@@ -1,0 +1,1128 @@
+# BRD — Open-Source Business Metadata Configurator
+
+**Версія документа:** 2.1
+**Дата:** 2026-04-01
+**Статус:** Draft для архітектурного ревʼю  
+**Мова інтерфейсу:** Українська (перша), English (друга)
+
+---
+
+## 1. Огляд продукту
+
+**Робоча назва:** Simetra
+
+**Суть продукту:**  
+Open-source візуальний конфігуратор бізнес-метаданих, натхненний підходом конфігуратора 1С:Підприємство, але реалізований як сучасний кросплатформний додаток для роботи з PostgreSQL та сучасними технологічними стеками.
+
+**Ключова відмінність від усіх існуючих інструментів:**  
+Це НЕ ще один дизайнер таблиць БД. Це інструмент, де користувач мислить бізнес-об'єктами — довідниками, документами, регістрами — а система знає структуру, стандартні реквізити та правила поведінки кожного типу. Користувач обирає "Створити довідник" і отримує об'єкт з Кодом, Найменуванням, ПозначкоюВидалення та можливістю ієрархії. Обирає "Створити регістр накопичення" — і отримує структуру з вимірами, ресурсами та типом (залишки/обороти).
+
+**Ліцензія:** Apache 2.0  
+**Внески:** DCO (Developer Certificate of Origin)
+
+---
+
+## 2. Проблема
+
+### 2.1. Для кого ця проблема існує
+
+Розробники, які будують облікові, ERP-подібні або бізнес-системи на сучасних стеках (.NET, Node.js, Python, Go), щоразу стикаються з однією і тією ж задачею: їм потрібно спроектувати структуру даних для довідників, документів, реєстрів руху — і щоразу вони роблять це вручну, з нуля, без стандартів і без інструменту.
+
+### 2.2. Як виглядає проблема сьогодні
+
+**Підхід "від таблиць"** — розробник відразу пише CREATE TABLE або Prisma schema. Немає стандартних реквізитів, немає типізації бізнес-об'єктів. Кожен новий проєкт — нова структура. Документ не відрізняється від довідника на рівні архітектури.
+
+**Підхід "від 1С"** — розробник, який знає 1С, розуміє, що потрібні довідники з кодом і найменуванням, документи з датою і номером, регістри з вимірами і ресурсами. Але 1С — закрита пропрієтарна платформа з власною мовою і рантаймом. Перенести ці концепції на PostgreSQL + .NET потрібно вручну.
+
+**Існуючі інструменти не вирішують проблему:**
+
+| Інструмент | Що робить | Чого не має |
+|---|---|---|
+| pgAdmin, DBeaver | Робота з існуючою БД | Бізнес-семантика, моделювання з нуля |
+| dbdiagram.io, DrawDB | Візуальне моделювання таблиць | Бізнес-типи, стандартні реквізити |
+| Prisma, Drizzle | Code-first ORM-схеми | Візуальний конфігуратор, бізнес-семантика |
+| Frappe/ERPNext | Metadata-driven ERP | Регістри, типізовані прототипи об'єктів |
+| Supabase Studio | Візуальний редактор PostgreSQL | Бізнес-об'єкти, генерація |
+
+**Жоден із 19 проаналізованих open-source проєктів не реалізує регістри (накопичення, відомостей, бухгалтерії) з вимірами, ресурсами та реквізитами як first-class примітив.**
+
+### 2.3. Наслідки
+
+- Кожна команда винаходить структуру довідників і документів з нуля
+- Відсутність стандартів призводить до архітектурних помилок (наприклад, відсутність ПозначкиВидалення, неправильна нумерація)
+- Знання 1С-архітектури залишається замкненим у пропрієтарній екосистемі
+- Немає інструменту, який би допоміг валідувати архітектуру бізнес-системи до написання коду
+
+---
+
+## 3. Візія продукту
+
+### 3.1. Коротко
+
+Стати стандартним open-source інструментом для проєктування бізнес-систем — тим, чим Prisma стала для ORM, а Figma — для дизайну інтерфейсів, але для доменної архітектури облікових і ERP-систем.
+
+### 3.2. Що продукт дає користувачу
+
+1. **Моделювання бізнес-об'єктів** — довідники, документи, регістри, перелічення — з вбудованою семантикою кожного типу
+2. **Візуальний конфігуратор** — дерево метаданих, редактор реквізитів, панель властивостей — як у конфігураторі 1С, але в сучасному UI
+3. **Генерація артефактів** — PostgreSQL DDL, EF Core entities, міграції — з метаданих, без ручного кодування схеми
+4. **Git-native формат** — метадані зберігаються як JSON-файли, один файл на об'єкт, оптимізовані для diff/merge
+5. **Плагінна архітектура** — генератори для різних стеків як незалежні модулі
+
+### 3.3. Чим продукт НЕ є
+
+- Не runtime-платформа (як 1С або Frappe) — не виконує бізнес-логіку
+- Не ORM (як Prisma або EF Core) — не генерує клієнтський код для запитів
+- Не редактор таблиць БД (як pgAdmin) — працює на рівні бізнес-об'єктів, а не SQL
+- Не замінник 1С:Підприємство — це інструмент проєктування, а не платформа розробки
+
+### 3.4. Довгострокові горизонти (не в scope BRD)
+
+- Runtime metadata-driven application engine
+- Автоматична генерація UI-форм з метаданих
+- Автоматична генерація REST API
+- Імпорт існуючих схем БД з автоматичним розпізнаванням бізнес-типів
+- Колаборативне редагування метаданих (cloud-версія)
+
+---
+
+## 4. Цільові користувачі
+
+### 4.1. Первинні
+
+**Розробник бізнес-систем із досвідом 1С.** Знає, що таке довідники, документи, регістри. Переходить на .NET/Node/Python і хоче перенести перевірені архітектурні патерни 1С на сучасний стек. Цей користувач — найбільш мотивований early adopter.
+
+**Fullstack-розробник, який будує облікову/ERP-систему.** Не має досвіду 1С, але стикається з тими ж задачами: потрібна нумерація документів, ієрархія довідників, реєстрація руху по регістрах. Для нього продукт — це фреймворк архітектурних рішень.
+
+### 4.2. Вторинні
+
+- Архітектор, який ревʼює структуру даних команди
+- Аналітик, який моделює предметну область перед розробкою
+- DevOps/DBA, який працює з генерованими міграціями
+
+---
+
+## 5. Система типів метаданих
+
+Це серцевина продукту. Кожен тип метаданих — це не просто "entity з тегом", а об'єкт з чітко визначеною структурою, де частина полів задана системою.
+
+### 5.1. Реєстр типів метаданих (Metadata Type Registry)
+
+Система має вбудований реєстр типів, який визначає для кожного типу:
+- Стандартні реквізити (задані платформою, не видаляються)
+- Налаштування типу (конфігурує поведінку конкретного об'єкта)
+- Дозволені підоб'єкти (табличні частини, виміри, ресурси тощо)
+- Ролі полів (для регістрів: вимір, ресурс, реквізит)
+- Правила поведінки (нумерація, ієрархія, проведення)
+
+У MVP користувач не може створювати нові типи метаданих — тільки обирати з вбудованих. Розширення реєстру — у long-term scope.
+
+### 5.2. Довідник (Catalog)
+
+**Призначення:** Зберігання умовно-постійної інформації — контрагенти, номенклатура, склади, валюти.
+
+**Стандартні реквізити:**
+
+| Реквізит | Тип у метамоделі | Тип у PostgreSQL | Опис | Видаляється |
+|---|---|---|---|---|
+| id | UUID | `uuid DEFAULT gen_random_uuid()` | Унікальний ідентифікатор | Ні |
+| code | String / Number | `varchar(N)` / `integer` | Код елемента | Ні |
+| description | String | `varchar(N)` | Найменування | Ні |
+| deletion_mark | Boolean | `boolean DEFAULT false` | Позначка на видалення | Ні |
+| parent_id | CatalogRef.Self | `uuid REFERENCES ... NULL` | Батьківська група (якщо ієрархічний) | Ні¹ |
+| is_folder | Boolean | `boolean DEFAULT false` | Це група (якщо ієрархічний) | Ні¹ |
+| owner_id | CatalogRef.{Owner} | `uuid REFERENCES ...` | Власник (якщо підпорядкований) | Ні² |
+| predefined_name | String | `varchar(100) NULL` | Ім'я предефінованого елемента | Ні |
+| created_at | DateTime | `timestamptz DEFAULT now()` | Дата створення | Ні |
+| updated_at | DateTime | `timestamptz DEFAULT now()` | Дата останньої зміни | Ні |
+
+¹ — присутній тільки якщо увімкнена ієрархія  
+² — присутній тільки якщо задані власники
+
+**Налаштування типу:**
+
+| Параметр | Тип | Значення за замовчуванням | Опис |
+|---|---|---|---|
+| codeLength | Integer | 9 | Довжина коду |
+| codeType | Enum: String, Number | String | Тип коду |
+| descriptionLength | Integer | 150 | Довжина найменування |
+| hierarchyType | Enum: None, FoldersAndItems, ItemsOnly | None | Тип ієрархії |
+| owners | Array of {kind, name} | [] | Довідники-власники |
+| autonumber | Boolean | true | Автонумерація коду |
+| codeUnique | Boolean | true | Унікальність коду |
+| mainPresentation | Enum: Code, Description | Description | Представлення за замовчуванням |
+| predefinedItems | Array of {name, description} | [] | Предефіновані елементи |
+
+**Дозволені підоб'єкти:** Реквізити (Attributes), Табличні частини (TabularSections).
+
+### 5.3. Документ (Document)
+
+**Призначення:** Реєстрація подій бізнес-діяльності — продажі, оплати, переміщення товарів.
+
+**Стандартні реквізити:**
+
+| Реквізит | Тип | PostgreSQL | Опис |
+|---|---|---|---|
+| id | UUID | `uuid` PK | Унікальний ідентифікатор |
+| number | String / Number | `varchar(N)` / `integer` | Номер документа |
+| date | DateTime | `timestamptz NOT NULL` | Дата документа |
+| posted | Boolean | `boolean DEFAULT false` | Проведений |
+| deletion_mark | Boolean | `boolean DEFAULT false` | Позначка на видалення |
+| created_at | DateTime | `timestamptz DEFAULT now()` | Дата створення |
+| updated_at | DateTime | `timestamptz DEFAULT now()` | Дата останньої зміни |
+
+**Налаштування типу:**
+
+| Параметр | Тип | За замовчуванням | Опис |
+|---|---|---|---|
+| numberLength | Integer | 11 | Довжина номера |
+| numberType | Enum: String, Number | String | Тип номера |
+| autonumber | Boolean | true | Автонумерація |
+| numberPeriodicity | Enum: None, Year, Quarter, Month, Day | Year | Періодичність нумерації |
+| posting | Boolean | true | Підтримка проведення |
+| registerMovements | Array of {kind, name} | [] | Регістри, по яких документ здійснює рухи |
+
+**Дозволені підоб'єкти:** Реквізити, Табличні частини.
+
+**Поведінка проведення:**  
+Документ підтримує життєвий цикл Draft → Posted → Unposted → Draft (зворотне проведення без зміни номера — на відміну від Frappe). Зв'язок з регістрами декларативний: у метаданих документа вказуються регістри, по яких він робить рухи. Генерація коду проведення — на стороні генератора.
+
+### 5.4. Перелічення (Enumeration)
+
+**Призначення:** Фіксовані набори значень — статуси, типи, ознаки.
+
+**Структура:**
+
+| Властивість | Тип | Опис |
+|---|---|---|
+| name | String | Ім'я перелічення |
+| values | Array of {name, displayName, order} | Перелік значень |
+
+**Стандартних реквізитів немає** — перелічення не має таблиці в БД у класичному розумінні. Генерується як PostgreSQL ENUM type або як lookup-таблиця (конфігурується в генераторі).
+
+**Підоб'єктів немає.**
+
+### 5.5. Регістр відомостей (InformationRegister)
+
+**Призначення:** Зберігання структурованої інформації "ключ → значення" з можливою періодичністю — курси валют, ціни, кадрові дані.
+
+**Стандартні реквізити:**
+
+| Реквізит | Тип | Умова | Опис |
+|---|---|---|---|
+| period | Date / DateTime | Якщо періодичний | Дата запису |
+| recorder_id | DocumentRef | Якщо підпорядкований реєстратору | Документ-реєстратор |
+| line_number | Integer | Якщо підпорядкований реєстратору | Номер рядка |
+| active | Boolean | Якщо підпорядкований реєстратору | Активність запису |
+
+**Налаштування типу:**
+
+| Параметр | Тип | За замовчуванням | Опис |
+|---|---|---|---|
+| periodicity | Enum: NonPeriodic, Day, Month, Quarter, Year | NonPeriodic | Періодичність |
+| writeMode | Enum: Independent, RecorderSubordinate | Independent | Режим запису |
+| recorderTypes | Array of {kind, name} | [] | Документи-реєстратори (якщо RecorderSubordinate) |
+
+**Ролі полів:** Виміри (Dimensions), Ресурси (Resources), Реквізити (Attributes).
+
+- **Виміри** — ключові поля, за якими зберігається інформація (наприклад, Валюта, Організація)
+- **Ресурси** — значення, що зберігаються (наприклад, Курс, Кратність). Тип — будь-який (не тільки числовий)
+- **Реквізити** — додаткова інформація (наприклад, Відповідальний)
+
+**Унікальність:** Комбінація (period + усі виміри) є унікальним ключем для незалежного регістру.
+
+### 5.6. Регістр накопичення (AccumulationRegister)
+
+**Призначення:** Накопичення числових даних — залишки товарів, взаєморозрахунки, рух коштів.
+
+**Стандартні реквізити:**
+
+| Реквізит | Тип | Опис |
+|---|---|---|
+| period | DateTime | Дата руху |
+| recorder_id | DocumentRef | Документ-реєстратор |
+| line_number | Integer | Номер рядка |
+| active | Boolean | Активність запису |
+| movement_type | Enum: Receipt, Expense | Вид руху (тільки для регістрів залишків) |
+
+**Налаштування типу:**
+
+| Параметр | Тип | За замовчуванням | Опис |
+|---|---|---|---|
+| registerType | Enum: Balance, Turnover | Balance | Тип регістру |
+| recorderTypes | Array of {kind, name} | [] | Документи-реєстратори |
+
+**Ролі полів:** Виміри, Ресурси (тільки числові), Реквізити.
+
+- **Виміри** — аналітичні розрізи (Номенклатура, Склад, Організація)
+- **Ресурси** — числові величини для накопичення (Кількість, Сума). Тільки Numeric
+- **Реквізити** — додаткові дані без накопичення
+
+**Автоматичні віртуальні таблиці (генеруються):**
+
+Для **регістрів залишків**:
+- Таблиця рухів (основна)
+- Таблиця залишків (агреговані залишки по періодах)
+- View: Залишки на дату
+- View: Обороти за період
+- View: Залишки та обороти
+
+Для **регістрів оборотів**:
+- Таблиця рухів (основна)
+- View: Обороти за період
+
+### 5.7. Константи (Constant)
+
+**Призначення:** Одиничні значення налаштувань — назва організації, валюта обліку, ставка ПДВ.
+
+**Структура:**
+
+| Властивість | Тип | Опис |
+|---|---|---|
+| name | String | Ім'я константи |
+| valueType | FieldType | Тип значення |
+| defaultValue | Any | Значення за замовчуванням |
+
+Всі константи зберігаються в одній таблиці `constants` у форматі key-value або кожна як окрема однорядкова таблиця (конфігурується в генераторі).
+
+### 5.8. Таблична частина (TabularSection)
+
+**Призначення:** Підпорядкована таблиця, що належить довіднику або документу — рядки товарів у накладній, контактні особи контрагента.
+
+**Стандартні реквізити:**
+
+| Реквізит | Тип | Опис |
+|---|---|---|
+| id | UUID | Унікальний ідентифікатор рядка |
+| line_number | Integer | Номер рядка |
+
+Таблична частина автоматично отримує зовнішній ключ на батьківський об'єкт з ON DELETE CASCADE.
+
+**Дозволені підоб'єкти:** Реквізити (тільки прості поля, без вкладених табличних частин у MVP).
+
+### 5.9. Довільна таблиця (CustomTable)
+
+**Призначення:** Службові таблиці, що не вписуються в жоден бізнес-тип — логи, черги, налаштування, тимчасові дані. Також використовується для відображення таблиць існуючої БД, що не розпізнані як бізнес-об'єкти.
+
+**Стандартні реквізити:**
+
+| Реквізит | Тип | Опис | Видаляється |
+|---|---|---|---|
+| id | UUID | Унікальний ідентифікатор (якщо autoAddPrimaryKey = true) | Ні¹ |
+
+¹ — присутній за замовчуванням; вимикається через налаштування `autoAddPrimaryKey: false`
+
+**Налаштування типу:**
+
+| Параметр | Тип | За замовчуванням | Опис |
+|---|---|---|---|
+| autoAddPrimaryKey | Boolean | true | Автоматично додавати id (UUID) як PK |
+
+**Дозволені підоб'єкти:** Реквізити.
+
+### 5.10. Зведена карта типів
+
+| Тип | Стандартні реквізити | Ролі полів | Табличні частини | Ієрархія | Проведення | Фаза |
+|---|---|---|---|---|---|---|
+| Catalog | id, code, description, deletion_mark, parent_id, is_folder, owner_id, predefined_name, created_at, updated_at | — | Так | Так | — | MVP |
+| Document | id, number, date, posted, deletion_mark, created_at, updated_at | — | Так | — | Так | MVP |
+| Enumeration | — | — | — | — | — | MVP |
+| InformationRegister | period, recorder_id, line_number, active | Dimension, Resource, Attribute | — | — | — | MVP |
+| AccumulationRegister | period, recorder_id, line_number, active, movement_type | Dimension, Resource (numeric), Attribute | — | — | — | MVP |
+| Constant | — | — | — | — | — | MVP |
+| CustomTable | id¹ | — | — | — | — | MVP |
+
+¹ — `id` присутній за замовчуванням (`autoAddPrimaryKey: true`), можна вимкнути
+
+**Примітка:** `created_at` / `updated_at` наявні у Catalog та Document (див. розділи 5.2, 5.3), але не включені в таблицю для стислості.
+
+| Тип | Стандартні реквізити | Ролі полів | Табличні частини | Ієрархія | Проведення | Фаза |
+|---|---|---|---|---|---|---|
+| ChartOfCharacteristicTypes | id, code, description, deletion_mark, value_type | — | Так | Так | — | Phase 2 |
+| ChartOfAccounts | id, code, description, deletion_mark, off_balance, order | — | Так | Так | — | Phase 3 |
+| AccountingRegister | period, recorder_id, line_number, active, debit_account, credit_account | Dimension, Resource, Attribute | — | — | — | Phase 3 |
+| BusinessProcess | id, number, date, started, completed, deletion_mark | — | Так | — | — | Phase 4 |
+| Task | id, number, date, executed, deletion_mark, business_process_id, route_point | — | Так | — | — | Phase 4 |
+
+---
+
+## 6. Система типів полів
+
+### 6.1. Примітивні типи
+
+| Тип у метамоделі | PostgreSQL | Параметри | Опис |
+|---|---|---|---|
+| UUID | `uuid` | — | Унікальний ідентифікатор |
+| String | `varchar(N)` | length | Рядок обмеженої довжини |
+| Text | `text` | — | Текст необмеженої довжини |
+| Integer | `integer` / `bigint` | — | Ціле число |
+| Numeric | `numeric(p,s)` | precision, scale | Десяткове число |
+| Boolean | `boolean` | — | Логічне значення |
+| Date | `date` | — | Дата |
+| DateTime | `timestamptz` | — | Дата і час з часовим поясом |
+| Binary | `bytea` | — | Двійкові дані |
+
+### 6.2. Посилальні типи
+
+| Тип | Опис | Приклад |
+|---|---|---|
+| CatalogRef.{Name} | Посилання на довідник | CatalogRef.Products |
+| DocumentRef.{Name} | Посилання на документ | DocumentRef.SalesOrder |
+| EnumRef.{Name} | Посилання на значення перелічення | EnumRef.OrderStatus |
+| AnyRef | Поліморфне посилання (складений тип) | CatalogRef.Products \| CatalogRef.Services |
+
+**Поліморфне посилання** реалізується як пара полів: `{field}_type` (varchar — ім'я типу) + `{field}_id` (uuid). Аналог Dynamic Link у Frappe та складеного типу в 1С.
+
+**Приклад AnyRef у JSON-метаданих:**
+
+```json
+{
+  "name": "owner",
+  "displayName": { "uk": "Власник", "en": "Owner" },
+  "type": "AnyRef",
+  "allowedTypes": [
+    { "kind": "Catalog", "name": "Products" },
+    { "kind": "Catalog", "name": "Services" }
+  ],
+  "required": true
+}
+```
+
+Генерується як два поля у PostgreSQL: `owner_type varchar(100) NOT NULL` + `owner_id uuid NOT NULL`.
+
+### 6.3. Властивості поля (Attribute Properties)
+
+| Властивість | Тип | За замовчуванням | Опис |
+|---|---|---|---|
+| name | String | (required) | Технічне ім'я (snake_case) |
+| displayName | LocalizedString | — | Відображуване ім'я {uk, en} |
+| type | FieldType | (required) | Тип даних |
+| required | Boolean | false | Обов'язковість |
+| indexed | Boolean | false | Індексувати |
+| unique | Boolean | false | Унікальність |
+| defaultValue | String | null | Значення за замовчуванням |
+| description | LocalizedString | — | Опис |
+| length | Integer | — | Довжина (для String) |
+| precision | Integer | — | Точність (для Numeric) |
+| scale | Integer | — | Масштаб (для Numeric) |
+| ref | String | — | Ім'я цільового об'єкта (для посилальних типів) |
+
+---
+
+## 7. Формат метаданих
+
+### 7.1. Рішення: JSON з JSON Schema валідацією
+
+**Обґрунтування** (на основі аналізу 6 альтернативних форматів):
+- JSON — універсальні парсери в усіх мовах (.NET, TypeScript, Rust, Python)
+- JSON Schema — стандартна валідація, x-розширення для бізнес-семантики
+- Не потребує створення власного парсера (на відміну від Prisma DSL або DBML)
+- Достатня людиночитабельність при правильному форматуванні
+- DSL-представлення може бути додане як sugar-синтаксис у майбутньому (Phase 3+)
+
+### 7.2. Структура каталогів
+
+```
+metadata/
+├── project.meta.json                          # Налаштування проєкту
+├── catalogs/
+│   └── products/
+│       └── products.meta.json
+├── documents/
+│   └── sales-order/
+│       └── sales-order.meta.json
+├── enumerations/
+│   └── order-status/
+│       └── order-status.meta.json
+├── accumulation-registers/
+│   └── inventory-balance/
+│       └── inventory-balance.meta.json
+├── information-registers/
+│   └── exchange-rates/
+│       └── exchange-rates.meta.json
+├── constants/
+│   └── constants.meta.json                    # Всі константи в одному файлі
+└── custom-tables/
+    └── audit-log/
+        └── audit-log.meta.json
+```
+
+Один файл на об'єкт. Ім'я каталогу = kebab-case від імені об'єкта. Файли серіалізуються з сортованими ключами, 2-пробільним відступом і trailing newline для чистих Git-дифів.
+
+### 7.3. Формат файлу проєкту
+
+```json
+{
+  "$schema": "https://simetra.dev/schemas/v1/project.schema.json",
+  "schemaVersion": "1.0",
+  "name": "MyBusinessApp",
+  "displayName": { "uk": "Мій бізнес-додаток", "en": "My Business App" },
+  "defaultLocale": "uk",
+  "database": {
+    "target": "postgresql",
+    "schema": "public",
+    "namingConvention": "snake_case"
+  },
+  "generation": {
+    "tablePrefix": "",
+    "enumStrategy": "pgEnum",
+    "constantsStrategy": "singleTable"
+  }
+}
+```
+
+### 7.4. Приклад файлу довідника
+
+```json
+{
+  "$schema": "https://simetra.dev/schemas/v1/catalog.schema.json",
+  "kind": "Catalog",
+  "name": "Products",
+  "displayName": { "uk": "Товари", "en": "Products" },
+  "codeLength": 9,
+  "codeType": "String",
+  "descriptionLength": 150,
+  "hierarchyType": "FoldersAndItems",
+  "autonumber": true,
+  "codeUnique": true,
+  "mainPresentation": "Description",
+  "predefinedItems": [
+    { "name": "Delivery", "description": { "uk": "Доставка", "en": "Delivery" } }
+  ],
+  "attributes": [
+    {
+      "name": "article",
+      "displayName": { "uk": "Артикул", "en": "Article" },
+      "type": "String",
+      "length": 50,
+      "indexed": true
+    },
+    {
+      "name": "unit",
+      "displayName": { "uk": "Одиниця виміру", "en": "Unit" },
+      "type": "EnumRef",
+      "ref": "Units"
+    },
+    {
+      "name": "base_price",
+      "displayName": { "uk": "Базова ціна", "en": "Base Price" },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 2
+    }
+  ],
+  "tabularSections": [
+    {
+      "name": "barcodes",
+      "displayName": { "uk": "Штрихкоди", "en": "Barcodes" },
+      "attributes": [
+        { "name": "barcode", "type": "String", "length": 200, "required": true },
+        { "name": "barcode_type", "type": "EnumRef", "ref": "BarcodeTypes" }
+      ]
+    }
+  ]
+}
+```
+
+### 7.5. Приклад файлу регістру накопичення
+
+```json
+{
+  "$schema": "https://simetra.dev/schemas/v1/accumulation-register.schema.json",
+  "kind": "AccumulationRegister",
+  "name": "InventoryBalance",
+  "displayName": { "uk": "Залишки товарів", "en": "Inventory Balance" },
+  "registerType": "Balance",
+  "recorderTypes": [
+    { "kind": "Document", "name": "SalesOrder" },
+    { "kind": "Document", "name": "PurchaseOrder" },
+    { "kind": "Document", "name": "InventoryTransfer" }
+  ],
+  "dimensions": [
+    {
+      "name": "product",
+      "displayName": { "uk": "Товар", "en": "Product" },
+      "type": "CatalogRef",
+      "ref": "Products",
+      "required": true
+    },
+    {
+      "name": "warehouse",
+      "displayName": { "uk": "Склад", "en": "Warehouse" },
+      "type": "CatalogRef",
+      "ref": "Warehouses",
+      "required": true
+    }
+  ],
+  "resources": [
+    {
+      "name": "quantity",
+      "displayName": { "uk": "Кількість", "en": "Quantity" },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 3
+    },
+    {
+      "name": "amount",
+      "displayName": { "uk": "Сума", "en": "Amount" },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 2
+    }
+  ],
+  "attributes": [
+    {
+      "name": "responsible",
+      "displayName": { "uk": "Відповідальний", "en": "Responsible" },
+      "type": "CatalogRef",
+      "ref": "Users"
+    }
+  ]
+}
+```
+
+### 7.6. Правила детерміністичної серіалізації
+
+1. Ключі об'єктів — у фіксованому порядку (визначається JSON Schema)
+2. Масиви attributes, dimensions, resources, tabularSections — **зберігають порядок, визначений користувачем** (порядок полів є частиною моделі). Сортування за `name` НЕ застосовується — порядок масиву в JSON є canonical
+3. Ключі всередині кожного об'єкта масиву — у фіксованому порядку (name, displayName, type, ...)
+4. Відступ: 2 пробіли
+5. Trailing newline: обов'язково
+6. Ніяких volatile даних (timestamps, checksums, auto-increment idx)
+7. Кожен файл має `$schema` для валідації
+8. UTF-8 без BOM
+
+### 7.7. Стратегія еволюції схеми (Schema Evolution)
+
+Поле `schemaVersion` у `project.meta.json` визначає версію формату метаданих. Правила еволюції:
+
+1. **Additive-only changes** — нові поля додаються з дефолтними значеннями, існуючі поля не видаляються і не змінюють семантику. Це дозволяє старим проєктам відкриватися новою версією без breaking changes
+2. **Deprecation з терміном** — якщо поле стає застарілим, воно позначається `deprecated` в JSON Schema на 1 minor-версію, видаляється на наступну major
+3. **Автоматичний upgrade** — при відкритті проєкту з старшим `schemaVersion` конфігуратор пропонує міграцію (з показом diff). Міграція — це функція `(oldJson, oldVersion) → newJson`, що зберігається в коді ядра
+4. **Версіонування** — SemVer: major (зламні зміни), minor (нові типи/поля), patch (виправлення схеми). Додавання `ChartOfAccounts` у Phase 3 — це minor, бо старі проєкти просто не використовують цей тип
+5. **JSON Schema per version** — кожна версія `schemaVersion` має відповідний набір JSON Schema (`/schemas/v1/`, `/schemas/v1.1/`)
+6. **URL-домен** — `https://simetra.dev/schemas/` як base URL для `$schema` у файлах метаданих
+
+---
+
+## 8. Функціональні вимоги
+
+### 8.1. Управління проєктом
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-001 | Створити новий проєкт з ім'ям та базовими налаштуваннями | MVP |
+| FR-002 | Відкрити існуючий проєкт з каталогу metadata/ | MVP |
+| FR-003 | Зберегти проєкт у файлову систему (JSON-файли) | MVP |
+| FR-004 | Налаштувати параметри проєкту (database target, naming convention) | MVP |
+| FR-005 | Валідувати цілісність проєкту (посилальна цілісність, обов'язкові поля) | MVP |
+
+### 8.2. Дерево метаданих
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-010 | Відображати дерево метаданих з фіксованими розділами за типами | MVP |
+| FR-011 | Додавати об'єкт усередині розділу (контекстне меню, кнопка, Cmd+N) | MVP |
+| FR-012 | Перейменовувати об'єкт (F2, inline rename) | MVP |
+| FR-013 | Видаляти об'єкт з перевіркою посилальної цілісності | MVP |
+| FR-014 | Вибирати об'єкт з відображенням його полів та властивостей | MVP |
+| FR-015 | Показувати кількість об'єктів у кожному розділі | MVP |
+| FR-016 | Пошук/фільтрація по дереву (Ctrl+F) | MVP |
+| FR-017 | Показувати іконку типу для кожного об'єкта | MVP |
+| FR-018 | Drag-and-drop для зміни порядку | Phase 2 |
+| FR-019 | Фільтрація дерева за тегами/підсистемами | Phase 2 |
+| FR-01A | Дублювати об'єкт (глибока копія з новим ім'ям) | MVP |
+
+### 8.3. Редагування об'єкта
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-020 | Редагувати базові властивості об'єкта (ім'я, displayName, налаштування типу) | MVP |
+| FR-021 | Відображати стандартні реквізити як readonly з візуальним розділенням від користувацьких | MVP |
+| FR-022 | Показувати налаштування, специфічні для типу (hierarchyType для Catalog, registerType для AccumulationRegister) | MVP |
+| FR-023 | Валідувати зміни в реальному часі (унікальність імен, коректність типів) | MVP |
+| FR-024 | Валідація імен об'єктів та полів: snake_case, латиниця, заборона SQL reserved words (`order`, `group`, `user`, `table` тощо) | MVP |
+
+### 8.4. Редагування полів (реквізитів)
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-030 | Відображати список полів об'єкта в табличному вигляді | MVP |
+| FR-031 | Додавати нове поле | MVP |
+| FR-032 | Редагувати поле (inline або в панелі властивостей) | MVP |
+| FR-033 | Видаляти поле | MVP |
+| FR-034 | Змінювати порядок полів (кнопки вгору/вниз; drag-and-drop — Phase 2) | MVP |
+| FR-035 | Обирати тип поля з категоризованого списку (примітивні, посилальні, перелічення) | MVP |
+| FR-036 | Для посилальних типів — обирати цільовий об'єкт з випадаючого списку | MVP |
+| FR-037 | Для регістрів — призначати роль поля (Dimension / Resource / Attribute) | MVP |
+| FR-038 | Відображати роль поля візуально (іконка або колір) | MVP |
+
+### 8.5. Табличні частини
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-040 | Додавати табличну частину до довідника або документа | MVP |
+| FR-041 | Редагувати реквізити табличної частини (як окремий список полів) | MVP |
+| FR-042 | Видаляти табличну частину | MVP |
+| FR-043 | Перемикатися між основними реквізитами і табличними частинами | MVP |
+
+### 8.6. Посилальна цілісність
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-050 | Валідувати, що цільовий об'єкт посилального поля існує | MVP |
+| FR-051 | Попереджати при видаленні об'єкта, на який є посилання | MVP |
+| FR-052 | Показувати список вхідних посилань на об'єкт (де використовується) | MVP |
+
+### 8.7. Генерація (Post-MVP)
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-060 | Згенерувати PostgreSQL DDL (CREATE TABLE, CREATE INDEX, FK) з метаданих | Phase 2 |
+| FR-061 | Згенерувати SQL-міграцію (ALTER TABLE) при зміні метаданих | Phase 2 |
+| FR-062 | Згенерувати EF Core entity classes + IEntityTypeConfiguration | Phase 2 |
+| FR-063 | Згенерувати view/materialized view для віртуальних таблиць регістрів | Phase 2 |
+| FR-064 | Показати diff між поточними метаданими та станом БД | Phase 3 |
+| FR-065 | Підключитися до живої PostgreSQL БД для schema introspection | Phase 3 |
+
+### 8.8. Import / Export
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-070 | Експортувати проєкт як ZIP-архів JSON-файлів | MVP |
+| FR-071 | Імпортувати проєкт з ZIP-архіву | MVP |
+| FR-072 | Імпортувати схему з існуючої PostgreSQL БД (schema introspection) | Phase 3 |
+
+### 8.9. Undo/Redo
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-080 | Підтримка Undo (Ctrl+Z) для всіх операцій редагування | MVP |
+| FR-081 | Підтримка Redo (Ctrl+Shift+Z) | MVP |
+
+### 8.10. Локалізація
+
+| ID | Вимога | Пріоритет |
+|---|---|---|
+| FR-090 | Інтерфейс українською мовою за замовчуванням | MVP |
+| FR-091 | Підтримка англійської мови інтерфейсу | MVP |
+| FR-092 | Всі displayName — локалізовані об'єкти {uk, en} | MVP |
+| FR-093 | Технічні ідентифікатори — англійською (snake_case) | MVP |
+
+---
+
+## 9. Архітектура UI
+
+### 9.1. Технологічний стек
+
+| Компонент | Технологія | Обґрунтування |
+|---|---|---|
+| Framework | React 18+ + Vite 6 | Швидкість збірки, ecosystem |
+| UI Kit | shadcn/ui + Tailwind CSS 4 | Повний контроль, професійний вигляд |
+| Дерево | react-arborist | Custom renderer, keyboard nav, search |
+| Таблиця | @tanstack/react-table v8 | shadcn/ui інтеграція, sorting, filtering |
+| Layout | react-resizable-panels | Вбудований у shadcn/ui |
+| Command Palette | cmdk (shadcn/ui Command) | Швидка навігація, Ctrl+K / Cmd+K |
+| State | Zustand + immer | Централізований store, інтуїтивні мутації |
+| Undo/Redo | zundo | Battle-tested temporal middleware |
+| Validation | Zod | Runtime validation, TypeScript inference, генерація JSON Schema |
+| JSON Schema | zod-to-json-schema | Zod як single source of truth → JSON Schema як build artifact |
+| Keyboard | react-hotkeys-hook | Scoped hotkeys |
+| Icons | lucide-react | Вбудована залежність shadcn/ui |
+| CLI (Phase 2) | citty (unjs) | Lightweight CLI framework для generate/validate/init |
+| Desktop shell (Phase 3) | Tauri 2.0 | Кросплатформний desktop-додаток, Rust-бекенд для нативного FS |
+| VS Code extension (Phase 3) | VS Code Extension API | Інтеграція в IDE, sidebar panel |
+| Тести | Vitest + Testing Library | Vite-native, швидкий запуск |
+| Монорепо | pnpm workspaces + turborepo | Розділення пакетів, кешовані збірки |
+
+### 9.2. Архітектура пакетів (монорепо)
+
+Проєкт організований як pnpm monorepo з turborepo для кешованих збірок:
+
+```
+packages/
+├── @simetra/core             ← Zod-схеми, типи, валідація (чистий TS, без UI/Node API)
+├── @simetra/json-schemas     ← Згенеровані JSON Schema (з Zod, build step)
+├── @simetra/generator-api    ← MetadataGenerator interface + спільні утиліти (Phase 2)
+├── @simetra/generator-pg     ← PostgreSQL DDL генератор (Phase 2)
+├── @simetra/generator-efcore ← EF Core генератор (Phase 2)
+└── @simetra/cli              ← CLI обгортка (citty) над core + generators (Phase 2)
+apps/
+├── web/                      ← React SPA (Vite) — основний інтерфейс (Phase 1)
+├── desktop/                  ← Tauri 2.0 обгортка web-додатку з нативним FS (Phase 3)
+└── vscode/                   ← VS Code extension — sidebar panel (Phase 3)
+```
+
+**Ключовий принцип:** `@simetra/core` — це серцевина. Вона не залежить ні від React, ні від Tauri, ні від Node.js API. Чистий TypeScript з Zod. Це дозволяє:
+- Використовувати в Web UI (React), CLI (Node.js), Desktop (Tauri), VS Code extension
+- Тестувати метамодель незалежно від UI
+- Спільний код валідації між усіма клієнтами
+
+**Стратегія доступу до файлової системи:**
+
+Оскільки Phase 1 — це web SPA без серверу, доступ до файлів абстрагований через інтерфейс `StorageProvider`:
+- `WebStorage` (Phase 1) — File System Access API (Chrome/Edge) + download/upload fallback для Safari/Firefox
+- `TauriStorage` (Phase 3) — нативний FS через Tauri FS API
+- `NodeStorage` (Phase 2) — для CLI
+
+**JSON Schema генерується, не пишеться вручну:** `zod-to-json-schema` як build step генерує JSON Schema з Zod-схем пакету `@simetra/core`. Zod є єдиним джерелом правди для структури метаданих.
+
+### 9.3. Layout
+
+```
+┌────────────────────────────────────────────────────────┐
+│  [Logo] [Project Name]    [Save] [Generate] [Export]   │  Top Bar
+├──────────┬──────────────────────────┬──────────────────┤
+│          │                          │                  │
+│  Дерево  │    Редактор полів        │   Властивості    │
+│  мета-   │    (таблиця реквізитів   │   (панель        │
+│  даних   │     або табличних        │    context-      │
+│          │     частин)              │    sensitive)     │
+│  [20%]   │    [50%]                 │   [30%]          │
+│          │                          │                  │
+├──────────┴──────────────────────────┴──────────────────┤
+│  [Status bar: validation, object count, dirty state]   │
+└────────────────────────────────────────────────────────┘
+```
+
+Три панелі — resizable, середня не менше 30%, права — collapsible. Dark theme за замовчуванням.
+
+### 9.4. Ліва панель — дерево метаданих
+
+- Фіксовані кореневі розділи (Довідники, Документи, Перелічення, Регістри відомостей, Регістри накопичення, Константи, Довільні таблиці)
+- Іконки для кожного типу (lucide-react: BookOpen для довідників, FileText для документів, BarChart3 для регістрів накопичення, Database для регістрів відомостей, List для перелічень, Settings для констант)
+- Контекстне меню: Додати, Перейменувати, Видалити, Дублювати, Показати посилання
+- Інкрементний пошук: Ctrl+F → пошукове поле у верхній частині панелі
+- Кількість об'єктів у badge біля назви розділу
+
+### 9.5. Центральна панель — редактор
+
+Коли вибрано об'єкт у дереві:
+
+**Заголовок:** ім'я об'єкта, тип (badge), кнопка редагування displayName.
+
+**Вкладки** (якщо об'єкт підтримує):
+- **Реквізити** — таблиця полів із колонками: Ім'я, Тип (з іконкою), Обов'язковий, Індексований, Опис
+- **Табличні частини** — список табличних частин, при виборі — таблиця їх реквізитів
+- **Значення** (тільки для Enumeration) — редагований список значень перелічення (name, displayName, order) з кнопками додавання/видалення/переміщення
+- **Налаштування** — специфічні для типу (ієрархія, нумерація, рухи по регістрах)
+
+Стандартні реквізити відображаються у верхній частині таблиці реквізитів, візуально відокремлені (іконка замка, сірий фон, readonly).
+
+### 9.6. Права панель — властивості
+
+Context-sensitive — контент залежить від того, що вибрано:
+- Вибрано об'єкт у дереві → властивості об'єкта (name, displayName, налаштування типу)
+- Вибрано поле в таблиці → властивості поля (type, required, indexed, defaultValue, description, ref)
+
+Згруповано через shadcn/ui Accordion: "Основні", "Тип даних", "Обмеження", "Додатково".
+
+### 9.7. Keyboard shortcuts
+
+| Комбінація (Windows / macOS) | Дія |
+|---|---|
+| Ctrl+K / Cmd+K | Command Palette |
+| Ctrl+S / Cmd+S | Зберегти проєкт |
+| Ctrl+Z / Cmd+Z | Undo |
+| Ctrl+Shift+Z / Cmd+Shift+Z | Redo |
+| Ctrl+N / Cmd+N | Новий об'єкт |
+| Delete | Видалити вибраний елемент |
+| F2 | Перейменувати |
+| Ctrl+F / Cmd+F | Пошук по дереву |
+| Alt+Enter | Відкрити властивості |
+
+---
+
+## 10. Архітектура генераторів (Phase 2+)
+
+### 10.1. Принцип: генератори — це плагіни
+
+Ядро продукту — це метамодель і UI. Генератори — це окремі модулі, які читають метадані (JSON) і виробляють артефакти для конкретного стеку.
+
+```
+Metadata JSON (canonical)
+    │
+    ├── PostgreSQL SQL Generator  →  DDL, migrations
+    ├── EF Core Generator         →  C# entities, DbContext, configurations
+    ├── Prisma Generator          →  .prisma schema
+    ├── Drizzle Generator         →  TypeScript schema
+    ├── TypeScript Types          →  .d.ts files
+    └── [Community generators]    →  Django models, Laravel migrations, ...
+```
+
+### 10.2. PostgreSQL SQL Generator (перший, вбудований)
+
+Генерує з метаданих:
+
+- `CREATE TABLE` для кожного об'єкта з правильними типами, constraints, FK
+- `CREATE TYPE` для перелічень (якщо обрана стратегія pgEnum)
+- `CREATE INDEX` для індексованих полів
+- `CREATE VIEW` / `CREATE MATERIALIZED VIEW` для віртуальних таблиць регістрів
+- Trigger-функцію для автонумерації (якщо autonumber = true)
+- `ALTER TABLE` міграції при зміні метаданих (snapshot-based diff)
+
+**Джерела для реалізації** (ліцензійно безпечні):
+- SQL-запити introspection: supabase/pg_meta (Apache 2.0)
+- Snapshot diff алгоритм: drizzle-kit (MIT)
+- DDL generation patterns: Prisma Engines (Apache 2.0)
+- Migration runner: DbUp (MIT)
+
+### 10.3. EF Core Generator (другий, вбудований)
+
+Генерує:
+- Entity class для кожного об'єкта
+- `IEntityTypeConfiguration<T>` з правильними іменами таблиць, індексами, FK
+- DbContext з DbSet для кожного об'єкта
+- Migration scaffolding (опціонально)
+
+### 10.4. Інтерфейс плагіна генератора
+
+```typescript
+interface MetadataGenerator {
+  name: string;
+  version: string;
+  description: LocalizedString;
+  generate(project: ProjectModel, options: GeneratorOptions): GeneratorOutput;
+}
+
+interface GeneratorOutput {
+  files: Array<{
+    path: string;
+    content: string;
+  }>;
+  warnings: string[];
+}
+```
+
+---
+
+## 11. Нефункціональні вимоги
+
+### 11.1. Продуктивність
+- Плавна робота з проєктами до 200 об'єктів і 5000 полів сумарно
+- Дерево метаданих — миттєве розгортання/згортання (< 16ms)
+- Збереження проєкту — менше 1 секунди
+- Генерація SQL — менше 5 секунд для проєкту з 200 об'єктами
+
+### 11.2. Портативність
+- Web SPA (Phase 1): працює в Chrome, Firefox, Safari, Edge (останні 2 мажорні версії). File System Access API для повноцінної роботи з файлами (Chrome/Edge), download/upload fallback (інші браузери)
+- Tauri desktop (Phase 3): Windows 10+, macOS 12+, Ubuntu 22.04+ — нативний FS, file dialogs
+- VS Code extension (Phase 3): будь-яка платформа з VS Code 1.85+
+- Метадані: read/write без серверу (файлова система або browser storage)
+
+### 11.3. Якість коду
+- TypeScript strict mode
+- Розділення: metadata model / UI rendering / generation logic (монорепо-пакети)
+- Zustand store typed через Zod schemas
+- CI: lint (ESLint 9 flat config), format (Prettier), type check, unit tests (Vitest)
+
+### 11.4. Git-friendliness
+- Детерміністична серіалізація JSON (sorted keys, 2-space indent, trailing newline)
+- Один файл на об'єкт — мінімальний diff при зміні одного об'єкта
+- Ніяких автогенерованих timestamp-ів у файлах метаданих
+- JSON Schema валідація у CI/CD
+
+### 11.5. Розширюваність
+- Нові типи метаданих додаються через Metadata Type Registry без переписування UI
+- Нові генератори — через plugin interface
+- Нові типи полів — через розширення FieldType enum
+
+### 11.6. Доступність
+- Повна клавіатурна навігація
+- ARIA-атрибути для дерева та таблиці
+- Підтримка screen reader для ключових операцій
+
+---
+
+## 12. Стратегія доставки
+
+### Phase 1 — Web UI Prototype
+
+**Ціль:** Валідувати layout, взаємодію та метамодель. Web-first — додаток працює у браузері без серверу.
+
+**Результат:**
+- React SPA (Vite) — 3-panel layout з деревом, таблицею полів, панеллю властивостей
+- `@simetra/core` — Zod-схеми, типи, валідація як окремий пакет
+- Всі 7 типів метаданих MVP у дереві
+- Створення, редагування, видалення об'єктів
+- Стандартні реквізити для кожного типу (readonly)
+- Налаштування типу (ієрархія для довідників, registerType для регістрів)
+- Ролі полів для регістрів (dimension/resource/attribute)
+- Табличні частини для довідників і документів
+- Збереження/завантаження проєкту через File System Access API (Chrome/Edge) + download/upload fallback (Safari/Firefox)
+- Undo/Redo
+- Command Palette
+- Пошук по дереву
+
+**Не включено:** генерація, підключення до БД, schema introspection, Tauri desktop, VS Code extension.
+
+### Phase 2 — Генерація та CLI
+
+**Ціль:** Перетворити метадані на робочі артефакти.
+
+**Результат:**
+- PostgreSQL SQL Generator (DDL, indexes, FK, enum types)
+- View/materialized view для регістрів
+- Trigger для автонумерації
+- EF Core Generator (entities, configurations, DbContext)
+- CLI-інструмент: `simetra generate --target postgresql`
+- Snapshot-based migration diff
+- Валідація проєкту перед генерацією
+- Кнопка "Generate" у Web UI з preview та завантаженням згенерованих файлів
+
+### Phase 3 — Desktop, VS Code та Live Connection
+
+**Ціль:** Розширити платформи доставки та зв'язати конфігуратор з реальною БД.
+
+**Результат:**
+- **Tauri 2.0 desktop-додаток** — обгортка web-додатку з нативним доступом до файлової системи (Windows, macOS, Linux)
+- **VS Code extension** — sidebar panel з деревом метаданих та редактором у webview, інтеграція з workspace FS
+- Підключення до PostgreSQL (connection string)
+- Schema introspection (читання поточної схеми)
+- Diff між метамоделлю та живою схемою
+- Інтерактивне застосування міграцій
+- Імпорт існуючої БД з розпізнаванням бізнес-типів (евристики)
+
+### Phase 4 — Advanced Modeling
+
+**Ціль:** Розширити набір бізнес-об'єктів.
+
+**Результат:**
+- Плани видів характеристик (динамічна аналітика)
+- Плани рахунків + Регістри бухгалтерії
+- Schema Visualizer (React Flow — інтерактивна ER-діаграма)
+- Шаблони типових конфігурацій (торгівля, послуги, виробництво)
+- Порівняння версій метаданих
+
+### Phase 5 — Platform
+
+**Ціль:** Рух до metadata-driven runtime.
+
+**Результат:**
+- Автоматична генерація REST API з метаданих
+- Автоматична генерація UI-форм
+- Бізнес-процеси та Задачі
+- Плагінна архітектура для генераторів
+- Cloud-версія з колаборацією
+
+---
+
+## 13. Обмеження та ризики
+
+### 13.1. Обмеження
+
+1. PostgreSQL — єдина підтримувана СУБД на старті. Архітектура дозволяє інші, але реалізація — тільки PG
+2. Метамодель підтримує тільки вбудовані типи метаданих — кастомні типи не в scope MVP
+3. Генератори не виконують SQL — тільки генерують файли. Виконання — відповідальність користувача (Phase 2) або через live connection (Phase 3)
+4. Без runtime — продукт не виконує бізнес-логіку, не обслуговує запити. Це інструмент проєктування
+
+### 13.2. Ризики
+
+| Ризик | Ймовірність | Вплив | Мітигація |
+|---|---|---|---|
+| Спроба повторити всю функціональність 1С занадто рано | Висока | Критичний | Жорсткий scope MVP: тільки 7 типів, тільки метадані, без runtime |
+| Метамодель виявиться недостатньо гнучкою для генерації | Середня | Високий | JSON Schema з x-розширеннями, schemaVersion для еволюції |
+| Низьке adoption через вузьку нішу (1С-розробники на сучасних стеках) | Середня | Високий | Позиціонувати ширше: для всіх, хто будує облікові системи, не тільки ex-1С |
+| Складність UI для дерева з DnD та inline editing | Середня | Середній | react-arborist як перевірене рішення, Phase 1 без DnD |
+| Конфлікти merge у JSON-файлах при командній роботі | Низька | Середній | Один файл на об'єкт, сортовані ключі, canonical JSON |
+| Високий обсяг JSON Schema підтримки (7+ схем у MVP, 12+ у Phase 4) | Середня | Середній | Генерація JSON Schema з Zod-схем (zod-to-json-schema) — Zod як single source of truth |
+| Tauri 2.0 екосистема плагінів ще молода | Низька | Низький | Web-first стратегія: Tauri — Phase 3, не блокує MVP. Валідувати file dialogs, FS watcher перед інтеграцією |
+| File System Access API не підтримується у Safari/Firefox | Середня | Середній | Download/upload fallback для браузерів без FS Access API; повноцінна робота в Chrome/Edge |
+
+---
+
+## 14. Юридичні аспекти
+
+### 14.1. Ліцензія продукту
+
+**Apache License 2.0** — обрана на основі аналізу 18 порівнянних проєктів:
+- Явний патентний грант (критично для бізнес-інструменту)
+- Індустріальний стандарт серед аналогів (Prisma, Drizzle, Supabase, Amplication)
+- Сумісність з GPL v3
+- Корпоративне прийняття
+
+### 14.2. Внески
+
+**DCO (Developer Certificate of Origin)** замість CLA:
+- Мінімальний бар'єр для контриб'юторів
+- Достатній захист у поєднанні з Apache 2.0
+- Індустріальний тренд (Linux kernel, Docker, GitLab)
+- Автоматизація через DCO Bot для GitHub
+
+### 14.3. Термінологія 1С
+
+Терміни "довідник", "документ", "регістр накопичення", "табличні частини", "проведення" є загальними функціональними термінами бухгалтерського домену і вільно використовуються (доктрина scènes à faire, рішення SAS Institute v. World Programming Ltd).
+
+Назва "1С" **не використовується** в назві продукту. У документації — формулювання "натхненний концепціями 1С:Підприємство" з дисклеймером.
+
+### 14.4. Запозичення коду
+
+Безпечні джерела (Apache 2.0 / MIT):
+- supabase/pg-meta — SQL introspection запити
+- frappe/frappe — lifecycle patterns
+- prisma/prisma-engines — schema diff concepts
+- drizzle-kit — snapshot diff
+- holistics/dbml — DSL parser (якщо знадобиться)
+- DbUp — migration runner
+
+Тільки ідеї (copyleft):
+- ERPNext, Odoo, DrawDB, pgModeler, NocoDB, Directus, BSL Language Server, MDClasses
+
+Файл THIRD-PARTY-NOTICES для attribution запозиченого коду.
+
+---
+
+## 15. Критерії успіху
+
+### Phase 1 (Web UI Prototype)
+
+1. Користувач може створити проєкт і додати 7 типів об'єктів без написання коду
+2. Стандартні реквізити відображаються автоматично і відповідають специфікації 1С
+3. Регістри мають ролі полів (dimension/resource/attribute)
+4. Модель зберігається/завантажується як JSON-файли
+5. Формат JSON стабільний для Git (мінімальні дифи при однакових змінах)
+6. Undo/Redo працює для всіх операцій
+7. Додаток працює у браузері без встановлення (web SPA)
+
+### Phase 2 (Generation)
+
+1. Згенерований DDL створює валідну PostgreSQL-схему
+2. EF Core entities компілюються без помилок
+3. Міграції коректно обробляють додавання/видалення полів
+4. Регістри отримують view для залишків/оборотів
+5. CLI працює без UI (headless generation)
+
+### Загальний успіх продукту
+
+1. 100+ зірок на GitHub протягом 3 місяців після публічного релізу
+2. Хоча б 3 community-генератори (для різних стеків)
+3. Використання у реальному проєкті (dogfooding на AutoHUB або DoxyHub)
+4. Хоча б 10 користувачів створили проєкт з ≥10 об'єктами (метрика реального використання)
+
+---
+
+## 16. Відкриті питання
+
+### Вирішені питання
+
+- ~~**Назва продукту**~~ → **Simetra**. GitHub repo: `Simetra`, npm scope: `@simetra/*`, CLI command: `simetra`, домен: `simetra.dev`.
+- ~~**Мова ядра конфігуратора**~~ → **TypeScript** для всього бізнес-ядра (core, generators, UI, CLI). Rust мінімальний — тільки Tauri commands для FS у Phase 3. Обґрунтування: єдина кодова база, Zod як shared source of truth, відсутність потреби в Rust-performance для проєктів до 200 об'єктів.
+- ~~**Стратегія зберігання стану**~~ → **Zustand** (in-memory) з серіалізацією у файлову систему через абстракцію `StorageProvider` при Save. Phase 1: `WebStorage` (File System Access API + download/upload fallback). Phase 3: `TauriStorage` (нативний FS).
+- ~~**Як обробляти compound types**~~ → **AnyRef** з `allowedTypes` масивом структурованих посилань `{ kind, name }`. Генерується як `{field}_type` + `{field}_id` (Dynamic Link pattern).
+- ~~**Web vs Desktop first**~~ → **Web-first**. Phase 1 — React SPA у браузері, без серверу. Tauri desktop та VS Code extension — Phase 3. Обґрунтування: нижчий бар'єр для adoption (не потрібно встановлювати), швидший прототип, спільний код між усіма платформами.
+
+### Потребують рішення до Phase 2
+
+4. **Формат міграцій** — SQL-файли (як Drizzle/Prisma) чи C# класи (як EF Core)?
+5. **Як генерувати код проведення** — декларативний mapping в метаданих чи тільки структура, без логіки?
+6. **Стратегія для регістрів бухгалтерії** — чи потрібен Plan of Accounts як prerequisite, чи можна спростити?
+
+### Архітектурні (можуть чекати)
+
+7. **Чи потрібна підтримка кастомних типів метаданих** (user-defined entity kinds)?
+
+---
+
+## 17. Дисклеймер
+
+> Цей проєкт не пов'язаний, не схвалений і не асоційований з компанією 1С або її продуктами. «1С» та «1С:Підприємство» є зареєстрованими товарними знаками. Цей проєкт є незалежним open-source інструментом, натхненним концепціями конфігуратора 1С:Підприємство.
