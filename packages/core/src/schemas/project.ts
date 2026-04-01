@@ -12,9 +12,15 @@ export const projectSchema = z.object({
     .object({
       target: z.literal("postgresql").default("postgresql"),
       schema: z.string().default("public"),
-      namingConvention: z.enum(["snake_case", "camelCase"]).default("snake_case"),
+      namingConvention: z
+        .enum(["snake_case", "camelCase"])
+        .default("snake_case"),
     })
-    .default({}),
+    .default(() => ({
+      target: "postgresql" as const,
+      schema: "public",
+      namingConvention: "snake_case" as const,
+    })),
   generation: z
     .object({
       tablePrefix: z.string().default(""),
@@ -23,7 +29,11 @@ export const projectSchema = z.object({
         .enum(["singleTable", "separateTables"])
         .default("singleTable"),
     })
-    .default({}),
+    .default(() => ({
+      tablePrefix: "",
+      enumStrategy: "pgEnum" as const,
+      constantsStrategy: "singleTable" as const,
+    })),
 })
 
 export type Project = z.infer<typeof projectSchema>

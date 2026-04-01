@@ -10,13 +10,19 @@
     "lint": "turbo lint",
     "format": "turbo format",
     "typecheck": "turbo typecheck",
-    "test": "turbo test"
+    "test": "turbo test",
+    "format:fix": "prettier --write .",
+    "format:check": "prettier --check .",
+    "deps:check": "syncpack lint",
+    "deps:fix": "syncpack fix",
+    "deps:update": "pnpm update -r && syncpack fix"
   },
   "devDependencies": {
     "prettier": "^3.8.1",
     "prettier-plugin-tailwindcss": "^0.7.2",
-    "turbo": "^2.8.17",
-    "typescript": "5.9.3"
+    "syncpack": "^14.3.0",
+    "turbo": "^2.9.3",
+    "typescript": "^6.0.2"
   },
   "packageManager": "pnpm@10.26.1",
   "engines": {

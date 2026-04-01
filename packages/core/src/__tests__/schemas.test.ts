@@ -98,7 +98,10 @@ describe("catalogSchema", () => {
 
 describe("documentSchema", () => {
   it("parses minimal document", () => {
-    const result = documentSchema.parse({ kind: "Document", name: "SalesOrder" })
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "SalesOrder",
+    })
     expect(result.numberLength).toBe(11)
     expect(result.posting).toBe(true)
     expect(result.numberPeriodicity).toBe("Year")
@@ -137,12 +140,8 @@ describe("informationRegisterSchema", () => {
       name: "ExchangeRates",
       periodicity: "Day",
       writeMode: "Independent",
-      dimensions: [
-        { name: "currency", type: "CatalogRef", ref: "Currencies" },
-      ],
-      resources: [
-        { name: "rate", type: "Numeric", precision: 15, scale: 4 },
-      ],
+      dimensions: [{ name: "currency", type: "CatalogRef", ref: "Currencies" }],
+      resources: [{ name: "rate", type: "Numeric", precision: 15, scale: 4 }],
     })
     expect(result.periodicity).toBe("Day")
     expect(result.dimensions).toHaveLength(1)
@@ -158,8 +157,18 @@ describe("accumulationRegisterSchema", () => {
       registerType: "Balance",
       recorderTypes: [{ kind: "Document", name: "SalesOrder" }],
       dimensions: [
-        { name: "product", type: "CatalogRef", ref: "Products", required: true },
-        { name: "warehouse", type: "CatalogRef", ref: "Warehouses", required: true },
+        {
+          name: "product",
+          type: "CatalogRef",
+          ref: "Products",
+          required: true,
+        },
+        {
+          name: "warehouse",
+          type: "CatalogRef",
+          ref: "Warehouses",
+          required: true,
+        },
       ],
       resources: [
         { name: "quantity", type: "Numeric", precision: 15, scale: 3 },
@@ -200,9 +209,7 @@ describe("customTableSchema", () => {
       kind: "CustomTable",
       name: "TempQueue",
       autoAddPrimaryKey: false,
-      attributes: [
-        { name: "payload", type: "Text" },
-      ],
+      attributes: [{ name: "payload", type: "Text" }],
     })
     expect(result.autoAddPrimaryKey).toBe(false)
   })

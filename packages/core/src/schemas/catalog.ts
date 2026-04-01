@@ -15,7 +15,9 @@ export const catalogSchema = z.object({
   codeLength: z.number().int().positive().default(9),
   codeType: z.enum(["String", "Number"]).default("String"),
   descriptionLength: z.number().int().positive().default(150),
-  hierarchyType: z.enum(["None", "FoldersAndItems", "ItemsOnly"]).default("None"),
+  hierarchyType: z
+    .enum(["None", "FoldersAndItems", "ItemsOnly"])
+    .default("None"),
   owners: z.array(metadataRefSchema).default([]),
   autonumber: z.boolean().default(true),
   codeUnique: z.boolean().default(true),

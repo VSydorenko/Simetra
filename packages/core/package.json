@@ -5,7 +5,7 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --noEmit",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
@@ -13,11 +13,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "zod": "^3.25.76"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "vitest": "^3.2.4",
-    "typescript": "^5.9.3"
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.58.0",
+    "vitest": "^4.1.2"
   },
   "exports": {
     ".": "./src/index.ts",
