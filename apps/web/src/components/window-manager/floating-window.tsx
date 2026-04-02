@@ -12,6 +12,9 @@ import { Badge } from '@workspace/ui/components/badge'
 import { cn } from '@workspace/ui/lib/utils'
 import { useUiStore, type FloatingWindow as FloatingWindowType } from '../../stores/ui-store'
 
+/** Поріг Y-координати (px) — якщо вікно перетягнуто вище цього значення, attach як вкладку */
+const ATTACH_THRESHOLD_Y = 10
+
 /** Title bar кнопка */
 function TitleBarButton({
   onClick,
@@ -144,6 +147,11 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
       dragHandleClassName="floating-window-drag-handle"
       style={{ zIndex: window.zIndex }}
       onDragStop={(_e, d) => {
+        // Якщо перетягнуто до верху контейнера — attach як вкладку
+        if (d.y <= ATTACH_THRESHOLD_Y) {
+          attachWindow(window.id)
+          return
+        }
         moveWindow(window.id, { x: d.x, y: d.y })
       }}
       onResizeStop={(_e, _dir, ref, _delta, position) => {

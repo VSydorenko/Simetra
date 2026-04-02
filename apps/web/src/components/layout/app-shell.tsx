@@ -13,6 +13,7 @@ import { CommandPalette } from '../command-palette'
 import { useUiStore } from '@/stores/ui-store'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useProjectStore } from '@/stores/project-store'
+import { createDefaultObject, generateUniqueName, getObjectNames } from '@/lib/metadata-defaults'
 
 export function AppShell() {
   const toggleCommandPalette = useUiStore((s) => s.toggleCommandPalette)
@@ -49,10 +50,19 @@ export function AppShell() {
     togglePropertiesPanel()
   })
 
-  // Ctrl+N — створити обʼєкт (реалізація у Модулі 6)
+  // Ctrl+N — створити обʼєкт (контекст-залежне створення)
   useHotkeys('mod+n', (e) => {
     e.preventDefault()
-    // TODO: createObject() — контекст-залежне створення у Модулі 6
+    const { selectedObject } = useUiStore.getState()
+    const kind = selectedObject?.kind ?? 'Catalog'
+    const model = useMetadataStore.getState().model
+    const existingNames = getObjectNames(model, kind)
+    const name = generateUniqueName(kind, existingNames)
+    const obj = createDefaultObject(kind, name)
+    const errors = useMetadataStore.getState().createObject(obj)
+    if (!errors) {
+      useUiStore.getState().selectObject({ kind, name })
+    }
   })
 
   // Ctrl+W — закрити активну вкладку

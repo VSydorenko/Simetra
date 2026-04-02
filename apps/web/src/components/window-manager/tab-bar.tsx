@@ -12,6 +12,9 @@ import { Badge } from '@workspace/ui/components/badge'
 import { cn } from '@workspace/ui/lib/utils'
 import { useUiStore, type TabItem } from '../../stores/ui-store'
 
+/** Поріг вертикального зміщення (px) для detach вкладки при drag */
+const DETACH_THRESHOLD_Y = 40
+
 /** Вкладка в TabBar — одиночний елемент */
 function Tab({
   tab,
@@ -33,6 +36,7 @@ function Tab({
     unpinTab,
     detachTab,
   } = useUiStore()
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
 
   const handleClick = useCallback(() => {
     setActiveTab(tab.id)
@@ -56,6 +60,37 @@ function Tab({
     [closeTab, tab.id],
   )
 
+  // --- Drag-to-detach: відстежуємо вертикальне зміщення ---
+  const handleDragStart = useCallback(
+    (e: MouseEvent) => {
+      // Ігноруємо якщо натиснута кнопка закриття або не лівий клік
+      if (e.button !== 0) return
+      dragStartRef.current = { x: e.clientX, y: e.clientY }
+
+      const handleMouseMove = (ev: globalThis.MouseEvent) => {
+        if (!dragStartRef.current) return
+        const dy = Math.abs(ev.clientY - dragStartRef.current.y)
+        if (dy > DETACH_THRESHOLD_Y) {
+          // Перевищено поріг — detach вкладку у floating window
+          dragStartRef.current = null
+          document.removeEventListener('mousemove', handleMouseMove)
+          document.removeEventListener('mouseup', handleMouseUp)
+          detachTab(tab.id)
+        }
+      }
+
+      const handleMouseUp = () => {
+        dragStartRef.current = null
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+      }
+
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+    },
+    [detachTab, tab.id],
+  )
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -71,7 +106,10 @@ function Tab({
             !isActive && 'bg-muted/30',
           )}
           onClick={handleClick}
-          onMouseDown={handleMiddleClick}
+          onMouseDown={(e) => {
+            handleMiddleClick(e)
+            handleDragStart(e)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()

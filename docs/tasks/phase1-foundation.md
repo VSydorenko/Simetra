@@ -310,7 +310,7 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 Тільки визначена система z-index рівнів. Ніяких `z-[9999]` — тільки семантичні шари.
 
 ### Тести
-- [ ] App shell рендериться без crash
+- [Х] App shell рендериться без crash
 - [ ] Hotkeys dispatch відповідні actions у store
 - [ ] Command Palette відкривається і фільтрує команди
 
@@ -384,8 +384,8 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 - [Х] Мінімізовані windows відображаються як іконки в нижній частині центральної панелі (taskbar-подібна смужка)
 
 #### Detach / Attach
-- [ ] Drag вкладки за межі Tab Bar → створення floating window
-- [ ] Drag floating window на Tab Bar → attach як вкладка
+- [Х] Drag вкладки за межі Tab Bar → створення floating window
+- [Х] Drag floating window на Tab Bar → attach як вкладка
 - [Х] Контекстне меню вкладки: "Відкрити у вікні" (Detach)
 - [Х] Контекстне меню floating window title bar: "Закріпити у вкладках" (Attach)
 - [ ] При detach/attach — стан обʼєкта (скрол, вибір поля) зберігається
@@ -413,18 +413,18 @@ Floating windows — це UI state (position, size, z-index). Вони не по
 Floating windows обмежені центральною панеллю. Якщо при resize панелі вікно виходить за межі — автоматичний clamp.
 
 ### Тести
-- [ ] `openTab` відкриває нову вкладку або активує існуючу
-- [ ] `detachTab` переміщує вкладку у floating window
-- [ ] `attachWindow` повертає floating window у Tab Bar
-- [ ] `closeTab` закриває вкладку, `closeAllTabs` закриває всі крім pinned
+- [Х] `openTab` відкриває нову вкладку або активує існуючу
+- [Х] `detachTab` переміщує вкладку у floating window
+- [Х] `attachWindow` повертає floating window у Tab Bar
+- [Х] `closeTab` закриває вкладку, `closeAllTabs` закриває всі крім pinned
 - [ ] Floating window draggable і resizable
-- [ ] `focusWindow` піднімає z-index
+- [Х] `focusWindow` піднімає z-index
 
 ### Definition of Done
 - [Х] UI store підтримує openTabs, activeTabId, floatingWindows
 - [Х] Tab lifecycle повністю працює (open, close, pin, reorder)
 - [Х] Floating window lifecycle працює (detach, attach, move, resize, minimize, maximize)
-- [ ] Detach/Attach працює через drag та контекстне меню
+- [Х] Detach/Attach працює через drag та контекстне меню
 - [Х] Z-order коректний для floating windows
 - [Х] Мінімізовані windows відображаються в taskbar
 - [Х] Видалення обʼєкта закриває його вкладки/вікна
@@ -436,8 +436,8 @@ Floating windows обмежені центральною панеллю. Якщ�
 ## Модуль 6: Дерево метаданих (ліва панель)
 
 ### Вимоги
-- [ ] Реалізувати дерево через `react-arborist`
-- [ ] Фіксовані кореневі розділи (не видаляються, не переміщуються):
+- [Х] Реалізувати дерево через `react-arborist`
+- [Х] Фіксовані кореневі розділи (не видаляються, не переміщуються):
   - Довідники (BookOpen) — Catalogs
   - Документи (FileText) — Documents
   - Перелічення (List) — Enumerations
@@ -445,20 +445,20 @@ Floating windows обмежені центральною панеллю. Якщ�
   - Регістри накопичення (BarChart3) — AccumulationRegisters
   - Константи (Settings) — Constants
   - Довільні таблиці (Table) — CustomTables
-- [ ] Badge з кількістю обʼєктів біля назви кожного розділу
-- [ ] Іконка типу для кожного обʼєкта всередині розділу
-- [ ] Контекстне меню (правий клік) на обʼєкті:
+- [Х] Badge з кількістю обʼєктів біля назви кожного розділу
+- [Х] Іконка типу для кожного обʼєкта всередині розділу
+- [Х] Контекстне меню (правий клік) на обʼєкті:
   - Додати (Insert / Ctrl+N) — з автоматичним ім'ям NewCatalog1, NewDocument1 тощо
   - Перейменувати (F2) — inline rename з валідацією PascalCase
   - Дублювати — глибока копія з суфіксом Copy
   - Видалити (Delete) — з діалогом підтвердження і перевіркою вхідних посилань
   - Де використовується — показати список вхідних посилань (реалізація action у Модулі 9, пункт меню додати зараз)
-- [ ] Контекстне меню на розділі:
+- [Х] Контекстне меню на розділі:
   - Додати новий обʼєкт цього типу
-- [ ] Вибір обʼєкта у дереві (single click) → виділення, оновлення propertiesPanel
-- [ ] Відкриття обʼєкта (double-click або Enter) → відкрити як нову вкладку в Tab Bar (або активувати існуючу, якщо вже відкрита)
-- [ ] Інкрементний пошук: Ctrl+F → поле пошуку вгорі панелі, фільтрація дерева
-- [ ] Keyboard navigation: стрілки, Enter для відкриття у вкладці, Space для розгортання/згортання
+- [Х] Вибір обʼєкта у дереві (single click) → виділення, оновлення propertiesPanel
+- [Х] Відкриття обʼєкта (double-click або Enter) → відкрити як нову вкладку в Tab Bar (або активувати існуючу, якщо вже відкрита)
+- [Х] Інкрементний пошук: Ctrl+F → поле пошуку вгорі панелі, фільтрація дерева
+- [Х] Keyboard navigation: стрілки, Enter для відкриття у вкладці, Space для розгортання/згортання
 
 ### Рекомендовані патерни
 
@@ -483,16 +483,16 @@ Floating windows обмежені центральною панеллю. Якщ�
 - [ ] Rename з невалідним ім'ям (не PascalCase) — відхиляється
 
 ### Definition of Done
-- [ ] 7 розділів з іконками рендеряться
-- [ ] CRUD обʼєктів працює через контекстне меню
-- [ ] Inline rename з валідацією
-- [ ] Видалення з перевіркою посилань
-- [ ] «Де використовується» у контекстному меню
-- [ ] Пошук фільтрує дерево
-- [ ] Keyboard navigation працює
-- [ ] Badge з кількістю обʼєктів
-- [ ] Усі labels через i18n
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] 7 розділів з іконками рендеряться
+- [Х] CRUD обʼєктів працює через контекстне меню
+- [Х] Inline rename з валідацією
+- [Х] Видалення з перевіркою посилань
+- [Х] «Де використовується» у контекстному меню
+- [Х] Пошук фільтрує дерево
+- [Х] Keyboard navigation працює
+- [Х] Badge з кількістю обʼєктів
+- [Х] Усі labels через i18n
+- [Х] `pnpm lint && pnpm typecheck` — green
 
 ---
 
