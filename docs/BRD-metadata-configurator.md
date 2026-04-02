@@ -728,7 +728,7 @@ metadata/
 | Validation | Zod | Runtime validation, TypeScript inference, генерація JSON Schema |
 | JSON Schema | zod-to-json-schema | Zod як single source of truth → JSON Schema як build artifact |
 | Keyboard | react-hotkeys-hook | Scoped hotkeys |
-| Icons | lucide-react | Вбудована залежність shadcn/ui |
+| Icons | hugeicons (@hugeicons/react + @hugeicons/core-free-icons) | Візуальна тема shadcn "mira" працює з hugeicons |
 | CLI (Phase 2) | citty (unjs) | Lightweight CLI framework для generate/validate/init |
 | Desktop shell (Phase 3) | Tauri 2.0 | Кросплатформний desktop-додаток, Rust-бекенд для нативного FS |
 | VS Code extension (Phase 3) | VS Code Extension API | Інтеграція в IDE, sidebar panel |
@@ -790,7 +790,7 @@ apps/
 ### 9.4. Ліва панель — дерево метаданих
 
 - Фіксовані кореневі розділи (Довідники, Документи, Перелічення, Регістри відомостей, Регістри накопичення, Константи, Довільні таблиці)
-- Іконки для кожного типу (lucide-react: BookOpen для довідників, FileText для документів, BarChart3 для регістрів накопичення, Database для регістрів відомостей, List для перелічень, Settings для констант)
+- Іконки для кожного типу (hugeicons: Book02Icon для довідників, File02Icon для документів, BarChart01Icon для регістрів накопичення, Database01Icon для регістрів відомостей, Menu01Icon для перелічень, Settings02Icon для констант)
 - Контекстне меню: Додати, Перейменувати, Видалити, Дублювати, Показати посилання
 - Інкрементний пошук: Ctrl+F → пошукове поле у верхній частині панелі
 - Кількість об'єктів у badge біля назви розділу

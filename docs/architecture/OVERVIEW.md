@@ -84,7 +84,7 @@ apps/
 | Resizable panels | react-resizable-panels |
 | Command palette | cmdk |
 | Hotkeys | react-hotkeys-hook |
-| Icons | lucide-react |
+| Icons | hugeicons (@hugeicons/react + @hugeicons/core-free-icons) |
 
 ### Core Layer (packages/core)
 

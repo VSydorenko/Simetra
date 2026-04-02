@@ -16,44 +16,37 @@ Simetra — open-source візуальний конфігуратор бізне
 ## Модуль 1: Технічний baseline
 
 ### Вимоги
-- [ ] Встановити в `apps/web` залежності Phase 1:
+- [Х] Встановити в `apps/web` залежності Phase 1:
   - `zustand`, `immer`, `zundo` — state management
   - `react-arborist` — дерево метаданих
   - `@tanstack/react-table` — таблиця реквізитів
   - `react-resizable-panels` — resizable layout
   - `cmdk` — command palette
   - `react-hotkeys-hook` — keyboard shortcuts
-  - `lucide-react` — іконки
-  - `@simetra/core` — workspace dependency (вже є як `@workspace/ui`)
-- [ ] Встановити `lucide-react` у `packages/ui` (замінить hugeicons для нових компонентів)
-- [ ] Додати в `packages/ui` shadcn-компоненти, потрібні для shell:
-  - `input`, `textarea`, `select`, `tabs`, `accordion`, `badge`, `dropdown-menu`, `dialog`, `tooltip`, `scroll-area`, `separator`, `table`, `command`, `context-menu`, `popover`, `sheet`
-- [ ] Визначити i18n стратегію для інтерфейсу (FR-090, FR-091):
-  - Встановити мінімальний i18n framework (наприклад, `react-i18next` або простий `t()` helper з JSON-словниками)
-  - Створити початкові словники `uk.json` та `en.json` для UI labels
+  - `i18next`, `react-i18next` — i18n
+  - `@simetra/core` — workspace dependency
+- [Х] Залишити hugeicons (mira theme) — додано `@hugeicons/react`, `@hugeicons/core-free-icons` у `packages/ui`
+- [Х] Додати в `packages/ui` shadcn-компоненти, потрібні для shell:
+  - `input`, `textarea`, `select`, `tabs`, `accordion`, `badge`, `dropdown-menu`, `dialog`, `tooltip`, `scroll-area`, `separator`, `table`, `command`, `context-menu`, `popover`, `sheet`, `input-group`
+- [Х] Визначити i18n стратегію для інтерфейсу (FR-090, FR-091):
+  - Встановлено повноцінний `react-i18next` з `i18next`
+  - Створені словники `apps/web/src/i18n/locales/uk.json` та `en.json`
+  - Конфігурація `apps/web/src/i18n/index.ts`, підключена в `main.tsx`
   - Українська — мова за замовчуванням
   - Усі наступні модулі мають використовувати `t('label.key')` замість хардкодених рядків
-- [ ] Перевірити сумісність усіх бібліотек з React 19 (поточна версія у workspace)
-- [ ] Запустити `pnpm build && pnpm lint && pnpm typecheck && pnpm test` — green baseline
+- [Х] Перевірити сумісність усіх бібліотек з React 19 (React 19.2.4 — всі peer deps OK)
+- [Х] Запустити `pnpm build && pnpm lint && pnpm typecheck && pnpm test` — green baseline
 
-### Clarify
-- [ ] Hugeicons vs Lucide: BRD і інструкції вказують на lucide-react, але scaffold використовує hugeicons
-  - Чому важливо: два icon-набори = несумісність, подвійні залежності
-  - Варіанти: A) повністю перейти на lucide; B) залишити hugeicons для існуючих, lucide для нових
-  - Вплив: UI consistency, bundle size
-- [ ] ThemeProvider: scaffold стартує з system theme, BRD каже dark-by-default
-  - Варіанти: A) змінити default на dark; B) залишити system
-  - Вплив: UI
-- [ ] i18n framework: повноцінний react-i18next чи мінімальний t() helper?
-  - Чому важливо: впливає на кожен UI-модуль, рефакторинг пізніше — дорогий
-  - Варіанти: A) react-i18next (namespace-и, lazy loading, plurals); B) простий Record<string, string> з t() функцією
-  - Вплив: архітектура, bundle size, DX
+### Clarify (вирішено)
+- [Х] Hugeicons vs Lucide: **залишаємо hugeicons** — візуальна тема shadcn "mira" працює з hugeicons. lucide-react не потрібен.
+- [Х] ThemeProvider: **залишаємо system** — scaffold default.
+- [Х] i18n framework: **повноцінний react-i18next** — пізніший рефакторинг дорожчий. Підтримка plurals, namespace-ів, lazy loading.
 
 ### Definition of Done
-- [ ] `pnpm build && pnpm lint && pnpm typecheck && pnpm test` — зелений
-- [ ] Усі Phase 1 залежності в package.json
-- [ ] shadcn-примітиви додані у `packages/ui`
-- [ ] i18n framework встановлений, початкові словники створені
+- [Х] `pnpm build && pnpm lint && pnpm typecheck && pnpm test` — зелений
+- [Х] Усі Phase 1 залежності в package.json
+- [Х] shadcn-примітиви додані у `packages/ui`
+- [Х] i18n framework встановлений, початкові словники створені
 
 ---
 

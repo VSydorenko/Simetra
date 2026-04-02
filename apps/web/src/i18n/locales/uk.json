@@ -1,0 +1,120 @@
+{
+  "app": {
+    "name": "Simetra",
+    "description": "Конфігуратор бізнес-метаданих"
+  },
+  "action": {
+    "save": "Зберегти",
+    "open": "Відкрити",
+    "new": "Новий проєкт",
+    "export": "Експорт",
+    "import": "Імпорт",
+    "undo": "Скасувати",
+    "redo": "Повторити",
+    "delete": "Видалити",
+    "rename": "Перейменувати",
+    "duplicate": "Дублювати",
+    "add": "Додати",
+    "cancel": "Скасувати",
+    "confirm": "Підтвердити",
+    "close": "Закрити",
+    "search": "Пошук",
+    "settings": "Налаштування"
+  },
+  "metadata": {
+    "kind": {
+      "Catalog": "Довідник",
+      "Document": "Документ",
+      "Enumeration": "Перелічення",
+      "InformationRegister": "Регістр відомостей",
+      "AccumulationRegister": "Регістр накопичення",
+      "Constant": "Константа",
+      "CustomTable": "Довільна таблиця"
+    },
+    "kindPlural": {
+      "Catalog": "Довідники",
+      "Document": "Документи",
+      "Enumeration": "Перелічення",
+      "InformationRegister": "Регістри відомостей",
+      "AccumulationRegister": "Регістри накопичення",
+      "Constant": "Константи",
+      "CustomTable": "Довільні таблиці"
+    },
+    "field": {
+      "name": "Імʼя",
+      "displayName": "Назва",
+      "description": "Опис",
+      "type": "Тип",
+      "required": "Обовʼязковий",
+      "indexed": "Індексований",
+      "unique": "Унікальний",
+      "defaultValue": "Значення за замовчуванням"
+    },
+    "section": {
+      "attributes": "Реквізити",
+      "tabularSections": "Табличні частини",
+      "dimensions": "Виміри",
+      "resources": "Ресурси",
+      "values": "Значення",
+      "settings": "Налаштування"
+    },
+    "standardAttribute": "Стандартний реквізит"
+  },
+  "tree": {
+    "addObject": "Додати {{kind}}",
+    "deleteObject": "Видалити",
+    "renameObject": "Перейменувати",
+    "duplicateObject": "Дублювати",
+    "whereUsed": "Де використовується",
+    "searchPlaceholder": "Пошук обʼєктів…"
+  },
+  "editor": {
+    "noSelection": "Виберіть обʼєкт у дереві",
+    "emptyAttributes": "Натисніть «Додати», щоб створити реквізит",
+    "emptyTabularSections": "Натисніть «Додати», щоб створити табличну частину",
+    "emptyValues": "Натисніть «Додати», щоб створити значення",
+    "addAttribute": "Додати реквізит",
+    "addTabularSection": "Додати табличну частину",
+    "addValue": "Додати значення",
+    "deleteSelected": "Видалити вибране",
+    "moveUp": "Вгору",
+    "moveDown": "Вниз"
+  },
+  "properties": {
+    "title": "Властивості",
+    "group": {
+      "general": "Основні",
+      "dataType": "Тип даних",
+      "constraints": "Обмеження",
+      "additional": "Додатково"
+    },
+    "projectSettings": "Параметри проєкту"
+  },
+  "project": {
+    "name": "Назва проєкту",
+    "displayName": "Відображувана назва",
+    "description": "Опис",
+    "version": "Версія",
+    "unsavedChanges": "Незбережені зміни",
+    "objectCount_one": "{{count}} обʼєкт",
+    "objectCount_few": "{{count}} обʼєкти",
+    "objectCount_many": "{{count}} обʼєктів"
+  },
+  "commandPalette": {
+    "placeholder": "Введіть команду або назву обʼєкта…",
+    "noResults": "Нічого не знайдено"
+  },
+  "validation": {
+    "errors_one": "{{count}} помилка",
+    "errors_few": "{{count}} помилки",
+    "errors_many": "{{count}} помилок",
+    "noErrors": "Без помилок"
+  },
+  "dialog": {
+    "deleteTitle": "Видалення обʼєкта",
+    "deleteMessage": "Ви впевнені, що хочете видалити «{{name}}»?",
+    "deleteWithReferences": "Обʼєкт «{{name}}» використовується в:",
+    "unsavedTitle": "Незбережені зміни",
+    "unsavedMessage": "Є незбережені зміни. Зберегти перед закриттям?"
+  }
+}

@@ -55,18 +55,18 @@ description: 'Правила побудови UI: React компоненти, la
 - Використовуй компоненти з `@workspace/ui` (packages/ui)
 - Для нових компонентів: `pnpm dlx shadcn@latest add <component> -c apps/web`
 - Tailwind CSS 4 для стилізації
-- lucide-react для іконок
+- hugeicons для іконок (@hugeicons/react + @hugeicons/core-free-icons)
 
 ### Іконки типів метаданих
-| Тип | Іконка (lucide-react) |
+| Тип | Іконка (hugeicons) |
 |-----|----------------------|
-| Catalog | BookOpen |
-| Document | FileText |
-| Enumeration | List |
-| AccumulationRegister | BarChart3 |
-| InformationRegister | Database |
-| Constant | Settings |
-| CustomTable | Table |
+| Catalog | Book02Icon |
+| Document | File02Icon |
+| Enumeration | Menu01Icon |
+| AccumulationRegister | BarChart01Icon |
+| InformationRegister | Database01Icon |
+| Constant | Settings02Icon |
+| CustomTable | Table01Icon |
 
 ## Keyboard Shortcuts
 

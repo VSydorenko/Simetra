@@ -54,7 +54,7 @@ Simetra працює з **бізнес-метаданими** — не табл�
 | Layout | react-resizable-panels |
 | Command Palette | cmdk (shadcn/ui Command) |
 | Keyboard | react-hotkeys-hook |
-| Icons | lucide-react |
+| Icons | hugeicons (@hugeicons/react + @hugeicons/core-free-icons) |
 | Tests | Vitest + Testing Library |
 | Monorepo | pnpm workspaces + turborepo |
 | TypeScript | strict mode |

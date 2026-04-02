@@ -1,0 +1,118 @@
+{
+  "app": {
+    "name": "Simetra",
+    "description": "Business metadata configurator"
+  },
+  "action": {
+    "save": "Save",
+    "open": "Open",
+    "new": "New project",
+    "export": "Export",
+    "import": "Import",
+    "undo": "Undo",
+    "redo": "Redo",
+    "delete": "Delete",
+    "rename": "Rename",
+    "duplicate": "Duplicate",
+    "add": "Add",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close": "Close",
+    "search": "Search",
+    "settings": "Settings"
+  },
+  "metadata": {
+    "kind": {
+      "Catalog": "Catalog",
+      "Document": "Document",
+      "Enumeration": "Enumeration",
+      "InformationRegister": "Information Register",
+      "AccumulationRegister": "Accumulation Register",
+      "Constant": "Constant",
+      "CustomTable": "Custom Table"
+    },
+    "kindPlural": {
+      "Catalog": "Catalogs",
+      "Document": "Documents",
+      "Enumeration": "Enumerations",
+      "InformationRegister": "Information Registers",
+      "AccumulationRegister": "Accumulation Registers",
+      "Constant": "Constants",
+      "CustomTable": "Custom Tables"
+    },
+    "field": {
+      "name": "Name",
+      "displayName": "Display Name",
+      "description": "Description",
+      "type": "Type",
+      "required": "Required",
+      "indexed": "Indexed",
+      "unique": "Unique",
+      "defaultValue": "Default Value"
+    },
+    "section": {
+      "attributes": "Attributes",
+      "tabularSections": "Tabular Sections",
+      "dimensions": "Dimensions",
+      "resources": "Resources",
+      "values": "Values",
+      "settings": "Settings"
+    },
+    "standardAttribute": "Standard attribute"
+  },
+  "tree": {
+    "addObject": "Add {{kind}}",
+    "deleteObject": "Delete",
+    "renameObject": "Rename",
+    "duplicateObject": "Duplicate",
+    "whereUsed": "Where used",
+    "searchPlaceholder": "Search objects…"
+  },
+  "editor": {
+    "noSelection": "Select an object in the tree",
+    "emptyAttributes": "Click \"Add\" to create an attribute",
+    "emptyTabularSections": "Click \"Add\" to create a tabular section",
+    "emptyValues": "Click \"Add\" to create a value",
+    "addAttribute": "Add attribute",
+    "addTabularSection": "Add tabular section",
+    "addValue": "Add value",
+    "deleteSelected": "Delete selected",
+    "moveUp": "Move up",
+    "moveDown": "Move down"
+  },
+  "properties": {
+    "title": "Properties",
+    "group": {
+      "general": "General",
+      "dataType": "Data Type",
+      "constraints": "Constraints",
+      "additional": "Additional"
+    },
+    "projectSettings": "Project Settings"
+  },
+  "project": {
+    "name": "Project name",
+    "displayName": "Display name",
+    "description": "Description",
+    "version": "Version",
+    "unsavedChanges": "Unsaved changes",
+    "objectCount_one": "{{count}} object",
+    "objectCount_other": "{{count}} objects"
+  },
+  "commandPalette": {
+    "placeholder": "Type a command or object name…",
+    "noResults": "No results found"
+  },
+  "validation": {
+    "errors_one": "{{count}} error",
+    "errors_other": "{{count}} errors",
+    "noErrors": "No errors"
+  },
+  "dialog": {
+    "deleteTitle": "Delete Object",
+    "deleteMessage": "Are you sure you want to delete \"{{name}}\"?",
+    "deleteWithReferences": "Object \"{{name}}\" is used in:",
+    "unsavedTitle": "Unsaved Changes",
+    "unsavedMessage": "You have unsaved changes. Save before closing?"
+  }
+}
