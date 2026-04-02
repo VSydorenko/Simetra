@@ -31,7 +31,7 @@ export function StatusBar() {
   return (
     <footer className="z-panels flex h-6 shrink-0 items-center gap-3 border-t border-border bg-background px-3 text-[0.6875rem] text-muted-foreground">
       <span>{t('project.objectCount', { count: objectCount })}</span>
-      <span>
+      <span className={errorCount > 0 ? 'text-destructive' : 'text-success'}>
         {errorCount > 0
           ? t('validation.errors', { count: errorCount })
           : t('validation.noErrors')}
@@ -42,7 +42,7 @@ export function StatusBar() {
         </span>
       )}
       {isDirty && (
-        <span className="ml-auto">{t('project.unsavedChanges')}</span>
+        <span className="ml-auto text-warning">{t('project.unsavedChanges')}</span>
       )}
     </footer>
   )

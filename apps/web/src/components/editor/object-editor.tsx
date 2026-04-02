@@ -8,12 +8,13 @@ import {
 } from '@workspace/ui/components/tabs'
 import { Badge } from '@workspace/ui/components/badge'
 import { Input } from '@workspace/ui/components/input'
+import { cn } from '@workspace/ui/lib/utils'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { AttributeTable } from './attribute-table'
 import { EnumValuesEditor } from './enum-values-editor'
 import { TabularSectionsEditor } from './tabular-sections-editor'
 import { SettingsForm } from './settings-form'
-import { KIND_ICONS } from '@/lib/metadata-icons'
+import { KIND_ICONS, KIND_COLORS, KIND_BADGE_CLASSES } from '@/lib/metadata-icons'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useUiStore } from '@/stores/ui-store'
@@ -103,8 +104,8 @@ export function ObjectEditor({ objectRef }: ObjectEditorProps) {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Заголовок обʼєкта */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-        <HugeiconsIcon icon={icon} size={16} className="shrink-0 text-muted-foreground" />
-        <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+        <HugeiconsIcon icon={icon} size={16} className={cn('shrink-0', KIND_COLORS[objectRef.kind])} />
+        <Badge variant="outline" className={cn('px-1.5 py-0 text-[10px]', KIND_BADGE_CLASSES[objectRef.kind])}>
           {t(`metadata.kind.${objectRef.kind}`)}
         </Badge>
         <Input

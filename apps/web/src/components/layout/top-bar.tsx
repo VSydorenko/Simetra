@@ -51,7 +51,7 @@ export function TopBar() {
         <Separator orientation="vertical" className="!h-4" />
         <span className="max-w-48 truncate text-xs text-muted-foreground">
           {projectName}
-          {isDirty ? ' *' : ''}
+          {isDirty && <span className="text-warning"> *</span>}
         </span>
       </div>
 

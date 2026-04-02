@@ -11,6 +11,7 @@ import {
 import { Badge } from '@workspace/ui/components/badge'
 import { cn } from '@workspace/ui/lib/utils'
 import { useUiStore, type TabItem } from '../../stores/ui-store'
+import { KIND_BADGE_CLASSES } from '@/lib/metadata-icons'
 
 /** Поріг вертикального зміщення (px) для detach вкладки при drag */
 const DETACH_THRESHOLD_Y = 40
@@ -102,7 +103,7 @@ function Tab({
             'group flex h-8 min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5',
             'border-r border-border px-2 text-xs outline-none',
             'transition-colors hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring',
-            isActive && 'bg-background shadow-sm',
+            isActive && 'bg-background shadow-sm border-b-2 border-primary',
             !isActive && 'bg-muted/30',
           )}
           onClick={handleClick}
@@ -127,7 +128,10 @@ function Tab({
           {/* Тип обʼєкта — компактний badge */}
           <Badge
             variant="outline"
-            className="shrink-0 px-1 py-0 text-[9px] leading-tight"
+            className={cn(
+              'shrink-0 px-1 py-0 text-[9px] leading-tight',
+              KIND_BADGE_CLASSES[tab.objectRef.kind],
+            )}
           >
             {t(`metadata.kind.${tab.objectRef.kind}`)}
           </Badge>
@@ -139,7 +143,7 @@ function Tab({
 
           {/* Dirty indicator */}
           {isDirty && (
-            <span className="shrink-0 text-xs text-amber-500">*</span>
+            <span className="shrink-0 text-xs text-warning">*</span>
           )}
 
           {/* Кнопка закриття */}

@@ -42,9 +42,9 @@
 
 ### Частина 1: Оновлення CSS-токенів у globals.css
 
-- [ ] Замінити ахроматичні oklch-значення на хроматичні (з ненульовим chroma) у **обох** режимах: `:root` (light) та `.dark`
-- [ ] Базовий hue-сімейство: **250 (slate-blue)** — бізнесовий, спокійний, професійний
-- [ ] Токени, що змінюються (із збереженням lightness-контрасту для WCAG AA):
+- [Х] Замінити ахроматичні oklch-значення на хроматичні (з ненульовим chroma) у **обох** режимах: `:root` (light) та `.dark`
+- [Х] Базовий hue-сімейство: **250 (slate-blue)** — бізнесовий, спокійний, професійний
+- [Х] Токени, що змінюються (із збереженням lightness-контрасту для WCAG AA):
 
   **Dark theme (.dark):**
   | Токен | Поточне | Нове | Пояснення |
@@ -87,7 +87,7 @@
   | `--sidebar` | `oklch(0.985 0 0)` | `oklch(0.97 0.01 255)` |
   | `--sidebar-primary` | `oklch(0.205 0 0)` | `oklch(0.45 0.18 250)` |
 
-- [ ] Оновити chart-кольори на хроматичні (п'ять різних hue):
+- [Х] Оновити chart-кольори на хроматичні (п'ять різних hue):
   - `--chart-1`: `oklch(0.65 0.15 250)` (blue)
   - `--chart-2`: `oklch(0.65 0.15 155)` (green)
   - `--chart-3`: `oklch(0.70 0.12 30)` (coral)
@@ -96,7 +96,7 @@
 
 ### Частина 2: Нові семантичні CSS-токени
 
-- [ ] Додати нові CSS custom properties до `:root` і `.dark` у `globals.css`:
+- [Х] Додати нові CSS custom properties до `:root` і `.dark` у `globals.css`:
   - `--success` / `--success-foreground` — для валідації ОК, saved status
   - `--warning` / `--warning-foreground` — для validation warnings
   - `--info` / `--info-foreground` — для інформаційних badge/підказок
@@ -121,15 +121,15 @@
   | `--info` | `oklch(0.55 0.15 240)` |
   | `--info-foreground` | `oklch(0.98 0.01 240)` |
 
-- [ ] Зареєструвати нові токени в `@theme inline` блоці:
+- [Х] Зареєструвати нові токени в `@theme inline` блоці:
   - `--color-success`, `--color-success-foreground`
   - `--color-warning`, `--color-warning-foreground`
   - `--color-info`, `--color-info-foreground`
 
 ### Частина 3: Кольори типів метаданих (KIND_COLORS)
 
-- [ ] Створити маппінг `KIND_COLORS` у `apps/web/src/lib/metadata-icons.ts` (поруч з `KIND_ICONS`)
-- [ ] Кожен MetadataKind отримує унікальний пастельний колір:
+- [Х] Створити маппінг `KIND_COLORS` у `apps/web/src/lib/metadata-icons.ts` (поруч з `KIND_ICONS`)
+- [Х] Кожен MetadataKind отримує унікальний пастельний колір:
 
   | MetadataKind | CSS-клас (Tailwind) | oklch Dark | oklch Light | Опис |
   |---|---|---|---|---|
@@ -141,46 +141,46 @@
   | Constant | `text-kind-constant` | `oklch(0.65 0.08 200)` | `oklch(0.48 0.10 200)` | Приглушений teal |
   | CustomTable | `text-kind-custom` | `oklch(0.65 0.06 250)` | `oklch(0.48 0.08 250)` | Нейтральний slate |
 
-- [ ] Реалізація: `KIND_COLORS` як `Record<MetadataKind, string>` — значення = Tailwind CSS клас
-- [ ] Визначити кольори через CSS custom properties в globals.css (щоб автоматично перемикались між dark/light):
+- [Х] Реалізація: `KIND_COLORS` як `Record<MetadataKind, string>` — значення = Tailwind CSS клас
+- [Х] Визначити кольори через CSS custom properties в globals.css (щоб автоматично перемикались між dark/light):
   - У `:root` і `.dark` додати `--kind-catalog`, `--kind-document`, `--kind-enum`, `--kind-info-reg`, `--kind-acc-reg`, `--kind-constant`, `--kind-custom`
   - В `@theme inline` додати відповідні `--color-kind-*` маппінги
-- [ ] `KIND_COLORS` зберігає Tailwind-клас, наприклад `'text-kind-catalog'` — без inline styles
+- [Х] `KIND_COLORS` зберігає Tailwind-клас, наприклад `'text-kind-catalog'` — без inline styles
 
 ### Частина 4: Застосування кольорів у компонентах
 
-- [ ] **Tree Panel** (`apps/web/src/components/layout/tree-panel.tsx`):
+- [Х] **Tree Panel** (`apps/web/src/components/layout/tree-panel.tsx`):
   - `SectionNode`: замінити `text-muted-foreground` на іконці → `KIND_COLORS[data.kind]`
   - `ObjectNode`: замінити `text-muted-foreground` на іконці → `KIND_COLORS[data.kind]`
   - `ObjectNode` selected: додати `border-l-2 border-primary` до `bg-accent` для виразнішого виділення
 
-- [ ] **Tab Bar** (`apps/web/src/components/window-manager/tab-bar.tsx`):
+- [Х] **Tab Bar** (`apps/web/src/components/window-manager/tab-bar.tsx`):
   - Active tab: додати `border-b-2 border-primary` замість тільки `bg-background shadow-sm`
   - Badge типу: застосувати фоновий колір kind-а (light-версія як `bg-kind-*/10` або через opacity)
   - Іконку типу поруч з badge — можна не додавати, достатньо кольорового badge
 
-- [ ] **Object Editor** (`apps/web/src/components/editor/object-editor.tsx`):
+- [Х] **Object Editor** (`apps/web/src/components/editor/object-editor.tsx`):
   - Іконка у заголовку: замінити `text-muted-foreground` → `KIND_COLORS[objectRef.kind]`
   - Badge типу: зробити трохи кольоровим (background з opacity від kind-кольору)
 
-- [ ] **Attribute Table** (`apps/web/src/components/editor/attribute-table.tsx`):
+- [Х] **Attribute Table** (`apps/web/src/components/editor/attribute-table.tsx`):
   - Виділений рядок: переконатись що `bg-accent` з новим blue-tinted accent візуально помітний
   - Toolbar border: переконатись що `border-b border-border` помітний з новим border token
 
-- [ ] **Status Bar** (`apps/web/src/components/layout/status-bar.tsx`):
+- [Х] **Status Bar** (`apps/web/src/components/layout/status-bar.tsx`):
   - Помилки: показувати кольором `text-destructive` замість `text-muted-foreground` коли `errorCount > 0`
   - "Немає помилок": показувати `text-success` (новий семантичний колір)
   - "Незбережені зміни": показувати `text-warning`
 
-- [ ] **Top Bar** (`apps/web/src/components/layout/top-bar.tsx`):
+- [Х] **Top Bar** (`apps/web/src/components/layout/top-bar.tsx`):
   - Dirty indicator (`*`): текст `text-warning` замість звичайного muted
 
 ### Частина 5: Тіні та бордери
 
-- [ ] **Панельні бордери**: переконатись що `border-border` з новим `oklch(1 0 0 / 14%)` дає видимий розподіл панелей (не торкати padding/margins!)
-- [ ] **Картки/Popover**: додати `shadow-sm` з тонкою тінню — через CSS custom property або Tailwind shadow
-- [ ] **Active tab**: додати subtle `shadow-sm` для виділення
-- [ ] **Floating windows**: переконатись що вже наявний shadow достатній з новою палітрою
+- [Х] **Панельні бордери**: переконатись що `border-border` з новим `oklch(1 0 0 / 14%)` дає видимий розподіл панелей (не торкати padding/margins!)
+- [Х] **Картки/Popover**: додати `shadow-sm` з тонкою тінню — через CSS custom property або Tailwind shadow
+- [Х] **Active tab**: додати subtle `shadow-sm` для виділення
+- [Х] **Floating windows**: переконатись що вже наявний shadow достатній з новою палітрою
 
 ## Clarify (питання перед імплементацією)
 
@@ -284,17 +284,17 @@ metadata-icons.ts
 
 ## Definition of Done
 
-- [ ] Всі CSS-токени в `:root` і `.dark` мають ненульовий chroma (окрім pure white/black де це семантично правильно)
-- [ ] `--success`, `--warning`, `--info` з відповідними foreground-токенами додані і зареєстровані в `@theme inline`
-- [ ] `KIND_COLORS` маппінг створений у `metadata-icons.ts`
-- [ ] Kind-кольори визначені через CSS custom properties і автоматично перемикаються між dark/light
-- [ ] Іконки в дереві метаданих мають унікальний колір на кожен тип
-- [ ] Активна вкладка має чіткий візуальний індикатор (border-b primary)
-- [ ] Selected tree node має чіткий візуальний індикатор (border-l primary)
-- [ ] Status bar використовує семантичні кольори (success/warning/destructive)
-- [ ] Focus ring (`--ring`) помітний при keyboard navigation
-- [ ] Обидві теми (dark + light) виглядають контрастно і читабельно
-- [ ] Контрастність тексту ≥ 4.5:1 (WCAG AA) для обох тем
-- [ ] Розміри, відступи, padding компонентів НЕ змінені
-- [ ] Жодних inline кольорів — тільки CSS vars через Tailwind
-- [ ] `pnpm build && pnpm lint && pnpm typecheck` — green
+- [Х] Всі CSS-токени в `:root` і `.dark` мають ненульовий chroma (окрім pure white/black де це семантично правильно)
+- [Х] `--success`, `--warning`, `--info` з відповідними foreground-токенами додані і зареєстровані в `@theme inline`
+- [Х] `KIND_COLORS` маппінг створений у `metadata-icons.ts`
+- [Х] Kind-кольори визначені через CSS custom properties і автоматично перемикаються між dark/light
+- [Х] Іконки в дереві метаданих мають унікальний колір на кожен тип
+- [Х] Активна вкладка має чіткий візуальний індикатор (border-b primary)
+- [Х] Selected tree node має чіткий візуальний індикатор (border-l primary)
+- [Х] Status bar використовує семантичні кольори (success/warning/destructive)
+- [Х] Focus ring (`--ring`) помітний при keyboard navigation
+- [Х] Обидві теми (dark + light) виглядають контрастно і читабельно
+- [Х] Контрастність тексту ≥ 4.5:1 (WCAG AA) для обох тем
+- [Х] Розміри, відступи, padding компонентів НЕ змінені
+- [Х] Жодних inline кольорів — тільки CSS vars через Tailwind
+- [Х] `pnpm build && pnpm lint && pnpm typecheck` — green

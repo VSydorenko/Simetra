@@ -34,7 +34,7 @@ import { cn } from '@workspace/ui/lib/utils'
 import type { MetadataKind, MetadataObject, ProjectModel } from '@simetra/core'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useUiStore, refToTabId } from '@/stores/ui-store'
-import { KIND_ICONS } from '@/lib/metadata-icons'
+import { KIND_ICONS, KIND_COLORS } from '@/lib/metadata-icons'
 import { createDefaultObject, generateUniqueName, getObjectNames, KIND_TO_KEY } from '@/lib/metadata-defaults'
 import { findReferences, type Reference } from '@/lib/find-references'
 
@@ -432,7 +432,7 @@ function SectionNode({
           <HugeiconsIcon
             icon={icon}
             size={14}
-            className="shrink-0 text-muted-foreground"
+            className={cn('shrink-0', KIND_COLORS[data.kind])}
           />
           <span className="truncate font-medium">
             {t(`metadata.kindPlural.${data.kind}`)}
@@ -520,14 +520,14 @@ function ObjectNode({
           className={cn(
             'flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
             'hover:bg-accent/50',
-            node.isSelected && 'bg-accent text-accent-foreground',
+            node.isSelected && 'bg-accent text-accent-foreground border-l-2 border-primary',
             node.isFocused && !node.isSelected && 'ring-1 ring-ring',
           )}
         >
           <HugeiconsIcon
             icon={icon}
             size={14}
-            className="shrink-0 text-muted-foreground"
+            className={cn('shrink-0', KIND_COLORS[data.kind])}
           />
           {node.isEditing ? (
             <RenameInput node={node} />
