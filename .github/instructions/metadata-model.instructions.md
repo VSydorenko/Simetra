@@ -1,0 +1,71 @@
+---
+applyTo: 'packages/core/**/*.ts'
+description: 'Правила роботи з Zod-схемами метаданих в @simetra/core'
+---
+
+## Принципи
+
+- `@simetra/core` — **single source of truth** для структури метаданих
+- Чистий TypeScript + Zod. Без React, без Node.js API, без UI
+- Кожен тип метаданих має Zod-схему, що відповідає BRD (секції 5.1–5.10)
+- TypeScript типи виводяться з Zod: `type Catalog = z.infer<typeof catalogSchema>`
+- JSON Schema генерується з Zod як build artifact (zod-to-json-schema)
+
+## Структура файлів
+
+```
+packages/core/src/schemas/
+├── index.ts                    — barrel export (re-exports усіх схем і типів)
+├── localized-string.ts         — LocalizedString {uk, en}
+├── field-type.ts               — PrimitiveFieldType, ReferenceFieldType, FieldType
+├── metadata-kind.ts            — MetadataKind enum
+├── metadata-ref.ts             — MetadataRef {kind, name}
+├── attribute.ts                — Attribute schema (поле об'єкта)
+├── tabular-section.ts          — TabularSection schema
+├── catalog.ts                  — Catalog (довідник)
+├── document.ts                 — Document (документ)
+├── enumeration.ts              — Enumeration (перелічення)
+├── information-register.ts     — InformationRegister (регістр відомостей)
+├── accumulation-register.ts    — AccumulationRegister (регістр накопичення)
+├── constant.ts                 — Constant (константа)
+├── custom-table.ts             — CustomTable (довільна таблиця)
+└── project.ts                  — Project schema (налаштування проєкту)
+```
+
+## ✅ ALWAYS
+
+- Додавай export у `index.ts` для нових схем
+- Стандартні реквізити визначені в BRD — не змінюй їх набір
+- Використовуй `localizedStringSchema` для displayName/description
+- Використовуй `metadataRefSchema` для посилань між об'єктами
+- Використовуй `fieldTypeSchema` для типів полів
+- Для кожного типу метаданих додавай `kind` literal: `z.literal("Catalog")`, `z.literal("Document")`
+- Тести в `packages/core/src/__tests__/` — обов'язково для нових/змінених схем
+- Запуск тестів: `pnpm --filter @simetra/core test`
+
+## ❌ NEVER
+
+- Не додавай runtime залежності крім Zod
+- Не змінюй стандартні реквізити типів без оновлення BRD
+- Не створюй циклічні залежності між схемами
+- Не використовуй `z.any()` — конкретні типи завжди
+- Не дублюй enum values — імпортуй з відповідних файлів
+
+## Ролі полів для регістрів
+
+Для InformationRegister та AccumulationRegister:
+- **Dimensions** — ключові поля (виміри)
+- **Resources** — значення (ресурси). Для AccumulationRegister — тільки Numeric
+- **Attributes** — додаткова інформація
+
+## Правила валідації імен
+
+- Імена об'єктів: PascalCase, латиниця, починається з літери
+- Імена полів: snake_case, латиниця, починається з літери
+- Заборонені SQL reserved words: `order`, `group`, `user`, `table`, `select`, `insert`, ...
+- Унікальність імен у межах батьківського контексту
+
+## ℹ️ Де шукати деталі
+- Повна специфікація типів: `docs/BRD-metadata-configurator.md`, секції 5.1–5.10
+- Система типів полів: `docs/BRD-metadata-configurator.md`, секція 6
+- Формат JSON: `docs/BRD-metadata-configurator.md`, секція 7
