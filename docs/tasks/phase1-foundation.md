@@ -250,23 +250,23 @@ localStorage обмежений 5–10 MB і не підтримує струк�
 ## Модуль 5: App shell і 3-panel layout
 
 ### Вимоги
-- [ ] Замінити заглушку в `apps/web/src/App.tsx` на app shell
-- [ ] Top bar:
+- [Х] Замінити заглушку в `apps/web/src/App.tsx` на app shell
+- [Х] Top bar:
   - Логотип / назва Simetra
   - Назва поточного проєкту (editable)
   - Кнопки: New, Open, Save (Ctrl+S), Export, Import
   - Dirty indicator (крапка або зірочка біля назви)
   - Undo (Ctrl+Z) / Redo (Ctrl+Shift+Z) кнопки (з disabled стан коли стек порожній)
-- [ ] 3-panel layout через `react-resizable-panels`:
+- [Х] 3-panel layout через `react-resizable-panels`:
   - Ліва панель (дерево) — 20%, min 200px
   - Центральна панель (редактор + tab bar + floating area) — 50%, min 30%
   - Права панель (властивості) — 30%, collapsible
-- [ ] Status bar:
+- [Х] Status bar:
   - Кількість обʼєктів у проєкті
   - Кількість validation errors/warnings
   - Dirty state текстом
   - Кількість відкритих вкладок / floating windows
-- [ ] Keyboard shortcuts через `react-hotkeys-hook`:
+- [Х] Keyboard shortcuts через `react-hotkeys-hook`:
   - Ctrl+K / Cmd+K — Command Palette
   - Ctrl+S / Cmd+S — Save
   - Ctrl+Z / Cmd+Z — Undo
@@ -275,16 +275,16 @@ localStorage обмежений 5–10 MB і не підтримує струк�
   - Ctrl+W / Cmd+W — Закрити активну вкладку
   - Ctrl+Tab / Ctrl+Shift+Tab — Переключення між вкладками
   - Alt+Enter — Відкрити властивості вибраного елемента (BRD §9.7)
-- [ ] Command Palette через `cmdk`:
+- [Х] Command Palette через `cmdk`:
   - Пошук обʼєктів по назві
   - Команди: New Catalog, New Document, New Enumeration тощо
   - Save, Export, Undo, Redo
-- [ ] Dark theme за замовчуванням
-- [ ] Compact density для data-dense UI:
+- [Х] Dark theme за замовчуванням
+- [Х] Compact density для data-dense UI:
   - Зменшені padding в таблицях, формах, деревах (8-12px замість 16px)
   - Monospace шрифт для технічних полів (імена обʼєктів, імена реквізитів)
   - Proportional шрифт для UI labels, descriptions (дефолтний шрифт теми mira)
-- [ ] Z-index система для шарів UI:
+- [Х] Z-index система для шарів UI:
   - panels(10) → tab-content(20) → floating-windows(30) → dialogs(40) → command-palette(50)
 
 ### Рекомендовані патерни
@@ -315,16 +315,16 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 - [ ] Command Palette відкривається і фільтрує команди
 
 ### Definition of Done
-- [ ] 3-panel layout рендериться і ресайзиться
-- [ ] Top bar з усіма кнопками (connected до stores)
-- [ ] Status bar показує актуальний стан
-- [ ] Keyboard shortcuts працюють (включно з Alt+Enter, Ctrl+W, Ctrl+Tab)
-- [ ] Command Palette відкривається по Ctrl+K
-- [ ] Dark theme за замовчуванням
-- [ ] Compact density застосовано
-- [ ] Z-index система визначена і задокументована
-- [ ] Усі UI labels через i18n (t() helper)
-- [ ] `pnpm build && pnpm lint && pnpm typecheck` — green
+- [Х] 3-panel layout рендериться і ресайзиться
+- [Х] Top bar з усіма кнопками (connected до stores)
+- [Х] Status bar показує актуальний стан
+- [Х] Keyboard shortcuts працюють (включно з Alt+Enter, Ctrl+W, Ctrl+Tab)
+- [Х] Command Palette відкривається по Ctrl+K
+- [Х] Dark theme за замовчуванням
+- [Х] Compact density застосовано
+- [Х] Z-index система визначена і задокументована
+- [Х] Усі UI labels через i18n (t() helper)
+- [Х] `pnpm build && pnpm lint && pnpm typecheck` — green
 
 ---
 
@@ -336,25 +336,25 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 ### Вимоги
 
 #### UI Store розширення для window management
-- [ ] Розширити UI store (`apps/web/src/stores/ui-store.ts`):
+- [Х] Розширити UI store (`apps/web/src/stores/ui-store.ts`):
   ```
   openTabs: Tab[]           // масив відкритих вкладок
   activeTabId: string | null // id активної вкладки
   floatingWindows: FloatingWindow[]  // масив floating windows
   activeWindowId: string | null      // id активного floating window (або null якщо активна tab)
   ```
-- [ ] Типи для Tab:
+- [Х] Типи для Tab:
   ```
   Tab { id: string, objectId: string, objectKind: MetadataKind, isPinned: boolean }
   ```
-- [ ] Типи для FloatingWindow:
+- [Х] Типи для FloatingWindow:
   ```
   FloatingWindow { id: string, objectId: string, objectKind: MetadataKind,
                    position: { x: number, y: number },
                    size: { width: number, height: number },
                    isMinimized: boolean, isMaximized: boolean, zIndex: number }
   ```
-- [ ] Actions для tab lifecycle:
+- [Х] Actions для tab lifecycle:
   - `openTab(objectId, kind)` — відкрити нову вкладку або активувати існуючу
   - `closeTab(tabId)`
   - `closeOtherTabs(tabId)` — закрити всі крім вказаної
@@ -363,7 +363,7 @@ App shell — це місце, де зʼєднуються stores, panels і sho
   - `pinTab(tabId)` / `unpinTab(tabId)`
   - `reorderTabs(fromIndex, toIndex)`
   - `setActiveTab(tabId)`
-- [ ] Actions для floating window lifecycle:
+- [Х] Actions для floating window lifecycle:
   - `detachTab(tabId)` — відʼєднати вкладку у floating window
   - `attachWindow(windowId)` — повернути floating window у Tab Bar
   - `moveWindow(windowId, position)`
@@ -374,20 +374,20 @@ App shell — це місце, де зʼєднуються stores, panels і sho
   - `focusWindow(windowId)` — підняти z-index
 
 #### Floating Window Container
-- [ ] Створити компонент `FloatingWindowContainer` — обгортка для floating windows у центральній панелі
-- [ ] Кожне floating window є draggable + resizable панеллю (розглянути react-rnd або dnd-kit)
-- [ ] Кожне floating window містить:
+- [Х] Створити компонент `FloatingWindowContainer` — обгортка для floating windows у центральній панелі
+- [Х] Кожне floating window є draggable + resizable панеллю (розглянути react-rnd або dnd-kit)
+- [Х] Кожне floating window містить:
   - Title bar з іконкою типу, імʼям обʼєкта, кнопками minimize/maximize/close
   - Вміст = `ObjectEditor` для відповідного обʼєкта
-- [ ] Floating windows обмежені viewport центральної панелі (не виходять за межі)
-- [ ] Z-order management: клік на window підіймає його вгору
-- [ ] Мінімізовані windows відображаються як іконки в нижній частині центральної панелі (taskbar-подібна смужка)
+- [Х] Floating windows обмежені viewport центральної панелі (не виходять за межі)
+- [Х] Z-order management: клік на window підіймає його вгору
+- [Х] Мінімізовані windows відображаються як іконки в нижній частині центральної панелі (taskbar-подібна смужка)
 
 #### Detach / Attach
 - [ ] Drag вкладки за межі Tab Bar → створення floating window
 - [ ] Drag floating window на Tab Bar → attach як вкладка
-- [ ] Контекстне меню вкладки: "Відкрити у вікні" (Detach)
-- [ ] Контекстне меню floating window title bar: "Закріпити у вкладках" (Attach)
+- [Х] Контекстне меню вкладки: "Відкрити у вікні" (Detach)
+- [Х] Контекстне меню floating window title bar: "Закріпити у вкладках" (Attach)
 - [ ] При detach/attach — стан обʼєкта (скрол, вибір поля) зберігається
 
 ### Рекомендовані патерни
@@ -421,15 +421,15 @@ Floating windows обмежені центральною панеллю. Якщ�
 - [ ] `focusWindow` піднімає z-index
 
 ### Definition of Done
-- [ ] UI store підтримує openTabs, activeTabId, floatingWindows
-- [ ] Tab lifecycle повністю працює (open, close, pin, reorder)
-- [ ] Floating window lifecycle працює (detach, attach, move, resize, minimize, maximize)
+- [Х] UI store підтримує openTabs, activeTabId, floatingWindows
+- [Х] Tab lifecycle повністю працює (open, close, pin, reorder)
+- [Х] Floating window lifecycle працює (detach, attach, move, resize, minimize, maximize)
 - [ ] Detach/Attach працює через drag та контекстне меню
-- [ ] Z-order коректний для floating windows
-- [ ] Мінімізовані windows відображаються в taskbar
-- [ ] Видалення обʼєкта закриває його вкладки/вікна
-- [ ] Усі labels через i18n
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] Z-order коректний для floating windows
+- [Х] Мінімізовані windows відображаються в taskbar
+- [Х] Видалення обʼєкта закриває його вкладки/вікна
+- [Х] Усі labels через i18n
+- [Х] `pnpm lint && pnpm typecheck` — green
 
 ---
 

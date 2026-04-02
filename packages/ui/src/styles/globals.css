@@ -131,3 +131,12 @@
     @apply font-sans;
   }
 }
+
+/* Z-index система: panels → tab-content → floating-windows → dialogs → command-palette */
+@layer utilities {
+  .z-panels { z-index: 10; }
+  .z-tab-content { z-index: 20; }
+  .z-floating { z-index: 30; }
+  .z-dialog { z-index: 40; }
+  .z-command-palette { z-index: 50; }
+}

@@ -102,7 +102,12 @@
   },
   "commandPalette": {
     "placeholder": "Введіть команду або назву обʼєкта…",
-    "noResults": "Нічого не знайдено"
+    "noResults": "Нічого не знайдено",
+    "group": {
+      "actions": "Дії",
+      "objects": "Обʼєкти",
+      "create": "Створити"
+    }
   },
   "validation": {
     "errors_one": "{{count}} помилка",
@@ -116,6 +121,28 @@
     "deleteWithReferences": "Обʼєкт «{{name}}» використовується в:",
     "unsavedTitle": "Незбережені зміни",
     "unsavedMessage": "Є незбережені зміни. Зберегти перед закриттям?"
+  },
+  "tabs": {
+    "close": "Закрити",
+    "closeOthers": "Закрити інші",
+    "closeAll": "Закрити всі",
+    "closeToRight": "Закрити праворуч",
+    "pin": "Закріпити",
+    "unpin": "Відкріпити",
+    "detach": "Відкрити у вікні",
+    "noOpenTabs": "Оберіть обʼєкт у дереві для редагування"
+  },
+  "floatingWindow": {
+    "attach": "Закріпити у вкладках",
+    "minimize": "Згорнути",
+    "maximize": "Розгорнути",
+    "restore": "Відновити",
+    "close": "Закрити"
+  },
+  "statusBar": {
+    "openTabs_one": "{{count}} вкладка",
+    "openTabs_few": "{{count}} вкладки",
+    "openTabs_many": "{{count}} вкладок"
   },
   "storage": {
     "saving": "Збереження…",

@@ -101,7 +101,12 @@
   },
   "commandPalette": {
     "placeholder": "Type a command or object name…",
-    "noResults": "No results found"
+    "noResults": "No results found",
+    "group": {
+      "actions": "Actions",
+      "objects": "Objects",
+      "create": "Create"
+    }
   },
   "validation": {
     "errors_one": "{{count}} error",
@@ -114,6 +119,27 @@
     "deleteWithReferences": "Object \"{{name}}\" is used in:",
     "unsavedTitle": "Unsaved Changes",
     "unsavedMessage": "You have unsaved changes. Save before closing?"
+  },
+  "tabs": {
+    "close": "Close",
+    "closeOthers": "Close Others",
+    "closeAll": "Close All",
+    "closeToRight": "Close to the Right",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "detach": "Open in Window",
+    "noOpenTabs": "Select an object in the tree to edit"
+  },
+  "floatingWindow": {
+    "attach": "Pin to Tabs",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close"
+  },
+  "statusBar": {
+    "openTabs_one": "{{count}} tab",
+    "openTabs_other": "{{count}} tabs"
   },
   "storage": {
     "saving": "Saving…",
