@@ -12,22 +12,22 @@ Simetra — браузерний конфігуратор метаданих, я
 
 ### Модуль A: Захист від втрати даних (швидкі фікси)
 
-- [ ] Додати `beforeunload` handler в `AppShell`, що попереджає при `isDirty === true`
+- [Х] Додати `beforeunload` handler в `AppShell`, що попереджає при `isDirty === true`
   - Handler підписується на dirty-стан через `useMetadataStore.version` і `useProjectStore.lastSavedVersion`
   - Стандартний браузерний діалог "Ви впевнені, що хочете покинути сторінку?"
   - Не показувати при `isDirty === false`
-- [ ] Відображати шлях/назву директорії проєкту у StatusBar
+- [Х] Відображати шлях/назву директорії проєкту у StatusBar
   - Якщо проєкт збережений через FS API → `projectHandle.name` (назва кореневої папки)
   - Якщо імпортовано з ZIP → i18n ключ `statusBar.importedFromZip`
   - Якщо новий проєкт → i18n ключ `statusBar.notSaved`
   - Формат: іконка папки + назва, ліворуч від лічильника об'єктів
-- [ ] Додати `projectDirectoryName` до `ProjectState` — computed з `projectHandle?.name ?? null`
+- [Х] Додати `projectDirectoryName` до `ProjectState` — computed з `projectHandle?.name ?? null`
 
 ### Модуль B: IndexedDB persistence layer
 
-- [ ] Встановити бібліотеку `idb` (typed wrapper для IndexedDB, ~2KB gzipped)
+- [Х] Встановити бібліотеку `idb` (typed wrapper для IndexedDB, ~2KB gzipped)
   - `pnpm --filter web add idb`
-- [ ] Створити `apps/web/src/storage/session-db.ts` — обгортка над IndexedDB:
+- [Х] Створити `apps/web/src/storage/session-db.ts` — обгортка над IndexedDB:
   - Database name: `simetra-session`
   - Object store `session`: зберігає `{ projectHandle, projectModel, lastSavedVersion, savedAt }`
   - Object store `drafts`: зберігає `{ model, version, savedAt }` для crash recovery
@@ -38,13 +38,13 @@ Simetra — браузерний конфігуратор метаданих, я
     - `saveDraft(model, version)` — зберігає draft для crash recovery
     - `loadDraft()` — повертає draft або null
     - `clearDraft()` — видаляє draft
-- [ ] IndexedDB підтримує зберігання `FileSystemDirectoryHandle` як structured clone
+- [Х] IndexedDB підтримує зберігання `FileSystemDirectoryHandle` як structured clone
   - Це нативна можливість браузера, серіалізація не потрібна
   - Після reload handle треба перевалідувати через `handle.requestPermission({ mode: 'readwrite' })`
 
 ### Модуль C: Auto-restore сесії при старті
 
-- [ ] Створити `apps/web/src/hooks/use-session-restore.ts`:
+- [Х] Створити `apps/web/src/hooks/use-session-restore.ts`:
   - При mount AppShell — перевірити IndexedDB на збережену сесію
   - Якщо є сесія з `projectHandle`:
     1. Спробувати `handle.requestPermission({ mode: 'readwrite' })`
@@ -52,25 +52,25 @@ Simetra — браузерний конфігуратор метаданих, я
     3. Якщо `denied` або `prompt` — показати Welcome Screen з кнопкою "Відновити доступ"
   - Якщо є сесія без handle (import з ZIP) — завантажити model з IndexedDB draft
   - Якщо сесії немає — показати Welcome Screen
-- [ ] `requestPermission()` вимагає user gesture (клік) — auto-restore **можливий** тільки якщо дозвіл вже granted (persistent permission). Інакше — потрібна кнопка
-- [ ] Логіка вибору джерела при restore:
+- [Х] `requestPermission()` вимагає user gesture (клік) — auto-restore **можливий** тільки якщо дозвіл вже granted (persistent permission). Інакше — потрібна кнопка
+- [Х] Логіка вибору джерела при restore:
   - IndexedDB draft.version > file system version → запитати: "Є незбережена чернетка. Відновити?" (crash recovery)
   - IndexedDB draft.version === file system version → завантажити з FS (основне джерело)
   - IndexedDB draft.version < file system version → завантажити з FS (файли новіші, наприклад git pull)
 
 ### Модуль D: Auto-save draft у IndexedDB
 
-- [ ] Підписатися на зміни metadata-store через `useMetadataStore.subscribe()`
+- [Х] Підписатися на зміни metadata-store через `useMetadataStore.subscribe()`
   - Debounce: зберігати draft **не частіше ніж раз на 3 секунди**
   - Зберігати в IndexedDB object store `drafts`
   - Draft — це підстраховка від крашу, не заміна Ctrl+S
-- [ ] При успішному `saveProject()` (на диск) — очистити draft
-- [ ] При `newProject()` — очистити draft і session
-- [ ] При `openProject()` або `importProject()` — оновити session, очистити draft
+- [Х] При успішному `saveProject()` (на диск) — очистити draft
+- [Х] При `newProject()` — очистити draft і session
+- [Х] При `openProject()` або `importProject()` — оновити session, очистити draft
 
 ### Модуль E: Welcome Screen
 
-- [ ] Створити `apps/web/src/components/editor/welcome-screen.tsx`
+- [Х] Створити `apps/web/src/components/editor/welcome-screen.tsx`
   - Відображається в центральній панелі, коли немає відкритих вкладок І немає завантаженого проєкту (або це новий порожній проєкт)
   - Дії:
     - "Створити новий проєкт" → `useProjectStore.newProject()`
@@ -79,21 +79,21 @@ Simetra — браузерний конфігуратор метаданих, я
     - "Відновити останній проєкт" → restore session з IndexedDB (показувати тільки якщо є збережена сесія)
   - Стиль: мінімалістичний, по центру, з іконками hugeicons
   - Dark theme, compact density — відповідно до дизайн-системи
-- [ ] Показувати назву останнього проєкту і дату збереження (з IndexedDB session metadata)
-- [ ] Keyboard shortcut: Enter на "Відновити останній" якщо він доступний
+- [Х] Показувати назву останнього проєкту і дату збереження (з IndexedDB session metadata)
+- [Х] Keyboard shortcut: Enter на "Відновити останній" якщо він доступний
 
 ### Модуль F: Інтеграція session з project-store
 
-- [ ] Розширити `ProjectState`:
+- [Х] Розширити `ProjectState`:
   - `projectDirectoryName: string | null` — `handle?.name ?? null`
   - `sessionRestoreStatus: 'idle' | 'restoring' | 'awaiting-permission' | 'restored' | 'failed'`
-- [ ] Розширити `ProjectActions`:
+- [Х] Розширити `ProjectActions`:
   - `restoreSession()` — зчитати IndexedDB, перевалідувати handle, завантажити model
   - `requestDirectoryPermission()` — для кнопки "Відновити доступ" з Welcome Screen
-- [ ] При saveProject — оновити session в IndexedDB (зберегти handle + version)
-- [ ] При openProject — оновити session в IndexedDB
-- [ ] При newProject — очистити session і draft в IndexedDB
-- [ ] При importProject — зберегти model як draft (без handle), очистити session
+- [Х] При saveProject — оновити session в IndexedDB (зберегти handle + version)
+- [Х] При openProject — оновити session в IndexedDB
+- [Х] При newProject — очистити session і draft в IndexedDB
+- [Х] При importProject — зберегти model як draft (без handle), очистити session
 
 ## Clarify (питання перед імплементацією)
 

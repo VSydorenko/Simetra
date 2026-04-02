@@ -12,6 +12,11 @@ import {
 import { useUiStore } from '@/stores/ui-store'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useProjectStore } from '@/stores/project-store'
+import {
+  createDefaultObject,
+  generateUniqueName,
+  getObjectNames,
+} from '@/lib/metadata-defaults'
 import type { MetadataKind } from '@simetra/core'
 
 const METADATA_KINDS: MetadataKind[] = [
@@ -23,14 +28,6 @@ const METADATA_KINDS: MetadataKind[] = [
   'Constant',
   'CustomTable',
 ]
-
-/** Генерує унікальне ім'я для нового обʼєкта: NewCatalog1, NewCatalog2... */
-function generateName(kind: MetadataKind, existingNames: string[]): string {
-  const base = `New${kind}`
-  let i = 1
-  while (existingNames.includes(`${base}${i}`)) i++
-  return `${base}${i}`
-}
 
 export function CommandPalette() {
   const { t } = useTranslation()
@@ -60,25 +57,15 @@ export function CommandPalette() {
 
   const handleCreateObject = (kind: MetadataKind) => {
     close()
-    const { model: m, createObject } = useMetadataStore.getState()
-    const kindToKey: Record<MetadataKind, keyof typeof m> = {
-      Catalog: 'catalogs',
-      Document: 'documents',
-      Enumeration: 'enumerations',
-      InformationRegister: 'informationRegisters',
-      AccumulationRegister: 'accumulationRegisters',
-      Constant: 'constants',
-      CustomTable: 'customTables',
+    const model = useMetadataStore.getState().model
+    const existingNames = getObjectNames(model, kind)
+    const name = generateUniqueName(kind, existingNames)
+    const obj = createDefaultObject(kind, name)
+    const errors = useMetadataStore.getState().createObject(obj)
+    if (!errors) {
+      selectObject({ kind, name })
+      useUiStore.getState().openTab({ kind, name })
     }
-    const existing = (m[kindToKey[kind]] as { name: string }[]).map(
-      (o) => o.name,
-    )
-    const name = generateName(kind, existing)
-
-    // Мінімальний обʼєкт для створення — kind + name обовʼязково
-    const obj = { kind, name } as Parameters<typeof createObject>[0]
-    createObject(obj)
-    selectObject({ kind, name })
   }
 
   // Зібрати всі обʼєкти для пошуку
@@ -119,6 +106,7 @@ export function CommandPalette() {
   const handleSelectObject = (kind: MetadataKind, name: string) => {
     close()
     selectObject({ kind, name })
+    useUiStore.getState().openTab({ kind, name })
   }
 
   return (

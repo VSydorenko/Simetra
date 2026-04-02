@@ -476,6 +476,19 @@ export class WebStorage implements StorageProvider {
     return this.openFromZip()
   }
 
+  /** Відкрити проєкт із вже відомого handle (для restore session) */
+  async openFromHandle(handle: FileSystemDirectoryHandle): Promise<OpenResult> {
+    const fileMap = await readFromDirectory(handle)
+    const { parsed, warnings: parseWarnings } = parseFileStructure(fileMap)
+    const { model, warnings: validationWarnings } = buildProjectModel(parsed)
+
+    return {
+      model,
+      handle,
+      warnings: [...parseWarnings, ...validationWarnings],
+    }
+  }
+
   // --- Private: File System Access API ---
 
   private async openFromDirectory(): Promise<OpenResult> {

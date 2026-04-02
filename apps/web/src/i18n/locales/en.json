@@ -164,6 +164,8 @@
   "validation": {
     "errors_one": "{{count}} error",
     "errors_other": "{{count}} errors",
+    "warnings_one": "{{count}} warning",
+    "warnings_other": "{{count}} warnings",
     "noErrors": "No errors"
   },
   "dialog": {
@@ -192,7 +194,10 @@
   },
   "statusBar": {
     "openTabs_one": "{{count}} tab",
-    "openTabs_other": "{{count}} tabs"
+    "openTabs_other": "{{count}} tabs",
+    "projectDirectory": "{{name}}",
+    "importedFromZip": "Imported from ZIP",
+    "notSaved": "Not saved"
   },
   "storage": {
     "saving": "Saving…",
@@ -209,5 +214,30 @@
     "warningsMessage": "Some files have validation errors:",
     "missingProject": "project.meta.json not found",
     "invalidJson": "Invalid JSON in file {{file}}"
+  },
+  "welcome": {
+    "title": "Welcome to Simetra",
+    "subtitle": "Business metadata configurator",
+    "newProject": "New Project",
+    "newProjectDescription": "Create a new empty project",
+    "openProject": "Open Project",
+    "openProjectDescription": "Open a project from folder",
+    "importZip": "Import from ZIP",
+    "importZipDescription": "Import a project from a ZIP archive",
+    "restoreSession": "Restore Last Project",
+    "restoreSessionDescription": "Reopen \"{{name}}\" (saved {{date}})",
+    "reopenProject": "Reopen Project",
+    "reopenProjectDescription": "Grant access to continue working",
+    "permissionDenied": "Access to the project folder was denied",
+    "restoring": "Restoring session…",
+    "recoverDraft": "Recover Unsaved Changes",
+    "recoverDraftDescription": "Found unsaved changes from a previous session",
+    "loadFromBackup": "Load from Backup",
+    "loadFromBackupDescription": "Restore data from IndexedDB backup"
+  },
+  "session": {
+    "restoreError": "Failed to restore session: {{error}}",
+    "draftSaved": "Draft saved",
+    "draftRecovered": "Draft recovered"
   }
 }

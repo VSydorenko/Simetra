@@ -16,6 +16,8 @@ import { DEFAULT_PANEL_LAYOUT, useUiStore } from '@/stores/ui-store'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useProjectStore } from '@/stores/project-store'
 import { createDefaultObject, generateUniqueName, getObjectNames } from '@/lib/metadata-defaults'
+import { useSessionRestore } from '@/hooks/use-session-restore'
+import { startDraftSync } from '@/storage/draft-sync'
 
 export function AppShell() {
   const toggleCommandPalette = useUiStore((s) => s.toggleCommandPalette)
@@ -25,6 +27,27 @@ export function AppShell() {
   const setPanelLayout = useUiStore((s) => s.setPanelLayout)
   const setPropertiesPanelOpen = useUiStore((s) => s.setPropertiesPanelOpen)
   const propertiesPanelRef = useRef<PanelImperativeHandle | null>(null)
+
+  // Відновлення сесії при mount
+  useSessionRestore()
+
+  // beforeunload — попередження при незбережених змінах
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (useProjectStore.getState().getIsDirty()) {
+        e.preventDefault()
+        // Сумісність з Safari та старими браузерами
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
+
+  // Запуск auto-draft sync
+  useEffect(() => {
+    return startDraftSync()
+  }, [])
 
   useEffect(() => {
     const panel = propertiesPanelRef.current
@@ -82,6 +105,7 @@ export function AppShell() {
     const errors = useMetadataStore.getState().createObject(obj)
     if (!errors) {
       useUiStore.getState().selectObject({ kind, name })
+      useUiStore.getState().openTab({ kind, name })
     }
   })
 
@@ -123,7 +147,7 @@ export function AppShell() {
         onLayoutChanged={setPanelLayout}
       >
         <Panel id="tree" defaultSize={DEFAULT_PANEL_LAYOUT.tree} minSize={12}>
-          <div className="h-full border-r border-border">
+          <div className="h-full min-w-[200px] border-r border-border">
             <TreePanel />
           </div>
         </Panel>

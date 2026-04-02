@@ -8,10 +8,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@workspace/ui/components/context-menu'
-import { Badge } from '@workspace/ui/components/badge'
 import { cn } from '@workspace/ui/lib/utils'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useUiStore, type FloatingWindow as FloatingWindowType } from '../../stores/ui-store'
 import { ObjectEditor } from '../editor/object-editor'
+import { KIND_ICONS, KIND_COLORS } from '../../lib/metadata-icons'
 
 /** Поріг Y-координати (px) — якщо вікно перетягнуто вище цього значення, attach як вкладку */
 const ATTACH_THRESHOLD_Y = 10
@@ -186,13 +187,12 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
                   : maximizeWindow(window.id)
               }
             >
-              {/* Badge типу */}
-              <Badge
-                variant="outline"
-                className="shrink-0 px-1 py-0 text-[9px] leading-tight"
-              >
-                {t(`metadata.kind.${window.objectRef.kind}`)}
-              </Badge>
+              {/* Іконка типу */}
+              <HugeiconsIcon
+                icon={KIND_ICONS[window.objectRef.kind]}
+                size={14}
+                className={cn('shrink-0', KIND_COLORS[window.objectRef.kind])}
+              />
 
               {/* Імʼя обʼєкта */}
               <span className="min-w-0 truncate font-mono text-xs">

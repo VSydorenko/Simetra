@@ -166,6 +166,9 @@
     "errors_one": "{{count}} помилка",
     "errors_few": "{{count}} помилки",
     "errors_many": "{{count}} помилок",
+    "warnings_one": "{{count}} попередження",
+    "warnings_few": "{{count}} попередження",
+    "warnings_many": "{{count}} попереджень",
     "noErrors": "Без помилок"
   },
   "dialog": {
@@ -195,7 +198,10 @@
   "statusBar": {
     "openTabs_one": "{{count}} вкладка",
     "openTabs_few": "{{count}} вкладки",
-    "openTabs_many": "{{count}} вкладок"
+    "openTabs_many": "{{count}} вкладок",
+    "projectDirectory": "{{name}}",
+    "importedFromZip": "Імпортовано з ZIP",
+    "notSaved": "Не збережено"
   },
   "storage": {
     "saving": "Збереження…",
@@ -212,5 +218,30 @@
     "warningsMessage": "Деякі файли мають помилки валідації:",
     "missingProject": "Файл project.meta.json не знайдено",
     "invalidJson": "Невалідний JSON у файлі {{file}}"
+  },
+  "welcome": {
+    "title": "Ласкаво просимо до Simetra",
+    "subtitle": "Конфігуратор бізнес-метаданих",
+    "newProject": "Новий проєкт",
+    "newProjectDescription": "Створити новий порожній проєкт",
+    "openProject": "Відкрити проєкт",
+    "openProjectDescription": "Відкрити проєкт із папки",
+    "importZip": "Імпортувати з ZIP",
+    "importZipDescription": "Імпортувати проєкт із ZIP-архіву",
+    "restoreSession": "Відновити останній проєкт",
+    "restoreSessionDescription": "Відкрити \"{{name}}\" (збережено {{date}})",
+    "reopenProject": "Відновити доступ",
+    "reopenProjectDescription": "Надати доступ до папки проєкту",
+    "permissionDenied": "Доступ до папки проєкту відхилено",
+    "restoring": "Відновлення сесії…",
+    "recoverDraft": "Відновити незбережені зміни",
+    "recoverDraftDescription": "Знайдено незбережені зміни попередньої сесії",
+    "loadFromBackup": "Завантажити з резервної копії",
+    "loadFromBackupDescription": "Відновити дані з резервної копії IndexedDB"
+  },
+  "session": {
+    "restoreError": "Не вдалося відновити сесію: {{error}}",
+    "draftSaved": "Чернетку збережено",
+    "draftRecovered": "Чернетку відновлено"
   }
 }

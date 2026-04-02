@@ -55,6 +55,17 @@ const DEFAULT_WINDOW_POSITION: FloatingWindowPosition = { x: 50, y: 50 }
 // Зміщення для каскадного розміщення нових вікон
 const WINDOW_CASCADE_OFFSET = 30
 
+/** Знайти наступне non-minimized вікно з найвищим zIndex */
+function findNextActiveWindow(
+  windows: FloatingWindow[],
+  excludeId?: string,
+): string | null {
+  const candidates = windows
+    .filter((w) => !w.isMinimized && w.id !== excludeId)
+    .sort((a, b) => b.zIndex - a.zIndex)
+  return candidates[0]?.id ?? null
+}
+
 export interface UiState {
   // Вибраний обʼєкт у дереві
   selectedObject: MetadataRef | null
@@ -161,8 +172,8 @@ const DEFAULT_EXPANDED: string[] = [
 
 export const DEFAULT_PANEL_LAYOUT: Layout = {
   tree: 20,
-  editor: 55,
-  properties: 25,
+  editor: 50,
+  properties: 30,
 }
 
 export const UI_STORE_STORAGE_KEY = 'simetra-ui'
@@ -464,16 +475,13 @@ export const useUiStore = create<UiStore>()(
         }
       }
 
-      const activeTab = newActiveTabId
-        ? newTabs.find((t) => t.id === newActiveTabId)
-        : null
-
       return {
         openTabs: newTabs,
         activeTabId: newActiveTabId,
+        activeWindowId: windowId,
         floatingWindows: [...state.floatingWindows, win],
         nextWindowZIndex: newZIndex + 1,
-        selectedObject: activeTab?.objectRef ?? null,
+        selectedObject: win.objectRef,
         selectedField: null,
       }
     }),
@@ -484,13 +492,20 @@ export const useUiStore = create<UiStore>()(
       if (!win) return state
 
       const tabId = refToTabId(win.objectRef)
+      const remainingWindows = state.floatingWindows.filter(
+        (w) => w.id !== windowId,
+      )
+      const newActiveWindowId =
+        state.activeWindowId === windowId
+          ? null
+          : state.activeWindowId
+
       // Вже є вкладка з таким id — просто закрити вікно
       if (state.openTabs.some((t) => t.id === tabId)) {
         return {
-          floatingWindows: state.floatingWindows.filter(
-            (w) => w.id !== windowId,
-          ),
+          floatingWindows: remainingWindows,
           activeTabId: tabId,
+          activeWindowId: newActiveWindowId,
           selectedObject: win.objectRef,
           selectedField: null,
         }
@@ -505,25 +520,67 @@ export const useUiStore = create<UiStore>()(
       return {
         openTabs: [...state.openTabs, tab],
         activeTabId: tabId,
-        floatingWindows: state.floatingWindows.filter(
-          (w) => w.id !== windowId,
-        ),
+        floatingWindows: remainingWindows,
+        activeWindowId: newActiveWindowId,
         selectedObject: win.objectRef,
         selectedField: null,
       }
     }),
 
       closeWindow: (windowId) =>
-    set((state) => ({
-      floatingWindows: state.floatingWindows.filter((w) => w.id !== windowId),
-    })),
+    set((state) => {
+      const remainingWindows = state.floatingWindows.filter(
+        (w) => w.id !== windowId,
+      )
+
+      if (state.activeWindowId !== windowId) {
+        return { floatingWindows: remainingWindows }
+      }
+
+      const nextWindowId = findNextActiveWindow(remainingWindows)
+      const nextWindow = nextWindowId
+        ? remainingWindows.find((w) => w.id === nextWindowId)
+        : null
+
+      // Якщо є активна вкладка і немає наступного вікна — переключити контекст на неї
+      const activeTab = !nextWindow && state.activeTabId
+        ? state.openTabs.find((t) => t.id === state.activeTabId)
+        : null
+
+      return {
+        floatingWindows: remainingWindows,
+        activeWindowId: nextWindowId,
+        selectedObject: nextWindow?.objectRef ?? activeTab?.objectRef ?? null,
+        selectedField: null,
+      }
+    }),
 
       minimizeWindow: (windowId) =>
-    set((state) => ({
-      floatingWindows: state.floatingWindows.map((w) =>
+    set((state) => {
+      const newWindows = state.floatingWindows.map((w) =>
         w.id === windowId ? { ...w, isMinimized: true, isMaximized: false } : w,
-      ),
-    })),
+      )
+
+      if (state.activeWindowId !== windowId) {
+        return { floatingWindows: newWindows }
+      }
+
+      const nextWindowId = findNextActiveWindow(newWindows)
+      const nextWindow = nextWindowId
+        ? newWindows.find((w) => w.id === nextWindowId)
+        : null
+
+      const activeTab = !nextWindow && state.activeTabId
+        ? state.openTabs.find((t) => t.id === state.activeTabId)
+        : null
+
+      return {
+        floatingWindows: newWindows,
+        activeWindowId: nextWindowId,
+        selectedObject: nextWindow?.objectRef ?? activeTab?.objectRef ?? null,
+        selectedField: null,
+      }
+    }),
 
       maximizeWindow: (windowId) =>
     set((state) => ({
@@ -652,8 +709,24 @@ export const useUiStore = create<UiStore>()(
     }),
     {
       name: UI_STORE_STORAGE_KEY,
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
+      migrate: (persisted, version) => {
+        const state = persisted as Record<string, unknown>
+        if (version < 2) {
+          // v1 → v2: оновити layout defaults з 20/55/25 на 20/50/30
+          const layout = state.panelLayout as Layout | undefined
+          if (
+            layout &&
+            layout.tree === 20 &&
+            layout.editor === 55 &&
+            layout.properties === 25
+          ) {
+            state.panelLayout = { ...DEFAULT_PANEL_LAYOUT }
+          }
+        }
+        return state
+      },
       partialize: (state) => ({
         expandedTreeNodes: state.expandedTreeNodes,
         activeEditorTab: state.activeEditorTab,

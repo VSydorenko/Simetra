@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@workspace/ui/components/button'
 import { Separator } from '@workspace/ui/components/separator'
@@ -31,6 +32,40 @@ export function TopBar() {
   const canUndo = useStore(useMetadataStore.temporal, (s) => s.pastStates.length > 0)
   const canRedo = useStore(useMetadataStore.temporal, (s) => s.futureStates.length > 0)
 
+  const [isEditing, setIsEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const cancelledRef = useRef(false)
+
+  const startEditing = useCallback(() => {
+    cancelledRef.current = false
+    setDraft(projectName)
+    setIsEditing(true)
+  }, [projectName])
+
+  const commitEdit = useCallback(() => {
+    if (cancelledRef.current) return
+    const trimmed = draft.trim()
+    if (trimmed.length > 0 && trimmed !== projectName) {
+      useMetadataStore.getState().updateProject({ name: trimmed })
+    }
+    setIsEditing(false)
+  }, [draft, projectName])
+
+  const cancelEdit = useCallback(() => {
+    cancelledRef.current = true
+    setDraft(projectName)
+    setIsEditing(false)
+  }, [projectName])
+
+  // AutoFocus + selectAll при вході в режим редагування
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditing])
+
   const handleNew = () => useProjectStore.getState().newProject('NewProject')
   const handleOpen = () => void useProjectStore.getState().openProject()
   const handleSave = () => void useProjectStore.getState().saveProject()
@@ -49,10 +84,33 @@ export function TopBar() {
           {t('app.name')}
         </span>
         <Separator orientation="vertical" className="!h-4" />
-        <span className="max-w-48 truncate text-xs text-muted-foreground">
-          {projectName}
-          {isDirty && <span className="text-warning"> *</span>}
-        </span>
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitEdit()
+              if (e.key === 'Escape') cancelEdit()
+            }}
+            className="max-w-48 rounded-sm border border-border bg-transparent px-1 text-xs text-muted-foreground outline-none focus:border-primary"
+          />
+        ) : (
+          <span
+            className="max-w-48 cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground"
+            onClick={startEditing}
+            onKeyDown={(e) => {
+              if (e.key === 'F2') startEditing()
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            {projectName}
+            {isDirty && <span className="text-warning"> *</span>}
+          </span>
+        )}
       </div>
 
       {/* Кнопки дій */}

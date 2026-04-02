@@ -16,62 +16,56 @@
 
 ### 1. Command Palette — використання `createDefaultObject` замість raw cast
 
-- [ ] У `apps/web/src/components/command-palette.tsx` замінити ручне створення об'єкта `{ kind, name }` на виклик `createDefaultObject(kind, existingNames)` з `apps/web/src/lib/metadata-defaults.ts`
-- [ ] Використовувати `generateUniqueName(kind, existingNames)` для генерації імені замість дублювання логіки
-- [ ] Після створення об'єкта перевіряти результат `createObject(...)` — якщо Zod-валідація відхилила, НЕ викликати `selectObject` і `openTab`
-- [ ] Після успішного створення — викликати і `selectObject`, і `openTab` (зараз palette може не відкривати вкладку)
-- [ ] Переконатися, що створення Constant через палітру працює коректно (має бути `valueType: 'String'` за замовчуванням)
+- [Х] У `apps/web/src/components/command-palette.tsx` замінити ручне створення об'єкта `{ kind, name }` на виклик `createDefaultObject(kind, existingNames)` з `apps/web/src/lib/metadata-defaults.ts`
+- [Х] Використовувати `generateUniqueName(kind, existingNames)` для генерації імені замість дублювання логіки
+- [Х] Після створення об'єкта перевіряти результат `createObject(...)` — якщо Zod-валідація відхилила, НЕ викликати `selectObject` і `openTab`
+- [Х] Після успішного створення — викликати і `selectObject`, і `openTab` (зараз palette може не відкривати вкладку)
+- [Х] Переконатися, що створення Constant через палітру працює коректно (має бути `valueType: 'String'` за замовчуванням)
 
 ### 2. Нормалізація `activeWindowId` у UI store
 
-- [ ] У `apps/web/src/stores/ui-store.ts`, action `detachTab`: після створення floating window — встановити `activeWindowId` на id нового вікна (зараз не встановлюється)
-- [ ] У action `attachWindow`: після переміщення window у tabs — якщо `activeWindowId === windowId`, скинути `activeWindowId` на `null` і встановити `activeTabId` на нову вкладку
-- [ ] У action `closeWindow`: якщо `activeWindowId === windowId`, знайти наступне вікно з найвищим `zIndex` і встановити `activeWindowId` на нього (або `null`, якщо вікон більше немає)
-- [ ] У action `minimizeWindow`: якщо `activeWindowId === windowId`, аналогічно знайти наступне non-minimized вікно або скинути на `null`
-- [ ] Після кожної lifecycle-action, що видаляє або мінімізує вікно, має діяти інваріант: `activeWindowId` завжди вказує на існуюче, non-minimized вікно або `null`
+- [Х] У `apps/web/src/stores/ui-store.ts`, action `detachTab`: після створення floating window — встановити `activeWindowId` на id нового вікна (зараз не встановлюється)
+- [Х] У action `attachWindow`: після переміщення window у tabs — якщо `activeWindowId === windowId`, скинути `activeWindowId` на `null` і встановити `activeTabId` на нову вкладку
+- [Х] У action `closeWindow`: якщо `activeWindowId === windowId`, знайти наступне вікно з найвищим `zIndex` і встановити `activeWindowId` на нього (або `null`, якщо вікон більше немає)
+- [Х] У action `minimizeWindow`: якщо `activeWindowId === windowId`, аналогічно знайти наступне non-minimized вікно або скинути на `null`
+- [Х] Після кожної lifecycle-action, що видаляє або мінімізує вікно, має діяти інваріант: `activeWindowId` завжди вказує на існуюче, non-minimized вікно або `null`
 
 ### 3. Layout defaults відповідно до BRD
 
-- [ ] У `apps/web/src/stores/ui-store.ts` змінити `DEFAULT_PANEL_LAYOUT` з `{ tree: 20, editor: 55, properties: 25 }` на `{ tree: 20, editor: 50, properties: 30 }` (BRD §9.1, ui-architecture.instructions.md)
-- [ ] Додати persist migration (version bump) щоб у існуючих користувачів із збереженими layout в localStorage застосувалися нові defaults замість старих значень
-- [ ] У компоненті, що використовує `react-resizable-panels`, забезпечити min-width для tree panel ≥ 200px (BRD §9.1: "min 200px")
+- [Х] У `apps/web/src/stores/ui-store.ts` змінити `DEFAULT_PANEL_LAYOUT` з `{ tree: 20, editor: 55, properties: 25 }` на `{ tree: 20, editor: 50, properties: 30 }` (BRD §9.1, ui-architecture.instructions.md)
+- [Х] Додати persist migration (version bump) щоб у існуючих користувачів із збереженими layout в localStorage застосувалися нові defaults замість старих значень
+- [Х] У компоненті, що використовує `react-resizable-panels`, забезпечити min-width для tree panel ≥ 200px (BRD §9.1: "min 200px")
 
 ### 4. Status bar — канал warnings
 
-- [ ] У `apps/web/src/components/layout/status-bar.tsx` додати відображення кількості warnings
-- [ ] Джерело даних: `openWarnings` з `useProjectStore` (масив попереджень, що повертається при open)
-- [ ] Формат відображення: аналогічний до errors — іконка + кількість, інший колір (жовтий/amber замість червоного)
-- [ ] Warnings показуються поруч з errors: "N errors · M warnings"
+- [Х] У `apps/web/src/components/layout/status-bar.tsx` додати відображення кількості warnings
+- [Х] Джерело даних: `openWarnings` з `useProjectStore` (масив попереджень, що повертається при open)
+- [Х] Формат відображення: аналогічний до errors — іконка + кількість, інший колір (жовтий/amber замість червоного)
+- [Х] Warnings показуються поруч з errors: "N errors · M warnings"
 
 ### 5. Редагування назви проєкту в top bar
 
-- [ ] У `apps/web/src/components/layout/top-bar.tsx` замінити read-only `<span>` із назвою проєкту на inline editable input
-- [ ] Поведінка: клік або F2 на назві → inline input з'являється, blur або Enter → commit через `updateProject({ name: newName })`, Escape → cancel
-- [ ] Валідація: непорожній рядок (мінімум 1 символ після trim)
-- [ ] Action `updateProject` вже існує в metadata store — використовувати його
+- [Х] У `apps/web/src/components/layout/top-bar.tsx` замінити read-only `<span>` із назвою проєкту на inline editable input
+- [Х] Поведінка: клік або F2 на назві → inline input з'являється, blur або Enter → commit через `updateProject({ name: newName })`, Escape → cancel
+- [Х] Валідація: непорожній рядок (мінімум 1 символ після trim)
+- [Х] Action `updateProject` вже існує в metadata store — використовувати його
 
 ### 6. Іконка типу у title bar floating window
 
-- [ ] У `apps/web/src/components/window-manager/floating-window.tsx` замінити компонент `Badge` для типу метаданих на іконку з `KIND_ICONS` (`apps/web/src/lib/metadata-icons.ts`)
-- [ ] Використати `HugeiconsIcon` з відповідною іконкою для `objectKind` — аналогічно тому, як це зроблено в дереві метаданих та `ObjectEditor`
-- [ ] Зберегти текстове ім'я об'єкта поруч з іконкою
+- [Х] У `apps/web/src/components/window-manager/floating-window.tsx` замінити компонент `Badge` для типу метаданих на іконку з `KIND_ICONS` (`apps/web/src/lib/metadata-icons.ts`)
+- [Х] Використати `HugeiconsIcon` з відповідною іконкою для `objectKind` — аналогічно тому, як це зроблено в дереві метаданих та `ObjectEditor`
+- [Х] Зберегти текстове ім'я об'єкта поруч з іконкою
 
 ## Clarify (питання перед імплементацією)
 
-- [ ] Min-width через CSS або `minSize` prop?
-  - Чому це важливо: `react-resizable-panels` має власний `minSize` prop (у відсотках), але BRD вказує "200px" (абсолютне значення)
-  - Варіанти: (A) `minSize` prop із розрахунком % від контейнера, (B) CSS `min-width: 200px` на внутрішньому елементі, (C) `ResizeObserver` для динамічного перерахунку
-  - Вплив на рішення: UX при дуже вузьких viewport
+- [Х] Min-width через CSS або `minSize` prop?
+  - Рішення: (B) CSS `min-width: 200px` на внутрішньому елементі, бо react-resizable-panels minSize працює у відсотках
 
-- [ ] Persist migration strategy
-  - Чому це важливо: зміна `DEFAULT_PANEL_LAYOUT` без міграції залишить у існуючих користувачів старі збережені значення 20/55/25
-  - Варіанти: (A) version bump + migration function у zustand persist, (B) просто видалити збережений layout при невідповідності
-  - Вплив на рішення: данні користувача
+- [Х] Persist migration strategy
+  - Рішення: (A) version bump (1→2) + migrate function у zustand persist, міграція лише якщо збережений layout точно дорівнює старим defaults 20/55/25
 
-- [ ] Scope warnings у status bar
-  - Чому це важливо: `openWarnings` відноситься до помилок парсингу при open, а metadata store validation errors — до поточного стану
-  - Варіанти: (A) показувати тільки `openWarnings`, (B) composite selector з обох джерел, (C) окремі лічильники
-  - Вплив на рішення: UX status bar, що саме користувач бачить
+- [Х] Scope warnings у status bar
+  - Рішення: (A) показувати тільки `openWarnings` (попередження парсингу файлів при open/import)
 
 ## Рекомендовані патерни
 
@@ -158,13 +152,13 @@ metadataStore.createObject(object)         ← Zod validation
 
 ## Definition of Done
 
-- [ ] Створення Constant через Command Palette працює без помилок валідації
-- [ ] Всі шляхи створення об'єктів використовують `createDefaultObject`: дерево (`tree-panel.tsx`), command palette (`command-palette.tsx`), hotkey Ctrl+N (`app-shell.tsx`)
-- [ ] `activeWindowId` завжди вказує на існуюче non-minimized вікно або `null` (інваріант)
-- [ ] `DEFAULT_PANEL_LAYOUT` = 20/50/30, persist migration працює
-- [ ] Min-width tree panel забезпечено
-- [ ] Status bar показує warnings поруч з errors
-- [ ] Назва проєкту редагується inline з commit-on-blur
-- [ ] Floating window title bar показує іконку типу замість Badge
-- [ ] Існуючі тести (`pnpm --filter web test`) проходять
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] Створення Constant через Command Palette працює без помилок валідації
+- [Х] Всі шляхи створення об'єктів використовують `createDefaultObject`: дерево (`tree-panel.tsx`), command palette (`command-palette.tsx`), hotkey Ctrl+N (`app-shell.tsx`)
+- [Х] `activeWindowId` завжди вказує на існуюче non-minimized вікно або `null` (інваріант)
+- [Х] `DEFAULT_PANEL_LAYOUT` = 20/50/30, persist migration працює
+- [Х] Min-width tree panel забезпечено
+- [Х] Status bar показує warnings поруч з errors
+- [Х] Назва проєкту редагується inline з commit-on-blur
+- [Х] Floating window title bar показує іконку типу замість Badge
+- [Х] Існуючі тести (`pnpm --filter web test`) проходять
+- [Х] `pnpm lint && pnpm typecheck` — green
