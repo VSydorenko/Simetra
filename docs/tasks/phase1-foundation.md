@@ -131,7 +131,7 @@ Simetra — open-source візуальний конфігуратор бізне
 ## Модуль 3: State layer
 
 ### Вимоги
-- [ ] Створити metadata store (`apps/web/src/stores/metadata-store.ts`)
+- [Х] Створити metadata store (`apps/web/src/stores/metadata-store.ts`)
   - Zustand + immer middleware
   - zundo middleware для undo/redo
   - Тримає `ProjectModel` з core
@@ -142,7 +142,7 @@ Simetra — open-source візуальний конфігуратор бізне
   - Selector: getObjectByKindAndName, getObjectsByKind, getAllObjects
   - Selector: isDirty (є незбережені зміни)
   - Валідація через Zod-схеми core при кожній мутації
-- [ ] Створити UI store (`apps/web/src/stores/ui-store.ts`)
+- [Х] Створити UI store (`apps/web/src/stores/ui-store.ts`)
   - Zustand без immer (простий стан)
   - selectedObjectId: {kind, name} | null
   - selectedAttributeIndex: number | null
@@ -150,7 +150,7 @@ Simetra — open-source візуальний конфігуратор бізне
   - activeTab: string
   - propertiesPanelCollapsed: boolean
   - searchQuery: string
-- [ ] Створити project store або slice (`apps/web/src/stores/project-store.ts`)
+- [Х] Створити project store або slice (`apps/web/src/stores/project-store.ts`)
   - projectPath: string | null (для File System Access API)
   - projectName: string
   - isNewProject: boolean
@@ -184,13 +184,13 @@ Selections, expanded tree nodes, active tab — це не метадані. Як
 Один централізований metadata store, а не catalogStore + documentStore + registerStore. Інакше referential integrity стає неможливою.
 
 ### Definition of Done
-- [ ] Metadata store створює/редагує/видаляє обʼєкти всіх 7 типів
-- [ ] Undo/Redo працює для всіх мутацій метаданих
-- [ ] UI store тримає selections і стан панелей окремо
-- [ ] Object-level Zod validation при кожній мутації
+- [Х] Metadata store створює/редагує/видаляє обʼєкти всіх 7 типів
+- [Х] Undo/Redo працює для всіх мутацій метаданих
+- [Х] UI store тримає selections і стан панелей окремо
+- [Х] Object-level Zod validation при кожній мутації
 - [ ] Project-level validation debounced
-- [ ] isDirty правильно відстежує незбережені зміни
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] isDirty правильно відстежує незбережені зміни
+- [Х] `pnpm lint && pnpm typecheck` — green
 
 ---
 
