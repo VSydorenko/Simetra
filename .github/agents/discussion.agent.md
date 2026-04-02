@@ -1,6 +1,6 @@
 ---
 description: "Discussion-only mode: explanations and architecture discussions without code generation"
-tools: [vscode/askQuestions, execute/getTerminalOutput, execute/runInTerminal, read, agent, search, web, todo, vscode.mermaid-chat-features/renderMermaidDiagram]
+tools: [vscode/memory, vscode/askQuestions, execute/getTerminalOutput, execute/runInTerminal, read, agent, browser, search, web, github/get_commit, github/get_copilot_job_status, github/get_file_contents, github/get_label, github/get_latest_release, github/get_me, github/get_release_by_tag, github/get_tag, github/issue_read, github/list_branches, github/list_commits, github/list_issue_types, github/list_issues, github/list_pull_requests, github/list_releases, github/list_tags, github/search_code, github/search_issues, github/search_pull_requests, github/search_repositories, 'io.github.upstash/context7/*', 'shadcn/*', 'io.github.chromedevtools/chrome-devtools-mcp/*', vscode.mermaid-chat-features/renderMermaidDiagram, todo]
 handoffs:
   - label: Create Task
     agent: create-task

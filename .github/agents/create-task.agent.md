@@ -1,6 +1,6 @@
 ---
 description: "Prepare a task file for GitHub Copilot coding agent based on analysis"
-tools: [vscode/askQuestions, read/readFile, agent/runSubagent, edit/createFile, edit/editFiles, search/changes, search/codebase, search/fileSearch, search/listDirectory, search/searchResults, search/textSearch, search/searchSubagent, search/usages, todo, vscode.mermaid-chat-features/renderMermaidDiagram]
+tools: [vscode/askQuestions, read/readFile, agent, edit/createFile, edit/editFiles, edit/rename, search, vscode.mermaid-chat-features/renderMermaidDiagram, todo]
 ---
 
 # Task Preparation Agent

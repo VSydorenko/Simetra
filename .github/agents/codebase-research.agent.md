@@ -1,6 +1,6 @@
 ---
 description: "Fast read-only codebase exploration for Simetra. Use this agent INSTEAD of generic Explore when you need to investigate project structure, find existing patterns, check Zod schemas, or gather context before implementing a feature. Returns structured summary — never modifies files."
-tools: [read/readFile, read/problems, search/codebase, search/fileSearch, search/listDirectory, search/textSearch, search/usages, search/searchResults, agent/runSubagent, web/fetch, web/githubRepo, todo]
+tools: [read/problems, read/readFile, agent, search/codebase, search/fileSearch, search/listDirectory, search/searchResults, search/textSearch, search/usages, web, todo]
 agents: []
 ---
 
