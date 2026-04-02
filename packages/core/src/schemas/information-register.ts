@@ -2,12 +2,16 @@ import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { metadataRefSchema } from "./metadata-ref"
+import { isSqlReservedWord } from "./sql-reserved-words"
 
 /** BRD §5.5 — Information Register */
 export const informationRegisterSchema = z.object({
   $schema: z.string().optional(),
   kind: z.literal("InformationRegister"),
-  name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only"),
+  name: z
+    .string()
+    .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
+    .refine((n) => !isSqlReservedWord(n), { message: "Name is a SQL reserved word" }),
   displayName: localizedStringSchema.optional(),
 
   // Type settings
@@ -20,9 +24,27 @@ export const informationRegisterSchema = z.object({
   recorderTypes: z.array(metadataRefSchema).default([]),
 
   // Field roles
-  dimensions: z.array(attributeSchema).default([]),
-  resources: z.array(attributeSchema).default([]),
-  attributes: z.array(attributeSchema).default([]),
+  dimensions: z
+    .array(attributeSchema)
+    .refine(
+      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
+      { message: "Dimension names must be unique" },
+    )
+    .default([]),
+  resources: z
+    .array(attributeSchema)
+    .refine(
+      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
+      { message: "Resource names must be unique" },
+    )
+    .default([]),
+  attributes: z
+    .array(attributeSchema)
+    .refine(
+      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
+      { message: "Attribute names must be unique" },
+    )
+    .default([]),
 })
 
 export type InformationRegister = z.infer<typeof informationRegisterSchema>

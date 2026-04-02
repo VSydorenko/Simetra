@@ -1,0 +1,29 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/custom-table.json",
+  "kind": "CustomTable",
+  "name": "AuditLog",
+  "displayName": {
+    "uk": "Журнал аудиту",
+    "en": "Audit Log"
+  },
+  "autoAddPrimaryKey": true,
+  "attributes": [
+    {
+      "name": "event_type",
+      "type": "String",
+      "required": true,
+      "indexed": true,
+      "unique": false,
+      "defaultValue": null,
+      "length": 50
+    },
+    {
+      "name": "payload",
+      "type": "Text",
+      "required": false,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null
+    }
+  ]
+}

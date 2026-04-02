@@ -1,0 +1,70 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/document.json",
+  "kind": "Document",
+  "name": "SalesOrder",
+  "displayName": {
+    "uk": "Замовлення покупця",
+    "en": "Sales Order"
+  },
+  "numberLength": 11,
+  "numberType": "String",
+  "autonumber": true,
+  "numberPeriodicity": "Year",
+  "posting": true,
+  "registerMovements": [
+    {
+      "kind": "AccumulationRegister",
+      "name": "InventoryBalance"
+    }
+  ],
+  "attributes": [
+    {
+      "name": "contractor",
+      "type": "CatalogRef",
+      "required": true,
+      "indexed": true,
+      "unique": false,
+      "defaultValue": null,
+      "ref": "Contractors"
+    }
+  ],
+  "tabularSections": [
+    {
+      "name": "items",
+      "displayName": {
+        "uk": "Товари"
+      },
+      "attributes": [
+        {
+          "name": "product",
+          "type": "CatalogRef",
+          "required": true,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "ref": "Products"
+        },
+        {
+          "name": "quantity",
+          "type": "Numeric",
+          "required": true,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "precision": 15,
+          "scale": 3
+        },
+        {
+          "name": "price",
+          "type": "Numeric",
+          "required": false,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "precision": 15,
+          "scale": 2
+        }
+      ]
+    }
+  ]
+}

@@ -53,31 +53,31 @@ Simetra — open-source візуальний конфігуратор бізне
 ## Модуль 2: Core foundation — посилення ядра
 
 ### Вимоги
-- [ ] Зробити `metadataRefSchema.kind` типізованим через `metadataKindSchema` замість вільного `z.string()`
+- [Х] Зробити `metadataRefSchema.kind` типізованим через `metadataKindSchema` замість вільного `z.string()`
   - Зараз: `kind: z.string()` у `packages/core/src/schemas/metadata-ref.ts`
   - Має бути: `kind: metadataKindSchema`
-- [ ] Enforce: ресурси AccumulationRegister приймають тільки Numeric-тип
+- [Х] Enforce: ресурси AccumulationRegister приймають тільки Numeric-тип
   - Зараз: `resources: z.array(attributeSchema)` без обмежень
   - Має бути: окрема схема `numericAttributeSchema` або `.refine()` на рівні register
-- [ ] Створити реєстр стандартних реквізитів для кожного типу
+- [Х] Створити реєстр стандартних реквізитів для кожного типу
   - Окремий файл `packages/core/src/schemas/standard-attributes.ts`
   - Кожен тип має функцію, яка повертає список стандартних реквізитів з урахуванням налаштувань (hierarchyType, writeMode тощо)
   - UI використовуватиме це для відображення readonly-полів
   - Стандартні реквізити визначені в BRD §5.2–§5.9 — не змінювати набір
-- [ ] Створити агреговану модель проєкту
+- [Х] Створити агреговану модель проєкту
   - Файл `packages/core/src/schemas/project-model.ts`
   - Тип `ProjectModel` = Project settings + колекції всіх об'єктів метаданих
   - Це runtime-контейнер для всього проєкту, який store буде тримати в памʼяті
-- [ ] Додати валідацію SQL reserved words для імен обʼєктів та полів
+- [Х] Додати валідацію SQL reserved words для імен обʼєктів та полів
   - Список заборонених слів: `order`, `group`, `user`, `table`, `select`, `insert`, `update`, `delete`, `index`, `column`, `row`, `type`, `check`, `primary`, `key`, `constraint`, `default`, `null`, `not`, `and`, `or`, `from`, `where`, `join`, `on`, `as`, `in`, `create`, `alter`, `drop`, `grant`, `revoke`, `set`, `values`, `into`, `like`, `between`, `union`, `all`, `any`, `exists`, `case`, `when`, `then`, `else`, `end`, `having`, `limit`, `offset`, `distinct`, `view`, `trigger`, `function`, `procedure`, `schema` тощо
   - Може бути `.refine()` або окрема утилітарна функція
-- [ ] Додати валідацію унікальності імен атрибутів у межах одного обʼєкта
-- [ ] Створити canonical JSON serializer
+- [Х] Додати валідацію унікальності імен атрибутів у межах одного обʼєкта
+- [Х] Створити canonical JSON serializer
   - Файл `packages/core/src/serialization.ts`
   - Фіксований порядок ключів (відповідає BRD §7.6)
   - 2-пробільний відступ, trailing newline, UTF-8 без BOM
   - Масиви attributes/dimensions/resources/tabularSections зберігають порядок користувача
-- [ ] Додати barrel export нових модулів у `packages/core/src/schemas/index.ts` та `packages/core/src/index.ts`
+- [Х] Додати barrel export нових модулів у `packages/core/src/schemas/index.ts` та `packages/core/src/index.ts`
 
 ### Архітектурні рішення (прийняті)
 - **ProjectModel** використовує `Record<MetadataKind, Array<MetadataObject>>` — простіше, достатньо для 200 об'єктів (BRD §11.1), нормалізація не потрібна на цьому етапі
@@ -107,24 +107,24 @@ Simetra — open-source візуальний конфігуратор бізне
 `JSON.stringify` не гарантує порядок ключів і не додає trailing newline. Canonical serializer має бути явним.
 
 ### Тести
-- [ ] Golden fixtures: створити `packages/core/src/__tests__/fixtures/` з еталонними JSON-файлами для кожного типу (catalog, document, register...) і тестувати roundtrip `parse → serialize → parse`
-- [ ] Тести стандартних реквізитів: перевірити, що `getStandardAttributes('Catalog', { hierarchyType: 'FoldersAndItems' })` повертає parent_id та is_folder
-- [ ] Тести reserved words: `order`, `group`, `user`, `table` мають відхилятися
-- [ ] Тести унікальності імен: два атрибути з однаковим name — reject
-- [ ] Тести AccumulationRegister resources: тип String у resource — reject
-- [ ] Тести metadataRef: `kind: 'InvalidKind'` — reject
+- [Х] Golden fixtures: створити `packages/core/src/__tests__/fixtures/` з еталонними JSON-файлами для кожного типу (catalog, document, register...) і тестувати roundtrip `parse → serialize → parse`
+- [Х] Тести стандартних реквізитів: перевірити, що `getStandardAttributes('Catalog', { hierarchyType: 'FoldersAndItems' })` повертає parent_id та is_folder
+- [Х] Тести reserved words: `order`, `group`, `user`, `table` мають відхилятися
+- [Х] Тести унікальності імен: два атрибути з однаковим name — reject
+- [Х] Тести AccumulationRegister resources: тип String у resource — reject
+- [Х] Тести metadataRef: `kind: 'InvalidKind'` — reject
 
 ### Definition of Done
-- [ ] `metadataRefSchema` типізований через `metadataKindSchema`
-- [ ] Ресурси AccumulationRegister enforce Numeric
-- [ ] `getStandardAttributes()` працює для всіх 7 типів
-- [ ] `ProjectModel` описує повну структуру проєкту
-- [ ] `MetadataObject` discriminated union працює
-- [ ] Canonical serializer проходить golden fixture тести
-- [ ] Reserved words відхиляються
-- [ ] Унікальність імен валідується
-- [ ] `pnpm --filter @simetra/core test` — green
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] `metadataRefSchema` типізований через `metadataKindSchema`
+- [Х] Ресурси AccumulationRegister enforce Numeric
+- [Х] `getStandardAttributes()` працює для всіх 7 типів
+- [Х] `ProjectModel` описує повну структуру проєкту
+- [Х] `MetadataObject` discriminated union працює
+- [Х] Canonical serializer проходить golden fixture тести
+- [Х] Reserved words відхиляються
+- [Х] Унікальність імен валідується
+- [Х] `pnpm --filter @simetra/core test` — green
+- [Х] `pnpm lint && pnpm typecheck` — green
 
 ---
 

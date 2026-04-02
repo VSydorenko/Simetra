@@ -2,10 +2,14 @@ import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { fieldTypeSchema } from "./field-type"
 import { metadataRefSchema } from "./metadata-ref"
+import { isSqlReservedWord } from "./sql-reserved-words"
 
 /** BRD §6.3 — Attribute (field) properties */
 export const attributeSchema = z.object({
-  name: z.string().regex(/^[a-z][a-z0-9_]*$/, "Must be snake_case, Latin only"),
+  name: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*$/, "Must be snake_case, Latin only")
+    .refine((n) => !isSqlReservedWord(n), { message: "Name is a SQL reserved word" }),
   displayName: localizedStringSchema.optional(),
   type: fieldTypeSchema,
   required: z.boolean().default(false),

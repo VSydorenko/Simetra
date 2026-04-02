@@ -1,0 +1,44 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/information-register.json",
+  "kind": "InformationRegister",
+  "name": "ExchangeRates",
+  "displayName": {
+    "uk": "Курси валют",
+    "en": "Exchange Rates"
+  },
+  "periodicity": "Day",
+  "writeMode": "Independent",
+  "recorderTypes": [],
+  "dimensions": [
+    {
+      "name": "currency",
+      "type": "CatalogRef",
+      "required": true,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null,
+      "ref": "Currencies"
+    }
+  ],
+  "resources": [
+    {
+      "name": "rate",
+      "type": "Numeric",
+      "required": true,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null,
+      "precision": 15,
+      "scale": 4
+    },
+    {
+      "name": "multiplier",
+      "type": "Integer",
+      "required": false,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null
+    }
+  ],
+  "attributes": []
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/constant.json",
+  "kind": "Constant",
+  "name": "OrganizationName",
+  "displayName": {
+    "uk": "Назва організації",
+    "en": "Organization Name"
+  },
+  "valueType": "String",
+  "defaultValue": ""
+}

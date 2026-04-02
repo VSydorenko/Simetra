@@ -1,0 +1,59 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/accumulation-register.json",
+  "kind": "AccumulationRegister",
+  "name": "InventoryBalance",
+  "displayName": {
+    "uk": "Залишки товарів",
+    "en": "Inventory Balance"
+  },
+  "registerType": "Balance",
+  "recorderTypes": [
+    {
+      "kind": "Document",
+      "name": "SalesOrder"
+    }
+  ],
+  "dimensions": [
+    {
+      "name": "product",
+      "type": "CatalogRef",
+      "required": true,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null,
+      "ref": "Products"
+    },
+    {
+      "name": "warehouse",
+      "type": "CatalogRef",
+      "required": true,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null,
+      "ref": "Warehouses"
+    }
+  ],
+  "resources": [
+    {
+      "name": "quantity",
+      "type": "Numeric",
+      "required": false,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null,
+      "precision": 15,
+      "scale": 3
+    },
+    {
+      "name": "amount",
+      "type": "Numeric",
+      "required": false,
+      "indexed": false,
+      "unique": false,
+      "defaultValue": null,
+      "precision": 15,
+      "scale": 2
+    }
+  ],
+  "attributes": []
+}

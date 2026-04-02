@@ -1,0 +1,35 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/enumeration.json",
+  "kind": "Enumeration",
+  "name": "OrderStatus",
+  "displayName": {
+    "uk": "Статуси замовлень",
+    "en": "Order Statuses"
+  },
+  "values": [
+    {
+      "name": "Draft",
+      "displayName": {
+        "uk": "Чернетка",
+        "en": "Draft"
+      },
+      "order": 0
+    },
+    {
+      "name": "Confirmed",
+      "displayName": {
+        "uk": "Підтверджено",
+        "en": "Confirmed"
+      },
+      "order": 1
+    },
+    {
+      "name": "Shipped",
+      "displayName": {
+        "uk": "Відвантажено",
+        "en": "Shipped"
+      },
+      "order": 2
+    }
+  ]
+}

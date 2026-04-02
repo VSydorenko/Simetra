@@ -1,0 +1,48 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/catalog.json",
+  "kind": "Catalog",
+  "name": "Products",
+  "displayName": {
+    "uk": "Товари",
+    "en": "Products"
+  },
+  "codeLength": 9,
+  "codeType": "String",
+  "descriptionLength": 150,
+  "hierarchyType": "FoldersAndItems",
+  "owners": [],
+  "autonumber": true,
+  "codeUnique": true,
+  "mainPresentation": "Description",
+  "predefinedItems": [],
+  "attributes": [
+    {
+      "name": "article",
+      "type": "String",
+      "required": false,
+      "indexed": true,
+      "unique": false,
+      "defaultValue": null,
+      "length": 50
+    }
+  ],
+  "tabularSections": [
+    {
+      "name": "barcodes",
+      "displayName": {
+        "uk": "Штрихкоди"
+      },
+      "attributes": [
+        {
+          "name": "barcode",
+          "type": "String",
+          "required": true,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "length": 200
+        }
+      ]
+    }
+  ]
+}
