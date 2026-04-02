@@ -259,24 +259,33 @@ localStorage обмежений 5–10 MB і не підтримує струк�
   - Undo (Ctrl+Z) / Redo (Ctrl+Shift+Z) кнопки (з disabled стан коли стек порожній)
 - [ ] 3-panel layout через `react-resizable-panels`:
   - Ліва панель (дерево) — 20%, min 200px
-  - Центральна панель (редактор) — 50%, min 30%
+  - Центральна панель (редактор + tab bar + floating area) — 50%, min 30%
   - Права панель (властивості) — 30%, collapsible
 - [ ] Status bar:
   - Кількість обʼєктів у проєкті
   - Кількість validation errors/warnings
   - Dirty state текстом
+  - Кількість відкритих вкладок / floating windows
 - [ ] Keyboard shortcuts через `react-hotkeys-hook`:
   - Ctrl+K / Cmd+K — Command Palette
   - Ctrl+S / Cmd+S — Save
   - Ctrl+Z / Cmd+Z — Undo
   - Ctrl+Shift+Z / Cmd+Shift+Z — Redo
   - Ctrl+N / Cmd+N — New object
+  - Ctrl+W / Cmd+W — Закрити активну вкладку
+  - Ctrl+Tab / Ctrl+Shift+Tab — Переключення між вкладками
   - Alt+Enter — Відкрити властивості вибраного елемента (BRD §9.7)
 - [ ] Command Palette через `cmdk`:
   - Пошук обʼєктів по назві
   - Команди: New Catalog, New Document, New Enumeration тощо
   - Save, Export, Undo, Redo
 - [ ] Dark theme за замовчуванням
+- [ ] Compact density для data-dense UI:
+  - Зменшені padding в таблицях, формах, деревах (8-12px замість 16px)
+  - Monospace шрифт для технічних полів (імена обʼєктів, імена реквізитів)
+  - Proportional шрифт для UI labels, descriptions (дефолтний шрифт теми mira)
+- [ ] Z-index система для шарів UI:
+  - panels(10) → tab-content(20) → floating-windows(30) → dialogs(40) → command-palette(50)
 
 ### Рекомендовані патерни
 
@@ -286,6 +295,9 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 #### Responsive hotkeys з scoping
 `react-hotkeys-hook` має scoped handlers. Ctrl+S працює глобально, Delete — тільки коли фокус у дереві або таблиці.
 
+#### Compact density як дизайн-рішення
+Конфігуратор метаданих — це data-dense IDE, не landing page. Кожен піксель на вагу золота. Padding 8-12px для компактних таблиць, 32-36px row height. Шрифт для технічних імен — monospace (системний або JetBrains Mono, якщо встановлений).
+
 ### Антипатерни
 
 #### ❌ Inline стилі для layout
@@ -293,6 +305,9 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 
 #### ❌ Hardcoded розміри
 Панелі повинні бути резиновими через react-resizable-panels, а не через фіксовані px/%.
+
+#### ❌ Довільний z-index
+Тільки визначена система z-index рівнів. Ніяких `z-[9999]` — тільки семантичні шари.
 
 ### Тести
 - [ ] App shell рендериться без crash
@@ -303,11 +318,118 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 - [ ] 3-panel layout рендериться і ресайзиться
 - [ ] Top bar з усіма кнопками (connected до stores)
 - [ ] Status bar показує актуальний стан
-- [ ] Keyboard shortcuts працюють (включно з Alt+Enter)
+- [ ] Keyboard shortcuts працюють (включно з Alt+Enter, Ctrl+W, Ctrl+Tab)
 - [ ] Command Palette відкривається по Ctrl+K
 - [ ] Dark theme за замовчуванням
+- [ ] Compact density застосовано
+- [ ] Z-index система визначена і задокументована
 - [ ] Усі UI labels через i18n (t() helper)
 - [ ] `pnpm build && pnpm lint && pnpm typecheck` — green
+
+---
+
+## Модуль 5a: Система вікон (Tabs + Floating Windows)
+
+### Контекст
+Конфігуратор метаданих передбачає роботу з великою кількістю об'єктів за один сеанс. Як у конфігураторі 1С:Підприємство, користувач відкриває десятки карток одночасно — довідники, документи, регістри — і має бачити / порівнювати їх. Цей модуль реалізує гібридну модель вікон: Tabs + Floating Windows (MDI).
+
+### Вимоги
+
+#### UI Store розширення для window management
+- [ ] Розширити UI store (`apps/web/src/stores/ui-store.ts`):
+  ```
+  openTabs: Tab[]           // масив відкритих вкладок
+  activeTabId: string | null // id активної вкладки
+  floatingWindows: FloatingWindow[]  // масив floating windows
+  activeWindowId: string | null      // id активного floating window (або null якщо активна tab)
+  ```
+- [ ] Типи для Tab:
+  ```
+  Tab { id: string, objectId: string, objectKind: MetadataKind, isPinned: boolean }
+  ```
+- [ ] Типи для FloatingWindow:
+  ```
+  FloatingWindow { id: string, objectId: string, objectKind: MetadataKind,
+                   position: { x: number, y: number },
+                   size: { width: number, height: number },
+                   isMinimized: boolean, isMaximized: boolean, zIndex: number }
+  ```
+- [ ] Actions для tab lifecycle:
+  - `openTab(objectId, kind)` — відкрити нову вкладку або активувати існуючу
+  - `closeTab(tabId)`
+  - `closeOtherTabs(tabId)` — закрити всі крім вказаної
+  - `closeAllTabs()` — закрити всі (крім pinned)
+  - `closeTabsToTheRight(tabId)`
+  - `pinTab(tabId)` / `unpinTab(tabId)`
+  - `reorderTabs(fromIndex, toIndex)`
+  - `setActiveTab(tabId)`
+- [ ] Actions для floating window lifecycle:
+  - `detachTab(tabId)` — відʼєднати вкладку у floating window
+  - `attachWindow(windowId)` — повернути floating window у Tab Bar
+  - `moveWindow(windowId, position)`
+  - `resizeWindow(windowId, size)`
+  - `minimizeWindow(windowId)` / `restoreWindow(windowId)`
+  - `maximizeWindow(windowId)` / `restoreWindow(windowId)`
+  - `closeWindow(windowId)`
+  - `focusWindow(windowId)` — підняти z-index
+
+#### Floating Window Container
+- [ ] Створити компонент `FloatingWindowContainer` — обгортка для floating windows у центральній панелі
+- [ ] Кожне floating window є draggable + resizable панеллю (розглянути react-rnd або dnd-kit)
+- [ ] Кожне floating window містить:
+  - Title bar з іконкою типу, імʼям обʼєкта, кнопками minimize/maximize/close
+  - Вміст = `ObjectEditor` для відповідного обʼєкта
+- [ ] Floating windows обмежені viewport центральної панелі (не виходять за межі)
+- [ ] Z-order management: клік на window підіймає його вгору
+- [ ] Мінімізовані windows відображаються як іконки в нижній частині центральної панелі (taskbar-подібна смужка)
+
+#### Detach / Attach
+- [ ] Drag вкладки за межі Tab Bar → створення floating window
+- [ ] Drag floating window на Tab Bar → attach як вкладка
+- [ ] Контекстне меню вкладки: "Відкрити у вікні" (Detach)
+- [ ] Контекстне меню floating window title bar: "Закріпити у вкладках" (Attach)
+- [ ] При detach/attach — стан обʼєкта (скрол, вибір поля) зберігається
+
+### Рекомендовані патерни
+
+#### Floating windows живуть у UI store, не в metadata store
+Floating windows — це UI state (position, size, z-index). Вони не потрапляють у undo-стек zundo.
+
+#### Window management через єдину функцію focus
+`focusEntity(objectId)` — знаходить обʼєкт серед tabs або floating windows і активує його. Якщо немає — відкриває нову вкладку.
+
+#### Lazy rendering вмісту
+Вміст floating window рендериться лише коли вікно не мінімізоване. Мінімізоване вікно = лише іконка в taskbar.
+
+### Антипатерни
+
+#### ❌ Видалення обʼєкта без закриття вкладки/вікна
+При видаленні обʼєкта через дерево — автоматично закрити всі вкладки та floating windows, що посилаються на нього.
+
+#### ❌ Зміна z-index напряму
+Тільки через `focusWindow(id)` action. Z-index floating windows починається з 30 (відповідно до z-index системи Модуля 5).
+
+#### ❌ Floating windows за межами viewport
+Floating windows обмежені центральною панеллю. Якщо при resize панелі вікно виходить за межі — автоматичний clamp.
+
+### Тести
+- [ ] `openTab` відкриває нову вкладку або активує існуючу
+- [ ] `detachTab` переміщує вкладку у floating window
+- [ ] `attachWindow` повертає floating window у Tab Bar
+- [ ] `closeTab` закриває вкладку, `closeAllTabs` закриває всі крім pinned
+- [ ] Floating window draggable і resizable
+- [ ] `focusWindow` піднімає z-index
+
+### Definition of Done
+- [ ] UI store підтримує openTabs, activeTabId, floatingWindows
+- [ ] Tab lifecycle повністю працює (open, close, pin, reorder)
+- [ ] Floating window lifecycle працює (detach, attach, move, resize, minimize, maximize)
+- [ ] Detach/Attach працює через drag та контекстне меню
+- [ ] Z-order коректний для floating windows
+- [ ] Мінімізовані windows відображаються в taskbar
+- [ ] Видалення обʼєкта закриває його вкладки/вікна
+- [ ] Усі labels через i18n
+- [ ] `pnpm lint && pnpm typecheck` — green
 
 ---
 
@@ -333,9 +455,10 @@ App shell — це місце, де зʼєднуються stores, panels і sho
   - Де використовується — показати список вхідних посилань (реалізація action у Модулі 9, пункт меню додати зараз)
 - [ ] Контекстне меню на розділі:
   - Додати новий обʼєкт цього типу
-- [ ] Вибір обʼєкта у дереві → оновлення centralPanel і propertiesPanel
+- [ ] Вибір обʼєкта у дереві (single click) → виділення, оновлення propertiesPanel
+- [ ] Відкриття обʼєкта (double-click або Enter) → відкрити як нову вкладку в Tab Bar (або активувати існуючу, якщо вже відкрита)
 - [ ] Інкрементний пошук: Ctrl+F → поле пошуку вгорі панелі, фільтрація дерева
-- [ ] Keyboard navigation: стрілки, Enter для розгортання/згортання, Space для вибору
+- [ ] Keyboard navigation: стрілки, Enter для відкриття у вкладці, Space для розгортання/згортання
 
 ### Рекомендовані патерни
 
@@ -373,11 +496,27 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 
 ---
 
-## Модуль 7: Центральний редактор
+## Модуль 7: Центральний редактор (multi-tab)
 
 ### Вимоги
+
+#### Tab Bar
+- [ ] Tab Bar у верхній частині центральної панелі — горизонтальний рядок вкладок
+- [ ] Кожна вкладка відображає: іконку типу, імʼя обʼєкта, dirty indicator (`*`), кнопку close (×)
+- [ ] Операції з вкладками:
+  - Close (×), Close Others (контекстне меню), Close All
+  - Pin / Unpin (закріплені вкладки зліва, не закриваються через Close All)
+  - Reorder через drag-and-drop
+  - Detach у floating window (drag за межі Tab Bar або через контекстне меню)
+- [ ] Контекстне меню вкладки: Close, Close Others, Close All, Close to the Right, Pin/Unpin, Detach to Window
+- [ ] Scroll на Tab Bar при великій кількості вкладок (горизонтальний scroll або кнопки ◀ ▶)
+- [ ] Ctrl+W / Cmd+W — закрити активну вкладку
+- [ ] Ctrl+Tab / Ctrl+Shift+Tab — переключення між вкладками
+- [ ] Empty state коли немає відкритих вкладок: підказка "Оберіть обʼєкт у дереві для редагування"
+
+#### Вміст картки обʼєкта
 - [ ] Заголовок: імʼя обʼєкта (editable), badge типу, displayName
-- [ ] Вкладки (залежно від типу):
+- [ ] Вкладки всередині картки (залежно від типу):
   - **Реквізити** (Catalog, Document, CustomTable) — таблиця полів
   - **Табличні частини** (Catalog, Document) — список табличних частин → при виборі — таблиця їх реквізитів
   - **Значення** (Enumeration) — таблиця значень (name, displayName, order)
@@ -404,8 +543,11 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 #### Стандартні реквізити — derived data
 Не зберігати їх у store. Обчислювати через `getStandardAttributes(kind, settings)` при кожному рендері. Це забезпечує актуальність при зміні налаштувань типу.
 
-#### Editor реагує на selectedObject з UI store
-Один компонент `ObjectEditor`, який рендерить правильний набір вкладок залежно від `kind` вибраного обʼєкта.
+#### Editor реагує на activeTabId з UI store
+Один компонент `ObjectEditor`, який рендерить правильний набір вкладок залежно від `kind` обʼєкта з активної вкладки. Tab Bar — окремий компонент `TabBar`, який рендерить список вкладок і керує їх lifecycle.
+
+#### Кожна вкладка — lazy rendered
+Вміст вкладки рендериться тільки коли вона активна (або була активна хоча б раз — keep-alive pattern). Це важливо для продуктивності при 20+ відкритих вкладках.
 
 ### Антипатерни
 
@@ -416,12 +558,19 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 Стандартні реквізити — readonly завжди. Їх набір змінюється тільки через налаштування типу (наприклад, включення ієрархії додає parent_id).
 
 ### Тести
+- [ ] Tab Bar рендерить вкладки, підтримує close, reorder
+- [ ] Double-click у дереві = нова вкладка (або активація існуючої)
+- [ ] Ctrl+W закриває активну вкладку
+- [ ] Dirty indicator (*) зʼявляється при незбережених змінах у конкретній вкладці
 - [ ] Editor показує правильний набір вкладок для Catalog, Document, Enumeration, InformationRegister, AccumulationRegister, Constant, CustomTable
 - [ ] Стандартні реквізити рендеряться readonly (не можна редагувати чи видалити)
 - [ ] Додавання атрибута через кнопку — з'являється у таблиці
 - [ ] Вибір типу CatalogRef показує dropdown з наявними довідниками
 
 ### Definition of Done
+- [ ] Tab Bar з операціями: open, close, close others, pin, reorder
+- [ ] Empty state при відсутності відкритих вкладок
+- [ ] Per-tab dirty indicator
 - [ ] Editor показує правильні вкладки для кожного типу
 - [ ] Стандартні реквізити відображаються readonly
 - [ ] CRUD атрибутів працює
@@ -439,8 +588,10 @@ App shell — це місце, де зʼєднуються stores, panels і sho
 ## Модуль 8: Панель властивостей (права панель)
 
 ### Вимоги
-- [ ] Context-sensitive: контент залежить від вибраного елементу
-- [ ] Коли вибрано обʼєкт у дереві:
+- [ ] Context-sensitive: контент залежить від активної вкладки (або active floating window) і вибраного елементу всередині неї
+- [ ] Синхронізація з активною вкладкою: при переключенні вкладки в Tab Bar → Properties Panel оновлюється автоматично
+- [ ] Синхронізація з активним floating window: при кліку на floating window → Properties Panel переключається на його обʼєкт
+- [ ] Коли вибрано обʼєкт (активна вкладка або вибрано у дереві):
   - Група "Основні": name (readonly), displayName {uk, en}
   - Група "Налаштування типу" — специфічна для кожного типу:
     - Catalog: codeLength, codeType, descriptionLength, hierarchyType, owners, autonumber, codeUnique, mainPresentation, predefinedItems
@@ -560,7 +711,15 @@ apps/web/src/
 │   │   ├── metadata-tree.tsx
 │   │   ├── tree-node.tsx
 │   │   └── tree-context-menu.tsx
-│   ├── object-editor/               — центральна панель
+│   ├── tab-bar/                     — Tab Bar для центральної панелі
+│   │   ├── tab-bar.tsx
+│   │   ├── tab-item.tsx
+│   │   └── tab-context-menu.tsx
+│   ├── floating-windows/            — floating window management
+│   │   ├── floating-window-container.tsx
+│   │   ├── floating-window.tsx
+│   │   └── window-taskbar.tsx
+│   ├── object-editor/               — центральна панель (вміст вкладки/вікна)
 │   │   ├── object-editor.tsx
 │   │   ├── attributes-table.tsx
 │   │   ├── tabular-sections.tsx
@@ -575,7 +734,7 @@ apps/web/src/
 │   └── theme-provider.tsx           — (вже існує)
 ├── stores/
 │   ├── metadata-store.ts
-│   ├── ui-store.ts
+│   ├── ui-store.ts                  — включає tab/window management
 │   └── project-store.ts
 ├── storage/
 │   ├── storage-provider.ts          — інтерфейс
@@ -614,9 +773,13 @@ apps/web/src/
 - [ ] Проєкт зберігається/відкривається як canonical JSON
 - [ ] Undo/Redo працює для всіх мутацій
 - [ ] Command Palette і keyboard shortcuts працюють
+- [ ] Tab Bar підтримує multi-tab з pin/close/reorder
+- [ ] Floating Windows підтримують detach/attach, drag, resize, minimize, maximize
+- [ ] Properties Panel синхронізується з активною вкладкою / floating window
 - [ ] Validation errors показуються реалтаймово
 - [ ] Referential integrity перевіряється при видаленні
 - [ ] Dark theme за замовчуванням
+- [ ] Compact density для data-dense UI
 - [ ] Інтерфейс українською за замовчуванням, підтримка англійської (FR-090, FR-091)
 - [ ] `pnpm build && pnpm lint && pnpm typecheck && pnpm test` — green
 - [ ] Формат JSON стабільний для Git (byte-identical при однакових даних)

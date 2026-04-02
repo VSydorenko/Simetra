@@ -3,19 +3,30 @@ applyTo: 'apps/web/**/*.{ts,tsx},packages/ui/**/*.{ts,tsx}'
 description: 'Правила побудови UI: React компоненти, layout, state management'
 ---
 
-## Layout — 3-panel конфігуратор
+## Layout — 3-panel конфігуратор з multi-window
 
 ```
-┌──────────┬──────────────────────────┬──────────────────┐
-│  Дерево  │    Редактор полів        │   Властивості    │
-│  [20%]   │    [50%]                 │   [30%]          │
-└──────────┴──────────────────────────┴──────────────────┘
+┌──────────┬───────────────────────────────┬──────────────┐
+│  Дерево  │  Tab Bar: [Obj1] [Obj2*] [+]  │ Властивості  │
+│  [20%]   ├───────────────────────────────┤  [30%]       │
+│          │   Вміст активної вкладки      │              │
+│          │   (або floating windows)      │              │
+└──────────┴───────────────────────────────┴──────────────┘
 ```
 
 - `react-resizable-panels` для resizable layout
+- Центральна панель = Tab Bar + content area + floating window container
 - Середня панель — не менше 30%
 - Права панель — collapsible
 - Dark theme за замовчуванням
+
+## Система вікон (Tabs + Floating)
+
+- **Tabs** (за замовчуванням) — вкладки у Tab Bar, як у браузері
+- **Floating Windows** — MDI-подібні вікна всередині viewport центральної панелі
+- **Detach/Attach** — перемикання між режимами через drag або контекстне меню
+- Properties Panel синхронізується з активною вкладкою або active floating window
+- Z-index: panels(10) → tab-content(20) → floating-windows(30) → dialogs(40) → command-palette(50)
 
 ## Компоненти
 
