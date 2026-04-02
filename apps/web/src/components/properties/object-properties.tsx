@@ -1,0 +1,496 @@
+import { useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@workspace/ui/components/accordion'
+import { Input } from '@workspace/ui/components/input'
+import { Label } from '@workspace/ui/components/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@workspace/ui/components/select'
+import { Switch } from '@workspace/ui/components/switch'
+import { Badge } from '@workspace/ui/components/badge'
+import { FieldTypeSelect } from '@/components/editor/field-type-select'
+import { useMetadataStore } from '@/stores/metadata-store'
+import { KIND_TO_KEY } from '@/lib/metadata-defaults'
+import type {
+  MetadataKind,
+  MetadataObject,
+  MetadataRef,
+  FieldType,
+} from '@simetra/core'
+
+interface ObjectPropertiesProps {
+  objectRef: MetadataRef
+}
+
+function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[1fr_1fr] items-center gap-2">
+      <Label className="truncate text-xs text-muted-foreground">{label}</Label>
+      <div>{children}</div>
+    </div>
+  )
+}
+
+/** Multi-select для MetadataRef[] (owners, recorderTypes, registerMovements) */
+function RefMultiSelect({
+  value,
+  allowedKinds,
+  onChange,
+}: {
+  value: MetadataRef[]
+  allowedKinds: MetadataKind[]
+  onChange: (refs: MetadataRef[]) => void
+}) {
+  const model = useMetadataStore((s) => s.model)
+
+  // Зібрати всі доступні обʼєкти дозволених типів
+  const availableObjects = useMemo(() => {
+    const result: MetadataRef[] = []
+    for (const kind of allowedKinds) {
+      const key = KIND_TO_KEY[kind]
+      const objects = model[key] as { name: string }[]
+      for (const obj of objects) {
+        result.push({ kind, name: obj.name })
+      }
+    }
+    return result
+  }, [model, allowedKinds])
+
+  const selectedSet = useMemo(
+    () => new Set(value.map((r) => `${r.kind}/${r.name}`)),
+    [value],
+  )
+
+  const toggleRef = useCallback(
+    (ref: MetadataRef) => {
+      const key = `${ref.kind}/${ref.name}`
+      if (selectedSet.has(key)) {
+        onChange(value.filter((r) => `${r.kind}/${r.name}` !== key))
+      } else {
+        onChange([...value, ref])
+      }
+    },
+    [value, selectedSet, onChange],
+  )
+
+  if (availableObjects.length === 0) {
+    return (
+      <span className="text-xs text-muted-foreground">—</span>
+    )
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1" role="group">
+      {availableObjects.map((ref) => {
+        const key = `${ref.kind}/${ref.name}`
+        const isSelected = selectedSet.has(key)
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => toggleRef(ref)}
+            className="inline-flex"
+            aria-pressed={isSelected}
+          >
+            <Badge
+              variant={isSelected ? 'default' : 'outline'}
+              className="cursor-pointer px-1.5 py-0 text-[10px]"
+            >
+              {ref.name}
+            </Badge>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
+  const { t } = useTranslation()
+  const model = useMetadataStore((s) => s.model)
+  const updateObject = useMetadataStore((s) => s.updateObject)
+
+  const object = useMemo(() => {
+    const key = KIND_TO_KEY[objectRef.kind]
+    const objects = model[key] as MetadataObject[]
+    return objects.find((o) => o.name === objectRef.name) ?? null
+  }, [model, objectRef])
+
+  const handleUpdate = useCallback(
+    (updates: Partial<MetadataObject>) => {
+      updateObject(objectRef.kind, objectRef.name, updates)
+    },
+    [objectRef.kind, objectRef.name, updateObject],
+  )
+
+  if (!object) return null
+
+  const displayName = 'displayName' in object
+    ? (object.displayName as { uk?: string; en?: string } | undefined)
+    : undefined
+
+  return (
+    <Accordion type="multiple" defaultValue={['general', 'typeSettings']} className="w-full">
+      {/* Група: Основні */}
+      <AccordionItem value="general">
+        <AccordionTrigger className="px-3 py-2 text-xs font-medium">
+          {t('properties.group.general')}
+        </AccordionTrigger>
+        <AccordionContent className="space-y-2 px-3 pb-3">
+          <SettingRow label={t('metadata.field.name')}>
+            <Input
+              className="h-7 text-xs"
+              value={object.name}
+              readOnly
+              disabled
+            />
+          </SettingRow>
+          <SettingRow label={t('metadata.field.type')}>
+            <Badge variant="outline" className="text-[10px]">
+              {t(`metadata.kind.${objectRef.kind}`)}
+            </Badge>
+          </SettingRow>
+          <SettingRow label={t('editor.displayNameUk')}>
+            <Input
+              className="h-7 text-xs"
+              value={displayName?.uk ?? ''}
+              onChange={(e) =>
+                handleUpdate({
+                  displayName: { ...displayName, uk: e.target.value || undefined },
+                } as Partial<MetadataObject>)
+              }
+            />
+          </SettingRow>
+          <SettingRow label={t('editor.displayNameEn')}>
+            <Input
+              className="h-7 text-xs"
+              value={displayName?.en ?? ''}
+              onChange={(e) =>
+                handleUpdate({
+                  displayName: { ...displayName, en: e.target.value || undefined },
+                } as Partial<MetadataObject>)
+              }
+            />
+          </SettingRow>
+        </AccordionContent>
+      </AccordionItem>
+
+      {/* Група: Налаштування типу */}
+      <AccordionItem value="typeSettings">
+        <AccordionTrigger className="px-3 py-2 text-xs font-medium">
+          {t('metadata.section.settings')}
+        </AccordionTrigger>
+        <AccordionContent className="space-y-2 px-3 pb-3">
+          <TypeSettings kind={objectRef.kind} object={object} onUpdate={handleUpdate} />
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
+  )
+}
+
+// --- Kind-specific settings ---
+
+function TypeSettings({
+  kind,
+  object,
+  onUpdate,
+}: {
+  kind: MetadataKind
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  switch (kind) {
+    case 'Catalog':
+      return <CatalogTypeSettings object={object} onUpdate={onUpdate} />
+    case 'Document':
+      return <DocumentTypeSettings object={object} onUpdate={onUpdate} />
+    case 'InformationRegister':
+      return <InfoRegisterTypeSettings object={object} onUpdate={onUpdate} />
+    case 'AccumulationRegister':
+      return <AccumRegisterTypeSettings object={object} onUpdate={onUpdate} />
+    case 'Constant':
+      return <ConstantTypeSettings object={object} onUpdate={onUpdate} />
+    case 'CustomTable':
+      return <CustomTableTypeSettings object={object} onUpdate={onUpdate} />
+    case 'Enumeration':
+      return <EmptySettings />
+    default:
+      return null
+  }
+}
+
+function EmptySettings() {
+  return <span className="text-xs text-muted-foreground">—</span>
+}
+
+function CatalogTypeSettings({
+  object,
+  onUpdate,
+}: {
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  const { t } = useTranslation()
+  const o = object as Extract<MetadataObject, { kind: 'Catalog' }>
+
+  return (
+    <>
+      <SettingRow label={t('metadata.setting.codeLength')}>
+        <Input
+          type="number"
+          className="h-7 text-xs"
+          value={o.codeLength}
+          min={1}
+          onChange={(e) => onUpdate({ codeLength: parseInt(e.target.value, 10) || 9 } as Partial<MetadataObject>)}
+        />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.codeType')}>
+        <Select value={o.codeType} onValueChange={(v) => onUpdate({ codeType: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="String" className="text-xs">String</SelectItem>
+            <SelectItem value="Number" className="text-xs">Number</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.descriptionLength')}>
+        <Input
+          type="number"
+          className="h-7 text-xs"
+          value={o.descriptionLength}
+          min={1}
+          onChange={(e) => onUpdate({ descriptionLength: parseInt(e.target.value, 10) || 150 } as Partial<MetadataObject>)}
+        />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.hierarchyType')}>
+        <Select value={o.hierarchyType} onValueChange={(v) => onUpdate({ hierarchyType: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="None" className="text-xs">None</SelectItem>
+            <SelectItem value="FoldersAndItems" className="text-xs">Folders & Items</SelectItem>
+            <SelectItem value="ItemsOnly" className="text-xs">Items Only</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.autonumber')}>
+        <Switch checked={o.autonumber} onCheckedChange={(v) => onUpdate({ autonumber: v } as Partial<MetadataObject>)} />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.codeUnique')}>
+        <Switch checked={o.codeUnique} onCheckedChange={(v) => onUpdate({ codeUnique: v } as Partial<MetadataObject>)} />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.mainPresentation')}>
+        <Select value={o.mainPresentation} onValueChange={(v) => onUpdate({ mainPresentation: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Code" className="text-xs">Code</SelectItem>
+            <SelectItem value="Description" className="text-xs">Description</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">{t('properties.owners')}</Label>
+        <RefMultiSelect
+          value={o.owners}
+          allowedKinds={['Catalog']}
+          onChange={(refs) => onUpdate({ owners: refs } as Partial<MetadataObject>)}
+        />
+      </div>
+    </>
+  )
+}
+
+function DocumentTypeSettings({
+  object,
+  onUpdate,
+}: {
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  const { t } = useTranslation()
+  const o = object as Extract<MetadataObject, { kind: 'Document' }>
+
+  return (
+    <>
+      <SettingRow label={t('metadata.setting.numberLength')}>
+        <Input
+          type="number"
+          className="h-7 text-xs"
+          value={o.numberLength}
+          min={1}
+          onChange={(e) => onUpdate({ numberLength: parseInt(e.target.value, 10) || 11 } as Partial<MetadataObject>)}
+        />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.numberType')}>
+        <Select value={o.numberType} onValueChange={(v) => onUpdate({ numberType: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="String" className="text-xs">String</SelectItem>
+            <SelectItem value="Number" className="text-xs">Number</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.autonumber')}>
+        <Switch checked={o.autonumber} onCheckedChange={(v) => onUpdate({ autonumber: v } as Partial<MetadataObject>)} />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.numberPeriodicity')}>
+        <Select value={o.numberPeriodicity} onValueChange={(v) => onUpdate({ numberPeriodicity: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="None" className="text-xs">None</SelectItem>
+            <SelectItem value="Year" className="text-xs">Year</SelectItem>
+            <SelectItem value="Quarter" className="text-xs">Quarter</SelectItem>
+            <SelectItem value="Month" className="text-xs">Month</SelectItem>
+            <SelectItem value="Day" className="text-xs">Day</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.posting')}>
+        <Switch checked={o.posting} onCheckedChange={(v) => onUpdate({ posting: v } as Partial<MetadataObject>)} />
+      </SettingRow>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">{t('properties.registerMovements')}</Label>
+        <RefMultiSelect
+          value={o.registerMovements}
+          allowedKinds={['AccumulationRegister', 'InformationRegister']}
+          onChange={(refs) => onUpdate({ registerMovements: refs } as Partial<MetadataObject>)}
+        />
+      </div>
+    </>
+  )
+}
+
+function InfoRegisterTypeSettings({
+  object,
+  onUpdate,
+}: {
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  const { t } = useTranslation()
+  const o = object as Extract<MetadataObject, { kind: 'InformationRegister' }>
+
+  return (
+    <>
+      <SettingRow label={t('metadata.setting.periodicity')}>
+        <Select value={o.periodicity} onValueChange={(v) => onUpdate({ periodicity: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="NonPeriodic" className="text-xs">Non-periodic</SelectItem>
+            <SelectItem value="Day" className="text-xs">Day</SelectItem>
+            <SelectItem value="Month" className="text-xs">Month</SelectItem>
+            <SelectItem value="Quarter" className="text-xs">Quarter</SelectItem>
+            <SelectItem value="Year" className="text-xs">Year</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.writeMode')}>
+        <Select value={o.writeMode} onValueChange={(v) => onUpdate({ writeMode: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Independent" className="text-xs">Independent</SelectItem>
+            <SelectItem value="RecorderSubordinate" className="text-xs">Recorder Subordinate</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">{t('properties.recorderTypes')}</Label>
+        <RefMultiSelect
+          value={o.recorderTypes}
+          allowedKinds={['Document']}
+          onChange={(refs) => onUpdate({ recorderTypes: refs } as Partial<MetadataObject>)}
+        />
+      </div>
+    </>
+  )
+}
+
+function AccumRegisterTypeSettings({
+  object,
+  onUpdate,
+}: {
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  const { t } = useTranslation()
+  const o = object as Extract<MetadataObject, { kind: 'AccumulationRegister' }>
+
+  return (
+    <>
+      <SettingRow label={t('metadata.setting.registerType')}>
+        <Select value={o.registerType} onValueChange={(v) => onUpdate({ registerType: v } as Partial<MetadataObject>)}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Balance" className="text-xs">Balance</SelectItem>
+            <SelectItem value="Turnover" className="text-xs">Turnover</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">{t('properties.recorderTypes')}</Label>
+        <RefMultiSelect
+          value={o.recorderTypes}
+          allowedKinds={['Document']}
+          onChange={(refs) => onUpdate({ recorderTypes: refs } as Partial<MetadataObject>)}
+        />
+      </div>
+    </>
+  )
+}
+
+function ConstantTypeSettings({
+  object,
+  onUpdate,
+}: {
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  const { t } = useTranslation()
+  const o = object as Extract<MetadataObject, { kind: 'Constant' }>
+
+  return (
+    <>
+      <SettingRow label={t('metadata.setting.valueType')}>
+        <FieldTypeSelect
+          value={o.valueType as FieldType}
+          onChange={(v) => onUpdate({ valueType: v } as Partial<MetadataObject>)}
+        />
+      </SettingRow>
+      <SettingRow label={t('metadata.setting.defaultValue')}>
+        <Input
+          className="h-7 text-xs"
+          value={typeof o.defaultValue === 'string' || typeof o.defaultValue === 'number' ? String(o.defaultValue) : ''}
+          onChange={(e) => onUpdate({ defaultValue: e.target.value || null } as Partial<MetadataObject>)}
+        />
+      </SettingRow>
+    </>
+  )
+}
+
+function CustomTableTypeSettings({
+  object,
+  onUpdate,
+}: {
+  object: MetadataObject
+  onUpdate: (u: Partial<MetadataObject>) => void
+}) {
+  const { t } = useTranslation()
+  const o = object as Extract<MetadataObject, { kind: 'CustomTable' }>
+
+  return (
+    <SettingRow label={t('metadata.setting.autoAddPrimaryKey')}>
+      <Switch
+        checked={o.autoAddPrimaryKey}
+        onCheckedChange={(v) => onUpdate({ autoAddPrimaryKey: v } as Partial<MetadataObject>)}
+      />
+    </SettingRow>
+  )
+}

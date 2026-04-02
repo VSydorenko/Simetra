@@ -166,6 +166,9 @@ Simetra — open-source візуальний конфігуратор бізне
 #### Metadata store + UI store = два окремі stores
 zundo підключається тільки до metadata store. UI state (selections, expanded nodes) не потрапляє в undo-стек.
 
+#### Persist тільки для стабільних UI preferences
+Стан, який має переживати reload незалежно від відкритого проєкту, треба зберігати окремо від runtime-сесії: layout панелей, відкритість/закритість Properties Panel, expanded state дерева. Не persist-ити `selectedObject`, `selectedField`, `openTabs`, `floatingWindows` без окремої стратегії відновлення проєктної сесії.
+
 #### Валідація при мутації, а не при відображенні
 Кожен action у metadata store проганяє зміну через Zod-схему core. Якщо невалідно — action відхиляється, помилка потрапляє в UI через callback або error state.
 
@@ -176,6 +179,9 @@ Store типізується через `ProjectModel`, `Catalog`, `Document` і
 
 #### ❌ UI state в metadata store
 Selections, expanded tree nodes, active tab — це не метадані. Якщо вони потраплять у undo-стек, Ctrl+Z почне "скакати" по вкладках замість відміни реальних змін.
+
+#### ❌ UI state існує у store, але не керує живим UI
+Якщо `propertiesPanelOpen`, `expandedTreeNodes` або подібний стан описані у Zustand store, вони мають бути підключені до реальних компонентів (`Panel`, `Tree`) як source of truth. Інакше persistence не працює, а поведінка після reload стає випадковою.
 
 #### ❌ Мутація state напряму
 Тільки через immer produce. Ніяких `state.objects.push(...)` поза immer-контекстом.
@@ -291,6 +297,9 @@ localStorage обмежений 5–10 MB і не підтримує струк�
 
 #### Shell як composition root
 App shell — це місце, де зʼєднуються stores, panels і shortcuts. Кожна панель — окремий компонент, що підключається до store через hooks.
+
+#### Layout панелей має бути persisted і підключений до UI напряму
+Розміри лівої/центральної/правої панелі мають відновлюватися після reload через `react-resizable-panels` (`defaultLayout` + `onLayoutChanged` або еквівалентний storage hook). Окремий прапорець `propertiesPanelOpen` повинен реально керувати `collapse/expand` правої панелі, а не існувати лише у store.
 
 #### Responsive hotkeys з scoping
 `react-hotkeys-hook` має scoped handlers. Ctrl+S працює глобально, Delete — тільки коли фокус у дереві або таблиці.
@@ -465,6 +474,9 @@ Floating windows обмежені центральною панеллю. Якщ�
 #### Дерево читає з metadata store, пише через actions
 Дерево — read view metadata store + dispatch actions (createObject, deleteObject, renameObject). Дерево не тримає власну копію даних.
 
+#### Expanded state дерева = UI store, а не локальна константа
+`expandedTreeNodes` має керувати `initialOpenState` дерева і оновлюватися через `onToggle`. Не можна тримати окремий локальний `initialOpenState`, який не синхронізується зі store, інакше користувацьке розгортання розділів губиться після reload.
+
 #### Валідація імен при rename
 Використовувати regex з core (`/^[A-Z][A-Za-z0-9]*$/`) + перевірку reserved words + унікальність серед обʼєктів цього типу.
 
@@ -546,6 +558,9 @@ Floating windows обмежені центральною панеллю. Якщ�
 #### Editor реагує на activeTabId з UI store
 Один компонент `ObjectEditor`, який рендерить правильний набір вкладок залежно від `kind` обʼєкта з активної вкладки. Tab Bar — окремий компонент `TabBar`, який рендерить список вкладок і керує їх lifecycle.
 
+#### Внутрішня вкладка редактора має бути привʼязана до контексту обʼєкта
+`activeEditorTab` не повинен бути «глобальним назавжди» для всіх відкритих обʼєктів. Для коректного multi-tab UX його слід або зберігати per object/tab id, або явно скидати на сумісну вкладку при зміні активного обʼєкта.
+
 #### Кожна вкладка — lazy rendered
 Вміст вкладки рендериться тільки коли вона активна (або була активна хоча б раз — keep-alive pattern). Це важливо для продуктивності при 20+ відкритих вкладках.
 
@@ -588,10 +603,10 @@ Floating windows обмежені центральною панеллю. Якщ�
 ## Модуль 8: Панель властивостей (права панель)
 
 ### Вимоги
-- [ ] Context-sensitive: контент залежить від активної вкладки (або active floating window) і вибраного елементу всередині неї
-- [ ] Синхронізація з активною вкладкою: при переключенні вкладки в Tab Bar → Properties Panel оновлюється автоматично
-- [ ] Синхронізація з активним floating window: при кліку на floating window → Properties Panel переключається на його обʼєкт
-- [ ] Коли вибрано обʼєкт (активна вкладка або вибрано у дереві):
+- [Х] Context-sensitive: контент залежить від активної вкладки (або active floating window) і вибраного елементу всередині неї
+- [Х] Синхронізація з активною вкладкою: при переключенні вкладки в Tab Bar → Properties Panel оновлюється автоматично
+- [Х] Синхронізація з активним floating window: при кліку на floating window → Properties Panel переключається на його обʼєкт
+- [Х] Коли вибрано обʼєкт (активна вкладка або вибрано у дереві):
   - Група "Основні": name (readonly), displayName {uk, en}
   - Група "Налаштування типу" — специфічна для кожного типу:
     - Catalog: codeLength, codeType, descriptionLength, hierarchyType, owners, autonumber, codeUnique, mainPresentation, predefinedItems
@@ -601,15 +616,15 @@ Floating windows обмежені центральною панеллю. Якщ�
     - CustomTable: autoAddPrimaryKey
     - Enumeration: (немає додаткових налаштувань)
     - Constant: valueType, defaultValue
-- [ ] Коли вибрано поле у таблиці:
+- [Х] Коли вибрано поле у таблиці:
   - Група "Основні": name, displayName
   - Група "Тип даних": type, length, precision, scale, ref, allowedTypes
   - Група "Обмеження": required, indexed, unique, defaultValue
   - Група "Додатково": description
-- [ ] Групи через shadcn/ui Accordion (collapsible)
-- [ ] Зміна налаштувань типу (наприклад, hierarchyType) одразу впливає на стандартні реквізити в editor
-- [ ] Для посилальних полів owners/recorderTypes/registerMovements — multi-select з наявних обʼєктів
-- [ ] **Project Settings view** (FR-004): коли нічого не вибрано або вибрано кореневий вузол дерева — показувати форму:
+- [Х] Групи через shadcn/ui Accordion (collapsible)
+- [Х] Зміна налаштувань типу (наприклад, hierarchyType) одразу впливає на стандартні реквізити в editor
+- [Х] Для посилальних полів owners/recorderTypes/registerMovements — multi-select з наявних обʼєктів
+- [Х] **Project Settings view** (FR-004): коли нічого не вибрано або вибрано кореневий вузол дерева — показувати форму:
   - Project name, displayName
   - Database: target (postgresql), schema, namingConvention
   - Generation: tablePrefix, enumStrategy, constantsStrategy
@@ -618,6 +633,9 @@ Floating windows обмежені центральною панеллю. Якщ�
 
 #### Форми читають з store, пишуть через actions
 Кожне поле форми — controlled компонент, значення з store, onChange → dispatch action. Не тримати проміжний form state.
+
+#### Properties Panel має споживати selectedField з UI store
+`selectedField`, який встановлюється в таблиці реквізитів, повинен бути source of truth для режиму "властивості поля". Якщо вибрано поле — панель показує field-level форму; якщо вибрано лише обʼєкт — object-level форму. До повної реалізації панелі не persist-ити `selectedField`.
 
 #### Зміна налаштувань типу = мутація в metadata store
 Коли hierarchyType змінюється з None на FoldersAndItems — store оновлює обʼєкт, editor автоматично перерендерить стандартні реквізити.
@@ -637,15 +655,15 @@ Name обʼєкта змінюється тільки через rename в де�
 - [ ] Project Settings відображається коли нічого не вибрано
 
 ### Definition of Done
-- [ ] Властивості обʼєкта показуються при виборі в дереві
-- [ ] Властивості поля показуються при виборі в таблиці
-- [ ] Project Settings view працює (FR-004)
-- [ ] Accordion-групи працюють
-- [ ] Зміна налаштувань типу одразу відображається в editor
-- [ ] Multi-select для owners/recorderTypes працює
-- [ ] Панель collapsible
-- [ ] Усі labels через i18n
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] Властивості обʼєкта показуються при виборі в дереві
+- [Х] Властивості поля показуються при виборі в таблиці
+- [Х] Project Settings view працює (FR-004)
+- [Х] Accordion-групи працюють
+- [Х] Зміна налаштувань типу одразу відображається в editor
+- [Х] Multi-select для owners/recorderTypes працює
+- [Х] Панель collapsible
+- [Х] Усі labels через i18n
+- [Х] `pnpm lint && pnpm typecheck` — green
 
 ---
 

@@ -117,9 +117,31 @@
       "general": "General",
       "dataType": "Data Type",
       "constraints": "Constraints",
-      "additional": "Additional"
+      "additional": "Additional",
+      "database": "Database",
+      "generation": "Generation"
     },
-    "projectSettings": "Project Settings"
+    "projectSettings": "Project Settings",
+    "owners": "Owners",
+    "recorderTypes": "Recorder Types",
+    "registerMovements": "Register Movements",
+    "database": {
+      "target": "DBMS",
+      "schema": "Schema",
+      "namingConvention": "Naming Convention"
+    },
+    "generation": {
+      "tablePrefix": "Table prefix",
+      "enumStrategy": "Enum strategy",
+      "constantsStrategy": "Constants strategy"
+    },
+    "field": {
+      "length": "Length",
+      "precision": "Precision",
+      "scale": "Scale",
+      "ref": "Reference",
+      "allowedTypes": "Allowed Types"
+    }
   },
   "project": {
     "name": "Project name",

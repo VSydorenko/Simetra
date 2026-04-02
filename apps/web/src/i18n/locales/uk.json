@@ -117,9 +117,31 @@
       "general": "Основні",
       "dataType": "Тип даних",
       "constraints": "Обмеження",
-      "additional": "Додатково"
+      "additional": "Додатково",
+      "database": "База даних",
+      "generation": "Генерація"
     },
-    "projectSettings": "Параметри проєкту"
+    "projectSettings": "Параметри проєкту",
+    "owners": "Власники",
+    "recorderTypes": "Типи реєстраторів",
+    "registerMovements": "Рухи по регістрах",
+    "database": {
+      "target": "СУБД",
+      "schema": "Схема",
+      "namingConvention": "Конвенція імен"
+    },
+    "generation": {
+      "tablePrefix": "Префікс таблиць",
+      "enumStrategy": "Стратегія enum",
+      "constantsStrategy": "Стратегія констант"
+    },
+    "field": {
+      "length": "Довжина",
+      "precision": "Точність",
+      "scale": "Масштаб",
+      "ref": "Посилання",
+      "allowedTypes": "Дозволені типи"
+    }
   },
   "project": {
     "name": "Назва проєкту",
