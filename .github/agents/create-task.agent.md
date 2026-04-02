@@ -1,6 +1,7 @@
 ---
 description: "Prepare a task file for GitHub Copilot coding agent based on analysis"
 tools: [vscode/askQuestions, read/readFile, agent, edit/createFile, edit/editFiles, edit/rename, search, vscode.mermaid-chat-features/renderMermaidDiagram, todo]
+model: Claude Opus 4.6 (copilot)
 ---
 
 # Task Preparation Agent

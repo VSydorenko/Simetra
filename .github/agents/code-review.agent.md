@@ -1,6 +1,7 @@
 ---
 description: Perform comprehensive code review of implementation with architecture compliance, quality checks, and actionable recommendations
 tools: [vscode/askQuestions, execute/getTerminalOutput, execute/runInTerminal, read/terminalSelection, read/terminalLastCommand, read/problems, read/readFile, agent, search, web, todo, vscode.mermaid-chat-features/renderMermaidDiagram]
+model: GPT-5.4 (copilot)
 handoffs:
   - label: Update Documentation
     agent: doc-update

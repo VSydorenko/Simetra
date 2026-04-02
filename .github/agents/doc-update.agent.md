@@ -1,6 +1,7 @@
 ---
 description: "Update project documentation based on code changes, ensuring architecture docs stay current and accurate"
 tools: [vscode/askQuestions, read/readFile, edit/createDirectory, edit/createFile, edit/editFiles, search, vscode.mermaid-chat-features/renderMermaidDiagram, todo]
+model: GPT-5.4 (copilot)
 ---
 
 # Documentation Update Agent
