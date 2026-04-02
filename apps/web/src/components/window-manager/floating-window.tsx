@@ -11,6 +11,7 @@ import {
 import { Badge } from '@workspace/ui/components/badge'
 import { cn } from '@workspace/ui/lib/utils'
 import { useUiStore, type FloatingWindow as FloatingWindowType } from '../../stores/ui-store'
+import { ObjectEditor } from '../editor/object-editor'
 
 /** Поріг Y-координати (px) — якщо вікно перетягнуто вище цього значення, attach як вкладку */
 const ATTACH_THRESHOLD_Y = 10
@@ -253,9 +254,9 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
           </ContextMenuContent>
         </ContextMenu>
 
-        {/* Вміст вікна — ObjectEditor підключається пізніше (Модуль 7) */}
-        <div className="flex flex-1 items-center justify-center overflow-auto p-4 text-sm text-muted-foreground">
-          {window.objectRef.kind}: {window.objectRef.name}
+        {/* Вміст вікна — ObjectEditor */}
+        <div className="flex-1 overflow-auto">
+          <ObjectEditor objectRef={window.objectRef} />
         </div>
       </div>
     </Rnd>

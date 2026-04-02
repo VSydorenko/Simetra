@@ -58,6 +58,25 @@
       "values": "Значення",
       "settings": "Налаштування"
     },
+    "setting": {
+      "codeLength": "Довжина коду",
+      "codeType": "Тип коду",
+      "descriptionLength": "Довжина найменування",
+      "hierarchyType": "Тип ієрархії",
+      "autonumber": "Автонумерація",
+      "codeUnique": "Унікальність коду",
+      "mainPresentation": "Основне подання",
+      "numberLength": "Довжина номера",
+      "numberType": "Тип номера",
+      "numberPeriodicity": "Періодичність номера",
+      "posting": "Проведення",
+      "periodicity": "Періодичність",
+      "writeMode": "Режим запису",
+      "registerType": "Тип регістру",
+      "valueType": "Тип значення",
+      "defaultValue": "Значення за замовчуванням",
+      "autoAddPrimaryKey": "Автододавання первинного ключа"
+    },
     "standardAttribute": "Стандартний реквізит"
   },
   "tree": {
@@ -73,12 +92,24 @@
     "emptyAttributes": "Натисніть «Додати», щоб створити реквізит",
     "emptyTabularSections": "Натисніть «Додати», щоб створити табличну частину",
     "emptyValues": "Натисніть «Додати», щоб створити значення",
+    "emptyDimensions": "Натисніть «Додати», щоб створити вимір",
+    "emptyResources": "Натисніть «Додати», щоб створити ресурс",
     "addAttribute": "Додати реквізит",
     "addTabularSection": "Додати табличну частину",
     "addValue": "Додати значення",
+    "addDimension": "Додати вимір",
+    "addResource": "Додати ресурс",
     "deleteSelected": "Видалити вибране",
     "moveUp": "Вгору",
-    "moveDown": "Вниз"
+    "moveDown": "Вниз",
+    "noOpenTabs": "Оберіть обʼєкт у дереві для редагування",
+    "objectName": "Імʼя обʼєкта",
+    "displayNameUk": "Назва (uk)",
+    "displayNameEn": "Name (en)",
+    "valueName": "Імʼя значення",
+    "order": "Порядок",
+    "tabularSectionName": "Імʼя табличної частини",
+    "standardAttributes": "Стандартні реквізити"
   },
   "properties": {
     "title": "Властивості",

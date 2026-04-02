@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import {
   Group,
   Panel,
+  type PanelImperativeHandle,
   Separator as PanelSeparator,
 } from 'react-resizable-panels'
 import { TopBar } from './top-bar'
@@ -10,7 +12,7 @@ import { TreePanel } from './tree-panel'
 import { EditorPanel } from './editor-panel'
 import { PropertiesPanel } from './properties-panel'
 import { CommandPalette } from '../command-palette'
-import { useUiStore } from '@/stores/ui-store'
+import { DEFAULT_PANEL_LAYOUT, useUiStore } from '@/stores/ui-store'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useProjectStore } from '@/stores/project-store'
 import { createDefaultObject, generateUniqueName, getObjectNames } from '@/lib/metadata-defaults'
@@ -18,6 +20,24 @@ import { createDefaultObject, generateUniqueName, getObjectNames } from '@/lib/m
 export function AppShell() {
   const toggleCommandPalette = useUiStore((s) => s.toggleCommandPalette)
   const togglePropertiesPanel = useUiStore((s) => s.togglePropertiesPanel)
+  const propertiesPanelOpen = useUiStore((s) => s.propertiesPanelOpen)
+  const panelLayout = useUiStore((s) => s.panelLayout)
+  const setPanelLayout = useUiStore((s) => s.setPanelLayout)
+  const setPropertiesPanelOpen = useUiStore((s) => s.setPropertiesPanelOpen)
+  const propertiesPanelRef = useRef<PanelImperativeHandle | null>(null)
+
+  useEffect(() => {
+    const panel = propertiesPanelRef.current
+    if (!panel) return
+
+    if (propertiesPanelOpen && panel.isCollapsed()) {
+      panel.expand()
+    }
+
+    if (!propertiesPanelOpen && !panel.isCollapsed()) {
+      panel.collapse()
+    }
+  }, [propertiesPanelOpen])
 
   // --- Глобальні hotkeys ---
 
@@ -99,8 +119,10 @@ export function AppShell() {
         orientation="horizontal"
         className="flex-1"
         id="simetra-panels"
+        defaultLayout={panelLayout ?? DEFAULT_PANEL_LAYOUT}
+        onLayoutChanged={setPanelLayout}
       >
-        <Panel id="tree" defaultSize={20} minSize={12}>
+        <Panel id="tree" defaultSize={DEFAULT_PANEL_LAYOUT.tree} minSize={12}>
           <div className="h-full border-r border-border">
             <TreePanel />
           </div>
@@ -108,7 +130,7 @@ export function AppShell() {
 
         <PanelSeparator className="w-px bg-border transition-colors hover:bg-primary/50 active:bg-primary/70" />
 
-        <Panel id="editor" minSize={30}>
+        <Panel id="editor" defaultSize={DEFAULT_PANEL_LAYOUT.editor} minSize={30}>
           <EditorPanel />
         </Panel>
 
@@ -116,9 +138,17 @@ export function AppShell() {
 
         <Panel
           id="properties"
-          defaultSize={25}
+          panelRef={propertiesPanelRef}
+          defaultSize={DEFAULT_PANEL_LAYOUT.properties}
+          collapsedSize={0}
           minSize={12}
           collapsible
+          onResize={(size) => {
+            const nextOpen = size.asPercentage > 0
+            if (nextOpen !== useUiStore.getState().propertiesPanelOpen) {
+              setPropertiesPanelOpen(nextOpen)
+            }
+          }}
         >
           <div className="h-full border-l border-border">
             <PropertiesPanel />

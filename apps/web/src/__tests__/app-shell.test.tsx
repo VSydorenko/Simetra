@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { TooltipProvider } from '@workspace/ui/components/tooltip'
 import '../i18n'
-import { useUiStore } from '../stores/ui-store'
+import { DEFAULT_PANEL_LAYOUT, useUiStore } from '../stores/ui-store'
 
 // Мок cmdk — не працює в jsdom через залежність від browser API
 vi.mock('cmdk', () => ({
@@ -25,6 +25,7 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   useUiStore.setState({
     openTabs: [],
     activeTabId: null,
@@ -33,9 +34,21 @@ beforeEach(() => {
     nextWindowZIndex: 30,
     selectedObject: null,
     selectedField: null,
+    expandedTreeNodes: [
+      'Catalog',
+      'Document',
+      'Enumeration',
+      'InformationRegister',
+      'AccumulationRegister',
+      'Constant',
+      'CustomTable',
+    ],
+    activeEditorTab: 'attributes',
     commandPaletteOpen: false,
     propertiesPanelOpen: true,
+    panelLayout: DEFAULT_PANEL_LAYOUT,
     searchQuery: '',
+    focusedPanel: null,
   })
 })
 

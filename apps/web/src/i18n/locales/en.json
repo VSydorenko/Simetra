@@ -58,6 +58,25 @@
       "values": "Values",
       "settings": "Settings"
     },
+    "setting": {
+      "codeLength": "Code length",
+      "codeType": "Code type",
+      "descriptionLength": "Description length",
+      "hierarchyType": "Hierarchy type",
+      "autonumber": "Auto-number",
+      "codeUnique": "Code unique",
+      "mainPresentation": "Main presentation",
+      "numberLength": "Number length",
+      "numberType": "Number type",
+      "numberPeriodicity": "Number periodicity",
+      "posting": "Posting",
+      "periodicity": "Periodicity",
+      "writeMode": "Write mode",
+      "registerType": "Register type",
+      "valueType": "Value type",
+      "defaultValue": "Default value",
+      "autoAddPrimaryKey": "Auto-add primary key"
+    },
     "standardAttribute": "Standard attribute"
   },
   "tree": {
@@ -73,12 +92,24 @@
     "emptyAttributes": "Click \"Add\" to create an attribute",
     "emptyTabularSections": "Click \"Add\" to create a tabular section",
     "emptyValues": "Click \"Add\" to create a value",
+    "emptyDimensions": "Click \"Add\" to create a dimension",
+    "emptyResources": "Click \"Add\" to create a resource",
     "addAttribute": "Add attribute",
     "addTabularSection": "Add tabular section",
     "addValue": "Add value",
+    "addDimension": "Add dimension",
+    "addResource": "Add resource",
     "deleteSelected": "Delete selected",
     "moveUp": "Move up",
-    "moveDown": "Move down"
+    "moveDown": "Move down",
+    "noOpenTabs": "Select an object in the tree to edit",
+    "objectName": "Object name",
+    "displayNameUk": "Name (uk)",
+    "displayNameEn": "Name (en)",
+    "valueName": "Value name",
+    "order": "Order",
+    "tabularSectionName": "Tabular section name",
+    "standardAttributes": "Standard attributes"
   },
   "properties": {
     "title": "Properties",

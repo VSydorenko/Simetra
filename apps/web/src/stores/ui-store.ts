@@ -1,5 +1,7 @@
 import { create } from 'zustand'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import type { MetadataKind, MetadataRef } from '@simetra/core'
+import type { Layout } from 'react-resizable-panels'
 
 // Контекст вибору — або обʼєкт, або поле всередині обʼєкта
 export interface FieldSelection {
@@ -66,6 +68,8 @@ export interface UiState {
   activeEditorTab: string
   // Чи відкрита панель властивостей
   propertiesPanelOpen: boolean
+  // Розкладка 3-panel layout у відсотках від ширини контейнера
+  panelLayout: Layout
   // Чи відкрита Command Palette
   commandPaletteOpen: boolean
   // Останній активний фокус (для scoped hotkeys)
@@ -89,6 +93,7 @@ export interface UiActions {
   setSearchQuery: (query: string) => void
   setActiveEditorTab: (tab: string) => void
   setPropertiesPanelOpen: (open: boolean) => void
+  setPanelLayout: (layout: Layout) => void
   togglePropertiesPanel: () => void
   setCommandPaletteOpen: (open: boolean) => void
   toggleCommandPalette: () => void
@@ -113,6 +118,8 @@ export interface UiActions {
   unpinTab: (tabId: string) => void
   /** Змінити порядок вкладок */
   reorderTabs: (fromIndex: number, toIndex: number) => void
+  /** Оновити objectRef вкладки (при перейменуванні обʼєкта) */
+  updateTabObjectRef: (oldRef: MetadataRef, newRef: MetadataRef) => void
 
   // --- Floating window lifecycle ---
   /** Відʼєднати вкладку у floating window */
@@ -152,98 +159,112 @@ const DEFAULT_EXPANDED: string[] = [
   'CustomTable',
 ] satisfies MetadataKind[]
 
+export const DEFAULT_PANEL_LAYOUT: Layout = {
+  tree: 20,
+  editor: 55,
+  properties: 25,
+}
+
+export const UI_STORE_STORAGE_KEY = 'simetra-ui'
+
 export type UiStore = UiState & UiActions
 
-export const useUiStore = create<UiStore>()((set, get) => ({
-  selectedObject: null,
-  selectedField: null,
-  expandedTreeNodes: DEFAULT_EXPANDED,
-  searchQuery: '',
-  activeEditorTab: 'attributes',
-  propertiesPanelOpen: true,
-  commandPaletteOpen: false,
-  focusedPanel: null,
-
-  // Window management defaults
-  openTabs: [],
-  activeTabId: null,
-  floatingWindows: [],
-  activeWindowId: null,
-  nextWindowZIndex: FLOATING_WINDOW_BASE_Z,
-
-  selectObject: (ref) =>
-    set({
-      selectedObject: ref,
-      // Скинути вибір поля при зміні обʼєкта
+export const useUiStore = create<UiStore>()(
+  persist(
+    (set, get) => ({
+      selectedObject: null,
       selectedField: null,
+      expandedTreeNodes: DEFAULT_EXPANDED,
+      searchQuery: '',
       activeEditorTab: 'attributes',
-    }),
+      propertiesPanelOpen: true,
+      panelLayout: DEFAULT_PANEL_LAYOUT,
+      commandPaletteOpen: false,
+      focusedPanel: null,
 
-  selectField: (field) =>
-    set({ selectedField: field }),
+      // Window management defaults
+      openTabs: [],
+      activeTabId: null,
+      floatingWindows: [],
+      activeWindowId: null,
+      nextWindowZIndex: FLOATING_WINDOW_BASE_Z,
 
-  setExpandedTreeNodes: (nodes) =>
-    set({ expandedTreeNodes: nodes }),
+      selectObject: (ref) =>
+        set({
+          selectedObject: ref,
+          // Скинути вибір поля при зміні обʼєкта
+          selectedField: null,
+          activeEditorTab: 'attributes',
+        }),
 
-  toggleTreeNode: (nodeId) =>
-    set((state) => {
-      const nodes = state.expandedTreeNodes
-      const isExpanded = nodes.includes(nodeId)
-      return {
-        expandedTreeNodes: isExpanded
-          ? nodes.filter((n) => n !== nodeId)
-          : [...nodes, nodeId],
-      }
-    }),
+      selectField: (field) =>
+        set({ selectedField: field }),
 
-  setSearchQuery: (query) =>
-    set({ searchQuery: query }),
+      setExpandedTreeNodes: (nodes) =>
+        set({ expandedTreeNodes: nodes }),
 
-  setActiveEditorTab: (tab) =>
-    set({ activeEditorTab: tab }),
+      toggleTreeNode: (nodeId) =>
+        set((state) => {
+          const nodes = state.expandedTreeNodes
+          const isExpanded = nodes.includes(nodeId)
+          return {
+            expandedTreeNodes: isExpanded
+              ? nodes.filter((n) => n !== nodeId)
+              : [...nodes, nodeId],
+          }
+        }),
 
-  setPropertiesPanelOpen: (open) =>
-    set({ propertiesPanelOpen: open }),
+      setSearchQuery: (query) =>
+        set({ searchQuery: query }),
 
-  togglePropertiesPanel: () =>
-    set((state) => ({ propertiesPanelOpen: !state.propertiesPanelOpen })),
+      setActiveEditorTab: (tab) =>
+        set({ activeEditorTab: tab }),
 
-  setCommandPaletteOpen: (open) =>
-    set({ commandPaletteOpen: open }),
+      setPropertiesPanelOpen: (open) =>
+        set({ propertiesPanelOpen: open }),
 
-  toggleCommandPalette: () =>
-    set((state) => ({ commandPaletteOpen: !state.commandPaletteOpen })),
+      setPanelLayout: (layout) =>
+        set({ panelLayout: layout }),
 
-  setFocusedPanel: (panel) =>
-    set({ focusedPanel: panel }),
+      togglePropertiesPanel: () =>
+        set((state) => ({ propertiesPanelOpen: !state.propertiesPanelOpen })),
+
+      setCommandPaletteOpen: (open) =>
+        set({ commandPaletteOpen: open }),
+
+      toggleCommandPalette: () =>
+        set((state) => ({ commandPaletteOpen: !state.commandPaletteOpen })),
+
+      setFocusedPanel: (panel) =>
+        set({ focusedPanel: panel }),
 
   // --- Tab lifecycle ---
 
-  openTab: (ref) => {
-    const tabId = refToTabId(ref)
-    const { openTabs } = get()
-    const existing = openTabs.find((t) => t.id === tabId)
-    if (existing) {
-      // Вкладка вже відкрита — просто активувати
-      set({
-        activeTabId: tabId,
-        activeWindowId: null,
-        selectedObject: ref,
-        selectedField: null,
-      })
-      return
-    }
-    const tab: TabItem = { id: tabId, objectRef: ref, isPinned: false }
-    set({
-      openTabs: [...openTabs, tab],
-      activeTabId: tabId,
-      activeWindowId: null,
-      selectedObject: ref,
-      selectedField: null,
-    })
-  },
+      openTab: (ref) => {
+        const tabId = refToTabId(ref)
+        const { openTabs } = get()
+        const existing = openTabs.find((t) => t.id === tabId)
+        if (existing) {
+          // Вкладка вже відкрита — просто активувати
+          set({
+            activeTabId: tabId,
+            activeWindowId: null,
+            selectedObject: ref,
+            selectedField: null,
+          })
+          return
+        }
+        const tab: TabItem = { id: tabId, objectRef: ref, isPinned: false }
+        set({
+          openTabs: [...openTabs, tab],
+          activeTabId: tabId,
+          activeWindowId: null,
+          selectedObject: ref,
+          selectedField: null,
+        })
+      },
 
-  closeTab: (tabId) =>
+      closeTab: (tabId) =>
     set((state) => {
       const idx = state.openTabs.findIndex((t) => t.id === tabId)
       if (idx === -1) return state
@@ -274,7 +295,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  closeOtherTabs: (tabId) =>
+      closeOtherTabs: (tabId) =>
     set((state) => {
       const kept = state.openTabs.filter((t) => t.id === tabId || t.isPinned)
       const activeTab = kept.find((t) => t.id === tabId) ?? kept[0]
@@ -286,7 +307,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  closeAllTabs: () =>
+      closeAllTabs: () =>
     set((state) => {
       const pinned = state.openTabs.filter((t) => t.isPinned)
       const activeTab = pinned[0]
@@ -298,7 +319,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  closeTabsToRight: (tabId) =>
+      closeTabsToRight: (tabId) =>
     set((state) => {
       const idx = state.openTabs.findIndex((t) => t.id === tabId)
       if (idx === -1) return state
@@ -316,7 +337,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  setActiveTab: (tabId) =>
+      setActiveTab: (tabId) =>
     set((state) => {
       if (tabId === null) {
         return {
@@ -336,21 +357,21 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  pinTab: (tabId) =>
+      pinTab: (tabId) =>
     set((state) => ({
       openTabs: state.openTabs.map((t) =>
         t.id === tabId ? { ...t, isPinned: true } : t,
       ),
     })),
 
-  unpinTab: (tabId) =>
+      unpinTab: (tabId) =>
     set((state) => ({
       openTabs: state.openTabs.map((t) =>
         t.id === tabId ? { ...t, isPinned: false } : t,
       ),
     })),
 
-  reorderTabs: (fromIndex, toIndex) =>
+      reorderTabs: (fromIndex, toIndex) =>
     set((state) => {
       if (
         fromIndex < 0 ||
@@ -366,9 +387,43 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       return { openTabs: tabs }
     }),
 
+      updateTabObjectRef: (oldRef, newRef) =>
+    set((state) => {
+      const oldTabId = refToTabId(oldRef)
+      const newTabId = refToTabId(newRef)
+      const tabIdx = state.openTabs.findIndex((t) => t.id === oldTabId)
+      if (tabIdx === -1) return state
+
+      const newTabs = state.openTabs.map((t) =>
+        t.id === oldTabId ? { ...t, id: newTabId, objectRef: newRef } : t,
+      )
+      const newActiveTabId = state.activeTabId === oldTabId ? newTabId : state.activeTabId
+
+      // Оновити також floating windows
+      const newWindows = state.floatingWindows.map((w) =>
+        w.id === `window-${oldTabId}`
+          ? { ...w, id: `window-${newTabId}`, objectRef: newRef }
+          : w,
+      )
+      const newActiveWindowId =
+        state.activeWindowId === `window-${oldTabId}`
+          ? `window-${newTabId}`
+          : state.activeWindowId
+
+      return {
+        openTabs: newTabs,
+        activeTabId: newActiveTabId,
+        floatingWindows: newWindows,
+        activeWindowId: newActiveWindowId,
+        selectedObject: state.selectedObject?.kind === oldRef.kind && state.selectedObject?.name === oldRef.name
+          ? newRef
+          : state.selectedObject,
+      }
+    }),
+
   // --- Floating window lifecycle ---
 
-  detachTab: (tabId) =>
+      detachTab: (tabId) =>
     set((state) => {
       const tab = state.openTabs.find((t) => t.id === tabId)
       if (!tab) return state
@@ -423,7 +478,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  attachWindow: (windowId) =>
+      attachWindow: (windowId) =>
     set((state) => {
       const win = state.floatingWindows.find((w) => w.id === windowId)
       if (!win) return state
@@ -458,26 +513,26 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  closeWindow: (windowId) =>
+      closeWindow: (windowId) =>
     set((state) => ({
       floatingWindows: state.floatingWindows.filter((w) => w.id !== windowId),
     })),
 
-  minimizeWindow: (windowId) =>
+      minimizeWindow: (windowId) =>
     set((state) => ({
       floatingWindows: state.floatingWindows.map((w) =>
         w.id === windowId ? { ...w, isMinimized: true, isMaximized: false } : w,
       ),
     })),
 
-  maximizeWindow: (windowId) =>
+      maximizeWindow: (windowId) =>
     set((state) => ({
       floatingWindows: state.floatingWindows.map((w) =>
         w.id === windowId ? { ...w, isMaximized: true, isMinimized: false } : w,
       ),
     })),
 
-  restoreWindow: (windowId) =>
+      restoreWindow: (windowId) =>
     set((state) => ({
       floatingWindows: state.floatingWindows.map((w) =>
         w.id === windowId
@@ -486,7 +541,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       ),
     })),
 
-  focusWindow: (windowId) =>
+      focusWindow: (windowId) =>
     set((state) => {
       const win = state.floatingWindows.find((w) => w.id === windowId)
       const newZIndex = state.nextWindowZIndex
@@ -501,14 +556,14 @@ export const useUiStore = create<UiStore>()((set, get) => ({
       }
     }),
 
-  moveWindow: (windowId, position) =>
+      moveWindow: (windowId, position) =>
     set((state) => ({
       floatingWindows: state.floatingWindows.map((w) =>
         w.id === windowId ? { ...w, position } : w,
       ),
     })),
 
-  resizeWindow: (windowId, size) =>
+      resizeWindow: (windowId, size) =>
     set((state) => ({
       floatingWindows: state.floatingWindows.map((w) =>
         w.id === windowId ? { ...w, size } : w,
@@ -517,7 +572,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 
   // --- Unified ---
 
-  focusEntity: (ref) => {
+      focusEntity: (ref) => {
     const tabId = refToTabId(ref)
     const { openTabs, floatingWindows } = get()
 
@@ -545,7 +600,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
     get().openTab(ref)
   },
 
-  closeAllForObject: (ref) =>
+      closeAllForObject: (ref) =>
     set((state) => {
       const tabId = refToTabId(ref)
       const windowId = `window-${tabId}`
@@ -594,4 +649,17 @@ export const useUiStore = create<UiStore>()((set, get) => ({
         selectedField: null,
       }
     }),
-}))
+    }),
+    {
+      name: UI_STORE_STORAGE_KEY,
+      version: 1,
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        expandedTreeNodes: state.expandedTreeNodes,
+        activeEditorTab: state.activeEditorTab,
+        propertiesPanelOpen: state.propertiesPanelOpen,
+        panelLayout: state.panelLayout,
+      }),
+    },
+  ),
+)

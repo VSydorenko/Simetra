@@ -139,6 +139,8 @@ export function TreePanel() {
   const searchQuery = useUiStore((s) => s.searchQuery)
   const setSearchQuery = useUiStore((s) => s.setSearchQuery)
   const selectedObject = useUiStore((s) => s.selectedObject)
+  const expandedTreeNodes = useUiStore((s) => s.expandedTreeNodes)
+  const toggleTreeNode = useUiStore((s) => s.toggleTreeNode)
 
   // --- Побудова дерева ---
   const treeData = useMemo(
@@ -161,11 +163,11 @@ export function TreePanel() {
   // --- Початковий стан відкритих вузлів ---
   const initialOpenState = useMemo(() => {
     const state: Record<string, boolean> = {}
-    for (const kind of SECTION_ORDER) {
-      state[kind] = true
+    for (const nodeId of expandedTreeNodes) {
+      state[nodeId] = true
     }
     return state
-  }, [])
+  }, [expandedTreeNodes])
 
   // --- Selection ---
   const selectedId = useMemo(() => {
@@ -348,6 +350,7 @@ export function TreePanel() {
             disableDrag
             disableDrop
             disableMultiSelection
+            onToggle={toggleTreeNode}
             searchTerm={searchQuery}
             searchMatch={(node, term) =>
               node.data.isSection || node.data.name.toLowerCase().includes(term.toLowerCase())

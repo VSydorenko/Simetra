@@ -6,20 +6,12 @@ import {
   type MetadataObject,
   type MetadataKind,
   type Project,
+  type Attribute,
+  type TabularSection,
   projectModelSchema,
   metadataObjectSchema,
 } from '@simetra/core'
-
-// Маппінг MetadataKind → ключ у ProjectModel
-const KIND_TO_KEY: Record<MetadataKind, keyof Omit<ProjectModel, 'project'>> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  Enumeration: 'enumerations',
-  InformationRegister: 'informationRegisters',
-  AccumulationRegister: 'accumulationRegisters',
-  Constant: 'constants',
-  CustomTable: 'customTables',
-}
+import { KIND_TO_KEY } from '@/lib/metadata-defaults'
 
 export interface ValidationError {
   path: string
@@ -64,6 +56,141 @@ export interface MetadataActions {
     sourceName: string,
     newName: string,
   ) => ValidationError[] | null
+
+  // --- Granular attribute actions ---
+  /** Додати атрибут до обʼєкта */
+  addAttribute: (
+    kind: MetadataKind,
+    name: string,
+    attribute: Attribute,
+  ) => ValidationError[] | null
+  /** Видалити атрибут з обʼєкта */
+  removeAttribute: (
+    kind: MetadataKind,
+    name: string,
+    attrName: string,
+  ) => void
+  /** Оновити атрибут обʼєкта */
+  updateAttribute: (
+    kind: MetadataKind,
+    name: string,
+    attrName: string,
+    updates: Partial<Attribute>,
+  ) => ValidationError[] | null
+  /** Змінити порядок атрибутів */
+  reorderAttributes: (
+    kind: MetadataKind,
+    name: string,
+    fromIndex: number,
+    toIndex: number,
+  ) => void
+
+  // --- Tabular section actions ---
+  /** Додати табличну частину */
+  addTabularSection: (
+    kind: MetadataKind,
+    name: string,
+    section: TabularSection,
+  ) => ValidationError[] | null
+  /** Видалити табличну частину */
+  removeTabularSection: (
+    kind: MetadataKind,
+    name: string,
+    sectionName: string,
+  ) => void
+  /** Додати атрибут до табличної частини */
+  addTabularSectionAttribute: (
+    kind: MetadataKind,
+    name: string,
+    sectionName: string,
+    attribute: Attribute,
+  ) => ValidationError[] | null
+  /** Видалити атрибут з табличної частини */
+  removeTabularSectionAttribute: (
+    kind: MetadataKind,
+    name: string,
+    sectionName: string,
+    attrName: string,
+  ) => void
+  /** Оновити атрибут табличної частини */
+  updateTabularSectionAttribute: (
+    kind: MetadataKind,
+    name: string,
+    sectionName: string,
+    attrName: string,
+    updates: Partial<Attribute>,
+  ) => ValidationError[] | null
+  /** Змінити порядок атрибутів табличної частини */
+  reorderTabularSectionAttributes: (
+    kind: MetadataKind,
+    name: string,
+    sectionName: string,
+    fromIndex: number,
+    toIndex: number,
+  ) => void
+
+  // --- Enum value actions ---
+  /** Додати значення enum */
+  addEnumValue: (
+    name: string,
+    value: { name: string; displayName?: { uk?: string; en?: string }; order?: number },
+  ) => ValidationError[] | null
+  /** Видалити значення enum */
+  removeEnumValue: (name: string, valueName: string) => void
+  /** Оновити значення enum */
+  updateEnumValue: (
+    name: string,
+    valueName: string,
+    updates: { name?: string; displayName?: { uk?: string; en?: string }; order?: number },
+  ) => ValidationError[] | null
+  /** Змінити порядок значень enum */
+  reorderEnumValues: (name: string, fromIndex: number, toIndex: number) => void
+
+  // --- Register dimension/resource actions (делегують до attribute actions з відповідним полем) ---
+  /** Додати dimension до регістру */
+  addDimension: (
+    kind: MetadataKind,
+    name: string,
+    attribute: Attribute,
+  ) => ValidationError[] | null
+  /** Видалити dimension з регістру */
+  removeDimension: (kind: MetadataKind, name: string, attrName: string) => void
+  /** Оновити dimension регістру */
+  updateDimension: (
+    kind: MetadataKind,
+    name: string,
+    attrName: string,
+    updates: Partial<Attribute>,
+  ) => ValidationError[] | null
+  /** Змінити порядок dimensions */
+  reorderDimensions: (
+    kind: MetadataKind,
+    name: string,
+    fromIndex: number,
+    toIndex: number,
+  ) => void
+  /** Додати resource до регістру */
+  addResource: (
+    kind: MetadataKind,
+    name: string,
+    attribute: Attribute,
+  ) => ValidationError[] | null
+  /** Видалити resource з регістру */
+  removeResource: (kind: MetadataKind, name: string, attrName: string) => void
+  /** Оновити resource регістру */
+  updateResource: (
+    kind: MetadataKind,
+    name: string,
+    attrName: string,
+    updates: Partial<Attribute>,
+  ) => ValidationError[] | null
+  /** Змінити порядок resources */
+  reorderResources: (
+    kind: MetadataKind,
+    name: string,
+    fromIndex: number,
+    toIndex: number,
+  ) => void
 }
 
 function createEmptyModel(projectName: string): ProjectModel {
@@ -228,6 +355,482 @@ export const useMetadataStore = create<MetadataStore>()(
 
         const duplicate = { ...structuredClone(source), name: newName }
         return get().createObject(duplicate as MetadataObject)
+      },
+
+      // --- Granular attribute actions ---
+
+      addAttribute: (kind, name, attribute) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('attributes' in obj)) return [{ path: '', message: 'Object not found or has no attributes' }]
+
+        const attrs = (obj as { attributes: Attribute[] }).attributes
+        if (attrs.some((a) => a.name === attribute.name)) {
+          return [{ path: 'name', message: `Attribute "${attribute.name}" already exists` }]
+        }
+
+        const merged = { ...obj, attributes: [...attrs, attribute] }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            ;(arr[idx] as unknown as { attributes: Attribute[] }).attributes.push(attribute)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      removeAttribute: (kind, name, attrName) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'attributes' in arr[idx]) {
+            const obj = arr[idx] as unknown as { attributes: Attribute[] }
+            obj.attributes = obj.attributes.filter((a) => a.name !== attrName)
+            state.version++
+          }
+        })
+      },
+
+      updateAttribute: (kind, name, attrName, updates) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('attributes' in obj)) return [{ path: '', message: 'Object not found' }]
+
+        const attrs = (obj as { attributes: Attribute[] }).attributes
+        const attrIdx = attrs.findIndex((a) => a.name === attrName)
+        if (attrIdx === -1) return [{ path: '', message: `Attribute "${attrName}" not found` }]
+
+        const updatedAttrs = attrs.map((a, i) =>
+          i === attrIdx ? { ...a, ...updates } : a,
+        )
+        const merged = { ...obj, attributes: updatedAttrs }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            const target = arr[idx] as unknown as { attributes: Attribute[] }
+            Object.assign(target.attributes[attrIdx], updates)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      reorderAttributes: (kind, name, fromIndex, toIndex) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'attributes' in arr[idx]) {
+            const obj = arr[idx] as unknown as { attributes: Attribute[] }
+            const attrs = obj.attributes
+            if (fromIndex >= 0 && fromIndex < attrs.length && toIndex >= 0 && toIndex < attrs.length) {
+              const [moved] = attrs.splice(fromIndex, 1)
+              attrs.splice(toIndex, 0, moved)
+              state.version++
+            }
+          }
+        })
+      },
+
+      // --- Tabular section actions ---
+
+      addTabularSection: (kind, name, section) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('tabularSections' in obj)) return [{ path: '', message: 'Object not found or has no tabular sections' }]
+
+        const sections = (obj as { tabularSections: TabularSection[] }).tabularSections
+        if (sections.some((s) => s.name === section.name)) {
+          return [{ path: 'name', message: `Tabular section "${section.name}" already exists` }]
+        }
+
+        const merged = { ...obj, tabularSections: [...sections, section] }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            ;(arr[idx] as unknown as { tabularSections: TabularSection[] }).tabularSections.push(section)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      removeTabularSection: (kind, name, sectionName) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'tabularSections' in arr[idx]) {
+            const obj = arr[idx] as unknown as { tabularSections: TabularSection[] }
+            obj.tabularSections = obj.tabularSections.filter((s) => s.name !== sectionName)
+            state.version++
+          }
+        })
+      },
+
+      addTabularSectionAttribute: (kind, name, sectionName, attribute) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('tabularSections' in obj)) return [{ path: '', message: 'Object not found' }]
+
+        const sections = (obj as { tabularSections: TabularSection[] }).tabularSections
+        const section = sections.find((s) => s.name === sectionName)
+        if (!section) return [{ path: '', message: `Tabular section "${sectionName}" not found` }]
+
+        if (section.attributes.some((a) => a.name === attribute.name)) {
+          return [{ path: 'name', message: `Attribute "${attribute.name}" already exists in section "${sectionName}"` }]
+        }
+
+        const updatedSections = sections.map((s) =>
+          s.name === sectionName ? { ...s, attributes: [...s.attributes, attribute] } : s,
+        )
+        const merged = { ...obj, tabularSections: updatedSections }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const objIdx = findObjectIndex(arr, name)
+          if (objIdx !== -1) {
+            const target = arr[objIdx] as unknown as { tabularSections: TabularSection[] }
+            const sec = target.tabularSections.find((s) => s.name === sectionName)
+            if (sec) {
+              sec.attributes.push(attribute)
+              state.version++
+            }
+          }
+        })
+        return null
+      },
+
+      removeTabularSectionAttribute: (kind, name, sectionName, attrName) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const objIdx = findObjectIndex(arr, name)
+          if (objIdx !== -1 && 'tabularSections' in arr[objIdx]) {
+            const target = arr[objIdx] as unknown as { tabularSections: TabularSection[] }
+            const sec = target.tabularSections.find((s) => s.name === sectionName)
+            if (sec) {
+              sec.attributes = sec.attributes.filter((a) => a.name !== attrName)
+              state.version++
+            }
+          }
+        })
+      },
+
+      updateTabularSectionAttribute: (kind, name, sectionName, attrName, updates) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('tabularSections' in obj)) return [{ path: '', message: 'Object not found' }]
+
+        const sections = (obj as { tabularSections: TabularSection[] }).tabularSections
+        const section = sections.find((s) => s.name === sectionName)
+        if (!section) return [{ path: '', message: `Section "${sectionName}" not found` }]
+
+        const attrIdx = section.attributes.findIndex((a) => a.name === attrName)
+        if (attrIdx === -1) return [{ path: '', message: `Attribute "${attrName}" not found` }]
+
+        const updatedSections = sections.map((s) =>
+          s.name === sectionName
+            ? { ...s, attributes: s.attributes.map((a, i) => (i === attrIdx ? { ...a, ...updates } : a)) }
+            : s,
+        )
+        const merged = { ...obj, tabularSections: updatedSections }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const objIdx = findObjectIndex(arr, name)
+          if (objIdx !== -1) {
+            const target = arr[objIdx] as unknown as { tabularSections: TabularSection[] }
+            const sec = target.tabularSections.find((s) => s.name === sectionName)
+            if (sec) {
+              Object.assign(sec.attributes[attrIdx], updates)
+              state.version++
+            }
+          }
+        })
+        return null
+      },
+
+      reorderTabularSectionAttributes: (kind, name, sectionName, fromIndex, toIndex) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const objIdx = findObjectIndex(arr, name)
+          if (objIdx !== -1 && 'tabularSections' in arr[objIdx]) {
+            const target = arr[objIdx] as unknown as { tabularSections: TabularSection[] }
+            const sec = target.tabularSections.find((s) => s.name === sectionName)
+            if (sec) {
+              const attrs = sec.attributes
+              if (fromIndex >= 0 && fromIndex < attrs.length && toIndex >= 0 && toIndex < attrs.length) {
+                const [moved] = attrs.splice(fromIndex, 1)
+                attrs.splice(toIndex, 0, moved)
+                state.version++
+              }
+            }
+          }
+        })
+      },
+
+      // --- Enum value actions ---
+
+      addEnumValue: (name, value) => {
+        const objects = get().model.enumerations
+        const obj = objects.find((o) => o.name === name)
+        if (!obj) return [{ path: '', message: `Enumeration "${name}" not found` }]
+
+        if (obj.values.some((v) => v.name === value.name)) {
+          return [{ path: 'name', message: `Value "${value.name}" already exists` }]
+        }
+
+        const merged = { ...obj, values: [...obj.values, value] }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const target = state.model.enumerations.find((o) => o.name === name)
+          if (target) {
+            target.values.push(value)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      removeEnumValue: (name, valueName) => {
+        set((state) => {
+          const target = state.model.enumerations.find((o) => o.name === name)
+          if (target) {
+            target.values = target.values.filter((v) => v.name !== valueName)
+            state.version++
+          }
+        })
+      },
+
+      updateEnumValue: (name, valueName, updates) => {
+        const objects = get().model.enumerations
+        const obj = objects.find((o) => o.name === name)
+        if (!obj) return [{ path: '', message: `Enumeration "${name}" not found` }]
+
+        const valIdx = obj.values.findIndex((v) => v.name === valueName)
+        if (valIdx === -1) return [{ path: '', message: `Value "${valueName}" not found` }]
+
+        const updatedValues = obj.values.map((v, i) =>
+          i === valIdx ? { ...v, ...updates } : v,
+        )
+        const merged = { ...obj, values: updatedValues }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const target = state.model.enumerations.find((o) => o.name === name)
+          if (target) {
+            Object.assign(target.values[valIdx], updates)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      reorderEnumValues: (name, fromIndex, toIndex) => {
+        set((state) => {
+          const target = state.model.enumerations.find((o) => o.name === name)
+          if (target && fromIndex >= 0 && fromIndex < target.values.length && toIndex >= 0 && toIndex < target.values.length) {
+            const [moved] = target.values.splice(fromIndex, 1)
+            target.values.splice(toIndex, 0, moved)
+            state.version++
+          }
+        })
+      },
+
+      // --- Register dimension/resource actions ---
+
+      addDimension: (kind, name, attribute) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('dimensions' in obj)) return [{ path: '', message: 'Object not found or has no dimensions' }]
+
+        const dims = (obj as { dimensions: Attribute[] }).dimensions
+        if (dims.some((d) => d.name === attribute.name)) {
+          return [{ path: 'name', message: `Dimension "${attribute.name}" already exists` }]
+        }
+
+        const merged = { ...obj, dimensions: [...dims, attribute] }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            ;(arr[idx] as unknown as { dimensions: Attribute[] }).dimensions.push(attribute)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      removeDimension: (kind, name, attrName) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'dimensions' in arr[idx]) {
+            const obj = arr[idx] as unknown as { dimensions: Attribute[] }
+            obj.dimensions = obj.dimensions.filter((d) => d.name !== attrName)
+            state.version++
+          }
+        })
+      },
+
+      addResource: (kind, name, attribute) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('resources' in obj)) return [{ path: '', message: 'Object not found or has no resources' }]
+
+        const res = (obj as { resources: Attribute[] }).resources
+        if (res.some((r) => r.name === attribute.name)) {
+          return [{ path: 'name', message: `Resource "${attribute.name}" already exists` }]
+        }
+
+        const merged = { ...obj, resources: [...res, attribute] }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            ;(arr[idx] as unknown as { resources: Attribute[] }).resources.push(attribute)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      removeResource: (kind, name, attrName) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'resources' in arr[idx]) {
+            const obj = arr[idx] as unknown as { resources: Attribute[] }
+            obj.resources = obj.resources.filter((r) => r.name !== attrName)
+            state.version++
+          }
+        })
+      },
+
+      updateDimension: (kind, name, attrName, updates) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('dimensions' in obj)) return [{ path: '', message: 'Object not found' }]
+
+        const dims = (obj as { dimensions: Attribute[] }).dimensions
+        const attrIdx = dims.findIndex((a) => a.name === attrName)
+        if (attrIdx === -1) return [{ path: '', message: `Dimension "${attrName}" not found` }]
+
+        const updatedDims = dims.map((a, i) => (i === attrIdx ? { ...a, ...updates } : a))
+        const merged = { ...obj, dimensions: updatedDims }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            const target = arr[idx] as unknown as { dimensions: Attribute[] }
+            Object.assign(target.dimensions[attrIdx], updates)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      reorderDimensions: (kind, name, fromIndex, toIndex) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'dimensions' in arr[idx]) {
+            const obj = arr[idx] as unknown as { dimensions: Attribute[] }
+            const dims = obj.dimensions
+            if (fromIndex >= 0 && fromIndex < dims.length && toIndex >= 0 && toIndex < dims.length) {
+              const [moved] = dims.splice(fromIndex, 1)
+              dims.splice(toIndex, 0, moved)
+              state.version++
+            }
+          }
+        })
+      },
+
+      updateResource: (kind, name, attrName, updates) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((o) => o.name === name)
+        if (!obj || !('resources' in obj)) return [{ path: '', message: 'Object not found' }]
+
+        const res = (obj as { resources: Attribute[] }).resources
+        const attrIdx = res.findIndex((a) => a.name === attrName)
+        if (attrIdx === -1) return [{ path: '', message: `Resource "${attrName}" not found` }]
+
+        const updatedRes = res.map((a, i) => (i === attrIdx ? { ...a, ...updates } : a))
+        const merged = { ...obj, resources: updatedRes }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) return errors
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1) {
+            const target = arr[idx] as unknown as { resources: Attribute[] }
+            Object.assign(target.resources[attrIdx], updates)
+            state.version++
+          }
+        })
+        return null
+      },
+
+      reorderResources: (kind, name, fromIndex, toIndex) => {
+        const key = KIND_TO_KEY[kind]
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const idx = findObjectIndex(arr, name)
+          if (idx !== -1 && 'resources' in arr[idx]) {
+            const obj = arr[idx] as unknown as { resources: Attribute[] }
+            const res = obj.resources
+            if (fromIndex >= 0 && fromIndex < res.length && toIndex >= 0 && toIndex < res.length) {
+              const [moved] = res.splice(fromIndex, 1)
+              res.splice(toIndex, 0, moved)
+              state.version++
+            }
+          }
+        })
       },
     })),
     {

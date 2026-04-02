@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useUiStore, refToTabId } from '../stores/ui-store'
+import {
+  DEFAULT_PANEL_LAYOUT,
+  UI_STORE_STORAGE_KEY,
+  useUiStore,
+  refToTabId,
+} from '../stores/ui-store'
 import type { MetadataRef } from '@simetra/core'
 
 // Хелпери для створення MetadataRef
@@ -8,6 +13,7 @@ const documentRef = (name: string): MetadataRef => ({ kind: 'Document', name })
 
 // Скидання стану store перед кожним тестом
 beforeEach(() => {
+  localStorage.clear()
   useUiStore.setState({
     openTabs: [],
     activeTabId: null,
@@ -16,6 +22,21 @@ beforeEach(() => {
     nextWindowZIndex: 30,
     selectedObject: null,
     selectedField: null,
+    expandedTreeNodes: [
+      'Catalog',
+      'Document',
+      'Enumeration',
+      'InformationRegister',
+      'AccumulationRegister',
+      'Constant',
+      'CustomTable',
+    ],
+    activeEditorTab: 'attributes',
+    propertiesPanelOpen: true,
+    panelLayout: DEFAULT_PANEL_LAYOUT,
+    searchQuery: '',
+    commandPaletteOpen: false,
+    focusedPanel: null,
   })
 })
 
@@ -24,6 +45,38 @@ beforeEach(() => {
 describe('refToTabId', () => {
   it('генерує id у форматі kind/name', () => {
     expect(refToTabId({ kind: 'Catalog', name: 'Products' })).toBe('Catalog/Products')
+  })
+})
+
+describe('persisted UI preferences', () => {
+  it('зберігає тільки стабільні UI налаштування', () => {
+    useUiStore.setState({
+      propertiesPanelOpen: false,
+      panelLayout: { tree: 18, editor: 64, properties: 18 },
+      expandedTreeNodes: ['Catalog', 'Document'],
+      openTabs: [{
+        id: 'Catalog/Products',
+        objectRef: catalogRef('Products'),
+        isPinned: false,
+      }],
+      selectedObject: catalogRef('Products'),
+    })
+
+    const raw = localStorage.getItem(UI_STORE_STORAGE_KEY)
+    expect(raw).not.toBeNull()
+
+    const persisted = JSON.parse(raw ?? '{}') as {
+      state?: Record<string, unknown>
+    }
+
+    expect(persisted.state).toMatchObject({
+      propertiesPanelOpen: false,
+      panelLayout: { tree: 18, editor: 64, properties: 18 },
+      expandedTreeNodes: ['Catalog', 'Document'],
+      activeEditorTab: 'attributes',
+    })
+    expect(persisted.state).not.toHaveProperty('openTabs')
+    expect(persisted.state).not.toHaveProperty('selectedObject')
   })
 })
 
