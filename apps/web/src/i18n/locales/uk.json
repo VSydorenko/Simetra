@@ -116,5 +116,21 @@
     "deleteWithReferences": "Обʼєкт «{{name}}» використовується в:",
     "unsavedTitle": "Незбережені зміни",
     "unsavedMessage": "Є незбережені зміни. Зберегти перед закриттям?"
+  },
+  "storage": {
+    "saving": "Збереження…",
+    "loading": "Завантаження…",
+    "saved": "Збережено",
+    "exportSuccess": "Проєкт експортовано",
+    "importSuccess": "Проєкт імпортовано",
+    "openSuccess": "Проєкт відкрито",
+    "errorSave": "Помилка збереження: {{error}}",
+    "errorOpen": "Помилка відкриття: {{error}}",
+    "errorExport": "Помилка експорту: {{error}}",
+    "errorImport": "Помилка імпорту: {{error}}",
+    "warningsTitle": "Попередження при відкритті",
+    "warningsMessage": "Деякі файли мають помилки валідації:",
+    "missingProject": "Файл project.meta.json не знайдено",
+    "invalidJson": "Невалідний JSON у файлі {{file}}"
   }
 }

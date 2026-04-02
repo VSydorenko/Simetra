@@ -197,19 +197,19 @@ Selections, expanded tree nodes, active tab — це не метадані. Як
 ## Модуль 4: Storage abstraction
 
 ### Вимоги
-- [ ] Створити інтерфейс StorageProvider (`apps/web/src/storage/storage-provider.ts`)
+- [Х] Створити інтерфейс StorageProvider (`apps/web/src/storage/storage-provider.ts`)
   - `openProject(): Promise<ProjectModel>` — вибір каталогу, читання JSON-файлів
   - `saveProject(model: ProjectModel): Promise<void>` — запис canonical JSON
   - `exportProject(model: ProjectModel): Promise<void>` — ZIP-архів
   - `importProject(): Promise<ProjectModel>` — з ZIP
-- [ ] Реалізувати WebStorage (`apps/web/src/storage/web-storage.ts`)
+- [Х] Реалізувати WebStorage (`apps/web/src/storage/web-storage.ts`)
   - File System Access API (Chrome/Edge): `showDirectoryPicker()` для open/save
   - Download/upload fallback (Safari/Firefox): JSON download, file input upload
   - Feature detection для переключення між стратегіями
-- [ ] Інтегрувати storage з project store
+- [Х] Інтегрувати storage з project store
   - save → serialize через canonical serializer з core → write через storage
   - open → read через storage → parse через Zod-схеми core → load у metadata store
-- [ ] Створити новий проєкт із дефолтними значеннями (empty ProjectModel)
+- [Х] Створити новий проєкт із дефолтними значеннями (empty ProjectModel)
 
 ### Архітектурне рішення (прийняте)
 - **File System Access API** (Chrome/Edge): save/open працює з директорією, один файл на об'єкт (BRD §7.2)
@@ -233,17 +233,17 @@ localStorage обмежений 5–10 MB і не підтримує струк�
 Ніяких timestamps, checksums, auto-increment IDs у збережених файлах. Canonical JSON має бути детерміністичним для чистих Git-дифів.
 
 ### Тести
-- [ ] Roundtrip test: create empty project → save → open → порівняти з оригіналом
-- [ ] Валідація при open: зіпсований JSON → зрозуміла помилка
-- [ ] Canonical serialization: save → save → byte-identical output
+- [Х] Roundtrip test: create empty project → save → open → порівняти з оригіналом
+- [Х] Валідація при open: зіпсований JSON → зрозуміла помилка
+- [Х] Canonical serialization: save → save → byte-identical output
 
 ### Definition of Done
-- [ ] Можна створити новий проєкт
-- [ ] Можна зберегти й відкрити проєкт через File System Access API
-- [ ] Fallback працює для браузерів без FS API
-- [ ] Export/Import через ZIP працює
-- [ ] Roundtrip зберігає byte-identical JSON
-- [ ] `pnpm lint && pnpm typecheck` — green
+- [Х] Можна створити новий проєкт
+- [Х] Можна зберегти й відкрити проєкт через File System Access API
+- [Х] Fallback працює для браузерів без FS API
+- [Х] Export/Import через ZIP працює
+- [Х] Roundtrip зберігає byte-identical JSON
+- [Х] `pnpm lint && pnpm typecheck` — green
 
 ---
 

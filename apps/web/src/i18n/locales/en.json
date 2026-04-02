@@ -114,5 +114,21 @@
     "deleteWithReferences": "Object \"{{name}}\" is used in:",
     "unsavedTitle": "Unsaved Changes",
     "unsavedMessage": "You have unsaved changes. Save before closing?"
+  },
+  "storage": {
+    "saving": "Saving…",
+    "loading": "Loading…",
+    "saved": "Saved",
+    "exportSuccess": "Project exported",
+    "importSuccess": "Project imported",
+    "openSuccess": "Project opened",
+    "errorSave": "Save error: {{error}}",
+    "errorOpen": "Open error: {{error}}",
+    "errorExport": "Export error: {{error}}",
+    "errorImport": "Import error: {{error}}",
+    "warningsTitle": "Warnings during opening",
+    "warningsMessage": "Some files have validation errors:",
+    "missingProject": "project.meta.json not found",
+    "invalidJson": "Invalid JSON in file {{file}}"
   }
 }
