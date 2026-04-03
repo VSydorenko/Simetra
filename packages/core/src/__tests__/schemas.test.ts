@@ -150,7 +150,7 @@ describe("informationRegisterSchema", () => {
       name: "ExchangeRates",
       periodicity: "Day",
       writeMode: "Independent",
-      dimensions: [{ name: "currency", type: "CatalogRef", ref: "Currencies" }],
+      dimensions: [{ name: "currency", type: "Ref", ref: { kind: "Catalog", name: "Currencies" } }],
       resources: [{ name: "rate", type: "Numeric", precision: 15, scale: 4 }],
     })
     expect(result.periodicity).toBe("Day")
@@ -169,14 +169,14 @@ describe("accumulationRegisterSchema", () => {
       dimensions: [
         {
           name: "product",
-          type: "CatalogRef",
-          ref: "Products",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Products" },
           required: true,
         },
         {
           name: "warehouse",
-          type: "CatalogRef",
-          ref: "Warehouses",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Warehouses" },
           required: true,
         },
       ],
@@ -246,10 +246,10 @@ describe("attributeSchema", () => {
     expect(result.required).toBe(true)
   })
 
-  it("parses AnyRef attribute with allowedTypes", () => {
+  it("parses Ref attribute with allowedTypes", () => {
     const result = attributeSchema.parse({
       name: "owner",
-      type: "AnyRef",
+      type: "Ref",
       allowedTypes: [
         { kind: "Catalog", name: "Products" },
         { kind: "Catalog", name: "Services" },
@@ -257,6 +257,76 @@ describe("attributeSchema", () => {
       required: true,
     })
     expect(result.allowedTypes).toHaveLength(2)
+  })
+
+  it("parses single Ref attribute with MetadataRef", () => {
+    const result = attributeSchema.parse({
+      name: "contractor",
+      type: "Ref",
+      ref: { kind: "Catalog", name: "Contractors" },
+      required: true,
+    })
+    expect(result.ref).toEqual({ kind: "Catalog", name: "Contractors" })
+  })
+
+  it("accepts Ref without ref and allowedTypes (not yet selected)", () => {
+    const result = attributeSchema.parse({
+      name: "target",
+      type: "Ref",
+    })
+    expect(result.ref).toBeUndefined()
+    expect(result.allowedTypes).toBeUndefined()
+  })
+
+  it("rejects attribute with both ref and allowedTypes", () => {
+    expect(() =>
+      attributeSchema.parse({
+        name: "bad_ref",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Products" },
+        allowedTypes: [{ kind: "Document", name: "SalesOrder" }],
+      }),
+    ).toThrow(/mutually exclusive/)
+  })
+
+  it("rejects ref on non-Ref type", () => {
+    expect(() =>
+      attributeSchema.parse({
+        name: "bad_field",
+        type: "String",
+        ref: { kind: "Catalog", name: "Products" },
+      }),
+    ).toThrow(/only valid when type is Ref/)
+  })
+
+  it("rejects allowedTypes on non-Ref type", () => {
+    expect(() =>
+      attributeSchema.parse({
+        name: "bad_field",
+        type: "Integer",
+        allowedTypes: [{ kind: "Catalog", name: "Products" }],
+      }),
+    ).toThrow(/only valid when type is Ref/)
+  })
+
+  it("rejects non-referenceable kind in ref", () => {
+    expect(() =>
+      attributeSchema.parse({
+        name: "bad_kind",
+        type: "Ref",
+        ref: { kind: "AccumulationRegister", name: "Balance" },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects non-referenceable kind in allowedTypes", () => {
+    expect(() =>
+      attributeSchema.parse({
+        name: "bad_kind",
+        type: "Ref",
+        allowedTypes: [{ kind: "Constant", name: "Settings" }],
+      }),
+    ).toThrow()
   })
 })
 
@@ -538,6 +608,75 @@ describe("getStandardAttributes", () => {
     const attrs = getTabularSectionStandardAttributes()
     const names = attrs.map((a) => a.name)
     expect(names).toEqual(["id", "line_number"])
+  })
+
+  it("parent_id has type UUID without ref", () => {
+    const attrs = getStandardAttributes("Catalog", {
+      hierarchyType: "FoldersAndItems",
+    })
+    const parentId = attrs.find((a) => a.name === "parent_id")
+    expect(parentId).toBeDefined()
+    expect(parentId!.type).toBe("UUID")
+    expect(parentId!.ref).toBeUndefined()
+  })
+
+  it("owner_id with single owner has type Ref and ref MetadataRef", () => {
+    const attrs = getStandardAttributes("Catalog", {
+      owners: [{ kind: "Catalog", name: "Companies" }],
+    })
+    const ownerId = attrs.find((a) => a.name === "owner_id")
+    expect(ownerId).toBeDefined()
+    expect(ownerId!.type).toBe("Ref")
+    expect(ownerId!.ref).toEqual({ kind: "Catalog", name: "Companies" })
+    expect(ownerId!.allowedTypes).toBeUndefined()
+  })
+
+  it("owner_id with multiple owners has type Ref and allowedTypes", () => {
+    const attrs = getStandardAttributes("Catalog", {
+      owners: [
+        { kind: "Catalog", name: "Companies" },
+        { kind: "Catalog", name: "Individuals" },
+      ],
+    })
+    const ownerId = attrs.find((a) => a.name === "owner_id")
+    expect(ownerId).toBeDefined()
+    expect(ownerId!.type).toBe("Ref")
+    expect(ownerId!.ref).toBeUndefined()
+    expect(ownerId!.allowedTypes).toEqual([
+      { kind: "Catalog", name: "Companies" },
+      { kind: "Catalog", name: "Individuals" },
+    ])
+  })
+
+  it("recorder_id with single recorder has type Ref and ref MetadataRef", () => {
+    const attrs = getStandardAttributes("InformationRegister", {
+      periodicity: "Day",
+      writeMode: "RecorderSubordinate",
+      recorderTypes: [{ kind: "Document", name: "SalesOrder" }],
+    })
+    const recorderId = attrs.find((a) => a.name === "recorder_id")
+    expect(recorderId).toBeDefined()
+    expect(recorderId!.type).toBe("Ref")
+    expect(recorderId!.ref).toEqual({ kind: "Document", name: "SalesOrder" })
+    expect(recorderId!.allowedTypes).toBeUndefined()
+  })
+
+  it("recorder_id with multiple recorders has type Ref and allowedTypes", () => {
+    const attrs = getStandardAttributes("AccumulationRegister", {
+      registerType: "Balance",
+      recorderTypes: [
+        { kind: "Document", name: "SalesOrder" },
+        { kind: "Document", name: "PurchaseOrder" },
+      ],
+    })
+    const recorderId = attrs.find((a) => a.name === "recorder_id")
+    expect(recorderId).toBeDefined()
+    expect(recorderId!.type).toBe("Ref")
+    expect(recorderId!.ref).toBeUndefined()
+    expect(recorderId!.allowedTypes).toEqual([
+      { kind: "Document", name: "SalesOrder" },
+      { kind: "Document", name: "PurchaseOrder" },
+    ])
   })
 })
 

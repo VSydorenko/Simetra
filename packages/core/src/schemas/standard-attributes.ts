@@ -3,7 +3,8 @@ import type { MetadataKind } from './metadata-kind'
 export interface StandardAttribute {
   name: string
   type: string
-  ref?: string
+  ref?: { kind: string; name: string }
+  allowedTypes?: { kind: string; name: string }[]
   /** Чи індексується реквізит за замовчуванням (primary keys, foreign keys, period) */
   indexed: boolean
   description: { uk: string; en: string }
@@ -14,6 +15,7 @@ export interface StandardAttributeSettings {
   owners?: { kind: string; name: string }[]
   periodicity?: string
   writeMode?: string
+  recorderTypes?: { kind: string; name: string }[]
   registerType?: 'Balance' | 'Turnover'
   autoAddPrimaryKey?: boolean
 }
@@ -52,8 +54,7 @@ function catalogStandardAttributes(
     attrs.push(
       {
         name: 'parent_id',
-        type: 'CatalogRef',
-        ref: 'Self',
+        type: 'UUID',
         indexed: true,
         description: { uk: 'Батьківський елемент', en: 'Parent item' },
       },
@@ -67,14 +68,23 @@ function catalogStandardAttributes(
   }
 
   if (settings.owners && settings.owners.length > 0) {
-    // TODO: 2026-04-02 — якщо є кілька owners, тип має бути AnyRef (polymorphic reference)
-    attrs.push({
-      name: 'owner_id',
-      type: 'CatalogRef',
-      ref: settings.owners[0].name,
-      indexed: true,
-      description: { uk: 'Власник', en: 'Owner' },
-    })
+    if (settings.owners.length === 1) {
+      attrs.push({
+        name: 'owner_id',
+        type: 'Ref',
+        ref: { kind: settings.owners[0].kind, name: settings.owners[0].name },
+        indexed: true,
+        description: { uk: 'Власник', en: 'Owner' },
+      })
+    } else {
+      attrs.push({
+        name: 'owner_id',
+        type: 'Ref',
+        allowedTypes: settings.owners.map((o) => ({ kind: o.kind, name: o.name })),
+        indexed: true,
+        description: { uk: 'Власник', en: 'Owner' },
+      })
+    }
   }
 
   attrs.push(
@@ -166,13 +176,25 @@ function informationRegisterStandardAttributes(
   }
 
   if (settings.writeMode === 'RecorderSubordinate') {
+    const recorderAttr: StandardAttribute = {
+      name: 'recorder_id',
+      type: 'Ref',
+      indexed: true,
+      description: { uk: 'Реєстратор', en: 'Recorder' },
+    }
+    if (settings.recorderTypes && settings.recorderTypes.length === 1) {
+      recorderAttr.ref = {
+        kind: settings.recorderTypes[0].kind,
+        name: settings.recorderTypes[0].name,
+      }
+    } else if (settings.recorderTypes && settings.recorderTypes.length > 1) {
+      recorderAttr.allowedTypes = settings.recorderTypes.map((r) => ({
+        kind: r.kind,
+        name: r.name,
+      }))
+    }
     attrs.push(
-      {
-        name: 'recorder_id',
-        type: 'DocumentRef',
-        indexed: true,
-        description: { uk: 'Реєстратор', en: 'Recorder' },
-      },
+      recorderAttr,
       {
         name: 'line_number',
         type: 'Integer',
@@ -194,6 +216,24 @@ function informationRegisterStandardAttributes(
 function accumulationRegisterStandardAttributes(
   settings: StandardAttributeSettings,
 ): StandardAttribute[] {
+  const recorderAttr: StandardAttribute = {
+    name: 'recorder_id',
+    type: 'Ref',
+    indexed: true,
+    description: { uk: 'Реєстратор', en: 'Recorder' },
+  }
+  if (settings.recorderTypes && settings.recorderTypes.length === 1) {
+    recorderAttr.ref = {
+      kind: settings.recorderTypes[0].kind,
+      name: settings.recorderTypes[0].name,
+    }
+  } else if (settings.recorderTypes && settings.recorderTypes.length > 1) {
+    recorderAttr.allowedTypes = settings.recorderTypes.map((r) => ({
+      kind: r.kind,
+      name: r.name,
+    }))
+  }
+
   const attrs: StandardAttribute[] = [
     {
       name: 'period',
@@ -201,12 +241,7 @@ function accumulationRegisterStandardAttributes(
       indexed: true,
       description: { uk: 'Період', en: 'Period' },
     },
-    {
-      name: 'recorder_id',
-      type: 'DocumentRef',
-      indexed: true,
-      description: { uk: 'Реєстратор', en: 'Recorder' },
-    },
+    recorderAttr,
     {
       name: 'line_number',
       type: 'Integer',

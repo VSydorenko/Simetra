@@ -17,21 +17,27 @@
   "dimensions": [
     {
       "name": "product",
-      "type": "CatalogRef",
+      "type": "Ref",
       "required": true,
       "indexed": false,
       "unique": false,
       "defaultValue": null,
-      "ref": "Products"
+      "ref": {
+        "kind": "Catalog",
+        "name": "Products"
+      }
     },
     {
       "name": "warehouse",
-      "type": "CatalogRef",
+      "type": "Ref",
       "required": true,
       "indexed": false,
       "unique": false,
       "defaultValue": null,
-      "ref": "Warehouses"
+      "ref": {
+        "kind": "Catalog",
+        "name": "Warehouses"
+      }
     }
   ],
   "resources": [

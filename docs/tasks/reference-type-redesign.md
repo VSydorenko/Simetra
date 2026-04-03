@@ -36,20 +36,20 @@
 
 ### Вимоги
 
-- [x] Оновити `docs/BRD-metadata-configurator.md` §6.2 — замінити таблицю reference types (`CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`) на один `Ref` з двома режимами (single / polymorphic)
-- [x] Оновити `docs/BRD-metadata-configurator.md` §6.3 — поле `ref` стає `MetadataRef | undefined` замість `String`; додати опис `allowedTypes` як альтернативного режиму для polymorphic ref
-- [x] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `parent_id` тип → `UUID` (структурне поле ієрархії, не reference); видалити згадку `CatalogRef.Self`
-- [x] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `owner_id`: single owner → `type: Ref, ref: { kind: "Catalog", name: "{Owner}" }`; multiple owners → `type: Ref, allowedTypes: owners[]`
-- [x] Оновити `docs/BRD-metadata-configurator.md` §5.5, §5.6 — `recorder_id`: `type: Ref, ref: { kind: "Document", name: "{Recorder}" }` / `allowedTypes: recorderTypes[]`
-- [x] Оновити `docs/BRD-metadata-configurator.md` §7.4, §7.5 — JSON приклади під нову модель
-- [x] Оновити `docs/BRD-metadata-configurator.md` §16 — уточнити вирішене питання "compound types": тепер `Ref` + `allowedTypes`, а не окремий `AnyRef`
-- [x] Оновити `.github/instructions/metadata-model.instructions.md` — правила Zod-схем під нову модель
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §6.2 — замінити таблицю reference types (`CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`) на один `Ref` з двома режимами (single / polymorphic)
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §6.3 — поле `ref` стає `MetadataRef | undefined` замість `String`; додати опис `allowedTypes` як альтернативного режиму для polymorphic ref
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `parent_id` тип → `UUID` (структурне поле ієрархії, не reference); видалити згадку `CatalogRef.Self`
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `owner_id`: single owner → `type: Ref, ref: { kind: "Catalog", name: "{Owner}" }`; multiple owners → `type: Ref, allowedTypes: owners[]`
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §5.5, §5.6 — `recorder_id`: `type: Ref, ref: { kind: "Document", name: "{Recorder}" }` / `allowedTypes: recorderTypes[]`
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §7.4, §7.5 — JSON приклади під нову модель
+- [Х] Оновити `docs/BRD-metadata-configurator.md` §16 — уточнити вирішене питання "compound types": тепер `Ref` + `allowedTypes`, а не окремий `AnyRef`
+- [Х] Оновити `.github/instructions/metadata-model.instructions.md` — правила Zod-схем під нову модель
 
 ### DoD фази 0
-- [x] BRD не згадує `CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef` як FieldType значення
-- [x] BRD не згадує `CatalogRef.Self` — parent_id описаний як UUID
-- [x] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
-- [x] `.github/instructions/` узгоджені з новою моделлю
+- [Х] BRD не згадує `CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef` як FieldType значення
+- [Х] BRD не згадує `CatalogRef.Self` — parent_id описаний як UUID
+- [Х] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
+- [Х] `.github/instructions/` узгоджені з новою моделлю
 
 ---
 
@@ -59,27 +59,27 @@
 
 ### Вимоги
 
-- [ ] `field-type.ts` — видалити `referenceFieldType` enum. Створити єдиний `fieldTypeSchema = z.enum([...primitives, "Ref"])`. Видалити типи `PrimitiveFieldType`, `ReferenceFieldType` — залишити один `FieldType`
-- [ ] `attribute.ts` — змінити `ref` з `z.string().optional()` на `metadataRefSchema.optional()`. Зберегти `allowedTypes: z.array(metadataRefSchema).optional()`. Додати `.refine()`: якщо `type === "Ref"`, має бути заповнено **рівно одне** з `ref` або `allowedTypes` (або жодне — для стану "ще не обрано"). Одночасна присутність обох — помилка валідації
-- [ ] `standard-attributes.ts` — змінити `StandardAttribute` інтерфейс: `ref` стає `{ kind: string; name: string } | undefined`, додати `allowedTypes?: { kind: string; name: string }[]`
-- [ ] `standard-attributes.ts` — `parent_id`: змінити тип на `UUID`, **видалити** `ref: 'Self'`. parent_id — структурне поле ієрархії (`hierarchyType`), а не конфігуроване посилання
-- [ ] `standard-attributes.ts` — `owner_id`: single owner → `type: 'Ref', ref: { kind: 'Catalog', name: owners[0].name }`; multiple owners → `type: 'Ref', allowedTypes: owners.map(...)`
-- [ ] `standard-attributes.ts` — `recorder_id`: single recorder → `type: 'Ref', ref: { kind: 'Document', name: recorderTypes[0].name }`; multiple → `type: 'Ref', allowedTypes: recorderTypes`
-- [ ] `index.ts` — видалити exports `primitiveFieldType`, `referenceFieldType`, `PrimitiveFieldType`, `ReferenceFieldType`
-- [ ] `serialization.ts` — додати `ref` до `NESTED_OBJECT_KEY_ORDERS` як `ref: METADATA_REF_KEY_ORDER` (ref тепер object, а не scalar)
-- [ ] Оновити `__tests__/schemas.test.ts` — тести single ref, polymorphic ref, mutual exclusion ref/allowedTypes
-- [ ] Оновити `__tests__/fixtures/` — JSON під нову модель (`type: "Ref"`, `ref: { kind, name }`)
+- [Х] `field-type.ts` — видалити `referenceFieldType` enum. Створити єдиний `fieldTypeSchema = z.enum([...primitives, "Ref"])`. Видалити типи `PrimitiveFieldType`, `ReferenceFieldType` — залишити один `FieldType`
+- [Х] `attribute.ts` — змінити `ref` з `z.string().optional()` на `metadataRefSchema.optional()`. Зберегти `allowedTypes: z.array(metadataRefSchema).optional()`. Додати `.refine()`: якщо `type === "Ref"`, має бути заповнено **рівно одне** з `ref` або `allowedTypes` (або жодне — для стану "ще не обрано"). Одночасна присутність обох — помилка валідації
+- [Х] `standard-attributes.ts` — змінити `StandardAttribute` інтерфейс: `ref` стає `{ kind: string; name: string } | undefined`, додати `allowedTypes?: { kind: string; name: string }[]`
+- [Х] `standard-attributes.ts` — `parent_id`: змінити тип на `UUID`, **видалити** `ref: 'Self'`. parent_id — структурне поле ієрархії (`hierarchyType`), а не конфігуроване посилання
+- [Х] `standard-attributes.ts` — `owner_id`: single owner → `type: 'Ref', ref: { kind: 'Catalog', name: owners[0].name }`; multiple owners → `type: 'Ref', allowedTypes: owners.map(...)`
+- [Х] `standard-attributes.ts` — `recorder_id`: single recorder → `type: 'Ref', ref: { kind: 'Document', name: recorderTypes[0].name }`; multiple → `type: 'Ref', allowedTypes: recorderTypes`
+- [Х] `index.ts` — видалити exports `primitiveFieldType`, `referenceFieldType`, `PrimitiveFieldType`, `ReferenceFieldType`
+- [Х] `serialization.ts` — додати `ref` до `NESTED_OBJECT_KEY_ORDERS` як `ref: METADATA_REF_KEY_ORDER` (ref тепер object, а не scalar)
+- [Х] Оновити `__tests__/schemas.test.ts` — тести single ref, polymorphic ref, mutual exclusion ref/allowedTypes
+- [Х] Оновити `__tests__/fixtures/` — JSON під нову модель (`type: "Ref"`, `ref: { kind, name }`)
 
 ### DoD фази 1
-- [ ] `pnpm --filter @simetra/core test` — всі тести проходять
-- [ ] `pnpm typecheck` — без помилок
-- [ ] Жодне значення `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` не існує в core
-- [ ] Тест: `parent_id` має `type: 'UUID'`, без `ref`
-- [ ] Тест: `owner_id` з одним owner → `type: 'Ref'` + `ref: MetadataRef`
-- [ ] Тест: `owner_id` з кількома owners → `type: 'Ref'` + `allowedTypes: MetadataRef[]`
-- [ ] Тест: `recorder_id` — аналогічні кейси
-- [ ] Тест: attribute з `ref` і `allowedTypes` одночасно → validation error
-- [ ] Тест: attribute з `type: 'Ref'` без `ref` і без `allowedTypes` → valid (стан "ще не обрано")
+- [Х] `pnpm --filter @simetra/core test` — всі тести проходять
+- [Х] `pnpm typecheck` — без помилок
+- [Х] Жодне значення `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` не існує в core
+- [Х] Тест: `parent_id` має `type: 'UUID'`, без `ref`
+- [Х] Тест: `owner_id` з одним owner → `type: 'Ref'` + `ref: MetadataRef`
+- [Х] Тест: `owner_id` з кількома owners → `type: 'Ref'` + `allowedTypes: MetadataRef[]`
+- [Х] Тест: `recorder_id` — аналогічні кейси
+- [Х] Тест: attribute з `ref` і `allowedTypes` одночасно → validation error
+- [Х] Тест: attribute з `type: 'Ref'` без `ref` і без `allowedTypes` → valid (стан "ще не обрано")
 
 ---
 
@@ -369,19 +369,19 @@ FieldType enum:                             FieldType enum:
 ## Definition of Done
 
 ### Документація (Фаза 0)
-- [x] BRD не згадує `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` як FieldType значення
-- [x] BRD не згадує `CatalogRef.Self` — `parent_id` описаний як `UUID`
-- [x] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
+- [Х] BRD не згадує `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` як FieldType значення
+- [Х] BRD не згадує `CatalogRef.Self` — `parent_id` описаний як `UUID`
+- [Х] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
 
 ### Core (Фаза 1)
-- [ ] `fieldTypeSchema` — єдиний enum з `"Ref"`, без `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef`
-- [ ] `attributeSchema.ref` — тип `MetadataRef | undefined`
-- [ ] `attributeSchema` — `.refine()` для mutual exclusion `ref` / `allowedTypes`
-- [ ] `parent_id` — тип `UUID`, без `ref`
-- [ ] `owner_id` — single → `Ref` + `ref`, multiple → `Ref` + `allowedTypes`
-- [ ] `recorder_id` — аналогічно `owner_id`
-- [ ] `pnpm --filter @simetra/core test` — все зелене
-- [ ] `pnpm typecheck` — без помилок
+- [Х] `fieldTypeSchema` — єдиний enum з `"Ref"`, без `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef`
+- [Х] `attributeSchema.ref` — тип `MetadataRef | undefined`
+- [Х] `attributeSchema` — `.refine()` для mutual exclusion `ref` / `allowedTypes`
+- [Х] `parent_id` — тип `UUID`, без `ref`
+- [Х] `owner_id` — single → `Ref` + `ref`, multiple → `Ref` + `allowedTypes`
+- [Х] `recorder_id` — аналогічно `owner_id`
+- [Х] `pnpm --filter @simetra/core test` — все зелене
+- [Х] `pnpm typecheck` — без помилок
 
 ### UI (Фаза 2)
 - [ ] FieldTypeSelect — один пункт "Посилання" в окремій групі

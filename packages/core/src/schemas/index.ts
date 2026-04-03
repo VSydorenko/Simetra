@@ -1,15 +1,17 @@
 // Base types
 export { localizedStringSchema, type LocalizedString } from "./localized-string"
 export {
-  primitiveFieldType,
-  referenceFieldType,
   fieldTypeSchema,
-  type PrimitiveFieldType,
-  type ReferenceFieldType,
   type FieldType,
 } from "./field-type"
 export { metadataKindSchema, type MetadataKind } from "./metadata-kind"
-export { metadataRefSchema, type MetadataRef } from "./metadata-ref"
+export {
+  metadataRefSchema,
+  type MetadataRef,
+  referenceableKindSchema,
+  type ReferenceableKind,
+  attributeRefTargetSchema,
+} from "./metadata-ref"
 export { attributeSchema, type Attribute } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"

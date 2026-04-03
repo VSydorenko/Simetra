@@ -21,12 +21,15 @@
   "attributes": [
     {
       "name": "contractor",
-      "type": "CatalogRef",
+      "type": "Ref",
       "required": true,
       "indexed": true,
       "unique": false,
       "defaultValue": null,
-      "ref": "Contractors"
+      "ref": {
+        "kind": "Catalog",
+        "name": "Contractors"
+      }
     }
   ],
   "tabularSections": [
@@ -38,12 +41,15 @@
       "attributes": [
         {
           "name": "product",
-          "type": "CatalogRef",
+          "type": "Ref",
           "required": true,
           "indexed": false,
           "unique": false,
           "defaultValue": null,
-          "ref": "Products"
+          "ref": {
+            "kind": "Catalog",
+            "name": "Products"
+          }
         },
         {
           "name": "quantity",

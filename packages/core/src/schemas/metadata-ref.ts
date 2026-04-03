@@ -8,3 +8,14 @@ export const metadataRefSchema = z.object({
 })
 
 export type MetadataRef = z.infer<typeof metadataRefSchema>
+
+/** Kinds, на які може посилатися реквізит (attribute.ref / attribute.allowedTypes) */
+export const referenceableKindSchema = z.enum(["Catalog", "Document", "Enumeration"])
+
+export type ReferenceableKind = z.infer<typeof referenceableKindSchema>
+
+/** Обмежений MetadataRef для attribute references — лише referenceable kinds */
+export const attributeRefTargetSchema = z.object({
+  kind: referenceableKindSchema,
+  name: z.string(),
+})

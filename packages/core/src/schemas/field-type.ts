@@ -1,7 +1,7 @@
 import { z } from "zod"
 
-/** BRD §6.1 — Primitive types */
-export const primitiveFieldType = z.enum([
+/** BRD §6.1–6.2 — Усі типи полів: примітивні + Ref (посилання) */
+export const fieldTypeSchema = z.enum([
   "UUID",
   "String",
   "Text",
@@ -11,19 +11,7 @@ export const primitiveFieldType = z.enum([
   "Date",
   "DateTime",
   "Binary",
+  "Ref",
 ])
 
-/** BRD §6.2 — Reference types */
-export const referenceFieldType = z.enum([
-  "CatalogRef",
-  "DocumentRef",
-  "EnumRef",
-  "AnyRef",
-])
-
-/** Combined field type */
-export const fieldTypeSchema = z.union([primitiveFieldType, referenceFieldType])
-
-export type PrimitiveFieldType = z.infer<typeof primitiveFieldType>
-export type ReferenceFieldType = z.infer<typeof referenceFieldType>
 export type FieldType = z.infer<typeof fieldTypeSchema>

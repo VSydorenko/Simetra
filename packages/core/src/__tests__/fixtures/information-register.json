@@ -13,12 +13,15 @@
   "dimensions": [
     {
       "name": "currency",
-      "type": "CatalogRef",
+      "type": "Ref",
       "required": true,
       "indexed": false,
       "unique": false,
       "defaultValue": null,
-      "ref": "Currencies"
+      "ref": {
+        "kind": "Catalog",
+        "name": "Currencies"
+      }
     }
   ],
   "resources": [

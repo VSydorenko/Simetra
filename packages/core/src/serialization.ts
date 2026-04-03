@@ -137,6 +137,7 @@ const NESTED_OBJECT_KEY_ORDERS: Record<string, string[]> = {
   description: LOCALIZED_STRING_KEY_ORDER,
   database: DATABASE_KEY_ORDER,
   generation: GENERATION_KEY_ORDER,
+  ref: METADATA_REF_KEY_ORDER,
 }
 
 // Ключі, масиви яких містять об'єкти зі специфічним порядком
