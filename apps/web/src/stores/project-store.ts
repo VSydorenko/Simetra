@@ -33,6 +33,8 @@ export interface ProjectState {
   isNewProject: boolean
   // Версія model на момент останнього збереження — для порівняння isDirty
   lastSavedVersion: number | null
+  // Per-object versions на момент останнього збереження
+  lastSavedObjectVersions: Record<string, number>
   // Статус операції
   isSaving: boolean
   isLoading: boolean
@@ -97,6 +99,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
   pendingDirectoryName: null,
   isNewProject: true,
   lastSavedVersion: null,
+  lastSavedObjectVersions: {},
   isSaving: false,
   isLoading: false,
   lastError: null,
@@ -117,6 +120,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       pendingDirectoryName: null,
       isNewProject: true,
       lastSavedVersion: useMetadataStore.getState().version,
+      lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
       isSaving: false,
       isLoading: false,
       lastError: null,
@@ -136,6 +140,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
   markSaved: (handle) => {
     set((state) => ({
       lastSavedVersion: useMetadataStore.getState().version,
+      lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
       isNewProject: false,
       ...(handle ? withHandle(handle) : { projectHandle: state.projectHandle }),
     }))
@@ -171,13 +176,14 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
     set({ isSaving: true, lastError: null })
     try {
       // Зафіксувати model і version з одного snapshot до await
-      const { model, version: snapshotVersion } = useMetadataStore.getState()
+      const { model, version: snapshotVersion, objectVersions: snapshotObjVersions } = useMetadataStore.getState()
       const result = await storage.saveProject(model, projectHandle ?? undefined)
       const newHandle = result.handle ?? get().projectHandle
       set({
         isSaving: false,
         isNewProject: false,
         lastSavedVersion: snapshotVersion,
+        lastSavedObjectVersions: { ...snapshotObjVersions },
         ...withHandle(newHandle),
       })
 
@@ -209,6 +215,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         isLoading: false,
         isNewProject: false,
         lastSavedVersion: version,
+        lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
         ...withHandle(handle),
         openWarnings: result.warnings ?? [],
         sessionRestoreStatus: 'restored',
@@ -263,6 +270,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         isLoading: false,
         isNewProject: false,
         lastSavedVersion: version,
+        lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
         ...withHandle(null),
         openWarnings: result.warnings ?? [],
         sessionRestoreStatus: 'restored',
@@ -310,6 +318,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
             ...withHandle(handle),
             isNewProject: false,
             lastSavedVersion: version,
+            lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
             openWarnings: result.warnings ?? [],
             projectOrigin: 'directory',
             pendingDirectoryName: null,
@@ -367,6 +376,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         ...withHandle(null),
         isNewProject: false,
         lastSavedVersion: useMetadataStore.getState().version,
+        lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
         sessionRestoreStatus: 'restored',
         projectOrigin: 'zip-import',
         pendingDirectoryName: null,
@@ -416,6 +426,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         ...withHandle(handle),
         isNewProject: false,
         lastSavedVersion: version,
+        lastSavedObjectVersions: { ...useMetadataStore.getState().objectVersions },
         openWarnings: result.warnings ?? [],
         projectOrigin: 'directory',
         pendingDirectoryName: null,

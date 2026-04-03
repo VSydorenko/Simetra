@@ -11,6 +11,8 @@ import {
 import { Badge } from '@workspace/ui/components/badge'
 import { cn } from '@workspace/ui/lib/utils'
 import { useUiStore, type TabItem } from '../../stores/ui-store'
+import { useMetadataStore } from '@/stores/metadata-store'
+import { useProjectStore } from '@/stores/project-store'
 import { KIND_BADGE_CLASSES } from '@/lib/metadata-icons'
 
 /** Поріг вертикального зміщення (px) для detach вкладки при drag */
@@ -206,6 +208,10 @@ function Tab({
 /** TabBar — горизонтальний рядок вкладок у верхній частині центральної панелі */
 export function TabBar() {
   const { openTabs, activeTabId } = useUiStore()
+  const objectVersions = useMetadataStore((s) => s.objectVersions)
+  const lastSavedObjectVersions = useProjectStore(
+    (s) => s.lastSavedObjectVersions,
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
 
   if (openTabs.length === 0) return null
@@ -214,13 +220,18 @@ export function TabBar() {
     <div className="flex h-8 shrink-0 border-b border-border bg-muted/50">
       <ScrollArea className="w-full" ref={scrollRef}>
         <div role="tablist" className="flex h-8">
-          {openTabs.map((tab) => (
-            <Tab
-              key={tab.id}
-              tab={tab}
-              isActive={tab.id === activeTabId}
-            />
-          ))}
+          {openTabs.map((tab) => {
+            const isDirty =
+              objectVersions[tab.id] !== lastSavedObjectVersions[tab.id]
+            return (
+              <Tab
+                key={tab.id}
+                tab={tab}
+                isActive={tab.id === activeTabId}
+                isDirty={isDirty}
+              />
+            )
+          })}
         </div>
         <ScrollBar orientation="horizontal" className="h-1" />
       </ScrollArea>

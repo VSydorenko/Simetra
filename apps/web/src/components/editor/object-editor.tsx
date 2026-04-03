@@ -22,6 +22,8 @@ import type { MetadataKind, MetadataRef, MetadataObject, Attribute, TabularSecti
 
 interface ObjectEditorProps {
   objectRef: MetadataRef
+  activeSection: string
+  onSectionChange: (section: string) => void
 }
 
 /** Визначає набір вкладок залежно від kind обʼєкта */
@@ -54,9 +56,9 @@ function getStandardSettings(obj: MetadataObject): StandardAttributeSettings {
   return settings
 }
 
-export function ObjectEditor({ objectRef }: ObjectEditorProps) {
+export function ObjectEditor({ objectRef, activeSection, onSectionChange }: ObjectEditorProps) {
   const { t } = useTranslation()
-  const { activeEditorTab, setActiveEditorTab, updateTabObjectRef } = useUiStore()
+  const { updateTabObjectRef } = useUiStore()
   const model = useMetadataStore((s) => s.model)
   const renameObject = useMetadataStore((s) => s.renameObject)
 
@@ -68,8 +70,8 @@ export function ObjectEditor({ objectRef }: ObjectEditorProps) {
 
   const tabs = useMemo(() => getEditorTabs(objectRef.kind), [objectRef.kind])
 
-  // Якщо поточна вкладка не в списку для цього kind — вибрати першу
-  const effectiveTab = tabs.includes(activeEditorTab) ? activeEditorTab : tabs[0]
+  // Якщо поточна секція не в списку для цього kind — вибрати першу
+  const effectiveTab = tabs.includes(activeSection) ? activeSection : tabs[0]
 
   // commit-on-blur: локальний draft для імені обʼєкта
   const [nameDraft, setNameDraft] = useState(object?.name ?? '')
@@ -137,7 +139,7 @@ export function ObjectEditor({ objectRef }: ObjectEditorProps) {
       </div>
 
       {/* Вкладки всередині картки */}
-      <Tabs value={effectiveTab} onValueChange={setActiveEditorTab} className="flex flex-1 flex-col overflow-hidden">
+      <Tabs value={effectiveTab} onValueChange={onSectionChange} className="flex flex-1 flex-col overflow-hidden">
         <TabsList className="h-8 w-full justify-start rounded-none border-b border-border bg-transparent px-2">
           {tabs.map((tab) => (
             <TabsTrigger

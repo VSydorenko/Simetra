@@ -12,6 +12,7 @@ import { cn } from '@workspace/ui/lib/utils'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useUiStore, type FloatingWindow as FloatingWindowType } from '../../stores/ui-store'
 import { ObjectEditor } from '../editor/object-editor'
+import { useIsObjectDirty } from '../../hooks/use-is-dirty'
 import { KIND_ICONS, KIND_COLORS } from '../../lib/metadata-icons'
 
 /** Поріг Y-координати (px) — якщо вікно перетягнуто вище цього значення, attach як вкладку */
@@ -97,6 +98,15 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
     resizeWindow,
     attachWindow,
   } = useUiStore()
+
+  const isDirty = useIsObjectDirty(window.objectRef)
+
+  const handleSectionChange = useCallback(
+    (section: string) => {
+      useUiStore.getState().setActiveSection(section)
+    },
+    [],
+  )
 
   const handleMouseDown = useCallback(() => {
     focusWindow(window.id)
@@ -199,6 +209,11 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
                 {window.objectRef.name}
               </span>
 
+              {/* Dirty indicator */}
+              {isDirty && (
+                <span className="shrink-0 text-xs text-warning">*</span>
+              )}
+
               {/* Spacer */}
               <div className="flex-1" />
 
@@ -256,7 +271,11 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
 
         {/* Вміст вікна — ObjectEditor */}
         <div className="flex-1 overflow-auto">
-          <ObjectEditor objectRef={window.objectRef} />
+          <ObjectEditor
+            objectRef={window.objectRef}
+            activeSection={window.activeSection}
+            onSectionChange={handleSectionChange}
+          />
         </div>
       </div>
     </Rnd>

@@ -22,6 +22,8 @@ export interface MetadataState {
   model: ProjectModel
   // Лічильник версій — збільшується при кожній мутації model
   version: number
+  // Per-object версії для dirty tracking, ключ — `${kind}/${name}`
+  objectVersions: Record<string, number>
   // Помилки object-level валідації, ключ — `${kind}/${name}`
   validationErrors: Record<string, ValidationError[]>
 }
@@ -224,6 +226,16 @@ function findObjectIndex(
   return objects.findIndex((o) => o.name === name)
 }
 
+/** Інкрементувати per-object version (immer draft) */
+function bumpObjectVersion(
+  state: { objectVersions: Record<string, number> },
+  kind: MetadataKind | string,
+  name: string,
+): void {
+  const key = `${kind}/${name}`
+  state.objectVersions[key] = (state.objectVersions[key] ?? 0) + 1
+}
+
 export type MetadataStore = MetadataState & MetadataActions
 
 export const useMetadataStore = create<MetadataStore>()(
@@ -231,12 +243,14 @@ export const useMetadataStore = create<MetadataStore>()(
     immer((set, get) => ({
       model: createEmptyModel('NewProject'),
       version: 0,
+      objectVersions: {},
       validationErrors: {},
 
       loadModel: (model) => {
         set((state) => {
           state.model = model
           state.version++
+          state.objectVersions = {}
           state.validationErrors = {}
         })
         // Caller відповідає за очищення undo-стеку через
@@ -247,6 +261,7 @@ export const useMetadataStore = create<MetadataStore>()(
         set((state) => {
           state.model = createEmptyModel(projectName)
           state.version++
+          state.objectVersions = {}
           state.validationErrors = {}
         })
       },
@@ -273,6 +288,7 @@ export const useMetadataStore = create<MetadataStore>()(
           const arr = state.model[key] as MetadataObject[]
           arr.push(obj as never)
           state.version++
+          bumpObjectVersion(state, obj.kind, obj.name)
         })
         return null
       },
@@ -295,6 +311,7 @@ export const useMetadataStore = create<MetadataStore>()(
           Object.assign(arr[index], updates)
           delete state.validationErrors[errorKey]
           state.version++
+          bumpObjectVersion(state, kind, name)
         })
 
         return null
@@ -309,6 +326,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (index !== -1) {
             arr.splice(index, 1)
             delete state.validationErrors[`${kind}/${name}`]
+            delete state.objectVersions[`${kind}/${name}`]
             state.version++
           }
         })
@@ -340,6 +358,12 @@ export const useMetadataStore = create<MetadataStore>()(
             state.validationErrors[newKey] = state.validationErrors[oldKey]
             delete state.validationErrors[oldKey]
           }
+          // Міграція per-object version при rename
+          if (state.objectVersions[oldKey] != null) {
+            state.objectVersions[newKey] = state.objectVersions[oldKey]
+            delete state.objectVersions[oldKey]
+          }
+          bumpObjectVersion(state, kind, newName)
           state.version++
         })
         return null
@@ -380,6 +404,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             ;(arr[idx] as unknown as { attributes: Attribute[] }).attributes.push(attribute)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -394,6 +419,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const obj = arr[idx] as unknown as { attributes: Attribute[] }
             obj.attributes = obj.attributes.filter((a) => a.name !== attrName)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
       },
@@ -422,6 +448,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const target = arr[idx] as unknown as { attributes: Attribute[] }
             Object.assign(target.attributes[attrIdx], updates)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -439,6 +466,7 @@ export const useMetadataStore = create<MetadataStore>()(
               const [moved] = attrs.splice(fromIndex, 1)
               attrs.splice(toIndex, 0, moved)
               state.version++
+              bumpObjectVersion(state, kind, name)
             }
           }
         })
@@ -467,6 +495,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             ;(arr[idx] as unknown as { tabularSections: TabularSection[] }).tabularSections.push(section)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -481,6 +510,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const obj = arr[idx] as unknown as { tabularSections: TabularSection[] }
             obj.tabularSections = obj.tabularSections.filter((s) => s.name !== sectionName)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
       },
@@ -515,6 +545,7 @@ export const useMetadataStore = create<MetadataStore>()(
             if (sec) {
               sec.attributes.push(attribute)
               state.version++
+              bumpObjectVersion(state, kind, name)
             }
           }
         })
@@ -532,6 +563,7 @@ export const useMetadataStore = create<MetadataStore>()(
             if (sec) {
               sec.attributes = sec.attributes.filter((a) => a.name !== attrName)
               state.version++
+              bumpObjectVersion(state, kind, name)
             }
           }
         })
@@ -568,6 +600,7 @@ export const useMetadataStore = create<MetadataStore>()(
             if (sec) {
               Object.assign(sec.attributes[attrIdx], updates)
               state.version++
+              bumpObjectVersion(state, kind, name)
             }
           }
         })
@@ -588,6 +621,7 @@ export const useMetadataStore = create<MetadataStore>()(
                 const [moved] = attrs.splice(fromIndex, 1)
                 attrs.splice(toIndex, 0, moved)
                 state.version++
+                bumpObjectVersion(state, kind, name)
               }
             }
           }
@@ -614,6 +648,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (target) {
             target.values.push(value)
             state.version++
+            bumpObjectVersion(state, 'Enumeration', name)
           }
         })
         return null
@@ -625,6 +660,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (target) {
             target.values = target.values.filter((v) => v.name !== valueName)
             state.version++
+            bumpObjectVersion(state, 'Enumeration', name)
           }
         })
       },
@@ -649,6 +685,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (target) {
             Object.assign(target.values[valIdx], updates)
             state.version++
+            bumpObjectVersion(state, 'Enumeration', name)
           }
         })
         return null
@@ -661,6 +698,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const [moved] = target.values.splice(fromIndex, 1)
             target.values.splice(toIndex, 0, moved)
             state.version++
+            bumpObjectVersion(state, 'Enumeration', name)
           }
         })
       },
@@ -688,6 +726,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             ;(arr[idx] as unknown as { dimensions: Attribute[] }).dimensions.push(attribute)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -702,6 +741,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const obj = arr[idx] as unknown as { dimensions: Attribute[] }
             obj.dimensions = obj.dimensions.filter((d) => d.name !== attrName)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
       },
@@ -727,6 +767,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             ;(arr[idx] as unknown as { resources: Attribute[] }).resources.push(attribute)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -741,6 +782,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const obj = arr[idx] as unknown as { resources: Attribute[] }
             obj.resources = obj.resources.filter((r) => r.name !== attrName)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
       },
@@ -767,6 +809,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const target = arr[idx] as unknown as { dimensions: Attribute[] }
             Object.assign(target.dimensions[attrIdx], updates)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -784,6 +827,7 @@ export const useMetadataStore = create<MetadataStore>()(
               const [moved] = dims.splice(fromIndex, 1)
               dims.splice(toIndex, 0, moved)
               state.version++
+              bumpObjectVersion(state, kind, name)
             }
           }
         })
@@ -811,6 +855,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const target = arr[idx] as unknown as { resources: Attribute[] }
             Object.assign(target.resources[attrIdx], updates)
             state.version++
+            bumpObjectVersion(state, kind, name)
           }
         })
         return null
@@ -828,13 +873,14 @@ export const useMetadataStore = create<MetadataStore>()(
               const [moved] = res.splice(fromIndex, 1)
               res.splice(toIndex, 0, moved)
               state.version++
+              bumpObjectVersion(state, kind, name)
             }
           }
         })
       },
     })),
     {
-      // zundo: відстежувати тільки зміни model, без validationErrors
+      // zundo: відстежувати тільки зміни model, без validationErrors/objectVersions
       equality: (pastState, currentState) =>
         pastState.model === currentState.model,
       // Обмеження розміру стеку undo

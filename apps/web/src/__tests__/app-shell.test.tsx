@@ -43,7 +43,6 @@ beforeEach(() => {
       'Constant',
       'CustomTable',
     ],
-    activeEditorTab: 'attributes',
     commandPaletteOpen: false,
     propertiesPanelOpen: true,
     panelLayout: DEFAULT_PANEL_LAYOUT,

@@ -19,38 +19,39 @@
 ## Модуль A: Підготовка — bugfixes та BRD update
 
 ### Вимоги
-- [x] Виправити `restoreSession` без handle: встановлювати `lastSavedVersion` у поточний runtime version після `loadModel` замість хардкоду `null`. Поточний код у `project-store.ts` (branch "no handle") ставив `lastSavedVersion = null`, що робило проєкт dirty одразу після restore без реальних змін. Фікс: після `loadModel` відновленої моделі встановлюємо `lastSavedVersion = useMetadataStore.getState().version` — clean baseline
-- [x] Виправити `find-references.ts`: порівняння `attr.ref` лише по `name` без kind — false positives. Додати перевірку `attr.type` (startsWith `CatalogRef`/`DocumentRef`/`EnumRef`) та порівняння kind target
-- [x] Виправити `deleteObject` version increment: `version++` стоїть поза умовою знаходження об'єкта — інкрементує навіть якщо об'єкт не існує
-- [x] Виправити `AttributeTable` → `selectField`: не передає `tabularSectionName` prop, хоча `TabularSectionsEditor` його прокидає. FieldProperties вже вміє з ним працювати
-- [x] Оновити BRD §9.5, §9.6, FR-021 через `doc-update` агента — зафіксувати дизайнерські рішення (вертикальні вкладки, стандартні реквізити через діалог, права панель як єдине місце редагування)
+- [Х] Виправити `restoreSession` без handle: встановлювати `lastSavedVersion` у поточний runtime version після `loadModel` замість хардкоду `null`. Поточний код у `project-store.ts` (branch "no handle") ставив `lastSavedVersion = null`, що робило проєкт dirty одразу після restore без реальних змін. Фікс: після `loadModel` відновленої моделі встановлюємо `lastSavedVersion = useMetadataStore.getState().version` — clean baseline
+- [Х] Виправити `find-references.ts`: порівняння `attr.ref` лише по `name` без kind — false positives. Додати перевірку `attr.type` (startsWith `CatalogRef`/`DocumentRef`/`EnumRef`) та порівняння kind target
+- [Х] Виправити `deleteObject` version increment: `version++` стоїть поза умовою знаходження об'єкта — інкрементує навіть якщо об'єкт не існує
+- [Х] Виправити `AttributeTable` → `selectField`: не передає `tabularSectionName` prop, хоча `TabularSectionsEditor` його прокидає. FieldProperties вже вміє з ним працювати
+- [Х] Оновити BRD §9.5, §9.6, FR-021 через `doc-update` агента — зафіксувати дизайнерські рішення (вертикальні вкладки, стандартні реквізити через діалог, права панель як єдине місце редагування)
 
 ### Definition of Done
-- [x] Session restore зі збереженим проєктом БЕЗ handle — проєкт clean при reload (якщо не було змін)
-- [x] `find-references` не дає false positives при однакових name в різних kinds
-- [x] `deleteObject` з неіснуючим name не інкрементує version
-- [x] Вибір поля табличної частини в editor → права панель показує правильний контекст (з `tabularSectionName`)
-- [x] BRD оновлений і відповідає новому дизайну
+- [Х] Session restore зі збереженим проєктом БЕЗ handle — проєкт clean при reload (якщо не було змін)
+- [Х] `find-references` не дає false positives при однакових name в різних kinds
+- [Х] `deleteObject` з неіснуючим name не інкрементує version
+- [Х] Вибір поля табличної частини в editor → права панель показує правильний контекст (з `tabularSectionName`)
+- [Х] BRD оновлений і відповідає новому дизайну
 
 ---
 
 ## Модуль B: Per-object state та dirty tracking
 
 ### Вимоги
-- [ ] Розширити `TabItem` у ui-store полем `activeSection: string` (замість глобального `activeEditorTab`)
-- [ ] Розширити `FloatingWindow` у ui-store полем `activeSection: string`
-- [ ] При відкритті нового tab — ставити `activeSection` за замовчуванням (перша доступна секція для kind)
-- [ ] При переключенні між відкритими вкладками — зберігати і відновлювати `activeSection` per-tab
-- [ ] Додати `objectVersions: Record<string, number>` у metadata-store — інкрементувати при кожній мутації конкретного об'єкта (ключ = `kind/name`)
-- [ ] Додати `lastSavedObjectVersions: Record<string, number>` у project-store — snapshot при save
-- [ ] Dirty per object = `objectVersions[id] !== lastSavedObjectVersions[id]` або object не існує в saved snapshot
-- [ ] Dirty indicator (зірочка `*`) на кожній вкладці TabBar та floating window title bar
+- [Х] Розширити `TabItem` у ui-store полем `activeSection: string` (замість глобального `activeEditorTab`)
+- [Х] Розширити `FloatingWindow` у ui-store полем `activeSection: string`
+- [Х] При відкритті нового tab — ставити `activeSection` за замовчуванням (перша доступна секція для kind)
+- [Х] При переключенні між відкритими вкладками — зберігати і відновлювати `activeSection` per-tab
+- [Х] Додати `objectVersions: Record<string, number>` у metadata-store — інкрементувати при кожній мутації конкретного об'єкта (ключ = `kind/name`)
+- [Х] Додати `lastSavedObjectVersions: Record<string, number>` у project-store — snapshot при save
+- [Х] Dirty per object = `objectVersions[id] !== lastSavedObjectVersions[id]` або object не існує в saved snapshot
+- [Х] Dirty indicator (зірочка `*`) на кожній вкладці TabBar та floating window title bar
 
 ### Clarify (питання перед імплементацією)
-- [ ] Чи потрібен механізм "скинути зміни одного об'єкта" (revert per object), чи тільки глобальний undo?
+- [Х] Чи потрібен механізм "скинути зміни одного об'єкта" (revert per object), чи тільки глобальний undo?
   - Чому це важливо: per-object dirty tracking відкриває можливість per-object revert
   - Варіанти: A) тільки глобальний undo/redo / B) per-object revert через snapshot
   - Вплив на рішення: архітектура store
+  - **Рішення: (A) тільки глобальний undo/redo.** Per-object dirty tracking використовується виключно для UI-індикації (зірочка `*`). Per-object revert не реалізований — при потребі може бути доданий окремим модулем.
 
 ### Рекомендовані патерни
 

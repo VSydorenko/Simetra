@@ -21,10 +21,23 @@ export function refToTabId(ref: MetadataRef): string {
   return `${ref.kind}/${ref.name}`
 }
 
+/** Перша доступна секція залежно від kind обʼєкта */
+export const DEFAULT_SECTION: Record<MetadataKind, string> = {
+  Catalog: 'attributes',
+  Document: 'attributes',
+  Enumeration: 'values',
+  InformationRegister: 'dimensions',
+  AccumulationRegister: 'dimensions',
+  Constant: 'settings',
+  CustomTable: 'attributes',
+}
+
 export interface TabItem {
   id: string
   objectRef: MetadataRef
   isPinned: boolean
+  // Активна секція редактора per-tab
+  activeSection: string
 }
 
 export interface FloatingWindowPosition {
@@ -45,6 +58,8 @@ export interface FloatingWindow {
   zIndex: number
   isMinimized: boolean
   isMaximized: boolean
+  // Активна секція редактора per-window
+  activeSection: string
 }
 
 // Z-index для floating windows починається з 30 (відповідно до z-index системи Модуля 5)
@@ -75,8 +90,6 @@ export interface UiState {
   expandedTreeNodes: string[]
   // Пошуковий запит у дереві
   searchQuery: string
-  // Активна вкладка в редакторі обʼєкта (attributes/tabularSections/...)
-  activeEditorTab: string
   // Чи відкрита панель властивостей
   propertiesPanelOpen: boolean
   // Розкладка 3-panel layout у відсотках від ширини контейнера
@@ -102,7 +115,8 @@ export interface UiActions {
   setExpandedTreeNodes: (nodes: string[]) => void
   toggleTreeNode: (nodeId: string) => void
   setSearchQuery: (query: string) => void
-  setActiveEditorTab: (tab: string) => void
+  /** Встановити активну секцію для поточного tab/window */
+  setActiveSection: (section: string) => void
   setPropertiesPanelOpen: (open: boolean) => void
   setPanelLayout: (layout: Layout) => void
   togglePropertiesPanel: () => void
@@ -187,7 +201,6 @@ export const useUiStore = create<UiStore>()(
       selectedField: null,
       expandedTreeNodes: DEFAULT_EXPANDED,
       searchQuery: '',
-      activeEditorTab: 'attributes',
       propertiesPanelOpen: true,
       panelLayout: DEFAULT_PANEL_LAYOUT,
       commandPaletteOpen: false,
@@ -203,9 +216,8 @@ export const useUiStore = create<UiStore>()(
       selectObject: (ref) =>
         set({
           selectedObject: ref,
-          // Скинути вибір поля при зміні обʼєкта
+          // Скинути вибір поля при зміні обʼєкта (але НЕ скидати activeSection)
           selectedField: null,
-          activeEditorTab: 'attributes',
         }),
 
       selectField: (field) =>
@@ -228,8 +240,25 @@ export const useUiStore = create<UiStore>()(
       setSearchQuery: (query) =>
         set({ searchQuery: query }),
 
-      setActiveEditorTab: (tab) =>
-        set({ activeEditorTab: tab }),
+      setActiveSection: (section) =>
+        set((state) => {
+          // Встановити activeSection для поточного активного tab або window
+          if (state.activeWindowId) {
+            return {
+              floatingWindows: state.floatingWindows.map((w) =>
+                w.id === state.activeWindowId ? { ...w, activeSection: section } : w,
+              ),
+            }
+          }
+          if (state.activeTabId) {
+            return {
+              openTabs: state.openTabs.map((t) =>
+                t.id === state.activeTabId ? { ...t, activeSection: section } : t,
+              ),
+            }
+          }
+          return state
+        }),
 
       setPropertiesPanelOpen: (open) =>
         set({ propertiesPanelOpen: open }),
@@ -265,7 +294,7 @@ export const useUiStore = create<UiStore>()(
           })
           return
         }
-        const tab: TabItem = { id: tabId, objectRef: ref, isPinned: false }
+        const tab: TabItem = { id: tabId, objectRef: ref, isPinned: false, activeSection: DEFAULT_SECTION[ref.kind] }
         set({
           openTabs: [...openTabs, tab],
           activeTabId: tabId,
@@ -458,6 +487,7 @@ export const useUiStore = create<UiStore>()(
         zIndex: newZIndex,
         isMinimized: false,
         isMaximized: false,
+        activeSection: tab.activeSection,
       }
 
       // Видалити вкладку з tabs
@@ -515,6 +545,7 @@ export const useUiStore = create<UiStore>()(
         id: tabId,
         objectRef: win.objectRef,
         isPinned: false,
+        activeSection: win.activeSection,
       }
 
       return {
@@ -709,7 +740,7 @@ export const useUiStore = create<UiStore>()(
     }),
     {
       name: UI_STORE_STORAGE_KEY,
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>
@@ -725,11 +756,14 @@ export const useUiStore = create<UiStore>()(
             state.panelLayout = { ...DEFAULT_PANEL_LAYOUT }
           }
         }
+        if (version < 3) {
+          // v2 → v3: activeEditorTab перенесено у per-tab activeSection
+          delete state.activeEditorTab
+        }
         return state
       },
       partialize: (state) => ({
         expandedTreeNodes: state.expandedTreeNodes,
-        activeEditorTab: state.activeEditorTab,
         propertiesPanelOpen: state.propertiesPanelOpen,
         panelLayout: state.panelLayout,
       }),

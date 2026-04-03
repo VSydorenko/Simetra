@@ -31,7 +31,6 @@ beforeEach(() => {
       'Constant',
       'CustomTable',
     ],
-    activeEditorTab: 'attributes',
     propertiesPanelOpen: true,
     panelLayout: DEFAULT_PANEL_LAYOUT,
     searchQuery: '',
@@ -58,6 +57,7 @@ describe('persisted UI preferences', () => {
         id: 'Catalog/Products',
         objectRef: catalogRef('Products'),
         isPinned: false,
+        activeSection: 'attributes',
       }],
       selectedObject: catalogRef('Products'),
     })
@@ -73,8 +73,8 @@ describe('persisted UI preferences', () => {
       propertiesPanelOpen: false,
       panelLayout: { tree: 18, editor: 64, properties: 18 },
       expandedTreeNodes: ['Catalog', 'Document'],
-      activeEditorTab: 'attributes',
     })
+    expect(persisted.state).not.toHaveProperty('activeEditorTab')
     expect(persisted.state).not.toHaveProperty('openTabs')
     expect(persisted.state).not.toHaveProperty('selectedObject')
   })
@@ -327,6 +327,7 @@ describe('attachWindow', () => {
           zIndex: 30,
           isMinimized: false,
           isMaximized: false,
+          activeSection: 'attributes',
         },
       ],
     }))

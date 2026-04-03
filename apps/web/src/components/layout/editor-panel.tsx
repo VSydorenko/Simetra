@@ -7,15 +7,21 @@ import { WelcomeScreen } from '../editor/welcome-screen'
 import { RecoveryBanner } from '../editor/recovery-banner'
 import { useUiStore } from '@/stores/ui-store'
 import { useProjectStore } from '@/stores/project-store'
+import { useCallback } from 'react'
 
 /** Центральна панель: TabBar + вміст активної вкладки + floating windows */
 export function EditorPanel() {
   const { t } = useTranslation()
-  const { openTabs, activeTabId } = useUiStore()
+  const { openTabs, activeTabId, setActiveSection } = useUiStore()
   const sessionRestoreStatus = useProjectStore((s) => s.sessionRestoreStatus)
   const isNewProject = useProjectStore((s) => s.isNewProject)
 
   const activeTab = activeTabId ? openTabs.find((tab) => tab.id === activeTabId) : null
+
+  const handleSectionChange = useCallback(
+    (section: string) => setActiveSection(section),
+    [setActiveSection],
+  )
 
   // Показати Welcome Screen коли немає вкладок і:
   // — сесія ще не відновлена, або
@@ -42,7 +48,12 @@ export function EditorPanel() {
       {/* Контент активної вкладки */}
       <div className="flex-1 overflow-hidden">
         {activeTab ? (
-          <ObjectEditor key={activeTab.id} objectRef={activeTab.objectRef} />
+          <ObjectEditor
+            key={activeTab.id}
+            objectRef={activeTab.objectRef}
+            activeSection={activeTab.activeSection}
+            onSectionChange={handleSectionChange}
+          />
         ) : showWelcome ? (
           <WelcomeScreen />
         ) : (
