@@ -6,11 +6,10 @@ import {
   saveSession,
   clearSession,
   clearDraft,
-  saveDraft as saveDraftToDb,
   loadSession,
   loadDraft,
 } from '@/storage/session-db'
-import { pauseDraftSync, resumeDraftSync } from '@/storage/draft-sync'
+import { pauseDraftSync, resumeDraftSync, stopAndClearDraft } from '@/storage/draft-sync'
 
 const storage = new WebStorage()
 
@@ -105,7 +104,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
 
     // Очистити session і draft в IndexedDB
     void clearSession()
-    void clearDraft()
+    stopAndClearDraft()
     resumeDraftSync()
   },
 
@@ -145,21 +144,21 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
 
     set({ isSaving: true, lastError: null })
     try {
-      const model = useMetadataStore.getState().model
+      // Зафіксувати model і version з одного snapshot до await
+      const { model, version: snapshotVersion } = useMetadataStore.getState()
       const result = await storage.saveProject(model, projectHandle ?? undefined)
       const newHandle = result.handle ?? get().projectHandle
-      const version = useMetadataStore.getState().version
       set({
         isSaving: false,
         isNewProject: false,
-        lastSavedVersion: version,
+        lastSavedVersion: snapshotVersion,
         projectHandle: newHandle,
         projectDirectoryName: newHandle?.name ?? null,
       })
 
       // Оновити session в IndexedDB, очистити draft
-      void saveSession(newHandle, model, version)
-      void clearDraft()
+      void saveSession(newHandle, model, snapshotVersion)
+      stopAndClearDraft()
     } catch (e) {
       set({
         isSaving: false,
@@ -192,7 +191,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
 
       // Оновити session, очистити draft
       void saveSession(handle, result.model, version)
-      void clearDraft()
+      stopAndClearDraft()
       resumeDraftSync()
     } catch (e) {
       set({
@@ -240,9 +239,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
         openWarnings: result.warnings ?? [],
       })
 
-      // Очистити session (немає handle), зберегти model як draft
-      void clearSession()
-      void saveDraftToDb(result.model, version)
+      // Зберегти повноцінну session з handle: null (для restore flow після reload)
+      void saveSession(null, result.model, version)
       resumeDraftSync()
     } catch (e) {
       set({

@@ -13,21 +13,21 @@
 ### Фаза 1: Критичні виправлення store (P0)
 
 #### 1.1 Race condition у saveProject — snapshot version до await
-- [ ] У `saveProject` (`stores/project-store.ts`) зафіксувати і model, і version з одного синхронного snapshot **до** асинхронного запису на диск
-- [ ] Поточний стан: model читається до await, але version — після. Якщо користувач змінить model під час IO, version буде новий, а на диску — стара модель
-- [ ] `lastSavedVersion` оновлювати тільки збереженим snapshot version, не поточним runtime version
-- [ ] Перевірити ту ж логіку в `openProject` — там version читається після loadModel, що коректно
+- [x] У `saveProject` (`stores/project-store.ts`) зафіксувати і model, і version з одного синхронного snapshot **до** асинхронного запису на диск
+- [x] Поточний стан: model читається до await, але version — після. Якщо користувач змінить model під час IO, version буде новий, а на диску — стара модель
+- [x] `lastSavedVersion` оновлювати тільки збереженим snapshot version, не поточним runtime version
+- [x] Перевірити ту ж логіку в `openProject` — там version читається після loadModel, що коректно
 
 #### 1.2 Draft-only restore після ZIP import
-- [ ] У `importProject` (`stores/project-store.ts`) замість `clearSession()` + `saveDraftToDb()` зберігати повноцінну session через `saveSession(null, result.model, version)`
-- [ ] Це єдина зміна: замість двох викликів — один `saveSession`. Draft-sync продовжить працювати окремо для crash recovery
-- [ ] Перевірити: після reload з ZIP import → `restoreSession` знаходить session → Welcome Screen показує CTA → `restoreDraft` або `requestDirectoryPermission` працюють
+- [x] У `importProject` (`stores/project-store.ts`) замість `clearSession()` + `saveDraftToDb()` зберігати повноцінну session через `saveSession(null, result.model, version)`
+- [x] Це єдина зміна: замість двох викликів — один `saveSession`. Draft-sync продовжить працювати окремо для crash recovery
+- [x] Перевірити: після reload з ZIP import → `restoreSession` знаходить session → Welcome Screen показує CTA → `restoreDraft` або `requestDirectoryPermission` працюють
 
 #### 1.3 Debounced draft не скасовується після save
-- [ ] У `saveProject`, `openProject`, `newProject` замість прямого `void clearDraft()` викликати `stopAndClearDraft()` з `storage/draft-sync.ts`
-- [ ] `stopAndClearDraft` вже існує, але жодного call site немає — це dead code
-- [ ] Функція і скасовує pending debounce timer, і очищує IndexedDB — єдина точка відповідальності
-- [ ] Залишити `pauseDraftSync()` / `resumeDraftSync()` як є — вони працюють коректно для load-time паузи
+- [x] У `saveProject`, `openProject`, `newProject` замість прямого `void clearDraft()` викликати `stopAndClearDraft()` з `storage/draft-sync.ts`
+- [x] `stopAndClearDraft` вже існує, але жодного call site немає — це dead code
+- [x] Функція і скасовує pending debounce timer, і очищує IndexedDB — єдина точка відповідальності
+- [x] Залишити `pauseDraftSync()` / `resumeDraftSync()` як є — вони працюють коректно для load-time паузи
 
 ### Фаза 2: State machine нормалізація (P1)
 
@@ -83,6 +83,12 @@
 - [ ] EditorPanel: `recovery-available` не показує Welcome Screen, а показує RecoveryBanner поверх editor
 
 #### 3.3 Denied permission — fallback на draft
+
+> **⚠️ Примітка з Фази 1 code-review:** Після виправлення 1.2 (importProject → saveSession(null, ...)), `restoreSession()` для session з `handle: null` не використовує `session.projectModel` — замість цього шукає draft. Якщо draft не встиг зберегтись (draft-sync debounce 3с), проєкт не відновиться. При реалізації 3.3/3.4 потрібно:
+> 1. Додати restore path для session з `handle: null` — використовувати `session.projectModel` як джерело відновлення (аналогічно restoreDraft, але з session payload).
+> 2. Або забезпечити негайний запис draft при import (крім saveSession), щоб draft завжди був доступний для restore.
+> 3. При наявності session з `handle: null` віддавати пріоритет session.projectModel над старим draft від попереднього проєкту.
+
 - [ ] Додати поле `hasDraftFallback: boolean` до ProjectState (default false)
 - [ ] У `requestDirectoryPermission`, коли `permission !== 'granted'`:
   - Перевірити `loadDraft()`
