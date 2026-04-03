@@ -236,6 +236,108 @@ function bumpObjectVersion(
   state.objectVersions[key] = (state.objectVersions[key] ?? 0) + 1
 }
 
+/** Відповідність kind → префікс reference-типу атрибута (для cascade rename) */
+const KIND_TO_REF_PREFIX: Partial<Record<MetadataKind, string>> = {
+  Catalog: 'CatalogRef',
+  Document: 'DocumentRef',
+  Enumeration: 'EnumRef',
+}
+
+/** Cascade-оновлення посилань на перейменований обʼєкт у всій моделі (immer draft) */
+function cascadeRenameRefs(
+  state: { model: ProjectModel; objectVersions: Record<string, number> },
+  kind: MetadataKind,
+  oldName: string,
+  newName: string,
+): void {
+  const refPrefix = KIND_TO_REF_PREFIX[kind]
+  const allKinds: MetadataKind[] = [
+    'Catalog', 'Document', 'Enumeration',
+    'InformationRegister', 'AccumulationRegister',
+    'Constant', 'CustomTable',
+  ]
+
+  for (const k of allKinds) {
+    const key = KIND_TO_KEY[k]
+    const objects = state.model[key] as MetadataObject[]
+    for (const obj of objects) {
+      let changed = false
+
+      // Оновити owners (Catalog)
+      if ('owners' in obj && Array.isArray(obj.owners)) {
+        for (const ref of obj.owners as { kind: MetadataKind; name: string }[]) {
+          if (ref.kind === kind && ref.name === oldName) {
+            ref.name = newName
+            changed = true
+          }
+        }
+      }
+
+      // Оновити recorderTypes (InformationRegister, AccumulationRegister)
+      if ('recorderTypes' in obj && Array.isArray(obj.recorderTypes)) {
+        for (const ref of obj.recorderTypes as { kind: MetadataKind; name: string }[]) {
+          if (ref.kind === kind && ref.name === oldName) {
+            ref.name = newName
+            changed = true
+          }
+        }
+      }
+
+      // Оновити registerMovements (Document)
+      if ('registerMovements' in obj && Array.isArray(obj.registerMovements)) {
+        for (const ref of obj.registerMovements as { kind: MetadataKind; name: string }[]) {
+          if (ref.kind === kind && ref.name === oldName) {
+            ref.name = newName
+            changed = true
+          }
+        }
+      }
+
+      // Оновити attribute.ref і attribute.allowedTypes
+      const attrCollections: Attribute[][] = []
+      if ('attributes' in obj && Array.isArray(obj.attributes)) {
+        attrCollections.push(obj.attributes as Attribute[])
+      }
+      if ('dimensions' in obj && Array.isArray(obj.dimensions)) {
+        attrCollections.push(obj.dimensions as Attribute[])
+      }
+      if ('resources' in obj && Array.isArray(obj.resources)) {
+        attrCollections.push(obj.resources as Attribute[])
+      }
+      if ('tabularSections' in obj && Array.isArray(obj.tabularSections)) {
+        for (const ts of obj.tabularSections as { attributes: Attribute[] }[]) {
+          if (Array.isArray(ts.attributes)) {
+            attrCollections.push(ts.attributes)
+          }
+        }
+      }
+
+      for (const attrs of attrCollections) {
+        for (const attr of attrs) {
+          // Single ref (CatalogRef, DocumentRef, EnumRef)
+          if (refPrefix && attr.ref === oldName && attr.type?.startsWith(refPrefix)) {
+            attr.ref = newName
+            changed = true
+          }
+          // AnyRef allowedTypes
+          if (attr.allowedTypes) {
+            for (const allowed of attr.allowedTypes) {
+              if (allowed.kind === kind && allowed.name === oldName) {
+                allowed.name = newName
+                changed = true
+              }
+            }
+          }
+        }
+      }
+
+      if (changed) {
+        bumpObjectVersion(state, k, obj.name)
+      }
+    }
+  }
+}
+
 export type MetadataStore = MetadataState & MetadataActions
 
 export const useMetadataStore = create<MetadataStore>()(
@@ -363,6 +465,8 @@ export const useMetadataStore = create<MetadataStore>()(
             state.objectVersions[newKey] = state.objectVersions[oldKey]
             delete state.objectVersions[oldKey]
           }
+          // Cascade: оновити всі посилання на перейменований обʼєкт
+          cascadeRenameRefs(state, kind, oldName, newName)
           bumpObjectVersion(state, kind, newName)
           state.version++
         })

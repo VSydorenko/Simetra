@@ -267,7 +267,7 @@ react-arborist virtualizes — окей для 1000+ вузлів. Але якщ
 ## Модуль F: Reference Picker (FR-036)
 
 ### Вимоги
-- [ ] Створити компонент `MetadataRefPicker` — shadcn/ui Combobox (Popover + Command):
+- [Х] Створити компонент `MetadataRefPicker` — shadcn/ui Combobox (Popover + Command):
   - Фільтрація за kind відповідно до типу поля:
     - `CatalogRef` → список усіх каталогів
     - `DocumentRef` → список усіх документів
@@ -276,9 +276,9 @@ react-arborist virtualizes — окей для 1000+ вузлів. Але якщ
   - Вільний пошук по name
   - Можливість очистити ref (кнопка ×)
   - Validation hint якщо target не існує в поточній моделі
-- [ ] Замінити plain `Input` для `ref` у `FieldProperties` на `MetadataRefPicker`
-- [ ] Існуючий `RefMultiSelect` (для owners/recorderTypes/registerMovements) — уніфікувати з `MetadataRefPicker` де можливо, або залишити окремим, але з однаковим UX
-- [ ] При rename цільового об'єкта — автоматичне оновлення ref у всіх полях, що посилаються на нього (вже є `renameObject` з cascade в metadata-store — перевірити що cascade працює для `attribute.ref`)
+- [Х] Замінити plain `Input` для `ref` у `FieldProperties` на `MetadataRefPicker`
+- [Х] Існуючий `RefMultiSelect` (для owners/recorderTypes/registerMovements) — уніфікувати з `MetadataRefPicker` де можливо, або залишити окремим, але з однаковим UX
+- [Х] При rename цільового об'єкта — автоматичне оновлення ref у всіх полях, що посилаються на нього (вже є `renameObject` з cascade в metadata-store — перевірити що cascade працює для `attribute.ref`)
 - [ ] Для `FieldTypeSelect` в центральній зоні (таблиця реквізитів) — при виборі reference type автоматично фокусувати права панель на поле `ref` для вибору target
 
 ### Рекомендовані патерни
@@ -298,11 +298,11 @@ shadcn/ui Command (cmdk) всередині Popover — стандартний �
 Не хардкодити списки. Завжди брати з metadata-store через selector.
 
 ### Definition of Done
-- [ ] Для CatalogRef/DocumentRef/EnumRef — dropdown з існуючими об'єктами відповідного kind
-- [ ] Пошук по name працює
-- [ ] Вибір target оновлює `attribute.ref`
-- [ ] Неіснуючий target — validation warning
-- [ ] При rename target — ref оновлюється автоматично
+- [Х] Для CatalogRef/DocumentRef/EnumRef — dropdown з існуючими об'єктами відповідного kind
+- [Х] Пошук по name працює
+- [Х] Вибір target оновлює `attribute.ref`
+- [Х] Неіснуючий target — validation warning
+- [Х] При rename target — ref оновлюється автоматично
 
 ---
 

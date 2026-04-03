@@ -19,6 +19,7 @@ import {
 import { Switch } from '@workspace/ui/components/switch'
 import { Badge } from '@workspace/ui/components/badge'
 import { FieldTypeSelect } from '@/components/editor/field-type-select'
+import { MetadataRefMultiPicker } from '@/components/properties/metadata-ref-picker'
 import { useMetadataStore, type ValidationError } from '@/stores/metadata-store'
 import { useUiStore } from '@/stores/ui-store'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
@@ -91,80 +92,6 @@ function NameEditor({
         }
       }}
     />
-  )
-}
-
-/** Multi-select для MetadataRef[] (owners, recorderTypes, registerMovements) */
-function RefMultiSelect({
-  value,
-  allowedKinds,
-  onChange,
-}: {
-  value: MetadataRef[]
-  allowedKinds: MetadataKind[]
-  onChange: (refs: MetadataRef[]) => void
-}) {
-  const model = useMetadataStore((s) => s.model)
-
-  // Зібрати всі доступні обʼєкти дозволених типів
-  const availableObjects = useMemo(() => {
-    const result: MetadataRef[] = []
-    for (const kind of allowedKinds) {
-      const key = KIND_TO_KEY[kind]
-      const objects = model[key] as { name: string }[]
-      for (const obj of objects) {
-        result.push({ kind, name: obj.name })
-      }
-    }
-    return result
-  }, [model, allowedKinds])
-
-  const selectedSet = useMemo(
-    () => new Set(value.map((r) => `${r.kind}/${r.name}`)),
-    [value],
-  )
-
-  const toggleRef = useCallback(
-    (ref: MetadataRef) => {
-      const key = `${ref.kind}/${ref.name}`
-      if (selectedSet.has(key)) {
-        onChange(value.filter((r) => `${r.kind}/${r.name}` !== key))
-      } else {
-        onChange([...value, ref])
-      }
-    },
-    [value, selectedSet, onChange],
-  )
-
-  if (availableObjects.length === 0) {
-    return (
-      <span className="text-xs text-muted-foreground">—</span>
-    )
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1" role="group">
-      {availableObjects.map((ref) => {
-        const key = `${ref.kind}/${ref.name}`
-        const isSelected = selectedSet.has(key)
-        return (
-          <button
-            key={key}
-            type="button"
-            onClick={() => toggleRef(ref)}
-            className="inline-flex"
-            aria-pressed={isSelected}
-          >
-            <Badge
-              variant={isSelected ? 'default' : 'outline'}
-              className="cursor-pointer px-1.5 py-0 text-[10px]"
-            >
-              {ref.name}
-            </Badge>
-          </button>
-        )
-      })}
-    </div>
   )
 }
 
@@ -381,7 +308,7 @@ function CatalogTypeSettings({
       </SettingRow>
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">{t('properties.owners')}</Label>
-        <RefMultiSelect
+        <MetadataRefMultiPicker
           value={o.owners}
           allowedKinds={['Catalog']}
           onChange={(refs) => onUpdate({ owners: refs } as Partial<MetadataObject>)}
@@ -481,7 +408,7 @@ function DocumentTypeSettings({
       </SettingRow>
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">{t('properties.registerMovements')}</Label>
-        <RefMultiSelect
+        <MetadataRefMultiPicker
           value={o.registerMovements}
           allowedKinds={['AccumulationRegister', 'InformationRegister']}
           onChange={(refs) => onUpdate({ registerMovements: refs } as Partial<MetadataObject>)}
@@ -526,7 +453,7 @@ function InfoRegisterTypeSettings({
       </SettingRow>
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">{t('properties.recorderTypes')}</Label>
-        <RefMultiSelect
+        <MetadataRefMultiPicker
           value={o.recorderTypes}
           allowedKinds={['Document']}
           onChange={(refs) => onUpdate({ recorderTypes: refs } as Partial<MetadataObject>)}
@@ -559,7 +486,7 @@ function AccumRegisterTypeSettings({
       </SettingRow>
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">{t('properties.recorderTypes')}</Label>
-        <RefMultiSelect
+        <MetadataRefMultiPicker
           value={o.recorderTypes}
           allowedKinds={['Document']}
           onChange={(refs) => onUpdate({ recorderTypes: refs } as Partial<MetadataObject>)}

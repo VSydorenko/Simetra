@@ -179,6 +179,14 @@
       "create": "Створити"
     }
   },
+  "refPicker": {
+    "placeholder": "Оберіть обʼєкт…",
+    "searchPlaceholder": "Пошук…",
+    "addPlaceholder": "Додати…",
+    "noResults": "Не знайдено",
+    "clear": "Очистити",
+    "targetNotFound": "Обʼєкт \"{{name}}\" не знайдено в моделі"
+  },
   "validation": {
     "errors_one": "{{count}} помилка",
     "errors_few": "{{count}} помилки",

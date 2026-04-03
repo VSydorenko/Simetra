@@ -178,6 +178,14 @@
       "create": "Create"
     }
   },
+  "refPicker": {
+    "placeholder": "Select object…",
+    "searchPlaceholder": "Search…",
+    "addPlaceholder": "Add…",
+    "noResults": "No results",
+    "clear": "Clear",
+    "targetNotFound": "Object \"{{name}}\" not found in model"
+  },
   "validation": {
     "errors_one": "{{count}} error",
     "errors_other": "{{count}} errors",
