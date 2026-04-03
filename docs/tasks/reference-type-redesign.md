@@ -36,20 +36,20 @@
 
 ### Вимоги
 
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §6.2 — замінити таблицю reference types (`CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`) на один `Ref` з двома режимами (single / polymorphic)
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §6.3 — поле `ref` стає `MetadataRef | undefined` замість `String`; додати опис `allowedTypes` як альтернативного режиму для polymorphic ref
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `parent_id` тип → `UUID` (структурне поле ієрархії, не reference); видалити згадку `CatalogRef.Self`
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `owner_id`: single owner → `type: Ref, ref: { kind: "Catalog", name: "{Owner}" }`; multiple owners → `type: Ref, allowedTypes: owners[]`
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §5.5, §5.6 — `recorder_id`: `type: Ref, ref: { kind: "Document", name: "{Recorder}" }` / `allowedTypes: recorderTypes[]`
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §7.4, §7.5 — JSON приклади під нову модель
-- [ ] Оновити `docs/BRD-metadata-configurator.md` §16 — уточнити вирішене питання "compound types": тепер `Ref` + `allowedTypes`, а не окремий `AnyRef`
-- [ ] Оновити `.github/instructions/metadata-model.instructions.md` — правила Zod-схем під нову модель
+- [x] Оновити `docs/BRD-metadata-configurator.md` §6.2 — замінити таблицю reference types (`CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`) на один `Ref` з двома режимами (single / polymorphic)
+- [x] Оновити `docs/BRD-metadata-configurator.md` §6.3 — поле `ref` стає `MetadataRef | undefined` замість `String`; додати опис `allowedTypes` як альтернативного режиму для polymorphic ref
+- [x] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `parent_id` тип → `UUID` (структурне поле ієрархії, не reference); видалити згадку `CatalogRef.Self`
+- [x] Оновити `docs/BRD-metadata-configurator.md` §5.2 — `owner_id`: single owner → `type: Ref, ref: { kind: "Catalog", name: "{Owner}" }`; multiple owners → `type: Ref, allowedTypes: owners[]`
+- [x] Оновити `docs/BRD-metadata-configurator.md` §5.5, §5.6 — `recorder_id`: `type: Ref, ref: { kind: "Document", name: "{Recorder}" }` / `allowedTypes: recorderTypes[]`
+- [x] Оновити `docs/BRD-metadata-configurator.md` §7.4, §7.5 — JSON приклади під нову модель
+- [x] Оновити `docs/BRD-metadata-configurator.md` §16 — уточнити вирішене питання "compound types": тепер `Ref` + `allowedTypes`, а не окремий `AnyRef`
+- [x] Оновити `.github/instructions/metadata-model.instructions.md` — правила Zod-схем під нову модель
 
 ### DoD фази 0
-- [ ] BRD не згадує `CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef` як FieldType значення
-- [ ] BRD не згадує `CatalogRef.Self` — parent_id описаний як UUID
-- [ ] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
-- [ ] `.github/instructions/` узгоджені з новою моделлю
+- [x] BRD не згадує `CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef` як FieldType значення
+- [x] BRD не згадує `CatalogRef.Self` — parent_id описаний як UUID
+- [x] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
+- [x] `.github/instructions/` узгоджені з новою моделлю
 
 ---
 
@@ -369,9 +369,9 @@ FieldType enum:                             FieldType enum:
 ## Definition of Done
 
 ### Документація (Фаза 0)
-- [ ] BRD не згадує `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` як FieldType значення
-- [ ] BRD не згадує `CatalogRef.Self` — `parent_id` описаний як `UUID`
-- [ ] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
+- [x] BRD не згадує `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` як FieldType значення
+- [x] BRD не згадує `CatalogRef.Self` — `parent_id` описаний як `UUID`
+- [x] JSON приклади у BRD використовують `type: "Ref"` + `ref: { kind, name }`
 
 ### Core (Фаза 1)
 - [ ] `fieldTypeSchema` — єдиний enum з `"Ref"`, без `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef`

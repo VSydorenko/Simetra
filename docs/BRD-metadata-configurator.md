@@ -129,15 +129,15 @@ Open-source візуальний конфігуратор бізнес-мета�
 | code | String / Number | `varchar(N)` / `integer` | Код елемента | Ні |
 | description | String | `varchar(N)` | Найменування | Ні |
 | deletion_mark | Boolean | `boolean DEFAULT false` | Позначка на видалення | Ні |
-| parent_id | CatalogRef.Self | `uuid REFERENCES ... NULL` | Батьківська група (якщо ієрархічний) | Ні¹ |
+| parent_id | UUID | `uuid REFERENCES ... NULL` | Батьківська група (якщо ієрархічний) | Ні¹ |
 | is_folder | Boolean | `boolean DEFAULT false` | Це група (якщо ієрархічний) | Ні¹ |
-| owner_id | CatalogRef.{Owner} | `uuid REFERENCES ...` | Власник (якщо підпорядкований) | Ні² |
+| owner_id | Ref → {Owner} | `uuid REFERENCES ...` | Власник (якщо підпорядкований) | Ні² |
 | predefined_name | String | `varchar(100) NULL` | Ім'я предефінованого елемента | Ні |
 | created_at | DateTime | `timestamptz DEFAULT now()` | Дата створення | Ні |
 | updated_at | DateTime | `timestamptz DEFAULT now()` | Дата останньої зміни | Ні |
 
 ¹ — присутній тільки якщо увімкнена ієрархія  
-² — присутній тільки якщо задані власники
+² — присутній тільки якщо задані власники. `parent_id` — структурне поле ієрархії (визначається `hierarchyType`), не reference-поле. `owner_id` при одному owner → `type: "Ref"`, `ref: { kind: "Catalog", name: "{Owner}" }`; при кількох owners → `type: "Ref"`, `allowedTypes: owners[]`
 
 **Налаштування типу:**
 
@@ -211,9 +211,11 @@ Open-source візуальний конфігуратор бізнес-мета�
 | Реквізит | Тип | Умова | Опис |
 |---|---|---|---|
 | period | Date / DateTime | Якщо періодичний | Дата запису |
-| recorder_id | DocumentRef | Якщо підпорядкований реєстратору | Документ-реєстратор |
+| recorder_id | Ref → {Recorder} | Якщо підпорядкований реєстратору | Документ-реєстратор |
 | line_number | Integer | Якщо підпорядкований реєстратору | Номер рядка |
 | active | Boolean | Якщо підпорядкований реєстратору | Активність запису |
+
+`recorder_id` при одному реєстраторі → `type: "Ref"`, `ref: { kind: "Document", name: "{Recorder}" }`; при кількох → `type: "Ref"`, `allowedTypes: recorderTypes[]`.
 
 **Налаштування типу:**
 
@@ -240,10 +242,12 @@ Open-source візуальний конфігуратор бізнес-мета�
 | Реквізит | Тип | Опис |
 |---|---|---|
 | period | DateTime | Дата руху |
-| recorder_id | DocumentRef | Документ-реєстратор |
+| recorder_id | Ref → {Recorder} | Документ-реєстратор |
 | line_number | Integer | Номер рядка |
 | active | Boolean | Активність запису |
 | movement_type | Enum: Receipt, Expense | Вид руху (тільки для регістрів залишків) |
+
+`recorder_id` при одному реєстраторі → `type: "Ref"`, `ref: { kind: "Document", name: "{Recorder}" }`; при кількох → `type: "Ref"`, `allowedTypes: recorderTypes[]`.
 
 **Налаштування типу:**
 
@@ -364,22 +368,42 @@ Open-source візуальний конфігуратор бізнес-мета�
 
 ### 6.2. Посилальні типи
 
-| Тип | Опис | Приклад |
+Усі посилання на інші об'єкти метаданих використовують єдиний тип `Ref` з двома режимами:
+
+| Режим | Опис | Структура |
 |---|---|---|
-| CatalogRef.{Name} | Посилання на довідник | CatalogRef.Products |
-| DocumentRef.{Name} | Посилання на документ | DocumentRef.SalesOrder |
-| EnumRef.{Name} | Посилання на значення перелічення | EnumRef.OrderStatus |
-| AnyRef | Поліморфне посилання (складений тип) | CatalogRef.Products \| CatalogRef.Services |
+| Single ref | Посилання на один конкретний об'єкт | `type: "Ref"`, `ref: { kind, name }` |
+| Polymorphic ref | Посилання на один із дозволених об'єктів (складений тип) | `type: "Ref"`, `allowedTypes: [{ kind, name }, ...]` |
 
-**Поліморфне посилання** реалізується як пара полів: `{field}_type` (varchar — ім'я типу) + `{field}_id` (uuid). Аналог Dynamic Link у Frappe та складеного типу в 1С.
+`ref` і `allowedTypes` — **взаємовиключні**: у одному полі може бути задано лише одне з них (або жодне — стан "ще не обрано").
 
-**Приклад AnyRef у JSON-метаданих:**
+**Підтримувані `kind` для посилань:** `Catalog`, `Document`, `Enumeration`.
+
+**Display формат** — derived value, не збережений рядок:
+- Single ref → `CatalogRef.Products` (з `ref.kind` + `ref.name`)
+- Polymorphic ref → `AnyRef(2)` (кількість дозволених типів)
+
+**Приклад single ref у JSON-метаданих:**
+
+```json
+{
+  "name": "product",
+  "displayName": { "uk": "Товар", "en": "Product" },
+  "type": "Ref",
+  "ref": { "kind": "Catalog", "name": "Products" },
+  "required": true
+}
+```
+
+Генерується як `product_id uuid REFERENCES products(id) NOT NULL` у PostgreSQL.
+
+**Приклад polymorphic ref у JSON-метаданих:**
 
 ```json
 {
   "name": "owner",
   "displayName": { "uk": "Власник", "en": "Owner" },
-  "type": "AnyRef",
+  "type": "Ref",
   "allowedTypes": [
     { "kind": "Catalog", "name": "Products" },
     { "kind": "Catalog", "name": "Services" }
@@ -388,7 +412,7 @@ Open-source візуальний конфігуратор бізнес-мета�
 }
 ```
 
-Генерується як два поля у PostgreSQL: `owner_type varchar(100) NOT NULL` + `owner_id uuid NOT NULL`.
+Поліморфне посилання генерується як пара полів у PostgreSQL: `owner_type varchar(100) NOT NULL` + `owner_id uuid NOT NULL` (Dynamic Link pattern).
 
 ### 6.3. Властивості поля (Attribute Properties)
 
@@ -405,7 +429,8 @@ Open-source візуальний конфігуратор бізнес-мета�
 | length | Integer | — | Довжина (для String) |
 | precision | Integer | — | Точність (для Numeric) |
 | scale | Integer | — | Масштаб (для Numeric) |
-| ref | String | — | Ім'я цільового об'єкта (для посилальних типів) |
+| ref | MetadataRef | — | Цільовий об'єкт `{ kind, name }` (для `type: "Ref"`, single ref) |
+| allowedTypes | Array of MetadataRef | — | Дозволені цільові об'єкти (для `type: "Ref"`, polymorphic ref) |
 
 ---
 
@@ -500,8 +525,8 @@ metadata/
     {
       "name": "unit",
       "displayName": { "uk": "Одиниця виміру", "en": "Unit" },
-      "type": "EnumRef",
-      "ref": "Units"
+      "type": "Ref",
+      "ref": { "kind": "Enumeration", "name": "Units" }
     },
     {
       "name": "base_price",
@@ -517,7 +542,7 @@ metadata/
       "displayName": { "uk": "Штрихкоди", "en": "Barcodes" },
       "attributes": [
         { "name": "barcode", "type": "String", "length": 200, "required": true },
-        { "name": "barcode_type", "type": "EnumRef", "ref": "BarcodeTypes" }
+        { "name": "barcode_type", "type": "Ref", "ref": { "kind": "Enumeration", "name": "BarcodeTypes" } }
       ]
     }
   ]
@@ -542,15 +567,15 @@ metadata/
     {
       "name": "product",
       "displayName": { "uk": "Товар", "en": "Product" },
-      "type": "CatalogRef",
-      "ref": "Products",
+      "type": "Ref",
+      "ref": { "kind": "Catalog", "name": "Products" },
       "required": true
     },
     {
       "name": "warehouse",
       "displayName": { "uk": "Склад", "en": "Warehouse" },
-      "type": "CatalogRef",
-      "ref": "Warehouses",
+      "type": "Ref",
+      "ref": { "kind": "Catalog", "name": "Warehouses" },
       "required": true
     }
   ],
@@ -574,8 +599,8 @@ metadata/
     {
       "name": "responsible",
       "displayName": { "uk": "Відповідальний", "en": "Responsible" },
-      "type": "CatalogRef",
-      "ref": "Users"
+      "type": "Ref",
+      "ref": { "kind": "Catalog", "name": "Users" }
     }
   ]
 }
@@ -1165,7 +1190,7 @@ interface GeneratorOutput {
 - ~~**Назва продукту**~~ → **Simetra**. GitHub repo: `Simetra`, npm scope: `@simetra/*`, CLI command: `simetra`, домен: `simetra.dev`.
 - ~~**Мова ядра конфігуратора**~~ → **TypeScript** для всього бізнес-ядра (core, generators, UI, CLI). Rust мінімальний — тільки Tauri commands для FS у Phase 3. Обґрунтування: єдина кодова база, Zod як shared source of truth, відсутність потреби в Rust-performance для проєктів до 200 об'єктів.
 - ~~**Стратегія зберігання стану**~~ → **Zustand** (in-memory) з серіалізацією у файлову систему через абстракцію `StorageProvider` при Save. Phase 1: `WebStorage` (File System Access API + download/upload fallback). Phase 3: `TauriStorage` (нативний FS).
-- ~~**Як обробляти compound types**~~ → **AnyRef** з `allowedTypes` масивом структурованих посилань `{ kind, name }`. Генерується як `{field}_type` + `{field}_id` (Dynamic Link pattern).
+- ~~**Як обробляти compound types**~~ → Єдиний тип `Ref` з двома режимами: single ref (`ref: { kind, name }`) і polymorphic ref (`allowedTypes: [{ kind, name }, ...]`). `ref` і `allowedTypes` — взаємовиключні. Polymorphic ref генерується як `{field}_type` + `{field}_id` (Dynamic Link pattern).
 - ~~**Web vs Desktop first**~~ → **Web-first**. Phase 1 — React SPA у браузері, без серверу. Tauri desktop та VS Code extension — Phase 3. Обґрунтування: нижчий бар'єр для adoption (не потрібно встановлювати), швидший прототип, спільний код між усіма платформами.
 
 ### Потребують рішення до Phase 2

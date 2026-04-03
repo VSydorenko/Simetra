@@ -17,7 +17,7 @@ description: 'Правила роботи з Zod-схемами метадани
 packages/core/src/schemas/
 ├── index.ts                    — barrel export (re-exports усіх схем і типів)
 ├── localized-string.ts         — LocalizedString {uk, en}
-├── field-type.ts               — PrimitiveFieldType, ReferenceFieldType, FieldType
+├── field-type.ts               — FieldType (єдиний enum: примітиви + "Ref")
 ├── metadata-kind.ts            — MetadataKind enum
 ├── metadata-ref.ts             — MetadataRef {kind, name}
 ├── attribute.ts                — Attribute schema (поле об'єкта)
@@ -57,6 +57,18 @@ packages/core/src/schemas/
 - **Dimensions** — ключові поля (виміри)
 - **Resources** — значення (ресурси). Для AccumulationRegister — тільки Numeric
 - **Attributes** — додаткова інформація
+
+## Reference-модель
+
+- Єдиний тип посилання: `Ref`. Немає окремих `CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`
+- `fieldTypeSchema` — один `z.enum([...primitives, "Ref"])`, без поділу на `primitiveFieldType`/`referenceFieldType`
+- Single ref: `type: "Ref"`, `ref: MetadataRef` (`{ kind, name }`)
+- Polymorphic ref: `type: "Ref"`, `allowedTypes: MetadataRef[]`
+- `ref` і `allowedTypes` — взаємовиключні (Zod `.refine()`)
+- `parent_id` — тип `UUID`, структурне поле ієрархії. Не reference, не має `ref`
+- `owner_id` — single owner → `type: "Ref"`, `ref: { kind: "Catalog", name: "{Owner}" }`; multiple owners → `type: "Ref"`, `allowedTypes: owners[]`
+- `recorder_id` — single recorder → `type: "Ref"`, `ref: { kind: "Document", name: "{Recorder}" }`; multiple → `type: "Ref"`, `allowedTypes: recorderTypes[]`
+- `MetadataRef { kind, name }` — єдиний формат для ВСІХ посилань: `attribute.ref`, `attribute.allowedTypes[]`, `owners[]`, `recorderTypes[]`, `registerMovements[]`
 
 ## Правила валідації імен
 
