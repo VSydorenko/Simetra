@@ -285,6 +285,7 @@
   },
   "dataTypeEditor": {
     "title": "Data Type Editor",
+    "editType": "Edit type",
     "compoundType": "Compound type",
     "compoundTooltip": "Compound type supports references only",
     "search": "Search type",

@@ -403,6 +403,8 @@ export interface RefKindGroupPresentationProps {
   onToggle: () => void
   label: string
   childCount: number
+  /** Стан чекбоксу групи у compound mode: true/false/'indeterminate'/undefined (не показувати) */
+  checkedState?: boolean | "indeterminate"
   style?: React.CSSProperties
 }
 
@@ -412,6 +414,7 @@ export function RefKindGroupPresentation({
   onToggle,
   label,
   childCount,
+  checkedState,
   style,
 }: RefKindGroupPresentationProps) {
   const kind = data.kind!
@@ -429,6 +432,17 @@ export function RefKindGroupPresentation({
       <span className="shrink-0 text-[10px] text-muted-foreground">
         {isOpen ? "▼" : "▶"}
       </span>
+      {checkedState !== undefined && (
+        <input
+          type="checkbox"
+          checked={checkedState === true}
+          ref={(el) => {
+            if (el) el.indeterminate = checkedState === "indeterminate"
+          }}
+          readOnly
+          className="pointer-events-none h-3 w-3 shrink-0 accent-primary"
+        />
+      )}
       <NodeIcon icon={icon} className={KIND_COLORS[kind]} />
       <span className="truncate font-medium">{label}</span>
       <NodeBadge count={childCount} />

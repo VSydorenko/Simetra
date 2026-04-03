@@ -292,29 +292,29 @@
 
 #### FieldProperties — readonly display + тригер діалогу
 
-- [ ] Секція "Тип даних" у FieldProperties замінюється на:
+- [x] Секція "Тип даних" у FieldProperties замінюється на:
   - Readonly display поточного типу (з піктограмою) + кнопка "..." для відкриття `DataTypeEditorDialog`
   - Формат display: локалізований через `formatTypeLabel` (Фаза 4)
   - Під display value — readonly підказка параметрів: String → "Довжина: 50", Numeric → "Точність: 10, Масштаб: 2"
-- [ ] Видалити з FieldProperties inline type-editing UI:
+- [x] Видалити з FieldProperties inline type-editing UI:
   - `FieldTypeSelect` (Select компонент) — прибрати import і usage
   - Inline поля `length`, `precision`, `scale`
   - Inline `MetadataRefPicker`
-- [ ] `onSave` callback для діалогу формується в FieldProperties з використанням існуючого `handleUpdate` (який вже робить routing по field role)
-- [ ] `FieldTypeSelect` **залишається** як компонент — він використовується для Constant.valueType в `object-properties.tsx`
+- [x] `onSave` callback для діалогу формується в FieldProperties з використанням існуючого `handleUpdate` (який вже робить routing по field role)
+- [x] `FieldTypeSelect` **залишається** як компонент — він використовується для Constant.valueType в `object-properties.tsx`
 
 #### AttributeTable — entry point з таблиці
 
-- [ ] В колонці "Тип" таблиці реквізитів — зробити type cell clickable
-- [ ] Клік на type badge → відкриває `DataTypeEditorDialog` для цього атрибута
-- [ ] Потрібен `stopPropagation` на cell level щоб не зламати row selection
-- [ ] `onSave` callback формується з координатами атрибута (kind, objectName, fieldName, field role)
-- [ ] Після Save — таблиця оновлюється автоматично (reactive через store)
+- [x] В колонці "Тип" таблиці реквізитів — зробити type cell clickable
+- [x] Клік на type badge → відкриває `DataTypeEditorDialog` для цього атрибута
+- [x] Потрібен `stopPropagation` на cell level щоб не зламати row selection
+- [x] `onSave` callback формується з координатами атрибута (kind, objectName, fieldName, field role)
+- [x] Після Save — таблиця оновлюється автоматично (reactive через store)
 
 #### UX polishing діалогу після інтеграції
 
-- [ ] Додати keyboard navigation у `DataTypeEditorDialog` до паритету з sidebar tree (`onSelect` / `onActivate`, навігація без mouse-only flow)
-- [ ] Додати checked / indeterminate visual state для `refKindGroup` у compound mode
+- [x] Додати keyboard navigation у `DataTypeEditorDialog` до паритету з sidebar tree (`onSelect` / `onActivate`, навігація без mouse-only flow)
+- [x] Додати checked / indeterminate visual state для `refKindGroup` у compound mode
 
 ### Ризики
 
@@ -322,12 +322,12 @@
 - Click на type cell vs row selection: потрібен окремий event handling на cell рівні
 
 ### DoD фази 3
-- [ ] FieldProperties — readonly display типу + кнопка "..." → діалог
-- [ ] FieldProperties не містить inline type-editing UI
-- [ ] AttributeTable — клік на type badge відкриває діалог
-- [ ] Два entry points працюють: права панель і таблиця
-- [ ] Зміна типу через діалог атомарно оновлює store
-- [ ] Constant.valueType flow не зачеплено (FieldTypeSelect залишається)
+- [x] FieldProperties — readonly display типу + кнопка "..." → діалог
+- [x] FieldProperties не містить inline type-editing UI
+- [x] AttributeTable — клік на type badge відкриває діалог
+- [x] Два entry points працюють: права панель і таблиця
+- [x] Зміна типу через діалог атомарно оновлює store
+- [x] Constant.valueType flow не зачеплено (FieldTypeSelect залишається)
 
 ---
 

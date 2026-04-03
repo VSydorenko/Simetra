@@ -27,11 +27,12 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Search01Icon } from "@hugeicons/core-free-icons"
-import type {
-  Attribute,
-  FieldType,
-  ProjectModel,
-  ReferenceableKind,
+import {
+  referenceableKindSchema,
+  type Attribute,
+  type FieldType,
+  type ProjectModel,
+  type ReferenceableKind,
 } from "@simetra/core"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { buildTypeEditorTree } from "@/components/layout/tree/tree-builder"
@@ -42,7 +43,7 @@ import {
   RefTargetPresentation,
 } from "@/components/layout/tree/tree-node-presentation"
 
-const REFERENCEABLE_KINDS = ["Catalog", "Document", "Enumeration"] as const
+const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
 type AttributeRefTarget = NonNullable<Attribute["ref"]>
 
@@ -248,6 +249,28 @@ function DataTypeEditorBody({
     return ids
   }, [draft])
 
+  /** Стан чекбоксу для кожного kind group у compound mode */
+  const kindCheckedStates = useMemo(() => {
+    if (!compoundEnabled) return {} as Record<string, boolean | "indeterminate">
+    const states: Record<string, boolean | "indeterminate"> = {}
+    for (const k of REFERENCEABLE_KINDS) {
+      const modelKey = KIND_TO_KEY[k]
+      const objects = (model[modelKey] as { name: string }[]) ?? []
+      if (objects.length === 0) {
+        states[k] = false
+        continue
+      }
+      const current = draft.allowedTypes ?? []
+      const selectedCount = objects.filter((obj) =>
+        current.some((at) => at.kind === k && at.name === obj.name),
+      ).length
+      if (selectedCount === 0) states[k] = false
+      else if (selectedCount === objects.length) states[k] = true
+      else states[k] = "indeterminate"
+    }
+    return states
+  }, [compoundEnabled, draft.allowedTypes, model])
+
   // --- Обробники вибору ---
 
   /** Клік на примітивний тип (single mode) */
@@ -410,6 +433,25 @@ function DataTypeEditorBody({
     onCancel()
   }, [draft, onSave, onCancel])
 
+  /** Keyboard activate: Enter/Space на вузлі дерева — аналог кліку */
+  const handleActivate = useCallback(
+    (node: NodeApi<TreeNodeData>) => {
+      const data = node.data
+      if (data.nodeType === "primitiveType" && data.fieldTypeValue) {
+        handleSelectPrimitive(data.fieldTypeValue)
+      } else if (data.nodeType === "refTarget" && isAttributeRefTarget(data.refTarget)) {
+        handleSelectRefTarget(data.refTarget)
+      } else if (data.nodeType === "refKindGroup") {
+        // Поведінка ідентична mouse click: compound → bulk toggle, single → expand/collapse
+        if (compoundEnabled && data.kind && isReferenceableKind(data.kind)) {
+          handleToggleKindGroup(data.kind)
+        }
+        node.toggle()
+      }
+    },
+    [compoundEnabled, handleSelectPrimitive, handleSelectRefTarget, handleToggleKindGroup],
+  )
+
   // --- Tree node renderer ---
 
   const renderNode = useCallback(
@@ -455,6 +497,11 @@ function DataTypeEditorBody({
               onToggle={() => {}}
               label={t(`dataTypeEditor.refGroup.${data.kind}`)}
               childCount={data.children?.length ?? 0}
+              checkedState={
+                compoundEnabled && data.kind
+                  ? kindCheckedStates[data.kind]
+                  : undefined
+              }
               style={style}
             />
           </div>
@@ -487,6 +534,7 @@ function DataTypeEditorBody({
     [
       selectedIds,
       compoundEnabled,
+      kindCheckedStates,
       handleSelectPrimitive,
       handleSelectRefTarget,
       handleToggleKindGroup,
@@ -659,6 +707,7 @@ function DataTypeEditorBody({
           disableMultiSelection
           disableEdit
           padding={4}
+          onActivate={handleActivate}
         >
           {renderNode}
         </Tree>

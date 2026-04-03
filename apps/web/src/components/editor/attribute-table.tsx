@@ -15,7 +15,6 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import { Button } from "@workspace/ui/components/button"
-import { Badge } from "@workspace/ui/components/badge"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import {
   Tooltip,
@@ -34,6 +33,7 @@ import type { Attribute, MetadataKind } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useUiStore } from "@/stores/ui-store"
 import { formatRefDisplay } from "@/lib/format-ref-display"
+import { DataTypeEditorDialog } from "@/components/editor/data-type-editor-dialog"
 
 const columnHelper = createColumnHelper<Attribute>()
 
@@ -56,20 +56,26 @@ export function AttributeTable({
 }: AttributeTableProps) {
   const { t, i18n } = useTranslation()
   const [selectedRow, setSelectedRow] = useState<string | null>(null)
+  const [editingTypeAttr, setEditingTypeAttr] = useState<string | null>(null)
 
+  const model = useMetadataStore((s) => s.model)
   const {
     addAttribute,
     removeAttribute,
     reorderAttributes,
+    updateAttribute,
     addDimension,
     removeDimension,
     reorderDimensions,
+    updateDimension,
     addResource,
     removeResource,
     reorderResources,
+    updateResource,
     addTabularSectionAttribute,
     removeTabularSectionAttribute,
     reorderTabularSectionAttributes,
+    updateTabularSectionAttribute,
   } = useMetadataStore()
   const { selectField } = useUiStore()
 
@@ -175,6 +181,34 @@ export function AttributeTable({
     ]
   )
 
+  /** Атрибут, для якого зараз відкрито діалог редагування типу */
+  const editingAttribute = useMemo(
+    () => (editingTypeAttr ? attributes.find((a) => a.name === editingTypeAttr) ?? null : null),
+    [editingTypeAttr, attributes],
+  )
+
+  /** Зберігає зміни типу через відповідний store action */
+  const handleTypeUpdate = useCallback(
+    (updates: Partial<Attribute>) => {
+      if (!editingTypeAttr) return
+      if (tabularSectionName) {
+        updateTabularSectionAttribute(
+          kind, objectName, tabularSectionName, editingTypeAttr, updates,
+        )
+      } else if (field === "dimensions") {
+        updateDimension(kind, objectName, editingTypeAttr, updates)
+      } else if (field === "resources") {
+        updateResource(kind, objectName, editingTypeAttr, updates)
+      } else {
+        updateAttribute(kind, objectName, editingTypeAttr, updates)
+      }
+    },
+    [
+      kind, objectName, field, editingTypeAttr, tabularSectionName,
+      updateAttribute, updateDimension, updateResource, updateTabularSectionAttribute,
+    ],
+  )
+
   const columns = useMemo(
     () => [
       columnHelper.accessor("name", {
@@ -187,9 +221,16 @@ export function AttributeTable({
       columnHelper.accessor("type", {
         header: () => t("metadata.field.type"),
         cell: (info) => (
-          <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+          <button
+            type="button"
+            className="inline-flex cursor-pointer items-center rounded-md border bg-transparent px-1.5 py-0 text-[10px] font-semibold text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={(e) => {
+              e.stopPropagation()
+              setEditingTypeAttr(info.row.original.name)
+            }}
+          >
             {formatRefDisplay(info.row.original)}
-          </Badge>
+          </button>
         ),
         size: 130,
       }),
@@ -399,6 +440,18 @@ export function AttributeTable({
           </TableBody>
         </Table>
       </ScrollArea>
+
+      {editingAttribute && (
+        <DataTypeEditorDialog
+          open={!!editingTypeAttr}
+          onOpenChange={(open) => {
+            if (!open) setEditingTypeAttr(null)
+          }}
+          attribute={editingAttribute}
+          model={model}
+          onSave={handleTypeUpdate}
+        />
+      )}
     </div>
   )
 }

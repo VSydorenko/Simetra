@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Accordion,
@@ -6,15 +6,27 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@workspace/ui/components/accordion"
+import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { Checkbox } from "@workspace/ui/components/checkbox"
-import { FieldTypeSelect } from "@/components/editor/field-type-select"
-import { MetadataRefPicker } from "@/components/properties/metadata-ref-picker"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { PencilEdit02Icon } from "@hugeicons/core-free-icons"
+import { DataTypeEditorDialog } from "@/components/editor/data-type-editor-dialog"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 import { type FieldSelection } from "@/stores/ui-store"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
-import type { Attribute, MetadataObject } from "@simetra/core"
+import {
+  FIELD_TYPE_ICONS,
+  KIND_ICONS,
+  DEFAULT_FIELD_ICON,
+} from "@/lib/metadata-icons"
+import type { Attribute, MetadataObject, ProjectModel } from "@simetra/core"
 
 interface FieldPropertiesProps {
   selection: FieldSelection
@@ -166,7 +178,6 @@ function getFieldRole(
 }
 
 export function FieldProperties({ selection }: FieldPropertiesProps) {
-  const { t } = useTranslation()
   const model = useMetadataStore((s) => s.model)
   const {
     updateAttribute,
@@ -253,9 +264,32 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
 
   if (!object || !attribute) return null
 
-  const isRefType = attribute.type === "Ref"
-  const isStringType = attribute.type === "String"
-  const isNumericType = attribute.type === "Numeric"
+  return (
+    <FieldPropertiesInner
+      selection={selection}
+      attribute={attribute}
+      model={model}
+      objectErrors={objectErrors}
+      handleUpdate={handleUpdate}
+    />
+  )
+}
+
+function FieldPropertiesInner({
+  selection,
+  attribute,
+  model,
+  objectErrors,
+  handleUpdate,
+}: {
+  selection: FieldSelection
+  attribute: Attribute
+  model: ProjectModel
+  objectErrors: ValidationError[]
+  handleUpdate: (updates: Partial<Attribute>) => void
+}) {
+  const { t } = useTranslation()
+  const [typeEditorOpen, setTypeEditorOpen] = useState(false)
 
   return (
     <>
@@ -314,88 +348,37 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
           </AccordionContent>
         </AccordionItem>
 
-        {/* Тип даних */}
+        {/* Тип даних — readonly display + тригер діалогу */}
         <AccordionItem value="dataType">
           <AccordionTrigger className="px-3 py-2 text-xs font-medium">
             {t("properties.group.dataType")}
           </AccordionTrigger>
           <AccordionContent className="space-y-2 px-3 pb-3">
             <SettingRow label={t("metadata.field.type")}>
-              <FieldTypeSelect
-                value={attribute.type}
-                onChange={(v) => {
-                  const updates: Partial<Attribute> = { type: v }
-                  // Очищення type-specific полів при зміні типу
-                  if (v !== "Ref") {
-                    updates.ref = undefined
-                    updates.allowedTypes = undefined
-                  }
-                  if (v !== "String") {
-                    updates.length = undefined
-                  }
-                  if (v !== "Numeric") {
-                    updates.precision = undefined
-                    updates.scale = undefined
-                  }
-                  handleUpdate(updates)
-                }}
-              />
-            </SettingRow>
-            {isStringType && (
-              <SettingRow label={t("properties.field.length")}>
-                <Input
-                  type="number"
-                  className="h-7 text-xs"
-                  value={attribute.length ?? ""}
-                  min={1}
-                  onChange={(e) =>
-                    handleUpdate({
-                      length: parseInt(e.target.value, 10) || undefined,
-                    })
-                  }
-                />
-              </SettingRow>
-            )}
-            {isNumericType && (
-              <>
-                <SettingRow label={t("properties.field.precision")}>
-                  <Input
-                    type="number"
-                    className="h-7 text-xs"
-                    value={attribute.precision ?? ""}
-                    min={1}
-                    onChange={(e) =>
-                      handleUpdate({
-                        precision: parseInt(e.target.value, 10) || undefined,
-                      })
-                    }
-                  />
-                </SettingRow>
-                <SettingRow label={t("properties.field.scale")}>
-                  <Input
-                    type="number"
-                    className="h-7 text-xs"
-                    value={attribute.scale ?? ""}
-                    min={0}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      handleUpdate({
-                        scale: val === "" ? undefined : parseInt(val, 10),
-                      })
-                    }}
-                  />
-                </SettingRow>
-              </>
-            )}
-            {isRefType && (
-              <div className="space-y-1">
-                <MetadataRefPicker
-                  refValue={attribute.ref}
-                  allowedTypes={attribute.allowedTypes}
-                  onChange={handleUpdate}
-                />
+              <div className="flex items-center gap-1">
+                <TypeReadonlyDisplay attribute={attribute} />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-6 shrink-0"
+                      onClick={() => setTypeEditorOpen(true)}
+                    >
+                      <HugeiconsIcon
+                        icon={PencilEdit02Icon}
+                        size={14}
+                        className="text-muted-foreground"
+                      />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">
+                    {t("dataTypeEditor.editType")}
+                  </TooltipContent>
+                </Tooltip>
               </div>
-            )}
+            </SettingRow>
+            <TypeParamsHint attribute={attribute} />
           </AccordionContent>
         </AccordionItem>
 
@@ -484,6 +467,103 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+
+      <DataTypeEditorDialog
+        open={typeEditorOpen}
+        onOpenChange={setTypeEditorOpen}
+        attribute={attribute}
+        model={model}
+        onSave={handleUpdate}
+      />
     </>
   )
+}
+
+/** Readonly display поточного типу з іконкою */
+function TypeReadonlyDisplay({ attribute }: { attribute: Attribute }) {
+  const { t } = useTranslation()
+
+  if (attribute.type === "Ref") {
+    if (attribute.allowedTypes && attribute.allowedTypes.length > 0) {
+      return (
+        <span className="flex items-center gap-1.5 truncate text-xs">
+          <HugeiconsIcon
+            icon={FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON}
+            size={14}
+            className="shrink-0 text-muted-foreground"
+          />
+          <span className="truncate">
+            {t("dataTypeEditor.selectedCount", {
+              count: attribute.allowedTypes.length,
+            })}
+          </span>
+        </span>
+      )
+    }
+    if (attribute.ref) {
+      const kindIcon = KIND_ICONS[attribute.ref.kind]
+      return (
+        <span className="flex items-center gap-1.5 truncate text-xs">
+          <HugeiconsIcon
+            icon={kindIcon ?? FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON}
+            size={14}
+            className="shrink-0 text-muted-foreground"
+          />
+          <span className="truncate">{attribute.ref.name}</span>
+        </span>
+      )
+    }
+    return (
+      <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+        <HugeiconsIcon
+          icon={FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON}
+          size={14}
+          className="shrink-0"
+        />
+        <span className="truncate">{t("fieldType.Ref")}</span>
+      </span>
+    )
+  }
+
+  const icon = FIELD_TYPE_ICONS[attribute.type] ?? DEFAULT_FIELD_ICON
+  return (
+    <span className="flex items-center gap-1.5 truncate text-xs">
+      <HugeiconsIcon
+        icon={icon}
+        size={14}
+        className="shrink-0 text-muted-foreground"
+      />
+      <span className="truncate">{t(`fieldType.${attribute.type}`)}</span>
+    </span>
+  )
+}
+
+/** Readonly підказка параметрів типу під display value */
+function TypeParamsHint({ attribute }: { attribute: Attribute }) {
+  const { t } = useTranslation()
+
+  if (attribute.type === "String" && attribute.length != null) {
+    return (
+      <p className="text-[11px] text-muted-foreground">
+        {t("properties.field.length")}: {attribute.length}
+      </p>
+    )
+  }
+
+  if (attribute.type === "Numeric") {
+    const parts: string[] = []
+    if (attribute.precision != null)
+      parts.push(`${t("properties.field.precision")}: ${attribute.precision}`)
+    if (attribute.scale != null)
+      parts.push(`${t("properties.field.scale")}: ${attribute.scale}`)
+    if (parts.length > 0) {
+      return (
+        <p className="text-[11px] text-muted-foreground">
+          {parts.join(", ")}
+        </p>
+      )
+    }
+  }
+
+  return null
 }
