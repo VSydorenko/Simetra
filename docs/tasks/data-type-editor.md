@@ -8,7 +8,13 @@
 
 - Вибір типу — це **комплексна операція**, що торкається кількох полів атрибута одночасно: `type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`. Атомарний Save гарантує консистентність
 - Дерево метаданих у діалозі дає користувачу повний огляд доступних reference targets з піктограмами — не потрібно запам'ятовувати імена об'єктів
-- Checkbox "Складений тип" (compound type) та параметри типу (довжина, точність) в одному вікні — все як у 1С
+- Checkbox "Складений тип" (compound type = polymorphic Ref) та параметри типу (довжина, точність) в одному вікні — все як у 1С
+
+### Scope
+
+**Входить у задачу:** Редагування type-related полів атрибута (attributes, dimensions, resources, tabularSection attributes).
+
+**НЕ входить у задачу:** Constant.valueType — окремий scope. `FieldTypeSelect` залишається без змін для Constant (окреме рішення — фільтрація Ref зі списку для Constant).
 
 ### Поточний стан
 
@@ -22,42 +28,118 @@
 | `metadata-icons.ts` | `apps/web/src/lib/metadata-icons.ts` | `KIND_ICONS`, `FIELD_TYPE_ICONS`, `KIND_COLORS` |
 | `tree-builder.ts` | `apps/web/src/components/layout/tree/tree-builder.ts` | Data-builder для дерева (чистий TS, без React) |
 | `tree-types.ts` | `apps/web/src/components/layout/tree/tree-types.ts` | `TreeNodeData` інтерфейс |
+| `referenceableKindSchema` | `packages/core/src/schemas/metadata-ref.ts` | Source of truth для referenceable kinds |
+
+### Ключові рішення (прийняті на основі дослідження)
+
+| # | Рішення | Обґрунтування |
+|---|---------|---------------|
+| R1 | **Compound type = тільки polymorphic Ref** (allowedTypes). Compound primitive types — out of scope | BRD §6.2 фіксує compound тільки як Ref. Core `type: FieldType` — одиничне поле, compound primitives потребують зміни core + DDL стратегії |
+| R2 | **Core superRefine** для type-specific полів | Stale length/precision/scale без cross-field refine проходять validation. Потрібен guard на рівні схеми |
+| R3 | **REFERENCEABLE_KINDS з core**, не UI literal | `referenceableKindSchema` вже є source of truth у `packages/core/src/schemas/metadata-ref.ts` |
+| R4 | **Рефакторинг TreeNodeData** для підтримки і sidebar, і data type editor | Один shared tree model, один renderer pattern. Без ризику стилістичного розходження |
+| R5 | **react-arborist** для дерева в діалозі | Consistency з головним деревом, virtualizer, keyboard nav. Спільний TreeNodeData |
+| R6 | **Діалог = dumb component**, caller формує onSave | Routing-логіка (attribute/dimension/resource/tabularSection) залишається в caller |
+| R7 | **nonNegative** — відкладено до задачі DDL generation | Немає погодженого DDL-ефекту в BRD |
+| R8 | **i18n namespace `fieldType.*`** для всіх field type labels | Поточні raw enum strings — не user-facing якість |
 
 ---
 
-## Фаза 0: Core-модель — розширення attributeSchema (якщо потрібно)
+## Фаза 0: Core-модель та bugfixes
 
-### Аналіз поточних type-specific параметрів
-
-Поточна `attributeSchema` підтримує:
-- `String` → `length: number`
-- `Numeric` → `precision: number`, `scale: number`
-- `Ref` → `ref: MetadataRef`, `allowedTypes: MetadataRef[]`
-
-**Відсутні параметри**, що були б корисні (аналогія 1С):
-- `Integer` → **Немає параметрів**. Поточний UI помилково показує precision/scale для Integer — це баг
-- `Date` / `DateTime` → **Немає параметрів**. В 1С є "Тип дати" (Дата, Час, Дата+Час), але в Simetra Date і DateTime — окремі типи, тому додатковий параметр не потрібен
-- `Numeric` → **Немає `nonNegative`**. В 1С є checkbox "Неотрицательный", що впливає на DDL. Опціонально — можна додати в core
+**Мета:** Посилити `attributeSchema` валідацією type-specific полів. Виправити Integer bug.
 
 ### Вимоги
 
-- [ ] Виправити баг: прибрати показ precision/scale для `Integer` у FieldProperties. Integer не має type-specific параметрів
-- [ ] Очищення type-specific полів при зміні типу — перенести в Data Type Editor (замість live cleanup в FieldProperties)
+- [ ] Додати `superRefine` в `attributeSchema` (`packages/core/src/schemas/attribute.ts`):
+  - `length` дозволений **тільки** коли `type === 'String'`; інакше — issue
+  - `precision` і `scale` дозволені **тільки** коли `type === 'Numeric'`; інакше — issue
+  - Це доповнює існуючий refine для ref/allowedTypes, а не замінює його
+- [ ] Виправити `isNumericType` у `field-properties.tsx` рядок ~243: прибрати `|| attribute.type === 'Integer'`. Integer не має type-specific параметрів (BRD §6.1)
+- [ ] Оновити тести `attributeSchema` — перевірити, що stale length при type=Boolean rejected, stale precision при type=String rejected
+- [ ] `pnpm --filter @simetra/core test` — зелене
 
-### Clarify (питання перед імплементацією)
+### Ризики
 
-- [ ] **Чи додавати `nonNegative: boolean` в `attributeSchema`?**
-  - Чому це важливо: впливає на DDL генерацію (`CHECK (value >= 0)` або `UNSIGNED`)
-  - Варіанти: A) Додати зараз як optional boolean / B) Відкласти до Phase DDL generation
-  - Вплив на рішення: core-модель, BRD §6.3
+- Existing test fixtures або persisted data можуть містити stale params. Перевірити фікстури, при потребі очистити. Проєкт на етапі розробки — дані тестові, можна ігнорувати
 
 ### DoD фази 0
-- [ ] Integer не показує precision/scale
-- [ ] BRD оновлений якщо є зміни core-моделі
+- [ ] `attributeSchema` відхиляє stale length/precision/scale для невідповідного type
+- [ ] Integer не показує precision/scale у FieldProperties
+- [ ] Тести core зелені
 
 ---
 
-## Фаза 1: Компонент DataTypeEditorDialog
+## Фаза 1: Рефакторинг TreeNodeData + shared tree infrastructure
+
+**Мета:** Розширити `TreeNodeData` і tree layer так, щоб він підтримував і sidebar метаданих, і дерево вибору типу в діалозі — з єдиним renderer pattern і без стилістичного розходження.
+
+### Вимоги
+
+#### Рефакторинг TreeNodeData
+
+- [ ] Розширити `TreeNodeType` у `tree-types.ts` новими значеннями: `'primitiveType' | 'refKindGroup' | 'refTarget'`
+- [ ] Зробити `kind` **optional** у `TreeNodeData`: `kind?: MetadataKind`. Для нових node types (primitiveType) kind не має сенсу
+- [ ] Додати optional поля для type editor nodes:
+  - `fieldTypeValue?: FieldType` — для primitiveType і refTarget (яке значення type це представляє)
+  - `refTarget?: MetadataRef` — для refTarget (конкретний об'єкт посилання)
+  - `icon?: IconSvgElement` — explicit icon override (для primitive types де іконка береться з FIELD_TYPE_ICONS, а не з KIND_ICONS)
+  - `iconColor?: string` — explicit Tailwind color class override
+  - `selectable?: boolean` — чи можна вибрати цей вузол (false для refKindGroup — тільки expand)
+- [ ] Оновити всі існуючі usages в `tree-nodes.tsx` і `tree-builder.ts`, щоб `kind` доступався через optional chaining або guards по `nodeType`
+- [ ] Додати TypeScript overloads або discriminated union утиліти якщо потрібно для type safety
+
+#### Рефакторинг TreeNode renderer
+
+- [ ] Розділити `tree-nodes.tsx` на два шари:
+  - **Presentation layer** — `TreeNodePresentation`: рендер іконки + label + badge. Без CRUD, без context menu, без store access. Pure visual.
+  - **Interaction layer** — поточні `KindSectionNode`, `ObjectNode`, `GroupNode`, `FieldNode`, `TabularSectionNode`: обгортки навколо presentation + CRUD + context menu
+- [ ] Додати нові presentation-only renderers для нових node types:
+  - `PrimitiveTypeNode` — іконка з `FIELD_TYPE_ICONS` + локалізований label + radio/checkbox
+  - `RefKindGroupNode` — іконка з `KIND_ICONS` + label + expand arrow (не selectable)
+  - `RefTargetNode` — іконка kind + name об'єкта + radio/checkbox
+- [ ] Data Type Editor tree використовує ті ж presentation layers, але без interaction layer (без ContextMenu, без rename, без delete, без DnD)
+
+#### buildTypeEditorTree
+
+- [ ] Створити **експортовану** pure function `buildTypeEditorTree(model: ProjectModel, searchQuery: string): TreeNodeData[]` у `tree-builder.ts`
+- [ ] Source of truth для referenceable kinds: `referenceableKindSchema.options` з `@simetra/core` (замість локальної константи)
+- [ ] Структура дерева:
+  - Рівень 0: примітивні type nodes (`nodeType: 'primitiveType'`, `fieldTypeValue`, `icon` з `FIELD_TYPE_ICONS`, `selectable: true`)
+  - Рівень 0: reference kind groups (`nodeType: 'refKindGroup'`, `kind` = Catalog/Document/Enumeration, `icon` з `KIND_ICONS`, `iconColor` з `KIND_COLORS`, `selectable: false`)
+  - Рівень 1: reference targets (`nodeType: 'refTarget'`, `kind`, `fieldTypeValue: 'Ref'`, `refTarget: { kind, name }`, `selectable: true`)
+- [ ] Пошук: фільтрує і примітивні типи, і reference targets по name. При збігу в дочірньому — батьківський refKindGroup залишається видимим
+- [ ] Об'єкти для reference targets брати з `model` через `KIND_TO_KEY`
+
+#### Прибрати дублювання REFERENCEABLE_KINDS
+
+- [ ] Видалити `const REFERENCEABLE_KINDS` з `metadata-ref-picker.tsx`
+- [ ] Замінити на import: `import { referenceableKindSchema } from '@simetra/core'` → `referenceableKindSchema.options`
+- [ ] `buildTypeEditorTree` теж спирається на `referenceableKindSchema.options`
+
+#### Винести useAvailableObjects
+
+- [ ] Перенести `useAvailableObjects` з `metadata-ref-picker.tsx` у `apps/web/src/hooks/use-available-objects.ts` (shared hook)
+- [ ] `metadata-ref-picker.tsx` і `DataTypeEditorDialog` обидва імпортують з shared hook
+
+### Ризики
+
+- Рефакторинг `kind` на optional торкається ~50 місць у `tree-nodes.tsx`. Потрібен guard `data.kind!` або narrowing по `nodeType` для metadata-specific вузлів. Зміна механічна, але об'ємна
+- Рефакторинг renderer на два шари (presentation + interaction) — більший scope, але це інвестиція що прибирає дублювання надалі
+
+### DoD фази 1
+- [ ] `TreeNodeData` підтримує нові nodeTypes без ламання існуючого sidebar
+- [ ] `buildTypeEditorTree` повертає дерево primitive types + ref kind groups + ref targets
+- [ ] Пошук по дереву type editor працює
+- [ ] Presentation layer відокремлений від interaction layer у tree-nodes
+- [ ] `REFERENCEABLE_KINDS` — одне джерело з core
+- [ ] `useAvailableObjects` — shared hook
+- [ ] Sidebar метаданих візуально і функціонально не змінився (regression-free)
+- [ ] `pnpm lint && pnpm typecheck` — зелене
+
+---
+
+## Фаза 2: Компонент DataTypeEditorDialog
 
 **Мета:** Створити модальний діалог "Редагування типу даних" за патерном `StandardAttributesDialog` (draft state + revisionKey + Save/Cancel).
 
@@ -66,28 +148,30 @@
 ```
 ┌─────────────── Редагування типу даних ───────────────┐
 │                                                       │
-│  ☐ Складений тип                                      │
+│  ☐ Складений тип (Polymorphic Ref)                    │
 │                                                       │
-│  🔍 Пошук (Ctrl+Alt+M)                               │
+│  🔍 Пошук                                             │
 │  ┌─────────────────────────────────────────────────┐  │
-│  │  ☐ 183 Число                                    │  │
-│  │  ☐ abc Строка                                   │  │
-│  │  ☐ 31 Дата                                      │  │
-│  │  ☐ ✓  Булево                                    │  │
-│  │  ▶ 📖 СправочникПосилання                       │  │
-│  │    ☐ 📖 Номенклатура                            │  │
-│  │    ☐ 📖 Контрагенти                             │  │
-│  │    ☐ 📖 Склади                                  │  │
-│  │  ▶ 📄 ДокументПосилання                         │  │
-│  │    ☐ 📄 ЗамовленняПокупця                       │  │
-│  │    ☐ 📄 Оплата                                  │  │
-│  │  ▶ 📋 ПерелічуванняПосилання                    │  │
-│  │    ☐ 📋 ТипиЦін                                 │  │
+│  │  ○ 🔤 Рядок                                     │  │
+│  │  ○ 📝 Текст                                     │  │
+│  │  ○ # Ціле число                                  │  │
+│  │  ○ # Число                                       │  │
+│  │  ○ ✓ Булево                                      │  │
+│  │  ○ 📅 Дата                                       │  │
+│  │  ○ 📅 Дата і час                                 │  │
+│  │  ○ 🔑 UUID                                       │  │
+│  │  ○ 📎 Двійкові дані                              │  │
+│  │  ▶ 📖 ДовідникПосилання                          │  │
+│  │    ○ 📖 Номенклатура                             │  │
+│  │    ○ 📖 Контрагенти                              │  │
+│  │  ▶ 📄 ДокументПосилання                          │  │
+│  │    ○ 📄 ЗамовленняПокупця                        │  │
+│  │  ▶ 📋 ПеречисленняПосилання                      │  │
+│  │    ○ 📋 ТипиЦін                                  │  │
 │  └─────────────────────────────────────────────────┘  │
 │                                                       │
 │  ─── Параметри типу ──────────────────────────────    │
-│  Довжина:  [10  ▼]     Точність: [0  ▼]              │
-│  ☐ Невід'ємний                                        │
+│  Довжина:  [10  ]                                     │
 │                                                       │
 │                          [ Скасувати ]  [ Зберегти ]  │
 └───────────────────────────────────────────────────────┘
@@ -98,219 +182,247 @@
 #### Структура компонента
 
 - [ ] Створити `apps/web/src/components/editor/data-type-editor-dialog.tsx`
-- [ ] Використати патерн wrapper + body з `revisionKey` (як у `StandardAttributesDialog`)
-- [ ] Draft state: при відкритті — `structuredClone` поточних значень type-related полів атрибута (`type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`). При Save — передати всі зміни одним patch. При Cancel — нічого не зберігати
+- [ ] Патерн wrapper + body з `revisionKey` (як у `StandardAttributesDialog`):
+  - Wrapper: `Dialog` + `revisionKey` state, інкрементується при відкритті
+  - Body: монтується з `key={revisionKey}`, ініціалізує draft при mount
+- [ ] Draft state: при відкритті — `structuredClone` поточних type-related полів атрибута (`type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`). При Save — передати всі зміни одним patch. При Cancel — нічого не зберігати
 - [ ] Props: `open`, `onOpenChange`, `attribute: Attribute` (поточний стан), `onSave: (updates: Partial<Attribute>) => void`
-- [ ] isDirty — порівняння draft з початковими значеннями
+- [ ] `isDirty` — `JSON.stringify(draft) !== JSON.stringify(snapshot)` у useMemo
+- [ ] Діалог — **dumb component**: не знає про store, не знає про field role. Caller формує `onSave` callback з правильним store dispatch
 
-#### Чекбокс "Складений тип" (compound type)
+#### Чекбокс "Складений тип" (compound type = polymorphic Ref)
 
 - [ ] Вгорі діалогу — чекбокс "Складений тип"
-- [ ] Увімкнений "Складений тип" дозволяє вибрати **кілька** типів одночасно (мультиселект): кілька примітивних типів + кілька reference targets. Це аналог "Составной тип данных" у 1С
-- [ ] Вимкнений "Складений тип" дозволяє вибрати тільки **один** тип (радіо-кнопка/одиничний вибір)
-- [ ] Перемикання compound → single: якщо вибрано більше одного — показати підтвердження або зберегти перший вибраний
+- [ ] Увімкнений "Складений тип" дозволяє обрати **кілька reference targets** одночасно (мультиселект). Примітивні типи стають недоступними (disabled) — compound = тільки polymorphic Ref
+- [ ] Вимкнений "Складений тип" дозволяє вибрати **один** тип (радіо-кнопка/одиничний вибір): або примітивний, або один reference target
+- [ ] Перемикання compound → single: якщо обрано кілька targets — зберегти перший
+- [ ] Перемикання single → compound: якщо обрано примітивний тип — скинути вибір; якщо обрано single ref — перенести в allowedTypes
 
-#### Область вибору типу — дерево (основна секція)
+#### Область вибору типу — react-arborist дерево
 
-- [ ] Побудувати дерево з двома рівнями:
-  - **Рівень 1 — примітивні типи**: плоский список з піктограмами з `FIELD_TYPE_ICONS` (Число, Строка, Текст, Дата, ДатаЧас, Булево, UUID, Двійкові дані)
-  - **Рівень 2 — reference kinds**: розгортаються як дерева, де kind-node = "ДовідникПосилання" / "ДокументПосилання" / "ПеречисленняПосилання" (з `KIND_ICONS`), а дочірні — конкретні обʼєкти з поточної моделі
-- [ ] Для побудови reference-дерева — reuse data logic з `tree-builder.ts` (функція `buildTreeData` або витягти utility для отримання обʼєктів по kind).  Самі обʼєкти брати з `useMetadataStore((s) => s.model)` через `KIND_TO_KEY`
-- [ ] Піктограми: використати `FIELD_TYPE_ICONS` для примітивів та `KIND_ICONS` для reference groups. Для окремих reference targets — іконку kind батьківського вузла
-- [ ] Колір піктограм reference kinds — з `KIND_COLORS`
-- [ ] Пошук (CommandInput або окремий Input зверху) — фільтрує і примітивні типи, і reference targets по name
-- [ ] react-arborist для дерева — consistency з головним деревом метаданих. Але без context menu, без rename, без delete, без drag-and-drop — тільки вибір
+- [ ] Використати `buildTypeEditorTree` з Фази 1 для побудови даних дерева
+- [ ] react-arborist з shared `TreeNodeData` і presentation renderers з Фази 1
+- [ ] Дерево ізольоване: expanded/selected state — тільки локальний (useState). Не писати в ui-store
+- [ ] Без context menu, без rename, без delete, без DnD — тільки вибір і expand/collapse
 
 #### Режим single type (compound type вимкнений)
 
 - [ ] Радіо-вибір: клік на елемент — обирає його, знімає з попереднього
 - [ ] Клік на примітивний тип → draft: `type = вибраний`, `ref = undefined`, `allowedTypes = undefined`
-- [ ] Клік на reference target (конкретний обʼєкт) → draft: `type = "Ref"`, `ref = { kind, name }`, `allowedTypes = undefined`
-- [ ] Клік на reference kind node (наприклад "ДовідникПосилання") — **розгортає** групу, не обирає
-- [ ] Візуально — виділення radio-style (кружок або підсвітка)
+- [ ] Клік на reference target → draft: `type = "Ref"`, `ref = { kind, name }`, `allowedTypes = undefined`
+- [ ] Клік на reference kind group → тільки expand/collapse, не обирає
+- [ ] Візуально — radio-style виділення
 
 #### Режим compound type (складений тип увімкнений)
 
-- [ ] Мультиселект через чекбокси на кожному елементі
-- [ ] Можна обрати кілька примітивних типів та/або кілька reference targets одночасно
-- [ ] Якщо обрано хоча б один reference target — draft: `type = "Ref"`, `allowedTypes = [обрані ref targets]`
-- [ ] Якщо обрано тільки примітивні — зберегти перший обраний як `type`, решту... (Clarify — див. нижче)
+- [ ] Мультиселект через чекбокси на reference target nodes
+- [ ] Примітивні типи — disabled (не можна обрати)
+- [ ] Обрані targets → draft: `type = "Ref"`, `allowedTypes = [обрані ref targets]`, `ref = undefined`
 - [ ] Чекбокс на kind-node ("ДовідникПосилання") — обирає/знімає **всі** reference targets цього kind
+
+#### Централізований cleanup type-specific полів
+
+- [ ] При зміні типу в draft — автоматичне очищення несумісних полів:
+  - `String` → зберегти `length`, очистити `precision`, `scale`, `ref`, `allowedTypes`
+  - `Numeric` → зберегти `precision`, `scale`, очистити `length`, `ref`, `allowedTypes`
+  - `Ref` (single) → зберегти `ref`, очистити `length`, `precision`, `scale`, `allowedTypes`
+  - `Ref` (compound) → зберегти `allowedTypes`, очистити `length`, `precision`, `scale`, `ref`
+  - Будь-який інший (UUID, Boolean, Text, Date, DateTime, Binary, Integer) → очистити всі type-specific поля
+- [ ] Cleanup виконується в draft state, до Save — в store потрапляють тільки валідні комбінації
 
 #### Параметри типу (нижня секція)
 
 - [ ] Динамічна секція внизу діалогу — показує параметри залежно від обраного типу
 - [ ] `String` → поле "Довжина" (Input type="number", min=1)
 - [ ] `Numeric` → поля "Точність" (precision) та "Масштаб" (scale)
-- [ ] `Integer` → **немає параметрів** (виправлення поточного бага)
-- [ ] `Ref` (single) → readonly відображення обраного target (`CatalogRef.Products`)
-- [ ] `Ref` (compound) → readonly відображення кількості обраних (`AnyRef(3)`)
+- [ ] `Integer` → **немає параметрів**
+- [ ] `Ref` (single) → readonly display обраного target (локалізований `formatTypeLabel`)
+- [ ] `Ref` (compound / allowedTypes) → readonly display кількості обраних
 - [ ] Інші типи (UUID, Boolean, Text, Date, DateTime, Binary) → секція прихована або текст "Додаткових налаштувань немає"
 - [ ] Значення параметрів зберігаються в draft і передаються разом із Save
-- [ ] При зміні типу — параметри попереднього типу очищуються з draft
 
 #### Footer (кнопки)
 
 - [ ] "Скасувати" — закрити без збереження
-- [ ] "Зберегти" — apply draft як один `Partial<Attribute>` update, закрити діалог
+- [ ] "Зберегти" — apply draft як один `Partial<Attribute>` update (включаючи поля з `undefined` для explicit cleanup), закрити діалог
 - [ ] "Зберегти" disabled якщо `!isDirty`
 
-### Clarify (питання перед імплементацією)
+### Ризики
 
-- [ ] **Compound primitive types — як зберігати в core?**
-  - Чому це важливо: Поточна `attributeSchema` підтримує тільки один `type: FieldType`. Compound type з кількома примітивами (наприклад Число + Строка) не вкладається в поточну модель
-  - Варіанти: A) MVP без compound primitives — compound type тільки для references (allowedTypes), одиничний тип для примітивів / B) Розширити core: `type: FieldType | FieldType[]` або окрема структура
-  - Вплив на рішення: core-модель, BRD, серіалізація
-  - **Рекомендація:** Варіант A для MVP. Compound тип у 1С прив'язаний до runtime variant-типу. Simetra генерує DDL, де кожна колонка має один SQL-тип. Compound primitives потребують окремого архітектурного рішення (union column, JSON, окремі колонки). Тож compound type поки = reference polymorphism (allowedTypes)
-
-- [ ] **Чи потрібно перевикористати react-arborist чи можна простіший компонент?**
-  - Чому це важливо: react-arborist — потужний але складний. Для діалогу без DnD, rename, delete може бути overhead
-  - Варіанти: A) react-arborist (consistency з головним деревом) / B) рекурсивний Disclosure/Collapsible / C) shadcn Accordion + flat list
-  - Вплив на рішення: UX consistency, складність, performance
-  - **Рекомендація:** Варіант A, якщо є виграш у поведінці (virtualizer, keyboard nav). Варіант B — якщо обʼєктів менше 200 і virtualizer не потрібен
-
-- [ ] **Де показувати іконку відкриття діалогу?**
-  - Варіанти: A) Кнопка "..." біля FieldTypeSelect / B) Замінити FieldTypeSelect на кнопку-тригер / C) Обидва варіанти — Select для швидкої зміни + кнопка для повного діалогу
-  - Вплив на рішення: UX flow
-  - **Рекомендація:** Варіант B — FieldTypeSelect в правій панелі стає readonly display з кнопкою відкриття діалогу. Як у 1С — поле "Тип" відображає поточне значення і має кнопку "..." для відкриття форми редагування
-
-### DoD фази 1
-- [ ] Діалог відкривається з правої панелі (FieldProperties)
-- [ ] Дерево показує примітивні типи + reference kinds з дочірніми обʼєктами
-- [ ] Піктограми для всіх типів відповідають `FIELD_TYPE_ICONS` і `KIND_ICONS`
-- [ ] Single mode: вибір одного типу працює
-- [ ] Compound mode: мультиселект reference targets працює
-- [ ] Параметри типу відображаються і редагуються в нижній секції
-- [ ] Save — атомарний patch для `type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`
-- [ ] Cancel — жодних змін
-- [ ] Пошук по дереву працює
-
----
-
-## Фаза 2: Інтеграція з FieldProperties
-
-**Мета:** Замінити поточний inline flow (FieldTypeSelect + MetadataRefPicker + окремі поля параметрів) на єдиний тригер діалогу.
-
-### Вимоги
-
-- [ ] У FieldProperties секція "Тип даних" замінюється на:
-  - Readonly display поточного типу (з піктограмою) + кнопка "..." (або іконка Edit) для відкриття `DataTypeEditorDialog`
-  - Формат display: для примітивів — назва типу, для ref — `CatalogRef.Products`, для polymorphic — `AnyRef(3)`
-  - Використати існуючу функцію `formatRefDisplay` з `apps/web/src/lib/format-ref-display.ts`
-- [ ] Видалити з FieldProperties:
-  - Inline `FieldTypeSelect` (Select компонент)
-  - Inline поля `length`, `precision`, `scale`
-  - Inline `MetadataRefPicker`
-- [ ] Зберегти readonly відображення параметрів типу під display value (як підказка):
-  - String → "Довжина: 50"
-  - Numeric → "Точність: 10, Масштаб: 2"
-  - Ref → display target name
-- [ ] При зміні type через діалог — store отримує single update з усіма полями, очищення непотрібних полів (length при зміні з String на Boolean тощо) відбувається всередині діалога перед Save
-- [ ] Якщо діалог використовується також із `AttributeTable` (центральна зона) — забезпечити відкриття з двох точок входу
-
-### Clarify
-
-- [ ] **Чи залишити FieldTypeSelect як fallback / quick-switch?**
-  - Варіанти: A) Тільки діалог — як у 1С / B) Select для примітивів + діалог для повного редагування
-  - Вплив на рішення: UX, кількість кліків для простої зміни String → Integer
-  - **Рекомендація:** Варіант A для consistency з 1С. Один клік на "..." → діалог → вибір → Зберегти. Це 3 кліки vs 2, але діалог дає повну картину і уникає помилок
+- Compound mode disabled primitives — може здивувати користувача. Потрібен tooltip "Складений тип підтримує тільки посилання"
+- react-arborist у модальному вікні: треба перевірити фокус-менеджмент (Dialog trap vs tree keyboard nav)
 
 ### DoD фази 2
-- [ ] FieldProperties не містить inline type-editing UI
-- [ ] Поле "Тип" показує readonly display + кнопку відкриття діалогу
-- [ ] Зміна типу через діалог атомарно оновлює store
-- [ ] Type-specific параметри очищуються автоматично при зміні типу
+- [ ] Діалог відкривається, показує дерево типів + параметри
+- [ ] Single mode: вибір одного типу працює коректно
+- [ ] Compound mode: мультиселект reference targets працює
+- [ ] Cleanup type-specific полів — автоматичний
+- [ ] Save — атомарний patch для всіх type-related полів
+- [ ] Cancel — жодних змін
+- [ ] Пошук по дереву працює
+- [ ] Presentation layer з Фази 1 — стилістично ідентичний sidebar
 
 ---
 
-## Фаза 3: Reuse дерева метаданих
+## Фаза 3: Інтеграція з FieldProperties та AttributeTable
 
-**Мета:** Дерево в діалозі максимально перевикористовує data layer головного дерева.
-
-### Що можна перевикористати
-
-| Артефакт | Файл | Що береться |
-|----------|------|-------------|
-| `KIND_ICONS` | `metadata-icons.ts` | Піктограми для reference kind groups |
-| `FIELD_TYPE_ICONS` | `metadata-icons.ts` | Піктограми для примітивних типів |
-| `KIND_COLORS` | `metadata-icons.ts` | Кольори для kind у дереві |
-| `KIND_TO_KEY` | `metadata-defaults.ts` | Маппінг kind → model key |
-| `REFERENCEABLE_KINDS` | `metadata-ref-picker.tsx` | `['Catalog', 'Document', 'Enumeration']` |
-| `useAvailableObjects` | `metadata-ref-picker.tsx` | Хук для отримання MetadataRef[] |
-| Стилістика вузлів | `tree-nodes.tsx` | Відповідність іконок, кольорів, відступів |
-
-### Що НЕ можна перевикористати (нова реалізація)
-
-| Артефакт | Причина |
-|----------|---------|
-| `tree-panel.tsx` | Прив'язаний до ui-store, tab management, delete dialog |
-| `tree-nodes.tsx` | CRUD логіка, context menus, rename — не потрібні в діалозі |
-| `tree-builder.ts` | Будує повне дерево з attributes — в діалозі потрібні тільки objects без полів |
+**Мета:** Замінити поточний inline type-editing flow на єдиний тригер діалогу. Додати entry point з таблиці атрибутів.
 
 ### Вимоги
 
-- [ ] Створити utility `buildTypeEditorTree(model: MetadataModel): TypeEditorTreeNode[]` або аналогічну функцію, що будує дерево тільки з:
-  - Примітивних типів (плоский список)
-  - Reference kind groups → дочірні object nodes (без attributes/tabularSections)
-- [ ] Вирівняти стилістику вузлів із головним деревом: ті ж іконки, ті ж кольори, той же spacing
-- [ ] Винести `REFERENCEABLE_KINDS` як shared constant (зараз дублюється в `metadata-ref-picker.tsx`)
+#### FieldProperties — readonly display + тригер діалогу
+
+- [ ] Секція "Тип даних" у FieldProperties замінюється на:
+  - Readonly display поточного типу (з піктограмою) + кнопка "..." для відкриття `DataTypeEditorDialog`
+  - Формат display: локалізований через `formatTypeLabel` (Фаза 4)
+  - Під display value — readonly підказка параметрів: String → "Довжина: 50", Numeric → "Точність: 10, Масштаб: 2"
+- [ ] Видалити з FieldProperties inline type-editing UI:
+  - `FieldTypeSelect` (Select компонент) — прибрати import і usage
+  - Inline поля `length`, `precision`, `scale`
+  - Inline `MetadataRefPicker`
+- [ ] `onSave` callback для діалогу формується в FieldProperties з використанням існуючого `handleUpdate` (який вже робить routing по field role)
+- [ ] `FieldTypeSelect` **залишається** як компонент — він використовується для Constant.valueType в `object-properties.tsx`
+
+#### AttributeTable — entry point з таблиці
+
+- [ ] В колонці "Тип" таблиці реквізитів — зробити type cell clickable
+- [ ] Клік на type badge → відкриває `DataTypeEditorDialog` для цього атрибута
+- [ ] Потрібен `stopPropagation` на cell level щоб не зламати row selection
+- [ ] `onSave` callback формується з координатами атрибута (kind, objectName, fieldName, field role)
+- [ ] Після Save — таблиця оновлюється автоматично (reactive через store)
+
+### Ризики
+
+- FieldProperties містить складну routing-логіку (`getFieldRole` → dispatch до різних store methods). Діалог не повинен дублювати її — приймає готовий onSave
+- Click на type cell vs row selection: потрібен окремий event handling на cell рівні
 
 ### DoD фази 3
-- [ ] Дерево в діалозі візуально відповідає головному дереву
-- [ ] Data layer не дублює tree-builder.ts
-- [ ] `REFERENCEABLE_KINDS` — one source of truth
+- [ ] FieldProperties — readonly display типу + кнопка "..." → діалог
+- [ ] FieldProperties не містить inline type-editing UI
+- [ ] AttributeTable — клік на type badge відкриває діалог
+- [ ] Два entry points працюють: права панель і таблиця
+- [ ] Зміна типу через діалог атомарно оновлює store
+- [ ] Constant.valueType flow не зачеплено (FieldTypeSelect залишається)
 
 ---
 
-## Фаза 4: Інтеграція з AttributeTable (центральна зона)
+## Фаза 4: i18n та user-facing display
 
-**Мета:** Додати можливість відкрити діалог безпосередньо з таблиці реквізитів.
+**Мета:** Додати локалізацію для field types і створити user-facing formatter.
 
 ### Вимоги
 
-- [ ] В колонці "Тип" таблиці реквізитів — clickable display значення з іконкою
-- [ ] Клік на тип у таблиці → відкриває `DataTypeEditorDialog` для цього атрибута
-- [ ] Після Save — таблиця оновлюється автоматично (reactive через store)
-- [ ] Зберегти також відкриття діалогу через праву панель (два entry points)
+#### i18n namespace fieldType
+
+- [ ] Додати в `apps/web/src/i18n/locales/uk.json`:
+  ```
+  "fieldType": {
+    "UUID": "UUID",
+    "String": "Рядок",
+    "Text": "Текст",
+    "Integer": "Ціле число",
+    "Numeric": "Число",
+    "Boolean": "Булево",
+    "Date": "Дата",
+    "DateTime": "Дата і час",
+    "Binary": "Двійкові дані",
+    "Ref": "Посилання"
+  }
+  ```
+- [ ] Додати в `apps/web/src/i18n/locales/en.json`:
+  ```
+  "fieldType": {
+    "UUID": "UUID",
+    "String": "String",
+    "Text": "Text",
+    "Integer": "Integer",
+    "Numeric": "Numeric",
+    "Boolean": "Boolean",
+    "Date": "Date",
+    "DateTime": "DateTime",
+    "Binary": "Binary",
+    "Ref": "Reference"
+  }
+  ```
+
+#### i18n ключі для діалогу
+
+- [ ] `dataTypeEditor.title` — "Редагування типу даних" / "Data Type Editor"
+- [ ] `dataTypeEditor.compoundType` — "Складений тип" / "Compound type"
+- [ ] `dataTypeEditor.compoundTooltip` — "Складений тип підтримує тільки посилання" / "Compound type supports references only"
+- [ ] `dataTypeEditor.search` — "Пошук типу" / "Search type"
+- [ ] `dataTypeEditor.typeParams` — "Параметри типу" / "Type parameters"
+- [ ] `dataTypeEditor.noParams` — "Додаткових налаштувань немає" / "No additional settings"
+- [ ] `dataTypeEditor.refGroup.Catalog` — "ДовідникПосилання" / "CatalogRef"
+- [ ] `dataTypeEditor.refGroup.Document` — "ДокументПосилання" / "DocumentRef"
+- [ ] `dataTypeEditor.refGroup.Enumeration` — "ПеречисленняПосилання" / "EnumerationRef"
+
+#### User-facing formatter formatTypeLabel
+
+- [ ] Створити `apps/web/src/lib/format-type-label.ts` — user-facing formatter:
+  - Примітивний тип → `t('fieldType.String')` → "Рядок"
+  - Single ref → `t('fieldType.Ref') + ': ' + ref.name` → "Посилання: Products"
+  - Polymorphic ref → `t('fieldType.Ref') + ' (' + count + ')'` → "Посилання (3)"
+  - Незавершений Ref → `t('fieldType.Ref')` → "Посилання"
+- [ ] Використовувати у: readonly display FieldProperties, Data Type Editor dialog, AttributeTable badge
+- [ ] `formatRefDisplay` залишити для технічного display (tree field nodes де `CatalogRef.Products` стиль доречний)
+
+### Ризики
+
+- Масив змін в locale файлах. Потрібна координація з усіма місцями де зараз raw enum strings
+- `formatTypeLabel` залежить від `t()` — тобто це React-тільки helper (через useTranslation). Для pure contexts можна передавати `t` як параметр
 
 ### DoD фази 4
-- [ ] Клік на тип в AttributeTable відкриває діалог
-- [ ] Два entry points: таблиця і права панель
+- [ ] `fieldType.*` namespace у uk.json та en.json
+- [ ] `dataTypeEditor.*` ключі у обох locales
+- [ ] `formatTypeLabel` використовується у FieldProperties, AttributeTable, DataTypeEditorDialog
+- [ ] Primitive type labels локалізовані у дереві діалогу
 
 ---
 
-## Фаза 5: Тести та i18n
+## Фаза 5: Тести
+
+**Мета:** Покрити тестами нову функціональність.
 
 ### Вимоги
 
-- [ ] Додати i18n ключі для нового діалогу (uk + en):
-  - `dataTypeEditor.title` — "Редагування типу даних"
-  - `dataTypeEditor.compoundType` — "Складений тип"
-  - `dataTypeEditor.search` — "Пошук"
-  - `dataTypeEditor.typeParams` — "Параметри типу"
-  - `dataTypeEditor.noParams` — "Додаткових налаштувань немає"
-  - `dataTypeEditor.refGroup.Catalog` — "ДовідникПосилання"
-  - `dataTypeEditor.refGroup.Document` — "ДокументПосилання"
-  - `dataTypeEditor.refGroup.Enumeration` — "ПеречисленняПосилання"
-  - `dataTypeEditor.nonNegative` — "Невідʼємний" (якщо включено)
-- [ ] Unit тести для `buildTypeEditorTree`:
-  - Всі примітивні типи присутні
-  - Reference kinds показують лише REFERENCEABLE_KINDS
-  - Обʼєкти беруться з model
-  - Пошук фільтрує коректно
-- [ ] Компонентні тести для `DataTypeEditorDialog`:
-  - Single mode: вибір примітивного типу → draft оновлюється
-  - Single mode: вибір reference target → draft = `{ type: "Ref", ref: MetadataRef }`
-  - Compound mode: мультиселект references → draft = `{ type: "Ref", allowedTypes: MetadataRef[] }`
-  - Save → onSave викликається з правильним patch
-  - Cancel → onSave не викликається
-  - Зміна типу очищує непотрібні параметри
-  - isDirty правильно обчислюється
+#### Unit тести core
+
+- [ ] `attributeSchema` — stale params rejected:
+  - `{ type: 'Boolean', length: 50 }` → issue
+  - `{ type: 'String', precision: 10 }` → issue
+  - `{ type: 'String', length: 50 }` → pass
+  - `{ type: 'Numeric', precision: 10, scale: 2 }` → pass
+
+#### Unit тести buildTypeEditorTree
+
+- [ ] Всі примітивні типи присутні (9 шт: UUID..Binary)
+- [ ] Reference kinds = тільки referenceable (Catalog, Document, Enumeration)
+- [ ] Об'єкти беруться з model — якщо в model 2 catalogs, в дереві 2 ref targets під CatalogRef
+- [ ] Пошук фільтрує примітиви і ref targets по name
+- [ ] Refactor: sidebar tree не зламаний — buildTreeData повертає ті ж результати
+
+#### Компонентні тести DataTypeEditorDialog
+
+- [ ] Single mode: вибір примітивного типу → draft оновлюється
+- [ ] Single mode: вибір reference target → draft = `{ type: "Ref", ref: MetadataRef }`
+- [ ] Compound mode: мультиселект references → draft = `{ type: "Ref", allowedTypes: MetadataRef[] }`
+- [ ] Compound mode: примітивні типи disabled
+- [ ] Save → onSave викликається з правильним patch (включаючи undefined для cleanup)
+- [ ] Cancel → onSave не викликається
+- [ ] Зміна типу очищує непотрібні параметри (centralized cleanup)
+- [ ] isDirty правильно обчислюється
+- [ ] Переключення compound → single зберігає перший target
+
+#### Фінальна перевірка
+
 - [ ] `pnpm lint && pnpm typecheck && pnpm test` — все зелене
 
 ### DoD фази 5
-- [ ] i18n ключі додані в uk.json та en.json
-- [ ] Тести дерева та діалогу проходять
+- [ ] Core тести stale params
+- [ ] Tree builder тести
+- [ ] Dialog тести
+- [ ] Sidebar regression test
 - [ ] Lint + typecheck + tests — green
 
 ---
@@ -319,27 +431,31 @@
 
 ### Draft state + revisionKey
 
-Патерн з `StandardAttributesDialog`: при відкритті діалогу інкрементувати `revisionKey`, що скидає внутрішній body компонент. Draft ініціалізується з `structuredClone` поточних type-related полів атрибута. `isDirty` обчислюється порівнянням draft із snapshot. Save комітить всі зміни одним patch.
-
-```
-Файл-еталон: apps/web/src/components/editor/standard-attributes-dialog.tsx
-```
+Патерн з `StandardAttributesDialog` (файл-еталон: `apps/web/src/components/editor/standard-attributes-dialog.tsx`):
+- Wrapper інкрементує `revisionKey` при відкритті
+- Body монтується з `key={revisionKey}` — hard reset draft
+- Draft: `structuredClone` type-related полів
+- `isDirty`: `JSON.stringify(draft) !== JSON.stringify(snapshot)` у useMemo
+- Save передає всі зміни одним patch
 
 ### Atomic type update
 
-При Save діалог формує `Partial<Attribute>` що включає **всі** type-related поля: `type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`. Навіть якщо деякі стають `undefined` — їх потрібно явно передати, щоб store очистив попередні значення. Це усуває потребу в cleanup-логіці у FieldProperties.
+При Save діалог формує `Partial<Attribute>` що включає **всі** type-related поля: `type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`. Навіть якщо деякі стають `undefined` — їх потрібно явно передати, щоб `Object.assign` у store поставив `undefined`, а серіалізатор потім їх опустить.
 
-### Піктограми з metadata-icons.ts
+### Presentation + Interaction layers у tree
 
-`FIELD_TYPE_ICONS` і `KIND_ICONS` — єдине джерело піктограм для типів. Діалог повинен використовувати ті ж самі icon records, а не імпортувати hugeicons напряму. Це гарантує синхронність із головним деревом.
+Tree renderer розділений на:
+- **Presentation** — pure visual: іконка, label, badge, indent, expand arrow. Без store, без CRUD
+- **Interaction** — обгортка: ContextMenu, onClick для select/open-tab, rename, delete, add
 
-### KIND_COLORS для reference groups
+Data Type Editor використовує Presentation layer напряму, без Interaction layer.
 
-Reference kind nodes у дереві — зафарбовувати тими ж кольорами, що й секції головного дерева (KIND_COLORS). Це створює візуальну когерентність.
+### Source of truth: core → UI
 
-### Readonly display type у FieldProperties
-
-Після заміни FieldTypeSelect на readonly display, використовувати `formatRefDisplay` для генерації display value. Для примітивних типів — просто назву типу. Рядок із піктограмою та кнопкою "..." — один SettingRow.
+- Field types: `fieldTypeSchema` з `@simetra/core`
+- Referenceable kinds: `referenceableKindSchema.options` з `@simetra/core`
+- Іконки/кольори: `FIELD_TYPE_ICONS`, `KIND_ICONS`, `KIND_COLORS` з `metadata-icons.ts`
+- Model access: `KIND_TO_KEY` з `metadata-defaults.ts`
 
 ---
 
@@ -347,35 +463,39 @@ Reference kind nodes у дереві — зафарбовувати тими ж 
 
 ### ❌ Live update без Save/Cancel для комплексного вибору типу
 
-Поточний flow: FieldTypeSelect → onChange → instant store write. Потім окремо параметри типу. Це спричиняє проміжні невалідні стани (наприклад, тип змінено на String, але length ще не задано). Діалог із draft state вирішує цю проблему.
+Поточний flow: FieldTypeSelect → onChange → instant store write. Потім окремо параметри типу. Проміжні невалідні стани. Діалог із draft state вирішує це.
 
 ### ❌ Окремий Select для типу + Popover для reference
 
-Розмежування "тип поля" та "якісь об'єкт посилається" — штучне. У 1С це один потік: вибрав "СправочникПосилання.Номенклатура" — і тип, і target задані одночасно. Діалог об'єднує ці два кроки.
+У 1С це один потік: вибрав "СправочникПосилання.Номенклатура" — і тип, і target задані одночасно.
 
-### ❌ Дублювання tree-builder.ts для діалогу
+### ❌ Compound primitive types
 
-Не копіювати `buildTreeData`. Створити **окрему** utility function що бере model і будує спрощене дерево без attributes/tabularSections. Використовувати shared constants (`KIND_TO_KEY`, `REFERENCEABLE_KINDS`).
+BRD визначає compound тільки як polymorphic Ref. Core model не підтримує `type: FieldType[]`. Compound primitives потребують окремого архітектурного рішення і DDL стратегії.
+
+### ❌ Окремий tree model для діалогу (стилістичне розходження)
+
+Не створювати паралельний `TypeEditorNode` тип. Одна `TreeNodeData` для sidebar і для діалогу. Єдиний presentation layer забезпечує візуальну когерентність.
 
 ### ❌ Прив'язка дерева діалогу до ui-store
 
-Дерево в діалозі — **ізольоване**. Його expanded/selected state — тільки локальний (useState). Не писати в ui-store.expandedTreeNodes і не читати з нього.
+Дерево в діалозі — ізольоване. expanded/selected state — тільки локальний useState. Не писати в ui-store.
 
-### ❌ Context menu, rename, delete у дереві діалогу
+### ❌ REFERENCEABLE_KINDS як UI literal
 
-Дерево діалогу — read-only selector. Ніяких CRUD операцій. Тільки вибір типу.
-
-### ❌ Копіювання стилів tree-nodes.tsx
-
-Не дублювати JSX з tree-nodes.tsx. Створити окремий renderer для діалогу, що використовує ті ж icons/colors, але набагато простіший (без actionButtons, без RenameInput, без isEditing).
+Source of truth — `referenceableKindSchema` з `@simetra/core`. Не дублювати в UI.
 
 ### ❌ Integer з precision/scale
 
-Integer — це цілочисловий тип. Precision/scale — властивість Numeric. Поточний UI помилково показує їх для Integer. Це потрібно виправити.
+Integer — цілочисловий тип. Precision/scale — тільки Numeric. BRD §6.1 explicit.
 
 ### ❌ Hardcoded type names замість i18n
 
-Усі labels типів — через t('fieldType.String'), t('fieldType.Numeric') тощо. Не хардкодити "Число", "Строка".
+Усі user-facing labels типів — через `t('fieldType.String')`. Технічний display (`CatalogRef.Products`) — тільки у tree field nodes через `formatRefDisplay`.
+
+### ❌ Діалог знає про store routing
+
+Діалог приймає `onSave: (updates) => void`. Не знає чи це attribute, dimension, resource чи tabularSection. Caller формує callback.
 
 ---
 
@@ -384,20 +504,22 @@ Integer — це цілочисловий тип. Precision/scale — власт
 ### Потік роботи
 
 ```
-FieldProperties: readonly "Тип: CatalogRef.Products [...]"
+FieldProperties: readonly "Посилання: Products [...]"
+        │                     або
+AttributeTable: click на type badge
         │
-        ▼ клік на [...]
+        ▼
 DataTypeEditorDialog відкривається
         │
         ├── draft = structuredClone({ type, ref, allowedTypes, length, precision, scale })
         │
-        ├── Користувач обирає тип у дереві
-        │   ├── Примітивний → draft.type = "String", draft.ref = undefined
-        │   └── Reference → draft.type = "Ref", draft.ref = { kind: "Catalog", name: "Products" }
+        ├── Користувач обирає тип у дереві (shared TreeNodeData + presentation layer)
+        │   ├── Примітивний → draft.type = "String", cleanup ref/allowedTypes/precision/scale
+        │   └── Reference → draft.type = "Ref", draft.ref = { kind, name }, cleanup length/precision/scale
         │
-        ├── Користувач налаштовує параметри (length, precision...)
+        ├── Користувач налаштовує параметри (length, precision, scale)
         │
-        ├── [Зберегти] → onSave(draft as Partial<Attribute>) → store.updateAttribute(...)
+        ├── [Зберегти] → onSave(draft as Partial<Attribute>) → caller dispatches to store
         └── [Скасувати] → нічого не зберігається
 ```
 
@@ -406,12 +528,12 @@ DataTypeEditorDialog відкривається
 ```
 DataTypeEditorDialog (wrapper: Dialog + revisionKey)
   └── DataTypeEditorBody (stateful body)
-        ├── CompoundTypeCheckbox
+        ├── CompoundTypeCheckbox (enables polymorphic Ref mode)
         ├── TypeSearchInput
-        ├── TypeSelectionTree (react-arborist або рекурсивний компонент)
-        │     ├── PrimitiveTypeNode (radio/checkbox + icon + label)
-        │     └── ReferenceKindNode (expandable)
-        │           └── ReferenceTargetNode (radio/checkbox + icon + label)
+        ├── TypeSelectionTree (react-arborist + shared TreeNodeData)
+        │     ├── PrimitiveTypeNode [presentation layer] (radio/checkbox + icon + label)
+        │     ├── RefKindGroupNode [presentation layer] (expandable, not selectable)
+        │     └── RefTargetNode [presentation layer] (radio/checkbox + icon + label)
         ├── TypeParametersSection (conditional)
         │     ├── StringParams (length)
         │     ├── NumericParams (precision, scale)
@@ -421,17 +543,33 @@ DataTypeEditorDialog (wrapper: Dialog + revisionKey)
 
 ### Модель draft state
 
-```typescript
-interface TypeEditorDraft {
+```
+TypeEditorDraft:
   type: FieldType
   ref: MetadataRef | undefined
   allowedTypes: MetadataRef[] | undefined
   length: number | undefined
   precision: number | undefined
   scale: number | undefined
-  // nonNegative: boolean | undefined  // якщо додано в core
-}
 ```
+
+### Файли, які будуть змінені
+
+| Файл | Фаза | Що змінюється |
+|------|-------|---------------|
+| `packages/core/src/schemas/attribute.ts` | 0 | Додати superRefine для type-specific полів |
+| `packages/core/src/__tests__/attribute.test.ts` | 0, 5 | Тести stale params |
+| `apps/web/src/components/properties/field-properties.tsx` | 0, 3 | Fix Integer bug → замінити inline editing на readonly + dialog trigger |
+| `apps/web/src/components/layout/tree/tree-types.ts` | 1 | Розширити TreeNodeType, зробити kind optional, додати нові поля |
+| `apps/web/src/components/layout/tree/tree-builder.ts` | 1 | Додати buildTypeEditorTree, адаптувати buildTreeData під optional kind |
+| `apps/web/src/components/layout/tree/tree-nodes.tsx` | 1 | Розділити на presentation + interaction, додати нові node renderers |
+| `apps/web/src/components/properties/metadata-ref-picker.tsx` | 1 | Видалити REFERENCEABLE_KINDS, використати core import |
+| `apps/web/src/hooks/use-available-objects.ts` | 1 | **Новий файл** — shared hook |
+| `apps/web/src/components/editor/data-type-editor-dialog.tsx` | 2 | **Новий файл** — діалог |
+| `apps/web/src/components/editor/attribute-table.tsx` | 3 | Clickable type cell → dialog trigger |
+| `apps/web/src/lib/format-type-label.ts` | 4 | **Новий файл** — user-facing formatter |
+| `apps/web/src/i18n/locales/uk.json` | 4 | fieldType.* + dataTypeEditor.* |
+| `apps/web/src/i18n/locales/en.json` | 4 | fieldType.* + dataTypeEditor.* |
 
 ---
 
@@ -440,23 +578,26 @@ interface TypeEditorDraft {
 - `docs/BRD-metadata-configurator.md` §6 — система типів полів
 - `docs/BRD-metadata-configurator.md` §6.3 — властивості атрибутів
 - `docs/tasks/editor-layer-redesign.md` — загальний план редизайну editor layer
-- `docs/tasks/reference-type-redesign.md` — завершена задача redesign reference types
 - `.github/instructions/metadata-model.instructions.md` — правила Zod-схем
 - `.github/instructions/ui-architecture.instructions.md` — правила побудови UI
 - `.github/instructions/coding-style.instructions.md` — стиль коду
 - `packages/core/src/schemas/attribute.ts` — Zod-схема атрибута
 - `packages/core/src/schemas/field-type.ts` — FieldType enum
+- `packages/core/src/schemas/metadata-ref.ts` — referenceableKindSchema, ReferenceableKind
 - `apps/web/src/components/editor/standard-attributes-dialog.tsx` — еталон патерну draft + Save/Cancel
 
 ## Definition of Done (загальний)
-- [ ] Модальний діалог "Редагування типу даних" створений і функціонує
-- [ ] Дерево з примітивними типами + reference kinds + object targets
-- [ ] Піктограми відповідають головному дереву метаданих
-- [ ] Single mode (один тип) та compound mode (polymorphic ref) працюють
-- [ ] Параметри типу (length, precision, scale) редагуються в діалозі
-- [ ] Draft state + Save/Cancel — атомарне оновлення
-- [ ] FieldProperties — readonly display + кнопка відкриття діалогу
-- [ ] Integer не показує precision/scale (bugfix)
-- [ ] i18n ключі для uk та en
-- [ ] Тести для дерева та діалогу
-- [ ] `pnpm lint && pnpm typecheck && pnpm test` — все зелене
+- [ ] Core: attributeSchema відхиляє stale type-specific params (superRefine)
+- [ ] Tree: TreeNodeData підтримує і sidebar, і data type editor без окремих моделей
+- [ ] Tree: presentation layer відокремлений від interaction layer
+- [ ] Dialog: модальний діалог "Редагування типу даних" з react-arborist деревом
+- [ ] Dialog: single mode (один тип) та compound mode (polymorphic ref) працюють
+- [ ] Dialog: параметри типу (length, precision, scale) редагуються в діалозі
+- [ ] Dialog: centralized cleanup type-specific полів при зміні типу
+- [ ] Dialog: draft state + Save/Cancel — атомарне оновлення
+- [ ] Integration: FieldProperties — readonly display + кнопка відкриття діалогу
+- [ ] Integration: AttributeTable — click на type badge → діалог
+- [ ] Integration: Constant.valueType не зачеплено (FieldTypeSelect залишається)
+- [ ] i18n: fieldType.* namespace, dataTypeEditor.* ключі, formatTypeLabel utility
+- [ ] Tests: core stale params, tree builder, dialog, sidebar regression
+- [ ] Quality: `pnpm lint && pnpm typecheck && pnpm test` — все зелене
