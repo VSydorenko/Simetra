@@ -132,29 +132,29 @@ shadcn Tabs використовує Radix UI Tabs, який жорстко за
 ## Модуль D: Права панель — єдине місце редагування
 
 ### Вимоги
-- [ ] **Видалити** `SettingsForm` (`apps/web/src/components/editor/settings-form.tsx`) повністю
-- [ ] Перенести всі kind-specific налаштування (CatalogSettings, DocumentSettings, InformationRegisterSettings, AccumulationRegisterSettings, ConstantSettings, CustomTableSettings) у `ObjectProperties` правої панелі
-- [ ] Центральна зона (секція "Дані") — тільки **структурний вигляд**:
+- [Х] **Видалити** `SettingsForm` (`apps/web/src/components/editor/settings-form.tsx`) повністю
+- [Х] Перенести всі kind-specific налаштування (CatalogSettings, DocumentSettings, InformationRegisterSettings, AccumulationRegisterSettings, ConstantSettings, CustomTableSettings) у `ObjectProperties` правої панелі
+- [Х] Центральна зона (секція "Дані") — тільки **структурний вигляд**:
   - Дерево/список реквізитів (name, type) — readonly preview
   - Список табличних частин
   - Для переліку — список значень
   - Дії: додати, видалити, перемістити (вгору/вниз)
-- [ ] **Вибір елемента** в центральній зоні → права панель оновлюється з повними властивостями виділеного
-- [ ] Пріоритет контексту правої панелі (зберегти поточний):
+- [Х] **Вибір елемента** в центральній зоні → права панель оновлюється з повними властивостями виділеного
+- [Х] Пріоритет контексту правої панелі (зберегти поточний):
   1. `selectedField` → FieldProperties
   2. `selectedObject` → ObjectProperties
   3. activeTab/activeWindow → ObjectProperties
   4. нічого → ProjectSettings
-- [ ] `FieldProperties` — додати всі поля з BRD §6.3: name, displayName, type, length, precision, scale, ref (через MetadataRefPicker — Модуль F), allowedTypes, required, indexed, unique, defaultValue, description
-- [ ] `ObjectProperties` — консолідувати всі kind-specific налаштування:
+- [Х] `FieldProperties` — додати всі поля з BRD §6.3: name, displayName, type, length, precision, scale, ref (через MetadataRefPicker — Модуль F), allowedTypes, required, indexed, unique, defaultValue, description
+- [Х] `ObjectProperties` — консолідувати всі kind-specific налаштування:
   - Catalog: codeLength, codeType, descriptionLength, hierarchyType, owners, autonumber, codeUnique, mainPresentation, predefinedItems
   - Document: numberLength, numberType, autonumber, numberPeriodicity, posting, registerMovements
   - AccumulationRegister: registerType, recorderTypes
   - InformationRegister: periodicity, writeMode, recorderTypes
   - CustomTable: autoAddPrimaryKey
   - Constant: valueType, defaultValue
-- [ ] Додати у ObjectProperties посилання "Стандартні реквізити" (→ Модуль G)
-- [ ] Додати у ObjectProperties посилання "Додаткові індекси" (→ Модуль H)
+- [Х] Додати у ObjectProperties посилання "Стандартні реквізити" (→ Модуль G)
+- [Х] Додати у ObjectProperties посилання "Додаткові індекси" (→ Модуль H)
 
 ### Рекомендовані патерни
 
@@ -176,11 +176,11 @@ Store — єдине джерело правди. Commit-on-blur для текс
 Name змінюється тільки через rename в дереві (F2). В ObjectProperties — завжди readonly.
 
 ### Definition of Done
-- [ ] `SettingsForm` видалений
-- [ ] Всі kind-specific налаштування доступні через ObjectProperties
-- [ ] Центральна зона "Дані" — тільки структурний вигляд + CRUD дії
-- [ ] Вибір елемента в центрі → права панель показує його властивості
-- [ ] Немає дублювання UI для одних і тих самих полів
+- [Х] `SettingsForm` видалений
+- [Х] Всі kind-specific налаштування доступні через ObjectProperties
+- [Х] Центральна зона "Дані" — тільки структурний вигляд + CRUD дії
+- [Х] Вибір елемента в центрі → права панель показує його властивості
+- [Х] Немає дублювання UI для одних і тих самих полів
 
 ---
 
@@ -228,13 +228,12 @@ Name змінюється тільки через rename в дереві (F2). �
 - [ ] `expandedTreeNodes` — зберігати в ui-store, але використовувати react-arborist `ref` API для програмного розгортання при додаванні елементів
 
 ### Clarify (питання перед імплементацією)
-- [ ] Чи показувати стандартні реквізити в дереві?
+- [Х] Чи показувати стандартні реквізити в дереві?
   - Чому це важливо: якщо так — дерево стає дуже великим; якщо ні — користувач не бачить повну структуру
-  - Варіанти: A) не показувати (тільки через діалог) / B) показувати згорнутими під окремим вузлом "Стандартні реквізити"
-  - Вплив на рішення: UI, tree data model
-- [ ] Чи потрібен drag-and-drop для reorder реквізитів у дереві?
+  - Рішення: A) не показувати (тільки через діалог)
+- [Х] Чи потрібен drag-and-drop для reorder реквізитів у дереві?
   - Чому це важливо: дублює функціональність кнопок "вгору/вниз", але може бути зручніший для великих списків
-  - Варіанти: A) ні, залишити тільки arrow buttons / B) так, через react-arborist drag
+  - Рішення: A) ні, залишити тільки arrow buttons
   - Вплив на рішення: складність імплементації, UX
 
 ### Рекомендовані патерни

@@ -250,7 +250,7 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
               </SettingRow>
             </>
           )}
-          {isRefType && attribute.ref !== undefined && (
+          {isRefType && (
             <SettingRow label={t('properties.field.ref')}>
               <Input
                 className="h-7 text-xs"

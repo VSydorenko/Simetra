@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Accordion,
@@ -6,6 +6,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@workspace/ui/components/accordion'
+import { Button } from '@workspace/ui/components/button'
 import { Input } from '@workspace/ui/components/input'
 import { Label } from '@workspace/ui/components/label'
 import {
@@ -18,7 +19,8 @@ import {
 import { Switch } from '@workspace/ui/components/switch'
 import { Badge } from '@workspace/ui/components/badge'
 import { FieldTypeSelect } from '@/components/editor/field-type-select'
-import { useMetadataStore } from '@/stores/metadata-store'
+import { useMetadataStore, type ValidationError } from '@/stores/metadata-store'
+import { useUiStore } from '@/stores/ui-store'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
 import type {
   MetadataKind,
@@ -37,6 +39,58 @@ function SettingRow({ label, children }: { label: string; children: React.ReactN
       <Label className="truncate text-xs text-muted-foreground">{label}</Label>
       <div>{children}</div>
     </div>
+  )
+}
+
+/** Commit-on-blur редагування імені обʼєкта */
+function NameEditor({
+  kind,
+  currentName,
+  renameObject,
+  updateTabObjectRef,
+}: {
+  kind: MetadataKind
+  currentName: string
+  renameObject: (kind: MetadataKind, oldName: string, newName: string) => ValidationError[] | null
+  updateTabObjectRef: (oldRef: MetadataRef, newRef: MetadataRef) => void
+}) {
+  const [draft, setDraft] = useState(currentName)
+
+  // Синхронізація draft при зміні objectRef ззовні
+  useEffect(() => {
+    setDraft(currentName)
+  }, [currentName])
+
+  const commit = () => {
+    const trimmed = draft.trim()
+    if (trimmed && trimmed !== currentName) {
+      const errors = renameObject(kind, currentName, trimmed)
+      if (!errors) {
+        updateTabObjectRef({ kind, name: currentName }, { kind, name: trimmed })
+      } else {
+        setDraft(currentName)
+      }
+    } else {
+      setDraft(currentName)
+    }
+  }
+
+  return (
+    <Input
+      className="h-7 font-mono text-xs"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          commit()
+          ;(e.target as HTMLInputElement).blur()
+        } else if (e.key === 'Escape') {
+          setDraft(currentName)
+          ;(e.target as HTMLInputElement).blur()
+        }
+      }}
+    />
   )
 }
 
@@ -118,6 +172,8 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
   const { t } = useTranslation()
   const model = useMetadataStore((s) => s.model)
   const updateObject = useMetadataStore((s) => s.updateObject)
+  const renameObject = useMetadataStore((s) => s.renameObject)
+  const { updateTabObjectRef } = useUiStore()
 
   const object = useMemo(() => {
     const key = KIND_TO_KEY[objectRef.kind]
@@ -138,7 +194,10 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
     ? (object.displayName as { uk?: string; en?: string } | undefined)
     : undefined
 
+  const hasStandardAttributes = !['Enumeration', 'Constant'].includes(objectRef.kind)
+
   return (
+    <>
     <Accordion type="multiple" defaultValue={['general', 'typeSettings']} className="w-full">
       {/* Група: Основні */}
       <AccordionItem value="general">
@@ -147,11 +206,11 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
         </AccordionTrigger>
         <AccordionContent className="space-y-2 px-3 pb-3">
           <SettingRow label={t('metadata.field.name')}>
-            <Input
-              className="h-7 text-xs"
-              value={object.name}
-              readOnly
-              disabled
+            <NameEditor
+              kind={objectRef.kind}
+              currentName={object.name}
+              renameObject={renameObject}
+              updateTabObjectRef={updateTabObjectRef}
             />
           </SettingRow>
           <SettingRow label={t('metadata.field.type')}>
@@ -194,6 +253,30 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
         </AccordionContent>
       </AccordionItem>
     </Accordion>
+
+    {/* Посилання на діалоги (Модулі G, H) */}
+    {hasStandardAttributes && (
+      <div className="space-y-1 border-t border-border px-3 py-2">
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs"
+          disabled
+        >
+          {t('properties.standardAttributes')}
+        </Button>
+        <br />
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs"
+          disabled
+        >
+          {t('properties.additionalIndexes')}
+        </Button>
+      </div>
+    )}
+    </>
   )
 }
 
@@ -303,6 +386,46 @@ function CatalogTypeSettings({
           allowedKinds={['Catalog']}
           onChange={(refs) => onUpdate({ owners: refs } as Partial<MetadataObject>)}
         />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">{t('metadata.setting.predefinedItems')}</Label>
+        <div className="space-y-1">
+          {(o.predefinedItems ?? []).map((item, idx) => (
+            <div key={idx} className="flex items-center gap-1">
+              <Input
+                className="h-7 flex-1 font-mono text-xs"
+                value={item.name}
+                onChange={(e) => {
+                  const updated = [...(o.predefinedItems ?? [])]
+                  updated[idx] = { ...updated[idx], name: e.target.value }
+                  onUpdate({ predefinedItems: updated } as Partial<MetadataObject>)
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                onClick={() => {
+                  const updated = (o.predefinedItems ?? []).filter((_, i) => i !== idx)
+                  onUpdate({ predefinedItems: updated } as Partial<MetadataObject>)
+                }}
+              >
+                <span className="text-xs">✕</span>
+              </Button>
+            </div>
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 w-full text-xs"
+            onClick={() => {
+              const items = o.predefinedItems ?? []
+              onUpdate({ predefinedItems: [...items, { name: `Item${items.length + 1}` }] } as Partial<MetadataObject>)
+            }}
+          >
+            + {t('metadata.setting.predefinedItems')}
+          </Button>
+        </div>
       </div>
     </>
   )

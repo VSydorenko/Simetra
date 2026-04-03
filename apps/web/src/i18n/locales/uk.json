@@ -79,7 +79,8 @@
       "registerType": "Тип регістру",
       "valueType": "Тип значення",
       "defaultValue": "Значення за замовчуванням",
-      "autoAddPrimaryKey": "Автододавання первинного ключа"
+      "autoAddPrimaryKey": "Автододавання первинного ключа",
+      "predefinedItems": "Попередньо визначені елементи"
     },
     "standardAttribute": "Стандартний реквізит"
   },
@@ -130,6 +131,8 @@
     "owners": "Власники",
     "recorderTypes": "Типи реєстраторів",
     "registerMovements": "Рухи по регістрах",
+    "standardAttributes": "Стандартні реквізити",
+    "additionalIndexes": "Додаткові індекси",
     "database": {
       "target": "СУБД",
       "schema": "Схема",

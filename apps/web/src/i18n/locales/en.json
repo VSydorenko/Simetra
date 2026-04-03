@@ -79,7 +79,8 @@
       "registerType": "Register type",
       "valueType": "Value type",
       "defaultValue": "Default value",
-      "autoAddPrimaryKey": "Auto-add primary key"
+      "autoAddPrimaryKey": "Auto-add primary key",
+      "predefinedItems": "Predefined items"
     },
     "standardAttribute": "Standard attribute"
   },
@@ -130,6 +131,8 @@
     "owners": "Owners",
     "recorderTypes": "Recorder Types",
     "registerMovements": "Register Movements",
+    "standardAttributes": "Standard Attributes",
+    "additionalIndexes": "Additional Indexes",
     "database": {
       "target": "DBMS",
       "schema": "Schema",
