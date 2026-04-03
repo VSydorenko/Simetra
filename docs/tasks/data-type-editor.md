@@ -51,22 +51,22 @@
 
 ### Вимоги
 
-- [ ] Додати `superRefine` в `attributeSchema` (`packages/core/src/schemas/attribute.ts`):
+- [Х] Додати `superRefine` в `attributeSchema` (`packages/core/src/schemas/attribute.ts`):
   - `length` дозволений **тільки** коли `type === 'String'`; інакше — issue
   - `precision` і `scale` дозволені **тільки** коли `type === 'Numeric'`; інакше — issue
   - Це доповнює існуючий refine для ref/allowedTypes, а не замінює його
-- [ ] Виправити `isNumericType` у `field-properties.tsx` рядок ~243: прибрати `|| attribute.type === 'Integer'`. Integer не має type-specific параметрів (BRD §6.1)
-- [ ] Оновити тести `attributeSchema` — перевірити, що stale length при type=Boolean rejected, stale precision при type=String rejected
-- [ ] `pnpm --filter @simetra/core test` — зелене
+- [Х] Виправити `isNumericType` у `field-properties.tsx` рядок ~243: прибрати `|| attribute.type === 'Integer'`. Integer не має type-specific параметрів (BRD §6.1)
+- [Х] Оновити тести `attributeSchema` — перевірити, що stale length при type=Boolean rejected, stale precision при type=String rejected
+- [Х] `pnpm --filter @simetra/core test` — зелене
 
 ### Ризики
 
 - Existing test fixtures або persisted data можуть містити stale params. Перевірити фікстури, при потребі очистити. Проєкт на етапі розробки — дані тестові, можна ігнорувати
 
 ### DoD фази 0
-- [ ] `attributeSchema` відхиляє stale length/precision/scale для невідповідного type
-- [ ] Integer не показує precision/scale у FieldProperties
-- [ ] Тести core зелені
+- [Х] `attributeSchema` відхиляє stale length/precision/scale для невідповідного type
+- [Х] Integer не показує precision/scale у FieldProperties
+- [Х] Тести core зелені
 
 ---
 
@@ -159,8 +159,6 @@
 │  │  ○ ✓ Булево                                      │  │
 │  │  ○ 📅 Дата                                       │  │
 │  │  ○ 📅 Дата і час                                 │  │
-│  │  ○ 🔑 UUID                                       │  │
-│  │  ○ 📎 Двійкові дані                              │  │
 │  │  ▶ 📖 ДовідникПосилання                          │  │
 │  │    ○ 📖 Номенклатура                             │  │
 │  │    ○ 📖 Контрагенти                              │  │

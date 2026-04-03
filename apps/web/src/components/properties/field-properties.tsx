@@ -237,7 +237,7 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
 
   const isRefType = attribute.type === 'Ref'
   const isStringType = attribute.type === 'String'
-  const isNumericType = attribute.type === 'Numeric' || attribute.type === 'Integer'
+  const isNumericType = attribute.type === 'Numeric'
 
   return (
     <>
@@ -297,10 +297,17 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
               value={attribute.type}
               onChange={(v) => {
                 const updates: Partial<Attribute> = { type: v }
-                // Очищення ref/allowedTypes при зміні типу з Ref на інший
+                // Очищення type-specific полів при зміні типу
                 if (v !== 'Ref') {
                   updates.ref = undefined
                   updates.allowedTypes = undefined
+                }
+                if (v !== 'String') {
+                  updates.length = undefined
+                }
+                if (v !== 'Numeric') {
+                  updates.precision = undefined
+                  updates.scale = undefined
                 }
                 handleUpdate(updates)
               }}

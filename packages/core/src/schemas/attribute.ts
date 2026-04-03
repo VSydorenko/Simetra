@@ -30,6 +30,30 @@ export const attributeSchema = z
     allowedTypes: z.array(attributeRefTargetSchema).optional(),
   })
   .superRefine((attr, ctx) => {
+    // Валідація type-specific полів
+    if (attr.type !== "String" && attr.length != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "length is only valid when type is String",
+        path: ["length"],
+      })
+    }
+    if (attr.type !== "Numeric" && attr.precision != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precision is only valid when type is Numeric",
+        path: ["precision"],
+      })
+    }
+    if (attr.type !== "Numeric" && attr.scale != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "scale is only valid when type is Numeric",
+        path: ["scale"],
+      })
+    }
+
+    // Валідація ref/allowedTypes
     const hasRef = !!attr.ref
     const hasAllowedTypes = !!attr.allowedTypes && attr.allowedTypes.length > 0
 

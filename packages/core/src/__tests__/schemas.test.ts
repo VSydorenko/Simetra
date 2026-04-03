@@ -328,6 +328,66 @@ describe("attributeSchema", () => {
       }),
     ).toThrow()
   })
+
+  it("rejects stale length when type is not String", () => {
+    expect(() =>
+      attributeSchema.parse({ name: "flag", type: "Boolean", length: 50 }),
+    ).toThrow(/length is only valid when type is String/)
+  })
+
+  it("rejects stale precision when type is not Numeric", () => {
+    expect(() =>
+      attributeSchema.parse({ name: "code", type: "String", precision: 10, length: 50 }),
+    ).toThrow(/precision is only valid when type is Numeric/)
+  })
+
+  it("rejects stale scale when type is not Numeric", () => {
+    expect(() =>
+      attributeSchema.parse({ name: "code", type: "String", scale: 2, length: 50 }),
+    ).toThrow(/scale is only valid when type is Numeric/)
+  })
+
+  it("rejects stale length on Integer", () => {
+    expect(() =>
+      attributeSchema.parse({ name: "count", type: "Integer", length: 10 }),
+    ).toThrow(/length is only valid when type is String/)
+  })
+
+  it("rejects stale precision on Integer", () => {
+    expect(() =>
+      attributeSchema.parse({ name: "count", type: "Integer", precision: 10 }),
+    ).toThrow(/precision is only valid when type is Numeric/)
+  })
+
+  it("accepts Numeric with precision and scale", () => {
+    const result = attributeSchema.parse({
+      name: "amount",
+      type: "Numeric",
+      precision: 10,
+      scale: 2,
+    })
+    expect(result.precision).toBe(10)
+    expect(result.scale).toBe(2)
+  })
+
+  it("accepts String with length", () => {
+    const result = attributeSchema.parse({
+      name: "title",
+      type: "String",
+      length: 100,
+    })
+    expect(result.length).toBe(100)
+  })
+
+  it("accepts Integer without type-specific params", () => {
+    const result = attributeSchema.parse({
+      name: "count",
+      type: "Integer",
+    })
+    expect(result.precision).toBeUndefined()
+    expect(result.scale).toBeUndefined()
+    expect(result.length).toBeUndefined()
+  })
 })
 
 // ============================================================
