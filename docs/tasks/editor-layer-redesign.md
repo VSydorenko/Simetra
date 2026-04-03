@@ -362,22 +362,22 @@ shadcn/ui Command (cmdk) всередині Popover — стандартний �
 ## Модуль I: Кольорові піктограми замість текстових кнопок
 
 ### Вимоги
-- [ ] Замінити текстові кнопки у toolbar-ах на іконки hugeicons з tooltip:
+- [Х] Замінити текстові кнопки у toolbar-ах на іконки hugeicons з tooltip:
   - "Додати реквізит" → зелена іконка Add (наприклад, `AddCircleIcon` або `PlusSignIcon`)
   - "Видалити вибране" → червона іконка Delete (наприклад, `Delete02Icon`)
-  - "Вгору" → нейтральна іконка Arrow Up (`ArrowUp02Icon`)
-  - "Вниз" → нейтральна іконка Arrow Down (`ArrowDown02Icon`)
+  - "Вгору" → синя іконка Arrow Up (`ArrowUp02Icon`)
+  - "Вниз" → синя іконка Arrow Down (`ArrowDown02Icon`)
   - "Додати табличну частину" → зелена іконка з Table accent
-- [ ] Застосувати до всіх toolbar-ів:
+- [Х] Застосувати до всіх toolbar-ів:
   - AttributeTable toolbar
   - TabularSectionsEditor toolbar
   - EnumValuesEditor toolbar
   - Нові toolbar-и в глибокому дереві (contextual)
-- [ ] Кольорове кодування:
+- [Х] Кольорове кодування:
   - Зелений accent для дій додавання
   - Червоний accent для дій видалення
-  - Нейтральний (muted) для переміщення/сортування
-- [ ] Tooltip на кожній іконці з i18n label
+  - Синій для переміщення/сортування
+- [Х] Tooltip на кожній іконці з i18n label
 
 ### Рекомендовані патерни
 
@@ -385,8 +385,8 @@ shadcn/ui Command (cmdk) всередині Popover — стандартний �
 Стандартний патерн: `<TooltipProvider><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon">...</Button></TooltipTrigger><TooltipContent>...</TooltipContent></Tooltip></TooltipProvider>`.
 
 ### Definition of Done
-- [ ] Усі текстові кнопки toolbar-ів замінені на іконки з tooltip
-- [ ] Кольорове кодування: зелений/червоний/нейтральний
+- [Х] Усі текстові кнопки toolbar-ів замінені на іконки з tooltip
+- [Х] Кольорове кодування: зелений/червоний/синій
 
 ---
 

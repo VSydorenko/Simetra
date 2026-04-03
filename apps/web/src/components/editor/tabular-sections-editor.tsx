@@ -9,6 +9,13 @@ import {
 import { Button } from '@workspace/ui/components/button'
 import { Badge } from '@workspace/ui/components/badge'
 import { ScrollArea } from '@workspace/ui/components/scroll-area'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@workspace/ui/components/tooltip'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { Add01Icon, Delete02Icon } from '@hugeicons/core-free-icons'
 import { AttributeTable } from './attribute-table'
 import type { MetadataKind, TabularSection } from '@simetra/core'
 import { useMetadataStore } from '@/stores/metadata-store'
@@ -53,10 +60,21 @@ export function TabularSectionsEditor({
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 border-b border-border px-2 py-1">
-        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={handleAdd}>
-          {t('editor.addTabularSection')}
-        </Button>
+      <div className="flex items-center gap-0.5 border-b border-border px-1.5 py-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-green-600 hover:text-green-600"
+              aria-label={t('editor.addTabularSection')}
+              onClick={handleAdd}
+            >
+              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('editor.addTabularSection')}</TooltipContent>
+        </Tooltip>
       </div>
 
       <ScrollArea className="flex-1">
@@ -82,17 +100,23 @@ export function TabularSectionsEditor({
                       </Badge>
                     </div>
                   </AccordionTrigger>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-5 px-1.5 text-[10px] text-destructive hover:text-destructive"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleRemove(section.name)
-                    }}
-                  >
-                    ×
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-6 text-destructive hover:text-destructive"
+                        aria-label={t('editor.deleteTabularSection')}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRemove(section.name)
+                        }}
+                      >
+                        <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">{t('editor.deleteTabularSection')}</TooltipContent>
+                  </Tooltip>
                 </div>
                 <AccordionContent className="pb-2">
                   <div className="h-48 rounded border border-border">

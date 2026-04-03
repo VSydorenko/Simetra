@@ -114,6 +114,7 @@
     "addDimension": "Add dimension",
     "addResource": "Add resource",
     "deleteSelected": "Delete selected",
+    "deleteTabularSection": "Delete tabular section",
     "moveUp": "Move up",
     "moveDown": "Move down",
     "noOpenTabs": "Select an object in the tree to edit",

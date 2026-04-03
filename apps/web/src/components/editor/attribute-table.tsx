@@ -17,7 +17,19 @@ import {
 import { Button } from '@workspace/ui/components/button'
 import { Badge } from '@workspace/ui/components/badge'
 import { ScrollArea } from '@workspace/ui/components/scroll-area'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@workspace/ui/components/tooltip'
 import { cn } from '@workspace/ui/lib/utils'
+import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  Add01Icon,
+  Delete02Icon,
+  ArrowUp01Icon,
+  ArrowDown01Icon,
+} from '@hugeicons/core-free-icons'
 import type { Attribute, MetadataKind } from '@simetra/core'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useUiStore } from '@/stores/ui-store'
@@ -196,37 +208,66 @@ export function AttributeTable({
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 border-b border-border px-2 py-1">
-        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={handleAdd}>
-          {addLabel}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-xs"
-          disabled={!selectedRow}
-          onClick={handleRemove}
-        >
-          {t('editor.deleteSelected')}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-xs"
-          disabled={!selectedRow}
-          onClick={() => handleMove('up')}
-        >
-          {t('editor.moveUp')}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-xs"
-          disabled={!selectedRow}
-          onClick={() => handleMove('down')}
-        >
-          {t('editor.moveDown')}
-        </Button>
+      <div className="flex items-center gap-0.5 border-b border-border px-1.5 py-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-green-600 hover:text-green-600"
+              aria-label={addLabel}
+              onClick={handleAdd}
+            >
+              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{addLabel}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-destructive hover:text-destructive"
+              aria-label={t('editor.deleteSelected')}
+              disabled={!selectedRow}
+              onClick={handleRemove}
+            >
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('editor.deleteSelected')}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-blue-500 hover:text-blue-500"
+              aria-label={t('editor.moveUp')}
+              disabled={!selectedRow}
+              onClick={() => handleMove('up')}
+            >
+              <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('editor.moveUp')}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-blue-500 hover:text-blue-500"
+              aria-label={t('editor.moveDown')}
+              disabled={!selectedRow}
+              onClick={() => handleMove('down')}
+            >
+              <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t('editor.moveDown')}</TooltipContent>
+        </Tooltip>
       </div>
 
       <ScrollArea className="flex-1">
