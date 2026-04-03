@@ -16,6 +16,12 @@ export const customTableSchema = z.object({
   // Type settings
   autoAddPrimaryKey: z.boolean().default(true),
 
+  // Користувацькі перевизначення описів стандартних реквізитів
+  standardAttributeOverrides: z
+    .record(z.string(), z.object({ description: localizedStringSchema.optional() }))
+    .optional()
+    .default({}),
+
   // User-defined sub-objects
   attributes: z
     .array(attributeSchema)

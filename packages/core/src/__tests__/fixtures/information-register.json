@@ -9,6 +9,7 @@
   "periodicity": "Day",
   "writeMode": "Independent",
   "recorderTypes": [],
+  "standardAttributeOverrides": {},
   "dimensions": [
     {
       "name": "currency",

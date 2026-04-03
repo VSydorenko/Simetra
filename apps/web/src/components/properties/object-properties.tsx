@@ -18,6 +18,7 @@ import {
 } from '@workspace/ui/components/select'
 import { Switch } from '@workspace/ui/components/switch'
 import { Badge } from '@workspace/ui/components/badge'
+import { StandardAttributesDialog } from '@/components/editor/standard-attributes-dialog'
 import { FieldTypeSelect } from '@/components/editor/field-type-select'
 import { MetadataRefMultiPicker } from '@/components/properties/metadata-ref-picker'
 import { useMetadataStore, type ValidationError } from '@/stores/metadata-store'
@@ -115,13 +116,14 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
     [objectRef.kind, objectRef.name, updateObject],
   )
 
+  const hasStandardAttributes = !['Enumeration', 'Constant'].includes(objectRef.kind)
+  const [stdAttrDialogOpen, setStdAttrDialogOpen] = useState(false)
+
   if (!object) return null
 
   const displayName = 'displayName' in object
     ? (object.displayName as { uk?: string; en?: string } | undefined)
     : undefined
-
-  const hasStandardAttributes = !['Enumeration', 'Constant'].includes(objectRef.kind)
 
   return (
     <>
@@ -185,22 +187,29 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
     {hasStandardAttributes && (
       <div className="space-y-1 border-t border-border px-3 py-2">
         <Button
-          variant="link"
+          variant="outline"
           size="sm"
-          className="h-auto p-0 text-xs"
-          disabled
+          className="h-7 w-full text-xs"
+          onClick={() => setStdAttrDialogOpen(true)}
         >
           {t('properties.standardAttributes')}
         </Button>
-        <br />
         <Button
-          variant="link"
+          variant="outline"
           size="sm"
-          className="h-auto p-0 text-xs"
+          className="h-7 w-full text-xs"
           disabled
         >
           {t('properties.additionalIndexes')}
         </Button>
+        <StandardAttributesDialog
+          open={stdAttrDialogOpen}
+          onOpenChange={setStdAttrDialogOpen}
+          kind={objectRef.kind}
+          objectName={objectRef.name}
+          object={object}
+          onUpdateObject={handleUpdate}
+        />
       </div>
     )}
     </>

@@ -35,6 +35,12 @@ export const catalogSchema = z.object({
     )
     .default([]),
 
+  // Користувацькі перевизначення описів стандартних реквізитів
+  standardAttributeOverrides: z
+    .record(z.string(), z.object({ description: localizedStringSchema.optional() }))
+    .optional()
+    .default({}),
+
   // User-defined sub-objects
   attributes: z
     .array(attributeSchema)

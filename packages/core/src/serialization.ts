@@ -30,6 +30,7 @@ const CATALOG_KEY_ORDER = [
   'codeUnique',
   'mainPresentation',
   'predefinedItems',
+  'standardAttributeOverrides',
   'attributes',
   'tabularSections',
 ]
@@ -45,6 +46,7 @@ const DOCUMENT_KEY_ORDER = [
   'numberPeriodicity',
   'posting',
   'registerMovements',
+  'standardAttributeOverrides',
   'attributes',
   'tabularSections',
 ]
@@ -59,6 +61,7 @@ const INFORMATION_REGISTER_KEY_ORDER = [
   'periodicity',
   'writeMode',
   'recorderTypes',
+  'standardAttributeOverrides',
   'dimensions',
   'resources',
   'attributes',
@@ -71,6 +74,7 @@ const ACCUMULATION_REGISTER_KEY_ORDER = [
   'displayName',
   'registerType',
   'recorderTypes',
+  'standardAttributeOverrides',
   'dimensions',
   'resources',
   'attributes',
@@ -91,6 +95,7 @@ const CUSTOM_TABLE_KEY_ORDER = [
   'name',
   'displayName',
   'autoAddPrimaryKey',
+  'standardAttributeOverrides',
   'attributes',
 ]
 

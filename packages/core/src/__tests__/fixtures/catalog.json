@@ -15,6 +15,7 @@
   "codeUnique": true,
   "mainPresentation": "Description",
   "predefinedItems": [],
+  "standardAttributeOverrides": {},
   "attributes": [
     {
       "name": "article",

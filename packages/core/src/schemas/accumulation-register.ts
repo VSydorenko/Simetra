@@ -18,6 +18,12 @@ export const accumulationRegisterSchema = z.object({
   registerType: z.enum(["Balance", "Turnover"]).default("Balance"),
   recorderTypes: z.array(metadataRefSchema).default([]),
 
+  // Користувацькі перевизначення описів стандартних реквізитів
+  standardAttributeOverrides: z
+    .record(z.string(), z.object({ description: localizedStringSchema.optional() }))
+    .optional()
+    .default({}),
+
   // Field roles
   dimensions: z
     .array(attributeSchema)

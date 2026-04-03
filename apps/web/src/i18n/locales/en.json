@@ -198,7 +198,9 @@
     "deleteMessage": "Are you sure you want to delete \"{{name}}\"?",
     "deleteWithReferences": "Object \"{{name}}\" is used in:",
     "unsavedTitle": "Unsaved Changes",
-    "unsavedMessage": "You have unsaved changes. Save before closing?"
+    "unsavedMessage": "You have unsaved changes. Save before closing?",
+    "standardAttributesDescription": "Standard attributes are determined automatically based on the object type and settings",
+    "noStandardAttributes": "This object type has no standard attributes"
   },
   "tabs": {
     "close": "Close",

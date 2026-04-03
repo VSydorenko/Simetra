@@ -25,6 +25,12 @@ export const documentSchema = z.object({
   posting: z.boolean().default(true),
   registerMovements: z.array(metadataRefSchema).default([]),
 
+  // Користувацькі перевизначення описів стандартних реквізитів
+  standardAttributeOverrides: z
+    .record(z.string(), z.object({ description: localizedStringSchema.optional() }))
+    .optional()
+    .default({}),
+
   // User-defined sub-objects
   attributes: z
     .array(attributeSchema)
