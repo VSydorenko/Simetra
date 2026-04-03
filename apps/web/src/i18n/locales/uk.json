@@ -201,6 +201,7 @@
     "openTabs_many": "{{count}} вкладок",
     "projectDirectory": "{{name}}",
     "importedFromZip": "Імпортовано з ZIP",
+    "draftRecovery": "Відновлено з чернетки",
     "notSaved": "Не збережено"
   },
   "storage": {

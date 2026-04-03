@@ -9,14 +9,18 @@ import { HugeiconsIcon } from '@hugeicons/react'
 function ProjectDirectoryIndicator() {
   const { t } = useTranslation()
   const projectDirectoryName = useProjectStore((s) => s.projectDirectoryName)
-  const projectHandle = useProjectStore((s) => s.projectHandle)
-  const isNewProject = useProjectStore((s) => s.isNewProject)
+  const pendingDirectoryName = useProjectStore((s) => s.pendingDirectoryName)
+  const projectOrigin = useProjectStore((s) => s.projectOrigin)
+
+  const displayName = projectDirectoryName ?? pendingDirectoryName
 
   let label: string
-  if (projectDirectoryName) {
-    label = t('statusBar.projectDirectory', { name: projectDirectoryName })
-  } else if (!isNewProject && !projectHandle) {
+  if (displayName) {
+    label = t('statusBar.projectDirectory', { name: displayName })
+  } else if (projectOrigin === 'zip-import') {
     label = t('statusBar.importedFromZip')
+  } else if (projectOrigin === 'draft-recovery') {
+    label = t('statusBar.draftRecovery')
   } else {
     label = t('statusBar.notSaved')
   }

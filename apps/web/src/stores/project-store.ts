@@ -20,11 +20,15 @@ export type SessionRestoreStatus =
   | 'restored'
   | 'failed'
 
+export type ProjectOrigin = 'new' | 'directory' | 'zip-import' | 'draft-recovery' | null
+
 export interface ProjectState {
   // Шлях або handle до директорії проєкту (File System Access API)
   projectHandle: FileSystemDirectoryHandle | null
   // Обчислене з handle?.name — назва директорії проєкту
   projectDirectoryName: string | null
+  // Назва директорії до отримання дозволу (awaiting-permission)
+  pendingDirectoryName: string | null
   // Чи це новий (ще не збережений) проєкт
   isNewProject: boolean
   // Версія model на момент останнього збереження — для порівняння isDirty
@@ -38,6 +42,8 @@ export interface ProjectState {
   openWarnings: FileValidationError[]
   // Статус відновлення сесії
   sessionRestoreStatus: SessionRestoreStatus
+  // Походження поточного проєкту (як він був завантажений, не змінюється при save)
+  projectOrigin: ProjectOrigin
 }
 
 export interface ProjectActions {
@@ -74,9 +80,17 @@ export interface ProjectActions {
 
 export type ProjectStore = ProjectState & ProjectActions
 
-export const useProjectStore = create<ProjectStore>()((set, get) => ({
+export const useProjectStore = create<ProjectStore>()((set, get) => {
+  // Інваріант: projectHandle і projectDirectoryName завжди синхронізовані
+  const withHandle = (handle: FileSystemDirectoryHandle | null) => ({
+    projectHandle: handle,
+    projectDirectoryName: handle?.name ?? null,
+  })
+
+  return {
   projectHandle: null,
   projectDirectoryName: null,
+  pendingDirectoryName: null,
   isNewProject: true,
   lastSavedVersion: null,
   isSaving: false,
@@ -84,6 +98,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
   lastError: null,
   openWarnings: [],
   sessionRestoreStatus: 'idle' as SessionRestoreStatus,
+  projectOrigin: null as ProjectOrigin,
 
   newProject: (name) => {
     pauseDraftSync()
@@ -92,14 +107,16 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     useMetadataStore.temporal.getState().clear()
 
     set({
-      projectHandle: null,
-      projectDirectoryName: null,
+      ...withHandle(null),
+      pendingDirectoryName: null,
       isNewProject: true,
       lastSavedVersion: useMetadataStore.getState().version,
       isSaving: false,
       isLoading: false,
       lastError: null,
       openWarnings: [],
+      sessionRestoreStatus: 'restored',
+      projectOrigin: 'new',
     })
 
     // Очистити session і draft в IndexedDB
@@ -112,12 +129,12 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
     set((state) => ({
       lastSavedVersion: useMetadataStore.getState().version,
       isNewProject: false,
-      projectHandle: handle ?? state.projectHandle,
+      ...(handle ? withHandle(handle) : { projectHandle: state.projectHandle }),
     }))
   },
 
   setProjectHandle: (handle) => {
-    set({ projectHandle: handle })
+    set(withHandle(handle))
   },
 
   getIsDirty: () => {
@@ -152,8 +169,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
         isSaving: false,
         isNewProject: false,
         lastSavedVersion: snapshotVersion,
-        projectHandle: newHandle,
-        projectDirectoryName: newHandle?.name ?? null,
+        ...withHandle(newHandle),
       })
 
       // Оновити session в IndexedDB, очистити draft
@@ -184,9 +200,11 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
         isLoading: false,
         isNewProject: false,
         lastSavedVersion: version,
-        projectHandle: handle,
-        projectDirectoryName: handle?.name ?? null,
+        ...withHandle(handle),
         openWarnings: result.warnings ?? [],
+        sessionRestoreStatus: 'restored',
+        projectOrigin: handle ? 'directory' : 'zip-import',
+        pendingDirectoryName: null,
       })
 
       // Оновити session, очистити draft
@@ -234,9 +252,11 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
         isLoading: false,
         isNewProject: false,
         lastSavedVersion: version,
-        projectHandle: null,
-        projectDirectoryName: null,
+        ...withHandle(null),
         openWarnings: result.warnings ?? [],
+        sessionRestoreStatus: 'restored',
+        projectOrigin: 'zip-import',
+        pendingDirectoryName: null,
       })
 
       // Зберегти повноцінну session з handle: null (для restore flow після reload)
@@ -274,12 +294,13 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
 
           const version = useMetadataStore.getState().version
           set({
-            projectHandle: handle,
-            projectDirectoryName: handle.name,
+            ...withHandle(handle),
             isNewProject: false,
             lastSavedVersion: version,
             sessionRestoreStatus: 'restored',
             openWarnings: result.warnings ?? [],
+            projectOrigin: 'directory',
+            pendingDirectoryName: null,
           })
 
           // Перевірити чи є новіший draft (crash recovery)
@@ -298,7 +319,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
           // Потрібен user gesture — показати Welcome Screen з кнопкою
           set({
             sessionRestoreStatus: 'awaiting-permission',
-            projectDirectoryName: handle.name,
+            pendingDirectoryName: handle.name,
           })
           return
         }
@@ -307,15 +328,19 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       // Немає handle або denied — спробувати draft
       const draft = await loadDraft()
       if (draft) {
-        set({ sessionRestoreStatus: 'awaiting-permission' })
+        set({
+          sessionRestoreStatus: 'awaiting-permission',
+          pendingDirectoryName: handle?.name ?? null,
+        })
         return
       }
 
-      set({ sessionRestoreStatus: 'idle' })
+      set({ sessionRestoreStatus: 'idle', pendingDirectoryName: null })
     } catch (e) {
       resumeDraftSync()
       set({
         sessionRestoreStatus: 'failed',
+        pendingDirectoryName: null,
         lastError: e instanceof Error ? e.message : String(e),
       })
     }
@@ -345,12 +370,13 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
 
       const version = useMetadataStore.getState().version
       set({
-        projectHandle: handle,
-        projectDirectoryName: handle.name,
+        ...withHandle(handle),
         isNewProject: false,
         lastSavedVersion: version,
         sessionRestoreStatus: 'restored',
         openWarnings: result.warnings ?? [],
+        projectOrigin: 'directory',
+        pendingDirectoryName: null,
       })
 
       void saveSession(handle, result.model, version)
@@ -361,6 +387,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       resumeDraftSync()
       set({
         sessionRestoreStatus: 'failed',
+        pendingDirectoryName: null,
         lastError: e instanceof Error ? e.message : String(e),
       })
     }
@@ -382,10 +409,11 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       set({
         isLoading: false,
         isNewProject: false,
-        lastSavedVersion: draft.version,
-        projectHandle: null,
-        projectDirectoryName: null,
+        lastSavedVersion: null,
+        ...withHandle(null),
         sessionRestoreStatus: 'restored',
+        projectOrigin: 'draft-recovery',
+        pendingDirectoryName: null,
       })
       resumeDraftSync()
     } catch (e) {
@@ -396,4 +424,4 @@ export const useProjectStore = create<ProjectStore>()((set, get) => ({
       })
     }
   },
-}))
+}})

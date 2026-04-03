@@ -13,52 +13,52 @@
 ### Фаза 1: Критичні виправлення store (P0)
 
 #### 1.1 Race condition у saveProject — snapshot version до await
-- [x] У `saveProject` (`stores/project-store.ts`) зафіксувати і model, і version з одного синхронного snapshot **до** асинхронного запису на диск
-- [x] Поточний стан: model читається до await, але version — після. Якщо користувач змінить model під час IO, version буде новий, а на диску — стара модель
-- [x] `lastSavedVersion` оновлювати тільки збереженим snapshot version, не поточним runtime version
-- [x] Перевірити ту ж логіку в `openProject` — там version читається після loadModel, що коректно
+- [Х] У `saveProject` (`stores/project-store.ts`) зафіксувати і model, і version з одного синхронного snapshot **до** асинхронного запису на диск
+- [Х] Поточний стан: model читається до await, але version — після. Якщо користувач змінить model під час IO, version буде новий, а на диску — стара модель
+- [Х] `lastSavedVersion` оновлювати тільки збереженим snapshot version, не поточним runtime version
+- [Х] Перевірити ту ж логіку в `openProject` — там version читається після loadModel, що коректно
 
 #### 1.2 Draft-only restore після ZIP import
-- [x] У `importProject` (`stores/project-store.ts`) замість `clearSession()` + `saveDraftToDb()` зберігати повноцінну session через `saveSession(null, result.model, version)`
-- [x] Це єдина зміна: замість двох викликів — один `saveSession`. Draft-sync продовжить працювати окремо для crash recovery
-- [x] Перевірити: після reload з ZIP import → `restoreSession` знаходить session → Welcome Screen показує CTA → `restoreDraft` або `requestDirectoryPermission` працюють
+- [Х] У `importProject` (`stores/project-store.ts`) замість `clearSession()` + `saveDraftToDb()` зберігати повноцінну session через `saveSession(null, result.model, version)`
+- [Х] Це єдина зміна: замість двох викликів — один `saveSession`. Draft-sync продовжить працювати окремо для crash recovery
+- [Х] Перевірити: після reload з ZIP import → `restoreSession` знаходить session → Welcome Screen показує CTA → `restoreDraft` або `requestDirectoryPermission` працюють
 
 #### 1.3 Debounced draft не скасовується після save
-- [x] У `saveProject`, `openProject`, `newProject` замість прямого `void clearDraft()` викликати `stopAndClearDraft()` з `storage/draft-sync.ts`
-- [x] `stopAndClearDraft` вже існує, але жодного call site немає — це dead code
-- [x] Функція і скасовує pending debounce timer, і очищує IndexedDB — єдина точка відповідальності
-- [x] Залишити `pauseDraftSync()` / `resumeDraftSync()` як є — вони працюють коректно для load-time паузи
+- [Х] У `saveProject`, `openProject`, `newProject` замість прямого `void clearDraft()` викликати `stopAndClearDraft()` з `storage/draft-sync.ts`
+- [Х] `stopAndClearDraft` вже існує, але жодного call site немає — це dead code
+- [Х] Функція і скасовує pending debounce timer, і очищує IndexedDB — єдина точка відповідальності
+- [Х] Залишити `pauseDraftSync()` / `resumeDraftSync()` як є — вони працюють коректно для load-time паузи
 
 ### Фаза 2: State machine нормалізація (P1)
 
 #### 2.1 sessionRestoreStatus не нормалізується після open/import/new
-- [ ] У `newProject`, `openProject`, `importProject` додати `sessionRestoreStatus: 'restored'` до фінального `set({...})`
-- [ ] Без цього EditorPanel продовжує показувати Welcome Screen поверх вже завантаженої моделі, якщо немає відкритих вкладок
-- [ ] Логіка `showWelcome` в `editor-panel.tsx` залежить від sessionRestoreStatus — після successful open/import/new він має бути `restored`
+- [Х] У `newProject`, `openProject`, `importProject` додати `sessionRestoreStatus: 'restored'` до фінального `set({...})`
+- [Х] Без цього EditorPanel продовжує показувати Welcome Screen поверх вже завантаженої моделі, якщо немає відкритих вкладок
+- [Х] Логіка `showWelcome` в `editor-panel.tsx` залежить від sessionRestoreStatus — після successful open/import/new він має бути `restored`
 
 #### 2.2 Dirty-state після draft restore
-- [ ] У `restoreDraft` (`stores/project-store.ts`) записувати `lastSavedVersion: null` замість `draft.version`
-- [ ] Семантика: draft recovery — це незбережені зміни, dirty = true — коректна поведінка
-- [ ] Поточний стан хибно записує `draft.version` з попередньої сесії; після loadModel runtime counter вже інший, тому dirty буде випадково true/false залежно від порядку операцій
-- [ ] `lastSavedVersion: null` означає "ніколи не зберігалося на диск" → `getIsDirty()` → true → beforeunload працює
+- [Х] У `restoreDraft` (`stores/project-store.ts`) записувати `lastSavedVersion: null` замість `draft.version`
+- [Х] Семантика: draft recovery — це незбережені зміни, dirty = true — коректна поведінка
+- [Х] Поточний стан хибно записує `draft.version` з попередньої сесії; після loadModel runtime counter вже інший, тому dirty буде випадково true/false залежно від порядку операцій
+- [Х] `lastSavedVersion: null` означає "ніколи не зберігалося на диск" → `getIsDirty()` → true → beforeunload працює
 
 #### 2.3 Інваріант projectHandle / projectDirectoryName
-- [ ] Створити приватний helper у project-store (всередині create callback):
+- [Х] Створити приватний helper у project-store (всередині create callback):
   `const withHandle = (handle: FileSystemDirectoryHandle | null) => ({ projectHandle: handle, projectDirectoryName: handle?.name ?? null })`
-- [ ] Використовувати `...withHandle(handle)` скрізь, де store записує projectHandle, замість окремих присвоєнь (8 замін)
-- [ ] Окремо: для `awaiting-permission` path, де handle ще не в store, додати поле `pendingDirectoryName: string | null` до ProjectState
-- [ ] `pendingDirectoryName` записується тільки в `restoreSession` при prompt/denied, очищується при restored/failed/idle
-- [ ] StatusBar використовує `projectDirectoryName ?? pendingDirectoryName`
+- [Х] Використовувати `...withHandle(handle)` скрізь, де store записує projectHandle, замість окремих присвоєнь (8 замін)
+- [Х] Окремо: для `awaiting-permission` path, де handle ще не в store, додати поле `pendingDirectoryName: string | null` до ProjectState
+- [Х] `pendingDirectoryName` записується тільки в `restoreSession` при prompt/denied, очищується при restored/failed/idle
+- [Х] StatusBar використовує `projectDirectoryName ?? pendingDirectoryName`
 
 #### 2.4 Додати projectOrigin для коректного StatusBar
-- [ ] Додати поле `projectOrigin: 'new' | 'directory' | 'zip-import' | 'draft-recovery' | null` до ProjectState
-- [ ] Виставляти явно:
+- [Х] Додати поле `projectOrigin: 'new' | 'directory' | 'zip-import' | 'draft-recovery' | null` до ProjectState
+- [Х] Виставляти явно:
   - `newProject` → `'new'`
   - `openProject` з handle → `'directory'`, без handle (ZIP fallback) → `'zip-import'`
   - `importProject` → `'zip-import'`
   - `restoreDraft` → `'draft-recovery'`
   - `restoreSession`/`requestDirectoryPermission` з FS → `'directory'`
-- [ ] StatusBar (`ProjectDirectoryIndicator`) використовує `projectOrigin` замість евристики `!isNewProject && !projectHandle`
+- [Х] StatusBar (`ProjectDirectoryIndicator`) використовує `projectOrigin` замість евристики `!isNewProject && !projectHandle`
 
 ### Фаза 3: Crash recovery та permission fallback (P2)
 

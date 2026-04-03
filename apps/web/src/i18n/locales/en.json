@@ -197,6 +197,7 @@
     "openTabs_other": "{{count}} tabs",
     "projectDirectory": "{{name}}",
     "importedFromZip": "Imported from ZIP",
+    "draftRecovery": "Recovered from draft",
     "notSaved": "Not saved"
   },
   "storage": {
