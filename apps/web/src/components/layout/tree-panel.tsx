@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Tree, type NodeApi, type TreeApi } from 'react-arborist'
-import { useHotkeys } from 'react-hotkeys-hook'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Search01Icon, Cancel01Icon } from '@hugeicons/core-free-icons'
-import { Input } from '@workspace/ui/components/input'
+import { useCallback, useMemo, useRef, useState, useEffect } from "react"
+import { useTranslation } from "react-i18next"
+import { Tree, type NodeApi, type TreeApi } from "react-arborist"
+import { useHotkeys } from "react-hotkeys-hook"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Search01Icon, Cancel01Icon } from "@hugeicons/core-free-icons"
+import { Input } from "@workspace/ui/components/input"
 import {
   Dialog,
   DialogContent,
@@ -12,15 +12,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@workspace/ui/components/dialog'
-import { Button } from '@workspace/ui/components/button'
-import type { MetadataKind } from '@simetra/core'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useUiStore, refToTabId } from '@/stores/ui-store'
-import { findReferences, type Reference } from '@/lib/find-references'
-import { DeleteDialogContext, type TreeNodeData } from './tree/tree-types'
-import { buildTreeData } from './tree/tree-builder'
-import { TreeNode } from './tree/tree-nodes'
+} from "@workspace/ui/components/dialog"
+import { Button } from "@workspace/ui/components/button"
+import type { MetadataKind } from "@simetra/core"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useUiStore, refToTabId } from "@/stores/ui-store"
+import { findReferences, type Reference } from "@/lib/find-references"
+import { DeleteDialogContext, type TreeNodeData } from "./tree/tree-types"
+import { buildTreeData } from "./tree/tree-builder"
+import { TreeNode } from "./tree/tree-nodes"
 
 // --- Головний компонент ---
 
@@ -33,7 +33,10 @@ export function TreePanel() {
   const [searchVisible, setSearchVisible] = useState(false)
 
   // --- Delete dialog state (один на все дерево) ---
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: MetadataKind; name: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    kind: MetadataKind
+    name: string
+  } | null>(null)
   const [deleteRefs, setDeleteRefs] = useState<Reference[]>([])
 
   const requestDelete = useCallback((kind: MetadataKind, name: string) => {
@@ -46,7 +49,9 @@ export function TreePanel() {
   const confirmDelete = useCallback(() => {
     if (!deleteTarget) return
     useUiStore.getState().closeAllForObject(deleteTarget)
-    useMetadataStore.getState().deleteObject(deleteTarget.kind, deleteTarget.name)
+    useMetadataStore
+      .getState()
+      .deleteObject(deleteTarget.kind, deleteTarget.name)
     setDeleteTarget(null)
   }, [deleteTarget])
 
@@ -66,7 +71,7 @@ export function TreePanel() {
   const treeData = useMemo(
     () => buildTreeData(model, searchQuery),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, version, searchQuery],
+    [model, version, searchQuery]
   )
 
   // --- Розміри контейнера ---
@@ -90,7 +95,9 @@ export function TreePanel() {
   }, [expandedTreeNodes])
 
   // --- Selection ---
-  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(undefined)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(
+    undefined
+  )
 
   useEffect(() => {
     if (selectedObject) {
@@ -101,95 +108,98 @@ export function TreePanel() {
     } else {
       setSelectedNodeId(undefined)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedObject])
 
   // --- Обробники ---
-  const handleSelect = useCallback(
-    (nodes: NodeApi<TreeNodeData>[]) => {
-      if (nodes.length === 0) return
-      const node = nodes[0]
-      const d = node.data
+  const handleSelect = useCallback((nodes: NodeApi<TreeNodeData>[]) => {
+    if (nodes.length === 0) return
+    const node = nodes[0]
+    const d = node.data
 
-      if (d.nodeType === 'kind' || d.nodeType === 'group') {
-        setSelectedNodeId(undefined)
-        useUiStore.getState().selectObject(null)
-        return
-      }
+    if (d.nodeType === "kind" || d.nodeType === "group") {
+      setSelectedNodeId(undefined)
+      useUiStore.getState().selectObject(null)
+      return
+    }
 
-      setSelectedNodeId(node.id)
+    setSelectedNodeId(node.id)
 
-      if (d.nodeType === 'field' && d.objectName) {
-        const objectRef = { kind: d.kind, name: d.objectName }
-        useUiStore.getState().selectObject(objectRef)
+    if (d.nodeType === "field" && d.objectName) {
+      const objectRef = { kind: d.kind!, name: d.objectName }
+      useUiStore.getState().selectObject(objectRef)
 
-        if (d.groupKey === 'values') return
+      if (d.groupKey === "values") return
 
+      useUiStore.getState().selectField({
+        objectRef,
+        fieldName: d.name,
+        tabularSectionName: d.tabularSectionName,
+      })
+      return
+    }
+
+    if (d.nodeType === "tabularSection" && d.objectName) {
+      useUiStore.getState().selectObject({
+        kind: d.kind!,
+        name: d.objectName,
+      })
+      return
+    }
+
+    useUiStore.getState().selectObject({
+      kind: d.kind!,
+      name: d.name,
+    })
+  }, [])
+
+  const handleActivate = useCallback((node: NodeApi<TreeNodeData>) => {
+    const d = node.data
+
+    if (d.nodeType === "kind" || d.nodeType === "group") return
+
+    if (d.nodeType === "field" && d.objectName) {
+      useUiStore.getState().openTab({ kind: d.kind!, name: d.objectName })
+
+      if (d.groupKey !== "values") {
         useUiStore.getState().selectField({
-          objectRef,
+          objectRef: { kind: d.kind!, name: d.objectName },
           fieldName: d.name,
           tabularSectionName: d.tabularSectionName,
         })
-        return
       }
+      return
+    }
 
-      if (d.nodeType === 'tabularSection' && d.objectName) {
-        useUiStore.getState().selectObject({
-          kind: d.kind,
-          name: d.objectName,
-        })
-        return
-      }
+    if (d.nodeType === "tabularSection" && d.objectName) {
+      useUiStore.getState().openTab({ kind: d.kind!, name: d.objectName })
+      return
+    }
 
-      useUiStore.getState().selectObject({
-        kind: d.kind,
-        name: d.name,
-      })
-    },
-    [],
-  )
-
-  const handleActivate = useCallback(
-    (node: NodeApi<TreeNodeData>) => {
-      const d = node.data
-
-      if (d.nodeType === 'kind' || d.nodeType === 'group') return
-
-      if (d.nodeType === 'field' && d.objectName) {
-        useUiStore.getState().openTab({ kind: d.kind, name: d.objectName })
-
-        if (d.groupKey !== 'values') {
-          useUiStore.getState().selectField({
-            objectRef: { kind: d.kind, name: d.objectName },
-            fieldName: d.name,
-            tabularSectionName: d.tabularSectionName,
-          })
-        }
-        return
-      }
-
-      if (d.nodeType === 'tabularSection' && d.objectName) {
-        useUiStore.getState().openTab({ kind: d.kind, name: d.objectName })
-        return
-      }
-
-      useUiStore.getState().openTab({
-        kind: d.kind,
-        name: d.name,
-      })
-    },
-    [],
-  )
+    useUiStore.getState().openTab({
+      kind: d.kind!,
+      name: d.name,
+    })
+  }, [])
 
   const handleRename = useCallback(
-    ({ id, name }: { id: string; name: string; node: NodeApi<TreeNodeData> }) => {
-      const parts = id.split('/')
+    ({
+      id,
+      name,
+    }: {
+      id: string
+      name: string
+      node: NodeApi<TreeNodeData>
+    }) => {
+      const parts = id.split("/")
       if (parts.length !== 2) return
       const kind = parts[0] as MetadataKind
       const oldName = parts[1]
       if (name === oldName) return
 
-      const errors = useMetadataStore.getState().renameObject(kind, oldName, name)
+      const errors = useMetadataStore
+        .getState()
+        .renameObject(kind, oldName, name)
       if (errors) return
 
       const uiState = useUiStore.getState()
@@ -207,30 +217,32 @@ export function TreePanel() {
         uiState.openTab({ kind, name })
       }
     },
-    [],
+    []
   )
 
   // --- Hotkeys ---
   useHotkeys(
-    'mod+f',
+    "mod+f",
     (e) => {
       e.preventDefault()
       setSearchVisible(true)
       setTimeout(() => searchInputRef.current?.focus(), 0)
     },
-    { enableOnFormTags: true },
+    { enableOnFormTags: true }
   )
 
   useHotkeys(
-    'escape',
+    "escape",
     () => {
       if (searchVisible) {
         setSearchVisible(false)
-        setSearchQuery('')
-        treeRef.current?.focus(treeRef.current.focusedNode ?? treeRef.current.firstNode)
+        setSearchQuery("")
+        treeRef.current?.focus(
+          treeRef.current.focusedNode ?? treeRef.current.firstNode
+        )
       }
     },
-    { enableOnFormTags: true },
+    { enableOnFormTags: true }
   )
 
   // --- Search ---
@@ -238,49 +250,55 @@ export function TreePanel() {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setSearchQuery(e.target.value)
     },
-    [setSearchQuery],
+    [setSearchQuery]
   )
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         setSearchVisible(false)
-        setSearchQuery('')
-        treeRef.current?.focus(treeRef.current.focusedNode ?? treeRef.current.firstNode)
+        setSearchQuery("")
+        treeRef.current?.focus(
+          treeRef.current.focusedNode ?? treeRef.current.firstNode
+        )
       }
-      if (e.key === 'ArrowDown') {
+      if (e.key === "ArrowDown") {
         e.preventDefault()
         treeRef.current?.focus(treeRef.current.firstNode)
       }
     },
-    [setSearchQuery],
+    [setSearchQuery]
   )
 
   return (
     <DeleteDialogContext.Provider value={deleteDialogCtx}>
       <div
         className="flex h-full flex-col"
-        onFocus={() => useUiStore.getState().setFocusedPanel('tree')}
+        onFocus={() => useUiStore.getState().setFocusedPanel("tree")}
       >
         {/* Пошук */}
         {searchVisible && (
           <div className="flex items-center gap-1 border-b border-border px-1.5 py-1">
-            <HugeiconsIcon icon={Search01Icon} size={14} className="shrink-0 text-muted-foreground" />
+            <HugeiconsIcon
+              icon={Search01Icon}
+              size={14}
+              className="shrink-0 text-muted-foreground"
+            />
             <Input
               ref={searchInputRef}
               value={searchQuery}
               onChange={handleSearchChange}
               onKeyDown={handleSearchKeyDown}
-              placeholder={t('tree.searchPlaceholder')}
+              placeholder={t("tree.searchPlaceholder")}
               className="h-6 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
             />
             {searchQuery && (
               <button
                 type="button"
-                aria-label={t('action.close')}
+                aria-label={t("action.close")}
                 className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
                 onClick={() => {
-                  setSearchQuery('')
+                  setSearchQuery("")
                   searchInputRef.current?.focus()
                 }}
               >
@@ -293,11 +311,11 @@ export function TreePanel() {
         {!searchVisible && (
           <div className="flex items-center justify-between border-b border-border px-2 py-1">
             <span className="text-[0.6875rem] font-medium text-muted-foreground">
-              {t('commandPalette.group.objects')}
+              {t("commandPalette.group.objects")}
             </span>
             <button
               type="button"
-              aria-label={t('action.search')}
+              aria-label={t("action.search")}
               className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
               onClick={() => {
                 setSearchVisible(true)
@@ -332,8 +350,8 @@ export function TreePanel() {
             searchTerm={searchQuery}
             searchMatch={(node, term) => {
               const d = node.data
-              if (d.nodeType === 'kind') return true
-              if (d.nodeType === 'group') return true
+              if (d.nodeType === "kind") return true
+              if (d.nodeType === "group") return true
               return d.name.toLowerCase().includes(term.toLowerCase())
             }}
             padding={4}
@@ -345,8 +363,10 @@ export function TreePanel() {
         {/* Один діалог видалення на все дерево */}
         <DeleteConfirmDialog
           open={deleteTarget !== null}
-          onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
-          objectName={deleteTarget?.name ?? ''}
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null)
+          }}
+          objectName={deleteTarget?.name ?? ""}
           references={deleteRefs}
           onConfirm={confirmDelete}
         />
@@ -376,11 +396,11 @@ function DeleteConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('dialog.deleteTitle')}</DialogTitle>
+          <DialogTitle>{t("dialog.deleteTitle")}</DialogTitle>
           <DialogDescription>
             {references.length > 0
-              ? t('dialog.deleteWithReferences', { name: objectName })
-              : t('dialog.deleteMessage', { name: objectName })}
+              ? t("dialog.deleteWithReferences", { name: objectName })
+              : t("dialog.deleteMessage", { name: objectName })}
           </DialogDescription>
         </DialogHeader>
 
@@ -388,8 +408,12 @@ function DeleteConfirmDialog({
           <ul className="max-h-32 overflow-y-auto text-xs text-muted-foreground">
             {references.map((ref, i) => (
               <li key={i} className="py-0.5">
-                <span className="font-mono">{ref.from.kind}/{ref.from.name}</span>
-                <span className="ml-1 text-muted-foreground/70">({ref.via})</span>
+                <span className="font-mono">
+                  {ref.from.kind}/{ref.from.name}
+                </span>
+                <span className="ml-1 text-muted-foreground/70">
+                  ({ref.via})
+                </span>
               </li>
             ))}
           </ul>
@@ -397,10 +421,10 @@ function DeleteConfirmDialog({
 
         <DialogFooter>
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
-            {t('action.cancel')}
+            {t("action.cancel")}
           </Button>
           <Button variant="destructive" size="sm" onClick={onConfirm}>
-            {t('action.delete')}
+            {t("action.delete")}
           </Button>
         </DialogFooter>
       </DialogContent>

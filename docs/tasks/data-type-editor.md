@@ -78,49 +78,49 @@
 
 #### Рефакторинг TreeNodeData
 
-- [ ] Розширити `TreeNodeType` у `tree-types.ts` новими значеннями: `'primitiveType' | 'refKindGroup' | 'refTarget'`
-- [ ] Зробити `kind` **optional** у `TreeNodeData`: `kind?: MetadataKind`. Для нових node types (primitiveType) kind не має сенсу
-- [ ] Додати optional поля для type editor nodes:
+- [Х] Розширити `TreeNodeType` у `tree-types.ts` новими значеннями: `'primitiveType' | 'refKindGroup' | 'refTarget'`
+- [Х] Зробити `kind` **optional** у `TreeNodeData`: `kind?: MetadataKind`. Для нових node types (primitiveType) kind не має сенсу
+- [Х] Додати optional поля для type editor nodes:
   - `fieldTypeValue?: FieldType` — для primitiveType і refTarget (яке значення type це представляє)
   - `refTarget?: MetadataRef` — для refTarget (конкретний об'єкт посилання)
-  - `icon?: IconSvgElement` — explicit icon override (для primitive types де іконка береться з FIELD_TYPE_ICONS, а не з KIND_ICONS)
-  - `iconColor?: string` — explicit Tailwind color class override
+  - ~~`icon?: IconSvgElement` — explicit icon override~~ → відкладено: icon/iconColor **не додані** в TreeNodeData; buildTypeEditorTree не заповнює ці поля. Presentation layer в tree-node-presentation.tsx отримує іконки через FIELD_TYPE_ICONS/KIND_ICONS безпосередньо. Додати у Фазі 2, якщо знадобиться
+  - ~~`iconColor?: string` — explicit Tailwind color class override~~ → відкладено (див. вище)
   - `selectable?: boolean` — чи можна вибрати цей вузол (false для refKindGroup — тільки expand)
-- [ ] Оновити всі існуючі usages в `tree-nodes.tsx` і `tree-builder.ts`, щоб `kind` доступався через optional chaining або guards по `nodeType`
-- [ ] Додати TypeScript overloads або discriminated union утиліти якщо потрібно для type safety
+- [Х] Оновити всі існуючі usages в `tree-nodes.tsx` і `tree-builder.ts`, щоб `kind` доступався через optional chaining або guards по `nodeType`
+- [~] Додати TypeScript overloads або discriminated union утиліти якщо потрібно для type safety → **відкладено**: discriminated union потребує рефакторингу всіх споживачів TreeNodeData. Поки використовується `kind!` non-null assertion у sidebar nodes де kind гарантовано є. Розглянути у Фазі 2
 
 #### Рефакторинг TreeNode renderer
 
-- [ ] Розділити `tree-nodes.tsx` на два шари:
-  - **Presentation layer** — `TreeNodePresentation`: рендер іконки + label + badge. Без CRUD, без context menu, без store access. Pure visual.
+- [Х] Розділити `tree-nodes.tsx` на два шари:
+  - **Presentation layer** — `tree-node-presentation.tsx`: рендер іконки + label + badge. Без CRUD, без context menu, без store access. Pure visual.
   - **Interaction layer** — поточні `KindSectionNode`, `ObjectNode`, `GroupNode`, `FieldNode`, `TabularSectionNode`: обгортки навколо presentation + CRUD + context menu
-- [ ] Додати нові presentation-only renderers для нових node types:
-  - `PrimitiveTypeNode` — іконка з `FIELD_TYPE_ICONS` + локалізований label + radio/checkbox
-  - `RefKindGroupNode` — іконка з `KIND_ICONS` + label + expand arrow (не selectable)
-  - `RefTargetNode` — іконка kind + name об'єкта + radio/checkbox
-- [ ] Data Type Editor tree використовує ті ж presentation layers, але без interaction layer (без ContextMenu, без rename, без delete, без DnD)
+- [Х] Додати нові presentation-only renderers для нових node types:
+  - `PrimitiveTypePresentation` — іконка з `FIELD_TYPE_ICONS` + label + radio/checkbox
+  - `RefKindGroupPresentation` — іконка з `KIND_ICONS` + label + expand arrow (не selectable)
+  - `RefTargetPresentation` — іконка kind + name обʼєкта + radio/checkbox
+- [Х] Data Type Editor tree використовує ті ж presentation layers, але без interaction layer (без ContextMenu, без rename, без delete, без DnD)
 
 #### buildTypeEditorTree
 
-- [ ] Створити **експортовану** pure function `buildTypeEditorTree(model: ProjectModel, searchQuery: string): TreeNodeData[]` у `tree-builder.ts`
-- [ ] Source of truth для referenceable kinds: `referenceableKindSchema.options` з `@simetra/core` (замість локальної константи)
-- [ ] Структура дерева:
+- [Х] Створити **експортовану** pure function `buildTypeEditorTree(model: ProjectModel, searchQuery: string): TreeNodeData[]` у `tree-builder.ts`
+- [Х] Source of truth для referenceable kinds: `referenceableKindSchema.options` з `@simetra/core` (замість локальної константи)
+- [Х] Структура дерева:
   - Рівень 0: примітивні type nodes (`nodeType: 'primitiveType'`, `fieldTypeValue`, `icon` з `FIELD_TYPE_ICONS`, `selectable: true`)
   - Рівень 0: reference kind groups (`nodeType: 'refKindGroup'`, `kind` = Catalog/Document/Enumeration, `icon` з `KIND_ICONS`, `iconColor` з `KIND_COLORS`, `selectable: false`)
   - Рівень 1: reference targets (`nodeType: 'refTarget'`, `kind`, `fieldTypeValue: 'Ref'`, `refTarget: { kind, name }`, `selectable: true`)
-- [ ] Пошук: фільтрує і примітивні типи, і reference targets по name. При збігу в дочірньому — батьківський refKindGroup залишається видимим
-- [ ] Об'єкти для reference targets брати з `model` через `KIND_TO_KEY`
+- [Х] Пошук: фільтрує і примітивні типи, і reference targets по name. При збігу в дочірньому — батьківський refKindGroup залишається видимим
+- [Х] Обʼєкти для reference targets брати з `model` через `KIND_TO_KEY`
 
 #### Прибрати дублювання REFERENCEABLE_KINDS
 
-- [ ] Видалити `const REFERENCEABLE_KINDS` з `metadata-ref-picker.tsx`
-- [ ] Замінити на import: `import { referenceableKindSchema } from '@simetra/core'` → `referenceableKindSchema.options`
-- [ ] `buildTypeEditorTree` теж спирається на `referenceableKindSchema.options`
+- [Х] Видалити `const REFERENCEABLE_KINDS` з `metadata-ref-picker.tsx`
+- [Х] Замінити на import: `import { referenceableKindSchema } from '@simetra/core'` → `referenceableKindSchema.options`
+- [Х] `buildTypeEditorTree` теж спирається на `referenceableKindSchema.options`
 
 #### Винести useAvailableObjects
 
-- [ ] Перенести `useAvailableObjects` з `metadata-ref-picker.tsx` у `apps/web/src/hooks/use-available-objects.ts` (shared hook)
-- [ ] `metadata-ref-picker.tsx` і `DataTypeEditorDialog` обидва імпортують з shared hook
+- [Х] Перенести `useAvailableObjects` з `metadata-ref-picker.tsx` у `apps/web/src/hooks/use-available-objects.ts` (shared hook)
+- [Х] `metadata-ref-picker.tsx` і `DataTypeEditorDialog` обидва імпортують з shared hook
 
 ### Ризики
 
@@ -128,14 +128,26 @@
 - Рефакторинг renderer на два шари (presentation + interaction) — більший scope, але це інвестиція що прибирає дублювання надалі
 
 ### DoD фази 1
-- [ ] `TreeNodeData` підтримує нові nodeTypes без ламання існуючого sidebar
-- [ ] `buildTypeEditorTree` повертає дерево primitive types + ref kind groups + ref targets
-- [ ] Пошук по дереву type editor працює
-- [ ] Presentation layer відокремлений від interaction layer у tree-nodes
-- [ ] `REFERENCEABLE_KINDS` — одне джерело з core
-- [ ] `useAvailableObjects` — shared hook
-- [ ] Sidebar метаданих візуально і функціонально не змінився (regression-free)
-- [ ] `pnpm lint && pnpm typecheck` — зелене
+- [Х] `TreeNodeData` підтримує нові nodeTypes без ламання існуючого sidebar
+- [Х] `buildTypeEditorTree` повертає дерево primitive types + ref kind groups + ref targets
+- [Х] Пошук по дереву type editor працює
+- [Х] Presentation layer відокремлений від interaction layer у tree-nodes
+- [Х] `REFERENCEABLE_KINDS` — одне джерело з core
+- [Х] `useAvailableObjects` — shared hook
+- [Х] Sidebar метаданих візуально і функціонально не змінився (regression-free)
+- [Х] `pnpm lint && pnpm typecheck` — зелене
+
+### Зауваження з code review Фази 1
+
+> Наступні пункти виявлені під час code review і **відкладені** до наступних фаз.
+
+1. **Sidebar nodes не використовують presentation components** — sidebar `tree-nodes.tsx` (KindSectionNode, ObjectNode, тощо) не обгорнуті у `*Presentation` компоненти з `tree-node-presentation.tsx`. Причина: sidebar nodes обгорнуті Radix `ContextMenu.Trigger asChild`, що потребує `forwardRef` та Slot prop merging. Презентаційні компоненти створені для Phase 2 (Data Type Editor діалог) і працюють без Radix обгортки. Інтеграція sidebar → presentation — **окремий рефакторинг після Phase 2**, коли обидва use cases стабільні.
+
+2. **`icon` / `iconColor` поля не додані в `TreeNodeData`** — `buildTypeEditorTree` не заповнює ці поля. Presentation layer (`tree-node-presentation.tsx`) отримує іконки напряму через `FIELD_TYPE_ICONS` / `KIND_ICONS`. Якщо Phase 2 покаже необхідність — додати.
+
+3. **Discriminated union для `TreeNodeData`** — замість `kind?: MetadataKind` рекомендовано discriminated union по `nodeType`. Зараз використовується `kind!` non-null assertion у sidebar nodes. Рефакторинг потребує змін у всіх споживачах. Розглянути після Phase 2.
+
+4. **Unit тести для `buildTypeEditorTree`** — відкладені до Фази 5 (тести).
 
 ---
 

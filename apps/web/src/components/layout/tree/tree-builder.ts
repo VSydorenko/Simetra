@@ -1,7 +1,14 @@
-import type { MetadataKind, MetadataObject, Attribute, TabularSection, ProjectModel } from '@simetra/core'
-import { KIND_TO_KEY } from '@/lib/metadata-defaults'
-import { formatRefDisplay } from '@/lib/format-ref-display'
-import { SECTION_ORDER, type TreeNodeData } from './tree-types'
+import type {
+  MetadataKind,
+  MetadataObject,
+  Attribute,
+  TabularSection,
+  ProjectModel,
+} from "@simetra/core"
+import { fieldTypeSchema, referenceableKindSchema } from "@simetra/core"
+import { KIND_TO_KEY } from "@/lib/metadata-defaults"
+import { formatRefDisplay } from "@/lib/format-ref-display"
+import { SECTION_ORDER, type TreeNodeData } from "./tree-types"
 
 /** Вузли полів для attributes/dimensions/resources */
 function buildFieldNodes(
@@ -9,7 +16,7 @@ function buildFieldNodes(
   objectName: string,
   groupKey: string,
   attrs: Attribute[],
-  tabularSectionName?: string,
+  tabularSectionName?: string
 ): TreeNodeData[] {
   const basePath = tabularSectionName
     ? `${kind}/${objectName}/tabularSections/${tabularSectionName}`
@@ -19,9 +26,9 @@ function buildFieldNodes(
     id: `${basePath}/${attr.name}`,
     name: attr.name,
     kind,
-    nodeType: 'field' as const,
+    nodeType: "field" as const,
     objectName,
-    groupKey: tabularSectionName ? 'attributes' : groupKey,
+    groupKey: tabularSectionName ? "attributes" : groupKey,
     tabularSectionName,
     fieldType: attr.type,
     fieldTypeDisplay: formatRefDisplay(attr),
@@ -33,13 +40,13 @@ function buildGroupNode(
   kind: MetadataKind,
   objectName: string,
   groupKey: string,
-  children: TreeNodeData[],
+  children: TreeNodeData[]
 ): TreeNodeData {
   return {
     id: `${kind}/${objectName}/${groupKey}`,
     name: groupKey,
     kind,
-    nodeType: 'group',
+    nodeType: "group",
     objectName,
     groupKey,
     children,
@@ -47,74 +54,125 @@ function buildGroupNode(
 }
 
 /** Дочірні вузли обʼєкта залежно від kind */
-function buildObjectChildren(kind: MetadataKind, obj: MetadataObject): TreeNodeData[] {
+function buildObjectChildren(
+  kind: MetadataKind,
+  obj: MetadataObject
+): TreeNodeData[] {
   const children: TreeNodeData[] = []
 
-  if (kind === 'Enumeration') {
-    if ('values' in obj) {
+  if (kind === "Enumeration") {
+    if ("values" in obj) {
       const values = obj.values as { name: string }[]
       children.push(
-        buildGroupNode(kind, obj.name, 'values',
+        buildGroupNode(
+          kind,
+          obj.name,
+          "values",
           values.map((v) => ({
             id: `${kind}/${obj.name}/values/${v.name}`,
             name: v.name,
             kind,
-            nodeType: 'field' as const,
+            nodeType: "field" as const,
             objectName: obj.name,
-            groupKey: 'values',
-          })),
-        ),
+            groupKey: "values",
+          }))
+        )
       )
     }
-  } else if (kind === 'InformationRegister' || kind === 'AccumulationRegister') {
-    if ('dimensions' in obj) {
+  } else if (
+    kind === "InformationRegister" ||
+    kind === "AccumulationRegister"
+  ) {
+    if ("dimensions" in obj) {
       children.push(
-        buildGroupNode(kind, obj.name, 'dimensions',
-          buildFieldNodes(kind, obj.name, 'dimensions', obj.dimensions as Attribute[]),
-        ),
+        buildGroupNode(
+          kind,
+          obj.name,
+          "dimensions",
+          buildFieldNodes(
+            kind,
+            obj.name,
+            "dimensions",
+            obj.dimensions as Attribute[]
+          )
+        )
       )
     }
-    if ('resources' in obj) {
+    if ("resources" in obj) {
       children.push(
-        buildGroupNode(kind, obj.name, 'resources',
-          buildFieldNodes(kind, obj.name, 'resources', obj.resources as Attribute[]),
-        ),
+        buildGroupNode(
+          kind,
+          obj.name,
+          "resources",
+          buildFieldNodes(
+            kind,
+            obj.name,
+            "resources",
+            obj.resources as Attribute[]
+          )
+        )
       )
     }
-    if ('attributes' in obj) {
+    if ("attributes" in obj) {
       children.push(
-        buildGroupNode(kind, obj.name, 'attributes',
-          buildFieldNodes(kind, obj.name, 'attributes', obj.attributes as Attribute[]),
-        ),
+        buildGroupNode(
+          kind,
+          obj.name,
+          "attributes",
+          buildFieldNodes(
+            kind,
+            obj.name,
+            "attributes",
+            obj.attributes as Attribute[]
+          )
+        )
       )
     }
-  } else if (kind === 'Constant') {
+  } else if (kind === "Constant") {
     // Константа не має дочірніх структурних груп
   } else {
     // Catalog, Document, CustomTable
-    if ('attributes' in obj) {
+    if ("attributes" in obj) {
       children.push(
-        buildGroupNode(kind, obj.name, 'attributes',
-          buildFieldNodes(kind, obj.name, 'attributes', obj.attributes as Attribute[]),
-        ),
+        buildGroupNode(
+          kind,
+          obj.name,
+          "attributes",
+          buildFieldNodes(
+            kind,
+            obj.name,
+            "attributes",
+            obj.attributes as Attribute[]
+          )
+        )
       )
     }
-    if ('tabularSections' in obj && (kind === 'Catalog' || kind === 'Document')) {
+    if (
+      "tabularSections" in obj &&
+      (kind === "Catalog" || kind === "Document")
+    ) {
       const sections = obj.tabularSections as TabularSection[]
       children.push(
-        buildGroupNode(kind, obj.name, 'tabularSections',
+        buildGroupNode(
+          kind,
+          obj.name,
+          "tabularSections",
           sections.map((section) => ({
             id: `${kind}/${obj.name}/tabularSections/${section.name}`,
             name: section.name,
             kind,
-            nodeType: 'tabularSection' as const,
+            nodeType: "tabularSection" as const,
             objectName: obj.name,
-            groupKey: 'tabularSections',
+            groupKey: "tabularSections",
             children: buildFieldNodes(
-              kind, obj.name, 'attributes', section.attributes, section.name,
+              kind,
+              obj.name,
+              "attributes",
+              section.attributes,
+              section.name
             ),
-          })),
-        ),
+          }))
+        )
       )
     }
   }
@@ -126,38 +184,55 @@ function buildObjectChildren(kind: MetadataKind, obj: MetadataObject): TreeNodeD
 function objectMatchesSearch(obj: MetadataObject, lowerQuery: string): boolean {
   if (obj.name.toLowerCase().includes(lowerQuery)) return true
 
-  if ('attributes' in obj) {
-    if ((obj.attributes as Attribute[]).some((a) => a.name.toLowerCase().includes(lowerQuery))) {
+  if ("attributes" in obj) {
+    if (
+      (obj.attributes as Attribute[]).some((a) =>
+        a.name.toLowerCase().includes(lowerQuery)
+      )
+    ) {
       return true
     }
   }
 
-  if ('dimensions' in obj) {
-    if ((obj.dimensions as Attribute[]).some((a) => a.name.toLowerCase().includes(lowerQuery))) {
+  if ("dimensions" in obj) {
+    if (
+      (obj.dimensions as Attribute[]).some((a) =>
+        a.name.toLowerCase().includes(lowerQuery)
+      )
+    ) {
       return true
     }
   }
 
-  if ('resources' in obj) {
-    if ((obj.resources as Attribute[]).some((a) => a.name.toLowerCase().includes(lowerQuery))) {
+  if ("resources" in obj) {
+    if (
+      (obj.resources as Attribute[]).some((a) =>
+        a.name.toLowerCase().includes(lowerQuery)
+      )
+    ) {
       return true
     }
   }
 
-  if ('tabularSections' in obj) {
+  if ("tabularSections" in obj) {
     const sections = obj.tabularSections as TabularSection[]
-    if (sections.some((s) =>
-      s.name.toLowerCase().includes(lowerQuery) ||
-      s.attributes.some((a) => a.name.toLowerCase().includes(lowerQuery)),
-    )) {
+    if (
+      sections.some(
+        (s) =>
+          s.name.toLowerCase().includes(lowerQuery) ||
+          s.attributes.some((a) => a.name.toLowerCase().includes(lowerQuery))
+      )
+    ) {
       return true
     }
   }
 
-  if ('values' in obj) {
-    if ((obj.values as { name: string }[]).some((v) =>
-      v.name.toLowerCase().includes(lowerQuery),
-    )) {
+  if ("values" in obj) {
+    if (
+      (obj.values as { name: string }[]).some((v) =>
+        v.name.toLowerCase().includes(lowerQuery)
+      )
+    ) {
       return true
     }
   }
@@ -167,7 +242,7 @@ function objectMatchesSearch(obj: MetadataObject, lowerQuery: string): boolean {
 
 export function buildTreeData(
   model: ProjectModel,
-  searchQuery: string,
+  searchQuery: string
 ): TreeNodeData[] {
   const lowerQuery = searchQuery.toLowerCase()
 
@@ -183,16 +258,82 @@ export function buildTreeData(
       id: kind,
       name: kind,
       kind,
-      nodeType: 'kind' as const,
+      nodeType: "kind" as const,
       objectCount: objects.length,
       children: filtered.map((obj) => ({
         id: `${kind}/${obj.name}`,
         name: obj.name,
         kind,
-        nodeType: 'object' as const,
+        nodeType: "object" as const,
         objectName: obj.name,
         children: buildObjectChildren(kind, obj),
       })),
     }
   })
+}
+
+// --- Побудова дерева для Data Type Editor діалогу ---
+
+/** Примітивні типи (все окрім Ref — Ref представлений через refKindGroup/refTarget) */
+const PRIMITIVE_TYPES = fieldTypeSchema.options.filter((t) => t !== "Ref")
+
+/** Referenceable kinds — source of truth з core */
+const REFERENCEABLE_KINDS = referenceableKindSchema.options
+
+export function buildTypeEditorTree(
+  model: ProjectModel,
+  searchQuery: string
+): TreeNodeData[] {
+  const lowerQuery = searchQuery.toLowerCase()
+  const nodes: TreeNodeData[] = []
+
+  // Примітивні типи
+  for (const ft of PRIMITIVE_TYPES) {
+    if (searchQuery && !ft.toLowerCase().includes(lowerQuery)) continue
+    nodes.push({
+      id: `type/${ft}`,
+      name: ft,
+      nodeType: "primitiveType",
+      fieldTypeValue: ft,
+      selectable: true,
+    })
+  }
+
+  // Reference kind groups + targets
+  for (const refKind of REFERENCEABLE_KINDS) {
+    const key = KIND_TO_KEY[refKind as MetadataKind]
+    const objects = model[key] as MetadataObject[]
+
+    const filteredObjects = searchQuery
+      ? objects.filter((o) => o.name.toLowerCase().includes(lowerQuery))
+      : objects
+
+    // Показувати kind group, якщо є збіг у дочірніх або сам kind збігається
+    const kindMatches = refKind.toLowerCase().includes(lowerQuery)
+    if (searchQuery && !kindMatches && filteredObjects.length === 0) continue
+
+    // При збігу kind — показати всі дочірні targets
+    const objectsToShow = !searchQuery || kindMatches ? objects : filteredObjects
+
+    const children: TreeNodeData[] = objectsToShow.map((obj) => ({
+      id: `ref/${refKind}/${obj.name}`,
+      name: obj.name,
+      kind: refKind as MetadataKind,
+      nodeType: "refTarget" as const,
+      fieldTypeValue: "Ref" as const,
+      refTarget: { kind: refKind as MetadataKind, name: obj.name },
+      selectable: true,
+    }))
+
+    nodes.push({
+      id: `refKind/${refKind}`,
+      name: `${refKind}Ref`,
+      kind: refKind as MetadataKind,
+      nodeType: "refKindGroup",
+      selectable: false,
+      children,
+    })
+  }
+
+  return nodes
 }

@@ -1,7 +1,7 @@
-import { useCallback, useRef, useEffect, useContext } from 'react'
-import { useTranslation } from 'react-i18next'
-import type { NodeRendererProps, NodeApi } from 'react-arborist'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { useCallback, useRef, useEffect, useContext } from "react"
+import { useTranslation } from "react-i18next"
+import type { NodeRendererProps, NodeApi } from "react-arborist"
+import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   Copy01Icon,
@@ -10,40 +10,63 @@ import {
   LinkSquare02Icon,
   ArrowUp01Icon,
   ArrowDown01Icon,
-} from '@hugeicons/core-free-icons'
+} from "@hugeicons/core-free-icons"
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@workspace/ui/components/context-menu'
-import { Badge } from '@workspace/ui/components/badge'
-import { cn } from '@workspace/ui/lib/utils'
-import type { MetadataObject, Attribute, TabularSection } from '@simetra/core'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useUiStore } from '@/stores/ui-store'
-import { KIND_ICONS, KIND_COLORS, GROUP_ICONS, FIELD_TYPE_ICONS, DEFAULT_FIELD_ICON } from '@/lib/metadata-icons'
-import { createDefaultObject, generateUniqueName, getObjectNames, KIND_TO_KEY } from '@/lib/metadata-defaults'
-import { findReferences } from '@/lib/find-references'
-import { DeleteDialogContext, GROUP_ADD_KEYS, type TreeNodeData } from './tree-types'
+} from "@workspace/ui/components/context-menu"
+import { Badge } from "@workspace/ui/components/badge"
+import { cn } from "@workspace/ui/lib/utils"
+import type { MetadataObject, Attribute, TabularSection } from "@simetra/core"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useUiStore } from "@/stores/ui-store"
+import {
+  KIND_ICONS,
+  KIND_COLORS,
+  GROUP_ICONS,
+  FIELD_TYPE_ICONS,
+  DEFAULT_FIELD_ICON,
+} from "@/lib/metadata-icons"
+import {
+  createDefaultObject,
+  generateUniqueName,
+  getObjectNames,
+  KIND_TO_KEY,
+} from "@/lib/metadata-defaults"
+import { findReferences } from "@/lib/find-references"
+import {
+  DeleteDialogContext,
+  GROUP_ADD_KEYS,
+  type TreeNodeData,
+} from "./tree-types"
 
 // --- Рендерер вузлів ---
 
-export function TreeNode({ node, style, dragHandle }: NodeRendererProps<TreeNodeData>) {
+export function TreeNode({
+  node,
+  style,
+  dragHandle,
+}: NodeRendererProps<TreeNodeData>) {
   const data = node.data
 
   switch (data.nodeType) {
-    case 'kind':
-      return <KindSectionNode node={node} style={style} dragHandle={dragHandle} />
-    case 'object':
+    case "kind":
+      return (
+        <KindSectionNode node={node} style={style} dragHandle={dragHandle} />
+      )
+    case "object":
       return <ObjectNode node={node} style={style} dragHandle={dragHandle} />
-    case 'group':
+    case "group":
       return <GroupNode node={node} style={style} dragHandle={dragHandle} />
-    case 'field':
+    case "field":
       return <FieldNode node={node} style={style} dragHandle={dragHandle} />
-    case 'tabularSection':
-      return <TabularSectionNode node={node} style={style} dragHandle={dragHandle} />
+    case "tabularSection":
+      return (
+        <TabularSectionNode node={node} style={style} dragHandle={dragHandle} />
+      )
     default:
       return null
   }
@@ -62,19 +85,20 @@ function KindSectionNode({
 }) {
   const { t } = useTranslation()
   const data = node.data
-  const icon = KIND_ICONS[data.kind]
+  const kind = data.kind!
+  const icon = KIND_ICONS[kind]
 
   const handleAddObject = useCallback(() => {
     const model = useMetadataStore.getState().model
-    const existingNames = getObjectNames(model, data.kind)
-    const name = generateUniqueName(data.kind, existingNames)
-    const obj = createDefaultObject(data.kind, name)
+    const existingNames = getObjectNames(model, kind)
+    const name = generateUniqueName(kind, existingNames)
+    const obj = createDefaultObject(kind, name)
     const errors = useMetadataStore.getState().createObject(obj)
     if (!errors) {
-      useUiStore.getState().selectObject({ kind: data.kind, name })
+      useUiStore.getState().selectObject({ kind, name })
       node.open()
     }
-  }, [data.kind, node])
+  }, [kind, node])
 
   return (
     <ContextMenu>
@@ -83,22 +107,22 @@ function KindSectionNode({
           ref={dragHandle}
           style={style}
           className={cn(
-            'group flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isFocused && 'bg-accent',
+            "group flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
+            "hover:bg-accent/50",
+            node.isFocused && "bg-accent"
           )}
           onClick={() => node.toggle()}
         >
           <span className="shrink-0 text-[10px] text-muted-foreground">
-            {node.isOpen ? '▼' : '▶'}
+            {node.isOpen ? "▼" : "▶"}
           </span>
           <HugeiconsIcon
             icon={icon}
             size={14}
-            className={cn('shrink-0', KIND_COLORS[data.kind])}
+            className={cn("shrink-0", KIND_COLORS[kind])}
           />
           <span className="truncate font-medium">
-            {t(`metadata.kindPlural.${data.kind}`)}
+            {t(`metadata.kindPlural.${kind}`)}
           </span>
           {(data.objectCount ?? 0) > 0 && (
             <Badge
@@ -113,7 +137,7 @@ function KindSectionNode({
       <ContextMenuContent>
         <ContextMenuItem onClick={handleAddObject}>
           <HugeiconsIcon icon={Add01Icon} size={14} className="mr-2" />
-          {t('tree.addObject', { kind: t(`metadata.kind.${data.kind}`) })}
+          {t("tree.addObject", { kind: t(`metadata.kind.${kind}`) })}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -133,19 +157,20 @@ function ObjectNode({
 }) {
   const { t } = useTranslation()
   const data = node.data
-  const icon = KIND_ICONS[data.kind]
+  const kind = data.kind!
+  const icon = KIND_ICONS[kind]
   const { requestDelete } = useContext(DeleteDialogContext)
 
   const handleAdd = useCallback(() => {
     const model = useMetadataStore.getState().model
-    const existingNames = getObjectNames(model, data.kind)
-    const name = generateUniqueName(data.kind, existingNames)
-    const obj = createDefaultObject(data.kind, name)
+    const existingNames = getObjectNames(model, kind)
+    const name = generateUniqueName(kind, existingNames)
+    const obj = createDefaultObject(kind, name)
     const errors = useMetadataStore.getState().createObject(obj)
     if (!errors) {
-      useUiStore.getState().selectObject({ kind: data.kind, name })
+      useUiStore.getState().selectObject({ kind, name })
     }
-  }, [data.kind])
+  }, [kind])
 
   const handleRename = useCallback(() => {
     node.edit()
@@ -153,25 +178,25 @@ function ObjectNode({
 
   const handleDuplicate = useCallback(() => {
     const model = useMetadataStore.getState().model
-    const existingNames = getObjectNames(model, data.kind)
-    const newName = generateUniqueName(data.kind, existingNames)
-    useMetadataStore.getState().duplicateObject(data.kind, data.name, newName)
-    useUiStore.getState().selectObject({ kind: data.kind, name: newName })
-  }, [data.kind, data.name])
+    const existingNames = getObjectNames(model, kind)
+    const newName = generateUniqueName(kind, existingNames)
+    useMetadataStore.getState().duplicateObject(kind, data.name, newName)
+    useUiStore.getState().selectObject({ kind, name: newName })
+  }, [kind, data.name])
 
   const handleDelete = useCallback(() => {
-    requestDelete(data.kind, data.name)
-  }, [data.kind, data.name, requestDelete])
+    requestDelete(kind, data.name)
+  }, [kind, data.name, requestDelete])
 
   const handleWhereUsed = useCallback(() => {
     const model = useMetadataStore.getState().model
-    const refs = findReferences(model, data.kind, data.name)
+    const refs = findReferences(model, kind, data.name)
     if (refs.length === 0) {
       console.info(`"${data.name}" не використовується`)
     } else {
       console.info(`"${data.name}" використовується в:`, refs)
     }
-  }, [data.kind, data.name])
+  }, [kind, data.name])
 
   return (
     <ContextMenu>
@@ -180,10 +205,11 @@ function ObjectNode({
           ref={dragHandle}
           style={style}
           className={cn(
-            'flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isSelected && 'bg-accent text-accent-foreground border-l-2 border-primary',
-            node.isFocused && !node.isSelected && 'ring-1 ring-ring',
+            "flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
+            "hover:bg-accent/50",
+            node.isSelected &&
+              "border-l-2 border-primary bg-accent text-accent-foreground",
+            node.isFocused && !node.isSelected && "ring-1 ring-ring"
           )}
         >
           {/* Стрілка розгортання — тільки якщо є дочірні вузли */}
@@ -196,15 +222,15 @@ function ObjectNode({
                 node.toggle()
               }}
             >
-              {node.isOpen ? '▼' : '▶'}
+              {node.isOpen ? "▼" : "▶"}
             </button>
           ) : (
-            <span className="shrink-0 w-[10px]" />
+            <span className="w-[10px] shrink-0" />
           )}
           <HugeiconsIcon
             icon={icon}
             size={14}
-            className={cn('shrink-0', KIND_COLORS[data.kind])}
+            className={cn("shrink-0", KIND_COLORS[kind])}
           />
           {node.isEditing ? (
             <RenameInput node={node} />
@@ -218,21 +244,21 @@ function ObjectNode({
       <ContextMenuContent>
         <ContextMenuItem onClick={handleAdd}>
           <HugeiconsIcon icon={Add01Icon} size={14} className="mr-2" />
-          {t('tree.addObject', { kind: t(`metadata.kind.${data.kind}`) })}
+          {t("tree.addObject", { kind: t(`metadata.kind.${kind}`) })}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={handleRename}>
           <HugeiconsIcon icon={PencilEdit02Icon} size={14} className="mr-2" />
-          {t('tree.renameObject')}
+          {t("tree.renameObject")}
         </ContextMenuItem>
         <ContextMenuItem onClick={handleDuplicate}>
           <HugeiconsIcon icon={Copy01Icon} size={14} className="mr-2" />
-          {t('tree.duplicateObject')}
+          {t("tree.duplicateObject")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={handleWhereUsed}>
           <HugeiconsIcon icon={LinkSquare02Icon} size={14} className="mr-2" />
-          {t('tree.whereUsed')}
+          {t("tree.whereUsed")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -240,7 +266,7 @@ function ObjectNode({
           className="text-destructive focus:text-destructive"
         >
           <HugeiconsIcon icon={Delete02Icon} size={14} className="mr-2" />
-          {t('tree.deleteObject')}
+          {t("tree.deleteObject")}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -260,26 +286,31 @@ function GroupNode({
 }) {
   const { t } = useTranslation()
   const data = node.data
-  const groupIcon = GROUP_ICONS[data.groupKey ?? '']
+  const kind = data.kind!
+  const groupIcon = GROUP_ICONS[data.groupKey ?? ""]
 
   const handleAdd = useCallback(() => {
     if (!data.objectName || !data.groupKey) return
     const store = useMetadataStore.getState()
     const uiStore = useUiStore.getState()
-    const objectRef = { kind: data.kind, name: data.objectName }
+    const objectRef = { kind, name: data.objectName }
 
-    if (data.groupKey === 'attributes' || data.groupKey === 'dimensions' || data.groupKey === 'resources') {
-      const key = KIND_TO_KEY[data.kind]
+    if (
+      data.groupKey === "attributes" ||
+      data.groupKey === "dimensions" ||
+      data.groupKey === "resources"
+    ) {
+      const key = KIND_TO_KEY[kind]
       const objects = store.model[key] as MetadataObject[]
       const obj = objects.find((o) => o.name === data.objectName)
       if (!obj) return
 
       const existingAttrs: Attribute[] =
-        data.groupKey === 'dimensions' && 'dimensions' in obj
+        data.groupKey === "dimensions" && "dimensions" in obj
           ? (obj.dimensions as Attribute[])
-          : data.groupKey === 'resources' && 'resources' in obj
+          : data.groupKey === "resources" && "resources" in obj
             ? (obj.resources as Attribute[])
-            : 'attributes' in obj
+            : "attributes" in obj
               ? (obj.attributes as Attribute[])
               : []
 
@@ -288,19 +319,19 @@ function GroupNode({
       while (existing.has(`new_field_${i}`)) i++
       const attr: Attribute = {
         name: `new_field_${i}`,
-        type: data.groupKey === 'resources' ? 'Numeric' : 'String',
+        type: data.groupKey === "resources" ? "Numeric" : "String",
         required: false,
         indexed: false,
         unique: false,
         defaultValue: null,
       }
 
-      if (data.groupKey === 'dimensions') {
-        store.addDimension(data.kind, data.objectName, attr)
-      } else if (data.groupKey === 'resources') {
-        store.addResource(data.kind, data.objectName, attr)
+      if (data.groupKey === "dimensions") {
+        store.addDimension(kind, data.objectName, attr)
+      } else if (data.groupKey === "resources") {
+        store.addResource(kind, data.objectName, attr)
       } else {
-        store.addAttribute(data.kind, data.objectName, attr)
+        store.addAttribute(kind, data.objectName, attr)
       }
 
       node.open()
@@ -309,27 +340,27 @@ function GroupNode({
         objectRef,
         fieldName: attr.name,
       })
-      uiStore.setFocusedPanel('properties')
-    } else if (data.groupKey === 'tabularSections') {
-      const key = KIND_TO_KEY[data.kind]
+      uiStore.setFocusedPanel("properties")
+    } else if (data.groupKey === "tabularSections") {
+      const key = KIND_TO_KEY[kind]
       const objects = store.model[key] as MetadataObject[]
       const obj = objects.find((o) => o.name === data.objectName)
-      if (!obj || !('tabularSections' in obj)) return
+      if (!obj || !("tabularSections" in obj)) return
 
       const sections = obj.tabularSections as TabularSection[]
       let i = 1
       const existing = new Set(sections.map((s) => s.name))
       while (existing.has(`section_${i}`)) i++
       const section: TabularSection = { name: `section_${i}`, attributes: [] }
-      store.addTabularSection(data.kind, data.objectName, section)
+      store.addTabularSection(kind, data.objectName, section)
 
       node.open()
       uiStore.selectObject(objectRef)
-    } else if (data.groupKey === 'values') {
-      const key = KIND_TO_KEY[data.kind]
+    } else if (data.groupKey === "values") {
+      const key = KIND_TO_KEY[kind]
       const objects = store.model[key] as MetadataObject[]
       const obj = objects.find((o) => o.name === data.objectName)
-      if (!obj || !('values' in obj)) return
+      if (!obj || !("values" in obj)) return
 
       const values = obj.values as { name: string }[]
       let i = 1
@@ -343,7 +374,7 @@ function GroupNode({
       node.open()
       uiStore.selectObject(objectRef)
     }
-  }, [data, node])
+  }, [data, kind, node])
 
   return (
     <ContextMenu>
@@ -352,14 +383,14 @@ function GroupNode({
           ref={dragHandle}
           style={style}
           className={cn(
-            'group flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isFocused && 'bg-accent',
+            "group flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
+            "hover:bg-accent/50",
+            node.isFocused && "bg-accent"
           )}
           onClick={() => node.toggle()}
         >
           <span className="shrink-0 text-[10px] text-muted-foreground">
-            {node.isOpen ? '▼' : '▶'}
+            {node.isOpen ? "▼" : "▶"}
           </span>
           {groupIcon && (
             <HugeiconsIcon
@@ -384,7 +415,7 @@ function GroupNode({
       <ContextMenuContent>
         <ContextMenuItem onClick={handleAdd}>
           <HugeiconsIcon icon={Add01Icon} size={14} className="mr-2" />
-          {t(GROUP_ADD_KEYS[data.groupKey ?? ''] ?? 'action.add')}
+          {t(GROUP_ADD_KEYS[data.groupKey ?? ""] ?? "action.add")}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -404,67 +435,81 @@ function FieldNode({
 }) {
   const { t } = useTranslation()
   const data = node.data
-  const fieldIcon = FIELD_TYPE_ICONS[data.fieldType ?? ''] ?? DEFAULT_FIELD_ICON
+  const kind = data.kind!
+  const fieldIcon = FIELD_TYPE_ICONS[data.fieldType ?? ""] ?? DEFAULT_FIELD_ICON
 
   const handleDelete = useCallback(() => {
     if (!data.objectName || !data.groupKey) return
     const store = useMetadataStore.getState()
 
-    if (data.groupKey === 'values') {
+    if (data.groupKey === "values") {
       store.removeEnumValue(data.objectName, data.name)
     } else if (data.tabularSectionName) {
-      store.removeTabularSectionAttribute(data.kind, data.objectName, data.tabularSectionName, data.name)
-    } else if (data.groupKey === 'dimensions') {
-      store.removeDimension(data.kind, data.objectName, data.name)
-    } else if (data.groupKey === 'resources') {
-      store.removeResource(data.kind, data.objectName, data.name)
+      store.removeTabularSectionAttribute(
+        kind,
+        data.objectName,
+        data.tabularSectionName,
+        data.name
+      )
+    } else if (data.groupKey === "dimensions") {
+      store.removeDimension(kind, data.objectName, data.name)
+    } else if (data.groupKey === "resources") {
+      store.removeResource(kind, data.objectName, data.name)
     } else {
-      store.removeAttribute(data.kind, data.objectName, data.name)
+      store.removeAttribute(kind, data.objectName, data.name)
     }
     useUiStore.getState().selectField(null)
-  }, [data])
+  }, [data, kind])
 
   const handleMove = useCallback(
-    (direction: 'up' | 'down') => {
+    (direction: "up" | "down") => {
       if (!data.objectName || !data.groupKey) return
       const store = useMetadataStore.getState()
-      const key = KIND_TO_KEY[data.kind]
+      const key = KIND_TO_KEY[kind]
       const objects = store.model[key] as MetadataObject[]
       const obj = objects.find((o) => o.name === data.objectName)
       if (!obj) return
 
       let attrs: Attribute[] | { name: string }[] = []
-      if (data.groupKey === 'values' && 'values' in obj) {
+      if (data.groupKey === "values" && "values" in obj) {
         attrs = obj.values as { name: string }[]
-      } else if (data.tabularSectionName && 'tabularSections' in obj) {
-        const ts = (obj.tabularSections as TabularSection[]).find((s) => s.name === data.tabularSectionName)
+      } else if (data.tabularSectionName && "tabularSections" in obj) {
+        const ts = (obj.tabularSections as TabularSection[]).find(
+          (s) => s.name === data.tabularSectionName
+        )
         if (ts) attrs = ts.attributes
-      } else if (data.groupKey === 'dimensions' && 'dimensions' in obj) {
+      } else if (data.groupKey === "dimensions" && "dimensions" in obj) {
         attrs = obj.dimensions as Attribute[]
-      } else if (data.groupKey === 'resources' && 'resources' in obj) {
+      } else if (data.groupKey === "resources" && "resources" in obj) {
         attrs = obj.resources as Attribute[]
-      } else if ('attributes' in obj) {
+      } else if ("attributes" in obj) {
         attrs = obj.attributes as Attribute[]
       }
 
       const idx = attrs.findIndex((a) => a.name === data.name)
       if (idx === -1) return
-      const newIdx = direction === 'up' ? idx - 1 : idx + 1
+      const newIdx = direction === "up" ? idx - 1 : idx + 1
       if (newIdx < 0 || newIdx >= attrs.length) return
 
-      if (data.groupKey === 'values') {
+      if (data.groupKey === "values") {
         store.reorderEnumValues(data.objectName, idx, newIdx)
       } else if (data.tabularSectionName) {
-        store.reorderTabularSectionAttributes(data.kind, data.objectName, data.tabularSectionName, idx, newIdx)
-      } else if (data.groupKey === 'dimensions') {
-        store.reorderDimensions(data.kind, data.objectName, idx, newIdx)
-      } else if (data.groupKey === 'resources') {
-        store.reorderResources(data.kind, data.objectName, idx, newIdx)
+        store.reorderTabularSectionAttributes(
+          kind,
+          data.objectName,
+          data.tabularSectionName,
+          idx,
+          newIdx
+        )
+      } else if (data.groupKey === "dimensions") {
+        store.reorderDimensions(kind, data.objectName, idx, newIdx)
+      } else if (data.groupKey === "resources") {
+        store.reorderResources(kind, data.objectName, idx, newIdx)
       } else {
-        store.reorderAttributes(data.kind, data.objectName, idx, newIdx)
+        store.reorderAttributes(kind, data.objectName, idx, newIdx)
       }
     },
-    [data],
+    [data, kind]
   )
 
   return (
@@ -474,10 +519,11 @@ function FieldNode({
           ref={dragHandle}
           style={style}
           className={cn(
-            'flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isSelected && 'bg-accent text-accent-foreground border-l-2 border-primary',
-            node.isFocused && !node.isSelected && 'ring-1 ring-ring',
+            "flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
+            "hover:bg-accent/50",
+            node.isSelected &&
+              "border-l-2 border-primary bg-accent text-accent-foreground",
+            node.isFocused && !node.isSelected && "ring-1 ring-ring"
           )}
         >
           <HugeiconsIcon
@@ -494,13 +540,13 @@ function FieldNode({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem onClick={() => handleMove('up')}>
+        <ContextMenuItem onClick={() => handleMove("up")}>
           <HugeiconsIcon icon={ArrowUp01Icon} size={14} className="mr-2" />
-          {t('tree.moveUp')}
+          {t("tree.moveUp")}
         </ContextMenuItem>
-        <ContextMenuItem onClick={() => handleMove('down')}>
+        <ContextMenuItem onClick={() => handleMove("down")}>
           <HugeiconsIcon icon={ArrowDown01Icon} size={14} className="mr-2" />
-          {t('tree.moveDown')}
+          {t("tree.moveDown")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -508,7 +554,7 @@ function FieldNode({
           className="text-destructive focus:text-destructive"
         >
           <HugeiconsIcon icon={Delete02Icon} size={14} className="mr-2" />
-          {t('tree.deleteField')}
+          {t("tree.deleteField")}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -528,17 +574,20 @@ function TabularSectionNode({
 }) {
   const { t } = useTranslation()
   const data = node.data
+  const kind = data.kind!
   const groupIcon = GROUP_ICONS.tabularSections
 
   const handleAddAttribute = useCallback(() => {
     if (!data.objectName) return
     const store = useMetadataStore.getState()
-    const key = KIND_TO_KEY[data.kind]
+    const key = KIND_TO_KEY[kind]
     const objects = store.model[key] as MetadataObject[]
     const obj = objects.find((o) => o.name === data.objectName)
-    if (!obj || !('tabularSections' in obj)) return
+    if (!obj || !("tabularSections" in obj)) return
 
-    const ts = (obj.tabularSections as TabularSection[]).find((s) => s.name === data.name)
+    const ts = (obj.tabularSections as TabularSection[]).find(
+      (s) => s.name === data.name
+    )
     if (!ts) return
 
     let i = 1
@@ -546,30 +595,32 @@ function TabularSectionNode({
     while (existing.has(`new_field_${i}`)) i++
     const attr: Attribute = {
       name: `new_field_${i}`,
-      type: 'String',
+      type: "String",
       required: false,
       indexed: false,
       unique: false,
       defaultValue: null,
     }
-    store.addTabularSectionAttribute(data.kind, data.objectName, data.name, attr)
+    store.addTabularSectionAttribute(kind, data.objectName, data.name, attr)
 
     node.open()
     const uiStore = useUiStore.getState()
-    const objectRef = { kind: data.kind, name: data.objectName }
+    const objectRef = { kind, name: data.objectName }
     uiStore.selectObject(objectRef)
     uiStore.selectField({
       objectRef,
       fieldName: attr.name,
       tabularSectionName: data.name,
     })
-    uiStore.setFocusedPanel('properties')
-  }, [data, node])
+    uiStore.setFocusedPanel("properties")
+  }, [data, kind, node])
 
   const handleDelete = useCallback(() => {
     if (!data.objectName) return
-    useMetadataStore.getState().removeTabularSection(data.kind, data.objectName, data.name)
-  }, [data])
+    useMetadataStore
+      .getState()
+      .removeTabularSection(kind, data.objectName, data.name)
+  }, [data, kind])
 
   return (
     <ContextMenu>
@@ -578,16 +629,17 @@ function TabularSectionNode({
           ref={dragHandle}
           style={style}
           className={cn(
-            'flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isSelected && 'bg-accent text-accent-foreground border-l-2 border-primary',
-            node.isFocused && !node.isSelected && 'ring-1 ring-ring',
+            "flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
+            "hover:bg-accent/50",
+            node.isSelected &&
+              "border-l-2 border-primary bg-accent text-accent-foreground",
+            node.isFocused && !node.isSelected && "ring-1 ring-ring"
           )}
           onClick={() => node.toggle()}
         >
           {node.children && node.children.length > 0 && (
             <span className="shrink-0 text-[10px] text-muted-foreground">
-              {node.isOpen ? '▼' : '▶'}
+              {node.isOpen ? "▼" : "▶"}
             </span>
           )}
           {groupIcon && (
@@ -611,7 +663,7 @@ function TabularSectionNode({
       <ContextMenuContent>
         <ContextMenuItem onClick={handleAddAttribute}>
           <HugeiconsIcon icon={Add01Icon} size={14} className="mr-2" />
-          {t('tree.addAttribute')}
+          {t("tree.addAttribute")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -619,7 +671,7 @@ function TabularSectionNode({
           className="text-destructive focus:text-destructive"
         >
           <HugeiconsIcon icon={Delete02Icon} size={14} className="mr-2" />
-          {t('tree.deleteTabularSection')}
+          {t("tree.deleteTabularSection")}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -644,10 +696,10 @@ function RenameInput({ node }: { node: NodeApi<TreeNodeData> }) {
       className="h-5 w-full rounded-sm border border-ring bg-background px-1 font-mono text-[0.75rem] outline-none"
       onBlur={() => node.reset()}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
+        if (e.key === "Enter") {
           node.submit(e.currentTarget.value)
         }
-        if (e.key === 'Escape') {
+        if (e.key === "Escape") {
           node.reset()
         }
       }}

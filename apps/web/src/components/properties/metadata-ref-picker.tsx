@@ -1,14 +1,14 @@
-import { useCallback, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Button } from '@workspace/ui/components/button'
-import { Badge } from '@workspace/ui/components/badge'
-import { Checkbox } from '@workspace/ui/components/checkbox'
-import { Label } from '@workspace/ui/components/label'
+import { useCallback, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { Button } from "@workspace/ui/components/button"
+import { Badge } from "@workspace/ui/components/badge"
+import { Checkbox } from "@workspace/ui/components/checkbox"
+import { Label } from "@workspace/ui/components/label"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@workspace/ui/components/popover'
+} from "@workspace/ui/components/popover"
 import {
   Command,
   CommandEmpty,
@@ -16,30 +16,13 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@workspace/ui/components/command'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { KIND_TO_KEY } from '@/lib/metadata-defaults'
-import type { Attribute, MetadataKind, MetadataRef } from '@simetra/core'
+} from "@workspace/ui/components/command"
+import { referenceableKindSchema } from "@simetra/core"
+import type { Attribute, MetadataRef } from "@simetra/core"
+import { useAvailableObjects } from "@/hooks/use-available-objects"
 
-/** Дозволені kinds для reference-полів */
-const REFERENCEABLE_KINDS: MetadataKind[] = ['Catalog', 'Document', 'Enumeration']
-
-/** Хук для отримання списку доступних обʼєктів за kinds */
-function useAvailableObjects(allowedKinds: MetadataKind[]): MetadataRef[] {
-  const model = useMetadataStore((s) => s.model)
-
-  return useMemo(() => {
-    const result: MetadataRef[] = []
-    for (const kind of allowedKinds) {
-      const key = KIND_TO_KEY[kind]
-      const objects = model[key] as { name: string }[]
-      for (const obj of objects) {
-        result.push({ kind, name: obj.name })
-      }
-    }
-    return result
-  }, [model, allowedKinds])
-}
+/** Referenceable kinds — source of truth з core */
+const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
 // ---------------------------------------------------------------------------
 // MetadataRefPicker — unified picker для attribute.ref (single / polymorphic)
@@ -72,9 +55,9 @@ export function MetadataRefPicker({
     () =>
       !refValue ||
       availableObjects.some(
-        (o) => o.kind === refValue.kind && o.name === refValue.name,
+        (o) => o.kind === refValue.kind && o.name === refValue.name
       ),
-    [refValue, availableObjects],
+    [refValue, availableObjects]
   )
 
   const handleTogglePolymorphic = useCallback(
@@ -90,7 +73,7 @@ export function MetadataRefPicker({
         })
       }
     },
-    [refValue, onChange],
+    [refValue, onChange]
   )
 
   const handleSelectSingle = useCallback(
@@ -100,7 +83,7 @@ export function MetadataRefPicker({
       onChange({ ref: isSame ? undefined : ref })
       setOpen(false)
     },
-    [refValue, onChange],
+    [refValue, onChange]
   )
 
   const handleClear = useCallback(() => {
@@ -111,7 +94,7 @@ export function MetadataRefPicker({
   // Polymorphic mode — toggle selection
   const selectedSet = useMemo(
     () => new Set((allowedTypes ?? []).map((r) => `${r.kind}/${r.name}`)),
-    [allowedTypes],
+    [allowedTypes]
   )
 
   const handleToggleRef = useCallback(
@@ -119,12 +102,14 @@ export function MetadataRefPicker({
       const key = `${ref.kind}/${ref.name}`
       const current = allowedTypes ?? []
       if (selectedSet.has(key)) {
-        onChange({ allowedTypes: current.filter((r) => `${r.kind}/${r.name}` !== key) })
+        onChange({
+          allowedTypes: current.filter((r) => `${r.kind}/${r.name}` !== key),
+        })
       } else {
         onChange({ allowedTypes: [...current, ref] })
       }
     },
-    [allowedTypes, selectedSet, onChange],
+    [allowedTypes, selectedSet, onChange]
   )
 
   const handleRemoveFromAllowed = useCallback(
@@ -132,11 +117,11 @@ export function MetadataRefPicker({
       const current = allowedTypes ?? []
       onChange({
         allowedTypes: current.filter(
-          (r) => !(r.kind === ref.kind && r.name === ref.name),
+          (r) => !(r.kind === ref.kind && r.name === ref.name)
         ),
       })
     },
-    [allowedTypes, onChange],
+    [allowedTypes, onChange]
   )
 
   // Derive display value for single mode
@@ -158,7 +143,7 @@ export function MetadataRefPicker({
             onCheckedChange={(v) => handleTogglePolymorphic(v === true)}
           />
           <Label htmlFor="polymorphic-toggle" className="text-xs">
-            {t('refPicker.compoundType')}
+            {t("refPicker.compoundType")}
           </Label>
         </div>
 
@@ -179,7 +164,7 @@ export function MetadataRefPicker({
                   type="button"
                   className="ml-0.5 hover:text-destructive"
                   onClick={() => handleRemoveFromAllowed(ref)}
-                  aria-label={t('action.delete')}
+                  aria-label={t("action.delete")}
                 >
                   <X className="h-2.5 w-2.5" />
                 </button>
@@ -200,7 +185,7 @@ export function MetadataRefPicker({
               className="h-7 w-full justify-between text-xs font-normal"
             >
               <span className="text-muted-foreground">
-                {t('refPicker.addPlaceholder')}
+                {t("refPicker.addPlaceholder")}
               </span>
               <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
             </Button>
@@ -208,18 +193,23 @@ export function MetadataRefPicker({
           <PopoverContent className="w-[200px] p-0" align="start">
             <Command>
               <CommandInput
-                placeholder={t('refPicker.searchPlaceholder')}
+                placeholder={t("refPicker.searchPlaceholder")}
                 className="h-8 text-xs"
               />
               <CommandList>
                 <CommandEmpty className="py-3 text-center text-xs">
-                  {t('refPicker.noResults')}
+                  {t("refPicker.noResults")}
                 </CommandEmpty>
                 {REFERENCEABLE_KINDS.map((kind) => {
-                  const kindObjects = availableObjects.filter((o) => o.kind === kind)
+                  const kindObjects = availableObjects.filter(
+                    (o) => o.kind === kind
+                  )
                   if (kindObjects.length === 0) return null
                   return (
-                    <CommandGroup key={kind} heading={t(`metadata.kindPlural.${kind}`)}>
+                    <CommandGroup
+                      key={kind}
+                      heading={t(`metadata.kindPlural.${kind}`)}
+                    >
                       {kindObjects.map((ref) => {
                         const key = `${ref.kind}/${ref.name}`
                         const isSelected = selectedSet.has(key)
@@ -231,7 +221,7 @@ export function MetadataRefPicker({
                             className="text-xs"
                           >
                             <Check
-                              className={`mr-2 h-3 w-3 ${isSelected ? 'opacity-100' : 'opacity-0'}`}
+                              className={`mr-2 h-3 w-3 ${isSelected ? "opacity-100" : "opacity-0"}`}
                             />
                             {ref.name}
                           </CommandItem>
@@ -259,7 +249,7 @@ export function MetadataRefPicker({
           onCheckedChange={(v) => handleTogglePolymorphic(v === true)}
         />
         <Label htmlFor="polymorphic-toggle" className="text-xs">
-          {t('refPicker.compoundType')}
+          {t("refPicker.compoundType")}
         </Label>
       </div>
 
@@ -273,8 +263,8 @@ export function MetadataRefPicker({
               aria-expanded={open}
               className="h-7 w-full justify-between text-xs font-normal"
             >
-              <span className={displayValue ? '' : 'text-muted-foreground'}>
-                {displayValue ?? t('refPicker.placeholder')}
+              <span className={displayValue ? "" : "text-muted-foreground"}>
+                {displayValue ?? t("refPicker.placeholder")}
               </span>
               <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
             </Button>
@@ -282,30 +272,36 @@ export function MetadataRefPicker({
           <PopoverContent className="w-[200px] p-0" align="start">
             <Command>
               <CommandInput
-                placeholder={t('refPicker.searchPlaceholder')}
+                placeholder={t("refPicker.searchPlaceholder")}
                 className="h-8 text-xs"
               />
               <CommandList>
                 <CommandEmpty className="py-3 text-center text-xs">
-                  {t('refPicker.noResults')}
+                  {t("refPicker.noResults")}
                 </CommandEmpty>
                 {REFERENCEABLE_KINDS.map((kind) => {
-                  const kindObjects = availableObjects.filter((o) => o.kind === kind)
+                  const kindObjects = availableObjects.filter(
+                    (o) => o.kind === kind
+                  )
                   if (kindObjects.length === 0) return null
                   return (
-                    <CommandGroup key={kind} heading={t(`metadata.kindPlural.${kind}`)}>
+                    <CommandGroup
+                      key={kind}
+                      heading={t(`metadata.kindPlural.${kind}`)}
+                    >
                       {refValue && (
                         <CommandItem
                           value="__clear__"
                           onSelect={handleClear}
                           className="text-xs text-muted-foreground"
                         >
-                          {t('refPicker.clear')}
+                          {t("refPicker.clear")}
                         </CommandItem>
                       )}
                       {kindObjects.map((ref) => {
                         const isSelected =
-                          refValue?.kind === ref.kind && refValue?.name === ref.name
+                          refValue?.kind === ref.kind &&
+                          refValue?.name === ref.name
                         return (
                           <CommandItem
                             key={`${ref.kind}/${ref.name}`}
@@ -314,7 +310,7 @@ export function MetadataRefPicker({
                             className="text-xs"
                           >
                             <Check
-                              className={`mr-2 h-3 w-3 ${isSelected ? 'opacity-100' : 'opacity-0'}`}
+                              className={`mr-2 h-3 w-3 ${isSelected ? "opacity-100" : "opacity-0"}`}
                             />
                             {ref.name}
                           </CommandItem>
@@ -332,7 +328,7 @@ export function MetadataRefPicker({
             type="button"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-input hover:bg-accent"
             onClick={handleClear}
-            aria-label={t('refPicker.clear')}
+            aria-label={t("refPicker.clear")}
           >
             <X className="h-3 w-3" />
           </button>
@@ -340,7 +336,7 @@ export function MetadataRefPicker({
       </div>
       {refValue && !targetExists && (
         <p className="text-[10px] text-destructive">
-          {t('refPicker.targetNotFound', { name: refValue.name })}
+          {t("refPicker.targetNotFound", { name: refValue.name })}
         </p>
       )}
     </div>
@@ -371,7 +367,7 @@ export function MetadataRefMultiPicker({
 
   const selectedSet = useMemo(
     () => new Set(value.map((r) => `${r.kind}/${r.name}`)),
-    [value],
+    [value]
   )
 
   const toggleRef = useCallback(
@@ -383,14 +379,16 @@ export function MetadataRefMultiPicker({
         onChange([...value, ref])
       }
     },
-    [value, selectedSet, onChange],
+    [value, selectedSet, onChange]
   )
 
   const removeRef = useCallback(
     (ref: MetadataRef) => {
-      onChange(value.filter((r) => !(r.kind === ref.kind && r.name === ref.name)))
+      onChange(
+        value.filter((r) => !(r.kind === ref.kind && r.name === ref.name))
+      )
     },
-    [value, onChange],
+    [value, onChange]
   )
 
   const showKindLabel = allowedKinds.length > 1
@@ -416,7 +414,7 @@ export function MetadataRefMultiPicker({
                 type="button"
                 className="ml-0.5 hover:text-destructive"
                 onClick={() => removeRef(ref)}
-                aria-label={t('action.delete')}
+                aria-label={t("action.delete")}
               >
                 <X className="h-2.5 w-2.5" />
               </button>
@@ -428,64 +426,70 @@ export function MetadataRefMultiPicker({
       {availableObjects.length === 0 && value.length === 0 ? (
         <span className="text-xs text-muted-foreground">—</span>
       ) : (
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            role="combobox"
-            aria-expanded={open}
-            disabled={availableObjects.length === 0}
-            className="h-7 w-full justify-between text-xs font-normal"
-          >
-            <span className="text-muted-foreground">
-              {t('refPicker.addPlaceholder')}
-            </span>
-            <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[200px] p-0" align="start">
-          <Command>
-            <CommandInput
-              placeholder={t('refPicker.searchPlaceholder')}
-              className="h-8 text-xs"
-            />
-            <CommandList>
-              <CommandEmpty className="py-3 text-center text-xs">
-                {t('refPicker.noResults')}
-              </CommandEmpty>
-              {allowedKinds.map((kind) => {
-                const kindObjects = availableObjects.filter((o) => o.kind === kind)
-                if (kindObjects.length === 0) return null
-                return (
-                  <CommandGroup
-                    key={kind}
-                    heading={showKindLabel ? t(`metadata.kindPlural.${kind}`) : undefined}
-                  >
-                    {kindObjects.map((ref) => {
-                      const key = `${ref.kind}/${ref.name}`
-                      const isSelected = selectedSet.has(key)
-                      return (
-                        <CommandItem
-                          key={key}
-                          value={`${ref.kind} ${ref.name}`}
-                          onSelect={() => toggleRef(ref)}
-                          className="text-xs"
-                        >
-                          <Check
-                            className={`mr-2 h-3 w-3 ${isSelected ? 'opacity-100' : 'opacity-0'}`}
-                          />
-                          {ref.name}
-                        </CommandItem>
-                      )
-                    })}
-                  </CommandGroup>
-                )
-              })}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              role="combobox"
+              aria-expanded={open}
+              disabled={availableObjects.length === 0}
+              className="h-7 w-full justify-between text-xs font-normal"
+            >
+              <span className="text-muted-foreground">
+                {t("refPicker.addPlaceholder")}
+              </span>
+              <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[200px] p-0" align="start">
+            <Command>
+              <CommandInput
+                placeholder={t("refPicker.searchPlaceholder")}
+                className="h-8 text-xs"
+              />
+              <CommandList>
+                <CommandEmpty className="py-3 text-center text-xs">
+                  {t("refPicker.noResults")}
+                </CommandEmpty>
+                {allowedKinds.map((kind) => {
+                  const kindObjects = availableObjects.filter(
+                    (o) => o.kind === kind
+                  )
+                  if (kindObjects.length === 0) return null
+                  return (
+                    <CommandGroup
+                      key={kind}
+                      heading={
+                        showKindLabel
+                          ? t(`metadata.kindPlural.${kind}`)
+                          : undefined
+                      }
+                    >
+                      {kindObjects.map((ref) => {
+                        const key = `${ref.kind}/${ref.name}`
+                        const isSelected = selectedSet.has(key)
+                        return (
+                          <CommandItem
+                            key={key}
+                            value={`${ref.kind} ${ref.name}`}
+                            onSelect={() => toggleRef(ref)}
+                            className="text-xs"
+                          >
+                            <Check
+                              className={`mr-2 h-3 w-3 ${isSelected ? "opacity-100" : "opacity-0"}`}
+                            />
+                            {ref.name}
+                          </CommandItem>
+                        )
+                      })}
+                    </CommandGroup>
+                  )
+                })}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
       )}
     </div>
   )
