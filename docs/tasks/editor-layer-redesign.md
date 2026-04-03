@@ -393,11 +393,11 @@ shadcn/ui Command (cmdk) всередині Popover — стандартний �
 ## Модуль J: Валідація — заповнення validationErrors
 
 ### Вимоги
-- [ ] При failure мутації в metadata-store — записувати помилки в `validationErrors[kind/name]`
-- [ ] При success мутації — очищати `validationErrors[kind/name]` для цього об'єкта
-- [ ] `errorCount` у status bar — тепер показує реальну кількість помилок
-- [ ] Inline відображення помилок у правій панелі біля відповідних полів
-- [ ] Додати project-level validation як debounced selector:
+- [Х] При failure мутації в metadata-store — записувати помилки в `validationErrors[kind/name]`
+- [Х] При success мутації — очищати `validationErrors[kind/name]` для цього об'єкта
+- [Х] `errorCount` у status bar — тепер показує реальну кількість помилок
+- [Х] Inline відображення помилок у правій панелі біля відповідних полів
+- [Х] Додати project-level validation як debounced selector:
   - Усі reference targets існують (FR-050)
   - Імена унікальні в межах типу
   - Обов'язкові поля заповнені
@@ -416,9 +416,9 @@ BRD: валідація має бути реалтаймовою. Користу
 Поточна ситуація: errors ніде не пишуться, більше не повинна повторюватися.
 
 ### Definition of Done
-- [ ] `validationErrors` в store заповнюється при кожній мутації
-- [ ] Status bar показує реальний errorCount
-- [ ] Inline помилки відображаються в правій панелі
+- [Х] `validationErrors` в store заповнюється при кожній мутації
+- [Х] Status bar показує реальний errorCount
+- [Х] Inline помилки відображаються в правій панелі
 
 ---
 

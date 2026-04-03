@@ -197,7 +197,9 @@
     "warnings_one": "{{count}} попередження",
     "warnings_few": "{{count}} попередження",
     "warnings_many": "{{count}} попереджень",
-    "noErrors": "Без помилок"
+    "noErrors": "Без помилок",
+    "objectErrors": "Помилки валідації",
+    "refNotFound": "Посилання не знайдено: {{kind}}/{{name}}"
   },
   "dialog": {
     "deleteTitle": "Видалення обʼєкта",

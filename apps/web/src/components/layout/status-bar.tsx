@@ -48,12 +48,25 @@ export function StatusBar() {
       s.model.customTables.length,
   )
 
-  const errorCount = useMetadataStore((s) =>
-    Object.values(s.validationErrors).reduce(
-      (sum, errors) => sum + errors.length,
-      0,
-    ),
-  )
+  const errorCount = useMetadataStore((s) => {
+    // Дедуплікуємо помилки за ключем `path:message` в межах кожного обʼєкта
+    const allObjectKeys = new Set([
+      ...Object.keys(s.validationErrors),
+      ...Object.keys(s.modelErrors),
+    ])
+    let total = 0
+    for (const key of allObjectKeys) {
+      const seen = new Set<string>()
+      for (const err of [...(s.validationErrors[key] ?? []), ...(s.modelErrors[key] ?? [])]) {
+        const dedupeKey = `${err.path}:${err.message}`
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey)
+          total++
+        }
+      }
+    }
+    return total
+  })
 
   const warningCount = useProjectStore((s) => s.openWarnings.length)
 

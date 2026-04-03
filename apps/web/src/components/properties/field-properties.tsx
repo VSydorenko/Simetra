@@ -11,7 +11,7 @@ import { Label } from '@workspace/ui/components/label'
 import { Checkbox } from '@workspace/ui/components/checkbox'
 import { FieldTypeSelect } from '@/components/editor/field-type-select'
 import { MetadataRefPicker } from '@/components/properties/metadata-ref-picker'
-import { useMetadataStore } from '@/stores/metadata-store'
+import { useMetadataStore, type ValidationError } from '@/stores/metadata-store'
 import { type FieldSelection } from '@/stores/ui-store'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
 import type {
@@ -28,6 +28,67 @@ function SettingRow({ label, children }: { label: string; children: React.ReactN
     <div className="grid grid-cols-[1fr_1fr] items-center gap-2">
       <Label className="truncate text-xs text-muted-foreground">{label}</Label>
       <div>{children}</div>
+    </div>
+  )
+}
+
+/** Стабільне пусте посилання — уникаємо нових [] при відсутності помилок */
+const EMPTY_ERRORS: ValidationError[] = []
+
+/** Форматує повідомлення про помилку для відображення */
+function formatErrorMessage(message: string, t: (key: string, opts?: Record<string, string>) => string): string {
+  if (message.startsWith('ref:')) {
+    const refPart = message.slice(4)
+    const slashIdx = refPart.indexOf('/')
+    if (slashIdx !== -1) {
+      const kind = refPart.slice(0, slashIdx)
+      const name = refPart.slice(slashIdx + 1)
+      return t('validation.refNotFound', { kind, name })
+    }
+  }
+  return message
+}
+
+/** Панель відображення помилок валідації для поля */
+function FieldValidationErrors({
+  errors,
+  fieldName,
+  tabularSectionName,
+}: {
+  errors: ValidationError[]
+  fieldName: string
+  tabularSectionName?: string
+}) {
+  const { t } = useTranslation()
+  // Точне зіставлення за path з урахуванням ролі поля та секції
+  const fieldErrors = errors.filter((e) => {
+    if (!e.path) return false
+    // Поле табличної частини: tabularSections.{sectionName}.{fieldName}[.*]
+    if (tabularSectionName) {
+      const prefix = `tabularSections.${tabularSectionName}.${fieldName}`
+      return e.path === prefix || e.path.startsWith(`${prefix}.`)
+    }
+    // Звичайне поле (attributes, dimensions, resources) — точний збіг або sub-path
+    return (
+      e.path === `attributes.${fieldName}` || e.path.startsWith(`attributes.${fieldName}.`) ||
+      e.path === `dimensions.${fieldName}` || e.path.startsWith(`dimensions.${fieldName}.`) ||
+      e.path === `resources.${fieldName}` || e.path.startsWith(`resources.${fieldName}.`)
+    )
+  })
+  if (fieldErrors.length === 0) return null
+
+  return (
+    <div className="mb-2 rounded border border-destructive/20 bg-destructive/5 px-3 py-2">
+      <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-destructive">
+        {t('validation.objectErrors')}
+      </p>
+      <ul className="space-y-0.5">
+        {fieldErrors.map((err, i) => (
+          <li key={i} className="text-[11px] text-destructive">
+            {formatErrorMessage(err.message, t)}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -100,6 +161,25 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
 
   const { kind, name: objectName } = selection.objectRef
 
+  // Помилки валідації: два окремих примітивних селектори + useMemo
+  // (уникаємо infinite loop через нові посилання на масив у single selector)
+  const key = `${kind}/${objectName}`
+  const mutErrors = useMetadataStore((s) => s.validationErrors[key] ?? EMPTY_ERRORS)
+  const mdlErrors = useMetadataStore((s) => s.modelErrors[key] ?? EMPTY_ERRORS)
+  const objectErrors = useMemo(() => {
+    if (mutErrors.length === 0 && mdlErrors.length === 0) return EMPTY_ERRORS
+    const seen = new Set<string>()
+    const combined: ValidationError[] = []
+    for (const err of [...mutErrors, ...mdlErrors]) {
+      const dedupeKey = `${err.path}:${err.message}`
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey)
+        combined.push(err)
+      }
+    }
+    return combined
+  }, [mutErrors, mdlErrors])
+
   const object = useMemo(() => {
     const key = KIND_TO_KEY[kind]
     const objects = model[key] as MetadataObject[]
@@ -160,7 +240,13 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
   const isNumericType = attribute.type === 'Numeric' || attribute.type === 'Integer'
 
   return (
-    <Accordion type="multiple" defaultValue={['general', 'dataType', 'constraints', 'additional']} className="w-full">
+    <>
+      <FieldValidationErrors
+        errors={objectErrors}
+        fieldName={selection.fieldName}
+        tabularSectionName={selection.tabularSectionName}
+      />
+      <Accordion type="multiple" defaultValue={['general', 'dataType', 'constraints', 'additional']} className="w-full">
       {/* Основні */}
       <AccordionItem value="general">
         <AccordionTrigger className="px-3 py-2 text-xs font-medium">
@@ -345,5 +431,6 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
         </AccordionContent>
       </AccordionItem>
     </Accordion>
+    </>
   )
 }

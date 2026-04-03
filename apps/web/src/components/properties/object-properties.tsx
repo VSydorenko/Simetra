@@ -47,7 +47,55 @@ function SettingRow({ label, children }: { label: string; children: React.ReactN
   )
 }
 
-/** Commit-on-blur редагування імені обʼєкта */
+/** Стабільне пусте посилання — уникаємо нових [] при відсутності помилок */
+const EMPTY_ERRORS: ValidationError[] = []
+
+/** Форматує повідомлення про помилку для відображення */
+function formatErrorMessage(message: string, t: (key: string, opts?: Record<string, string>) => string): string {
+  // ref:Kind/Name — спеціальний формат для broken references
+  if (message.startsWith('ref:')) {
+    const refPart = message.slice(4) // видаляємо "ref:"
+    const slashIdx = refPart.indexOf('/')
+    if (slashIdx !== -1) {
+      const kind = refPart.slice(0, slashIdx)
+      const name = refPart.slice(slashIdx + 1)
+      return t('validation.refNotFound', { kind, name })
+    }
+  }
+  return message
+}
+
+/** Панель відображення помилок валідації у правій панелі */
+function ValidationErrorsPanel({
+  errors,
+}: {
+  errors: ValidationError[]
+}) {
+  const { t } = useTranslation()
+  if (errors.length === 0) return null
+
+  return (
+    <div className="border-b border-destructive/20 bg-destructive/5 px-3 py-2">
+      <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-destructive">
+        {t('validation.objectErrors')}
+      </p>
+      <ul className="space-y-0.5">
+        {errors.map((err, i) => (
+          <li key={i} className="text-[11px] text-destructive">
+            {err.path ? (
+              <span>
+                <span className="font-mono opacity-70">{err.path}: </span>
+                {formatErrorMessage(err.message, t)}
+              </span>
+            ) : (
+              formatErrorMessage(err.message, t)
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
 function NameEditor({
   kind,
   currentName,
@@ -106,6 +154,26 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
   const renameObject = useMetadataStore((s) => s.renameObject)
   const { updateTabObjectRef } = useUiStore()
 
+  // Помилки валідації: два окремих примітивних селектори + useMemo
+  // (уникаємо infinite loop через нові посилання на масив у single selector)
+  const errKey = `${objectRef.kind}/${objectRef.name}`
+  const mutErrors = useMetadataStore((s) => s.validationErrors[errKey] ?? EMPTY_ERRORS)
+  const mdlErrors = useMetadataStore((s) => s.modelErrors[errKey] ?? EMPTY_ERRORS)
+  const objectErrors = useMemo(() => {
+    if (mutErrors.length === 0 && mdlErrors.length === 0) return EMPTY_ERRORS
+    // Обʼєднуємо, уникаючи дублікатів за повідомленням
+    const seen = new Set<string>()
+    const combined: ValidationError[] = []
+    for (const err of [...mutErrors, ...mdlErrors]) {
+      const dedupeKey = `${err.path}:${err.message}`
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey)
+        combined.push(err)
+      }
+    }
+    return combined
+  }, [mutErrors, mdlErrors])
+
   const object = useMemo(() => {
     const key = KIND_TO_KEY[objectRef.kind]
     const objects = model[key] as MetadataObject[]
@@ -158,6 +226,7 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
 
   return (
     <>
+    <ValidationErrorsPanel errors={objectErrors} />
     <Accordion type="multiple" defaultValue={['general', 'typeSettings']} className="w-full">
       {/* Група: Основні */}
       <AccordionItem value="general">

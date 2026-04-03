@@ -17,6 +17,7 @@ import { useMetadataStore } from '@/stores/metadata-store'
 import { useProjectStore } from '@/stores/project-store'
 import { createDefaultObject, generateUniqueName, getObjectNames } from '@/lib/metadata-defaults'
 import { useSessionRestore } from '@/hooks/use-session-restore'
+import { useModelValidation } from '@/hooks/use-model-validation'
 import { startDraftSync } from '@/storage/draft-sync'
 
 export function AppShell() {
@@ -30,6 +31,9 @@ export function AppShell() {
 
   // Відновлення сесії при mount
   useSessionRestore()
+
+  // Project-level валідація (debounced)
+  useModelValidation()
 
   // beforeunload — попередження при незбережених змінах
   useEffect(() => {

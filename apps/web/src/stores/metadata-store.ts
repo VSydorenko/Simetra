@@ -12,6 +12,7 @@ import {
   metadataObjectSchema,
 } from '@simetra/core'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
+import { resolveZodPath } from '@/lib/resolve-zod-path'
 
 export interface ValidationError {
   path: string
@@ -24,8 +25,10 @@ export interface MetadataState {
   version: number
   // Per-object версії для dirty tracking, ключ — `${kind}/${name}`
   objectVersions: Record<string, number>
-  // Помилки object-level валідації, ключ — `${kind}/${name}`
+  // Помилки мутацій, ключ — `${kind}/${name}`
   validationErrors: Record<string, ValidationError[]>
+  // Помилки project-level валідації (debounced), ключ — `${kind}/${name}`
+  modelErrors: Record<string, ValidationError[]>
 }
 
 export interface MetadataActions {
@@ -35,6 +38,8 @@ export interface MetadataActions {
   resetModel: (projectName: string) => void
   /** Оновити налаштування проєкту */
   updateProject: (updates: Partial<Project>) => void
+  /** Встановити помилки project-level валідації (debounced hook) */
+  setModelErrors: (errors: Record<string, ValidationError[]>) => void
 
   /** Створити новий обʼєкт метаданих */
   createObject: (obj: MetadataObject) => ValidationError[] | null
@@ -213,7 +218,7 @@ function validateObject(obj: MetadataObject): ValidationError[] | null {
   const result = metadataObjectSchema.safeParse(obj)
   if (result.success) return null
   return result.error.issues.map((issue) => ({
-    path: issue.path.join('.'),
+    path: resolveZodPath(obj, issue.path as (string | number)[]),
     message: issue.message,
   }))
 }
@@ -339,6 +344,7 @@ export const useMetadataStore = create<MetadataStore>()(
       version: 0,
       objectVersions: {},
       validationErrors: {},
+      modelErrors: {},
 
       loadModel: (model) => {
         set((state) => {
@@ -346,6 +352,7 @@ export const useMetadataStore = create<MetadataStore>()(
           state.version++
           state.objectVersions = {}
           state.validationErrors = {}
+          state.modelErrors = {}
         })
         // Caller відповідає за очищення undo-стеку через
         // useMetadataStore.temporal.getState().clear()
@@ -357,6 +364,13 @@ export const useMetadataStore = create<MetadataStore>()(
           state.version++
           state.objectVersions = {}
           state.validationErrors = {}
+          state.modelErrors = {}
+        })
+      },
+
+      setModelErrors: (errors) => {
+        set((state) => {
+          state.modelErrors = errors
         })
       },
 
@@ -369,18 +383,25 @@ export const useMetadataStore = create<MetadataStore>()(
 
       createObject: (obj) => {
         const errors = validateObject(obj)
-        if (errors) return errors
+        const errorKey = `${obj.kind}/${obj.name}`
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         const key = KIND_TO_KEY[obj.kind]
         const objects = get().model[key] as MetadataObject[]
         // Перевірка унікальності імені в межах типу
         if (objects.some((o) => o.name === obj.name)) {
-          return [{ path: 'name', message: `Name "${obj.name}" already exists in ${obj.kind}` }]
+          const dupErrors = [{ path: 'name', message: `Name "${obj.name}" already exists in ${obj.kind}` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           arr.push(obj as never)
+          delete state.validationErrors[errorKey]
           state.version++
           bumpObjectVersion(state, obj.kind, obj.name)
         })
@@ -391,15 +412,20 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const index = findObjectIndex(objects, name)
+        const errorKey = `${kind}/${name}`
         if (index === -1) {
-          return [{ path: '', message: `Object "${name}" not found in ${kind}` }]
+          const notFoundErrors = [{ path: '', message: `Object "${name}" not found in ${kind}` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
         }
 
         const merged = { ...objects[index], ...updates }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
-        const errorKey = `${kind}/${name}`
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           Object.assign(arr[index], updates)
@@ -430,28 +456,35 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const index = findObjectIndex(objects, oldName)
+        const errorKey = `${kind}/${oldName}`
         if (index === -1) {
-          return [{ path: '', message: `Object "${oldName}" not found in ${kind}` }]
+          const notFoundErrors = [{ path: '', message: `Object "${oldName}" not found in ${kind}` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
         }
 
         // Перевірка унікальності нового імені
         if (objects.some((o) => o.name === newName)) {
-          return [{ path: 'name', message: `Name "${newName}" already exists in ${kind}` }]
+          const dupErrors = [{ path: 'name', message: `Name "${newName}" already exists in ${kind}` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const renamed = { ...objects[index], name: newName }
         const errors = validateObject(renamed as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           arr[index].name = newName
           const oldKey = `${kind}/${oldName}`
           const newKey = `${kind}/${newName}`
-          if (state.validationErrors[oldKey]) {
-            state.validationErrors[newKey] = state.validationErrors[oldKey]
-            delete state.validationErrors[oldKey]
-          }
+          // Успішний rename — очищаємо stale mutation errors для старого ключа
+          delete state.validationErrors[oldKey]
+          delete state.validationErrors[newKey]
           // Міграція per-object version при rename
           if (state.objectVersions[oldKey] != null) {
             state.objectVersions[newKey] = state.objectVersions[oldKey]
@@ -483,22 +516,33 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('attributes' in obj)) return [{ path: '', message: 'Object not found or has no attributes' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('attributes' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found or has no attributes' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const attrs = (obj as { attributes: Attribute[] }).attributes
         if (attrs.some((a) => a.name === attribute.name)) {
-          return [{ path: 'name', message: `Attribute "${attribute.name}" already exists` }]
+          const dupErrors = [{ path: 'name', message: `Attribute "${attribute.name}" already exists` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const merged = { ...obj, attributes: [...attrs, attribute] }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           const idx = findObjectIndex(arr, name)
           if (idx !== -1) {
             ;(arr[idx] as unknown as { attributes: Attribute[] }).attributes.push(attribute)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -514,6 +558,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1 && 'attributes' in arr[idx]) {
             const obj = arr[idx] as unknown as { attributes: Attribute[] }
             obj.attributes = obj.attributes.filter((a) => a.name !== attrName)
+            delete state.validationErrors[`${kind}/${name}`]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -524,18 +569,30 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('attributes' in obj)) return [{ path: '', message: 'Object not found' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('attributes' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const attrs = (obj as { attributes: Attribute[] }).attributes
         const attrIdx = attrs.findIndex((a) => a.name === attrName)
-        if (attrIdx === -1) return [{ path: '', message: `Attribute "${attrName}" not found` }]
+        if (attrIdx === -1) {
+          const notFoundErrors = [{ path: '', message: `Attribute "${attrName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const updatedAttrs = attrs.map((a, i) =>
           i === attrIdx ? { ...a, ...updates } : a,
         )
         const merged = { ...obj, attributes: updatedAttrs }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
@@ -543,6 +600,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             const target = arr[idx] as unknown as { attributes: Attribute[] }
             Object.assign(target.attributes[attrIdx], updates)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -561,6 +619,7 @@ export const useMetadataStore = create<MetadataStore>()(
             if (fromIndex >= 0 && fromIndex < attrs.length && toIndex >= 0 && toIndex < attrs.length) {
               const [moved] = attrs.splice(fromIndex, 1)
               attrs.splice(toIndex, 0, moved)
+              delete state.validationErrors[`${kind}/${name}`]
               state.version++
               bumpObjectVersion(state, kind, name)
             }
@@ -574,22 +633,33 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('tabularSections' in obj)) return [{ path: '', message: 'Object not found or has no tabular sections' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('tabularSections' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found or has no tabular sections' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const sections = (obj as { tabularSections: TabularSection[] }).tabularSections
         if (sections.some((s) => s.name === section.name)) {
-          return [{ path: 'name', message: `Tabular section "${section.name}" already exists` }]
+          const dupErrors = [{ path: 'name', message: `Tabular section "${section.name}" already exists` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const merged = { ...obj, tabularSections: [...sections, section] }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           const idx = findObjectIndex(arr, name)
           if (idx !== -1) {
             ;(arr[idx] as unknown as { tabularSections: TabularSection[] }).tabularSections.push(section)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -605,6 +675,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1 && 'tabularSections' in arr[idx]) {
             const obj = arr[idx] as unknown as { tabularSections: TabularSection[] }
             obj.tabularSections = obj.tabularSections.filter((s) => s.name !== sectionName)
+            delete state.validationErrors[`${kind}/${name}`]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -615,14 +686,25 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('tabularSections' in obj)) return [{ path: '', message: 'Object not found' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('tabularSections' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const sections = (obj as { tabularSections: TabularSection[] }).tabularSections
         const section = sections.find((s) => s.name === sectionName)
-        if (!section) return [{ path: '', message: `Tabular section "${sectionName}" not found` }]
+        if (!section) {
+          const notFoundErrors = [{ path: '', message: `Tabular section "${sectionName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         if (section.attributes.some((a) => a.name === attribute.name)) {
-          return [{ path: 'name', message: `Attribute "${attribute.name}" already exists in section "${sectionName}"` }]
+          const dupErrors = [{ path: 'name', message: `Attribute "${attribute.name}" already exists in section "${sectionName}"` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const updatedSections = sections.map((s) =>
@@ -630,7 +712,10 @@ export const useMetadataStore = create<MetadataStore>()(
         )
         const merged = { ...obj, tabularSections: updatedSections }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
@@ -640,6 +725,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const sec = target.tabularSections.find((s) => s.name === sectionName)
             if (sec) {
               sec.attributes.push(attribute)
+              delete state.validationErrors[errorKey]
               state.version++
               bumpObjectVersion(state, kind, name)
             }
@@ -658,6 +744,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const sec = target.tabularSections.find((s) => s.name === sectionName)
             if (sec) {
               sec.attributes = sec.attributes.filter((a) => a.name !== attrName)
+              delete state.validationErrors[`${kind}/${name}`]
               state.version++
               bumpObjectVersion(state, kind, name)
             }
@@ -669,14 +756,27 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('tabularSections' in obj)) return [{ path: '', message: 'Object not found' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('tabularSections' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const sections = (obj as { tabularSections: TabularSection[] }).tabularSections
         const section = sections.find((s) => s.name === sectionName)
-        if (!section) return [{ path: '', message: `Section "${sectionName}" not found` }]
+        if (!section) {
+          const notFoundErrors = [{ path: '', message: `Section "${sectionName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const attrIdx = section.attributes.findIndex((a) => a.name === attrName)
-        if (attrIdx === -1) return [{ path: '', message: `Attribute "${attrName}" not found` }]
+        if (attrIdx === -1) {
+          const notFoundErrors = [{ path: '', message: `Attribute "${attrName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const updatedSections = sections.map((s) =>
           s.name === sectionName
@@ -685,7 +785,10 @@ export const useMetadataStore = create<MetadataStore>()(
         )
         const merged = { ...obj, tabularSections: updatedSections }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
@@ -695,6 +798,7 @@ export const useMetadataStore = create<MetadataStore>()(
             const sec = target.tabularSections.find((s) => s.name === sectionName)
             if (sec) {
               Object.assign(sec.attributes[attrIdx], updates)
+              delete state.validationErrors[errorKey]
               state.version++
               bumpObjectVersion(state, kind, name)
             }
@@ -716,6 +820,7 @@ export const useMetadataStore = create<MetadataStore>()(
               if (fromIndex >= 0 && fromIndex < attrs.length && toIndex >= 0 && toIndex < attrs.length) {
                 const [moved] = attrs.splice(fromIndex, 1)
                 attrs.splice(toIndex, 0, moved)
+                delete state.validationErrors[`${kind}/${name}`]
                 state.version++
                 bumpObjectVersion(state, kind, name)
               }
@@ -729,20 +834,31 @@ export const useMetadataStore = create<MetadataStore>()(
       addEnumValue: (name, value) => {
         const objects = get().model.enumerations
         const obj = objects.find((o) => o.name === name)
-        if (!obj) return [{ path: '', message: `Enumeration "${name}" not found` }]
+        const errorKey = `Enumeration/${name}`
+        if (!obj) {
+          const notFoundErrors = [{ path: '', message: `Enumeration "${name}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         if (obj.values.some((v) => v.name === value.name)) {
-          return [{ path: 'name', message: `Value "${value.name}" already exists` }]
+          const dupErrors = [{ path: 'name', message: `Value "${value.name}" already exists` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const merged = { ...obj, values: [...obj.values, value] }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const target = state.model.enumerations.find((o) => o.name === name)
           if (target) {
             target.values.push(value)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, 'Enumeration', name)
           }
@@ -755,6 +871,7 @@ export const useMetadataStore = create<MetadataStore>()(
           const target = state.model.enumerations.find((o) => o.name === name)
           if (target) {
             target.values = target.values.filter((v) => v.name !== valueName)
+            delete state.validationErrors[`Enumeration/${name}`]
             state.version++
             bumpObjectVersion(state, 'Enumeration', name)
           }
@@ -764,22 +881,35 @@ export const useMetadataStore = create<MetadataStore>()(
       updateEnumValue: (name, valueName, updates) => {
         const objects = get().model.enumerations
         const obj = objects.find((o) => o.name === name)
-        if (!obj) return [{ path: '', message: `Enumeration "${name}" not found` }]
+        const errorKey = `Enumeration/${name}`
+        if (!obj) {
+          const notFoundErrors = [{ path: '', message: `Enumeration "${name}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const valIdx = obj.values.findIndex((v) => v.name === valueName)
-        if (valIdx === -1) return [{ path: '', message: `Value "${valueName}" not found` }]
+        if (valIdx === -1) {
+          const notFoundErrors = [{ path: '', message: `Value "${valueName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const updatedValues = obj.values.map((v, i) =>
           i === valIdx ? { ...v, ...updates } : v,
         )
         const merged = { ...obj, values: updatedValues }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const target = state.model.enumerations.find((o) => o.name === name)
           if (target) {
             Object.assign(target.values[valIdx], updates)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, 'Enumeration', name)
           }
@@ -793,6 +923,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (target && fromIndex >= 0 && fromIndex < target.values.length && toIndex >= 0 && toIndex < target.values.length) {
             const [moved] = target.values.splice(fromIndex, 1)
             target.values.splice(toIndex, 0, moved)
+            delete state.validationErrors[`Enumeration/${name}`]
             state.version++
             bumpObjectVersion(state, 'Enumeration', name)
           }
@@ -805,22 +936,33 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('dimensions' in obj)) return [{ path: '', message: 'Object not found or has no dimensions' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('dimensions' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found or has no dimensions' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const dims = (obj as { dimensions: Attribute[] }).dimensions
         if (dims.some((d) => d.name === attribute.name)) {
-          return [{ path: 'name', message: `Dimension "${attribute.name}" already exists` }]
+          const dupErrors = [{ path: 'name', message: `Dimension "${attribute.name}" already exists` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const merged = { ...obj, dimensions: [...dims, attribute] }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           const idx = findObjectIndex(arr, name)
           if (idx !== -1) {
             ;(arr[idx] as unknown as { dimensions: Attribute[] }).dimensions.push(attribute)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -836,6 +978,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1 && 'dimensions' in arr[idx]) {
             const obj = arr[idx] as unknown as { dimensions: Attribute[] }
             obj.dimensions = obj.dimensions.filter((d) => d.name !== attrName)
+            delete state.validationErrors[`${kind}/${name}`]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -846,22 +989,33 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('resources' in obj)) return [{ path: '', message: 'Object not found or has no resources' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('resources' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found or has no resources' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const res = (obj as { resources: Attribute[] }).resources
         if (res.some((r) => r.name === attribute.name)) {
-          return [{ path: 'name', message: `Resource "${attribute.name}" already exists` }]
+          const dupErrors = [{ path: 'name', message: `Resource "${attribute.name}" already exists` }]
+          set((state) => { state.validationErrors[errorKey] = dupErrors })
+          return dupErrors
         }
 
         const merged = { ...obj, resources: [...res, attribute] }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           const idx = findObjectIndex(arr, name)
           if (idx !== -1) {
             ;(arr[idx] as unknown as { resources: Attribute[] }).resources.push(attribute)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -877,6 +1031,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1 && 'resources' in arr[idx]) {
             const obj = arr[idx] as unknown as { resources: Attribute[] }
             obj.resources = obj.resources.filter((r) => r.name !== attrName)
+            delete state.validationErrors[`${kind}/${name}`]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -887,16 +1042,28 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('dimensions' in obj)) return [{ path: '', message: 'Object not found' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('dimensions' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const dims = (obj as { dimensions: Attribute[] }).dimensions
         const attrIdx = dims.findIndex((a) => a.name === attrName)
-        if (attrIdx === -1) return [{ path: '', message: `Dimension "${attrName}" not found` }]
+        if (attrIdx === -1) {
+          const notFoundErrors = [{ path: '', message: `Dimension "${attrName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const updatedDims = dims.map((a, i) => (i === attrIdx ? { ...a, ...updates } : a))
         const merged = { ...obj, dimensions: updatedDims }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
@@ -904,6 +1071,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             const target = arr[idx] as unknown as { dimensions: Attribute[] }
             Object.assign(target.dimensions[attrIdx], updates)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -922,6 +1090,7 @@ export const useMetadataStore = create<MetadataStore>()(
             if (fromIndex >= 0 && fromIndex < dims.length && toIndex >= 0 && toIndex < dims.length) {
               const [moved] = dims.splice(fromIndex, 1)
               dims.splice(toIndex, 0, moved)
+              delete state.validationErrors[`${kind}/${name}`]
               state.version++
               bumpObjectVersion(state, kind, name)
             }
@@ -933,16 +1102,28 @@ export const useMetadataStore = create<MetadataStore>()(
         const key = KIND_TO_KEY[kind]
         const objects = get().model[key] as MetadataObject[]
         const obj = objects.find((o) => o.name === name)
-        if (!obj || !('resources' in obj)) return [{ path: '', message: 'Object not found' }]
+        const errorKey = `${kind}/${name}`
+        if (!obj || !('resources' in obj)) {
+          const notFoundErrors = [{ path: '', message: 'Object not found' }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const res = (obj as { resources: Attribute[] }).resources
         const attrIdx = res.findIndex((a) => a.name === attrName)
-        if (attrIdx === -1) return [{ path: '', message: `Resource "${attrName}" not found` }]
+        if (attrIdx === -1) {
+          const notFoundErrors = [{ path: '', message: `Resource "${attrName}" not found` }]
+          set((state) => { state.validationErrors[errorKey] = notFoundErrors })
+          return notFoundErrors
+        }
 
         const updatedRes = res.map((a, i) => (i === attrIdx ? { ...a, ...updates } : a))
         const merged = { ...obj, resources: updatedRes }
         const errors = validateObject(merged as MetadataObject)
-        if (errors) return errors
+        if (errors) {
+          set((state) => { state.validationErrors[errorKey] = errors })
+          return errors
+        }
 
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
@@ -950,6 +1131,7 @@ export const useMetadataStore = create<MetadataStore>()(
           if (idx !== -1) {
             const target = arr[idx] as unknown as { resources: Attribute[] }
             Object.assign(target.resources[attrIdx], updates)
+            delete state.validationErrors[errorKey]
             state.version++
             bumpObjectVersion(state, kind, name)
           }
@@ -968,6 +1150,7 @@ export const useMetadataStore = create<MetadataStore>()(
             if (fromIndex >= 0 && fromIndex < res.length && toIndex >= 0 && toIndex < res.length) {
               const [moved] = res.splice(fromIndex, 1)
               res.splice(toIndex, 0, moved)
+              delete state.validationErrors[`${kind}/${name}`]
               state.version++
               bumpObjectVersion(state, kind, name)
             }

@@ -194,7 +194,9 @@
     "errors_other": "{{count}} errors",
     "warnings_one": "{{count}} warning",
     "warnings_other": "{{count}} warnings",
-    "noErrors": "No errors"
+    "noErrors": "No errors",
+    "objectErrors": "Validation errors",
+    "refNotFound": "Reference not found: {{kind}}/{{name}}"
   },
   "dialog": {
     "deleteTitle": "Delete Object",
