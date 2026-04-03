@@ -234,7 +234,14 @@
     "recoverDraft": "Recover Unsaved Changes",
     "recoverDraftDescription": "Found unsaved changes from a previous session",
     "loadFromBackup": "Load from Backup",
-    "loadFromBackupDescription": "Restore data from IndexedDB backup"
+    "loadFromBackupDescription": "Restore data from IndexedDB backup",
+    "restoreFromBackup": "Restore from Backup",
+    "restoreFromBackupDescription": "Restore latest changes without folder access"
+  },
+  "recovery": {
+    "bannerMessage": "Found unsaved changes from {{date}}. Restore?",
+    "accept": "Restore",
+    "dismiss": "Dismiss"
   },
   "session": {
     "restoreError": "Failed to restore session: {{error}}",

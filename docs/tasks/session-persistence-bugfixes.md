@@ -63,24 +63,24 @@
 ### Фаза 3: Crash recovery та permission fallback (P2)
 
 #### 3.1 Порівняння draft vs FS через timestamp замість version
-- [ ] У `restoreSession`, коли FS restore успішний і є draft, порівнювати `draft.savedAt > session.savedAt` замість `draft.version > version`
-- [ ] Runtime version counter нестабільний між сесіями (починається з 0). Timestamp стабільний
-- [ ] session-db вже зберігає `savedAt` і в session, і в draft — додаткові зміни в DB schema не потрібні
+- [Х] У `restoreSession`, коли FS restore успішний і є draft, порівнювати `draft.savedAt > session.savedAt` замість `draft.version > version`
+- [Х] Runtime version counter нестабільний між сесіями (починається з 0). Timestamp стабільний
+- [Х] session-db вже зберігає `savedAt` і в session, і в draft — додаткові зміни в DB schema не потрібні
 
 #### 3.2 Recovery prompt для новішого draft
-- [ ] Додати стан `'recovery-available'` до типу `SessionRestoreStatus`
-- [ ] Додати поле `pendingRecovery: { savedAt: number } | null` до ProjectState
-- [ ] У `restoreSession`, якщо `draft.savedAt > session.savedAt`, після успішного FS restore:
+- [Х] Додати стан `'recovery-available'` до типу `SessionRestoreStatus`
+- [Х] Додати поле `pendingRecovery: { savedAt: number } | null` до ProjectState
+- [Х] У `restoreSession`, якщо `draft.savedAt > session.savedAt`, після успішного FS restore:
   - Виставити `sessionRestoreStatus: 'recovery-available'`
   - Записати `pendingRecovery: { savedAt: draft.savedAt }`
   - Не очищати draft
-- [ ] У `requestDirectoryPermission` — та ж логіка замість безумовного `clearDraft()`
-- [ ] Створити компонент `RecoveryBanner` — це не модальне вікно, а banner поверх editor content:
+- [Х] У `requestDirectoryPermission` — та ж логіка замість безумовного `clearDraft()`
+- [Х] Створити компонент `RecoveryBanner` — це не модальне вікно, а banner поверх editor content:
   - Показується в EditorPanel коли `sessionRestoreStatus === 'recovery-available'`
   - Текст: "Знайдено незбережені зміни від [дата]. Відновити?" (через i18n)
   - Дія "Відновити" → `restoreDraft()` + `set({ pendingRecovery: null })`
   - Дія "Відхилити" → `clearDraft()` + `set({ sessionRestoreStatus: 'restored', pendingRecovery: null })`
-- [ ] EditorPanel: `recovery-available` не показує Welcome Screen, а показує RecoveryBanner поверх editor
+- [Х] EditorPanel: `recovery-available` не показує Welcome Screen, а показує RecoveryBanner поверх editor
 
 #### 3.3 Denied permission — fallback на draft
 
@@ -89,23 +89,23 @@
 > 2. Або забезпечити негайний запис draft при import (крім saveSession), щоб draft завжди був доступний для restore.
 > 3. При наявності session з `handle: null` віддавати пріоритет session.projectModel над старим draft від попереднього проєкту.
 
-- [ ] Додати поле `hasDraftFallback: boolean` до ProjectState (default false)
-- [ ] У `requestDirectoryPermission`, коли `permission !== 'granted'`:
+- [Х] Додати поле `hasDraftFallback: boolean` до ProjectState (default false)
+- [Х] У `requestDirectoryPermission`, коли `permission !== 'granted'`:
   - Перевірити `loadDraft()`
   - Якщо draft є → `set({ sessionRestoreStatus: 'awaiting-permission', hasDraftFallback: true })`
   - Якщо draft немає → `set({ sessionRestoreStatus: 'awaiting-permission', hasDraftFallback: false })`
-- [ ] У `restoreSession`, denied path — та ж логіка
-- [ ] Welcome Screen: якщо `hasDraftFallback === true` і `sessionRestoreStatus === 'awaiting-permission'`, показувати **два** CTA:
+- [Х] У `restoreSession`, denied path — та ж логіка
+- [Х] Welcome Screen: якщо `hasDraftFallback === true` і `sessionRestoreStatus === 'awaiting-permission'`, показувати **два** CTA:
   - "Відновити доступ до папки" → `requestDirectoryPermission()`
   - "Відновити з резервної копії" → `restoreDraft()`
-- [ ] i18n ключі `welcome.restoreFromBackup` / `welcome.restoreFromBackupDescription` вже заготовлені в uk.json і en.json
+- [Х] i18n ключі `welcome.restoreFromBackup` / `welcome.restoreFromBackupDescription` вже заготовлені в uk.json і en.json
 
 #### 3.4 Welcome Screen: одноразове читання session meta
-- [ ] Замінити одноразовий `useEffect` + `loadSession()` на комбінований джерело:
+- [Х] Замінити одноразовий `useEffect` + `loadSession()` на комбінований джерело:
   - Спочатку `loadSession()` — якщо є, побудувати sessionMeta
   - Якщо session немає — спробувати `loadDraft()` і побудувати sessionMeta з draft.model.project.name + draft.savedAt + hasHandle: false
-- [ ] Додати залежність від `sessionRestoreStatus` — при зміні статусу (наприклад після newProject → clearSession) sessionMeta перечитується
-- [ ] Видалити глобальний Enter keydown listener — autoFocus на restore кнопці вже достатній
+- [Х] Додати залежність від `sessionRestoreStatus` — при зміні статусу (наприклад після newProject → clearSession) sessionMeta перечитується
+- [Х] Видалити глобальний Enter keydown listener — autoFocus на restore кнопці вже достатній
 
 ### Фаза 4: Тести (P2)
 

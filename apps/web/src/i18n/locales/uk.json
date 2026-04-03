@@ -238,7 +238,14 @@
     "recoverDraft": "Відновити незбережені зміни",
     "recoverDraftDescription": "Знайдено незбережені зміни попередньої сесії",
     "loadFromBackup": "Завантажити з резервної копії",
-    "loadFromBackupDescription": "Відновити дані з резервної копії IndexedDB"
+    "loadFromBackupDescription": "Відновити дані з резервної копії IndexedDB",
+    "restoreFromBackup": "Відновити з резервної копії",
+    "restoreFromBackupDescription": "Відновити останні зміни без доступу до папки"
+  },
+  "recovery": {
+    "bannerMessage": "Знайдено незбережені зміни від {{date}}. Відновити?",
+    "accept": "Відновити",
+    "dismiss": "Відхилити"
   },
   "session": {
     "restoreError": "Не вдалося відновити сесію: {{error}}",

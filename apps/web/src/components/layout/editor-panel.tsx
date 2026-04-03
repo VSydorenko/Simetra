@@ -4,6 +4,7 @@ import { FloatingWindowContainer } from '../window-manager/floating-window-conta
 import { Taskbar } from '../window-manager/taskbar'
 import { ObjectEditor } from '../editor/object-editor'
 import { WelcomeScreen } from '../editor/welcome-screen'
+import { RecoveryBanner } from '../editor/recovery-banner'
 import { useUiStore } from '@/stores/ui-store'
 import { useProjectStore } from '@/stores/project-store'
 
@@ -19,6 +20,7 @@ export function EditorPanel() {
   // Показати Welcome Screen коли немає вкладок і:
   // — сесія ще не відновлена, або
   // — це новий порожній проєкт
+  // recovery-available — проєкт вже завантажений, показуємо RecoveryBanner замість Welcome
   const showWelcome = !activeTab && (
     sessionRestoreStatus === 'idle' ||
     sessionRestoreStatus === 'awaiting-permission' ||
@@ -27,10 +29,15 @@ export function EditorPanel() {
     isNewProject
   )
 
+  const showRecoveryBanner = sessionRestoreStatus === 'recovery-available'
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       {/* Tab Bar */}
       <TabBar />
+
+      {/* Recovery Banner — inline notification поверх editor */}
+      {showRecoveryBanner && <RecoveryBanner />}
 
       {/* Контент активної вкладки */}
       <div className="flex-1 overflow-hidden">

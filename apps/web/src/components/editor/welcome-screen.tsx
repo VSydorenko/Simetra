@@ -8,9 +8,10 @@ import {
   Upload04Icon,
   ArrowTurnBackwardIcon,
   Loading03Icon,
+  DataRecoveryIcon,
 } from '@hugeicons/core-free-icons'
 import { useProjectStore } from '@/stores/project-store'
-import { loadSession } from '@/storage/session-db'
+import { loadSession, loadDraft } from '@/storage/session-db'
 
 interface SessionMeta {
   name: string | null
@@ -21,6 +22,7 @@ interface SessionMeta {
 export function WelcomeScreen() {
   const { t } = useTranslation()
   const sessionRestoreStatus = useProjectStore((s) => s.sessionRestoreStatus)
+  const hasDraftFallback = useProjectStore((s) => s.hasDraftFallback)
   const newProject = useProjectStore((s) => s.newProject)
   const openProject = useProjectStore((s) => s.openProject)
   const importProject = useProjectStore((s) => s.importProject)
@@ -29,17 +31,31 @@ export function WelcomeScreen() {
 
   const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null)
 
+  // Перечитувати sessionMeta при зміні sessionRestoreStatus
   useEffect(() => {
-    void loadSession().then((session) => {
+    void (async () => {
+      const session = await loadSession()
       if (session) {
         setSessionMeta({
           name: session.projectHandle?.name ?? session.projectModel.project.name,
           savedAt: session.savedAt,
           hasHandle: !!session.projectHandle,
         })
+        return
       }
-    })
-  }, [])
+      // Якщо session немає — спробувати draft
+      const draft = await loadDraft()
+      if (draft) {
+        setSessionMeta({
+          name: draft.model.project.name,
+          savedAt: draft.savedAt,
+          hasHandle: false,
+        })
+        return
+      }
+      setSessionMeta(null)
+    })()
+  }, [sessionRestoreStatus])
 
   const handleNewProject = useCallback(() => {
     newProject(t('welcome.defaultProjectName', { defaultValue: 'NewProject' }))
@@ -61,20 +77,9 @@ export function WelcomeScreen() {
     }
   }, [sessionMeta, requestDirectoryPermission, restoreDraft])
 
-  // Обробка Enter на кнопці відновлення
-  useEffect(() => {
-    if (!sessionMeta) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const target = e.target as HTMLElement
-        // Не перехоплювати якщо фокус на кнопці
-        if (target.tagName === 'BUTTON') return
-        handleRestoreSession()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [sessionMeta, handleRestoreSession])
+  const handleRestoreFromBackup = useCallback(() => {
+    void restoreDraft()
+  }, [restoreDraft])
 
   if (sessionRestoreStatus === 'restoring') {
     return (
@@ -88,6 +93,9 @@ export function WelcomeScreen() {
   const formattedDate = sessionMeta?.savedAt
     ? new Date(sessionMeta.savedAt).toLocaleString()
     : null
+
+  const showRestoreAction = sessionMeta && sessionRestoreStatus !== 'restored'
+  const showDualCta = hasDraftFallback && sessionRestoreStatus === 'awaiting-permission'
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8">
@@ -118,7 +126,7 @@ export function WelcomeScreen() {
           onClick={handleImportProject}
         />
 
-        {sessionMeta && sessionRestoreStatus !== 'restored' && (
+        {showRestoreAction && (
           <WelcomeAction
             icon={ArrowTurnBackwardIcon}
             label={
@@ -136,6 +144,15 @@ export function WelcomeScreen() {
             }
             onClick={handleRestoreSession}
             autoFocus
+          />
+        )}
+
+        {showDualCta && (
+          <WelcomeAction
+            icon={DataRecoveryIcon}
+            label={t('welcome.restoreFromBackup')}
+            description={t('welcome.restoreFromBackupDescription')}
+            onClick={handleRestoreFromBackup}
           />
         )}
       </div>

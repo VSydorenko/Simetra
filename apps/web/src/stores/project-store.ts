@@ -5,7 +5,6 @@ import type { FileValidationError } from '@/storage/storage-provider'
 import {
   saveSession,
   clearSession,
-  clearDraft,
   loadSession,
   loadDraft,
 } from '@/storage/session-db'
@@ -19,6 +18,7 @@ export type SessionRestoreStatus =
   | 'awaiting-permission'
   | 'restored'
   | 'failed'
+  | 'recovery-available'
 
 export type ProjectOrigin = 'new' | 'directory' | 'zip-import' | 'draft-recovery' | null
 
@@ -44,6 +44,10 @@ export interface ProjectState {
   sessionRestoreStatus: SessionRestoreStatus
   // Походження поточного проєкту (як він був завантажений, не змінюється при save)
   projectOrigin: ProjectOrigin
+  // Інформація про новіший draft для RecoveryBanner
+  pendingRecovery: { savedAt: number } | null
+  // Чи є draft-fallback при denied permission
+  hasDraftFallback: boolean
 }
 
 export interface ProjectActions {
@@ -99,6 +103,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
   openWarnings: [],
   sessionRestoreStatus: 'idle' as SessionRestoreStatus,
   projectOrigin: null as ProjectOrigin,
+  pendingRecovery: null,
+  hasDraftFallback: false,
 
   newProject: (name) => {
     pauseDraftSync()
@@ -117,6 +123,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       openWarnings: [],
       sessionRestoreStatus: 'restored',
       projectOrigin: 'new',
+      pendingRecovery: null,
+      hasDraftFallback: false,
     })
 
     // Очистити session і draft в IndexedDB
@@ -206,6 +214,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         sessionRestoreStatus: 'restored',
         projectOrigin: handle ? 'directory' : 'zip-import',
         pendingDirectoryName: null,
+        pendingRecovery: null,
+        hasDraftFallback: false,
       })
 
       // Оновити session, очистити draft
@@ -258,6 +268,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         sessionRestoreStatus: 'restored',
         projectOrigin: 'zip-import',
         pendingDirectoryName: null,
+        pendingRecovery: null,
+        hasDraftFallback: false,
       })
 
       // Зберегти повноцінну session з handle: null (для restore flow після reload)
@@ -298,45 +310,70 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
             ...withHandle(handle),
             isNewProject: false,
             lastSavedVersion: version,
-            sessionRestoreStatus: 'restored',
             openWarnings: result.warnings ?? [],
             projectOrigin: 'directory',
             pendingDirectoryName: null,
+            hasDraftFallback: false,
           })
 
-          // Перевірити чи є новіший draft (crash recovery)
+          // Порівняння draft vs FS через timestamp (стабільний між сесіями)
           const draft = await loadDraft()
-          if (draft && draft.version > version) {
-            // Draft новіший — зберегти інфо, UI вирішить чи показувати діалог
-            void saveSession(handle, result.model, version)
+          if (draft && draft.savedAt > session.savedAt) {
+            // Draft новіший — показати RecoveryBanner, не оновлювати session.savedAt
+            set({
+              sessionRestoreStatus: 'recovery-available',
+              pendingRecovery: { savedAt: draft.savedAt },
+            })
           } else {
-            void clearDraft()
+            set({
+              sessionRestoreStatus: 'restored',
+              pendingRecovery: null,
+            })
+            stopAndClearDraft()
+            // Оновити session тільки коли draft не новіший (щоб зберегти baseline для порівняння)
+            void saveSession(handle, result.model, version)
           }
           resumeDraftSync()
           return
         }
 
         if (permission === 'prompt') {
-          // Потрібен user gesture — показати Welcome Screen з кнопкою
+          // Потрібен user gesture — перевірити чи є draft fallback
+          const draft = await loadDraft()
           set({
             sessionRestoreStatus: 'awaiting-permission',
             pendingDirectoryName: handle.name,
+            hasDraftFallback: !!draft,
           })
           return
         }
-      }
 
-      // Немає handle або denied — спробувати draft
-      const draft = await loadDraft()
-      if (draft) {
+        // denied — перевірити draft fallback
+        const draft = await loadDraft()
         set({
           sessionRestoreStatus: 'awaiting-permission',
-          pendingDirectoryName: handle?.name ?? null,
+          pendingDirectoryName: handle.name,
+          hasDraftFallback: !!draft,
         })
         return
       }
 
-      set({ sessionRestoreStatus: 'idle', pendingDirectoryName: null })
+      // Session без handle (ZIP import) — відновити з session.projectModel
+      pauseDraftSync()
+      useMetadataStore.getState().loadModel(session.projectModel)
+      useMetadataStore.temporal.getState().clear()
+
+      set({
+        ...withHandle(null),
+        isNewProject: false,
+        lastSavedVersion: null,
+        sessionRestoreStatus: 'restored',
+        projectOrigin: 'zip-import',
+        pendingDirectoryName: null,
+        pendingRecovery: null,
+        hasDraftFallback: false,
+      })
+      resumeDraftSync()
     } catch (e) {
       resumeDraftSync()
       set({
@@ -360,7 +397,12 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       const permission = await handle.requestPermission({ mode: 'readwrite' })
 
       if (permission !== 'granted') {
-        set({ sessionRestoreStatus: 'awaiting-permission' })
+        // Denied — перевірити чи є draft fallback
+        const draft = await loadDraft()
+        set({
+          sessionRestoreStatus: 'awaiting-permission',
+          hasDraftFallback: !!draft,
+        })
         return
       }
 
@@ -374,15 +416,28 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         ...withHandle(handle),
         isNewProject: false,
         lastSavedVersion: version,
-        sessionRestoreStatus: 'restored',
         openWarnings: result.warnings ?? [],
         projectOrigin: 'directory',
         pendingDirectoryName: null,
+        hasDraftFallback: false,
       })
 
-      void saveSession(handle, result.model, version)
-      // Draft очищається тільки після успішного відновлення з FS
-      void clearDraft()
+      // Порівняння draft vs FS через timestamp
+      const draft = await loadDraft()
+      if (draft && draft.savedAt > session.savedAt) {
+        // Draft новіший — показати RecoveryBanner, не оновлювати session.savedAt
+        set({
+          sessionRestoreStatus: 'recovery-available',
+          pendingRecovery: { savedAt: draft.savedAt },
+        })
+      } else {
+        set({
+          sessionRestoreStatus: 'restored',
+          pendingRecovery: null,
+        })
+        stopAndClearDraft()
+        void saveSession(handle, result.model, version)
+      }
       resumeDraftSync()
     } catch (e) {
       resumeDraftSync()
@@ -415,6 +470,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         sessionRestoreStatus: 'restored',
         projectOrigin: 'draft-recovery',
         pendingDirectoryName: null,
+        pendingRecovery: null,
+        hasDraftFallback: false,
       })
       resumeDraftSync()
     } catch (e) {
