@@ -19,18 +19,18 @@
 ## Модуль A: Підготовка — bugfixes та BRD update
 
 ### Вимоги
-- [ ] Виправити `restoreSession` без handle: читати `session.lastSavedVersion` замість хардкоду `null`. Поточний код у `project-store.ts` (branch "no handle") ставить `lastSavedVersion = null`, що робить проєкт dirty одразу після restore без реальних змін. `session-db` зберігає `lastSavedVersion` у `SessionData`, але воно ігнорується
-- [ ] Виправити `find-references.ts`: порівняння `attr.ref` лише по `name` без kind — false positives. Додати перевірку `attr.type` (startsWith `CatalogRef`/`DocumentRef`/`EnumRef`) та порівняння kind target
-- [ ] Виправити `deleteObject` version increment: `version++` стоїть поза умовою знаходження об'єкта — інкрементує навіть якщо об'єкт не існує
-- [ ] Виправити `AttributeTable` → `selectField`: не передає `tabularSectionName` prop, хоча `TabularSectionsEditor` його прокидає. FieldProperties вже вміє з ним працювати
-- [ ] Оновити BRD §9.5, §9.6, FR-021 через `doc-update` агента — зафіксувати дизайнерські рішення (вертикальні вкладки, стандартні реквізити через діалог, права панель як єдине місце редагування)
+- [x] Виправити `restoreSession` без handle: встановлювати `lastSavedVersion` у поточний runtime version після `loadModel` замість хардкоду `null`. Поточний код у `project-store.ts` (branch "no handle") ставив `lastSavedVersion = null`, що робило проєкт dirty одразу після restore без реальних змін. Фікс: після `loadModel` відновленої моделі встановлюємо `lastSavedVersion = useMetadataStore.getState().version` — clean baseline
+- [x] Виправити `find-references.ts`: порівняння `attr.ref` лише по `name` без kind — false positives. Додати перевірку `attr.type` (startsWith `CatalogRef`/`DocumentRef`/`EnumRef`) та порівняння kind target
+- [x] Виправити `deleteObject` version increment: `version++` стоїть поза умовою знаходження об'єкта — інкрементує навіть якщо об'єкт не існує
+- [x] Виправити `AttributeTable` → `selectField`: не передає `tabularSectionName` prop, хоча `TabularSectionsEditor` його прокидає. FieldProperties вже вміє з ним працювати
+- [x] Оновити BRD §9.5, §9.6, FR-021 через `doc-update` агента — зафіксувати дизайнерські рішення (вертикальні вкладки, стандартні реквізити через діалог, права панель як єдине місце редагування)
 
 ### Definition of Done
-- [ ] Session restore зі збереженим проєктом БЕЗ handle — проєкт clean при reload (якщо не було змін)
-- [ ] `find-references` не дає false positives при однакових name в різних kinds
-- [ ] `deleteObject` з неіснуючим name не інкрементує version
-- [ ] Вибір поля табличної частини в editor → права панель показує правильний контекст (з `tabularSectionName`)
-- [ ] BRD оновлений і відповідає новому дизайну
+- [x] Session restore зі збереженим проєктом БЕЗ handle — проєкт clean при reload (якщо не було змін)
+- [x] `find-references` не дає false positives при однакових name в різних kinds
+- [x] `deleteObject` з неіснуючим name не інкрементує version
+- [x] Вибір поля табличної частини в editor → права панель показує правильний контекст (з `tabularSectionName`)
+- [x] BRD оновлений і відповідає новому дизайну
 
 ---
 

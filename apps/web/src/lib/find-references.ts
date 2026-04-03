@@ -1,6 +1,13 @@
 import type { MetadataKind, MetadataObject, MetadataRef, ProjectModel, Attribute } from '@simetra/core'
 import { KIND_TO_KEY } from './metadata-defaults'
 
+/** Відповідність kind → префікс reference-типу атрибута */
+const KIND_TO_REF_PREFIX: Partial<Record<MetadataKind, string>> = {
+  Catalog: 'CatalogRef',
+  Document: 'DocumentRef',
+  Enumeration: 'EnumRef',
+}
+
 interface Reference {
   /** Обʼєкт, що посилається */
   from: MetadataRef
@@ -48,8 +55,9 @@ export function findReferences(
 
     // Перевірка типів атрибутів (ref = target object name, allowedTypes = MetadataRef[])
     const allAttributes = getObjectAttributes(obj)
+    const refPrefix = KIND_TO_REF_PREFIX[targetKind]
     for (const attr of allAttributes) {
-      if (attr.ref === targetName) {
+      if (attr.ref === targetName && refPrefix && attr.type?.startsWith(refPrefix)) {
         refs.push({ from: objRef, via: `attribute "${attr.name}" ref` })
       }
       if (attr.allowedTypes) {

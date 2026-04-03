@@ -332,6 +332,7 @@ export function AttributeTable({
                     selectField({
                       objectRef: { kind, name: objectName },
                       fieldName: row.id,
+                      tabularSectionName,
                     })
                   }}
                 >

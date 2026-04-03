@@ -308,9 +308,9 @@ export const useMetadataStore = create<MetadataStore>()(
           const index = findObjectIndex(arr, name)
           if (index !== -1) {
             arr.splice(index, 1)
+            delete state.validationErrors[`${kind}/${name}`]
+            state.version++
           }
-          delete state.validationErrors[`${kind}/${name}`]
-          state.version++
         })
       },
 

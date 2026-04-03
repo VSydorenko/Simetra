@@ -366,7 +366,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       set({
         ...withHandle(null),
         isNewProject: false,
-        lastSavedVersion: null,
+        lastSavedVersion: useMetadataStore.getState().version,
         sessionRestoreStatus: 'restored',
         projectOrigin: 'zip-import',
         pendingDirectoryName: null,
