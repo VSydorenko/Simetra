@@ -90,7 +90,16 @@
     "renameObject": "Rename",
     "duplicateObject": "Duplicate",
     "whereUsed": "Where used",
-    "searchPlaceholder": "Search objects…"
+    "searchPlaceholder": "Search objects and attributes…",
+    "addAttribute": "Add attribute",
+    "addDimension": "Add dimension",
+    "addResource": "Add resource",
+    "addTabularSection": "Add tabular section",
+    "addValue": "Add value",
+    "deleteField": "Delete",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "deleteTabularSection": "Delete tabular section"
   },
   "editor": {
     "noSelection": "Select an object in the tree",

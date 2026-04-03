@@ -7,6 +7,19 @@ import {
   ChartHistogramIcon,
   Settings02Icon,
   GridTableIcon,
+  Layers01Icon,
+  RulerIcon,
+  Calculator01Icon,
+  Table01Icon,
+  Tag01Icon,
+  TextFontIcon,
+  TextAlignLeftIcon,
+  HashtagIcon,
+  Tick01Icon,
+  Calendar03Icon,
+  Key01Icon,
+  Attachment01Icon,
+  Link04Icon,
 } from '@hugeicons/core-free-icons'
 import type { MetadataKind } from '@simetra/core'
 
@@ -20,6 +33,35 @@ export const KIND_ICONS: Record<MetadataKind, IconSvgElement> = {
   Constant: Settings02Icon,
   CustomTable: GridTableIcon,
 }
+
+/** Іконки для структурних груп у дереві метаданих */
+export const GROUP_ICONS: Record<string, IconSvgElement> = {
+  attributes: Layers01Icon,
+  dimensions: RulerIcon,
+  resources: Calculator01Icon,
+  tabularSections: Table01Icon,
+  values: Tag01Icon,
+}
+
+/** Іконки для типів полів */
+export const FIELD_TYPE_ICONS: Record<string, IconSvgElement> = {
+  String: TextFontIcon,
+  Text: TextAlignLeftIcon,
+  Integer: HashtagIcon,
+  Numeric: HashtagIcon,
+  Boolean: Tick01Icon,
+  Date: Calendar03Icon,
+  DateTime: Calendar03Icon,
+  UUID: Key01Icon,
+  Binary: Attachment01Icon,
+  CatalogRef: Link04Icon,
+  DocumentRef: Link04Icon,
+  EnumRef: Link04Icon,
+  AnyRef: Link04Icon,
+}
+
+/** Іконка за замовчуванням для невідомого типу поля */
+export const DEFAULT_FIELD_ICON: IconSvgElement = TextFontIcon
 
 /** Маппінг MetadataKind → Tailwind CSS клас кольору тексту */
 export const KIND_COLORS: Record<MetadataKind, string> = {

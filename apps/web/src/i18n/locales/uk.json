@@ -90,7 +90,16 @@
     "renameObject": "Перейменувати",
     "duplicateObject": "Дублювати",
     "whereUsed": "Де використовується",
-    "searchPlaceholder": "Пошук обʼєктів…"
+    "searchPlaceholder": "Пошук обʼєктів та реквізитів…",
+    "addAttribute": "Додати реквізит",
+    "addDimension": "Додати вимір",
+    "addResource": "Додати ресурс",
+    "addTabularSection": "Додати табличну частину",
+    "addValue": "Додати значення",
+    "deleteField": "Видалити",
+    "moveUp": "Вгору",
+    "moveDown": "Вниз",
+    "deleteTabularSection": "Видалити табличну частину"
   },
   "editor": {
     "noSelection": "Виберіть обʼєкт у дереві",

@@ -1,25 +1,9 @@
-import { useCallback, useMemo, useRef, useState, useEffect, createContext, useContext } from 'react'
+import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Tree, type NodeRendererProps, type NodeApi, type TreeApi } from 'react-arborist'
+import { Tree, type NodeApi, type TreeApi } from 'react-arborist'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { HugeiconsIcon } from '@hugeicons/react'
-import {
-  Add01Icon,
-  Copy01Icon,
-  Delete02Icon,
-  PencilEdit02Icon,
-  Search01Icon,
-  Cancel01Icon,
-  LinkSquare02Icon,
-} from '@hugeicons/core-free-icons'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@workspace/ui/components/context-menu'
-import { Badge } from '@workspace/ui/components/badge'
+import { Search01Icon, Cancel01Icon } from '@hugeicons/core-free-icons'
 import { Input } from '@workspace/ui/components/input'
 import {
   Dialog,
@@ -30,77 +14,13 @@ import {
   DialogTitle,
 } from '@workspace/ui/components/dialog'
 import { Button } from '@workspace/ui/components/button'
-import { cn } from '@workspace/ui/lib/utils'
-import type { MetadataKind, MetadataObject, ProjectModel } from '@simetra/core'
+import type { MetadataKind } from '@simetra/core'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useUiStore, refToTabId } from '@/stores/ui-store'
-import { KIND_ICONS, KIND_COLORS } from '@/lib/metadata-icons'
-import { createDefaultObject, generateUniqueName, getObjectNames, KIND_TO_KEY } from '@/lib/metadata-defaults'
 import { findReferences, type Reference } from '@/lib/find-references'
-
-// --- Типи даних дерева ---
-
-interface TreeNodeData {
-  id: string
-  name: string
-  kind: MetadataKind
-  isSection: boolean
-  objectCount?: number
-  children?: TreeNodeData[]
-}
-
-// Порядок розділів у дереві
-const SECTION_ORDER: MetadataKind[] = [
-  'Catalog',
-  'Document',
-  'Enumeration',
-  'InformationRegister',
-  'AccumulationRegister',
-  'Constant',
-  'CustomTable',
-]
-
-// --- Контекст для діалогу видалення (один на все дерево) ---
-
-interface DeleteDialogState {
-  requestDelete: (kind: MetadataKind, name: string) => void
-}
-
-const DeleteDialogContext = createContext<DeleteDialogState>({
-  requestDelete: () => {},
-})
-
-// --- Побудова дерева ---
-
-function buildTreeData(
-  model: ProjectModel,
-  searchQuery: string,
-): TreeNodeData[] {
-  const lowerQuery = searchQuery.toLowerCase()
-
-  return SECTION_ORDER.map((kind) => {
-    const key = KIND_TO_KEY[kind]
-    const objects = model[key] as MetadataObject[]
-
-    const filtered = searchQuery
-      ? objects.filter((o) => o.name.toLowerCase().includes(lowerQuery))
-      : objects
-
-    return {
-      id: kind,
-      name: kind,
-      kind,
-      isSection: true,
-      objectCount: objects.length,
-      children: filtered.map((obj) => ({
-        id: `${kind}/${obj.name}`,
-        name: obj.name,
-        kind,
-        isSection: false,
-      })),
-    }
-  })
-}
+import { DeleteDialogContext, type TreeNodeData } from './tree/tree-types'
+import { buildTreeData } from './tree/tree-builder'
+import { TreeNode } from './tree/tree-nodes'
 
 // --- Головний компонент ---
 
@@ -170,9 +90,18 @@ export function TreePanel() {
   }, [expandedTreeNodes])
 
   // --- Selection ---
-  const selectedId = useMemo(() => {
-    if (!selectedObject) return undefined
-    return `${selectedObject.kind}/${selectedObject.name}`
+  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    if (selectedObject) {
+      const objId = `${selectedObject.kind}/${selectedObject.name}`
+      if (!selectedNodeId || !selectedNodeId.startsWith(objId)) {
+        setSelectedNodeId(objId)
+      }
+    } else {
+      setSelectedNodeId(undefined)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedObject])
 
   // --- Обробники ---
@@ -180,13 +109,41 @@ export function TreePanel() {
     (nodes: NodeApi<TreeNodeData>[]) => {
       if (nodes.length === 0) return
       const node = nodes[0]
-      if (node.data.isSection) {
+      const d = node.data
+
+      if (d.nodeType === 'kind' || d.nodeType === 'group') {
+        setSelectedNodeId(undefined)
         useUiStore.getState().selectObject(null)
         return
       }
+
+      setSelectedNodeId(node.id)
+
+      if (d.nodeType === 'field' && d.objectName) {
+        const objectRef = { kind: d.kind, name: d.objectName }
+        useUiStore.getState().selectObject(objectRef)
+
+        if (d.groupKey === 'values') return
+
+        useUiStore.getState().selectField({
+          objectRef,
+          fieldName: d.name,
+          tabularSectionName: d.tabularSectionName,
+        })
+        return
+      }
+
+      if (d.nodeType === 'tabularSection' && d.objectName) {
+        useUiStore.getState().selectObject({
+          kind: d.kind,
+          name: d.objectName,
+        })
+        return
+      }
+
       useUiStore.getState().selectObject({
-        kind: node.data.kind,
-        name: node.data.name,
+        kind: d.kind,
+        name: d.name,
       })
     },
     [],
@@ -194,10 +151,31 @@ export function TreePanel() {
 
   const handleActivate = useCallback(
     (node: NodeApi<TreeNodeData>) => {
-      if (node.data.isSection) return
+      const d = node.data
+
+      if (d.nodeType === 'kind' || d.nodeType === 'group') return
+
+      if (d.nodeType === 'field' && d.objectName) {
+        useUiStore.getState().openTab({ kind: d.kind, name: d.objectName })
+
+        if (d.groupKey !== 'values') {
+          useUiStore.getState().selectField({
+            objectRef: { kind: d.kind, name: d.objectName },
+            fieldName: d.name,
+            tabularSectionName: d.tabularSectionName,
+          })
+        }
+        return
+      }
+
+      if (d.nodeType === 'tabularSection' && d.objectName) {
+        useUiStore.getState().openTab({ kind: d.kind, name: d.objectName })
+        return
+      }
+
       useUiStore.getState().openTab({
-        kind: node.data.kind,
-        name: node.data.name,
+        kind: d.kind,
+        name: d.name,
       })
     },
     [],
@@ -214,7 +192,6 @@ export function TreePanel() {
       const errors = useMetadataStore.getState().renameObject(kind, oldName, name)
       if (errors) return
 
-      // Оновити вибір і вкладки на нове імʼя
       const uiState = useUiStore.getState()
       if (
         uiState.selectedObject?.kind === kind &&
@@ -223,7 +200,6 @@ export function TreePanel() {
         uiState.selectObject({ kind, name })
       }
 
-      // Оновити відкриту вкладку якщо є
       const oldTabId = refToTabId({ kind, name: oldName })
       const existingTab = uiState.openTabs.find((tab) => tab.id === oldTabId)
       if (existingTab) {
@@ -301,6 +277,7 @@ export function TreePanel() {
             {searchQuery && (
               <button
                 type="button"
+                aria-label={t('action.close')}
                 className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
                 onClick={() => {
                   setSearchQuery('')
@@ -320,6 +297,7 @@ export function TreePanel() {
             </span>
             <button
               type="button"
+              aria-label={t('action.search')}
               className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
               onClick={() => {
                 setSearchVisible(true)
@@ -343,7 +321,7 @@ export function TreePanel() {
             indent={16}
             rowHeight={28}
             overscanCount={5}
-            selection={selectedId}
+            selection={selectedNodeId}
             onSelect={handleSelect}
             onActivate={handleActivate}
             onRename={handleRename}
@@ -352,9 +330,12 @@ export function TreePanel() {
             disableMultiSelection
             onToggle={toggleTreeNode}
             searchTerm={searchQuery}
-            searchMatch={(node, term) =>
-              node.data.isSection || node.data.name.toLowerCase().includes(term.toLowerCase())
-            }
+            searchMatch={(node, term) => {
+              const d = node.data
+              if (d.nodeType === 'kind') return true
+              if (d.nodeType === 'group') return true
+              return d.name.toLowerCase().includes(term.toLowerCase())
+            }}
             padding={4}
           >
             {TreeNode}
@@ -371,231 +352,6 @@ export function TreePanel() {
         />
       </div>
     </DeleteDialogContext.Provider>
-  )
-}
-
-// --- Рендерер вузлів ---
-
-function TreeNode({ node, style, dragHandle }: NodeRendererProps<TreeNodeData>) {
-  const data = node.data
-
-  if (data.isSection) {
-    return <SectionNode node={node} style={style} dragHandle={dragHandle} />
-  }
-
-  return <ObjectNode node={node} style={style} dragHandle={dragHandle} />
-}
-
-// --- Вузол розділу ---
-
-function SectionNode({
-  node,
-  style,
-  dragHandle,
-}: {
-  node: NodeApi<TreeNodeData>
-  style: React.CSSProperties
-  dragHandle?: (el: HTMLDivElement | null) => void
-}) {
-  const { t } = useTranslation()
-  const data = node.data
-  const icon = KIND_ICONS[data.kind]
-
-  const handleAddObject = useCallback(() => {
-    const model = useMetadataStore.getState().model
-    const existingNames = getObjectNames(model, data.kind)
-    const name = generateUniqueName(data.kind, existingNames)
-    const obj = createDefaultObject(data.kind, name)
-    const errors = useMetadataStore.getState().createObject(obj)
-    if (!errors) {
-      useUiStore.getState().selectObject({ kind: data.kind, name })
-      node.open()
-    }
-  }, [data.kind, node])
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={dragHandle}
-          style={style}
-          className={cn(
-            'group flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isFocused && 'bg-accent',
-          )}
-          onClick={() => node.toggle()}
-        >
-          <span className="shrink-0 text-[10px] text-muted-foreground">
-            {node.isOpen ? '▼' : '▶'}
-          </span>
-          <HugeiconsIcon
-            icon={icon}
-            size={14}
-            className={cn('shrink-0', KIND_COLORS[data.kind])}
-          />
-          <span className="truncate font-medium">
-            {t(`metadata.kindPlural.${data.kind}`)}
-          </span>
-          {(data.objectCount ?? 0) > 0 && (
-            <Badge
-              variant="secondary"
-              className="ml-auto h-4 min-w-5 justify-center px-1 text-[0.6rem]"
-            >
-              {data.objectCount}
-            </Badge>
-          )}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onClick={handleAddObject}>
-          <HugeiconsIcon icon={Add01Icon} size={14} className="mr-2" />
-          {t('tree.addObject', { kind: t(`metadata.kind.${data.kind}`) })}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  )
-}
-
-// --- Вузол обʼєкта ---
-
-function ObjectNode({
-  node,
-  style,
-  dragHandle,
-}: {
-  node: NodeApi<TreeNodeData>
-  style: React.CSSProperties
-  dragHandle?: (el: HTMLDivElement | null) => void
-}) {
-  const { t } = useTranslation()
-  const data = node.data
-  const icon = KIND_ICONS[data.kind]
-  const { requestDelete } = useContext(DeleteDialogContext)
-
-  const handleAdd = useCallback(() => {
-    const model = useMetadataStore.getState().model
-    const existingNames = getObjectNames(model, data.kind)
-    const name = generateUniqueName(data.kind, existingNames)
-    const obj = createDefaultObject(data.kind, name)
-    const errors = useMetadataStore.getState().createObject(obj)
-    if (!errors) {
-      useUiStore.getState().selectObject({ kind: data.kind, name })
-    }
-  }, [data.kind])
-
-  const handleRename = useCallback(() => {
-    node.edit()
-  }, [node])
-
-  const handleDuplicate = useCallback(() => {
-    const model = useMetadataStore.getState().model
-    const existingNames = getObjectNames(model, data.kind)
-    const newName = generateUniqueName(data.kind, existingNames)
-    useMetadataStore.getState().duplicateObject(data.kind, data.name, newName)
-    useUiStore.getState().selectObject({ kind: data.kind, name: newName })
-  }, [data.kind, data.name])
-
-  const handleDelete = useCallback(() => {
-    requestDelete(data.kind, data.name)
-  }, [data.kind, data.name, requestDelete])
-
-  const handleWhereUsed = useCallback(() => {
-    // TODO: повноцінний діалог «Де використовується» — Модуль 9
-    const model = useMetadataStore.getState().model
-    const refs = findReferences(model, data.kind, data.name)
-    if (refs.length === 0) {
-      console.info(`"${data.name}" не використовується`)
-    } else {
-      console.info(`"${data.name}" використовується в:`, refs)
-    }
-  }, [data.kind, data.name])
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={dragHandle}
-          style={style}
-          className={cn(
-            'flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs',
-            'hover:bg-accent/50',
-            node.isSelected && 'bg-accent text-accent-foreground border-l-2 border-primary',
-            node.isFocused && !node.isSelected && 'ring-1 ring-ring',
-          )}
-        >
-          <HugeiconsIcon
-            icon={icon}
-            size={14}
-            className={cn('shrink-0', KIND_COLORS[data.kind])}
-          />
-          {node.isEditing ? (
-            <RenameInput node={node} />
-          ) : (
-            <span className="truncate font-mono text-[0.75rem]">
-              {data.name}
-            </span>
-          )}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onClick={handleAdd}>
-          <HugeiconsIcon icon={Add01Icon} size={14} className="mr-2" />
-          {t('tree.addObject', { kind: t(`metadata.kind.${data.kind}`) })}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={handleRename}>
-          <HugeiconsIcon icon={PencilEdit02Icon} size={14} className="mr-2" />
-          {t('tree.renameObject')}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={handleDuplicate}>
-          <HugeiconsIcon icon={Copy01Icon} size={14} className="mr-2" />
-          {t('tree.duplicateObject')}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={handleWhereUsed}>
-          <HugeiconsIcon icon={LinkSquare02Icon} size={14} className="mr-2" />
-          {t('tree.whereUsed')}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          onClick={handleDelete}
-          className="text-destructive focus:text-destructive"
-        >
-          <HugeiconsIcon icon={Delete02Icon} size={14} className="mr-2" />
-          {t('tree.deleteObject')}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  )
-}
-
-// --- Inline rename input ---
-
-function RenameInput({ node }: { node: NodeApi<TreeNodeData> }) {
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-    inputRef.current?.select()
-  }, [])
-
-  return (
-    <input
-      ref={inputRef}
-      type="text"
-      defaultValue={node.data.name}
-      className="h-5 w-full rounded-sm border border-ring bg-background px-1 font-mono text-[0.75rem] outline-none"
-      onBlur={() => node.reset()}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          node.submit(e.currentTarget.value)
-        }
-        if (e.key === 'Escape') {
-          node.reset()
-        }
-      }}
-    />
   )
 }
 
