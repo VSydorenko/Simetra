@@ -1,32 +1,42 @@
-import type { MetadataKind, MetadataObject, StandardAttributeSettings } from '@simetra/core'
+import type {
+  MetadataKind,
+  MetadataObject,
+  StandardAttributeSettings,
+} from "@simetra/core"
 
 /** Витягує settings з обʼєкта для передачі в getStandardAttributes */
 export function extractStandardAttributeSettings(
   kind: MetadataKind,
-  object: MetadataObject,
+  object: MetadataObject
 ): StandardAttributeSettings {
   switch (kind) {
-    case 'Catalog': {
-      const o = object as { hierarchyType?: string; owners?: { kind: string; name: string }[] }
+    case "Catalog": {
+      const o = object as {
+        hierarchyType?: string
+        owners?: { kind: string; name: string }[]
+      }
       return {
-        hierarchyType: (o.hierarchyType as StandardAttributeSettings['hierarchyType']) ?? 'None',
+        hierarchyType:
+          (o.hierarchyType as StandardAttributeSettings["hierarchyType"]) ??
+          "None",
         owners: o.owners,
       }
     }
-    case 'InformationRegister': {
+    case "InformationRegister": {
       const o = object as { periodicity?: string; writeMode?: string }
       return {
         periodicity: o.periodicity,
         writeMode: o.writeMode,
       }
     }
-    case 'AccumulationRegister': {
+    case "AccumulationRegister": {
       const o = object as { registerType?: string }
       return {
-        registerType: o.registerType as StandardAttributeSettings['registerType'],
+        registerType:
+          o.registerType as StandardAttributeSettings["registerType"],
       }
     }
-    case 'CustomTable': {
+    case "CustomTable": {
       const o = object as { autoAddPrimaryKey?: boolean }
       return {
         autoAddPrimaryKey: o.autoAddPrimaryKey,

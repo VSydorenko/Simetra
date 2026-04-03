@@ -11,7 +11,9 @@ export const informationRegisterSchema = z.object({
   name: z
     .string()
     .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), { message: "Name is a SQL reserved word" }),
+    .refine((n) => !isSqlReservedWord(n), {
+      message: "Name is a SQL reserved word",
+    }),
   displayName: localizedStringSchema.optional(),
 
   // Type settings
@@ -25,7 +27,10 @@ export const informationRegisterSchema = z.object({
 
   // Користувацькі перевизначення описів стандартних реквізитів
   standardAttributeOverrides: z
-    .record(z.string(), z.object({ description: localizedStringSchema.optional() }))
+    .record(
+      z.string(),
+      z.object({ description: localizedStringSchema.optional() })
+    )
     .optional()
     .default({}),
 
@@ -34,21 +39,21 @@ export const informationRegisterSchema = z.object({
     .array(attributeSchema)
     .refine(
       (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Dimension names must be unique" },
+      { message: "Dimension names must be unique" }
     )
     .default([]),
   resources: z
     .array(attributeSchema)
     .refine(
       (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Resource names must be unique" },
+      { message: "Resource names must be unique" }
     )
     .default([]),
   attributes: z
     .array(attributeSchema)
     .refine(
       (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Attribute names must be unique" },
+      { message: "Attribute names must be unique" }
     )
     .default([]),
 })

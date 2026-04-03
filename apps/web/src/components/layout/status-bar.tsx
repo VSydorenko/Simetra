@@ -1,10 +1,10 @@
-import { useTranslation } from 'react-i18next'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useUiStore } from '@/stores/ui-store'
-import { useProjectStore } from '@/stores/project-store'
-import { useIsDirty } from '@/hooks/use-is-dirty'
-import { Folder02Icon } from '@hugeicons/core-free-icons'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { useTranslation } from "react-i18next"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useUiStore } from "@/stores/ui-store"
+import { useProjectStore } from "@/stores/project-store"
+import { useIsDirty } from "@/hooks/use-is-dirty"
+import { Folder02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 function ProjectDirectoryIndicator() {
   const { t } = useTranslation()
@@ -16,13 +16,13 @@ function ProjectDirectoryIndicator() {
 
   let label: string
   if (displayName) {
-    label = t('statusBar.projectDirectory', { name: displayName })
-  } else if (projectOrigin === 'zip-import') {
-    label = t('statusBar.importedFromZip')
-  } else if (projectOrigin === 'draft-recovery') {
-    label = t('statusBar.draftRecovery')
+    label = t("statusBar.projectDirectory", { name: displayName })
+  } else if (projectOrigin === "zip-import") {
+    label = t("statusBar.importedFromZip")
+  } else if (projectOrigin === "draft-recovery") {
+    label = t("statusBar.draftRecovery")
   } else {
-    label = t('statusBar.notSaved')
+    label = t("statusBar.notSaved")
   }
 
   return (
@@ -45,7 +45,7 @@ export function StatusBar() {
       s.model.informationRegisters.length +
       s.model.accumulationRegisters.length +
       s.model.constants.length +
-      s.model.customTables.length,
+      s.model.customTables.length
   )
 
   const errorCount = useMetadataStore((s) => {
@@ -57,7 +57,10 @@ export function StatusBar() {
     let total = 0
     for (const key of allObjectKeys) {
       const seen = new Set<string>()
-      for (const err of [...(s.validationErrors[key] ?? []), ...(s.modelErrors[key] ?? [])]) {
+      for (const err of [
+        ...(s.validationErrors[key] ?? []),
+        ...(s.modelErrors[key] ?? []),
+      ]) {
         const dedupeKey = `${err.path}:${err.message}`
         if (!seen.has(dedupeKey)) {
           seen.add(dedupeKey)
@@ -76,24 +79,28 @@ export function StatusBar() {
   return (
     <footer className="z-panels flex h-6 shrink-0 items-center gap-3 border-t border-border bg-background px-3 text-[0.6875rem] text-muted-foreground">
       <ProjectDirectoryIndicator />
-      <span>{t('project.objectCount', { count: objectCount })}</span>
-      <span className={errorCount > 0 ? 'text-destructive' : 'text-success'}>
+      <span>{t("project.objectCount", { count: objectCount })}</span>
+      <span className={errorCount > 0 ? "text-destructive" : "text-success"}>
         {errorCount > 0
-          ? t('validation.errors', { count: errorCount })
-          : t('validation.noErrors')}
+          ? t("validation.errors", { count: errorCount })
+          : t("validation.noErrors")}
       </span>
       {warningCount > 0 && (
         <span className="text-amber-500">
-          {t('validation.warnings', { count: warningCount })}
+          {t("validation.warnings", { count: warningCount })}
         </span>
       )}
       {(openTabsCount > 0 || floatingWindowsCount > 0) && (
         <span>
-          {t('statusBar.openTabs', { count: openTabsCount + floatingWindowsCount })}
+          {t("statusBar.openTabs", {
+            count: openTabsCount + floatingWindowsCount,
+          })}
         </span>
       )}
       {isDirty && (
-        <span className="ml-auto text-warning">{t('project.unsavedChanges')}</span>
+        <span className="ml-auto text-warning">
+          {t("project.unsavedChanges")}
+        </span>
       )}
     </footer>
   )

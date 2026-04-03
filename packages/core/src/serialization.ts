@@ -1,125 +1,135 @@
-import type { MetadataObject } from './schemas/project-model'
-import type { Project } from './schemas/project'
+import type { MetadataObject } from "./schemas/project-model"
+import type { Project } from "./schemas/project"
 
 // Порядок ключів для проєкту
 const PROJECT_KEY_ORDER = [
-  '$schema',
-  'schemaVersion',
-  'name',
-  'displayName',
-  'defaultLocale',
-  'database',
-  'generation',
+  "$schema",
+  "schemaVersion",
+  "name",
+  "displayName",
+  "defaultLocale",
+  "database",
+  "generation",
 ]
 
-const DATABASE_KEY_ORDER = ['target', 'schema', 'namingConvention']
-const GENERATION_KEY_ORDER = ['tablePrefix', 'enumStrategy', 'constantsStrategy']
+const DATABASE_KEY_ORDER = ["target", "schema", "namingConvention"]
+const GENERATION_KEY_ORDER = [
+  "tablePrefix",
+  "enumStrategy",
+  "constantsStrategy",
+]
 
 // Порядок ключів для кожного типу метаданих
 const CATALOG_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'name',
-  'displayName',
-  'codeLength',
-  'codeType',
-  'descriptionLength',
-  'hierarchyType',
-  'owners',
-  'autonumber',
-  'codeUnique',
-  'mainPresentation',
-  'predefinedItems',
-  'standardAttributeOverrides',
-  'attributes',
-  'tabularSections',
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "codeLength",
+  "codeType",
+  "descriptionLength",
+  "hierarchyType",
+  "owners",
+  "autonumber",
+  "codeUnique",
+  "mainPresentation",
+  "predefinedItems",
+  "standardAttributeOverrides",
+  "attributes",
+  "tabularSections",
 ]
 
 const DOCUMENT_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'name',
-  'displayName',
-  'numberLength',
-  'numberType',
-  'autonumber',
-  'numberPeriodicity',
-  'posting',
-  'registerMovements',
-  'standardAttributeOverrides',
-  'attributes',
-  'tabularSections',
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "numberLength",
+  "numberType",
+  "autonumber",
+  "numberPeriodicity",
+  "posting",
+  "registerMovements",
+  "standardAttributeOverrides",
+  "attributes",
+  "tabularSections",
 ]
 
-const ENUMERATION_KEY_ORDER = ['$schema', 'kind', 'name', 'displayName', 'values']
+const ENUMERATION_KEY_ORDER = [
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "values",
+]
 
 const INFORMATION_REGISTER_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'name',
-  'displayName',
-  'periodicity',
-  'writeMode',
-  'recorderTypes',
-  'standardAttributeOverrides',
-  'dimensions',
-  'resources',
-  'attributes',
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "periodicity",
+  "writeMode",
+  "recorderTypes",
+  "standardAttributeOverrides",
+  "dimensions",
+  "resources",
+  "attributes",
 ]
 
 const ACCUMULATION_REGISTER_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'name',
-  'displayName',
-  'registerType',
-  'recorderTypes',
-  'standardAttributeOverrides',
-  'dimensions',
-  'resources',
-  'attributes',
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "registerType",
+  "recorderTypes",
+  "standardAttributeOverrides",
+  "dimensions",
+  "resources",
+  "attributes",
 ]
 
 const CONSTANT_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'name',
-  'displayName',
-  'valueType',
-  'defaultValue',
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "valueType",
+  "defaultValue",
 ]
 
 const CUSTOM_TABLE_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'name',
-  'displayName',
-  'autoAddPrimaryKey',
-  'standardAttributeOverrides',
-  'attributes',
+  "$schema",
+  "kind",
+  "name",
+  "displayName",
+  "autoAddPrimaryKey",
+  "standardAttributeOverrides",
+  "attributes",
 ]
 
 const ATTRIBUTE_KEY_ORDER = [
-  'name',
-  'displayName',
-  'type',
-  'required',
-  'indexed',
-  'unique',
-  'defaultValue',
-  'description',
-  'length',
-  'precision',
-  'scale',
-  'ref',
-  'allowedTypes',
+  "name",
+  "displayName",
+  "type",
+  "required",
+  "indexed",
+  "unique",
+  "defaultValue",
+  "description",
+  "length",
+  "precision",
+  "scale",
+  "ref",
+  "allowedTypes",
 ]
 
-const TABULAR_SECTION_KEY_ORDER = ['name', 'displayName', 'attributes']
-const METADATA_REF_KEY_ORDER = ['kind', 'name']
-const LOCALIZED_STRING_KEY_ORDER = ['uk', 'en']
-const ENUM_VALUE_KEY_ORDER = ['name', 'displayName', 'order']
-const PREDEFINED_ITEM_KEY_ORDER = ['name', 'description']
+const TABULAR_SECTION_KEY_ORDER = ["name", "displayName", "attributes"]
+const METADATA_REF_KEY_ORDER = ["kind", "name"]
+const LOCALIZED_STRING_KEY_ORDER = ["uk", "en"]
+const ENUM_VALUE_KEY_ORDER = ["name", "displayName", "order"]
+const PREDEFINED_ITEM_KEY_ORDER = ["name", "description"]
 
 const METADATA_KEY_ORDERS: Record<string, string[]> = {
   Catalog: CATALOG_KEY_ORDER,
@@ -156,7 +166,7 @@ const ARRAY_ITEM_KEY_ORDERS: Record<string, string[]> = {
 
 function orderKeys(
   obj: Record<string, unknown>,
-  keyOrder: string[],
+  keyOrder: string[]
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const key of keyOrder) {
@@ -175,12 +185,14 @@ function orderKeys(
 
 function canonicalizeValue(value: unknown, parentKey?: string): unknown {
   if (value === null || value === undefined) return value
-  if (typeof value !== 'object') return value
+  if (typeof value !== "object") return value
 
   if (Array.isArray(value)) {
-    const itemKeyOrder = parentKey ? ARRAY_ITEM_KEY_ORDERS[parentKey] : undefined
+    const itemKeyOrder = parentKey
+      ? ARRAY_ITEM_KEY_ORDERS[parentKey]
+      : undefined
     return value.map((item) => {
-      if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      if (item !== null && typeof item === "object" && !Array.isArray(item)) {
         const record = item as Record<string, unknown>
         if (itemKeyOrder) {
           return canonicalizeObject(record, itemKeyOrder)
@@ -203,7 +215,7 @@ function canonicalizeValue(value: unknown, parentKey?: string): unknown {
 
 function canonicalizeObject(
   obj: Record<string, unknown>,
-  keyOrder: string[],
+  keyOrder: string[]
 ): Record<string, unknown> {
   const ordered = orderKeys(obj, keyOrder)
   const result: Record<string, unknown> = {}
@@ -226,9 +238,9 @@ export function serializeMetadataObject(obj: MetadataObject): string {
   }
   const canonical = canonicalizeObject(
     obj as unknown as Record<string, unknown>,
-    keyOrder,
+    keyOrder
   )
-  return JSON.stringify(canonical, null, 2) + '\n'
+  return JSON.stringify(canonical, null, 2) + "\n"
 }
 
 /**
@@ -237,7 +249,7 @@ export function serializeMetadataObject(obj: MetadataObject): string {
 export function serializeProject(project: Project): string {
   const canonical = canonicalizeObject(
     project as unknown as Record<string, unknown>,
-    PROJECT_KEY_ORDER,
+    PROJECT_KEY_ORDER
   )
-  return JSON.stringify(canonical, null, 2) + '\n'
+  return JSON.stringify(canonical, null, 2) + "\n"
 }

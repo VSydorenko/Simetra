@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import {
   Dialog,
   DialogContent,
@@ -7,7 +7,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-} from '@workspace/ui/components/dialog'
+} from "@workspace/ui/components/dialog"
 import {
   Table,
   TableBody,
@@ -15,17 +15,21 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@workspace/ui/components/table'
-import { Badge } from '@workspace/ui/components/badge'
-import { Button } from '@workspace/ui/components/button'
-import { Input } from '@workspace/ui/components/input'
-import { ScrollArea } from '@workspace/ui/components/scroll-area'
-import type { MetadataKind, MetadataObject, LocalizedString } from '@simetra/core'
+} from "@workspace/ui/components/table"
+import { Badge } from "@workspace/ui/components/badge"
+import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
+import { ScrollArea } from "@workspace/ui/components/scroll-area"
+import type {
+  MetadataKind,
+  MetadataObject,
+  LocalizedString,
+} from "@simetra/core"
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
-} from '@simetra/core'
-import { extractStandardAttributeSettings } from '@/lib/extract-settings'
+} from "@simetra/core"
+import { extractStandardAttributeSettings } from "@/lib/extract-settings"
 
 interface StandardAttributesDialogProps {
   open: boolean
@@ -65,7 +69,7 @@ export function StandardAttributesDialog({
         setRevisionKey((k) => k + 1)
       }
     },
-    [handleCancel],
+    [handleCancel]
   )
 
   return (
@@ -106,7 +110,7 @@ function StandardAttributesDialogBody({
   t: (key: string) => string
 }) {
   const { i18n } = useTranslation()
-  const lang = i18n.language as 'uk' | 'en'
+  const lang = i18n.language as "uk" | "en"
 
   const attributes = useMemo(() => {
     if (tabularSectionName) {
@@ -117,14 +121,16 @@ function StandardAttributesDialogBody({
   }, [kind, object, tabularSectionName])
 
   const savedOverrides = useMemo(() => {
-    return ('standardAttributeOverrides' in object
-      ? (object.standardAttributeOverrides as Overrides)
-      : {}) ?? {}
+    return (
+      ("standardAttributeOverrides" in object
+        ? (object.standardAttributeOverrides as Overrides)
+        : {}) ?? {}
+    )
   }, [object])
 
   // Ініціалізується один раз при mount (key-reset при відкритті)
   const [draftOverrides, setDraftOverrides] = useState<Overrides>(() =>
-    structuredClone(savedOverrides),
+    structuredClone(savedOverrides)
   )
 
   const isDirty = useMemo(() => {
@@ -132,7 +138,7 @@ function StandardAttributesDialogBody({
   }, [draftOverrides, savedOverrides])
 
   const handleDescriptionChange = useCallback(
-    (attrName: string, locale: 'uk' | 'en', value: string) => {
+    (attrName: string, locale: "uk" | "en", value: string) => {
       setDraftOverrides((prev) => {
         const current = prev[attrName]?.description ?? {}
         return {
@@ -144,18 +150,20 @@ function StandardAttributesDialogBody({
         }
       })
     },
-    [],
+    []
   )
 
   const handleSave = useCallback(() => {
-    onUpdateObject({ standardAttributeOverrides: draftOverrides } as Partial<MetadataObject>)
+    onUpdateObject({
+      standardAttributeOverrides: draftOverrides,
+    } as Partial<MetadataObject>)
     onCancel()
   }, [draftOverrides, onUpdateObject, onCancel])
 
   const kindLabel = t(`metadata.kind.${kind}`)
   const title = tabularSectionName
-    ? `${kindLabel} ${objectName} / ${tabularSectionName}: ${t('properties.standardAttributes')}`
-    : `${kindLabel} ${objectName}: ${t('properties.standardAttributes')}`
+    ? `${kindLabel} ${objectName} / ${tabularSectionName}: ${t("properties.standardAttributes")}`
+    : `${kindLabel} ${objectName}: ${t("properties.standardAttributes")}`
 
   const isReadonly = !!tabularSectionName
 
@@ -164,7 +172,7 @@ function StandardAttributesDialogBody({
       <DialogHeader>
         <DialogTitle className="text-sm">{title}</DialogTitle>
         <DialogDescription className="text-xs">
-          {t('dialog.standardAttributesDescription')}
+          {t("dialog.standardAttributesDescription")}
         </DialogDescription>
       </DialogHeader>
       <ScrollArea className="max-h-[60vh]">
@@ -172,13 +180,13 @@ function StandardAttributesDialogBody({
           <TableHeader>
             <TableRow className="h-8">
               <TableHead className="h-8 w-[140px] px-2 text-xs font-medium">
-                {t('metadata.field.name')}
+                {t("metadata.field.name")}
               </TableHead>
               <TableHead className="h-8 w-[100px] px-2 text-xs font-medium">
-                {t('metadata.field.type')}
+                {t("metadata.field.type")}
               </TableHead>
               <TableHead className="h-8 px-2 text-xs font-medium whitespace-normal">
-                {t('metadata.field.description')}
+                {t("metadata.field.description")}
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -187,9 +195,9 @@ function StandardAttributesDialogBody({
               <TableRow>
                 <TableCell
                   colSpan={3}
-                  className="h-16 text-center text-xs text-muted-foreground whitespace-normal"
+                  className="h-16 text-center text-xs whitespace-normal text-muted-foreground"
                 >
-                  {t('dialog.noStandardAttributes')}
+                  {t("dialog.noStandardAttributes")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -210,10 +218,10 @@ function StandardAttributesDialogBody({
       {!isReadonly && (
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onCancel}>
-            {t('action.cancel')}
+            {t("action.cancel")}
           </Button>
           <Button size="sm" onClick={handleSave} disabled={!isDirty}>
-            {t('action.save')}
+            {t("action.save")}
           </Button>
         </DialogFooter>
       )}
@@ -230,13 +238,17 @@ function StandardAttributeRow({
   onDescriptionChange,
 }: {
   attr: { name: string; type: string; description: { uk: string; en: string } }
-  lang: 'uk' | 'en'
+  lang: "uk" | "en"
   override?: { description?: LocalizedString }
   isReadonly: boolean
-  onDescriptionChange: (attrName: string, locale: 'uk' | 'en', value: string) => void
+  onDescriptionChange: (
+    attrName: string,
+    locale: "uk" | "en",
+    value: string
+  ) => void
 }) {
-  const systemDescription = attr.description[lang] ?? attr.description.uk ?? ''
-  const value = override?.description?.[lang] ?? ''
+  const systemDescription = attr.description[lang] ?? attr.description.uk ?? ""
+  const value = override?.description?.[lang] ?? ""
 
   return (
     <TableRow className="h-8">
@@ -250,13 +262,17 @@ function StandardAttributeRow({
       </TableCell>
       <TableCell className="px-2 py-1 whitespace-normal">
         {isReadonly ? (
-          <span className="text-xs text-muted-foreground">{systemDescription}</span>
+          <span className="text-xs text-muted-foreground">
+            {systemDescription}
+          </span>
         ) : (
           <Input
             className="h-6 text-xs"
             placeholder={systemDescription}
             value={value}
-            onChange={(e) => onDescriptionChange(attr.name, lang, e.target.value)}
+            onChange={(e) =>
+              onDescriptionChange(attr.name, lang, e.target.value)
+            }
           />
         )}
       </TableCell>

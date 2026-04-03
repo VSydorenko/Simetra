@@ -1,19 +1,19 @@
-import { useCallback, useRef, type MouseEvent } from 'react'
-import { useTranslation } from 'react-i18next'
-import { ScrollArea, ScrollBar } from '@workspace/ui/components/scroll-area'
+import { useCallback, useRef, type MouseEvent } from "react"
+import { useTranslation } from "react-i18next"
+import { ScrollArea, ScrollBar } from "@workspace/ui/components/scroll-area"
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@workspace/ui/components/context-menu'
-import { Badge } from '@workspace/ui/components/badge'
-import { cn } from '@workspace/ui/lib/utils'
-import { useUiStore, type TabItem } from '../../stores/ui-store'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useProjectStore } from '@/stores/project-store'
-import { KIND_BADGE_CLASSES } from '@/lib/metadata-icons'
+} from "@workspace/ui/components/context-menu"
+import { Badge } from "@workspace/ui/components/badge"
+import { cn } from "@workspace/ui/lib/utils"
+import { useUiStore, type TabItem } from "../../stores/ui-store"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useProjectStore } from "@/stores/project-store"
+import { KIND_BADGE_CLASSES } from "@/lib/metadata-icons"
 
 /** Поріг вертикального зміщення (px) для detach вкладки при drag */
 const DETACH_THRESHOLD_Y = 40
@@ -52,7 +52,7 @@ function Tab({
         closeTab(tab.id)
       }
     },
-    [closeTab, tab.id],
+    [closeTab, tab.id]
   )
 
   const handleClose = useCallback(
@@ -60,7 +60,7 @@ function Tab({
       e.stopPropagation()
       closeTab(tab.id)
     },
-    [closeTab, tab.id],
+    [closeTab, tab.id]
   )
 
   // --- Drag-to-detach: відстежуємо вертикальне зміщення ---
@@ -76,22 +76,22 @@ function Tab({
         if (dy > DETACH_THRESHOLD_Y) {
           // Перевищено поріг — detach вкладку у floating window
           dragStartRef.current = null
-          document.removeEventListener('mousemove', handleMouseMove)
-          document.removeEventListener('mouseup', handleMouseUp)
+          document.removeEventListener("mousemove", handleMouseMove)
+          document.removeEventListener("mouseup", handleMouseUp)
           detachTab(tab.id)
         }
       }
 
       const handleMouseUp = () => {
         dragStartRef.current = null
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
+        document.removeEventListener("mousemove", handleMouseMove)
+        document.removeEventListener("mouseup", handleMouseUp)
       }
 
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
+      document.addEventListener("mousemove", handleMouseMove)
+      document.addEventListener("mouseup", handleMouseUp)
     },
-    [detachTab, tab.id],
+    [detachTab, tab.id]
   )
 
   return (
@@ -102,11 +102,11 @@ function Tab({
           tabIndex={0}
           aria-selected={isActive}
           className={cn(
-            'group flex h-8 min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5',
-            'border-r border-border px-2 text-xs outline-none',
-            'transition-colors hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring',
-            isActive && 'bg-background shadow-sm border-b-2 border-primary',
-            !isActive && 'bg-muted/30',
+            "group flex h-8 max-w-48 min-w-0 shrink-0 cursor-pointer items-center gap-1.5",
+            "border-r border-border px-2 text-xs outline-none",
+            "transition-colors hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring",
+            isActive && "border-b-2 border-primary bg-background shadow-sm",
+            !isActive && "bg-muted/30"
           )}
           onClick={handleClick}
           onMouseDown={(e) => {
@@ -114,7 +114,7 @@ function Tab({
             handleDragStart(e)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
+            if (e.key === "Enter" || e.key === " ") {
               e.preventDefault()
               handleClick()
             }
@@ -131,8 +131,8 @@ function Tab({
           <Badge
             variant="outline"
             className={cn(
-              'shrink-0 px-1 py-0 text-[9px] leading-tight',
-              KIND_BADGE_CLASSES[tab.objectRef.kind],
+              "shrink-0 px-1 py-0 text-[9px] leading-tight",
+              KIND_BADGE_CLASSES[tab.objectRef.kind]
             )}
           >
             {t(`metadata.kind.${tab.objectRef.kind}`)}
@@ -144,21 +144,19 @@ function Tab({
           </span>
 
           {/* Dirty indicator */}
-          {isDirty && (
-            <span className="shrink-0 text-xs text-warning">*</span>
-          )}
+          {isDirty && <span className="shrink-0 text-xs text-warning">*</span>}
 
           {/* Кнопка закриття */}
           <button
             type="button"
             className={cn(
-              'ml-auto shrink-0 rounded-sm p-0.5',
-              'text-muted-foreground hover:bg-destructive/20 hover:text-destructive',
-              'opacity-0 group-hover:opacity-100',
-              isActive && 'opacity-100',
+              "ml-auto shrink-0 rounded-sm p-0.5",
+              "text-muted-foreground hover:bg-destructive/20 hover:text-destructive",
+              "opacity-0 group-hover:opacity-100",
+              isActive && "opacity-100"
             )}
             onClick={handleClose}
-            aria-label={t('tabs.close')}
+            aria-label={t("tabs.close")}
           >
             <svg
               width="10"
@@ -175,30 +173,30 @@ function Tab({
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => closeTab(tab.id)}>
-          {t('tabs.close')}
+          {t("tabs.close")}
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => closeOtherTabs(tab.id)}>
-          {t('tabs.closeOthers')}
+          {t("tabs.closeOthers")}
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => closeTabsToRight(tab.id)}>
-          {t('tabs.closeToRight')}
+          {t("tabs.closeToRight")}
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => closeAllTabs()}>
-          {t('tabs.closeAll')}
+          {t("tabs.closeAll")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         {tab.isPinned ? (
           <ContextMenuItem onSelect={() => unpinTab(tab.id)}>
-            {t('tabs.unpin')}
+            {t("tabs.unpin")}
           </ContextMenuItem>
         ) : (
           <ContextMenuItem onSelect={() => pinTab(tab.id)}>
-            {t('tabs.pin')}
+            {t("tabs.pin")}
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => detachTab(tab.id)}>
-          {t('tabs.detach')}
+          {t("tabs.detach")}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -210,7 +208,7 @@ export function TabBar() {
   const { openTabs, activeTabId } = useUiStore()
   const objectVersions = useMetadataStore((s) => s.objectVersions)
   const lastSavedObjectVersions = useProjectStore(
-    (s) => s.lastSavedObjectVersions,
+    (s) => s.lastSavedObjectVersions
   )
   const scrollRef = useRef<HTMLDivElement>(null)
 

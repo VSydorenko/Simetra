@@ -12,7 +12,9 @@ export const documentSchema = z.object({
   name: z
     .string()
     .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), { message: "Name is a SQL reserved word" }),
+    .refine((n) => !isSqlReservedWord(n), {
+      message: "Name is a SQL reserved word",
+    }),
   displayName: localizedStringSchema.optional(),
 
   // Type settings
@@ -27,7 +29,10 @@ export const documentSchema = z.object({
 
   // Користувацькі перевизначення описів стандартних реквізитів
   standardAttributeOverrides: z
-    .record(z.string(), z.object({ description: localizedStringSchema.optional() }))
+    .record(
+      z.string(),
+      z.object({ description: localizedStringSchema.optional() })
+    )
     .optional()
     .default({}),
 
@@ -36,14 +41,15 @@ export const documentSchema = z.object({
     .array(attributeSchema)
     .refine(
       (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Attribute names must be unique" },
+      { message: "Attribute names must be unique" }
     )
     .default([]),
   tabularSections: z
     .array(tabularSectionSchema)
     .refine(
-      (sections) => new Set(sections.map((s) => s.name)).size === sections.length,
-      { message: "Tabular section names must be unique" },
+      (sections) =>
+        new Set(sections.map((s) => s.name)).size === sections.length,
+      { message: "Tabular section names must be unique" }
     )
     .default([]),
 })

@@ -10,7 +10,9 @@ export const constantSchema = z.object({
   name: z
     .string()
     .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), { message: "Name is a SQL reserved word" }),
+    .refine((n) => !isSqlReservedWord(n), {
+      message: "Name is a SQL reserved word",
+    }),
   displayName: localizedStringSchema.optional(),
   valueType: fieldTypeSchema,
   defaultValue: z.unknown().optional(),

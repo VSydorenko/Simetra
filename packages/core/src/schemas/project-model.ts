@@ -1,14 +1,14 @@
-import { z } from 'zod'
-import { catalogSchema } from './catalog'
-import { documentSchema } from './document'
-import { enumerationSchema } from './enumeration'
-import { informationRegisterSchema } from './information-register'
-import { accumulationRegisterSchema } from './accumulation-register'
-import { constantSchema } from './constant'
-import { customTableSchema } from './custom-table'
-import { projectSchema } from './project'
+import { z } from "zod"
+import { catalogSchema } from "./catalog"
+import { documentSchema } from "./document"
+import { enumerationSchema } from "./enumeration"
+import { informationRegisterSchema } from "./information-register"
+import { accumulationRegisterSchema } from "./accumulation-register"
+import { constantSchema } from "./constant"
+import { customTableSchema } from "./custom-table"
+import { projectSchema } from "./project"
 
-export const metadataObjectSchema = z.discriminatedUnion('kind', [
+export const metadataObjectSchema = z.discriminatedUnion("kind", [
   catalogSchema,
   documentSchema,
   enumerationSchema,

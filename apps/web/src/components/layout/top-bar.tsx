@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Button } from '@workspace/ui/components/button'
-import { Separator } from '@workspace/ui/components/separator'
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { Button } from "@workspace/ui/components/button"
+import { Separator } from "@workspace/ui/components/separator"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@workspace/ui/components/tooltip'
-import { HugeiconsIcon } from '@hugeicons/react'
+} from "@workspace/ui/components/tooltip"
+import { HugeiconsIcon } from "@hugeicons/react"
 import {
   FileAddIcon,
   FolderOpenIcon,
@@ -16,11 +16,11 @@ import {
   Upload04Icon,
   ArrowTurnBackwardIcon,
   ArrowTurnForwardIcon,
-} from '@hugeicons/core-free-icons'
-import { useStore } from 'zustand'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useProjectStore } from '@/stores/project-store'
-import { useIsDirty } from '@/hooks/use-is-dirty'
+} from "@hugeicons/core-free-icons"
+import { useStore } from "zustand"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useProjectStore } from "@/stores/project-store"
+import { useIsDirty } from "@/hooks/use-is-dirty"
 
 export function TopBar() {
   const { t } = useTranslation()
@@ -29,11 +29,17 @@ export function TopBar() {
   const isSaving = useProjectStore((s) => s.isSaving)
   const isLoading = useProjectStore((s) => s.isLoading)
 
-  const canUndo = useStore(useMetadataStore.temporal, (s) => s.pastStates.length > 0)
-  const canRedo = useStore(useMetadataStore.temporal, (s) => s.futureStates.length > 0)
+  const canUndo = useStore(
+    useMetadataStore.temporal,
+    (s) => s.pastStates.length > 0
+  )
+  const canRedo = useStore(
+    useMetadataStore.temporal,
+    (s) => s.futureStates.length > 0
+  )
 
   const [isEditing, setIsEditing] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
 
@@ -66,7 +72,7 @@ export function TopBar() {
     }
   }, [isEditing])
 
-  const handleNew = () => useProjectStore.getState().newProject('NewProject')
+  const handleNew = () => useProjectStore.getState().newProject("NewProject")
   const handleOpen = () => void useProjectStore.getState().openProject()
   const handleSave = () => void useProjectStore.getState().saveProject()
   const handleExport = () => void useProjectStore.getState().exportProject()
@@ -81,7 +87,7 @@ export function TopBar() {
       {/* Логотип і назва проєкту */}
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold tracking-tight">
-          {t('app.name')}
+          {t("app.name")}
         </span>
         <Separator orientation="vertical" className="!h-4" />
         {isEditing ? (
@@ -92,8 +98,8 @@ export function TopBar() {
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commitEdit}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') commitEdit()
-              if (e.key === 'Escape') cancelEdit()
+              if (e.key === "Enter") commitEdit()
+              if (e.key === "Escape") cancelEdit()
             }}
             className="max-w-48 rounded-sm border border-border bg-transparent px-1 text-xs text-muted-foreground outline-none focus:border-primary"
           />
@@ -102,7 +108,7 @@ export function TopBar() {
             className="max-w-48 cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground"
             onClick={startEditing}
             onKeyDown={(e) => {
-              if (e.key === 'F2') startEditing()
+              if (e.key === "F2") startEditing()
             }}
             role="button"
             tabIndex={0}
@@ -131,7 +137,7 @@ export function TopBar() {
               />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{t('action.new')}</TooltipContent>
+          <TooltipContent side="bottom">{t("action.new")}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -150,7 +156,7 @@ export function TopBar() {
               />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{t('action.open')}</TooltipContent>
+          <TooltipContent side="bottom">{t("action.open")}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -170,7 +176,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t('action.save')} (Ctrl+S)
+            {t("action.save")} (Ctrl+S)
           </TooltipContent>
         </Tooltip>
 
@@ -190,7 +196,7 @@ export function TopBar() {
               />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{t('action.export')}</TooltipContent>
+          <TooltipContent side="bottom">{t("action.export")}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -209,7 +215,7 @@ export function TopBar() {
               />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{t('action.import')}</TooltipContent>
+          <TooltipContent side="bottom">{t("action.import")}</TooltipContent>
         </Tooltip>
 
         <Separator orientation="vertical" className="!mx-1 !h-4" />
@@ -231,7 +237,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t('action.undo')} (Ctrl+Z)
+            {t("action.undo")} (Ctrl+Z)
           </TooltipContent>
         </Tooltip>
 
@@ -252,7 +258,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t('action.redo')} (Ctrl+Shift+Z)
+            {t("action.redo")} (Ctrl+Shift+Z)
           </TooltipContent>
         </Tooltip>
       </div>

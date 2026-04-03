@@ -150,7 +150,13 @@ describe("informationRegisterSchema", () => {
       name: "ExchangeRates",
       periodicity: "Day",
       writeMode: "Independent",
-      dimensions: [{ name: "currency", type: "Ref", ref: { kind: "Catalog", name: "Currencies" } }],
+      dimensions: [
+        {
+          name: "currency",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Currencies" },
+        },
+      ],
       resources: [{ name: "rate", type: "Numeric", precision: 15, scale: 4 }],
     })
     expect(result.periodicity).toBe("Day")
@@ -285,7 +291,7 @@ describe("attributeSchema", () => {
         type: "Ref",
         ref: { kind: "Catalog", name: "Products" },
         allowedTypes: [{ kind: "Document", name: "SalesOrder" }],
-      }),
+      })
     ).toThrow(/mutually exclusive/)
   })
 
@@ -295,7 +301,7 @@ describe("attributeSchema", () => {
         name: "bad_field",
         type: "String",
         ref: { kind: "Catalog", name: "Products" },
-      }),
+      })
     ).toThrow(/only valid when type is Ref/)
   })
 
@@ -305,7 +311,7 @@ describe("attributeSchema", () => {
         name: "bad_field",
         type: "Integer",
         allowedTypes: [{ kind: "Catalog", name: "Products" }],
-      }),
+      })
     ).toThrow(/only valid when type is Ref/)
   })
 
@@ -315,7 +321,7 @@ describe("attributeSchema", () => {
         name: "bad_kind",
         type: "Ref",
         ref: { kind: "AccumulationRegister", name: "Balance" },
-      }),
+      })
     ).toThrow()
   })
 
@@ -325,37 +331,47 @@ describe("attributeSchema", () => {
         name: "bad_kind",
         type: "Ref",
         allowedTypes: [{ kind: "Constant", name: "Settings" }],
-      }),
+      })
     ).toThrow()
   })
 
   it("rejects stale length when type is not String", () => {
     expect(() =>
-      attributeSchema.parse({ name: "flag", type: "Boolean", length: 50 }),
+      attributeSchema.parse({ name: "flag", type: "Boolean", length: 50 })
     ).toThrow(/length is only valid when type is String/)
   })
 
   it("rejects stale precision when type is not Numeric", () => {
     expect(() =>
-      attributeSchema.parse({ name: "code", type: "String", precision: 10, length: 50 }),
+      attributeSchema.parse({
+        name: "code",
+        type: "String",
+        precision: 10,
+        length: 50,
+      })
     ).toThrow(/precision is only valid when type is Numeric/)
   })
 
   it("rejects stale scale when type is not Numeric", () => {
     expect(() =>
-      attributeSchema.parse({ name: "code", type: "String", scale: 2, length: 50 }),
+      attributeSchema.parse({
+        name: "code",
+        type: "String",
+        scale: 2,
+        length: 50,
+      })
     ).toThrow(/scale is only valid when type is Numeric/)
   })
 
   it("rejects stale length on Integer", () => {
     expect(() =>
-      attributeSchema.parse({ name: "count", type: "Integer", length: 10 }),
+      attributeSchema.parse({ name: "count", type: "Integer", length: 10 })
     ).toThrow(/length is only valid when type is String/)
   })
 
   it("rejects stale precision on Integer", () => {
     expect(() =>
-      attributeSchema.parse({ name: "count", type: "Integer", precision: 10 }),
+      attributeSchema.parse({ name: "count", type: "Integer", precision: 10 })
     ).toThrow(/precision is only valid when type is Numeric/)
   })
 
@@ -396,13 +412,16 @@ describe("attributeSchema", () => {
 
 describe("metadataRefSchema", () => {
   it("accepts valid kind", () => {
-    const result = metadataRefSchema.parse({ kind: "Catalog", name: "Products" })
+    const result = metadataRefSchema.parse({
+      kind: "Catalog",
+      name: "Products",
+    })
     expect(result.kind).toBe("Catalog")
   })
 
   it("rejects invalid kind", () => {
     expect(() =>
-      metadataRefSchema.parse({ kind: "InvalidKind", name: "Foo" }),
+      metadataRefSchema.parse({ kind: "InvalidKind", name: "Foo" })
     ).toThrow()
   })
 
@@ -417,7 +436,9 @@ describe("metadataRefSchema", () => {
       "CustomTable",
     ]
     for (const kind of kinds) {
-      expect(() => metadataRefSchema.parse({ kind, name: "Test" })).not.toThrow()
+      expect(() =>
+        metadataRefSchema.parse({ kind, name: "Test" })
+      ).not.toThrow()
     }
   })
 })
@@ -432,29 +453,29 @@ describe("SQL reserved words", () => {
   })
 
   it("rejects reserved word as attribute name", () => {
-    expect(() => attributeSchema.parse({ name: "order", type: "String" })).toThrow(
-      /SQL reserved word/,
-    )
-    expect(() => attributeSchema.parse({ name: "group", type: "Integer" })).toThrow(
-      /SQL reserved word/,
-    )
-    expect(() => attributeSchema.parse({ name: "user", type: "String" })).toThrow(
-      /SQL reserved word/,
-    )
-    expect(() => attributeSchema.parse({ name: "table", type: "String" })).toThrow(
-      /SQL reserved word/,
-    )
+    expect(() =>
+      attributeSchema.parse({ name: "order", type: "String" })
+    ).toThrow(/SQL reserved word/)
+    expect(() =>
+      attributeSchema.parse({ name: "group", type: "Integer" })
+    ).toThrow(/SQL reserved word/)
+    expect(() =>
+      attributeSchema.parse({ name: "user", type: "String" })
+    ).toThrow(/SQL reserved word/)
+    expect(() =>
+      attributeSchema.parse({ name: "table", type: "String" })
+    ).toThrow(/SQL reserved word/)
   })
 
   it("rejects reserved word as object name (case-insensitive)", () => {
     expect(() =>
-      catalogSchema.parse({ kind: "Catalog", name: "Select" }),
+      catalogSchema.parse({ kind: "Catalog", name: "Select" })
     ).toThrow(/SQL reserved word/)
     expect(() =>
-      documentSchema.parse({ kind: "Document", name: "Update" }),
+      documentSchema.parse({ kind: "Document", name: "Update" })
     ).toThrow(/SQL reserved word/)
     expect(() =>
-      constantSchema.parse({ kind: "Constant", name: "Index" }),
+      constantSchema.parse({ kind: "Constant", name: "Index" })
     ).toThrow(/SQL reserved word/)
   })
 })
@@ -469,7 +490,7 @@ describe("attribute name uniqueness", () => {
           { name: "price", type: "Numeric" },
           { name: "price", type: "String" },
         ],
-      }),
+      })
     ).toThrow(/unique/)
   })
 
@@ -487,7 +508,7 @@ describe("attribute name uniqueness", () => {
             ],
           },
         ],
-      }),
+      })
     ).toThrow(/unique/)
   })
 
@@ -500,7 +521,7 @@ describe("attribute name uniqueness", () => {
           { name: "details", attributes: [] },
           { name: "details", attributes: [] },
         ],
-      }),
+      })
     ).toThrow(/unique/)
   })
 
@@ -513,7 +534,7 @@ describe("attribute name uniqueness", () => {
           { name: "price", type: "Numeric" },
           { name: "quantity", type: "Integer" },
         ],
-      }),
+      })
     ).not.toThrow()
   })
 })
@@ -525,7 +546,7 @@ describe("AccumulationRegister numeric resources", () => {
         kind: "AccumulationRegister",
         name: "TestRegister",
         resources: [{ name: "description", type: "String" }],
-      }),
+      })
     ).toThrow(/Numeric or Integer/)
   })
 
@@ -535,7 +556,7 @@ describe("AccumulationRegister numeric resources", () => {
         kind: "AccumulationRegister",
         name: "TestRegister",
         resources: [{ name: "flag", type: "Boolean" }],
-      }),
+      })
     ).toThrow(/Numeric or Integer/)
   })
 
@@ -652,7 +673,9 @@ describe("getStandardAttributes", () => {
   })
 
   it("returns CustomTable attrs with PK", () => {
-    const attrs = getStandardAttributes("CustomTable", { autoAddPrimaryKey: true })
+    const attrs = getStandardAttributes("CustomTable", {
+      autoAddPrimaryKey: true,
+    })
     expect(attrs).toHaveLength(1)
     expect(attrs[0].name).toBe("id")
   })

@@ -1,24 +1,28 @@
-import { useEffect, useRef } from 'react'
-import { useHotkeys } from 'react-hotkeys-hook'
+import { useEffect, useRef } from "react"
+import { useHotkeys } from "react-hotkeys-hook"
 import {
   Group,
   Panel,
   type PanelImperativeHandle,
   Separator as PanelSeparator,
-} from 'react-resizable-panels'
-import { TopBar } from './top-bar'
-import { StatusBar } from './status-bar'
-import { TreePanel } from './tree-panel'
-import { EditorPanel } from './editor-panel'
-import { PropertiesPanel } from './properties-panel'
-import { CommandPalette } from '../command-palette'
-import { DEFAULT_PANEL_LAYOUT, useUiStore } from '@/stores/ui-store'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useProjectStore } from '@/stores/project-store'
-import { createDefaultObject, generateUniqueName, getObjectNames } from '@/lib/metadata-defaults'
-import { useSessionRestore } from '@/hooks/use-session-restore'
-import { useModelValidation } from '@/hooks/use-model-validation'
-import { startDraftSync } from '@/storage/draft-sync'
+} from "react-resizable-panels"
+import { TopBar } from "./top-bar"
+import { StatusBar } from "./status-bar"
+import { TreePanel } from "./tree-panel"
+import { EditorPanel } from "./editor-panel"
+import { PropertiesPanel } from "./properties-panel"
+import { CommandPalette } from "../command-palette"
+import { DEFAULT_PANEL_LAYOUT, useUiStore } from "@/stores/ui-store"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useProjectStore } from "@/stores/project-store"
+import {
+  createDefaultObject,
+  generateUniqueName,
+  getObjectNames,
+} from "@/lib/metadata-defaults"
+import { useSessionRestore } from "@/hooks/use-session-restore"
+import { useModelValidation } from "@/hooks/use-model-validation"
+import { startDraftSync } from "@/storage/draft-sync"
 
 export function AppShell() {
   const toggleCommandPalette = useUiStore((s) => s.toggleCommandPalette)
@@ -41,11 +45,11 @@ export function AppShell() {
       if (useProjectStore.getState().getIsDirty()) {
         e.preventDefault()
         // Сумісність з Safari та старими браузерами
-        e.returnValue = ''
+        e.returnValue = ""
       }
     }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
+    window.addEventListener("beforeunload", handler)
+    return () => window.removeEventListener("beforeunload", handler)
   }, [])
 
   // Запуск auto-draft sync
@@ -69,39 +73,39 @@ export function AppShell() {
   // --- Глобальні hotkeys ---
 
   // Command Palette
-  useHotkeys('mod+k', (e) => {
+  useHotkeys("mod+k", (e) => {
     e.preventDefault()
     toggleCommandPalette()
   })
 
   // Save
-  useHotkeys('mod+s', (e) => {
+  useHotkeys("mod+s", (e) => {
     e.preventDefault()
     void useProjectStore.getState().saveProject()
   })
 
   // Undo / Redo
-  useHotkeys('mod+z', (e) => {
+  useHotkeys("mod+z", (e) => {
     e.preventDefault()
     useMetadataStore.temporal.getState().undo()
   })
 
-  useHotkeys('mod+shift+z', (e) => {
+  useHotkeys("mod+shift+z", (e) => {
     e.preventDefault()
     useMetadataStore.temporal.getState().redo()
   })
 
   // Alt+Enter — відкрити/закрити панель властивостей
-  useHotkeys('alt+enter', (e) => {
+  useHotkeys("alt+enter", (e) => {
     e.preventDefault()
     togglePropertiesPanel()
   })
 
   // Ctrl+N — створити обʼєкт (контекст-залежне створення)
-  useHotkeys('mod+n', (e) => {
+  useHotkeys("mod+n", (e) => {
     e.preventDefault()
     const { selectedObject } = useUiStore.getState()
-    const kind = selectedObject?.kind ?? 'Catalog'
+    const kind = selectedObject?.kind ?? "Catalog"
     const model = useMetadataStore.getState().model
     const existingNames = getObjectNames(model, kind)
     const name = generateUniqueName(kind, existingNames)
@@ -114,14 +118,14 @@ export function AppShell() {
   })
 
   // Ctrl+W — закрити активну вкладку
-  useHotkeys('mod+w', (e) => {
+  useHotkeys("mod+w", (e) => {
     e.preventDefault()
     const { activeTabId, closeTab } = useUiStore.getState()
     if (activeTabId) closeTab(activeTabId)
   })
 
   // Ctrl+Tab / Ctrl+Shift+Tab — переключення між вкладками
-  useHotkeys('ctrl+tab', (e) => {
+  useHotkeys("ctrl+tab", (e) => {
     e.preventDefault()
     const { openTabs, activeTabId, setActiveTab } = useUiStore.getState()
     if (openTabs.length === 0) return
@@ -130,7 +134,7 @@ export function AppShell() {
     setActiveTab(openTabs[next].id)
   })
 
-  useHotkeys('ctrl+shift+tab', (e) => {
+  useHotkeys("ctrl+shift+tab", (e) => {
     e.preventDefault()
     const { openTabs, activeTabId, setActiveTab } = useUiStore.getState()
     if (openTabs.length === 0) return
@@ -158,7 +162,11 @@ export function AppShell() {
 
         <PanelSeparator className="w-px bg-border transition-colors hover:bg-primary/50 active:bg-primary/70" />
 
-        <Panel id="editor" defaultSize={DEFAULT_PANEL_LAYOUT.editor} minSize={30}>
+        <Panel
+          id="editor"
+          defaultSize={DEFAULT_PANEL_LAYOUT.editor}
+          minSize={30}
+        >
           <EditorPanel />
         </Panel>
 

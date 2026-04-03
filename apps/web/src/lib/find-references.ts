@@ -1,5 +1,11 @@
-import type { MetadataKind, MetadataObject, MetadataRef, ProjectModel, Attribute } from '@simetra/core'
-import { KIND_TO_KEY } from './metadata-defaults'
+import type {
+  MetadataKind,
+  MetadataObject,
+  MetadataRef,
+  ProjectModel,
+  Attribute,
+} from "@simetra/core"
+import { KIND_TO_KEY } from "./metadata-defaults"
 
 interface Reference {
   /** Обʼєкт, що посилається */
@@ -12,7 +18,7 @@ interface Reference {
 export function findReferences(
   model: ProjectModel,
   targetKind: MetadataKind,
-  targetName: string,
+  targetName: string
 ): Reference[] {
   const refs: Reference[] = []
 
@@ -22,26 +28,26 @@ export function findReferences(
     const objRef: MetadataRef = { kind: obj.kind, name: obj.name }
 
     // Перевірка прямих посилань (owners, recorderTypes, registerMovements)
-    if ('owners' in obj && Array.isArray(obj.owners)) {
+    if ("owners" in obj && Array.isArray(obj.owners)) {
       for (const owner of obj.owners) {
         if (owner.kind === targetKind && owner.name === targetName) {
-          refs.push({ from: objRef, via: 'owners' })
+          refs.push({ from: objRef, via: "owners" })
         }
       }
     }
 
-    if ('recorderTypes' in obj && Array.isArray(obj.recorderTypes)) {
+    if ("recorderTypes" in obj && Array.isArray(obj.recorderTypes)) {
       for (const recorder of obj.recorderTypes) {
         if (recorder.kind === targetKind && recorder.name === targetName) {
-          refs.push({ from: objRef, via: 'recorderTypes' })
+          refs.push({ from: objRef, via: "recorderTypes" })
         }
       }
     }
 
-    if ('registerMovements' in obj && Array.isArray(obj.registerMovements)) {
+    if ("registerMovements" in obj && Array.isArray(obj.registerMovements)) {
       for (const movement of obj.registerMovements) {
         if (movement.kind === targetKind && movement.name === targetName) {
-          refs.push({ from: objRef, via: 'registerMovements' })
+          refs.push({ from: objRef, via: "registerMovements" })
         }
       }
     }
@@ -49,13 +55,20 @@ export function findReferences(
     // Перевірка типів атрибутів (ref = MetadataRef, allowedTypes = MetadataRef[])
     const allAttributes = getObjectAttributes(obj)
     for (const attr of allAttributes) {
-      if (attr.ref && attr.ref.kind === targetKind && attr.ref.name === targetName) {
+      if (
+        attr.ref &&
+        attr.ref.kind === targetKind &&
+        attr.ref.name === targetName
+      ) {
         refs.push({ from: objRef, via: `attribute "${attr.name}" ref` })
       }
       if (attr.allowedTypes) {
         for (const allowed of attr.allowedTypes) {
           if (allowed.kind === targetKind && allowed.name === targetName) {
-            refs.push({ from: objRef, via: `attribute "${attr.name}" allowedTypes` })
+            refs.push({
+              from: objRef,
+              via: `attribute "${attr.name}" allowedTypes`,
+            })
           }
         }
       }
@@ -67,9 +80,13 @@ export function findReferences(
 
 function getAllObjects(model: ProjectModel): MetadataObject[] {
   const kinds: MetadataKind[] = [
-    'Catalog', 'Document', 'Enumeration',
-    'InformationRegister', 'AccumulationRegister',
-    'Constant', 'CustomTable',
+    "Catalog",
+    "Document",
+    "Enumeration",
+    "InformationRegister",
+    "AccumulationRegister",
+    "Constant",
+    "CustomTable",
   ]
   const result: MetadataObject[] = []
   for (const kind of kinds) {
@@ -82,16 +99,16 @@ function getAllObjects(model: ProjectModel): MetadataObject[] {
 function getObjectAttributes(obj: MetadataObject): Attribute[] {
   const attrs: Attribute[] = []
 
-  if ('attributes' in obj && Array.isArray(obj.attributes)) {
+  if ("attributes" in obj && Array.isArray(obj.attributes)) {
     attrs.push(...obj.attributes)
   }
-  if ('dimensions' in obj && Array.isArray(obj.dimensions)) {
+  if ("dimensions" in obj && Array.isArray(obj.dimensions)) {
     attrs.push(...obj.dimensions)
   }
-  if ('resources' in obj && Array.isArray(obj.resources)) {
+  if ("resources" in obj && Array.isArray(obj.resources)) {
     attrs.push(...obj.resources)
   }
-  if ('tabularSections' in obj && Array.isArray(obj.tabularSections)) {
+  if ("tabularSections" in obj && Array.isArray(obj.tabularSections)) {
     for (const ts of obj.tabularSections) {
       if (Array.isArray(ts.attributes)) {
         attrs.push(...ts.attributes)

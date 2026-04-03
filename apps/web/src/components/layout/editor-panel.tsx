@@ -1,13 +1,13 @@
-import { useTranslation } from 'react-i18next'
-import { TabBar } from '../window-manager/tab-bar'
-import { FloatingWindowContainer } from '../window-manager/floating-window-container'
-import { Taskbar } from '../window-manager/taskbar'
-import { ObjectEditor } from '../editor/object-editor'
-import { WelcomeScreen } from '../editor/welcome-screen'
-import { RecoveryBanner } from '../editor/recovery-banner'
-import { useUiStore } from '@/stores/ui-store'
-import { useProjectStore } from '@/stores/project-store'
-import { useCallback } from 'react'
+import { useTranslation } from "react-i18next"
+import { TabBar } from "../window-manager/tab-bar"
+import { FloatingWindowContainer } from "../window-manager/floating-window-container"
+import { Taskbar } from "../window-manager/taskbar"
+import { ObjectEditor } from "../editor/object-editor"
+import { WelcomeScreen } from "../editor/welcome-screen"
+import { RecoveryBanner } from "../editor/recovery-banner"
+import { useUiStore } from "@/stores/ui-store"
+import { useProjectStore } from "@/stores/project-store"
+import { useCallback } from "react"
 
 /** Центральна панель: TabBar + вміст активної вкладки + floating windows */
 export function EditorPanel() {
@@ -16,26 +16,28 @@ export function EditorPanel() {
   const sessionRestoreStatus = useProjectStore((s) => s.sessionRestoreStatus)
   const isNewProject = useProjectStore((s) => s.isNewProject)
 
-  const activeTab = activeTabId ? openTabs.find((tab) => tab.id === activeTabId) : null
+  const activeTab = activeTabId
+    ? openTabs.find((tab) => tab.id === activeTabId)
+    : null
 
   const handleSectionChange = useCallback(
     (section: string) => setActiveSection(section),
-    [setActiveSection],
+    [setActiveSection]
   )
 
   // Показати Welcome Screen коли немає вкладок і:
   // — сесія ще не відновлена, або
   // — це новий порожній проєкт
   // recovery-available — проєкт вже завантажений, показуємо RecoveryBanner замість Welcome
-  const showWelcome = !activeTab && (
-    sessionRestoreStatus === 'idle' ||
-    sessionRestoreStatus === 'awaiting-permission' ||
-    sessionRestoreStatus === 'restoring' ||
-    sessionRestoreStatus === 'failed' ||
-    isNewProject
-  )
+  const showWelcome =
+    !activeTab &&
+    (sessionRestoreStatus === "idle" ||
+      sessionRestoreStatus === "awaiting-permission" ||
+      sessionRestoreStatus === "restoring" ||
+      sessionRestoreStatus === "failed" ||
+      isNewProject)
 
-  const showRecoveryBanner = sessionRestoreStatus === 'recovery-available'
+  const showRecoveryBanner = sessionRestoreStatus === "recovery-available"
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
@@ -58,7 +60,7 @@ export function EditorPanel() {
           <WelcomeScreen />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {t('editor.noOpenTabs')}
+            {t("editor.noOpenTabs")}
           </div>
         )}
       </div>

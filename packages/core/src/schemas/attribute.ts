@@ -10,7 +10,9 @@ export const attributeSchema = z
     name: z
       .string()
       .regex(/^[a-z][a-z0-9_]*$/, "Must be snake_case, Latin only")
-      .refine((n) => !isSqlReservedWord(n), { message: "Name is a SQL reserved word" }),
+      .refine((n) => !isSqlReservedWord(n), {
+        message: "Name is a SQL reserved word",
+      }),
     displayName: localizedStringSchema.optional(),
     type: fieldTypeSchema,
     required: z.boolean().default(false),

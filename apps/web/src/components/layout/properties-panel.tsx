@@ -1,10 +1,10 @@
-import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
-import { ScrollArea } from '@workspace/ui/components/scroll-area'
-import { ObjectProperties } from '@/components/properties/object-properties'
-import { FieldProperties } from '@/components/properties/field-properties'
-import { ProjectSettings } from '@/components/properties/project-settings'
-import { useUiStore } from '@/stores/ui-store'
+import { useMemo } from "react"
+import { useTranslation } from "react-i18next"
+import { ScrollArea } from "@workspace/ui/components/scroll-area"
+import { ObjectProperties } from "@/components/properties/object-properties"
+import { FieldProperties } from "@/components/properties/field-properties"
+import { ProjectSettings } from "@/components/properties/project-settings"
+import { useUiStore } from "@/stores/ui-store"
 
 /**
  * Контекстно-залежна панель властивостей.
@@ -40,7 +40,7 @@ export function PropertiesPanel() {
         <div className="py-1">
           <div className="border-b border-border px-3 py-2">
             <span className="text-xs font-medium text-muted-foreground">
-              {t('properties.title')} — {selectedField.fieldName}
+              {t("properties.title")} — {selectedField.fieldName}
             </span>
           </div>
           <FieldProperties selection={selectedField} />
@@ -56,7 +56,7 @@ export function PropertiesPanel() {
         <div className="py-1">
           <div className="border-b border-border px-3 py-2">
             <span className="text-xs font-medium text-muted-foreground">
-              {t('properties.title')} — {activeObjectRef.name}
+              {t("properties.title")} — {activeObjectRef.name}
             </span>
           </div>
           <ObjectProperties objectRef={activeObjectRef} />
@@ -71,7 +71,7 @@ export function PropertiesPanel() {
       <div className="py-1">
         <div className="border-b border-border px-3 py-2">
           <span className="text-xs font-medium text-muted-foreground">
-            {t('properties.projectSettings')}
+            {t("properties.projectSettings")}
           </span>
         </div>
         <ProjectSettings />

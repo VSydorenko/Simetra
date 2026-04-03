@@ -1,5 +1,5 @@
-import { useTranslation } from 'react-i18next'
-import { useMemo } from 'react'
+import { useTranslation } from "react-i18next"
+import { useMemo } from "react"
 import {
   CommandDialog,
   CommandInput,
@@ -8,25 +8,25 @@ import {
   CommandGroup,
   CommandItem,
   CommandShortcut,
-} from '@workspace/ui/components/command'
-import { useUiStore } from '@/stores/ui-store'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { useProjectStore } from '@/stores/project-store'
+} from "@workspace/ui/components/command"
+import { useUiStore } from "@/stores/ui-store"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { useProjectStore } from "@/stores/project-store"
 import {
   createDefaultObject,
   generateUniqueName,
   getObjectNames,
-} from '@/lib/metadata-defaults'
-import type { MetadataKind } from '@simetra/core'
+} from "@/lib/metadata-defaults"
+import type { MetadataKind } from "@simetra/core"
 
 const METADATA_KINDS: MetadataKind[] = [
-  'Catalog',
-  'Document',
-  'Enumeration',
-  'InformationRegister',
-  'AccumulationRegister',
-  'Constant',
-  'CustomTable',
+  "Catalog",
+  "Document",
+  "Enumeration",
+  "InformationRegister",
+  "AccumulationRegister",
+  "Constant",
+  "CustomTable",
 ]
 
 export function CommandPalette() {
@@ -72,35 +72,35 @@ export function CommandPalette() {
   const allObjects = useMemo(
     () => [
       ...model.catalogs.map((o) => ({
-        kind: 'Catalog' as const,
+        kind: "Catalog" as const,
         name: o.name,
       })),
       ...model.documents.map((o) => ({
-        kind: 'Document' as const,
+        kind: "Document" as const,
         name: o.name,
       })),
       ...model.enumerations.map((o) => ({
-        kind: 'Enumeration' as const,
+        kind: "Enumeration" as const,
         name: o.name,
       })),
       ...model.informationRegisters.map((o) => ({
-        kind: 'InformationRegister' as const,
+        kind: "InformationRegister" as const,
         name: o.name,
       })),
       ...model.accumulationRegisters.map((o) => ({
-        kind: 'AccumulationRegister' as const,
+        kind: "AccumulationRegister" as const,
         name: o.name,
       })),
       ...model.constants.map((o) => ({
-        kind: 'Constant' as const,
+        kind: "Constant" as const,
         name: o.name,
       })),
       ...model.customTables.map((o) => ({
-        kind: 'CustomTable' as const,
+        kind: "CustomTable" as const,
         name: o.name,
       })),
     ],
-    [model],
+    [model]
   )
 
   const handleSelectObject = (kind: MetadataKind, name: string) => {
@@ -113,45 +113,45 @@ export function CommandPalette() {
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      title={t('commandPalette.placeholder')}
-      description={t('commandPalette.placeholder')}
+      title={t("commandPalette.placeholder")}
+      description={t("commandPalette.placeholder")}
       className="z-command-palette"
     >
-      <CommandInput placeholder={t('commandPalette.placeholder')} />
+      <CommandInput placeholder={t("commandPalette.placeholder")} />
       <CommandList>
-        <CommandEmpty>{t('commandPalette.noResults')}</CommandEmpty>
+        <CommandEmpty>{t("commandPalette.noResults")}</CommandEmpty>
 
-        <CommandGroup heading={t('commandPalette.group.actions')}>
+        <CommandGroup heading={t("commandPalette.group.actions")}>
           <CommandItem onSelect={handleSave}>
-            {t('action.save')}
+            {t("action.save")}
             <CommandShortcut>Ctrl+S</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={handleExport}>
-            {t('action.export')}
+            {t("action.export")}
           </CommandItem>
           <CommandItem onSelect={handleUndo}>
-            {t('action.undo')}
+            {t("action.undo")}
             <CommandShortcut>Ctrl+Z</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={handleRedo}>
-            {t('action.redo')}
+            {t("action.redo")}
             <CommandShortcut>Ctrl+Shift+Z</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 
-        <CommandGroup heading={t('commandPalette.group.create')}>
+        <CommandGroup heading={t("commandPalette.group.create")}>
           {METADATA_KINDS.map((kind) => (
             <CommandItem
               key={`create-${kind}`}
               onSelect={() => handleCreateObject(kind)}
             >
-              {t('tree.addObject', { kind: t(`metadata.kind.${kind}`) })}
+              {t("tree.addObject", { kind: t(`metadata.kind.${kind}`) })}
             </CommandItem>
           ))}
         </CommandGroup>
 
         {allObjects.length > 0 && (
-          <CommandGroup heading={t('commandPalette.group.objects')}>
+          <CommandGroup heading={t("commandPalette.group.objects")}>
             {allObjects.map((obj) => (
               <CommandItem
                 key={`${obj.kind}/${obj.name}`}

@@ -1,5 +1,5 @@
-import { useMetadataStore } from '@/stores/metadata-store'
-import { saveDraft, clearDraft } from '@/storage/session-db'
+import { useMetadataStore } from "@/stores/metadata-store"
+import { saveDraft, clearDraft } from "@/storage/session-db"
 
 const DRAFT_DEBOUNCE_MS = 3000
 

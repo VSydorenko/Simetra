@@ -1,4 +1,4 @@
-import type { ProjectModel } from '@simetra/core'
+import type { ProjectModel } from "@simetra/core"
 
 /** Результат відкриття проєкту */
 export interface OpenProjectResult {
@@ -27,7 +27,10 @@ export interface StorageProvider {
   /** Відкрити проєкт із каталогу або файлу */
   openProject(): Promise<OpenResult>
   /** Зберегти проєкт у каталог */
-  saveProject(model: ProjectModel, handle?: FileSystemDirectoryHandle): Promise<OpenProjectResult>
+  saveProject(
+    model: ProjectModel,
+    handle?: FileSystemDirectoryHandle
+  ): Promise<OpenProjectResult>
   /** Експортувати проєкт як ZIP */
   exportProject(model: ProjectModel): Promise<void>
   /** Імпортувати проєкт із ZIP */

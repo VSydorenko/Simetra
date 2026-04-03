@@ -1,4 +1,4 @@
-import type { MetadataKind, MetadataObject, ProjectModel } from '@simetra/core'
+import type { MetadataKind, MetadataObject, ProjectModel } from "@simetra/core"
 import {
   serializeMetadataObject,
   serializeProject,
@@ -6,60 +6,60 @@ import {
   metadataObjectSchema,
   projectSchema,
   constantSchema,
-} from '@simetra/core'
-import { unzip, zip } from 'fflate'
+} from "@simetra/core"
+import { unzip, zip } from "fflate"
 import type {
   FileValidationError,
   OpenResult,
   OpenProjectResult,
   StorageProvider,
-} from './storage-provider'
+} from "./storage-provider"
 
 // Маппінг MetadataKind → назва каталогу (BRD §7.2)
 const KIND_TO_DIR: Record<MetadataKind, string> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  Enumeration: 'enumerations',
-  InformationRegister: 'information-registers',
-  AccumulationRegister: 'accumulation-registers',
-  Constant: 'constants',
-  CustomTable: 'custom-tables',
+  Catalog: "catalogs",
+  Document: "documents",
+  Enumeration: "enumerations",
+  InformationRegister: "information-registers",
+  AccumulationRegister: "accumulation-registers",
+  Constant: "constants",
+  CustomTable: "custom-tables",
 }
 
 // Зворотній маппінг: назва каталогу → MetadataKind
 const DIR_TO_KIND: Record<string, MetadataKind> = Object.fromEntries(
-  Object.entries(KIND_TO_DIR).map(([k, v]) => [v, k as MetadataKind]),
+  Object.entries(KIND_TO_DIR).map(([k, v]) => [v, k as MetadataKind])
 ) as Record<string, MetadataKind>
 
 // Ключі ProjectModel → MetadataKind
 const MODEL_KEY_TO_KIND: Record<string, MetadataKind> = {
-  catalogs: 'Catalog',
-  documents: 'Document',
-  enumerations: 'Enumeration',
-  informationRegisters: 'InformationRegister',
-  accumulationRegisters: 'AccumulationRegister',
-  constants: 'Constant',
-  customTables: 'CustomTable',
+  catalogs: "Catalog",
+  documents: "Document",
+  enumerations: "Enumeration",
+  informationRegisters: "InformationRegister",
+  accumulationRegisters: "AccumulationRegister",
+  constants: "Constant",
+  customTables: "CustomTable",
 }
 
 /** PascalCase → kebab-case: SalesOrder → sales-order */
 export function toKebabCase(name: string): string {
   return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
     .toLowerCase()
 }
 
 /** Чи підтримує браузер File System Access API */
 export function hasFileSystemAccess(): boolean {
-  return typeof window !== 'undefined' && 'showDirectoryPicker' in window
+  return typeof window !== "undefined" && "showDirectoryPicker" in window
 }
 
 // --- File System Access API helpers ---
 
 async function getOrCreateDir(
   parent: FileSystemDirectoryHandle,
-  name: string,
+  name: string
 ): Promise<FileSystemDirectoryHandle> {
   return parent.getDirectoryHandle(name, { create: true })
 }
@@ -67,7 +67,7 @@ async function getOrCreateDir(
 async function writeTextFile(
   dir: FileSystemDirectoryHandle,
   name: string,
-  content: string,
+  content: string
 ): Promise<void> {
   const file = await dir.getFileHandle(name, { create: true })
   const writable = await file.createWritable()
@@ -77,7 +77,7 @@ async function writeTextFile(
 
 async function fileExists(
   dir: FileSystemDirectoryHandle,
-  name: string,
+  name: string
 ): Promise<boolean> {
   try {
     await dir.getFileHandle(name)
@@ -89,7 +89,7 @@ async function fileExists(
 
 async function dirExists(
   parent: FileSystemDirectoryHandle,
-  name: string,
+  name: string
 ): Promise<boolean> {
   try {
     await parent.getDirectoryHandle(name)
@@ -112,7 +112,7 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
 
   // project.meta.json
   files.push({
-    path: 'project.meta.json',
+    path: "project.meta.json",
     content: serializeProject(model.project),
   })
 
@@ -123,17 +123,23 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
 
     const dirName = KIND_TO_DIR[kind]
 
-    if (kind === 'Constant') {
+    if (kind === "Constant") {
       // Усі константи — в одному файлі (BRD §7.2)
       // Серіалізуємо кожну константу canonical, потім збираємо масив
       const serializedItems = objects.map((obj) =>
-        serializeMetadataObject(obj).trimEnd(),
+        serializeMetadataObject(obj).trimEnd()
       )
-      const constantsJson = '[\n' +
-        serializedItems.map((item) =>
-          item.split('\n').map((line) => '  ' + line).join('\n'),
-        ).join(',\n') +
-        '\n]\n'
+      const constantsJson =
+        "[\n" +
+        serializedItems
+          .map((item) =>
+            item
+              .split("\n")
+              .map((line) => "  " + line)
+              .join("\n")
+          )
+          .join(",\n") +
+        "\n]\n"
       files.push({
         path: `${dirName}/constants.meta.json`,
         content: constantsJson,
@@ -160,28 +166,31 @@ interface ParsedFiles {
   objects: { kind: MetadataKind; data: unknown; filePath: string }[]
 }
 
-function parseFileStructure(
-  files: Map<string, string>,
-): { parsed: ParsedFiles; warnings: FileValidationError[] } {
+function parseFileStructure(files: Map<string, string>): {
+  parsed: ParsedFiles
+  warnings: FileValidationError[]
+} {
   const warnings: FileValidationError[] = []
   const parsed: ParsedFiles = { objects: [] }
 
   for (const [path, content] of files) {
     // project.meta.json
-    if (path === 'project.meta.json') {
+    if (path === "project.meta.json") {
       try {
         parsed.project = JSON.parse(content)
       } catch (e) {
         warnings.push({
           filePath: path,
-          errors: [`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`],
+          errors: [
+            `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
+          ],
         })
       }
       continue
     }
 
     // Визначити тип за назвою каталогу
-    const parts = path.split('/')
+    const parts = path.split("/")
     if (parts.length < 2) continue
 
     const dirName = parts[0]
@@ -190,12 +199,12 @@ function parseFileStructure(
 
     // Файл має закінчуватись на .meta.json
     const fileName = parts[parts.length - 1]
-    if (!fileName.endsWith('.meta.json')) continue
+    if (!fileName.endsWith(".meta.json")) continue
 
     try {
       const data = JSON.parse(content)
 
-      if (kind === 'Constant' && Array.isArray(data)) {
+      if (kind === "Constant" && Array.isArray(data)) {
         // constants.meta.json — масив констант
         for (const item of data) {
           parsed.objects.push({ kind, data: item, filePath: path })
@@ -214,9 +223,10 @@ function parseFileStructure(
   return { parsed, warnings }
 }
 
-function buildProjectModel(
-  parsed: ParsedFiles,
-): { model: ProjectModel; warnings: FileValidationError[] } {
+function buildProjectModel(parsed: ParsedFiles): {
+  model: ProjectModel
+  warnings: FileValidationError[]
+} {
   const warnings: FileValidationError[] = []
 
   // Валідація project
@@ -227,14 +237,16 @@ function buildProjectModel(
       project = result.data
     } else {
       warnings.push({
-        filePath: 'project.meta.json',
-        errors: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+        filePath: "project.meta.json",
+        errors: result.error.issues.map(
+          (i) => `${i.path.join(".")}: ${i.message}`
+        ),
       })
     }
   }
 
   if (!project) {
-    throw new Error('project.meta.json is missing or invalid')
+    throw new Error("project.meta.json is missing or invalid")
   }
 
   // Валідація обʼєктів по типах
@@ -249,17 +261,17 @@ function buildProjectModel(
   }
 
   const kindToKey: Record<MetadataKind, string> = {
-    Catalog: 'catalogs',
-    Document: 'documents',
-    Enumeration: 'enumerations',
-    InformationRegister: 'informationRegisters',
-    AccumulationRegister: 'accumulationRegisters',
-    Constant: 'constants',
-    CustomTable: 'customTables',
+    Catalog: "catalogs",
+    Document: "documents",
+    Enumeration: "enumerations",
+    InformationRegister: "informationRegisters",
+    AccumulationRegister: "accumulationRegisters",
+    Constant: "constants",
+    CustomTable: "customTables",
   }
 
   for (const { kind, data, filePath } of parsed.objects) {
-    const schema = kind === 'Constant' ? constantSchema : metadataObjectSchema
+    const schema = kind === "Constant" ? constantSchema : metadataObjectSchema
     const result = schema.safeParse(data)
     if (result.success) {
       const key = kindToKey[kind]
@@ -267,7 +279,9 @@ function buildProjectModel(
     } else {
       warnings.push({
         filePath,
-        errors: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+        errors: result.error.issues.map(
+          (i) => `${i.path.join(".")}: ${i.message}`
+        ),
       })
     }
   }
@@ -289,7 +303,7 @@ async function clearDirectory(dir: FileSystemDirectoryHandle): Promise<void> {
     entries.push(entry)
   }
   for (const [name, entry] of entries) {
-    if (entry.kind === 'directory') {
+    if (entry.kind === "directory") {
       await dir.removeEntry(name, { recursive: true })
     } else {
       await dir.removeEntry(name)
@@ -299,16 +313,16 @@ async function clearDirectory(dir: FileSystemDirectoryHandle): Promise<void> {
 
 async function saveToDirectory(
   model: ProjectModel,
-  handle: FileSystemDirectoryHandle,
+  handle: FileSystemDirectoryHandle
 ): Promise<void> {
   const files = serializeToFiles(model)
 
   // Створити metadata/ корінь та очистити stale файли
-  const metadataDir = await getOrCreateDir(handle, 'metadata')
+  const metadataDir = await getOrCreateDir(handle, "metadata")
   await clearDirectory(metadataDir)
 
   for (const file of files) {
-    const parts = file.path.split('/')
+    const parts = file.path.split("/")
     let currentDir = metadataDir
 
     // Створити проміжні каталоги
@@ -321,21 +335,21 @@ async function saveToDirectory(
 }
 
 async function readFromDirectory(
-  handle: FileSystemDirectoryHandle,
+  handle: FileSystemDirectoryHandle
 ): Promise<Map<string, string>> {
   const files = new Map<string, string>()
 
   // Шукаємо metadata/ каталог
   let metadataDir: FileSystemDirectoryHandle
-  if (await dirExists(handle, 'metadata')) {
-    metadataDir = await handle.getDirectoryHandle('metadata')
+  if (await dirExists(handle, "metadata")) {
+    metadataDir = await handle.getDirectoryHandle("metadata")
   } else {
     // Можливо, кореневий каталог — це вже metadata/
-    if (await fileExists(handle, 'project.meta.json')) {
+    if (await fileExists(handle, "project.meta.json")) {
       metadataDir = handle
     } else {
       throw new Error(
-        'Cannot find project.meta.json. Please select a valid project directory.',
+        "Cannot find project.meta.json. Please select a valid project directory."
       )
     }
   }
@@ -345,21 +359,21 @@ async function readFromDirectory(
   async function readDir(
     dir: FileSystemDirectoryHandle,
     prefix: string,
-    depth: number,
+    depth: number
   ): Promise<void> {
     if (depth > MAX_DEPTH) return
     for await (const [name, entry] of dir.entries()) {
       const fullPath = prefix ? `${prefix}/${name}` : name
-      if (entry.kind === 'file' && name.endsWith('.meta.json')) {
+      if (entry.kind === "file" && name.endsWith(".meta.json")) {
         const file = await entry.getFile()
         files.set(fullPath, await file.text())
-      } else if (entry.kind === 'directory') {
+      } else if (entry.kind === "directory") {
         await readDir(entry, fullPath, depth + 1)
       }
     }
   }
 
-  await readDir(metadataDir, '', 0)
+  await readDir(metadataDir, "", 0)
   return files
 }
 
@@ -385,13 +399,13 @@ function unzipEntries(data: Uint8Array): Promise<Map<string, string>> {
       const files = new Map<string, string>()
       for (const [entryPath, content] of Object.entries(entries)) {
         // Захист від path traversal в ZIP
-        if (entryPath.includes('..') || entryPath.startsWith('/')) continue
+        if (entryPath.includes("..") || entryPath.startsWith("/")) continue
 
         // Видалити metadata/ префікс якщо є
-        const normalizedPath = entryPath.startsWith('metadata/')
-          ? entryPath.slice('metadata/'.length)
+        const normalizedPath = entryPath.startsWith("metadata/")
+          ? entryPath.slice("metadata/".length)
           : entryPath
-        if (normalizedPath && normalizedPath.endsWith('.meta.json')) {
+        if (normalizedPath && normalizedPath.endsWith(".meta.json")) {
           files.set(normalizedPath, decoder.decode(content))
         }
       }
@@ -402,7 +416,7 @@ function unzipEntries(data: Uint8Array): Promise<Map<string, string>> {
 
 function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
+  const a = document.createElement("a")
   a.href = url
   a.download = fileName
   document.body.appendChild(a)
@@ -415,17 +429,21 @@ const MAX_IMPORT_SIZE = 50 * 1024 * 1024 // 50 MB
 
 function pickFile(accept: string): Promise<File> {
   return new Promise((resolve, reject) => {
-    const input = document.createElement('input')
-    input.type = 'file'
+    const input = document.createElement("input")
+    input.type = "file"
     input.accept = accept
-    input.addEventListener('change', () => {
+    input.addEventListener("change", () => {
       const file = input.files?.[0]
       if (!file) {
-        reject(new Error('No file selected'))
+        reject(new Error("No file selected"))
         return
       }
       if (file.size > MAX_IMPORT_SIZE) {
-        reject(new Error(`File too large (${Math.round(file.size / 1024 / 1024)} MB). Maximum: 50 MB.`))
+        reject(
+          new Error(
+            `File too large (${Math.round(file.size / 1024 / 1024)} MB). Maximum: 50 MB.`
+          )
+        )
         return
       }
       resolve(file)
@@ -446,7 +464,7 @@ export class WebStorage implements StorageProvider {
 
   async saveProject(
     model: ProjectModel,
-    handle?: FileSystemDirectoryHandle,
+    handle?: FileSystemDirectoryHandle
   ): Promise<OpenProjectResult> {
     if (hasFileSystemAccess()) {
       return this.saveToDirectory(model, handle)
@@ -460,14 +478,16 @@ export class WebStorage implements StorageProvider {
     const files = serializeToFiles(model)
     const entries = filesToZipEntries(files)
 
-    const data = await new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
-      zip(entries, { level: 6 }, (err, result) => {
-        if (err) reject(err)
-        else resolve(result as Uint8Array<ArrayBuffer>)
-      })
-    })
+    const data = await new Promise<Uint8Array<ArrayBuffer>>(
+      (resolve, reject) => {
+        zip(entries, { level: 6 }, (err, result) => {
+          if (err) reject(err)
+          else resolve(result as Uint8Array<ArrayBuffer>)
+        })
+      }
+    )
 
-    const blob = new Blob([data], { type: 'application/zip' })
+    const blob = new Blob([data], { type: "application/zip" })
     const projectName = toKebabCase(model.project.name)
     downloadBlob(blob, `${projectName}.simetra.zip`)
   }
@@ -492,7 +512,7 @@ export class WebStorage implements StorageProvider {
   // --- Private: File System Access API ---
 
   private async openFromDirectory(): Promise<OpenResult> {
-    const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" })
     const fileMap = await readFromDirectory(handle)
     const { parsed, warnings: parseWarnings } = parseFileStructure(fileMap)
     const { model, warnings: validationWarnings } = buildProjectModel(parsed)
@@ -506,9 +526,11 @@ export class WebStorage implements StorageProvider {
 
   private async saveToDirectory(
     model: ProjectModel,
-    existingHandle?: FileSystemDirectoryHandle,
+    existingHandle?: FileSystemDirectoryHandle
   ): Promise<OpenProjectResult> {
-    const handle = existingHandle ?? await window.showDirectoryPicker({ mode: 'readwrite' })
+    const handle =
+      existingHandle ??
+      (await window.showDirectoryPicker({ mode: "readwrite" }))
     await saveToDirectory(model, handle)
     return { model, handle }
   }
@@ -516,7 +538,7 @@ export class WebStorage implements StorageProvider {
   // --- Private: ZIP fallback ---
 
   private async openFromZip(): Promise<OpenResult> {
-    const file = await pickFile('.zip')
+    const file = await pickFile(".zip")
     const buffer = await file.arrayBuffer()
     const data = new Uint8Array(buffer)
     const fileMap = await unzipEntries(data)

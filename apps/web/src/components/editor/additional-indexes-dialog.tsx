@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import {
   Dialog,
   DialogContent,
@@ -7,7 +7,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-} from '@workspace/ui/components/dialog'
+} from "@workspace/ui/components/dialog"
 import {
   Table,
   TableBody,
@@ -15,16 +15,16 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@workspace/ui/components/table'
-import { Badge } from '@workspace/ui/components/badge'
-import { Button } from '@workspace/ui/components/button'
-import { Checkbox } from '@workspace/ui/components/checkbox'
-import { ScrollArea } from '@workspace/ui/components/scroll-area'
-import type { MetadataKind, MetadataObject, Attribute } from '@simetra/core'
-import { getStandardAttributes } from '@simetra/core'
-import { useMetadataStore } from '@/stores/metadata-store'
-import { KIND_TO_KEY } from '@/lib/metadata-defaults'
-import { extractStandardAttributeSettings } from '@/lib/extract-settings'
+} from "@workspace/ui/components/table"
+import { Badge } from "@workspace/ui/components/badge"
+import { Button } from "@workspace/ui/components/button"
+import { Checkbox } from "@workspace/ui/components/checkbox"
+import { ScrollArea } from "@workspace/ui/components/scroll-area"
+import type { MetadataKind, MetadataObject, Attribute } from "@simetra/core"
+import { getStandardAttributes } from "@simetra/core"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { KIND_TO_KEY } from "@/lib/metadata-defaults"
+import { extractStandardAttributeSettings } from "@/lib/extract-settings"
 
 interface AdditionalIndexesDialogProps {
   open: boolean
@@ -40,7 +40,7 @@ interface IndexableField {
   /** Стандартний реквізит — лише для відображення, не редагується */
   isStandard: boolean
   /** Роль поля для dispatch */
-  role: 'attributes' | 'dimensions' | 'resources'
+  role: "attributes" | "dimensions" | "resources"
   /** Група для відображення в UI */
   group: string
 }
@@ -49,7 +49,7 @@ interface IndexableField {
 function collectIndexableFields(
   kind: MetadataKind,
   object: MetadataObject,
-  t: (key: string) => string,
+  t: (key: string) => string
 ): IndexableField[] {
   const fields: IndexableField[] = []
 
@@ -62,49 +62,49 @@ function collectIndexableFields(
       type: attr.type,
       indexed: attr.indexed,
       isStandard: true,
-      role: 'attributes',
-      group: t('metadata.standardAttribute'),
+      role: "attributes",
+      group: t("metadata.standardAttribute"),
     })
   }
 
   // Custom реквізити
-  if ('attributes' in object && Array.isArray(object.attributes)) {
+  if ("attributes" in object && Array.isArray(object.attributes)) {
     for (const attr of object.attributes as Attribute[]) {
       fields.push({
         name: attr.name,
         type: attr.type,
         indexed: attr.indexed ?? false,
         isStandard: false,
-        role: 'attributes',
-        group: t('metadata.section.attributes'),
+        role: "attributes",
+        group: t("metadata.section.attributes"),
       })
     }
   }
 
   // Виміри (dimensions)
-  if ('dimensions' in object && Array.isArray(object.dimensions)) {
+  if ("dimensions" in object && Array.isArray(object.dimensions)) {
     for (const attr of object.dimensions as Attribute[]) {
       fields.push({
         name: attr.name,
         type: attr.type,
         indexed: attr.indexed ?? false,
         isStandard: false,
-        role: 'dimensions',
-        group: t('metadata.section.dimensions'),
+        role: "dimensions",
+        group: t("metadata.section.dimensions"),
       })
     }
   }
 
   // Ресурси (resources)
-  if ('resources' in object && Array.isArray(object.resources)) {
+  if ("resources" in object && Array.isArray(object.resources)) {
     for (const attr of object.resources as Attribute[]) {
       fields.push({
         name: attr.name,
         type: attr.type,
         indexed: attr.indexed ?? false,
         isStandard: false,
-        role: 'resources',
-        group: t('metadata.section.resources'),
+        role: "resources",
+        group: t("metadata.section.resources"),
       })
     }
   }
@@ -134,7 +134,7 @@ export function AdditionalIndexesDialog({
         setRevisionKey((k) => k + 1)
       }
     },
-    [handleCancel],
+    [handleCancel]
   )
 
   return (
@@ -161,17 +161,17 @@ type IndexedDraft = Record<string, boolean>
 function buildInitialDraft(object: MetadataObject): IndexedDraft {
   const draft: IndexedDraft = {}
 
-  if ('attributes' in object && Array.isArray(object.attributes)) {
+  if ("attributes" in object && Array.isArray(object.attributes)) {
     for (const attr of object.attributes as Attribute[]) {
       draft[`attributes:${attr.name}`] = attr.indexed ?? false
     }
   }
-  if ('dimensions' in object && Array.isArray(object.dimensions)) {
+  if ("dimensions" in object && Array.isArray(object.dimensions)) {
     for (const attr of object.dimensions as Attribute[]) {
       draft[`dimensions:${attr.name}`] = attr.indexed ?? false
     }
   }
-  if ('resources' in object && Array.isArray(object.resources)) {
+  if ("resources" in object && Array.isArray(object.resources)) {
     for (const attr of object.resources as Attribute[]) {
       draft[`resources:${attr.name}`] = attr.indexed ?? false
     }
@@ -204,15 +204,17 @@ function AdditionalIndexesDialogBody({
 
   const fields = useMemo(
     () => (object ? collectIndexableFields(kind, object, t) : []),
-    [kind, object, t],
+    [kind, object, t]
   )
 
   const savedDraft = useMemo(
     () => (object ? buildInitialDraft(object) : {}),
-    [object],
+    [object]
   )
 
-  const [draft, setDraft] = useState<IndexedDraft>(() => structuredClone(savedDraft))
+  const [draft, setDraft] = useState<IndexedDraft>(() =>
+    structuredClone(savedDraft)
+  )
 
   const isDirty = useMemo(() => {
     return JSON.stringify(draft) !== JSON.stringify(savedDraft)
@@ -226,7 +228,7 @@ function AdditionalIndexesDialogBody({
         [`${field.role}:${field.name}`]: checked,
       }))
     },
-    [],
+    []
   )
 
   const handleSave = useCallback(() => {
@@ -234,12 +236,12 @@ function AdditionalIndexesDialogBody({
     for (const [key, indexed] of Object.entries(draft)) {
       if (savedDraft[key] === indexed) continue
 
-      const [role, fieldName] = key.split(':') as [string, string]
+      const [role, fieldName] = key.split(":") as [string, string]
       switch (role) {
-        case 'dimensions':
+        case "dimensions":
           updateDimension(kind, objectName, fieldName, { indexed })
           break
-        case 'resources':
+        case "resources":
           updateResource(kind, objectName, fieldName, { indexed })
           break
         default:
@@ -247,10 +249,19 @@ function AdditionalIndexesDialogBody({
       }
     }
     onCancel()
-  }, [draft, savedDraft, kind, objectName, updateAttribute, updateDimension, updateResource, onCancel])
+  }, [
+    draft,
+    savedDraft,
+    kind,
+    objectName,
+    updateAttribute,
+    updateDimension,
+    updateResource,
+    onCancel,
+  ])
 
   const kindLabel = t(`metadata.kind.${kind}`)
-  const title = `${kindLabel} ${objectName}: ${t('properties.additionalIndexes')}`
+  const title = `${kindLabel} ${objectName}: ${t("properties.additionalIndexes")}`
 
   /** Отримати draft-значення indexed для custom поля */
   const getDraftIndexed = (field: IndexableField): boolean => {
@@ -263,7 +274,7 @@ function AdditionalIndexesDialogBody({
       <DialogHeader>
         <DialogTitle className="text-sm">{title}</DialogTitle>
         <DialogDescription className="text-xs">
-          {t('dialog.additionalIndexesDescription')}
+          {t("dialog.additionalIndexesDescription")}
         </DialogDescription>
       </DialogHeader>
       <ScrollArea className="max-h-[60vh]">
@@ -271,16 +282,16 @@ function AdditionalIndexesDialogBody({
           <TableHeader>
             <TableRow className="h-8">
               <TableHead className="h-8 w-[140px] px-2 text-xs font-medium">
-                {t('metadata.field.name')}
+                {t("metadata.field.name")}
               </TableHead>
               <TableHead className="h-8 w-[100px] px-2 text-xs font-medium">
-                {t('metadata.field.type')}
+                {t("metadata.field.type")}
               </TableHead>
               <TableHead className="h-8 w-[120px] px-2 text-xs font-medium">
-                {t('dialog.fieldGroup')}
+                {t("dialog.fieldGroup")}
               </TableHead>
               <TableHead className="h-8 w-[80px] px-2 text-center text-xs font-medium">
-                {t('metadata.field.indexed')}
+                {t("metadata.field.indexed")}
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -291,7 +302,7 @@ function AdditionalIndexesDialogBody({
                   colSpan={4}
                   className="h-16 text-center text-xs text-muted-foreground"
                 >
-                  {t('dialog.noIndexableFields')}
+                  {t("dialog.noIndexableFields")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -309,10 +320,10 @@ function AdditionalIndexesDialogBody({
       </ScrollArea>
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={onCancel}>
-          {t('action.cancel')}
+          {t("action.cancel")}
         </Button>
         <Button size="sm" onClick={handleSave} disabled={!isDirty}>
-          {t('action.save')}
+          {t("action.save")}
         </Button>
       </DialogFooter>
     </>

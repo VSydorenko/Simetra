@@ -1,9 +1,6 @@
 // Base types
 export { localizedStringSchema, type LocalizedString } from "./localized-string"
-export {
-  fieldTypeSchema,
-  type FieldType,
-} from "./field-type"
+export { fieldTypeSchema, type FieldType } from "./field-type"
 export { metadataKindSchema, type MetadataKind } from "./metadata-kind"
 export {
   metadataRefSchema,

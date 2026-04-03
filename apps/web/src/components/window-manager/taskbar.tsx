@@ -1,8 +1,8 @@
-import { useCallback } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Badge } from '@workspace/ui/components/badge'
-import { cn } from '@workspace/ui/lib/utils'
-import { useUiStore } from '../../stores/ui-store'
+import { useCallback } from "react"
+import { useTranslation } from "react-i18next"
+import { Badge } from "@workspace/ui/components/badge"
+import { cn } from "@workspace/ui/lib/utils"
+import { useUiStore } from "../../stores/ui-store"
 
 /**
  * Taskbar — смужка в нижній частині центральної панелі
@@ -31,7 +31,7 @@ export function Taskbar() {
             focusWindow(win.id)
           }}
           onClose={() => closeWindow(win.id)}
-          closeLabel={t('floatingWindow.close')}
+          closeLabel={t("floatingWindow.close")}
         />
       ))}
     </div>
@@ -58,15 +58,15 @@ function TaskbarItem({
       e.stopPropagation()
       onClose()
     },
-    [onClose],
+    [onClose]
   )
 
   return (
     <button
       type="button"
       className={cn(
-        'group flex h-5 items-center gap-1 rounded-sm border border-border',
-        'bg-background px-1.5 text-[10px] transition-colors hover:bg-accent/50',
+        "group flex h-5 items-center gap-1 rounded-sm border border-border",
+        "bg-background px-1.5 text-[10px] transition-colors hover:bg-accent/50"
       )}
       onClick={onRestore}
     >
@@ -79,7 +79,7 @@ function TaskbarItem({
       <span className="max-w-20 truncate font-mono">{name}</span>
       <button
         type="button"
-        className="ml-0.5 shrink-0 rounded-sm opacity-0 hover:text-destructive group-hover:opacity-100"
+        className="ml-0.5 shrink-0 rounded-sm opacity-0 group-hover:opacity-100 hover:text-destructive"
         onClick={handleClose}
         aria-label={closeLabel}
       >

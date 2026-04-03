@@ -1,24 +1,24 @@
-import { useCallback, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useState } from "react"
+import { useTranslation } from "react-i18next"
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from '@workspace/ui/components/accordion'
-import { Button } from '@workspace/ui/components/button'
-import { Badge } from '@workspace/ui/components/badge'
-import { ScrollArea } from '@workspace/ui/components/scroll-area'
+} from "@workspace/ui/components/accordion"
+import { Button } from "@workspace/ui/components/button"
+import { Badge } from "@workspace/ui/components/badge"
+import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@workspace/ui/components/tooltip'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Add01Icon, Delete02Icon } from '@hugeicons/core-free-icons'
-import { AttributeTable } from './attribute-table'
-import type { MetadataKind, TabularSection } from '@simetra/core'
-import { useMetadataStore } from '@/stores/metadata-store'
+} from "@workspace/ui/components/tooltip"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import { AttributeTable } from "./attribute-table"
+import type { MetadataKind, TabularSection } from "@simetra/core"
+import { useMetadataStore } from "@/stores/metadata-store"
 
 interface TabularSectionsEditorProps {
   kind: MetadataKind
@@ -34,7 +34,7 @@ export function TabularSectionsEditor({
   const { t } = useTranslation()
   const { addTabularSection, removeTabularSection } = useMetadataStore()
   const [expandedSections, setExpandedSections] = useState<string[]>(
-    tabularSections.map((s) => s.name),
+    tabularSections.map((s) => s.name)
   )
 
   const handleAdd = useCallback(() => {
@@ -54,7 +54,7 @@ export function TabularSectionsEditor({
       removeTabularSection(kind, objectName, sectionName)
       setExpandedSections((prev) => prev.filter((s) => s !== sectionName))
     },
-    [kind, objectName, removeTabularSection],
+    [kind, objectName, removeTabularSection]
   )
 
   return (
@@ -67,20 +67,26 @@ export function TabularSectionsEditor({
               variant="ghost"
               size="icon"
               className="size-6 text-green-600 hover:text-green-600"
-              aria-label={t('editor.addTabularSection')}
+              aria-label={t("editor.addTabularSection")}
               onClick={handleAdd}
             >
-              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="size-3.5" />
+              <HugeiconsIcon
+                icon={Add01Icon}
+                strokeWidth={2}
+                className="size-3.5"
+              />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{t('editor.addTabularSection')}</TooltipContent>
+          <TooltipContent side="bottom">
+            {t("editor.addTabularSection")}
+          </TooltipContent>
         </Tooltip>
       </div>
 
       <ScrollArea className="flex-1">
         {tabularSections.length === 0 ? (
           <div className="flex h-20 items-center justify-center text-xs text-muted-foreground">
-            {t('editor.emptyTabularSections')}
+            {t("editor.emptyTabularSections")}
           </div>
         ) : (
           <Accordion
@@ -106,16 +112,22 @@ export function TabularSectionsEditor({
                         variant="ghost"
                         size="icon"
                         className="size-6 text-destructive hover:text-destructive"
-                        aria-label={t('editor.deleteTabularSection')}
+                        aria-label={t("editor.deleteTabularSection")}
                         onClick={(e) => {
                           e.stopPropagation()
                           handleRemove(section.name)
                         }}
                       >
-                        <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+                        <HugeiconsIcon
+                          icon={Delete02Icon}
+                          strokeWidth={2}
+                          className="size-3.5"
+                        />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="left">{t('editor.deleteTabularSection')}</TooltipContent>
+                    <TooltipContent side="left">
+                      {t("editor.deleteTabularSection")}
+                    </TooltipContent>
                   </Tooltip>
                 </div>
                 <AccordionContent className="pb-2">

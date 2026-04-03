@@ -1,8 +1,8 @@
-export { ObjectEditor } from './object-editor'
-export { AttributeTable } from './attribute-table'
-export { EnumValuesEditor } from './enum-values-editor'
-export { TabularSectionsEditor } from './tabular-sections-editor'
-export { FieldTypeSelect } from './field-type-select'
-export { WelcomeScreen } from './welcome-screen'
-export { VerticalNav } from './vertical-nav'
-export { SECTION_CONFIG } from './section-config'
+export { ObjectEditor } from "./object-editor"
+export { AttributeTable } from "./attribute-table"
+export { EnumValuesEditor } from "./enum-values-editor"
+export { TabularSectionsEditor } from "./tabular-sections-editor"
+export { FieldTypeSelect } from "./field-type-select"
+export { WelcomeScreen } from "./welcome-screen"
+export { VerticalNav } from "./vertical-nav"
+export { SECTION_CONFIG } from "./section-config"

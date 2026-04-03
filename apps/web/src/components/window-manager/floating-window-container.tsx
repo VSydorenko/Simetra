@@ -1,5 +1,5 @@
-import { useUiStore } from '../../stores/ui-store'
-import { FloatingWindow } from './floating-window'
+import { useUiStore } from "../../stores/ui-store"
+import { FloatingWindow } from "./floating-window"
 
 /**
  * Контейнер для floating windows — має бути position: relative,

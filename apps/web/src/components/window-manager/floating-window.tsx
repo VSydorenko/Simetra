@@ -1,19 +1,22 @@
-import { useCallback, type MouseEvent as ReactMouseEvent } from 'react'
-import { Rnd } from 'react-rnd'
-import { useTranslation } from 'react-i18next'
+import { useCallback, type MouseEvent as ReactMouseEvent } from "react"
+import { Rnd } from "react-rnd"
+import { useTranslation } from "react-i18next"
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@workspace/ui/components/context-menu'
-import { cn } from '@workspace/ui/lib/utils'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { useUiStore, type FloatingWindow as FloatingWindowType } from '../../stores/ui-store'
-import { ObjectEditor } from '../editor/object-editor'
-import { useIsObjectDirty } from '../../hooks/use-is-dirty'
-import { KIND_ICONS, KIND_COLORS } from '../../lib/metadata-icons'
+} from "@workspace/ui/components/context-menu"
+import { cn } from "@workspace/ui/lib/utils"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  useUiStore,
+  type FloatingWindow as FloatingWindowType,
+} from "../../stores/ui-store"
+import { ObjectEditor } from "../editor/object-editor"
+import { useIsObjectDirty } from "../../hooks/use-is-dirty"
+import { KIND_ICONS, KIND_COLORS } from "../../lib/metadata-icons"
 
 /** Поріг Y-координати (px) — якщо вікно перетягнуто вище цього значення, attach як вкладку */
 const ATTACH_THRESHOLD_Y = 10
@@ -23,22 +26,22 @@ function TitleBarButton({
   onClick,
   label,
   children,
-  variant = 'default',
+  variant = "default",
 }: {
   onClick: (e: ReactMouseEvent) => void
   label: string
   children: React.ReactNode
-  variant?: 'default' | 'close'
+  variant?: "default" | "close"
 }) {
   return (
     <button
       type="button"
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-sm',
-        'transition-colors',
-        variant === 'close'
-          ? 'hover:bg-destructive hover:text-destructive-foreground'
-          : 'hover:bg-accent',
+        "flex h-5 w-5 shrink-0 items-center justify-center rounded-sm",
+        "transition-colors",
+        variant === "close"
+          ? "hover:text-destructive-foreground hover:bg-destructive"
+          : "hover:bg-accent"
       )}
       onClick={onClick}
       aria-label={label}
@@ -51,7 +54,14 @@ function TitleBarButton({
 /** Іконка для minimize */
 function MinimizeIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
       <path d="M2 5h6" />
     </svg>
   )
@@ -60,7 +70,14 @@ function MinimizeIcon() {
 /** Іконка для maximize */
 function MaximizeIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
       <rect x="1.5" y="1.5" width="7" height="7" rx="0.5" />
     </svg>
   )
@@ -69,7 +86,14 @@ function MaximizeIcon() {
 /** Іконка для restore */
 function RestoreIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
       <rect x="2.5" y="3" width="5.5" height="5.5" rx="0.5" />
       <path d="M4 3V2h5v5h-1" />
     </svg>
@@ -79,7 +103,14 @@ function RestoreIcon() {
 /** Іконка для close */
 function CloseIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
       <path d="M2 2l6 6M8 2l-6 6" />
     </svg>
   )
@@ -101,12 +132,9 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
 
   const isDirty = useIsObjectDirty(window.objectRef)
 
-  const handleSectionChange = useCallback(
-    (section: string) => {
-      useUiStore.getState().setActiveSection(section)
-    },
-    [],
-  )
+  const handleSectionChange = useCallback((section: string) => {
+    useUiStore.getState().setActiveSection(section)
+  }, [])
 
   const handleMouseDown = useCallback(() => {
     focusWindow(window.id)
@@ -117,7 +145,7 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
       e.stopPropagation()
       minimizeWindow(window.id)
     },
-    [minimizeWindow, window.id],
+    [minimizeWindow, window.id]
   )
 
   const handleMaximizeRestore = useCallback(
@@ -129,7 +157,7 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
         maximizeWindow(window.id)
       }
     },
-    [maximizeWindow, restoreWindow, window.id, window.isMaximized],
+    [maximizeWindow, restoreWindow, window.id, window.isMaximized]
   )
 
   const handleClose = useCallback(
@@ -137,7 +165,7 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
       e.stopPropagation()
       closeWindow(window.id)
     },
-    [closeWindow, window.id],
+    [closeWindow, window.id]
   )
 
   // Мінімізовані вікна рендеряться у Taskbar, не тут
@@ -147,9 +175,7 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
     <Rnd
       position={window.isMaximized ? { x: 0, y: 0 } : window.position}
       size={
-        window.isMaximized
-          ? { width: '100%', height: '100%' }
-          : window.size
+        window.isMaximized ? { width: "100%", height: "100%" } : window.size
       }
       minWidth={300}
       minHeight={200}
@@ -178,8 +204,8 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
     >
       <div
         className={cn(
-          'flex h-full flex-col overflow-hidden rounded-md border border-border',
-          'bg-background shadow-lg',
+          "flex h-full flex-col overflow-hidden rounded-md border border-border",
+          "bg-background shadow-lg"
         )}
       >
         {/* Title bar */}
@@ -187,9 +213,9 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
           <ContextMenuTrigger asChild>
             <div
               className={cn(
-                'floating-window-drag-handle',
-                'flex h-8 shrink-0 cursor-grab items-center gap-1.5 border-b border-border',
-                'bg-muted/70 px-2 active:cursor-grabbing',
+                "floating-window-drag-handle",
+                "flex h-8 shrink-0 cursor-grab items-center gap-1.5 border-b border-border",
+                "bg-muted/70 px-2 active:cursor-grabbing"
               )}
               onDoubleClick={() =>
                 window.isMaximized
@@ -201,7 +227,7 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
               <HugeiconsIcon
                 icon={KIND_ICONS[window.objectRef.kind]}
                 size={14}
-                className={cn('shrink-0', KIND_COLORS[window.objectRef.kind])}
+                className={cn("shrink-0", KIND_COLORS[window.objectRef.kind])}
               />
 
               {/* Імʼя обʼєкта */}
@@ -221,7 +247,7 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
               <div className="flex items-center gap-0.5">
                 <TitleBarButton
                   onClick={handleMinimize}
-                  label={t('floatingWindow.minimize')}
+                  label={t("floatingWindow.minimize")}
                 >
                   <MinimizeIcon />
                 </TitleBarButton>
@@ -229,15 +255,15 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
                   onClick={handleMaximizeRestore}
                   label={
                     window.isMaximized
-                      ? t('floatingWindow.restore')
-                      : t('floatingWindow.maximize')
+                      ? t("floatingWindow.restore")
+                      : t("floatingWindow.maximize")
                   }
                 >
                   {window.isMaximized ? <RestoreIcon /> : <MaximizeIcon />}
                 </TitleBarButton>
                 <TitleBarButton
                   onClick={handleClose}
-                  label={t('floatingWindow.close')}
+                  label={t("floatingWindow.close")}
                   variant="close"
                 >
                   <CloseIcon />
@@ -247,24 +273,24 @@ export function FloatingWindow({ window }: { window: FloatingWindowType }) {
           </ContextMenuTrigger>
           <ContextMenuContent>
             <ContextMenuItem onSelect={() => attachWindow(window.id)}>
-              {t('floatingWindow.attach')}
+              {t("floatingWindow.attach")}
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => minimizeWindow(window.id)}>
-              {t('floatingWindow.minimize')}
+              {t("floatingWindow.minimize")}
             </ContextMenuItem>
             {window.isMaximized ? (
               <ContextMenuItem onSelect={() => restoreWindow(window.id)}>
-                {t('floatingWindow.restore')}
+                {t("floatingWindow.restore")}
               </ContextMenuItem>
             ) : (
               <ContextMenuItem onSelect={() => maximizeWindow(window.id)}>
-                {t('floatingWindow.maximize')}
+                {t("floatingWindow.maximize")}
               </ContextMenuItem>
             )}
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => closeWindow(window.id)}>
-              {t('floatingWindow.close')}
+              {t("floatingWindow.close")}
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
