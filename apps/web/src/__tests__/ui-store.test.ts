@@ -57,7 +57,7 @@ describe('persisted UI preferences', () => {
         id: 'Catalog/Products',
         objectRef: catalogRef('Products'),
         isPinned: false,
-        activeSection: 'attributes',
+        activeSection: 'main',
       }],
       selectedObject: catalogRef('Products'),
     })
@@ -327,7 +327,7 @@ describe('attachWindow', () => {
           zIndex: 30,
           isMinimized: false,
           isMaximized: false,
-          activeSection: 'attributes',
+          activeSection: 'main',
         },
       ],
     }))

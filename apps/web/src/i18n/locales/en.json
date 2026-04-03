@@ -51,6 +51,10 @@
       "defaultValue": "Default Value"
     },
     "section": {
+      "main": "Main",
+      "data": "Data",
+      "numbering": "Numbering",
+      "movements": "Movements",
       "attributes": "Attributes",
       "tabularSections": "Tabular Sections",
       "dimensions": "Dimensions",
@@ -109,7 +113,8 @@
     "valueName": "Value name",
     "order": "Order",
     "tabularSectionName": "Tabular section name",
-    "standardAttributes": "Standard attributes"
+    "standardAttributes": "Standard attributes",
+    "comingSoon": "coming soon"
   },
   "properties": {
     "title": "Properties",

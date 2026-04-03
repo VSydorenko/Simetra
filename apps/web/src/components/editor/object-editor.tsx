@@ -1,47 +1,27 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@workspace/ui/components/tabs'
 import { Badge } from '@workspace/ui/components/badge'
 import { Input } from '@workspace/ui/components/input'
+import { Label } from '@workspace/ui/components/label'
+import { ScrollArea } from '@workspace/ui/components/scroll-area'
 import { cn } from '@workspace/ui/lib/utils'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { AttributeTable } from './attribute-table'
 import { EnumValuesEditor } from './enum-values-editor'
 import { TabularSectionsEditor } from './tabular-sections-editor'
-import { SettingsForm } from './settings-form'
+import { SettingsFormContent } from './settings-form'
+import { VerticalNav } from './vertical-nav'
+import { SECTION_CONFIG } from './section-config'
 import { KIND_ICONS, KIND_COLORS, KIND_BADGE_CLASSES } from '@/lib/metadata-icons'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useUiStore } from '@/stores/ui-store'
-import type { MetadataKind, MetadataRef, MetadataObject, Attribute, TabularSection, StandardAttributeSettings } from '@simetra/core'
+import type { MetadataRef, MetadataObject, Attribute, TabularSection, StandardAttributeSettings } from '@simetra/core'
 
 interface ObjectEditorProps {
   objectRef: MetadataRef
   activeSection: string
   onSectionChange: (section: string) => void
-}
-
-/** Визначає набір вкладок залежно від kind обʼєкта */
-function getEditorTabs(kind: MetadataKind): string[] {
-  switch (kind) {
-    case 'Catalog':
-    case 'Document':
-      return ['attributes', 'tabularSections', 'settings']
-    case 'CustomTable':
-      return ['attributes', 'settings']
-    case 'Enumeration':
-      return ['values']
-    case 'InformationRegister':
-    case 'AccumulationRegister':
-      return ['dimensions', 'resources', 'attributes', 'settings']
-    case 'Constant':
-      return ['settings']
-  }
 }
 
 /** Витягує налаштування для стандартних реквізитів з обʼєкта */
@@ -68,10 +48,11 @@ export function ObjectEditor({ objectRef, activeSection, onSectionChange }: Obje
     return objects.find((o) => o.name === objectRef.name) ?? null
   }, [model, objectRef])
 
-  const tabs = useMemo(() => getEditorTabs(objectRef.kind), [objectRef.kind])
+  const sections = useMemo(() => SECTION_CONFIG[objectRef.kind], [objectRef.kind])
+  const sectionIds = useMemo(() => sections.map((s) => s.id), [sections])
 
   // Якщо поточна секція не в списку для цього kind — вибрати першу
-  const effectiveTab = tabs.includes(activeSection) ? activeSection : tabs[0]
+  const effectiveSection = sectionIds.includes(activeSection) ? activeSection : sectionIds[0]
 
   // commit-on-blur: локальний draft для імені обʼєкта
   const [nameDraft, setNameDraft] = useState(object?.name ?? '')
@@ -138,93 +119,227 @@ export function ObjectEditor({ objectRef, activeSection, onSectionChange }: Obje
         )}
       </div>
 
-      {/* Вкладки всередині картки */}
-      <Tabs value={effectiveTab} onValueChange={onSectionChange} className="flex flex-1 flex-col overflow-hidden">
-        <TabsList className="h-8 w-full justify-start rounded-none border-b border-border bg-transparent px-2">
-          {tabs.map((tab) => (
-            <TabsTrigger
-              key={tab}
-              value={tab}
-              className="h-7 rounded-sm px-3 text-xs data-[state=active]:bg-accent data-[state=active]:shadow-none"
-            >
-              {t(`metadata.section.${tab}`)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-
-        {/* Контент вкладок */}
-        {tabs.includes('attributes') && (
-          <TabsContent value="attributes" className="mt-0 flex-1 overflow-hidden">
-            <AttributeTable
-              kind={objectRef.kind}
-              objectName={objectRef.name}
-              field="attributes"
-              attributes={'attributes' in object ? (object.attributes as Attribute[]) : []}
-              standardSettings={stdSettings}
-              showStandard
-            />
-          </TabsContent>
-        )}
-
-        {tabs.includes('dimensions') && (
-          <TabsContent value="dimensions" className="mt-0 flex-1 overflow-hidden">
-            <AttributeTable
-              kind={objectRef.kind}
-              objectName={objectRef.name}
-              field="dimensions"
-              attributes={'dimensions' in object ? (object.dimensions as Attribute[]) : []}
-              standardSettings={stdSettings}
-              showStandard
-            />
-          </TabsContent>
-        )}
-
-        {tabs.includes('resources') && (
-          <TabsContent value="resources" className="mt-0 flex-1 overflow-hidden">
-            <AttributeTable
-              kind={objectRef.kind}
-              objectName={objectRef.name}
-              field="resources"
-              attributes={'resources' in object ? (object.resources as Attribute[]) : []}
-            />
-          </TabsContent>
-        )}
-
-        {tabs.includes('tabularSections') && (
-          <TabsContent value="tabularSections" className="mt-0 flex-1 overflow-hidden">
-            <TabularSectionsEditor
-              kind={objectRef.kind}
-              objectName={objectRef.name}
-              tabularSections={
-                'tabularSections' in object ? (object.tabularSections as TabularSection[]) : []
-              }
-            />
-          </TabsContent>
-        )}
-
-        {tabs.includes('values') && (
-          <TabsContent value="values" className="mt-0 flex-1 overflow-hidden">
-            <EnumValuesEditor
-              objectName={objectRef.name}
-              values={
-                'values' in object
-                  ? (object.values as { name: string; displayName?: { uk?: string; en?: string }; order?: number }[])
-                  : []
-              }
-            />
-          </TabsContent>
-        )}
-
-        {tabs.includes('settings') && (
-          <TabsContent value="settings" className="mt-0 flex-1 overflow-hidden">
-            <SettingsForm
-              kind={objectRef.kind}
-              objectName={objectRef.name}
-              object={object}
-            />
-          </TabsContent>
-        )}
-      </Tabs>
+      {/* Вертикальна навігація + контент секції */}
+      <div className="flex flex-1 overflow-hidden">
+        <VerticalNav
+          sections={sections}
+          activeSection={effectiveSection}
+          onSectionChange={onSectionChange}
+        />
+        <div className="flex-1 overflow-hidden">
+          <SectionContent
+            kind={objectRef.kind}
+            objectName={objectRef.name}
+            object={object}
+            section={effectiveSection}
+            standardSettings={stdSettings}
+          />
+        </div>
+      </div>
     </div>
+  )
+}
+
+/** Рендер контенту активної секції */
+function SectionContent({
+  kind,
+  objectName,
+  object,
+  section,
+  standardSettings,
+}: {
+  kind: MetadataRef['kind']
+  objectName: string
+  object: MetadataObject
+  section: string
+  standardSettings: StandardAttributeSettings
+}) {
+  const { t } = useTranslation()
+
+  switch (section) {
+    case 'main':
+      return (
+        <MainSectionContent
+          kind={kind}
+          objectName={objectName}
+          object={object}
+        />
+      )
+
+    case 'data':
+      return (
+        <DataSectionContent
+          kind={kind}
+          objectName={objectName}
+          object={object}
+          standardSettings={standardSettings}
+        />
+      )
+
+    case 'values':
+      return (
+        <EnumValuesEditor
+          objectName={objectName}
+          values={
+            'values' in object
+              ? (object.values as { name: string; displayName?: { uk?: string; en?: string }; order?: number }[])
+              : []
+          }
+        />
+      )
+
+    case 'numbering':
+    case 'movements':
+    case 'settings':
+      return (
+        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          {t(`metadata.section.${section}`)} — {t('editor.comingSoon')}
+        </div>
+      )
+
+    default:
+      return null
+  }
+}
+
+/** Комбінований вигляд даних: реквізити + табличні частини або виміри + ресурси + реквізити */
+function DataSectionContent({
+  kind,
+  objectName,
+  object,
+  standardSettings,
+}: {
+  kind: MetadataRef['kind']
+  objectName: string
+  object: MetadataObject
+  standardSettings: StandardAttributeSettings
+}) {
+  const isRegister = kind === 'InformationRegister' || kind === 'AccumulationRegister'
+
+  if (isRegister) {
+    return (
+      <div className="flex h-full flex-col overflow-auto">
+        <AttributeTable
+          kind={kind}
+          objectName={objectName}
+          field="dimensions"
+          attributes={'dimensions' in object ? (object.dimensions as Attribute[]) : []}
+          standardSettings={standardSettings}
+          showStandard
+        />
+        <AttributeTable
+          kind={kind}
+          objectName={objectName}
+          field="resources"
+          attributes={'resources' in object ? (object.resources as Attribute[]) : []}
+        />
+        <AttributeTable
+          kind={kind}
+          objectName={objectName}
+          field="attributes"
+          attributes={'attributes' in object ? (object.attributes as Attribute[]) : []}
+        />
+      </div>
+    )
+  }
+
+  const hasTabularSections = kind === 'Catalog' || kind === 'Document'
+
+  return (
+    <div className="flex h-full flex-col overflow-auto">
+      <AttributeTable
+        kind={kind}
+        objectName={objectName}
+        field="attributes"
+        attributes={'attributes' in object ? (object.attributes as Attribute[]) : []}
+        standardSettings={standardSettings}
+        showStandard
+      />
+      {hasTabularSections && (
+        <TabularSectionsEditor
+          kind={kind}
+          objectName={objectName}
+          tabularSections={
+            'tabularSections' in object ? (object.tabularSections as TabularSection[]) : []
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+/** Секція "Основні": displayName + ключові налаштування типу */
+function MainSectionContent({
+  kind,
+  objectName,
+  object,
+}: {
+  kind: MetadataRef['kind']
+  objectName: string
+  object: MetadataObject
+}) {
+  const { t } = useTranslation()
+  const updateObject = useMetadataStore((s) => s.updateObject)
+
+  const displayName = 'displayName' in object
+    ? (object.displayName as { uk?: string; en?: string })
+    : undefined
+  const description = 'description' in object ? (object.description as string) : undefined
+
+  const handleDisplayNameChange = useCallback(
+    (lang: 'uk' | 'en', value: string) => {
+      updateObject(kind, objectName, {
+        displayName: { ...displayName, [lang]: value },
+      } as Partial<MetadataObject>)
+    },
+    [kind, objectName, displayName, updateObject],
+  )
+
+  const handleDescriptionChange = useCallback(
+    (value: string) => {
+      updateObject(kind, objectName, { description: value } as Partial<MetadataObject>)
+    },
+    [kind, objectName, updateObject],
+  )
+
+  return (
+    <ScrollArea className="h-full">
+      <div className="space-y-4 p-3">
+        {displayName !== undefined && (
+          <>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">{t('editor.displayNameUk')}</Label>
+              <Input
+                className="h-8 text-sm"
+                value={displayName?.uk ?? ''}
+                onChange={(e) => handleDisplayNameChange('uk', e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">{t('editor.displayNameEn')}</Label>
+              <Input
+                className="h-8 text-sm"
+                value={displayName?.en ?? ''}
+                onChange={(e) => handleDisplayNameChange('en', e.target.value)}
+              />
+            </div>
+          </>
+        )}
+
+        {description !== undefined && (
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">{t('metadata.field.description')}</Label>
+            <Input
+              className="h-8 text-sm"
+              value={description ?? ''}
+              onChange={(e) => handleDescriptionChange(e.target.value)}
+            />
+          </div>
+        )}
+
+        {/* Налаштування типу — рендеримо вміст SettingsForm без окремого ScrollArea */}
+        <SettingsFormContent kind={kind} objectName={objectName} object={object} />
+      </div>
+    </ScrollArea>
   )
 }

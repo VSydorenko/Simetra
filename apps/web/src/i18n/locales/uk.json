@@ -51,6 +51,10 @@
       "defaultValue": "Значення за замовчуванням"
     },
     "section": {
+      "main": "Основні",
+      "data": "Дані",
+      "numbering": "Нумерація",
+      "movements": "Рухи",
       "attributes": "Реквізити",
       "tabularSections": "Табличні частини",
       "dimensions": "Виміри",
@@ -109,7 +113,8 @@
     "valueName": "Імʼя значення",
     "order": "Порядок",
     "tabularSectionName": "Імʼя табличної частини",
-    "standardAttributes": "Стандартні реквізити"
+    "standardAttributes": "Стандартні реквізити",
+    "comingSoon": "буде доступно пізніше"
   },
   "properties": {
     "title": "Властивості",

@@ -22,6 +22,17 @@ interface SettingsFormProps {
 }
 
 export function SettingsForm({ kind, objectName, object }: SettingsFormProps) {
+  return (
+    <ScrollArea className="h-full">
+      <div className="space-y-4 p-3">
+        <SettingsFormContent kind={kind} objectName={objectName} object={object} />
+      </div>
+    </ScrollArea>
+  )
+}
+
+/** Вміст налаштувань без зовнішнього ScrollArea — для вбудовування в інші секції */
+export function SettingsFormContent({ kind, objectName, object }: SettingsFormProps) {
   const updateObject = useMetadataStore((s) => s.updateObject)
 
   const handleUpdate = useCallback(
@@ -32,28 +43,26 @@ export function SettingsForm({ kind, objectName, object }: SettingsFormProps) {
   )
 
   return (
-    <ScrollArea className="h-full">
-      <div className="space-y-4 p-3">
-        {kind === 'Catalog' && 'codeLength' in object && (
-          <CatalogSettings object={object} onUpdate={handleUpdate} />
-        )}
-        {kind === 'Document' && 'numberLength' in object && (
-          <DocumentSettings object={object} onUpdate={handleUpdate} />
-        )}
-        {kind === 'InformationRegister' && 'periodicity' in object && (
-          <InformationRegisterSettings object={object} onUpdate={handleUpdate} />
-        )}
-        {kind === 'AccumulationRegister' && 'registerType' in object && (
-          <AccumulationRegisterSettings object={object} onUpdate={handleUpdate} />
-        )}
-        {kind === 'Constant' && 'valueType' in object && (
-          <ConstantSettings object={object} onUpdate={handleUpdate} />
-        )}
-        {kind === 'CustomTable' && 'autoAddPrimaryKey' in object && (
-          <CustomTableSettings object={object} onUpdate={handleUpdate} />
-        )}
-      </div>
-    </ScrollArea>
+    <>
+      {kind === 'Catalog' && 'codeLength' in object && (
+        <CatalogSettings object={object} onUpdate={handleUpdate} />
+      )}
+      {kind === 'Document' && 'numberLength' in object && (
+        <DocumentSettings object={object} onUpdate={handleUpdate} />
+      )}
+      {kind === 'InformationRegister' && 'periodicity' in object && (
+        <InformationRegisterSettings object={object} onUpdate={handleUpdate} />
+      )}
+      {kind === 'AccumulationRegister' && 'registerType' in object && (
+        <AccumulationRegisterSettings object={object} onUpdate={handleUpdate} />
+      )}
+      {kind === 'Constant' && 'valueType' in object && (
+        <ConstantSettings object={object} onUpdate={handleUpdate} />
+      )}
+      {kind === 'CustomTable' && 'autoAddPrimaryKey' in object && (
+        <CustomTableSettings object={object} onUpdate={handleUpdate} />
+      )}
+    </>
   )
 }
 

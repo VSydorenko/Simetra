@@ -23,13 +23,13 @@ export function refToTabId(ref: MetadataRef): string {
 
 /** Перша доступна секція залежно від kind обʼєкта */
 export const DEFAULT_SECTION: Record<MetadataKind, string> = {
-  Catalog: 'attributes',
-  Document: 'attributes',
-  Enumeration: 'values',
-  InformationRegister: 'dimensions',
-  AccumulationRegister: 'dimensions',
-  Constant: 'settings',
-  CustomTable: 'attributes',
+  Catalog: 'main',
+  Document: 'main',
+  Enumeration: 'main',
+  InformationRegister: 'main',
+  AccumulationRegister: 'main',
+  Constant: 'main',
+  CustomTable: 'main',
 }
 
 export interface TabItem {
