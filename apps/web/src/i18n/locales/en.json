@@ -200,7 +200,10 @@
     "unsavedTitle": "Unsaved Changes",
     "unsavedMessage": "You have unsaved changes. Save before closing?",
     "standardAttributesDescription": "Standard attributes are determined automatically based on the object type and settings",
-    "noStandardAttributes": "This object type has no standard attributes"
+    "noStandardAttributes": "This object type has no standard attributes",
+    "additionalIndexesDescription": "Manage indexes for object fields. Standard attributes are indexed automatically",
+    "fieldGroup": "Group",
+    "noIndexableFields": "No fields available for indexing"
   },
   "tabs": {
     "close": "Close",

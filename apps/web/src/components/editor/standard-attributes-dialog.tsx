@@ -24,8 +24,8 @@ import type { MetadataKind, MetadataObject, LocalizedString } from '@simetra/cor
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
-  type StandardAttributeSettings,
 } from '@simetra/core'
+import { extractStandardAttributeSettings } from '@/lib/extract-settings'
 
 interface StandardAttributesDialogProps {
   open: boolean
@@ -39,40 +39,6 @@ interface StandardAttributesDialogProps {
 }
 
 type Overrides = Record<string, { description?: LocalizedString }>
-
-/** Витягує settings з обʼєкта для передачі в getStandardAttributes */
-function extractSettings(kind: MetadataKind, object: MetadataObject): StandardAttributeSettings {
-  switch (kind) {
-    case 'Catalog': {
-      const o = object as { hierarchyType?: string; owners?: { kind: string; name: string }[] }
-      return {
-        hierarchyType: (o.hierarchyType as StandardAttributeSettings['hierarchyType']) ?? 'None',
-        owners: o.owners,
-      }
-    }
-    case 'InformationRegister': {
-      const o = object as { periodicity?: string; writeMode?: string }
-      return {
-        periodicity: o.periodicity,
-        writeMode: o.writeMode,
-      }
-    }
-    case 'AccumulationRegister': {
-      const o = object as { registerType?: string }
-      return {
-        registerType: o.registerType as StandardAttributeSettings['registerType'],
-      }
-    }
-    case 'CustomTable': {
-      const o = object as { autoAddPrimaryKey?: boolean }
-      return {
-        autoAddPrimaryKey: o.autoAddPrimaryKey,
-      }
-    }
-    default:
-      return {}
-  }
-}
 
 export function StandardAttributesDialog({
   open,
@@ -146,7 +112,7 @@ function StandardAttributesDialogBody({
     if (tabularSectionName) {
       return getTabularSectionStandardAttributes()
     }
-    const settings = extractSettings(kind, object)
+    const settings = extractStandardAttributeSettings(kind, object)
     return getStandardAttributes(kind, settings)
   }, [kind, object, tabularSectionName])
 

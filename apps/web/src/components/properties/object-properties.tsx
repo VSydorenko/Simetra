@@ -19,16 +19,19 @@ import {
 import { Switch } from '@workspace/ui/components/switch'
 import { Badge } from '@workspace/ui/components/badge'
 import { StandardAttributesDialog } from '@/components/editor/standard-attributes-dialog'
+import { AdditionalIndexesDialog } from '@/components/editor/additional-indexes-dialog'
 import { FieldTypeSelect } from '@/components/editor/field-type-select'
 import { MetadataRefMultiPicker } from '@/components/properties/metadata-ref-picker'
 import { useMetadataStore, type ValidationError } from '@/stores/metadata-store'
 import { useUiStore } from '@/stores/ui-store'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
 import type {
+  Attribute,
   MetadataKind,
   MetadataObject,
   MetadataRef,
   FieldType,
+  LocalizedString,
 } from '@simetra/core'
 
 interface ObjectPropertiesProps {
@@ -118,6 +121,34 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
 
   const hasStandardAttributes = !['Enumeration', 'Constant'].includes(objectRef.kind)
   const [stdAttrDialogOpen, setStdAttrDialogOpen] = useState(false)
+  const [indexesDialogOpen, setIndexesDialogOpen] = useState(false)
+
+  // Індикатор: чи є кастомний опис у стандартних реквізитах
+  const hasCustomDescriptions = useMemo(() => {
+    if (!object || !('standardAttributeOverrides' in object)) return false
+    const overrides = object.standardAttributeOverrides as
+      | Record<string, { description?: LocalizedString }>
+      | undefined
+    if (!overrides) return false
+    return Object.values(overrides).some((o) => {
+      const d = o?.description
+      return d && (d.uk || d.en)
+    })
+  }, [object])
+
+  // Індикатор: чи є indexed на custom реквізитах
+  const hasCustomIndexes = useMemo(() => {
+    if (!object) return false
+    const sections = ['attributes', 'dimensions', 'resources'] as const
+    for (const section of sections) {
+      if (section in object && Array.isArray((object as Record<string, unknown>)[section])) {
+        for (const attr of (object as Record<string, unknown>)[section] as Attribute[]) {
+          if (attr.indexed) return true
+        }
+      }
+    }
+    return false
+  }, [object])
 
   if (!object) return null
 
@@ -193,14 +224,20 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
           onClick={() => setStdAttrDialogOpen(true)}
         >
           {t('properties.standardAttributes')}
+          {hasCustomDescriptions && (
+            <span className="ml-1.5 inline-block size-1.5 rounded-full bg-primary" />
+          )}
         </Button>
         <Button
           variant="outline"
           size="sm"
           className="h-7 w-full text-xs"
-          disabled
+          onClick={() => setIndexesDialogOpen(true)}
         >
           {t('properties.additionalIndexes')}
+          {hasCustomIndexes && (
+            <span className="ml-1.5 inline-block size-1.5 rounded-full bg-primary" />
+          )}
         </Button>
         <StandardAttributesDialog
           open={stdAttrDialogOpen}
@@ -209,6 +246,12 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
           objectName={objectRef.name}
           object={object}
           onUpdateObject={handleUpdate}
+        />
+        <AdditionalIndexesDialog
+          open={indexesDialogOpen}
+          onOpenChange={setIndexesDialogOpen}
+          kind={objectRef.kind}
+          objectName={objectRef.name}
         />
       </div>
     )}

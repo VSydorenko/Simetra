@@ -344,18 +344,18 @@ shadcn/ui Command (cmdk) всередині Popover — стандартний �
 ## Модуль H: Додаткові індекси — Dialog
 
 ### Вимоги
-- [ ] Додати в ObjectProperties кнопку-посилання **"Додаткові індекси"** (для всіх types крім Enumeration та Constant)
-- [ ] Клік відкриває shadcn `Dialog` з:
+- [Х] Додати в ObjectProperties кнопку-посилання **"Додаткові індекси"** (для всіх types крім Enumeration та Constant)
+- [Х] Клік відкриває shadcn `Dialog` з:
   - Список усіх реквізитів об'єкта (включаючи стандартні) з checkbox "Індексований"
   - Можливість увімкнути/вимкнути indexed для кожного реквізиту
   - Для стандартних реквізитів — через `standardAttributeSettings` mechanism (вже є в core)
   - Для custom реквізитів — через `updateAttribute({ indexed: true/false })`
-- [ ] Зберегти можливість встановлювати indexed і через FieldProperties (checkbox "Індексований" в групі "Обмеження")
+- [Х] Зберегти можливість встановлювати indexed і через FieldProperties (checkbox "Індексований" в групі "Обмеження")
 
 ### Definition of Done
-- [ ] Кнопка "Додаткові індекси" є в ObjectProperties
-- [ ] Діалог показує всі реквізити (standard + custom) з checkbox indexed
-- [ ] Зміна indexed в діалозі синхронізується з FieldProperties і навпаки
+- [Х] Кнопка "Додаткові індекси" є в ObjectProperties
+- [Х] Діалог показує всі реквізити (standard + custom) з checkbox indexed
+- [Х] Зміна indexed в діалозі синхронізується з FieldProperties і навпаки
 
 ---
 
