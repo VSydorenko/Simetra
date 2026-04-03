@@ -486,9 +486,9 @@ function FieldNode({
             className="shrink-0 text-muted-foreground"
           />
           <span className="truncate font-mono text-[0.75rem]">{data.name}</span>
-          {data.fieldType && (
+          {data.fieldTypeDisplay && (
             <span className="ml-auto truncate text-[10px] text-muted-foreground">
-              {data.fieldType}
+              {data.fieldTypeDisplay}
             </span>
           )}
         </div>

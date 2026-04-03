@@ -236,13 +236,6 @@ function bumpObjectVersion(
   state.objectVersions[key] = (state.objectVersions[key] ?? 0) + 1
 }
 
-/** Відповідність kind → префікс reference-типу атрибута (для cascade rename) */
-const KIND_TO_REF_PREFIX: Partial<Record<MetadataKind, string>> = {
-  Catalog: 'CatalogRef',
-  Document: 'DocumentRef',
-  Enumeration: 'EnumRef',
-}
-
 /** Cascade-оновлення посилань на перейменований обʼєкт у всій моделі (immer draft) */
 function cascadeRenameRefs(
   state: { model: ProjectModel; objectVersions: Record<string, number> },
@@ -250,7 +243,6 @@ function cascadeRenameRefs(
   oldName: string,
   newName: string,
 ): void {
-  const refPrefix = KIND_TO_REF_PREFIX[kind]
   const allKinds: MetadataKind[] = [
     'Catalog', 'Document', 'Enumeration',
     'InformationRegister', 'AccumulationRegister',
@@ -314,12 +306,12 @@ function cascadeRenameRefs(
 
       for (const attrs of attrCollections) {
         for (const attr of attrs) {
-          // Single ref (CatalogRef, DocumentRef, EnumRef)
-          if (refPrefix && attr.ref === oldName && attr.type?.startsWith(refPrefix)) {
-            attr.ref = newName
+          // Single ref (Ref + MetadataRef)
+          if (attr.ref && attr.ref.kind === kind && attr.ref.name === oldName) {
+            attr.ref.name = newName
             changed = true
           }
-          // AnyRef allowedTypes
+          // Polymorphic ref allowedTypes
           if (attr.allowedTypes) {
             for (const allowed of attr.allowedTypes) {
               if (allowed.kind === kind && allowed.name === oldName) {

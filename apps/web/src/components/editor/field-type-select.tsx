@@ -1,4 +1,6 @@
 import { useTranslation } from 'react-i18next'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { Link04Icon } from '@hugeicons/core-free-icons'
 import {
   Select,
   SelectContent,
@@ -22,12 +24,7 @@ const PRIMITIVE_TYPES: FieldType[] = [
   'Binary',
 ]
 
-const REFERENCE_TYPES: FieldType[] = [
-  'CatalogRef',
-  'DocumentRef',
-  'EnumRef',
-  'AnyRef',
-]
+const REFERENCE_TYPES: FieldType[] = ['Ref']
 
 interface FieldTypeSelectProps {
   value: FieldType
@@ -53,10 +50,13 @@ export function FieldTypeSelect({ value, onChange, disabled }: FieldTypeSelectPr
           ))}
         </SelectGroup>
         <SelectGroup>
-          <SelectLabel className="text-xs">Reference</SelectLabel>
+          <SelectLabel className="text-xs">{t('properties.group.reference')}</SelectLabel>
           {REFERENCE_TYPES.map((type) => (
             <SelectItem key={type} value={type} className="text-xs">
-              {type}
+              <span className="inline-flex items-center gap-1.5">
+                <HugeiconsIcon icon={Link04Icon} className="h-3.5 w-3.5" />
+                {t('properties.group.reference')}
+              </span>
             </SelectItem>
           ))}
         </SelectGroup>

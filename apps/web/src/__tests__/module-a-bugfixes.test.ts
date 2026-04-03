@@ -24,7 +24,11 @@ function createModelWithRefTargets(): ProjectModel {
         descriptionLength: 100,
         hierarchyType: 'None',
         attributes: [
-          { name: 'category', type: 'CatalogRef', ref: 'Categories' },
+          {
+            name: 'category',
+            type: 'Ref',
+            ref: { kind: 'Catalog', name: 'Categories' },
+          },
         ],
         tabularSections: [],
       },
@@ -46,7 +50,11 @@ function createModelWithRefTargets(): ProjectModel {
         numberLength: 11,
         numberType: 'String',
         attributes: [
-          { name: 'ref_doc', type: 'DocumentRef', ref: 'Categories' },
+          {
+            name: 'ref_doc',
+            type: 'Ref',
+            ref: { kind: 'Document', name: 'Categories' },
+          },
         ],
         tabularSections: [],
       },
@@ -94,7 +102,7 @@ describe('findReferences kind-aware', () => {
 
     // Шукаємо хто посилається на Catalog/Categories
     const catalogRefs = findReferences(model, 'Catalog', 'Categories')
-    // Тільки Products.Category (CatalogRef) має посилатись
+    // Тільки Products.category (Ref → Catalog/Categories) має посилатись
     expect(catalogRefs).toHaveLength(1)
     expect(catalogRefs[0].from).toEqual({ kind: 'Catalog', name: 'Products' })
   })
@@ -104,7 +112,7 @@ describe('findReferences kind-aware', () => {
 
     // Шукаємо хто посилається на Document/Categories
     const docRefs = findReferences(model, 'Document', 'Categories')
-    // Documents.Categories.ref_doc (DocumentRef → Categories) має знайтись
+    // Documents.Categories.ref_doc (Ref → Document/Categories) має знайтись
     expect(docRefs).toHaveLength(1)
     expect(docRefs[0].from).toEqual({ kind: 'Document', name: 'Categories' })
   })

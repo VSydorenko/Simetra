@@ -134,6 +134,7 @@
       "dataType": "Тип даних",
       "constraints": "Обмеження",
       "additional": "Додатково",
+      "reference": "Посилання",
       "database": "База даних",
       "generation": "Генерація"
     },
@@ -186,6 +187,7 @@
     "addPlaceholder": "Додати…",
     "noResults": "Не знайдено",
     "clear": "Очистити",
+    "compoundType": "Складений тип",
     "targetNotFound": "Обʼєкт \"{{name}}\" не знайдено в моделі"
   },
   "validation": {

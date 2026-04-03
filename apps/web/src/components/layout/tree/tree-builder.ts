@@ -1,5 +1,6 @@
 import type { MetadataKind, MetadataObject, Attribute, TabularSection, ProjectModel } from '@simetra/core'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
+import { formatRefDisplay } from '@/lib/format-ref-display'
 import { SECTION_ORDER, type TreeNodeData } from './tree-types'
 
 /** Вузли полів для attributes/dimensions/resources */
@@ -23,6 +24,7 @@ function buildFieldNodes(
     groupKey: tabularSectionName ? 'attributes' : groupKey,
     tabularSectionName,
     fieldType: attr.type,
+    fieldTypeDisplay: formatRefDisplay(attr),
   }))
 }
 

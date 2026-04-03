@@ -10,10 +10,7 @@ import { Input } from '@workspace/ui/components/input'
 import { Label } from '@workspace/ui/components/label'
 import { Checkbox } from '@workspace/ui/components/checkbox'
 import { FieldTypeSelect } from '@/components/editor/field-type-select'
-import {
-  MetadataRefPicker,
-  AllowedTypesMultiPicker,
-} from '@/components/properties/metadata-ref-picker'
+import { MetadataRefPicker } from '@/components/properties/metadata-ref-picker'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { type FieldSelection } from '@/stores/ui-store'
 import { KIND_TO_KEY } from '@/lib/metadata-defaults'
@@ -158,7 +155,7 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
 
   if (!object || !attribute) return null
 
-  const isRefType = ['CatalogRef', 'DocumentRef', 'EnumRef', 'AnyRef'].includes(attribute.type)
+  const isRefType = attribute.type === 'Ref'
   const isStringType = attribute.type === 'String'
   const isNumericType = attribute.type === 'Numeric' || attribute.type === 'Integer'
 
@@ -214,13 +211,11 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
               value={attribute.type}
               onChange={(v) => {
                 const updates: Partial<Attribute> = { type: v }
-                const isNewRef = ['CatalogRef', 'DocumentRef', 'EnumRef'].includes(v)
-                const isNewAnyRef = v === 'AnyRef'
-                // Очищення ref при зміні типу (інший kind або не-reference)
-                if (!isNewRef) updates.ref = undefined
-                if (isNewRef && attribute.type !== v) updates.ref = undefined
-                // Очищення allowedTypes при виході з AnyRef
-                if (!isNewAnyRef) updates.allowedTypes = undefined
+                // Очищення ref/allowedTypes при зміні типу з Ref на інший
+                if (v !== 'Ref') {
+                  updates.ref = undefined
+                  updates.allowedTypes = undefined
+                }
                 handleUpdate(updates)
               }}
             />
@@ -261,21 +256,12 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
               </SettingRow>
             </>
           )}
-          {isRefType && attribute.type !== 'AnyRef' && (
-            <SettingRow label={t('properties.field.ref')}>
-              <MetadataRefPicker
-                value={attribute.ref}
-                fieldType={attribute.type}
-                onChange={(ref) => handleUpdate({ ref })}
-              />
-            </SettingRow>
-          )}
-          {attribute.type === 'AnyRef' && (
+          {isRefType && (
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">{t('properties.field.allowedTypes')}</Label>
-              <AllowedTypesMultiPicker
-                value={attribute.allowedTypes ?? []}
-                onChange={(refs) => handleUpdate({ allowedTypes: refs })}
+              <MetadataRefPicker
+                refValue={attribute.ref}
+                allowedTypes={attribute.allowedTypes}
+                onChange={handleUpdate}
               />
             </div>
           )}

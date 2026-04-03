@@ -54,10 +54,7 @@ export const FIELD_TYPE_ICONS: Record<string, IconSvgElement> = {
   DateTime: Calendar03Icon,
   UUID: Key01Icon,
   Binary: Attachment01Icon,
-  CatalogRef: Link04Icon,
-  DocumentRef: Link04Icon,
-  EnumRef: Link04Icon,
-  AnyRef: Link04Icon,
+  Ref: Link04Icon,
 }
 
 /** Іконка за замовчуванням для невідомого типу поля */

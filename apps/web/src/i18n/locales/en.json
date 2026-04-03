@@ -134,6 +134,7 @@
       "dataType": "Data Type",
       "constraints": "Constraints",
       "additional": "Additional",
+      "reference": "Reference",
       "database": "Database",
       "generation": "Generation"
     },
@@ -185,7 +186,8 @@
     "addPlaceholder": "Add…",
     "noResults": "No results",
     "clear": "Clear",
-    "targetNotFound": "Object \"{{name}}\" not found in model"
+    "targetNotFound": "Object \"{{name}}\" not found in model",
+    "compoundType": "Compound type"
   },
   "validation": {
     "errors_one": "{{count}} error",

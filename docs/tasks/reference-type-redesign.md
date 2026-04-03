@@ -89,32 +89,32 @@
 
 ### FieldTypeSelect
 
-- [ ] Зберегти дві `CommandGroup`: "Примітивні типи" і "Посилання"
-- [ ] В групі "Посилання" — один пункт `Ref` (з іконкою `Link04Icon` та label "Посилання")
-- [ ] При виборі `Ref` — auto-scroll/focus на секцію "Тип даних" у правій панелі
+- [Х] Зберегти дві `CommandGroup`: "Примітивні типи" і "Посилання"
+- [Х] В групі "Посилання" — один пункт `Ref` (з іконкою `Link04Icon` та label "Посилання")
+- [Х] При виборі `Ref` — auto-scroll/focus на секцію "Тип даних" у правій панелі
 
 ### MetadataRefPicker
 
-- [ ] Переробити для роботи з `MetadataRef` (`{ kind, name }`) замість `string`
-- [ ] Показувати ВСІ referenceable kinds (Catalog, Document, Enumeration), згруповані в `CommandGroup`
-- [ ] Додати перемикач single ref ↔ polymorphic ref (чекбокс "Складений тип")
-- [ ] Single ref: вибір одного `MetadataRef` → `attribute.ref` (при перемиканні з polymorphic — очищати `allowedTypes`)
-- [ ] Polymorphic ref: мультивибір `MetadataRef[]` → `attribute.allowedTypes` (при перемиканні з single — очищати `ref`). Використати існуючий `AllowedTypesMultiPicker`
-- [ ] Показувати значення у форматі `{Kind}Ref.{Name}` (наприклад `CatalogRef.Products`)
-- [ ] Кнопка очищення (скидає `ref` / `allowedTypes`)
-- [ ] Валідація існування target object
+- [Х] Переробити для роботи з `MetadataRef` (`{ kind, name }`) замість `string`
+- [Х] Показувати ВСІ referenceable kinds (Catalog, Document, Enumeration), згруповані в `CommandGroup`
+- [Х] Додати перемикач single ref ↔ polymorphic ref (чекбокс "Складений тип")
+- [Х] Single ref: вибір одного `MetadataRef` → `attribute.ref` (при перемиканні з polymorphic — очищати `allowedTypes`)
+- [Х] Polymorphic ref: мультивибір `MetadataRef[]` → `attribute.allowedTypes` (при перемиканні з single — очищати `ref`). Використати існуючий `AllowedTypesMultiPicker`
+- [Х] Показувати значення у форматі `{Kind}Ref.{Name}` (наприклад `CatalogRef.Products`)
+- [Х] Кнопка очищення (скидає `ref` / `allowedTypes`)
+- [Х] Валідація існування target object
 
 ### FieldProperties
 
-- [ ] Спростити логіку: якщо `type === "Ref"` → показувати MetadataRefPicker
-- [ ] Видалити `REF_TYPE_TO_KIND` маппінг та всю логіку визначення kind з type
-- [ ] Видалити `isAnyRef` / `isSingleRef` розділення
-- [ ] При зміні type з `Ref` на інший — очищати `ref` і `allowedTypes`
-- [ ] При зміні type на `Ref` — зберігати `ref`/`allowedTypes` якщо вони вже задані
+- [Х] Спростити логіку: якщо `type === "Ref"` → показувати MetadataRefPicker
+- [Х] Видалити `REF_TYPE_TO_KIND` маппінг та всю логіку визначення kind з type
+- [Х] Видалити `isAnyRef` / `isSingleRef` розділення
+- [Х] При зміні type з `Ref` на інший — очищати `ref` і `allowedTypes`
+- [Х] При зміні type на `Ref` — зберігати `ref`/`allowedTypes` якщо вони вже задані
 
 ### attribute-table.tsx
 
-- [ ] Display format для ref: `formatRefDisplay` helper
+- [Х] Display format для ref: `formatRefDisplay` helper
   - `type === "Ref"` + `ref` → `CatalogRef.Products`
   - `type === "Ref"` + `allowedTypes` → `AnyRef(2)` (кількість дозволених типів)
   - `type === "Ref"` без ref/allowedTypes → `Ref (не вказано)`
@@ -122,23 +122,23 @@
 
 ### tree display
 
-- [ ] `metadata-icons.ts` — замінити 4 записи (`CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`) на один `Ref: Link04Icon`
-- [ ] `tree-builder.ts` — передавати derived `fieldTypeDisplay: string` у TreeNodeData (замість raw `attr.type`), щоб дерево показувало `CatalogRef.Products` а не `Ref`
-- [ ] `tree-nodes.tsx` — використовувати `fieldTypeDisplay` для відображення
+- [Х] `metadata-icons.ts` — замінити 4 записи (`CatalogRef`, `DocumentRef`, `EnumRef`, `AnyRef`) на один `Ref: Link04Icon`
+- [Х] `tree-builder.ts` — передавати derived `fieldTypeDisplay: string` у TreeNodeData (замість raw `attr.type`), щоб дерево показувало `CatalogRef.Products` а не `Ref`
+- [Х] `tree-nodes.tsx` — використовувати `fieldTypeDisplay` для відображення
 
 ### Store та логіка
 
-- [ ] `find-references.ts` — видалити `KIND_TO_REF_PREFIX`. Порівнювати `attr.ref?.kind === targetKind && attr.ref?.name === targetName` напряму. Зберегти перевірку `attr.allowedTypes`
-- [ ] `metadata-store.ts` — cascade rename: оновлювати `ref.kind` + `ref.name` напряму. Зберегти оновлення `allowedTypes`
-- [ ] `metadata-store.ts` — cascade rename: видалити `KIND_TO_REF_PREFIX` маппінг
+- [Х] `find-references.ts` — видалити `KIND_TO_REF_PREFIX`. Порівнювати `attr.ref?.kind === targetKind && attr.ref?.name === targetName` напряму. Зберегти перевірку `attr.allowedTypes`
+- [Х] `metadata-store.ts` — cascade rename: оновлювати `ref.kind` + `ref.name` напряму. Зберегти оновлення `allowedTypes`
+- [Х] `metadata-store.ts` — cascade rename: видалити `KIND_TO_REF_PREFIX` маппінг
 
 ### DoD фази 2
-- [ ] Жодного `REF_TYPE_TO_KIND` або `KIND_TO_REF_PREFIX` маппінгу в codebase
-- [ ] Жодних перевірок `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` у UI-коді
-- [ ] FieldTypeSelect показує один пункт "Посилання" в окремій групі
-- [ ] MetadataRefPicker — unified picker для single і polymorphic ref
-- [ ] Таблиця реквізитів показує derived display format
-- [ ] Дерево показує derived display format
+- [Х] Жодного `REF_TYPE_TO_KIND` або `KIND_TO_REF_PREFIX` маппінгу в codebase
+- [Х] Жодних перевірок `CatalogRef`/`DocumentRef`/`EnumRef`/`AnyRef` у UI-коді
+- [Х] FieldTypeSelect показує один пункт "Посилання" в окремій групі
+- [Х] MetadataRefPicker — unified picker для single і polymorphic ref
+- [Х] Таблиця реквізитів показує derived display format
+- [Х] Дерево показує derived display format
 
 ---
 
@@ -148,15 +148,15 @@
 
 ### Вимоги
 
-- [ ] Оновити `apps/web/src/__tests__/module-a-bugfixes.test.ts` — тести find-references під нову модель (`ref: { kind, name }` замість `type: CatalogRef` + `ref: string`)
+- [Х] Оновити `apps/web/src/__tests__/module-a-bugfixes.test.ts` — тести find-references під нову модель (`ref: { kind, name }` замість `type: CatalogRef` + `ref: string`)
 - [ ] Перевірити що cascade rename працює коректно для single ref і polymorphic ref
 - [ ] Перевірити що delete confirmation dialog показує правильні залежності
-- [ ] `pnpm lint` — без помилок
-- [ ] `pnpm typecheck` — без помилок
-- [ ] `pnpm test` — core + web, все зелене
+- [Х] `pnpm lint` — без помилок
+- [Х] `pnpm typecheck` — без помилок
+- [Х] `pnpm test` — core + web, все зелене
 
 ### DoD фази 3
-- [ ] `pnpm lint && pnpm typecheck && pnpm test` — все проходить
+- [Х] `pnpm lint && pnpm typecheck && pnpm test` — все проходить
 - [ ] Manual smoke test: створити об'єкт, додати Ref поле, обрати target, перейменувати target — ref оновиться
 
 ---

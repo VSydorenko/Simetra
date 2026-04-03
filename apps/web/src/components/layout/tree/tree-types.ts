@@ -19,6 +19,8 @@ export interface TreeNodeData {
   tabularSectionName?: string
   /** Тип поля метаданих (для field вузлів) */
   fieldType?: string
+  /** Відображуваний тип поля (derived, наприклад CatalogRef.Products) */
+  fieldTypeDisplay?: string
   children?: TreeNodeData[]
 }
 

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { fieldTypeSchema } from "./field-type"
-import { attributeRefTargetSchema, metadataRefSchema } from "./metadata-ref"
+import { attributeRefTargetSchema } from "./metadata-ref"
 import { isSqlReservedWord } from "./sql-reserved-words"
 
 /** BRD §6.3 — Attribute (field) properties */

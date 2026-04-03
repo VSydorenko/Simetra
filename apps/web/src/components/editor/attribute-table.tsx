@@ -33,6 +33,7 @@ import {
 import type { Attribute, MetadataKind } from '@simetra/core'
 import { useMetadataStore } from '@/stores/metadata-store'
 import { useUiStore } from '@/stores/ui-store'
+import { formatRefDisplay } from '@/lib/format-ref-display'
 
 const columnHelper = createColumnHelper<Attribute>()
 
@@ -144,7 +145,7 @@ export function AttributeTable({
         header: () => t('metadata.field.type'),
         cell: (info) => (
           <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-            {info.getValue()}
+            {formatRefDisplay(info.row.original)}
           </Badge>
         ),
         size: 130,
