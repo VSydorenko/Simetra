@@ -75,6 +75,7 @@ export function ObjectEditor({ objectRef }: ObjectEditorProps) {
   const [nameDraft, setNameDraft] = useState(object?.name ?? '')
   const nameInputRef = useRef<HTMLInputElement>(null)
 
+
   if (!object) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -112,8 +113,12 @@ export function ObjectEditor({ objectRef }: ObjectEditorProps) {
           ref={nameInputRef}
           className="h-7 max-w-64 border-none bg-transparent px-1 font-mono text-sm font-medium shadow-none focus-visible:ring-1"
           value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
-          onBlur={commitName}
+          onChange={(e) => {
+            setNameDraft(e.target.value)
+          }}
+          onBlur={() => {
+            commitName()
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               commitName()

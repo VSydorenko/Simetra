@@ -367,8 +367,12 @@ function EditableNameCell({ value, onCommit }: { value: string; onCommit: (newNa
     <Input
       className="h-6 border-none bg-transparent px-1 font-mono text-xs shadow-none focus-visible:ring-1"
       value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
+      onChange={(e) => {
+        setDraft(e.target.value)
+      }}
+      onBlur={() => {
+        commit()
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           commit()

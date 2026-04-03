@@ -140,7 +140,8 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
   getIsDirty: () => {
     const { lastSavedVersion } = get()
     if (lastSavedVersion === null) return true
-    return useMetadataStore.getState().version !== lastSavedVersion
+    const { version } = useMetadataStore.getState()
+    return version !== lastSavedVersion
   },
 
   setLoading: (loading) => {
