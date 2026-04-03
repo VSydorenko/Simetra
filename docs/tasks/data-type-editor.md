@@ -191,71 +191,71 @@
 
 #### Структура компонента
 
-- [ ] Створити `apps/web/src/components/editor/data-type-editor-dialog.tsx`
-- [ ] Патерн wrapper + body з `revisionKey` (як у `StandardAttributesDialog`):
+- [Х] Створити `apps/web/src/components/editor/data-type-editor-dialog.tsx`
+- [Х] Патерн wrapper + body з `revisionKey` (як у `StandardAttributesDialog`):
   - Wrapper: `Dialog` + `revisionKey` state, інкрементується при відкритті
   - Body: монтується з `key={revisionKey}`, ініціалізує draft при mount
-- [ ] Draft state: при відкритті — `structuredClone` поточних type-related полів атрибута (`type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`). При Save — передати всі зміни одним patch. При Cancel — нічого не зберігати
-- [ ] Props: `open`, `onOpenChange`, `attribute: Attribute` (поточний стан), `onSave: (updates: Partial<Attribute>) => void`
-- [ ] `isDirty` — `JSON.stringify(draft) !== JSON.stringify(snapshot)` у useMemo
-- [ ] Діалог — **dumb component**: не знає про store, не знає про field role. Caller формує `onSave` callback з правильним store dispatch
+- [Х] Draft state: при відкритті — `structuredClone` поточних type-related полів атрибута (`type`, `ref`, `allowedTypes`, `length`, `precision`, `scale`). При Save — передати всі зміни одним patch. При Cancel — нічого не зберігати
+- [Х] Props: `open`, `onOpenChange`, `attribute: Attribute` (поточний стан), `onSave: (updates: Partial<Attribute>) => void`
+- [Х] `isDirty` — `JSON.stringify(draft) !== JSON.stringify(snapshot)` у useMemo
+- [Х] Діалог — **dumb component**: не знає про store, не знає про field role. Caller формує `onSave` callback з правильним store dispatch
 
 #### Чекбокс "Складений тип" (compound type = polymorphic Ref)
 
-- [ ] Вгорі діалогу — чекбокс "Складений тип"
-- [ ] Увімкнений "Складений тип" дозволяє обрати **кілька reference targets** одночасно (мультиселект). Примітивні типи стають недоступними (disabled) — compound = тільки polymorphic Ref
-- [ ] Вимкнений "Складений тип" дозволяє вибрати **один** тип (радіо-кнопка/одиничний вибір): або примітивний, або один reference target
-- [ ] Перемикання compound → single: якщо обрано кілька targets — зберегти перший
-- [ ] Перемикання single → compound: якщо обрано примітивний тип — скинути вибір; якщо обрано single ref — перенести в allowedTypes
+- [Х] Вгорі діалогу — чекбокс "Складений тип"
+- [Х] Увімкнений "Складений тип" дозволяє обрати **кілька reference targets** одночасно (мультиселект). Примітивні типи стають недоступними (disabled) — compound = тільки polymorphic Ref
+- [Х] Вимкнений "Складений тип" дозволяє вибрати **один** тип (радіо-кнопка/одиничний вибір): або примітивний, або один reference target
+- [Х] Перемикання compound → single: якщо обрано кілька targets — зберегти перший
+- [Х] Перемикання single → compound: якщо обрано примітивний тип — скинути вибір; якщо обрано single ref — перенести в allowedTypes
 
 #### Область вибору типу — react-arborist дерево
 
-- [ ] Використати `buildTypeEditorTree` з Фази 1 для побудови даних дерева
-- [ ] react-arborist з shared `TreeNodeData` і presentation renderers з Фази 1
-- [ ] Дерево ізольоване: expanded/selected state — тільки локальний (useState). Не писати в ui-store
-- [ ] Без context menu, без rename, без delete, без DnD — тільки вибір і expand/collapse
+- [Х] Використати `buildTypeEditorTree` з Фази 1 для побудови даних дерева
+- [Х] react-arborist з shared `TreeNodeData` і presentation renderers з Фази 1
+- [Х] Дерево ізольоване: expanded/selected state — тільки локальний (useState). Не писати в ui-store
+- [Х] Без context menu, без rename, без delete, без DnD — тільки вибір і expand/collapse
 
 #### Режим single type (compound type вимкнений)
 
-- [ ] Радіо-вибір: клік на елемент — обирає його, знімає з попереднього
-- [ ] Клік на примітивний тип → draft: `type = вибраний`, `ref = undefined`, `allowedTypes = undefined`
-- [ ] Клік на reference target → draft: `type = "Ref"`, `ref = { kind, name }`, `allowedTypes = undefined`
-- [ ] Клік на reference kind group → тільки expand/collapse, не обирає
-- [ ] Візуально — radio-style виділення
+- [Х] Радіо-вибір: клік на елемент — обирає його, знімає з попереднього
+- [Х] Клік на примітивний тип → draft: `type = вибраний`, `ref = undefined`, `allowedTypes = undefined`
+- [Х] Клік на reference target → draft: `type = "Ref"`, `ref = { kind, name }`, `allowedTypes = undefined`
+- [Х] Клік на reference kind group → тільки expand/collapse, не обирає
+- [Х] Візуально — radio-style виділення
 
 #### Режим compound type (складений тип увімкнений)
 
-- [ ] Мультиселект через чекбокси на reference target nodes
-- [ ] Примітивні типи — disabled (не можна обрати)
-- [ ] Обрані targets → draft: `type = "Ref"`, `allowedTypes = [обрані ref targets]`, `ref = undefined`
-- [ ] Чекбокс на kind-node ("ДовідникПосилання") — обирає/знімає **всі** reference targets цього kind
+- [Х] Мультиселект через чекбокси на reference target nodes
+- [Х] Примітивні типи — disabled (не можна обрати)
+- [Х] Обрані targets → draft: `type = "Ref"`, `allowedTypes = [обрані ref targets]`, `ref = undefined`
+- [Х] Чекбокс на kind-node ("ДовідникПосилання") — обирає/знімає **всі** reference targets цього kind
 
 #### Централізований cleanup type-specific полів
 
-- [ ] При зміні типу в draft — автоматичне очищення несумісних полів:
+- [Х] При зміні типу в draft — автоматичне очищення несумісних полів:
   - `String` → зберегти `length`, очистити `precision`, `scale`, `ref`, `allowedTypes`
   - `Numeric` → зберегти `precision`, `scale`, очистити `length`, `ref`, `allowedTypes`
   - `Ref` (single) → зберегти `ref`, очистити `length`, `precision`, `scale`, `allowedTypes`
   - `Ref` (compound) → зберегти `allowedTypes`, очистити `length`, `precision`, `scale`, `ref`
   - Будь-який інший (UUID, Boolean, Text, Date, DateTime, Binary, Integer) → очистити всі type-specific поля
-- [ ] Cleanup виконується в draft state, до Save — в store потрапляють тільки валідні комбінації
+- [Х] Cleanup виконується в draft state, до Save — в store потрапляють тільки валідні комбінації
 
 #### Параметри типу (нижня секція)
 
-- [ ] Динамічна секція внизу діалогу — показує параметри залежно від обраного типу
-- [ ] `String` → поле "Довжина" (Input type="number", min=1)
-- [ ] `Numeric` → поля "Точність" (precision) та "Масштаб" (scale)
-- [ ] `Integer` → **немає параметрів**
-- [ ] `Ref` (single) → readonly display обраного target (локалізований `formatTypeLabel`)
-- [ ] `Ref` (compound / allowedTypes) → readonly display кількості обраних
-- [ ] Інші типи (UUID, Boolean, Text, Date, DateTime, Binary) → секція прихована або текст "Додаткових налаштувань немає"
-- [ ] Значення параметрів зберігаються в draft і передаються разом із Save
+- [Х] Динамічна секція внизу діалогу — показує параметри залежно від обраного типу
+- [Х] `String` → поле "Довжина" (Input type="number", min=1)
+- [Х] `Numeric` → поля "Точність" (precision) та "Масштаб" (scale)
+- [Х] `Integer` → **немає параметрів**
+- [Х] `Ref` (single) → readonly display обраного target (локалізований `formatTypeLabel`)
+- [Х] `Ref` (compound / allowedTypes) → readonly display кількості обраних
+- [Х] Інші типи (UUID, Boolean, Text, Date, DateTime, Binary) → секція прихована або текст "Додаткових налаштувань немає"
+- [Х] Значення параметрів зберігаються в draft і передаються разом із Save
 
 #### Footer (кнопки)
 
-- [ ] "Скасувати" — закрити без збереження
-- [ ] "Зберегти" — apply draft як один `Partial<Attribute>` update (включаючи поля з `undefined` для explicit cleanup), закрити діалог
-- [ ] "Зберегти" disabled якщо `!isDirty`
+- [Х] "Скасувати" — закрити без збереження
+- [Х] "Зберегти" — apply draft як один `Partial<Attribute>` update (включаючи поля з `undefined` для explicit cleanup), закрити діалог
+- [Х] "Зберегти" disabled якщо `!isDirty`
 
 ### Ризики
 
@@ -263,14 +263,24 @@
 - react-arborist у модальному вікні: треба перевірити фокус-менеджмент (Dialog trap vs tree keyboard nav)
 
 ### DoD фази 2
-- [ ] Діалог відкривається, показує дерево типів + параметри
-- [ ] Single mode: вибір одного типу працює коректно
-- [ ] Compound mode: мультиселект reference targets працює
-- [ ] Cleanup type-specific полів — автоматичний
-- [ ] Save — атомарний patch для всіх type-related полів
-- [ ] Cancel — жодних змін
-- [ ] Пошук по дереву працює
-- [ ] Presentation layer з Фази 1 — стилістично ідентичний sidebar
+- [Х] Діалог відкривається, показує дерево типів + параметри
+- [Х] Single mode: вибір одного типу працює коректно
+- [Х] Compound mode: мультиселект reference targets працює
+- [Х] Cleanup type-specific полів — автоматичний
+- [Х] Save — атомарний patch для всіх type-related полів
+- [Х] Cancel — жодних змін
+- [Х] Пошук по дереву працює
+- [Х] Presentation layer з Фази 1 — стилістично ідентичний sidebar
+
+### Зауваження з code review Фази 2
+
+> Наступні пункти виявлені під час code review і **відкладені** до наступних фаз.
+
+1. **Keyboard navigation у Data Type Editor ще не доведена до паритету з sidebar tree** — поточний діалог повністю mouse-driven. Потрібно додати selection / activate pattern через `react-arborist`, щоб keyboard UX був консистентний з основним деревом.
+
+2. **`refKindGroup` у compound mode не має checked / indeterminate affordance** — bulk-select для всього kind працює, але користувач не бачить агрегований стан групи. Потрібен окремий візуальний стан group-node.
+
+3. **Component tests для діалогу не покривають review-critical сценарії** — потрібні окремі тести на keyboard interaction, group toggle і search + bulk-select, щоб зафіксувати поведінку діалогу перед наступними ітераціями.
 
 ---
 
@@ -300,6 +310,11 @@
 - [ ] Потрібен `stopPropagation` на cell level щоб не зламати row selection
 - [ ] `onSave` callback формується з координатами атрибута (kind, objectName, fieldName, field role)
 - [ ] Після Save — таблиця оновлюється автоматично (reactive через store)
+
+#### UX polishing діалогу після інтеграції
+
+- [ ] Додати keyboard navigation у `DataTypeEditorDialog` до паритету з sidebar tree (`onSelect` / `onActivate`, навігація без mouse-only flow)
+- [ ] Додати checked / indeterminate visual state для `refKindGroup` у compound mode
 
 ### Ризики
 
@@ -418,11 +433,14 @@
 - [ ] Single mode: вибір reference target → draft = `{ type: "Ref", ref: MetadataRef }`
 - [ ] Compound mode: мультиселект references → draft = `{ type: "Ref", allowedTypes: MetadataRef[] }`
 - [ ] Compound mode: примітивні типи disabled
+- [ ] Compound mode: kind-group відображає checked / indeterminate state коректно
 - [ ] Save → onSave викликається з правильним patch (включаючи undefined для cleanup)
 - [ ] Cancel → onSave не викликається
 - [ ] Зміна типу очищує непотрібні параметри (centralized cleanup)
 - [ ] isDirty правильно обчислюється
 - [ ] Переключення compound → single зберігає перший target
+- [ ] Keyboard navigation / activate flow працює без mouse interaction
+- [ ] Search + group toggle використовує повний набір targets kind, а не тільки відфільтровані вузли
 
 #### Фінальна перевірка
 

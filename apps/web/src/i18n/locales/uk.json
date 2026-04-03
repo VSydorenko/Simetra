@@ -286,5 +286,31 @@
     "restoreError": "Не вдалося відновити сесію: {{error}}",
     "draftSaved": "Чернетку збережено",
     "draftRecovered": "Чернетку відновлено"
+  },
+  "dataTypeEditor": {
+    "title": "Редагування типу даних",
+    "compoundType": "Складений тип",
+    "compoundTooltip": "Складений тип підтримує тільки посилання",
+    "search": "Пошук типу",
+    "typeParams": "Параметри типу",
+    "noParams": "Додаткових налаштувань немає",
+    "selectedCount": "Обрано {{count}} типів",
+    "refGroup": {
+      "Catalog": "ДовідникПосилання",
+      "Document": "ДокументПосилання",
+      "Enumeration": "ПеречисленняПосилання"
+    }
+  },
+  "fieldType": {
+    "UUID": "UUID",
+    "String": "Рядок",
+    "Text": "Текст",
+    "Integer": "Ціле число",
+    "Numeric": "Число",
+    "Boolean": "Булево",
+    "Date": "Дата",
+    "DateTime": "Дата і час",
+    "Binary": "Двійкові дані",
+    "Ref": "Посилання"
   }
 }

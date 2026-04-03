@@ -282,5 +282,31 @@
     "restoreError": "Failed to restore session: {{error}}",
     "draftSaved": "Draft saved",
     "draftRecovered": "Draft recovered"
+  },
+  "dataTypeEditor": {
+    "title": "Data Type Editor",
+    "compoundType": "Compound type",
+    "compoundTooltip": "Compound type supports references only",
+    "search": "Search type",
+    "typeParams": "Type parameters",
+    "noParams": "No additional settings",
+    "selectedCount": "{{count}} types selected",
+    "refGroup": {
+      "Catalog": "CatalogRef",
+      "Document": "DocumentRef",
+      "Enumeration": "EnumerationRef"
+    }
+  },
+  "fieldType": {
+    "UUID": "UUID",
+    "String": "String",
+    "Text": "Text",
+    "Integer": "Integer",
+    "Numeric": "Numeric",
+    "Boolean": "Boolean",
+    "Date": "Date",
+    "DateTime": "DateTime",
+    "Binary": "Binary",
+    "Ref": "Reference"
   }
 }
