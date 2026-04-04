@@ -5,10 +5,12 @@ import {
   enrichSchemaUrl,
   enrichProjectSchemaUrl,
   buildConstantsSchemaUrl,
+  KIND_TO_KEY,
   projectModelSchema,
   metadataObjectSchema,
   projectSchema,
   constantSchema,
+  constantsFileSchema,
 } from "@simetra/core"
 import { unzip, zip } from "fflate"
 import type {
@@ -215,11 +217,15 @@ function parseFileStructure(files: Map<string, string>): {
 
       if (kind === "Constant") {
         // constants.meta.json — object wrapper or legacy array (backward compat)
-        const items = Array.isArray(data)
-          ? data
-          : data && typeof data === "object" && "constants" in data && Array.isArray((data as Record<string, unknown>).constants)
-            ? (data as Record<string, unknown>).constants as unknown[]
-            : null
+        let items: unknown[] | null = null
+        if (Array.isArray(data)) {
+          items = data
+        } else {
+          const wrapperResult = constantsFileSchema.safeParse(data)
+          if (wrapperResult.success) {
+            items = wrapperResult.data.constants
+          }
+        }
         if (items) {
           for (const item of items) {
             parsed.objects.push({ kind, data: item, filePath: path })
@@ -278,21 +284,11 @@ function buildProjectModel(parsed: ParsedFiles): {
     customTables: [],
   }
 
-  const kindToKey: Record<MetadataKind, string> = {
-    Catalog: "catalogs",
-    Document: "documents",
-    Enumeration: "enumerations",
-    InformationRegister: "informationRegisters",
-    AccumulationRegister: "accumulationRegisters",
-    Constant: "constants",
-    CustomTable: "customTables",
-  }
-
   for (const { kind, data, filePath } of parsed.objects) {
     const schema = kind === "Constant" ? constantSchema : metadataObjectSchema
     const result = schema.safeParse(data)
     if (result.success) {
-      const key = kindToKey[kind]
+      const key = KIND_TO_KEY[kind]
       collections[key].push(result.data as MetadataObject)
     } else {
       warnings.push({

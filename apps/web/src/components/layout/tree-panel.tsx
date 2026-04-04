@@ -293,11 +293,11 @@ export function TreePanel() {
 
   return (
     <DeleteDialogContext.Provider value={deleteDialogCtx}>
-    <WhereUsedDialogContext.Provider value={whereUsedDialogCtx}>
-      <div
-        className="flex h-full flex-col"
-        onFocus={() => useUiStore.getState().setFocusedPanel("tree")}
-      >
+      <WhereUsedDialogContext.Provider value={whereUsedDialogCtx}>
+        <div
+          className="flex h-full flex-col"
+          onFocus={() => useUiStore.getState().setFocusedPanel("tree")}
+        >
         {/* Пошук */}
         {searchVisible && (
           <div className="flex items-center gap-1 border-b border-border px-1.5 py-1">
@@ -402,8 +402,8 @@ export function TreePanel() {
           objectName={whereUsedTarget?.name ?? ""}
           references={whereUsedTarget?.refs ?? []}
         />
-      </div>
-    </WhereUsedDialogContext.Provider>
+        </div>
+      </WhereUsedDialogContext.Provider>
     </DeleteDialogContext.Provider>
   )
 }

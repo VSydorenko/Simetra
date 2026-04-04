@@ -81,20 +81,18 @@ export function WhereUsedDialog({
                       onClick={() => handleNavigate(ref)}
                     >
                       <td className="flex items-center gap-1.5 py-1.5 pr-3">
-                        {icon && (
-                          <HugeiconsIcon
-                            icon={icon}
-                            size={12}
-                            className={colorClass}
-                          />
-                        )}
+                        <HugeiconsIcon
+                          icon={icon}
+                          size={12}
+                          className={colorClass}
+                        />
                         <span className="font-mono">{ref.from.name}</span>
                       </td>
                       <td className="py-1.5 pr-3 font-mono text-muted-foreground">
                         {formatReference(ref)}
                       </td>
                       <td className="py-1.5 text-muted-foreground">
-                        {ref.referenceKind}
+                        {t(`referenceKind.${ref.referenceKind}`, { defaultValue: ref.referenceKind })}
                       </td>
                     </tr>
                   )

@@ -303,6 +303,13 @@
       "Enumeration": "EnumerationRef"
     }
   },
+  "referenceKind": {
+    "owners": "Owners",
+    "recorderTypes": "Recorder types",
+    "registerMovements": "Register movements",
+    "attributeRef": "Attribute ref",
+    "attributeAllowedTypes": "Allowed types"
+  },
   "fieldType": {
     "UUID": "UUID",
     "String": "String",

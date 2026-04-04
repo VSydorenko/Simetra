@@ -37,16 +37,17 @@ export const KIND_TO_KEY: Record<
   CustomTable: "customTables",
 }
 
+const REFERENCE_KIND_LABELS: Record<ReferenceKind, string> = {
+  owners: "owners",
+  recorderTypes: "recorderTypes",
+  registerMovements: "registerMovements",
+  attributeRef: "ref",
+  attributeAllowedTypes: "allowedTypes",
+}
+
 /** Format a Reference for human-readable display */
 export function formatReference(ref: Reference): string {
-  const kindLabels: Record<ReferenceKind, string> = {
-    owners: "owners",
-    recorderTypes: "recorderTypes",
-    registerMovements: "registerMovements",
-    attributeRef: "ref",
-    attributeAllowedTypes: "allowedTypes",
-  }
-  const label = kindLabels[ref.referenceKind]
+  const label = REFERENCE_KIND_LABELS[ref.referenceKind]
   if (ref.fieldName) {
     const tsPrefix = ref.tabularSectionName
       ? `${ref.tabularSectionName}.`

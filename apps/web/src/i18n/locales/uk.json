@@ -307,6 +307,13 @@
       "Enumeration": "ПеречисленняПосилання"
     }
   },
+  "referenceKind": {
+    "owners": "Власники",
+    "recorderTypes": "Типи реєстраторів",
+    "registerMovements": "Рухи регістрів",
+    "attributeRef": "Посилання реквізиту",
+    "attributeAllowedTypes": "Допустимі типи"
+  },
   "fieldType": {
     "UUID": "UUID",
     "String": "Рядок",
