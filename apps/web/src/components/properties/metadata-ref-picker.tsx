@@ -18,11 +18,12 @@ import {
   CommandList,
 } from "@workspace/ui/components/command"
 import { referenceableKindSchema } from "@simetra/core"
-import type { Attribute, MetadataRef } from "@simetra/core"
+import type { Attribute, MetadataKind, MetadataRef } from "@simetra/core"
 import { useAvailableObjects } from "@/hooks/use-available-objects"
 
 /** Referenceable kinds — source of truth з core */
 const REFERENCEABLE_KINDS = referenceableKindSchema.options
+type AttributeRefTarget = NonNullable<Attribute["ref"]>
 
 // ---------------------------------------------------------------------------
 // MetadataRefPicker — unified picker для attribute.ref (single / polymorphic)
@@ -30,9 +31,9 @@ const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
 interface MetadataRefPickerProps {
   /** Поточне значення ref (single reference) */
-  refValue: MetadataRef | undefined
+  refValue: AttributeRefTarget | undefined
   /** Поточне значення allowedTypes (polymorphic reference) */
-  allowedTypes: MetadataRef[] | undefined
+  allowedTypes: AttributeRefTarget[] | undefined
   /** Callback при зміні — передає часткові оновлення для attribute */
   onChange: (updates: Partial<Attribute>) => void
 }
@@ -77,7 +78,7 @@ export function MetadataRefPicker({
   )
 
   const handleSelectSingle = useCallback(
-    (ref: MetadataRef) => {
+    (ref: AttributeRefTarget) => {
       const isSame =
         refValue && refValue.kind === ref.kind && refValue.name === ref.name
       onChange({ ref: isSame ? undefined : ref })
@@ -98,7 +99,7 @@ export function MetadataRefPicker({
   )
 
   const handleToggleRef = useCallback(
-    (ref: MetadataRef) => {
+    (ref: AttributeRefTarget) => {
       const key = `${ref.kind}/${ref.name}`
       const current = allowedTypes ?? []
       if (selectedSet.has(key)) {
@@ -113,7 +114,7 @@ export function MetadataRefPicker({
   )
 
   const handleRemoveFromAllowed = useCallback(
-    (ref: MetadataRef) => {
+    (ref: AttributeRefTarget) => {
       const current = allowedTypes ?? []
       onChange({
         allowedTypes: current.filter(
