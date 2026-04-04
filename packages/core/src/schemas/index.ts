@@ -28,8 +28,10 @@ export {
 export {
   constantSchema,
   constantValueTypeSchema,
+  constantsFileSchema,
   type Constant,
   type ConstantValueType,
+  type ConstantsFile,
 } from "./constant"
 export { customTableSchema, type CustomTable } from "./custom-table"
 

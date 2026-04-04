@@ -28,3 +28,11 @@ export const constantSchema = z.object({
 })
 
 export type Constant = z.infer<typeof constantSchema>
+
+/** BRD §7.6 — Constants file wrapper schema (for direct file parsing in Phase 2 DDL) */
+export const constantsFileSchema = z.object({
+  $schema: z.string().optional(),
+  constants: z.array(constantSchema),
+})
+
+export type ConstantsFile = z.infer<typeof constantsFileSchema>
