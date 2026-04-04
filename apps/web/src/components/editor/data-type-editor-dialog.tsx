@@ -471,6 +471,7 @@ function DataTypeEditorBody({
             <PrimitiveTypePresentation
               data={data}
               isSelected={isSelected}
+              isFocused={node.isFocused}
               mode={compoundEnabled ? "checkbox" : "radio"}
               disabled={compoundEnabled}
               label={t(`fieldType.${data.fieldTypeValue}`)}
@@ -494,6 +495,7 @@ function DataTypeEditorBody({
             <RefKindGroupPresentation
               data={data}
               isOpen={node.isOpen}
+              isFocused={node.isFocused}
               onToggle={() => {}}
               label={t(`dataTypeEditor.refGroup.${data.kind}`)}
               childCount={data.children?.length ?? 0}
@@ -522,6 +524,7 @@ function DataTypeEditorBody({
             <RefTargetPresentation
               data={data}
               isSelected={isSelected}
+              isFocused={node.isFocused}
               mode={compoundEnabled ? "checkbox" : "radio"}
               style={style}
             />

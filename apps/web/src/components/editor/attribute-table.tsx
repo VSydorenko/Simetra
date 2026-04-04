@@ -32,7 +32,8 @@ import {
 import type { Attribute, MetadataKind } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useUiStore } from "@/stores/ui-store"
-import { formatRefDisplay } from "@/lib/format-ref-display"
+import { useFieldUpdate, type FieldRole } from "@/hooks/use-field-update"
+import { formatTypeLabel } from "@/lib/format-type-label"
 import { DataTypeEditorDialog } from "@/components/editor/data-type-editor-dialog"
 
 const columnHelper = createColumnHelper<Attribute>()
@@ -63,21 +64,18 @@ export function AttributeTable({
     addAttribute,
     removeAttribute,
     reorderAttributes,
-    updateAttribute,
     addDimension,
     removeDimension,
     reorderDimensions,
-    updateDimension,
     addResource,
     removeResource,
     reorderResources,
-    updateResource,
     addTabularSectionAttribute,
     removeTabularSectionAttribute,
     reorderTabularSectionAttributes,
-    updateTabularSectionAttribute,
   } = useMetadataStore()
   const { selectField } = useUiStore()
+  const dispatchFieldUpdate = useFieldUpdate()
 
   const handleAdd = useCallback(() => {
     let i = 1
@@ -191,22 +189,15 @@ export function AttributeTable({
   const handleTypeUpdate = useCallback(
     (updates: Partial<Attribute>) => {
       if (!editingTypeAttr) return
-      if (tabularSectionName) {
-        updateTabularSectionAttribute(
-          kind, objectName, tabularSectionName, editingTypeAttr, updates,
-        )
-      } else if (field === "dimensions") {
-        updateDimension(kind, objectName, editingTypeAttr, updates)
-      } else if (field === "resources") {
-        updateResource(kind, objectName, editingTypeAttr, updates)
-      } else {
-        updateAttribute(kind, objectName, editingTypeAttr, updates)
-      }
+      const role: FieldRole = tabularSectionName
+        ? "tabularSection"
+        : field
+      dispatchFieldUpdate(
+        { kind, objectName, fieldName: editingTypeAttr, role, tabularSectionName },
+        updates,
+      )
     },
-    [
-      kind, objectName, field, editingTypeAttr, tabularSectionName,
-      updateAttribute, updateDimension, updateResource, updateTabularSectionAttribute,
-    ],
+    [kind, objectName, field, editingTypeAttr, tabularSectionName, dispatchFieldUpdate],
   )
 
   const columns = useMemo(
@@ -229,7 +220,7 @@ export function AttributeTable({
               setEditingTypeAttr(info.row.original.name)
             }}
           >
-            {formatRefDisplay(info.row.original)}
+            {formatTypeLabel(info.row.original, t)}
           </button>
         ),
         size: 130,

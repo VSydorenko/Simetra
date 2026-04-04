@@ -149,6 +149,8 @@
 
 4. **Unit тести для `buildTypeEditorTree`** — відкладені до Фази 5 (тести).
 
+5. **`useAvailableObjects` не використовується діалогом** — spec вимагає `DataTypeEditorDialog` імпортувати shared hook, але діалог коректно отримує `model: ProjectModel` через props і будує grouped tree через `buildTypeEditorTree`. Hook повертає плоский `MetadataRef[]`, що не підходить для дерева. Це виправдане відхилення від spec — hook залишається shared для `MetadataRefPicker`, діалог спирається на model prop.
+
 ---
 
 ## Фаза 2: Компонент DataTypeEditorDialog
@@ -292,29 +294,29 @@
 
 #### FieldProperties — readonly display + тригер діалогу
 
-- [x] Секція "Тип даних" у FieldProperties замінюється на:
+- [Х] Секція "Тип даних" у FieldProperties замінюється на:
   - Readonly display поточного типу (з піктограмою) + кнопка "..." для відкриття `DataTypeEditorDialog`
   - Формат display: локалізований через `formatTypeLabel` (Фаза 4)
   - Під display value — readonly підказка параметрів: String → "Довжина: 50", Numeric → "Точність: 10, Масштаб: 2"
-- [x] Видалити з FieldProperties inline type-editing UI:
+- [Х] Видалити з FieldProperties inline type-editing UI:
   - `FieldTypeSelect` (Select компонент) — прибрати import і usage
   - Inline поля `length`, `precision`, `scale`
   - Inline `MetadataRefPicker`
-- [x] `onSave` callback для діалогу формується в FieldProperties з використанням існуючого `handleUpdate` (який вже робить routing по field role)
-- [x] `FieldTypeSelect` **залишається** як компонент — він використовується для Constant.valueType в `object-properties.tsx`
+- [Х] `onSave` callback для діалогу формується в FieldProperties з використанням існуючого `handleUpdate` (який вже робить routing по field role)
+- [Х] `FieldTypeSelect` **залишається** як компонент — він використовується для Constant.valueType в `object-properties.tsx`
 
 #### AttributeTable — entry point з таблиці
 
-- [x] В колонці "Тип" таблиці реквізитів — зробити type cell clickable
-- [x] Клік на type badge → відкриває `DataTypeEditorDialog` для цього атрибута
-- [x] Потрібен `stopPropagation` на cell level щоб не зламати row selection
-- [x] `onSave` callback формується з координатами атрибута (kind, objectName, fieldName, field role)
-- [x] Після Save — таблиця оновлюється автоматично (reactive через store)
+- [Х] В колонці "Тип" таблиці реквізитів — зробити type cell clickable
+- [Х] Клік на type badge → відкриває `DataTypeEditorDialog` для цього атрибута
+- [Х] Потрібен `stopPropagation` на cell level щоб не зламати row selection
+- [Х] `onSave` callback формується з координатами атрибута (kind, objectName, fieldName, field role)
+- [Х] Після Save — таблиця оновлюється автоматично (reactive через store)
 
 #### UX polishing діалогу після інтеграції
 
-- [x] Додати keyboard navigation у `DataTypeEditorDialog` до паритету з sidebar tree (`onSelect` / `onActivate`, навігація без mouse-only flow)
-- [x] Додати checked / indeterminate visual state для `refKindGroup` у compound mode
+- [Х] Додати keyboard navigation у `DataTypeEditorDialog` до паритету з sidebar tree (`onSelect` / `onActivate`, навігація без mouse-only flow)
+- [Х] Додати checked / indeterminate visual state для `refKindGroup` у compound mode
 
 ### Ризики
 
@@ -322,12 +324,12 @@
 - Click на type cell vs row selection: потрібен окремий event handling на cell рівні
 
 ### DoD фази 3
-- [x] FieldProperties — readonly display типу + кнопка "..." → діалог
-- [x] FieldProperties не містить inline type-editing UI
-- [x] AttributeTable — клік на type badge відкриває діалог
-- [x] Два entry points працюють: права панель і таблиця
-- [x] Зміна типу через діалог атомарно оновлює store
-- [x] Constant.valueType flow не зачеплено (FieldTypeSelect залишається)
+- [Х] FieldProperties — readonly display типу + кнопка "..." → діалог
+- [Х] FieldProperties не містить inline type-editing UI
+- [Х] AttributeTable — клік на type badge відкриває діалог
+- [Х] Два entry points працюють: права панель і таблиця
+- [Х] Зміна типу через діалог атомарно оновлює store
+- [Х] Constant.valueType flow не зачеплено (FieldTypeSelect залишається)
 
 ---
 

@@ -23,6 +23,7 @@ import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import type { MetadataKind, MetadataObject, Attribute } from "@simetra/core"
 import { getStandardAttributes } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
+import { useFieldUpdate, type FieldRole } from "@/hooks/use-field-update"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { extractStandardAttributeSettings } from "@/lib/extract-settings"
 
@@ -192,9 +193,7 @@ function AdditionalIndexesDialogBody({
   t: (key: string) => string
 }) {
   const model = useMetadataStore((s) => s.model)
-  const updateAttribute = useMetadataStore((s) => s.updateAttribute)
-  const updateDimension = useMetadataStore((s) => s.updateDimension)
-  const updateResource = useMetadataStore((s) => s.updateResource)
+  const dispatchFieldUpdate = useFieldUpdate()
 
   const object = useMemo(() => {
     const key = KIND_TO_KEY[kind]
@@ -236,29 +235,11 @@ function AdditionalIndexesDialogBody({
     for (const [key, indexed] of Object.entries(draft)) {
       if (savedDraft[key] === indexed) continue
 
-      const [role, fieldName] = key.split(":") as [string, string]
-      switch (role) {
-        case "dimensions":
-          updateDimension(kind, objectName, fieldName, { indexed })
-          break
-        case "resources":
-          updateResource(kind, objectName, fieldName, { indexed })
-          break
-        default:
-          updateAttribute(kind, objectName, fieldName, { indexed })
-      }
+      const [role, fieldName] = key.split(":") as [FieldRole, string]
+      dispatchFieldUpdate({ kind, objectName, fieldName, role }, { indexed })
     }
     onCancel()
-  }, [
-    draft,
-    savedDraft,
-    kind,
-    objectName,
-    updateAttribute,
-    updateDimension,
-    updateResource,
-    onCancel,
-  ])
+  }, [draft, savedDraft, kind, objectName, dispatchFieldUpdate, onCancel])
 
   const kindLabel = t(`metadata.kind.${kind}`)
   const title = `${kindLabel} ${objectName}: ${t("properties.additionalIndexes")}`

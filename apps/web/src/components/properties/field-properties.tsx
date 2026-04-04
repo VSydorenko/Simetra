@@ -19,6 +19,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { PencilEdit02Icon } from "@hugeicons/core-free-icons"
 import { DataTypeEditorDialog } from "@/components/editor/data-type-editor-dialog"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
+import { useFieldUpdate, getFieldRole } from "@/hooks/use-field-update"
 import { type FieldSelection } from "@/stores/ui-store"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import {
@@ -26,6 +27,7 @@ import {
   KIND_ICONS,
   DEFAULT_FIELD_ICON,
 } from "@/lib/metadata-icons"
+import { formatTypeLabel } from "@/lib/format-type-label"
 import type { Attribute, MetadataObject, ProjectModel } from "@simetra/core"
 
 interface FieldPropertiesProps {
@@ -157,34 +159,9 @@ function findAttribute(
   return null
 }
 
-/** Визначає field role для правильного dispatch */
-function getFieldRole(
-  object: MetadataObject,
-  selection: FieldSelection
-): "attributes" | "dimensions" | "resources" | "tabularSection" {
-  if (selection.tabularSectionName) return "tabularSection"
-
-  if ("dimensions" in object) {
-    const dims = object.dimensions as Attribute[]
-    if (dims.some((a) => a.name === selection.fieldName)) return "dimensions"
-  }
-
-  if ("resources" in object) {
-    const res = object.resources as Attribute[]
-    if (res.some((a) => a.name === selection.fieldName)) return "resources"
-  }
-
-  return "attributes"
-}
-
 export function FieldProperties({ selection }: FieldPropertiesProps) {
   const model = useMetadataStore((s) => s.model)
-  const {
-    updateAttribute,
-    updateDimension,
-    updateResource,
-    updateTabularSectionAttribute,
-  } = useMetadataStore()
+  const dispatchFieldUpdate = useFieldUpdate()
 
   const { kind, name: objectName } = selection.objectRef
 
@@ -221,45 +198,27 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
   )
 
   const fieldRole = useMemo(
-    () => (object ? getFieldRole(object, selection) : "attributes"),
-    [object, selection]
+    () =>
+      object
+        ? getFieldRole(object, selection.fieldName, selection.tabularSectionName)
+        : "attributes",
+    [object, selection.fieldName, selection.tabularSectionName],
   )
 
   const handleUpdate = useCallback(
     (updates: Partial<Attribute>) => {
-      switch (fieldRole) {
-        case "dimensions":
-          updateDimension(kind, objectName, selection.fieldName, updates)
-          break
-        case "resources":
-          updateResource(kind, objectName, selection.fieldName, updates)
-          break
-        case "tabularSection":
-          if (selection.tabularSectionName) {
-            updateTabularSectionAttribute(
-              kind,
-              objectName,
-              selection.tabularSectionName,
-              selection.fieldName,
-              updates
-            )
-          }
-          break
-        default:
-          updateAttribute(kind, objectName, selection.fieldName, updates)
-      }
+      dispatchFieldUpdate(
+        {
+          kind,
+          objectName,
+          fieldName: selection.fieldName,
+          role: fieldRole,
+          tabularSectionName: selection.tabularSectionName,
+        },
+        updates,
+      )
     },
-    [
-      kind,
-      objectName,
-      selection.fieldName,
-      selection.tabularSectionName,
-      fieldRole,
-      updateAttribute,
-      updateDimension,
-      updateResource,
-      updateTabularSectionAttribute,
-    ]
+    [kind, objectName, selection.fieldName, selection.tabularSectionName, fieldRole, dispatchFieldUpdate],
   )
 
   if (!object || !attribute) return null
@@ -483,49 +442,14 @@ function FieldPropertiesInner({
 function TypeReadonlyDisplay({ attribute }: { attribute: Attribute }) {
   const { t } = useTranslation()
 
-  if (attribute.type === "Ref") {
-    if (attribute.allowedTypes && attribute.allowedTypes.length > 0) {
-      return (
-        <span className="flex items-center gap-1.5 truncate text-xs">
-          <HugeiconsIcon
-            icon={FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON}
-            size={14}
-            className="shrink-0 text-muted-foreground"
-          />
-          <span className="truncate">
-            {t("dataTypeEditor.selectedCount", {
-              count: attribute.allowedTypes.length,
-            })}
-          </span>
-        </span>
-      )
-    }
-    if (attribute.ref) {
-      const kindIcon = KIND_ICONS[attribute.ref.kind]
-      return (
-        <span className="flex items-center gap-1.5 truncate text-xs">
-          <HugeiconsIcon
-            icon={kindIcon ?? FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON}
-            size={14}
-            className="shrink-0 text-muted-foreground"
-          />
-          <span className="truncate">{attribute.ref.name}</span>
-        </span>
-      )
-    }
-    return (
-      <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-        <HugeiconsIcon
-          icon={FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON}
-          size={14}
-          className="shrink-0"
-        />
-        <span className="truncate">{t("fieldType.Ref")}</span>
-      </span>
-    )
-  }
+  const label = formatTypeLabel(attribute, t)
 
-  const icon = FIELD_TYPE_ICONS[attribute.type] ?? DEFAULT_FIELD_ICON
+  // Іконка залежить від типу
+  const icon =
+    attribute.type === "Ref" && attribute.ref
+      ? (KIND_ICONS[attribute.ref.kind] ?? FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON)
+      : (FIELD_TYPE_ICONS[attribute.type] ?? DEFAULT_FIELD_ICON)
+
   return (
     <span className="flex items-center gap-1.5 truncate text-xs">
       <HugeiconsIcon
@@ -533,7 +457,7 @@ function TypeReadonlyDisplay({ attribute }: { attribute: Attribute }) {
         size={14}
         className="shrink-0 text-muted-foreground"
       />
-      <span className="truncate">{t(`fieldType.${attribute.type}`)}</span>
+      <span className="truncate">{label}</span>
     </span>
   )
 }

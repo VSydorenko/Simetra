@@ -354,6 +354,7 @@ export function TabularSectionPresentation({
 export interface PrimitiveTypeNodeProps {
   data: TreeNodeData
   isSelected: boolean
+  isFocused?: boolean
   mode: "radio" | "checkbox"
   disabled?: boolean
   label: string
@@ -363,6 +364,7 @@ export interface PrimitiveTypeNodeProps {
 export function PrimitiveTypePresentation({
   data,
   isSelected,
+  isFocused,
   mode,
   disabled,
   label,
@@ -377,6 +379,7 @@ export function PrimitiveTypePresentation({
         "flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
         "hover:bg-accent/50",
         isSelected && "bg-accent text-accent-foreground",
+        isFocused && !isSelected && "ring-1 ring-ring",
         disabled && "cursor-not-allowed opacity-50"
       )}
     >
@@ -400,6 +403,7 @@ export function PrimitiveTypePresentation({
 export interface RefKindGroupPresentationProps {
   data: TreeNodeData
   isOpen: boolean
+  isFocused?: boolean
   onToggle: () => void
   label: string
   childCount: number
@@ -411,6 +415,7 @@ export interface RefKindGroupPresentationProps {
 export function RefKindGroupPresentation({
   data,
   isOpen,
+  isFocused,
   onToggle,
   label,
   childCount,
@@ -425,7 +430,8 @@ export function RefKindGroupPresentation({
       style={style}
       className={cn(
         "group flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
-        "hover:bg-accent/50"
+        "hover:bg-accent/50",
+        isFocused && "bg-accent"
       )}
       onClick={onToggle}
     >
@@ -453,6 +459,7 @@ export function RefKindGroupPresentation({
 export interface RefTargetPresentationProps {
   data: TreeNodeData
   isSelected: boolean
+  isFocused?: boolean
   mode: "radio" | "checkbox"
   style?: React.CSSProperties
 }
@@ -460,6 +467,7 @@ export interface RefTargetPresentationProps {
 export function RefTargetPresentation({
   data,
   isSelected,
+  isFocused,
   mode,
   style,
 }: RefTargetPresentationProps) {
@@ -472,7 +480,8 @@ export function RefTargetPresentation({
       className={cn(
         "flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
         "hover:bg-accent/50",
-        isSelected && "bg-accent text-accent-foreground"
+        isSelected && "bg-accent text-accent-foreground",
+        isFocused && !isSelected && "ring-1 ring-ring"
       )}
     >
       <input
