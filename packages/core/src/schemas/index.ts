@@ -25,7 +25,14 @@ export {
   accumulationRegisterSchema,
   type AccumulationRegister,
 } from "./accumulation-register"
-export { constantSchema, type Constant } from "./constant"
+export {
+  constantSchema,
+  constantValueTypeSchema,
+  constantsFileSchema,
+  type Constant,
+  type ConstantValueType,
+  type ConstantsFile,
+} from "./constant"
 export { customTableSchema, type CustomTable } from "./custom-table"
 
 // Project

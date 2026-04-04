@@ -2,10 +2,15 @@ import type { MetadataKind, MetadataObject, ProjectModel } from "@simetra/core"
 import {
   serializeMetadataObject,
   serializeProject,
+  enrichSchemaUrl,
+  enrichProjectSchemaUrl,
+  buildConstantsSchemaUrl,
+  KIND_TO_KEY,
   projectModelSchema,
   metadataObjectSchema,
   projectSchema,
   constantSchema,
+  constantsFileSchema,
 } from "@simetra/core"
 import { unzip, zip } from "fflate"
 import type {
@@ -109,11 +114,13 @@ interface FileEntry {
 /** Серіалізувати ProjectModel у масив файлів (path → content) */
 export function serializeToFiles(model: ProjectModel): FileEntry[] {
   const files: FileEntry[] = []
+  const schemaVersion = model.project.schemaVersion
 
-  // project.meta.json
+  // project.meta.json — enrich $schema before serialization
+  const enrichedProject = enrichProjectSchemaUrl(model.project, schemaVersion)
   files.push({
     path: "project.meta.json",
-    content: serializeProject(model.project),
+    content: serializeProject(enrichedProject),
   })
 
   // Кожен тип метаданих
@@ -124,33 +131,37 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
     const dirName = KIND_TO_DIR[kind]
 
     if (kind === "Constant") {
-      // Усі константи — в одному файлі (BRD §7.2)
-      // Серіалізуємо кожну константу canonical, потім збираємо масив
-      const serializedItems = objects.map((obj) =>
+      // Усі константи — в одному файлі, object wrapper (BRD §7.2 + §7.6)
+      const enrichedConstants = objects.map((obj) =>
+        enrichSchemaUrl(obj, schemaVersion)
+      )
+      const serializedItems = enrichedConstants.map((obj) =>
         serializeMetadataObject(obj).trimEnd()
       )
+      const indentedItems = serializedItems.map((item) =>
+        item
+          .split("\n")
+          .map((line) => "    " + line)
+          .join("\n")
+      )
       const constantsJson =
-        "[\n" +
-        serializedItems
-          .map((item) =>
-            item
-              .split("\n")
-              .map((line) => "  " + line)
-              .join("\n")
-          )
-          .join(",\n") +
-        "\n]\n"
+        "{\n" +
+        `  "$schema": "${buildConstantsSchemaUrl(schemaVersion)}",\n` +
+        '  "constants": [\n' +
+        indentedItems.join(",\n") +
+        "\n  ]\n}\n"
       files.push({
         path: `${dirName}/constants.meta.json`,
         content: constantsJson,
       })
     } else {
-      // Один файл на обʼєкт
+      // Один файл на обʼєкт — enrich $schema
       for (const obj of objects) {
+        const enriched = enrichSchemaUrl(obj, schemaVersion)
         const kebabName = toKebabCase(obj.name)
         files.push({
           path: `${dirName}/${kebabName}/${kebabName}.meta.json`,
-          content: serializeMetadataObject(obj),
+          content: serializeMetadataObject(enriched),
         })
       }
     }
@@ -204,10 +215,23 @@ function parseFileStructure(files: Map<string, string>): {
     try {
       const data = JSON.parse(content)
 
-      if (kind === "Constant" && Array.isArray(data)) {
-        // constants.meta.json — масив констант
-        for (const item of data) {
-          parsed.objects.push({ kind, data: item, filePath: path })
+      if (kind === "Constant") {
+        // constants.meta.json — object wrapper or legacy array (backward compat)
+        let items: unknown[] | null = null
+        if (Array.isArray(data)) {
+          items = data
+        } else {
+          const wrapperResult = constantsFileSchema.safeParse(data)
+          if (wrapperResult.success) {
+            items = wrapperResult.data.constants
+          }
+        }
+        if (items) {
+          for (const item of items) {
+            parsed.objects.push({ kind, data: item, filePath: path })
+          }
+        } else {
+          parsed.objects.push({ kind, data, filePath: path })
         }
       } else {
         parsed.objects.push({ kind, data, filePath: path })
@@ -260,21 +284,11 @@ function buildProjectModel(parsed: ParsedFiles): {
     customTables: [],
   }
 
-  const kindToKey: Record<MetadataKind, string> = {
-    Catalog: "catalogs",
-    Document: "documents",
-    Enumeration: "enumerations",
-    InformationRegister: "informationRegisters",
-    AccumulationRegister: "accumulationRegisters",
-    Constant: "constants",
-    CustomTable: "customTables",
-  }
-
   for (const { kind, data, filePath } of parsed.objects) {
     const schema = kind === "Constant" ? constantSchema : metadataObjectSchema
     const result = schema.safeParse(data)
     if (result.success) {
-      const key = kindToKey[kind]
+      const key = KIND_TO_KEY[kind]
       collections[key].push(result.data as MetadataObject)
     } else {
       warnings.push({

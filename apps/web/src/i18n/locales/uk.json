@@ -211,7 +211,12 @@
     "noStandardAttributes": "Цей тип обʼєкта не має стандартних реквізитів",
     "additionalIndexesDescription": "Керування індексами для полів обʼєкта. Стандартні реквізити індексуються автоматично",
     "fieldGroup": "Група",
-    "noIndexableFields": "Немає полів для індексування"
+    "noIndexableFields": "Немає полів для індексування",
+    "whereUsedTitle": "Де використовується: {{name}}",
+    "whereUsedEmpty": "Посилань не знайдено",
+    "whereUsedObject": "Обʼєкт",
+    "whereUsedField": "Поле",
+    "whereUsedRefKind": "Тип посилання"
   },
   "tabs": {
     "close": "Закрити",
@@ -301,6 +306,13 @@
       "Document": "ДокументПосилання",
       "Enumeration": "ПеречисленняПосилання"
     }
+  },
+  "referenceKind": {
+    "owners": "Власники",
+    "recorderTypes": "Типи реєстраторів",
+    "registerMovements": "Рухи регістрів",
+    "attributeRef": "Посилання реквізиту",
+    "attributeAllowedTypes": "Допустимі типи"
   },
   "fieldType": {
     "UUID": "UUID",

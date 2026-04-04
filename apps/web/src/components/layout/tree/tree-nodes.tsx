@@ -36,9 +36,9 @@ import {
   getObjectNames,
   KIND_TO_KEY,
 } from "@/lib/metadata-defaults"
-import { findReferences } from "@/lib/find-references"
 import {
   DeleteDialogContext,
+  WhereUsedDialogContext,
   GROUP_ADD_KEYS,
   type TreeNodeData,
 } from "./tree-types"
@@ -160,6 +160,7 @@ function ObjectNode({
   const kind = data.kind!
   const icon = KIND_ICONS[kind]
   const { requestDelete } = useContext(DeleteDialogContext)
+  const { requestWhereUsed } = useContext(WhereUsedDialogContext)
 
   const handleAdd = useCallback(() => {
     const model = useMetadataStore.getState().model
@@ -189,14 +190,8 @@ function ObjectNode({
   }, [kind, data.name, requestDelete])
 
   const handleWhereUsed = useCallback(() => {
-    const model = useMetadataStore.getState().model
-    const refs = findReferences(model, kind, data.name)
-    if (refs.length === 0) {
-      console.info(`"${data.name}" не використовується`)
-    } else {
-      console.info(`"${data.name}" використовується в:`, refs)
-    }
-  }, [kind, data.name])
+    requestWhereUsed(kind, data.name)
+  }, [kind, data.name, requestWhereUsed])
 
   return (
     <ContextMenu>

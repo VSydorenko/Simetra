@@ -68,3 +68,13 @@ export interface DeleteDialogState {
 export const DeleteDialogContext = createContext<DeleteDialogState>({
   requestDelete: () => {},
 })
+
+// --- Контекст для діалогу «Де використовується» ---
+
+export interface WhereUsedDialogState {
+  requestWhereUsed: (kind: MetadataKind, name: string) => void
+}
+
+export const WhereUsedDialogContext = createContext<WhereUsedDialogState>({
+  requestWhereUsed: () => {},
+})

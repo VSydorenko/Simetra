@@ -108,10 +108,13 @@ describe("serializeToFiles", () => {
     expect(constantFiles[0].path).toBe("constants/constants.meta.json")
 
     const parsed = JSON.parse(constantFiles[0].content)
-    expect(Array.isArray(parsed)).toBe(true)
-    expect(parsed).toHaveLength(2)
-    expect(parsed[0].name).toBe("CompanyName")
-    expect(parsed[1].name).toBe("MaxRetries")
+    // Object wrapper format: { "$schema": "...", "constants": [...] }
+    expect(parsed).toHaveProperty("$schema")
+    expect(parsed).toHaveProperty("constants")
+    expect(Array.isArray(parsed.constants)).toBe(true)
+    expect(parsed.constants).toHaveLength(2)
+    expect(parsed.constants[0].name).toBe("CompanyName")
+    expect(parsed.constants[1].name).toBe("MaxRetries")
   })
 
   it("serializes with trailing newline", () => {
@@ -164,7 +167,13 @@ describe("roundtrip serialization", () => {
     const constantsFile = files.find(
       (f) => f.path === "constants/constants.meta.json"
     )
-    const constants = constantsFile ? JSON.parse(constantsFile.content) : []
+    const constantsData = constantsFile
+      ? JSON.parse(constantsFile.content)
+      : { constants: [] }
+    // Object wrapper: extract constants array
+    const constants = Array.isArray(constantsData)
+      ? constantsData
+      : constantsData.constants ?? []
 
     const rebuilt = projectModelSchema.parse({
       project: projectJson,
@@ -194,5 +203,34 @@ describe("validation on open", () => {
       catalogs: [{ kind: "Catalog", name: "bad name" }],
     })
     expect(result.success).toBe(false)
+  })
+})
+
+// --- Constants object wrapper ---
+
+describe("constants object wrapper", () => {
+  it("constants file has $schema and constants array", () => {
+    const model = createModelWithObjects()
+    const files = serializeToFiles(model)
+    const cf = files.find((f) => f.path === "constants/constants.meta.json")!
+    const parsed = JSON.parse(cf.content)
+    expect(parsed.$schema).toContain("constants.schema.json")
+    expect(Array.isArray(parsed.constants)).toBe(true)
+  })
+
+  it("individual objects have $schema URLs", () => {
+    const model = createModelWithObjects()
+    const files = serializeToFiles(model)
+    const catalogFile = files.find((f) => f.path.includes("products"))!
+    const parsed = JSON.parse(catalogFile.content)
+    expect(parsed.$schema).toContain("catalog.schema.json")
+  })
+
+  it("project.meta.json has $schema URL", () => {
+    const model = createModelWithObjects()
+    const files = serializeToFiles(model)
+    const pf = files.find((f) => f.path === "project.meta.json")!
+    const parsed = JSON.parse(pf.content)
+    expect(parsed.$schema).toContain("project.schema.json")
   })
 })
