@@ -71,12 +71,12 @@ export function WhereUsedDialog({
                 </tr>
               </thead>
               <tbody>
-                {references.map((ref, i) => {
+                {references.map((ref) => {
                   const icon = KIND_ICONS[ref.from.kind]
                   const colorClass = KIND_COLORS[ref.from.kind]
                   return (
                     <tr
-                      key={i}
+                      key={`${ref.from.kind}/${ref.from.name}/${ref.referenceKind}/${ref.fieldName ?? ""}/${ref.tabularSectionName ?? ""}`}
                       className="cursor-pointer border-b border-border/50 hover:bg-accent/50"
                       onClick={() => handleNavigate(ref)}
                     >
