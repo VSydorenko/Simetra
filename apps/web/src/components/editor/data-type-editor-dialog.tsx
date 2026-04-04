@@ -207,8 +207,8 @@ function DataTypeEditorBody({
   // --- Дерево ---
 
   const treeData = useMemo(
-    () => buildTypeEditorTree(model, searchQuery),
-    [model, searchQuery],
+    () => buildTypeEditorTree(model, searchQuery, (key) => t(key)),
+    [model, searchQuery, t],
   )
 
   const treeContainerRef = useRef<HTMLDivElement>(null)

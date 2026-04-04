@@ -280,16 +280,27 @@ const PRIMITIVE_TYPES = fieldTypeSchema.options.filter((t) => t !== "Ref")
 /** Referenceable kinds — source of truth з core */
 const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
+/** Резолвер локалізованих лейблів для пошуку у Data Type Editor */
+export type LabelResolver = (key: string) => string
+
 export function buildTypeEditorTree(
   model: ProjectModel,
-  searchQuery: string
+  searchQuery: string,
+  getLabel?: LabelResolver
 ): TreeNodeData[] {
   const lowerQuery = searchQuery.toLowerCase()
   const nodes: TreeNodeData[] = []
 
   // Примітивні типи
   for (const ft of PRIMITIVE_TYPES) {
-    if (searchQuery && !ft.toLowerCase().includes(lowerQuery)) continue
+    if (searchQuery) {
+      const label = getLabel?.(`fieldType.${ft}`) ?? ft
+      if (
+        !ft.toLowerCase().includes(lowerQuery) &&
+        !label.toLowerCase().includes(lowerQuery)
+      )
+        continue
+    }
     nodes.push({
       id: `type/${ft}`,
       name: ft,
@@ -309,7 +320,10 @@ export function buildTypeEditorTree(
       : objects
 
     // Показувати kind group, якщо є збіг у дочірніх або сам kind збігається
-    const kindMatches = refKind.toLowerCase().includes(lowerQuery)
+    const kindLabel = getLabel?.(`metadata.kind.${refKind}`) ?? refKind
+    const kindMatches =
+      refKind.toLowerCase().includes(lowerQuery) ||
+      kindLabel.toLowerCase().includes(lowerQuery)
     if (searchQuery && !kindMatches && filteredObjects.length === 0) continue
 
     // При збігу kind — показати всі дочірні targets

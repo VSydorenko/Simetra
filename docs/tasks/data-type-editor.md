@@ -341,7 +341,7 @@
 
 #### i18n namespace fieldType
 
-- [ ] Додати в `apps/web/src/i18n/locales/uk.json`:
+- [Х] Додати в `apps/web/src/i18n/locales/uk.json`:
   ```
   "fieldType": {
     "UUID": "UUID",
@@ -356,7 +356,7 @@
     "Ref": "Посилання"
   }
   ```
-- [ ] Додати в `apps/web/src/i18n/locales/en.json`:
+- [Х] Додати в `apps/web/src/i18n/locales/en.json`:
   ```
   "fieldType": {
     "UUID": "UUID",
@@ -374,25 +374,25 @@
 
 #### i18n ключі для діалогу
 
-- [ ] `dataTypeEditor.title` — "Редагування типу даних" / "Data Type Editor"
-- [ ] `dataTypeEditor.compoundType` — "Складений тип" / "Compound type"
-- [ ] `dataTypeEditor.compoundTooltip` — "Складений тип підтримує тільки посилання" / "Compound type supports references only"
-- [ ] `dataTypeEditor.search` — "Пошук типу" / "Search type"
-- [ ] `dataTypeEditor.typeParams` — "Параметри типу" / "Type parameters"
-- [ ] `dataTypeEditor.noParams` — "Додаткових налаштувань немає" / "No additional settings"
-- [ ] `dataTypeEditor.refGroup.Catalog` — "ДовідникПосилання" / "CatalogRef"
-- [ ] `dataTypeEditor.refGroup.Document` — "ДокументПосилання" / "DocumentRef"
-- [ ] `dataTypeEditor.refGroup.Enumeration` — "ПеречисленняПосилання" / "EnumerationRef"
+- [Х] `dataTypeEditor.title` — "Редагування типу даних" / "Data Type Editor"
+- [Х] `dataTypeEditor.compoundType` — "Складений тип" / "Compound type"
+- [Х] `dataTypeEditor.compoundTooltip` — "Складений тип підтримує тільки посилання" / "Compound type supports references only"
+- [Х] `dataTypeEditor.search` — "Пошук типу" / "Search type"
+- [Х] `dataTypeEditor.typeParams` — "Параметри типу" / "Type parameters"
+- [Х] `dataTypeEditor.noParams` — "Додаткових налаштувань немає" / "No additional settings"
+- [Х] `dataTypeEditor.refGroup.Catalog` — "ДовідникПосилання" / "CatalogRef"
+- [Х] `dataTypeEditor.refGroup.Document` — "ДокументПосилання" / "DocumentRef"
+- [Х] `dataTypeEditor.refGroup.Enumeration` — "ПеречисленняПосилання" / "EnumerationRef"
 
 #### User-facing formatter formatTypeLabel
 
-- [ ] Створити `apps/web/src/lib/format-type-label.ts` — user-facing formatter:
+- [Х] Створити `apps/web/src/lib/format-type-label.ts` — user-facing formatter:
   - Примітивний тип → `t('fieldType.String')` → "Рядок"
   - Single ref → `t('fieldType.Ref') + ': ' + ref.name` → "Посилання: Products"
   - Polymorphic ref → `t('fieldType.Ref') + ' (' + count + ')'` → "Посилання (3)"
   - Незавершений Ref → `t('fieldType.Ref')` → "Посилання"
-- [ ] Використовувати у: readonly display FieldProperties, Data Type Editor dialog, AttributeTable badge
-- [ ] `formatRefDisplay` залишити для технічного display (tree field nodes де `CatalogRef.Products` стиль доречний)
+- [Х] Використовувати у: readonly display FieldProperties, Data Type Editor dialog, AttributeTable badge
+- [Х] `formatRefDisplay` залишити для технічного display (tree field nodes де `CatalogRef.Products` стиль доречний)
 
 ### Ризики
 
@@ -400,10 +400,10 @@
 - `formatTypeLabel` залежить від `t()` — тобто це React-тільки helper (через useTranslation). Для pure contexts можна передавати `t` як параметр
 
 ### DoD фази 4
-- [ ] `fieldType.*` namespace у uk.json та en.json
-- [ ] `dataTypeEditor.*` ключі у обох locales
-- [ ] `formatTypeLabel` використовується у FieldProperties, AttributeTable, DataTypeEditorDialog
-- [ ] Primitive type labels локалізовані у дереві діалогу
+- [Х] `fieldType.*` namespace у uk.json та en.json
+- [Х] `dataTypeEditor.*` ключі у обох locales
+- [Х] `formatTypeLabel` використовується у FieldProperties, AttributeTable, DataTypeEditorDialog
+- [Х] Primitive type labels локалізовані у дереві діалогу
 
 ---
 
@@ -415,7 +415,7 @@
 
 #### Unit тести core
 
-- [ ] `attributeSchema` — stale params rejected:
+- [Х] `attributeSchema` — stale params rejected:
   - `{ type: 'Boolean', length: 50 }` → issue
   - `{ type: 'String', precision: 10 }` → issue
   - `{ type: 'String', length: 50 }` → pass
@@ -423,11 +423,11 @@
 
 #### Unit тести buildTypeEditorTree
 
-- [ ] Всі примітивні типи присутні (9 шт: UUID..Binary)
-- [ ] Reference kinds = тільки referenceable (Catalog, Document, Enumeration)
-- [ ] Об'єкти беруться з model — якщо в model 2 catalogs, в дереві 2 ref targets під CatalogRef
-- [ ] Пошук фільтрує примітиви і ref targets по name
-- [ ] Refactor: sidebar tree не зламаний — buildTreeData повертає ті ж результати
+- [Х] Всі примітивні типи присутні (9 шт: UUID..Binary)
+- [Х] Reference kinds = тільки referenceable (Catalog, Document, Enumeration)
+- [Х] Обʼєкти беруться з model — якщо в model 2 catalogs, в дереві 2 ref targets під CatalogRef
+- [Х] Пошук фільтрує примітиви і ref targets по name
+- [Х] Refactor: sidebar tree не зламаний — buildTreeData повертає ті ж результати
 
 #### Компонентні тести DataTypeEditorDialog
 
@@ -436,24 +436,24 @@
 - [ ] Compound mode: мультиселект references → draft = `{ type: "Ref", allowedTypes: MetadataRef[] }`
 - [ ] Compound mode: примітивні типи disabled
 - [ ] Compound mode: kind-group відображає checked / indeterminate state коректно
-- [ ] Save → onSave викликається з правильним patch (включаючи undefined для cleanup)
-- [ ] Cancel → onSave не викликається
+- [Х] Save → onSave викликається з правильним patch (включаючи undefined для cleanup)
+- [Х] Cancel → onSave не викликається
 - [ ] Зміна типу очищує непотрібні параметри (centralized cleanup)
-- [ ] isDirty правильно обчислюється
+- [Х] isDirty правильно обчислюється
 - [ ] Переключення compound → single зберігає перший target
 - [ ] Keyboard navigation / activate flow працює без mouse interaction
 - [ ] Search + group toggle використовує повний набір targets kind, а не тільки відфільтровані вузли
 
 #### Фінальна перевірка
 
-- [ ] `pnpm lint && pnpm typecheck && pnpm test` — все зелене
+- [Х] `pnpm lint && pnpm typecheck && pnpm test` — все зелене
 
 ### DoD фази 5
-- [ ] Core тести stale params
-- [ ] Tree builder тести
-- [ ] Dialog тести
-- [ ] Sidebar regression test
-- [ ] Lint + typecheck + tests — green
+- [Х] Core тести stale params
+- [Х] Tree builder тести
+- [~] Dialog тести
+- [Х] Sidebar regression test
+- [Х] Lint + typecheck + tests — green
 
 ---
 

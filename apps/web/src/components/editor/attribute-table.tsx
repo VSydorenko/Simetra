@@ -264,6 +264,7 @@ export function AttributeTable({
     [t, i18n.language]
   )
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- відомий false positive для TanStack Table
   const table = useReactTable({
     data: attributes,
     columns,
