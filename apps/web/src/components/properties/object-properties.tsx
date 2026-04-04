@@ -162,6 +162,7 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
   const updateObject = useMetadataStore((s) => s.updateObject)
   const renameObject = useMetadataStore((s) => s.renameObject)
   const { updateTabObjectRef } = useUiStore()
+  const selectedField = useUiStore((s) => s.selectedField)
 
   // Помилки валідації: два окремих примітивних селектори + useMemo
   // (уникаємо infinite loop через нові посилання на масив у single selector)
@@ -350,6 +351,7 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
             objectName={objectRef.name}
             object={object}
             onUpdateObject={handleUpdate}
+            tabularSectionName={selectedField?.tabularSectionName}
           />
           <AdditionalIndexesDialog
             open={indexesDialogOpen}

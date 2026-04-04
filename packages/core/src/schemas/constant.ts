@@ -3,6 +3,15 @@ import { localizedStringSchema } from "./localized-string"
 import { fieldTypeSchema } from "./field-type"
 import { isSqlReservedWord } from "./sql-reserved-words"
 
+/**
+ * BRD §5.7 — Constants cannot use Ref as valueType because they lack
+ * ref/allowedTypes fields to specify a target. If Ref-constants are
+ * needed in the future, add ref field first (Phase 2).
+ */
+export const constantValueTypeSchema = fieldTypeSchema.exclude(["Ref"])
+
+export type ConstantValueType = z.infer<typeof constantValueTypeSchema>
+
 /** BRD §5.7 — Constant */
 export const constantSchema = z.object({
   $schema: z.string().optional(),
@@ -14,7 +23,7 @@ export const constantSchema = z.object({
       message: "Name is a SQL reserved word",
     }),
   displayName: localizedStringSchema.optional(),
-  valueType: fieldTypeSchema,
+  valueType: constantValueTypeSchema,
   defaultValue: z.unknown().optional(),
 })
 

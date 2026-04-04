@@ -208,7 +208,12 @@
     "noStandardAttributes": "This object type has no standard attributes",
     "additionalIndexesDescription": "Manage indexes for object fields. Standard attributes are indexed automatically",
     "fieldGroup": "Group",
-    "noIndexableFields": "No fields available for indexing"
+    "noIndexableFields": "No fields available for indexing",
+    "whereUsedTitle": "Where used: {{name}}",
+    "whereUsedEmpty": "No references found",
+    "whereUsedObject": "Object",
+    "whereUsedField": "Field",
+    "whereUsedRefKind": "Reference type"
   },
   "tabs": {
     "close": "Close",

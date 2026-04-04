@@ -20,7 +20,7 @@ import {
   getTabularSectionStandardAttributes,
   isSqlReservedWord,
 } from "../schemas"
-import { serializeMetadataObject } from "../serialization"
+import { serializeMetadataObject, enrichSchemaUrl, enrichProjectSchemaUrl, buildConstantsSchemaUrl } from "../serialization"
 
 describe("localizedStringSchema", () => {
   it("accepts uk only", () => {
@@ -886,5 +886,106 @@ describe("canonical serialization", () => {
     const reparsed = catalogSchema.parse(JSON.parse(first))
     const second = serializeMetadataObject(reparsed)
     expect(first).toBe(second)
+  })
+})
+
+// ============================================================
+// constantSchema — valueType restriction
+// ============================================================
+
+describe("constantSchema — valueType restriction", () => {
+  it("rejects Ref as valueType", () => {
+    const result = constantSchema.safeParse({
+      kind: "Constant",
+      name: "BadConst",
+      valueType: "Ref",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("accepts String as valueType", () => {
+    const result = constantSchema.safeParse({
+      kind: "Constant",
+      name: "GoodConst",
+      valueType: "String",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts all non-Ref types", () => {
+    const validTypes = [
+      "UUID",
+      "String",
+      "Text",
+      "Integer",
+      "Numeric",
+      "Boolean",
+      "Date",
+      "DateTime",
+      "Binary",
+    ]
+    for (const t of validTypes) {
+      const result = constantSchema.safeParse({
+        kind: "Constant",
+        name: "TestConst",
+        valueType: t,
+      })
+      expect(result.success).toBe(true)
+    }
+  })
+})
+
+// ============================================================
+// $schema enrichment
+// ============================================================
+
+describe("$schema enrichment", () => {
+  it("enrichSchemaUrl adds correct URL for Catalog", () => {
+    const obj = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Test",
+      codeLength: 9,
+      codeType: "String",
+      descriptionLength: 100,
+      hierarchyType: "None",
+      attributes: [],
+      tabularSections: [],
+    })
+    const enriched = enrichSchemaUrl(obj, "1.0")
+    expect(enriched.$schema).toBe(
+      "https://simetra.dev/schemas/v1.0/catalog.schema.json",
+    )
+  })
+
+  it("enrichProjectSchemaUrl adds correct URL", () => {
+    const project = projectSchema.parse({ name: "Test" })
+    const enriched = enrichProjectSchemaUrl(project, "1.0")
+    expect(enriched.$schema).toBe(
+      "https://simetra.dev/schemas/v1.0/project.schema.json",
+    )
+  })
+
+  it("buildConstantsSchemaUrl returns correct URL", () => {
+    expect(buildConstantsSchemaUrl("1.0")).toBe(
+      "https://simetra.dev/schemas/v1.0/constants.schema.json",
+    )
+  })
+
+  it("enrichSchemaUrl overwrites existing $schema", () => {
+    const obj = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Test",
+      codeLength: 9,
+      codeType: "String",
+      descriptionLength: 100,
+      hierarchyType: "None",
+      attributes: [],
+      tabularSections: [],
+    })
+    const first = enrichSchemaUrl(obj, "1.0")
+    const second = enrichSchemaUrl(first, "2.0")
+    expect(second.$schema).toBe(
+      "https://simetra.dev/schemas/v2.0/catalog.schema.json",
+    )
   })
 })

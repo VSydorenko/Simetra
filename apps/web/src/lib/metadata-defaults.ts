@@ -7,18 +7,8 @@ import {
   accumulationRegisterSchema,
   constantSchema,
   customTableSchema,
+  KIND_TO_KEY,
 } from "@simetra/core"
-
-// Маппінг MetadataKind → ключ у ProjectModel
-const KIND_TO_KEY: Record<MetadataKind, keyof Omit<ProjectModel, "project">> = {
-  Catalog: "catalogs",
-  Document: "documents",
-  Enumeration: "enumerations",
-  InformationRegister: "informationRegisters",
-  AccumulationRegister: "accumulationRegisters",
-  Constant: "constants",
-  CustomTable: "customTables",
-}
 
 // Маппінг MetadataKind → Zod-схема
 const SCHEMA_MAP: Record<MetadataKind, { parse: (input: unknown) => unknown }> =

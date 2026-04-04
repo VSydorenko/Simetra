@@ -1,5 +1,5 @@
 {
-  "$schema": "https://simetra.dev/schemas/v1/information-register.json",
+  "$schema": "https://simetra.dev/schemas/v1/information-register.schema.json",
   "kind": "InformationRegister",
   "name": "ExchangeRates",
   "displayName": {

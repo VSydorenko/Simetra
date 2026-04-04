@@ -1,5 +1,54 @@
 import type { MetadataObject } from "./schemas/project-model"
 import type { Project } from "./schemas/project"
+import type { MetadataKind } from "./schemas/metadata-kind"
+
+// MetadataKind → kebab-case slug for $schema URL
+const KIND_SLUG: Record<MetadataKind, string> = {
+  Catalog: "catalog",
+  Document: "document",
+  Enumeration: "enumeration",
+  InformationRegister: "information-register",
+  AccumulationRegister: "accumulation-register",
+  Constant: "constant",
+  CustomTable: "custom-table",
+}
+
+/**
+ * Build $schema URL for a metadata object.
+ * Convention: https://simetra.dev/schemas/v{schemaVersion}/{kind-kebab}.schema.json
+ */
+function buildSchemaUrl(slug: string, schemaVersion: string): string {
+  return `https://simetra.dev/schemas/v${schemaVersion}/${slug}.schema.json`
+}
+
+/**
+ * Enrich a metadata object with the canonical $schema URL.
+ * Always overwrites $schema to prevent stale URLs after version bumps.
+ */
+export function enrichSchemaUrl<T extends MetadataObject>(
+  obj: T,
+  schemaVersion: string,
+): T {
+  const slug = KIND_SLUG[obj.kind]
+  return { ...obj, $schema: buildSchemaUrl(slug, schemaVersion) }
+}
+
+/**
+ * Enrich a Project with the canonical $schema URL.
+ */
+export function enrichProjectSchemaUrl(
+  project: Project,
+  schemaVersion: string,
+): Project {
+  return { ...project, $schema: buildSchemaUrl("project", schemaVersion) }
+}
+
+/**
+ * Build $schema URL for the constants collection file.
+ */
+export function buildConstantsSchemaUrl(schemaVersion: string): string {
+  return buildSchemaUrl("constants", schemaVersion)
+}
 
 // Порядок ключів для проєкту
 const PROJECT_KEY_ORDER = [

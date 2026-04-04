@@ -1,5 +1,5 @@
 {
-  "$schema": "https://simetra.dev/schemas/v1/catalog.json",
+  "$schema": "https://simetra.dev/schemas/v1/catalog.schema.json",
   "kind": "Catalog",
   "name": "Products",
   "displayName": {

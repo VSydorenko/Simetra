@@ -1,5 +1,5 @@
 {
-  "$schema": "https://simetra.dev/schemas/v1/accumulation-register.json",
+  "$schema": "https://simetra.dev/schemas/v1/accumulation-register.schema.json",
   "kind": "AccumulationRegister",
   "name": "InventoryBalance",
   "displayName": {

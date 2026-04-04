@@ -1,5 +1,5 @@
 {
-  "$schema": "https://simetra.dev/schemas/v1/enumeration.json",
+  "$schema": "https://simetra.dev/schemas/v1/enumeration.schema.json",
   "kind": "Enumeration",
   "name": "OrderStatus",
   "displayName": {

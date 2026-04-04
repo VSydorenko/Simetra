@@ -17,10 +17,11 @@ import { Button } from "@workspace/ui/components/button"
 import type { MetadataKind } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useUiStore, refToTabId } from "@/stores/ui-store"
-import { findReferences, type Reference } from "@/lib/find-references"
-import { DeleteDialogContext, type TreeNodeData } from "./tree/tree-types"
+import { findReferences, formatReference, type Reference } from "@/lib/find-references"
+import { DeleteDialogContext, WhereUsedDialogContext, type TreeNodeData } from "./tree/tree-types"
 import { buildTreeData } from "./tree/tree-builder"
 import { TreeNode } from "./tree/tree-nodes"
+import { WhereUsedDialog } from "@/components/editor/where-used-dialog"
 
 // --- Головний компонент ---
 
@@ -56,6 +57,26 @@ export function TreePanel() {
   }, [deleteTarget])
 
   const deleteDialogCtx = useMemo(() => ({ requestDelete }), [requestDelete])
+
+  // --- Where Used dialog state ---
+  const [whereUsedTarget, setWhereUsedTarget] = useState<{
+    name: string
+    refs: Reference[]
+  } | null>(null)
+
+  const requestWhereUsed = useCallback(
+    (kind: MetadataKind, name: string) => {
+      const mdl = useMetadataStore.getState().model
+      const refs = findReferences(mdl, kind, name)
+      setWhereUsedTarget({ name, refs })
+    },
+    [],
+  )
+
+  const whereUsedDialogCtx = useMemo(
+    () => ({ requestWhereUsed }),
+    [requestWhereUsed],
+  )
 
   // --- Store state ---
   const model = useMetadataStore((s) => s.model)
@@ -272,6 +293,7 @@ export function TreePanel() {
 
   return (
     <DeleteDialogContext.Provider value={deleteDialogCtx}>
+    <WhereUsedDialogContext.Provider value={whereUsedDialogCtx}>
       <div
         className="flex h-full flex-col"
         onFocus={() => useUiStore.getState().setFocusedPanel("tree")}
@@ -370,7 +392,18 @@ export function TreePanel() {
           references={deleteRefs}
           onConfirm={confirmDelete}
         />
+
+        {/* Діалог «Де використовується» */}
+        <WhereUsedDialog
+          open={whereUsedTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setWhereUsedTarget(null)
+          }}
+          objectName={whereUsedTarget?.name ?? ""}
+          references={whereUsedTarget?.refs ?? []}
+        />
       </div>
+    </WhereUsedDialogContext.Provider>
     </DeleteDialogContext.Provider>
   )
 }
@@ -412,7 +445,7 @@ function DeleteConfirmDialog({
                   {ref.from.kind}/{ref.from.name}
                 </span>
                 <span className="ml-1 text-muted-foreground/70">
-                  ({ref.via})
+                  ({formatReference(ref)})
                 </span>
               </li>
             ))}

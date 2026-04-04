@@ -501,3 +501,74 @@ describe("closeAllForObject", () => {
     expect(useUiStore.getState().activeTabId).toBe("Catalog/C")
   })
 })
+
+// --- Window manager invariants ---
+
+describe("Window manager invariants", () => {
+  it("after attachWindow: activeWindowId !== attached window", () => {
+    const { openTab } = useUiStore.getState()
+    openTab(catalogRef("Test1"))
+    openTab(catalogRef("Test2"))
+    const tabId = useUiStore.getState().openTabs[0].id
+    useUiStore.getState().detachTab(tabId)
+    const windowId = useUiStore.getState().floatingWindows[0]?.id
+    expect(windowId).toBeDefined()
+    useUiStore.getState().attachWindow(windowId!)
+    expect(useUiStore.getState().activeWindowId).not.toBe(windowId)
+  })
+
+  it("after closing last window: activeWindowId === null", () => {
+    const { openTab } = useUiStore.getState()
+    openTab(catalogRef("Test1"))
+    const tabId = useUiStore.getState().openTabs[0].id
+    useUiStore.getState().detachTab(tabId)
+    const windowId = useUiStore.getState().floatingWindows[0]?.id
+    expect(windowId).toBeDefined()
+    useUiStore.getState().closeWindow(windowId!)
+    expect(useUiStore.getState().activeWindowId).toBeNull()
+  })
+
+  it("after minimizeWindow active: activeWindowId changes or null", () => {
+    const { openTab } = useUiStore.getState()
+    openTab(catalogRef("Test1"))
+    const tabId = useUiStore.getState().openTabs[0].id
+    useUiStore.getState().detachTab(tabId)
+    const windowId = useUiStore.getState().floatingWindows[0]?.id
+    expect(windowId).toBeDefined()
+    useUiStore.getState().minimizeWindow(windowId!)
+    const { activeWindowId } = useUiStore.getState()
+    expect(activeWindowId === null || activeWindowId !== windowId).toBe(true)
+  })
+
+  it("after detachTab: activeWindowId === new floating window id", () => {
+    const { openTab } = useUiStore.getState()
+    openTab(catalogRef("Test1"))
+    const tabId = useUiStore.getState().openTabs[0].id
+    useUiStore.getState().detachTab(tabId)
+    const newWindow = useUiStore.getState().floatingWindows[0]
+    expect(newWindow).toBeDefined()
+    expect(useUiStore.getState().activeWindowId).toBe(newWindow?.id)
+  })
+
+  it("invariant: activeWindowId is always null or existing non-minimized window", () => {
+    const { openTab } = useUiStore.getState()
+    openTab(catalogRef("Test1"))
+    openTab(catalogRef("Test2"))
+
+    // Detach two tabs
+    const tabs = useUiStore.getState().openTabs
+    useUiStore.getState().detachTab(tabs[0].id)
+    useUiStore.getState().detachTab(tabs[1].id)
+
+    // Minimize first
+    const windows = useUiStore.getState().floatingWindows
+    useUiStore.getState().minimizeWindow(windows[0].id)
+
+    const { activeWindowId, floatingWindows } = useUiStore.getState()
+    if (activeWindowId !== null) {
+      const win = floatingWindows.find((w) => w.id === activeWindowId)
+      expect(win).toBeDefined()
+      expect(win?.isMinimized).toBe(false)
+    }
+  })
+})
