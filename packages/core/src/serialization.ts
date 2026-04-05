@@ -174,7 +174,12 @@ const ATTRIBUTE_KEY_ORDER = [
   "allowedTypes",
 ]
 
-const TABULAR_SECTION_KEY_ORDER = ["name", "displayName", "attributes"]
+const TABULAR_SECTION_KEY_ORDER = [
+  "name",
+  "displayName",
+  "standardAttributeOverrides",
+  "attributes",
+]
 const METADATA_REF_KEY_ORDER = ["kind", "name"]
 const LOCALIZED_STRING_KEY_ORDER = ["uk", "en"]
 const ENUM_VALUE_KEY_ORDER = ["name", "displayName", "order"]

@@ -66,9 +66,10 @@ state slices чи storage flows з тематичних документів. Н
   формами та правою панеллю. Це розмивало ownership властивостей об'єкта і
   поля.
 - Рішення: контекстна права панель є основною поверхнею для редагування
-  властивостей об'єкта, поля й налаштувань проєкту. Центральні редактори при
-  цьому зберігають структурні inline-операції там, де вони природні для списку
-  або таблиці, наприклад для складу атрибутів чи значень enum.
+  властивостей поля, табличної частини, об'єкта й налаштувань проєкту.
+  Центральні редактори при цьому зберігають структурні inline-операції там,
+  де вони природні для списку або таблиці, наприклад для складу атрибутів чи
+  значень enum.
 - Наслідки: нові detail forms не повинні дублювати праву панель у центрі.
   Inline editing у центральних редакторах допустимий, якщо він описує
   структуру списку, а не створює другу незалежну surface для тих самих
@@ -190,6 +191,54 @@ state slices чи storage flows з тематичних документів. Н
   [../../apps/web/src/hooks/use-is-dirty.ts](../../apps/web/src/hooks/use-is-dirty.ts),
   [./state-management.md](./state-management.md)
 
+## ADR-011: Catalog predefined моделюється через predefined_name
+
+- Статус: прийнято
+- Контекст: для predefined items у каталозі важливий стабільний semantic key,
+  а не окремий boolean-прапорець присутності. Додаткове поле `predefined`
+  дублювало б сам факт заповненого predefined-контексту.
+- Рішення: standard attribute helper для `Catalog` додає `predefined_name`.
+  Окремий boolean `predefined` не є частиною current model.
+- Наслідки: predefined semantics задаються значенням `predefined_name` і
+  списком `predefinedItems`, без паралельного прапорця з тим самим змістом.
+- Джерела:
+  [../../packages/core/src/schemas/standard-attributes.ts](../../packages/core/src/schemas/standard-attributes.ts),
+  [../../packages/core/src/schemas/catalog.ts](../../packages/core/src/schemas/catalog.ts),
+  [./metadata-model.md](./metadata-model.md)
+
+## ADR-012: Enumeration не має standard attributes
+
+- Статус: прийнято
+- Контекст: перелічення мають власну модель значень, у якій порядок already
+  представлений через `values[].order`. Додавати окремі standard attributes для
+  цього не потрібно.
+- Рішення: helper-layer повертає порожній набір standard attributes для
+  `Enumeration`.
+- Наслідки: порядок і presentation enum values лишаються в моделі значень, а
+  не мігрують у derived standard attributes.
+- Джерела:
+  [../../packages/core/src/schemas/standard-attributes.ts](../../packages/core/src/schemas/standard-attributes.ts),
+  [../../packages/core/src/schemas/enumeration.ts](../../packages/core/src/schemas/enumeration.ts),
+  [./metadata-model.md](./metadata-model.md)
+
+## ADR-013: Standard attributes мають readonly structure і editable description override
+
+- Статус: прийнято
+- Контекст: standard attributes є derived layer з core helper-ів, тому їхня
+  структура не повинна редагуватися як звичайні persisted поля. Водночас
+  користувачу потрібен контроль над локалізованим описом цих реквізитів.
+- Рішення: структура standard attributes лишається readonly, а
+  `standardAttributeOverrides` дозволяє override тільки description metadata.
+  Те саме правило поширюється і на tabular sections через
+  `tabularSection.standardAttributeOverrides`.
+- Наслідки: UI не пропонує structural editing standard attributes, але може
+  відкривати редактор описів для object-level і tabular-section contexts.
+- Джерела:
+  [../../packages/core/src/schemas/standard-attributes.ts](../../packages/core/src/schemas/standard-attributes.ts),
+  [../../packages/core/src/schemas/tabular-section.ts](../../packages/core/src/schemas/tabular-section.ts),
+  [./metadata-model.md](./metadata-model.md),
+  [./ui-components.md](./ui-components.md)
+
 ## Загальні патерни
 
 - Commit-on-blur: локальний input draft фіксується в store при blur або явному
@@ -198,7 +247,8 @@ state slices чи storage flows з тематичних документів. Н
   з canonical model/store, а не підтримують паралельні long-lived копії тих
   самих сутностей.
 - Derived standard attributes: стандартні реквізити виводяться з виду об'єкта
-  та його налаштувань, а не редагуються як звичайні persisted custom поля.
+  та його налаштувань, мають readonly structure і допускають лише editable
+  description override, а не редагуються як звичайні persisted custom поля.
 - Store preload testing: інтеграційні тести shell/store починаються з явного
   preload потрібного store state або model snapshot, щоб перевіряти поведінку,
   а не побічні ефекти ініціалізації.

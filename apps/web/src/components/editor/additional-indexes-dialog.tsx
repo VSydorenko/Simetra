@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react"
+import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
 import {
   Dialog,
@@ -26,6 +27,7 @@ import { useMetadataStore } from "@/stores/metadata-store"
 import { useFieldUpdate, type FieldRole } from "@/hooks/use-field-update"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { extractStandardAttributeSettings } from "@/lib/extract-settings"
+import { formatTypeLabel } from "@/lib/format-type-label"
 
 interface AdditionalIndexesDialogProps {
   open: boolean
@@ -36,7 +38,7 @@ interface AdditionalIndexesDialogProps {
 
 interface IndexableField {
   name: string
-  type: string
+  typeLabel: string
   indexed: boolean
   /** Стандартний реквізит — лише для відображення, не редагується */
   isStandard: boolean
@@ -50,7 +52,7 @@ interface IndexableField {
 function collectIndexableFields(
   kind: MetadataKind,
   object: MetadataObject,
-  t: (key: string) => string
+  t: TFunction
 ): IndexableField[] {
   const fields: IndexableField[] = []
 
@@ -60,7 +62,7 @@ function collectIndexableFields(
   for (const attr of standardAttrs) {
     fields.push({
       name: attr.name,
-      type: attr.type,
+      typeLabel: formatTypeLabel(attr, t),
       indexed: attr.indexed,
       isStandard: true,
       role: "attributes",
@@ -73,7 +75,7 @@ function collectIndexableFields(
     for (const attr of object.attributes as Attribute[]) {
       fields.push({
         name: attr.name,
-        type: attr.type,
+        typeLabel: formatTypeLabel(attr, t),
         indexed: attr.indexed ?? false,
         isStandard: false,
         role: "attributes",
@@ -87,7 +89,7 @@ function collectIndexableFields(
     for (const attr of object.dimensions as Attribute[]) {
       fields.push({
         name: attr.name,
-        type: attr.type,
+        typeLabel: formatTypeLabel(attr, t),
         indexed: attr.indexed ?? false,
         isStandard: false,
         role: "dimensions",
@@ -101,7 +103,7 @@ function collectIndexableFields(
     for (const attr of object.resources as Attribute[]) {
       fields.push({
         name: attr.name,
-        type: attr.type,
+        typeLabel: formatTypeLabel(attr, t),
         indexed: attr.indexed ?? false,
         isStandard: false,
         role: "resources",
@@ -190,7 +192,7 @@ function AdditionalIndexesDialogBody({
   kind: MetadataKind
   objectName: string
   onCancel: () => void
-  t: (key: string) => string
+  t: TFunction
 }) {
   const model = useMetadataStore((s) => s.model)
   const dispatchFieldUpdate = useFieldUpdate()
@@ -327,7 +329,7 @@ function IndexableFieldRow({
       </TableCell>
       <TableCell className="px-2 py-1">
         <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-          {field.type}
+          {field.typeLabel}
         </Badge>
       </TableCell>
       <TableCell className="px-2 py-1">

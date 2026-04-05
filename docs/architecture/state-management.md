@@ -25,7 +25,7 @@ Simetra свідомо не зводить увесь runtime у один store.
 ### Планований стан
 
 - Узагальнений object-scoped `viewState` поки не реалізований.
-- Поточна система зберігає тільки частину view-контексту: `selectedField`, `selectedObject` і `activeSection` для tab/window.
+- Поточна система зберігає тільки частину view-контексту: `selectedField`, `selectedTabularSection`, `selectedObject` і `activeSection` для tab/window.
 - Обмеження detach/attach для глибшого view state зафіксоване як Phase 1 known limitation у [../phase1-known-limitations.md](../phase1-known-limitations.md).
 
 ## Metadata Store
@@ -103,12 +103,14 @@ Store організований навколо груп доменних опе
 
 `ui-store` тримає runtime-стан, який потрібен для навігації та presentation orchestration, але не є частиною доменної моделі:
 
-- selection: `selectedObject`, `selectedField`
+- selection: `selectedObject`, `selectedTabularSection`, `selectedField`
 - navigation: `openTabs`, `activeTabId`
 - window management: `floatingWindows`, `activeWindowId`, `nextWindowZIndex`
 - editor context: `activeSection` у кожній вкладці та кожному floating window
 - tree/navigation state: `expandedTreeNodes`, `searchQuery`
 - layout state: `panelLayout`, `propertiesPanelOpen`, `focusedPanel`, `commandPaletteOpen`
+
+Selection model у `ui-store` трирівнева: `selectedField` є найспецифічнішим контекстом, `selectedTabularSection` описує контекст табличної частини, а `selectedObject` є object-level anchor для поточного вибору. Цей стан є volatile: він не входить до `ProjectModel`, не персиститься між сесіями і може скидатися під час закриття вкладок/вікон, видалення об'єкта або reconcile з актуальною моделлю.
 
 ### Window-management модель
 
@@ -141,6 +143,7 @@ Store організований навколо груп доменних опе
 - `floatingWindows`
 - `activeWindowId`
 - `selectedObject`
+- `selectedTabularSection`
 - `selectedField`
 - `searchQuery`
 - `commandPaletteOpen`
@@ -154,6 +157,7 @@ Store організований навколо груп доменних опе
 Поточний стан:
 
 - є selection state
+- selection state вже трирівневий: `selectedField -> selectedTabularSection -> selectedObject`
 - є per-tab/per-window `activeSection`
 - є tabs/windows/layout state
 

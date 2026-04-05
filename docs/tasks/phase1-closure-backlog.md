@@ -250,9 +250,9 @@ Phase 1 "Web UI Prototype" виконана на ~85%. Основний конф
   - Вплив: (A) закриває дефект, (B) додає нову функціональність
   - Рекомендація: **(A) виключити Ref** для Phase 1. Якщо потрібні Ref-константи — Phase 2
 
-- [x] ~~clearSession() — має чистити drafts?~~ → **RESOLVED**: `newProject()` вже викликає обидва. Окремість API — by design
-- [x] ~~activeEditorTab стан~~ → **RESOLVED**: store мігровано в v3, `activeSection` per-tab/per-window
-- [x] ~~Delete confirmation з references~~ → **RESOLVED**: вже реалізовано в `tree-panel.tsx`
+- [Х] ~~clearSession() — має чистити drafts?~~ → **RESOLVED**: `newProject()` вже викликає обидва. Окремість API — by design
+- [Х] ~~activeEditorTab стан~~ → **RESOLVED**: store мігровано в v3, `activeSection` per-tab/per-window
+- [Х] ~~Delete confirmation з references~~ → **RESOLVED**: вже реалізовано в `tree-panel.tsx`
 
 ### Відповіді з дослідження (для контексту)
 

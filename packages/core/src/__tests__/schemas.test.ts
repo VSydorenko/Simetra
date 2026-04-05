@@ -96,7 +96,38 @@ describe("catalogSchema", () => {
     })
     expect(result.attributes).toHaveLength(1)
     expect(result.tabularSections).toHaveLength(1)
+    expect(result.tabularSections[0].standardAttributeOverrides).toEqual({})
     expect(result.tabularSections[0].attributes[0].required).toBe(true)
+  })
+
+  it("parses tabular section standard attribute overrides", () => {
+    const result = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Products",
+      tabularSections: [
+        {
+          name: "barcodes",
+          standardAttributeOverrides: {
+            line_number: {
+              description: {
+                uk: "Номер рядка у табличній частині",
+                en: "Tabular section line number",
+              },
+            },
+          },
+          attributes: [],
+        },
+      ],
+    })
+
+    expect(result.tabularSections[0].standardAttributeOverrides).toEqual({
+      line_number: {
+        description: {
+          uk: "Номер рядка у табличній частині",
+          en: "Tabular section line number",
+        },
+      },
+    })
   })
 
   it("rejects invalid name", () => {
@@ -886,6 +917,38 @@ describe("canonical serialization", () => {
     const reparsed = catalogSchema.parse(JSON.parse(first))
     const second = serializeMetadataObject(reparsed)
     expect(first).toBe(second)
+  })
+
+  it("serializes tabular section overrides before attributes", () => {
+    const serialized = serializeMetadataObject(
+      catalogSchema.parse({
+        kind: "Catalog",
+        name: "Products",
+        tabularSections: [
+          {
+            name: "barcodes",
+            displayName: { uk: "Штрихкоди" },
+            standardAttributeOverrides: {
+              line_number: {
+                description: {
+                  uk: "Номер рядка у табличній частині",
+                },
+              },
+            },
+            attributes: [{ name: "barcode", type: "String", length: 200 }],
+          },
+        ],
+      })
+    )
+
+    const tabularSectionsChunk = serialized.split('"tabularSections": [\n')[1]
+
+    expect(tabularSectionsChunk.indexOf('"displayName"')).toBeLessThan(
+      tabularSectionsChunk.indexOf('"standardAttributeOverrides"')
+    )
+    expect(
+      tabularSectionsChunk.indexOf('"standardAttributeOverrides"')
+    ).toBeLessThan(tabularSectionsChunk.indexOf('"attributes"'))
   })
 })
 

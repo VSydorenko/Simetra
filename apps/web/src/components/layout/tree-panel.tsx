@@ -85,6 +85,7 @@ export function TreePanel() {
   const searchQuery = useUiStore((s) => s.searchQuery)
   const setSearchQuery = useUiStore((s) => s.setSearchQuery)
   const selectedObject = useUiStore((s) => s.selectedObject)
+  const selectedTabularSection = useUiStore((s) => s.selectedTabularSection)
   const expandedTreeNodes = useUiStore((s) => s.expandedTreeNodes)
   const toggleTreeNode = useUiStore((s) => s.toggleTreeNode)
 
@@ -121,16 +122,24 @@ export function TreePanel() {
   )
 
   useEffect(() => {
+    if (selectedTabularSection) {
+      const sectionId = `${selectedTabularSection.objectRef.kind}/${selectedTabularSection.objectRef.name}/tabularSections/${selectedTabularSection.tabularSectionName}`
+      if (selectedNodeId !== sectionId) {
+        setSelectedNodeId(sectionId)
+      }
+      return
+    }
+
     if (selectedObject) {
       const objId = `${selectedObject.kind}/${selectedObject.name}`
-      if (!selectedNodeId || !selectedNodeId.startsWith(objId)) {
+      if (selectedNodeId !== objId) {
         setSelectedNodeId(objId)
       }
     } else {
       setSelectedNodeId(undefined)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedObject])
+  }, [selectedObject, selectedTabularSection])
 
   // --- Обробники ---
   const handleSelect = useCallback((nodes: NodeApi<TreeNodeData>[]) => {
@@ -161,9 +170,15 @@ export function TreePanel() {
     }
 
     if (d.nodeType === "tabularSection" && d.objectName) {
-      useUiStore.getState().selectObject({
+      const objectRef = {
         kind: d.kind!,
         name: d.objectName,
+      }
+      const uiStore = useUiStore.getState()
+      uiStore.selectObject(objectRef)
+      uiStore.selectTabularSection({
+        objectRef,
+        tabularSectionName: d.name,
       })
       return
     }
@@ -193,7 +208,13 @@ export function TreePanel() {
     }
 
     if (d.nodeType === "tabularSection" && d.objectName) {
-      useUiStore.getState().openTab({ kind: d.kind!, name: d.objectName })
+      const objectRef = { kind: d.kind!, name: d.objectName }
+      const uiStore = useUiStore.getState()
+      uiStore.openTab(objectRef)
+      uiStore.selectTabularSection({
+        objectRef,
+        tabularSectionName: d.name,
+      })
       return
     }
 

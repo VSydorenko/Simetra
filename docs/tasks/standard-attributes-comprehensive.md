@@ -12,83 +12,84 @@
 
 > **Суть:** при виділенні табличної частини у дереві — права панель має показувати властивості ТЧ (не об'єкта і не поля). Зараз клік по ТЧ показує ObjectProperties, бо selection model не має окремого рівня для ТЧ.
 
-- [ ] Додати `TabularSectionSelection` interface у `apps/web/src/stores/ui-store.ts`: `{ objectRef: MetadataRef; tabularSectionName: string }`
-- [ ] Додати state `selectedTabularSection: TabularSectionSelection | null` у `UiState`
-- [ ] Додати action `selectTabularSection(sel: TabularSectionSelection | null)` у `UiActions`
-- [ ] Правила зв'язку між selection levels:
+- [Х] Додати `TabularSectionSelection` interface у `apps/web/src/stores/ui-store.ts`: `{ objectRef: MetadataRef; tabularSectionName: string }`
+- [Х] Додати state `selectedTabularSection: TabularSectionSelection | null` у `UiState`
+- [Х] Додати action `selectTabularSection(sel: TabularSectionSelection | null)` у `UiActions`
+- [Х] Правила зв'язку між selection levels:
   - `selectTabularSection` — очищає `selectedField`
   - `selectObject` — очищає і `selectedField`, і `selectedTabularSection`
   - `selectField` — очищає `selectedTabularSection`
-- [ ] У `apps/web/src/components/layout/tree-panel.tsx`: при кліку на nodeType `"tabularSection"` — крім `selectObject` також викликати `selectTabularSection({ objectRef: { kind, name: objectName }, tabularSectionName: nodeName })`
-- [ ] Створити компонент `TabularSectionProperties` у `apps/web/src/components/properties/`:
+- [Х] У `apps/web/src/components/layout/tree-panel.tsx`: при кліку на nodeType `"tabularSection"` — крім `selectObject` також викликати `selectTabularSection({ objectRef: { kind, name: objectName }, tabularSectionName: nodeName })`
+- [Х] Створити компонент `TabularSectionProperties` у `apps/web/src/components/properties/`:
   - Показує **технічне ім'я** ТЧ (editable через inline input з commit-on-blur, rename through store action)
-  - Показує **displayName** ТЧ (editable, LocalizedString — аналог "Синоніму" в 1С)
+  - Показує **displayName** ТЧ (editable, LocalizedString — аналог "Синоніму" в 1С; спосіб commit має відповідати фактичній реалізації компонента, не обов'язково commit-on-blur)
   - Кнопка "Стандартні реквізити" → відкриває `StandardAttributesDialog` з `tabularSectionName`
   - UX аналогічний `ObjectProperties`: використовує shadcn/ui `Accordion` для груп
-- [ ] При rename технічного імені ТЧ — синхронізувати `selectedTabularSection.tabularSectionName` у ui-store
-- [ ] У `apps/web/src/components/layout/properties-panel.tsx`: змінити пріоритет контексту:
+- [Х] При rename технічного імені ТЧ — синхронізувати `selectedTabularSection.tabularSectionName` у ui-store
+- [Х] У `apps/web/src/components/layout/properties-panel.tsx`: змінити пріоритет контексту:
   1. `selectedField` → `FieldProperties`
   2. **`selectedTabularSection` → `TabularSectionProperties`** (новий рівень)
   3. `activeObjectRef` (selectedObject → activeWindow → activeTab) → `ObjectProperties`
   4. Нічого → `ProjectSettings`
-- [ ] Переконатись що всі місця, які скидають selection (`selectObject`, `closeTab`, `closeAllForObject`, `removeObject`, тощо) — також скидають `selectedTabularSection: null`
+- [Х] Переконатись що всі місця, які скидають selection (`selectObject`, `closeTab`, `closeAllForObject`, `removeObject`, тощо) — також скидають `selectedTabularSection: null`
 
 ### Part 2: Кнопка "Стандартні реквізити" у header ТЧ
 
 > **Суть:** окрім правої панелі, кнопку Standard Attributes дублювати прямо в header кожної ТЧ у accordion редакторі — як швидкий доступ, аналогічно як об'єкт має кнопку на панелі ObjectProperties.
 
-- [ ] У `apps/web/src/components/editor/tabular-sections-editor.tsx`: у header кожного AccordionItem (поруч із кнопкою delete) додати icon button для Standard Attributes
-- [ ] Кнопка відкриває `StandardAttributesDialog` з відповідним `tabularSectionName`
-- [ ] Використовувати існуючий `StandardAttributesDialog` без змін (він вже підтримує `tabularSectionName` prop)
+- [Х] У `apps/web/src/components/editor/tabular-sections-editor.tsx`: у header кожного AccordionItem (поруч із кнопкою delete) додати icon button для Standard Attributes
+- [Х] Кнопка відкриває `StandardAttributesDialog` з відповідним `tabularSectionName`
+- [Х] Використовувати існуючий `StandardAttributesDialog` без змін (він вже підтримує `tabularSectionName` prop)
 
 ### Part 3: recorderTypes — bug fix у extract-settings.ts
 
 > **Суть:** `extractStandardAttributeSettings` в `apps/web/src/lib/extract-settings.ts` не прокидає `recorderTypes` для InformationRegister і AccumulationRegister. Через це `recorder_id` у StandardAttributesDialog і AdditionalIndexesDialog відображається без конкретного ref target.
 
-- [ ] У case `"InformationRegister"`: додати `recorderTypes` до результату (поруч із `periodicity`, `writeMode`)
-- [ ] У case `"AccumulationRegister"`: додати `recorderTypes` до результату (поруч із `registerType`)
-- [ ] Перевірити що `StandardAttributesDialog` коректно відображає ref target для `recorder_id` після виправлення
-- [ ] Перевірити що `AdditionalIndexesDialog` також коректно використовує оновлені settings (smoke check)
+- [Х] У case `"InformationRegister"`: додати `recorderTypes` до результату (поруч із `periodicity`, `writeMode`)
+- [Х] У case `"AccumulationRegister"`: додати `recorderTypes` до результату (поруч із `registerType`)
+- [Х] Перевірити що `StandardAttributesDialog` коректно відображає ref target для `recorder_id` після виправлення
+- [Х] Перевірити що `AdditionalIndexesDialog` також коректно використовує оновлені settings (smoke check)
 
 ### Part 4: Очищення dead path для StdAttrs ТЧ
 
 > **Суть:** зараз є мертвий код, який передає `tabularSectionName` через `ObjectProperties` → `StandardAttributesDialog`. Цей шлях ніколи не спрацьовує (PropertiesPanel рендерить FieldProperties коли selectedField існує). Після Part 1 tabularSectionName передаватиметься через `TabularSectionProperties` — dead path у ObjectProperties треба видалити.
 
-- [ ] У `apps/web/src/components/properties/object-properties.tsx`: видалити передачу `selectedField?.tabularSectionName` у `StandardAttributesDialog`. Prop `tabularSectionName` більше не потрібен у цьому контексті
-- [ ] Переконатись що `StandardAttributesDialog` зберігає prop `tabularSectionName` (він використовуватиметься з `TabularSectionProperties`)
+- [Х] У `apps/web/src/components/properties/object-properties.tsx`: видалити передачу `selectedField?.tabularSectionName` у `StandardAttributesDialog`. Prop `tabularSectionName` більше не потрібен у цьому контексті
+- [Х] Переконатись що `StandardAttributesDialog` зберігає prop `tabularSectionName` (він використовуватиметься з `TabularSectionProperties`)
 
 ### Part 5: Тести
 
-- [ ] Unit тест для `selectTabularSection` action: перевірити що очищає `selectedField`, встановлює `selectedTabularSection`
-- [ ] Unit тест: `selectObject` очищає `selectedTabularSection`
-- [ ] Unit тест: `selectField` очищає `selectedTabularSection`
-- [ ] Regression тест: `closeTab` / `closeAllForObject` / `removeObject` — очищають `selectedTabularSection` якщо вона належала закритому об'єкту
-- [ ] Unit тест: `extractStandardAttributeSettings` для InformationRegister з `recorderTypes` — повертає їх у результаті
-- [ ] Unit тест: `extractStandardAttributeSettings` для AccumulationRegister з `recorderTypes` — повертає їх у результаті
-- [ ] Component тест: `TabularSectionProperties` рендерить технічне ім'я, displayName і кнопку Standard Attributes
-- [ ] Component тест: `PropertiesPanel` рендерить `TabularSectionProperties` коли `selectedTabularSection` !== null
+- [Х] Unit тест для `selectTabularSection` action: перевірити що очищає `selectedField`, встановлює `selectedTabularSection`
+- [Х] Unit тест: `selectObject` очищає `selectedTabularSection`
+- [Х] Unit тест: `selectField` очищає `selectedTabularSection`
+- [Х] Regression тест: `closeTab` / `closeAllForObject` / `removeObject` — очищають `selectedTabularSection` якщо вона належала закритому об'єкту
+- [Х] Unit тест: `extractStandardAttributeSettings` для InformationRegister з `recorderTypes` — повертає їх у результаті
+- [Х] Unit тест: `extractStandardAttributeSettings` для AccumulationRegister з `recorderTypes` — повертає їх у результаті
+- [Х] Component тест: `TabularSectionProperties` рендерить технічне ім'я, displayName і кнопку Standard Attributes
+- [Х] Component тест: `PropertiesPanel` рендерить `TabularSectionProperties` коли `selectedTabularSection` !== null
 
 ### Part 6: Актуалізація архітектурної документації
 
-> **Суть:** зараз паралельно розробляється архітектурна документація (див. `docs/tasks/architecture-documentation.md`). Після виконання Parts 1–5 у написаних документах можуть бути некоректні описи selection model, properties panel пріоритетів, або standard attributes. Цю фазу виконувати **після** Parts 1–5.
+> **Суть:** архітектурна документація має бути узгоджена з фактичним станом коду після виконання Parts 1–5. Після цих змін у наявних документах можуть лишитися некоректні описи selection model, properties panel пріоритетів або standard attributes. Цю фазу виконувати **після** Parts 1–5.
 
-- [ ] Перевірити `docs/architecture/OVERVIEW.md` — чи є згадки properties panel або selection model, актуалізувати
-- [ ] Перевірити `docs/architecture/state-management.md` (якщо вже створений) — додати `selectedTabularSection` до опису ui-store
-- [ ] Перевірити `docs/architecture/ui-components.md` (якщо вже створений) — додати `TabularSectionProperties` у опис properties panel hierarchy та оновити пріоритет контексту
-- [ ] Перевірити `docs/architecture/metadata-model.md` (якщо вже створений) — актуалізувати секцію standard attributes: зафіксувати що ТЧ мають id + line_number, і що description override дозволений
-- [ ] Перевірити `docs/architecture/patterns-and-decisions.md` (якщо вже створений) — додати ADR або зафіксувати рішення:
+- [Х] Перевірити `docs/architecture/OVERVIEW.md` — чи є згадки properties panel або selection model, актуалізувати
+- [Х] Перевірити `docs/architecture/state-management.md` — додати `selectedTabularSection` до опису ui-store
+- [Х] Перевірити `docs/architecture/ui-components.md` — додати `TabularSectionProperties` у опис properties panel hierarchy та оновити пріоритет контексту
+- [Х] Перевірити `docs/architecture/metadata-model.md` — актуалізувати секцію standard attributes: зафіксувати що ТЧ мають id + line_number, і що description override дозволений
+- [Х] Перевірити `docs/architecture/patterns-and-decisions.md` — додати ADR або зафіксувати рішення:
   - Catalog `predefined` змодельовано через `predefined_name` (boolean не потрібен)
   - Enumeration не має standard attrs (order вже в values model)
   - Standard attrs мають readonly structure (набір/типи фіксовані), але editable description override (аналог Синоніму в 1С)
-- [ ] Оновити `docs/phase1-known-limitations.md` — додати або актуалізувати запис про стандартні реквізити ТЧ (закрито)
-- [ ] Якщо в документації зустрічається формулювання "Стандартні реквізити для кожного типу (readonly)" — уточнити: "readonly structure, editable description"
+- [Х] Оновити `docs/phase1-known-limitations.md` — додати або актуалізувати запис про стандартні реквізити ТЧ (закрито)
+- [Х] Якщо в документації зустрічається формулювання "Стандартні реквізити для кожного типу (readonly)" — уточнити: "readonly structure, editable description"
 
 ## Clarify (питання перед імплементацією)
 
-- [ ] **tabularSectionSchema — додавати standardAttributeOverrides?**: зараз у `tabularSectionSchema` немає `standardAttributeOverrides`. Для повної симетрії з object-level варто додати, але це зміна core schema + serialization + save path у діалозі + тести.
+- [Х] **tabularSectionSchema — додавати standardAttributeOverrides?**: зараз у `tabularSectionSchema` немає `standardAttributeOverrides`. Для повної симетрії з object-level варто додати, але це зміна core schema + serialization + save path у діалозі + тести.
   - Чому це важливо: визначає чи ТЧ standard attrs readonly чи editable description
   - Варіанти: (A) не додавати — ТЧ standard attrs строго readonly у діалозі; (B) додати — дозволити description override як для object-level (потребує: додати поле у `tabularSectionSchema`, оновити serializer, оновити `StandardAttributesDialog` read/write path для ТЧ overrides, додати тести)
   - Вплив на рішення: core schema + serialization + UI
+  - Рішення: (B) додати — дозволити description override як для object-level
 
 ## Рекомендовані патерни
 
@@ -107,7 +108,7 @@ Selection у ui-store має три взаємовиключних рівні:
 PropertiesPanel визначає що рендерити за найбільш специфічним non-null selection. Порядок перевірки: field → tabularSection → object → project. Не використовувати nested if/else — використовувати ранній return.
 
 ### Inline rename у Properties Panel
-Для редагування displayName і технічного імені ТЧ використовувати той самий UX pattern що і для object properties в ObjectProperties: inline text field з commit-on-blur. Rename технічного імені потребує окремої store action (аналог `renameObject` для ТЧ), яка також оновлює `selectedTabularSection.tabularSectionName` у ui-store для синхронізації.
+Для технічного імені ТЧ використовувати той самий UX pattern що і для object properties в ObjectProperties: inline text field з commit-on-blur. `displayName` також редагується inline, але спосіб commit має відповідати фактичній реалізації компонента. Rename технічного імені потребує окремої store action (аналог `renameObject` для ТЧ), яка також оновлює `selectedTabularSection.tabularSectionName` у ui-store для синхронізації.
 
 ## Антипатерни (уникати)
 
@@ -149,7 +150,7 @@ flowchart TD
 
 ### TabularSectionProperties data flow
 
-Компонент отримує `objectRef` і `tabularSectionName` від selection. Знаходить ТЧ у metadata-store через `getObject(objectRef)` → шукає у масиві `tabularSections`. Рендерить: технічне ім'я (editable, rename через store action), displayName (editable), кнопка Standard Attributes (відкриває існуючий `StandardAttributesDialog` з prop `tabularSectionName`).
+Компонент отримує `objectRef` і `tabularSectionName` від selection. Далі знаходить об'єкт у поточній `model` за `kind/name` і шукає потрібну ТЧ у масиві `tabularSections`. Рендерить: технічне ім'я (editable, rename через store action), displayName (editable), кнопка Standard Attributes (відкриває існуючий `StandardAttributesDialog` з prop `tabularSectionName`).
 
 ### recorderTypes fix
 
@@ -185,23 +186,23 @@ Adapter `extractStandardAttributeSettings` для InformationRegister і Accumul
   - §5.1–5.10 — специфікація типів метаданих та їхніх стандартних реквізитів
   - §5.8 — TabularSection: стандартні реквізити `id`, `line_number`
 - `docs/architecture/OVERVIEW.md` — загальна архітектура
-- `docs/tasks/architecture-documentation.md` — паралельна задача з документацією (Part 6 координується з нею)
+- `docs/architecture/` — актуальний набір архітектурних документів, з якими має узгоджуватися Part 6
 - `docs/research/Завдання 1 Повна карта метаданих 1СПідприємство 8.3.md` — повне порівняння стандартних реквізитів 1С (§5.2, Додаток A)
 - `.github/instructions/ui-architecture.instructions.md` — правила побудови UI, properties panel контекст
 - `.github/instructions/metadata-model.instructions.md` — правила роботи зі схемами, стандартні реквізити readonly
 
 ## Definition of Done
 
-- [ ] Клік по ТЧ у дереві → права панель показує `TabularSectionProperties` з технічним ім'ям, displayName і кнопкою Standard Attributes
-- [ ] Кнопка Standard Attributes відкриває діалог із `id` і `line_number`
-- [ ] Перейменування технічного імені ТЧ працює через праву панель, selection синхронізується
-- [ ] Встановлення/зміна displayName ТЧ працює через праву панель
-- [ ] У header ТЧ в accordion є icon button для швидкого доступу до Standard Attributes
-- [ ] `recorder_id` у StandardAttributesDialog та AdditionalIndexesDialog для регістрів показує конкретні ref targets (Document names)
-- [ ] Dead path `selectedField?.tabularSectionName` у ObjectProperties видалений
-- [ ] Selection model: selectObject очищає TS і field, selectTS очищає field, selectField очищає TS
-- [ ] Architeture docs актуалізовані (якщо вже створені) з новою selection model і properties hierarchy
-- [ ] Всі нові та оновлені тести проходять
-- [ ] `pnpm lint` — без помилок
-- [ ] `pnpm typecheck` — без помилок
-- [ ] `pnpm test` — всі тести проходять
+- [x] Клік по ТЧ у дереві → права панель показує `TabularSectionProperties` з технічним ім'ям, displayName і кнопкою Standard Attributes
+- [x] Кнопка Standard Attributes відкриває діалог із `id` і `line_number`
+- [x] Перейменування технічного імені ТЧ працює через праву панель, selection синхронізується
+- [x] Встановлення/зміна displayName ТЧ працює через праву панель
+- [x] У header ТЧ в accordion є icon button для швидкого доступу до Standard Attributes
+- [x] `recorder_id` у StandardAttributesDialog та AdditionalIndexesDialog для регістрів показує конкретні ref targets (Document names)
+- [x] Dead path `selectedField?.tabularSectionName` у ObjectProperties видалений
+- [x] Selection model: selectObject очищає TS і field, selectTS очищає field, selectField очищає TS
+- [x] Architeture docs актуалізовані (якщо вже створені) з новою selection model і properties hierarchy
+- [x] Всі нові та оновлені тести проходять
+- [x] `pnpm lint` — без помилок
+- [x] `pnpm typecheck` — без помилок
+- [x] `pnpm test` — всі тести проходять

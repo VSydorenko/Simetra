@@ -1,21 +1,28 @@
 import type { TFunction } from 'i18next'
-import type { Attribute } from '@simetra/core'
+
+interface TypeLabelSource {
+  type: string
+  ref?: { name: string }
+  allowedTypes?: Array<{ name: string }>
+}
 
 /**
  * User-facing локалізований формат типу атрибута.
  * formatRefDisplay залишається для технічного display (tree field nodes).
  */
-export function formatTypeLabel(attr: Attribute, t: TFunction): string {
-  if (attr.type !== 'Ref') {
-    return t(`fieldType.${attr.type}`)
+export function formatTypeLabel(source: TypeLabelSource, t: TFunction): string {
+  if (source.type !== 'Ref') {
+    return t(`fieldType.${source.type}`)
   }
 
-  if (attr.ref) {
-    return `${t('fieldType.Ref')}: ${attr.ref.name}`
+  if (source.ref) {
+    return `${t('fieldType.Ref')}: ${source.ref.name}`
   }
 
-  if (attr.allowedTypes && attr.allowedTypes.length > 0) {
-    return `${t('fieldType.Ref')} (${attr.allowedTypes.length})`
+  if (source.allowedTypes && source.allowedTypes.length > 0) {
+    const targetNames = source.allowedTypes.map(({ name }) => name).join(', ')
+
+    return `${t('fieldType.Ref')}: ${targetNames}`
   }
 
   return t('fieldType.Ref')

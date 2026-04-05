@@ -41,6 +41,7 @@ beforeEach(() => {
     activeWindowId: null,
     nextWindowZIndex: 30,
     selectedObject: null,
+    selectedTabularSection: null,
     selectedField: null,
     expandedTreeNodes: [
       "Catalog",

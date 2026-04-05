@@ -23,6 +23,7 @@ import {
 import { useSessionRestore } from "@/hooks/use-session-restore"
 import { useModelValidation } from "@/hooks/use-model-validation"
 import { startDraftSync } from "@/storage/draft-sync"
+import { startUiSelectionSync } from "@/stores/ui-selection-sync"
 
 export function AppShell() {
   const toggleCommandPalette = useUiStore((s) => s.toggleCommandPalette)
@@ -55,6 +56,10 @@ export function AppShell() {
   // Запуск auto-draft sync
   useEffect(() => {
     return startDraftSync()
+  }, [])
+
+  useEffect(() => {
+    return startUiSelectionSync()
   }, [])
 
   useEffect(() => {

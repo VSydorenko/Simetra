@@ -101,6 +101,20 @@ export interface MetadataActions {
     name: string,
     sectionName: string
   ) => void
+  /** Оновити табличну частину */
+  updateTabularSection: (
+    kind: MetadataKind,
+    name: string,
+    sectionName: string,
+    updates: Partial<TabularSection>
+  ) => ValidationError[] | null
+  /** Перейменувати табличну частину */
+  renameTabularSection: (
+    kind: MetadataKind,
+    name: string,
+    oldSectionName: string,
+    newSectionName: string
+  ) => ValidationError[] | null
   /** Додати атрибут до табличної частини */
   addTabularSectionAttribute: (
     kind: MetadataKind,
@@ -778,6 +792,145 @@ export const useMetadataStore = create<MetadataStore>()(
             bumpObjectVersion(state, kind, name)
           }
         })
+      },
+
+      updateTabularSection: (kind, name, sectionName, updates) => {
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((candidate) => candidate.name === name)
+        const errorKey = `${kind}/${name}`
+
+        if (!obj || !("tabularSections" in obj)) {
+          const notFoundErrors = [
+            {
+              path: "",
+              message: "Object not found or has no tabular sections",
+            },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = notFoundErrors
+          })
+          return notFoundErrors
+        }
+
+        const sections = (obj as { tabularSections: TabularSection[] })
+          .tabularSections
+        const sectionIndex = sections.findIndex((s) => s.name === sectionName)
+        if (sectionIndex === -1) {
+          const notFoundErrors = [
+            { path: "", message: `Tabular section "${sectionName}" not found` },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = notFoundErrors
+          })
+          return notFoundErrors
+        }
+
+        const updatedSections = sections.map((section, index) =>
+          index === sectionIndex ? { ...section, ...updates } : section
+        )
+        const merged = { ...obj, tabularSections: updatedSections }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) {
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const objIdx = findObjectIndex(arr, name)
+          if (objIdx !== -1) {
+            const target = arr[objIdx] as unknown as {
+              tabularSections: TabularSection[]
+            }
+            Object.assign(target.tabularSections[sectionIndex], updates)
+            delete state.validationErrors[errorKey]
+            state.version++
+            bumpObjectVersion(state, kind, name)
+          }
+        })
+
+        return null
+      },
+
+      renameTabularSection: (kind, name, oldSectionName, newSectionName) => {
+        if (oldSectionName === newSectionName) {
+          return null
+        }
+
+        const key = KIND_TO_KEY[kind]
+        const objects = get().model[key] as MetadataObject[]
+        const obj = objects.find((candidate) => candidate.name === name)
+        const errorKey = `${kind}/${name}`
+
+        if (!obj || !("tabularSections" in obj)) {
+          const notFoundErrors = [
+            {
+              path: "",
+              message: "Object not found or has no tabular sections",
+            },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = notFoundErrors
+          })
+          return notFoundErrors
+        }
+
+        const sections = (obj as { tabularSections: TabularSection[] })
+          .tabularSections
+        const sectionIndex = sections.findIndex((s) => s.name === oldSectionName)
+        if (sectionIndex === -1) {
+          const notFoundErrors = [
+            { path: "", message: `Tabular section "${oldSectionName}" not found` },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = notFoundErrors
+          })
+          return notFoundErrors
+        }
+
+        if (sections.some((s) => s.name === newSectionName)) {
+          const dupErrors = [
+            {
+              path: "name",
+              message: `Tabular section "${newSectionName}" already exists`,
+            },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = dupErrors
+          })
+          return dupErrors
+        }
+
+        const updatedSections = sections.map((section, index) =>
+          index === sectionIndex ? { ...section, name: newSectionName } : section
+        )
+        const merged = { ...obj, tabularSections: updatedSections }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) {
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+
+        set((state) => {
+          const arr = state.model[key] as MetadataObject[]
+          const objIdx = findObjectIndex(arr, name)
+          if (objIdx !== -1) {
+            const target = arr[objIdx] as unknown as {
+              tabularSections: TabularSection[]
+            }
+            target.tabularSections[sectionIndex].name = newSectionName
+            delete state.validationErrors[errorKey]
+            state.version++
+            bumpObjectVersion(state, kind, name)
+          }
+        })
+
+        return null
       },
 
       addTabularSectionAttribute: (kind, name, sectionName, attribute) => {

@@ -39,7 +39,7 @@ describe('formatTypeLabel', () => {
     expect(formatTypeLabel(attr, mockT)).toBe('fieldType.Ref: Products')
   })
 
-  it('polymorphic ref → "fieldType.Ref (count)"', () => {
+  it('polymorphic ref → "fieldType.Ref: target1, target2"', () => {
     const attr = makeAttr({
       type: 'Ref',
       allowedTypes: [
@@ -47,7 +47,9 @@ describe('formatTypeLabel', () => {
         { kind: 'Document', name: 'SalesOrder' },
       ],
     })
-    expect(formatTypeLabel(attr, mockT)).toBe('fieldType.Ref (2)')
+    expect(formatTypeLabel(attr, mockT)).toBe(
+      'fieldType.Ref: Products, SalesOrder',
+    )
   })
 
   it('незавершений Ref → "fieldType.Ref"', () => {

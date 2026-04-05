@@ -12,6 +12,13 @@ export const tabularSectionSchema = z.object({
       message: "Name is a SQL reserved word",
     }),
   displayName: localizedStringSchema.optional(),
+  standardAttributeOverrides: z
+    .record(
+      z.string(),
+      z.object({ description: localizedStringSchema.optional() })
+    )
+    .optional()
+    .default({}),
   attributes: z
     .array(attributeSchema)
     .refine(

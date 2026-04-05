@@ -21,6 +21,7 @@ beforeEach(() => {
     activeWindowId: null,
     nextWindowZIndex: 30,
     selectedObject: null,
+    selectedTabularSection: null,
     selectedField: null,
     expandedTreeNodes: [
       "Catalog",
@@ -81,6 +82,71 @@ describe("persisted UI preferences", () => {
     expect(persisted.state).not.toHaveProperty("activeEditorTab")
     expect(persisted.state).not.toHaveProperty("openTabs")
     expect(persisted.state).not.toHaveProperty("selectedObject")
+  })
+})
+
+describe("selection actions", () => {
+  it("selectTabularSection очищає selectedField і встановлює selectedTabularSection", () => {
+    useUiStore.setState({
+      selectedField: {
+        objectRef: catalogRef("Products"),
+        fieldName: "quantity",
+        tabularSectionName: "items",
+      },
+    })
+
+    useUiStore.getState().selectTabularSection({
+      objectRef: catalogRef("Products"),
+      tabularSectionName: "items",
+    })
+
+    const state = useUiStore.getState()
+    expect(state.selectedField).toBeNull()
+    expect(state.selectedTabularSection).toEqual({
+      objectRef: catalogRef("Products"),
+      tabularSectionName: "items",
+    })
+  })
+
+  it("selectObject очищає selectedTabularSection", () => {
+    useUiStore.setState({
+      selectedTabularSection: {
+        objectRef: catalogRef("Products"),
+        tabularSectionName: "items",
+      },
+      selectedField: {
+        objectRef: catalogRef("Products"),
+        fieldName: "quantity",
+      },
+    })
+
+    useUiStore.getState().selectObject(documentRef("SalesOrder"))
+
+    const state = useUiStore.getState()
+    expect(state.selectedObject).toEqual(documentRef("SalesOrder"))
+    expect(state.selectedTabularSection).toBeNull()
+    expect(state.selectedField).toBeNull()
+  })
+
+  it("selectField очищає selectedTabularSection", () => {
+    useUiStore.setState({
+      selectedTabularSection: {
+        objectRef: catalogRef("Products"),
+        tabularSectionName: "items",
+      },
+    })
+
+    useUiStore.getState().selectField({
+      objectRef: catalogRef("Products"),
+      fieldName: "quantity",
+    })
+
+    const state = useUiStore.getState()
+    expect(state.selectedTabularSection).toBeNull()
+    expect(state.selectedField).toEqual({
+      objectRef: catalogRef("Products"),
+      fieldName: "quantity",
+    })
   })
 })
 
@@ -159,6 +225,25 @@ describe("closeTab", () => {
     useUiStore.getState().closeTab("nonexistent")
 
     expect(useUiStore.getState().openTabs).toHaveLength(1)
+  })
+
+  it("скидає selectedTabularSection для закритого обʼєкта", () => {
+    useUiStore.getState().openTab(catalogRef("Products"))
+    useUiStore.getState().openTab(documentRef("SalesOrder"))
+    useUiStore.setState({
+      activeTabId: "Catalog/Products",
+      selectedObject: catalogRef("Products"),
+      selectedTabularSection: {
+        objectRef: catalogRef("Products"),
+        tabularSectionName: "items",
+      },
+    })
+
+    useUiStore.getState().closeTab("Catalog/Products")
+
+    const state = useUiStore.getState()
+    expect(state.selectedTabularSection).toBeNull()
+    expect(state.selectedObject).toEqual(documentRef("SalesOrder"))
   })
 })
 
@@ -499,6 +584,24 @@ describe("closeAllForObject", () => {
     useUiStore.getState().closeAllForObject(catalogRef("B"))
 
     expect(useUiStore.getState().activeTabId).toBe("Catalog/C")
+  })
+
+  it("скидає selectedTabularSection для обʼєкта, який закривається", () => {
+    useUiStore.getState().openTab(catalogRef("Products"))
+    useUiStore.getState().openTab(documentRef("SalesOrder"))
+    useUiStore.setState({
+      selectedObject: catalogRef("Products"),
+      selectedTabularSection: {
+        objectRef: catalogRef("Products"),
+        tabularSectionName: "items",
+      },
+    })
+
+    useUiStore.getState().closeAllForObject(catalogRef("Products"))
+
+    const state = useUiStore.getState()
+    expect(state.selectedTabularSection).toBeNull()
+    expect(state.selectedObject).toEqual(documentRef("SalesOrder"))
   })
 })
 

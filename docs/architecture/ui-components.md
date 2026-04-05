@@ -73,7 +73,7 @@ flowchart TD
 - `TopBar` — глобальні дії проєкту, а не редагування конкретного об'єкта.
 - `TreePanel` — навігація по метаданих і структурні дії над деревом.
 - `EditorPanel` — вкладки, floating windows, welcome/recovery стани й сам `ObjectEditor`.
-- `PropertiesPanel` — правий context-sensitive маршрут до властивостей поля, об'єкта або проєкту.
+- `PropertiesPanel` — правий context-sensitive маршрут до властивостей поля, табличної частини, об'єкта або проєкту.
 - `StatusBar` — зведений runtime-стан проєкту.
 - `CommandPalette` — глобальний overlay для команд і швидкої навігації.
 
@@ -204,6 +204,7 @@ Editor layer зведений навколо одного reusable редакт�
 
 - секція `main` показує readonly summary;
 - детальне редагування поля відбувається переважно через `FieldProperties`;
+- детальне редагування табличної частини відбувається через `TabularSectionProperties`;
 - налаштування об'єкта й частина auxiliary dialogs живуть у `ObjectProperties`.
 
 Отже `ObjectEditor` є редактором структури та навігації по секціях, але не є єдиною точкою редагування всіх деталей.
@@ -215,30 +216,28 @@ Editor layer зведений навколо одного reusable редакт�
 ```mermaid
 flowchart TD
   Field{selectedField?} -- так --> FieldProps[FieldProperties]
-  Field -- ні --> SelectedObject{selectedObject?}
-  SelectedObject -- так --> ObjectProps[ObjectProperties]
-  SelectedObject -- ні --> ActiveWindow{activeWindow?}
-  ActiveWindow -- так --> ObjectProps
-  ActiveWindow -- ні --> ActiveTab{activeTab?}
-  ActiveTab -- так --> ObjectProps
-  ActiveTab -- ні --> ProjectProps[ProjectSettings]
+  Field -- ні --> TabularSection{selectedTabularSection?}
+  TabularSection -- так --> TabularSectionProps[TabularSectionProperties]
+  TabularSection -- ні --> ActiveObjectRef{activeObjectRef?}
+  ActiveObjectRef -- так --> ObjectProps[ObjectProperties]
+  ActiveObjectRef -- ні --> ProjectProps[ProjectSettings]
 ```
 
 Пріоритет контексту зараз такий:
 
 1. `selectedField`
-2. `selectedObject`
-3. активне floating window
-4. активна вкладка
-5. `ProjectSettings`
+2. `selectedTabularSection`
+3. active object context: `selectedObject`, інакше active floating window, інакше active tab
+4. `ProjectSettings`
 
 ### Ролі дочірніх компонентів
 
 - [field-properties.tsx](../../apps/web/src/components/properties/field-properties.tsx) — детальне редагування атрибута, validation errors per field, відкриття `DataTypeEditorDialog`, маршрутизація field updates через `useFieldUpdate()`.
+- [tabular-section-properties.tsx](../../apps/web/src/components/properties/tabular-section-properties.tsx) — детальне редагування табличної частини, inline rename/displayName і запуск `StandardAttributesDialog` для `tabularSection.standardAttributeOverrides`.
 - [object-properties.tsx](../../apps/web/src/components/properties/object-properties.tsx) — rename/displayName/type settings об'єкта, об'єктні validation errors, запуск `StandardAttributesDialog` та `AdditionalIndexesDialog`.
 - [project-settings.tsx](../../apps/web/src/components/properties/project-settings.tsx) — fallback-контекст для налаштувань проєкту, database і generation параметрів.
 
-**Поточна реалізація:** логіка вибору контексту централізована і проста.
+**Поточна реалізація:** логіка вибору контексту централізована і окремо виділяє tabular section як самостійний рівень між field і object-level контекстом.
 
 **Частково / planned:** окремий object-scoped `viewState`, який би узгоджував ще більше локального контексту між tabs/windows, поки не є частиною цього маршрутизатора.
 
@@ -365,6 +364,7 @@ I18n bootstrapping відбувається в [apps/web/src/i18n/index.ts](../.
 - [tree-builder.test.ts](../../apps/web/src/__tests__/tree-builder.test.ts) перевіряє builder-и дерева для sidebar і Data Type Editor.
 - [ui-store.test.ts](../../apps/web/src/__tests__/ui-store.test.ts) покриває tabs/windows lifecycle, detach/attach, z-index, focus invariants і persisted UI subset.
 - [app-shell.test.tsx](../../apps/web/src/__tests__/app-shell.test.tsx) перевіряє базовий shell rendering.
+- [properties-panel.test.tsx](../../apps/web/src/__tests__/properties-panel.test.tsx) перевіряє routing правої панелі, включно з `TabularSectionProperties`.
 - [data-type-editor-dialog.test.tsx](../../apps/web/src/__tests__/data-type-editor-dialog.test.tsx) перевіряє поведінку важливого редакторського діалогу.
 
 ### Що варто тестувати на архітектурному рівні

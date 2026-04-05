@@ -23,17 +23,26 @@ export function extractStandardAttributeSettings(
       }
     }
     case "InformationRegister": {
-      const o = object as { periodicity?: string; writeMode?: string }
+      const o = object as {
+        periodicity?: string
+        writeMode?: string
+        recorderTypes?: StandardAttributeSettings["recorderTypes"]
+      }
       return {
         periodicity: o.periodicity,
         writeMode: o.writeMode,
+        recorderTypes: o.recorderTypes,
       }
     }
     case "AccumulationRegister": {
-      const o = object as { registerType?: string }
+      const o = object as {
+        registerType?: string
+        recorderTypes?: StandardAttributeSettings["recorderTypes"]
+      }
       return {
         registerType:
           o.registerType as StandardAttributeSettings["registerType"],
+        recorderTypes: o.recorderTypes,
       }
     }
     case "CustomTable": {

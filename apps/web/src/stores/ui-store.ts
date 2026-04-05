@@ -1,7 +1,14 @@
 import { create } from "zustand"
 import { createJSONStorage, persist } from "zustand/middleware"
-import type { MetadataKind, MetadataRef } from "@simetra/core"
+import type {
+  MetadataKind,
+  MetadataObject,
+  MetadataRef,
+  ProjectModel,
+  TabularSection,
+} from "@simetra/core"
 import type { Layout } from "react-resizable-panels"
+import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 
 // Контекст вибору — або обʼєкт, або поле всередині обʼєкта
 export interface FieldSelection {
@@ -10,6 +17,11 @@ export interface FieldSelection {
   fieldName: string
   // Для поля всередині табличної частини
   tabularSectionName?: string
+}
+
+export interface TabularSectionSelection {
+  objectRef: MetadataRef
+  tabularSectionName: string
 }
 
 export type PanelId = "tree" | "editor" | "properties"
@@ -81,9 +93,148 @@ function findNextActiveWindow(
   return candidates[0]?.id ?? null
 }
 
+function isSameRef(
+  left: MetadataRef | null | undefined,
+  right: MetadataRef | null | undefined
+): boolean {
+  return left?.kind === right?.kind && left?.name === right?.name
+}
+
+export function findMetadataObject(
+  model: ProjectModel,
+  ref: MetadataRef | null | undefined
+): MetadataObject | null {
+  if (!ref) {
+    return null
+  }
+
+  const key = KIND_TO_KEY[ref.kind]
+  const objects = model[key] as MetadataObject[]
+  return objects.find((candidate) => candidate.name === ref.name) ?? null
+}
+
+export function findTabularSection(
+  model: ProjectModel,
+  selection: TabularSectionSelection | null | undefined
+): TabularSection | null {
+  if (!selection) {
+    return null
+  }
+
+  const object = findMetadataObject(model, selection.objectRef)
+  if (!object || !("tabularSections" in object)) {
+    return null
+  }
+
+  return (
+    (object.tabularSections as TabularSection[]).find(
+      (candidate) => candidate.name === selection.tabularSectionName
+    ) ?? null
+  )
+}
+
+function areTabularSectionsEquivalentExceptName(
+  left: TabularSection,
+  right: TabularSection
+): boolean {
+  const leftRest = { ...left }
+  const rightRest = { ...right }
+  delete leftRest.name
+  delete rightRest.name
+  return JSON.stringify(leftRest) === JSON.stringify(rightRest)
+}
+
+function resolveRenamedTabularSectionName(
+  previousModel: ProjectModel | undefined,
+  nextModel: ProjectModel,
+  objectRef: MetadataRef,
+  previousSectionName: string
+): string | null {
+  if (!previousModel) {
+    return null
+  }
+
+  const previousObject = findMetadataObject(previousModel, objectRef)
+  const nextObject = findMetadataObject(nextModel, objectRef)
+  if (
+    !previousObject ||
+    !nextObject ||
+    !("tabularSections" in previousObject) ||
+    !("tabularSections" in nextObject)
+  ) {
+    return null
+  }
+
+  const previousSections = previousObject.tabularSections as TabularSection[]
+  const nextSections = nextObject.tabularSections as TabularSection[]
+  const previousIndex = previousSections.findIndex(
+    (section) => section.name === previousSectionName
+  )
+
+  if (previousIndex === -1 || previousSections.length !== nextSections.length) {
+    return null
+  }
+
+  const previousSection = previousSections[previousIndex]
+  const nextSection = nextSections[previousIndex]
+
+  if (!nextSection || nextSection.name === previousSectionName) {
+    return null
+  }
+
+  if (!areTabularSectionsEquivalentExceptName(previousSection, nextSection)) {
+    return null
+  }
+
+  return nextSection.name
+}
+
+function findTopLevelField(
+  model: ProjectModel,
+  objectRef: MetadataRef,
+  fieldName: string
+): { name: string } | null {
+  const object = findMetadataObject(model, objectRef)
+
+  if (!object) {
+    return null
+  }
+
+  if ("attributes" in object) {
+    const attribute = object.attributes.find(
+      (candidate) => candidate.name === fieldName
+    )
+    if (attribute) {
+      return attribute
+    }
+  }
+
+  if ("dimensions" in object) {
+    const dimension = object.dimensions.find(
+      (candidate) => candidate.name === fieldName
+    )
+    if (dimension) {
+      return dimension
+    }
+  }
+
+  if ("resources" in object) {
+    const resource = object.resources.find(
+      (candidate) => candidate.name === fieldName
+    )
+    if (resource) {
+      return resource
+    }
+  }
+
+  return null
+}
+
 export interface UiState {
   // Вибраний обʼєкт у дереві
   selectedObject: MetadataRef | null
+  // Вибрана таблична частина у межах обʼєкта
+  selectedTabularSection: TabularSectionSelection | null
   // Вибране поле в таблиці атрибутів
   selectedField: FieldSelection | null
   // Розгорнуті вузли дерева (kind як кореневий розділ)
@@ -111,7 +262,12 @@ export interface UiState {
 
 export interface UiActions {
   selectObject: (ref: MetadataRef | null) => void
+  selectTabularSection: (selection: TabularSectionSelection | null) => void
   selectField: (field: FieldSelection | null) => void
+  reconcileSelectionWithModel: (
+    model: ProjectModel,
+    previousModel?: ProjectModel
+  ) => void
   setExpandedTreeNodes: (nodes: string[]) => void
   toggleTreeNode: (nodeId: string) => void
   setSearchQuery: (query: string) => void
@@ -198,6 +354,7 @@ export const useUiStore = create<UiStore>()(
   persist(
     (set, get) => ({
       selectedObject: null,
+      selectedTabularSection: null,
       selectedField: null,
       expandedTreeNodes: DEFAULT_EXPANDED,
       searchQuery: "",
@@ -217,10 +374,143 @@ export const useUiStore = create<UiStore>()(
         set({
           selectedObject: ref,
           // Скинути вибір поля при зміні обʼєкта (але НЕ скидати activeSection)
+          selectedTabularSection: null,
           selectedField: null,
         }),
 
-      selectField: (field) => set({ selectedField: field }),
+      selectTabularSection: (selection) =>
+        set((state) => ({
+          selectedObject: selection?.objectRef ?? state.selectedObject,
+          selectedTabularSection: selection,
+          selectedField: null,
+        })),
+
+      selectField: (field) =>
+        set((state) => ({
+          selectedObject: field?.objectRef ?? state.selectedObject,
+          selectedTabularSection: null,
+          selectedField: field,
+        })),
+
+      reconcileSelectionWithModel: (model, previousModel) =>
+        set((state) => {
+          let selectedObject = state.selectedObject
+          let selectedTabularSection = state.selectedTabularSection
+          let selectedField = state.selectedField
+          let fallbackObjectRef: MetadataRef | null = null
+          let hasChanges = false
+
+          if (selectedTabularSection) {
+            const renamedSectionName =
+              findTabularSection(model, selectedTabularSection) === null
+                ? resolveRenamedTabularSectionName(
+                    previousModel,
+                    model,
+                    selectedTabularSection.objectRef,
+                    selectedTabularSection.tabularSectionName
+                  )
+                : null
+
+            if (renamedSectionName) {
+              selectedTabularSection = {
+                ...selectedTabularSection,
+                tabularSectionName: renamedSectionName,
+              }
+              hasChanges = true
+            } else if (!findTabularSection(model, selectedTabularSection)) {
+              fallbackObjectRef = selectedTabularSection.objectRef
+              selectedTabularSection = null
+              hasChanges = true
+            }
+          }
+
+          if (selectedField?.tabularSectionName) {
+            const previousField = selectedField
+            let resolvedSectionName = selectedField.tabularSectionName
+            let resolvedSection = findTabularSection(model, {
+              objectRef: selectedField.objectRef,
+              tabularSectionName: selectedField.tabularSectionName,
+            })
+
+            if (!resolvedSection) {
+              const renamedSectionName = resolveRenamedTabularSectionName(
+                previousModel,
+                model,
+                selectedField.objectRef,
+                selectedField.tabularSectionName
+              )
+
+              if (renamedSectionName) {
+                resolvedSectionName = renamedSectionName
+                resolvedSection = findTabularSection(model, {
+                  objectRef: selectedField.objectRef,
+                  tabularSectionName: renamedSectionName,
+                })
+              }
+            }
+
+            const fieldStillExists =
+              resolvedSection?.attributes.some(
+                (attribute) => attribute.name === previousField.fieldName
+              ) ?? false
+
+            if (resolvedSection && fieldStillExists) {
+              if (resolvedSectionName !== previousField.tabularSectionName) {
+                selectedField = {
+                  ...previousField,
+                  tabularSectionName: resolvedSectionName,
+                }
+                hasChanges = true
+              }
+            } else {
+              fallbackObjectRef = previousField.objectRef
+              selectedField = null
+              hasChanges = true
+            }
+          } else if (selectedField) {
+            const fieldStillExists = findTopLevelField(
+              model,
+              selectedField.objectRef,
+              selectedField.fieldName
+            )
+
+            if (!fieldStillExists) {
+              fallbackObjectRef = selectedField.objectRef
+              selectedField = null
+              hasChanges = true
+            }
+          }
+
+          const nextSelectedObject =
+            (selectedField && findMetadataObject(model, selectedField.objectRef)
+              ? selectedField.objectRef
+              : null) ??
+            (selectedTabularSection &&
+            findMetadataObject(model, selectedTabularSection.objectRef)
+              ? selectedTabularSection.objectRef
+              : null) ??
+            (selectedObject && findMetadataObject(model, selectedObject)
+              ? selectedObject
+              : null) ??
+            (fallbackObjectRef && findMetadataObject(model, fallbackObjectRef)
+              ? fallbackObjectRef
+              : null)
+
+          if (!isSameRef(selectedObject, nextSelectedObject)) {
+            selectedObject = nextSelectedObject
+            hasChanges = true
+          }
+
+          if (!hasChanges) {
+            return state
+          }
+
+          return {
+            selectedObject,
+            selectedTabularSection,
+            selectedField,
+          }
+        }),
 
       setExpandedTreeNodes: (nodes) => set({ expandedTreeNodes: nodes }),
 
@@ -287,6 +577,7 @@ export const useUiStore = create<UiStore>()(
             activeTabId: tabId,
             activeWindowId: null,
             selectedObject: ref,
+            selectedTabularSection: null,
             selectedField: null,
           })
           return
@@ -302,6 +593,7 @@ export const useUiStore = create<UiStore>()(
           activeTabId: tabId,
           activeWindowId: null,
           selectedObject: ref,
+          selectedTabularSection: null,
           selectedField: null,
         })
       },
@@ -333,6 +625,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: newTabs,
             activeTabId: newActiveTabId,
             selectedObject: activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -347,6 +640,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: kept,
             activeTabId: activeTab?.id ?? null,
             selectedObject: activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -359,6 +653,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: pinned,
             activeTabId: activeTab?.id ?? null,
             selectedObject: activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -377,6 +672,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: kept,
             activeTabId: newActiveTabId,
             selectedObject: activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -388,6 +684,7 @@ export const useUiStore = create<UiStore>()(
               activeTabId: null,
               activeWindowId: null,
               selectedObject: null,
+              selectedTabularSection: null,
               selectedField: null,
             }
           }
@@ -397,6 +694,7 @@ export const useUiStore = create<UiStore>()(
             activeTabId: tabId,
             activeWindowId: null,
             selectedObject: tab.objectRef,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -461,10 +759,24 @@ export const useUiStore = create<UiStore>()(
             floatingWindows: newWindows,
             activeWindowId: newActiveWindowId,
             selectedObject:
-              state.selectedObject?.kind === oldRef.kind &&
-              state.selectedObject?.name === oldRef.name
+              isSameRef(state.selectedObject, oldRef)
                 ? newRef
                 : state.selectedObject,
+            selectedTabularSection:
+              state.selectedTabularSection &&
+              isSameRef(state.selectedTabularSection.objectRef, oldRef)
+                ? {
+                    ...state.selectedTabularSection,
+                    objectRef: newRef,
+                  }
+                : state.selectedTabularSection,
+            selectedField:
+              state.selectedField && isSameRef(state.selectedField.objectRef, oldRef)
+                ? {
+                    ...state.selectedField,
+                    objectRef: newRef,
+                  }
+                : state.selectedField,
           }
         }),
 
@@ -519,6 +831,7 @@ export const useUiStore = create<UiStore>()(
             floatingWindows: [...state.floatingWindows, win],
             nextWindowZIndex: newZIndex + 1,
             selectedObject: win.objectRef,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -542,6 +855,7 @@ export const useUiStore = create<UiStore>()(
               activeTabId: tabId,
               activeWindowId: newActiveWindowId,
               selectedObject: win.objectRef,
+              selectedTabularSection: null,
               selectedField: null,
             }
           }
@@ -559,6 +873,7 @@ export const useUiStore = create<UiStore>()(
             floatingWindows: remainingWindows,
             activeWindowId: newActiveWindowId,
             selectedObject: win.objectRef,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -589,6 +904,7 @@ export const useUiStore = create<UiStore>()(
             activeWindowId: nextWindowId,
             selectedObject:
               nextWindow?.objectRef ?? activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -620,6 +936,7 @@ export const useUiStore = create<UiStore>()(
             activeWindowId: nextWindowId,
             selectedObject:
               nextWindow?.objectRef ?? activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -653,6 +970,7 @@ export const useUiStore = create<UiStore>()(
             nextWindowZIndex: newZIndex + 1,
             activeWindowId: windowId,
             selectedObject: win?.objectRef ?? state.selectedObject,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),
@@ -683,6 +1001,7 @@ export const useUiStore = create<UiStore>()(
             activeTabId: tabId,
             activeWindowId: null,
             selectedObject: ref,
+            selectedTabularSection: null,
             selectedField: null,
           })
           return
@@ -747,6 +1066,7 @@ export const useUiStore = create<UiStore>()(
             activeTabId: newActiveTabId,
             activeWindowId: newActiveWindowId,
             selectedObject: activeTab?.objectRef ?? null,
+            selectedTabularSection: null,
             selectedField: null,
           }
         }),

@@ -18,7 +18,7 @@ Simetra — open-source візуальний конфігуратор бізне
 
 - `src/components/layout` — shell застосунку: TopBar, 3-panel layout, StatusBar, panel composition.
 - `src/components/editor` — редактори об'єктів, вертикальна навігація секцій, діалоги, recovery banner, welcome screen.
-- `src/components/properties` — context-sensitive редактори властивостей об'єкта, поля та налаштувань проєкту.
+- `src/components/properties` — context-sensitive редактори властивостей поля, табличної частини, об'єкта та налаштувань проєкту.
 - `src/components/window-manager` — вкладки, floating windows, taskbar.
 - `src/stores` — `metadata-store`, `ui-store`, `project-store`.
 - `src/storage` — I/O абстракція, браузерне файлове сховище, IndexedDB session/draft persistence.
@@ -120,7 +120,7 @@ Simetra — open-source візуальний конфігуратор бізне
 - `TopBar` містить глобальні дії проєкту: створення, відкриття, збереження, import/export, undo/redo.
 - Ліва панель — дерево метаданих з пошуком і глибокою ієрархією `kind -> object -> structural group -> field/tabular section`.
 - Центральна панель — робоча область редактора: `TabBar`, контент активного об'єкта, `RecoveryBanner`, `FloatingWindowContainer`, `Taskbar`.
-- Права панель — context-sensitive properties panel.
+- Права панель — context-sensitive properties panel для поля, табличної частини, об'єкта або проєкту.
 - `StatusBar` показує стан проєкту, кількість об'єктів, помилки/попередження, відкриті робочі елементи та dirty state.
 
 Редагування об'єкта відбувається у `ObjectEditor`: ліворуч вертикальна навігація секцій, праворуч контент активної секції. Це замінює спрощену модель з однією таблицею в центрі.
@@ -130,7 +130,7 @@ Simetra — open-source візуальний конфігуратор бізне
 - вкладки — основний спосіб навігації між об'єктами;
 - floating windows — від'єднані редактори всередині центральної панелі з власним z-order і taskbar для мінімізованих вікон.
 
-Панель властивостей працює за пріоритетом контексту: вибране поле, потім явно вибраний об'єкт, потім активне floating window, потім активна вкладка, і лише після цього налаштування проєкту.
+Панель властивостей працює за пріоритетом контексту: вибране поле, потім вибрана таблична частина, потім активний object-level контекст (`selectedObject`, далі active floating window, далі active tab), і лише після цього налаштування проєкту.
 
 Ключові файли: [../../apps/web/src/components/layout/app-shell.tsx](../../apps/web/src/components/layout/app-shell.tsx), [../../apps/web/src/components/layout/editor-panel.tsx](../../apps/web/src/components/layout/editor-panel.tsx), [../../apps/web/src/components/layout/properties-panel.tsx](../../apps/web/src/components/layout/properties-panel.tsx), [../../apps/web/src/components/layout/tree-panel.tsx](../../apps/web/src/components/layout/tree-panel.tsx), [../../apps/web/src/components/layout/tree/tree-builder.ts](../../apps/web/src/components/layout/tree/tree-builder.ts), [../../apps/web/src/components/editor/object-editor.tsx](../../apps/web/src/components/editor/object-editor.tsx), [../../apps/web/src/components/editor/vertical-nav.tsx](../../apps/web/src/components/editor/vertical-nav.tsx), [../../apps/web/src/components/window-manager/tab-bar.tsx](../../apps/web/src/components/window-manager/tab-bar.tsx), [../../apps/web/src/components/window-manager/floating-window-container.tsx](../../apps/web/src/components/window-manager/floating-window-container.tsx), [../../apps/web/src/components/window-manager/taskbar.tsx](../../apps/web/src/components/window-manager/taskbar.tsx)
 
@@ -147,7 +147,7 @@ Simetra — open-source візуальний конфігуратор бізне
 
 ### ui-store
 
-- Тримає вибір у дереві, вибір поля, стан панелей, пошук, expanded nodes.
+- Тримає volatile selection і навігаційний контекст у UI: `selectedObject`, `selectedTabularSection`, `selectedField`, стан панелей, пошук, expanded nodes.
 - Керує `openTabs`, `activeTabId`, `floatingWindows`, `activeWindowId`, z-index і per-tab/per-window active section.
 - Персистить layout та UI preferences у браузерне storage через Zustand persist.
 

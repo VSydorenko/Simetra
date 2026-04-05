@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Accordion,
@@ -15,9 +15,15 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import {
+  Add01Icon,
+  Delete02Icon,
+  Settings02Icon,
+} from "@hugeicons/core-free-icons"
 import { AttributeTable } from "./attribute-table"
-import type { MetadataKind, TabularSection } from "@simetra/core"
+import { StandardAttributesDialog } from "./standard-attributes-dialog"
+import type { MetadataKind, MetadataObject, TabularSection } from "@simetra/core"
+import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { useMetadataStore } from "@/stores/metadata-store"
 
 interface TabularSectionsEditorProps {
@@ -32,9 +38,27 @@ export function TabularSectionsEditor({
   tabularSections,
 }: TabularSectionsEditorProps) {
   const { t } = useTranslation()
-  const { addTabularSection, removeTabularSection } = useMetadataStore()
+  const model = useMetadataStore((state) => state.model)
+  const addTabularSection = useMetadataStore((state) => state.addTabularSection)
+  const removeTabularSection = useMetadataStore((state) => state.removeTabularSection)
+  const updateObject = useMetadataStore((state) => state.updateObject)
   const [expandedSections, setExpandedSections] = useState<string[]>(
     tabularSections.map((s) => s.name)
+  )
+  const [standardAttributesSectionName, setStandardAttributesSectionName] =
+    useState<string | null>(null)
+
+  const object = useMemo(() => {
+    const key = KIND_TO_KEY[kind]
+    const objects = model[key] as MetadataObject[]
+    return objects.find((candidate) => candidate.name === objectName) ?? null
+  }, [kind, model, objectName])
+
+  const handleUpdateObject = useCallback(
+    (updates: Partial<MetadataObject>) => {
+      updateObject(kind, objectName, updates)
+    },
+    [kind, objectName, updateObject]
   )
 
   const handleAdd = useCallback(() => {
@@ -111,6 +135,29 @@ export function TabularSectionsEditor({
                       <Button
                         variant="ghost"
                         size="icon"
+                        className="size-6"
+                        aria-label={t("properties.standardAttributes")}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setStandardAttributesSectionName(section.name)
+                        }}
+                      >
+                        <HugeiconsIcon
+                          icon={Settings02Icon}
+                          strokeWidth={2}
+                          className="size-3.5"
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      {t("properties.standardAttributes")}
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         className="size-6 text-destructive hover:text-destructive"
                         aria-label={t("editor.deleteTabularSection")}
                         onClick={(e) => {
@@ -146,6 +193,22 @@ export function TabularSectionsEditor({
           </Accordion>
         )}
       </ScrollArea>
+
+      {object && standardAttributesSectionName && (
+        <StandardAttributesDialog
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) {
+              setStandardAttributesSectionName(null)
+            }
+          }}
+          kind={kind}
+          objectName={objectName}
+          object={object}
+          onUpdateObject={handleUpdateObject}
+          tabularSectionName={standardAttributesSectionName}
+        />
+      )}
     </div>
   )
 }

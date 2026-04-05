@@ -124,6 +124,8 @@ attributes не обходяться як окремі custom fields.
   `hierarchyType !== "None"`.
 - `Catalog`: `owner_id` з'являється тільки якщо `owners.length > 0`; для
   одного owner використовується `ref`, для кількох `allowedTypes`.
+- `Catalog`: predefined-контекст моделюється через `predefined_name`; окремий
+  boolean-прапорець `predefined` helper-layer не вводить.
 - `Document`: `id`, `number`, `date`, `posted`, `deletion_mark`,
   `created_at`, `updated_at`.
 - `InformationRegister`: `period` з'являється коли
@@ -136,12 +138,17 @@ attributes не обходяться як окремі custom fields.
   `registerType === "Balance"`.
 - `CustomTable`: `id` додається тільки якщо
   `autoAddPrimaryKey !== false`.
-- `Enumeration` і `Constant`: стандартних реквізитів немає.
-- Tabular sections мають окремий helper для `id` і `line_number`.
+- `Enumeration`: стандартних реквізитів немає, бо порядок already живе у
+  `values[].order`.
+- `Constant`: стандартних реквізитів немає.
+- Tabular sections мають окремий helper для `id` і `line_number`; цей набір
+  структурно фіксований так само, як і object-level standard attributes.
 
 `standardAttributeOverrides` у схемах об'єктів не робить стандартні поля
-persisted custom fields. Поточна роль цього словника значно вужча:
-override метаданих стандартного реквізиту, насамперед описів.
+persisted custom fields. Поточна роль цього словника значно вужча: standard
+attributes мають readonly structure, а override дозволяє редагувати тільки
+метадані опису. Те саме правило діє і для tabular sections через
+`tabularSection.standardAttributeOverrides`.
 
 BRD описує бізнес-політику цих реквізитів. Поточна реалізація helper-layer
 визначає, які з них реально з'являються у UI та serializer flows сьогодні.
@@ -149,9 +156,11 @@ BRD описує бізнес-політику цих реквізитів. По
 Джерела: [../../packages/core/src/schemas/standard-attributes.ts](../../packages/core/src/schemas/standard-attributes.ts),
 [../../packages/core/src/schemas/catalog.ts](../../packages/core/src/schemas/catalog.ts),
 [../../packages/core/src/schemas/document.ts](../../packages/core/src/schemas/document.ts),
+[../../packages/core/src/schemas/enumeration.ts](../../packages/core/src/schemas/enumeration.ts),
 [../../packages/core/src/schemas/information-register.ts](../../packages/core/src/schemas/information-register.ts),
 [../../packages/core/src/schemas/accumulation-register.ts](../../packages/core/src/schemas/accumulation-register.ts),
-[../../packages/core/src/schemas/constant.ts](../../packages/core/src/schemas/constant.ts)
+[../../packages/core/src/schemas/constant.ts](../../packages/core/src/schemas/constant.ts),
+[../../packages/core/src/schemas/tabular-section.ts](../../packages/core/src/schemas/tabular-section.ts)
 
 ## Інваріанти атрибутів і об'єктів
 
@@ -308,7 +317,8 @@ Core test suite перевіряє модель у двох площинах.
 ## Антипатерни
 
 - Дублювати Zod-схеми або reference rules у UI замість імпорту з core.
-- Трактувати derived standard attributes як persisted custom attributes.
+- Трактувати derived standard attributes як persisted custom attributes або як
+  повністю editable набір полів.
 - Описувати project-level referential validation як ніби вона повністю живе
   в core.
 - Використовувати `findReferences()` як validator замість traversal utility.

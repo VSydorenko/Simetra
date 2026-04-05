@@ -38,6 +38,7 @@
       "displayName": {
         "uk": "Товари"
       },
+      "standardAttributeOverrides": {},
       "attributes": [
         {
           "name": "product",

@@ -15,21 +15,36 @@
 
 ## Project-Level Validation UX (Block G, FR-005)
 
-**Status:** Тільки scoping — реалізація в Phase 2.
+**Status:** Частково закрито у Phase 1; актуальний limitation стосується UX,
+а не відсутності самої project-level validation.
 
-**Опис:** Validation на рівні об'єкта (Zod per mutation) працює. Project-level — це cross-object checks, що не реалізовані.
+**Опис:** Debounced project-level validation уже працює через
+`useModelValidation()` і наповнює `modelErrors` окремо від
+mutation-time `validationErrors`. Поточна реалізація вже покриває
+graph-level / cross-object перевірки для reachable refs і duplicate object
+names у межах kind. Обмеження Phase 1 полягає в тому, що UX подачі цих
+результатів лишається розподіленим: помилки видно в status bar та у
+properties-панелях, але немає окремого validation workspace з навігацією по
+всіх findings.
 
-**Cross-object checks для Phase 2:**
-- Broken refs (посилання на неіснуючий об'єкт)
-- Duplicate names across kinds
-- Empty required collections (порожній проєкт — це valid?)
+**Можливі подальші покращення UX:**
+- окремий validation panel
+- навігація до next/previous issue
+- command palette action для переходу по findings
 
-**Варіанти UI для відображення результатів:**
-- Status bar badge
-- Validation panel
-- Command palette action
+**Ref:** FR-005 лишається актуальним як validation UX follow-up, але не як
+твердження про відсутність project-level / cross-object validation.
 
-**Ref:** BRD FR-005 — «Partial — object-level done, project-level validation UX incomplete»
+## Standard Attributes для Tabular Sections
+
+**Status:** Закрито у Phase 1.
+
+**Опис:** Обмеження, за яким standard attributes для табличних частин не мали
+окремого selection/context path, більше не актуальне. Поточний UI має
+`selectedTabularSection`, окремий `TabularSectionProperties` і записує
+description overrides у `tabularSection.standardAttributeOverrides`.
+
+**Вплив:** Немає активного limitation для цього сценарію у Phase 1.
 
 ## Constant valueType: Ref
 

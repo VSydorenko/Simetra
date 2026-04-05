@@ -33,6 +33,7 @@
       "displayName": {
         "uk": "Штрихкоди"
       },
+      "standardAttributeOverrides": {},
       "attributes": [
         {
           "name": "barcode",

@@ -4,20 +4,33 @@ import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import { ObjectProperties } from "@/components/properties/object-properties"
 import { FieldProperties } from "@/components/properties/field-properties"
 import { ProjectSettings } from "@/components/properties/project-settings"
-import { useUiStore } from "@/stores/ui-store"
+import { TabularSectionProperties } from "@/components/properties/tabular-section-properties"
+import { useMetadataStore } from "@/stores/metadata-store"
+import { findTabularSection, useUiStore } from "@/stores/ui-store"
 
 /**
  * Контекстно-залежна панель властивостей.
- * Пріоритет контексту: selectedField → selectedObject → activeWindow → activeTab → ProjectSettings
+ * Пріоритет контексту: selectedField → selectedTabularSection → selectedObject → activeWindow → activeTab → ProjectSettings
  */
 export function PropertiesPanel() {
   const { t } = useTranslation()
+  const model = useMetadataStore((s) => s.model)
   const selectedField = useUiStore((s) => s.selectedField)
+  const selectedTabularSection = useUiStore((s) => s.selectedTabularSection)
   const selectedObject = useUiStore((s) => s.selectedObject)
   const activeTabId = useUiStore((s) => s.activeTabId)
   const activeWindowId = useUiStore((s) => s.activeWindowId)
   const openTabs = useUiStore((s) => s.openTabs)
   const floatingWindows = useUiStore((s) => s.floatingWindows)
+  const resolvedTabularSectionSelection = useMemo(() => {
+    if (!selectedTabularSection) {
+      return null
+    }
+
+    return findTabularSection(model, selectedTabularSection)
+      ? selectedTabularSection
+      : null
+  }, [model, selectedTabularSection])
 
   // Визначити активний обʼєкт — selectedObject > floating window > tab
   const activeObjectRef = useMemo(() => {
@@ -44,6 +57,23 @@ export function PropertiesPanel() {
             </span>
           </div>
           <FieldProperties selection={selectedField} />
+        </div>
+      </ScrollArea>
+    )
+  }
+
+  if (resolvedTabularSectionSelection) {
+    return (
+      <ScrollArea className="h-full">
+        <div className="py-1">
+          <div className="border-b border-border px-3 py-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("properties.title")} —
+              {" "}
+              {resolvedTabularSectionSelection.tabularSectionName}
+            </span>
+          </div>
+          <TabularSectionProperties selection={resolvedTabularSectionSelection} />
         </div>
       </ScrollArea>
     )
