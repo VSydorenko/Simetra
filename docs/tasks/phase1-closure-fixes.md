@@ -2,7 +2,9 @@
 
 ## Контекст
 
-Код-ревью Phase 1 Closure Backlog виявило 7 проблем різної критичності. Усі виправляються в рамках Phase 1 без переносу на Phase 2. Задача охоплює: data-loss bug у parser constants, implicit restore після ZIP import, UI/core drift для Constant Ref, стандартні реквізити табличних частин, i18n drift у formatReference, $schema URL drift, та покриття тестами.
+Код-ревью Phase 1 Closure Backlog виявило проблеми різної критичності. Усі виправляються в рамках Phase 1 без переносу на Phase 2. Задача охоплює: data-loss bug у parser constants, implicit restore після ZIP import, UI/core drift для Constant Ref, i18n drift у formatReference, $schema URL drift, та покриття тестами.
+
+> **Примітка:** Стандартні реквізити табличних частин (колишній Fix 4) винесені в окрему задачу: `docs/tasks/standard-attributes-comprehensive.md`
 
 ## Вимоги
 
@@ -39,14 +41,6 @@
 - [ ] У `ConstantTypeSettings` (`apps/web/src/components/properties/object-properties.tsx`) передати `excludeTypes={["Ref"]}` у `FieldTypeSelect`
 - [ ] Перевірити, що Zod-валідація у store залишається як fallback safety net — НЕ видаляти
 
-### Fix 4: Стандартні реквізити табличних частин — очищення dead path
-
-- [ ] Видалити dead path передачі `tabularSectionName` через `ObjectProperties` → `StandardAttributesDialog` (prop `selectedField?.tabularSectionName` у `object-properties.tsx`)
-- [ ] У `StandardAttributesDialog` — видалити prop `tabularSectionName` та всю пов'язану логіку (гілку `getTabularSectionStandardAttributes`, зміну заголовка, readonly mode для ТЧ)
-- [ ] У `packages/core` — видалити функцію `getTabularSectionStandardAttributes` з `standard-attributes.ts` та її реекспорти з `schemas/index.ts` і `index.ts`
-- [ ] Видалити відповідні тести `getTabularSectionStandardAttributes` із `schemas.test.ts`
-- [ ] Оновити `docs/phase1-known-limitations.md` якщо є згадки
-
 ### Fix 5: formatReference — перенести presentation logic у UI
 
 - [ ] У `packages/core/src/find-references.ts`: змінити `formatReference` щоб повертав структуру `{ fieldName: string | undefined; tabularSectionName: string | undefined; referenceKind: ReferenceKind }` замість готового display string
@@ -76,12 +70,7 @@
 
 ## Clarify (питання перед імплементацією)
 
-- [ ] **StdAttrs ТЧ у BRD**: BRD §5.8 описує стандартні реквізити табличної частини (`id`, `line_number`). Функція `getTabularSectionStandardAttributes` у core їх реалізує. Однак власник проєкту вказує що стандартні реквізити ТЧ не потрібні як окрема UI-концепція.
-  - Чому це важливо: визначає, чи видаляємо код з core та документації, чи лише dead UI path
-  - Варіанти:
-    - **A**: Видалити `getTabularSectionStandardAttributes` з core, видалити секцію 5.8 стандартних реквізитів з BRD, видалити UI-код. Стандартні реквізити ТЧ стануть implicit: DDL generator у Phase 2 додаватиме `id` і `line_number` автоматично без конфігурації
-    - **B**: Залишити helper у core (знадобиться DDL generator у Phase 2), але видалити тільки UI-код та dead path. BRD зберегти як є
-  - Вплив на рішення: архітектура core + документація + Phase 2 DDL generator scope
+> Питання про StdAttrs ТЧ винесено в окрему задачу: `docs/tasks/standard-attributes-comprehensive.md`
 
 ## Рекомендовані патерни
 
@@ -172,7 +161,6 @@ restoreSession()
 | 1 | `apps/web/src/storage/web-storage.ts`, тести |
 | 2 | `apps/web/src/storage/session-db.ts`, `apps/web/src/stores/project-store.ts`, `apps/web/src/components/layout/editor-panel.tsx`, `apps/web/src/components/editor/welcome-screen.tsx`, тести |
 | 3 | `apps/web/src/components/editor/field-type-select.tsx`, `apps/web/src/components/properties/object-properties.tsx`, тести |
-| 4 | `apps/web/src/components/properties/object-properties.tsx`, `apps/web/src/components/editor/standard-attributes-dialog.tsx`, `packages/core/src/schemas/standard-attributes.ts`, `packages/core/src/schemas/index.ts`, `packages/core/src/index.ts`, `packages/core/src/__tests__/schemas.test.ts` |
 | 5 | `packages/core/src/find-references.ts`, `apps/web/src/components/editor/where-used-dialog.tsx`, `apps/web/src/components/layout/tree-panel.tsx`, `apps/web/src/lib/find-references.ts`, `packages/core/src/__tests__/find-references.test.ts`, `apps/web/src/i18n/locales/uk.json`, `apps/web/src/i18n/locales/en.json` |
 | 6 | `packages/core/src/serialization.ts`, `packages/core/src/__tests__/schemas.test.ts` |
 | 7 | `apps/web/src/__tests__/` (нові та оновлені файли) |
@@ -187,7 +175,6 @@ restoreSession()
 - [ ] Fix 1: broken constants wrapper → валідні siblings збережені, точні warnings
 - [ ] Fix 2: origin persisted у IndexedDB, restore flow використовує persisted origin, Welcome Screen коректний для всіх scenarios
 - [ ] Fix 3: Ref не з'являється у FieldTypeSelect для Constant
-- [ ] Fix 4: dead path для StdAttrs ТЧ видалений (scope залежить від Clarify)
 - [ ] Fix 5: core повертає структуру, UI форматує через i18n, delete confirm локалізований
 - [ ] Fix 6: `schemaVersion 1.0` → URL `/schemas/v1/`, відповідно до BRD §7.7
 - [ ] Fix 7: regression тести для кожного fix проходять
