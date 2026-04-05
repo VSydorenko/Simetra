@@ -45,6 +45,6 @@ pnpm dlx shadcn@latest add <component> -c apps/web
 ```
 
 ## Документація
-- Високорівнева структура — `docs/architecture/OVERVIEW.md`
+- Архітектурний набір документів — `docs/architecture/` (`OVERVIEW.md` як точка входу)
 - Бізнес-вимоги — `docs/BRD-metadata-configurator.md`
 - README у пакетах тримай лаконічними: призначення, встановлення, API

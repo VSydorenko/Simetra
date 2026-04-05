@@ -15,7 +15,7 @@ description: 'Правила побудови UI: React компоненти, la
 ```
 
 - `react-resizable-panels` для resizable layout
-- Центральна панель = Tab Bar + content area + floating window container
+- Центральна панель = Tab Bar + ObjectEditor/welcome state + floating window container
 - Середня панель — не менше 30%
 - Права панель — collapsible
 - Dark theme за замовчуванням
@@ -36,11 +36,11 @@ description: 'Правила побудови UI: React компоненти, la
 - Контекстне меню: Додати, Перейменувати, Видалити, Дублювати
 - Пошук: Ctrl+F
 
-### Таблиця реквізитів (центральна панель)
-- `@tanstack/react-table v8`
-- Колонки: Ім'я, Тип, Обов'язковий, Індексований, Опис
-- Стандартні реквізити — readonly, візуально відокремлені (іконка замка, сірий фон)
-- Inline editing для полів
+### ObjectEditor (центральна панель)
+- Основний контент центральної панелі — `ObjectEditor`, а не окрема універсальна таблиця
+- Навігація всередині об'єкта — через vertical nav і секції `main` / `data` / `values` / інші доступні для kind
+- Tabs і floating windows відповідають за навігацію між об'єктами, а не між секціями всередині редактора
+- Таблиці реквізитів, tabular sections і enum values є вмістом окремих секцій `ObjectEditor`
 
 ### Панель властивостей (права панель)
 - Context-sensitive: залежить від вибраного елемента
@@ -50,15 +50,19 @@ description: 'Правила побудови UI: React компоненти, la
 
 ### ✅ ALWAYS
 - Zustand + immer для store
-- zundo middleware для undo/redo
-- Розділяй metadata state та UI state (окремі stores або slices)
+- zundo middleware використовуй для `metadata-store`, а не для всього runtime state
+- Явно розділяй `metadata-store`, `ui-store`, `project-store`
+- `metadata-store` = доменна модель і мутації метаданих
+- `ui-store` = tabs, floating windows, layout, selection, navigation state
+- `project-store` = file context, save baseline, open/save/restore orchestration
 - Імпортуй типи з `@simetra/core` для store typing
 - Валідуй через Zod-схеми з core при мутаціях
 
 ### ❌ NEVER
 - Не тримай UI state (selections, expanded nodes) у metadata store
+- Не змішуй file/session lifecycle з `ui-store` або доменними мутаціями в `metadata-store`
 - Не мутуй state напряму — тільки через immer produce
-- Не створюй окремі стори для кожного типу метаданих — один централізований store
+- Не зводь metadata, UI і project lifecycle concerns в один store
 - Не дублюй Zod-типи в UI — імпортуй з `@simetra/core`
 
 ## shadcn/ui
@@ -101,4 +105,6 @@ description: 'Правила побудови UI: React компоненти, la
 
 ## ℹ️ Де шукати деталі
 - `docs/architecture/OVERVIEW.md` — загальна архітектура
+- `docs/architecture/ui-components.md` — shell, tree layer, editor, properties panel, dialogs і window system
+- `docs/architecture/state-management.md` — межі `metadata-store` / `ui-store` / `project-store` і runtime UI state
 - `docs/BRD-metadata-configurator.md`, секція 9 — UI Layout та компоненти
