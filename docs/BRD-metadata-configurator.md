@@ -1,7 +1,7 @@
 # BRD — Open-Source Business Metadata Configurator
 
-**Версія документа:** 2.1
-**Дата:** 2026-04-01
+**Версія документа:** 3.0
+**Дата:** 2026-04-05
 **Статус:** Draft для архітектурного ревʼю  
 **Мова інтерфейсу:** Українська (перша), English (друга)
 
@@ -69,20 +69,38 @@ Open-source візуальний конфігуратор бізнес-мета�
 4. **Git-native формат** — метадані зберігаються як JSON-файли, один файл на об'єкт, оптимізовані для diff/merge
 5. **Плагінна архітектура** — генератори для різних стеків як незалежні модулі
 
-### 3.3. Чим продукт НЕ є
+### 3.3. Чим продукт НЕ є (еволюційна позиція)
 
-- Не runtime-платформа (як 1С або Frappe) — не виконує бізнес-логіку
+Позиціонування Simetra змінюється з розвитком продукту:
+
+**Phase 1–2 (Конфігуратор + Генератор):**
+- Не runtime-платформа — не виконує бізнес-логіку, тільки генерує артефакти
 - Не ORM (як Prisma або EF Core) — не генерує клієнтський код для запитів
 - Не редактор таблиць БД (як pgAdmin) — працює на рівні бізнес-об'єктів, а не SQL
-- Не замінник 1С:Підприємство — це інструмент проєктування, а не платформа розробки
 
-### 3.4. Довгострокові горизонти (не в scope BRD)
+**Phase 3+ (Runtime-рендерінг форм):**
+- Може рендерити форми і додатки з JSON-метаданих напряму (JSON → React)
+- Але НЕ є повноцінною application platform з власним server runtime (як 1С або Frappe)
+- Бізнес-логіка генерується як PostgreSQL функції або React код, а не інтерпретується
 
-- Runtime metadata-driven application engine
-- Автоматична генерація UI-форм з метаданих
-- Автоматична генерація REST API
-- Імпорт існуючих схем БД з автоматичним розпізнаванням бізнес-типів
-- Колаборативне редагування метаданих (cloud-версія)
+**Незалежно від фази:**
+- Не замінник 1С:Підприємство — Simetra перетворює архітектурні концепції 1С на сучасний стек, а не копіює платформу
+
+### 3.4. Дорожня карта розвитку
+
+| Горизонт | Можливість | Фаза |
+|----------|------------|------|
+| Декларативний движок проведення (posting engine) | Phase 2b |
+| Генерація PostgreSQL функцій проведення/валідації | Phase 2b |
+| Supabase як deployment target + auto REST API | Phase 2c |
+| Runtime-рендерінг форм з JSON-метаданих | Phase 3 |
+| Бібліотека domain-компонентів (@simetra/ui) | Phase 3 |
+| Візуальний конструктор форм | Phase 4 |
+| Application Shell (навігація, маршрутизація, dashboard) | Phase 4 |
+| Codegen React-додатку (eject) | Phase 4–5 |
+| Generated .NET/Node.js API | Phase 5 |
+| Імпорт існуючих схем БД з розпізнаванням бізнес-типів | Phase 3 |
+| Колаборативне редагування метаданих (cloud-версія) | Phase 5+ |
 
 ---
 
@@ -185,7 +203,125 @@ Open-source візуальний конфігуратор бізнес-мета�
 **Дозволені підоб'єкти:** Реквізити, Табличні частини.
 
 **Поведінка проведення:**  
-Документ підтримує життєвий цикл Draft → Posted → Unposted → Draft (зворотне проведення без зміни номера — на відміну від Frappe). Зв'язок з регістрами декларативний: у метаданих документа вказуються регістри, по яких він робить рухи. Генерація коду проведення — на стороні генератора.
+Документ підтримує життєвий цикл Draft → Posted → Unposted → Draft (зворотне проведення без зміни номера — на відміну від Frappe). Зв'язок з регістрами декларативний: у метаданих документа вказуються регістри, по яких він робить рухи (`registerMovements`). Детальний маппінг полів описується в секції `posting` (див. §5.3.1).
+
+#### 5.3.1. Секція `posting` — декларативний маппінг проведення
+
+Опціональна секція `posting` описує **як саме** дані документа стають рухами регістру. У 1С цей маппінг пишеться кодом у процедурі `ОбробкаПроведення()`. У 90% випадків цей код шаблонний: "візьми поле X з рядка табличної частини → запиши у вимір Y регістру". Simetra робить це декларативно.
+
+Документи без секції `posting` працюють як раніше — тільки декларація зв'язку через `registerMovements`.
+
+**Формат у JSON-метаданих:**
+
+```json
+{
+  "kind": "Document",
+  "name": "GoodsReceipt",
+  "posting": {
+    "movements": [
+      {
+        "register": { "kind": "AccumulationRegister", "name": "InventoryBalance" },
+        "movementType": "Receipt",
+        "source": "tabularSection:items",
+        "mappings": {
+          "dimensions": {
+            "product": "row.product",
+            "warehouse": "doc.warehouse"
+          },
+          "resources": {
+            "quantity": "row.quantity",
+            "amount": "row.amount"
+          },
+          "attributes": {
+            "responsible": "doc.responsible"
+          }
+        }
+      }
+    ],
+    "validations": [
+      {
+        "type": "NonNegativeBalance",
+        "register": { "kind": "AccumulationRegister", "name": "InventoryBalance" },
+        "dimensions": ["product", "warehouse"],
+        "resource": "quantity",
+        "message": {
+          "uk": "Недостатньо товару «{product}» на складі «{warehouse}»",
+          "en": "Not enough product \"{product}\" in warehouse \"{warehouse}\""
+        },
+        "applyTo": "Expense"
+      }
+    ]
+  }
+}
+```
+
+**Специфікація `posting.movements[]`:**
+
+| Поле | Тип | Обов'язкове | Опис |
+|---|---|---|---|
+| register | MetadataRef `{ kind, name }` | Так | Цільовий регістр |
+| movementType | `"Receipt"` \| `"Expense"` \| mapping expression | Так | Фіксований тип або посилання на поле документа |
+| source | `"document"` \| `"tabularSection:{name}"` | Так | Джерело рядків |
+| condition | Expression \| null | Ні | Умова формування руху |
+| mappings | MappingSet | Так | Маппінг полів |
+
+**Джерело рядків (`source`):**
+- `"document"` — один рух на весь документ (наприклад, загальна сума для регістру взаєморозрахунків)
+- `"tabularSection:{name}"` — один рух на кожен рядок табличної частини
+
+**Тип руху (`movementType`):**
+- Фіксований: `"Receipt"` або `"Expense"`
+- Динамічний: `"doc.operation_type"` — значення береться з реквізиту документа. Поле має бути Ref (kind=Enumeration) з значеннями, що маплятся на Receipt/Expense
+
+**Маппінг виразів (mapping expressions):**
+- `"doc.{field}"` — значення реквізиту документа
+- `"row.{field}"` — значення поля рядка табличної частини (тільки якщо source = tabularSection)
+- `"sum({tabularSection}.{field})"` — сума по полю табличної частини (тільки якщо source = document)
+- `"count({tabularSection})"` — кількість рядків табличної частини
+- `"literal:{value}"` — фіксоване значення
+- `"now()"` — поточний timestamp
+- `"row.{fieldA} * row.{fieldB}"` — арифметичний вираз між полями одного рядка (обмежений набір: `+`, `-`, `*`, `/`)
+
+**Специфікація `posting.validations[]`:**
+
+| Поле | Тип | Обов'язкове | Опис |
+|---|---|---|---|
+| type | `"NonNegativeBalance"` | Так | Тип перевірки (MVP — тільки контроль невід'ємних залишків) |
+| register | MetadataRef | Так | Регістр для перевірки |
+| dimensions | string[] | Так | По яких вимірах перевіряти |
+| resource | string | Так | Який ресурс перевіряти |
+| message | LocalizedString | Так | Повідомлення помилки з плейсхолдерами `{dimension_name}` |
+| applyTo | `"Receipt"` \| `"Expense"` \| `"Both"` | Ні | Для яких типів руху перевіряти (default: `"Expense"`) |
+
+**Що генерується з posting-метаданих:**
+
+1. **Функція проведення `post_{document_name}(doc_id uuid)`:**
+   - Перевірка `IF posted THEN RAISE EXCEPTION`
+   - Очистка попередніх рухів (для перепроведення)
+   - INSERT рухів з маппінгу expressions → SQL expressions
+   - Виконання валідацій
+   - `UPDATE {document} SET posted = true`
+   - Обгорнуто в `BEGIN ... END` (єдина транзакція)
+
+2. **Функція скасування проведення `unpost_{document_name}(doc_id uuid)`:**
+   - DELETE рухів з кожного регістру
+   - `UPDATE {document} SET posted = false`
+
+3. **Функція перевірки залишків** (для кожного validation типу NonNegativeBalance):
+   - `check_{register}_{resource}(dimensions..., required_qty)`
+   - Підставляє displayName з довідників у повідомлення помилки
+
+**Межі декларативності:**
+
+| Покривається маппінгами (генерується автоматично) | Потребує кастомного коду (eject) |
+|---|---|
+| Прямий маппінг полів документа/ТЧ → виміри/ресурси регістру | FIFO/LIFO розрахунок собівартості |
+| Агрегація: `sum()`, `count()` по табличній частині | Умовні рухи зі складною бізнес-логікою |
+| Арифметика в межах одного рядка: `quantity * price` | Кросдокументне проведення |
+| Контроль невід'ємних залишків | Виклик зовнішніх API при проведенні |
+| Статичний або поле-залежний тип руху | Складні валідації (кредитний ліміт, терміни) |
+
+Для кастомних випадків генерована функція проведення має **точку розширення** — виклик `{document_name}_post_custom(doc_id)`, яку розробник реалізує самостійно.
 
 ### 5.4. Перелічення (Enumeration)
 
@@ -301,6 +437,26 @@ Open-source візуальний конфігуратор бізнес-мета�
 | line_number | Integer | Номер рядка |
 
 Таблична частина автоматично отримує зовнішній ключ на батьківський об'єкт з ON DELETE CASCADE.
+
+**Обчислювані поля (Phase 3):**
+
+Опціональна секція `computedFields` описує формули для автоперерахунку полів табличної частини:
+
+```json
+{
+  "computedFields": [
+    {
+      "target": "amount",
+      "formula": "row.quantity * row.price",
+      "recalcOn": ["quantity", "price"]
+    }
+  ]
+}
+```
+
+Simetra генерує з цього:
+- **PostgreSQL trigger** — `BEFORE INSERT OR UPDATE OF quantity, price` для серверної валідації
+- **React hook** (у codegen-режимі) — `useWatch` + `setValue` для автоперерахунку на фронтенді
 
 **Дозволені підоб'єкти:** Реквізити (тільки прості поля, без вкладених табличних частин у MVP).
 
@@ -450,9 +606,13 @@ Open-source візуальний конфігуратор бізнес-мета�
 ```
 metadata/
 ├── project.meta.json                          # Налаштування проєкту
+├── application.meta.json                      # Каркас додатку (Phase 4)
 ├── catalogs/
 │   └── products/
-│       └── products.meta.json
+│       ├── products.meta.json
+│       └── forms/                             # Phase 3+: форми об'єкта
+│           ├── item.form.json
+│           └── list.form.json
 ├── documents/
 │   └── sales-order/
 │       └── sales-order.meta.json
@@ -703,12 +863,16 @@ metadata/
 
 | ID | Вимога | Пріоритет | Статус |
 |---|---|---|---|
-| FR-060 | Згенерувати PostgreSQL DDL (CREATE TABLE, CREATE INDEX, FK) з метаданих | Phase 2 | — Planned: phase2-ddl-generator.md |
-| FR-061 | Згенерувати SQL-міграцію (ALTER TABLE) при зміні метаданих | Phase 2 | — Planned: Phase 2b |
-| FR-062 | Згенерувати EF Core entity classes + IEntityTypeConfiguration | Phase 2 | — Deferred |
-| FR-063 | Згенерувати view/materialized view для віртуальних таблиць регістрів | Phase 2 | — Planned: phase2-ddl-generator.md |
-| FR-064 | Показати diff між поточними метаданими та станом БД | Phase 3 | — |
+| FR-060 | Згенерувати PostgreSQL DDL (CREATE TABLE, CREATE INDEX, FK) з метаданих | Phase 2a | — Planned: phase2a-ddl-generator.md |
+| FR-061 | Згенерувати SQL-міграцію (ALTER TABLE) при зміні метаданих | Phase 2c | — Planned: phase2c-deployment-adapter.md |
+| FR-062 | Згенерувати EF Core entity classes + IEntityTypeConfiguration | Phase 2+ | — Deferred |
+| FR-063 | Згенерувати view/materialized view для віртуальних таблиць регістрів | Phase 2a | — Planned: phase2a-ddl-generator.md |
+| FR-064 | Показати diff між поточними метаданими та станом БД | Phase 2c | — Planned: phase2c-deployment-adapter.md |
 | FR-065 | Підключитися до живої PostgreSQL БД для schema introspection | Phase 3 | — |
+| FR-066 | Згенерувати SQL-функції проведення/скасування з posting-метаданих | Phase 2b | — Planned: phase2b-posting-engine.md |
+| FR-067 | Візуальний редактор маппінгів проведення (movements editor) | Phase 2b | — Planned: phase2b-posting-engine.md |
+| FR-068 | Runtime-рендерінг форм з JSON-метаданих (form.json → React) | Phase 3 | — |
+| FR-069 | Генерація каркасу додатку (Application Shell) з метаданих | Phase 4 | — |
 
 ### 8.8. Import / Export
 
@@ -766,16 +930,22 @@ metadata/
 
 ```
 packages/
-├── @simetra/core             ← Zod-схеми, типи, валідація (чистий TS, без UI/Node API)
-├── @simetra/json-schemas     ← Згенеровані JSON Schema (з Zod, build step)
-├── @simetra/generator-api    ← MetadataGenerator interface + спільні утиліти (Phase 2)
-├── @simetra/generator-pg     ← PostgreSQL DDL генератор (Phase 2)
-├── @simetra/generator-efcore ← EF Core генератор (Phase 2)
-└── @simetra/cli              ← CLI обгортка (citty) над core + generators (Phase 2)
+├── @simetra/core                ← Zod-схеми, типи, валідація (чистий TS, без UI/Node API)
+├── @workspace/ui                ← shadcn/ui примітиви (Phase 1, existing)
+├── @simetra/json-schemas        ← Згенеровані JSON Schema (з Zod, build step)
+├── @simetra/generator-api       ← MetadataGenerator interface + спільні утиліти (Phase 2a)
+├── @simetra/generator-pg        ← PostgreSQL DDL + posting SQL генератор (Phase 2a–2b)
+├── @simetra/generator-efcore    ← EF Core генератор (Phase 2+, deferred)
+├── @simetra/cli                 ← CLI обгортка (citty) над core + generators (Phase 2a)
+├── @simetra/ui                  ← Domain-компоненти: CatalogCombobox, PostButton, DataTable (Phase 3)
+├── @simetra/form-runtime        ← JSON → React form renderer (Phase 3)
+├── @simetra/app-runtime         ← JSON → full app renderer (Phase 4)
+├── @simetra/generator-react     ← Form codegen (.tsx eject) (Phase 4)
+└── @simetra/generator-react-app ← Full app codegen (Phase 5)
 apps/
-├── web/                      ← React SPA (Vite) — основний інтерфейс (Phase 1)
-├── desktop/                  ← Tauri 2.0 обгортка web-додатку з нативним FS (Phase 3)
-└── vscode/                   ← VS Code extension — sidebar panel (Phase 3)
+├── web/                         ← React SPA (Vite) — основний інтерфейс (Phase 1)
+├── desktop/                     ← Tauri 2.0 обгортка web-додатку з нативним FS (Phase 3)
+└── vscode/                      ← VS Code extension — sidebar panel (Phase 3)
 ```
 
 **Ключовий принцип:** `@simetra/core` — це серцевина. Вона не залежить ні від React, ні від Tauri, ні від Node.js API. Чистий TypeScript з Zod. Це дозволяє:
@@ -840,7 +1010,7 @@ apps/
 
 **Секції картки об'єкта** — вертикальна навігація зліва від контенту замість горизонтальних вкладок у центральній зоні. Набір секцій залежить від `kind` об'єкта:
 - **Catalog** — Основні, Дані, Нумерація, Налаштування
-- **Document** — Основні, Дані, Нумерація, Рухи, Налаштування
+- **Document** — Основні, Дані, Нумерація, Рухи (posting editor — візуальний редактор маппінгів, Phase 2b), Налаштування
 - **Enumeration** — Основні, Значення
 - **InformationRegister** — Основні, Дані, Налаштування
 - **AccumulationRegister** — Основні, Дані, Налаштування
@@ -851,7 +1021,7 @@ apps/
 
 Всі налаштування об'єкта та його елементів редагуються виключно через праву панель Properties.
 
-### 9.8. Система вікон (Window Management)
+### 9.6. Система вікон (Window Management)
 
 Інтерфейс Simetra оптимізований для роботи з великою кількістю одночасно відкритих карток об'єктів — типовий сценарій для конфігуратора метаданих.
 
@@ -881,7 +1051,7 @@ apps/
 
 **Z-index система:** panels(10) → tab-content(20) → floating-windows(30) → dialogs(40) → command-palette(50).
 
-### 9.6. Права панель — властивості
+### 9.7. Права панель — властивості
 
 Права панель Properties — єдине місце редагування властивостей об'єктів та полів. `SettingsForm` у центральній зоні не використовується.
 
@@ -899,7 +1069,7 @@ apps/
 
 Згруповано через shadcn/ui Accordion: "Основні", "Тип даних", "Обмеження", "Додатково".
 
-### 9.7. Keyboard shortcuts
+### 9.8. Keyboard shortcuts
 
 | Комбінація (Windows / macOS) | Дія |
 |---|---|
@@ -934,13 +1104,23 @@ Metadata JSON (canonical)
 
 ### 10.2. PostgreSQL SQL Generator (перший, вбудований)
 
-Генерує з метаданих:
+**Phase 2a — структурна генерація:**
 
 - `CREATE TABLE` для кожного об'єкта з правильними типами, constraints, FK
 - `CREATE TYPE` для перелічень (якщо обрана стратегія pgEnum)
 - `CREATE INDEX` для індексованих полів
 - `CREATE VIEW` / `CREATE MATERIALIZED VIEW` для віртуальних таблиць регістрів
 - Trigger-функцію для автонумерації (якщо autonumber = true)
+
+**Phase 2b — генерація проведення (posting SQL):**
+
+- `post_{document_name}(doc_id uuid)` — функція проведення документа (див. §5.3.1)
+- `unpost_{document_name}(doc_id uuid)` — функція скасування проведення
+- `check_{register}_{resource}(dims...)` — функція перевірки залишків
+- Всі функції доступні як Supabase RPC endpoints через PostgREST
+
+**Phase 2c — міграції:**
+
 - `ALTER TABLE` міграції при зміні метаданих (snapshot-based diff)
 
 **Джерела для реалізації** (ліцензійно безпечні):
@@ -975,6 +1155,394 @@ interface GeneratorOutput {
   warnings: string[];
 }
 ```
+
+### 10.5. Генерація UI-форм (Phase 3–4)
+
+Simetra знає все необхідне для генерації форм: типи полів, обов'язковість, зв'язки між об'єктами, табличні частини. Підтримуються три рівні:
+
+**Рівень 1 — Автоформа (zero config).** Генерується повністю з метаданих без додаткової конфігурації.
+
+**Рівень 2 — Візуальний конструктор (Phase 4).** Кастомізація автоформи: переміщення полів, групування у вкладки/секції/колонки, override компонентів. Результат — `*.form.json`.
+
+**Рівень 3 — Export to code / eject (Phase 4).** Генерація повноцінного `.tsx` файлу — React-компонент з shadcn/ui, react-hook-form, Zod-валідацією.
+
+#### 10.5.1. Маппінг типів полів → shadcn/ui компоненти
+
+| Тип поля (Simetra) | shadcn/ui компонент | Умови / override |
+|---|---|---|
+| String (length ≤ 255) | `<Input />` | — |
+| String (length > 255) / Text | `<Textarea />` | — |
+| Integer, Numeric | `<Input type="number" />` | Числове форматування |
+| Boolean | `<Switch />` | `<Checkbox />` через override |
+| Date | `<DatePicker />` | — |
+| DateTime | `<DatePicker />` + time input | — |
+| Ref (kind=Enumeration) | `<Select />` | `<RadioGroup />` якщо ≤5 значень |
+| Ref (kind=Catalog) | `<Combobox />` з пошуком | Autocomplete по довіднику |
+| Ref (kind=Document) | `<Combobox />` з пошуком | Autocomplete по документу |
+| Ref (polymorphic) | `<Select />` (тип) + `<Combobox />` (значення) | Пара компонентів |
+| TabularSection | `<DataTable />` (TanStack Table + shadcn) | Inline edit, add/delete rows |
+| Binary | `<FileUpload />` | Кастомний компонент |
+
+**Додаткові правила маппінгу:**
+- Стандартні реквізити з `readOnly` ознакою → `<Input readOnly className="bg-muted" />`
+- Поля з `required: true` → label з `*`, Zod `.min(1)` або `.nonempty()`
+- Поля з `description` → tooltip (shadcn Tooltip) або helper text під полем
+
+#### 10.5.2. Формат файлу форми (`*.form.json`)
+
+Layout описується як дерево елементів. Кожен файл — один тип форми для одного об'єкта:
+
+```
+metadata/catalogs/counterparties/
+├── counterparties.meta.json       # Метадані об'єкта
+└── forms/
+    ├── item.form.json             # Форма елемента
+    ├── list.form.json             # Форма списку
+    └── quick-create.form.json     # Спрощена форма
+```
+
+Структура `*.form.json`:
+
+```json
+{
+  "$schema": "https://simetra.dev/schemas/v1/form.schema.json",
+  "kind": "ItemForm",
+  "objectRef": { "kind": "Catalog", "name": "Counterparties" },
+  "title": { "uk": "Контрагент", "en": "Counterparty" },
+  "width": "2xl",
+  "layout": { },
+  "toolbar": [ ],
+  "commandBar": [ ]
+}
+```
+
+#### 10.5.3. Layout-елементи
+
+| Елемент | Опис | shadcn/ui + Tailwind | Дочірні |
+|---|---|---|---|
+| Field | Одне поле, прив'язане до реквізиту | `<FormField />` + input за типом | Ні |
+| Group | Візуальна група з заголовком | `<Card />` або `<fieldset>` | Так |
+| Columns | Багатоколонковий layout | `<div className="grid grid-cols-{n} gap-4">` | Column[] |
+| Column | Одна колонка | `<div className="space-y-4">` | Так |
+| Tabs | Набір вкладок | `<Tabs />` (shadcn) | Tab[] |
+| Tab | Одна вкладка | `<TabsContent />` | Так |
+| TabularSection | Редагована таблиця | `<DataTable />` (TanStack + shadcn) | Ні |
+| Separator | Горизонтальна лінія | `<Separator />` (shadcn) | Ні |
+| Label | Статичний текст | `<p className="text-sm text-muted-foreground">` | Ні |
+| Accordion | Секція, що згортається | `<Accordion />` (shadcn) | Так |
+
+**Властивості Field:**
+
+| Поле | Тип | Опис |
+|---|---|---|
+| ref | string | Ім'я реквізиту з метаданих об'єкта (required) |
+| label | LocalizedString \| null | Override label (якщо null — береться з displayName реквізиту) |
+| component | string \| null | Override компонента (наприклад, `"Textarea"` замість `"Input"`) |
+| readOnly | boolean | Тільки для читання |
+| autoFocus | boolean | Фокус при відкритті форми |
+| placeholder | LocalizedString \| null | Placeholder |
+| className | string \| null | Додатковий CSS-клас |
+| hidden | boolean | Приховане поле (зберігає значення, але не відображається) |
+| visibleWhen | Expression \| null | Умова видимості (Phase 4) |
+
+**Властивості TabularSection:**
+
+| Поле | Тип | Опис |
+|---|---|---|
+| ref | string | Ім'я табличної частини |
+| columns | string[] \| null | Які колонки показувати (null = всі) |
+| allowAdd | boolean | Дозволити додавання рядків (default: true) |
+| allowDelete | boolean | Дозволити видалення (default: true) |
+| allowReorder | boolean | Дозволити зміну порядку (default: false) |
+
+#### 10.5.4. Toolbar і CommandBar
+
+**Toolbar** — кнопки вгорі форми:
+
+| Тип | Опис |
+|---|---|
+| SaveButton | Зберегти запис |
+| SaveAndCloseButton | Зберегти і закрити |
+| PostButton | Провести документ (тільки для Document з posting) |
+| UnpostButton | Скасувати проведення |
+| DeletionMarkButton | Позначити/зняти позначку на видалення |
+| Separator | Роздільник |
+| CustomButton | Кастомна кнопка з name, label, icon, action |
+
+**CommandBar** — навігаційні посилання внизу форми:
+
+| Тип | Опис |
+|---|---|
+| NavigationLink | Перехід до пов'язаного списку з фільтром. Приклад: "Документи продажу" → list of SalesOrder where counterparty_id = $id |
+
+#### 10.5.5. Автоформа: алгоритм генерації
+
+Коли форма ще не створена (немає `*.form.json`), Simetra генерує автоформу:
+
+1. Взяти всі attributes об'єкта (без стандартних)
+2. Якщо є tabularSections — створити `Tabs`: перша вкладка "Основні" з полями, решта — по одній на кожну ТЧ
+3. Якщо немає ТЧ — просто вертикальний список полів
+4. Якщо полів > 6 — розбити на 2 колонки
+5. Ref-поля: на довідники → `Combobox`, на перелічення → `Select`
+6. Toolbar за типом: Catalog → Save + DeletionMark; Document → Save + Post/Unpost + DeletionMark
+
+#### 10.5.6. Runtime-рендерер (`@simetra/form-runtime`, Phase 3)
+
+React-компонент, який зчитує `form.json` + `meta.json` і рендерить повноцінну форму:
+
+```tsx
+<SimetraForm
+  objectRef={{ kind: "Catalog", name: "Counterparties" }}
+  formKind="item"
+  metadata={projectMetadata}
+  apiClient={supabaseClient}
+  recordId={id}
+  onSave={handleSave}
+/>
+```
+
+Рендерер:
+- Зчитує метадані об'єкта (`*.meta.json`) — стандартні та кастомні реквізити
+- Зчитує форму (`*.form.json`) — layout, toolbar
+- Генерує Zod-схему валідації на льоту
+- Будує react-hook-form з zodResolver
+- Рендерить layout дерево рекурсивно, підставляючи shadcn/ui компоненти
+- Для Ref-полів — виконує запити до API (autocomplete/search)
+- Для TabularSection — рендерить TanStack Table з inline edit
+
+Зміни у формі (`form.json`) або метаданих (`meta.json`) → миттєве оновлення рендерінгу без перекомпіляції.
+
+#### 10.5.7. Codegen (`@simetra/generator-react`, Phase 4)
+
+Для кожного об'єкта з формою генерується:
+- `{object}-form.tsx` — React-компонент з shadcn/ui, react-hook-form, Zod
+- `{object}-schema.ts` — Zod-схема валідації
+- `{object}-columns.tsx` — column definitions для TanStack Table (для list form)
+- `{object}-api.ts` — typed API client (Supabase або generic fetch)
+
+**Бібліотека доменних компонентів `@simetra/ui` (Phase 3):**
+- `<CatalogCombobox catalogRef="Products" />` — combobox з пошуком по довіднику
+- `<EnumSelect enumRef="OrderStatus" />` — select з значеннями перелічення
+- `<EditableDataTable />` — таблиця для табличних частин з inline edit
+- `<DocumentNumberInput />` — поле номера з автонумерацією
+- `<PostButton />` / `<UnpostButton />` — кнопки проведення з RPC-викликом
+
+#### 10.5.8. Візуальний конструктор форм (`apps/web`, Phase 4)
+
+**Layout:**
+- Ліва палітра: список нерозміщених полів + layout-елементи (Group, Tabs, Columns, Separator)
+- Canvas: структурне представлення форми з рамками елементів. Drag-and-drop через @dnd-kit
+- Права панель: властивості вибраного елемента (label override, component override, className, visibility)
+
+**Операції:**
+- Drag field з палітри на canvas
+- Drag-and-drop для зміни порядку
+- Wrap selection у Group/Columns/Tabs
+- Delete елемент (повертається у палітру)
+- Preview: рендерінг форми через `@simetra/form-runtime`
+
+**Збереження:** зміни зберігаються у `*.form.json` у каталозі `forms/` об'єкта.
+
+#### 10.5.9. Фазування форм
+
+| Крок | Пакет | Фаза |
+|---|---|---|
+| Zod-схеми для form.json | `@simetra/core` | Phase 3 |
+| Алгоритм автоформи | `@simetra/core` | Phase 3 |
+| Runtime-рендерер | `@simetra/form-runtime` | Phase 3 |
+| Бібліотека доменних компонентів | `@simetra/ui` | Phase 3 |
+| Codegen React | `@simetra/generator-react` | Phase 4 |
+| Візуальний конструктор форм | `apps/web` | Phase 4 |
+
+### 10.6. Генерація каркасу додатку — Application Shell (Phase 4–5)
+
+Після Phase 2–3 Simetra генерує БД + API + форми. Application Shell додає навігацію, маршрутизацію та dashboard.
+
+#### 10.6.1. `application.meta.json`
+
+Файл метаданих рівня проєкту, що описує структуру додатку — підсистеми, навігацію, тему, dashboard:
+
+```json
+{
+  "$schema": "https://simetra.dev/schemas/v1/application.schema.json",
+  "kind": "Application",
+  "displayName": { "uk": "Торговий облік", "en": "Trade Accounting" },
+  "logo": "assets/logo.svg",
+  "theme": {
+    "base": "zinc",
+    "mode": "system",
+    "radius": 0.5,
+    "accentColor": "blue"
+  },
+  "shell": {
+    "layout": "SidebarWithHeader",
+    "sidebar": {
+      "position": "left",
+      "collapsible": true,
+      "width": 240,
+      "showSearch": true
+    },
+    "header": {
+      "showBreadcrumbs": true,
+      "showGlobalSearch": true,
+      "showUserMenu": true
+    }
+  },
+  "subsystems": [],
+  "dashboard": { "widgets": [] }
+}
+```
+
+#### 10.6.2. Специфікація subsystems[]
+
+| Поле | Тип | Опис |
+|---|---|---|
+| name | string (snake_case) | Технічне ім'я (→ URL path) |
+| displayName | LocalizedString | Назва розділу |
+| icon | string | Ім'я іконки (lucide-react) |
+| order | number | Порядок у sidebar |
+| objects | SubsystemObject[] | Об'єкти в розділі |
+
+**SubsystemObject:**
+
+| Поле | Тип | Опис |
+|---|---|---|
+| ref | MetadataRef `{ kind, name }` | Посилання на об'єкт метаданих |
+| showInList | boolean | Показувати в меню розділу (default: true) |
+| listForm | string \| null | Override форми списку (ім'я form.json) |
+
+#### 10.6.3. Dashboard widgets
+
+```json
+{
+  "dashboard": {
+    "widgets": [
+      {
+        "type": "RecentDocuments",
+        "title": { "uk": "Останні документи" },
+        "documentTypes": [
+          { "kind": "Document", "name": "SalesOrder" }
+        ],
+        "limit": 10,
+        "span": 2
+      },
+      {
+        "type": "RegisterBalance",
+        "title": { "uk": "Залишки на складах" },
+        "registerRef": { "kind": "AccumulationRegister", "name": "InventoryBalance" },
+        "groupBy": ["warehouse"],
+        "resource": "quantity",
+        "span": 1
+      },
+      {
+        "type": "Counter",
+        "title": { "uk": "Неоплачені рахунки" },
+        "source": { "kind": "Document", "name": "SalesInvoice" },
+        "filter": "posted = true AND paid = false",
+        "icon": "AlertCircle",
+        "variant": "destructive",
+        "span": 1
+      }
+    ]
+  }
+}
+```
+
+**Типи віджетів (MVP):**
+
+| Тип | Опис | Дані |
+|---|---|---|
+| RecentDocuments | Список останніх документів | Запит до таблиць документів, сортування по date desc |
+| RegisterBalance | Залишки по регістру | View `{register}_balance` |
+| Counter | Число з іконкою та підписом | `SELECT count(*) FROM ... WHERE ...` |
+| QuickLinks | Набір кнопок швидких дій | Статичний список `{ label, icon, href }[]` |
+
+#### 10.6.4. Shell layouts
+
+| Layout | Опис | Аналогія |
+|---|---|---|
+| SidebarWithHeader | Sidebar зліва + header зверху | Supabase, Linear |
+| TopNavWithTabs | Горизонтальна навігація вгорі | 1С:Fresh, Odoo |
+| MinimalSidebar | Іконки без тексту зліва | Slack |
+
+Кожен layout — React-компонент у `@simetra/ui`, параметризований через `application.meta.json`.
+
+#### 10.6.5. Автогенерація маршрутів
+
+З `subsystems[]` і `objects[]` Simetra автоматично генерує маршрути:
+
+```
+/                                      → Dashboard
+/{subsystem.name}                      → Список об'єктів підсистеми
+/{subsystem.name}/{object.name}        → Список записів об'єкта
+/{subsystem.name}/{object.name}/new    → Форма створення
+/{subsystem.name}/{object.name}/:id    → Форма редагування
+/settings                             → Константи / налаштування
+```
+
+#### 10.6.6. Стандартні сторінки
+
+**Сторінка списку** — автоматично для кожного об'єкта:
+- TanStack Table з колонками з `list.form.json` або автоматично з metadata
+- Пошук по displayName полях (code, description для Catalog; number, date для Document)
+- Фільтр по періоду (для Document)
+- Підтримка ієрархії (для Catalog з hierarchyType ≠ None)
+- Кнопка "Створити", bulk-дії
+
+**Сторінка елемента** — обгортка навколо форми (item.form.json):
+- Toolbar (Save, Post/Unpost, DeletionMark)
+- Breadcrumbs
+- Навігація "назад до списку"
+
+**Сторінка констант** — одна форма для всіх констант з підсистеми.
+
+#### 10.6.7. Два режими
+
+**Runtime:** `<SimetraApp metadata={project} apiClient={supabase} />` — один React-компонент, який читає всі JSON-метадані і рендерить повний додаток. Зміни в метаданих → миттєве оновлення UI.
+
+**Codegen (eject):** `simetra generate --target react-app` → повний Next.js/Vite проєкт зі структурою:
+
+```
+exported-app/
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx
+│   │   ├── page.tsx                    # Dashboard
+│   │   └── {subsystem}/
+│   │       └── {object}/
+│   │           ├── page.tsx            # List
+│   │           ├── [id]/page.tsx       # Edit
+│   │           └── new/page.tsx        # Create
+│   ├── components/
+│   │   ├── shell/                      # Sidebar, Header, Breadcrumbs
+│   │   ├── forms/                      # Згенеровані форми
+│   │   └── lists/                      # Згенеровані списки
+│   ├── lib/
+│   │   ├── api.ts                      # Supabase client
+│   │   └── schemas/                    # Zod-схеми
+│   └── simetra.config.json            # Зв'язок з метаданими
+├── package.json
+└── tailwind.config.ts
+```
+
+#### 10.6.8. Зв'язок з бекендом
+
+| Стратегія | Опис | Коли |
+|---|---|---|
+| Supabase | Simetra створила таблиці в Supabase → PostgREST дає API автоматично. Фронтенд працює через supabase-js | Phase 2–3, основний шлях |
+| Generated API | Simetra генерує .NET/Node.js API з метаданих (контролери, сервіси, маршрути) | Phase 5 |
+| Embedded | Simetra як Tauri-додаток має вбудований сервер, що працює з локальною PostgreSQL напряму | Phase 5 |
+
+#### 10.6.9. Фазування Application Shell
+
+| Крок | Пакет | Фаза |
+|---|---|---|
+| Zod-схеми для application.meta.json | `@simetra/core` | Phase 4 |
+| Shell layouts (SidebarWithHeader) | `@simetra/ui` | Phase 4 |
+| Runtime app renderer | `@simetra/app-runtime` | Phase 4 |
+| Dashboard widgets (RecentDocuments, RegisterBalance, Counter, QuickLinks) | `@simetra/ui` | Phase 4 |
+| Codegen React App | `@simetra/generator-react-app` | Phase 5 |
+| Generated .NET/Node.js API | `@simetra/generator-dotnet` / `generator-node` | Phase 5 |
 
 ---
 
@@ -1038,52 +1606,81 @@ interface GeneratorOutput {
 
 **Не включено:** генерація, підключення до БД, schema introspection, Tauri desktop, VS Code extension.
 
-### Phase 2 — Генерація та CLI
+### Phase 2a — DDL Generator + SQL Preview
 
-**Ціль:** Перетворити метадані на робочі артефакти.
-
-**Результат:**
-- PostgreSQL SQL Generator (DDL, indexes, FK, enum types)
-- View/materialized view для регістрів
-- Trigger для автонумерації
-- EF Core Generator (entities, configurations, DbContext)
-- CLI-інструмент: `simetra generate --target postgresql`
-- Snapshot-based migration diff
-- Валідація проєкту перед генерацією
-- Кнопка "Generate" у Web UI з preview та завантаженням згенерованих файлів
-
-### Phase 3 — Desktop, VS Code та Live Connection
-
-**Ціль:** Розширити платформи доставки та зв'язати конфігуратор з реальною БД.
+**Ціль:** Перетворити метадані на PostgreSQL-схему та показати результат.
 
 **Результат:**
-- **Tauri 2.0 desktop-додаток** — обгортка web-додатку з нативним доступом до файлової системи (Windows, macOS, Linux)
-- **VS Code extension** — sidebar panel з деревом метаданих та редактором у webview, інтеграція з workspace FS
-- Підключення до PostgreSQL (connection string)
-- Schema introspection (читання поточної схеми)
-- Diff між метамоделлю та живою схемою
-- Інтерактивне застосування міграцій
-- Імпорт існуючої БД з розпізнаванням бізнес-типів (евристики)
+- `@simetra/generator-pg` — новий пакет: CREATE TABLE, INDEX, FK, ENUM types для всіх 7 типів метаданих
+- View/materialized view для регістрів (залишки, обороти, зріз останніх)
+- Trigger для автонумерації (Catalog, Document)
+- `@simetra/generator-api` — інтерфейс MetadataGenerator
+- SQL Preview UI: кнопка "Generate" → syntax-highlighted preview → download/copy
+- Validation перед генерацією (referential integrity, обов'язкові поля)
+- `@simetra/cli` — CLI: `simetra generate --target postgresql`
 
-### Phase 4 — Advanced Modeling
+### Phase 2b — Posting Engine
 
-**Ціль:** Розширити набір бізнес-об'єктів.
-
-**Результат:**
-- Плани видів характеристик (динамічна аналітика)
-- Плани рахунків + Регістри бухгалтерії
-- Schema Visualizer (React Flow — інтерактивна ER-діаграма)
-- Шаблони типових конфігурацій (торгівля, послуги, виробництво)
-- Порівняння версій метаданих
-
-### Phase 5 — Platform
-
-**Ціль:** Рух до metadata-driven runtime.
+**Ціль:** Декларативний маппінг проведення документів і генерація SQL-функцій.
 
 **Результат:**
-- Автоматична генерація REST API з метаданих
-- Автоматична генерація UI-форм
+- Zod-схеми `posting` секції у `@simetra/core` (movements, validations, mapping expressions)
+- Генерація `post_`/`unpost_`/`check_` SQL-функцій у `@simetra/generator-pg`
+- Візуальний editor маппінгів у `apps/web`: dropdown-based маппінг полів документа на виміри/ресурси регістру (MVP); drag-drop лінії як enhancement
+- SQL-функції доступні як Supabase RPC endpoints через PostgREST
+
+### Phase 2c — Deployment Adapter + Schema Diff
+
+**Ціль:** Задеплоїти згенерований SQL і підтримувати еволюцію схеми.
+
+**Результат:**
+- Supabase як перший deployment target (Edge Function proxy для Apply)
+- Connection settings у Project Settings (URL, API key — не в метаданих)
+- Schema snapshot + diff: порівняння new DDL vs applied state
+- Генерація ALTER TABLE замість CREATE TABLE для існуючих об'єктів
+- Destructive changes (DROP) з explicit confirmation
+
+### Phase 3 — Form Runtime + Domain Components
+
+**Ціль:** Runtime-рендерінг форм з JSON-метаданих і бібліотека domain-компонентів.
+
+**Результат:**
+- **Zod-схеми для `form.json`** — layout-елементи (Field, Group, Columns, Tabs, TabularSection, Separator, Accordion)
+- **Алгоритм автоформи** — zero-config генерація форми з метаданих об'єкта:
+  - Маппінг типів полів → shadcn/ui компоненти (String→Input, Ref(Catalog)→Combobox, Boolean→Switch тощо)
+  - Якщо полів > 6 → 2 колонки; якщо є ТЧ → Tabs
+- **`@simetra/form-runtime`** — React-компонент `<SimetraForm>`, який читає `*.form.json` + `*.meta.json` і рендерить форму на льоту (react-hook-form + zodResolver + shadcn/ui)
+- **`@simetra/ui`** — domain-компоненти: `<CatalogCombobox>`, `<EnumSelect>`, `<EditableDataTable>`, `<DocumentNumberInput>`, `<PostButton>`, `<UnpostButton>`
+- **`computedFields` у TabularSection** — формули автоперерахунку (§5.8)
+- **Desktop (Tauri 2.0)** — обгортка web-додатку з нативним FS (Windows, macOS, Linux)
+- **VS Code extension** — sidebar panel з деревом метаданих у webview
+- Schema introspection, live DB connection, import існуючої БД
+
+### Phase 4 — Application Shell + Visual Form Designer
+
+**Ціль:** Повний каркас додатку і візуальний конструктор форм.
+
+**Результат:**
+- **`application.meta.json`** — новий файл метаданих рівня проєкту:
+  - Підсистеми (subsystems) — логічне групування об'єктів у розділи
+  - Shell layout (SidebarWithHeader, TopNavWithTabs, MinimalSidebar)
+  - Dashboard з типізованими віджетами (RecentDocuments, RegisterBalance, Counter, QuickLinks)
+  - Тема (base color, mode, radius, accent)
+- **Автогенерація маршрутів** з subsystems: `/{subsystem}/{object}`, `/{subsystem}/{object}/:id`
+- **`@simetra/app-runtime`** — `<SimetraApp>` рендерить повний додаток з JSON-метаданих
+- **Візуальний конструктор форм** у `apps/web`: палітра полів + canvas + drag-and-drop (@dnd-kit)
+- **Codegen React (eject):** `@simetra/generator-react` → `.tsx` файли з shadcn/ui, react-hook-form, Zod
+- **Advanced Modeling:** ChartOfAccounts, AccountingRegister, Schema Visualizer (React Flow)
+
+### Phase 5 — Platform + Full App Codegen
+
+**Ціль:** Повноцінний low-code app builder з codegen-eject.
+
+**Результат:**
+- `@simetra/generator-react-app` — повний Next.js/Vite проєкт (shell, forms, lists, routing)
+- Generated .NET/Node.js API з метаданих (контролери, сервіси, маршрути)
 - Бізнес-процеси та Задачі
+- Embedded server mode (Tauri + local PostgreSQL)
 - Плагінна архітектура для генераторів
 - Cloud-версія з колаборацією
 
@@ -1095,8 +1692,8 @@ interface GeneratorOutput {
 
 1. PostgreSQL — єдина підтримувана СУБД на старті. Архітектура дозволяє інші, але реалізація — тільки PG
 2. Метамодель підтримує тільки вбудовані типи метаданих — кастомні типи не в scope MVP
-3. Генератори не виконують SQL — тільки генерують файли. Виконання — відповідальність користувача (Phase 2) або через live connection (Phase 3)
-4. Без runtime — продукт не виконує бізнес-логіку, не обслуговує запити. Це інструмент проєктування
+3. Генератори в Phase 2a не виконують SQL — тільки генерують файли. Phase 2c додає Supabase Apply Adapter для виконання
+4. Phase 1–2: продукт не виконує бізнес-логіку — це інструмент проєктування та генерації. Phase 3+ додає runtime-рендерінг форм
 
 ### 13.2. Ризики
 
@@ -1169,10 +1766,11 @@ interface GeneratorOutput {
 ### Phase 2 (Generation)
 
 1. Згенерований DDL створює валідну PostgreSQL-схему
-2. EF Core entities компілюються без помилок
-3. Міграції коректно обробляють додавання/видалення полів
-4. Регістри отримують view для залишків/оборотів
-5. CLI працює без UI (headless generation)
+2. Регістри отримують view для залишків/оборотів
+3. CLI працює без UI (headless generation)
+4. Функції проведення (post/unpost) коректно маплять поля документа на регістри
+5. Supabase Apply працює енд-ту-енд: Generate → Apply → REST API auto-created
+6. Schema diff коректно обробляє додавання/видалення полів
 
 ### Загальний успіх продукту
 
@@ -1192,11 +1790,11 @@ interface GeneratorOutput {
 - ~~**Стратегія зберігання стану**~~ → **Zustand** (in-memory) з серіалізацією у файлову систему через абстракцію `StorageProvider` при Save. Phase 1: `WebStorage` (File System Access API + download/upload fallback). Phase 3: `TauriStorage` (нативний FS).
 - ~~**Як обробляти compound types**~~ → Єдиний тип `Ref` з двома режимами: single ref (`ref: { kind, name }`) і polymorphic ref (`allowedTypes: [{ kind, name }, ...]`). `ref` і `allowedTypes` — взаємовиключні. Polymorphic ref генерується як `{field}_type` + `{field}_id` (Dynamic Link pattern).
 - ~~**Web vs Desktop first**~~ → **Web-first**. Phase 1 — React SPA у браузері, без серверу. Tauri desktop та VS Code extension — Phase 3. Обґрунтування: нижчий бар'єр для adoption (не потрібно встановлювати), швидший прототип, спільний код між усіма платформами.
+- ~~**Як генерувати код проведення**~~ → **Декларативний mapping** у секції `posting` метаданих документа (§5.3.1). Покриває 90% шаблонних випадків. Для складної логіки — точка розширення `_post_custom()`.
 
 ### Потребують рішення до Phase 2
 
 4. **Формат міграцій** — SQL-файли (як Drizzle/Prisma) чи C# класи (як EF Core)?
-5. **Як генерувати код проведення** — декларативний mapping в метаданих чи тільки структура, без логіки?
 6. **Стратегія для регістрів бухгалтерії** — чи потрібен Plan of Accounts як prerequisite, чи можна спростити?
 
 ### Архітектурні (можуть чекати)
