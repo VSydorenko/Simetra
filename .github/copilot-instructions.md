@@ -8,7 +8,7 @@ Specialized agents for delegating specific workflows:
 
 | Agent | Purpose |
 |-------|---------|
-| `task-orchestrator` | **Оркестрація виконання етапу задачі.** Розбиває етап на кроки, делегує worker-субагентам (simetra-web-ui, simetra-core-metadata), контролює якість через code-review. Entry-point: промпт `виконай-задачу`. |
+| `task-orchestrator` | **Оркестрація виконання етапу задачі.** Розбиває етап на кроки, делегує worker-субагентам (simetra-web-ui, simetra-core-metadata), контролює якість через code-review. Модель обирається юзером при запуску. Entry-point: промпт `виконай-задачу`. |
 | `codebase-research` | **Дослідження кодової бази.** Read-only аналіз структури, патернів, залежностей, Zod-схем. Завжди запускай цього агента замість generic Explore для збору контексту перед імплементацією. |
 | `simetra-web-ui` | **Worker: UI реалізація.** React компоненти, stores, hooks в `apps/web/`. Викликається тільки через `task-orchestrator`. Hidden (user-invocable: false). |
 | `simetra-core-metadata` | **Worker: Core реалізація.** Zod-схеми, типи, валідація в `packages/core/`. Викликається тільки через `task-orchestrator`. Hidden (user-invocable: false). |

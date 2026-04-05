@@ -1,7 +1,7 @@
 ---
 description: "Worker-агент для реалізації UI задач в apps/web: React компоненти, Zustand stores, hooks, тести"
 tools: [execute/getTerminalOutput, execute/runInTerminal, read/problems, read/readFile, edit/createFile, edit/editFiles, edit/rename, search, todo]
-model: Claude Sonnet 4.5 (copilot)
+model: Claude Opus 4.6 (copilot)
 agents: []
 user-invocable: false
 ---
