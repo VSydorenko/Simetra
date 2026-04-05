@@ -833,6 +833,7 @@ function ConstantTypeSettings({
           onChange={(v) =>
             onUpdate({ valueType: v } as Partial<MetadataObject>)
           }
+          excludeTypes={["Ref"]}
         />
       </SettingRow>
       <SettingRow label={t("metadata.setting.defaultValue")}>

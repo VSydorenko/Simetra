@@ -15,7 +15,6 @@ export function EditorPanel() {
   const { openTabs, activeTabId, setActiveSection } = useUiStore()
   const sessionRestoreStatus = useProjectStore((s) => s.sessionRestoreStatus)
   const isNewProject = useProjectStore((s) => s.isNewProject)
-  const projectOrigin = useProjectStore((s) => s.projectOrigin)
 
   const activeTab = activeTabId
     ? openTabs.find((tab) => tab.id === activeTabId)
@@ -28,8 +27,7 @@ export function EditorPanel() {
 
   // Показати Welcome Screen коли немає вкладок і:
   // — сесія ще не відновлена, або
-  // — це новий порожній проєкт, або
-  // — проєкт відновлено з ZIP import (no tabs, show Welcome замість порожнього екрану)
+  // — це новий порожній проєкт
   // recovery-available — проєкт вже завантажений, показуємо RecoveryBanner замість Welcome
   const showWelcome =
     !activeTab &&
@@ -37,8 +35,7 @@ export function EditorPanel() {
       sessionRestoreStatus === "awaiting-permission" ||
       sessionRestoreStatus === "restoring" ||
       sessionRestoreStatus === "failed" ||
-      isNewProject ||
-      projectOrigin === "zip-import")
+      isNewProject)
 
   const showRecoveryBanner = sessionRestoreStatus === "recovery-available"
 

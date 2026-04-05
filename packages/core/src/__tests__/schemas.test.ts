@@ -1016,7 +1016,7 @@ describe("$schema enrichment", () => {
     })
     const enriched = enrichSchemaUrl(obj, "1.0")
     expect(enriched.$schema).toBe(
-      "https://simetra.dev/schemas/v1.0/catalog.schema.json",
+      "https://simetra.dev/schemas/v1/catalog.schema.json",
     )
   })
 
@@ -1024,13 +1024,13 @@ describe("$schema enrichment", () => {
     const project = projectSchema.parse({ name: "Test" })
     const enriched = enrichProjectSchemaUrl(project, "1.0")
     expect(enriched.$schema).toBe(
-      "https://simetra.dev/schemas/v1.0/project.schema.json",
+      "https://simetra.dev/schemas/v1/project.schema.json",
     )
   })
 
   it("buildConstantsSchemaUrl returns correct URL", () => {
     expect(buildConstantsSchemaUrl("1.0")).toBe(
-      "https://simetra.dev/schemas/v1.0/constants.schema.json",
+      "https://simetra.dev/schemas/v1/constants.schema.json",
     )
   })
 
@@ -1048,7 +1048,33 @@ describe("$schema enrichment", () => {
     const first = enrichSchemaUrl(obj, "1.0")
     const second = enrichSchemaUrl(first, "2.0")
     expect(second.$schema).toBe(
-      "https://simetra.dev/schemas/v2.0/catalog.schema.json",
+      "https://simetra.dev/schemas/v2/catalog.schema.json",
+    )
+  })
+
+  it("enrichSchemaUrl normalizes version: major.minor where minor > 0", () => {
+    const obj = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Test",
+      codeLength: 9,
+      codeType: "String",
+      descriptionLength: 100,
+      hierarchyType: "None",
+      attributes: [],
+      tabularSections: [],
+    })
+    const enriched = enrichSchemaUrl(obj, "1.1")
+    expect(enriched.$schema).toBe(
+      "https://simetra.dev/schemas/v1.1/catalog.schema.json",
+    )
+  })
+
+  it("buildConstantsSchemaUrl normalizes version correctly", () => {
+    expect(buildConstantsSchemaUrl("2.0")).toBe(
+      "https://simetra.dev/schemas/v2/constants.schema.json",
+    )
+    expect(buildConstantsSchemaUrl("2.1")).toBe(
+      "https://simetra.dev/schemas/v2.1/constants.schema.json",
     )
   })
 })

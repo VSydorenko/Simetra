@@ -7,6 +7,7 @@ interface SessionData {
   projectModel: ProjectModel
   lastSavedVersion: number
   savedAt: number
+  origin?: string // "directory" | "zip-import" — тільки persistable origins
 }
 
 interface DraftData {
@@ -59,7 +60,8 @@ function getDb(): Promise<IDBPDatabase<SimetraSessionDB>> | null {
 export async function saveSession(
   handle: FileSystemDirectoryHandle | null,
   model: ProjectModel,
-  version: number
+  version: number,
+  origin?: string,
 ): Promise<void> {
   try {
     const dbP = getDb()
@@ -72,6 +74,7 @@ export async function saveSession(
         projectModel: model,
         lastSavedVersion: version,
         savedAt: Date.now(),
+        ...(origin && { origin }),
       },
       SESSION_KEY
     )

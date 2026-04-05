@@ -17,6 +17,7 @@ interface SessionMeta {
   name: string | null
   savedAt: number | null
   hasHandle: boolean
+  origin?: string // "directory" | "zip-import" | undefined (legacy)
 }
 
 export function WelcomeScreen() {
@@ -30,6 +31,7 @@ export function WelcomeScreen() {
     (s) => s.requestDirectoryPermission
   )
   const restoreDraft = useProjectStore((s) => s.restoreDraft)
+  const restoreSession = useProjectStore((s) => s.restoreSession)
 
   const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null)
 
@@ -43,6 +45,7 @@ export function WelcomeScreen() {
             session.projectHandle?.name ?? session.projectModel.project.name,
           savedAt: session.savedAt,
           hasHandle: !!session.projectHandle,
+          origin: session.origin,
         })
         return
       }
@@ -76,9 +79,10 @@ export function WelcomeScreen() {
     if (sessionMeta?.hasHandle) {
       void requestDirectoryPermission()
     } else {
-      void restoreDraft()
+      // ZIP-import session або legacy session без handle — restoreSession обробить
+      void restoreSession()
     }
-  }, [sessionMeta, requestDirectoryPermission, restoreDraft])
+  }, [sessionMeta, requestDirectoryPermission, restoreSession])
 
   const handleRestoreFromBackup = useCallback(() => {
     void restoreDraft()

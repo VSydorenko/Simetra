@@ -210,7 +210,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         })
 
         // Оновити session в IndexedDB, очистити draft
-        void saveSession(newHandle, model, snapshotVersion)
+        void saveSession(newHandle, model, snapshotVersion, 'directory')
         stopAndClearDraft()
       } catch (e) {
         set({
@@ -232,6 +232,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         useMetadataStore.temporal.getState().clear()
 
         const handle = result.handle ?? null
+        const origin = handle ? 'directory' : 'zip-import'
         const version = useMetadataStore.getState().version
         set({
           isLoading: false,
@@ -243,14 +244,14 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
           ...withHandle(handle),
           openWarnings: result.warnings ?? [],
           sessionRestoreStatus: "restored",
-          projectOrigin: handle ? "directory" : "zip-import",
+          projectOrigin: origin,
           pendingDirectoryName: null,
           pendingRecovery: null,
           hasDraftFallback: false,
         })
 
         // Оновити session, очистити draft
-        void saveSession(handle, result.model, version)
+        void saveSession(handle, result.model, version, origin)
         stopAndClearDraft()
         resumeDraftSync()
       } catch (e) {
@@ -307,7 +308,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         })
 
         // Зберегти повноцінну session з handle: null (для restore flow після reload)
-        void saveSession(null, result.model, version)
+        void saveSession(null, result.model, version, 'zip-import')
         resumeDraftSync()
       } catch (e) {
         set({
@@ -368,7 +369,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
               })
               stopAndClearDraft()
               // Оновити session тільки коли draft не новіший (щоб зберегти baseline для порівняння)
-              void saveSession(handle, result.model, version)
+              void saveSession(handle, result.model, version, 'directory')
             }
             resumeDraftSync()
             return
@@ -408,7 +409,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
             ...useMetadataStore.getState().objectVersions,
           },
           sessionRestoreStatus: "restored",
-          projectOrigin: "zip-import",
+          projectOrigin: (session.origin as ProjectOrigin) ?? "zip-import",
           pendingDirectoryName: null,
           pendingRecovery: null,
           hasDraftFallback: false,
@@ -479,7 +480,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
             pendingRecovery: null,
           })
           stopAndClearDraft()
-          void saveSession(handle, result.model, version)
+          void saveSession(handle, result.model, version, 'directory')
         }
         resumeDraftSync()
       } catch (e) {

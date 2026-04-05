@@ -10,63 +10,63 @@
 
 ### Fix 1: Constants wrapper parser fallback (CRITICAL — data loss)
 
-- [ ] У `parseFileStructure` (`apps/web/src/storage/web-storage.ts`): коли `constantsFileSchema.safeParse` для wrapper фейлиться — розпакувати `wrapperResult.data.constants` (або сиру JSON-масу `.constants`) **поелементно** через `constantSchema.safeParse` на кожному елементі
-- [ ] Валідні елементи → у `parsed.objects`, невалідні → у `warnings` з адресою `constants[i]` та деталізацією помилки
-- [ ] Happy path (wrapper schema passes): елементи з `wrapperResult.data.constants` вже пройшли `z.array(constantSchema)` на рівні wrapper — додаткова поелементна валідація не потрібна
-- [ ] Додати regression test: wrapper з 3 constants, один broken → 2 повертаються у model, 1 warning з коректною адресою
+- [X] У `parseFileStructure` (`apps/web/src/storage/web-storage.ts`): коли `constantsFileSchema.safeParse` для wrapper фейлиться — розпакувати `wrapperResult.data.constants` (або сиру JSON-масу `.constants`) **поелементно** через `constantSchema.safeParse` на кожному елементі
+- [X] Валідні елементи → у `parsed.objects`, невалідні → у `warnings` з адресою `constants[i]` та деталізацією помилки
+- [X] Happy path (wrapper schema passes): елементи з `wrapperResult.data.constants` вже пройшли `z.array(constantSchema)` на рівні wrapper — додаткова поелементна валідація не потрібна
+- [X] Додати regression test: wrapper з 3 constants, один broken → 2 повертаються у model, 1 warning з коректною адресою
 
 ### Fix 2: ZIP import — persisted origin у SessionData (повна реалізація)
 
-- [ ] Додати поле `origin?: ProjectOrigin` до `SessionData` interface у `apps/web/src/storage/session-db.ts`
-- [ ] Розширити сигнатуру `saveSession` для прийому `origin`
-- [ ] Оновити всі 5 callsites `saveSession` у `apps/web/src/stores/project-store.ts` — передавати актуальний `projectOrigin`:
+- [X] Додати поле `origin?: ProjectOrigin` до `SessionData` interface у `apps/web/src/storage/session-db.ts`
+- [X] Розширити сигнатуру `saveSession` для прийому `origin`
+- [X] Оновити всі 5 callsites `saveSession` у `apps/web/src/stores/project-store.ts` — передавати актуальний `projectOrigin`:
   - `saveProject` → `"directory"`
   - `openProject` → `"directory"` або `"zip-import"` (залежно від handle)
   - `importProject` → `"zip-import"`
   - `restoreSession` (handle branch) → `"directory"`
   - `requestDirectoryPermission` → `"directory"`
-- [ ] У `restoreSession` (null-handle branch): читати `session.origin` замість hardcoded `"zip-import"`, використовувати його для `projectOrigin`
-- [ ] Прибрати `projectOrigin === "zip-import"` з умови `showWelcome` у `apps/web/src/components/layout/editor-panel.tsx` — ця умова зараз **включає** Welcome Screen для zip-import навіть після restore; без неї ZIP-проєкт після restore працює як повноцінний відкритий проєкт (editor відразу видимий)
-- [ ] Оновити `SessionMeta` у `welcome-screen.tsx`: додати `origin` і використовувати для кращого UX повідомлення (розрізняти ZIP session і draft)
-- [ ] Маппінг origin для кожного callsite `saveSession`: `"directory"`, `"zip-import"` persist-яться; `"new"` і `"draft-recovery"` — НЕ persist-яться, бо ці стани не зберігаються як session (newProject не викликає saveSession, restoreDraft не викликає saveSession)
-- [ ] Backward compatibility: якщо `origin` відсутній у збереженій session (legacy), виводити з наявності/відсутності `projectHandle`
-- [ ] Додати тест на збереження та відновлення origin через saveSession/loadSession
+- [X] У `restoreSession` (null-handle branch): читати `session.origin` замість hardcoded `"zip-import"`, використовувати його для `projectOrigin`
+- [X] Прибрати `projectOrigin === "zip-import"` з умови `showWelcome` у `apps/web/src/components/layout/editor-panel.tsx` — ця умова зараз **включає** Welcome Screen для zip-import навіть після restore; без неї ZIP-проєкт після restore працює як повноцінний відкритий проєкт (editor відразу видимий)
+- [X] Оновити `SessionMeta` у `welcome-screen.tsx`: додати `origin` і використовувати для кращого UX повідомлення (розрізняти ZIP session і draft)
+- [X] Маппінг origin для кожного callsite `saveSession`: `"directory"`, `"zip-import"` persist-яться; `"new"` і `"draft-recovery"` — НЕ persist-яться, бо ці стани не зберігаються як session (newProject не викликає saveSession, restoreDraft не викликає saveSession)
+- [X] Backward compatibility: якщо `origin` відсутній у збереженій session (legacy), виводити з наявності/відсутності `projectHandle`
+- [X] Додати тест на збереження та відновлення origin через saveSession/loadSession
 
 ### Fix 3: Constant UI — заборонити Ref у FieldTypeSelect
 
 > **Примітка:** Core-level fix вже виконаний: `constantValueTypeSchema = fieldTypeSchema.exclude(["Ref"])` у `packages/core/src/schemas/constant.ts`. Цей fix стосується тільки UI — щоб dropdown не показував заборонений варіант.
 
-- [ ] Додати prop `excludeTypes?: FieldType[]` у `FieldTypeSelect` (`apps/web/src/components/editor/field-type-select.tsx`)
-- [ ] Фільтрувати options на рівні рендерингу: не показувати типи з `excludeTypes`
-- [ ] У `ConstantTypeSettings` (`apps/web/src/components/properties/object-properties.tsx`) передати `excludeTypes={["Ref"]}` у `FieldTypeSelect`
-- [ ] Перевірити, що Zod-валідація у store залишається як fallback safety net — НЕ видаляти
+- [X] Додати prop `excludeTypes?: FieldType[]` у `FieldTypeSelect` (`apps/web/src/components/editor/field-type-select.tsx`)
+- [X] Фільтрувати options на рівні рендерингу: не показувати типи з `excludeTypes`
+- [X] У `ConstantTypeSettings` (`apps/web/src/components/properties/object-properties.tsx`) передати `excludeTypes={["Ref"]}` у `FieldTypeSelect`
+- [X] Перевірити, що Zod-валідація у store залишається як fallback safety net — НЕ видаляти
 
 ### Fix 5: formatReference — перенести presentation logic у UI
 
-- [ ] У `packages/core/src/find-references.ts`: змінити `formatReference` щоб повертав структуру `{ fieldName: string | undefined; tabularSectionName: string | undefined; referenceKind: ReferenceKind }` замість готового display string
-- [ ] Видалити старий `formatReference` string-based (breaking change прийнятний — єдиний споживач `apps/web`)
-- [ ] У `apps/web/src/components/editor/where-used-dialog.tsx`: замінити `formatReference(ref)` на `fieldName` / `tabularSectionName` для колонки Field; колонка Ref Kind вже використовує `t(referenceKind.*)` — зберегти
-- [ ] У `apps/web/src/components/layout/tree-panel.tsx` (delete confirm): формувати текст через `t(referenceKind.*)` + field info замість `formatReference`
-- [ ] У `apps/web/src/lib/find-references.ts`: оновити реекспорт
-- [ ] Видалити `REFERENCE_KIND_LABELS` з core (hardcoded English labels)
-- [ ] Перевірити i18n ключі `referenceKind.*` у `apps/web/src/i18n/locales/uk.json` і `en.json` — вони вже існують, переконатись що повні
-- [ ] Оновити тести `formatReference` у `packages/core/src/__tests__/find-references.test.ts` під нову структуру
+- [X] У `packages/core/src/find-references.ts`: змінити `formatReference` щоб повертав структуру `{ fieldName: string | undefined; tabularSectionName: string | undefined; referenceKind: ReferenceKind }` замість готового display string
+- [X] Видалити старий `formatReference` string-based (breaking change прийнятний — єдиний споживач `apps/web`)
+- [X] У `apps/web/src/components/editor/where-used-dialog.tsx`: замінити `formatReference(ref)` на `fieldName` / `tabularSectionName` для колонки Field; колонка Ref Kind вже використовує `t(referenceKind.*)` — зберегти
+- [X] У `apps/web/src/components/layout/tree-panel.tsx` (delete confirm): формувати текст через `t(referenceKind.*)` + field info замість `formatReference`
+- [X] У `apps/web/src/lib/find-references.ts`: оновити реекспорт
+- [X] Видалити `REFERENCE_KIND_LABELS` з core (hardcoded English labels)
+- [X] Перевірити i18n ключі `referenceKind.*` у `apps/web/src/i18n/locales/uk.json` і `en.json` — вони вже існують, переконатись що повні
+- [X] Оновити тести `formatReference` у `packages/core/src/__tests__/find-references.test.ts` під нову структуру
 
 ### Fix 6: $schema URL — нормалізація version формату
 
-- [ ] У `buildSchemaUrl` (`packages/core/src/serialization.ts`): нормалізувати schemaVersion — `.0` minor → тільки major (BRD правило: `v1` для `1.0`, `v1.1` для `1.1`)
-- [ ] Оновити enrichment тести у `schemas.test.ts`: змінити очікування з `v1.0` на `v1`
-- [ ] Перевірити, що roundtrip тести з fixtures (які вже використовують `v1`) проходять без змін
-- [ ] `temp/metadata/` — не чіпати (dev sandbox, $schema додається при serialize-time)
+- [X] У `buildSchemaUrl` (`packages/core/src/serialization.ts`): нормалізувати schemaVersion — `.0` minor → тільки major (BRD правило: `v1` для `1.0`, `v1.1` для `1.1`)
+- [X] Оновити enrichment тести у `schemas.test.ts`: змінити очікування з `v1.0` на `v1`
+- [X] Перевірити, що roundtrip тести з fixtures (які вже використовують `v1`) проходять без змін
+- [X] `temp/metadata/` — не чіпати (dev sandbox, $schema додається при serialize-time)
 
 ### Fix 7: Test coverage — regression та integration тести
 
-- [ ] **parseFileStructure + buildProjectModel**: тест broken constants wrapper (з Fix 1), тест legacy array format, тест валідного wrapper
-- [ ] **Session restore flow**: тест saveSession з origin, тест loadSession з origin, тест backward compatibility (session без origin)
-- [ ] **Session restore implicit/explicit**: тест що null-handle session з origin "zip-import" коректно restore-ить і ставить правильний projectOrigin
-- [ ] **FieldTypeSelect excludeTypes**: тест що Ref не рендериться з `excludeTypes={["Ref"]}`
-- [ ] **formatReference нова структура**: тест що повертає `{ fieldPath, referenceKind }` замість string
-- [ ] **$schema URL нормалізація**: тест що `1.0` → `v1`, `1.1` → `v1.1`, `2.0` → `v2`
+- [X] **parseFileStructure + buildProjectModel**: тест broken constants wrapper (з Fix 1), тест legacy array format, тест валідного wrapper
+- [X] **Session restore flow**: тест saveSession з origin, тест loadSession з origin, тест backward compatibility (session без origin)
+- [X] **Session restore implicit/explicit**: тест що null-handle session з origin "zip-import" коректно restore-ить і ставить правильний projectOrigin
+- [X] **FieldTypeSelect excludeTypes**: тест що Ref не рендериться з `excludeTypes={["Ref"]}`
+- [X] **formatReference нова структура**: тест що повертає `{ fieldPath, referenceKind }` замість string
+- [X] **$schema URL нормалізація**: тест що `1.0` → `v1`, `1.1` → `v1.1`, `2.0` → `v2`
 
 ## Clarify (питання перед імплементацією)
 
@@ -172,13 +172,13 @@ restoreSession()
 
 ## Definition of Done
 
-- [ ] Fix 1: broken constants wrapper → валідні siblings збережені, точні warnings
-- [ ] Fix 2: origin persisted у IndexedDB, restore flow використовує persisted origin, Welcome Screen коректний для всіх scenarios
-- [ ] Fix 3: Ref не з'являється у FieldTypeSelect для Constant
-- [ ] Fix 5: core повертає структуру, UI форматує через i18n, delete confirm локалізований
-- [ ] Fix 6: `schemaVersion 1.0` → URL `/schemas/v1/`, відповідно до BRD §7.7
-- [ ] Fix 7: regression тести для кожного fix проходять
-- [ ] `pnpm lint` — без помилок
-- [ ] `pnpm typecheck` — без помилок
-- [ ] `pnpm test` — всі тести проходять
-- [ ] `docs/phase1-known-limitations.md` оновлений (видалити вирішені обмеження)
+- [X] Fix 1: broken constants wrapper → валідні siblings збережені, точні warnings
+- [X] Fix 2: origin persisted у IndexedDB, restore flow використовує persisted origin, Welcome Screen коректний для всіх scenarios
+- [X] Fix 3: Ref не з'являється у FieldTypeSelect для Constant
+- [X] Fix 5: core повертає структуру, UI форматує через i18n, delete confirm локалізований
+- [X] Fix 6: `schemaVersion 1.0` → URL `/schemas/v1/`, відповідно до BRD §7.7
+- [X] Fix 7: regression тести для кожного fix проходять
+- [X] `pnpm lint` — без помилок
+- [X] `pnpm typecheck` — без помилок
+- [X] `pnpm test` — всі тести проходять
+- [X] `docs/phase1-known-limitations.md` оновлений (видалити вирішені обмеження)

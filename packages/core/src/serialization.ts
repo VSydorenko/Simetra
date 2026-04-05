@@ -17,8 +17,14 @@ const KIND_SLUG: Record<MetadataKind, string> = {
  * Build $schema URL for a metadata object.
  * Convention: https://simetra.dev/schemas/v{schemaVersion}/{kind-kebab}.schema.json
  */
+function normalizeVersion(version: string): string {
+  const [major, minor] = version.split('.')
+  // BRD §7.7: trailing .0 видаляється — "1.0" → "1", "1.1" → "1.1"
+  return !minor || minor === '0' ? major : `${major}.${minor}`
+}
+
 function buildSchemaUrl(slug: string, schemaVersion: string): string {
-  return `https://simetra.dev/schemas/v${schemaVersion}/${slug}.schema.json`
+  return `https://simetra.dev/schemas/v${normalizeVersion(schemaVersion)}/${slug}.schema.json`
 }
 
 /**

@@ -172,12 +172,12 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
 
 // --- Десеріалізація файлової структури → ProjectModel ---
 
-interface ParsedFiles {
+export interface ParsedFiles {
   project?: unknown
   objects: { kind: MetadataKind; data: unknown; filePath: string }[]
 }
 
-function parseFileStructure(files: Map<string, string>): {
+export function parseFileStructure(files: Map<string, string>): {
   parsed: ParsedFiles
   warnings: FileValidationError[]
 } {
@@ -223,7 +223,31 @@ function parseFileStructure(files: Map<string, string>): {
         } else {
           const wrapperResult = constantsFileSchema.safeParse(data)
           if (wrapperResult.success) {
+            // Happy path — wrapper validates all constants at once
             items = wrapperResult.data.constants
+          } else if (
+            data !== null &&
+            typeof data === 'object' &&
+            'constants' in data &&
+            Array.isArray((data as Record<string, unknown>).constants)
+          ) {
+            // Wrapper schema failed — graceful degradation: parse each constant individually
+            const rawConstants = (data as Record<string, unknown>).constants as unknown[]
+            items = []
+            for (let i = 0; i < rawConstants.length; i++) {
+              const itemResult = constantSchema.safeParse(rawConstants[i])
+              if (itemResult.success) {
+                items.push(itemResult.data)
+              } else {
+                warnings.push({
+                  filePath: path,
+                  errors: itemResult.error.issues.map(
+                    (issue) =>
+                      `constants[${i}].${issue.path.join('.')}: ${issue.message}`,
+                  ),
+                })
+              }
+            }
           }
         }
         if (items) {
@@ -231,6 +255,7 @@ function parseFileStructure(files: Map<string, string>): {
             parsed.objects.push({ kind, data: item, filePath: path })
           }
         } else {
+          // Не wrapper формат — кладемо як є, buildProjectModel дасть warning
           parsed.objects.push({ kind, data, filePath: path })
         }
       } else {
@@ -247,7 +272,7 @@ function parseFileStructure(files: Map<string, string>): {
   return { parsed, warnings }
 }
 
-function buildProjectModel(parsed: ParsedFiles): {
+export function buildProjectModel(parsed: ParsedFiles): {
   model: ProjectModel
   warnings: FileValidationError[]
 } {

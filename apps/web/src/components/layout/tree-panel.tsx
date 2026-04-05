@@ -460,16 +460,24 @@ function DeleteConfirmDialog({
 
         {references.length > 0 && (
           <ul className="max-h-32 overflow-y-auto text-xs text-muted-foreground">
-            {references.map((ref, i) => (
-              <li key={i} className="py-0.5">
-                <span className="font-mono">
-                  {ref.from.kind}/{ref.from.name}
-                </span>
-                <span className="ml-1 text-muted-foreground/70">
-                  ({formatReference(ref)})
-                </span>
-              </li>
-            ))}
+            {references.map((ref, i) => {
+              const fmt = formatReference(ref)
+              const fieldPath = fmt.fieldName
+                ? fmt.tabularSectionName
+                  ? `${fmt.tabularSectionName}.${fmt.fieldName}`
+                  : fmt.fieldName
+                : null
+              return (
+                <li key={i} className="py-0.5">
+                  <span className="font-mono">
+                    {ref.from.kind}/{ref.from.name}
+                  </span>
+                  <span className="ml-1 text-muted-foreground/70">
+                    ({fieldPath ? `${fieldPath}, ` : ''}{t(`referenceKind.${fmt.referenceKind}`)})
+                  </span>
+                </li>
+              )
+            })}
           </ul>
         )}
 

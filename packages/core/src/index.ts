@@ -10,6 +10,7 @@ export {
   findReferences,
   formatReference,
   KIND_TO_KEY,
+  type FormattedReference,
   type Reference,
   type ReferenceKind,
 } from "./find-references"

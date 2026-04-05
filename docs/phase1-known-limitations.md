@@ -48,6 +48,7 @@ description overrides у `tabularSection.standardAttributeOverrides`.
 
 ## Constant valueType: Ref
 
-**Status:** Виключено у Phase 1 (constantValueTypeSchema без "Ref").
+**Status:** Закрито у Phase 1.
 
-**Опис:** Якщо Ref-константи потрібні у майбутньому, необхідно додати поле `ref` (аналогічно до `Attribute`) до `constantSchema`. До цього — "Ref" виключено зі списку допустимих типів.
+**Опис:** `constantValueTypeSchema` виключає `"Ref"` через `fieldTypeSchema.exclude(["Ref"])`.
+UI-компонент `FieldTypeSelect` фільтрує заборонені типи через prop `excludeTypes={["Ref"]}` для Constant. Якщо Ref-константи потрібні у майбутньому, необхідно додати поле `ref` до `constantSchema` та прибрати excludeTypes.

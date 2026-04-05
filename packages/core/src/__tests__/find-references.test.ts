@@ -409,40 +409,60 @@ describe("findReferences", () => {
 // formatReference
 // ---------------------------------------------------------------------------
 describe("formatReference", () => {
-  it("owners → 'owners'", () => {
+  it("owners -> structured reference without field", () => {
     const ref: Reference = {
       from: { kind: "Catalog", name: "Contracts" },
       referenceKind: "owners",
     }
-    expect(formatReference(ref)).toBe("owners")
+    const result = formatReference(ref)
+    expect(result).toEqual({
+      fieldName: undefined,
+      tabularSectionName: undefined,
+      referenceKind: "owners",
+    })
   })
 
-  it("attributeRef with fieldName → 'fieldName (ref)'", () => {
+  it("attributeRef with fieldName -> structured reference", () => {
     const ref: Reference = {
       from: { kind: "Document", name: "SalesOrder" },
       referenceKind: "attributeRef",
       fieldName: "product",
     }
-    expect(formatReference(ref)).toBe("product (ref)")
+    const result = formatReference(ref)
+    expect(result).toEqual({
+      fieldName: "product",
+      tabularSectionName: undefined,
+      referenceKind: "attributeRef",
+    })
   })
 
-  it("attributeRef with fieldName + tabularSectionName → 'tsName.fieldName (ref)'", () => {
+  it("attributeRef with tabularSectionName -> structured with TS name", () => {
     const ref: Reference = {
       from: { kind: "Document", name: "SalesOrder" },
       referenceKind: "attributeRef",
       fieldName: "product",
       tabularSectionName: "items",
     }
-    expect(formatReference(ref)).toBe("items.product (ref)")
+    const result = formatReference(ref)
+    expect(result).toEqual({
+      fieldName: "product",
+      tabularSectionName: "items",
+      referenceKind: "attributeRef",
+    })
   })
 
-  it("attributeAllowedTypes with fieldName → 'fieldName (allowedTypes)'", () => {
+  it("attributeAllowedTypes with fieldName -> structured reference", () => {
     const ref: Reference = {
       from: { kind: "Document", name: "Invoice" },
       referenceKind: "attributeAllowedTypes",
       fieldName: "item",
     }
-    expect(formatReference(ref)).toBe("item (allowedTypes)")
+    const result = formatReference(ref)
+    expect(result).toEqual({
+      fieldName: "item",
+      tabularSectionName: undefined,
+      referenceKind: "attributeAllowedTypes",
+    })
   })
 })
 

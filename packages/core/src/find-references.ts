@@ -37,24 +37,23 @@ export const KIND_TO_KEY: Record<
   CustomTable: "customTables",
 }
 
-const REFERENCE_KIND_LABELS: Record<ReferenceKind, string> = {
-  owners: "owners",
-  recorderTypes: "recorderTypes",
-  registerMovements: "registerMovements",
-  attributeRef: "ref",
-  attributeAllowedTypes: "allowedTypes",
+/** Структуровані дані посилання для display у UI */
+export interface FormattedReference {
+  /** Ім'я поля (attribute/dimension/resource) */
+  fieldName: string | undefined
+  /** Ім'я табличної частини, якщо поле в ТЧ */
+  tabularSectionName: string | undefined
+  /** Тип посилання */
+  referenceKind: ReferenceKind
 }
 
-/** Format a Reference for human-readable display */
-export function formatReference(ref: Reference): string {
-  const label = REFERENCE_KIND_LABELS[ref.referenceKind]
-  if (ref.fieldName) {
-    const tsPrefix = ref.tabularSectionName
-      ? `${ref.tabularSectionName}.`
-      : ""
-    return `${tsPrefix}${ref.fieldName} (${label})`
+/** Витягує структуровані дані з Reference для display у UI */
+export function formatReference(ref: Reference): FormattedReference {
+  return {
+    fieldName: ref.fieldName,
+    tabularSectionName: ref.tabularSectionName,
+    referenceKind: ref.referenceKind,
   }
-  return label
 }
 
 interface AttributeWithContext {
