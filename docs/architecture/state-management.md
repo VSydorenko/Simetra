@@ -206,7 +206,7 @@ Store оркеструє такі сценарії:
 ### Ключові поля
 
 - `projectHandle`: актуальний File System Access handle або `null`
-- `sessionRestoreStatus`: `idle`, `restoring`, `awaiting-permission`, `restored`, `failed`, `recovery-available`
+- `sessionRestoreStatus`: `idle`, `restoring`, `awaiting-permission`, `restored`, `failed`, `recovery-available`, `draft-available`
 - `lastSavedVersion`: глобальний save baseline
 - `lastSavedObjectVersions`: baseline для per-object dirty tracking
 - `projectOrigin`: `new`, `directory`, `zip-import`, `draft-recovery` або `null`

@@ -84,7 +84,7 @@ export function WelcomeScreen() {
     }
   }, [sessionMeta, requestDirectoryPermission, restoreSession])
 
-  const handleRestoreFromBackup = useCallback(() => {
+  const handleRecoverDraft = useCallback(() => {
     void restoreDraft()
   }, [restoreDraft])
 
@@ -105,7 +105,12 @@ export function WelcomeScreen() {
     ? new Date(sessionMeta.savedAt).toLocaleString()
     : null
 
-  const showRestoreAction = sessionMeta && sessionRestoreStatus !== "restored"
+  const showRestoreAction =
+    sessionMeta &&
+    sessionRestoreStatus !== "restored" &&
+    sessionRestoreStatus !== "draft-available"
+  const showDraftRestore =
+    sessionMeta && sessionRestoreStatus === "draft-available"
   const showDualCta =
     hasDraftFallback && sessionRestoreStatus === "awaiting-permission"
 
@@ -169,12 +174,29 @@ export function WelcomeScreen() {
           />
         )}
 
+        {showDraftRestore && (
+          <WelcomeAction
+            icon={DataRecoveryIcon}
+            label={t("welcome.recoverDraft")}
+            description={t("welcome.recoverDraftDetailsDescription", {
+              name:
+                sessionMeta.name ??
+                t("welcome.defaultProjectName", {
+                  defaultValue: "Project",
+                }),
+              date: formattedDate ?? "",
+            })}
+            onClick={handleRecoverDraft}
+            autoFocus
+          />
+        )}
+
         {showDualCta && (
           <WelcomeAction
             icon={DataRecoveryIcon}
             label={t("welcome.restoreFromBackup")}
             description={t("welcome.restoreFromBackupDescription")}
-            onClick={handleRestoreFromBackup}
+            onClick={handleRecoverDraft}
           />
         )}
       </div>

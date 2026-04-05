@@ -277,6 +277,7 @@
     "restoring": "Відновлення сесії…",
     "recoverDraft": "Відновити незбережені зміни",
     "recoverDraftDescription": "Знайдено незбережені зміни попередньої сесії",
+    "recoverDraftDetailsDescription": "Відновити \"{{name}}\" (збережено {{date}})",
     "loadFromBackup": "Завантажити з резервної копії",
     "loadFromBackupDescription": "Відновити дані з резервної копії IndexedDB",
     "restoreFromBackup": "Відновити з резервної копії",

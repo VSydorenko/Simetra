@@ -23,6 +23,7 @@ export type SessionRestoreStatus =
   | "restored"
   | "failed"
   | "recovery-available"
+  | "draft-available"
 
 export type ProjectOrigin =
   | "new"
@@ -323,6 +324,15 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       try {
         const session = await loadSession()
         if (!session) {
+          // Перевірити, чи є draft для draft-only recovery
+          const draft = await loadDraft()
+          if (draft) {
+            set({
+              sessionRestoreStatus: "draft-available",
+              hasDraftFallback: true,
+            })
+            return
+          }
           set({ sessionRestoreStatus: "idle" })
           return
         }

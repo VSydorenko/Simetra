@@ -35,6 +35,7 @@ export function EditorPanel() {
       sessionRestoreStatus === "awaiting-permission" ||
       sessionRestoreStatus === "restoring" ||
       sessionRestoreStatus === "failed" ||
+      sessionRestoreStatus === "draft-available" ||
       isNewProject)
 
   const showRecoveryBanner = sessionRestoreStatus === "recovery-available"

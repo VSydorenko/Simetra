@@ -273,6 +273,7 @@
     "restoring": "Restoring session…",
     "recoverDraft": "Recover Unsaved Changes",
     "recoverDraftDescription": "Found unsaved changes from a previous session",
+    "recoverDraftDetailsDescription": "Recover \"{{name}}\" (saved {{date}})",
     "loadFromBackup": "Load from Backup",
     "loadFromBackupDescription": "Restore data from IndexedDB backup",
     "restoreFromBackup": "Restore from Backup",
