@@ -93,6 +93,69 @@ function findNextActiveWindow(
   return candidates[0]?.id ?? null
 }
 
+function findActiveTab(
+  tabs: TabItem[],
+  activeTabId: string | null
+): TabItem | null {
+  if (!activeTabId) {
+    return null
+  }
+
+  return tabs.find((tab) => tab.id === activeTabId) ?? null
+}
+
+function findActiveWindow(
+  windows: FloatingWindow[],
+  activeWindowId: string | null
+): FloatingWindow | null {
+  if (!activeWindowId) {
+    return null
+  }
+
+  return windows.find((window) => window.id === activeWindowId) ?? null
+}
+
+function resolveSelectionAfterClosedRef(
+  state: Pick<
+    UiState,
+    'selectedObject' | 'selectedTabularSection' | 'selectedField'
+  >,
+  closedRef: MetadataRef,
+  openTabs: TabItem[],
+  activeTabId: string | null,
+  floatingWindows: FloatingWindow[],
+  activeWindowId: string | null
+): Pick<UiState, 'selectedObject' | 'selectedTabularSection' | 'selectedField'> {
+  const selectedTabularSection =
+    state.selectedTabularSection &&
+    isSameRef(state.selectedTabularSection.objectRef, closedRef)
+      ? null
+      : state.selectedTabularSection
+
+  const selectedField =
+    state.selectedField && isSameRef(state.selectedField.objectRef, closedRef)
+      ? null
+      : state.selectedField
+
+  const activeWindow = findActiveWindow(floatingWindows, activeWindowId)
+  const activeTab = findActiveTab(openTabs, activeTabId)
+  const selectedObject =
+    selectedField?.objectRef ??
+    selectedTabularSection?.objectRef ??
+    (state.selectedObject && !isSameRef(state.selectedObject, closedRef)
+      ? state.selectedObject
+      : null) ??
+    activeWindow?.objectRef ??
+    activeTab?.objectRef ??
+    null
+
+  return {
+    selectedObject,
+    selectedTabularSection,
+    selectedField,
+  }
+}
+
 function isSameRef(
   left: MetadataRef | null | undefined,
   right: MetadataRef | null | undefined
@@ -603,6 +666,8 @@ export const useUiStore = create<UiStore>()(
           const idx = state.openTabs.findIndex((t) => t.id === tabId)
           if (idx === -1) return state
 
+          const closedTab = state.openTabs[idx]
+
           const newTabs = state.openTabs.filter((t) => t.id !== tabId)
           let newActiveTabId = state.activeTabId
 
@@ -617,16 +682,19 @@ export const useUiStore = create<UiStore>()(
             }
           }
 
-          const activeTab = newActiveTabId
-            ? newTabs.find((t) => t.id === newActiveTabId)
-            : null
+          const selectionState = resolveSelectionAfterClosedRef(
+            state,
+            closedTab.objectRef,
+            newTabs,
+            newActiveTabId,
+            state.floatingWindows,
+            state.activeWindowId,
+          )
 
           return {
             openTabs: newTabs,
             activeTabId: newActiveTabId,
-            selectedObject: activeTab?.objectRef ?? null,
-            selectedTabularSection: null,
-            selectedField: null,
+            ...selectionState,
           }
         }),
 
@@ -889,6 +957,11 @@ export const useUiStore = create<UiStore>()(
 
       closeWindow: (windowId) =>
         set((state) => {
+          const closedWindow = state.floatingWindows.find((w) => w.id === windowId)
+          if (!closedWindow) {
+            return state
+          }
+
           const remainingWindows = state.floatingWindows.filter(
             (w) => w.id !== windowId
           )
@@ -898,23 +971,19 @@ export const useUiStore = create<UiStore>()(
           }
 
           const nextWindowId = findNextActiveWindow(remainingWindows)
-          const nextWindow = nextWindowId
-            ? remainingWindows.find((w) => w.id === nextWindowId)
-            : null
-
-          // Якщо є активна вкладка і немає наступного вікна — переключити контекст на неї
-          const activeTab =
-            !nextWindow && state.activeTabId
-              ? state.openTabs.find((t) => t.id === state.activeTabId)
-              : null
+          const selectionState = resolveSelectionAfterClosedRef(
+            state,
+            closedWindow.objectRef,
+            state.openTabs,
+            state.activeTabId,
+            remainingWindows,
+            nextWindowId,
+          )
 
           return {
             floatingWindows: remainingWindows,
             activeWindowId: nextWindowId,
-            selectedObject:
-              nextWindow?.objectRef ?? activeTab?.objectRef ?? null,
-            selectedTabularSection: null,
-            selectedField: null,
+            ...selectionState,
           }
         }),
 
@@ -1062,21 +1131,24 @@ export const useUiStore = create<UiStore>()(
           // Скинути activeWindowId, якщо закрили активне вікно
           const newActiveWindowId =
             hasWindow && state.activeWindowId === windowId
-              ? null
+              ? findNextActiveWindow(newWindows)
               : state.activeWindowId
 
-          const activeTab = newActiveTabId
-            ? newTabs.find((t) => t.id === newActiveTabId)
-            : null
+          const selectionState = resolveSelectionAfterClosedRef(
+            state,
+            ref,
+            newTabs,
+            newActiveTabId,
+            newWindows,
+            newActiveWindowId,
+          )
 
           return {
             openTabs: newTabs,
             floatingWindows: newWindows,
             activeTabId: newActiveTabId,
             activeWindowId: newActiveWindowId,
-            selectedObject: activeTab?.objectRef ?? null,
-            selectedTabularSection: null,
-            selectedField: null,
+            ...selectionState,
           }
         }),
     }),

@@ -245,6 +245,28 @@ describe("closeTab", () => {
     expect(state.selectedTabularSection).toBeNull()
     expect(state.selectedObject).toEqual(documentRef("SalesOrder"))
   })
+
+  it("не скидає selectedField для іншого відкритого обʼєкта", () => {
+    useUiStore.getState().openTab(catalogRef("Products"))
+    useUiStore.getState().openTab(documentRef("SalesOrder"))
+    useUiStore.setState({
+      activeTabId: "Document/SalesOrder",
+      selectedObject: catalogRef("Products"),
+      selectedField: {
+        objectRef: catalogRef("Products"),
+        fieldName: "quantity",
+      },
+    })
+
+    useUiStore.getState().closeTab("Document/SalesOrder")
+
+    const state = useUiStore.getState()
+    expect(state.selectedField).toEqual({
+      objectRef: catalogRef("Products"),
+      fieldName: "quantity",
+    })
+    expect(state.selectedObject).toEqual(catalogRef("Products"))
+  })
 })
 
 describe("closeOtherTabs", () => {
@@ -602,6 +624,42 @@ describe("closeAllForObject", () => {
     const state = useUiStore.getState()
     expect(state.selectedTabularSection).toBeNull()
     expect(state.selectedObject).toEqual(documentRef("SalesOrder"))
+  })
+
+  it("не скидає selectedTabularSection для іншого відкритого обʼєкта", () => {
+    useUiStore.getState().openTab(catalogRef("Products"))
+    useUiStore.getState().openTab(documentRef("SalesOrder"))
+    useUiStore.setState({
+      activeTabId: "Document/SalesOrder",
+      selectedObject: catalogRef("Products"),
+      selectedTabularSection: {
+        objectRef: catalogRef("Products"),
+        tabularSectionName: "items",
+      },
+    })
+
+    useUiStore.getState().closeAllForObject(documentRef("SalesOrder"))
+
+    const state = useUiStore.getState()
+    expect(state.selectedTabularSection).toEqual({
+      objectRef: catalogRef("Products"),
+      tabularSectionName: "items",
+    })
+    expect(state.selectedObject).toEqual(catalogRef("Products"))
+  })
+
+  it("переходить на наступне active floating window після закриття обʼєкта", () => {
+    useUiStore.getState().openTab(catalogRef("A"))
+    useUiStore.getState().openTab(catalogRef("B"))
+    useUiStore.getState().openTab(catalogRef("C"))
+    useUiStore.getState().detachTab("Catalog/A")
+    useUiStore.getState().detachTab("Catalog/B")
+
+    useUiStore.getState().closeAllForObject(catalogRef("B"))
+
+    const state = useUiStore.getState()
+    expect(state.activeWindowId).toBe("window-Catalog/A")
+    expect(state.selectedObject).toEqual(catalogRef("A"))
   })
 })
 
