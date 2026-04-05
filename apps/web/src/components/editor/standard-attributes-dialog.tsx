@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
 import {
@@ -129,6 +129,13 @@ function StandardAttributesDialogBody({
       ) ?? null
     )
   }, [object, tabularSectionName])
+
+  // Закрити діалог якщо секцію видалено поки він відкритий
+  useEffect(() => {
+    if (tabularSectionName && !section) {
+      onCancel()
+    }
+  }, [tabularSectionName, section, onCancel])
 
   const attributes = useMemo(() => {
     if (tabularSectionName) {

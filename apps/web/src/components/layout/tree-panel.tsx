@@ -16,7 +16,7 @@ import {
 import { Button } from "@workspace/ui/components/button"
 import type { MetadataKind } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
-import { useUiStore, refToTabId } from "@/stores/ui-store"
+import { useUiStore } from "@/stores/ui-store"
 import { findReferences, formatReference, type Reference } from "@/lib/find-references"
 import { DeleteDialogContext, WhereUsedDialogContext, type TreeNodeData } from "./tree/tree-types"
 import { buildTreeData } from "./tree/tree-builder"
@@ -244,20 +244,9 @@ export function TreePanel() {
         .renameObject(kind, oldName, name)
       if (errors) return
 
-      const uiState = useUiStore.getState()
-      if (
-        uiState.selectedObject?.kind === kind &&
-        uiState.selectedObject.name === oldName
-      ) {
-        uiState.selectObject({ kind, name })
-      }
-
-      const oldTabId = refToTabId({ kind, name: oldName })
-      const existingTab = uiState.openTabs.find((tab) => tab.id === oldTabId)
-      if (existingTab) {
-        uiState.closeTab(oldTabId)
-        uiState.openTab({ kind, name })
-      }
+      useUiStore
+        .getState()
+        .updateTabObjectRef({ kind, name: oldName }, { kind, name })
     },
     []
   )

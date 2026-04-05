@@ -197,10 +197,30 @@ describe('StandardAttributesDialog', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: 'Стандартні реквізити' }),
+      screen.getByRole('button', { name: 'Стандартні реквізити — items' }),
     )
 
     expect(screen.getByText('line_number')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Зберегти' })).toBeInTheDocument()
+  })
+
+  it('auto-close при stale tabularSectionName (секцію видалено)', () => {
+    const onOpenChange = vi.fn()
+    const object = useMetadataStore.getState().model.catalogs[0]
+
+    render(
+      <StandardAttributesDialog
+        open={true}
+        onOpenChange={onOpenChange}
+        kind="Catalog"
+        objectName="Products"
+        object={object}
+        onUpdateObject={vi.fn()}
+        tabularSectionName="nonExistentSection"
+      />,
+    )
+
+    // Guard useEffect має автоматично закрити діалог
+    expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 })

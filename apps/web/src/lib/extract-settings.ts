@@ -6,51 +6,30 @@ import type {
 
 /** Витягує settings з обʼєкта для передачі в getStandardAttributes */
 export function extractStandardAttributeSettings(
-  kind: MetadataKind,
+  _kind: MetadataKind,
   object: MetadataObject
 ): StandardAttributeSettings {
-  switch (kind) {
-    case "Catalog": {
-      const o = object as {
-        hierarchyType?: string
-        owners?: { kind: string; name: string }[]
-      }
+  switch (object.kind) {
+    case "Catalog":
       return {
-        hierarchyType:
-          (o.hierarchyType as StandardAttributeSettings["hierarchyType"]) ??
-          "None",
-        owners: o.owners,
+        hierarchyType: object.hierarchyType ?? "None",
+        owners: object.owners,
       }
-    }
-    case "InformationRegister": {
-      const o = object as {
-        periodicity?: string
-        writeMode?: string
-        recorderTypes?: StandardAttributeSettings["recorderTypes"]
-      }
+    case "InformationRegister":
       return {
-        periodicity: o.periodicity,
-        writeMode: o.writeMode,
-        recorderTypes: o.recorderTypes,
+        periodicity: object.periodicity,
+        writeMode: object.writeMode,
+        recorderTypes: object.recorderTypes,
       }
-    }
-    case "AccumulationRegister": {
-      const o = object as {
-        registerType?: string
-        recorderTypes?: StandardAttributeSettings["recorderTypes"]
-      }
+    case "AccumulationRegister":
       return {
-        registerType:
-          o.registerType as StandardAttributeSettings["registerType"],
-        recorderTypes: o.recorderTypes,
+        registerType: object.registerType,
+        recorderTypes: object.recorderTypes,
       }
-    }
-    case "CustomTable": {
-      const o = object as { autoAddPrimaryKey?: boolean }
+    case "CustomTable":
       return {
-        autoAddPrimaryKey: o.autoAddPrimaryKey,
+        autoAddPrimaryKey: object.autoAddPrimaryKey,
       }
-    }
     default:
       return {}
   }

@@ -675,3 +675,109 @@ describe("Window manager invariants", () => {
     }
   })
 })
+
+describe("updateTabObjectRef", () => {
+  it("оновлює tab, floating window і selection при rename", () => {
+    const oldRef = catalogRef("Products")
+    const newRef = catalogRef("ProductsRenamed")
+
+    useUiStore.getState().openTab(oldRef)
+
+    const tabId = refToTabId(oldRef)
+
+    // Створити floating window для того ж об'єкта
+    useUiStore.getState().detachTab(tabId)
+    // Повторно відкрити вкладку (detach видалив з openTabs)
+    useUiStore.getState().openTab(oldRef)
+
+    // Встановити selection після openTab (openTab скидає selectedTabularSection)
+    useUiStore.getState().selectTabularSection({
+      objectRef: oldRef,
+      tabularSectionName: "items",
+    })
+
+    useUiStore.getState().updateTabObjectRef(oldRef, newRef)
+
+    const state = useUiStore.getState()
+    const newTabId = refToTabId(newRef)
+
+    expect(state.openTabs.find((t) => t.id === newTabId)).toBeDefined()
+    expect(state.openTabs.find((t) => t.id === tabId)).toBeUndefined()
+    expect(state.activeTabId).toBe(newTabId)
+    expect(state.selectedObject).toEqual(newRef)
+    expect(state.selectedTabularSection).toEqual({
+      objectRef: newRef,
+      tabularSectionName: "items",
+    })
+    expect(
+      state.floatingWindows.find((w) => w.id === `window-${newTabId}`)
+    ).toBeDefined()
+    expect(
+      state.floatingWindows.find((w) => w.id === `window-${tabId}`)
+    ).toBeUndefined()
+  })
+
+  it("оновлює selection навіть коли вкладки немає", () => {
+    const oldRef = catalogRef("Products")
+    const newRef = catalogRef("ProductsRenamed")
+
+    // Встановлюємо selection без відкриття вкладки
+    useUiStore.getState().selectObject(oldRef)
+    useUiStore.getState().selectTabularSection({
+      objectRef: oldRef,
+      tabularSectionName: "items",
+    })
+
+    expect(useUiStore.getState().openTabs).toHaveLength(0)
+
+    useUiStore.getState().updateTabObjectRef(oldRef, newRef)
+
+    const state = useUiStore.getState()
+    expect(state.selectedObject).toEqual(newRef)
+    expect(state.selectedTabularSection).toEqual({
+      objectRef: newRef,
+      tabularSectionName: "items",
+    })
+    expect(state.openTabs).toHaveLength(0)
+  })
+
+  it("зберігає isPinned та activeSection після rename", () => {
+    const oldRef = catalogRef("Products")
+    const newRef = catalogRef("ProductsRenamed")
+
+    useUiStore.getState().openTab(oldRef)
+    const tabId = refToTabId(oldRef)
+    useUiStore.getState().pinTab(tabId)
+    useUiStore.getState().setActiveSection("tabular-sections")
+
+    useUiStore.getState().updateTabObjectRef(oldRef, newRef)
+
+    const newTabId = refToTabId(newRef)
+    const tab = useUiStore.getState().openTabs.find((t) => t.id === newTabId)
+    expect(tab?.isPinned).toBe(true)
+    expect(tab?.activeSection).toBe("tabular-sections")
+  })
+
+  it("оновлює floating window навіть без відкритої вкладки", () => {
+    const oldRef = catalogRef("Products")
+    const newRef = catalogRef("ProductsRenamed")
+
+    // Відкрити та одразу detach — залишається тільки floating window
+    useUiStore.getState().openTab(oldRef)
+    const tabId = refToTabId(oldRef)
+    useUiStore.getState().detachTab(tabId)
+
+    expect(useUiStore.getState().openTabs).toHaveLength(0)
+    expect(useUiStore.getState().floatingWindows).toHaveLength(1)
+
+    useUiStore.getState().updateTabObjectRef(oldRef, newRef)
+
+    const state = useUiStore.getState()
+    const newWindowId = `window-${refToTabId(newRef)}`
+    const oldWindowId = `window-${tabId}`
+
+    expect(state.floatingWindows.find((w) => w.id === newWindowId)).toBeDefined()
+    expect(state.floatingWindows.find((w) => w.id === oldWindowId)).toBeUndefined()
+    expect(state.floatingWindows[0].objectRef).toEqual(newRef)
+  })
+})

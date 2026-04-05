@@ -136,7 +136,7 @@ export function TabularSectionsEditor({
                         variant="ghost"
                         size="icon"
                         className="size-6"
-                        aria-label={t("properties.standardAttributes")}
+                        aria-label={`${t("properties.standardAttributes")} — ${section.name}`}
                         onClick={(e) => {
                           e.stopPropagation()
                           setStandardAttributesSectionName(section.name)

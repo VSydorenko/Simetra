@@ -733,24 +733,33 @@ export const useUiStore = create<UiStore>()(
         set((state) => {
           const oldTabId = refToTabId(oldRef)
           const newTabId = refToTabId(newRef)
-          const tabIdx = state.openTabs.findIndex((t) => t.id === oldTabId)
-          if (tabIdx === -1) return state
 
-          const newTabs = state.openTabs.map((t) =>
-            t.id === oldTabId ? { ...t, id: newTabId, objectRef: newRef } : t
-          )
+          const hasTab =
+            state.openTabs.findIndex((t) => t.id === oldTabId) !== -1
+          const oldWindowId = `window-${oldTabId}`
+          const newWindowId = `window-${newTabId}`
+
+          const newTabs = hasTab
+            ? state.openTabs.map((t) =>
+                t.id === oldTabId
+                  ? { ...t, id: newTabId, objectRef: newRef }
+                  : t
+              )
+            : state.openTabs
           const newActiveTabId =
-            state.activeTabId === oldTabId ? newTabId : state.activeTabId
+            hasTab && state.activeTabId === oldTabId
+              ? newTabId
+              : state.activeTabId
 
-          // Оновити також floating windows
+          // Оновити floating windows незалежно від наявності вкладки
           const newWindows = state.floatingWindows.map((w) =>
-            w.id === `window-${oldTabId}`
-              ? { ...w, id: `window-${newTabId}`, objectRef: newRef }
+            w.id === oldWindowId
+              ? { ...w, id: newWindowId, objectRef: newRef }
               : w
           )
           const newActiveWindowId =
-            state.activeWindowId === `window-${oldTabId}`
-              ? `window-${newTabId}`
+            state.activeWindowId === oldWindowId
+              ? newWindowId
               : state.activeWindowId
 
           return {
@@ -758,10 +767,9 @@ export const useUiStore = create<UiStore>()(
             activeTabId: newActiveTabId,
             floatingWindows: newWindows,
             activeWindowId: newActiveWindowId,
-            selectedObject:
-              isSameRef(state.selectedObject, oldRef)
-                ? newRef
-                : state.selectedObject,
+            selectedObject: isSameRef(state.selectedObject, oldRef)
+              ? newRef
+              : state.selectedObject,
             selectedTabularSection:
               state.selectedTabularSection &&
               isSameRef(state.selectedTabularSection.objectRef, oldRef)
@@ -771,7 +779,8 @@ export const useUiStore = create<UiStore>()(
                   }
                 : state.selectedTabularSection,
             selectedField:
-              state.selectedField && isSameRef(state.selectedField.objectRef, oldRef)
+              state.selectedField &&
+              isSameRef(state.selectedField.objectRef, oldRef)
                 ? {
                     ...state.selectedField,
                     objectRef: newRef,
