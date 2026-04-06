@@ -225,10 +225,17 @@ function MovementConstructorBody({
     return opts
   }, [doc.tabularSections, t])
 
+  const translate = useCallback(
+    (key: string, fallback?: string): string => {
+      return fallback ? t(key, fallback) : t(key)
+    },
+    [t]
+  )
+
   // Опції виразів з buildExpressionOptions
   const expressionGroups = useMemo(
-    () => buildExpressionOptions(doc, draft.source, t),
-    [doc, draft.source, t]
+    () => buildExpressionOptions(doc, draft.source, translate),
+    [doc, draft.source, translate]
   )
 
   // Валідація виразу для поточного source
@@ -477,6 +484,12 @@ function MappingGroup({
   ) => void
 }) {
   const { t } = useTranslation()
+  const translate = useCallback(
+    (key: string, fallback?: string): string => {
+      return fallback ? t(key, fallback) : t(key)
+    },
+    [t]
+  )
 
   if (fields.length === 0) return null
 
@@ -494,7 +507,7 @@ function MappingGroup({
             expressionGroups={expressionGroups}
             isInvalid={isExpressionInvalid(mappings[field.name] ?? "")}
             onChange={(v) => onSetMapping(group, field.name, v)}
-            t={t}
+            t={translate}
           />
         ))}
       </div>
