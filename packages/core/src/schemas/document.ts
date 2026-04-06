@@ -4,6 +4,7 @@ import { attributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
 import { metadataRefSchema } from "./metadata-ref"
 import { isSqlReservedWord } from "./sql-reserved-words"
+import { postingSchema } from "./posting"
 
 /** BRD §5.3 — Document */
 export const documentSchema = z.object({
@@ -24,7 +25,7 @@ export const documentSchema = z.object({
   numberPeriodicity: z
     .enum(["None", "Year", "Quarter", "Month", "Day"])
     .default("Year"),
-  posting: z.boolean().default(true),
+  posting: z.union([z.boolean(), postingSchema]).default(true),
   registerMovements: z.array(metadataRefSchema).default([]),
 
   // Користувацькі перевизначення описів стандартних реквізитів

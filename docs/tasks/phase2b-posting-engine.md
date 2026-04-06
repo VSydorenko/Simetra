@@ -22,15 +22,15 @@ Phase 2a створила DDL генератор для структурної �
 
 ### Етап 1: Zod-схеми posting у `@simetra/core`
 
-- [ ] Створити `packages/core/src/schemas/posting.ts`:
+- [Х] Створити `packages/core/src/schemas/posting.ts`:
   - `mappingExpressionSchema` — string validation для `doc.`, `row.`, `sum()`, `count()`, `literal:`, `now()`, арифметика
   - `movementMappingSetSchema` — `{ dimensions: Record<string, expr>, resources: Record<string, expr>, attributes: Record<string, expr> }`
   - `postingMovementSchema` — `{ register: MetadataRef, movementType, source, condition?, mappings }`
   - `postingValidationSchema` — `{ type: "NonNegativeBalance", register, dimensions, resource, message, applyTo? }`
   - `postingSchema` — `{ movements: postingMovementSchema[], validations: postingValidationSchema[] }`
-- [ ] Розширити `documentSchema` — додати опціональне поле `posting: postingSchema.optional()`
-- [ ] Оновити серіалізацію (`serialization.ts`) — додати `posting` у key order для Document
-- [ ] **Тести:**
+- [Х] Розширити `documentSchema` — додати опціональне поле `posting: postingSchema.optional()`
+- [Х] Оновити серіалізацію (`serialization.ts`) — додати `posting` у key order для Document
+- [Х] **Тести:**
   - Валідний posting з movements + validations → pass
   - Невалідні mapping expressions → fail
   - Document без posting → pass (backward compatible)

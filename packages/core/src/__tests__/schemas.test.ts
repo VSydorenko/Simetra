@@ -19,6 +19,10 @@ import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
   isSqlReservedWord,
+  mappingExpressionSchema,
+  postingMovementSchema,
+  postingValidationSchema,
+  postingSchema,
 } from "../schemas"
 import { serializeMetadataObject, enrichSchemaUrl, enrichProjectSchemaUrl, buildConstantsSchemaUrl } from "../serialization"
 
@@ -157,6 +161,346 @@ describe("documentSchema", () => {
       ],
     })
     expect(result.registerMovements).toHaveLength(1)
+  })
+})
+
+// ============================================================
+// Posting schemas (BRD §5.3.1)
+// ============================================================
+
+describe("mappingExpressionSchema", () => {
+  it.each([
+    "doc.warehouse",
+    "row.product",
+    "row.quantity * row.price",
+    "row.a + row.b",
+    "row.a - row.b",
+    "row.a / row.b",
+    "sum(items.amount)",
+    "count(items)",
+    "literal:42",
+    "literal:some text",
+    "now()",
+  ])("accepts valid expression: %s", (expr) => {
+    expect(() => mappingExpressionSchema.parse(expr)).not.toThrow()
+  })
+
+  it.each([
+    "",
+    "invalid",
+    "field",
+    "doc.",
+    "row.",
+    "sum()",
+    "count()",
+    "123",
+    "SELECT * FROM users",
+  ])("rejects invalid expression: %s", (expr) => {
+    expect(() => mappingExpressionSchema.parse(expr)).toThrow()
+  })
+})
+
+describe("postingMovementSchema", () => {
+  it("parses valid movement with tabularSection source", () => {
+    const result = postingMovementSchema.parse({
+      register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+      movementType: "Receipt",
+      source: "tabularSection:items",
+      mappings: {
+        dimensions: { product: "row.product", warehouse: "doc.warehouse" },
+        resources: { quantity: "row.quantity" },
+      },
+    })
+    expect(result.register.name).toBe("InventoryBalance")
+    expect(result.movementType).toBe("Receipt")
+    expect(result.source).toBe("tabularSection:items")
+    expect(result.condition).toBeUndefined()
+    expect(result.mappings.dimensions).toEqual({
+      product: "row.product",
+      warehouse: "doc.warehouse",
+    })
+    expect(result.mappings.attributes).toEqual({})
+  })
+
+  it("parses movement with document source", () => {
+    const result = postingMovementSchema.parse({
+      register: { kind: "AccumulationRegister", name: "SettlementsBalance" },
+      movementType: "Expense",
+      source: "document",
+      mappings: {
+        dimensions: { contractor: "doc.contractor" },
+        resources: { amount: "sum(items.amount)" },
+      },
+    })
+    expect(result.source).toBe("document")
+  })
+
+  it("parses movement with dynamic movementType", () => {
+    const result = postingMovementSchema.parse({
+      register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+      movementType: "doc.operation_type",
+      source: "tabularSection:items",
+      mappings: { dimensions: { product: "row.product" } },
+    })
+    expect(result.movementType).toBe("doc.operation_type")
+  })
+
+  it("parses movement with condition", () => {
+    const result = postingMovementSchema.parse({
+      register: { kind: "AccumulationRegister", name: "Balance" },
+      movementType: "Receipt",
+      source: "tabularSection:items",
+      condition: "doc.is_active",
+      mappings: { dimensions: {} },
+    })
+    expect(result.condition).toBe("doc.is_active")
+  })
+
+  it("rejects invalid movementType", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Invalid",
+        source: "document",
+        mappings: { dimensions: {} },
+      })
+    ).toThrow()
+  })
+
+  it("rejects invalid source format", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Receipt",
+        source: "invalid_source",
+        mappings: { dimensions: {} },
+      })
+    ).toThrow()
+  })
+
+  it("rejects invalid mapping expression in dimensions", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Receipt",
+        source: "document",
+        mappings: { dimensions: { product: "INVALID" } },
+      })
+    ).toThrow()
+  })
+
+  it("rejects non-register kind in register ref", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "Catalog", name: "Products" },
+        movementType: "Receipt",
+        source: "document",
+        mappings: { dimensions: { product: "doc.product" } },
+      })
+    ).toThrow()
+  })
+
+  it("rejects row.* expressions when source is document", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Receipt",
+        source: "document",
+        mappings: { dimensions: { product: "row.product" } },
+      })
+    ).toThrow(/row\.\* expressions are only allowed/)
+  })
+
+  it("rejects sum()/count() expressions when source is tabularSection", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Receipt",
+        source: "tabularSection:items",
+        mappings: { resources: { amount: "sum(items.amount)" } },
+      })
+    ).toThrow(/aggregations are only allowed/)
+  })
+
+  it("allows doc.* expressions with document source", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Receipt",
+        source: "document",
+        mappings: { dimensions: { contractor: "doc.contractor" } },
+      })
+    ).not.toThrow()
+  })
+
+  it("allows row.* and doc.* with tabularSection source", () => {
+    expect(() =>
+      postingMovementSchema.parse({
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        movementType: "Receipt",
+        source: "tabularSection:items",
+        mappings: {
+          dimensions: { product: "row.product", warehouse: "doc.warehouse" },
+        },
+      })
+    ).not.toThrow()
+  })
+})
+
+describe("postingValidationSchema", () => {
+  it("parses valid validation", () => {
+    const result = postingValidationSchema.parse({
+      type: "NonNegativeBalance",
+      register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+      dimensions: ["product", "warehouse"],
+      resource: "quantity",
+      message: { uk: "Недостатньо товару", en: "Not enough product" },
+    })
+    expect(result.type).toBe("NonNegativeBalance")
+    expect(result.dimensions).toEqual(["product", "warehouse"])
+    expect(result.applyTo).toBe("Expense")
+  })
+
+  it("accepts explicit applyTo", () => {
+    const result = postingValidationSchema.parse({
+      type: "NonNegativeBalance",
+      register: { kind: "AccumulationRegister", name: "Balance" },
+      dimensions: ["product"],
+      resource: "quantity",
+      message: { uk: "Помилка" },
+      applyTo: "Both",
+    })
+    expect(result.applyTo).toBe("Both")
+  })
+
+  it("rejects unknown validation type", () => {
+    expect(() =>
+      postingValidationSchema.parse({
+        type: "CustomCheck",
+        register: { kind: "AccumulationRegister", name: "Balance" },
+        dimensions: ["product"],
+        resource: "quantity",
+        message: { uk: "Помилка" },
+      })
+    ).toThrow()
+  })
+
+  it("rejects non-register kind in validation register", () => {
+    expect(() =>
+      postingValidationSchema.parse({
+        type: "NonNegativeBalance",
+        register: { kind: "Document", name: "SalesOrder" },
+        dimensions: ["product"],
+        resource: "quantity",
+        message: { uk: "Помилка" },
+      })
+    ).toThrow()
+  })
+})
+
+describe("postingSchema", () => {
+  it("parses full posting with movements and validations", () => {
+    const result = postingSchema.parse({
+      movements: [
+        {
+          register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+          movementType: "Receipt",
+          source: "tabularSection:items",
+          mappings: {
+            dimensions: { product: "row.product", warehouse: "doc.warehouse" },
+            resources: { quantity: "row.quantity", amount: "row.quantity * row.price" },
+            attributes: { responsible: "doc.responsible" },
+          },
+        },
+      ],
+      validations: [
+        {
+          type: "NonNegativeBalance",
+          register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+          dimensions: ["product", "warehouse"],
+          resource: "quantity",
+          message: { uk: "Недостатньо товару" },
+        },
+      ],
+    })
+    expect(result.movements).toHaveLength(1)
+    expect(result.validations).toHaveLength(1)
+  })
+
+  it("parses empty posting object", () => {
+    const result = postingSchema.parse({})
+    expect(result.movements).toEqual([])
+    expect(result.validations).toEqual([])
+  })
+
+  it("defaults movements and validations to empty arrays", () => {
+    const result = postingSchema.parse({ movements: [] })
+    expect(result.validations).toEqual([])
+  })
+})
+
+describe("documentSchema — posting field", () => {
+  it("document without posting defaults to true (backward compatible)", () => {
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "SalesOrder",
+    })
+    expect(result.posting).toBe(true)
+  })
+
+  it("document with posting: true (backward compatible)", () => {
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "SalesOrder",
+      posting: true,
+    })
+    expect(result.posting).toBe(true)
+  })
+
+  it("document with posting: false", () => {
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "SalesOrder",
+      posting: false,
+    })
+    expect(result.posting).toBe(false)
+  })
+
+  it("document with posting object", () => {
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "GoodsReceipt",
+      posting: {
+        movements: [
+          {
+            register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+            movementType: "Receipt",
+            source: "tabularSection:items",
+            mappings: {
+              dimensions: { product: "row.product" },
+              resources: { quantity: "row.quantity" },
+            },
+          },
+        ],
+        validations: [],
+      },
+    })
+    expect(typeof result.posting).toBe("object")
+    const posting = result.posting as { movements: unknown[]; validations: unknown[] }
+    expect(posting.movements).toHaveLength(1)
+    expect(posting.validations).toEqual([])
+  })
+
+  it("document with empty posting object", () => {
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "SalesOrder",
+      posting: {},
+    })
+    expect(typeof result.posting).toBe("object")
+    const posting = result.posting as { movements: unknown[]; validations: unknown[] }
+    expect(posting.movements).toEqual([])
+    expect(posting.validations).toEqual([])
   })
 })
 
@@ -870,6 +1214,13 @@ describe("canonical serialization", () => {
 
   it("roundtrip: document parse → serialize → match fixture", () => {
     const json = loadFixture("document.json")
+    const parsed = documentSchema.parse(JSON.parse(json))
+    const serialized = serializeMetadataObject(parsed)
+    expect(serialized).toBe(json)
+  })
+
+  it("roundtrip: document with posting parse → serialize → match fixture", () => {
+    const json = loadFixture("document-with-posting.json")
     const parsed = documentSchema.parse(JSON.parse(json))
     const serialized = serializeMetadataObject(parsed)
     expect(serialized).toBe(json)

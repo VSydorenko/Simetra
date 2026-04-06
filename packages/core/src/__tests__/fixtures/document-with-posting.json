@@ -1,0 +1,119 @@
+{
+  "$schema": "https://simetra.dev/schemas/v1/document.schema.json",
+  "kind": "Document",
+  "name": "GoodsReceipt",
+  "displayName": {
+    "uk": "Надходження товарів",
+    "en": "Goods Receipt"
+  },
+  "numberLength": 11,
+  "numberType": "String",
+  "autonumber": true,
+  "numberPeriodicity": "Year",
+  "posting": {
+    "movements": [
+      {
+        "register": {
+          "kind": "AccumulationRegister",
+          "name": "InventoryBalance"
+        },
+        "movementType": "Receipt",
+        "source": "tabularSection:items",
+        "mappings": {
+          "dimensions": {
+            "product": "row.product",
+            "warehouse": "doc.warehouse"
+          },
+          "resources": {
+            "quantity": "row.quantity",
+            "amount": "row.quantity * row.price"
+          },
+          "attributes": {}
+        }
+      }
+    ],
+    "validations": [
+      {
+        "type": "NonNegativeBalance",
+        "register": {
+          "kind": "AccumulationRegister",
+          "name": "InventoryBalance"
+        },
+        "dimensions": [
+          "product",
+          "warehouse"
+        ],
+        "resource": "quantity",
+        "message": {
+          "uk": "Недостатньо товару на складі",
+          "en": "Not enough product in warehouse"
+        },
+        "applyTo": "Expense"
+      }
+    ]
+  },
+  "registerMovements": [
+    {
+      "kind": "AccumulationRegister",
+      "name": "InventoryBalance"
+    }
+  ],
+  "standardAttributeOverrides": {},
+  "attributes": [
+    {
+      "name": "warehouse",
+      "type": "Ref",
+      "required": true,
+      "indexed": true,
+      "unique": false,
+      "defaultValue": null,
+      "ref": {
+        "kind": "Catalog",
+        "name": "Warehouses"
+      }
+    }
+  ],
+  "tabularSections": [
+    {
+      "name": "items",
+      "displayName": {
+        "uk": "Товари"
+      },
+      "standardAttributeOverrides": {},
+      "attributes": [
+        {
+          "name": "product",
+          "type": "Ref",
+          "required": true,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "ref": {
+            "kind": "Catalog",
+            "name": "Products"
+          }
+        },
+        {
+          "name": "quantity",
+          "type": "Numeric",
+          "required": true,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "precision": 15,
+          "scale": 3
+        },
+        {
+          "name": "price",
+          "type": "Numeric",
+          "required": false,
+          "indexed": false,
+          "unique": false,
+          "defaultValue": null,
+          "precision": 15,
+          "scale": 2
+        }
+      ]
+    }
+  ]
+}

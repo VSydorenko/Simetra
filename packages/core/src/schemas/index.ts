@@ -12,6 +12,26 @@ export {
 export { attributeSchema, type Attribute } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
+export {
+  mappingExpressionSchema,
+  type MappingExpression,
+  registerKindSchema,
+  type RegisterKind,
+  registerRefSchema,
+  type RegisterRef,
+  movementMappingSetSchema,
+  type MovementMappingSet,
+  movementTypeSchema,
+  type MovementType,
+  movementSourceSchema,
+  type MovementSource,
+  postingMovementSchema,
+  type PostingMovement,
+  postingValidationSchema,
+  type PostingValidation,
+  postingSchema,
+  type Posting,
+} from "./posting"
 
 // Metadata types
 export { catalogSchema, type Catalog } from "./catalog"

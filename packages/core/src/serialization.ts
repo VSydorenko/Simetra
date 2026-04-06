@@ -188,6 +188,25 @@ const TABULAR_SECTION_KEY_ORDER = [
 ]
 const METADATA_REF_KEY_ORDER = ["kind", "name"]
 const LOCALIZED_STRING_KEY_ORDER = ["uk", "en"]
+
+// Posting-related key orders (BRD §5.3.1)
+const POSTING_KEY_ORDER = ["movements", "validations"]
+const POSTING_MOVEMENT_KEY_ORDER = [
+  "register",
+  "movementType",
+  "source",
+  "condition",
+  "mappings",
+]
+const POSTING_MAPPING_SET_KEY_ORDER = ["dimensions", "resources", "attributes"]
+const POSTING_VALIDATION_KEY_ORDER = [
+  "type",
+  "register",
+  "dimensions",
+  "resource",
+  "message",
+  "applyTo",
+]
 const ENUM_VALUE_KEY_ORDER = ["name", "displayName", "order"]
 const PREDEFINED_ITEM_KEY_ORDER = ["name", "description"]
 
@@ -208,6 +227,10 @@ const NESTED_OBJECT_KEY_ORDERS: Record<string, string[]> = {
   database: DATABASE_KEY_ORDER,
   generation: GENERATION_KEY_ORDER,
   ref: METADATA_REF_KEY_ORDER,
+  posting: POSTING_KEY_ORDER,
+  register: METADATA_REF_KEY_ORDER,
+  mappings: POSTING_MAPPING_SET_KEY_ORDER,
+  message: LOCALIZED_STRING_KEY_ORDER,
 }
 
 // Ключі, масиви яких містять об'єкти зі специфічним порядком
@@ -222,6 +245,8 @@ const ARRAY_ITEM_KEY_ORDERS: Record<string, string[]> = {
   allowedTypes: METADATA_REF_KEY_ORDER,
   values: ENUM_VALUE_KEY_ORDER,
   predefinedItems: PREDEFINED_ITEM_KEY_ORDER,
+  movements: POSTING_MOVEMENT_KEY_ORDER,
+  validations: POSTING_VALIDATION_KEY_ORDER,
 }
 
 function orderKeys(
