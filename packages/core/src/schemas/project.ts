@@ -34,16 +34,20 @@ export const projectSchema = z.object({
       enumStrategy: "pgEnum" as const,
       constantsStrategy: "singleTable" as const,
     })),
-  /** BRD Phase2c — налаштування деплою (не зберігає API key) */
+  /** BRD Phase2c — налаштування деплою (не зберігає Access Token) */
   deployment: z
     .object({
       target: z.enum(["supabase", "manual", "none"]).default("none"),
       supabase: z
         .object({
-          projectUrl: z.string(),
+          projectRef: z.string().min(20),
         })
         .optional(),
     })
+    .refine(
+      (d) => d.target !== "supabase" || d.supabase?.projectRef,
+      { message: "supabase.projectRef is required when target is 'supabase'" },
+    )
     .optional(),
 })
 

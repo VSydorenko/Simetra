@@ -26,6 +26,7 @@ import {
 } from "../schemas"
 import {
   serializeMetadataObject,
+  serializeProject,
   enrichSchemaUrl,
   enrichProjectSchemaUrl,
   buildConstantsSchemaUrl,
@@ -72,6 +73,70 @@ describe("projectSchema", () => {
       },
     })
     expect(result.name).toBe("MyBusinessApp")
+  })
+
+  it("parses project with deployment supabase target", () => {
+    const result = projectSchema.parse({
+      name: "DeployApp",
+      deployment: {
+        target: "supabase",
+        supabase: { projectRef: "abcdefghijklmnopqrst" },
+      },
+    })
+    expect(result.deployment?.target).toBe("supabase")
+    expect(result.deployment?.supabase?.projectRef).toBe(
+      "abcdefghijklmnopqrst",
+    )
+  })
+
+  it("parses project with deployment manual target (no supabase block)", () => {
+    const result = projectSchema.parse({
+      name: "ManualApp",
+      deployment: { target: "manual" },
+    })
+    expect(result.deployment?.target).toBe("manual")
+    expect(result.deployment?.supabase).toBeUndefined()
+  })
+
+  it("rejects supabase target without projectRef", () => {
+    expect(() =>
+      projectSchema.parse({
+        name: "BadApp",
+        deployment: { target: "supabase" },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects supabase target with empty projectRef", () => {
+    expect(() =>
+      projectSchema.parse({
+        name: "BadApp",
+        deployment: {
+          target: "supabase",
+          supabase: { projectRef: "" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects supabase target with too short projectRef", () => {
+    expect(() =>
+      projectSchema.parse({
+        name: "BadApp",
+        deployment: {
+          target: "supabase",
+          supabase: { projectRef: "abc" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("accepts none target without supabase block", () => {
+    const result = projectSchema.parse({
+      name: "NoDeployApp",
+      deployment: { target: "none" },
+    })
+    expect(result.deployment?.target).toBe("none")
   })
 })
 
@@ -1317,6 +1382,27 @@ describe("canonical serialization", () => {
     expect(
       tabularSectionsChunk.indexOf('"standardAttributeOverrides"')
     ).toBeLessThan(tabularSectionsChunk.indexOf('"attributes"'))
+  })
+
+  it("serializeProject with deployment.supabase.projectRef", () => {
+    const project = projectSchema.parse({
+      name: "DeployApp",
+      deployment: {
+        target: "supabase",
+        supabase: { projectRef: "abcdefghijklmnopqrst" },
+      },
+    })
+    const serialized = serializeProject(project)
+    const parsed = JSON.parse(serialized)
+    expect(parsed.deployment.target).toBe("supabase")
+    expect(parsed.deployment.supabase.projectRef).toBe(
+      "abcdefghijklmnopqrst",
+    )
+    // Порядок ключів: target перед supabase
+    const deploymentKeys = Object.keys(parsed.deployment)
+    expect(deploymentKeys.indexOf("target")).toBeLessThan(
+      deploymentKeys.indexOf("supabase"),
+    )
   })
 })
 

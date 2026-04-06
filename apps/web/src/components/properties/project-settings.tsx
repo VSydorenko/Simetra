@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Accordion,
@@ -39,37 +39,78 @@ export function ProjectSettings() {
   const project = useMetadataStore((s) => s.model.project)
   const updateProject = useMetadataStore((s) => s.updateProject)
 
-  // API key — зберігається в IndexedDB, не у файлах проєкту.
-  // Credential ID прив'язаний до URL Supabase-проєкту, а не до назви метаданих:
-  // якщо URL відсутній — fallback на project.name (до першого збереження URL).
-  const supabaseProjectUrl = project.deployment?.supabase?.projectUrl ?? ""
-  const credentialId = supabaseProjectUrl
-    ? `supabase-api-key:${supabaseProjectUrl}`
-    : `supabase-api-key:name:${project.name}`
+  // Access Token (PAT) — зберігається в IndexedDB, не у файлах проєкту.
+  // Credential ID прив'язаний до projectRef Supabase-проєкту.
+  const projectRef = project.deployment?.supabase?.projectRef ?? ""
+  const credentialId = projectRef
+    ? `supabase-access-token:${projectRef}`
+    : ""
+  const prevCredentialIdRef = useRef(credentialId)
 
-  const [supabaseApiKey, setSupabaseApiKey] = useState("")
+  const [accessToken, setAccessToken] = useState("")
+  const [tokenWarning, setTokenWarning] = useState("")
 
   useEffect(() => {
-    loadCredential(credentialId).then((v) => setSupabaseApiKey(v ?? ""))
+    if (!credentialId) return
+    let stale = false
+    loadCredential(credentialId).then((v) => {
+      // Захист від гонки: ігноруємо результат якщо credentialId вже змінився
+      if (!stale) setAccessToken(v ?? "")
+    })
+    return () => {
+      stale = true
+    }
   }, [credentialId])
 
-  const handleApiKeyChange = useCallback(
+  // При зміні projectRef — очищаємо старий credential і скидаємо стан
+  useEffect(() => {
+    const prev = prevCredentialIdRef.current
+    if (prev && prev !== credentialId) {
+      void clearCredential(prev)
+    }
+    prevCredentialIdRef.current = credentialId
+  }, [credentialId])
+
+  const handleUpdate = useCallback(
+    (updates: Partial<Project>) => {
+      updateProject(updates)
+    },
+    [updateProject],
+  )
+
+  const handleProjectRefChange = useCallback(
+    (value: string) => {
+      // Скидаємо token при зміні ref — новий ref = новий credential
+      setAccessToken("")
+      setTokenWarning("")
+      handleUpdate({
+        deployment: {
+          ...project.deployment,
+          target: "supabase",
+          supabase: { projectRef: value },
+        },
+      })
+    },
+    [handleUpdate, project.deployment],
+  )
+
+  const handleAccessTokenChange = useCallback(
     async (value: string) => {
-      setSupabaseApiKey(value)
+      setAccessToken(value)
+      // Базова валідація формату PAT (warning, не блокуємо)
+      if (value && !value.startsWith("sbp_")) {
+        setTokenWarning("pat")
+      } else {
+        setTokenWarning("")
+      }
+      if (!credentialId) return
       if (value) {
         await saveCredential(credentialId, value)
       } else {
         await clearCredential(credentialId)
       }
     },
-    [credentialId]
-  )
-
-  const handleUpdate = useCallback(
-    (updates: Partial<Project>) => {
-      updateProject(updates)
-    },
-    [updateProject]
+    [credentialId],
   )
 
   const deploymentTarget = project.deployment?.target ?? "none"
@@ -264,8 +305,11 @@ export function ProjectSettings() {
                 if (newTarget !== "supabase") {
                   // Очищаємо supabase config — не залишаємо прихованих даних
                   handleUpdate({ deployment: { target: newTarget } })
-                  void clearCredential(credentialId)
-                  setSupabaseApiKey("")
+                  if (credentialId) {
+                    void clearCredential(credentialId)
+                  }
+                  setAccessToken("")
+                  setTokenWarning("")
                 } else {
                   handleUpdate({
                     deployment: { ...project.deployment, target: newTarget },
@@ -292,32 +336,44 @@ export function ProjectSettings() {
 
           {deploymentTarget === "supabase" && (
             <>
-              <SettingRow label={t("properties.deployment.supabaseProjectUrl")}>
-                <Input
-                  className="h-7 text-xs"
-                  placeholder={t("properties.deployment.supabaseUrlPlaceholder")}
-                  value={project.deployment?.supabase?.projectUrl ?? ""}
-                  onChange={(e) =>
-                    handleUpdate({
-                      deployment: {
-                        ...project.deployment,
-                        target: "supabase",
-                        supabase: { projectUrl: e.target.value },
-                      },
-                    })
-                  }
-                />
+              <SettingRow label={t("properties.deployment.supabaseProjectRef")}>
+                <div className="space-y-1">
+                  <Input
+                    className="h-7 text-xs"
+                    placeholder={t(
+                      "properties.deployment.supabaseProjectRefPlaceholder",
+                    )}
+                    value={projectRef}
+                    onChange={(e) => handleProjectRefChange(e.target.value)}
+                  />
+                  {projectRef && (
+                    <p className="text-[10px] text-muted-foreground">
+                      {t("properties.deployment.supabaseDerivedUrl", {
+                        ref: projectRef,
+                      })}
+                    </p>
+                  )}
+                </div>
               </SettingRow>
-              <SettingRow label={t("properties.deployment.supabaseApiKey")}>
+              <SettingRow label={t("properties.deployment.supabaseAccessToken")}>
                 <div className="space-y-1">
                   <Input
                     className="h-7 text-xs"
                     type="password"
-                    value={supabaseApiKey}
-                    onChange={(e) => handleApiKeyChange(e.target.value)}
+                    disabled={!projectRef}
+                    value={accessToken}
+                    onChange={(e) => handleAccessTokenChange(e.target.value)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    {t("properties.deployment.supabaseApiKeyHint")}
+                    {t("properties.deployment.supabaseAccessTokenHint")}
+                  </p>
+                  {tokenWarning === "pat" && (
+                    <p className="text-[10px] text-yellow-600">
+                      {t("properties.deployment.supabasePatFormatWarning")}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-yellow-600">
+                    {t("properties.deployment.supabaseAccessTokenWarning")}
                   </p>
                 </div>
               </SettingRow>

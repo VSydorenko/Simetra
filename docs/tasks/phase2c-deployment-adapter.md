@@ -52,28 +52,28 @@ Simetra — конфігуратор, що **генерує і застосов�
 
 #### Core schema (`packages/core`)
 
-- [ ] Замінити `supabase.projectUrl` на `supabase.projectRef` (рядок, 20+ символів — ідентифікатор Supabase-проєкту)
-- [ ] `projectUrl` стає derived: `https://{projectRef}.supabase.co` — обчислюється в UI, не зберігається
-- [ ] Додати Zod `.refine()`: якщо `target === "supabase"`, то `supabase.projectRef` обовʼязковий
-- [ ] Оновити `DEPLOYMENT_SUPABASE_KEY_ORDER` у серіалізації: `["projectRef"]` замість `["projectUrl"]`
-- [ ] Тести: валідація інваріанту target/projectRef, парсинг із projectRef
+- [Х] Замінити `supabase.projectUrl` на `supabase.projectRef` (рядок, 20+ символів — ідентифікатор Supabase-проєкту)
+- [Х] `projectUrl` стає derived: `https://{projectRef}.supabase.co` — обчислюється в UI, не зберігається
+- [Х] Додати Zod `.refine()`: якщо `target === "supabase"`, то `supabase.projectRef` обовʼязковий
+- [Х] Оновити `DEPLOYMENT_SUPABASE_KEY_ORDER` у серіалізації: `["projectRef"]` замість `["projectUrl"]`
+- [Х] Тести: валідація інваріанту target/projectRef, парсинг із projectRef
 
 #### Credential lifecycle (`apps/web`)
 
-- [ ] Змінити тип зберіганого ключа: "Supabase Access Token" (PAT, `sbp_...`) замість "API Key (anon key)"
-- [ ] Credential ID будувати на `projectRef`: `supabase-access-token:{projectRef}` (стабільний keying)
-- [ ] Прибрати fallback на `project.name` — якщо `projectRef` порожній, credential не зберігається
-- [ ] При зміні `projectRef` — очищати старий credential за попереднім ID
-- [ ] Базова валідація формату: PAT починається з `sbp_` (warning, не блокувати)
+- [Х] Змінити тип зберіганого ключа: "Supabase Access Token" (PAT, `sbp_...`) замість "API Key (anon key)"
+- [Х] Credential ID будувати на `projectRef`: `supabase-access-token:{projectRef}` (стабільний keying)
+- [Х] Прибрати fallback на `project.name` — якщо `projectRef` порожній, credential не зберігається
+- [Х] При зміні `projectRef` — очищати старий credential за попереднім ID
+- [Х] Базова валідація формату: PAT починається з `sbp_` (warning, не блокувати)
 
 #### UI (`apps/web/src/components/properties/project-settings.tsx`)
 
-- [ ] Замінити поле "Supabase Project URL" на "Project Ref (ID)" з пояснюючим placeholder
-- [ ] Показувати derived URL як read-only підказку: `https://{ref}.supabase.co`
-- [ ] Замінити label "API Key (anon key)" на "Access Token (PAT)" з hint: "Створити: Dashboard → Account → Access Tokens"
-- [ ] Попередження: "Токен дає доступ до керування вашим Supabase-акаунтом"
-- [ ] Disable поля Access Token, якщо `projectRef` порожній
-- [ ] Оновити i18n (uk.json, en.json) для нових labels і hints
+- [Х] Замінити поле "Supabase Project URL" на "Project Ref (ID)" з пояснюючим placeholder
+- [Х] Показувати derived URL як read-only підказку: `https://{ref}.supabase.co`
+- [Х] Замінити label "API Key (anon key)" на "Access Token (PAT)" з hint: "Створити: Dashboard → Account → Access Tokens"
+- [Х] Попередження: "Токен дає доступ до керування вашим Supabase-акаунтом"
+- [Х] Disable поля Access Token, якщо `projectRef` порожній
+- [Х] Оновити i18n (uk.json, en.json) для нових labels і hints
 
 #### Міграція існуючих даних
 

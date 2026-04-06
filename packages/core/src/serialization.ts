@@ -75,7 +75,7 @@ const GENERATION_KEY_ORDER = [
   "constantsStrategy",
 ]
 const DEPLOYMENT_KEY_ORDER = ["target", "supabase"]
-const DEPLOYMENT_SUPABASE_KEY_ORDER = ["projectUrl"]
+const DEPLOYMENT_SUPABASE_KEY_ORDER = ["projectRef"]
 
 // Порядок ключів для кожного типу метаданих
 const CATALOG_KEY_ORDER = [

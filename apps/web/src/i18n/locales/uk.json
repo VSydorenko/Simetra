@@ -160,10 +160,13 @@
       "targetNone": "Не налаштовано",
       "targetSupabase": "Supabase",
       "targetManual": "Ручне (копіювати SQL)",
-      "supabaseProjectUrl": "URL проєкту Supabase",
-      "supabaseApiKey": "API Key (anon key)",
-      "supabaseApiKeyHint": "Ключ зберігається локально, не у файлах проєкту",
-      "supabaseUrlPlaceholder": "https://{ref}.supabase.co"
+      "supabaseProjectRef": "Project Ref (ID)",
+      "supabaseProjectRefPlaceholder": "напр. abcdefghijklmnopqrst",
+      "supabaseDerivedUrl": "URL: https://{{ref}}.supabase.co",
+      "supabaseAccessToken": "Access Token (PAT)",
+      "supabaseAccessTokenHint": "Створити: Dashboard → Account → Access Tokens. Токен зберігається локально.",
+      "supabaseAccessTokenWarning": "Токен дає доступ до керування вашим Supabase-акаунтом",
+      "supabasePatFormatWarning": "Формат PAT: sbp_..."
     },
     "field": {
       "length": "Довжина",

@@ -160,10 +160,13 @@
       "targetNone": "Not configured",
       "targetSupabase": "Supabase",
       "targetManual": "Manual (copy SQL)",
-      "supabaseProjectUrl": "Supabase Project URL",
-      "supabaseApiKey": "API Key (anon key)",
-      "supabaseApiKeyHint": "Key is stored locally, not in project files",
-      "supabaseUrlPlaceholder": "https://{ref}.supabase.co"
+      "supabaseProjectRef": "Project Ref (ID)",
+      "supabaseProjectRefPlaceholder": "e.g. abcdefghijklmnopqrst",
+      "supabaseDerivedUrl": "URL: https://{{ref}}.supabase.co",
+      "supabaseAccessToken": "Access Token (PAT)",
+      "supabaseAccessTokenHint": "Create: Dashboard \u2192 Account \u2192 Access Tokens. Token is stored locally.",
+      "supabaseAccessTokenWarning": "Token grants access to manage your Supabase account",
+      "supabasePatFormatWarning": "PAT format: sbp_..."
     },
     "field": {
       "length": "Length",
