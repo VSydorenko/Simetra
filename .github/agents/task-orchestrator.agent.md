@@ -1,6 +1,6 @@
 ---
 description: "Оркестрація виконання етапу задачі: розбиття на кроки, делегування субагентам, контроль якості кожного кроку"
-tools: [vscode/askQuestions, vscode/memory, execute/getTerminalOutput, execute/runInTerminal, read/problems, read/readFile, agent, search, todo, ditrix.ask-me-copilot-tool/ask, ditrix.ask-me-copilot-tool/choose, ditrix.ask-me-copilot-tool/review, ditrix.ask-me-copilot-tool/confirm, ditrix.ask-me-copilot-tool/image, ditrix.ask-me-copilot-tool/status, ditrix.ask-me-copilot-tool/form, ditrix.ask-me-copilot-tool/struct_inspect, ditrix.ask-me-copilot-tool/struct_query, ditrix.ask-me-copilot-tool/struct_mutate, ditrix.ask-me-copilot-tool/struct_validate, ditrix.ask-me-copilot-tool/struct_diff]
+tools: [vscode/askQuestions, vscode/memory, execute/getTerminalOutput, execute/awaitTerminal, execute/killTerminal, execute/createAndRunTask, execute/testFailure, execute/runInTerminal, read/terminalSelection, read/terminalLastCommand, read/problems, read/readFile, read/viewImage, agent, edit/createDirectory, edit/createFile, edit/editFiles, edit/rename, search, todo]
 agents: [codebase-research, simetra-web-ui, simetra-core-metadata, code-review, doc-update]
 handoffs:
   - label: Discuss Architectural Issue
