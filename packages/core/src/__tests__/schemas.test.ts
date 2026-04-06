@@ -218,7 +218,7 @@ describe("documentSchema", () => {
       name: "SalesOrder",
     })
     expect(result.numberLength).toBe(11)
-    expect(result.posting).toBe(true)
+    expect(result.posting).toBeUndefined()
     expect(result.numberPeriodicity).toBe("Year")
   })
 
@@ -513,30 +513,12 @@ describe("postingSchema", () => {
 })
 
 describe("documentSchema — posting field", () => {
-  it("document without posting defaults to true (backward compatible)", () => {
+  it("document without posting -> posting is undefined", () => {
     const result = documentSchema.parse({
       kind: "Document",
       name: "SalesOrder",
     })
-    expect(result.posting).toBe(true)
-  })
-
-  it("document with posting: true (backward compatible)", () => {
-    const result = documentSchema.parse({
-      kind: "Document",
-      name: "SalesOrder",
-      posting: true,
-    })
-    expect(result.posting).toBe(true)
-  })
-
-  it("document with posting: false", () => {
-    const result = documentSchema.parse({
-      kind: "Document",
-      name: "SalesOrder",
-      posting: false,
-    })
-    expect(result.posting).toBe(false)
+    expect(result.posting).toBeUndefined()
   })
 
   it("document with posting object", () => {

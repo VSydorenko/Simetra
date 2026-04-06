@@ -167,8 +167,20 @@
       "supabaseDerivedUrl": "URL: https://{{ref}}.supabase.co",
       "supabaseAccessToken": "Access Token (PAT)",
       "supabaseAccessTokenHint": "Create: Dashboard \u2192 Account \u2192 Access Tokens. Token is stored locally.",
+      "credentialSaving": "Saving token locally…",
+      "credentialSaved": "Token saved locally for this session",
+      "credentialCleared": "Token removed from local storage",
+      "credentialSaveError": "Failed to save token to local storage",
       "supabaseAccessTokenWarning": "Token grants access to manage your Supabase account",
-      "supabasePatFormatWarning": "PAT format: sbp_..."
+      "supabasePatFormatWarning": "PAT format: sbp_...",
+      "connectionCheck": "Connection Check",
+      "connectionCheckAction": "Test Connection",
+      "connectionChecking": "Checking…",
+      "connectionCheckHint": "Enter Project Ref and Access Token to test the connection",
+      "connectionSuccess": "Connection successful. Project status: {{status}}",
+      "connectionSuccessWithName": "Connection successful: {{name}}. Status: {{status}}",
+      "connectionError": "Failed to test connection: {{error}}",
+      "connectionStatusUnknown": "unknown"
     },
     "field": {
       "length": "Length",

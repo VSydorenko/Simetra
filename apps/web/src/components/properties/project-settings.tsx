@@ -6,6 +6,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@workspace/ui/components/accordion"
+import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import {
@@ -16,9 +17,13 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { normalizeSupabaseProjectRef } from "@/lib/normalize-supabase-project-ref"
+import { testSupabaseConnection } from "@/lib/supabase-management"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { saveCredential, loadCredential, clearCredential } from "@/storage/session-db"
 import type { Project } from "@simetra/core"
+
+type CredentialStatus = "idle" | "saving" | "saved" | "cleared" | "error"
+type ConnectionStatus = "idle" | "checking" | "success" | "error"
 
 function SettingRow({
   label,
@@ -50,13 +55,21 @@ export function ProjectSettings() {
 
   const [accessToken, setAccessToken] = useState("")
   const [tokenWarning, setTokenWarning] = useState("")
+  const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>("idle")
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle")
+  const [connectionMessage, setConnectionMessage] = useState("")
 
   useEffect(() => {
     if (!credentialId) return
     let stale = false
     loadCredential(credentialId).then((v) => {
       // Захист від гонки: ігноруємо результат якщо credentialId вже змінився
-      if (!stale) setAccessToken(v ?? "")
+      if (!stale) {
+        setAccessToken(v ?? "")
+        setCredentialStatus(v ? "saved" : "idle")
+        setConnectionStatus("idle")
+        setConnectionMessage("")
+      }
     })
     return () => {
       stale = true
@@ -85,6 +98,9 @@ export function ProjectSettings() {
       // Скидаємо token при зміні ref — новий ref = новий credential
       setAccessToken("")
       setTokenWarning("")
+      setCredentialStatus("idle")
+      setConnectionStatus("idle")
+      setConnectionMessage("")
       handleUpdate({
         deployment: {
           ...project.deployment,
@@ -99,25 +115,101 @@ export function ProjectSettings() {
   const handleAccessTokenChange = useCallback(
     async (value: string) => {
       setAccessToken(value)
+      setCredentialStatus("saving")
+      setConnectionStatus("idle")
+      setConnectionMessage("")
       // Базова валідація формату PAT (warning, не блокуємо)
       if (value && !value.startsWith("sbp_")) {
         setTokenWarning("pat")
       } else {
         setTokenWarning("")
       }
-      if (!credentialId) return
+      if (!credentialId) {
+        setCredentialStatus("idle")
+        return
+      }
       if (value) {
-        await saveCredential(credentialId, value)
+        const saved = await saveCredential(credentialId, value)
+        setCredentialStatus(saved ? "saved" : "error")
       } else {
-        await clearCredential(credentialId)
+        const cleared = await clearCredential(credentialId)
+        setCredentialStatus(cleared ? "cleared" : "error")
       }
     },
     [credentialId],
   )
 
+  const handleTestConnection = useCallback(async () => {
+    if (!projectRef || !accessToken) return
+
+    setConnectionStatus("checking")
+    setConnectionMessage("")
+
+    try {
+      const result = await testSupabaseConnection(projectRef, accessToken)
+      if (result.ok) {
+        setConnectionStatus("success")
+        setConnectionMessage(
+          result.projectName
+            ? t("properties.deployment.connectionSuccessWithName", {
+                name: result.projectName,
+                status:
+                  result.status ?? t("properties.deployment.connectionStatusUnknown"),
+              })
+            : t("properties.deployment.connectionSuccess", {
+                status:
+                  result.status ?? t("properties.deployment.connectionStatusUnknown"),
+              }),
+        )
+      } else {
+        setConnectionStatus("error")
+        setConnectionMessage(
+          t("properties.deployment.connectionError", {
+            error: result.error,
+          }),
+        )
+      }
+    } catch (error) {
+      setConnectionStatus("error")
+      setConnectionMessage(
+        t("properties.deployment.connectionError", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    }
+  }, [accessToken, projectRef, t])
+
   const deploymentTarget = project.deployment?.target ?? "none"
   const isProjectRefRequired =
     deploymentTarget === "supabase" && projectRef.trim().length === 0
+  const canTestConnection = projectRef.trim().length > 0 && accessToken.trim().length > 0
+
+  const credentialStatusMessage = (() => {
+    switch (credentialStatus) {
+      case "saving":
+        return {
+          text: t("properties.deployment.credentialSaving"),
+          className: "text-[10px] text-muted-foreground",
+        }
+      case "saved":
+        return {
+          text: t("properties.deployment.credentialSaved"),
+          className: "text-[10px] text-emerald-600",
+        }
+      case "cleared":
+        return {
+          text: t("properties.deployment.credentialCleared"),
+          className: "text-[10px] text-muted-foreground",
+        }
+      case "error":
+        return {
+          text: t("properties.deployment.credentialSaveError"),
+          className: "text-[10px] text-destructive",
+        }
+      default:
+        return null
+    }
+  })()
 
   return (
     <Accordion
@@ -314,6 +406,9 @@ export function ProjectSettings() {
                   }
                   setAccessToken("")
                   setTokenWarning("")
+                  setCredentialStatus("idle")
+                  setConnectionStatus("idle")
+                  setConnectionMessage("")
                 } else {
                   handleUpdate({
                     deployment: { ...project.deployment, target: newTarget },
@@ -386,6 +481,11 @@ export function ProjectSettings() {
                   <p className="text-[10px] text-muted-foreground">
                     {t("properties.deployment.supabaseAccessTokenHint")}
                   </p>
+                  {credentialStatusMessage && (
+                    <p className={credentialStatusMessage.className}>
+                      {credentialStatusMessage.text}
+                    </p>
+                  )}
                   {tokenWarning === "pat" && (
                     <p className="text-[10px] text-yellow-600">
                       {t("properties.deployment.supabasePatFormatWarning")}
@@ -394,6 +494,38 @@ export function ProjectSettings() {
                   <p className="text-[10px] text-yellow-600">
                     {t("properties.deployment.supabaseAccessTokenWarning")}
                   </p>
+                </div>
+              </SettingRow>
+              <SettingRow label={t("properties.deployment.connectionCheck") }>
+                <div className="space-y-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={!canTestConnection || connectionStatus === "checking"}
+                    onClick={() => void handleTestConnection()}
+                  >
+                    {connectionStatus === "checking"
+                      ? t("properties.deployment.connectionChecking")
+                      : t("properties.deployment.connectionCheckAction")}
+                  </Button>
+                  {!canTestConnection && (
+                    <p className="text-[10px] text-muted-foreground">
+                      {t("properties.deployment.connectionCheckHint")}
+                    </p>
+                  )}
+                  {connectionMessage && (
+                    <p
+                      className={
+                        connectionStatus === "success"
+                          ? "text-[10px] text-emerald-600"
+                          : "text-[10px] text-destructive"
+                      }
+                    >
+                      {connectionMessage}
+                    </p>
+                  )}
                 </div>
               </SettingRow>
             </>

@@ -167,8 +167,20 @@
       "supabaseDerivedUrl": "URL: https://{{ref}}.supabase.co",
       "supabaseAccessToken": "Access Token (PAT)",
       "supabaseAccessTokenHint": "Створити: Dashboard → Account → Access Tokens. Токен зберігається локально.",
+      "credentialSaving": "Токен зберігається локально…",
+      "credentialSaved": "Токен збережено локально в цій сесії",
+      "credentialCleared": "Токен видалено з локального сховища",
+      "credentialSaveError": "Не вдалося зберегти токен у локальному сховищі",
       "supabaseAccessTokenWarning": "Токен дає доступ до керування вашим Supabase-акаунтом",
-      "supabasePatFormatWarning": "Формат PAT: sbp_..."
+      "supabasePatFormatWarning": "Формат PAT: sbp_...",
+      "connectionCheck": "Перевірка зв'язку",
+      "connectionCheckAction": "Перевірити зв'язок",
+      "connectionChecking": "Перевірка…",
+      "connectionCheckHint": "Для перевірки вкажіть Project Ref і Access Token",
+      "connectionSuccess": "Підключення успішне. Статус проєкту: {{status}}",
+      "connectionSuccessWithName": "Підключення успішне: {{name}}. Статус: {{status}}",
+      "connectionError": "Не вдалося перевірити з'єднання: {{error}}",
+      "connectionStatusUnknown": "невідомий"
     },
     "field": {
       "length": "Довжина",

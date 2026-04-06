@@ -170,14 +170,19 @@ export async function clearDraft(): Promise<void> {
 }
 
 /** Зберегти облікові дані за ідентифікатором (API key тощо) */
-export async function saveCredential(id: string, value: string): Promise<void> {
+export async function saveCredential(
+  id: string,
+  value: string,
+): Promise<boolean> {
   try {
     const dbP = getDb()
-    if (!dbP) return
+    if (!dbP) return false
     const db = await dbP
     await db.put("credentials", { value, savedAt: Date.now() }, id)
+    return true
   } catch {
     // Graceful degradation
+    return false
   }
 }
 
@@ -195,13 +200,15 @@ export async function loadCredential(id: string): Promise<string | null> {
 }
 
 /** Видалити облікові дані за ідентифікатором */
-export async function clearCredential(id: string): Promise<void> {
+export async function clearCredential(id: string): Promise<boolean> {
   try {
     const dbP = getDb()
-    if (!dbP) return
+    if (!dbP) return false
     const db = await dbP
     await db.delete("credentials", id)
+    return true
   } catch {
     // Graceful degradation
+    return false
   }
 }
