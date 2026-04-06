@@ -37,7 +37,108 @@ Phase 2a створила DDL генератор для структурної �
   - Document з порожнім posting → pass
   - `pnpm --filter @simetra/core test` — green
 
-### Етап 2: Генерація posting SQL у `@simetra/generator-pg`
+### Етап 2: Візуальний editor маппінгів у `apps/web`
+
+> **Залежність від Етапу 1:** posting Zod-схеми мають бути в core до початку persisted save (крок 2.6).
+
+#### 2.1. Параметризація tree-builder
+
+- [ ] Додати параметри в `buildTypeEditorTree` (`tree-builder.ts`):
+  - `allowedKinds: readonly MetadataKind[]` — які kinds показувати (дефолт: `REFERENCEABLE_KINDS`)
+  - `includePrimitives: boolean` — чи показувати примітивні типи (дефолт: `true`)
+- [ ] Зберегти зворотну сумісність: поточний виклик з `DataTypeEditorDialog` працює без змін
+- [ ] Оновити тести `buildTypeEditorTree` під нові параметри
+
+#### 2.2. Виділення MetadataObjectTreeSelector
+
+- [ ] Витягнути з `DataTypeEditorBody` спільний stateless блок `MetadataObjectTreeSelector`:
+  - Props: `model`, `allowedKinds`, `searchQuery`, `selectedIds: Set<string>`, `mode: "radio" | "checkbox"`, `includePrimitives`
+  - Callbacks: `onSelectTarget(MetadataRef)`, `onToggleKindGroup(kind: MetadataKind)`
+  - Рендерить: search input + tree container + presentation nodes (`RefKindGroupPresentation`, `RefTargetPresentation`, опціонально `PrimitiveTypePresentation`)
+  - Bulk toggle для kind groups у checkbox mode — через `kindCheckedStates` по `allowedKinds`
+- [ ] Рефакторити `DataTypeEditorBody` — замінити inline tree на `MetadataObjectTreeSelector`
+- [ ] Підтвердити: `DataTypeEditorDialog` працює ідентично до рефакторингу
+
+#### 2.3. Секція "Рухи" в ObjectEditor
+
+- [ ] Замінити placeholder `comingSoon` у секції `movements` (`object-editor.tsx`) реальним компонентом `MovementsSection`
+- [ ] Перенести `registerMovements` з правої панелі (`DocumentTypeSettings` в `object-properties.tsx`) у центральну секцію:
+  - Таблиця "Регістри для рухів" з колонками: Регістр, Тип руху, Джерело
+  - Кнопка **"Додати"** → відкриває `RegisterPickerDialog`
+  - Кнопка **"Видалити"** → видаляє обраний рядок
+  - Кнопка **"Конструктор рухів"** → відкриває `MovementConstructorDialog` для обраного рядка
+- [ ] Прибрати `registerMovements` picker з `DocumentTypeSettings` у правій панелі (уникнення двох точок редагування)
+- [ ] Секція валідацій внизу:
+  - Таблиця: Регістр, Виміри, Ресурс, Повідомлення
+  - Кнопки Додати/Видалити
+- [ ] Зміни `registerMovements` → оновлення через `updateObject` в metadata-store
+
+#### 2.4. RegisterPickerDialog — діалог вибору регістрів
+
+- [ ] Новий діалог з патерном `open/onOpenChange + revisionKey + local draft + Save → close` (як `StandardAttributesDialog`)
+- [ ] Використовує `MetadataObjectTreeSelector` з props:
+  - `allowedKinds={["AccumulationRegister", "InformationRegister"]}`
+  - `mode="checkbox"` (multi-select)
+  - `includePrimitives={false}`
+  - `selectedIds` = вже додані регістри (для pre-check)
+- [ ] Save → повертає `MetadataRef[]`, caller додає нові до `registerMovements`
+- [ ] Cancel → відкидає зміни
+
+#### 2.5. MovementConstructorDialog — конструктор рухів для одного регістру
+
+- [ ] Окремий модальний діалог, відкривається по кнопці "Конструктор рухів" з обраним рядком регістру
+- [ ] Патерн: `open/onOpenChange + revisionKey + local draft + Save/Cancel`
+- [ ] Заголовок: "Конструктор рухів: {RegisterName}"
+- [ ] Верхня частина — налаштування руху:
+  - **Тип руху**: Radio `Прихід / Розхід / Динамічний` (+ dropdown для поля документа при "Динамічний")
+  - **Джерело**: Dropdown `Документ / ТЧ:{name}` (список ТЧ з document.tabularSections)
+  - **Умова**: Input для condition expression (опціонально)
+- [ ] Основна частина — таблиця маппінгу:
+  - Ліва колонка: "Поле регістру" — dimensions, resources, attributes цільового регістру, згруповані з заголовками
+  - Права колонка: "Вираз" — combobox з динамічним набором опцій залежно від source:
+    - Якщо source = `tabularSection:{name}`:
+      - Група "Рядок ТЧ": `row.{field}` для кожного attribute ТЧ (custom + standard `line_number`)
+      - Група "Документ": `doc.{field}` для кожного attribute шапки (custom + standard `number`, `date`, `posted`)
+      - Група "Вираз": вільний ввід для арифметики `row.a * row.b`
+    - Якщо source = `document`:
+      - Група "Документ": `doc.{field}`
+      - Група "Агрегати": `sum({ts}.{field})`, `count({ts})` для кожної ТЧ
+      - Група "Константи": `literal:{value}`, `now()`
+- [ ] При зміні source — вже заповнені вирази, що стали невалідними, підсвічуються як помилка (не очищаються автоматично)
+- [ ] Save → комітить draft у posting.movements[index] через store
+- [ ] Cancel → відкидає всі зміни маппінгу
+
+#### 2.6. Persisted save та інтеграція зі store
+
+- [ ] Posting-aware actions у metadata-store:
+  - `updateMovement(kind, name, registerRef, movementDraft)` — оновити один movement
+  - `removeMovement(kind, name, registerRef)` — видалити movement
+  - `addValidation(kind, name, validation)` / `removeValidation(kind, name, index)`
+- [ ] При додаванні/видаленні регістру в `registerMovements` — sync з `posting.movements[]` (видалення movement при видаленні регістру)
+- [ ] Розширити `cascadeRenameRefs` у metadata-store для `posting.movements[].register` і `posting.validations[].register`
+- [ ] Розширити `use-model-validation.ts` — перевіряти, що posting refs існують
+- [ ] Зміни зберігаються через serializer у JSON-файл документа
+
+#### 2.7. Утиліта buildExpressionOptions
+
+- [ ] Створити `apps/web/src/lib/build-expression-options.ts`:
+  - Вхід: `document: Document`, `source: string`
+  - Вихід: `{ group: string, options: { value: string, label: string }[] }[]`
+  - Збирає поля з: `document.attributes`, `document.tabularSections[name].attributes`, `getStandardAttributes("Document")`, `getTabularSectionStandardAttributes()`
+  - Динамічно перезбирається при зміні source
+
+#### 2.8. Тести
+
+- [ ] Unit тест: `buildTypeEditorTree` з custom `allowedKinds` → показує тільки зазначені kinds
+- [ ] Unit тест: `buildExpressionOptions` → коректні групи для source=document і source=tabularSection
+- [ ] Component test: `MovementsSection` рендерить таблицю регістрів
+- [ ] Component test: `RegisterPickerDialog` → multi-select → save → registerMovements оновлено
+- [ ] Component test: `MovementConstructorDialog` → заповнення маппінгу → save → posting.movements оновлено
+- [ ] Component test: зміна source → невалідні вирази підсвічуються
+- [ ] Integration: додавання/видалення movement → store update → JSON persistence
+- [ ] `pnpm --filter web test` — green
+
+### Етап 3: Генерація posting SQL у `@simetra/generator-pg`
 
 - [ ] `post_{document_name}(doc_id uuid)`:
   - Перевірка `IF posted THEN RAISE EXCEPTION`
@@ -65,46 +166,54 @@ Phase 2a створила DDL генератор для структурної �
   - Агрегація: `sum(items.amount)`
   - `pnpm --filter @simetra/generator-pg test` — green
 
-### Етап 3: Візуальний editor маппінгів у `apps/web`
-
-- [ ] Замінити placeholder "comingSoon" у секції "Рухи" (`object-editor.tsx`) реальним контентом
-- [ ] UI секції "Рухи" для Document:
-  - Список movements (кожен — окремий рядок/картка):
-    - Dropdown для вибору цільового регістру (з `registerMovements` document settings)
-    - Radio для типу руху (Receipt/Expense/Dynamic)
-    - Dropdown для source (document / tabularSection:{name})
-    - Textarea для condition (опціонально)
-  - Для кожного movement — панель маппінгів:
-    - Ліва колонка: поля документа/ТЧ (джерело)
-    - Права колонка: виміри + ресурси + реквізити обраного регістру (ціль)
-    - Dropdown-based маппінг (MVP); drag-drop лінії зв'язку як enhancement
-    - Input для expression (якщо потрібна арифметика/агрегація)
-  - Секція валідацій внизу:
-    - Кнопка "Додати валідацію"
-    - Вибір регістру, вимірів, ресурсу
-    - Текст повідомлення (LocalizedString)
-- [ ] Зберігання змін маппінгу в store → секція `posting` JSON-файлу документа
-- [ ] Sync: зміни в `registerMovements` (ObjectProperties) → оновлення списку доступних регістрів у movements editor
-- [ ] **Тести:**
-  - Component test: movements editor рендерить movement items
-  - Adding/removing movement → store update → JSON persistence
-  - Mapping change → correct posting structure in metadata
-
 ---
 
 ## Clarify (питання перед імплементацією)
 
-- [ ] **Drag-and-drop vs dropdown для маппінгів?** Drag-drop ефектніший візуально, але dropdown простіший для MVP. Рекомендація: dropdown + expression input для MVP, drag-drop як enhancement.
+- [x] ~~**Drag-and-drop vs dropdown для маппінгів?**~~ → Combobox з автокомплітом для MVP. Drag-drop як enhancement.
+- [x] ~~**Inline editor vs окремий діалог для маппінгів?**~~ → Окремий `MovementConstructorDialog` для одного регістру (1С-подібний патерн).
+- [x] ~~**Окремий builder для register tree vs параметризація існуючого?**~~ → Параметризація `buildTypeEditorTree` + виділення `MetadataObjectTreeSelector` як спільного блоку.
+- [x] ~~**Де живе registerMovements — центр чи права панель?**~~ → Тільки центральна секція "Рухи". З правої панелі прибирається.
 - [ ] **Валідація posting-маппінгу в реальному часі?** Перевіряти, що source fields існують, що target dimensions/resources існують у регістрі. Рекомендація: так, аналогічно до field ref validation.
-- [ ] **Чи потрібна кнопка "Preview Posting SQL" до Phase 2a SQL Preview?** Рекомендація: використовувати існуючий SQL Preview з Phase 2a.
+- [ ] **Чи потрібна кнопка "Preview Posting SQL" до Етапу 3?** Рекомендація: використовувати існуючий SQL Preview з Phase 2a.
+
+---
+
+## Рекомендовані патерни
+
+### Dialog lifecycle
+Усі діалоги Phase 2b мають повторювати патерн `open/onOpenChange + revisionKey + local draft + Save → close`, підтверджений у `StandardAttributesDialog` і `AdditionalIndexesDialog`.
+
+### MetadataObjectTreeSelector
+Спільний stateless блок для tree-based вибору metadata objects. Використовується і в рефакторнутому `DataTypeEditorDialog`, і в `RegisterPickerDialog`. Не є окремим діалогом — це **частина body** діалогу.
+
+### Expression picker
+Combobox з динамічним набором опцій, що перезбирається при зміні source. Список формується утилітою `buildExpressionOptions` зі стандартних + custom полів документа та його ТЧ.
+
+## Антипатерни (уникати)
+
+### ❌ Два місця редагування registerMovements
+registerMovements не повинен редагуватися одночасно з центральної секції Movements і правої панелі ObjectProperties.
+
+### ❌ Автоматичне очищення виразів при зміні source
+При зміні source невалідні вирази підсвічуються як помилка, але не очищаються — щоб не втрачати роботу користувача.
+
+### ❌ Пряме reuse DataTypeEditorDialog для register selection
+Dialog має Attribute-специфічний draft і save contract. Reuse — через виділений `MetadataObjectTreeSelector`, а не через conditional props самого діалогу.
 
 ---
 
 ## Definition of Done
 
-- [ ] `pnpm --filter @simetra/core test` — green (posting schemas)
+- [x] `pnpm --filter @simetra/core test` — green (posting schemas)
 - [ ] `pnpm --filter @simetra/generator-pg test` — green (posting SQL generation)
 - [ ] `pnpm lint ; pnpm typecheck` — clean
-- [ ] Movements editor UI функціональний: створення/редагування/видалення movements + validations
+- [ ] `buildTypeEditorTree` параметризований, `MetadataObjectTreeSelector` виділений
+- [ ] `DataTypeEditorDialog` працює ідентично після рефакторингу
+- [ ] Секція "Рухи" в ObjectEditor: таблиця регістрів + Додати/Видалити
+- [ ] `RegisterPickerDialog`: tree-based multi-select вибір регістрів
+- [ ] `MovementConstructorDialog`: per-register маппінг з expression combobox
+- [ ] registerMovements прибрано з правої панелі
+- [ ] Persisted save: маппінги зберігаються в posting секції JSON
 - [ ] Документ з posting секцією → Generate → SQL включає post/unpost/check функції
 - [ ] Backward compatible: документи без posting секції працюють як раніше
