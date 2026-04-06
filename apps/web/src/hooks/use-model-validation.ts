@@ -133,6 +133,34 @@ function validateSingleObject(
     }
   }
 
+  // 4. Перевірка posting refs (movements + validations)
+  if ("posting" in obj && typeof obj.posting === "object" && obj.posting !== null) {
+    const posting = obj.posting as {
+      movements?: { register: { kind: MetadataKind; name: string } }[]
+      validations?: { register: { kind: MetadataKind; name: string } }[]
+    }
+    if (posting.movements) {
+      for (const movement of posting.movements) {
+        if (!refExists(model, movement.register.kind, movement.register.name)) {
+          errors.push({
+            path: "posting.movements",
+            message: `ref:${movement.register.kind}/${movement.register.name}`,
+          })
+        }
+      }
+    }
+    if (posting.validations) {
+      for (const validation of posting.validations) {
+        if (!refExists(model, validation.register.kind, validation.register.name)) {
+          errors.push({
+            path: "posting.validations",
+            message: `ref:${validation.register.kind}/${validation.register.name}`,
+          })
+        }
+      }
+    }
+  }
+
   return errors
 }
 

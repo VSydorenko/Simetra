@@ -278,41 +278,54 @@ export function buildTreeData(
 const PRIMITIVE_TYPES = fieldTypeSchema.options.filter((t) => t !== "Ref")
 
 /** Referenceable kinds — source of truth з core */
-const REFERENCEABLE_KINDS = referenceableKindSchema.options
+export const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
 /** Резолвер локалізованих лейблів для пошуку у Data Type Editor */
 export type LabelResolver = (key: string) => string
 
+/** Параметри побудови дерева типів */
+export interface TypeEditorTreeOptions {
+  /** Які kinds показувати (дефолт: REFERENCEABLE_KINDS) */
+  allowedKinds?: readonly MetadataKind[]
+  /** Чи показувати примітивні типи (дефолт: true) */
+  includePrimitives?: boolean
+}
+
 export function buildTypeEditorTree(
   model: ProjectModel,
   searchQuery: string,
-  getLabel?: LabelResolver
+  getLabel?: LabelResolver,
+  options?: TypeEditorTreeOptions
 ): TreeNodeData[] {
   const lowerQuery = searchQuery.toLowerCase()
   const nodes: TreeNodeData[] = []
+  const allowedKinds = options?.allowedKinds ?? REFERENCEABLE_KINDS
+  const includePrimitives = options?.includePrimitives ?? true
 
   // Примітивні типи
-  for (const ft of PRIMITIVE_TYPES) {
-    if (searchQuery) {
-      const label = getLabel?.(`fieldType.${ft}`) ?? ft
-      if (
-        !ft.toLowerCase().includes(lowerQuery) &&
-        !label.toLowerCase().includes(lowerQuery)
-      )
-        continue
+  if (includePrimitives) {
+    for (const ft of PRIMITIVE_TYPES) {
+      if (searchQuery) {
+        const label = getLabel?.(`fieldType.${ft}`) ?? ft
+        if (
+          !ft.toLowerCase().includes(lowerQuery) &&
+          !label.toLowerCase().includes(lowerQuery)
+        )
+          continue
+      }
+      nodes.push({
+        id: `type/${ft}`,
+        name: ft,
+        nodeType: "primitiveType",
+        fieldTypeValue: ft,
+        selectable: true,
+      })
     }
-    nodes.push({
-      id: `type/${ft}`,
-      name: ft,
-      nodeType: "primitiveType",
-      fieldTypeValue: ft,
-      selectable: true,
-    })
   }
 
   // Reference kind groups + targets
-  for (const refKind of REFERENCEABLE_KINDS) {
-    const key = KIND_TO_KEY[refKind as MetadataKind]
+  for (const refKind of allowedKinds) {
+    const key = KIND_TO_KEY[refKind]
     const objects = model[key] as MetadataObject[]
 
     const filteredObjects = searchQuery

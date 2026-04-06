@@ -309,7 +309,31 @@
     "recorderTypes": "Recorder types",
     "registerMovements": "Register movements",
     "attributeRef": "Attribute ref",
-    "attributeAllowedTypes": "Allowed types"
+    "attributeAllowedTypes": "Allowed types",
+    "postingMovement": "Posting movement",
+    "postingValidation": "Posting validation"
+  },
+  "movements": {
+    "register": "Register",
+    "movementType": "Movement type",
+    "source": "Source",
+    "noRegisters": "No registers for movements",
+    "noValidations": "No validations",
+    "pickRegisters": "Select registers",
+    "validations": "Validations",
+    "dimensions": "Dimensions",
+    "resource": "Resource",
+    "message": "Message",
+    "constructor": "Movement constructor"
+  },
+  "expression": {
+    "tsRow": "Tabular section row",
+    "document": "Document",
+    "freeInput": "Expression",
+    "freeInputHint": "Free input",
+    "aggregates": "Aggregates",
+    "constants": "Constants",
+    "literalHint": "literal:{value}"
   },
   "fieldType": {
     "UUID": "UUID",

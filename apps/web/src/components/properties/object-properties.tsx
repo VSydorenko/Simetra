@@ -668,24 +668,12 @@ function DocumentTypeSettings({
       </SettingRow>
       <SettingRow label={t("metadata.setting.posting")}>
         <Switch
-          checked={o.posting}
+          checked={!!o.posting}
           onCheckedChange={(v) =>
             onUpdate({ posting: v } as Partial<MetadataObject>)
           }
         />
       </SettingRow>
-      <div className="space-y-1">
-        <Label className="text-xs text-muted-foreground">
-          {t("properties.registerMovements")}
-        </Label>
-        <MetadataRefMultiPicker
-          value={o.registerMovements}
-          allowedKinds={["AccumulationRegister", "InformationRegister"]}
-          onChange={(refs) =>
-            onUpdate({ registerMovements: refs } as Partial<MetadataObject>)
-          }
-        />
-      </div>
     </>
   )
 }

@@ -318,6 +318,30 @@ function cascadeRenameRefs(
         }
       }
 
+      // Оновити posting.movements[].register та posting.validations[].register (Document)
+      if ("posting" in obj && typeof obj.posting === "object" && obj.posting !== null) {
+        const posting = obj.posting as {
+          movements?: { register: { kind: MetadataKind; name: string } }[]
+          validations?: { register: { kind: MetadataKind; name: string } }[]
+        }
+        if (posting.movements) {
+          for (const movement of posting.movements) {
+            if (movement.register.kind === kind && movement.register.name === oldName) {
+              movement.register.name = newName
+              changed = true
+            }
+          }
+        }
+        if (posting.validations) {
+          for (const validation of posting.validations) {
+            if (validation.register.kind === kind && validation.register.name === oldName) {
+              validation.register.name = newName
+              changed = true
+            }
+          }
+        }
+      }
+
       // Оновити attribute.ref і attribute.allowedTypes
       const attrCollections: Attribute[][] = []
       if ("attributes" in obj && Array.isArray(obj.attributes)) {

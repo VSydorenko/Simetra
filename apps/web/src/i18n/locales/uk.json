@@ -313,7 +313,31 @@
     "recorderTypes": "Типи реєстраторів",
     "registerMovements": "Рухи регістрів",
     "attributeRef": "Посилання реквізиту",
-    "attributeAllowedTypes": "Допустимі типи"
+    "attributeAllowedTypes": "Допустимі типи",
+    "postingMovement": "Рух проведення",
+    "postingValidation": "Валідація проведення"
+  },
+  "movements": {
+    "register": "Регістр",
+    "movementType": "Тип руху",
+    "source": "Джерело",
+    "noRegisters": "Немає регістрів для рухів",
+    "noValidations": "Немає валідацій",
+    "pickRegisters": "Вибір регістрів",
+    "validations": "Валідації",
+    "dimensions": "Виміри",
+    "resource": "Ресурс",
+    "message": "Повідомлення",
+    "constructor": "Конструктор рухів"
+  },
+  "expression": {
+    "tsRow": "Рядок ТЧ",
+    "document": "Документ",
+    "freeInput": "Вираз",
+    "freeInputHint": "Вільний ввід",
+    "aggregates": "Агрегати",
+    "constants": "Константи",
+    "literalHint": "literal:{значення}"
   },
   "fieldType": {
     "UUID": "UUID",

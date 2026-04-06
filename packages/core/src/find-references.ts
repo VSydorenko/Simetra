@@ -10,6 +10,8 @@ export type ReferenceKind =
   | "registerMovements"
   | "attributeRef"
   | "attributeAllowedTypes"
+  | "postingMovement"
+  | "postingValidation"
 
 /** A structured reference from one object to another */
 export interface Reference {
@@ -147,6 +149,28 @@ export function findReferences(
       for (const movement of obj.registerMovements) {
         if (movement.kind === targetKind && movement.name === targetName) {
           refs.push({ from: objRef, referenceKind: "registerMovements" })
+        }
+      }
+    }
+
+    // Posting movements/validations register references
+    if ("posting" in obj && typeof obj.posting === "object" && obj.posting !== null) {
+      const posting = obj.posting as {
+        movements?: { register: { kind: string; name: string } }[]
+        validations?: { register: { kind: string; name: string } }[]
+      }
+      if (posting.movements) {
+        for (const m of posting.movements) {
+          if (m.register.kind === targetKind && m.register.name === targetName) {
+            refs.push({ from: objRef, referenceKind: "postingMovement" })
+          }
+        }
+      }
+      if (posting.validations) {
+        for (const v of posting.validations) {
+          if (v.register.kind === targetKind && v.register.name === targetName) {
+            refs.push({ from: objRef, referenceKind: "postingValidation" })
+          }
         }
       }
     }

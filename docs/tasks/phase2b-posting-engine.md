@@ -43,15 +43,15 @@ Phase 2a створила DDL генератор для структурної �
 
 #### 2.1. Параметризація tree-builder
 
-- [ ] Додати параметри в `buildTypeEditorTree` (`tree-builder.ts`):
+- [Х] Додати параметри в `buildTypeEditorTree` (`tree-builder.ts`):
   - `allowedKinds: readonly MetadataKind[]` — які kinds показувати (дефолт: `REFERENCEABLE_KINDS`)
   - `includePrimitives: boolean` — чи показувати примітивні типи (дефолт: `true`)
-- [ ] Зберегти зворотну сумісність: поточний виклик з `DataTypeEditorDialog` працює без змін
+- [Х] Зберегти зворотну сумісність: поточний виклик з `DataTypeEditorDialog` працює без змін
 - [ ] Оновити тести `buildTypeEditorTree` під нові параметри
 
 #### 2.2. Виділення MetadataObjectTreeSelector
 
-- [ ] Витягнути з `DataTypeEditorBody` спільний stateless блок `MetadataObjectTreeSelector`:
+- [Х] Витягнути з `DataTypeEditorBody` спільний stateless блок `MetadataObjectTreeSelector`:
   - Props: `model`, `allowedKinds`, `searchQuery`, `selectedIds: Set<string>`, `mode: "radio" | "checkbox"`, `includePrimitives`
   - Callbacks: `onSelectTarget(MetadataRef)`, `onToggleKindGroup(kind: MetadataKind)`
   - Рендерить: search input + tree container + presentation nodes (`RefKindGroupPresentation`, `RefTargetPresentation`, опціонально `PrimitiveTypePresentation`)
@@ -61,28 +61,28 @@ Phase 2a створила DDL генератор для структурної �
 
 #### 2.3. Секція "Рухи" в ObjectEditor
 
-- [ ] Замінити placeholder `comingSoon` у секції `movements` (`object-editor.tsx`) реальним компонентом `MovementsSection`
-- [ ] Перенести `registerMovements` з правої панелі (`DocumentTypeSettings` в `object-properties.tsx`) у центральну секцію:
+- [Х] Замінити placeholder `comingSoon` у секції `movements` (`object-editor.tsx`) реальним компонентом `MovementsSection`
+- [Х] Перенести `registerMovements` з правої панелі (`DocumentTypeSettings` в `object-properties.tsx`) у центральну секцію:
   - Таблиця "Регістри для рухів" з колонками: Регістр, Тип руху, Джерело
   - Кнопка **"Додати"** → відкриває `RegisterPickerDialog`
   - Кнопка **"Видалити"** → видаляє обраний рядок
   - Кнопка **"Конструктор рухів"** → відкриває `MovementConstructorDialog` для обраного рядка
-- [ ] Прибрати `registerMovements` picker з `DocumentTypeSettings` у правій панелі (уникнення двох точок редагування)
-- [ ] Секція валідацій внизу:
+- [Х] Прибрати `registerMovements` picker з `DocumentTypeSettings` у правій панелі (уникнення двох точок редагування)
+- [Х] Секція валідацій внизу:
   - Таблиця: Регістр, Виміри, Ресурс, Повідомлення
   - Кнопки Додати/Видалити
-- [ ] Зміни `registerMovements` → оновлення через `updateObject` в metadata-store
+- [Х] Зміни `registerMovements` → оновлення через `updateObject` в metadata-store
 
 #### 2.4. RegisterPickerDialog — діалог вибору регістрів
 
-- [ ] Новий діалог з патерном `open/onOpenChange + revisionKey + local draft + Save → close` (як `StandardAttributesDialog`)
-- [ ] Використовує `MetadataObjectTreeSelector` з props:
+- [Х] Новий діалог з патерном `open/onOpenChange + revisionKey + local draft + Save → close` (як `StandardAttributesDialog`)
+- [Х] Використовує `MetadataObjectTreeSelector` з props:
   - `allowedKinds={["AccumulationRegister", "InformationRegister"]}`
   - `mode="checkbox"` (multi-select)
   - `includePrimitives={false}`
   - `selectedIds` = вже додані регістри (для pre-check)
-- [ ] Save → повертає `MetadataRef[]`, caller додає нові до `registerMovements`
-- [ ] Cancel → відкидає зміни
+- [Х] Save → повертає `MetadataRef[]`, caller додає нові до `registerMovements`
+- [Х] Cancel → відкидає зміни
 
 #### 2.5. MovementConstructorDialog — конструктор рухів для одного регістру
 
@@ -115,13 +115,13 @@ Phase 2a створила DDL генератор для структурної �
   - `removeMovement(kind, name, registerRef)` — видалити movement
   - `addValidation(kind, name, validation)` / `removeValidation(kind, name, index)`
 - [ ] При додаванні/видаленні регістру в `registerMovements` — sync з `posting.movements[]` (видалення movement при видаленні регістру)
-- [ ] Розширити `cascadeRenameRefs` у metadata-store для `posting.movements[].register` і `posting.validations[].register`
-- [ ] Розширити `use-model-validation.ts` — перевіряти, що posting refs існують
+- [Х] Розширити `cascadeRenameRefs` у metadata-store для `posting.movements[].register` і `posting.validations[].register`
+- [Х] Розширити `use-model-validation.ts` — перевіряти, що posting refs існують
 - [ ] Зміни зберігаються через serializer у JSON-файл документа
 
 #### 2.7. Утиліта buildExpressionOptions
 
-- [ ] Створити `apps/web/src/lib/build-expression-options.ts`:
+- [Х] Створити `apps/web/src/lib/build-expression-options.ts`:
   - Вхід: `document: Document`, `source: string`
   - Вихід: `{ group: string, options: { value: string, label: string }[] }[]`
   - Збирає поля з: `document.attributes`, `document.tabularSections[name].attributes`, `getStandardAttributes("Document")`, `getTabularSectionStandardAttributes()`
@@ -170,10 +170,10 @@ Phase 2a створила DDL генератор для структурної �
 
 ## Clarify (питання перед імплементацією)
 
-- [x] ~~**Drag-and-drop vs dropdown для маппінгів?**~~ → Combobox з автокомплітом для MVP. Drag-drop як enhancement.
-- [x] ~~**Inline editor vs окремий діалог для маппінгів?**~~ → Окремий `MovementConstructorDialog` для одного регістру (1С-подібний патерн).
-- [x] ~~**Окремий builder для register tree vs параметризація існуючого?**~~ → Параметризація `buildTypeEditorTree` + виділення `MetadataObjectTreeSelector` як спільного блоку.
-- [x] ~~**Де живе registerMovements — центр чи права панель?**~~ → Тільки центральна секція "Рухи". З правої панелі прибирається.
+- [Х] ~~**Drag-and-drop vs dropdown для маппінгів?**~~ → Combobox з автокомплітом для MVP. Drag-drop як enhancement.
+- [Х] ~~**Inline editor vs окремий діалог для маппінгів?**~~ → Окремий `MovementConstructorDialog` для одного регістру (1С-подібний патерн).
+- [Х] ~~**Окремий builder для register tree vs параметризація існуючого?**~~ → Параметризація `buildTypeEditorTree` + виділення `MetadataObjectTreeSelector` як спільного блоку.
+- [Х] ~~**Де живе registerMovements — центр чи права панель?**~~ → Тільки центральна секція "Рухи". З правої панелі прибирається.
 - [ ] **Валідація posting-маппінгу в реальному часі?** Перевіряти, що source fields існують, що target dimensions/resources існують у регістрі. Рекомендація: так, аналогічно до field ref validation.
 - [ ] **Чи потрібна кнопка "Preview Posting SQL" до Етапу 3?** Рекомендація: використовувати існуючий SQL Preview з Phase 2a.
 
@@ -205,7 +205,7 @@ Dialog має Attribute-специфічний draft і save contract. Reuse —
 
 ## Definition of Done
 
-- [x] `pnpm --filter @simetra/core test` — green (posting schemas)
+- [Х] `pnpm --filter @simetra/core test` — green (posting schemas)
 - [ ] `pnpm --filter @simetra/generator-pg test` — green (posting SQL generation)
 - [ ] `pnpm lint ; pnpm typecheck` — clean
 - [ ] `buildTypeEditorTree` параметризований, `MetadataObjectTreeSelector` виділений

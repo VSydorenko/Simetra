@@ -7,6 +7,7 @@ import { cn } from "@workspace/ui/lib/utils"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { AttributeTable } from "./attribute-table"
 import { EnumValuesEditor } from "./enum-values-editor"
+import { MovementsSection } from "./movements-section"
 import { TabularSectionsEditor } from "./tabular-sections-editor"
 import { VerticalNav } from "./vertical-nav"
 import { SECTION_CONFIG } from "./section-config"
@@ -160,8 +161,16 @@ function SectionContent({
         />
       )
 
-    case "numbering":
     case "movements":
+      return (
+        <MovementsSection
+          kind={kind}
+          objectName={objectName}
+          object={object}
+        />
+      )
+
+    case "numbering":
     case "settings":
       return (
         <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
