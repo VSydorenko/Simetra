@@ -5,7 +5,7 @@ import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 export function computeKindCheckedStates(
   model: ProjectModel,
   allowedKinds: readonly MetadataKind[],
-  selectedRefs: MetadataRef[],
+  selectedRefs: MetadataRef[]
 ): Record<string, boolean | "indeterminate"> {
   const states: Record<string, boolean | "indeterminate"> = {}
   for (const k of allowedKinds) {
@@ -16,7 +16,7 @@ export function computeKindCheckedStates(
       continue
     }
     const selectedCount = objects.filter((obj) =>
-      selectedRefs.some((ref) => ref.kind === k && ref.name === obj.name),
+      selectedRefs.some((ref) => ref.kind === k && ref.name === obj.name)
     ).length
     if (selectedCount === 0) states[k] = false
     else if (selectedCount === objects.length) states[k] = true

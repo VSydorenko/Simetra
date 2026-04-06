@@ -173,7 +173,7 @@ describe("roundtrip serialization", () => {
     // Object wrapper: extract constants array
     const constants = Array.isArray(constantsData)
       ? constantsData
-      : constantsData.constants ?? []
+      : (constantsData.constants ?? [])
 
     const rebuilt = projectModelSchema.parse({
       project: projectJson,

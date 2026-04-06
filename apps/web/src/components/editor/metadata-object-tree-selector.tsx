@@ -4,7 +4,12 @@ import { Tree, type NodeApi, type TreeApi } from "react-arborist"
 import { Input } from "@workspace/ui/components/input"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Search01Icon } from "@hugeicons/core-free-icons"
-import type { FieldType, MetadataKind, MetadataRef, ProjectModel } from "@simetra/core"
+import type {
+  FieldType,
+  MetadataKind,
+  MetadataRef,
+  ProjectModel,
+} from "@simetra/core"
 import {
   buildTypeEditorTree,
   REFERENCEABLE_KINDS,
@@ -30,6 +35,8 @@ export interface MetadataObjectTreeSelectorProps {
   mode: "radio" | "checkbox"
   /** Чи показувати примітивні типи (дефолт: true) */
   includePrimitives?: boolean
+  /** Вимкнути вибір примітивних типів, показати як disabled */
+  primitivesDisabled?: boolean
   /** Callback при виборі ref target */
   onSelectTarget: (ref: MetadataRef) => void
   /** Callback при виборі примітивного типу (тільки якщо includePrimitives=true) */
@@ -50,6 +57,7 @@ export function MetadataObjectTreeSelector({
   selectedIds,
   mode,
   includePrimitives = true,
+  primitivesDisabled = false,
   onSelectTarget,
   onSelectPrimitive,
   onToggleKindGroup,
@@ -64,7 +72,7 @@ export function MetadataObjectTreeSelector({
         allowedKinds,
         includePrimitives,
       }),
-    [model, searchQuery, t, allowedKinds, includePrimitives],
+    [model, searchQuery, t, allowedKinds, includePrimitives]
   )
 
   const treeContainerRef = useRef<HTMLDivElement>(null)
@@ -89,6 +97,7 @@ export function MetadataObjectTreeSelector({
       if (data.nodeType === "refTarget" && data.refTarget) {
         onSelectTarget(data.refTarget)
       } else if (data.nodeType === "primitiveType") {
+        if (primitivesDisabled) return
         if (data.fieldTypeValue && onSelectPrimitive) {
           onSelectPrimitive(data.fieldTypeValue)
         }
@@ -99,7 +108,7 @@ export function MetadataObjectTreeSelector({
         node.toggle()
       }
     },
-    [isCheckboxMode, onSelectTarget, onSelectPrimitive, onToggleKindGroup],
+    [isCheckboxMode, primitivesDisabled, onSelectTarget, onSelectPrimitive, onToggleKindGroup]
   )
 
   const renderNode = useCallback(
@@ -118,6 +127,7 @@ export function MetadataObjectTreeSelector({
         return (
           <div
             onClick={() => {
+              if (primitivesDisabled) return
               if (data.fieldTypeValue && onSelectPrimitive) {
                 onSelectPrimitive(data.fieldTypeValue)
               }
@@ -128,6 +138,7 @@ export function MetadataObjectTreeSelector({
               isSelected={isSelected}
               isFocused={node.isFocused}
               mode={mode}
+              disabled={primitivesDisabled}
               label={t(`fieldType.${data.fieldTypeValue}`)}
               style={style}
             />
@@ -191,13 +202,14 @@ export function MetadataObjectTreeSelector({
       selectedIds,
       isCheckboxMode,
       includePrimitives,
+      primitivesDisabled,
       kindCheckedStates,
       onSelectTarget,
       onSelectPrimitive,
       onToggleKindGroup,
       mode,
       t,
-    ],
+    ]
   )
 
   return (

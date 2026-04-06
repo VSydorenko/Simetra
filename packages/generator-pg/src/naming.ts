@@ -1,8 +1,8 @@
 // PascalCase → snake_case: SalesOrder → sales_order
 export function toSnakeCase(name: string): string {
   return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
     .toLowerCase()
 }
 
@@ -16,7 +16,7 @@ export function tableName(prefix: string, objectName: string): string {
 export function tabularTableName(
   prefix: string,
   parentName: string,
-  sectionName: string,
+  sectionName: string
 ): string {
   const parent = tableName(prefix, parentName)
   return `${parent}_${sectionName}`
@@ -24,7 +24,7 @@ export function tabularTableName(
 
 // Кваліфікована назва з schema
 export function qualifiedName(schema: string, name: string): string {
-  return schema === 'public' ? name : `${schema}.${name}`
+  return schema === "public" ? name : `${schema}.${name}`
 }
 
 // Екранування SQL ідентифікаторів (table names, column names)

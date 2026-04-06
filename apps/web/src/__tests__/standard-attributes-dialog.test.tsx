@@ -1,41 +1,41 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { projectModelSchema, type ProjectModel } from '@simetra/core'
-import { TooltipProvider } from '@workspace/ui/components/tooltip'
-import '@/i18n'
-import { StandardAttributesDialog } from '../components/editor/standard-attributes-dialog'
-import { TabularSectionsEditor } from '../components/editor/tabular-sections-editor'
-import { useMetadataStore } from '../stores/metadata-store'
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { projectModelSchema, type ProjectModel } from "@simetra/core"
+import { TooltipProvider } from "@workspace/ui/components/tooltip"
+import "@/i18n"
+import { StandardAttributesDialog } from "../components/editor/standard-attributes-dialog"
+import { TabularSectionsEditor } from "../components/editor/tabular-sections-editor"
+import { useMetadataStore } from "../stores/metadata-store"
 
 function createModel(): ProjectModel {
   return projectModelSchema.parse({
-    project: { name: 'TestProject' },
+    project: { name: "TestProject" },
     catalogs: [
       {
-        kind: 'Catalog',
-        name: 'Products',
+        kind: "Catalog",
+        name: "Products",
         codeLength: 9,
-        codeType: 'String',
+        codeType: "String",
         descriptionLength: 100,
-        hierarchyType: 'None',
+        hierarchyType: "None",
         standardAttributeOverrides: {
           id: {
             description: {
-              uk: 'Object-level id',
-              en: 'Object-level id',
+              uk: "Object-level id",
+              en: "Object-level id",
             },
           },
         },
         attributes: [],
         tabularSections: [
           {
-            name: 'items',
+            name: "items",
             standardAttributeOverrides: {
               id: {
                 description: {
-                  uk: 'Section-level id',
-                  en: 'Section-level id',
+                  uk: "Section-level id",
+                  en: "Section-level id",
                 },
               },
             },
@@ -49,26 +49,26 @@ function createModel(): ProjectModel {
 
 function createInformationRegisterModel(): ProjectModel {
   return projectModelSchema.parse({
-    project: { name: 'TestProject' },
+    project: { name: "TestProject" },
     documents: [
       {
-        kind: 'Document',
-        name: 'SalesOrder',
+        kind: "Document",
+        name: "SalesOrder",
       },
       {
-        kind: 'Document',
-        name: 'ReturnOrder',
+        kind: "Document",
+        name: "ReturnOrder",
       },
     ],
     informationRegisters: [
       {
-        kind: 'InformationRegister',
-        name: 'SalesHistory',
-        periodicity: 'Month',
-        writeMode: 'RecorderSubordinate',
+        kind: "InformationRegister",
+        name: "SalesHistory",
+        periodicity: "Month",
+        writeMode: "RecorderSubordinate",
         recorderTypes: [
-          { kind: 'Document', name: 'SalesOrder' },
-          { kind: 'Document', name: 'ReturnOrder' },
+          { kind: "Document", name: "SalesOrder" },
+          { kind: "Document", name: "ReturnOrder" },
         ],
       },
     ],
@@ -77,16 +77,16 @@ function createInformationRegisterModel(): ProjectModel {
 
 function createCatalogWithOwnerModel(): ProjectModel {
   return projectModelSchema.parse({
-    project: { name: 'TestProject' },
+    project: { name: "TestProject" },
     catalogs: [
       {
-        kind: 'Catalog',
-        name: 'Products',
+        kind: "Catalog",
+        name: "Products",
         codeLength: 9,
-        codeType: 'String',
+        codeType: "String",
         descriptionLength: 100,
-        hierarchyType: 'None',
-        owners: [{ kind: 'Catalog', name: 'Categories' }],
+        hierarchyType: "None",
+        owners: [{ kind: "Catalog", name: "Categories" }],
       },
     ],
   })
@@ -96,8 +96,8 @@ beforeEach(() => {
   useMetadataStore.getState().loadModel(createModel())
 })
 
-describe('StandardAttributesDialog', () => {
-  it('для register settings показує конкретні recorder targets у type label recorder_id', () => {
+describe("StandardAttributesDialog", () => {
+  it("для register settings показує конкретні recorder targets у type label recorder_id", () => {
     const object = createInformationRegisterModel().informationRegisters[0]
 
     render(
@@ -108,20 +108,20 @@ describe('StandardAttributesDialog', () => {
         objectName="SalesHistory"
         object={object}
         onUpdateObject={vi.fn()}
-      />,
+      />
     )
 
-    const recorderRow = screen.getByText('recorder_id').closest('tr')
+    const recorderRow = screen.getByText("recorder_id").closest("tr")
     expect(recorderRow).not.toBeNull()
     expect(
-      within(recorderRow as HTMLTableRowElement).getByText(/SalesOrder/),
+      within(recorderRow as HTMLTableRowElement).getByText(/SalesOrder/)
     ).toBeInTheDocument()
     expect(
-      within(recorderRow as HTMLTableRowElement).getByText(/ReturnOrder/),
+      within(recorderRow as HTMLTableRowElement).getByText(/ReturnOrder/)
     ).toBeInTheDocument()
   })
 
-  it('object-level path не деградує і показує single ref target для owner_id', () => {
+  it("object-level path не деградує і показує single ref target для owner_id", () => {
     const object = createCatalogWithOwnerModel().catalogs[0]
 
     render(
@@ -132,17 +132,17 @@ describe('StandardAttributesDialog', () => {
         objectName="Products"
         object={object}
         onUpdateObject={vi.fn()}
-      />,
+      />
     )
 
-    const ownerRow = screen.getByText('owner_id').closest('tr')
+    const ownerRow = screen.getByText("owner_id").closest("tr")
     expect(ownerRow).not.toBeNull()
     expect(
-      within(ownerRow as HTMLTableRowElement).getByText(/Categories/),
+      within(ownerRow as HTMLTableRowElement).getByText(/Categories/)
     ).toBeInTheDocument()
   })
 
-  it('для tabular section читає й зберігає section-level overrides без object-level save', async () => {
+  it("для tabular section читає й зберігає section-level overrides без object-level save", async () => {
     const user = userEvent.setup()
     const onUpdateObject = vi.fn()
     const object = useMetadataStore.getState().model.catalogs[0]
@@ -156,35 +156,42 @@ describe('StandardAttributesDialog', () => {
         object={object}
         onUpdateObject={onUpdateObject}
         tabularSectionName="items"
-      />,
+      />
     )
 
-    expect(screen.getByDisplayValue('Section-level id')).toBeInTheDocument()
-    expect(screen.queryByDisplayValue('Object-level id')).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue("Section-level id")).toBeInTheDocument()
+    expect(
+      screen.queryByDisplayValue("Object-level id")
+    ).not.toBeInTheDocument()
 
-    const lineNumberRow = screen.getByText('line_number').closest('tr')
+    const lineNumberRow = screen.getByText("line_number").closest("tr")
     expect(lineNumberRow).not.toBeNull()
 
-    const lineNumberInput = within(lineNumberRow as HTMLTableRowElement).getByRole('textbox')
-    await user.type(lineNumberInput, 'Custom line number')
-    await user.click(screen.getByRole('button', { name: 'Зберегти' }))
+    const lineNumberInput = within(
+      lineNumberRow as HTMLTableRowElement
+    ).getByRole("textbox")
+    await user.type(lineNumberInput, "Custom line number")
+    await user.click(screen.getByRole("button", { name: "Зберегти" }))
 
     expect(onUpdateObject).not.toHaveBeenCalled()
 
     const updatedObject = useMetadataStore.getState().model.catalogs[0]
-    expect(updatedObject.standardAttributeOverrides?.line_number).toBeUndefined()
     expect(
-      updatedObject.tabularSections[0].standardAttributeOverrides?.line_number,
+      updatedObject.standardAttributeOverrides?.line_number
+    ).toBeUndefined()
+    expect(
+      updatedObject.tabularSections[0].standardAttributeOverrides?.line_number
     ).toEqual({
       description: {
-        uk: 'Custom line number',
+        uk: "Custom line number",
       },
     })
   })
 
-  it('quick-access кнопка в header ТЧ відкриває dialog з tabular-section standard attrs', async () => {
+  it("quick-access кнопка в header ТЧ відкриває dialog з tabular-section standard attrs", async () => {
     const user = userEvent.setup()
-    const section = useMetadataStore.getState().model.catalogs[0].tabularSections
+    const section =
+      useMetadataStore.getState().model.catalogs[0].tabularSections
 
     render(
       <TooltipProvider>
@@ -193,18 +200,18 @@ describe('StandardAttributesDialog', () => {
           objectName="Products"
           tabularSections={section}
         />
-      </TooltipProvider>,
+      </TooltipProvider>
     )
 
     await user.click(
-      screen.getByRole('button', { name: 'Стандартні реквізити — items' }),
+      screen.getByRole("button", { name: "Стандартні реквізити — items" })
     )
 
-    expect(screen.getByText('line_number')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Зберегти' })).toBeInTheDocument()
+    expect(screen.getByText("line_number")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Зберегти" })).toBeInTheDocument()
   })
 
-  it('auto-close при stale tabularSectionName (секцію видалено)', () => {
+  it("auto-close при stale tabularSectionName (секцію видалено)", () => {
     const onOpenChange = vi.fn()
     const object = useMetadataStore.getState().model.catalogs[0]
 
@@ -217,7 +224,7 @@ describe('StandardAttributesDialog', () => {
         object={object}
         onUpdateObject={vi.fn()}
         tabularSectionName="nonExistentSection"
-      />,
+      />
     )
 
     // Guard useEffect має автоматично закрити діалог

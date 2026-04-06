@@ -65,7 +65,7 @@ interface AttributeWithContext {
 
 /** Collect all attributes from a metadata object, preserving tabular section context */
 function getObjectAttributesWithContext(
-  obj: MetadataObject,
+  obj: MetadataObject
 ): AttributeWithContext[] {
   const result: AttributeWithContext[] = []
 
@@ -120,7 +120,7 @@ function getAllObjects(model: ProjectModel): MetadataObject[] {
 export function findReferences(
   model: ProjectModel,
   targetKind: MetadataKind,
-  targetName: string,
+  targetName: string
 ): Reference[] {
   const refs: Reference[] = []
   const allObjects = getAllObjects(model)
@@ -154,21 +154,31 @@ export function findReferences(
     }
 
     // Posting movements/validations register references
-    if ("posting" in obj && typeof obj.posting === "object" && obj.posting !== null) {
+    if (
+      "posting" in obj &&
+      typeof obj.posting === "object" &&
+      obj.posting !== null
+    ) {
       const posting = obj.posting as {
         movements?: { register: { kind: string; name: string } }[]
         validations?: { register: { kind: string; name: string } }[]
       }
       if (posting.movements) {
         for (const m of posting.movements) {
-          if (m.register.kind === targetKind && m.register.name === targetName) {
+          if (
+            m.register.kind === targetKind &&
+            m.register.name === targetName
+          ) {
             refs.push({ from: objRef, referenceKind: "postingMovement" })
           }
         }
       }
       if (posting.validations) {
         for (const v of posting.validations) {
-          if (v.register.kind === targetKind && v.register.name === targetName) {
+          if (
+            v.register.kind === targetKind &&
+            v.register.name === targetName
+          ) {
             refs.push({ from: objRef, referenceKind: "postingValidation" })
           }
         }

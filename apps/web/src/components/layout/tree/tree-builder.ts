@@ -340,7 +340,8 @@ export function buildTypeEditorTree(
     if (searchQuery && !kindMatches && filteredObjects.length === 0) continue
 
     // При збігу kind — показати всі дочірні targets
-    const objectsToShow = !searchQuery || kindMatches ? objects : filteredObjects
+    const objectsToShow =
+      !searchQuery || kindMatches ? objects : filteredObjects
 
     const children: TreeNodeData[] = objectsToShow.map((obj) => ({
       id: `ref/${refKind}/${obj.name}`,

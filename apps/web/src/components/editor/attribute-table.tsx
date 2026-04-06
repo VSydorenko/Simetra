@@ -181,23 +181,37 @@ export function AttributeTable({
 
   /** Атрибут, для якого зараз відкрито діалог редагування типу */
   const editingAttribute = useMemo(
-    () => (editingTypeAttr ? attributes.find((a) => a.name === editingTypeAttr) ?? null : null),
-    [editingTypeAttr, attributes],
+    () =>
+      editingTypeAttr
+        ? (attributes.find((a) => a.name === editingTypeAttr) ?? null)
+        : null,
+    [editingTypeAttr, attributes]
   )
 
   /** Зберігає зміни типу через відповідний store action */
   const handleTypeUpdate = useCallback(
     (updates: Partial<Attribute>) => {
       if (!editingTypeAttr) return
-      const role: FieldRole = tabularSectionName
-        ? "tabularSection"
-        : field
+      const role: FieldRole = tabularSectionName ? "tabularSection" : field
       dispatchFieldUpdate(
-        { kind, objectName, fieldName: editingTypeAttr, role, tabularSectionName },
-        updates,
+        {
+          kind,
+          objectName,
+          fieldName: editingTypeAttr,
+          role,
+          tabularSectionName,
+        },
+        updates
       )
     },
-    [kind, objectName, field, editingTypeAttr, tabularSectionName, dispatchFieldUpdate],
+    [
+      kind,
+      objectName,
+      field,
+      editingTypeAttr,
+      tabularSectionName,
+      dispatchFieldUpdate,
+    ]
   )
 
   const columns = useMemo(
@@ -214,7 +228,7 @@ export function AttributeTable({
         cell: (info) => (
           <button
             type="button"
-            className="inline-flex cursor-pointer items-center rounded-md border bg-transparent px-1.5 py-0 text-[10px] font-semibold text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="inline-flex cursor-pointer items-center rounded-md border bg-transparent px-1.5 py-0 text-[10px] font-semibold text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
             onClick={(e) => {
               e.stopPropagation()
               setEditingTypeAttr(info.row.original.name)

@@ -1,13 +1,13 @@
-import type { LocalizedString, ProjectModel } from '@simetra/core'
+import type { LocalizedString, ProjectModel } from "@simetra/core"
 
 // Опції генерації
 export interface GeneratorOptions {
   // Стратегія enum: CREATE TYPE або lookup table
-  enumStrategy?: 'pgEnum' | 'lookupTable'
+  enumStrategy?: "pgEnum" | "lookupTable"
   // Стратегія констант: одна таблиця або окрема на кожну константу
-  constantsStrategy?: 'singleTable' | 'separateTables'
+  constantsStrategy?: "singleTable" | "separateTables"
   // Один SQL файл або по-файлово
-  outputMode?: 'singleFile' | 'perObject'
+  outputMode?: "singleFile" | "perObject"
   // SQL schema (default: public)
   schema?: string
 }

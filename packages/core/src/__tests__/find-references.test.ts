@@ -9,7 +9,7 @@ import {
 
 /** Helper: build a minimal ProjectModel via schema parsing */
 function buildModel(
-  partial: Partial<Record<keyof Omit<ProjectModel, "project">, unknown[]>>,
+  partial: Partial<Record<keyof Omit<ProjectModel, "project">, unknown[]>>
 ): ProjectModel {
   return projectModelSchema.parse({
     project: { name: "TestProject" },
@@ -133,10 +133,16 @@ describe("findReferences", () => {
         },
       ],
     })
-    const refs = findReferences(model, "AccumulationRegister", "InventoryBalance")
+    const refs = findReferences(
+      model,
+      "AccumulationRegister",
+      "InventoryBalance"
+    )
     // registerMovements from SalesOrder + recorderTypes won't match (target is AccumulationRegister)
     // but recorderTypes references Document, not AccumulationRegister, so only registerMovements
-    const movementRefs = refs.filter((r) => r.referenceKind === "registerMovements")
+    const movementRefs = refs.filter(
+      (r) => r.referenceKind === "registerMovements"
+    )
     expect(movementRefs).toHaveLength(1)
     expect(movementRefs[0]).toMatchObject({
       from: { kind: "Document", name: "SalesOrder" },

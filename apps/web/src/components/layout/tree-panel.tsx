@@ -17,8 +17,16 @@ import { Button } from "@workspace/ui/components/button"
 import type { MetadataKind } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useUiStore } from "@/stores/ui-store"
-import { findReferences, formatReference, type Reference } from "@/lib/find-references"
-import { DeleteDialogContext, WhereUsedDialogContext, type TreeNodeData } from "./tree/tree-types"
+import {
+  findReferences,
+  formatReference,
+  type Reference,
+} from "@/lib/find-references"
+import {
+  DeleteDialogContext,
+  WhereUsedDialogContext,
+  type TreeNodeData,
+} from "./tree/tree-types"
 import { buildTreeData } from "./tree/tree-builder"
 import { TreeNode } from "./tree/tree-nodes"
 import { WhereUsedDialog } from "@/components/editor/where-used-dialog"
@@ -64,18 +72,15 @@ export function TreePanel() {
     refs: Reference[]
   } | null>(null)
 
-  const requestWhereUsed = useCallback(
-    (kind: MetadataKind, name: string) => {
-      const mdl = useMetadataStore.getState().model
-      const refs = findReferences(mdl, kind, name)
-      setWhereUsedTarget({ name, refs })
-    },
-    [],
-  )
+  const requestWhereUsed = useCallback((kind: MetadataKind, name: string) => {
+    const mdl = useMetadataStore.getState().model
+    const refs = findReferences(mdl, kind, name)
+    setWhereUsedTarget({ name, refs })
+  }, [])
 
   const whereUsedDialogCtx = useMemo(
     () => ({ requestWhereUsed }),
-    [requestWhereUsed],
+    [requestWhereUsed]
   )
 
   // --- Store state ---
@@ -308,110 +313,110 @@ export function TreePanel() {
           className="flex h-full flex-col"
           onFocus={() => useUiStore.getState().setFocusedPanel("tree")}
         >
-        {/* Пошук */}
-        {searchVisible && (
-          <div className="flex items-center gap-1 border-b border-border px-1.5 py-1">
-            <HugeiconsIcon
-              icon={Search01Icon}
-              size={14}
-              className="shrink-0 text-muted-foreground"
-            />
-            <Input
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={handleSearchChange}
-              onKeyDown={handleSearchKeyDown}
-              placeholder={t("tree.searchPlaceholder")}
-              className="h-6 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
-            />
-            {searchQuery && (
+          {/* Пошук */}
+          {searchVisible && (
+            <div className="flex items-center gap-1 border-b border-border px-1.5 py-1">
+              <HugeiconsIcon
+                icon={Search01Icon}
+                size={14}
+                className="shrink-0 text-muted-foreground"
+              />
+              <Input
+                ref={searchInputRef}
+                value={searchQuery}
+                onChange={handleSearchChange}
+                onKeyDown={handleSearchKeyDown}
+                placeholder={t("tree.searchPlaceholder")}
+                className="h-6 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  aria-label={t("action.close")}
+                  className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setSearchQuery("")
+                    searchInputRef.current?.focus()
+                  }}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={12} />
+                </button>
+              )}
+            </div>
+          )}
+
+          {!searchVisible && (
+            <div className="flex items-center justify-between border-b border-border px-2 py-1">
+              <span className="text-[0.6875rem] font-medium text-muted-foreground">
+                {t("commandPalette.group.objects")}
+              </span>
               <button
                 type="button"
-                aria-label={t("action.close")}
-                className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                aria-label={t("action.search")}
+                className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
                 onClick={() => {
-                  setSearchQuery("")
-                  searchInputRef.current?.focus()
+                  setSearchVisible(true)
+                  setTimeout(() => searchInputRef.current?.focus(), 0)
                 }}
               >
-                <HugeiconsIcon icon={Cancel01Icon} size={12} />
+                <HugeiconsIcon icon={Search01Icon} size={14} />
               </button>
-            )}
-          </div>
-        )}
+            </div>
+          )}
 
-        {!searchVisible && (
-          <div className="flex items-center justify-between border-b border-border px-2 py-1">
-            <span className="text-[0.6875rem] font-medium text-muted-foreground">
-              {t("commandPalette.group.objects")}
-            </span>
-            <button
-              type="button"
-              aria-label={t("action.search")}
-              className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setSearchVisible(true)
-                setTimeout(() => searchInputRef.current?.focus(), 0)
+          {/* Дерево */}
+          <div ref={containerRef} className="flex-1 overflow-hidden">
+            <Tree<TreeNodeData>
+              ref={treeRef}
+              data={treeData}
+              width={dimensions.width}
+              height={dimensions.height}
+              initialOpenState={initialOpenState}
+              openByDefault={false}
+              indent={16}
+              rowHeight={28}
+              overscanCount={5}
+              selection={selectedNodeId}
+              onSelect={handleSelect}
+              onActivate={handleActivate}
+              onRename={handleRename}
+              disableDrag
+              disableDrop
+              disableMultiSelection
+              onToggle={toggleTreeNode}
+              searchTerm={searchQuery}
+              searchMatch={(node, term) => {
+                const d = node.data
+                if (d.nodeType === "kind") return true
+                if (d.nodeType === "group") return true
+                return d.name.toLowerCase().includes(term.toLowerCase())
               }}
+              padding={4}
             >
-              <HugeiconsIcon icon={Search01Icon} size={14} />
-            </button>
+              {TreeNode}
+            </Tree>
           </div>
-        )}
 
-        {/* Дерево */}
-        <div ref={containerRef} className="flex-1 overflow-hidden">
-          <Tree<TreeNodeData>
-            ref={treeRef}
-            data={treeData}
-            width={dimensions.width}
-            height={dimensions.height}
-            initialOpenState={initialOpenState}
-            openByDefault={false}
-            indent={16}
-            rowHeight={28}
-            overscanCount={5}
-            selection={selectedNodeId}
-            onSelect={handleSelect}
-            onActivate={handleActivate}
-            onRename={handleRename}
-            disableDrag
-            disableDrop
-            disableMultiSelection
-            onToggle={toggleTreeNode}
-            searchTerm={searchQuery}
-            searchMatch={(node, term) => {
-              const d = node.data
-              if (d.nodeType === "kind") return true
-              if (d.nodeType === "group") return true
-              return d.name.toLowerCase().includes(term.toLowerCase())
+          {/* Один діалог видалення на все дерево */}
+          <DeleteConfirmDialog
+            open={deleteTarget !== null}
+            onOpenChange={(open) => {
+              if (!open) setDeleteTarget(null)
             }}
-            padding={4}
-          >
-            {TreeNode}
-          </Tree>
-        </div>
+            objectName={deleteTarget?.name ?? ""}
+            references={deleteRefs}
+            onConfirm={confirmDelete}
+          />
 
-        {/* Один діалог видалення на все дерево */}
-        <DeleteConfirmDialog
-          open={deleteTarget !== null}
-          onOpenChange={(open) => {
-            if (!open) setDeleteTarget(null)
-          }}
-          objectName={deleteTarget?.name ?? ""}
-          references={deleteRefs}
-          onConfirm={confirmDelete}
-        />
-
-        {/* Діалог «Де використовується» */}
-        <WhereUsedDialog
-          open={whereUsedTarget !== null}
-          onOpenChange={(open) => {
-            if (!open) setWhereUsedTarget(null)
-          }}
-          objectName={whereUsedTarget?.name ?? ""}
-          references={whereUsedTarget?.refs ?? []}
-        />
+          {/* Діалог «Де використовується» */}
+          <WhereUsedDialog
+            open={whereUsedTarget !== null}
+            onOpenChange={(open) => {
+              if (!open) setWhereUsedTarget(null)
+            }}
+            objectName={whereUsedTarget?.name ?? ""}
+            references={whereUsedTarget?.refs ?? []}
+          />
         </div>
       </WhereUsedDialogContext.Provider>
     </DeleteDialogContext.Provider>
@@ -462,7 +467,8 @@ function DeleteConfirmDialog({
                     {ref.from.kind}/{ref.from.name}
                   </span>
                   <span className="ml-1 text-muted-foreground/70">
-                    ({fieldPath ? `${fieldPath}, ` : ''}{t(`referenceKind.${fmt.referenceKind}`)})
+                    ({fieldPath ? `${fieldPath}, ` : ""}
+                    {t(`referenceKind.${fmt.referenceKind}`)})
                   </span>
                 </li>
               )

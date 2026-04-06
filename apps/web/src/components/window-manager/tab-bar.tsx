@@ -152,7 +152,7 @@ function Tab({
             <>
               <Badge
                 variant="outline"
-                className="shrink-0 px-1 py-0 text-[9px] leading-tight text-emerald-400 border-emerald-400/30"
+                className="shrink-0 border-emerald-400/30 px-1 py-0 text-[9px] leading-tight text-emerald-400"
               >
                 SQL
               </Badge>

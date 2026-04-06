@@ -41,7 +41,7 @@ export function WhereUsedDialog({
       useUiStore.getState().focusEntity(ref.from)
       onOpenChange(false)
     },
-    [onOpenChange],
+    [onOpenChange]
   )
 
   // Перенаправити фокус у Command list для keyboard navigation
@@ -50,17 +50,20 @@ export function WhereUsedDialog({
       if (references.length > 0) {
         e.preventDefault()
         const cmd = (e.currentTarget as HTMLElement).querySelector(
-          '[data-slot="command"]',
+          '[data-slot="command"]'
         )
         if (cmd instanceof HTMLElement) cmd.focus()
       }
     },
-    [references.length],
+    [references.length]
   )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg" onOpenAutoFocus={handleOpenAutoFocus}>
+      <DialogContent
+        className="sm:max-w-lg"
+        onOpenAutoFocus={handleOpenAutoFocus}
+      >
         <DialogHeader>
           <DialogTitle className="text-sm">
             {t("dialog.whereUsedTitle", { name: objectName })}
@@ -102,9 +105,7 @@ export function WhereUsedDialog({
                       size={12}
                       className={colorClass}
                     />
-                    <span className="font-mono text-xs">
-                      {ref.from.name}
-                    </span>
+                    <span className="font-mono text-xs">{ref.from.name}</span>
                     {fieldDisplay && (
                       <span className="font-mono text-xs text-muted-foreground">
                         {fieldDisplay}

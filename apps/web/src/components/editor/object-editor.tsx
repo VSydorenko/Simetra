@@ -163,11 +163,7 @@ function SectionContent({
 
     case "movements":
       return (
-        <MovementsSection
-          kind={kind}
-          objectName={objectName}
-          object={object}
-        />
+        <MovementsSection kind={kind} objectName={objectName} object={object} />
       )
 
     case "numbering":

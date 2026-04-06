@@ -5,9 +5,12 @@ import {
   type ProjectModel,
   type MetadataObject,
   type MetadataKind,
+  type MetadataRef,
   type Project,
   type Attribute,
   type TabularSection,
+  type PostingMovement,
+  type PostingValidation,
   projectModelSchema,
   metadataObjectSchema,
 } from "@simetra/core"
@@ -216,6 +219,29 @@ export interface MetadataActions {
     fromIndex: number,
     toIndex: number
   ) => void
+
+  // --- Posting actions (Document) ---
+  /** Оновити або додати один movement для документа */
+  updateMovement: (
+    name: string,
+    registerRef: MetadataRef,
+    movement: PostingMovement,
+  ) => ValidationError[] | null
+  /** Видалити movement для документа */
+  removeMovement: (
+    name: string,
+    registerRef: MetadataRef,
+  ) => void
+  /** Додати валідацію проведення */
+  addPostingValidation: (
+    name: string,
+    validation: PostingValidation,
+  ) => ValidationError[] | null
+  /** Видалити валідацію проведення за індексом */
+  removePostingValidation: (
+    name: string,
+    index: number,
+  ) => void
 }
 
 function createEmptyModel(projectName: string): ProjectModel {
@@ -319,14 +345,21 @@ function cascadeRenameRefs(
       }
 
       // Оновити posting.movements[].register та posting.validations[].register (Document)
-      if ("posting" in obj && typeof obj.posting === "object" && obj.posting !== null) {
+      if (
+        "posting" in obj &&
+        typeof obj.posting === "object" &&
+        obj.posting !== null
+      ) {
         const posting = obj.posting as {
           movements?: { register: { kind: MetadataKind; name: string } }[]
           validations?: { register: { kind: MetadataKind; name: string } }[]
         }
         if (posting.movements) {
           for (const movement of posting.movements) {
-            if (movement.register.kind === kind && movement.register.name === oldName) {
+            if (
+              movement.register.kind === kind &&
+              movement.register.name === oldName
+            ) {
               movement.register.name = newName
               changed = true
             }
@@ -334,7 +367,10 @@ function cascadeRenameRefs(
         }
         if (posting.validations) {
           for (const validation of posting.validations) {
-            if (validation.register.kind === kind && validation.register.name === oldName) {
+            if (
+              validation.register.kind === kind &&
+              validation.register.name === oldName
+            ) {
               validation.register.name = newName
               changed = true
             }
@@ -496,6 +532,36 @@ export const useMetadataStore = create<MetadataStore>()(
         set((state) => {
           const arr = state.model[key] as MetadataObject[]
           Object.assign(arr[index], updates)
+
+          // Sync posting ↔ registerMovements: при оновленні registerMovements чистимо стейл записи
+          if (updates.registerMovements && arr[index].kind === 'Document') {
+            const doc = arr[index] as Record<string, unknown>
+            const newRegs = updates.registerMovements as MetadataRef[]
+            const regSet = new Set(newRegs.map((r) => `${r.kind}/${r.name}`))
+
+            if (typeof doc.posting === 'object' && doc.posting !== null) {
+              const posting = doc.posting as {
+                movements: { register: MetadataRef }[]
+                validations: { register: MetadataRef }[]
+              }
+              const filteredMovements = posting.movements.filter((m) =>
+                regSet.has(`${m.register.kind}/${m.register.name}`),
+              )
+              const filteredValidations = posting.validations.filter((v) =>
+                regSet.has(`${v.register.kind}/${v.register.name}`),
+              )
+              if (
+                filteredMovements.length !== posting.movements.length ||
+                filteredValidations.length !== posting.validations.length
+              ) {
+                ;(doc.posting as Record<string, unknown>).movements =
+                  filteredMovements
+                ;(doc.posting as Record<string, unknown>).validations =
+                  filteredValidations
+              }
+            }
+          }
+
           delete state.validationErrors[errorKey]
           state.version++
           bumpObjectVersion(state, kind, name)
@@ -904,10 +970,15 @@ export const useMetadataStore = create<MetadataStore>()(
 
         const sections = (obj as { tabularSections: TabularSection[] })
           .tabularSections
-        const sectionIndex = sections.findIndex((s) => s.name === oldSectionName)
+        const sectionIndex = sections.findIndex(
+          (s) => s.name === oldSectionName
+        )
         if (sectionIndex === -1) {
           const notFoundErrors = [
-            { path: "", message: `Tabular section "${oldSectionName}" not found` },
+            {
+              path: "",
+              message: `Tabular section "${oldSectionName}" not found`,
+            },
           ]
           set((state) => {
             state.validationErrors[errorKey] = notFoundErrors
@@ -929,7 +1000,9 @@ export const useMetadataStore = create<MetadataStore>()(
         }
 
         const updatedSections = sections.map((section, index) =>
-          index === sectionIndex ? { ...section, name: newSectionName } : section
+          index === sectionIndex
+            ? { ...section, name: newSectionName }
+            : section
         )
         const merged = { ...obj, tabularSections: updatedSections }
         const errors = validateObject(merged as MetadataObject)
@@ -1585,6 +1658,151 @@ export const useMetadataStore = create<MetadataStore>()(
               bumpObjectVersion(state, kind, name)
             }
           }
+        })
+      },
+
+      // --- Posting actions (Document) ---
+
+      updateMovement: (name, registerRef, movement) => {
+        const objects = get().model.documents as MetadataObject[]
+        const index = findObjectIndex(objects, name)
+        const errorKey = `Document/${name}`
+        if (index === -1) return [{ path: '', message: `Object "${name}" not found` }]
+
+        const doc = objects[index] as Record<string, unknown>
+        const currentPosting =
+          typeof doc.posting === 'object' && doc.posting !== null
+            ? (doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] })
+            : { movements: [] as PostingMovement[], validations: [] as PostingValidation[] }
+
+        const existingIdx = currentPosting.movements.findIndex(
+          (m) =>
+            m.register.kind === registerRef.kind &&
+            m.register.name === registerRef.name,
+        )
+        const updatedMovements =
+          existingIdx >= 0
+            ? currentPosting.movements.map((m, i) =>
+                i === existingIdx ? movement : m,
+              )
+            : [...currentPosting.movements, movement]
+
+        const updatedPosting = { ...currentPosting, movements: updatedMovements }
+        const merged = { ...objects[index], posting: updatedPosting }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) {
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+
+        set((state) => {
+          const arr = state.model.documents as MetadataObject[]
+          ;(arr[index] as Record<string, unknown>).posting = updatedPosting
+          delete state.validationErrors[errorKey]
+          state.version++
+          bumpObjectVersion(state, 'Document', name)
+        })
+        return null
+      },
+
+      removeMovement: (name, registerRef) => {
+        const objects = get().model.documents as MetadataObject[]
+        const index = findObjectIndex(objects, name)
+        if (index === -1) return
+
+        const doc = objects[index] as Record<string, unknown>
+        if (typeof doc.posting !== 'object' || doc.posting === null) return
+
+        set((state) => {
+          const arr = state.model.documents as MetadataObject[]
+          const d = arr[index] as Record<string, unknown>
+          const posting = d.posting as {
+            movements: PostingMovement[]
+            validations: PostingValidation[]
+          }
+          d.posting = {
+            ...posting,
+            movements: posting.movements.filter(
+              (m) =>
+                !(
+                  m.register.kind === registerRef.kind &&
+                  m.register.name === registerRef.name
+                ),
+            ),
+            // Також видаляємо validations для цього регістру
+            validations: posting.validations.filter(
+              (v) =>
+                !(
+                  v.register.kind === registerRef.kind &&
+                  v.register.name === registerRef.name
+                ),
+            ),
+          }
+          state.version++
+          bumpObjectVersion(state, 'Document', name)
+        })
+      },
+
+      addPostingValidation: (name, validation) => {
+        const objects = get().model.documents as MetadataObject[]
+        const index = findObjectIndex(objects, name)
+        const errorKey = `Document/${name}`
+        if (index === -1) return [{ path: '', message: `Object "${name}" not found` }]
+
+        const doc = objects[index] as Record<string, unknown>
+        const currentPosting =
+          typeof doc.posting === 'object' && doc.posting !== null
+            ? (doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] })
+            : { movements: [] as PostingMovement[], validations: [] as PostingValidation[] }
+
+        const updatedPosting = {
+          ...currentPosting,
+          validations: [...currentPosting.validations, validation],
+        }
+        const merged = { ...objects[index], posting: updatedPosting }
+        const errors = validateObject(merged as MetadataObject)
+        if (errors) {
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+
+        set((state) => {
+          const arr = state.model.documents as MetadataObject[]
+          ;(arr[index] as Record<string, unknown>).posting = updatedPosting
+          delete state.validationErrors[errorKey]
+          state.version++
+          bumpObjectVersion(state, 'Document', name)
+        })
+        return null
+      },
+
+      removePostingValidation: (name, validationIndex) => {
+        const objects = get().model.documents as MetadataObject[]
+        const objIdx = findObjectIndex(objects, name)
+        if (objIdx === -1) return
+
+        const doc = objects[objIdx] as Record<string, unknown>
+        if (typeof doc.posting !== 'object' || doc.posting === null) return
+
+        set((state) => {
+          const arr = state.model.documents as MetadataObject[]
+          const d = arr[objIdx] as Record<string, unknown>
+          const posting = d.posting as {
+            movements: PostingMovement[]
+            validations: PostingValidation[]
+          }
+          d.posting = {
+            ...posting,
+            validations: posting.validations.filter(
+              (_, i) => i !== validationIndex,
+            ),
+          }
+          state.version++
+          bumpObjectVersion(state, 'Document', name)
         })
       },
     })),

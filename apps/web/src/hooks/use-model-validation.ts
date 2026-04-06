@@ -134,7 +134,11 @@ function validateSingleObject(
   }
 
   // 4. Перевірка posting refs (movements + validations)
-  if ("posting" in obj && typeof obj.posting === "object" && obj.posting !== null) {
+  if (
+    "posting" in obj &&
+    typeof obj.posting === "object" &&
+    obj.posting !== null
+  ) {
     const posting = obj.posting as {
       movements?: { register: { kind: MetadataKind; name: string } }[]
       validations?: { register: { kind: MetadataKind; name: string } }[]
@@ -151,7 +155,9 @@ function validateSingleObject(
     }
     if (posting.validations) {
       for (const validation of posting.validations) {
-        if (!refExists(model, validation.register.kind, validation.register.name)) {
+        if (
+          !refExists(model, validation.register.kind, validation.register.name)
+        ) {
           errors.push({
             path: "posting.validations",
             message: `ref:${validation.register.kind}/${validation.register.name}`,

@@ -116,7 +116,9 @@ function StandardAttributesDialogBody({
 }) {
   const { i18n } = useTranslation()
   const lang = i18n.language as "uk" | "en"
-  const updateTabularSection = useMetadataStore((state) => state.updateTabularSection)
+  const updateTabularSection = useMetadataStore(
+    (state) => state.updateTabularSection
+  )
 
   const section = useMemo(() => {
     if (!tabularSectionName || !("tabularSections" in object)) {
@@ -125,7 +127,7 @@ function StandardAttributesDialogBody({
 
     return (
       (object.tabularSections as TabularSection[]).find(
-        (candidate) => candidate.name === tabularSectionName,
+        (candidate) => candidate.name === tabularSectionName
       ) ?? null
     )
   }, [object, tabularSectionName])

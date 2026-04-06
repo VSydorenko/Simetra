@@ -47,7 +47,7 @@ Phase 2a створила DDL генератор для структурної �
   - `allowedKinds: readonly MetadataKind[]` — які kinds показувати (дефолт: `REFERENCEABLE_KINDS`)
   - `includePrimitives: boolean` — чи показувати примітивні типи (дефолт: `true`)
 - [Х] Зберегти зворотну сумісність: поточний виклик з `DataTypeEditorDialog` працює без змін
-- [ ] Оновити тести `buildTypeEditorTree` під нові параметри
+- [Х] Оновити тести `buildTypeEditorTree` під нові параметри
 
 #### 2.2. Виділення MetadataObjectTreeSelector
 
@@ -56,8 +56,8 @@ Phase 2a створила DDL генератор для структурної �
   - Callbacks: `onSelectTarget(MetadataRef)`, `onToggleKindGroup(kind: MetadataKind)`
   - Рендерить: search input + tree container + presentation nodes (`RefKindGroupPresentation`, `RefTargetPresentation`, опціонально `PrimitiveTypePresentation`)
   - Bulk toggle для kind groups у checkbox mode — через `kindCheckedStates` по `allowedKinds`
-- [ ] Рефакторити `DataTypeEditorBody` — замінити inline tree на `MetadataObjectTreeSelector`
-- [ ] Підтвердити: `DataTypeEditorDialog` працює ідентично до рефакторингу
+- [Х] Рефакторити `DataTypeEditorBody` — замінити inline tree на `MetadataObjectTreeSelector`
+- [Х] Підтвердити: `DataTypeEditorDialog` працює ідентично до рефакторингу
 
 #### 2.3. Секція "Рухи" в ObjectEditor
 
@@ -86,14 +86,14 @@ Phase 2a створила DDL генератор для структурної �
 
 #### 2.5. MovementConstructorDialog — конструктор рухів для одного регістру
 
-- [ ] Окремий модальний діалог, відкривається по кнопці "Конструктор рухів" з обраним рядком регістру
-- [ ] Патерн: `open/onOpenChange + revisionKey + local draft + Save/Cancel`
-- [ ] Заголовок: "Конструктор рухів: {RegisterName}"
-- [ ] Верхня частина — налаштування руху:
+- [Х] Окремий модальний діалог, відкривається по кнопці "Конструктор рухів" з обраним рядком регістру
+- [Х] Патерн: `open/onOpenChange + revisionKey + local draft + Save/Cancel`
+- [Х] Заголовок: "Конструктор рухів: {RegisterName}"
+- [Х] Верхня частина — налаштування руху:
   - **Тип руху**: Radio `Прихід / Розхід / Динамічний` (+ dropdown для поля документа при "Динамічний")
   - **Джерело**: Dropdown `Документ / ТЧ:{name}` (список ТЧ з document.tabularSections)
   - **Умова**: Input для condition expression (опціонально)
-- [ ] Основна частина — таблиця маппінгу:
+- [Х] Основна частина — таблиця маппінгу:
   - Ліва колонка: "Поле регістру" — dimensions, resources, attributes цільового регістру, згруповані з заголовками
   - Права колонка: "Вираз" — combobox з динамічним набором опцій залежно від source:
     - Якщо source = `tabularSection:{name}`:
@@ -104,20 +104,20 @@ Phase 2a створила DDL генератор для структурної �
       - Група "Документ": `doc.{field}`
       - Група "Агрегати": `sum({ts}.{field})`, `count({ts})` для кожної ТЧ
       - Група "Константи": `literal:{value}`, `now()`
-- [ ] При зміні source — вже заповнені вирази, що стали невалідними, підсвічуються як помилка (не очищаються автоматично)
-- [ ] Save → комітить draft у posting.movements[index] через store
-- [ ] Cancel → відкидає всі зміни маппінгу
+- [Х] При зміні source — вже заповнені вирази, що стали невалідними, підсвічуються як помилка (не очищаються автоматично)
+- [Х] Save → комітить draft у posting.movements[index] через store
+- [Х] Cancel → відкидає всі зміни маппінгу
 
 #### 2.6. Persisted save та інтеграція зі store
 
-- [ ] Posting-aware actions у metadata-store:
+- [Х] Posting-aware actions у metadata-store:
   - `updateMovement(kind, name, registerRef, movementDraft)` — оновити один movement
   - `removeMovement(kind, name, registerRef)` — видалити movement
   - `addValidation(kind, name, validation)` / `removeValidation(kind, name, index)`
-- [ ] При додаванні/видаленні регістру в `registerMovements` — sync з `posting.movements[]` (видалення movement при видаленні регістру)
+- [Х] При додаванні/видаленні регістру в `registerMovements` — sync з `posting.movements[]` (видалення movement при видаленні регістру)
 - [Х] Розширити `cascadeRenameRefs` у metadata-store для `posting.movements[].register` і `posting.validations[].register`
 - [Х] Розширити `use-model-validation.ts` — перевіряти, що posting refs існують
-- [ ] Зміни зберігаються через serializer у JSON-файл документа
+- [Х] Зміни зберігаються через serializer у JSON-файл документа
 
 #### 2.7. Утиліта buildExpressionOptions
 
@@ -129,18 +129,18 @@ Phase 2a створила DDL генератор для структурної �
 
 #### 2.8. Тести
 
-- [ ] Unit тест: `buildTypeEditorTree` з custom `allowedKinds` → показує тільки зазначені kinds
-- [ ] Unit тест: `buildExpressionOptions` → коректні групи для source=document і source=tabularSection
-- [ ] Component test: `MovementsSection` рендерить таблицю регістрів
+- [Х] Unit тест: `buildTypeEditorTree` з custom `allowedKinds` → показує тільки зазначені kinds
+- [Х] Unit тест: `buildExpressionOptions` → коректні групи для source=document і source=tabularSection
+- [Х] Component test: `MovementsSection` рендерить таблицю регістрів
 - [ ] Component test: `RegisterPickerDialog` → multi-select → save → registerMovements оновлено
 - [ ] Component test: `MovementConstructorDialog` → заповнення маппінгу → save → posting.movements оновлено
 - [ ] Component test: зміна source → невалідні вирази підсвічуються
 - [ ] Integration: додавання/видалення movement → store update → JSON persistence
-- [ ] `pnpm --filter web test` — green
+- [X] `pnpm --filter web test` — green
 
 ### Етап 3: Генерація posting SQL у `@simetra/generator-pg`
 
-- [ ] `post_{document_name}(doc_id uuid)`:
+- [X] `post_{document_name}(doc_id uuid)`:
   - Перевірка `IF posted THEN RAISE EXCEPTION`
   - Очистка попередніх рухів: `DELETE FROM {register} WHERE recorder_id = doc_id` (для кожного register з movements)
   - Для кожного `movements[]` елемента:
@@ -150,14 +150,14 @@ Phase 2a створила DDL генератор для структурної �
   - Виконання валідацій
   - `UPDATE {document} SET posted = true, updated_at = now() WHERE id = doc_id`
   - Обгорнуто в `BEGIN ... END` (єдина транзакція)
-- [ ] `unpost_{document_name}(doc_id uuid)`:
+- [X] `unpost_{document_name}(doc_id uuid)`:
   - `DELETE FROM {register} WHERE recorder_id = doc_id` — для кожного регістру з `movements[]`
   - `UPDATE {document} SET posted = false, updated_at = now() WHERE id = doc_id`
-- [ ] `check_{register}_{resource}(dimensions...)`:
+- [X] `check_{register}_{resource}(dimensions...)`:
   - Перевіряє, що залишок не стане від'ємним
   - Підставляє displayName у повідомлення помилки
-- [ ] Точка розширення: виклик `{document_name}_post_custom(doc_id)` (якщо функція існує)
-- [ ] **Тести:**
+- [X] Точка розширення: виклик `{document_name}_post_custom(doc_id)` (якщо функція існує)
+- [X] **Тести:**
   - Golden fixture: GoodsReceipt → InventoryBalance (tabularSection source)
   - Golden fixture: PaymentOrder → SettlementsBalance (document source)
   - Динамічний movementType (`doc.operation_type`)

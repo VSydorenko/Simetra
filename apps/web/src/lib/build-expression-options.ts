@@ -25,7 +25,7 @@ export interface ExpressionOptionGroup {
 export function buildExpressionOptions(
   document: Document,
   source: string,
-  t: (key: string, fallback?: string) => string,
+  t: (key: string, fallback?: string) => string
 ): ExpressionOptionGroup[] {
   const groups: ExpressionOptionGroup[] = []
 
@@ -56,7 +56,10 @@ export function buildExpressionOptions(
         })
       }
 
-      groups.push({ group: t("expression.tsRow", `ТЧ "${tsName}"`), options: rowOptions })
+      groups.push({
+        group: t("expression.tsRow", `ТЧ "${tsName}"`),
+        options: rowOptions,
+      })
     }
 
     // Документ — doc.{field} (стандартні + custom)
@@ -75,7 +78,10 @@ export function buildExpressionOptions(
         label: `doc.${attr.name}`,
       })
     }
-    groups.push({ group: t("expression.document", "Документ"), options: docOptions })
+    groups.push({
+      group: t("expression.document", "Документ"),
+      options: docOptions,
+    })
 
     // Вирази
     groups.push({
@@ -102,7 +108,10 @@ export function buildExpressionOptions(
         label: `doc.${attr.name}`,
       })
     }
-    groups.push({ group: t("expression.document", "Документ"), options: docOptions })
+    groups.push({
+      group: t("expression.document", "Документ"),
+      options: docOptions,
+    })
 
     // Агрегати — sum({ts}.{field}), count({ts})
     if (document.tabularSections.length > 0) {
@@ -119,7 +128,10 @@ export function buildExpressionOptions(
           })
         }
       }
-      groups.push({ group: t("expression.aggregates", "Агрегати"), options: aggOptions })
+      groups.push({
+        group: t("expression.aggregates", "Агрегати"),
+        options: aggOptions,
+      })
     }
 
     // Константи
@@ -127,7 +139,10 @@ export function buildExpressionOptions(
       group: t("expression.constants", "Константи"),
       options: [
         { value: "now()", label: "now()" },
-        { value: "literal:", label: t("expression.literalHint", "literal:{значення}") },
+        {
+          value: "literal:",
+          label: t("expression.literalHint", "literal:{значення}"),
+        },
       ],
     })
   }

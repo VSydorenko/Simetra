@@ -154,6 +154,17 @@
       "enumStrategy": "Стратегія enum",
       "constantsStrategy": "Стратегія констант"
     },
+    "deployment": {
+      "title": "Деплой",
+      "target": "Ціль",
+      "targetNone": "Не налаштовано",
+      "targetSupabase": "Supabase",
+      "targetManual": "Ручне (копіювати SQL)",
+      "supabaseProjectUrl": "URL проєкту Supabase",
+      "supabaseApiKey": "API Key (anon key)",
+      "supabaseApiKeyHint": "Ключ зберігається локально, не у файлах проєкту",
+      "supabaseUrlPlaceholder": "https://{ref}.supabase.co"
+    },
     "field": {
       "length": "Довжина",
       "precision": "Точність",
@@ -328,7 +339,23 @@
     "dimensions": "Виміри",
     "resource": "Ресурс",
     "message": "Повідомлення",
-    "constructor": "Конструктор рухів"
+    "constructor": "Конструктор рухів",
+    "constructorTitle": "Конструктор рухів: {{name}}",
+    "receipt": "Прихід",
+    "expense": "Розхід",
+    "dynamic": "Динамічний",
+    "sourceDocument": "Документ",
+    "sourceTs": "ТЧ: {{name}}",
+    "condition": "Умова",
+    "registerField": "Поле регістру",
+    "expression": "Вираз",
+    "dimensionsGroup": "Виміри",
+    "resourcesGroup": "Ресурси",
+    "attributesGroup": "Реквізити",
+    "selectExpression": "Оберіть вираз",
+    "manualInput": "Ручний ввід",
+    "invalidExpression": "Вираз невалідний для поточного джерела",
+    "dynamicField": "Поле документа"
   },
   "expression": {
     "tsRow": "Рядок ТЧ",

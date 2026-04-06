@@ -2,7 +2,11 @@ import { useCallback } from "react"
 import type { Attribute, MetadataKind, MetadataObject } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 
-export type FieldRole = "attributes" | "dimensions" | "resources" | "tabularSection"
+export type FieldRole =
+  | "attributes"
+  | "dimensions"
+  | "resources"
+  | "tabularSection"
 
 export interface FieldTarget {
   kind: MetadataKind
@@ -16,7 +20,7 @@ export interface FieldTarget {
 export function getFieldRole(
   object: MetadataObject,
   fieldName: string,
-  tabularSectionName?: string,
+  tabularSectionName?: string
 ): FieldRole {
   if (tabularSectionName) return "tabularSection"
 
@@ -46,10 +50,20 @@ export function useFieldUpdate() {
     (target: FieldTarget, updates: Partial<Attribute>) => {
       switch (target.role) {
         case "dimensions":
-          updateDimension(target.kind, target.objectName, target.fieldName, updates)
+          updateDimension(
+            target.kind,
+            target.objectName,
+            target.fieldName,
+            updates
+          )
           break
         case "resources":
-          updateResource(target.kind, target.objectName, target.fieldName, updates)
+          updateResource(
+            target.kind,
+            target.objectName,
+            target.fieldName,
+            updates
+          )
           break
         case "tabularSection":
           if (target.tabularSectionName) {
@@ -58,14 +72,24 @@ export function useFieldUpdate() {
               target.objectName,
               target.tabularSectionName,
               target.fieldName,
-              updates,
+              updates
             )
           }
           break
         default:
-          updateAttribute(target.kind, target.objectName, target.fieldName, updates)
+          updateAttribute(
+            target.kind,
+            target.objectName,
+            target.fieldName,
+            updates
+          )
       }
     },
-    [updateAttribute, updateDimension, updateResource, updateTabularSectionAttribute],
+    [
+      updateAttribute,
+      updateDimension,
+      updateResource,
+      updateTabularSectionAttribute,
+    ]
   )
 }

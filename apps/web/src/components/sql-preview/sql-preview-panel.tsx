@@ -1,14 +1,14 @@
-import { useTranslation } from 'react-i18next'
-import { Button } from '@workspace/ui/components/button'
-import { useDdlStore } from '@/stores/ddl-store'
+import { useTranslation } from "react-i18next"
+import { Button } from "@workspace/ui/components/button"
+import { useDdlStore } from "@/stores/ddl-store"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from '@workspace/ui/components/collapsible'
-import { SqlFileTree } from './sql-file-tree'
-import { SqlViewer } from './sql-viewer'
-import { SqlToolbar } from './sql-toolbar'
+} from "@workspace/ui/components/collapsible"
+import { SqlFileTree } from "./sql-file-tree"
+import { SqlViewer } from "./sql-viewer"
+import { SqlToolbar } from "./sql-toolbar"
 
 export function SqlPreviewPanel() {
   const { t } = useTranslation()
@@ -23,20 +23,18 @@ export function SqlPreviewPanel() {
       <div className="flex h-full flex-col items-center justify-center p-4">
         <div className="max-w-lg">
           <p className="text-sm font-medium text-destructive">
-            {t('sqlPreview.validationErrors')}
+            {t("sqlPreview.validationErrors")}
           </p>
           <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
             {validationErrors.map((e, i) => (
-              <li key={i}>{"\u2022"} {e}</li>
+              <li key={i}>
+                {"\u2022"} {e}
+              </li>
             ))}
           </ul>
           <div className="mt-4 flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={clearValidationErrors}
-            >
-              {t('action.cancel')}
+            <Button variant="outline" size="sm" onClick={clearValidationErrors}>
+              {t("action.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -46,7 +44,7 @@ export function SqlPreviewPanel() {
                 clearValidationErrors()
               }}
             >
-              {t('sqlPreview.generateAnyway')}
+              {t("sqlPreview.generateAnyway")}
             </Button>
           </div>
         </div>
@@ -59,7 +57,7 @@ export function SqlPreviewPanel() {
       <div className="flex h-full items-center justify-center p-4">
         <div className="max-w-md text-center">
           <p className="text-sm font-medium text-destructive">
-            {t('sqlPreview.generationError')}
+            {t("sqlPreview.generationError")}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {generationError}
@@ -72,7 +70,7 @@ export function SqlPreviewPanel() {
   if (!output) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t('sqlPreview.noOutput')}
+        {t("sqlPreview.noOutput")}
       </div>
     )
   }
@@ -85,7 +83,7 @@ export function SqlPreviewPanel() {
           <CollapsibleTrigger className="flex w-full items-center gap-1 border-b border-border bg-warning/5 px-3 py-1 text-xs text-warning hover:bg-warning/10">
             <span>⚠</span>
             <span>
-              {t('sqlPreview.warningCount', { count: output.warnings.length })}
+              {t("sqlPreview.warningCount", { count: output.warnings.length })}
             </span>
           </CollapsibleTrigger>
           <CollapsibleContent>

@@ -834,8 +834,12 @@ describe("updateTabObjectRef", () => {
     const newWindowId = `window-${refToTabId(newRef)}`
     const oldWindowId = `window-${tabId}`
 
-    expect(state.floatingWindows.find((w) => w.id === newWindowId)).toBeDefined()
-    expect(state.floatingWindows.find((w) => w.id === oldWindowId)).toBeUndefined()
+    expect(
+      state.floatingWindows.find((w) => w.id === newWindowId)
+    ).toBeDefined()
+    expect(
+      state.floatingWindows.find((w) => w.id === oldWindowId)
+    ).toBeUndefined()
     expect(state.floatingWindows[0].objectRef).toEqual(newRef)
   })
 })

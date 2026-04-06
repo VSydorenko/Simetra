@@ -43,7 +43,7 @@ function TabularSectionNameEditor({
   objectRef: MetadataRef
   currentName: string
   renameTabularSection: (
-    kind: MetadataRef['kind'],
+    kind: MetadataRef["kind"],
     name: string,
     oldSectionName: string,
     newSectionName: string
@@ -66,19 +66,14 @@ function TabularSectionNameEditor({
       objectRef.kind,
       objectRef.name,
       currentName,
-      trimmed,
+      trimmed
     )
 
     if (errors) {
       setDraft(currentName)
       return
     }
-  }, [
-    currentName,
-    draft,
-    objectRef,
-    renameTabularSection,
-  ])
+  }, [currentName, draft, objectRef, renameTabularSection])
 
   return (
     <Input
@@ -105,10 +100,10 @@ export function TabularSectionProperties({
   const { t } = useTranslation()
   const model = useMetadataStore((state) => state.model)
   const renameTabularSection = useMetadataStore(
-    (state) => state.renameTabularSection,
+    (state) => state.renameTabularSection
   )
   const updateTabularSection = useMetadataStore(
-    (state) => state.updateTabularSection,
+    (state) => state.updateTabularSection
   )
   const [stdAttrDialogOpen, setStdAttrDialogOpen] = useState(false)
 
@@ -116,8 +111,9 @@ export function TabularSectionProperties({
     const key = KIND_TO_KEY[selection.objectRef.kind]
     const objects = model[key] as MetadataObject[]
     return (
-      objects.find((candidate) => candidate.name === selection.objectRef.name) ??
-      null
+      objects.find(
+        (candidate) => candidate.name === selection.objectRef.name
+      ) ?? null
     )
   }, [model, selection.objectRef])
 
@@ -128,7 +124,7 @@ export function TabularSectionProperties({
 
     return (
       (object.tabularSections as TabularSection[]).find(
-        (candidate) => candidate.name === selection.tabularSectionName,
+        (candidate) => candidate.name === selection.tabularSectionName
       ) ?? null
     )
   }, [object, selection.tabularSectionName])
@@ -150,10 +146,10 @@ export function TabularSectionProperties({
             ...section.displayName,
             [locale]: value || undefined,
           },
-        },
+        }
       )
     },
-    [section, selection.objectRef, updateTabularSection],
+    [section, selection.objectRef, updateTabularSection]
   )
 
   if (!object || !section) {
@@ -162,11 +158,7 @@ export function TabularSectionProperties({
 
   return (
     <>
-      <Accordion
-        type="multiple"
-        defaultValue={["general"]}
-        className="w-full"
-      >
+      <Accordion type="multiple" defaultValue={["general"]} className="w-full">
         <AccordionItem value="general">
           <AccordionTrigger className="px-3 py-2 text-xs font-medium">
             {t("properties.group.general")}

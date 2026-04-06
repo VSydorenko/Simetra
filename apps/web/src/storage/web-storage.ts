@@ -227,12 +227,13 @@ export function parseFileStructure(files: Map<string, string>): {
             items = wrapperResult.data.constants
           } else if (
             data !== null &&
-            typeof data === 'object' &&
-            'constants' in data &&
+            typeof data === "object" &&
+            "constants" in data &&
             Array.isArray((data as Record<string, unknown>).constants)
           ) {
             // Wrapper schema failed — graceful degradation: parse each constant individually
-            const rawConstants = (data as Record<string, unknown>).constants as unknown[]
+            const rawConstants = (data as Record<string, unknown>)
+              .constants as unknown[]
             items = []
             for (let i = 0; i < rawConstants.length; i++) {
               const itemResult = constantSchema.safeParse(rawConstants[i])
@@ -243,7 +244,7 @@ export function parseFileStructure(files: Map<string, string>): {
                   filePath: path,
                   errors: itemResult.error.issues.map(
                     (issue) =>
-                      `constants[${i}].${issue.path.join('.')}: ${issue.message}`,
+                      `constants[${i}].${issue.path.join(".")}: ${issue.message}`
                   ),
                 })
               }

@@ -73,14 +73,14 @@ describe("PropertiesPanel", () => {
           objectRef: { kind: "Catalog", name: "Products" },
           tabularSectionName: "items",
         }}
-      />,
+      />
     )
 
     expect(screen.getByDisplayValue("items")).toBeInTheDocument()
     expect(screen.getByDisplayValue("Рядки")).toBeInTheDocument()
     expect(screen.getByDisplayValue("Rows")).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Стандартні реквізити" }),
+      screen.getByRole("button", { name: "Стандартні реквізити" })
     ).toBeInTheDocument()
   })
 
@@ -99,7 +99,7 @@ describe("PropertiesPanel", () => {
     expect(screen.getByDisplayValue("items")).toBeInTheDocument()
     expect(screen.getByDisplayValue("Рядки")).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Стандартні реквізити" }),
+      screen.getByRole("button", { name: "Стандартні реквізити" })
     ).toBeInTheDocument()
   })
 

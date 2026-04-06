@@ -1,6 +1,6 @@
-import { defineCommand } from 'citty'
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
-import { resolve, join } from 'node:path'
+import { defineCommand } from "citty"
+import { writeFileSync, mkdirSync, existsSync } from "node:fs"
+import { resolve, join } from "node:path"
 import {
   projectSchema,
   projectModelSchema,
@@ -18,97 +18,107 @@ import {
   type AccumulationRegister,
   type Constant,
   type CustomTable,
-} from '@simetra/core'
-import { PostgresGenerator } from '@simetra/generator-pg'
-import type { GeneratorOptions } from '@simetra/generator-api'
-import { readMetadataFiles } from '../read-metadata'
+} from "@simetra/core"
+import { PostgresGenerator } from "@simetra/generator-pg"
+import type { GeneratorOptions } from "@simetra/generator-api"
+import { readMetadataFiles } from "../read-metadata"
 
 // Маппінг директорій до kind та відповідних Zod-схем
 const DIR_TO_KIND = {
-  catalogs: { kind: 'Catalog', schema: catalogSchema },
-  documents: { kind: 'Document', schema: documentSchema },
-  enumerations: { kind: 'Enumeration', schema: enumerationSchema },
-  'information-registers': { kind: 'InformationRegister', schema: informationRegisterSchema },
-  'accumulation-registers': { kind: 'AccumulationRegister', schema: accumulationRegisterSchema },
-  'custom-tables': { kind: 'CustomTable', schema: customTableSchema },
+  catalogs: { kind: "Catalog", schema: catalogSchema },
+  documents: { kind: "Document", schema: documentSchema },
+  enumerations: { kind: "Enumeration", schema: enumerationSchema },
+  "information-registers": {
+    kind: "InformationRegister",
+    schema: informationRegisterSchema,
+  },
+  "accumulation-registers": {
+    kind: "AccumulationRegister",
+    schema: accumulationRegisterSchema,
+  },
+  "custom-tables": { kind: "CustomTable", schema: customTableSchema },
 } as const
 
-const VALID_ENUM_STRATEGIES = ['pgEnum', 'lookupTable'] as const
-const VALID_CONSTANTS_STRATEGIES = ['singleTable', 'separateTables'] as const
+const VALID_ENUM_STRATEGIES = ["pgEnum", "lookupTable"] as const
+const VALID_CONSTANTS_STRATEGIES = ["singleTable", "separateTables"] as const
 
 // Безпечна перевірка шляху — запобігає path traversal
 function isSafePath(path: string): boolean {
-  return !path.includes('..') && !path.startsWith('/')
+  return !path.includes("..") && !path.startsWith("/")
 }
 
 export const generate = defineCommand({
   meta: {
-    name: 'generate',
-    description: 'Генерація SQL з метаданих проєкту',
+    name: "generate",
+    description: "Генерація SQL з метаданих проєкту",
   },
   args: {
     target: {
-      type: 'string',
-      description: 'Цільова база даних (postgresql)',
-      default: 'postgresql',
+      type: "string",
+      description: "Цільова база даних (postgresql)",
+      default: "postgresql",
     },
     input: {
-      type: 'string',
-      description: 'Шлях до директорії з метаданими',
-      default: '.',
+      type: "string",
+      description: "Шлях до директорії з метаданими",
+      default: ".",
     },
     output: {
-      type: 'string',
-      description: 'Шлях для збереження результату',
-      default: './output',
+      type: "string",
+      description: "Шлях для збереження результату",
+      default: "./output",
     },
     schema: {
-      type: 'string',
-      description: 'SQL schema (default: public)',
-      default: 'public',
+      type: "string",
+      description: "SQL schema (default: public)",
+      default: "public",
     },
-    'enum-strategy': {
-      type: 'string',
-      description: 'Стратегія enum: pgEnum, lookupTable',
-      default: 'pgEnum',
+    "enum-strategy": {
+      type: "string",
+      description: "Стратегія enum: pgEnum, lookupTable",
+      default: "pgEnum",
     },
-    'constants-strategy': {
-      type: 'string',
-      description: 'Стратегія констант: singleTable, separateTables',
-      default: 'singleTable',
+    "constants-strategy": {
+      type: "string",
+      description: "Стратегія констант: singleTable, separateTables",
+      default: "singleTable",
     },
-    'output-mode': {
-      type: 'string',
-      description: 'Режим виводу: singleFile, perObject',
-      default: 'singleFile',
+    "output-mode": {
+      type: "string",
+      description: "Режим виводу: singleFile, perObject",
+      default: "singleFile",
     },
   },
   async run({ args }) {
     const inputDir = resolve(args.input)
     const outputDir = resolve(args.output)
 
-    if (args.target !== 'postgresql') {
+    if (args.target !== "postgresql") {
       console.error(`Непідтримувана ціль: ${args.target}. Доступні: postgresql`)
       process.exit(1)
     }
 
     // Валідація стратегій
-    const enumStrategy = args['enum-strategy']
-    if (!VALID_ENUM_STRATEGIES.includes(enumStrategy as typeof VALID_ENUM_STRATEGIES[number])) {
+    const enumStrategy = args["enum-strategy"]
+    if (
+      !VALID_ENUM_STRATEGIES.includes(
+        enumStrategy as (typeof VALID_ENUM_STRATEGIES)[number]
+      )
+    ) {
       console.error(
-        `Невідома enum-strategy: ${enumStrategy}. Доступні: ${VALID_ENUM_STRATEGIES.join(', ')}`,
+        `Невідома enum-strategy: ${enumStrategy}. Доступні: ${VALID_ENUM_STRATEGIES.join(", ")}`
       )
       process.exit(1)
     }
 
-    const constantsStrategy = args['constants-strategy']
+    const constantsStrategy = args["constants-strategy"]
     if (
       !VALID_CONSTANTS_STRATEGIES.includes(
-        constantsStrategy as typeof VALID_CONSTANTS_STRATEGIES[number],
+        constantsStrategy as (typeof VALID_CONSTANTS_STRATEGIES)[number]
       )
     ) {
       console.error(
-        `Невідома constants-strategy: ${constantsStrategy}. Доступні: ${VALID_CONSTANTS_STRATEGIES.join(', ')}`,
+        `Невідома constants-strategy: ${constantsStrategy}. Доступні: ${VALID_CONSTANTS_STRATEGIES.join(", ")}`
       )
       process.exit(1)
     }
@@ -117,7 +127,7 @@ export const generate = defineCommand({
     const metadataFiles = readMetadataFiles(inputDir)
 
     // Парсинг project.meta.json
-    const projectContent = metadataFiles.get('project.meta.json')
+    const projectContent = metadataFiles.get("project.meta.json")
     if (!projectContent) {
       console.error(`Файл project.meta.json не знайдено в ${inputDir}`)
       process.exit(1)
@@ -127,15 +137,15 @@ export const generate = defineCommand({
     try {
       projectRaw = JSON.parse(projectContent)
     } catch {
-      console.error('Помилка парсингу project.meta.json: невалідний JSON')
+      console.error("Помилка парсингу project.meta.json: невалідний JSON")
       process.exit(1)
     }
 
     const projectResult = projectSchema.safeParse(projectRaw)
     if (!projectResult.success) {
-      console.error('Помилка валідації project.meta.json:')
+      console.error("Помилка валідації project.meta.json:")
       for (const issue of projectResult.error.issues) {
-        console.error(`  - ${issue.path.join('.')}: ${issue.message}`)
+        console.error(`  - ${issue.path.join(".")}: ${issue.message}`)
       }
       process.exit(1)
     }
@@ -150,7 +160,7 @@ export const generate = defineCommand({
     const customTables: CustomTable[] = []
 
     for (const [filePath, content] of metadataFiles) {
-      if (filePath === 'project.meta.json') continue
+      if (filePath === "project.meta.json") continue
 
       let parsed: unknown
       try {
@@ -161,15 +171,15 @@ export const generate = defineCommand({
       }
 
       // Визначаємо тип за директорією
-      const dirName = filePath.split('/')[0]
+      const dirName = filePath.split("/")[0]
 
       // Константи — окремий формат (масив у wrapper)
-      if (dirName === 'constants') {
+      if (dirName === "constants") {
         const result = constantsFileSchema.safeParse(parsed)
         if (!result.success) {
           console.error(`Помилка валідації ${filePath}:`)
           for (const issue of result.error.issues) {
-            console.error(`  - ${issue.path.join('.')}: ${issue.message}`)
+            console.error(`  - ${issue.path.join(".")}: ${issue.message}`)
           }
           process.exit(1)
         }
@@ -180,7 +190,9 @@ export const generate = defineCommand({
       // Типові об'єкти метаданих
       const kindInfo = DIR_TO_KIND[dirName as keyof typeof DIR_TO_KIND]
       if (!kindInfo) {
-        console.warn(`Невідома директорія метаданих: ${dirName}, пропускаємо ${filePath}`)
+        console.warn(
+          `Невідома директорія метаданих: ${dirName}, пропускаємо ${filePath}`
+        )
         continue
       }
 
@@ -188,28 +200,28 @@ export const generate = defineCommand({
       if (!result.success) {
         console.error(`Помилка валідації ${filePath}:`)
         for (const issue of result.error.issues) {
-          console.error(`  - ${issue.path.join('.')}: ${issue.message}`)
+          console.error(`  - ${issue.path.join(".")}: ${issue.message}`)
         }
         process.exit(1)
       }
 
       switch (kindInfo.kind) {
-        case 'Catalog':
+        case "Catalog":
           catalogs.push(result.data as Catalog)
           break
-        case 'Document':
+        case "Document":
           documents.push(result.data as SimetraDocument)
           break
-        case 'Enumeration':
+        case "Enumeration":
           enumerations.push(result.data as Enumeration)
           break
-        case 'InformationRegister':
+        case "InformationRegister":
           informationRegisters.push(result.data as InformationRegister)
           break
-        case 'AccumulationRegister':
+        case "AccumulationRegister":
           accumulationRegisters.push(result.data as AccumulationRegister)
           break
-        case 'CustomTable':
+        case "CustomTable":
           customTables.push(result.data as CustomTable)
           break
       }
@@ -228,9 +240,10 @@ export const generate = defineCommand({
     })
 
     const options: GeneratorOptions = {
-      enumStrategy: enumStrategy as GeneratorOptions['enumStrategy'],
-      constantsStrategy: constantsStrategy as GeneratorOptions['constantsStrategy'],
-      outputMode: args['output-mode'] as GeneratorOptions['outputMode'],
+      enumStrategy: enumStrategy as GeneratorOptions["enumStrategy"],
+      constantsStrategy:
+        constantsStrategy as GeneratorOptions["constantsStrategy"],
+      outputMode: args["output-mode"] as GeneratorOptions["outputMode"],
       schema: args.schema,
     }
 
@@ -239,7 +252,7 @@ export const generate = defineCommand({
 
     // Вивід warnings
     if (result.warnings.length > 0) {
-      console.warn('\nПопередження:')
+      console.warn("\nПопередження:")
       for (const w of result.warnings) {
         console.warn(`  ⚠ ${w}`)
       }
@@ -257,7 +270,7 @@ export const generate = defineCommand({
         process.exit(1)
       }
       const filePath = join(outputDir, file.path)
-      writeFileSync(filePath, file.content, 'utf-8')
+      writeFileSync(filePath, file.content, "utf-8")
       console.log(`✓ ${file.path}`)
     }
 

@@ -162,7 +162,9 @@ describe("ui selection sync", () => {
       tabularSectionName: "items",
     })
 
-    useMetadataStore.getState().removeTabularSection("Catalog", "Products", "items")
+    useMetadataStore
+      .getState()
+      .removeTabularSection("Catalog", "Products", "items")
 
     expect(useUiStore.getState().selectedTabularSection).toBeNull()
     expect(useUiStore.getState().selectedObject).toEqual(objectRef)

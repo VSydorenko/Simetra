@@ -48,7 +48,7 @@ export function RegisterPickerDialog({
         setRevisionKey((k) => k + 1)
       }
     },
-    [handleCancel],
+    [handleCancel]
   )
 
   return (
@@ -81,7 +81,7 @@ function RegisterPickerBody({
 
   // Local draft — починаємо з existingRefs (pre-checked)
   const [selectedRefs, setSelectedRefs] = useState<MetadataRef[]>(() =>
-    structuredClone(existingRefs),
+    structuredClone(existingRefs)
   )
   const [searchQuery, setSearchQuery] = useState("")
 
@@ -95,18 +95,16 @@ function RegisterPickerBody({
 
   const kindCheckedStates = useMemo(
     () => computeKindCheckedStates(model, REGISTER_KINDS, selectedRefs),
-    [model, selectedRefs],
+    [model, selectedRefs]
   )
 
   const handleSelectTarget = useCallback((ref: MetadataRef) => {
     setSelectedRefs((prev) => {
       const exists = prev.some(
-        (r) => r.kind === ref.kind && r.name === ref.name,
+        (r) => r.kind === ref.kind && r.name === ref.name
       )
       if (exists) {
-        return prev.filter(
-          (r) => !(r.kind === ref.kind && r.name === ref.name),
-        )
+        return prev.filter((r) => !(r.kind === ref.kind && r.name === ref.name))
       }
       return [...prev, ref]
     })
@@ -123,30 +121,28 @@ function RegisterPickerBody({
 
       setSelectedRefs((prev) => {
         const allSelected = kindTargets.every((kt) =>
-          prev.some((r) => r.kind === kt.kind && r.name === kt.name),
+          prev.some((r) => r.kind === kt.kind && r.name === kt.name)
         )
         if (allSelected) {
           return prev.filter(
             (r) =>
               !kindTargets.some(
-                (kt) => kt.kind === r.kind && kt.name === r.name,
-              ),
+                (kt) => kt.kind === r.kind && kt.name === r.name
+              )
           )
         }
         const toAdd = kindTargets.filter(
-          (kt) => !prev.some((r) => r.kind === kt.kind && r.name === kt.name),
+          (kt) => !prev.some((r) => r.kind === kt.kind && r.name === kt.name)
         )
         return [...prev, ...toAdd]
       })
     },
-    [model],
+    [model]
   )
 
   const isDirty = useMemo(() => {
     if (selectedRefs.length !== existingRefs.length) return true
-    const existingSet = new Set(
-      existingRefs.map((r) => `${r.kind}/${r.name}`),
-    )
+    const existingSet = new Set(existingRefs.map((r) => `${r.kind}/${r.name}`))
     return selectedRefs.some((r) => !existingSet.has(`${r.kind}/${r.name}`))
   }, [selectedRefs, existingRefs])
 

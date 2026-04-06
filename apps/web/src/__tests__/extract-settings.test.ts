@@ -1,40 +1,40 @@
-import { describe, expect, it } from 'vitest'
-import type { MetadataObject } from '@simetra/core'
-import { extractStandardAttributeSettings } from '../lib/extract-settings'
+import { describe, expect, it } from "vitest"
+import type { MetadataObject } from "@simetra/core"
+import { extractStandardAttributeSettings } from "../lib/extract-settings"
 
-describe('extractStandardAttributeSettings', () => {
-  it('повертає recorderTypes для InformationRegister', () => {
-    const recorderTypes = [{ kind: 'Document', name: 'SalesOrder' }] as const
+describe("extractStandardAttributeSettings", () => {
+  it("повертає recorderTypes для InformationRegister", () => {
+    const recorderTypes = [{ kind: "Document", name: "SalesOrder" }] as const
     const object = {
-      kind: 'InformationRegister',
-      name: 'Prices',
-      periodicity: 'Month',
-      writeMode: 'RecorderSubordinate',
+      kind: "InformationRegister",
+      name: "Prices",
+      periodicity: "Month",
+      writeMode: "RecorderSubordinate",
       recorderTypes: [...recorderTypes],
     } as MetadataObject
 
     expect(
-      extractStandardAttributeSettings('InformationRegister', object),
+      extractStandardAttributeSettings("InformationRegister", object)
     ).toEqual({
-      periodicity: 'Month',
-      writeMode: 'RecorderSubordinate',
+      periodicity: "Month",
+      writeMode: "RecorderSubordinate",
       recorderTypes: [...recorderTypes],
     })
   })
 
-  it('повертає recorderTypes для AccumulationRegister', () => {
-    const recorderTypes = [{ kind: 'Document', name: 'SalesOrder' }] as const
+  it("повертає recorderTypes для AccumulationRegister", () => {
+    const recorderTypes = [{ kind: "Document", name: "SalesOrder" }] as const
     const object = {
-      kind: 'AccumulationRegister',
-      name: 'StockBalance',
-      registerType: 'Balance',
+      kind: "AccumulationRegister",
+      name: "StockBalance",
+      registerType: "Balance",
       recorderTypes: [...recorderTypes],
     } as MetadataObject
 
     expect(
-      extractStandardAttributeSettings('AccumulationRegister', object),
+      extractStandardAttributeSettings("AccumulationRegister", object)
     ).toEqual({
-      registerType: 'Balance',
+      registerType: "Balance",
       recorderTypes: [...recorderTypes],
     })
   })

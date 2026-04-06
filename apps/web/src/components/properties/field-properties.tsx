@@ -200,9 +200,13 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
   const fieldRole = useMemo(
     () =>
       object
-        ? getFieldRole(object, selection.fieldName, selection.tabularSectionName)
+        ? getFieldRole(
+            object,
+            selection.fieldName,
+            selection.tabularSectionName
+          )
         : "attributes",
-    [object, selection.fieldName, selection.tabularSectionName],
+    [object, selection.fieldName, selection.tabularSectionName]
   )
 
   const handleUpdate = useCallback(
@@ -215,10 +219,17 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
           role: fieldRole,
           tabularSectionName: selection.tabularSectionName,
         },
-        updates,
+        updates
       )
     },
-    [kind, objectName, selection.fieldName, selection.tabularSectionName, fieldRole, dispatchFieldUpdate],
+    [
+      kind,
+      objectName,
+      selection.fieldName,
+      selection.tabularSectionName,
+      fieldRole,
+      dispatchFieldUpdate,
+    ]
   )
 
   if (!object || !attribute) return null
@@ -447,7 +458,9 @@ function TypeReadonlyDisplay({ attribute }: { attribute: Attribute }) {
   // Іконка залежить від типу
   const icon =
     attribute.type === "Ref" && attribute.ref
-      ? (KIND_ICONS[attribute.ref.kind] ?? FIELD_TYPE_ICONS.Ref ?? DEFAULT_FIELD_ICON)
+      ? (KIND_ICONS[attribute.ref.kind] ??
+        FIELD_TYPE_ICONS.Ref ??
+        DEFAULT_FIELD_ICON)
       : (FIELD_TYPE_ICONS[attribute.type] ?? DEFAULT_FIELD_ICON)
 
   return (
@@ -482,9 +495,7 @@ function TypeParamsHint({ attribute }: { attribute: Attribute }) {
       parts.push(`${t("properties.field.scale")}: ${attribute.scale}`)
     if (parts.length > 0) {
       return (
-        <p className="text-[11px] text-muted-foreground">
-          {parts.join(", ")}
-        </p>
+        <p className="text-[11px] text-muted-foreground">{parts.join(", ")}</p>
       )
     }
   }

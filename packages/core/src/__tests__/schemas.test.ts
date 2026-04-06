@@ -24,7 +24,12 @@ import {
   postingValidationSchema,
   postingSchema,
 } from "../schemas"
-import { serializeMetadataObject, enrichSchemaUrl, enrichProjectSchemaUrl, buildConstantsSchemaUrl } from "../serialization"
+import {
+  serializeMetadataObject,
+  enrichSchemaUrl,
+  enrichProjectSchemaUrl,
+  buildConstantsSchemaUrl,
+} from "../serialization"
 
 describe("localizedStringSchema", () => {
   it("accepts uk only", () => {
@@ -408,7 +413,10 @@ describe("postingSchema", () => {
           source: "tabularSection:items",
           mappings: {
             dimensions: { product: "row.product", warehouse: "doc.warehouse" },
-            resources: { quantity: "row.quantity", amount: "row.quantity * row.price" },
+            resources: {
+              quantity: "row.quantity",
+              amount: "row.quantity * row.price",
+            },
             attributes: { responsible: "doc.responsible" },
           },
         },
@@ -473,7 +481,10 @@ describe("documentSchema — posting field", () => {
       posting: {
         movements: [
           {
-            register: { kind: "AccumulationRegister", name: "InventoryBalance" },
+            register: {
+              kind: "AccumulationRegister",
+              name: "InventoryBalance",
+            },
             movementType: "Receipt",
             source: "tabularSection:items",
             mappings: {
@@ -486,7 +497,10 @@ describe("documentSchema — posting field", () => {
       },
     })
     expect(typeof result.posting).toBe("object")
-    const posting = result.posting as { movements: unknown[]; validations: unknown[] }
+    const posting = result.posting as {
+      movements: unknown[]
+      validations: unknown[]
+    }
     expect(posting.movements).toHaveLength(1)
     expect(posting.validations).toEqual([])
   })
@@ -498,7 +512,10 @@ describe("documentSchema — posting field", () => {
       posting: {},
     })
     expect(typeof result.posting).toBe("object")
-    const posting = result.posting as { movements: unknown[]; validations: unknown[] }
+    const posting = result.posting as {
+      movements: unknown[]
+      validations: unknown[]
+    }
     expect(posting.movements).toEqual([])
     expect(posting.validations).toEqual([])
   })
@@ -1367,7 +1384,7 @@ describe("$schema enrichment", () => {
     })
     const enriched = enrichSchemaUrl(obj, "1.0")
     expect(enriched.$schema).toBe(
-      "https://simetra.dev/schemas/v1/catalog.schema.json",
+      "https://simetra.dev/schemas/v1/catalog.schema.json"
     )
   })
 
@@ -1375,13 +1392,13 @@ describe("$schema enrichment", () => {
     const project = projectSchema.parse({ name: "Test" })
     const enriched = enrichProjectSchemaUrl(project, "1.0")
     expect(enriched.$schema).toBe(
-      "https://simetra.dev/schemas/v1/project.schema.json",
+      "https://simetra.dev/schemas/v1/project.schema.json"
     )
   })
 
   it("buildConstantsSchemaUrl returns correct URL", () => {
     expect(buildConstantsSchemaUrl("1.0")).toBe(
-      "https://simetra.dev/schemas/v1/constants.schema.json",
+      "https://simetra.dev/schemas/v1/constants.schema.json"
     )
   })
 
@@ -1399,7 +1416,7 @@ describe("$schema enrichment", () => {
     const first = enrichSchemaUrl(obj, "1.0")
     const second = enrichSchemaUrl(first, "2.0")
     expect(second.$schema).toBe(
-      "https://simetra.dev/schemas/v2/catalog.schema.json",
+      "https://simetra.dev/schemas/v2/catalog.schema.json"
     )
   })
 
@@ -1416,16 +1433,16 @@ describe("$schema enrichment", () => {
     })
     const enriched = enrichSchemaUrl(obj, "1.1")
     expect(enriched.$schema).toBe(
-      "https://simetra.dev/schemas/v1.1/catalog.schema.json",
+      "https://simetra.dev/schemas/v1.1/catalog.schema.json"
     )
   })
 
   it("buildConstantsSchemaUrl normalizes version correctly", () => {
     expect(buildConstantsSchemaUrl("2.0")).toBe(
-      "https://simetra.dev/schemas/v2/constants.schema.json",
+      "https://simetra.dev/schemas/v2/constants.schema.json"
     )
     expect(buildConstantsSchemaUrl("2.1")).toBe(
-      "https://simetra.dev/schemas/v2.1/constants.schema.json",
+      "https://simetra.dev/schemas/v2.1/constants.schema.json"
     )
   })
 })

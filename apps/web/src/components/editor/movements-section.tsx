@@ -11,15 +11,17 @@ import {
   TableRow,
 } from "@workspace/ui/components/table"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import { Add01Icon, Delete02Icon, Edit02Icon } from "@hugeicons/core-free-icons"
 import type {
   MetadataKind,
   MetadataObject,
   MetadataRef,
+  PostingMovement,
   PostingValidation,
 } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { RegisterPickerDialog } from "./register-picker-dialog"
+import { MovementConstructorDialog } from "./movement-constructor-dialog"
 
 interface MovementsSectionProps {
   kind: MetadataKind
@@ -36,11 +38,18 @@ export function MovementsSection({
 }: MovementsSectionProps) {
   const { t } = useTranslation()
   const updateObject = useMetadataStore((s) => s.updateObject)
+  const storeUpdateMovement = useMetadataStore((s) => s.updateMovement)
+  const storeAddPostingValidation = useMetadataStore(
+    (s) => s.addPostingValidation,
+  )
+  const storeRemovePostingValidation = useMetadataStore(
+    (s) => s.removePostingValidation,
+  )
 
   const doc = object as DocumentObject
   const registerMovements = useMemo(
     () => doc.registerMovements ?? [],
-    [doc.registerMovements],
+    [doc.registerMovements]
   )
 
   // Posting секція — структурна або boolean
@@ -51,14 +60,40 @@ export function MovementsSection({
   // --- Register picker dialog ---
   const [pickerOpen, setPickerOpen] = useState(false)
 
+  // --- Movement constructor dialog ---
+  const [constructorOpen, setConstructorOpen] = useState(false)
+  const [selectedRegisterRef, setSelectedRegisterRef] =
+    useState<MetadataRef | null>(null)
+
+  const selectedMovement = useMemo(() => {
+    if (!selectedRegisterRef || !postingData) return null
+    return (
+      postingData.movements.find(
+        (m) =>
+          m.register.kind === selectedRegisterRef.kind &&
+          m.register.name === selectedRegisterRef.name
+      ) ?? null
+    )
+  }, [selectedRegisterRef, postingData])
+
+  const handleOpenConstructor = useCallback((ref: MetadataRef) => {
+    setSelectedRegisterRef(ref)
+    setConstructorOpen(true)
+  }, [])
+
+  const handleSaveMovement = useCallback(
+    (movement: PostingMovement) => {
+      storeUpdateMovement(objectName, movement.register, movement)
+    },
+    [objectName, storeUpdateMovement],
+  )
+
   const handleAddRegisters = useCallback(
     (refs: MetadataRef[]) => {
       const existing = new Set(
-        registerMovements.map((r) => `${r.kind}/${r.name}`),
+        registerMovements.map((r) => `${r.kind}/${r.name}`)
       )
-      const newRefs = refs.filter(
-        (r) => !existing.has(`${r.kind}/${r.name}`),
-      )
+      const newRefs = refs.filter((r) => !existing.has(`${r.kind}/${r.name}`))
       if (newRefs.length === 0) return
 
       const updated = [...registerMovements, ...newRefs]
@@ -66,7 +101,7 @@ export function MovementsSection({
         registerMovements: updated,
       } as Partial<MetadataObject>)
     },
-    [registerMovements, kind, objectName, updateObject],
+    [registerMovements, kind, objectName, updateObject]
   )
 
   const handleRemoveRegister = useCallback(
@@ -74,63 +109,55 @@ export function MovementsSection({
       const updatedRegs = registerMovements.filter(
         (r) => !(r.kind === ref.kind && r.name === ref.name),
       )
-
-      // Атомарне оновлення: registerMovements + posting за один виклик
-      const patch: Record<string, unknown> = {
+      // Sync posting ↔ registerMovements тепер обробляється в store
+      updateObject(kind, objectName, {
         registerMovements: updatedRegs,
-      }
-      if (postingData) {
-        patch.posting = {
-          movements: postingData.movements.filter(
-            (m) =>
-              !(m.register.kind === ref.kind && m.register.name === ref.name),
-          ),
-          validations: postingData.validations.filter(
-            (v) =>
-              !(v.register.kind === ref.kind && v.register.name === ref.name),
-          ),
-        }
-      }
-      updateObject(kind, objectName, patch as Partial<MetadataObject>)
+      } as Partial<MetadataObject>)
     },
-    [registerMovements, kind, objectName, updateObject, postingData],
+    [registerMovements, kind, objectName, updateObject],
   )
 
   // --- Validations ---
+  const model = useMetadataStore((s) => s.model)
+
   const handleAddValidation = useCallback(() => {
     if (registerMovements.length === 0) return
     const firstReg = registerMovements[0]
+
+    // Знаходимо регістр для отримання першого resource та dimensions
+    const register =
+      firstReg.kind === 'AccumulationRegister'
+        ? model.accumulationRegisters.find((r) => r.name === firstReg.name)
+        : model.informationRegisters.find((r) => r.name === firstReg.name)
+
+    const firstResource = register?.resources?.[0]?.name ?? 'amount'
+    const firstDimensions = register?.dimensions?.map((d) => d.name) ?? []
+
     const template: PostingValidation = {
       type: "NonNegativeBalance" as const,
-      register: { kind: firstReg.kind, name: firstReg.name },
-      dimensions: [],
-      resource: "",
-      message: { uk: "", en: "" },
+      register: {
+        kind: firstReg.kind as 'AccumulationRegister' | 'InformationRegister',
+        name: firstReg.name,
+      },
+      dimensions: firstDimensions,
+      resource: firstResource,
+      message: { uk: "Недостатній залишок", en: "Insufficient balance" },
       applyTo: "Expense" as const,
     }
-    const current = postingData ?? { movements: [], validations: [] }
-    updateObject(kind, objectName, {
-      posting: {
-        ...current,
-        validations: [...current.validations, template],
-      },
-    } as Partial<MetadataObject>)
-  }, [registerMovements, kind, objectName, updateObject, postingData])
+    storeAddPostingValidation(objectName, template)
+  }, [registerMovements, objectName, storeAddPostingValidation, model])
 
   const handleRemoveValidation = useCallback(
     (index: number) => {
-      if (!postingData) return
-      const updated = postingData.validations.filter((_, i) => i !== index)
-      updateObject(kind, objectName, {
-        posting: { ...postingData, validations: updated },
-      } as Partial<MetadataObject>)
+      storeRemovePostingValidation(objectName, index)
     },
-    [kind, objectName, updateObject, postingData],
+    [objectName, storeRemovePostingValidation],
   )
 
   // Знаходимо movement info для кожного регістру
   const movementInfoMap = useMemo(() => {
-    if (!postingData) return new Map<string, { movementType: string; source: string }>()
+    if (!postingData)
+      return new Map<string, { movementType: string; source: string }>()
     const map = new Map<string, { movementType: string; source: string }>()
     for (const m of postingData.movements) {
       map.set(`${m.register.kind}/${m.register.name}`, {
@@ -167,6 +194,7 @@ export function MovementsSection({
             registerMovements={registerMovements}
             movementInfoMap={movementInfoMap}
             onRemove={handleRemoveRegister}
+            onOpenConstructor={handleOpenConstructor}
           />
         </div>
 
@@ -206,6 +234,17 @@ export function MovementsSection({
         existingRefs={registerMovements}
         onSave={handleAddRegisters}
       />
+
+      {selectedRegisterRef && (
+        <MovementConstructorDialog
+          open={constructorOpen}
+          onOpenChange={setConstructorOpen}
+          registerRef={selectedRegisterRef}
+          document={doc}
+          existingMovement={selectedMovement}
+          onSave={handleSaveMovement}
+        />
+      )}
     </ScrollArea>
   )
 }
@@ -214,10 +253,12 @@ function RegisterMovementsTable({
   registerMovements,
   movementInfoMap,
   onRemove,
+  onOpenConstructor,
 }: {
   registerMovements: MetadataRef[]
   movementInfoMap: Map<string, { movementType: string; source: string }>
   onRemove: (ref: MetadataRef) => void
+  onOpenConstructor: (ref: MetadataRef) => void
 }) {
   const { t } = useTranslation()
 
@@ -250,7 +291,7 @@ function RegisterMovementsTable({
           const info = movementInfoMap.get(`${ref.kind}/${ref.name}`)
           return (
             <TableRow key={`${ref.kind}/${ref.name}`}>
-              <TableCell className="py-1 text-xs font-mono">
+              <TableCell className="py-1 font-mono text-xs">
                 {ref.name}
               </TableCell>
               <TableCell className="py-1 text-xs">
@@ -260,14 +301,27 @@ function RegisterMovementsTable({
                 {info?.source ?? "—"}
               </TableCell>
               <TableCell className="py-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-5 w-5 p-0 text-destructive hover:text-destructive"
-                  onClick={() => onRemove(ref)}
-                >
-                  <HugeiconsIcon icon={Delete02Icon} size={12} />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 w-5 p-0"
+                    title={t("movements.constructor")}
+                    aria-label={t("movements.constructor")}
+                    onClick={() => onOpenConstructor(ref)}
+                  >
+                    <HugeiconsIcon icon={Edit02Icon} size={12} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 w-5 p-0 text-destructive hover:text-destructive"
+                    aria-label={t("action.delete")}
+                    onClick={() => onRemove(ref)}
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} size={12} />
+                  </Button>
+                </div>
               </TableCell>
             </TableRow>
           )
@@ -308,7 +362,7 @@ function ValidationsTable({
       <TableBody>
         {validations.map((v, index) => (
           <TableRow key={index}>
-            <TableCell className="py-1 text-xs font-mono">
+            <TableCell className="py-1 font-mono text-xs">
               {v.register.name}
             </TableCell>
             <TableCell className="py-1 text-xs">

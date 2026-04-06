@@ -154,6 +154,17 @@
       "enumStrategy": "Enum strategy",
       "constantsStrategy": "Constants strategy"
     },
+    "deployment": {
+      "title": "Deployment",
+      "target": "Target",
+      "targetNone": "Not configured",
+      "targetSupabase": "Supabase",
+      "targetManual": "Manual (copy SQL)",
+      "supabaseProjectUrl": "Supabase Project URL",
+      "supabaseApiKey": "API Key (anon key)",
+      "supabaseApiKeyHint": "Key is stored locally, not in project files",
+      "supabaseUrlPlaceholder": "https://{ref}.supabase.co"
+    },
     "field": {
       "length": "Length",
       "precision": "Precision",
@@ -324,7 +335,23 @@
     "dimensions": "Dimensions",
     "resource": "Resource",
     "message": "Message",
-    "constructor": "Movement constructor"
+    "constructor": "Movement constructor",
+    "constructorTitle": "Movement constructor: {{name}}",
+    "receipt": "Receipt",
+    "expense": "Expense",
+    "dynamic": "Dynamic",
+    "sourceDocument": "Document",
+    "sourceTs": "TS: {{name}}",
+    "condition": "Condition",
+    "registerField": "Register field",
+    "expression": "Expression",
+    "dimensionsGroup": "Dimensions",
+    "resourcesGroup": "Resources",
+    "attributesGroup": "Attributes",
+    "selectExpression": "Select expression",
+    "manualInput": "Manual input",
+    "invalidExpression": "Expression is invalid for current source",
+    "dynamicField": "Document field"
   },
   "expression": {
     "tsRow": "Tabular section row",

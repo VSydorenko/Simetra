@@ -1,15 +1,15 @@
-import { useCallback } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Button } from '@workspace/ui/components/button'
-import { Badge } from '@workspace/ui/components/badge'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Copy01Icon, Download04Icon } from '@hugeicons/core-free-icons'
-import { useDdlStore } from '@/stores/ddl-store'
+import { useCallback } from "react"
+import { useTranslation } from "react-i18next"
+import { Button } from "@workspace/ui/components/button"
+import { Badge } from "@workspace/ui/components/badge"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Copy01Icon, Download04Icon } from "@hugeicons/core-free-icons"
+import { useDdlStore } from "@/stores/ddl-store"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@workspace/ui/components/tooltip'
+} from "@workspace/ui/components/tooltip"
 
 export function SqlToolbar() {
   const { t } = useTranslation()
@@ -17,18 +17,18 @@ export function SqlToolbar() {
 
   const handleCopyAll = useCallback(async () => {
     if (!output) return
-    const allSql = output.files.map((f) => f.content).join('\n\n')
+    const allSql = output.files.map((f) => f.content).join("\n\n")
     await navigator.clipboard.writeText(allSql)
   }, [output])
 
   const handleDownload = useCallback(() => {
     if (!output) return
-    const allSql = output.files.map((f) => f.content).join('\n\n')
-    const blob = new Blob([allSql], { type: 'application/sql' })
+    const allSql = output.files.map((f) => f.content).join("\n\n")
+    const blob = new Blob([allSql], { type: "application/sql" })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
+    const a = document.createElement("a")
     a.href = url
-    a.download = 'schema.sql'
+    a.download = "schema.sql"
     a.click()
     URL.revokeObjectURL(url)
   }, [output])
@@ -44,7 +44,7 @@ export function SqlToolbar() {
             size="icon"
             className="size-7"
             onClick={handleCopyAll}
-            aria-label={t('sqlPreview.copyAll')}
+            aria-label={t("sqlPreview.copyAll")}
           >
             <HugeiconsIcon
               icon={Copy01Icon}
@@ -53,9 +53,7 @@ export function SqlToolbar() {
             />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {t('sqlPreview.copyAll')}
-        </TooltipContent>
+        <TooltipContent side="bottom">{t("sqlPreview.copyAll")}</TooltipContent>
       </Tooltip>
 
       <Tooltip>
@@ -65,7 +63,7 @@ export function SqlToolbar() {
             size="icon"
             className="size-7"
             onClick={handleDownload}
-            aria-label={t('sqlPreview.download')}
+            aria-label={t("sqlPreview.download")}
           >
             <HugeiconsIcon
               icon={Download04Icon}
@@ -75,7 +73,7 @@ export function SqlToolbar() {
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">
-          {t('sqlPreview.download')}
+          {t("sqlPreview.download")}
         </TooltipContent>
       </Tooltip>
 
@@ -84,7 +82,7 @@ export function SqlToolbar() {
           variant="outline"
           className="ml-2 border-warning/30 text-warning"
         >
-          {t('sqlPreview.warningCount', { count: warningCount })}
+          {t("sqlPreview.warningCount", { count: warningCount })}
         </Badge>
       )}
     </div>

@@ -21,7 +21,7 @@ export const mappingExpressionSchema = z
   .min(1)
   .regex(
     MAPPING_EXPR_PATTERN,
-    "Invalid mapping expression. Allowed: doc.field, row.field, row.a * row.b, sum(ts.field), count(ts), literal:value, now()",
+    "Invalid mapping expression. Allowed: doc.field, row.field, row.a * row.b, sum(ts.field), count(ts), literal:value, now()"
   )
 
 export type MappingExpression = z.infer<typeof mappingExpressionSchema>
@@ -58,7 +58,7 @@ export const movementTypeSchema = z
   .string()
   .regex(
     MOVEMENT_TYPE_PATTERN,
-    "Must be 'Receipt', 'Expense', or a document field reference (doc.fieldName)",
+    "Must be 'Receipt', 'Expense', or a document field reference (doc.fieldName)"
   )
 
 export type MovementType = z.infer<typeof movementTypeSchema>
@@ -70,7 +70,7 @@ export const movementSourceSchema = z
   .string()
   .regex(
     MOVEMENT_SOURCE_PATTERN,
-    "Must be 'document' or 'tabularSection:{name}'",
+    "Must be 'document' or 'tabularSection:{name}'"
   )
 
 export type MovementSource = z.infer<typeof movementSourceSchema>

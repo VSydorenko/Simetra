@@ -1,12 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Tree, type NodeApi, type TreeApi } from "react-arborist"
 import {
   Dialog,
   DialogContent,
@@ -25,8 +18,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { Search01Icon } from "@hugeicons/core-free-icons"
 import {
   referenceableKindSchema,
   type Attribute,
@@ -35,13 +26,7 @@ import {
   type ReferenceableKind,
 } from "@simetra/core"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
-import { buildTypeEditorTree } from "@/components/layout/tree/tree-builder"
-import type { TreeNodeData } from "@/components/layout/tree/tree-types"
-import {
-  PrimitiveTypePresentation,
-  RefKindGroupPresentation,
-  RefTargetPresentation,
-} from "@/components/layout/tree/tree-node-presentation"
+import { MetadataObjectTreeSelector } from "@/components/editor/metadata-object-tree-selector"
 
 const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
@@ -61,12 +46,6 @@ interface TypeDraft {
 
 function isReferenceableKind(kind: string): kind is ReferenceableKind {
   return (REFERENCEABLE_KINDS as readonly string[]).includes(kind)
-}
-
-function isAttributeRefTarget(
-  refTarget: TreeNodeData["refTarget"],
-): refTarget is AttributeRefTarget {
-  return !!refTarget && isReferenceableKind(refTarget.kind)
 }
 
 interface DataTypeEditorDialogProps {
@@ -143,7 +122,7 @@ export function DataTypeEditorDialog({
         setRevisionKey((k) => k + 1)
       }
     },
-    [handleCancel],
+    [handleCancel]
   )
 
   return (
@@ -180,9 +159,7 @@ function DataTypeEditorBody({
 
   // Snapshot при mount — для isDirty
   const [snapshot] = useState(() => extractTypeDraft(attribute))
-  const [draft, setDraft] = useState<TypeDraft>(() =>
-    structuredClone(snapshot),
-  )
+  const [draft, setDraft] = useState<TypeDraft>(() => structuredClone(snapshot))
 
   // Compound mode: allowedTypes з кількома ref targets
   const isCompound = useMemo(
@@ -190,7 +167,7 @@ function DataTypeEditorBody({
       draft.type === "Ref" &&
       Array.isArray(draft.allowedTypes) &&
       draft.allowedTypes.length > 0,
-    [draft.type, draft.allowedTypes],
+    [draft.type, draft.allowedTypes]
   )
 
   const [compoundEnabled, setCompoundEnabled] = useState(() => isCompound)
@@ -201,32 +178,8 @@ function DataTypeEditorBody({
   // isDirty — порівняння draft зі snapshot
   const isDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(snapshot),
-    [draft, snapshot],
+    [draft, snapshot]
   )
-
-  // --- Дерево ---
-
-  const treeData = useMemo(
-    () => buildTypeEditorTree(model, searchQuery, (key) => t(key)),
-    [model, searchQuery, t],
-  )
-
-  const treeContainerRef = useRef<HTMLDivElement>(null)
-  const treeRef = useRef<TreeApi<TreeNodeData>>(null)
-  const [treeDimensions, setTreeDimensions] = useState({
-    width: 380,
-    height: 280,
-  })
-
-  useEffect(() => {
-    if (!treeContainerRef.current) return
-    const observer = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect
-      setTreeDimensions({ width, height })
-    })
-    observer.observe(treeContainerRef.current)
-    return () => observer.disconnect()
-  }, [])
 
   // --- Обрані вузли: визначаються з draft ---
 
@@ -262,7 +215,7 @@ function DataTypeEditorBody({
       }
       const current = draft.allowedTypes ?? []
       const selectedCount = objects.filter((obj) =>
-        current.some((at) => at.kind === k && at.name === obj.name),
+        current.some((at) => at.kind === k && at.name === obj.name)
       ).length
       if (selectedCount === 0) states[k] = false
       else if (selectedCount === objects.length) states[k] = true
@@ -283,10 +236,10 @@ function DataTypeEditorBody({
           type: fieldType,
           ref: undefined,
           allowedTypes: undefined,
-        }),
+        })
       )
     },
-    [compoundEnabled],
+    [compoundEnabled]
   )
 
   /** Клік на ref target */
@@ -297,12 +250,12 @@ function DataTypeEditorBody({
         setDraft((prev) => {
           const current = prev.allowedTypes ?? []
           const exists = current.some(
-            (at) => at.kind === refTarget.kind && at.name === refTarget.name,
+            (at) => at.kind === refTarget.kind && at.name === refTarget.name
           )
           const updated = exists
             ? current.filter(
                 (at) =>
-                  !(at.kind === refTarget.kind && at.name === refTarget.name),
+                  !(at.kind === refTarget.kind && at.name === refTarget.name)
               )
             : [...current, refTarget]
 
@@ -321,11 +274,11 @@ function DataTypeEditorBody({
             type: "Ref",
             ref: refTarget,
             allowedTypes: undefined,
-          }),
+          })
         )
       }
     },
-    [compoundEnabled],
+    [compoundEnabled]
   )
 
   /** Клік на kind group header — у compound mode toggle всі targets цього kind */
@@ -345,18 +298,21 @@ function DataTypeEditorBody({
         const current = prev.allowedTypes ?? []
         // Якщо всі targets цього kind вже обрані — зняти всі
         const allSelected = kindTargets.every((kt) =>
-          current.some((at) => at.kind === kt.kind && at.name === kt.name),
+          current.some((at) => at.kind === kt.kind && at.name === kt.name)
         )
 
         let updated: AttributeRefTarget[]
         if (allSelected) {
           updated = current.filter(
-            (at) => !kindTargets.some((kt) => kt.kind === at.kind && kt.name === at.name),
+            (at) =>
+              !kindTargets.some(
+                (kt) => kt.kind === at.kind && kt.name === at.name
+              )
           )
         } else {
           const toAdd = kindTargets.filter(
             (kt) =>
-              !current.some((at) => at.kind === kt.kind && at.name === kt.name),
+              !current.some((at) => at.kind === kt.kind && at.name === kt.name)
           )
           updated = [...current, ...toAdd]
         }
@@ -369,55 +325,52 @@ function DataTypeEditorBody({
         })
       })
     },
-    [compoundEnabled, model],
+    [compoundEnabled, model]
   )
 
   // --- Compound toggle ---
 
-  const handleCompoundToggle = useCallback(
-    (checked: boolean) => {
-      setCompoundEnabled(checked)
+  const handleCompoundToggle = useCallback((checked: boolean) => {
+    setCompoundEnabled(checked)
 
-      if (checked) {
-        // single → compound: якщо обрано single ref — перенести в allowedTypes
-        setDraft((prev) => {
-          if (prev.type === "Ref" && prev.ref) {
-            return cleanupDraftForType({
-              ...prev,
-              allowedTypes: [prev.ref],
-              ref: undefined,
-            })
-          }
-          // Якщо обрано примітивний тип — скинути
-          if (prev.type !== "Ref") {
-            return cleanupDraftForType({
-              ...prev,
-              type: "Ref",
-              ref: undefined,
-              allowedTypes: undefined,
-              length: undefined,
-              precision: undefined,
-              scale: undefined,
-            })
-          }
-          return prev
-        })
-      } else {
-        // compound → single: зберегти перший target
-        setDraft((prev) => {
-          if (prev.allowedTypes && prev.allowedTypes.length > 0) {
-            return cleanupDraftForType({
-              ...prev,
-              ref: prev.allowedTypes[0],
-              allowedTypes: undefined,
-            })
-          }
-          return prev
-        })
-      }
-    },
-    [],
-  )
+    if (checked) {
+      // single → compound: якщо обрано single ref — перенести в allowedTypes
+      setDraft((prev) => {
+        if (prev.type === "Ref" && prev.ref) {
+          return cleanupDraftForType({
+            ...prev,
+            allowedTypes: [prev.ref],
+            ref: undefined,
+          })
+        }
+        // Якщо обрано примітивний тип — скинути
+        if (prev.type !== "Ref") {
+          return cleanupDraftForType({
+            ...prev,
+            type: "Ref",
+            ref: undefined,
+            allowedTypes: undefined,
+            length: undefined,
+            precision: undefined,
+            scale: undefined,
+          })
+        }
+        return prev
+      })
+    } else {
+      // compound → single: зберегти перший target
+      setDraft((prev) => {
+        if (prev.allowedTypes && prev.allowedTypes.length > 0) {
+          return cleanupDraftForType({
+            ...prev,
+            ref: prev.allowedTypes[0],
+            allowedTypes: undefined,
+          })
+        }
+        return prev
+      })
+    }
+  }, [])
 
   // --- Save ---
 
@@ -432,118 +385,6 @@ function DataTypeEditorBody({
     })
     onCancel()
   }, [draft, onSave, onCancel])
-
-  /** Keyboard activate: Enter/Space на вузлі дерева — аналог кліку */
-  const handleActivate = useCallback(
-    (node: NodeApi<TreeNodeData>) => {
-      const data = node.data
-      if (data.nodeType === "primitiveType" && data.fieldTypeValue) {
-        handleSelectPrimitive(data.fieldTypeValue)
-      } else if (data.nodeType === "refTarget" && isAttributeRefTarget(data.refTarget)) {
-        handleSelectRefTarget(data.refTarget)
-      } else if (data.nodeType === "refKindGroup") {
-        // Поведінка ідентична mouse click: compound → bulk toggle, single → expand/collapse
-        if (compoundEnabled && data.kind && isReferenceableKind(data.kind)) {
-          handleToggleKindGroup(data.kind)
-        }
-        node.toggle()
-      }
-    },
-    [compoundEnabled, handleSelectPrimitive, handleSelectRefTarget, handleToggleKindGroup],
-  )
-
-  // --- Tree node renderer ---
-
-  const renderNode = useCallback(
-    ({ node, style }: { node: NodeApi<TreeNodeData>; style: React.CSSProperties }) => {
-      const data = node.data
-
-      if (data.nodeType === "primitiveType") {
-        const isSelected = selectedIds.has(data.id)
-        return (
-          <div
-            onClick={() => {
-              if (data.fieldTypeValue) {
-                handleSelectPrimitive(data.fieldTypeValue)
-              }
-            }}
-          >
-            <PrimitiveTypePresentation
-              data={data}
-              isSelected={isSelected}
-              isFocused={node.isFocused}
-              mode={compoundEnabled ? "checkbox" : "radio"}
-              disabled={compoundEnabled}
-              label={t(`fieldType.${data.fieldTypeValue}`)}
-              style={style}
-            />
-          </div>
-        )
-      }
-
-      if (data.nodeType === "refKindGroup") {
-        return (
-          <div
-            onClick={(e) => {
-              e.stopPropagation()
-              if (compoundEnabled && data.kind && isReferenceableKind(data.kind)) {
-                handleToggleKindGroup(data.kind)
-              }
-              node.toggle()
-            }}
-          >
-            <RefKindGroupPresentation
-              data={data}
-              isOpen={node.isOpen}
-              isFocused={node.isFocused}
-              onToggle={() => {}}
-              label={t(`dataTypeEditor.refGroup.${data.kind}`)}
-              childCount={data.children?.length ?? 0}
-              checkedState={
-                compoundEnabled && data.kind
-                  ? kindCheckedStates[data.kind]
-                  : undefined
-              }
-              style={style}
-            />
-          </div>
-        )
-      }
-
-      if (data.nodeType === "refTarget") {
-        const isSelected = selectedIds.has(data.id)
-        return (
-          <div
-            onClick={() => {
-              const refTarget = data.refTarget
-              if (isAttributeRefTarget(refTarget)) {
-                handleSelectRefTarget(refTarget)
-              }
-            }}
-          >
-            <RefTargetPresentation
-              data={data}
-              isSelected={isSelected}
-              isFocused={node.isFocused}
-              mode={compoundEnabled ? "checkbox" : "radio"}
-              style={style}
-            />
-          </div>
-        )
-      }
-
-      return null
-    },
-    [
-      selectedIds,
-      compoundEnabled,
-      kindCheckedStates,
-      handleSelectPrimitive,
-      handleSelectRefTarget,
-      handleToggleKindGroup,
-      t,
-    ],
-  )
 
   // --- Type params display ---
 
@@ -630,9 +471,7 @@ function DataTypeEditorBody({
         )
       }
       return (
-        <p className="text-xs text-muted-foreground">
-          {t("fieldType.Ref")}
-        </p>
+        <p className="text-xs text-muted-foreground">{t("fieldType.Ref")}</p>
       )
     }
 
@@ -676,45 +515,34 @@ function DataTypeEditorBody({
         </Tooltip>
       </div>
 
-      {/* Пошук */}
-      <div className="relative">
-        <HugeiconsIcon
-          icon={Search01Icon}
-          size={14}
-          className="absolute top-1/2 left-2 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          className="h-7 pl-7 text-xs"
-          placeholder={t("dataTypeEditor.search")}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-      </div>
-
       {/* Дерево вибору типу */}
-      <div
-        ref={treeContainerRef}
-        className="h-[280px] overflow-hidden rounded-md border"
-      >
-        <Tree<TreeNodeData>
-          ref={treeRef}
-          data={treeData}
-          width={treeDimensions.width}
-          height={treeDimensions.height}
-          openByDefault
-          indent={16}
-          rowHeight={28}
-          overscanCount={5}
-          disableDrag
-          disableDrop
-          disableMultiSelection
-          disableEdit
-          padding={4}
-          onActivate={handleActivate}
-        >
-          {renderNode}
-        </Tree>
-      </div>
+      <MetadataObjectTreeSelector
+        model={model}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        selectedIds={selectedIds}
+        mode={compoundEnabled ? "checkbox" : "radio"}
+        primitivesDisabled={compoundEnabled}
+        onSelectTarget={(ref) => {
+          if (isReferenceableKind(ref.kind)) {
+            handleSelectRefTarget({
+              kind: ref.kind as ReferenceableKind,
+              name: ref.name,
+            })
+          }
+        }}
+        onSelectPrimitive={handleSelectPrimitive}
+        onToggleKindGroup={
+          compoundEnabled
+            ? (kind) => {
+                if (isReferenceableKind(kind))
+                  handleToggleKindGroup(kind as ReferenceableKind)
+              }
+            : undefined
+        }
+        kindCheckedStates={compoundEnabled ? kindCheckedStates : undefined}
+        height={280}
+      />
 
       {/* Параметри типу */}
       <div className="space-y-2">

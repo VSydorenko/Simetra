@@ -22,7 +22,11 @@ import {
 } from "@hugeicons/core-free-icons"
 import { AttributeTable } from "./attribute-table"
 import { StandardAttributesDialog } from "./standard-attributes-dialog"
-import type { MetadataKind, MetadataObject, TabularSection } from "@simetra/core"
+import type {
+  MetadataKind,
+  MetadataObject,
+  TabularSection,
+} from "@simetra/core"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { useMetadataStore } from "@/stores/metadata-store"
 
@@ -40,7 +44,9 @@ export function TabularSectionsEditor({
   const { t } = useTranslation()
   const model = useMetadataStore((state) => state.model)
   const addTabularSection = useMetadataStore((state) => state.addTabularSection)
-  const removeTabularSection = useMetadataStore((state) => state.removeTabularSection)
+  const removeTabularSection = useMetadataStore(
+    (state) => state.removeTabularSection
+  )
   const updateObject = useMetadataStore((state) => state.updateObject)
   const [expandedSections, setExpandedSections] = useState<string[]>(
     tabularSections.map((s) => s.name)

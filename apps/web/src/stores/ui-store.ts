@@ -52,25 +52,25 @@ interface BaseTab {
 
 // Вкладка об'єкта метаданих (поточна поведінка)
 export interface ObjectTab extends BaseTab {
-  type: 'object'
+  type: "object"
   objectRef: MetadataRef
   activeSection: string
 }
 
 // Вкладка SQL Preview
 export interface SqlPreviewTab extends BaseTab {
-  type: 'sql-preview'
+  type: "sql-preview"
 }
 
 export type TabItem = ObjectTab | SqlPreviewTab
 
 // Type guard для TypeScript narrowing
 export function isObjectTab(tab: TabItem): tab is ObjectTab {
-  return tab.type === 'object'
+  return tab.type === "object"
 }
 
 export function isSqlPreviewTab(tab: TabItem): tab is SqlPreviewTab {
-  return tab.type === 'sql-preview'
+  return tab.type === "sql-preview"
 }
 
 export interface FloatingWindowPosition {
@@ -139,14 +139,17 @@ function findActiveWindow(
 function resolveSelectionAfterClosedRef(
   state: Pick<
     UiState,
-    'selectedObject' | 'selectedTabularSection' | 'selectedField'
+    "selectedObject" | "selectedTabularSection" | "selectedField"
   >,
   closedRef: MetadataRef,
   openTabs: TabItem[],
   activeTabId: string | null,
   floatingWindows: FloatingWindow[],
   activeWindowId: string | null
-): Pick<UiState, 'selectedObject' | 'selectedTabularSection' | 'selectedField'> {
+): Pick<
+  UiState,
+  "selectedObject" | "selectedTabularSection" | "selectedField"
+> {
   const selectedTabularSection =
     state.selectedTabularSection &&
     isSameRef(state.selectedTabularSection.objectRef, closedRef)
@@ -670,7 +673,7 @@ export const useUiStore = create<UiStore>()(
         }
         const tab: TabItem = {
           id: tabId,
-          type: 'object',
+          type: "object",
           objectRef: ref,
           isPinned: false,
           activeSection: DEFAULT_SECTION[ref.kind],
@@ -686,7 +689,7 @@ export const useUiStore = create<UiStore>()(
       },
 
       openSqlPreview: () => {
-        const sqlTabId = '__sql-preview__'
+        const sqlTabId = "__sql-preview__"
         const { openTabs } = get()
         const existing = openTabs.find((t) => t.id === sqlTabId)
         if (existing) {
@@ -695,7 +698,7 @@ export const useUiStore = create<UiStore>()(
         }
         const tab: SqlPreviewTab = {
           id: sqlTabId,
-          type: 'sql-preview',
+          type: "sql-preview",
           isPinned: false,
         }
         set({
@@ -734,7 +737,7 @@ export const useUiStore = create<UiStore>()(
                 newTabs,
                 newActiveTabId,
                 state.floatingWindows,
-                state.activeWindowId,
+                state.activeWindowId
               )
             : {}
 
@@ -755,9 +758,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: kept,
             activeTabId: activeTab?.id ?? null,
             selectedObject:
-              activeTab && isObjectTab(activeTab)
-                ? activeTab.objectRef
-                : null,
+              activeTab && isObjectTab(activeTab) ? activeTab.objectRef : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -771,9 +772,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: pinned,
             activeTabId: activeTab?.id ?? null,
             selectedObject:
-              activeTab && isObjectTab(activeTab)
-                ? activeTab.objectRef
-                : null,
+              activeTab && isObjectTab(activeTab) ? activeTab.objectRef : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -793,9 +792,7 @@ export const useUiStore = create<UiStore>()(
             openTabs: kept,
             activeTabId: newActiveTabId,
             selectedObject:
-              activeTab && isObjectTab(activeTab)
-                ? activeTab.objectRef
-                : null,
+              activeTab && isObjectTab(activeTab) ? activeTab.objectRef : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -996,7 +993,7 @@ export const useUiStore = create<UiStore>()(
 
           const tab: TabItem = {
             id: tabId,
-            type: 'object',
+            type: "object",
             objectRef: win.objectRef,
             isPinned: false,
             activeSection: win.activeSection,
@@ -1015,7 +1012,9 @@ export const useUiStore = create<UiStore>()(
 
       closeWindow: (windowId) =>
         set((state) => {
-          const closedWindow = state.floatingWindows.find((w) => w.id === windowId)
+          const closedWindow = state.floatingWindows.find(
+            (w) => w.id === windowId
+          )
           if (!closedWindow) {
             return state
           }
@@ -1035,7 +1034,7 @@ export const useUiStore = create<UiStore>()(
             state.openTabs,
             state.activeTabId,
             remainingWindows,
-            nextWindowId,
+            nextWindowId
           )
 
           return {
@@ -1202,7 +1201,7 @@ export const useUiStore = create<UiStore>()(
             newTabs,
             newActiveTabId,
             newWindows,
-            newActiveWindowId,
+            newActiveWindowId
           )
 
           return {
