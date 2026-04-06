@@ -326,5 +326,19 @@
     "DateTime": "Дата і час",
     "Binary": "Двійкові дані",
     "Ref": "Посилання"
+  },
+  "sqlPreview": {
+    "title": "SQL Preview",
+    "generateSql": "Згенерувати SQL",
+    "noOutput": "Натисніть \"Згенерувати SQL\" для перегляду DDL",
+    "generationError": "Помилка генерації SQL",
+    "copyAll": "Копіювати все",
+    "download": "Завантажити .sql",
+    "warningCount_one": "{{count}} попередження",
+    "warningCount_few": "{{count}} попередження",
+    "warningCount_many": "{{count}} попереджень",
+    "copied": "Скопійовано",
+    "validationErrors": "Знайдено помилки у моделі",
+    "generateAnyway": "Згенерувати все одно"
   }
 }

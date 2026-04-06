@@ -322,5 +322,18 @@
     "DateTime": "DateTime",
     "Binary": "Binary",
     "Ref": "Reference"
+  },
+  "sqlPreview": {
+    "title": "SQL Preview",
+    "generateSql": "Generate SQL",
+    "noOutput": "Click \"Generate SQL\" to preview DDL",
+    "generationError": "SQL generation error",
+    "copyAll": "Copy All",
+    "download": "Download .sql",
+    "warningCount_one": "{{count}} warning",
+    "warningCount_other": "{{count}} warnings",
+    "copied": "Copied",
+    "validationErrors": "Model validation errors found",
+    "generateAnyway": "Generate anyway"
   }
 }

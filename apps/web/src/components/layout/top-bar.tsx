@@ -14,12 +14,15 @@ import {
   FloppyDiskIcon,
   Download04Icon,
   Upload04Icon,
+  SourceCodeIcon,
   ArrowTurnBackwardIcon,
   ArrowTurnForwardIcon,
 } from "@hugeicons/core-free-icons"
 import { useStore } from "zustand"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useProjectStore } from "@/stores/project-store"
+import { useDdlStore } from "@/stores/ddl-store"
+import { useUiStore } from "@/stores/ui-store"
 import { useIsDirty } from "@/hooks/use-is-dirty"
 
 export function TopBar() {
@@ -77,6 +80,10 @@ export function TopBar() {
   const handleSave = () => void useProjectStore.getState().saveProject()
   const handleExport = () => void useProjectStore.getState().exportProject()
   const handleImport = () => void useProjectStore.getState().importProject()
+  const handleGenerate = () => {
+    useDdlStore.getState().generateDdl()
+    useUiStore.getState().openSqlPreview()
+  }
   const handleUndo = () => useMetadataStore.temporal.getState().undo()
   const handleRedo = () => useMetadataStore.temporal.getState().redo()
 
@@ -177,6 +184,27 @@ export function TopBar() {
           </TooltipTrigger>
           <TooltipContent side="bottom">
             {t("action.save")} (Ctrl+S)
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              disabled={busy}
+              onClick={handleGenerate}
+            >
+              <HugeiconsIcon
+                icon={SourceCodeIcon}
+                strokeWidth={2}
+                className="size-4"
+              />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {t("sqlPreview.generateSql")} (Ctrl+G)
           </TooltipContent>
         </Tooltip>
 

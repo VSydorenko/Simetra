@@ -10,7 +10,12 @@ import {
 } from "@workspace/ui/components/context-menu"
 import { Badge } from "@workspace/ui/components/badge"
 import { cn } from "@workspace/ui/lib/utils"
-import { useUiStore, type TabItem } from "../../stores/ui-store"
+import {
+  isObjectTab,
+  isSqlPreviewTab,
+  useUiStore,
+  type TabItem,
+} from "../../stores/ui-store"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useProjectStore } from "@/stores/project-store"
 import { KIND_BADGE_CLASSES } from "@/lib/metadata-icons"
@@ -128,20 +133,34 @@ function Tab({
           )}
 
           {/* Тип обʼєкта — компактний badge */}
-          <Badge
-            variant="outline"
-            className={cn(
-              "shrink-0 px-1 py-0 text-[9px] leading-tight",
-              KIND_BADGE_CLASSES[tab.objectRef.kind]
-            )}
-          >
-            {t(`metadata.kind.${tab.objectRef.kind}`)}
-          </Badge>
-
-          {/* Імʼя обʼєкта */}
-          <span className="min-w-0 truncate font-mono text-xs">
-            {tab.objectRef.name}
-          </span>
+          {isObjectTab(tab) ? (
+            <>
+              <Badge
+                variant="outline"
+                className={cn(
+                  "shrink-0 px-1 py-0 text-[9px] leading-tight",
+                  KIND_BADGE_CLASSES[tab.objectRef.kind]
+                )}
+              >
+                {t(`metadata.kind.${tab.objectRef.kind}`)}
+              </Badge>
+              <span className="min-w-0 truncate font-mono text-xs">
+                {tab.objectRef.name}
+              </span>
+            </>
+          ) : isSqlPreviewTab(tab) ? (
+            <>
+              <Badge
+                variant="outline"
+                className="shrink-0 px-1 py-0 text-[9px] leading-tight text-emerald-400 border-emerald-400/30"
+              >
+                SQL
+              </Badge>
+              <span className="min-w-0 truncate text-xs">
+                {t("sqlPreview.title")}
+              </span>
+            </>
+          ) : null}
 
           {/* Dirty indicator */}
           {isDirty && <span className="shrink-0 text-xs text-warning">*</span>}
@@ -195,9 +214,11 @@ function Tab({
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => detachTab(tab.id)}>
-          {t("tabs.detach")}
-        </ContextMenuItem>
+        {isObjectTab(tab) && (
+          <ContextMenuItem onSelect={() => detachTab(tab.id)}>
+            {t("tabs.detach")}
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -220,6 +241,7 @@ export function TabBar() {
         <div role="tablist" className="flex h-8">
           {openTabs.map((tab) => {
             const isDirty =
+              isObjectTab(tab) &&
               objectVersions[tab.id] !== lastSavedObjectVersions[tab.id]
             return (
               <Tab

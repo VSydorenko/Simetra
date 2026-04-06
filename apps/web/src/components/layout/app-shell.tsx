@@ -15,6 +15,7 @@ import { CommandPalette } from "../command-palette"
 import { DEFAULT_PANEL_LAYOUT, useUiStore } from "@/stores/ui-store"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useProjectStore } from "@/stores/project-store"
+import { useDdlStore } from "@/stores/ddl-store"
 import {
   createDefaultObject,
   generateUniqueName,
@@ -146,6 +147,13 @@ export function AppShell() {
     const idx = openTabs.findIndex((t) => t.id === activeTabId)
     const prev = (idx - 1 + openTabs.length) % openTabs.length
     setActiveTab(openTabs[prev].id)
+  })
+
+  // Generate SQL
+  useHotkeys("mod+g", (e) => {
+    e.preventDefault()
+    useDdlStore.getState().generateDdl()
+    useUiStore.getState().openSqlPreview()
   })
 
   return (

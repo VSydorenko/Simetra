@@ -5,7 +5,8 @@ import { Taskbar } from "../window-manager/taskbar"
 import { ObjectEditor } from "../editor/object-editor"
 import { WelcomeScreen } from "../editor/welcome-screen"
 import { RecoveryBanner } from "../editor/recovery-banner"
-import { useUiStore } from "@/stores/ui-store"
+import { SqlPreviewPanel } from "../sql-preview/sql-preview-panel"
+import { isObjectTab, isSqlPreviewTab, useUiStore } from "@/stores/ui-store"
 import { useProjectStore } from "@/stores/project-store"
 import { useCallback } from "react"
 
@@ -51,12 +52,16 @@ export function EditorPanel() {
       {/* Контент активної вкладки */}
       <div className="flex-1 overflow-hidden">
         {activeTab ? (
-          <ObjectEditor
-            key={activeTab.id}
-            objectRef={activeTab.objectRef}
-            activeSection={activeTab.activeSection}
-            onSectionChange={handleSectionChange}
-          />
+          isObjectTab(activeTab) ? (
+            <ObjectEditor
+              key={activeTab.id}
+              objectRef={activeTab.objectRef}
+              activeSection={activeTab.activeSection}
+              onSectionChange={handleSectionChange}
+            />
+          ) : isSqlPreviewTab(activeTab) ? (
+            <SqlPreviewPanel key={activeTab.id} />
+          ) : null
         ) : showWelcome ? (
           <WelcomeScreen />
         ) : (

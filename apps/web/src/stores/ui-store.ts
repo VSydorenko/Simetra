@@ -44,12 +44,33 @@ export const DEFAULT_SECTION: Record<MetadataKind, string> = {
   CustomTable: "main",
 }
 
-export interface TabItem {
+// Базові поля для всіх типів вкладок
+interface BaseTab {
   id: string
-  objectRef: MetadataRef
   isPinned: boolean
-  // Активна секція редактора per-tab
+}
+
+// Вкладка об'єкта метаданих (поточна поведінка)
+export interface ObjectTab extends BaseTab {
+  type: 'object'
+  objectRef: MetadataRef
   activeSection: string
+}
+
+// Вкладка SQL Preview
+export interface SqlPreviewTab extends BaseTab {
+  type: 'sql-preview'
+}
+
+export type TabItem = ObjectTab | SqlPreviewTab
+
+// Type guard для TypeScript narrowing
+export function isObjectTab(tab: TabItem): tab is ObjectTab {
+  return tab.type === 'object'
+}
+
+export function isSqlPreviewTab(tab: TabItem): tab is SqlPreviewTab {
+  return tab.type === 'sql-preview'
 }
 
 export interface FloatingWindowPosition {
@@ -146,7 +167,7 @@ function resolveSelectionAfterClosedRef(
       ? state.selectedObject
       : null) ??
     activeWindow?.objectRef ??
-    activeTab?.objectRef ??
+    (activeTab && isObjectTab(activeTab) ? activeTab.objectRef : null) ??
     null
 
   return {
@@ -346,6 +367,8 @@ export interface UiActions {
   // --- Tab lifecycle ---
   /** Відкрити вкладку або активувати існуючу */
   openTab: (ref: MetadataRef) => void
+  /** Відкрити SQL Preview вкладку */
+  openSqlPreview: () => void
   /** Закрити вкладку */
   closeTab: (tabId: string) => void
   /** Закрити всі вкладки крім зазначеної */
@@ -605,7 +628,7 @@ export const useUiStore = create<UiStore>()(
           if (state.activeTabId) {
             return {
               openTabs: state.openTabs.map((t) =>
-                t.id === state.activeTabId
+                t.id === state.activeTabId && isObjectTab(t)
                   ? { ...t, activeSection: section }
                   : t
               ),
@@ -647,6 +670,7 @@ export const useUiStore = create<UiStore>()(
         }
         const tab: TabItem = {
           id: tabId,
+          type: 'object',
           objectRef: ref,
           isPinned: false,
           activeSection: DEFAULT_SECTION[ref.kind],
@@ -658,6 +682,26 @@ export const useUiStore = create<UiStore>()(
           selectedObject: ref,
           selectedTabularSection: null,
           selectedField: null,
+        })
+      },
+
+      openSqlPreview: () => {
+        const sqlTabId = '__sql-preview__'
+        const { openTabs } = get()
+        const existing = openTabs.find((t) => t.id === sqlTabId)
+        if (existing) {
+          set({ activeTabId: sqlTabId, activeWindowId: null })
+          return
+        }
+        const tab: SqlPreviewTab = {
+          id: sqlTabId,
+          type: 'sql-preview',
+          isPinned: false,
+        }
+        set({
+          openTabs: [...openTabs, tab],
+          activeTabId: sqlTabId,
+          activeWindowId: null,
         })
       },
 
@@ -682,14 +726,17 @@ export const useUiStore = create<UiStore>()(
             }
           }
 
-          const selectionState = resolveSelectionAfterClosedRef(
-            state,
-            closedTab.objectRef,
-            newTabs,
-            newActiveTabId,
-            state.floatingWindows,
-            state.activeWindowId,
-          )
+          // Тільки для object tabs потрібен selection reconciliation
+          const selectionState = isObjectTab(closedTab)
+            ? resolveSelectionAfterClosedRef(
+                state,
+                closedTab.objectRef,
+                newTabs,
+                newActiveTabId,
+                state.floatingWindows,
+                state.activeWindowId,
+              )
+            : {}
 
           return {
             openTabs: newTabs,
@@ -707,7 +754,10 @@ export const useUiStore = create<UiStore>()(
           return {
             openTabs: kept,
             activeTabId: activeTab?.id ?? null,
-            selectedObject: activeTab?.objectRef ?? null,
+            selectedObject:
+              activeTab && isObjectTab(activeTab)
+                ? activeTab.objectRef
+                : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -720,7 +770,10 @@ export const useUiStore = create<UiStore>()(
           return {
             openTabs: pinned,
             activeTabId: activeTab?.id ?? null,
-            selectedObject: activeTab?.objectRef ?? null,
+            selectedObject:
+              activeTab && isObjectTab(activeTab)
+                ? activeTab.objectRef
+                : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -739,7 +792,10 @@ export const useUiStore = create<UiStore>()(
           return {
             openTabs: kept,
             activeTabId: newActiveTabId,
-            selectedObject: activeTab?.objectRef ?? null,
+            selectedObject:
+              activeTab && isObjectTab(activeTab)
+                ? activeTab.objectRef
+                : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -761,7 +817,7 @@ export const useUiStore = create<UiStore>()(
           return {
             activeTabId: tabId,
             activeWindowId: null,
-            selectedObject: tab.objectRef,
+            selectedObject: isObjectTab(tab) ? tab.objectRef : null,
             selectedTabularSection: null,
             selectedField: null,
           }
@@ -809,7 +865,7 @@ export const useUiStore = create<UiStore>()(
 
           const newTabs = hasTab
             ? state.openTabs.map((t) =>
-                t.id === oldTabId
+                t.id === oldTabId && isObjectTab(t)
                   ? { ...t, id: newTabId, objectRef: newRef }
                   : t
               )
@@ -862,7 +918,8 @@ export const useUiStore = create<UiStore>()(
       detachTab: (tabId) =>
         set((state) => {
           const tab = state.openTabs.find((t) => t.id === tabId)
-          if (!tab) return state
+          // SQL Preview та інші non-object tabs не detach-аються
+          if (!tab || !isObjectTab(tab)) return state
 
           const windowId = `window-${tab.id}`
           // Обʼєкт вже у floating window — не дублювати
@@ -939,6 +996,7 @@ export const useUiStore = create<UiStore>()(
 
           const tab: TabItem = {
             id: tabId,
+            type: 'object',
             objectRef: win.objectRef,
             isPinned: false,
             activeSection: win.activeSection,
@@ -1013,7 +1071,11 @@ export const useUiStore = create<UiStore>()(
             floatingWindows: newWindows,
             activeWindowId: nextWindowId,
             selectedObject:
-              nextWindow?.objectRef ?? activeTab?.objectRef ?? null,
+              nextWindow?.objectRef ??
+              (activeTab && isObjectTab(activeTab)
+                ? activeTab.objectRef
+                : null) ??
+              null,
             selectedTabularSection: null,
             selectedField: null,
           }

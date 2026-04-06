@@ -12,6 +12,7 @@ import {
 import { useUiStore } from "@/stores/ui-store"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useProjectStore } from "@/stores/project-store"
+import { useDdlStore } from "@/stores/ddl-store"
 import {
   createDefaultObject,
   generateUniqueName,
@@ -53,6 +54,11 @@ export function CommandPalette() {
   const handleRedo = () => {
     close()
     useMetadataStore.temporal.getState().redo()
+  }
+  const handleGenerateSql = () => {
+    close()
+    useDdlStore.getState().generateDdl()
+    useUiStore.getState().openSqlPreview()
   }
 
   const handleCreateObject = (kind: MetadataKind) => {
@@ -136,6 +142,10 @@ export function CommandPalette() {
           <CommandItem onSelect={handleRedo}>
             {t("action.redo")}
             <CommandShortcut>Ctrl+Shift+Z</CommandShortcut>
+          </CommandItem>
+          <CommandItem onSelect={handleGenerateSql}>
+            {t("sqlPreview.generateSql")}
+            <CommandShortcut>Ctrl+G</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 

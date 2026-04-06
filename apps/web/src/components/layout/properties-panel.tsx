@@ -6,7 +6,7 @@ import { FieldProperties } from "@/components/properties/field-properties"
 import { ProjectSettings } from "@/components/properties/project-settings"
 import { TabularSectionProperties } from "@/components/properties/tabular-section-properties"
 import { useMetadataStore } from "@/stores/metadata-store"
-import { findTabularSection, useUiStore } from "@/stores/ui-store"
+import { findTabularSection, isObjectTab, useUiStore } from "@/stores/ui-store"
 
 /**
  * Контекстно-залежна панель властивостей.
@@ -41,7 +41,7 @@ export function PropertiesPanel() {
     }
     if (activeTabId) {
       const tab = openTabs.find((t) => t.id === activeTabId)
-      if (tab) return tab.objectRef
+      if (tab && isObjectTab(tab)) return tab.objectRef
     }
     return null
   }, [selectedObject, activeTabId, activeWindowId, openTabs, floatingWindows])
