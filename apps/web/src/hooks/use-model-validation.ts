@@ -167,6 +167,58 @@ function validateSingleObject(
     }
   }
 
+  // 5. Cross-check: posting register refs мають бути підмножиною registerMovements
+  if (
+    "posting" in obj &&
+    typeof obj.posting === "object" &&
+    obj.posting !== null &&
+    "registerMovements" in obj &&
+    Array.isArray(obj.registerMovements)
+  ) {
+    const posting = obj.posting as {
+      movements?: { register: { kind: string; name: string } }[]
+    }
+    const regMovements = obj.registerMovements as { kind: string; name: string }[]
+    if (posting.movements) {
+      for (const movement of posting.movements) {
+        const declared = regMovements.some(
+          (r) =>
+            r.kind === movement.register.kind &&
+            r.name === movement.register.name,
+        )
+        if (!declared) {
+          errors.push({
+            path: "posting.movements",
+            message: `posting.movements contains register ${movement.register.kind}/${movement.register.name} not declared in registerMovements`,
+          })
+        }
+      }
+    }
+  }
+
+  // 6. Warning: validations без movements не мають сенсу
+  if (
+    "posting" in obj &&
+    typeof obj.posting === "object" &&
+    obj.posting !== null
+  ) {
+    const posting = obj.posting as {
+      movements?: unknown[]
+      validations?: unknown[]
+    }
+    if (
+      posting.validations &&
+      posting.validations.length > 0 &&
+      (!posting.movements || posting.movements.length === 0)
+    ) {
+      errors.push({
+        path: "posting.validations",
+        message:
+          "posting has validations but no movements — validations will have no effect",
+      })
+    }
+  }
+
   return errors
 }
 

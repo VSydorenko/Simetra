@@ -558,6 +558,10 @@ export const useMetadataStore = create<MetadataStore>()(
                   filteredMovements
                 ;(doc.posting as Record<string, unknown>).validations =
                   filteredValidations
+                // Нормалізація: порожній posting -> undefined
+                if (filteredMovements.length === 0 && filteredValidations.length === 0) {
+                  doc.posting = undefined
+                }
               }
             }
           }
@@ -1740,6 +1744,11 @@ export const useMetadataStore = create<MetadataStore>()(
                 ),
             ),
           }
+          // Нормалізація: порожній posting -> undefined
+          const updated = d.posting as { movements: unknown[]; validations: unknown[] }
+          if (updated.movements.length === 0 && updated.validations.length === 0) {
+            d.posting = undefined
+          }
           state.version++
           bumpObjectVersion(state, 'Document', name)
         })
@@ -1800,6 +1809,11 @@ export const useMetadataStore = create<MetadataStore>()(
             validations: posting.validations.filter(
               (_, i) => i !== validationIndex,
             ),
+          }
+          // Нормалізація: порожній posting -> undefined
+          const updated = d.posting as { movements: unknown[]; validations: unknown[] }
+          if (updated.movements.length === 0 && updated.validations.length === 0) {
+            d.posting = undefined
           }
           state.version++
           bumpObjectVersion(state, 'Document', name)

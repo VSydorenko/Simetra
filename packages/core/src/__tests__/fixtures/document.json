@@ -10,7 +10,6 @@
   "numberType": "String",
   "autonumber": true,
   "numberPeriodicity": "Year",
-  "posting": true,
   "registerMovements": [
     {
       "kind": "AccumulationRegister",

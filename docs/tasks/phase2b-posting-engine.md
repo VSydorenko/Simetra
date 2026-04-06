@@ -16,6 +16,8 @@ Phase 2a створила DDL генератор для структурної �
 
 Повна специфікація секції `posting` описана в BRD §5.3.1: `posting.movements[]`, `posting.validations[]`, mapping expressions, межі декларативності.
 
+> **Note:** Boolean backward-compat шар `z.union([z.boolean(), postingSchema]).default(true)` видалений задачею `posting-cleanup-and-findreferences`. Поточний контракт: `posting: postingSchema.optional()`. Детальний опис семантики — у `docs/architecture/metadata-model.md`.
+
 ---
 
 ## Етапи

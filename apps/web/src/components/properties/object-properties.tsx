@@ -666,14 +666,6 @@ function DocumentTypeSettings({
           </SelectContent>
         </Select>
       </SettingRow>
-      <SettingRow label={t("metadata.setting.posting")}>
-        <Switch
-          checked={!!o.posting}
-          onCheckedChange={(v) =>
-            onUpdate({ posting: v } as Partial<MetadataObject>)
-          }
-        />
-      </SettingRow>
     </>
   )
 }

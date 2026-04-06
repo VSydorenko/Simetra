@@ -135,6 +135,35 @@ function collectValidationErrors(model: ProjectModel): string[] {
           }
         }
       }
+      // Posting refs: movements + validations
+      if (
+        "posting" in obj &&
+        typeof obj.posting === "object" &&
+        obj.posting !== null
+      ) {
+        const posting = obj.posting as {
+          movements?: { register: { kind: MetadataKind; name: string } }[]
+          validations?: { register: { kind: MetadataKind; name: string } }[]
+        }
+        if (posting.movements) {
+          for (const m of posting.movements) {
+            if (!refExists(model, m.register.kind, m.register.name)) {
+              errors.push(
+                `${kind}.${obj.name}.posting.movements: посилання на неіснуючий обʼєкт ${m.register.kind}/${m.register.name}`
+              )
+            }
+          }
+        }
+        if (posting.validations) {
+          for (const v of posting.validations) {
+            if (!refExists(model, v.register.kind, v.register.name)) {
+              errors.push(
+                `${kind}.${obj.name}.posting.validations: посилання на неіснуючий обʼєкт ${v.register.kind}/${v.register.name}`
+              )
+            }
+          }
+        }
+      }
     }
   }
 

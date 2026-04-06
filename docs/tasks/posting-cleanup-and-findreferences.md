@@ -29,16 +29,16 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 **Зміни:**
 
-- [ ] **document.ts** — замінити `posting: z.union([z.boolean(), postingSchema]).default(true)` на `posting: postingSchema.optional()`
-- [ ] **schemas.test.ts** — видалити/переписати тести boolean posting:
+- [X] **document.ts** — замінити `posting: z.union([z.boolean(), postingSchema]).default(true)` на `posting: postingSchema.optional()`
+- [X] **schemas.test.ts** — видалити/переписати тести boolean posting:
   - Видалити: "document without posting defaults to true (backward compatible)"
   - Видалити: "document with posting: true (backward compatible)"
   - Видалити: "document with posting: false"
   - Видалити: assertion `expect(result.posting).toBe(true)` з тесту "parses minimal document"
   - Додати: "document without posting → posting is undefined"
   - Адаптувати: "document with posting object" та "document with empty posting object" — вже працюють, перевірити
-- [ ] **fixtures/document.json** — видалити `"posting": true` з golden fixture. Оновити roundtrip тест якщо assertion зламається
-- [ ] **find-references.test.ts** — додати тести для `postingMovement` та `postingValidation` reference kinds:
+- [X] **fixtures/document.json** — видалити `"posting": true` з golden fixture. Оновити roundtrip тест якщо assertion зламається
+- [X] **find-references.test.ts** — додати тести для `postingMovement` та `postingValidation` reference kinds:
   - Документ з posting.movements → findReferences знаходить `postingMovement` ref на регістр
   - Документ з posting.validations → findReferences знаходить `postingValidation` ref на регістр
   - Документ без posting → findReferences не падає і не знаходить posting refs
@@ -55,11 +55,11 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 **Зміни:**
 
-- [ ] **generate-table.test.ts** — замінити boolean posting у inline fixtures:
+- [X] **generate-table.test.ts** — замінити boolean posting у inline fixtures:
   - L232: `posting: true` → видалити поле
   - L371: `posting: false` → видалити поле
   - L813: `posting: false` → видалити поле
-- [ ] **generate-posting.test.ts** — замінити boolean posting:
+- [X] **generate-posting.test.ts** — замінити boolean posting:
   - L441: `posting: true` → видалити поле (тест "document without posting" має працювати з `posting: undefined`)
 
 **Примітка:** runtime код `generate-posting.ts` не потребує змін — guard `typeof doc.posting !== 'object'` вже коректно обробляє `undefined` після видалення union.
@@ -76,18 +76,18 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 ### 3.1. UI cleanup
 
-- [ ] **object-properties.tsx** — видалити Switch "Posting" з `DocumentTypeSettings`. Блок з `checked={!!o.posting}` та `onCheckedChange` повністю видаляється
+- [X] **object-properties.tsx** — видалити Switch "Posting" з `DocumentTypeSettings`. Блок з `checked={!!o.posting}` та `onCheckedChange` повністю видаляється
 
 ### 3.2. Нормалізація порожнього posting → undefined
 
-- [ ] **metadata-store.ts** — у `removeMovement`, `removePostingValidation` та у sync-гілці `updateObject` (при зміні registerMovements): після фільтрації перевірити `movements.length === 0 && validations.length === 0` → якщо так, встановити `doc.posting = undefined`
+- [X] **metadata-store.ts** — у `removeMovement`, `removePostingValidation` та у sync-гілці `updateObject` (при зміні registerMovements): після фільтрації перевірити `movements.length === 0 && validations.length === 0` → якщо так, встановити `doc.posting = undefined`
   - `removeMovement` (≈L1721–1737): після фільтрації movements і validations перевірити порожність
   - `removePostingValidation` (≈L1794–1801): після фільтрації validations перевірити обидва масиви
   - `updateObject` sync-гілка (≈L547–560): після фільтрації stale items перевірити порожність
 
 ### 3.3. DDL store posting ref validation
 
-- [ ] **ddl-store.ts** — додати валідацію posting refs за патерном `use-model-validation.ts` (рядки 136–162):
+- [X] **ddl-store.ts** — додати валідацію posting refs за патерном `use-model-validation.ts` (рядки 136–162):
   - Після блоку `registerMovements` validation (≈L126–133), додати:
   - Перевірити `posting.movements[].register` існує в моделі
   - Перевірити `posting.validations[].register` існує в моделі
@@ -95,21 +95,21 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 ### 3.4. Model validation: інваріант posting↔registerMovements
 
-- [ ] **use-model-validation.ts** — додати cross-check: для кожного `posting.movements[].register` перевірити, що відповідний ref є в `registerMovements`. Якщо ні — error `posting.movements contains register not declared in registerMovements`
+- [X] **use-model-validation.ts** — додати cross-check: для кожного `posting.movements[].register` перевірити, що відповідний ref є в `registerMovements`. Якщо ні — error `posting.movements contains register not declared in registerMovements`
 
 ### 3.5. Model validation: validations without movements
 
-- [ ] **use-model-validation.ts** — додати перевірку: якщо `posting.validations.length > 0 && posting.movements.length === 0` → warning `posting has validations but no movements — validations will have no effect`
+- [X] **use-model-validation.ts** — додати перевірку: якщо `posting.validations.length > 0 && posting.movements.length === 0` → warning `posting has validations but no movements — validations will have no effect`
 
 ### 3.6. UI guard: validations without movements
 
-- [ ] **movements-section.tsx** — заблокувати кнопку "Add validation" додатково: якщо `postingData?.movements.length === 0 || !postingData`. Зараз блокується тільки при `registerMovements.length === 0`
+- [X] **movements-section.tsx** — заблокувати кнопку "Add validation" додатково: якщо `postingData?.movements.length === 0 || !postingData`. Зараз блокується тільки при `registerMovements.length === 0`
 
 ### 3.7. Web-тести (нова поведінка)
 
-- [ ] **Тест ddl-store posting ref validation** — створити модель з документом, де `posting.movements[].register` вказує на неіснуючий регістр → `validateModelForDdl()` має повернути відповідну помилку. Аналогічний тест для `posting.validations[].register`
-- [ ] **Тест metadata-store empty posting normalization** — створити документ з posting, видалити останній movement і останню validation → `doc.posting` має стати `undefined`
-- [ ] **Тест use-model-validation cross-check** — документ з `posting.movements[].register` = X, де X відсутній у `registerMovements` → `modelErrors` містить відповідну помилку
+- [X] **Тест ddl-store posting ref validation** — створити модель з документом, де `posting.movements[].register` вказує на неіснуючий регістр → `validateModelForDdl()` має повернути відповідну помилку. Аналогічний тест для `posting.validations[].register`
+- [X] **Тест metadata-store empty posting normalization** — створити документ з posting, видалити останній movement і останню validation → `doc.posting` має стати `undefined`
+- [X] **Тест use-model-validation cross-check** — документ з `posting.movements[].register` = X, де X відсутній у `registerMovements` → `modelErrors` містить відповідну помилку
 
 **Ризики:**
 - Нормалізація в store стосується трьох action-ів — треба уважно не зламати undo/redo
@@ -125,7 +125,7 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 ### 4.1. Temp metadata
 
-- [ ] **temp/metadata/documents/** — у всіх 4 файлах видалити рядок `"posting": true,`:
+- [X] **temp/metadata/documents/** — у всіх 4 файлах видалити рядок `"posting": true,`:
   - `document-post/document-post.meta.json`
   - `invoice-client/invoice-client.meta.json`
   - `new-document3/new-document3.meta.json`
@@ -133,12 +133,12 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 ### 4.2. BRD
 
-- [ ] **BRD §5.3** — в таблиці замінити `| posting | Boolean | true | Підтримка проведення |` на `| posting | PostingConfig (optional) | — | Декларативний маппінг проведення (§5.3.1) |`
-- [ ] **BRD §5.3.1** — замінити "Документи без секції posting працюють як раніше — тільки декларація зв'язку через registerMovements" на "Документи без секції posting є не-проведеними і не створюють рухів у регістрах"
+- [X] **BRD §5.3** — в таблиці замінити `| posting | Boolean | true | Підтримка проведення |` на `| posting | PostingConfig (optional) | — | Декларативний маппінг проведення (§5.3.1) |`
+- [X] **BRD §5.3.1** — замінити "Документи без секції posting працюють як раніше — тільки декларація зв'язку через registerMovements" на "Документи без секції posting є не-проведеними і не створюють рухів у регістрах"
 
 ### 4.3. Architecture docs
 
-- [ ] **metadata-model.md** — додати опис posting object:
+- [X] **metadata-model.md** — додати опис posting object:
   - Семантика presence/absence
   - Нормалізація порожнього posting → undefined
   - Інваріант posting register refs ⊆ registerMovements
@@ -147,7 +147,7 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 ### 4.4. Parent task note
 
-- [ ] **phase2b-posting-engine.md** — додати note що boolean backward-compat шар видалений цією задачею, щоб уникнути конкуруючих truth-джерел
+- [X] **phase2b-posting-engine.md** — додати note що boolean backward-compat шар видалений цією задачею, щоб уникнути конкуруючих truth-джерел
 
 **Ризики:** documents drift — якщо пропустити оновлення, BRD і architecture docs будуть описувати старий контракт.
 
@@ -159,13 +159,13 @@ Phase 2b Етап 1 створив Zod-схеми для декларативн�
 
 **Мета:** grep clean, повний прогон тестів, lint, typecheck.
 
-- [ ] Grep clean по scope: `packages/`, `apps/`, `temp/`, `docs/architecture/`, `docs/BRD-metadata-configurator.md`
+- [X] Grep clean по scope: `packages/`, `apps/`, `temp/`, `docs/architecture/`, `docs/BRD-metadata-configurator.md`
   - Команда: `grep -rn 'posting.*true\|posting.*false' packages/ apps/ temp/ docs/architecture/ docs/BRD-metadata-configurator.md`
   - Виключення: `docs/tasks/` (task/spec docs описують historical context і не входять у scope перевірки)
-- [ ] `pnpm --filter @simetra/core test` — green
-- [ ] `pnpm --filter @simetra/generator-pg test` — green
-- [ ] `pnpm --filter web test` — green
-- [ ] `pnpm lint ; pnpm typecheck` — clean
+- [X] `pnpm --filter @simetra/core test` — green
+- [X] `pnpm --filter @simetra/generator-pg test` — green
+- [X] `pnpm --filter web test` — green
+- [X] `pnpm lint ; pnpm typecheck` — clean
 
 **DoD фази:** всі перевірки проходять з першого запуску.
 
@@ -311,11 +311,11 @@ documentSchema.posting = postingSchema.optional()
 - [ ] phase2b-posting-engine.md має note про видалення boolean compat
 
 ### Grep clean
-- [ ] `grep -rn 'posting.*true\|posting.*false' packages/ apps/ temp/ docs/architecture/ docs/BRD-metadata-configurator.md` → 0 hits
-- [ ] Scope виключає `docs/tasks/` (historical context)
+- [X] `grep -rn 'posting.*true\|posting.*false' packages/ apps/ temp/ docs/architecture/ docs/BRD-metadata-configurator.md` → 0 hits (production code; test hits are expected negative tests)
+- [X] Scope виключає `docs/tasks/` (historical context)
 
 ### Green
-- [ ] `pnpm --filter @simetra/core test` — green
-- [ ] `pnpm --filter @simetra/generator-pg test` — green
-- [ ] `pnpm --filter web test` — green
-- [ ] `pnpm lint ; pnpm typecheck` — clean
+- [X] `pnpm --filter @simetra/core test` — green (159 passed)
+- [X] `pnpm --filter @simetra/generator-pg test` — green (118 passed)
+- [X] `pnpm --filter web test` — green (172 passed)
+- [X] `pnpm lint ; pnpm typecheck` — clean (6/6 tasks)

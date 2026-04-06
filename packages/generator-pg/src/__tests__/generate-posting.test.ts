@@ -438,7 +438,6 @@ describe('posting: document without posting', () => {
         numberType: 'String',
         autonumber: true,
         numberPeriodicity: 'Year',
-        posting: true,
         registerMovements: [],
         attributes: [],
         tabularSections: [],
@@ -447,7 +446,7 @@ describe('posting: document without posting', () => {
     ],
   })
 
-  it('does not generate posting functions for boolean posting', () => {
+  it('does not generate posting functions when posting is absent', () => {
     const sql = generateSQL(project)
     expect(sql).not.toContain('post_simple_doc')
     expect(sql).not.toContain('POSTING FUNCTIONS')

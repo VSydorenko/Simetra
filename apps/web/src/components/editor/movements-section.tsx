@@ -52,7 +52,7 @@ export function MovementsSection({
     [doc.registerMovements]
   )
 
-  // Posting секція — структурна або boolean
+  // Posting секція — optional object
   const postingData =
     typeof doc.posting === "object" && doc.posting !== null ? doc.posting : null
   const validations = postingData?.validations ?? []
@@ -208,7 +208,7 @@ export function MovementsSection({
               variant="ghost"
               size="sm"
               className="h-6 px-2 text-xs"
-              disabled={registerMovements.length === 0}
+              disabled={registerMovements.length === 0 || !postingData?.movements?.length}
               onClick={handleAddValidation}
             >
               <HugeiconsIcon icon={Add01Icon} size={14} className="mr-1" />

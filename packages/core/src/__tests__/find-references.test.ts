@@ -409,6 +409,166 @@ describe("findReferences", () => {
     expect(fromNames).toContain("PurchaseOrder")
     expect(fromNames).toContain("Prices")
   })
+
+  it("finds 'postingMovement' references", () => {
+    const model = buildModel({
+      documents: [
+        {
+          kind: "Document",
+          name: "SalesOrder",
+          numberLength: 11,
+          numberType: "String",
+          posting: {
+            movements: [
+              {
+                register: {
+                  kind: "AccumulationRegister",
+                  name: "InventoryBalance",
+                },
+                movementType: "Receipt",
+                source: "tabularSection:items",
+                mappings: {
+                  dimensions: { product: "row.product" },
+                  resources: { quantity: "row.quantity" },
+                },
+              },
+            ],
+            validations: [],
+          },
+          registerMovements: [
+            { kind: "AccumulationRegister", name: "InventoryBalance" },
+          ],
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+      accumulationRegisters: [
+        {
+          kind: "AccumulationRegister",
+          name: "InventoryBalance",
+          registerType: "Balance",
+          dimensions: [],
+          resources: [],
+          attributes: [],
+          recorderTypes: [{ kind: "Document", name: "SalesOrder" }],
+        },
+      ],
+    })
+    const refs = findReferences(
+      model,
+      "AccumulationRegister",
+      "InventoryBalance",
+    )
+    const movementRefs = refs.filter(
+      (r) => r.referenceKind === "postingMovement",
+    )
+    expect(movementRefs).toHaveLength(1)
+    expect(movementRefs[0].from).toMatchObject({
+      kind: "Document",
+      name: "SalesOrder",
+    })
+  })
+
+  it("finds 'postingValidation' references", () => {
+    const model = buildModel({
+      documents: [
+        {
+          kind: "Document",
+          name: "SalesOrder",
+          numberLength: 11,
+          numberType: "String",
+          posting: {
+            movements: [
+              {
+                register: {
+                  kind: "AccumulationRegister",
+                  name: "InventoryBalance",
+                },
+                movementType: "Receipt",
+                source: "tabularSection:items",
+                mappings: {
+                  dimensions: { product: "row.product" },
+                },
+              },
+            ],
+            validations: [
+              {
+                type: "NonNegativeBalance",
+                register: {
+                  kind: "AccumulationRegister",
+                  name: "InventoryBalance",
+                },
+                dimensions: ["product"],
+                resource: "quantity",
+                message: { uk: "Недостатньо" },
+              },
+            ],
+          },
+          registerMovements: [
+            { kind: "AccumulationRegister", name: "InventoryBalance" },
+          ],
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+      accumulationRegisters: [
+        {
+          kind: "AccumulationRegister",
+          name: "InventoryBalance",
+          registerType: "Balance",
+          dimensions: [],
+          resources: [],
+          attributes: [],
+          recorderTypes: [{ kind: "Document", name: "SalesOrder" }],
+        },
+      ],
+    })
+    const refs = findReferences(
+      model,
+      "AccumulationRegister",
+      "InventoryBalance",
+    )
+    const validationRefs = refs.filter(
+      (r) => r.referenceKind === "postingValidation",
+    )
+    expect(validationRefs).toHaveLength(1)
+  })
+
+  it("handles document without posting — no posting refs", () => {
+    const model = buildModel({
+      documents: [
+        {
+          kind: "Document",
+          name: "SalesOrder",
+          numberLength: 11,
+          numberType: "String",
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+      accumulationRegisters: [
+        {
+          kind: "AccumulationRegister",
+          name: "SomeRegister",
+          registerType: "Balance",
+          dimensions: [],
+          resources: [],
+          attributes: [],
+        },
+      ],
+    })
+    const refs = findReferences(
+      model,
+      "AccumulationRegister",
+      "SomeRegister",
+    )
+    const postingRefs = refs.filter(
+      (r) =>
+        r.referenceKind === "postingMovement" ||
+        r.referenceKind === "postingValidation",
+    )
+    expect(postingRefs).toHaveLength(0)
+  })
 })
 
 // ---------------------------------------------------------------------------

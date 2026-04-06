@@ -25,7 +25,7 @@ export const documentSchema = z.object({
   numberPeriodicity: z
     .enum(["None", "Year", "Quarter", "Month", "Day"])
     .default("Year"),
-  posting: z.union([z.boolean(), postingSchema]).default(true),
+  posting: postingSchema.optional(),
   registerMovements: z.array(metadataRefSchema).default([]),
 
   // Користувацькі перевизначення описів стандартних реквізитів

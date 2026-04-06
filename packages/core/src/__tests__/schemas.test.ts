@@ -566,6 +566,26 @@ describe("documentSchema — posting field", () => {
     expect(posting.movements).toEqual([])
     expect(posting.validations).toEqual([])
   })
+
+  it("rejects posting: true (boolean no longer allowed)", () => {
+    expect(() =>
+      documentSchema.parse({
+        kind: "Document",
+        name: "SalesOrder",
+        posting: true,
+      })
+    ).toThrow()
+  })
+
+  it("rejects posting: false (boolean no longer allowed)", () => {
+    expect(() =>
+      documentSchema.parse({
+        kind: "Document",
+        name: "SalesOrder",
+        posting: false,
+      })
+    ).toThrow()
+  })
 })
 
 describe("enumerationSchema", () => {

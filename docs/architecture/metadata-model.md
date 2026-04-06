@@ -105,6 +105,46 @@ Object-level reference settings звужені слабше:
 Важлива межа: traversal працює з явними persisted refs. Derived standard
 attributes не обходяться як окремі custom fields.
 
+### Posting як optional object
+
+Починаючи з поточної версії, поле `posting` у `documentSchema` визначено як
+`postingSchema.optional()`. Попередній backward-compat union
+`z.union([z.boolean(), postingSchema])` видалений.
+
+**Семантика presence/absence:**
+
+- `doc.posting !== undefined` — документ є проведеним (має декларативний
+  маппінг рухів)
+- `doc.posting === undefined` — документ не створює рухів у регістрах
+
+**Нормалізація порожнього posting:**
+
+Store (`metadata-store`) нормалізує порожній posting object
+`{ movements: [], validations: [] }` у `undefined` після операцій
+`removeMovement`, `removePostingValidation` та sync-гілки `updateObject`.
+Core schema продовжує приймати порожній object для parse (legacy JSON,
+draft-flow), але store не дозволяє йому persist.
+
+**Інваріант posting register refs ⊆ registerMovements:**
+
+Кожен `posting.movements[].register` має бути оголошений у
+`registerMovements`. Перевірка виконується у `use-model-validation.ts`
+(model validation) та `ddl-store.ts` (pre-DDL validation).
+
+**Вплив на findReferences:**
+
+`findReferences()` обходить `posting.movements[].register` (reference kind
+`postingMovement`) та `posting.validations[].register` (reference kind
+`postingValidation`). Guard `typeof obj.posting === "object"` коректно
+обробляє як наявний, так і відсутній posting.
+
+**Зв'язок з registerMovements:**
+
+`registerMovements` — lightweight декларація зв'язку документа з регістрами.
+`posting` — повний маппінг полів. Обидва поля persisted окремо.
+Автоматична синхронізація registerMovements при зміні posting не
+виконується — замість цього model validation показує warning.
+
 Джерела: [../../packages/core/src/schemas/field-type.ts](../../packages/core/src/schemas/field-type.ts),
 [../../packages/core/src/schemas/metadata-ref.ts](../../packages/core/src/schemas/metadata-ref.ts),
 [../../packages/core/src/schemas/attribute.ts](../../packages/core/src/schemas/attribute.ts),

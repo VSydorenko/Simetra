@@ -229,7 +229,6 @@ describe("Document DDL", () => {
         numberType: "String",
         autonumber: true,
         numberPeriodicity: "Year",
-        posting: true,
         registerMovements: [{ kind: "AccumulationRegister", name: "Sales" }],
         standardAttributeOverrides: {},
         attributes: [
@@ -368,7 +367,6 @@ describe("InformationRegister DDL", () => {
         numberType: "String",
         autonumber: true,
         numberPeriodicity: "None",
-        posting: false,
         registerMovements: [],
         standardAttributeOverrides: {},
         attributes: [],
@@ -810,7 +808,6 @@ describe("Cross-references DDL", () => {
         numberType: "String",
         autonumber: false,
         numberPeriodicity: "None",
-        posting: false,
         registerMovements: [],
         standardAttributeOverrides: {},
         attributes: [
