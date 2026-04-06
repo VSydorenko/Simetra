@@ -18,9 +18,9 @@ const KIND_SLUG: Record<MetadataKind, string> = {
  * Convention: https://simetra.dev/schemas/v{schemaVersion}/{kind-kebab}.schema.json
  */
 function normalizeVersion(version: string): string {
-  const [major, minor] = version.split('.')
+  const [major, minor] = version.split(".")
   // BRD §7.7: trailing .0 видаляється — "1.0" → "1", "1.1" → "1.1"
-  return !minor || minor === '0' ? major : `${major}.${minor}`
+  return !minor || minor === "0" ? major : `${major}.${minor}`
 }
 
 function buildSchemaUrl(slug: string, schemaVersion: string): string {
@@ -33,7 +33,7 @@ function buildSchemaUrl(slug: string, schemaVersion: string): string {
  */
 export function enrichSchemaUrl<T extends MetadataObject>(
   obj: T,
-  schemaVersion: string,
+  schemaVersion: string
 ): T {
   const slug = KIND_SLUG[obj.kind]
   return { ...obj, $schema: buildSchemaUrl(slug, schemaVersion) }
@@ -44,7 +44,7 @@ export function enrichSchemaUrl<T extends MetadataObject>(
  */
 export function enrichProjectSchemaUrl(
   project: Project,
-  schemaVersion: string,
+  schemaVersion: string
 ): Project {
   return { ...project, $schema: buildSchemaUrl("project", schemaVersion) }
 }
@@ -65,6 +65,7 @@ const PROJECT_KEY_ORDER = [
   "defaultLocale",
   "database",
   "generation",
+  "deployment",
 ]
 
 const DATABASE_KEY_ORDER = ["target", "schema", "namingConvention"]
@@ -73,6 +74,8 @@ const GENERATION_KEY_ORDER = [
   "enumStrategy",
   "constantsStrategy",
 ]
+const DEPLOYMENT_KEY_ORDER = ["target", "supabase"]
+const DEPLOYMENT_SUPABASE_KEY_ORDER = ["projectUrl"]
 
 // Порядок ключів для кожного типу метаданих
 const CATALOG_KEY_ORDER = [
@@ -226,6 +229,8 @@ const NESTED_OBJECT_KEY_ORDERS: Record<string, string[]> = {
   description: LOCALIZED_STRING_KEY_ORDER,
   database: DATABASE_KEY_ORDER,
   generation: GENERATION_KEY_ORDER,
+  deployment: DEPLOYMENT_KEY_ORDER,
+  supabase: DEPLOYMENT_SUPABASE_KEY_ORDER,
   ref: METADATA_REF_KEY_ORDER,
   posting: POSTING_KEY_ORDER,
   register: METADATA_REF_KEY_ORDER,

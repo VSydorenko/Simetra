@@ -21,20 +21,20 @@ Phase 2a створює SQL для структури БД, Phase 2b додає 
 
 ### Етап 1: Supabase Connection Settings
 
-- [ ] Додати в Project Settings (ObjectProperties → ProjectSettings) секцію "Deployment":
+- [Х] Додати в Project Settings (ObjectProperties → ProjectSettings) секцію "Deployment":
   - Target: dropdown (Supabase / Manual — copy SQL / None)
   - Supabase Project URL: input (`https://{ref}.supabase.co`)
   - Supabase API Key: password input (anon key)
-- [ ] Розширити `projectSchema` у `@simetra/core` — додати опціональне поле `deployment`:
+- [Х] Розширити `projectSchema` у `@simetra/core` — додати опціональне поле `deployment`:
   ```
   deployment: {
     target: "supabase" | "manual" | "none",
     supabase?: { projectUrl: string }
   }
   ```
-- [ ] API key **НЕ зберігати у файлах метаданих** — тільки в session (IndexedDB або memory)
-- [ ] Оновити серіалізацію — `deployment` у key order для project.meta.json
-- [ ] UI: секція в ProjectSettings з conditional fields
+- [Х] API key **НЕ зберігати у файлах метаданих** — тільки в session (IndexedDB або memory)
+- [Х] Оновити серіалізацію — `deployment` у key order для project.meta.json
+- [Х] UI: секція в ProjectSettings з conditional fields
 
 ### Етап 2: Apply flow через Supabase Edge Function
 

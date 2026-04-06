@@ -49,63 +49,70 @@ export function PropertiesPanel() {
   // Вибрано поле — показати властивості поля
   if (selectedField) {
     return (
-      <ScrollArea className="h-full">
-        <div className="py-1">
-          <div className="border-b border-border px-3 py-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              {t("properties.title")} — {selectedField.fieldName}
-            </span>
-          </div>
-          <FieldProperties selection={selectedField} />
+      <div className="flex h-full flex-col">
+        <div className="border-b border-border px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("properties.title")} — {selectedField.fieldName}
+          </span>
         </div>
-      </ScrollArea>
+        <ScrollArea className="flex-1">
+          <div className="py-1">
+            <FieldProperties selection={selectedField} />
+          </div>
+        </ScrollArea>
+      </div>
     )
   }
 
   if (resolvedTabularSectionSelection) {
     return (
-      <ScrollArea className="h-full">
-        <div className="py-1">
-          <div className="border-b border-border px-3 py-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              {t("properties.title")} —
-              {" "}
-              {resolvedTabularSectionSelection.tabularSectionName}
-            </span>
-          </div>
-          <TabularSectionProperties selection={resolvedTabularSectionSelection} />
+      <div className="flex h-full flex-col">
+        <div className="border-b border-border px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("properties.title")} —{" "}
+            {resolvedTabularSectionSelection.tabularSectionName}
+          </span>
         </div>
-      </ScrollArea>
+        <ScrollArea className="flex-1">
+          <div className="py-1">
+            <TabularSectionProperties
+              selection={resolvedTabularSectionSelection}
+            />
+          </div>
+        </ScrollArea>
+      </div>
     )
   }
 
   // Є активний обʼєкт — показати властивості обʼєкта
   if (activeObjectRef) {
     return (
-      <ScrollArea className="h-full">
-        <div className="py-1">
-          <div className="border-b border-border px-3 py-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              {t("properties.title")} — {activeObjectRef.name}
-            </span>
-          </div>
-          <ObjectProperties objectRef={activeObjectRef} />
+      <div className="flex h-full flex-col">
+        <div className="border-b border-border px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            {t("properties.title")} — {activeObjectRef.name}
+          </span>
         </div>
-      </ScrollArea>
+        <ScrollArea className="flex-1">
+          <div className="py-1">
+            <ObjectProperties objectRef={activeObjectRef} />
+          </div>
+        </ScrollArea>
+      </div>
     )
   }
 
   // Нічого не вибрано — показати налаштування проєкту
   return (
-    <ScrollArea className="h-full">
-      <div className="py-1">
-        <div className="border-b border-border px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground">
-            {t("properties.projectSettings")}
-          </span>
-        </div>
-        <ProjectSettings />
+    <div className="flex h-full flex-col">
+      <div className="border-b border-border px-3 py-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          {t("properties.projectSettings")}
+        </span>
       </div>
-    </ScrollArea>
+      <ScrollArea className="flex-1">
+        <ProjectSettings />
+      </ScrollArea>
+    </div>
   )
 }

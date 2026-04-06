@@ -1,4 +1,4 @@
-import { useCallback } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Accordion,
@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { useMetadataStore } from "@/stores/metadata-store"
+import { saveCredential, loadCredential, clearCredential } from "@/storage/session-db"
 import type { Project } from "@simetra/core"
 
 function SettingRow({
@@ -38,12 +39,40 @@ export function ProjectSettings() {
   const project = useMetadataStore((s) => s.model.project)
   const updateProject = useMetadataStore((s) => s.updateProject)
 
+  // API key — зберігається в IndexedDB, не у файлах проєкту.
+  // Credential ID прив'язаний до URL Supabase-проєкту, а не до назви метаданих:
+  // якщо URL відсутній — fallback на project.name (до першого збереження URL).
+  const supabaseProjectUrl = project.deployment?.supabase?.projectUrl ?? ""
+  const credentialId = supabaseProjectUrl
+    ? `supabase-api-key:${supabaseProjectUrl}`
+    : `supabase-api-key:name:${project.name}`
+
+  const [supabaseApiKey, setSupabaseApiKey] = useState("")
+
+  useEffect(() => {
+    loadCredential(credentialId).then((v) => setSupabaseApiKey(v ?? ""))
+  }, [credentialId])
+
+  const handleApiKeyChange = useCallback(
+    async (value: string) => {
+      setSupabaseApiKey(value)
+      if (value) {
+        await saveCredential(credentialId, value)
+      } else {
+        await clearCredential(credentialId)
+      }
+    },
+    [credentialId]
+  )
+
   const handleUpdate = useCallback(
     (updates: Partial<Project>) => {
       updateProject(updates)
     },
     [updateProject]
   )
+
+  const deploymentTarget = project.deployment?.target ?? "none"
 
   return (
     <Accordion
@@ -218,6 +247,82 @@ export function ProjectSettings() {
               </SelectContent>
             </Select>
           </SettingRow>
+        </AccordionContent>
+      </AccordionItem>
+
+      {/* Deployment */}
+      <AccordionItem value="deployment">
+        <AccordionTrigger className="px-3 py-2 text-xs font-medium">
+          {t("properties.deployment.title")}
+        </AccordionTrigger>
+        <AccordionContent className="space-y-2 px-3 pb-3">
+          <SettingRow label={t("properties.deployment.target")}>
+            <Select
+              value={deploymentTarget}
+              onValueChange={(v) => {
+                const newTarget = v as "supabase" | "manual" | "none"
+                if (newTarget !== "supabase") {
+                  // Очищаємо supabase config — не залишаємо прихованих даних
+                  handleUpdate({ deployment: { target: newTarget } })
+                  void clearCredential(credentialId)
+                  setSupabaseApiKey("")
+                } else {
+                  handleUpdate({
+                    deployment: { ...project.deployment, target: newTarget },
+                  })
+                }
+              }}
+            >
+              <SelectTrigger className="h-7 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" className="text-xs">
+                  {t("properties.deployment.targetNone")}
+                </SelectItem>
+                <SelectItem value="supabase" className="text-xs">
+                  {t("properties.deployment.targetSupabase")}
+                </SelectItem>
+                <SelectItem value="manual" className="text-xs">
+                  {t("properties.deployment.targetManual")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          {deploymentTarget === "supabase" && (
+            <>
+              <SettingRow label={t("properties.deployment.supabaseProjectUrl")}>
+                <Input
+                  className="h-7 text-xs"
+                  placeholder={t("properties.deployment.supabaseUrlPlaceholder")}
+                  value={project.deployment?.supabase?.projectUrl ?? ""}
+                  onChange={(e) =>
+                    handleUpdate({
+                      deployment: {
+                        ...project.deployment,
+                        target: "supabase",
+                        supabase: { projectUrl: e.target.value },
+                      },
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow label={t("properties.deployment.supabaseApiKey")}>
+                <div className="space-y-1">
+                  <Input
+                    className="h-7 text-xs"
+                    type="password"
+                    value={supabaseApiKey}
+                    onChange={(e) => handleApiKeyChange(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    {t("properties.deployment.supabaseApiKeyHint")}
+                  </p>
+                </div>
+              </SettingRow>
+            </>
+          )}
         </AccordionContent>
       </AccordionItem>
     </Accordion>

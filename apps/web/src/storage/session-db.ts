@@ -16,6 +16,12 @@ interface DraftData {
   savedAt: number
 }
 
+// Захищені облікові дані — зберігаються окремо від проєктних файлів
+interface CredentialData {
+  value: string
+  savedAt: number
+}
+
 interface SimetraSessionDB {
   session: {
     key: string
@@ -25,10 +31,14 @@ interface SimetraSessionDB {
     key: string
     value: DraftData
   }
+  credentials: {
+    key: string
+    value: CredentialData
+  }
 }
 
 const DB_NAME = "simetra-session"
-const DB_VERSION = 1
+const DB_VERSION = 2
 const SESSION_KEY = "current"
 const DRAFT_KEY = "current"
 
@@ -50,6 +60,9 @@ function getDb(): Promise<IDBPDatabase<SimetraSessionDB>> | null {
         if (!db.objectStoreNames.contains("drafts")) {
           db.createObjectStore("drafts")
         }
+        if (!db.objectStoreNames.contains("credentials")) {
+          db.createObjectStore("credentials")
+        }
       },
     })
   }
@@ -61,7 +74,7 @@ export async function saveSession(
   handle: FileSystemDirectoryHandle | null,
   model: ProjectModel,
   version: number,
-  origin?: string,
+  origin?: string
 ): Promise<void> {
   try {
     const dbP = getDb()
@@ -151,6 +164,43 @@ export async function clearDraft(): Promise<void> {
     if (!dbP) return
     const db = await dbP
     await db.delete("drafts", DRAFT_KEY)
+  } catch {
+    // Graceful degradation
+  }
+}
+
+/** Зберегти облікові дані за ідентифікатором (API key тощо) */
+export async function saveCredential(id: string, value: string): Promise<void> {
+  try {
+    const dbP = getDb()
+    if (!dbP) return
+    const db = await dbP
+    await db.put("credentials", { value, savedAt: Date.now() }, id)
+  } catch {
+    // Graceful degradation
+  }
+}
+
+/** Завантажити облікові дані за ідентифікатором або null */
+export async function loadCredential(id: string): Promise<string | null> {
+  try {
+    const dbP = getDb()
+    if (!dbP) return null
+    const db = await dbP
+    const data = await db.get("credentials", id)
+    return data?.value ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Видалити облікові дані за ідентифікатором */
+export async function clearCredential(id: string): Promise<void> {
+  try {
+    const dbP = getDb()
+    if (!dbP) return
+    const db = await dbP
+    await db.delete("credentials", id)
   } catch {
     // Graceful degradation
   }
