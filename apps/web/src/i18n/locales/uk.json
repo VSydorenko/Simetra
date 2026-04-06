@@ -162,6 +162,8 @@
       "targetManual": "Ручне (копіювати SQL)",
       "supabaseProjectRef": "Project Ref (ID)",
       "supabaseProjectRefPlaceholder": "напр. abcdefghijklmnopqrst",
+      "supabaseProjectRefHint": "Вкажіть ідентифікатор проєкту з Supabase Dashboard або вставте повний URL проєкту",
+      "supabaseProjectRefRequired": "Project Ref є обов'язковим, коли ціль деплою — Supabase",
       "supabaseDerivedUrl": "URL: https://{{ref}}.supabase.co",
       "supabaseAccessToken": "Access Token (PAT)",
       "supabaseAccessTokenHint": "Створити: Dashboard → Account → Access Tokens. Токен зберігається локально.",

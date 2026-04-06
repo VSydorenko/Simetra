@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next"
+import { Button } from "@workspace/ui/components/button"
 import { TabBar } from "../window-manager/tab-bar"
 import { FloatingWindowContainer } from "../window-manager/floating-window-container"
 import { Taskbar } from "../window-manager/taskbar"
@@ -16,6 +17,9 @@ export function EditorPanel() {
   const { openTabs, activeTabId, setActiveSection } = useUiStore()
   const sessionRestoreStatus = useProjectStore((s) => s.sessionRestoreStatus)
   const isNewProject = useProjectStore((s) => s.isNewProject)
+  const lastError = useProjectStore((s) => s.lastError)
+  const lastErrorContext = useProjectStore((s) => s.lastErrorContext)
+  const setError = useProjectStore((s) => s.setError)
 
   const activeTab = activeTabId
     ? openTabs.find((tab) => tab.id === activeTabId)
@@ -41,6 +45,24 @@ export function EditorPanel() {
 
   const showRecoveryBanner = sessionRestoreStatus === "recovery-available"
 
+  const errorMessage = (() => {
+    if (!lastError) return null
+    switch (lastErrorContext) {
+      case "save":
+        return t("storage.errorSave", { error: lastError })
+      case "open":
+        return t("storage.errorOpen", { error: lastError })
+      case "export":
+        return t("storage.errorExport", { error: lastError })
+      case "import":
+        return t("storage.errorImport", { error: lastError })
+      case "restore":
+        return t("session.restoreError", { error: lastError })
+      default:
+        return lastError
+    }
+  })()
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       {/* Tab Bar */}
@@ -48,6 +70,20 @@ export function EditorPanel() {
 
       {/* Recovery Banner — inline notification поверх editor */}
       {showRecoveryBanner && <RecoveryBanner />}
+
+      {errorMessage && (
+        <div className="flex items-start gap-3 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="min-w-0 flex-1">{errorMessage}</div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setError(null)}
+          >
+            {t("action.close")}
+          </Button>
+        </div>
+      )}
 
       {/* Контент активної вкладки */}
       <div className="flex-1 overflow-hidden">

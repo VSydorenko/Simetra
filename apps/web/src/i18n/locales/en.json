@@ -162,6 +162,8 @@
       "targetManual": "Manual (copy SQL)",
       "supabaseProjectRef": "Project Ref (ID)",
       "supabaseProjectRefPlaceholder": "e.g. abcdefghijklmnopqrst",
+      "supabaseProjectRefHint": "Enter the project identifier from the Supabase Dashboard or paste the full project URL",
+      "supabaseProjectRefRequired": "Project Ref is required when the deployment target is Supabase",
       "supabaseDerivedUrl": "URL: https://{{ref}}.supabase.co",
       "supabaseAccessToken": "Access Token (PAT)",
       "supabaseAccessTokenHint": "Create: Dashboard \u2192 Account \u2192 Access Tokens. Token is stored locally.",

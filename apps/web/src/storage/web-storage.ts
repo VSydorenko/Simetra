@@ -286,12 +286,15 @@ export function buildProjectModel(parsed: ParsedFiles): {
     if (result.success) {
       project = result.data
     } else {
+      const errors = result.error.issues.map(
+        (i) => `${i.path.join(".")}: ${i.message}`
+      )
       warnings.push({
         filePath: "project.meta.json",
-        errors: result.error.issues.map(
-          (i) => `${i.path.join(".")}: ${i.message}`
-        ),
+        errors,
       })
+
+      throw new Error(`project.meta.json is invalid: ${errors.join("; ")}`)
     }
   }
 

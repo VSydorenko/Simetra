@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
+import { normalizeSupabaseProjectRef } from "@/lib/normalize-supabase-project-ref"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { saveCredential, loadCredential, clearCredential } from "@/storage/session-db"
 import type { Project } from "@simetra/core"
@@ -80,6 +81,7 @@ export function ProjectSettings() {
 
   const handleProjectRefChange = useCallback(
     (value: string) => {
+      const normalizedValue = normalizeSupabaseProjectRef(value)
       // Скидаємо token при зміні ref — новий ref = новий credential
       setAccessToken("")
       setTokenWarning("")
@@ -87,7 +89,7 @@ export function ProjectSettings() {
         deployment: {
           ...project.deployment,
           target: "supabase",
-          supabase: { projectRef: value },
+          supabase: { projectRef: normalizedValue },
         },
       })
     },
@@ -114,6 +116,8 @@ export function ProjectSettings() {
   )
 
   const deploymentTarget = project.deployment?.target ?? "none"
+  const isProjectRefRequired =
+    deploymentTarget === "supabase" && projectRef.trim().length === 0
 
   return (
     <Accordion
@@ -336,21 +340,36 @@ export function ProjectSettings() {
 
           {deploymentTarget === "supabase" && (
             <>
-              <SettingRow label={t("properties.deployment.supabaseProjectRef")}>
+              <SettingRow
+                label={`${t("properties.deployment.supabaseProjectRef")} *`}
+              >
                 <div className="space-y-1">
                   <Input
-                    className="h-7 text-xs"
+                    aria-invalid={isProjectRefRequired}
+                    className={
+                      isProjectRefRequired
+                        ? "h-7 border-destructive text-xs"
+                        : "h-7 text-xs"
+                    }
                     placeholder={t(
                       "properties.deployment.supabaseProjectRefPlaceholder",
                     )}
                     value={projectRef}
                     onChange={(e) => handleProjectRefChange(e.target.value)}
                   />
-                  {projectRef && (
+                  {isProjectRefRequired ? (
+                    <p className="text-[10px] text-destructive">
+                      {t("properties.deployment.supabaseProjectRefRequired")}
+                    </p>
+                  ) : projectRef ? (
                     <p className="text-[10px] text-muted-foreground">
                       {t("properties.deployment.supabaseDerivedUrl", {
                         ref: projectRef,
                       })}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      {t("properties.deployment.supabaseProjectRefHint")}
                     </p>
                   )}
                 </div>

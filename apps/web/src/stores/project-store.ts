@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { projectSchema } from "@simetra/core"
 import { useMetadataStore } from "./metadata-store"
 import { WebStorage } from "@/storage/web-storage"
 import type { FileValidationError } from "@/storage/storage-provider"
@@ -32,6 +33,14 @@ export type ProjectOrigin =
   | "draft-recovery"
   | null
 
+export type ProjectErrorContext =
+  | "save"
+  | "open"
+  | "export"
+  | "import"
+  | "restore"
+  | null
+
 export interface ProjectState {
   // Шлях або handle до директорії проєкту (File System Access API)
   projectHandle: FileSystemDirectoryHandle | null
@@ -50,6 +59,7 @@ export interface ProjectState {
   isLoading: boolean
   // Помилка останньої операції
   lastError: string | null
+  lastErrorContext: ProjectErrorContext
   // Попередження при відкритті проєкту (невалідні файли)
   openWarnings: FileValidationError[]
   // Статус відновлення сесії
@@ -76,7 +86,7 @@ export interface ProjectActions {
   /** Встановити стан збереження */
   setSaving: (saving: boolean) => void
   /** Встановити помилку */
-  setError: (error: string | null) => void
+  setError: (error: string | null, context?: ProjectErrorContext) => void
 
   /** Зберегти проєкт (File System Access API або ZIP fallback) */
   saveProject: () => Promise<void>
@@ -92,6 +102,17 @@ export interface ProjectActions {
   requestDirectoryPermission: () => Promise<void>
   /** Відновити draft з IndexedDB (crash recovery) */
   restoreDraft: () => Promise<void>
+}
+
+function formatProjectIssues(
+  issues: { path: PropertyKey[]; message: string }[],
+): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "project"
+      return `${path}: ${issue.message}`
+    })
+    .join("; ")
 }
 
 export type ProjectStore = ProjectState & ProjectActions
@@ -113,6 +134,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
     isSaving: false,
     isLoading: false,
     lastError: null,
+    lastErrorContext: null,
     openWarnings: [],
     sessionRestoreStatus: "idle" as SessionRestoreStatus,
     projectOrigin: null as ProjectOrigin,
@@ -136,6 +158,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         isSaving: false,
         isLoading: false,
         lastError: null,
+        lastErrorContext: null,
         openWarnings: [],
         sessionRestoreStatus: "restored",
         projectOrigin: "new",
@@ -181,15 +204,15 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       set({ isSaving: saving })
     },
 
-    setError: (error) => {
-      set({ lastError: error })
+    setError: (error, context = null) => {
+      set({ lastError: error, lastErrorContext: context })
     },
 
     saveProject: async () => {
       const { isSaving, projectHandle } = get()
       if (isSaving) return
 
-      set({ isSaving: true, lastError: null })
+      set({ isSaving: true, lastError: null, lastErrorContext: null })
       try {
         // Зафіксувати model і version з одного snapshot до await
         const {
@@ -197,6 +220,10 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
           version: snapshotVersion,
           objectVersions: snapshotObjVersions,
         } = useMetadataStore.getState()
+        const projectValidation = projectSchema.safeParse(model.project)
+        if (!projectValidation.success) {
+          throw new Error(formatProjectIssues(projectValidation.error.issues))
+        }
         const result = await storage.saveProject(
           model,
           projectHandle ?? undefined
@@ -217,6 +244,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         set({
           isSaving: false,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "save",
         })
       }
     },
@@ -225,7 +253,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       const { isLoading } = get()
       if (isLoading) return
 
-      set({ isLoading: true, lastError: null })
+      set({ isLoading: true, lastError: null, lastErrorContext: null })
       try {
         const result = await storage.openProject()
         pauseDraftSync()
@@ -259,6 +287,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         set({
           isLoading: false,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "open",
         })
       }
     },
@@ -267,7 +296,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       const { isSaving } = get()
       if (isSaving) return
 
-      set({ isSaving: true, lastError: null })
+      set({ isSaving: true, lastError: null, lastErrorContext: null })
       try {
         const model = useMetadataStore.getState().model
         await storage.exportProject(model)
@@ -276,6 +305,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         set({
           isSaving: false,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "export",
         })
       }
     },
@@ -284,7 +314,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
       const { isLoading } = get()
       if (isLoading) return
 
-      set({ isLoading: true, lastError: null })
+      set({ isLoading: true, lastError: null, lastErrorContext: null })
       try {
         const result = await storage.importProject()
         pauseDraftSync()
@@ -315,12 +345,17 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         set({
           isLoading: false,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "import",
         })
       }
     },
 
     restoreSession: async () => {
-      set({ sessionRestoreStatus: "restoring", lastError: null })
+      set({
+        sessionRestoreStatus: "restoring",
+        lastError: null,
+        lastErrorContext: null,
+      })
       try {
         const session = await loadSession()
         if (!session) {
@@ -431,12 +466,17 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
           sessionRestoreStatus: "failed",
           pendingDirectoryName: null,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "restore",
         })
       }
     },
 
     requestDirectoryPermission: async () => {
-      set({ sessionRestoreStatus: "restoring", lastError: null })
+      set({
+        sessionRestoreStatus: "restoring",
+        lastError: null,
+        lastErrorContext: null,
+      })
       try {
         const session = await loadSession()
         if (!session?.projectHandle) {
@@ -499,12 +539,13 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
           sessionRestoreStatus: "failed",
           pendingDirectoryName: null,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "restore",
         })
       }
     },
 
     restoreDraft: async () => {
-      set({ isLoading: true, lastError: null })
+      set({ isLoading: true, lastError: null, lastErrorContext: null })
       try {
         const draft = await loadDraft()
         if (!draft) {
@@ -533,6 +574,7 @@ export const useProjectStore = create<ProjectStore>()((set, get) => {
         set({
           isLoading: false,
           lastError: e instanceof Error ? e.message : String(e),
+          lastErrorContext: "restore",
         })
       }
     },
