@@ -49,13 +49,13 @@ export function PropertiesPanel() {
   // Вибрано поле — показати властивості поля
   if (selectedField) {
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <div className="border-b border-border px-3 py-2">
           <span className="text-xs font-medium text-muted-foreground">
             {t("properties.title")} — {selectedField.fieldName}
           </span>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="py-1">
             <FieldProperties selection={selectedField} />
           </div>
@@ -66,14 +66,14 @@ export function PropertiesPanel() {
 
   if (resolvedTabularSectionSelection) {
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <div className="border-b border-border px-3 py-2">
           <span className="text-xs font-medium text-muted-foreground">
             {t("properties.title")} —{" "}
             {resolvedTabularSectionSelection.tabularSectionName}
           </span>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="py-1">
             <TabularSectionProperties
               selection={resolvedTabularSectionSelection}
@@ -87,13 +87,13 @@ export function PropertiesPanel() {
   // Є активний обʼєкт — показати властивості обʼєкта
   if (activeObjectRef) {
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <div className="border-b border-border px-3 py-2">
           <span className="text-xs font-medium text-muted-foreground">
             {t("properties.title")} — {activeObjectRef.name}
           </span>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="py-1">
             <ObjectProperties objectRef={activeObjectRef} />
           </div>
@@ -104,14 +104,16 @@ export function PropertiesPanel() {
 
   // Нічого не вибрано — показати налаштування проєкту
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-border px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">
           {t("properties.projectSettings")}
         </span>
       </div>
-      <ScrollArea className="flex-1">
-        <ProjectSettings />
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="py-1">
+          <ProjectSettings />
+        </div>
       </ScrollArea>
     </div>
   )
