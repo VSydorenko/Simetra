@@ -36,14 +36,10 @@ export const projectSchema = z.object({
       target: z.enum(["supabase", "manual", "none"]).default("none"),
       supabase: z
         .object({
-          projectRef: z.string().min(20),
+          projectRef: z.string().optional(),
         })
         .optional(),
     })
-    .refine(
-      (d) => d.target !== "supabase" || d.supabase?.projectRef,
-      { message: "supabase.projectRef is required when target is 'supabase'" },
-    )
     .optional(),
 })
 

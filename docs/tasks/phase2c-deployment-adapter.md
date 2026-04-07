@@ -74,41 +74,41 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 
 #### Видалити browser-side Management API код
 
-- [ ] Видалити `apps/web/src/lib/supabase-management.ts` — browser-side Management API helper
-- [ ] Видалити виклик `testSupabaseConnection()` з `project-settings.tsx`
-- [ ] Видалити все, що стосується Test Connection: кнопку, стани checking/success/error, handlers
-- [ ] Видалити PAT (Access Token) input з Project Settings UI
-- [ ] Видалити збереження/завантаження credentials у IndexedDB для PAT
-- [ ] Прибрати `credentialId`, `accessToken` state, `saveCredential`/`loadCredential`/`clearCredential` виклики
-- [ ] Видалити PAT format warning (`sbp_` prefix check)
+- [X] Видалити `apps/web/src/lib/supabase-management.ts` — browser-side Management API helper
+- [X] Видалити виклик `testSupabaseConnection()` з `project-settings.tsx`
+- [X] Видалити все, що стосується Test Connection: кнопку, стани checking/success/error, handlers
+- [X] Видалити PAT (Access Token) input з Project Settings UI
+- [X] Видалити збереження/завантаження credentials у IndexedDB для PAT
+- [X] Прибрати `credentialId`, `accessToken` state, `saveCredential`/`loadCredential`/`clearCredential` виклики
+- [X] Видалити PAT format warning (`sbp_` prefix check)
 
 #### Спростити deployment schema
 
-- [ ] У `projectSchema` (`packages/core/src/schemas/project.ts`) прибрати `.refine()` що вимагає `projectRef` при `target === "supabase"` — тепер `projectRef` опціональний для всіх targets (використовується лише як hint для deep links)
-- [ ] Зберегти `supabase.projectRef` у схемі — він потрібен для формування deep links на Supabase Dashboard і SQL Editor
+- [X] У `projectSchema` (`packages/core/src/schemas/project.ts`) прибрати `.refine()` що вимагає `projectRef` при `target === "supabase"` — тепер `projectRef` опціональний для всіх targets (використовується лише як hint для deep links)
+- [X] Зберегти `supabase.projectRef` у схемі — він потрібен для формування deep links на Supabase Dashboard і SQL Editor
 
 #### Оновити Project Settings UI
 
-- [ ] Секція Deployment залишається з target selector: `supabase` | `manual` | `none`
-- [ ] При `target: "supabase"`:
-  - [ ] Project Ref input — опціональний, використовується для deep links
-  - [ ] Derived URL hint: `https://{ref}.supabase.co`
-  - [ ] Link "Open SQL Editor" → `https://supabase.com/dashboard/project/{ref}/sql/new` (disabled без ref)
-  - [ ] Link "Open Table Editor" → `https://supabase.com/dashboard/project/{ref}/editor` (disabled без ref)
-  - [ ] Hint text: "Згенерований SQL можна застосувати через SQL Editor у Supabase Dashboard або через CLI: `simetra apply`"
-- [ ] При `target: "manual"`:
-  - [ ] Hint: "Скопіюйте згенерований SQL і застосуйте вручну через psql, pgAdmin або інший інструмент"
-- [ ] При `target: "none"`:
-  - [ ] Без додаткових полів
+- [X] Секція Deployment залишається з target selector: `supabase` | `manual` | `none`
+- [X] При `target: "supabase"`:
+  - [X] Project Ref input — опціональний, використовується для deep links
+  - [X] Derived URL hint: `https://{ref}.supabase.co`
+  - [X] Link "Open SQL Editor" → `https://supabase.com/dashboard/project/{ref}/sql/new` (disabled без ref)
+  - [X] Link "Open Table Editor" → `https://supabase.com/dashboard/project/{ref}/editor` (disabled без ref)
+  - [X] Hint text: "Згенерований SQL можна застосувати через SQL Editor у Supabase Dashboard або через CLI: `simetra apply`"
+- [X] При `target: "manual"`:
+  - [X] Hint: "Скопіюйте згенерований SQL і застосуйте вручну через psql, pgAdmin або інший інструмент"
+- [X] При `target: "none"`:
+  - [X] Без додаткових полів
 
 #### Очистити i18n
 
-- [ ] Видалити ключі, що стосуються PAT і Test Connection:
+- [X] Видалити ключі, що стосуються PAT і Test Connection:
   - `supabaseAccessToken`, `supabaseAccessTokenHint`, `supabaseAccessTokenWarning`, `supabasePatFormatWarning`
   - `credentialSaving`, `credentialSaved`, `credentialCleared`, `credentialSaveError`
   - `connectionCheck`, `connectionCheckAction`, `connectionChecking`, `connectionCheckHint`
   - `connectionSuccess`, `connectionSuccessWithName`, `connectionError`, `connectionStatusUnknown`
-- [ ] Додати нові ключі:
+- [X] Додати нові ключі:
   - `supabaseOpenSqlEditor` — "Відкрити SQL Editor"
   - `supabaseOpenTableEditor` — "Відкрити Table Editor"
   - `supabaseApplyHint` — hint про способи apply
@@ -117,13 +117,13 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 #### Міграція існуючих даних
 
 - [ ] Якщо у `project.meta.json` є стара структура `supabase.projectUrl` — витягнути ref із URL при відкритті
-- [ ] IndexedDB: видалити всі credentials із ключем `supabase-access-token:*` і `supabase-api-key:*` — вони більше не потрібні
+- [X] IndexedDB: видалити всі credentials із ключем `supabase-access-token:*` і `supabase-api-key:*` — вони більше не потрібні
 
 #### Тести
 
-- [ ] Core: `deployment.target` валідація без `.refine()` для projectRef
+- [X] Core: `deployment.target` валідація без `.refine()` для projectRef
 - [ ] UI: Project Settings рендерить правильні поля для кожного target
-- [ ] Переконатися, що `supabase-management.ts` більше не імпортується ніде
+- [X] Переконатися, що `supabase-management.ts` більше не імпортується ніде
 
 ### Етап 3: SQL Preview UX для Manual Apply
 

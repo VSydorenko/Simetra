@@ -97,37 +97,24 @@ describe("projectSchema", () => {
     expect(result.deployment?.supabase).toBeUndefined()
   })
 
-  it("rejects supabase target without projectRef", () => {
-    expect(() =>
-      projectSchema.parse({
-        name: "BadApp",
-        deployment: { target: "supabase" },
-      }),
-    ).toThrow()
+  it("accepts supabase target without projectRef", () => {
+    const result = projectSchema.parse({
+      name: "NoRefApp",
+      deployment: { target: "supabase" },
+    })
+    expect(result.deployment?.target).toBe("supabase")
+    expect(result.deployment?.supabase).toBeUndefined()
   })
 
-  it("rejects supabase target with empty projectRef", () => {
-    expect(() =>
-      projectSchema.parse({
-        name: "BadApp",
-        deployment: {
-          target: "supabase",
-          supabase: { projectRef: "" },
-        },
-      }),
-    ).toThrow()
-  })
-
-  it("rejects supabase target with too short projectRef", () => {
-    expect(() =>
-      projectSchema.parse({
-        name: "BadApp",
-        deployment: {
-          target: "supabase",
-          supabase: { projectRef: "abc" },
-        },
-      }),
-    ).toThrow()
+  it("accepts supabase target with optional projectRef", () => {
+    const result = projectSchema.parse({
+      name: "OptionalRefApp",
+      deployment: {
+        target: "supabase",
+        supabase: { projectRef: "abc" },
+      },
+    })
+    expect(result.deployment?.supabase?.projectRef).toBe("abc")
   })
 
   it("accepts none target without supabase block", () => {

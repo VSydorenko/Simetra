@@ -113,7 +113,7 @@ describe("parseFileStructure: constants", () => {
     expect(model.constants).toHaveLength(2)
   })
 
-  it("throws detailed error for invalid project settings", () => {
+  it("accepts project with supabase target without projectRef", () => {
     const files = makeConstantsFiles(
       JSON.stringify({ constants: [VALID_CONSTANT_1] }),
       JSON.stringify({
@@ -124,9 +124,8 @@ describe("parseFileStructure: constants", () => {
     )
 
     const { parsed } = parseFileStructure(files)
+    const { model } = buildProjectModel(parsed)
 
-    expect(() => buildProjectModel(parsed)).toThrow(
-      /project\.meta\.json is invalid: deployment: supabase\.projectRef is required when target is 'supabase'/,
-    )
+    expect(model.project.deployment?.target).toBe("supabase")
   })
 })

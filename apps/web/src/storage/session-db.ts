@@ -169,46 +169,27 @@ export async function clearDraft(): Promise<void> {
   }
 }
 
-/** Зберегти облікові дані за ідентифікатором (API key тощо) */
-export async function saveCredential(
-  id: string,
-  value: string,
-): Promise<boolean> {
+/** Legacy cleanup: видалити Supabase PAT/API key credentials, які більше не зберігаються в SPA */
+const LEGACY_CREDENTIAL_PREFIXES = [
+  "supabase-access-token:",
+  "supabase-api-key:",
+]
+
+export async function clearLegacyCredentials(): Promise<void> {
   try {
     const dbP = getDb()
-    if (!dbP) return false
+    if (!dbP) return
     const db = await dbP
-    await db.put("credentials", { value, savedAt: Date.now() }, id)
-    return true
+    const allKeys = await db.getAllKeys("credentials")
+    for (const key of allKeys) {
+      if (
+        typeof key === "string" &&
+        LEGACY_CREDENTIAL_PREFIXES.some((p) => key.startsWith(p))
+      ) {
+        await db.delete("credentials", key)
+      }
+    }
   } catch {
     // Graceful degradation
-    return false
-  }
-}
-
-/** Завантажити облікові дані за ідентифікатором або null */
-export async function loadCredential(id: string): Promise<string | null> {
-  try {
-    const dbP = getDb()
-    if (!dbP) return null
-    const db = await dbP
-    const data = await db.get("credentials", id)
-    return data?.value ?? null
-  } catch {
-    return null
-  }
-}
-
-/** Видалити облікові дані за ідентифікатором */
-export async function clearCredential(id: string): Promise<boolean> {
-  try {
-    const dbP = getDb()
-    if (!dbP) return false
-    const db = await dbP
-    await db.delete("credentials", id)
-    return true
-  } catch {
-    // Graceful degradation
-    return false
   }
 }
