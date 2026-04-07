@@ -189,17 +189,17 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 
 > Порівняння поточних метаданих з раніше застосованим станом для генерації ALTER TABLE міграцій.
 
-- [ ] Schema snapshot: зберігати "applied state" як JSON (які таблиці/колонки створені)
-- [ ] Зберігання snapshot у `metadata/.simetra/applied-schema.json` (gitignored)
-- [ ] При повторній генерації: порівняти new DDL vs snapshot → показати diff
-- [ ] Diff categories: Added tables, Added columns, Modified columns, Dropped columns
-- [ ] Генерація ALTER TABLE замість CREATE TABLE для існуючих об'єктів
+- [Х] Schema snapshot: зберігати "applied state" як JSON (які таблиці/колонки створені)
+- [Х] Зберігання snapshot у `metadata/.simetra/applied-schema.json` (gitignored)
+- [Х] При повторній генерації: порівняти new DDL vs snapshot → показати diff
+- [Х] Diff categories: Added tables, Added columns, Modified columns, Dropped columns
+- [Х] Генерація ALTER TABLE замість CREATE TABLE для існуючих об'єктів
 - [ ] Preview diff перед apply (і в SPA SQL Preview, і в CLI `--dry-run`)
-- [ ] Destructive changes (DROP) — потребують explicit confirmation:
-  - В SPA: діалог з переліком destructive changes
-  - В CLI: `--allow-destructive` flag, без нього — abort з переліком
-- [ ] CLI: `simetra apply` використовує diff якщо snapshot існує, повний DDL якщо ні
-- [ ] **Тести:**
+- [Х] Destructive changes (DROP) — потребують explicit confirmation:
+  - [ ] В SPA: діалог з переліком destructive changes
+  - [Х] В CLI: `--allow-destructive` flag, без нього — abort з переліком
+- [Х] CLI: `simetra apply` використовує diff якщо snapshot існує, повний DDL якщо ні
+- [Х] **Тести:**
   - Snapshot create → modify metadata → diff → correct ALTER TABLE
   - Add column → ALTER TABLE ADD COLUMN
   - Remove column → warning + DROP COLUMN з confirmation

@@ -58,3 +58,21 @@ export class PostgresGenerator implements MetadataGenerator {
     return generateProjectDDL(project, opts)
   }
 }
+
+// Schema diff engine
+export {
+  buildSnapshot,
+  type SchemaSnapshot,
+  type SnapshotColumn,
+  type SnapshotTable,
+  type SnapshotEnum,
+  type SnapshotIndex,
+} from './schema-snapshot'
+export {
+  computeDiff,
+  isDestructiveChange,
+  formatDiffSummary,
+  type SchemaDiff,
+  type ColumnChange,
+} from './schema-diff'
+export { generateMigrationSQL } from './generate-migration'

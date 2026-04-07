@@ -30,3 +30,6 @@ npm-debug.log*
 *.pem
 temp
 .vscode/mcp.json
+
+# Simetra schema snapshots
+.simetra/
