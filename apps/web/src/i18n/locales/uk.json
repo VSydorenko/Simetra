@@ -395,6 +395,12 @@
     "warningCount_few": "{{count}} попередження",
     "warningCount_many": "{{count}} попереджень",
     "copied": "Скопійовано",
+    "copiedToast": "SQL скопійовано. Вставте у SQL Editor для застосування",
+    "copyError": "Не вдалося скопіювати в буфер обміну",
+    "openSupabaseSqlEditor": "Відкрити SQL Editor (Supabase)",
+    "tablesCount_one": "{{count}} таблиця",
+    "tablesCount_few": "{{count}} таблиці",
+    "tablesCount_many": "{{count}} таблиць",
     "validationErrors": "Знайдено помилки у моделі",
     "generateAnyway": "Згенерувати все одно"
   }

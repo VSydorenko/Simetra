@@ -21,6 +21,7 @@
     "@simetra/generator-api": "workspace:*",
     "@simetra/generator-pg": "workspace:*",
     "citty": "^0.1.6",
+    "postgres": "^3.4.7",
     "tsx": "^4.21.0"
   },
   "devDependencies": {

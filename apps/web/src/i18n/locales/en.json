@@ -390,6 +390,11 @@
     "warningCount_one": "{{count}} warning",
     "warningCount_other": "{{count}} warnings",
     "copied": "Copied",
+    "copiedToast": "SQL copied. Paste into SQL Editor to apply",
+    "copyError": "Failed to copy to clipboard",
+    "openSupabaseSqlEditor": "Open SQL Editor (Supabase)",
+    "tablesCount_one": "{{count}} table",
+    "tablesCount_other": "{{count}} tables",
     "validationErrors": "Model validation errors found",
     "generateAnyway": "Generate anyway"
   }

@@ -129,17 +129,17 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 
 > Покращити SQL Preview як основний канал apply для SPA-користувачів.
 
-- [ ] SQL Preview toolbar (`sql-toolbar.tsx`) — додати кнопки:
-  - [ ] "Copy to Clipboard" — копіює весь згенерований SQL
-  - [ ] "Download .sql" — зберігає як файл `{project-name}_{timestamp}.sql`
-  - [ ] "Open Supabase SQL Editor" — deep link (видимий тільки якщо `target === "supabase"` і є `projectRef`)
-- [ ] Toast після Copy: "SQL скопійовано. Вставте у SQL Editor для застосування"
-- [ ] Розділяти SQL Preview на секції з коментарями:
+- [X] SQL Preview toolbar (`sql-toolbar.tsx`) — додати кнопки:
+  - [X] "Copy to Clipboard" — копіює весь згенерований SQL
+  - [X] "Download .sql" — зберігає як файл `{project-name}_{timestamp}.sql`
+  - [X] "Open Supabase SQL Editor" — deep link (видимий тільки якщо `target === "supabase"` і є `projectRef`)
+- [X] Toast після Copy: "SQL скопійовано. Вставте у SQL Editor для застосування"
+- [X] Розділяти SQL Preview на секції з коментарями:
   - `-- DDL: Tables`
   - `-- DDL: Enums`
   - `-- Functions: Posting`
   - `-- Indexes`
-- [ ] Показувати кількість statements / estimated tables у footer preview
+- [X] Показувати кількість statements / estimated tables у footer preview
 
 ### Етап 4: CLI Apply (`simetra apply`)
 
@@ -147,14 +147,14 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 
 #### Команда `simetra apply`
 
-- [ ] Додати subcommand `apply` у `packages/cli/src/commands/apply.ts`
-- [ ] Аргументи:
+- [X] Додати subcommand `apply` у `packages/cli/src/commands/apply.ts`
+- [X] Аргументи:
   - `--connection-string` або env `SIMETRA_DATABASE_URL` — PostgreSQL connection string
   - `--input` — шлях до директорії metadata (default: `.`)
   - `--schema` — SQL schema (default: `public`)
   - `--dry-run` — показати SQL без виконання
   - `--enum-strategy`, `--constants-strategy` — як у `simetra generate`
-- [ ] Flow:
+- [X] Flow:
   1. Прочитати metadata з `--input`
   2. Згенерувати SQL через `@simetra/generator-pg`
   3. Якщо `--dry-run` — вивести SQL і вийти
@@ -165,8 +165,8 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 
 #### PostgreSQL client
 
-- [ ] Додати `postgres` (або `pg`) як dependency до `packages/cli`
-- [ ] Створити `packages/cli/src/db-client.ts` — обгортка для з'єднання:
+- [X] Додати `postgres` (або `pg`) як dependency до `packages/cli`
+- [X] Створити `packages/cli/src/db-client.ts` — обгортка для з'єднання:
   - `connect(connectionString)` → client
   - `execute(client, sql)` → result
   - `disconnect(client)`
@@ -175,14 +175,14 @@ Runtime-інтеграція (supabase-js, форми, CRUD) — **Phase 3**, к
 
 #### Безпека
 
-- [ ] Connection string **ніколи** не зберігається у файлах метаданих
-- [ ] Рекомендувати env variable `SIMETRA_DATABASE_URL` замість CLI arg (не потрапляє в shell history з `export`)
-- [ ] Валідація connection string формату перед підключенням
-- [ ] Sanitization SQL-помилок у виводі (не показувати connection credentials)
+- [X] Connection string **ніколи** не зберігається у файлах метаданих
+- [X] Рекомендувати env variable `SIMETRA_DATABASE_URL` замість CLI arg (не потрапляє в shell history з `export`)
+- [X] Валідація connection string формату перед підключенням
+- [X] Sanitization SQL-помилок у виводі (не показувати connection credentials)
 
 #### Тести
 
-- [ ] Unit: argument parsing, dry-run output
+- [X] Unit: argument parsing, dry-run output
 - [ ] Integration (optional, з test PostgreSQL): connect → execute DDL → verify tables exist
 
 ### Етап 5: Schema Diff

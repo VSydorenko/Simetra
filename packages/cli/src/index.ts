@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { defineCommand, runMain } from "citty"
 import { generate } from "./commands/generate"
+import { apply } from "./commands/apply"
 
 const main = defineCommand({
   meta: {
@@ -10,6 +11,7 @@ const main = defineCommand({
   },
   subCommands: {
     generate,
+    apply,
   },
 })
 
