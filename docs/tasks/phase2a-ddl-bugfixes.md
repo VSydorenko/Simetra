@@ -29,7 +29,7 @@
 
 ### Вимоги Phase A
 
-- [ ] Новий файл `packages/core/src/schemas/physical-naming.ts`:
+- [X] Новий файл `packages/core/src/schemas/physical-naming.ts`:
   - `KIND_PREFIX: Record<MetadataKind, string>` маппінг:
     - `Catalog` → `"cat_"`
     - `Document` → `"doc_"`
@@ -41,9 +41,9 @@
   - `toSnakeCase(name: string): string` — PascalCase → snake_case (перенести з generator-pg, бо потрібна будь-якому генератору)
   - `physicalObjectName(kind: MetadataKind, objectName: string): string` — повертає `{KIND_PREFIX[kind]}{toSnakeCase(objectName)}`
   - `physicalTabularName(kind: MetadataKind, parentName: string, sectionName: string): string` — повертає `{physicalObjectName(kind, parentName)}_{sectionName}`
-- [ ] Додати export у `packages/core/src/schemas/index.ts`
-- [ ] Додати re-export через `packages/core/src/index.ts`
-- [ ] Тести у `packages/core/src/__tests__/physical-naming.test.ts`:
+- [X] Додати export у `packages/core/src/schemas/index.ts`
+- [X] Додати re-export через `packages/core/src/index.ts`
+- [X] Тести у `packages/core/src/__tests__/physical-naming.test.ts`:
   - `toSnakeCase`: SalesOrder → sales_order, Products → products, CurrencyExchangeRates → currency_exchange_rates
   - `physicalObjectName` для кожного kind
   - `physicalTabularName` для табличних частин
@@ -56,9 +56,9 @@
 
 ### DoD Phase A
 
-- [ ] `pnpm --filter @simetra/core test` — green
-- [ ] `pnpm typecheck` — без помилок
-- [ ] KIND_PREFIX, physicalObjectName, physicalTabularName, toSnakeCase експортовані з `@simetra/core`
+- [X] `pnpm --filter @simetra/core test` — green
+- [X] `pnpm typecheck` — без помилок
+- [X] KIND_PREFIX, physicalObjectName, physicalTabularName, toSnakeCase експортовані з `@simetra/core`
 
 ---
 

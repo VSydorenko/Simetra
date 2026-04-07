@@ -13,6 +13,12 @@ export { attributeSchema, type Attribute } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
 export {
+  KIND_PREFIX,
+  toSnakeCase,
+  physicalObjectName,
+  physicalTabularName,
+} from "./physical-naming"
+export {
   mappingExpressionSchema,
   type MappingExpression,
   conditionExpressionSchema,
