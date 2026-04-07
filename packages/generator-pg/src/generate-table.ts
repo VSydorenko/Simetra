@@ -252,12 +252,7 @@ function emitForeignKeys(
   if (fkCollector.length === 0) return []
   const statements: string[] = []
   for (const fk of fkCollector) {
-    // Вилучити schema prefix для constraint naming (бо constraint name не
-    // кваліфікується schema)
-    const sourceUnqualified = fk.sourceTable.includes(".")
-      ? fk.sourceTable.split(".").pop()!
-      : fk.sourceTable
-    const constraintName = `fk_${sourceUnqualified}_${fk.column}`
+    const constraintName = getForeignKeyConstraintName(fk)
     // Identifier length check
     checkIdentifierLength(constraintName, warnings)
     const onDelete = fk.onDelete ? ` ON DELETE ${fk.onDelete}` : ""
@@ -268,6 +263,13 @@ function emitForeignKeys(
     )
   }
   return statements
+}
+
+function getForeignKeyConstraintName(fk: ForeignKeyDef): string {
+  const sourceUnqualified = fk.sourceTable.includes(".")
+    ? fk.sourceTable.split(".").pop()!
+    : fk.sourceTable
+  return `fk_${sourceUnqualified}_${fk.column}`
 }
 
 // Перевірити довжину ідентифікатора та додати warning
@@ -1519,7 +1521,7 @@ export function generateProjectDDL(
   for (const r of project.accumulationRegisters) identifiersToCheck.add(tableName(prefix, "AccumulationRegister", r.name))
   for (const t of project.customTables) identifiersToCheck.add(tableName(prefix, "CustomTable", t.name))
   // FK constraint names
-  for (const fk of fkCollector) identifiersToCheck.add(`fk_${fk.sourceTable}_${fk.column}`)
+  for (const fk of fkCollector) identifiersToCheck.add(getForeignKeyConstraintName(fk))
   for (const id of identifiersToCheck) {
     checkIdentifierLength(id, warnings)
   }
