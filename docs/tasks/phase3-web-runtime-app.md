@@ -364,13 +364,13 @@ flowchart TD
 
 ### Етап 7: Form Runtime — `@simetra/form-runtime`
 
-- [ ] Створити `packages/form-runtime/`:
+- [X] Створити `packages/form-runtime/`:
   - `package.json` — `@simetra/form-runtime`, залежить від `@simetra/core`, `@simetra/data-provider`, `@workspace/ui`
   - React + react-hook-form + zod (zodResolver)
   
 #### 7.1. Field type → Component mapping
 
-- [ ] `src/field-mapping.ts`:
+- [X] `src/field-mapping.ts`:
 
   | Тип поля | Компонент | Умова |
   |---|---|---|
@@ -388,7 +388,7 @@ flowchart TD
 
 #### 7.2. Runtime Zod schema generation
 
-- [ ] `src/schema-builder.ts`:
+- [X] `src/schema-builder.ts`:
   - З metadata object + attributes генерує Zod schema на льоту
   - `required: true` → `.min(1)` або `.nonempty()`
   - `type: "Ref"` → `.string().uuid()`
@@ -398,7 +398,7 @@ flowchart TD
 
 #### 7.3. Item Form Renderer
 
-- [ ] `src/item-form-renderer.tsx`:
+- [X] `src/item-form-renderer.tsx`:
   - Props: `objectRef, formModel, dataProvider, recordId?, onSave?, onCancel?`
   - Якщо `recordId` → завантажує запис через `dataProvider.get()`
   - Якщо ні → порожня форма для створення
@@ -412,7 +412,7 @@ flowchart TD
 
 #### 7.4. List Page Renderer
 
-- [ ] `src/list-renderer.tsx`:
+- [X] `src/list-renderer.tsx`:
   - Props: `objectRef, formModel, dataProvider, onRowClick?, onCreateClick?`
   - TanStack Table з колонками з form model
   - Server-side pagination через `dataProvider.list()`
@@ -426,7 +426,7 @@ flowchart TD
 
 #### 7.5. Constants Form
 
-- [ ] `src/components/constants-form.tsx`:
+- [X] `src/components/constants-form.tsx`:
   - Props: `constants: ConstantDefinition[], dataProvider`
   - Рендерить **всі** константи як одну форму (для `singleTable` strategy)
   - Кожна константа → поле відповідного типу (reuse field-mapping)
@@ -435,21 +435,21 @@ flowchart TD
 
 #### 7.6. Domain-компоненти
 
-- [ ] `src/components/catalog-combobox.tsx`:
+- [X] `src/components/catalog-combobox.tsx`:
   - Props: `targetRef, dataProvider, value?, onChange?`
   - Autocomplete через `dataProvider.searchRef()`
   - Display через `dataProvider.getRefDisplay()`
-- [ ] `src/components/enum-select.tsx`:
+- [X] `src/components/enum-select.tsx`:
   - Props: `enumRef, metadata, value?, onChange?`
   - Значення з `enumeration.values` — не потребує data provider
-- [ ] `src/components/runtime-data-table.tsx`:
+- [X] `src/components/runtime-data-table.tsx`:
   - Props: `tabularSectionMeta, formModel, value: Row[], onChange`
   - TanStack Table з inline edit
   - Add/Delete rows
   - Line number auto-increment
-- [ ] `src/components/polymorphic-ref-placeholder.tsx`:
+- [X] `src/components/polymorphic-ref-placeholder.tsx`:
   - Візуальна заглушка з повідомленням про Phase 4
-- [ ] Кнопки дій документа:
+- [X] Кнопки дій документа:
   - `src/components/post-button.tsx`
   - `src/components/unpost-button.tsx`
   - `src/components/deletion-mark-button.tsx`
