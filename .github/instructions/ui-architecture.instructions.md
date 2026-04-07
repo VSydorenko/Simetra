@@ -38,7 +38,8 @@ description: 'Правила побудови UI: React компоненти, la
 
 ### ObjectEditor (центральна панель)
 - Основний контент центральної панелі — `ObjectEditor`, а не окрема універсальна таблиця
-- Навігація всередині об'єкта — через vertical nav і секції `main` / `data` / `values` / інші доступні для kind
+- Навігація всередині об'єкта — через vertical nav і секції `main` / `data` / `forms` / `values` / інші доступні для kind
+- Секція `forms` доступна для `Catalog`, `Document`, `CustomTable` (Phase 3) — перегляд і редагування explicit forms, прив'язаних до об'єкта
 - Tabs і floating windows відповідають за навігацію між об'єктами, а не між секціями всередині редактора
 - Таблиці реквізитів, tabular sections і enum values є вмістом окремих секцій `ObjectEditor`
 

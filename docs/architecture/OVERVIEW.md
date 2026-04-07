@@ -28,8 +28,9 @@ Simetra — open-source візуальний конфігуратор бізне
 
 ### packages/core/src
 
-- `schemas` — Zod-схеми всіх типів метаданих, `Project`, `ProjectModel`, reference model.
+- `schemas` — Zod-схеми всіх типів метаданих, `Project`, `ProjectModel`, reference model, `FormSchema` (Phase 3).
 - `serialization.ts` — canonical JSON serializer, порядок ключів і `$schema` URL helpers.
+- `metadata-io.ts` — shared metadata IO layer: pure parsing і model building з `Map<string, string>` (Phase 3). DRY: один parser/validator для конфігуратора, CLI і runtime.
 - `find-references.ts` — пошук міжоб'єктних посилань у `ProjectModel`.
 - `index.ts` — публічний barrel export для UI та тестів.
 
@@ -74,10 +75,12 @@ Simetra — open-source візуальний конфігуратор бізне
 - Zod-схеми є single source of truth для типів метаданих і правил валідації.
 - UI імпортує типи, схеми, serializer helpers і reference utilities з core, а не описує модель повторно.
 - Серіалізація у файловий формат також визначена в core, тому write-path і доменна модель еволюціонують разом.
+- Shared metadata IO layer (`metadata-io.ts`) забезпечує DRY parsing і model building для конфігуратора, CLI і runtime — pure functions працюють з `Map<string, string>`, без залежності від browser/node API.
+- Forms flow: metadata JSON → shared parser → `ProjectModel` (з `forms` колекцією) → `resolveForm()` (explicit form або autoform) → form-runtime рендерінг.
 
 ## 4. Система типів метаданих
 
-Поточний `ProjectModel` містить сім колекцій бізнес-об'єктів:
+Поточний `ProjectModel` містить сім колекцій бізнес-об'єктів і колекцію forms (Phase 3):
 
 | Тип | Призначення |
 |-----|-------------|
@@ -238,5 +241,6 @@ SQL Preview відкривається як вкладка в центральн
 | Phase 1 closure | Дошліфування поточного web configurator: документація, UX gaps, перевірки, завершення архітектурного набору документів | roadmap |
 | Phase 2a | Генерація PostgreSQL DDL, SQL Preview, CLI | implemented |
 | Phase 2b-c | Posting engine, deployment targets | roadmap |
+| Phase 3 | Form Runtime & Dev Preview: `@simetra/form-runtime` (React-бібліотека рендерингу форм), `@simetra/data-provider` (абстрактний data-access contract), `@simetra/data-provider-postgrest` (PostgREST adapter), `apps/runtime` (dev preview shell). Core: Zod-схеми forms, shared metadata IO layer, autoform алгоритм, `resolveForm()` | roadmap |
 
 Усі інші пакети, рантайми й deployment targets мають з'являтися в overview тільки після появи реального коду в репозиторії.
