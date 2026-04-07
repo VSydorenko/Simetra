@@ -140,17 +140,17 @@ flowchart TD
 
 > **Мета:** DRY — один parser/validator для конфігуратора, CLI і runtime. Зараз існують два дублюючі loaders: `apps/web/src/storage/web-storage.ts` (parseFileStructure + buildProjectModel) і `packages/cli/src/build-model.ts`. Третій loader для runtime **не** створюємо — виносимо спільну pure-логіку в core.
 
-- [ ] Створити `packages/core/src/metadata-io.ts`:
+- [x] Створити `packages/core/src/metadata-io.ts`:
   - `parseMetadataFiles(files: Map<string, string>): { parsed: ParsedFiles, warnings: FileWarning[] }` — pure function, JSON parsing, file structure routing
   - `buildProjectModelFromParsed(parsed: ParsedFiles): { model: ProjectModel, forms: Map<string, FormSchema>, warnings: FileWarning[] }` — Zod validation, збирання ProjectModel + forms map
   - `FileWarning = { filePath: string, errors: string[] }`
   - `ParsedFiles = { project?: unknown, objects: ParsedObject[], forms: ParsedForm[] }`
-- [ ] Цей layer **не** залежить від node:fs, browser API чи HTTP — він працює з `Map<string, string>` (path → content)
-- [ ] Перевести `apps/web/src/storage/web-storage.ts` на використання shared layer (I/O залишається в WebStorage, parsing делегується core)
-- [ ] Перевести `packages/cli/src/build-model.ts` на використання shared layer (I/O залишається в read-metadata.ts, parsing делегується core)
-- [ ] Додати зчитування `forms/*.form.json` у shared parser (якщо файли присутні)
-- [ ] Додати export у `packages/core/src/index.ts`
-- [ ] **Тести:**
+- [x] Цей layer **не** залежить від node:fs, browser API чи HTTP — він працює з `Map<string, string>` (path → content)
+- [x] Перевести `apps/web/src/storage/web-storage.ts` на використання shared layer (I/O залишається в WebStorage, parsing делегується core)
+- [x] Перевести `packages/cli/src/build-model.ts` на використання shared layer (I/O залишається в read-metadata.ts, parsing делегується core)
+- [x] Додати зчитування `forms/*.form.json` у shared parser (якщо файли присутні)
+- [x] Додати export у `packages/core/src/index.ts`
+- [x] **Тести:**
   - Round-trip: serializeToFiles → parseMetadataFiles → buildProjectModelFromParsed = original model
   - Constants wrapper parsing (backward compat)
   - Forms parsing: explicit form читається і повертається в forms map

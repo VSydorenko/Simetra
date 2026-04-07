@@ -57,7 +57,7 @@ describe('buildProjectModel', () => {
         '{ invalid json',
       )
       expect(() => buildProjectModel(TMP_DIR)).toThrow(
-        /невалідний JSON/,
+        /project\.meta\.json/,
       )
     } finally {
       cleanupTmpDir()

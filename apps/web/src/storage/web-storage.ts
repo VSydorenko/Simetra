@@ -1,59 +1,16 @@
-import type { MetadataKind, MetadataObject, ProjectModel } from "@simetra/core"
+import type { ProjectModel, FileEntry } from "@simetra/core"
 import {
-  serializeMetadataObject,
-  serializeProject,
-  enrichSchemaUrl,
-  enrichProjectSchemaUrl,
-  buildConstantsSchemaUrl,
-  KIND_TO_KEY,
-  projectModelSchema,
-  metadataObjectSchema,
-  projectSchema,
-  constantSchema,
-  constantsFileSchema,
+  parseMetadataFiles,
+  buildProjectModelFromParsed,
+  serializeToFiles,
+  toKebabCase,
 } from "@simetra/core"
 import { unzip, zip } from "fflate"
 import type {
-  FileValidationError,
   OpenResult,
   OpenProjectResult,
   StorageProvider,
 } from "./storage-provider"
-
-// Маппінг MetadataKind → назва каталогу (BRD §7.2)
-const KIND_TO_DIR: Record<MetadataKind, string> = {
-  Catalog: "catalogs",
-  Document: "documents",
-  Enumeration: "enumerations",
-  InformationRegister: "information-registers",
-  AccumulationRegister: "accumulation-registers",
-  Constant: "constants",
-  CustomTable: "custom-tables",
-}
-
-// Зворотній маппінг: назва каталогу → MetadataKind
-const DIR_TO_KIND: Record<string, MetadataKind> = Object.fromEntries(
-  Object.entries(KIND_TO_DIR).map(([k, v]) => [v, k as MetadataKind])
-) as Record<string, MetadataKind>
-
-// Ключі ProjectModel → MetadataKind
-const MODEL_KEY_TO_KIND: Record<string, MetadataKind> = {
-  catalogs: "Catalog",
-  documents: "Document",
-  enumerations: "Enumeration",
-  informationRegisters: "InformationRegister",
-  accumulationRegisters: "AccumulationRegister",
-  constants: "Constant",
-  customTables: "CustomTable",
-}
-
-/** PascalCase → kebab-case: SalesOrder → sales-order */
-export function toKebabCase(name: string): string {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
-    .toLowerCase()
-}
 
 /** Чи підтримує браузер File System Access API */
 export function hasFileSystemAccess(): boolean {
@@ -104,238 +61,11 @@ async function dirExists(
   }
 }
 
-// --- Серіалізація ProjectModel → файлова структура ---
+// serializeToFiles, parseMetadataFiles, buildProjectModelFromParsed
+// тепер імпортуються з @simetra/core (shared metadata IO layer)
 
-interface FileEntry {
-  path: string
-  content: string
-}
-
-/** Серіалізувати ProjectModel у масив файлів (path → content) */
-export function serializeToFiles(model: ProjectModel): FileEntry[] {
-  const files: FileEntry[] = []
-  const schemaVersion = model.project.schemaVersion
-
-  // project.meta.json — enrich $schema before serialization
-  const enrichedProject = enrichProjectSchemaUrl(model.project, schemaVersion)
-  files.push({
-    path: "project.meta.json",
-    content: serializeProject(enrichedProject),
-  })
-
-  // Кожен тип метаданих
-  for (const [modelKey, kind] of Object.entries(MODEL_KEY_TO_KIND)) {
-    const objects = model[modelKey as keyof ProjectModel] as MetadataObject[]
-    if (!objects || objects.length === 0) continue
-
-    const dirName = KIND_TO_DIR[kind]
-
-    if (kind === "Constant") {
-      // Усі константи — в одному файлі, object wrapper (BRD §7.2 + §7.6)
-      const enrichedConstants = objects.map((obj) =>
-        enrichSchemaUrl(obj, schemaVersion)
-      )
-      const serializedItems = enrichedConstants.map((obj) =>
-        serializeMetadataObject(obj).trimEnd()
-      )
-      const indentedItems = serializedItems.map((item) =>
-        item
-          .split("\n")
-          .map((line) => "    " + line)
-          .join("\n")
-      )
-      const constantsJson =
-        "{\n" +
-        `  "$schema": "${buildConstantsSchemaUrl(schemaVersion)}",\n` +
-        '  "constants": [\n' +
-        indentedItems.join(",\n") +
-        "\n  ]\n}\n"
-      files.push({
-        path: `${dirName}/constants.meta.json`,
-        content: constantsJson,
-      })
-    } else {
-      // Один файл на обʼєкт — enrich $schema
-      for (const obj of objects) {
-        const enriched = enrichSchemaUrl(obj, schemaVersion)
-        const kebabName = toKebabCase(obj.name)
-        files.push({
-          path: `${dirName}/${kebabName}/${kebabName}.meta.json`,
-          content: serializeMetadataObject(enriched),
-        })
-      }
-    }
-  }
-
-  return files
-}
-
-// --- Десеріалізація файлової структури → ProjectModel ---
-
-export interface ParsedFiles {
-  project?: unknown
-  objects: { kind: MetadataKind; data: unknown; filePath: string }[]
-}
-
-export function parseFileStructure(files: Map<string, string>): {
-  parsed: ParsedFiles
-  warnings: FileValidationError[]
-} {
-  const warnings: FileValidationError[] = []
-  const parsed: ParsedFiles = { objects: [] }
-
-  for (const [path, content] of files) {
-    // project.meta.json
-    if (path === "project.meta.json") {
-      try {
-        parsed.project = JSON.parse(content)
-      } catch (e) {
-        warnings.push({
-          filePath: path,
-          errors: [
-            `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
-          ],
-        })
-      }
-      continue
-    }
-
-    // Визначити тип за назвою каталогу
-    const parts = path.split("/")
-    if (parts.length < 2) continue
-
-    const dirName = parts[0]
-    const kind = DIR_TO_KIND[dirName]
-    if (!kind) continue
-
-    // Файл має закінчуватись на .meta.json
-    const fileName = parts[parts.length - 1]
-    if (!fileName.endsWith(".meta.json")) continue
-
-    try {
-      const data = JSON.parse(content)
-
-      if (kind === "Constant") {
-        // constants.meta.json — object wrapper or legacy array (backward compat)
-        let items: unknown[] | null = null
-        if (Array.isArray(data)) {
-          items = data
-        } else {
-          const wrapperResult = constantsFileSchema.safeParse(data)
-          if (wrapperResult.success) {
-            // Happy path — wrapper validates all constants at once
-            items = wrapperResult.data.constants
-          } else if (
-            data !== null &&
-            typeof data === "object" &&
-            "constants" in data &&
-            Array.isArray((data as Record<string, unknown>).constants)
-          ) {
-            // Wrapper schema failed — graceful degradation: parse each constant individually
-            const rawConstants = (data as Record<string, unknown>)
-              .constants as unknown[]
-            items = []
-            for (let i = 0; i < rawConstants.length; i++) {
-              const itemResult = constantSchema.safeParse(rawConstants[i])
-              if (itemResult.success) {
-                items.push(itemResult.data)
-              } else {
-                warnings.push({
-                  filePath: path,
-                  errors: itemResult.error.issues.map(
-                    (issue) =>
-                      `constants[${i}].${issue.path.join(".")}: ${issue.message}`
-                  ),
-                })
-              }
-            }
-          }
-        }
-        if (items) {
-          for (const item of items) {
-            parsed.objects.push({ kind, data: item, filePath: path })
-          }
-        } else {
-          // Не wrapper формат — кладемо як є, buildProjectModel дасть warning
-          parsed.objects.push({ kind, data, filePath: path })
-        }
-      } else {
-        parsed.objects.push({ kind, data, filePath: path })
-      }
-    } catch (e) {
-      warnings.push({
-        filePath: path,
-        errors: [`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`],
-      })
-    }
-  }
-
-  return { parsed, warnings }
-}
-
-export function buildProjectModel(parsed: ParsedFiles): {
-  model: ProjectModel
-  warnings: FileValidationError[]
-} {
-  const warnings: FileValidationError[] = []
-
-  // Валідація project
-  let project
-  if (parsed.project) {
-    const result = projectSchema.safeParse(parsed.project)
-    if (result.success) {
-      project = result.data
-    } else {
-      const errors = result.error.issues.map(
-        (i) => `${i.path.join(".")}: ${i.message}`
-      )
-      warnings.push({
-        filePath: "project.meta.json",
-        errors,
-      })
-
-      throw new Error(`project.meta.json is invalid: ${errors.join("; ")}`)
-    }
-  }
-
-  if (!project) {
-    throw new Error("project.meta.json is missing or invalid")
-  }
-
-  // Валідація обʼєктів по типах
-  const collections: Record<string, MetadataObject[]> = {
-    catalogs: [],
-    documents: [],
-    enumerations: [],
-    informationRegisters: [],
-    accumulationRegisters: [],
-    constants: [],
-    customTables: [],
-  }
-
-  for (const { kind, data, filePath } of parsed.objects) {
-    const schema = kind === "Constant" ? constantSchema : metadataObjectSchema
-    const result = schema.safeParse(data)
-    if (result.success) {
-      const key = KIND_TO_KEY[kind]
-      collections[key].push(result.data as MetadataObject)
-    } else {
-      warnings.push({
-        filePath,
-        errors: result.error.issues.map(
-          (i) => `${i.path.join(".")}: ${i.message}`
-        ),
-      })
-    }
-  }
-
-  const model = projectModelSchema.parse({
-    project,
-    ...collections,
-  })
-
-  return { model, warnings }
-}
+// Re-export для зворотної сумісності модулів, що імпортували з web-storage
+export { toKebabCase, serializeToFiles }
 
 // --- File System Access API storage ---
 
@@ -407,7 +137,7 @@ async function readFromDirectory(
     if (depth > MAX_DEPTH) return
     for await (const [name, entry] of dir.entries()) {
       const fullPath = prefix ? `${prefix}/${name}` : name
-      if (entry.kind === "file" && name.endsWith(".meta.json")) {
+      if (entry.kind === "file" && (name.endsWith(".meta.json") || name.endsWith(".form.json"))) {
         const file = await entry.getFile()
         files.set(fullPath, await file.text())
       } else if (entry.kind === "directory") {
@@ -448,7 +178,7 @@ function unzipEntries(data: Uint8Array): Promise<Map<string, string>> {
         const normalizedPath = entryPath.startsWith("metadata/")
           ? entryPath.slice("metadata/".length)
           : entryPath
-        if (normalizedPath && normalizedPath.endsWith(".meta.json")) {
+        if (normalizedPath && (normalizedPath.endsWith(".meta.json") || normalizedPath.endsWith(".form.json"))) {
           files.set(normalizedPath, decoder.decode(content))
         }
       }
@@ -542,8 +272,8 @@ export class WebStorage implements StorageProvider {
   /** Відкрити проєкт із вже відомого handle (для restore session) */
   async openFromHandle(handle: FileSystemDirectoryHandle): Promise<OpenResult> {
     const fileMap = await readFromDirectory(handle)
-    const { parsed, warnings: parseWarnings } = parseFileStructure(fileMap)
-    const { model, warnings: validationWarnings } = buildProjectModel(parsed)
+    const { parsed, warnings: parseWarnings } = parseMetadataFiles(fileMap)
+    const { model, warnings: validationWarnings } = buildProjectModelFromParsed(parsed)
 
     return {
       model,
@@ -557,8 +287,8 @@ export class WebStorage implements StorageProvider {
   private async openFromDirectory(): Promise<OpenResult> {
     const handle = await window.showDirectoryPicker({ mode: "readwrite" })
     const fileMap = await readFromDirectory(handle)
-    const { parsed, warnings: parseWarnings } = parseFileStructure(fileMap)
-    const { model, warnings: validationWarnings } = buildProjectModel(parsed)
+    const { parsed, warnings: parseWarnings } = parseMetadataFiles(fileMap)
+    const { model, warnings: validationWarnings } = buildProjectModelFromParsed(parsed)
 
     return {
       model,
@@ -585,8 +315,8 @@ export class WebStorage implements StorageProvider {
     const buffer = await file.arrayBuffer()
     const data = new Uint8Array(buffer)
     const fileMap = await unzipEntries(data)
-    const { parsed, warnings: parseWarnings } = parseFileStructure(fileMap)
-    const { model, warnings: validationWarnings } = buildProjectModel(parsed)
+    const { parsed, warnings: parseWarnings } = parseMetadataFiles(fileMap)
+    const { model, warnings: validationWarnings } = buildProjectModelFromParsed(parsed)
 
     return {
       model,

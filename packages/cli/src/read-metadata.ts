@@ -46,7 +46,7 @@ export function readMetadataFiles(projectDir: string): Map<string, string> {
         )
       }
     } else {
-      // Інші типи: {kind-dir}/{kebab-name}/{kebab-name}.meta.json
+      // Інші типи: {kind-dir}/{kebab-name}/{kebab-name}.meta.json + forms
       const entries = readdirSync(dirPath)
       for (const entry of entries) {
         const entryPath = join(dirPath, entry)
@@ -57,6 +57,21 @@ export function readMetadataFiles(projectDir: string): Map<string, string> {
             `${kindDir}/${entry}/${entry}.meta.json`,
             readFileSync(metaFile, "utf-8")
           )
+        }
+        // Phase 3: forms/*.form.json
+        const formsDir = join(entryPath, "forms")
+        if (existsSync(formsDir) && statSync(formsDir).isDirectory()) {
+          const formEntries = readdirSync(formsDir)
+          for (const formFile of formEntries) {
+            if (!formFile.endsWith(".form.json")) continue
+            const formPath = join(formsDir, formFile)
+            if (statSync(formPath).isFile()) {
+              files.set(
+                `${kindDir}/${entry}/forms/${formFile}`,
+                readFileSync(formPath, "utf-8")
+              )
+            }
+          }
         }
       }
     }

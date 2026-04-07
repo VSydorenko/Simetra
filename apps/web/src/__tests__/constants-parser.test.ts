@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { parseFileStructure, buildProjectModel } from "../storage/web-storage"
+import {
+  parseMetadataFiles,
+  buildProjectModelFromParsed,
+} from "@simetra/core"
 
 // Helper: створити файлову карту для constants parse
 function makeConstantsFiles(
@@ -30,13 +33,13 @@ const BROKEN_CONSTANT = {
   valueType: "String",
 }
 
-describe("parseFileStructure: constants", () => {
+describe("parseMetadataFiles: constants", () => {
   it("valid wrapper — all constants parsed", () => {
     const wrapper = {
       constants: [VALID_CONSTANT_1, VALID_CONSTANT_2],
     }
     const files = makeConstantsFiles(JSON.stringify(wrapper))
-    const { parsed, warnings } = parseFileStructure(files)
+    const { parsed, warnings } = parseMetadataFiles(files)
 
     expect(warnings).toHaveLength(0)
     const constants = parsed.objects.filter((o) => o.kind === "Constant")
@@ -48,7 +51,7 @@ describe("parseFileStructure: constants", () => {
       constants: [VALID_CONSTANT_1, BROKEN_CONSTANT, VALID_CONSTANT_2],
     }
     const files = makeConstantsFiles(JSON.stringify(wrapper))
-    const { parsed, warnings } = parseFileStructure(files)
+    const { parsed, warnings } = parseMetadataFiles(files)
 
     // 2 valid constants should be preserved
     const constants = parsed.objects.filter((o) => o.kind === "Constant")
@@ -67,7 +70,7 @@ describe("parseFileStructure: constants", () => {
       constants: [BROKEN_CONSTANT],
     }
     const files = makeConstantsFiles(JSON.stringify(wrapper))
-    const { warnings } = parseFileStructure(files)
+    const { warnings } = parseMetadataFiles(files)
 
     expect(warnings).toHaveLength(1)
     expect(warnings[0].errors[0]).toContain("constants[0]")
@@ -76,20 +79,20 @@ describe("parseFileStructure: constants", () => {
   it("legacy array format — backward compat", () => {
     const legacy = [VALID_CONSTANT_1, VALID_CONSTANT_2]
     const files = makeConstantsFiles(JSON.stringify(legacy))
-    const { parsed, warnings } = parseFileStructure(files)
+    const { parsed, warnings } = parseMetadataFiles(files)
 
     expect(warnings).toHaveLength(0)
     const constants = parsed.objects.filter((o) => o.kind === "Constant")
     expect(constants).toHaveLength(2)
   })
 
-  it("valid wrapper through full pipeline (buildProjectModel)", () => {
+  it("valid wrapper through full pipeline (buildProjectModelFromParsed)", () => {
     const wrapper = {
       constants: [VALID_CONSTANT_1, VALID_CONSTANT_2],
     }
     const files = makeConstantsFiles(JSON.stringify(wrapper))
-    const { parsed } = parseFileStructure(files)
-    const { model, warnings } = buildProjectModel(parsed)
+    const { parsed } = parseMetadataFiles(files)
+    const { model, warnings } = buildProjectModelFromParsed(parsed)
 
     expect(warnings).toHaveLength(0)
     expect(model.constants).toHaveLength(2)
@@ -102,8 +105,8 @@ describe("parseFileStructure: constants", () => {
       constants: [VALID_CONSTANT_1, BROKEN_CONSTANT, VALID_CONSTANT_2],
     }
     const files = makeConstantsFiles(JSON.stringify(wrapper))
-    const { parsed, warnings: parseWarnings } = parseFileStructure(files)
-    const { model, warnings: buildWarnings } = buildProjectModel(parsed)
+    const { parsed, warnings: parseWarnings } = parseMetadataFiles(files)
+    const { model, warnings: buildWarnings } = buildProjectModelFromParsed(parsed)
 
     // Parse-time warnings for broken constant
     expect(parseWarnings).toHaveLength(1)
@@ -123,8 +126,8 @@ describe("parseFileStructure: constants", () => {
       }),
     )
 
-    const { parsed } = parseFileStructure(files)
-    const { model } = buildProjectModel(parsed)
+    const { parsed } = parseMetadataFiles(files)
+    const { model } = buildProjectModelFromParsed(parsed)
 
     expect(model.project.deployment?.target).toBe("supabase")
   })

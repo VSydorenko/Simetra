@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { projectModelSchema, type ProjectModel } from "@simetra/core"
-import { toKebabCase, serializeToFiles } from "../storage/web-storage"
+import {
+  projectModelSchema,
+  type ProjectModel,
+  toKebabCase,
+  serializeToFiles,
+} from "@simetra/core"
 
 // --- toKebabCase ---
 
