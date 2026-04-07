@@ -63,7 +63,7 @@ describe("attributeToColumn", () => {
   const noopResolve = () => "target_table"
   const noopEnumResolve = () => undefined
 
-  it("single Ref + required: true → NOT NULL", () => {
+  it("single Ref + required: true → NOT NULL (no inline FK)", () => {
     const col = attributeToColumn(
       {
         name: "customer",
@@ -79,7 +79,7 @@ describe("attributeToColumn", () => {
     )
     expect(col.sqlType).toBe("uuid")
     expect(col.constraints).toContain("NOT NULL")
-    expect(col.constraints).toContain("REFERENCES target_table(id)")
+    expect(col.constraints).not.toContain("REFERENCES target_table(id)")
   })
 
   it("single Ref + unique: true → UNIQUE", () => {
@@ -119,7 +119,7 @@ describe("attributeToColumn", () => {
     expect(col.constraints).toContain("NOT NULL")
   })
 
-  it("single Ref without required/unique → no constraints besides FK", () => {
+  it("single Ref without required/unique → no constraints (FK emitted later)", () => {
     const col = attributeToColumn(
       {
         name: "warehouse",
@@ -134,6 +134,6 @@ describe("attributeToColumn", () => {
       noopEnumResolve,
     )
     expect(col.sqlType).toBe("uuid")
-    expect(col.constraints).toEqual(["REFERENCES target_table(id)"])
+    expect(col.constraints).toEqual([])
   })
 })

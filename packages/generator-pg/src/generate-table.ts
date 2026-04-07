@@ -10,10 +10,12 @@ import type {
   Attribute,
   TabularSection,
   StandardAttribute,
+  MetadataKind,
 } from "@simetra/core"
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
+  toSnakeCase,
 } from "@simetra/core"
 import type { GeneratorOptions, GeneratorOutput } from "@simetra/generator-api"
 import {
@@ -30,6 +32,18 @@ import {
 import { generatePostingFunctions } from "./generate-posting"
 import { resolveColumnName, resolveStdColumnName } from "./column-naming"
 
+// ─── FK Collector ───────────────────────────────────────────
+
+export interface ForeignKeyDef {
+  sourceTable: string
+  column: string
+  targetTable: string
+  onDelete?: string
+}
+
+// PostgreSQL NAMEDATALEN-1 limit
+const PG_IDENTIFIER_LIMIT = 63
+
 // Побудувати lookup: MetadataRef → qualified table name
 function buildRefTableLookup(
   project: ProjectModel,
@@ -41,30 +55,30 @@ function buildRefTableLookup(
 
   for (const c of project.catalogs) {
     const key = `Catalog.${c.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, c.name)))
+    map.set(key, qualifiedName(schema, tableName(prefix, "Catalog", c.name)))
   }
   for (const d of project.documents) {
     const key = `Document.${d.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, d.name)))
+    map.set(key, qualifiedName(schema, tableName(prefix, "Document", d.name)))
   }
   for (const e of project.enumerations) {
     const key = `Enumeration.${e.name}`
     // Для pgEnum — немає таблиці, але для lookupTable — є
     if (opts.enumStrategy === "lookupTable") {
-      map.set(key, qualifiedName(schema, tableName(prefix, e.name)))
+      map.set(key, qualifiedName(schema, tableName(prefix, "Enumeration", e.name)))
     }
   }
   for (const r of project.informationRegisters) {
     const key = `InformationRegister.${r.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, r.name)))
+    map.set(key, qualifiedName(schema, tableName(prefix, "InformationRegister", r.name)))
   }
   for (const r of project.accumulationRegisters) {
     const key = `AccumulationRegister.${r.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, r.name)))
+    map.set(key, qualifiedName(schema, tableName(prefix, "AccumulationRegister", r.name)))
   }
   for (const t of project.customTables) {
     const key = `CustomTable.${t.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, t.name)))
+    map.set(key, qualifiedName(schema, tableName(prefix, "CustomTable", t.name)))
   }
 
   return map
@@ -89,7 +103,7 @@ function buildEnumTypeLookup(
   const map = new Map<string, string>()
   for (const e of project.enumerations) {
     const key = `Enumeration.${e.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, e.name)))
+    map.set(key, qualifiedName(schema, tableName(prefix, "Enumeration", e.name)))
   }
   return map
 }
@@ -181,15 +195,101 @@ function createTable(
   return `${header}CREATE TABLE ${qualName} (\n` + columns.join(",\n") + "\n);"
 }
 
+// Зібрати FK defs для кастомних Ref атрибутів (non-enum, non-polymorphic single refs)
+function collectAttributeFKs(
+  attrs: Attribute[],
+  sourceTable: string,
+  resolve: (ref: { kind: string; name: string }) => string,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
+): void {
+  for (const attr of attrs) {
+    if (attr.type !== "Ref" || !attr.ref) continue
+    // Пропускаємо polymorphic refs — Dynamic Link, без FK
+    if (attr.allowedTypes?.length) continue
+    // Пропускаємо pgEnum refs — це PostgreSQL TYPE, не таблиця
+    const enumType = resolveEnumType(attr.ref)
+    if (enumType) continue
+    // Single ref → FK
+    const targetTable = resolve(attr.ref)
+    fkCollector.push({
+      sourceTable,
+      column: `${attr.name}_id`,
+      targetTable,
+    })
+  }
+}
+
+// Зібрати FK defs для стандартних Ref атрибутів
+function collectStandardAttrFKs(
+  attrs: StandardAttribute[],
+  sourceTable: string,
+  resolve: (ref: { kind: string; name: string }) => string,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
+): void {
+  for (const attr of attrs) {
+    if (attr.type !== "Ref" || !attr.ref) continue
+    // Пропускаємо polymorphic refs
+    if (attr.allowedTypes?.length) continue
+    // Пропускаємо pgEnum refs
+    const enumType = resolveEnumType(attr.ref)
+    if (enumType) continue
+    // Стандартні реквізити вже мають canonical name (owner_id, recorder_id)
+    fkCollector.push({
+      sourceTable,
+      column: attr.name,
+      targetTable: resolve(attr.ref),
+    })
+  }
+}
+
+// Генерувати SQL для late-emitted FK constraints
+function emitForeignKeys(
+  fkCollector: ForeignKeyDef[],
+  warnings: string[]
+): string[] {
+  if (fkCollector.length === 0) return []
+  const statements: string[] = []
+  for (const fk of fkCollector) {
+    // Вилучити schema prefix для constraint naming (бо constraint name не
+    // кваліфікується schema)
+    const sourceUnqualified = fk.sourceTable.includes(".")
+      ? fk.sourceTable.split(".").pop()!
+      : fk.sourceTable
+    const constraintName = `fk_${sourceUnqualified}_${fk.column}`
+    // Identifier length check
+    checkIdentifierLength(constraintName, warnings)
+    const onDelete = fk.onDelete ? ` ON DELETE ${fk.onDelete}` : ""
+    statements.push(
+      `ALTER TABLE ${fk.sourceTable}\n` +
+        `  ADD CONSTRAINT ${constraintName}\n` +
+        `  FOREIGN KEY (${fk.column}) REFERENCES ${fk.targetTable}(id)${onDelete};`
+    )
+  }
+  return statements
+}
+
+// Перевірити довжину ідентифікатора та додати warning
+function checkIdentifierLength(identifier: string, warnings: string[]): void {
+  if (identifier.length > PG_IDENTIFIER_LIMIT) {
+    warnings.push(
+      `Identifier "${identifier}" exceeds PostgreSQL limit of ${PG_IDENTIFIER_LIMIT} characters and will be silently truncated`
+    )
+  }
+}
+
 // ─── Catalog ────────────────────────────────────────────────
 function generateCatalog(
   cat: Catalog,
   prefix: string,
   schema: string,
   resolve: (ref: { kind: string; name: string }) => string,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
 ): string[] {
-  const tName = qualifiedName(schema, tableName(prefix, cat.name))
+  const tbl = tableName(prefix, "Catalog", cat.name)
+  const tName = qualifiedName(schema, tbl)
   const stdAttrs = getStandardAttributes("Catalog", {
     hierarchyType: cat.hierarchyType,
     owners: cat.owners,
@@ -212,19 +312,40 @@ function generateCatalog(
     ...emitAttributeColumns(cat.attributes, resolve, resolveEnumType),
   ]
 
-  // parent_id — self-referencing FK
+  // parent_id — self-referencing FK (через collector)
   if (
     cat.hierarchyType !== "None" &&
     columns.some((c) => c.trimStart().startsWith("parent_id"))
   ) {
+    // Прибираємо inline REFERENCES — тепер це просто uuid
     const idx = columns.findIndex((c) => c.trimStart().startsWith("parent_id"))
-    columns[idx] = `  parent_id uuid REFERENCES ${tName}(id)`
+    columns[idx] = `  parent_id uuid`
+    fkCollector.push({
+      sourceTable: tName,
+      column: "parent_id",
+      targetTable: tName,
+    })
   }
+
+  // owner_id FK — single ref owners
+  for (const stdAttr of stdAttrs) {
+    if (stdAttr.name === "owner_id" && stdAttr.type === "Ref" && stdAttr.ref) {
+      const targetTable = resolve(stdAttr.ref)
+      fkCollector.push({
+        sourceTable: tName,
+        column: "owner_id",
+        targetTable,
+      })
+    }
+  }
+
+  // FK для кастомних single-ref атрибутів (не enum, не polymorphic)
+  collectAttributeFKs(cat.attributes, tName, resolve, resolveEnumType, fkCollector)
 
   // UNIQUE constraint для code якщо codeUnique
   if (cat.codeUnique) {
     columns.push(
-      `  CONSTRAINT uq_${tableName(prefix, cat.name)}_code UNIQUE (code)`
+      `  CONSTRAINT uq_${tbl}_code UNIQUE (code)`
     )
   }
 
@@ -238,11 +359,13 @@ function generateCatalog(
       generateTabularSection(
         ts,
         prefix,
+        "Catalog",
         cat.name,
         tName,
         schema,
         resolve,
-        resolveEnumType
+        resolveEnumType,
+        fkCollector
       )
     )
   }
@@ -256,9 +379,11 @@ function generateDocument(
   prefix: string,
   schema: string,
   resolve: (ref: { kind: string; name: string }) => string,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
 ): string[] {
-  const tName = qualifiedName(schema, tableName(prefix, doc.name))
+  const tbl = tableName(prefix, "Document", doc.name)
+  const tName = qualifiedName(schema, tbl)
   const stdAttrs = getStandardAttributes("Document")
 
   const overrides: Record<string, { type?: string; length?: number }> = {}
@@ -273,6 +398,9 @@ function generateDocument(
     ...emitAttributeColumns(doc.attributes, resolve, resolveEnumType),
   ]
 
+  // FK для кастомних атрибутів
+  collectAttributeFKs(doc.attributes, tName, resolve, resolveEnumType, fkCollector)
+
   const statements: string[] = []
   const label = doc.displayName?.en ?? doc.name
   statements.push(createTable(tName, columns, `Document: ${label}`))
@@ -282,11 +410,13 @@ function generateDocument(
       generateTabularSection(
         ts,
         prefix,
+        "Document",
         doc.name,
         tName,
         schema,
         resolve,
-        resolveEnumType
+        resolveEnumType,
+        fkCollector
       )
     )
   }
@@ -301,7 +431,7 @@ function generateEnumeration(
   schema: string,
   strategy: "pgEnum" | "lookupTable"
 ): string[] {
-  const name = tableName(prefix, en.name)
+  const name = tableName(prefix, "Enumeration", en.name)
   const qName = qualifiedName(schema, name)
   const label = en.displayName?.en ?? en.name
 
@@ -351,9 +481,11 @@ function generateInformationRegister(
   prefix: string,
   schema: string,
   resolve: (ref: { kind: string; name: string }) => string,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
 ): string[] {
-  const tName = qualifiedName(schema, tableName(prefix, reg.name))
+  const tbl = tableName(prefix, "InformationRegister", reg.name)
+  const tName = qualifiedName(schema, tbl)
   const stdAttrs = getStandardAttributes("InformationRegister", {
     periodicity: reg.periodicity,
     writeMode: reg.writeMode,
@@ -401,6 +533,13 @@ function generateInformationRegister(
     columns.push(`  UNIQUE (${uniqueCols.join(", ")})`)
   }
 
+  // FK для standard attrs (recorder_id single ref)
+  collectStandardAttrFKs(stdAttrs, tName, resolve, resolveEnumType, fkCollector)
+  // FK для dimensions/resources/attributes
+  collectAttributeFKs(reg.dimensions, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(reg.resources, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(reg.attributes, tName, resolve, resolveEnumType, fkCollector)
+
   const label = reg.displayName?.en ?? reg.name
   return [createTable(tName, columns, `InformationRegister: ${label}`)]
 }
@@ -411,9 +550,11 @@ function generateAccumulationRegister(
   prefix: string,
   schema: string,
   resolve: (ref: { kind: string; name: string }) => string,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
 ): string[] {
-  const tName = qualifiedName(schema, tableName(prefix, reg.name))
+  const tbl = tableName(prefix, "AccumulationRegister", reg.name)
+  const tName = qualifiedName(schema, tbl)
   const stdAttrs = getStandardAttributes("AccumulationRegister", {
     registerType: reg.registerType,
     recorderTypes: reg.recorderTypes,
@@ -425,6 +566,13 @@ function generateAccumulationRegister(
     ...emitAttributeColumns(reg.resources, resolve, resolveEnumType),
     ...emitAttributeColumns(reg.attributes, resolve, resolveEnumType),
   ]
+
+  // FK для standard attrs (recorder_id single ref)
+  collectStandardAttrFKs(stdAttrs, tName, resolve, resolveEnumType, fkCollector)
+  // FK для dimensions/resources/attributes
+  collectAttributeFKs(reg.dimensions, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(reg.resources, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(reg.attributes, tName, resolve, resolveEnumType, fkCollector)
 
   const label = reg.displayName?.en ?? reg.name
   return [createTable(tName, columns, `AccumulationRegister: ${label}`)]
@@ -438,7 +586,7 @@ function generateConstantsSingleTable(
 ): string[] {
   if (constants.length === 0) return []
 
-  const tName = qualifiedName(schema, `${prefix}constants`)
+  const tName = qualifiedName(schema, `${prefix}const_settings`)
   const columns = [
     "  key varchar(100) PRIMARY KEY",
     "  value_type varchar(50) NOT NULL",
@@ -460,7 +608,7 @@ function generateConstantsSeparateTables(
 ): string[] {
   const statements: string[] = []
   for (const c of constants) {
-    const tName = qualifiedName(schema, tableName(prefix, c.name))
+    const tName = qualifiedName(schema, tableName(prefix, "Constant", c.name))
     const sqlType = mapFieldType({ type: c.valueType })
     const columns = [
       "  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1)",
@@ -478,9 +626,11 @@ function generateCustomTable(
   prefix: string,
   schema: string,
   resolve: (ref: { kind: string; name: string }) => string,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector: ForeignKeyDef[]
 ): string[] {
-  const tName = qualifiedName(schema, tableName(prefix, ct.name))
+  const tbl = tableName(prefix, "CustomTable", ct.name)
+  const tName = qualifiedName(schema, tbl)
   const stdAttrs = getStandardAttributes("CustomTable", {
     autoAddPrimaryKey: ct.autoAddPrimaryKey,
   })
@@ -490,6 +640,9 @@ function generateCustomTable(
     ...emitAttributeColumns(ct.attributes, resolve, resolveEnumType),
   ]
 
+  // FK для кастомних атрибутів
+  collectAttributeFKs(ct.attributes, tName, resolve, resolveEnumType, fkCollector)
+
   const label = ct.displayName?.en ?? ct.name
   return [createTable(tName, columns, `CustomTable: ${label}`)]
 }
@@ -498,23 +651,36 @@ function generateCustomTable(
 function generateTabularSection(
   ts: TabularSection,
   prefix: string,
+  kind: MetadataKind,
   parentName: string,
   parentQualified: string,
   schema: string,
   resolve: (ref: { kind: string; name: string }) => string,
-  resolveEnumType?: (ref: { kind: string; name: string }) => string | undefined
+  resolveEnumType?: (ref: { kind: string; name: string }) => string | undefined,
+  fkCollector?: ForeignKeyDef[]
 ): string {
-  const tName = qualifiedName(
-    schema,
-    tabularTableName(prefix, parentName, ts.name)
-  )
+  const tbl = tabularTableName(prefix, kind, parentName, ts.name)
+  const tName = qualifiedName(schema, tbl)
   const stdAttrs = getTabularSectionStandardAttributes()
   const columns = [
     ...emitStandardColumns(stdAttrs, resolve, undefined, resolveEnumType),
-    `  parent_id uuid NOT NULL REFERENCES ${parentQualified}(id)` +
-      " ON DELETE CASCADE",
+    `  parent_id uuid NOT NULL`,
     ...emitAttributeColumns(ts.attributes, resolve, resolveEnumType),
   ]
+
+  // FK для parent_id → parent table (через collector)
+  if (fkCollector) {
+    fkCollector.push({
+      sourceTable: tName,
+      column: "parent_id",
+      targetTable: parentQualified,
+      onDelete: "CASCADE",
+    })
+    // FK для кастомних атрибутів ТЧ
+    if (resolveEnumType) {
+      collectAttributeFKs(ts.attributes, tName, resolve, resolveEnumType, fkCollector)
+    }
+  }
   return createTable(tName, columns, `Tabular: ${ts.name}`)
 }
 
@@ -523,6 +689,7 @@ function generateTabularSection(
 // Зібрати індекси для одного об'єкту метаданих
 function collectIndexes(
   objectName: string,
+  kind: MetadataKind,
   prefix: string,
   schema: string,
   standardAttrs: StandardAttribute[],
@@ -530,7 +697,7 @@ function collectIndexes(
   resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
   tabularSections?: TabularSection[]
 ): string[] {
-  const tbl = tableName(prefix, objectName)
+  const tbl = tableName(prefix, kind, objectName)
   const qName = qualifiedName(schema, tbl)
   const lines: string[] = []
 
@@ -576,7 +743,7 @@ function collectIndexes(
   // Індекси для табличних частин
   if (tabularSections) {
     for (const ts of tabularSections) {
-      const tsTbl = tabularTableName(prefix, objectName, ts.name)
+      const tsTbl = tabularTableName(prefix, kind, objectName, ts.name)
       const tsQName = qualifiedName(schema, tsTbl)
       // parent_id FK
       lines.push(
@@ -617,6 +784,7 @@ function collectIndexes(
 // Індекси для регістрів (dimensions, resources, attributes)
 function collectRegisterIndexes(
   objectName: string,
+  kind: MetadataKind,
   prefix: string,
   schema: string,
   standardAttrs: StandardAttribute[],
@@ -625,7 +793,7 @@ function collectRegisterIndexes(
   attributes: Attribute[],
   resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
 ): string[] {
-  const tbl = tableName(prefix, objectName)
+  const tbl = tableName(prefix, kind, objectName)
   const qName = qualifiedName(schema, tbl)
   const lines: string[] = []
 
@@ -682,7 +850,7 @@ function generateAccumulationViews(
   schema: string,
   resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
 ): string[] {
-  const tbl = tableName(prefix, reg.name)
+  const tbl = tableName(prefix, "AccumulationRegister", reg.name)
   const qName = qualifiedName(schema, tbl)
   const label = reg.displayName?.en ?? reg.name
   const statements: string[] = []
@@ -791,7 +959,7 @@ function generateInformationRegisterViews(
   // Зріз останніх — тільки для періодичних регістрів
   if (reg.periodicity === "NonPeriodic") return []
 
-  const tbl = tableName(prefix, reg.name)
+  const tbl = tableName(prefix, "InformationRegister", reg.name)
   const qName = qualifiedName(schema, tbl)
   const label = reg.displayName?.en ?? reg.name
 
@@ -865,7 +1033,7 @@ function generateCatalogAutonumberTrigger(
   prefix: string,
   schema: string
 ): string[] {
-  const tbl = tableName(prefix, cat.name)
+  const tbl = tableName(prefix, "Catalog", cat.name)
   const qName = qualifiedName(schema, tbl)
   const label = cat.displayName?.en ?? cat.name
   const funcName = qualifiedName(schema, `${tbl}_autonumber`)
@@ -952,7 +1120,7 @@ function generateDocumentAutonumberTrigger(
   prefix: string,
   schema: string
 ): string[] {
-  const tbl = tableName(prefix, doc.name)
+  const tbl = tableName(prefix, "Document", doc.name)
   const qName = qualifiedName(schema, tbl)
   const label = doc.displayName?.en ?? doc.name
   const numLen = doc.numberLength ?? 11
@@ -1078,6 +1246,7 @@ export function generateProjectDDL(
   }
 
   const sections: string[] = []
+  const fkCollector: ForeignKeyDef[] = []
 
   // Заголовок
   sections.push(fileHeader(project.project.name || "schema"))
@@ -1099,12 +1268,26 @@ export function generateProjectDDL(
 
   for (const cat of project.catalogs) {
     tableStatements.push(
-      ...generateCatalog(cat, prefix, schema, resolve, resolveEnumType)
+      ...generateCatalog(
+        cat,
+        prefix,
+        schema,
+        resolve,
+        resolveEnumType,
+        fkCollector,
+      )
     )
   }
   for (const doc of project.documents) {
     tableStatements.push(
-      ...generateDocument(doc, prefix, schema, resolve, resolveEnumType)
+      ...generateDocument(
+        doc,
+        prefix,
+        schema,
+        resolve,
+        resolveEnumType,
+        fkCollector,
+      )
     )
   }
   for (const reg of project.informationRegisters) {
@@ -1114,7 +1297,8 @@ export function generateProjectDDL(
         prefix,
         schema,
         resolve,
-        resolveEnumType
+        resolveEnumType,
+        fkCollector,
       )
     )
   }
@@ -1125,7 +1309,8 @@ export function generateProjectDDL(
         prefix,
         schema,
         resolve,
-        resolveEnumType
+        resolveEnumType,
+        fkCollector,
       )
     )
   }
@@ -1142,7 +1327,14 @@ export function generateProjectDDL(
 
   for (const ct of project.customTables) {
     tableStatements.push(
-      ...generateCustomTable(ct, prefix, schema, resolve, resolveEnumType)
+      ...generateCustomTable(
+        ct,
+        prefix,
+        schema,
+        resolve,
+        resolveEnumType,
+        fkCollector,
+      )
     )
   }
 
@@ -1151,7 +1343,14 @@ export function generateProjectDDL(
     sections.push(tableStatements.join("\n\n"))
   }
 
-  // 8. Indexes
+  // 8. Foreign Keys (late-emitted для уникнення forward-reference проблем)
+  const fkStatements = emitForeignKeys(fkCollector, warnings)
+  if (fkStatements.length > 0) {
+    sections.push(sectionHeader("FOREIGN KEYS"))
+    sections.push(fkStatements.join("\n"))
+  }
+
+  // 9. Indexes
   const indexStatements: string[] = []
 
   for (const cat of project.catalogs) {
@@ -1162,12 +1361,13 @@ export function generateProjectDDL(
     indexStatements.push(
       ...collectIndexes(
         cat.name,
+        "Catalog",
         prefix,
         schema,
         stdAttrs,
         cat.attributes,
         resolveEnumType,
-        cat.tabularSections
+        cat.tabularSections,
       )
     )
   }
@@ -1176,12 +1376,13 @@ export function generateProjectDDL(
     indexStatements.push(
       ...collectIndexes(
         doc.name,
+        "Document",
         prefix,
         schema,
         stdAttrs,
         doc.attributes,
         resolveEnumType,
-        doc.tabularSections
+        doc.tabularSections,
       )
     )
   }
@@ -1194,13 +1395,14 @@ export function generateProjectDDL(
     indexStatements.push(
       ...collectRegisterIndexes(
         reg.name,
+        "InformationRegister",
         prefix,
         schema,
         stdAttrs,
         reg.dimensions,
         reg.resources,
         reg.attributes,
-        resolveEnumType
+        resolveEnumType,
       )
     )
   }
@@ -1212,13 +1414,14 @@ export function generateProjectDDL(
     indexStatements.push(
       ...collectRegisterIndexes(
         reg.name,
+        "AccumulationRegister",
         prefix,
         schema,
         stdAttrs,
         reg.dimensions,
         reg.resources,
         reg.attributes,
-        resolveEnumType
+        resolveEnumType,
       )
     )
   }
@@ -1229,11 +1432,12 @@ export function generateProjectDDL(
     indexStatements.push(
       ...collectIndexes(
         ct.name,
+        "CustomTable",
         prefix,
         schema,
         stdAttrs,
         ct.attributes,
-        resolveEnumType
+        resolveEnumType,
       )
     )
   }
@@ -1243,7 +1447,7 @@ export function generateProjectDDL(
     sections.push(indexStatements.join("\n\n"))
   }
 
-  // 9. Views
+  // 10. Views
   const viewStatements: string[] = []
 
   for (const reg of project.accumulationRegisters) {
@@ -1262,7 +1466,7 @@ export function generateProjectDDL(
     sections.push(viewStatements.join("\n\n"))
   }
 
-  // 10. Triggers
+  // 11. Triggers
   const triggerStatements: string[] = []
 
   for (const cat of project.catalogs) {
@@ -1285,11 +1489,39 @@ export function generateProjectDDL(
     sections.push(triggerStatements.join("\n\n"))
   }
 
-  // 11. Posting Functions
-  const postingStatements = generatePostingFunctions(project, prefix, schema)
+  // 12. Posting Functions
+  const postingStatements = generatePostingFunctions(
+    project,
+    prefix,
+    schema,
+    resolveEnumType,
+  )
   if (postingStatements.length > 0) {
     sections.push(sectionHeader("POSTING FUNCTIONS"))
     sections.push(postingStatements.join("\n\n"))
+  }
+
+  // B.4: Перевірка довжини ідентифікаторів (table names + FK constraint names)
+  const identifiersToCheck = new Set<string>()
+  // Таблиці всіх об'єктів
+  for (const c of project.catalogs) {
+    const t = tableName(prefix, "Catalog", c.name)
+    identifiersToCheck.add(t)
+    for (const ts of c.tabularSections) identifiersToCheck.add(tabularTableName(prefix, "Catalog", c.name, ts.name))
+  }
+  for (const d of project.documents) {
+    const t = tableName(prefix, "Document", d.name)
+    identifiersToCheck.add(t)
+    for (const ts of d.tabularSections) identifiersToCheck.add(tabularTableName(prefix, "Document", d.name, ts.name))
+  }
+  for (const e of project.enumerations) identifiersToCheck.add(tableName(prefix, "Enumeration", e.name))
+  for (const r of project.informationRegisters) identifiersToCheck.add(tableName(prefix, "InformationRegister", r.name))
+  for (const r of project.accumulationRegisters) identifiersToCheck.add(tableName(prefix, "AccumulationRegister", r.name))
+  for (const t of project.customTables) identifiersToCheck.add(tableName(prefix, "CustomTable", t.name))
+  // FK constraint names
+  for (const fk of fkCollector) identifiersToCheck.add(`fk_${fk.sourceTable}_${fk.column}`)
+  for (const id of identifiersToCheck) {
+    checkIdentifierLength(id, warnings)
   }
 
   const fileName = `${project.project.name || "schema"}.sql`

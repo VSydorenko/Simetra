@@ -70,11 +70,10 @@ function refToColumn(
         constraints: [],
       }
     }
-    // Single ref → uuid REFERENCES target(id)
-    const targetTable = resolveRefTable(ref)
+    // Single ref → uuid (FK виноситься в окрему секцію ALTER TABLE)
     return {
       sqlType: "uuid",
-      constraints: [`REFERENCES ${targetTable}(id)`],
+      constraints: [],
     }
   }
   if (allowedTypes && allowedTypes.length > 0) {

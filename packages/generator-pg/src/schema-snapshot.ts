@@ -3,6 +3,7 @@ import type {
   Attribute,
   StandardAttribute,
   TabularSection,
+  MetadataKind,
 } from '@simetra/core'
 import {
   getStandardAttributes,
@@ -74,35 +75,35 @@ function buildRefTableLookup(
 ): Map<string, string> {
   const map = new Map<string, string>()
   for (const c of project.catalogs) {
-    map.set(`Catalog.${c.name}`, qualifiedName(schema, tableName(prefix, c.name)))
+    map.set(`Catalog.${c.name}`, qualifiedName(schema, tableName(prefix, "Catalog", c.name)))
   }
   for (const d of project.documents) {
-    map.set(`Document.${d.name}`, qualifiedName(schema, tableName(prefix, d.name)))
+    map.set(`Document.${d.name}`, qualifiedName(schema, tableName(prefix, "Document", d.name)))
   }
   for (const e of project.enumerations) {
     if (enumStrategy === 'lookupTable') {
       map.set(
         `Enumeration.${e.name}`,
-        qualifiedName(schema, tableName(prefix, e.name)),
+        qualifiedName(schema, tableName(prefix, "Enumeration", e.name)),
       )
     }
   }
   for (const r of project.informationRegisters) {
     map.set(
       `InformationRegister.${r.name}`,
-      qualifiedName(schema, tableName(prefix, r.name)),
+      qualifiedName(schema, tableName(prefix, "InformationRegister", r.name)),
     )
   }
   for (const r of project.accumulationRegisters) {
     map.set(
       `AccumulationRegister.${r.name}`,
-      qualifiedName(schema, tableName(prefix, r.name)),
+      qualifiedName(schema, tableName(prefix, "AccumulationRegister", r.name)),
     )
   }
   for (const t of project.customTables) {
     map.set(
       `CustomTable.${t.name}`,
-      qualifiedName(schema, tableName(prefix, t.name)),
+      qualifiedName(schema, tableName(prefix, "CustomTable", t.name)),
     )
   }
   return map
@@ -119,7 +120,7 @@ function buildEnumTypeLookup(
   for (const e of project.enumerations) {
     map.set(
       `Enumeration.${e.name}`,
-      qualifiedName(schema, tableName(prefix, e.name)),
+      qualifiedName(schema, tableName(prefix, "Enumeration", e.name)),
     )
   }
   return map
@@ -257,6 +258,7 @@ function collectAttributeColumns(
 
 function collectTableIndexes(
   objectName: string,
+  kind: MetadataKind,
   prefix: string,
   schema: string,
   standardAttrs: StandardAttribute[],
@@ -264,7 +266,7 @@ function collectTableIndexes(
   resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
   tabularSections?: TabularSection[],
 ): Record<string, SnapshotIndex> {
-  const tbl = tableName(prefix, objectName)
+  const tbl = tableName(prefix, kind, objectName)
   const qName = qualifiedName(schema, tbl)
   const result: Record<string, SnapshotIndex> = {}
   const pkColumns = new Set(['id'])
@@ -305,7 +307,7 @@ function collectTableIndexes(
 
   if (tabularSections) {
     for (const ts of tabularSections) {
-      const tsTbl = tabularTableName(prefix, objectName, ts.name)
+      const tsTbl = tabularTableName(prefix, kind, objectName, ts.name)
       const tsQName = qualifiedName(schema, tsTbl)
 
       const parentIdx = `idx_${tsTbl}_parent_id`
@@ -358,6 +360,7 @@ function collectTableIndexes(
 
 function collectRegisterSnapshotIndexes(
   objectName: string,
+  kind: MetadataKind,
   prefix: string,
   schema: string,
   standardAttrs: StandardAttribute[],
@@ -366,7 +369,7 @@ function collectRegisterSnapshotIndexes(
   attributes: Attribute[],
   resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
 ): Record<string, SnapshotIndex> {
-  const tbl = tableName(prefix, objectName)
+  const tbl = tableName(prefix, kind, objectName)
   const qName = qualifiedName(schema, tbl)
   const result: Record<string, SnapshotIndex> = {}
 
@@ -440,7 +443,7 @@ export function buildSnapshot(
 
   // ── Enumerations ──────────────────────────────────────────
   for (const en of project.enumerations) {
-    const qName = qualifiedName(schema, tableName(prefix, en.name))
+    const qName = qualifiedName(schema, tableName(prefix, "Enumeration", en.name))
     const values = en.values.map((v) => v.name)
 
     if (options.enumStrategy === 'pgEnum') {
@@ -486,7 +489,7 @@ export function buildSnapshot(
 
   // ── Catalogs ──────────────────────────────────────────────
   for (const cat of project.catalogs) {
-    const tName = qualifiedName(schema, tableName(prefix, cat.name))
+    const tName = qualifiedName(schema, tableName(prefix, "Catalog", cat.name))
     const stdAttrs = getStandardAttributes('Catalog', {
       hierarchyType: cat.hierarchyType,
       owners: cat.owners,
@@ -528,20 +531,20 @@ export function buildSnapshot(
     // Табличні частини
     for (const ts of cat.tabularSections) {
       buildTabularSnapshot(
-        ts, prefix, cat.name, tName, schema,
+        ts, prefix, "Catalog", cat.name, tName, schema,
         resolve, resolveEnumType, tables,
       )
     }
 
     Object.assign(indexes, collectTableIndexes(
-      cat.name, prefix, schema, stdAttrs,
+      cat.name, "Catalog", prefix, schema, stdAttrs,
       cat.attributes, resolveEnumType, cat.tabularSections,
     ))
   }
 
   // ── Documents ─────────────────────────────────────────────
   for (const doc of project.documents) {
-    const tName = qualifiedName(schema, tableName(prefix, doc.name))
+    const tName = qualifiedName(schema, tableName(prefix, "Document", doc.name))
     const stdAttrs = getStandardAttributes('Document')
 
     const overrides: Record<string, { type?: string; length?: number }> = {}
@@ -564,20 +567,20 @@ export function buildSnapshot(
 
     for (const ts of doc.tabularSections) {
       buildTabularSnapshot(
-        ts, prefix, doc.name, tName, schema,
+        ts, prefix, "Document", doc.name, tName, schema,
         resolve, resolveEnumType, tables,
       )
     }
 
     Object.assign(indexes, collectTableIndexes(
-      doc.name, prefix, schema, stdAttrs,
+      doc.name, "Document", prefix, schema, stdAttrs,
       doc.attributes, resolveEnumType, doc.tabularSections,
     ))
   }
 
   // ── InformationRegisters ──────────────────────────────────
   for (const reg of project.informationRegisters) {
-    const tName = qualifiedName(schema, tableName(prefix, reg.name))
+    const tName = qualifiedName(schema, tableName(prefix, "InformationRegister", reg.name))
     const stdAttrs = getStandardAttributes('InformationRegister', {
       periodicity: reg.periodicity,
       writeMode: reg.writeMode,
@@ -602,15 +605,15 @@ export function buildSnapshot(
     tables[tName] = { columns }
 
     Object.assign(indexes, collectRegisterSnapshotIndexes(
-      reg.name, prefix, schema, stdAttrs,
+      reg.name, "InformationRegister", prefix, schema, stdAttrs,
       reg.dimensions, reg.resources, reg.attributes,
       resolveEnumType,
     ))
   }
 
-  // ── AccumulationRegisters ─────────────────────────────────
+  // ── AccumulationRegisters ─────────────────────────────────────────
   for (const reg of project.accumulationRegisters) {
-    const tName = qualifiedName(schema, tableName(prefix, reg.name))
+    const tName = qualifiedName(schema, tableName(prefix, "AccumulationRegister", reg.name))
     const stdAttrs = getStandardAttributes('AccumulationRegister', {
       registerType: reg.registerType,
       recorderTypes: reg.recorderTypes,
@@ -634,7 +637,7 @@ export function buildSnapshot(
     tables[tName] = { columns }
 
     Object.assign(indexes, collectRegisterSnapshotIndexes(
-      reg.name, prefix, schema, stdAttrs,
+      reg.name, "AccumulationRegister", prefix, schema, stdAttrs,
       reg.dimensions, reg.resources, reg.attributes,
       resolveEnumType,
     ))
@@ -643,7 +646,7 @@ export function buildSnapshot(
   // ── Constants ─────────────────────────────────────────────
   if (options.constantsStrategy === 'singleTable') {
     if (project.constants.length > 0) {
-      const tName = qualifiedName(schema, `${prefix}constants`)
+      const tName = qualifiedName(schema, `${prefix}const_settings`)
       tables[tName] = {
         columns: {
           key: {
@@ -706,7 +709,7 @@ export function buildSnapshot(
   } else {
     for (const c of project.constants) {
       const tName = qualifiedName(
-        schema, tableName(prefix, c.name),
+        schema, tableName(prefix, "Constant", c.name),
       )
       const sqlType = mapFieldType({ type: c.valueType })
       tables[tName] = {
@@ -732,7 +735,7 @@ export function buildSnapshot(
 
   // ── CustomTables ──────────────────────────────────────────
   for (const ct of project.customTables) {
-    const tName = qualifiedName(schema, tableName(prefix, ct.name))
+    const tName = qualifiedName(schema, tableName(prefix, "CustomTable", ct.name))
     const stdAttrs = getStandardAttributes('CustomTable', {
       autoAddPrimaryKey: ct.autoAddPrimaryKey,
     })
@@ -749,7 +752,7 @@ export function buildSnapshot(
     tables[tName] = { columns }
 
     Object.assign(indexes, collectTableIndexes(
-      ct.name, prefix, schema, stdAttrs,
+      ct.name, "CustomTable", prefix, schema, stdAttrs,
       ct.attributes, resolveEnumType,
     ))
   }
@@ -775,6 +778,7 @@ export function buildSnapshot(
 function buildTabularSnapshot(
   ts: TabularSection,
   prefix: string,
+  kind: MetadataKind,
   parentName: string,
   parentQualified: string,
   schema: string,
@@ -784,7 +788,7 @@ function buildTabularSnapshot(
 ): void {
   const tName = qualifiedName(
     schema,
-    tabularTableName(prefix, parentName, ts.name),
+    tabularTableName(prefix, kind, parentName, ts.name),
   )
   const stdAttrs = getTabularSectionStandardAttributes()
 

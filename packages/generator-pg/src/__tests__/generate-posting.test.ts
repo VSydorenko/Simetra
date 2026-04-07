@@ -93,14 +93,14 @@ describe('expressionToSql', () => {
   it('sum(items.amount) → subquery', () => {
     const result = expressionToSql('sum(items.amount)', 'd', 'ts', 'GoodsReceipt', '')
     expect(result).toContain('SELECT COALESCE(SUM(amount), 0)')
-    expect(result).toContain('goods_receipt_items')
+    expect(result).toContain('doc_goods_receipt_items')
     expect(result).toContain('parent_id = d.id')
   })
 
   it('count(items) → subquery', () => {
     const result = expressionToSql('count(items)', 'd', 'ts', 'GoodsReceipt', '')
     expect(result).toContain('SELECT COUNT(*)')
-    expect(result).toContain('goods_receipt_items')
+    expect(result).toContain('doc_goods_receipt_items')
     expect(result).toContain('parent_id = d.id')
   })
 
@@ -197,9 +197,9 @@ describe('posting: tabularSection source', () => {
   it('generates post function with INSERT...SELECT', () => {
     const sql = generateSQL(project)
     expect(sql).toContain('CREATE OR REPLACE FUNCTION post_goods_receipt')
-    expect(sql).toContain('INSERT INTO inventory_balance')
+    expect(sql).toContain('INSERT INTO ar_inventory_balance')
     expect(sql).toContain('SELECT')
-    expect(sql).toContain('goods_receipt_items ts')
+    expect(sql).toContain('doc_goods_receipt_items ts')
     expect(sql).toContain('ts.product')
     expect(sql).toContain('d.warehouse')
   })
@@ -228,7 +228,7 @@ describe('posting: tabularSection source', () => {
   it('generates unpost function', () => {
     const sql = generateSQL(project)
     expect(sql).toContain('CREATE OR REPLACE FUNCTION unpost_goods_receipt')
-    expect(sql).toContain('DELETE FROM inventory_balance WHERE recorder_id')
+    expect(sql).toContain('DELETE FROM ar_inventory_balance WHERE recorder_id')
   })
 
   it('generates check function for NonNegativeBalance', () => {
@@ -301,7 +301,7 @@ describe('posting: document source', () => {
   it('generates post function with VALUES', () => {
     const sql = generateSQL(project)
     expect(sql).toContain('CREATE OR REPLACE FUNCTION post_payment_order')
-    expect(sql).toContain('INSERT INTO settlements_balance')
+    expect(sql).toContain('INSERT INTO ar_settlements_balance')
     expect(sql).toContain('VALUES')
     expect(sql).toContain('d.partner')
     expect(sql).toContain('d.amount')
@@ -458,14 +458,14 @@ describe('expressionToSql: schema qualification', () => {
     const result = expressionToSql(
       'sum(items.amount)', 'd', 'ts', 'GoodsReceipt', '', 'erp',
     )
-    expect(result).toContain('erp.goods_receipt_items')
+    expect(result).toContain('erp.doc_goods_receipt_items')
   })
 
   it('count() з custom schema → schema-qualified subquery', () => {
     const result = expressionToSql(
       'count(items)', 'd', 'ts', 'GoodsReceipt', '', 'erp',
     )
-    expect(result).toContain('erp.goods_receipt_items')
+    expect(result).toContain('erp.doc_goods_receipt_items')
   })
 })
 
@@ -722,13 +722,13 @@ describe('posting: InformationRegister movement', () => {
   it('generates post function for InformationRegister movement', () => {
     const sql = generateSQL(project)
     expect(sql).toContain('CREATE OR REPLACE FUNCTION post_price_change')
-    expect(sql).toContain('INSERT INTO product_prices')
-    expect(sql).toContain('price_change_prices ts')
+    expect(sql).toContain('INSERT INTO ir_product_prices')
+    expect(sql).toContain('doc_price_change_prices ts')
   })
 
   it('generates unpost function for InformationRegister movement', () => {
     const sql = generateSQL(project)
-    expect(sql).toContain('DELETE FROM product_prices WHERE recorder_id')
+    expect(sql).toContain('DELETE FROM ir_product_prices WHERE recorder_id')
   })
 })
 
@@ -843,7 +843,7 @@ describe('posting: AR.Balance with Ref dimension', () => {
     expect(sql).toContain('product_id')
     // Не повинно бути warehouse без _id у INSERT columns
     const postFunc = sql.slice(sql.indexOf('post_goods_receipt'))
-    const insertMatch = postFunc.match(/INSERT INTO inventory_balance \(\n\s+(.+?)\n\s+\)/)
+    const insertMatch = postFunc.match(/INSERT INTO ar_inventory_balance \(\n\s+(.+?)\n\s+\)/)
     expect(insertMatch).toBeTruthy()
     if (insertMatch) {
       const cols = insertMatch[1]

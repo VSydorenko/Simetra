@@ -8,6 +8,7 @@ import type {
   Attribute,
   StandardAttribute,
   StandardAttributeSettings,
+  MetadataKind,
 } from '@simetra/core'
 import { getStandardAttributes, getTabularSectionStandardAttributes, isPostingCompatible } from '@simetra/core'
 import { toSnakeCase, tableName, tabularTableName, qualifiedName, escapeLiteral } from './naming'
@@ -45,7 +46,7 @@ export function expressionToSql(
   const sumMatch = expr.match(/^sum\((\w+)\.(\w+)\)$/)
   if (sumMatch) {
     const [, tsName, field] = sumMatch
-    const tsTbl = qualifiedName(schema, tabularTableName(prefix, docTableName, tsName))
+    const tsTbl = qualifiedName(schema, tabularTableName(prefix, "Document", docTableName, tsName))
     const physicalField = resolveField ? resolveField('row', field) : toSnakeCase(field)
     return `(SELECT COALESCE(SUM(${physicalField}), 0) FROM ${tsTbl} WHERE parent_id = ${docAlias}.id)`
   }
@@ -54,7 +55,7 @@ export function expressionToSql(
   const countMatch = expr.match(/^count\((\w+)\)$/)
   if (countMatch) {
     const [, tsName] = countMatch
-    const tsTbl = qualifiedName(schema, tabularTableName(prefix, docTableName, tsName))
+    const tsTbl = qualifiedName(schema, tabularTableName(prefix, "Document", docTableName, tsName))
     return `(SELECT COUNT(*) FROM ${tsTbl} WHERE parent_id = ${docAlias}.id)`
   }
 
@@ -224,6 +225,7 @@ function generateMovementInsert(
   prefix: string,
   schema: string,
   project: ProjectModel,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
 ): string {
   const register = findRegister(project, movement.register)
   if (!register) {
@@ -240,7 +242,7 @@ function generateMovementInsert(
     )
   }
 
-  const regTable = qualifiedName(schema, tableName(prefix, register.name))
+  const regTable = qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, register.name))
 
   // Побудувати registerSettings для getStandardAttributes
   const registerSettings: StandardAttributeSettings = {
@@ -272,16 +274,6 @@ function generateMovementInsert(
   // Визначити чи recorder_id polymorphic
   const recorderAttr = stdAttrs.find((a) => a.name === 'recorder_id')
   const isPolymorphicRecorder = recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
-
-  // Стовпці dimensions/resources/attributes — через resolveColumnName з register metadata
-  const resolveEnumType = (ref: { kind: string; name: string }): string | undefined => {
-    if (ref.kind === 'Enumeration') {
-      return project.enumerations.find((e) => e.name === ref.name)
-        ? `enum_${toSnakeCase(ref.name)}`
-        : undefined
-    }
-    return undefined
-  }
 
   // Визначити атрибути source (ТЧ або документ) для резолюції фізичних імен полів
   let sourceAttrs: Attribute[] = []
@@ -413,7 +405,7 @@ function generateMovementInsert(
   // tabularSection source → SELECT ... FROM tabular_table
   if (movement.source.startsWith('tabularSection:')) {
     const tsName = movement.source.slice('tabularSection:'.length)
-    const tsTable = qualifiedName(schema, tabularTableName(prefix, doc.name, tsName))
+    const tsTable = qualifiedName(schema, tabularTableName(prefix, "Document", doc.name, tsName))
 
     const condition = translatedCondition ? `\n  AND (${translatedCondition})` : ''
 
@@ -464,6 +456,7 @@ function generateCheckFunction(
   prefix: string,
   schema: string,
   project: ProjectModel,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
 ): string {
   const register = findRegister(project, validation.register)
   if (!register) {
@@ -480,17 +473,7 @@ function generateCheckFunction(
     )
   }
 
-  // resolveEnumType для register dimensions
-  const resolveEnumType = (ref: { kind: string; name: string }): string | undefined => {
-    if (ref.kind === 'Enumeration') {
-      return project.enumerations.find((e) => e.name === ref.name)
-        ? `enum_${toSnakeCase(ref.name)}`
-        : undefined
-    }
-    return undefined
-  }
-
-  const regTable = qualifiedName(schema, tableName(prefix, register.name))
+  const regTable = qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, register.name))
   const regSnake = toSnakeCase(register.name)
   const resource = toSnakeCase(validation.resource)
   const funcName = qualifiedName(schema, `check_${regSnake}_${resource}`)
@@ -616,10 +599,11 @@ function generatePostFunction(
   prefix: string,
   schema: string,
   project: ProjectModel,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
 ): string {
   const posting = doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] }
   const docSnake = toSnakeCase(doc.name)
-  const docTable = qualifiedName(schema, tableName(prefix, doc.name))
+  const docTable = qualifiedName(schema, tableName(prefix, "Document", doc.name))
   const funcName = qualifiedName(schema, `post_${docSnake}`)
 
   // Очистка попередніх рухів (дедупліковані за регістром)
@@ -630,7 +614,7 @@ function generatePostFunction(
       const register = findRegister(project, m.register)
       if (register) {
         uniqueDeleteRegs.set(key, {
-          regTable: qualifiedName(schema, tableName(prefix, m.register.name)),
+          regTable: qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, m.register.name)),
           register,
         })
       }
@@ -644,7 +628,7 @@ function generatePostFunction(
 
   // INSERT рухів
   const insertStatements = posting.movements.map((m) =>
-    generateMovementInsert(m, doc, prefix, schema, project),
+    generateMovementInsert(m, doc, prefix, schema, project, resolveEnumType),
   )
 
   // Валідації — FOR loop по DISTINCT dimension combinations з регістру
@@ -656,17 +640,7 @@ function generatePostFunction(
       )
     }
 
-    // resolveEnumType для dimension columns
-    const resolveEnumType = (ref: { kind: string; name: string }): string | undefined => {
-      if (ref.kind === 'Enumeration') {
-        return project.enumerations.find((e) => e.name === ref.name)
-          ? `enum_${toSnakeCase(ref.name)}`
-          : undefined
-      }
-      return undefined
-    }
-
-    const regTable = qualifiedName(schema, tableName(prefix, register.name))
+    const regTable = qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, register.name))
     const regSnake = toSnakeCase(register.name)
     const resource = toSnakeCase(v.resource)
     const checkFunc = qualifiedName(schema, `check_${regSnake}_${resource}`)
@@ -769,7 +743,7 @@ function generateUnpostFunction(
 ): string {
   const posting = doc.posting as { movements: PostingMovement[] }
   const docSnake = toSnakeCase(doc.name)
-  const docTable = qualifiedName(schema, tableName(prefix, doc.name))
+  const docTable = qualifiedName(schema, tableName(prefix, "Document", doc.name))
   const funcName = qualifiedName(schema, `unpost_${docSnake}`)
 
   // Видалення рухів з кожного регістру
@@ -780,7 +754,7 @@ function generateUnpostFunction(
       const register = findRegister(project, m.register)
       if (register) {
         uniqueRegisters.set(key, {
-          regTable: qualifiedName(schema, tableName(prefix, m.register.name)),
+          regTable: qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, m.register.name)),
           register,
         })
       }
@@ -816,6 +790,7 @@ export function generatePostingFunctions(
   project: ProjectModel,
   prefix: string,
   schema: string,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
 ): string[] {
   const statements: string[] = []
 
@@ -832,12 +807,12 @@ export function generatePostingFunctions(
 
     const posting = doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] }
 
-    statements.push(generatePostFunction(doc, prefix, schema, project))
+    statements.push(generatePostFunction(doc, prefix, schema, project, resolveEnumType))
     statements.push(generateUnpostFunction(doc, prefix, schema, project))
 
     // Check functions для кожної валідації
     for (const v of posting.validations ?? []) {
-      statements.push(generateCheckFunction(v, prefix, schema, project))
+      statements.push(generateCheckFunction(v, prefix, schema, project, resolveEnumType))
     }
   }
 

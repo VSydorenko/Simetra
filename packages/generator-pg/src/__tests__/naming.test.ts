@@ -34,27 +34,29 @@ describe("toSnakeCase", () => {
 })
 
 describe("tableName", () => {
-  it("returns snake_case without prefix", () => {
-    expect(tableName("", "Products")).toBe("products")
-    expect(tableName("", "SalesOrder")).toBe("sales_order")
+  it("returns kind-prefixed snake_case without prefix", () => {
+    expect(tableName("", "Catalog", "Products")).toBe("cat_products")
+    expect(tableName("", "Document", "SalesOrder")).toBe("doc_sales_order")
   })
 
   it("prepends prefix", () => {
-    expect(tableName("app_", "Products")).toBe("app_products")
-    expect(tableName("erp_", "SalesOrder")).toBe("erp_sales_order")
+    expect(tableName("app_", "Catalog", "Products")).toBe("app_cat_products")
+    expect(tableName("erp_", "Document", "SalesOrder")).toBe(
+      "erp_doc_sales_order"
+    )
   })
 })
 
 describe("tabularTableName", () => {
-  it("combines parent and section names", () => {
-    expect(tabularTableName("", "Products", "barcodes")).toBe(
-      "products_barcodes"
+  it("combines parent and section names with kind prefix", () => {
+    expect(tabularTableName("", "Catalog", "Products", "barcodes")).toBe(
+      "cat_products_barcodes"
     )
   })
 
   it("includes prefix", () => {
-    expect(tabularTableName("app_", "Products", "barcodes")).toBe(
-      "app_products_barcodes"
+    expect(tabularTableName("app_", "Catalog", "Products", "barcodes")).toBe(
+      "app_cat_products_barcodes"
     )
   })
 })

@@ -70,85 +70,85 @@
 
 Термін "Late-Emitted FK" означає: всі FK виносяться у секцію `ALTER TABLE ... ADD CONSTRAINT` після всіх `CREATE TABLE`. Це **НЕ** PostgreSQL DEFERRABLE/INITIALLY DEFERRED (runtime feature для відкладення перевірки FK до кінця транзакції). SQL Server не підтримує DEFERRABLE — ще одна причина їх не змішувати.
 
-- [ ] `type-mapping.ts:refToColumn()` — прибрати `REFERENCES target(id)` із constraints для non-enum single Ref. Повертає лише `sqlType: "uuid"`
-- [ ] Створити інтерфейс `ForeignKeyDef { sourceTable, column, targetTable, onDelete? }` і масив-колектор у `generateProjectDDL()`
-- [ ] **Всі** FK виносяться в колектор through єдиний механізм:
+- [X] `type-mapping.ts:refToColumn()` — прибрати `REFERENCES target(id)` із constraints для non-enum single Ref. Повертає лише `sqlType: "uuid"`
+- [X] Створити інтерфейс `ForeignKeyDef { sourceTable, column, targetTable, onDelete? }` і масив-колектор у `generateProjectDDL()`
+- [X] **Всі** FK виносяться в колектор through єдиний механізм:
   - Single Ref атрибути → `FK (column_id) REFERENCES target(id)`
   - Self parent_id каталогів → `FK (parent_id) REFERENCES self(id)`
   - Tabular parent_id → `FK (parent_id) REFERENCES parent(id) ON DELETE CASCADE`
   - Owner_id (single) → `FK (owner_id) REFERENCES owner(id)`
   - Recorder_id (single) → `FK (recorder_id) REFERENCES recorder(id)`
   - Enumeration lookupTable refs → `FK (column) REFERENCES enum_table(id)`
-- [ ] Polymorphic Ref — **без FK** (Dynamic Link pattern, як зараз)
-- [ ] pgEnum refs — **без FK** (це PostgreSQL TYPE, не таблиця)
-- [ ] `generateProjectDDL()` додає нову секцію **"FOREIGN KEYS"** між TABLES і INDEXES
-- [ ] Конвенція іменування FK constraint: `fk_{source_table}_{column_name}`
-- [ ] Порядок секцій: ENUM TYPES → TABLES → **FOREIGN KEYS** → INDEXES → VIEWS → TRIGGERS → POSTING FUNCTIONS
+- [X] Polymorphic Ref — **без FK** (Dynamic Link pattern, як зараз)
+- [X] pgEnum refs — **без FK** (це PostgreSQL TYPE, не таблиця)
+- [X] `generateProjectDDL()` додає нову секцію **"FOREIGN KEYS"** між TABLES і INDEXES
+- [X] Конвенція іменування FK constraint: `fk_{source_table}_{column_name}`
+- [X] Порядок секцій: ENUM TYPES → TABLES → **FOREIGN KEYS** → INDEXES → VIEWS → TRIGGERS → POSTING FUNCTIONS
 
 ### B.2 — Kind-Prefix Table Naming
 
-- [ ] `naming.ts` — оновити для використання core physical naming:
+- [X] `naming.ts` — оновити для використання core physical naming:
   - `tableName(tablePrefix, kind, objectName)` = `tablePrefix + physicalObjectName(kind, objectName)`
   - `tabularTableName(tablePrefix, kind, parentName, sectionName)` = `tablePrefix + physicalTabularName(kind, parentName, sectionName)`
   - `toSnakeCase` — **видалити** з naming.ts, імпортувати з `@simetra/core`
   - `qualifiedName`, `quoteIdentifier`, `escapeLiteral` — залишаються в generator-pg (dialect-specific)
-- [ ] Оновити всі виклики `tableName()` по всьому generator-pg (~45 call sites у generate-table.ts та generate-posting.ts)
-- [ ] `buildRefTableLookup()` — передавати kind у tableName
-- [ ] `buildEnumTypeLookup()` — передавати `"Enumeration"` як kind
-- [ ] Enumeration naming:
+- [X] Оновити всі виклики `tableName()` по всьому generator-pg (~45 call sites у generate-table.ts та generate-posting.ts)
+- [X] `buildRefTableLookup()` — передавати kind у tableName
+- [X] `buildEnumTypeLookup()` — передавати `"Enumeration"` як kind
+- [X] Enumeration naming:
   - `pgEnum` стратегія: `CREATE TYPE {prefix}enum_{snake_case(name)} AS ENUM (...)`
   - `lookupTable` стратегія: `CREATE TABLE {prefix}enum_{snake_case(name)} (...)`
   - Обидва варіанти використовують `enum_` prefix — захист від колізій з іншими kind-ами (наприклад, `Catalog.Status` vs `Enumeration.Status`)
-- [ ] Constants naming:
+- [X] Constants naming:
   - `singleTable`: фіксоване ім'я `{tablePrefix}const_settings`
   - `separateTables`: стандартний kind-prefix `{tablePrefix}const_{snake_case(name)}`
 
 ### B.3 — Enum Naming Drift Fix
 
-- [ ] Видалити 3 місця з hardcoded `` `enum_${toSnakeCase(ref.name)}` `` у `generate-posting.ts` (рядки ~280, ~487, ~663)
-- [ ] `generatePostingFunctions()` отримує `resolveEnumType` callback як параметр від `generateProjectDDL()` — використовує той самий lookup, що й generate-table
-- [ ] Це автоматично виправляє: відсутній tablePrefix, відсутній schema qualification у posting enum resolution
+- [X] Видалити 3 місця з hardcoded `` `enum_${toSnakeCase(ref.name)}` `` у `generate-posting.ts` (рядки ~280, ~487, ~663)
+- [X] `generatePostingFunctions()` отримує `resolveEnumType` callback як параметр від `generateProjectDDL()` — використовує той самий lookup, що й generate-table
+- [X] Це автоматично виправляє: відсутній tablePrefix, відсутній schema qualification у posting enum resolution
 
 ### B.4 — Identifier Length Validation
 
-- [ ] Додати warning (не error) коли згенерований ідентифікатор > 63 символів (PostgreSQL NAMEDATALEN-1 limit)
-- [ ] PostgreSQL тихо обрізає довгі ідентифікатори — warning пояснює чому рантайм ім'я може не збігатися з очікуваним
-- [ ] Перевіряти: table names, constraint names (fk_..., uq_...)
-- [ ] Warning додається у `GeneratorOutput.warnings[]`
+- [X] Додати warning (не error) коли згенерований ідентифікатор > 63 символів (PostgreSQL NAMEDATALEN-1 limit)
+- [X] PostgreSQL тихо обрізає довгі ідентифікатори — warning пояснює чому рантайм ім'я може не збігатися з очікуваним
+- [X] Перевіряти: table names, constraint names (fk_..., uq_...)
+- [X] Warning додається у `GeneratorOutput.warnings[]`
 
 ### Тести Phase B
 
-- [ ] Тест: catalog → document FK (forward reference) генерує `ALTER TABLE ... ADD CONSTRAINT`
-- [ ] Тест: document → catalog FK генерує `ALTER TABLE ... ADD CONSTRAINT`
-- [ ] Тест: self-reference (catalog → self) генерує правильний FK
-- [ ] Тест: tabular section parent_id генерує FK з ON DELETE CASCADE через ALTER TABLE
-- [ ] Тест: owner_id single ref генерує FK через ALTER TABLE
-- [ ] Тест: recorder_id single ref генерує FK через ALTER TABLE
-- [ ] Тест: polymorphic ref **не** генерує FK (Dynamic Link)
-- [ ] Тест: pgEnum ref **не** генерує FK
-- [ ] Тест: lookupTable enum ref генерує FK
-- [ ] Тест: `InformationRegister.X` + `AccumulationRegister.X` генерують різні таблиці (`ir_x` / `ar_x`)
-- [ ] Тест: kind-prefix в іменах таблиць для **кожного** kind
-- [ ] Тест: kind-prefix з project-wide tablePrefix (`erp_cat_products`)
-- [ ] Тест: табличні частини з kind-prefix (`cat_products_barcodes`)
-- [ ] Тест: posting функції використовують правильні kind-prefixed імена таблиць
-- [ ] Тест: posting enum resolution збігається з DDL enum resolution (з tablePrefix і schema)
-- [ ] Тест: constants singleTable → `const_settings`; separateTables → `const_{name}`
-- [ ] Тест: identifier > 63 chars генерує warning
-- [ ] Тест у `naming.test.ts` для нового signature `tableName(prefix, kind, name)`, `tabularTableName(prefix, kind, parent, section)`
-- [ ] Оновити всі існуючі тести, що зламаються через зміну імен таблиць та late-emitted FK
+- [X] Тест: catalog → document FK (forward reference) генерує `ALTER TABLE ... ADD CONSTRAINT`
+- [X] Тест: document → catalog FK генерує `ALTER TABLE ... ADD CONSTRAINT`
+- [X] Тест: self-reference (catalog → self) генерує правильний FK
+- [X] Тест: tabular section parent_id генерує FK з ON DELETE CASCADE через ALTER TABLE
+- [X] Тест: owner_id single ref генерує FK через ALTER TABLE
+- [X] Тест: recorder_id single ref генерує FK через ALTER TABLE
+- [X] Тест: polymorphic ref **не** генерує FK (Dynamic Link)
+- [X] Тест: pgEnum ref **не** генерує FK
+- [X] Тест: lookupTable enum ref генерує FK
+- [X] Тест: `InformationRegister.X` + `AccumulationRegister.X` генерують різні таблиці (`ir_x` / `ar_x`)
+- [X] Тест: kind-prefix в іменах таблиць для **кожного** kind
+- [X] Тест: kind-prefix з project-wide tablePrefix (`erp_cat_products`)
+- [X] Тест: табличні частини з kind-prefix (`cat_products_barcodes`)
+- [X] Тест: posting функції використовують правильні kind-prefixed імена таблиць
+- [X] Тест: posting enum resolution збігається з DDL enum resolution (з tablePrefix і schema)
+- [X] Тест: constants singleTable → `const_settings`; separateTables → `const_{name}`
+- [X] Тест: identifier > 63 chars генерує warning
+- [X] Тест у `naming.test.ts` для нового signature `tableName(prefix, kind, name)`, `tabularTableName(prefix, kind, parent, section)`
+- [X] Оновити всі існуючі тести, що зламаються через зміну імен таблиць та late-emitted FK
 
 ### DoD Phase B
 
-- [ ] `pnpm --filter @simetra/generator-pg test` — всі тести проходять
-- [ ] `pnpm typecheck` — без помилок
-- [ ] `pnpm lint` — без помилок
-- [ ] Жоден inline REFERENCES у генерованому SQL (окрім pgEnum type refs)
-- [ ] SQL містить секцію FOREIGN KEYS з ALTER TABLE ... ADD CONSTRAINT
-- [ ] `InformationRegister.X` та `AccumulationRegister.X` генерують різні назви таблиць
-- [ ] Кожен kind має свій prefix у фізичних іменах таблиць
-- [ ] Posting функції та DDL використовують ідентичне enum type resolution
-- [ ] Жодного hardcoded `enum_` у generate-posting.ts
+- [X] `pnpm --filter @simetra/generator-pg test` — всі тести проходять
+- [X] `pnpm typecheck` — без помилок
+- [X] `pnpm lint` — без помилок
+- [X] Жоден inline REFERENCES у генерованому SQL (окрім pgEnum type refs)
+- [X] SQL містить секцію FOREIGN KEYS з ALTER TABLE ... ADD CONSTRAINT
+- [X] `InformationRegister.X` та `AccumulationRegister.X` генерують різні назви таблиць
+- [X] Кожен kind має свій prefix у фізичних іменах таблиць
+- [X] Posting функції та DDL використовують ідентичне enum type resolution
+- [X] Жодного hardcoded `enum_` у generate-posting.ts
 
 ---
 

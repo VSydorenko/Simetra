@@ -1,25 +1,24 @@
-// PascalCase → snake_case: SalesOrder → sales_order
-export function toSnakeCase(name: string): string {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
-    .toLowerCase()
+import type { MetadataKind } from "@simetra/core"
+import { physicalObjectName, physicalTabularName, toSnakeCase } from "@simetra/core"
+
+// Re-export toSnakeCase від core для зворотної сумісності імпортів
+export { toSnakeCase } from "@simetra/core"
+
+// Повна назва таблиці з prefix та kind-prefix
+export function tableName(prefix: string, kind: MetadataKind, objectName: string): string {
+  const physical = physicalObjectName(kind, objectName)
+  return prefix ? `${prefix}${physical}` : physical
 }
 
-// Повна назва таблиці з prefix
-export function tableName(prefix: string, objectName: string): string {
-  const snake = toSnakeCase(objectName)
-  return prefix ? `${prefix}${snake}` : snake
-}
-
-// Назва таблиці табличної частини: {parent}_{section}
+// Назва таблиці табличної частини з kind-prefix
 export function tabularTableName(
   prefix: string,
+  kind: MetadataKind,
   parentName: string,
   sectionName: string
 ): string {
-  const parent = tableName(prefix, parentName)
-  return `${parent}_${sectionName}`
+  const physical = physicalTabularName(kind, parentName, sectionName)
+  return prefix ? `${prefix}${physical}` : physical
 }
 
 // Кваліфікована назва з schema

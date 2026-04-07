@@ -128,11 +128,11 @@ describe('buildSnapshot', () => {
       catalogs: [catalogDef({ name: 'Items' })],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.tables['items']).toBeDefined()
-    expect(snap.tables['items'].columns['id']).toBeDefined()
-    expect(snap.tables['items'].columns['id'].primaryKey).toBe(true)
-    expect(snap.tables['items'].columns['code']).toBeDefined()
-    expect(snap.tables['items'].columns['description']).toBeDefined()
+    expect(snap.tables['cat_items']).toBeDefined()
+    expect(snap.tables['cat_items'].columns['id']).toBeDefined()
+    expect(snap.tables['cat_items'].columns['id'].primaryKey).toBe(true)
+    expect(snap.tables['cat_items'].columns['code']).toBeDefined()
+    expect(snap.tables['cat_items'].columns['description']).toBeDefined()
   })
 
   it('створює enum entry для pgEnum Enumeration', () => {
@@ -147,9 +147,9 @@ describe('buildSnapshot', () => {
       }],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.enums['status']).toBeDefined()
-    expect(snap.enums['status'].strategy).toBe('pgEnum')
-    expect(snap.enums['status'].values).toEqual(['Active', 'Inactive'])
+    expect(snap.enums['enum_status']).toBeDefined()
+    expect(snap.enums['enum_status'].strategy).toBe('pgEnum')
+    expect(snap.enums['enum_status'].values).toEqual(['Active', 'Inactive'])
   })
 
   it('створює таблицю для lookupTable Enumeration', () => {
@@ -165,9 +165,9 @@ describe('buildSnapshot', () => {
     })
     const opts = { ...defaultOpts, enumStrategy: 'lookupTable' as const }
     const snap = buildSnapshot(project, opts)
-    expect(snap.enums['status'].strategy).toBe('lookupTable')
-    expect(snap.tables['status']).toBeDefined()
-    expect(snap.tables['status'].columns['name']).toBeDefined()
+    expect(snap.enums['enum_status'].strategy).toBe('lookupTable')
+    expect(snap.tables['enum_status']).toBeDefined()
+    expect(snap.tables['enum_status'].columns['name']).toBeDefined()
   })
 
   it('створює таблицю для Document', () => {
@@ -180,9 +180,9 @@ describe('buildSnapshot', () => {
       })],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.tables['sales_order']).toBeDefined()
-    expect(snap.tables['sales_order'].columns['amount']).toBeDefined()
-    expect(snap.tables['sales_order'].columns['amount'].sqlType).toBe(
+    expect(snap.tables['doc_sales_order']).toBeDefined()
+    expect(snap.tables['doc_sales_order'].columns['amount']).toBeDefined()
+    expect(snap.tables['doc_sales_order'].columns['amount'].sqlType).toBe(
       'numeric(15, 2)',
     )
   })
@@ -201,10 +201,10 @@ describe('buildSnapshot', () => {
       })],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.tables['products']).toBeDefined()
-    expect(snap.tables['products_prices']).toBeDefined()
-    expect(snap.tables['products_prices'].columns['parent_id']).toBeDefined()
-    expect(snap.tables['products_prices'].columns['price']).toBeDefined()
+    expect(snap.tables['cat_products']).toBeDefined()
+    expect(snap.tables['cat_products_prices']).toBeDefined()
+    expect(snap.tables['cat_products_prices'].columns['parent_id']).toBeDefined()
+    expect(snap.tables['cat_products_prices'].columns['price']).toBeDefined()
   })
 
   it('створює indeksy для FK ref attributes', () => {
@@ -221,8 +221,8 @@ describe('buildSnapshot', () => {
       })],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.indexes['idx_items_category_id']).toBeDefined()
-    expect(snap.indexes['idx_items_category_id'].table).toBe('items')
+    expect(snap.indexes['idx_cat_items_category_id']).toBeDefined()
+    expect(snap.indexes['idx_cat_items_category_id'].table).toBe('cat_items')
   })
 
   it('зберігає options у snapshot', () => {
@@ -241,9 +241,9 @@ describe('buildSnapshot', () => {
       }],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.tables['constants']).toBeDefined()
-    expect(snap.tables['constants'].columns['key']).toBeDefined()
-    expect(snap.tables['constants'].columns['value_text']).toBeDefined()
+    expect(snap.tables['const_settings']).toBeDefined()
+    expect(snap.tables['const_settings'].columns['key']).toBeDefined()
+    expect(snap.tables['const_settings'].columns['value_text']).toBeDefined()
   })
 
   it('створює окремі таблиці для Constants (separateTables)', () => {
@@ -259,8 +259,8 @@ describe('buildSnapshot', () => {
       constantsStrategy: 'separateTables' as const,
     }
     const snap = buildSnapshot(project, opts)
-    expect(snap.tables['company_name']).toBeDefined()
-    expect(snap.tables['company_name'].columns['value']).toBeDefined()
+    expect(snap.tables['const_company_name']).toBeDefined()
+    expect(snap.tables['const_company_name'].columns['value']).toBeDefined()
   })
 
   it('створює table для CustomTable', () => {
@@ -273,8 +273,8 @@ describe('buildSnapshot', () => {
       })],
     })
     const snap = buildSnapshot(project, defaultOpts)
-    expect(snap.tables['audit_log']).toBeDefined()
-    expect(snap.tables['audit_log'].columns['message']).toBeDefined()
+    expect(snap.tables['ct_audit_log']).toBeDefined()
+    expect(snap.tables['ct_audit_log'].columns['message']).toBeDefined()
   })
 })
 
@@ -312,7 +312,7 @@ describe('computeDiff', () => {
     const diff = computeDiff(oldSnap, newSnap)
 
     expect(diff.addedColumns).toHaveLength(1)
-    expect(diff.addedColumns[0].table).toBe('items')
+    expect(diff.addedColumns[0].table).toBe('cat_items')
     expect(diff.addedColumns[0].column).toBe('weight')
     expect(diff.addedColumns[0].def.sqlType).toBe('numeric(10, 3)')
     expect(diff.hasDestructiveChanges).toBe(false)
@@ -335,7 +335,7 @@ describe('computeDiff', () => {
     const diff = computeDiff(oldSnap, newSnap)
 
     expect(diff.droppedColumns).toHaveLength(1)
-    expect(diff.droppedColumns[0].table).toBe('items')
+    expect(diff.droppedColumns[0].table).toBe('cat_items')
     expect(diff.droppedColumns[0].column).toBe('weight')
     expect(diff.hasDestructiveChanges).toBe(true)
   })
@@ -376,7 +376,7 @@ describe('computeDiff', () => {
     const newSnap = buildSnapshot(newProject, defaultOpts)
     const diff = computeDiff(oldSnap, newSnap)
 
-    expect(diff.addedTables).toContain('items')
+    expect(diff.addedTables).toContain('cat_items')
     expect(diff.hasDestructiveChanges).toBe(false)
   })
 
@@ -389,7 +389,7 @@ describe('computeDiff', () => {
     const newSnap = buildSnapshot(newProject, defaultOpts)
     const diff = computeDiff(oldSnap, newSnap)
 
-    expect(diff.droppedTables).toContain('items')
+    expect(diff.droppedTables).toContain('cat_items')
     expect(diff.hasDestructiveChanges).toBe(true)
   })
 
@@ -418,7 +418,7 @@ describe('computeDiff', () => {
     const diff = computeDiff(oldSnap, newSnap)
 
     expect(diff.addedEnumValues).toHaveLength(1)
-    expect(diff.addedEnumValues[0].enumName).toBe('status')
+    expect(diff.addedEnumValues[0].enumName).toBe('enum_status')
     expect(diff.addedEnumValues[0].values).toContain('Inactive')
   })
 
@@ -435,7 +435,7 @@ describe('computeDiff', () => {
     const newSnap = buildSnapshot(newProject, defaultOpts)
     const diff = computeDiff(oldSnap, newSnap)
 
-    expect(diff.droppedEnums).toContain('status')
+    expect(diff.droppedEnums).toContain('enum_status')
     expect(diff.hasDestructiveChanges).toBe(true)
   })
 
@@ -499,7 +499,7 @@ describe('generateMigrationSQL', () => {
     const diff = computeDiff(oldSnap, newSnap)
     const sql = generateMigrationSQL(diff, newSnap)
 
-    expect(sql).toContain('ALTER TABLE items ADD COLUMN')
+    expect(sql).toContain('ALTER TABLE cat_items ADD COLUMN')
     expect(sql).toContain('weight')
     expect(sql).toContain('numeric(10, 3)')
   })
@@ -521,7 +521,7 @@ describe('generateMigrationSQL', () => {
     const diff = computeDiff(oldSnap, newSnap)
     const sql = generateMigrationSQL(diff, newSnap)
 
-    expect(sql).toContain('ALTER TABLE items DROP COLUMN weight')
+    expect(sql).toContain('ALTER TABLE cat_items DROP COLUMN weight')
     expect(sql).toContain('DESTRUCTIVE')
   })
 
@@ -547,7 +547,7 @@ describe('generateMigrationSQL', () => {
     const diff = computeDiff(oldSnap, newSnap)
     const sql = generateMigrationSQL(diff, newSnap)
 
-    expect(sql).toContain('ALTER TABLE items ALTER COLUMN value TYPE numeric(15, 2)')
+    expect(sql).toContain('ALTER TABLE cat_items ALTER COLUMN value TYPE numeric(15, 2)')
   })
 
   it('генерує CREATE TABLE для нової таблиці', () => {
@@ -560,7 +560,7 @@ describe('generateMigrationSQL', () => {
     const diff = computeDiff(oldSnap, newSnap)
     const sql = generateMigrationSQL(diff, newSnap)
 
-    expect(sql).toContain('CREATE TABLE items')
+    expect(sql).toContain('CREATE TABLE cat_items')
     expect(sql).toContain('Added Tables')
   })
 
@@ -574,7 +574,7 @@ describe('generateMigrationSQL', () => {
     const diff = computeDiff(oldSnap, newSnap)
     const sql = generateMigrationSQL(diff, newSnap)
 
-    expect(sql).toContain('DROP TABLE IF EXISTS items')
+    expect(sql).toContain('DROP TABLE IF EXISTS cat_items')
     expect(sql).toContain('DESTRUCTIVE')
   })
 
@@ -601,7 +601,7 @@ describe('generateMigrationSQL', () => {
     const diff = computeDiff(oldSnap, newSnap)
     const sql = generateMigrationSQL(diff, newSnap)
 
-    expect(sql).toContain("ALTER TYPE status ADD VALUE 'Closed'")
+    expect(sql).toContain("ALTER TYPE enum_status ADD VALUE 'Closed'")
   })
 })
 
@@ -683,7 +683,7 @@ describe('повний цикл: snapshot → modify → diff → migration', ()
 
     expect(diff.addedColumns).toHaveLength(1)
     expect(diff.addedColumns[0].column).toBe('sku')
-    expect(sql).toContain('ALTER TABLE products ADD COLUMN sku varchar(50)')
+    expect(sql).toContain('ALTER TABLE cat_products ADD COLUMN sku varchar(50)')
     expect(diff.hasDestructiveChanges).toBe(false)
   })
 
@@ -743,6 +743,6 @@ describe('повний цикл: snapshot → modify → diff → migration', ()
     expect(diff.modifiedColumns).toHaveLength(1)
     expect(diff.modifiedColumns[0].old.sqlType).toBe('integer')
     expect(diff.modifiedColumns[0].new.sqlType).toBe('numeric(15, 2)')
-    expect(sql).toContain('ALTER TABLE invoice ALTER COLUMN total TYPE numeric(15, 2)')
+    expect(sql).toContain('ALTER TABLE doc_invoice ALTER COLUMN total TYPE numeric(15, 2)')
   })
 })

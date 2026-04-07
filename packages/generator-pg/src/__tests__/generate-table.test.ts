@@ -155,7 +155,7 @@ describe("Catalog DDL", () => {
   const sql = generateSQL(project)
 
   it("creates main table", () => {
-    expect(sql).toContain("CREATE TABLE products")
+    expect(sql).toContain("CREATE TABLE cat_products")
   })
 
   it("has comment with metadata source", () => {
@@ -163,7 +163,7 @@ describe("Catalog DDL", () => {
   })
 
   it("includes parent_id for hierarchy", () => {
-    expect(sql).toContain("parent_id uuid REFERENCES products(id)")
+    expect(sql).toContain("parent_id uuid")
   })
 
   it("includes is_folder for FoldersAndItems", () => {
@@ -183,13 +183,11 @@ describe("Catalog DDL", () => {
   })
 
   it("creates tabular section table", () => {
-    expect(sql).toContain("CREATE TABLE products_barcodes")
+    expect(sql).toContain("CREATE TABLE cat_products_barcodes")
   })
 
   it("tabular section references parent", () => {
-    expect(sql).toContain(
-      "parent_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE"
-    )
+    expect(sql).toContain("parent_id uuid NOT NULL")
   })
 
   it("tabular section has barcode column", () => {
@@ -197,19 +195,25 @@ describe("Catalog DDL", () => {
   })
 
   it("generates autonumber trigger", () => {
-    expect(sql).toContain("CREATE OR REPLACE FUNCTION products_autonumber()")
-    expect(sql).toContain("CREATE TRIGGER trg_products_autonumber")
+    expect(sql).toContain("CREATE OR REPLACE FUNCTION cat_products_autonumber()")
+    expect(sql).toContain("CREATE TRIGGER trg_cat_products_autonumber")
     expect(sql).toContain("LPAD")
   })
 
   it("generates indexes for indexed attributes", () => {
-    expect(sql).toContain("CREATE INDEX idx_products_code ON products (code)")
+    expect(sql).toContain("CREATE INDEX idx_cat_products_code ON cat_products (code)")
   })
 
   it("generates FK index for tabular section parent", () => {
     expect(sql).toContain(
-      "CREATE INDEX idx_products_barcodes_parent_id ON products_barcodes (parent_id)"
+      "CREATE INDEX idx_cat_products_barcodes_parent_id ON cat_products_barcodes (parent_id)"
     )
+  })
+
+  it("emits foreign keys via ALTER TABLE", () => {
+    expect(sql).toContain("-- FOREIGN KEYS")
+    expect(sql).toContain("ALTER TABLE cat_products_barcodes")
+    expect(sql).toContain("REFERENCES cat_products(id)")
   })
 
   it("includes TRIGGERS section", () => {
@@ -250,7 +254,7 @@ describe("Document DDL", () => {
   const sql = generateSQL(project)
 
   it("creates document table", () => {
-    expect(sql).toContain("CREATE TABLE invoice")
+    expect(sql).toContain("CREATE TABLE doc_invoice")
   })
 
   it("has number column", () => {
@@ -262,7 +266,7 @@ describe("Document DDL", () => {
   })
 
   it("generates autonumber trigger with year period", () => {
-    expect(sql).toContain("CREATE OR REPLACE FUNCTION invoice_autonumber()")
+    expect(sql).toContain("CREATE OR REPLACE FUNCTION doc_invoice_autonumber()")
     expect(sql).toContain("date_trunc('year', NEW.date)")
     expect(sql).toContain("LPAD")
   })
@@ -297,7 +301,7 @@ describe("Enumeration pgEnum", () => {
   const sql = generateSQL(project)
 
   it("creates enum type", () => {
-    expect(sql).toContain("CREATE TYPE order_status AS ENUM")
+    expect(sql).toContain("CREATE TYPE enum_order_status AS ENUM")
   })
 
   it("includes all values", () => {
@@ -338,12 +342,12 @@ describe("Enumeration lookupTable", () => {
   const sql = generateSQL(project, { enumStrategy: "lookupTable" })
 
   it("creates lookup table instead of type", () => {
-    expect(sql).toContain("CREATE TABLE order_status")
-    expect(sql).not.toContain("CREATE TYPE order_status")
+    expect(sql).toContain("CREATE TABLE enum_order_status")
+    expect(sql).not.toContain("CREATE TYPE enum_order_status")
   })
 
   it("inserts initial values", () => {
-    expect(sql).toContain("INSERT INTO order_status")
+    expect(sql).toContain("INSERT INTO enum_order_status")
     expect(sql).toContain("'New'")
     expect(sql).toContain("'InProgress'")
     expect(sql).toContain("'Completed'")
@@ -421,7 +425,7 @@ describe("InformationRegister DDL", () => {
   const sql = generateSQL(project)
 
   it("creates register table", () => {
-    expect(sql).toContain("CREATE TABLE prices")
+    expect(sql).toContain("CREATE TABLE ir_prices")
   })
 
   it("has period column", () => {
@@ -437,7 +441,7 @@ describe("InformationRegister DDL", () => {
   })
 
   it("generates slice_last view", () => {
-    expect(sql).toContain("prices_slice_last")
+    expect(sql).toContain("ir_prices_slice_last")
     expect(sql).toContain("DISTINCT ON")
   })
 
@@ -487,7 +491,7 @@ describe("AccumulationRegister Balance DDL", () => {
   const sql = generateSQL(project)
 
   it("creates register table", () => {
-    expect(sql).toContain("CREATE TABLE inventory_balance")
+    expect(sql).toContain("CREATE TABLE ar_inventory_balance")
   })
 
   it("has movement_type column with CHECK", () => {
@@ -497,7 +501,7 @@ describe("AccumulationRegister Balance DDL", () => {
   })
 
   it("generates balance view with CTE and window function", () => {
-    expect(sql).toContain("inventory_balance_balance")
+    expect(sql).toContain("ar_inventory_balance_balance")
     expect(sql).toContain("WITH deltas AS")
     expect(sql).toContain("quantity_delta")
     expect(sql).toContain("SUM(quantity_delta) OVER")
@@ -506,7 +510,7 @@ describe("AccumulationRegister Balance DDL", () => {
   })
 
   it("generates turnovers view", () => {
-    expect(sql).toContain("inventory_balance_turnovers")
+    expect(sql).toContain("ar_inventory_balance_turnovers")
   })
 })
 
@@ -541,7 +545,7 @@ describe("AccumulationRegister Balance without dimensions", () => {
   const sql = generateSQL(project)
 
   it("balance view uses window function without PARTITION BY", () => {
-    expect(sql).toContain("total_balance_balance")
+    expect(sql).toContain("ar_total_balance_balance")
     expect(sql).toContain("WITH deltas AS")
     expect(sql).toContain("total_delta")
     expect(sql).toContain("SUM(total_delta) OVER")
@@ -654,11 +658,11 @@ describe("AccumulationRegister Turnover DDL", () => {
   })
 
   it("generates turnovers view only", () => {
-    expect(sql).toContain("sales_turnovers")
+    expect(sql).toContain("ar_sales_turnovers")
   })
 
   it("does not generate balance view", () => {
-    expect(sql).not.toContain("sales_balance")
+    expect(sql).not.toContain("ar_sales_balance")
   })
 })
 
@@ -675,7 +679,7 @@ describe("Constant singleTable DDL", () => {
   const sql = generateSQL(project, { constantsStrategy: "singleTable" })
 
   it("creates one constants table", () => {
-    expect(sql).toContain("CREATE TABLE constants")
+    expect(sql).toContain("CREATE TABLE const_settings")
   })
 
   it("has key/value columns", () => {
@@ -686,8 +690,8 @@ describe("Constant singleTable DDL", () => {
   })
 
   it("does not create separate tables", () => {
-    expect(sql).not.toContain("CREATE TABLE company_name")
-    expect(sql).not.toContain("CREATE TABLE max_retries")
+    expect(sql).not.toContain("CREATE TABLE const_company_name")
+    expect(sql).not.toContain("CREATE TABLE const_max_retries")
   })
 })
 
@@ -704,9 +708,9 @@ describe("Constant separateTables DDL", () => {
   const sql = generateSQL(project, { constantsStrategy: "separateTables" })
 
   it("creates separate table for each constant", () => {
-    expect(sql).toContain("CREATE TABLE company_name")
-    expect(sql).toContain("CREATE TABLE max_retries")
-    expect(sql).toContain("CREATE TABLE debug_mode")
+    expect(sql).toContain("CREATE TABLE const_company_name")
+    expect(sql).toContain("CREATE TABLE const_max_retries")
+    expect(sql).toContain("CREATE TABLE const_debug_mode")
   })
 
   it("each table has singleton check", () => {
@@ -756,7 +760,7 @@ describe("CustomTable DDL", () => {
   const sql = generateSQL(project)
 
   it("creates custom table", () => {
-    expect(sql).toContain("CREATE TABLE audit_log")
+    expect(sql).toContain("CREATE TABLE ct_audit_log")
   })
 
   it("has auto-generated id column", () => {
@@ -853,7 +857,7 @@ describe("Polymorphic Ref DDL", () => {
   })
 
   it("generates index for polymorphic id", () => {
-    expect(sql).toContain("idx_contracts_subject_id")
+    expect(sql).toContain("idx_cat_contracts_subject_id")
   })
 })
 
@@ -942,21 +946,28 @@ describe("Cross-references DDL", () => {
   const sql = generateSQL(project)
 
   it("Product references Warehouse", () => {
-    expect(sql).toContain("default_warehouse_id uuid REFERENCES warehouses(id)")
+    expect(sql).toContain("default_warehouse_id uuid")
   })
 
   it("SalesOrder references Products", () => {
-    expect(sql).toContain("product_id uuid REFERENCES products(id)")
+    expect(sql).toContain("product_id uuid")
   })
 
   it("SalesOrder references Warehouses", () => {
-    expect(sql).toContain("warehouse_id uuid REFERENCES warehouses(id)")
+    expect(sql).toContain("warehouse_id uuid")
   })
 
   it("generates FK indexes", () => {
-    expect(sql).toContain("idx_products_default_warehouse_id")
-    expect(sql).toContain("idx_sales_order_product_id")
-    expect(sql).toContain("idx_sales_order_warehouse_id")
+    expect(sql).toContain("idx_cat_products_default_warehouse_id")
+    expect(sql).toContain("idx_doc_sales_order_product_id")
+    expect(sql).toContain("idx_doc_sales_order_warehouse_id")
+  })
+
+  it("emits foreign keys via ALTER TABLE", () => {
+    expect(sql).toContain("ALTER TABLE cat_products")
+    expect(sql).toContain("REFERENCES cat_warehouses(id)")
+    expect(sql).toContain("ALTER TABLE doc_sales_order")
+    expect(sql).toContain("REFERENCES cat_products(id)")
   })
 })
 
@@ -1003,18 +1014,18 @@ describe("Ref to Enumeration pgEnum", () => {
   const sql = generateSQL(project)
 
   it("creates enum type first", () => {
-    expect(sql).toContain("CREATE TYPE product_type AS ENUM")
+    expect(sql).toContain("CREATE TYPE enum_product_type AS ENUM")
   })
 
   it("uses enum type name as column type, not uuid REFERENCES", () => {
     // Колонка має використовувати тип enum, а не uuid REFERENCES
-    expect(sql).toContain("product_type product_type")
+    expect(sql).toContain("product_type enum_product_type")
     expect(sql).not.toMatch(/product_type_id uuid REFERENCES/)
   })
 
   it("does not generate FK index for enum ref", () => {
     // Для enum-посилань _id суфікс не додається, індекс FK не потрібен
-    expect(sql).not.toContain("idx_products_product_type_id")
+    expect(sql).not.toContain("idx_cat_products_product_type_id")
   })
 })
 
@@ -1228,7 +1239,196 @@ describe("Single Ref required/unique in DDL", () => {
 
     const sql = generateSQL(project)
     expect(sql).toContain(
-      "default_warehouse_id uuid REFERENCES warehouses(id) NOT NULL",
+      "default_warehouse_id uuid NOT NULL",
     )
+  })
+})
+
+// ─── Test: Same name different kinds → different tables ─────
+describe("Same name different kinds", () => {
+  const project: ProjectModel = emptyProject({
+    informationRegisters: [
+      {
+        kind: "InformationRegister",
+        name: "Balance",
+        periodicity: "NonPeriodic",
+        writeMode: "Independent",
+        recorderTypes: [],
+        standardAttributeOverrides: {},
+        dimensions: [],
+        resources: [
+          {
+            name: "value",
+            type: "Numeric",
+            precision: 15,
+            scale: 2,
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+        ],
+        attributes: [],
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: "AccumulationRegister",
+        name: "Balance",
+        registerType: "Turnover",
+        recorderTypes: [],
+        standardAttributeOverrides: {},
+        dimensions: [],
+        resources: [
+          {
+            name: "amount",
+            type: "Numeric",
+            precision: 15,
+            scale: 2,
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+        ],
+        attributes: [],
+      },
+    ],
+  })
+
+  const sql = generateSQL(project)
+
+  it("InformationRegister.Balance → ir_balance", () => {
+    expect(sql).toContain("CREATE TABLE ir_balance")
+  })
+
+  it("AccumulationRegister.Balance → ar_balance", () => {
+    expect(sql).toContain("CREATE TABLE ar_balance")
+  })
+})
+
+// ─── Test: kind-prefix with project-wide tablePrefix ────────
+describe("kind-prefix with tablePrefix", () => {
+  const project: ProjectModel = {
+    project: {
+      name: "test-project",
+      schemaVersion: "1.0",
+      defaultLocale: "uk",
+      database: { target: "postgresql", schema: "public" },
+      generation: {
+        tablePrefix: "erp_",
+        enumStrategy: "pgEnum",
+        constantsStrategy: "singleTable",
+      },
+    },
+    catalogs: [
+      {
+        kind: "Catalog",
+        name: "Products",
+        codeLength: 9,
+        codeType: "String",
+        descriptionLength: 150,
+        hierarchyType: "None",
+        owners: [],
+        autonumber: false,
+        codeUnique: false,
+        mainPresentation: "Description",
+        predefinedItems: [],
+        standardAttributeOverrides: {},
+        attributes: [],
+        tabularSections: [],
+      },
+    ],
+    documents: [],
+    enumerations: [],
+    informationRegisters: [],
+    accumulationRegisters: [],
+    constants: [],
+    customTables: [],
+  }
+
+  const sql = generateSQL(project)
+
+  it("prepends tablePrefix before kind-prefix", () => {
+    expect(sql).toContain("CREATE TABLE erp_cat_products")
+  })
+})
+
+// ─── Test: lookupTable enum ref → FK via ALTER TABLE ────────
+describe("lookupTable enum ref generates FK", () => {
+  const project: ProjectModel = emptyProject({
+    enumerations: [
+      {
+        kind: "Enumeration",
+        name: "Status",
+        values: [{ name: "Active" }, { name: "Inactive" }],
+      },
+    ],
+    catalogs: [
+      {
+        kind: "Catalog",
+        name: "Orders",
+        codeLength: 9,
+        codeType: "String",
+        descriptionLength: 150,
+        hierarchyType: "None",
+        owners: [],
+        autonumber: false,
+        codeUnique: false,
+        mainPresentation: "Description",
+        predefinedItems: [],
+        standardAttributeOverrides: {},
+        attributes: [
+          {
+            name: "status",
+            type: "Ref",
+            ref: { kind: "Enumeration", name: "Status" },
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+        ],
+        tabularSections: [],
+      },
+    ],
+  })
+
+  const sql = generateSQL(project, { enumStrategy: "lookupTable" })
+
+  it("generates FK for lookupTable enum ref via ALTER TABLE", () => {
+    expect(sql).toContain("ALTER TABLE cat_orders")
+    expect(sql).toContain("REFERENCES enum_status(id)")
+  })
+})
+
+// ─── Test: identifier > 63 chars → warning ─────────────────
+describe("identifier length warning", () => {
+  it("generates warning for identifier exceeding 63 chars", () => {
+    const longName = "A".repeat(60)
+    const project: ProjectModel = emptyProject({
+      catalogs: [
+        {
+          kind: "Catalog",
+          name: longName,
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+    })
+
+    const result = generateProjectDDL(project, defaultOpts)
+    expect(result.warnings.length).toBeGreaterThan(0)
+    expect(result.warnings.some((w) => w.includes("63"))).toBe(true)
   })
 })
