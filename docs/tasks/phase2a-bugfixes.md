@@ -32,21 +32,21 @@ Code review Phase 2a (DDL Generator + SQL Preview) виявив 9 проблем
 
 ### Вимоги
 
-- [ ] Рефакторинг `attributeToColumn()` на двофазну схему: спочатку base `ColumnDef` (через `refToColumn()` або `mapFieldType()`), потім **єдиний** epilogue для required/unique/default
-- [ ] `refToColumn()` НЕ має дублювати логіку required/unique — тільки base type + FK constraint
-- [ ] `emitPolymorphicColumns()` — приймати `required` як параметр; NOT NULL тільки коли `required: true`
-- [ ] Юніт-тести в `type-mapping.test.ts`:
+- [Х] Рефакторинг `attributeToColumn()` на двофазну схему: спочатку base `ColumnDef` (через `refToColumn()` або `mapFieldType()`), потім **єдиний** epilogue для required/unique/default
+- [Х] `refToColumn()` НЕ має дублювати логіку required/unique — тільки base type + FK constraint
+- [Х] `emitPolymorphicColumns()` — приймати `required` як параметр; NOT NULL тільки коли `required: true`
+- [Х] Юніт-тести в `type-mapping.test.ts`:
   - `attributeToColumn()` для single Ref + `required: true` → NOT NULL
   - `attributeToColumn()` для single Ref + `unique: true` → UNIQUE
   - `attributeToColumn()` для single enum Ref + `required: true` → NOT NULL
-- [ ] Інтеграційні тести в `generate-table.test.ts`:
+- [Х] Інтеграційні тести в `generate-table.test.ts`:
   - Polymorphic Ref + `required: false` → **без** NOT NULL
   - Polymorphic Ref + `required: true` → NOT NULL на обох колонках
-- [ ] Виправити існуючий тест polymorphic Ref, який закріплює неправильну поведінку (NOT NULL при `required: false`)
+- [Х] Виправити існуючий тест polymorphic Ref, який закріплює неправильну поведінку (NOT NULL при `required: false`)
 
 ### Clarify
 
-- [ ] Чи потрібно додати поле `required` до `StandardAttribute` схеми для explicit nullability control owner_id/recorder_id?
+- [Х] Чи потрібно додати поле `required` до `StandardAttribute` схеми для explicit nullability control owner_id/recorder_id?
   - Чому це важливо: зараз стандартні single Ref завжди nullable; для деяких об'єктів owner_id може бути обов'язковим
   - Варіанти: (A) додати `required` у StandardAttribute; (B) залишити owner_id завжди nullable за дизайном
   - Вплив на рішення: зміна схеми core → потребує оновлення standard-attributes.ts і всіх споживачів
@@ -70,13 +70,13 @@ Turnovers view — коректний, не чіпати.
 
 ### Вимоги
 
-- [ ] Balance view (`{name}_balance`) має використовувати CTE + window function для кумулятивного обчислення:
+- [Х] Balance view (`{name}_balance`) має використовувати CTE + window function для кумулятивного обчислення:
   - Внутрішній CTE: `GROUP BY period, dimensions` → `{resource}_delta` для кожного ресурсу
   - Зовнішній SELECT: `SUM({resource}_delta) OVER (PARTITION BY dimensions ORDER BY period ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS {resource}`
-- [ ] Якщо dimensions порожні — `PARTITION BY` пропускається, тільки `ORDER BY period`
-- [ ] Кожен ресурс має окремий `_delta` у CTE і окремий кумулятивний стовпець у зовнішньому SELECT
-- [ ] Turnovers view (`{name}_turnovers`) — **залишити як є**
-- [ ] Тести в `generate-table.test.ts`:
+- [Х] Якщо dimensions порожні — `PARTITION BY` пропускається, тільки `ORDER BY period`
+- [Х] Кожен ресурс має окремий `_delta` у CTE і окремий кумулятивний стовпець у зовнішньому SELECT
+- [Х] Turnovers view (`{name}_turnovers`) — **залишити як є**
+- [Х] Тести в `generate-table.test.ts`:
   - Multi-period тест: 2+ рухи з різним period → snapshot SQL з `SUM(...) OVER (...)`
   - Регістр без dimensions → balance view без `PARTITION BY`
   - Регістр з кількома ресурсами → кожен ресурс має окремий кумулятивний стовпець
@@ -102,15 +102,15 @@ Turnovers view — коректний, не чіпати.
 
 ### Вимоги
 
-- [ ] Видалити поле `namingConvention` з `databaseSchema` у `packages/core/src/schemas/project.ts`
-- [ ] Видалити `namingConvention` з default value об'єкта database
-- [ ] Видалити всі згадки `namingConvention` з тестів у `packages/core/src/__tests__/`
-- [ ] Видалити `namingConvention` з fixture/helper проєктів у `packages/generator-pg/src/__tests__/`
-- [ ] Видалити `namingConvention` з файлів метаданих у `temp/metadata/` (якщо присутній)
-- [ ] Перевірити CLI (`packages/cli/src/commands/generate.ts`) — видалити, якщо є згадки
-- [ ] Перевірити apps/web stores — видалити, якщо є згадки в project-store або будь-якому іншому місці
-- [ ] `pnpm typecheck` і `pnpm test` мають проходити після видалення
-- [ ] Оновити `docs/BRD-metadata-configurator.md` — видалити згадки namingConvention, якщо є
+- [Х] Видалити поле `namingConvention` з `databaseSchema` у `packages/core/src/schemas/project.ts`
+- [Х] Видалити `namingConvention` з default value об'єкта database
+- [Х] Видалити всі згадки `namingConvention` з тестів у `packages/core/src/__tests__/`
+- [Х] Видалити `namingConvention` з fixture/helper проєктів у `packages/generator-pg/src/__tests__/`
+- [Х] Видалити `namingConvention` з файлів метаданих у `temp/metadata/` (якщо присутній)
+- [Х] Перевірити CLI (`packages/cli/src/commands/generate.ts`) — видалити, якщо є згадки
+- [Х] Перевірити apps/web stores — видалити, якщо є згадки в project-store або будь-якому іншому місці
+- [Х] `pnpm typecheck` і `pnpm test` мають проходити після видалення
+- [Х] Оновити `docs/BRD-metadata-configurator.md` — видалити згадки namingConvention, якщо є
 
 ### Антипатерни
 
@@ -130,54 +130,56 @@ Enum з єдиним значенням `snake_case` — мертвий код. 
 
 ---
 
-## Етап 4: CLI package — bin, build, документація
+## Етап 4: CLI package — runtime, bin, документація
 
 ### Проблема
 
-`@simetra/cli` має citty-based entrypoint і generate subcommand, але:
-- `package.json` не має `bin` поля
-- `build` = `tsc --noEmit` — не продукує JS artifact
-- `tsconfig.json` має `noEmit: true`, немає `outDir`
-- Документація CLI **відсутня** — ні в README пакету, ні в головному README проєкту
+`@simetra/cli` має citty-based entrypoint і generate subcommand, але для нього не зафіксовано допустиму runtime/build-стратегію в умовах монорепо, де workspace-пакети експортують `.ts` source напряму.
+
+Наслідки без явної фіксації рішення:
+- code review може помилково трактувати відсутність `dist/index.js` як blocker
+- compiled entrypoint через plain `tsc` може не працювати з `@simetra/core` / `@simetra/generator-pg`, якщо вони й далі експортують `.ts`
+- документація CLI лишається неоднозначною для наступних етапів
 
 ### Вимоги
 
-#### Build pipeline
-- [ ] `packages/cli/tsconfig.json`: встановити `"noEmit": false`, додати `"outDir": "./dist"`, додати `"declaration": true`
-- [ ] `packages/cli/package.json`: додати `"bin": { "simetra": "./dist/index.js" }`
-- [ ] `packages/cli/package.json` scripts: змінити `"build": "tsc"` (замість `tsc --noEmit`)
-- [ ] `packages/cli/package.json` exports: оновити на `"./dist/index.js"`
-- [ ] `packages/cli/src/index.ts`: додати shebang `#!/usr/bin/env node` як перший рядок
-- [ ] Додати `dist/` до `.gitignore` для packages/cli
-- [ ] Перевірити: `pnpm --filter @simetra/cli build && node packages/cli/dist/index.js generate --help`
+#### Runtime / build pipeline
+- [Х] CLI має експонувати робочий executable через `package.json#bin`
+- [Х] Для поточного стану монорепо допустимим і preferred вважається runtime-based варіант: `tsx` wrapper або еквівалентний запуск через `node --import tsx`, якщо залежні workspace-пакети продовжують експортувати `.ts` source
+- [Х] Dist-based варіант (`dist/index.js`) допустимий лише якщо CLI bundlиться або якщо всі необхідні залежності також продукують JS artifacts і runtime-resolution перевірено end-to-end
+- [Х] `packages/cli/package.json` scripts та `exports` мають відповідати обраному runtime/build-підходу і не створювати фальшиве очікування наявності `dist/`, якщо його фактично немає
+- [Х] Реальний executable entrypoint має містити shebang `#!/usr/bin/env node` або еквівалентний робочий launcher для обраного підходу
+- [Х] Перевірити один із валідних сценаріїв запуску:
+  - runtime-based: `pnpm simetra generate --help` або еквівалентний package-local запуск
+  - dist-based: `pnpm --filter @simetra/cli build && node packages/cli/dist/index.js generate --help`
+- [Х] Для code review: відсутність `dist/index.js` **не є blocker**, якщо CLI запускається через задокументований підтримуваний runtime-підхід і help-команда проходить
 
 #### Документація пакету
-- [ ] Створити або оновити `packages/cli/README.md`:
+- [Х] Створити або оновити `packages/cli/README.md`:
   - Призначення пакету
-  - Встановлення / запуск (`pnpm --filter @simetra/cli build`, потім `simetra generate`)
+  - Встановлення / запуск для обраного runtime/build-підходу
   - Повний перелік аргументів команди `generate` (target, input, output, schema, enum-strategy, constants-strategy, output-mode) з описами та дефолтами
   - Приклад типового виклику
 
 #### Документація в головному README
-- [ ] Оновити кореневий `README.md`:
+- [Х] Оновити кореневий `README.md`:
   - Додати `packages/cli` і `packages/generator-pg`, `packages/generator-api` до секції Structure
   - Додати секцію "CLI Usage" з базовим прикладом виклику
   - Зберегти лаконічний стиль існуючого README
 
-### Clarify
+### Зафіксоване рішення
 
-- [ ] Чи потрібен tsx/esno runtime замість tsc-компіляції для dev-зручності?
-  - Чому це важливо: packages/core та generator-pg використовують source `.ts` exports через `"exports": { ".": "./src/index.ts" }`. Compiled CLI entry може мати проблеми з resolution
-  - Варіанти: (A) tsc build; (B) tsx runner `"bin": { "simetra": "tsx src/index.ts" }`; (C) tsup bundler
-  - Вплив на рішення: якщо (A) не працює через ts-source imports — потрібен (B) або (C)
+- [x] Для поточного монорепо `tsx`-based runtime є валідним рішенням і не має вважатися blocker у review
+  - Чому це важливо: `@simetra/core`, `@simetra/generator-pg` та інші workspace-пакети зараз експортують `.ts` source напряму
+  - Прийняте рішення: runtime-based підхід (wrapper або еквівалент) є preferred, доки монорепо не перейде на JS artifacts або bundling
+  - Альтернатива на майбутнє: dist/bundled CLI можна вводити окремим етапом після зміни build-моделі залежних пакетів
 
 ### Файли для зміни
 
 - `packages/cli/package.json`
-- `packages/cli/tsconfig.json`
+- `packages/cli/bin/simetra.mjs` (для runtime-based launcher)
 - `packages/cli/src/index.ts`
-- `packages/cli/README.md` (створити)
-- `packages/cli/.gitignore` (створити або оновити)
+- `packages/cli/README.md` (створити або оновити)
 - `README.md` (кореневий)
 
 ---
@@ -192,7 +194,7 @@ Enum з єдиним значенням `snake_case` — мертвий код. 
 
 ### Вимоги
 
-- [ ] `docs/architecture/state-management.md`:
+- [Х] `docs/architecture/state-management.md`:
   - Оновити таблицю stores з 3 до 4 рядків — додати ddl-store
   - Додати пояснення про **derived feature stores**: store, що читає доменну модель read-only і не мутує її
 
@@ -200,7 +202,7 @@ Enum з єдиним значенням `snake_case` — мертвий код. 
 |---|---|---|
 | ddl-store | DDL generation output, validation errors, SQL preview state | доменні мутації, UI layout, file lifecycle |
 
-- [ ] `docs/architecture/OVERVIEW.md`:
+- [Х] `docs/architecture/OVERVIEW.md`:
   - Оновити Phase 2a статус з `roadmap` на `implemented`
   - Додати пакети `generator-api`, `generator-pg`, `cli` до таблиці пакетів
   - Додати SQL Preview до UI опису, якщо є секція компонентів
@@ -246,7 +248,7 @@ ddl-store — приклад feature store, який:
   const SqlPreviewPanel = React.lazy(() => import('../sql-preview/sql-preview-panel'))
   ```
 - [X] Обгорнути в `<Suspense>` з fallback (спінер або skeleton)
-- [ ] Переконатися, що Shiki і всі sql-preview компоненти потрапляють в окремий chunk
+- [Х] Переконатися, що Shiki і всі sql-preview компоненти потрапляють в окремий chunk
 
 ### 6.3: Download — підготовка до multi-file
 
@@ -389,16 +391,16 @@ graph TD
 ## Definition of Done
 
 ### Per-етап
-- [ ] Етап 1: Required single Ref → NOT NULL у DDL; optional polymorphic Ref → без NOT NULL; тести проходять
-- [ ] Етап 2: Balance view використовує `SUM(...) OVER (PARTITION BY ... ORDER BY period)`; turnovers view не змінений; тести проходять
-- [ ] Етап 3: Жодних згадок `namingConvention` у codebase; `pnpm typecheck && pnpm test` проходять
-- [ ] Етап 4: `pnpm --filter @simetra/cli build && node packages/cli/dist/index.js generate --help` працює; README CLI і кореневий README оновлені
-- [ ] Етап 5: state-management.md описує 4 store; OVERVIEW.md має Phase 2a як implemented
-- [ ] Етап 6: Shortcut hints platform-aware; SqlPreviewPanel lazy-loaded; toolbar multi-file aware
-- [ ] Етап 7: ddl-store.test.ts і sql-preview-panel.test.tsx проходять
+- [Х] Етап 1: Required single Ref → NOT NULL у DDL; optional polymorphic Ref → без NOT NULL; тести проходять
+- [Х] Етап 2: Balance view використовує `SUM(...) OVER (PARTITION BY ... ORDER BY period)`; turnovers view не змінений; тести проходять
+- [Х] Етап 3: Жодних згадок `namingConvention` у codebase; `pnpm typecheck && pnpm test` проходять
+- [Х] Етап 4: CLI має задокументований і перевірений executable path; runtime-based або dist-based варіант узгоджений з фактичними exports залежностей; README CLI і кореневий README оновлені
+- [Х] Етап 5: state-management.md описує 4 store; OVERVIEW.md має Phase 2a як implemented
+- [Х] Етап 6: Shortcut hints platform-aware; SqlPreviewPanel lazy-loaded; toolbar multi-file aware
+- [Х] Етап 7: ddl-store.test.ts і sql-preview-panel.test.tsx проходять
 
 ### Загальне
-- [ ] `pnpm lint` — без нових помилок
-- [ ] `pnpm typecheck` — без помилок
-- [ ] `pnpm test` — всі тести зелені
-- [ ] Жодних нових залежностей крім тих, що вже у проєкті
+- [Х] `pnpm lint` — без нових помилок
+- [Х] `pnpm typecheck` — без помилок
+- [Х] `pnpm test` — всі тести зелені
+- [Х] Жодних нових залежностей крім тих, що вже у проєкті
