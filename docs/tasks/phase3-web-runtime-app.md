@@ -295,7 +295,7 @@ flowchart TD
 
 ### Етап 5: Data Provider — абстрактний контракт
 
-- [ ] Створити `packages/data-provider/`:
+- [X] Створити `packages/data-provider/`:
   - `package.json` — `@simetra/data-provider`, чистий TS, без React
   - `src/index.ts`:
     ```
@@ -338,12 +338,12 @@ flowchart TD
     }
     ```
   - Constants: MVP підтримує лише `singleTable` strategy. Контракт `getConstants()` / `updateConstant()` відповідає одній таблиці `constants(key, value)`. Для `separateTables` — Phase 4 extension.
-- [ ] TypeScript типізація через generic `DataProvider` без прив'язки до конкретного SDK
-- [ ] **Тести:** type-level тести (compile check)
+- [X] TypeScript типізація через generic `DataProvider` без прив'язки до конкретного SDK
+- [X] **Тести:** type-level тести (compile check)
 
 ### Етап 6: PostgREST Data Provider
 
-- [ ] Створити `packages/data-provider-postgrest/`:
+- [X] Створити `packages/data-provider-postgrest/`:
   - `package.json` — `@simetra/data-provider-postgrest`, залежить від `@simetra/data-provider`
   - Dependency: generic `fetch` — **не** `@supabase/supabase-js` (portable MVP, supabase adapter як окремий пакет при потребі)
   - Реалізація `DataProvider` через PostgREST REST API:
@@ -358,9 +358,9 @@ flowchart TD
     - `getConstants()` → `GET /rest/v1/constants`
     - `updateConstant()` → `PATCH /rest/v1/constants?key=eq.{name}`
   - Naming: імпортувати `toSnakeCase`, `tableName` з `@simetra/generator-pg` (вже exported в index.ts). **Не** дублювати PascalCase→snake_case
-- [ ] **Тести:** unit тести з msw (mock service worker)
-- [ ] Connection config: `{ url: string, anonKey?: string }` — мінімальний набір
-- [ ] Polymorphic refs: MVP **не підтримує**. `searchRef()` і `getRefDisplay()` працюють лише для single ref. Для polymorphic ref — помилка або заглушка
+- [X] **Тести:** unit тести з msw (mock service worker)
+- [X] Connection config: `{ url: string, anonKey?: string }` — мінімальний набір
+- [X] Polymorphic refs: MVP **не підтримує**. `searchRef()` і `getRefDisplay()` працюють лише для single ref. Для polymorphic ref — помилка або заглушка
 
 ### Етап 7: Form Runtime — `@simetra/form-runtime`
 
