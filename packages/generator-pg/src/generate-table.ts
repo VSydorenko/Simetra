@@ -136,7 +136,7 @@ function emitAttributeColumns(
   const lines: string[] = []
   for (const attr of attrs) {
     if (attr.type === "Ref" && attr.allowedTypes?.length) {
-      lines.push(...emitPolymorphicColumns(attr.name, attr.allowedTypes))
+      lines.push(...emitPolymorphicColumns(attr.name, attr.allowedTypes, attr.required))
       continue
     }
     const col = attributeToColumn(attr, resolve, resolveEnumType)
@@ -156,14 +156,16 @@ function emitAttributeColumns(
 // Polymorphic ref: дві колонки + CHECK
 function emitPolymorphicColumns(
   name: string,
-  allowedTypes: { kind: string; name: string }[]
+  allowedTypes: { kind: string; name: string }[],
+  required: boolean = false
 ): string[] {
   const typeValues = allowedTypes
     .map((t) => `'${escapeLiteral(`${t.kind}.${t.name}`)}'`)
     .join(", ")
+  const notNull = required ? " NOT NULL" : ""
   return [
-    `  ${name}_type varchar(100) NOT NULL`,
-    `  ${name}_id uuid NOT NULL`,
+    `  ${name}_type varchar(100)${notNull}`,
+    `  ${name}_id uuid${notNull}`,
     `  CHECK (${name}_type IN (${typeValues}))`,
   ]
 }
@@ -724,23 +726,44 @@ function generateAccumulationViews(
   const groupByExpr = groupCols.join(", ")
 
   if (reg.registerType === "Balance") {
-    // Залишки
-    const balanceResources = reg.resources
+    // Кумулятивні залишки через CTE + window function
+    const deltaResources = reg.resources
       .map(
         (r) =>
-          `  SUM(CASE WHEN movement_type = 'Receipt' THEN ${r.name}` +
-          ` ELSE -${r.name} END) AS ${r.name}`
+          `    SUM(CASE WHEN movement_type = 'Receipt' THEN ${r.name}` +
+          ` ELSE -${r.name} END) AS ${r.name}_delta`
       )
       .join(",\n")
+
+    const partitionBy = dimCols.length > 0 ? `PARTITION BY ${dimCols.join(", ")} ` : ""
+    const windowSpec =
+      `${partitionBy}ORDER BY period ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`
+
+    const cumulativeResources = reg.resources
+      .map(
+        (r) =>
+          `  SUM(${r.name}_delta) OVER (${windowSpec}) AS ${r.name}`
+      )
+      .join(",\n")
+
+    const cteCols = groupCols.map((c) => `    ${c}`).join(",\n")
+    const outerCols = groupCols.map((c) => `  ${c}`).join(",\n")
+
     statements.push(
       `-- Залишки на дату для ${label}\n` +
         `CREATE OR REPLACE VIEW ${qualifiedName(schema, `${tbl}_balance`)} AS\n` +
+        `WITH deltas AS (\n` +
+        `  SELECT\n` +
+        `${cteCols},\n` +
+        `${deltaResources}\n` +
+        `  FROM ${qName}\n` +
+        `  WHERE active = true\n` +
+        `  GROUP BY ${groupByExpr}\n` +
+        `)\n` +
         `SELECT\n` +
-        `${selectCols},\n` +
-        `${balanceResources}\n` +
-        `FROM ${qName}\n` +
-        `WHERE active = true\n` +
-        `GROUP BY ${groupByExpr};`
+        `${outerCols},\n` +
+        `${cumulativeResources}\n` +
+        `FROM deltas;`
     )
 
     // Обороти

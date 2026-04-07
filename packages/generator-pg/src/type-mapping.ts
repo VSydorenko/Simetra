@@ -125,30 +125,27 @@ export function attributeToColumn(
   resolveRefTable: (ref: { kind: string; name: string }) => string,
   resolveEnumType?: (ref: { kind: string; name: string }) => string | undefined
 ): ColumnDef {
+  // Phase 1: base type
+  let col: ColumnDef
   if (attr.type === "Ref") {
-    return refToColumn(
-      attr.ref,
-      attr.allowedTypes,
-      resolveRefTable,
-      resolveEnumType
-    )
+    col = refToColumn(attr.ref, attr.allowedTypes, resolveRefTable, resolveEnumType)
+  } else {
+    col = { sqlType: mapFieldType(attr), constraints: [] }
   }
 
-  const sqlType = mapFieldType(attr)
-  const constraints: string[] = []
-
+  // Phase 2: epilogue — apply required/unique/default for all types
   if (attr.required) {
-    constraints.push("NOT NULL")
+    col.constraints.push("NOT NULL")
   }
   if (attr.unique) {
-    constraints.push("UNIQUE")
+    col.constraints.push("UNIQUE")
   }
   if (attr.defaultValue != null) {
-    constraints.push(`DEFAULT '${escapeLiteral(String(attr.defaultValue))}'`)
+    col.constraints.push(`DEFAULT '${escapeLiteral(String(attr.defaultValue))}'`)
   }
   if (attr.type === "Boolean" && attr.defaultValue == null) {
-    constraints.push("DEFAULT false")
+    col.constraints.push("DEFAULT false")
   }
 
-  return { sqlType, constraints }
+  return col
 }

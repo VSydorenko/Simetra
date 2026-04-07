@@ -229,35 +229,35 @@ ddl-store — приклад feature store, який:
 
 **Проблема:** Усі tooltip та CommandShortcut hardcode "Ctrl+…", хоча `react-hotkeys-hook` уже використовує platform-neutral `"mod+…"`. На macOS це некоректно.
 
-- [ ] Створити `apps/web/src/lib/format-shortcut.ts`:
+- [X] Створити `apps/web/src/lib/format-shortcut.ts`:
   - Функція `formatShortcut(combo: string): string`
   - Визначити платформу через `navigator.platform` або `navigator.userAgentData`
   - `"mod"` → `"⌘"` (macOS) або `"Ctrl"` (інше)
   - `"shift"` → `"⇧"` (macOS) або `"Shift"` (інше)
-- [ ] Замінити hardcoded рядки в `top-bar.tsx` на виклик `formatShortcut()`
-- [ ] Замінити hardcoded рядки в `command-palette.tsx` на виклик `formatShortcut()`
+- [X] Замінити hardcoded рядки в `top-bar.tsx` на виклик `formatShortcut()`
+- [X] Замінити hardcoded рядки в `command-palette.tsx` на виклик `formatShortcut()`
 
 ### 6.2: Shiki lazy-loading
 
 **Проблема:** `codeToHtml` з `shiki` імпортується статично. Shiki (~600KB WASM + grammar) потрапляє в основний бандл, хоча SQL Preview — вторинна фіча.
 
-- [ ] У `editor-panel.tsx` замінити статичний імпорт `SqlPreviewPanel` на `React.lazy()`:
+- [X] У `editor-panel.tsx` замінити статичний імпорт `SqlPreviewPanel` на `React.lazy()`:
   ```
   const SqlPreviewPanel = React.lazy(() => import('../sql-preview/sql-preview-panel'))
   ```
-- [ ] Обгорнути в `<Suspense>` з fallback (спінер або skeleton)
+- [X] Обгорнути в `<Suspense>` з fallback (спінер або skeleton)
 - [ ] Переконатися, що Shiki і всі sql-preview компоненти потрапляють в окремий chunk
 
 ### 6.3: Download — підготовка до multi-file
 
 **Проблема:** `sql-toolbar.tsx` завжди конкатенує всі files в один `schema.sql`, ігноруючи multi-file output.
 
-- [ ] Якщо `output.files.length === 1` — поведінка як є (download single file)
-- [ ] Якщо `output.files.length > 1`:
+- [X] Якщо `output.files.length === 1` — поведінка як є (download single file)
+- [X] Якщо `output.files.length > 1`:
   - Кнопка «Copy» → копіює вміст **поточного вибраного** файлу (selectedFilePath з ddl-store)
   - Кнопка «Download» → скачує **поточний вибраний** файл з його оригінальним ім'ям
   - Додати окрему кнопку «Download All» → конкатенація всіх файлів як є зараз
-- [ ] `sql-file-tree.tsx` — додати per-file download icon
+- [X] `sql-file-tree.tsx` — додати per-file download icon
 
 ### Антипатерни
 
@@ -287,18 +287,18 @@ ddl-store — приклад feature store, який:
 ### Вимоги
 
 #### ddl-store.test.ts
-- [ ] `generateDdl()` з валідною моделлю → `output.files` непорожній
-- [ ] `generateDdl()` з broken ref → `validationErrors` непорожній, `output === null`
-- [ ] `generateDdlForce()` → output навіть при наявності validation errors
-- [ ] `selectFile()` → `selectedFilePath` оновлений
-- [ ] `reset()` → стан скинутий до initial
+- [X] `generateDdl()` з валідною моделлю → `output.files` непорожній
+- [X] `generateDdl()` з broken ref → `validationErrors` непорожній, `output === null`
+- [X] `generateDdlForce()` → output навіть при наявності validation errors
+- [X] `selectFile()` → `selectedFilePath` оновлений
+- [X] `reset()` → стан скинутий до initial
 
 #### sql-preview-panel.test.tsx
-- [ ] Рендер без output → показує empty state
-- [ ] Рендер з `validationErrors` → показує validation error UI
-- [ ] Рендер з `generationError` → показує generation error
-- [ ] Рендер з output → показує toolbar + viewer
-- [ ] Multi-file output → показує file tree
+- [X] Рендер без output → показує empty state
+- [X] Рендер з `validationErrors` → показує validation error UI
+- [X] Рендер з `generationError` → показує generation error
+- [X] Рендер з output → показує toolbar + viewer
+- [X] Multi-file output → показує file tree
 
 ### Рекомендовані патерни
 

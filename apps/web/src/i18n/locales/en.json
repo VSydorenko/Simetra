@@ -146,8 +146,7 @@
     "additionalIndexes": "Additional Indexes",
     "database": {
       "target": "DBMS",
-      "schema": "Schema",
-      "namingConvention": "Naming Convention"
+      "schema": "Schema"
     },
     "generation": {
       "tablePrefix": "Table prefix",
@@ -397,7 +396,10 @@
     "noOutput": "Click \"Generate SQL\" to preview DDL",
     "generationError": "SQL generation error",
     "copyAll": "Copy All",
+    "copyFile": "Copy File",
     "download": "Download .sql",
+    "downloadFile": "Download File",
+    "downloadAll": "Download All",
     "warningCount_one": "{{count}} warning",
     "warningCount_other": "{{count}} warnings",
     "copied": "Copied",

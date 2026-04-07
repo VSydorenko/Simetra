@@ -2,25 +2,27 @@
 
 ## Призначення і межі
 
-Simetra свідомо не зводить увесь runtime у один store. Поточна архітектура розділяє стан на три окремі контури з різними інваріантами:
+Simetra свідомо не зводить увесь runtime у один store. Поточна архітектура розділяє стан на чотири ізольовані контури з різними інваріантами:
 
 | Store | Канонічна відповідальність | Що принципово не зберігає |
 |---|---|---|
 | `metadata-store` | Доменна модель `ProjectModel` і всі мутації метаданих | layout, selection, file/session lifecycle |
 | `ui-store` | Навігація, layout, tabs, floating windows, вибір у UI | `ProjectModel`, save baseline, filesystem context |
 | `project-store` | Файловий контекст, save baseline, restore/recovery orchestration | доменні мутації, persisted UI layout |
+| `ddl-store` | DDL generation output, validation errors, SQL preview state | доменні мутації, UI layout, file lifecycle |
 
-Такий поділ зменшує кількість випадкових зв'язків між редагуванням моделі, runtime UI і файловими сценаріями. Найважливіший наслідок: undo/redo працює тільки для доменних змін, а не для layout чи permission state.
+Такий поділ зменшує кількість випадкових зв'язків між редагуванням моделі, runtime UI, derived preview-сценаріями і файловими сценаріями. Найважливіший наслідок: undo/redo працює тільки для доменних змін, а не для layout, preview чи permission state.
 
 Поточна точка інтеграції store-архітектури в shell: [../../apps/web/src/components/layout/app-shell.tsx](../../apps/web/src/components/layout/app-shell.tsx).
 
-## Огляд трьох store
+## Огляд store-архітектури
 
 ### Поточний стан
 
 - `metadata-store` у [../../apps/web/src/stores/metadata-store.ts](../../apps/web/src/stores/metadata-store.ts) є canonical in-memory представленням `ProjectModel`.
 - `ui-store` у [../../apps/web/src/stores/ui-store.ts](../../apps/web/src/stores/ui-store.ts) керує вибором, навігацією та window-management.
 - `project-store` у [../../apps/web/src/stores/project-store.ts](../../apps/web/src/stores/project-store.ts) оркеструє open/save/import/export/session restore поверх storage layer.
+- `ddl-store` у [../../apps/web/src/stores/ddl-store.ts](../../apps/web/src/stores/ddl-store.ts) тримає ізольований стан генерації DDL і SQL Preview поверх read-only доступу до моделі.
 
 ### Планований стан
 
@@ -223,6 +225,32 @@ Store оркеструє такі сценарії:
 
 Тому `project-store` не є store-персистенцією у стилі Zustand persist; він є orchestration layer над [../../apps/web/src/storage/session-db.ts](../../apps/web/src/storage/session-db.ts) і storage provider.
 
+## DDL Store
+
+Джерело: [../../apps/web/src/stores/ddl-store.ts](../../apps/web/src/stores/ddl-store.ts).
+
+### Відповідальність
+
+`ddl-store` — приклад **derived feature store**, що працює з доменною моделлю read-only і не мутує її:
+
+- Читає `ProjectModel` з `metadata-store` через `getState()` (не підписується).
+- Виконує валідацію broken refs перед генерацією DDL.
+- Тримає результат генерації (`GeneratorOutput`), помилки валідації, помилки генерації.
+- Керує станом SQL preview: вибраний файл, прапорець генерації.
+
+### Ізоляція
+
+`ddl-store` не потребує undo/redo, оскільки його стан повністю regenerable з доменної моделі. Він не персиститься і не бере участі у dirty tracking.
+
+### Патерн: Derived Feature Store
+
+Цей store рекомендується як приклад для майбутніх feature stores (export preview, migration preview тощо), що:
+
+- Читають модель одноразово через `getState()` замість підписки
+- Мають власний ізольований стан
+- Не мутують доменну модель
+- Не потребують temporal history
+
 ## Межі Undo/Redo
 
 Undo/redo є доменною функцією, а не глобальною rewind-моделлю всього UI.
@@ -354,6 +382,11 @@ flowchart LR
   M --> N[React rerender]
   M --> O[(localStorage simetra-ui)]
 
+  C -->|Generate DDL або SQL Preview| U[ddl-store]
+  U --> V[Broken refs validation]
+  U --> W[GeneratorOutput і selectedFilePath]
+  W --> X[React rerender]
+
   C -->|Open Save Import Restore| P[project-store]
   P --> Q[StorageProvider і session-db]
   Q --> R[(IndexedDB session)]
@@ -370,6 +403,7 @@ flowchart LR
 - `metadata-store`: інкремент `version` тільки при реальних мутаціях, коректний `objectVersions`, rename migration ключа, cascade ref updates, межі undo/redo
 - `ui-store`: tab/window lifecycle, `activeSection` per-tab/per-window, z-index progression, persisted subset без volatile runtime state
 - `project-store`: baseline updates після save/open/import/restore, стани `sessionRestoreStatus`, recovery branching, відсутність history bleed між проєктами
+- `ddl-store`: генерація з валідною моделлю, генерація з broken refs, force generation, вибір файлу, reset стану
 - `use-is-dirty`: глобальний і object-scoped dirty без deep diff
 - `use-model-validation`: debounce, duplicate detection, reachable refs, синхронізація `modelErrors`
 - `use-session-restore`: одноразовий bootstrap при mount shell
@@ -382,6 +416,7 @@ flowchart LR
 - Будувати dirty tracking на deep diff усього `ProjectModel`. Для великої моделі це дорожче, шумніше і складніше після rename/cascade.
 - Дублювати validation logic у компонентах. Компоненти повинні відображати store errors, а не повторювати доменні правила.
 - Persist-ити volatile runtime state: `openTabs`, active window, command palette, transient selection, z-index counters.
+- Створювати feature stores що підписуються на весь `ProjectModel` через `subscribe`. Derived stores мають читати модель через `getState()` для одноразового доступу.
 - Документувати planned `viewState` як уже реалізований API. Поточна система має лише частковий editor context, а не завершену view-state модель.
 
 ## Пов'язана документація

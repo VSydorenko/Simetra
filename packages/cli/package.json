@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
+  "bin": {
+    "simetra": "./bin/simetra.mjs"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
@@ -17,7 +20,8 @@
     "@simetra/core": "workspace:*",
     "@simetra/generator-api": "workspace:*",
     "@simetra/generator-pg": "workspace:*",
-    "citty": "^0.1.6"
+    "citty": "^0.1.6",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

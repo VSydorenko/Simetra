@@ -286,31 +286,6 @@ export function ProjectSettings() {
               }
             />
           </SettingRow>
-          <SettingRow label={t("properties.database.namingConvention")}>
-            <Select
-              value={project.database.namingConvention}
-              onValueChange={(v) =>
-                handleUpdate({
-                  database: {
-                    ...project.database,
-                    namingConvention: v as "snake_case" | "camelCase",
-                  },
-                })
-              }
-            >
-              <SelectTrigger className="h-7 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="snake_case" className="text-xs">
-                  snake_case
-                </SelectItem>
-                <SelectItem value="camelCase" className="text-xs">
-                  camelCase
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingRow>
         </AccordionContent>
       </AccordionItem>
 

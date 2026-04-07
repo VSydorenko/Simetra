@@ -12,7 +12,7 @@ Simetra — open-source візуальний конфігуратор бізне
 
 ## 2. Монорепо структура
 
-Поточна структура монорепо зосереджена на трьох робочих пакетах і документації.
+Поточна структура монорепо зосереджена на web SPA, core-моделі, UI kit, генераторах, CLI і наборі архітектурної документації.
 
 ### apps/web
 
@@ -20,7 +20,7 @@ Simetra — open-source візуальний конфігуратор бізне
 - `src/components/editor` — редактори об'єктів, вертикальна навігація секцій, діалоги, recovery banner, welcome screen.
 - `src/components/properties` — context-sensitive редактори властивостей поля, табличної частини, об'єкта та налаштувань проєкту.
 - `src/components/window-manager` — вкладки, floating windows, taskbar.
-- `src/stores` — `metadata-store`, `ui-store`, `project-store`.
+- `src/stores` — `metadata-store`, `ui-store`, `project-store`, `ddl-store`.
 - `src/storage` — I/O абстракція, браузерне файлове сховище, IndexedDB session/draft persistence.
 - `src/hooks` — dirty tracking, project-level validation, session restore та інші реактивні адаптери.
 - `src/i18n` — ініціалізація локалізації й ресурси `uk`/`en`.
@@ -40,12 +40,29 @@ Simetra — open-source візуальний конфігуратор бізне
 - `lib` — допоміжні утиліти UI kit.
 - `styles` — глобальні стилі й theme assets.
 
+### packages/generator-api/src
+
+- `index.ts` — контракт генератора: `GeneratorOptions`, `GeneratorOutput`, `GeneratedFile` інтерфейси.
+
+### packages/generator-pg/src
+
+- `generate-table.ts` — головна функція `generateProjectDDL()`: таблиці, views, тригери, indexes, posting functions.
+- `type-mapping.ts` — маппінг типів полів і Ref на PostgreSQL column definitions.
+- `naming.ts` — PascalCase → snake_case naming і кваліфіковані імена.
+- `generate-posting.ts` — генерація posting/unposting SQL функцій.
+
+### packages/cli/src
+
+- `index.ts` — точка входу CLI (citty).
+- `commands/generate.ts` — команда `generate`: зчитує метадані з директорії, валідує через Zod, генерує DDL.
+- `read-metadata.ts` — рекурсивне зчитування файлів метаданих.
+
 ### docs/architecture
 
 - `OVERVIEW.md` — коротка карта поточної архітектури.
 - Тематичні документи цього розділу деталізують state, UI, storage і рішення без дублювання коду.
 
-Майбутні генератори, CLI та інші deployment targets не вважаються частиною поточної структури коду; вони описуються тільки в roadmap.
+Генератори (`generator-api`, `generator-pg`) і CLI створені в Phase 2a. Інші deployment targets описуються тільки в roadmap.
 
 Ключові файли: [../../apps/web/src/components/layout/app-shell.tsx](../../apps/web/src/components/layout/app-shell.tsx), [../../apps/web/src/stores/metadata-store.ts](../../apps/web/src/stores/metadata-store.ts), [../../apps/web/src/storage/storage-provider.ts](../../apps/web/src/storage/storage-provider.ts), [../../packages/core/src/schemas/project-model.ts](../../packages/core/src/schemas/project-model.ts), [../../packages/core/src/serialization.ts](../../packages/core/src/serialization.ts)
 
@@ -130,13 +147,15 @@ Simetra — open-source візуальний конфігуратор бізне
 - вкладки — основний спосіб навігації між об'єктами;
 - floating windows — від'єднані редактори всередині центральної панелі з власним z-order і taskbar для мінімізованих вікон.
 
+SQL Preview відкривається як вкладка в центральній панелі та показує згенерований DDL: toolbar з copy/download, file tree для multi-file output, syntax-highlighted viewer через Shiki.
+
 Панель властивостей працює за пріоритетом контексту: вибране поле, потім вибрана таблична частина, потім активний object-level контекст (`selectedObject`, далі active floating window, далі active tab), і лише після цього налаштування проєкту.
 
 Ключові файли: [../../apps/web/src/components/layout/app-shell.tsx](../../apps/web/src/components/layout/app-shell.tsx), [../../apps/web/src/components/layout/editor-panel.tsx](../../apps/web/src/components/layout/editor-panel.tsx), [../../apps/web/src/components/layout/properties-panel.tsx](../../apps/web/src/components/layout/properties-panel.tsx), [../../apps/web/src/components/layout/tree-panel.tsx](../../apps/web/src/components/layout/tree-panel.tsx), [../../apps/web/src/components/layout/tree/tree-builder.ts](../../apps/web/src/components/layout/tree/tree-builder.ts), [../../apps/web/src/components/editor/object-editor.tsx](../../apps/web/src/components/editor/object-editor.tsx), [../../apps/web/src/components/editor/vertical-nav.tsx](../../apps/web/src/components/editor/vertical-nav.tsx), [../../apps/web/src/components/window-manager/tab-bar.tsx](../../apps/web/src/components/window-manager/tab-bar.tsx), [../../apps/web/src/components/window-manager/floating-window-container.tsx](../../apps/web/src/components/window-manager/floating-window-container.tsx), [../../apps/web/src/components/window-manager/taskbar.tsx](../../apps/web/src/components/window-manager/taskbar.tsx)
 
 ## 7. State Management
 
-Поточний стан не зведений в один conceptual store. Замість цього застосунок розділяє відповідальність між трьома stores.
+Поточний стан не зведений в один conceptual store. Замість цього застосунок розділяє відповідальність між чотирма stores.
 
 ### metadata-store
 
@@ -157,6 +176,12 @@ Simetra — open-source візуальний конфігуратор бізне
 - Тримає `projectHandle`, `lastSavedVersion`, `lastSavedObjectVersions`, статуси save/load/restore, походження проєкту й recovery state.
 - Оркеструє save/open/import/export/restore поверх `StorageProvider`.
 
+### ddl-store
+
+- Derived feature store: читає `ProjectModel` з metadata-store одноразово, не підписується і не мутує.
+- Тримає результат DDL generation, validation errors, стан SQL preview.
+- Не бере участі у undo/redo, dirty tracking або persistence.
+
 ### Dirty tracking і validation
 
 - Глобальний dirty state визначається як різниця між `metadata-store.version` і `project-store.lastSavedVersion`.
@@ -164,7 +189,7 @@ Simetra — open-source візуальний конфігуратор бізне
 - `useModelValidation` виконує debounced project-level validation і синхронізує `modelErrors`.
 - `useSessionRestore` запускає відновлення сесії при ініціалізації shell.
 
-Ключові файли: [../../apps/web/src/stores/metadata-store.ts](../../apps/web/src/stores/metadata-store.ts), [../../apps/web/src/stores/ui-store.ts](../../apps/web/src/stores/ui-store.ts), [../../apps/web/src/stores/project-store.ts](../../apps/web/src/stores/project-store.ts), [../../apps/web/src/hooks/use-is-dirty.ts](../../apps/web/src/hooks/use-is-dirty.ts), [../../apps/web/src/hooks/use-model-validation.ts](../../apps/web/src/hooks/use-model-validation.ts), [../../apps/web/src/hooks/use-session-restore.ts](../../apps/web/src/hooks/use-session-restore.ts)
+Ключові файли: [../../apps/web/src/stores/metadata-store.ts](../../apps/web/src/stores/metadata-store.ts), [../../apps/web/src/stores/ui-store.ts](../../apps/web/src/stores/ui-store.ts), [../../apps/web/src/stores/project-store.ts](../../apps/web/src/stores/project-store.ts), [../../apps/web/src/stores/ddl-store.ts](../../apps/web/src/stores/ddl-store.ts), [../../apps/web/src/hooks/use-is-dirty.ts](../../apps/web/src/hooks/use-is-dirty.ts), [../../apps/web/src/hooks/use-model-validation.ts](../../apps/web/src/hooks/use-model-validation.ts), [../../apps/web/src/hooks/use-session-restore.ts](../../apps/web/src/hooks/use-session-restore.ts)
 
 ## 8. `$schema` і формат метаданих
 
@@ -211,6 +236,7 @@ Simetra — open-source візуальний конфігуратор бізне
 | Етап | Фокус | Статус |
 |------|-------|--------|
 | Phase 1 closure | Дошліфування поточного web configurator: документація, UX gaps, перевірки, завершення архітектурного набору документів | roadmap |
-| Phase 2 | Генерація PostgreSQL DDL з моделі `@simetra/core`, перший deployment target — Supabase | roadmap |
+| Phase 2a | Генерація PostgreSQL DDL, SQL Preview, CLI | implemented |
+| Phase 2b-c | Posting engine, deployment targets | roadmap |
 
 Усі інші пакети, рантайми й deployment targets мають з'являтися в overview тільки після появи реального коду в репозиторії.

@@ -68,7 +68,7 @@ const PROJECT_KEY_ORDER = [
   "deployment",
 ]
 
-const DATABASE_KEY_ORDER = ["target", "schema", "namingConvention"]
+const DATABASE_KEY_ORDER = ["target", "schema"]
 const GENERATION_KEY_ORDER = [
   "tablePrefix",
   "enumStrategy",

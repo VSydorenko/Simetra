@@ -5,9 +5,12 @@ Open-source visual business metadata configurator.
 ## Structure
 
 ```
-apps/web        — React SPA (Vite + Tailwind CSS 4 + shadcn/ui)
-packages/ui     — Shared UI components (shadcn/ui)
-packages/core   — Business metadata schemas (Zod)
+apps/web            — React SPA (Vite + Tailwind CSS 4 + shadcn/ui)
+packages/ui         — Shared UI components (shadcn/ui)
+packages/core       — Business metadata schemas (Zod)
+packages/cli        — CLI for SQL generation from metadata
+packages/generator-pg  — PostgreSQL DDL generator
+packages/generator-api — Generator API contracts
 ```
 
 ## Getting Started
@@ -15,6 +18,13 @@ packages/core   — Business metadata schemas (Zod)
 ```bash
 pnpm install
 pnpm dev
+```
+
+## CLI Usage
+
+```bash
+# Generate SQL from metadata directory
+node packages/cli/bin/simetra.mjs generate --input ./temp/metadata --output ./output
 ```
 
 ## Adding UI Components

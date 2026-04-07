@@ -38,7 +38,6 @@ function baseProject(
     database: {
       target: 'postgresql',
       schema: 'public',
-      namingConvention: 'snake_case',
     },
     generation: {
       tablePrefix: '',
@@ -604,7 +603,6 @@ describe('posting: custom hook schema qualification', () => {
       database: {
         target: 'postgresql',
         schema: 'erp',
-        namingConvention: 'snake_case',
       },
     }),
     documents: [

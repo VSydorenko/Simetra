@@ -14,7 +14,6 @@ function baseProject(
     database: {
       target: "postgresql",
       schema: "public",
-      namingConvention: "snake_case",
     },
     generation: {
       tablePrefix: "",
@@ -497,13 +496,116 @@ describe("AccumulationRegister Balance DDL", () => {
     expect(sql).toContain("'Expense'")
   })
 
-  it("generates balance view", () => {
+  it("generates balance view with CTE and window function", () => {
     expect(sql).toContain("inventory_balance_balance")
-    expect(sql).toContain("CASE WHEN movement_type = 'Receipt'")
+    expect(sql).toContain("WITH deltas AS")
+    expect(sql).toContain("quantity_delta")
+    expect(sql).toContain("SUM(quantity_delta) OVER")
+    expect(sql).toContain("PARTITION BY warehouse")
+    expect(sql).toContain("ORDER BY period")
   })
 
   it("generates turnovers view", () => {
     expect(sql).toContain("inventory_balance_turnovers")
+  })
+})
+
+// ─── Test 6b: AccumulationRegister Balance without dimensions ─
+describe("AccumulationRegister Balance without dimensions", () => {
+  const project: ProjectModel = emptyProject({
+    accumulationRegisters: [
+      {
+        kind: "AccumulationRegister",
+        name: "TotalBalance",
+        registerType: "Balance",
+        recorderTypes: [],
+        standardAttributeOverrides: {},
+        dimensions: [],
+        resources: [
+          {
+            name: "total",
+            type: "Numeric",
+            precision: 15,
+            scale: 2,
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+        ],
+        attributes: [],
+      },
+    ],
+  })
+
+  const sql = generateSQL(project)
+
+  it("balance view uses window function without PARTITION BY", () => {
+    expect(sql).toContain("total_balance_balance")
+    expect(sql).toContain("WITH deltas AS")
+    expect(sql).toContain("total_delta")
+    expect(sql).toContain("SUM(total_delta) OVER")
+    expect(sql).toContain("ORDER BY period")
+    expect(sql).not.toContain("PARTITION BY")
+  })
+})
+
+// ─── Test 6c: AccumulationRegister Balance with multiple resources ─
+describe("AccumulationRegister Balance with multiple resources", () => {
+  const project: ProjectModel = emptyProject({
+    accumulationRegisters: [
+      {
+        kind: "AccumulationRegister",
+        name: "StockBalance",
+        registerType: "Balance",
+        recorderTypes: [],
+        standardAttributeOverrides: {},
+        dimensions: [
+          {
+            name: "warehouse",
+            type: "String",
+            length: 100,
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+        ],
+        resources: [
+          {
+            name: "quantity",
+            type: "Numeric",
+            precision: 15,
+            scale: 3,
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+          {
+            name: "amount",
+            type: "Numeric",
+            precision: 15,
+            scale: 2,
+            required: false,
+            indexed: false,
+            unique: false,
+            defaultValue: null,
+          },
+        ],
+        attributes: [],
+      },
+    ],
+  })
+
+  const sql = generateSQL(project)
+
+  it("each resource has its own cumulative column", () => {
+    expect(sql).toContain("quantity_delta")
+    expect(sql).toContain("amount_delta")
+    expect(sql).toContain("SUM(quantity_delta) OVER")
+    expect(sql).toContain("SUM(amount_delta) OVER")
+    expect(sql).toContain("PARTITION BY warehouse")
   })
 })
 
@@ -737,9 +839,11 @@ describe("Polymorphic Ref DDL", () => {
 
   const sql = generateSQL(project)
 
-  it("generates _type and _id columns", () => {
-    expect(sql).toContain("subject_type varchar(100) NOT NULL")
-    expect(sql).toContain("subject_id uuid NOT NULL")
+  it("generates _type and _id columns without NOT NULL for optional ref", () => {
+    expect(sql).toContain("subject_type varchar(100)")
+    expect(sql).toContain("subject_id uuid")
+    expect(sql).not.toMatch(/subject_type varchar\(100\) NOT NULL/)
+    expect(sql).not.toMatch(/subject_id uuid NOT NULL/)
   })
 
   it("generates CHECK constraint for allowed types", () => {
@@ -920,5 +1024,211 @@ describe("output file", () => {
     const result = generateProjectDDL(emptyProject(), defaultOpts)
     expect(result.files).toHaveLength(1)
     expect(result.files[0].path).toBe("test-project.sql")
+  })
+})
+
+// ─── Polymorphic Ref required behavior ─────────────────────
+describe("Polymorphic Ref required behavior", () => {
+  it("polymorphic Ref + required: false → no NOT NULL", () => {
+    const project: ProjectModel = emptyProject({
+      catalogs: [
+        {
+          kind: "Catalog",
+          name: "Products",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [],
+          tabularSections: [],
+        },
+        {
+          kind: "Catalog",
+          name: "Services",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [],
+          tabularSections: [],
+        },
+        {
+          kind: "Catalog",
+          name: "Orders",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [
+            {
+              name: "item",
+              type: "Ref",
+              allowedTypes: [
+                { kind: "Catalog", name: "Products" },
+                { kind: "Catalog", name: "Services" },
+              ],
+              required: false,
+              indexed: false,
+              unique: false,
+              defaultValue: null,
+            },
+          ],
+          tabularSections: [],
+        },
+      ],
+    })
+
+    const sql = generateSQL(project)
+    expect(sql).toContain("item_type varchar(100)")
+    expect(sql).toContain("item_id uuid")
+    expect(sql).not.toMatch(/item_type varchar\(100\) NOT NULL/)
+    expect(sql).not.toMatch(/item_id uuid NOT NULL/)
+  })
+
+  it("polymorphic Ref + required: true → NOT NULL on both columns", () => {
+    const project: ProjectModel = emptyProject({
+      catalogs: [
+        {
+          kind: "Catalog",
+          name: "Products",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [],
+          tabularSections: [],
+        },
+        {
+          kind: "Catalog",
+          name: "Services",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [],
+          tabularSections: [],
+        },
+        {
+          kind: "Catalog",
+          name: "Orders",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [
+            {
+              name: "item",
+              type: "Ref",
+              allowedTypes: [
+                { kind: "Catalog", name: "Products" },
+                { kind: "Catalog", name: "Services" },
+              ],
+              required: true,
+              indexed: false,
+              unique: false,
+              defaultValue: null,
+            },
+          ],
+          tabularSections: [],
+        },
+      ],
+    })
+
+    const sql = generateSQL(project)
+    expect(sql).toContain("item_type varchar(100) NOT NULL")
+    expect(sql).toContain("item_id uuid NOT NULL")
+  })
+})
+
+// ─── Single Ref required/unique in DDL ─────────────────────
+describe("Single Ref required/unique in DDL", () => {
+  it("required single Ref → NOT NULL in DDL", () => {
+    const project: ProjectModel = emptyProject({
+      catalogs: [
+        {
+          kind: "Catalog",
+          name: "Warehouses",
+          codeLength: 5,
+          codeType: "String",
+          descriptionLength: 100,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [],
+          tabularSections: [],
+        },
+        {
+          kind: "Catalog",
+          name: "Products",
+          codeLength: 9,
+          codeType: "String",
+          descriptionLength: 150,
+          hierarchyType: "None",
+          owners: [],
+          autonumber: false,
+          codeUnique: false,
+          mainPresentation: "Description",
+          predefinedItems: [],
+          standardAttributeOverrides: {},
+          attributes: [
+            {
+              name: "default_warehouse",
+              type: "Ref",
+              ref: { kind: "Catalog", name: "Warehouses" },
+              required: true,
+              indexed: false,
+              unique: false,
+              defaultValue: null,
+            },
+          ],
+          tabularSections: [],
+        },
+      ],
+    })
+
+    const sql = generateSQL(project)
+    expect(sql).toContain(
+      "default_warehouse_id uuid REFERENCES warehouses(id) NOT NULL",
+    )
   })
 })

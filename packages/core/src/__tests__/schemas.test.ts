@@ -64,7 +64,6 @@ describe("projectSchema", () => {
       database: {
         target: "postgresql",
         schema: "public",
-        namingConvention: "snake_case",
       },
       generation: {
         tablePrefix: "",

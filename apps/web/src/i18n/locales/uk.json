@@ -146,8 +146,7 @@
     "additionalIndexes": "Додаткові індекси",
     "database": {
       "target": "СУБД",
-      "schema": "Схема",
-      "namingConvention": "Конвенція імен"
+      "schema": "Схема"
     },
     "generation": {
       "tablePrefix": "Префікс таблиць",
@@ -401,7 +400,10 @@
     "noOutput": "Натисніть \"Згенерувати SQL\" для перегляду DDL",
     "generationError": "Помилка генерації SQL",
     "copyAll": "Копіювати все",
+    "copyFile": "Копіювати файл",
     "download": "Завантажити .sql",
+    "downloadFile": "Завантажити файл",
+    "downloadAll": "Завантажити все",
     "warningCount_one": "{{count}} попередження",
     "warningCount_few": "{{count}} попередження",
     "warningCount_many": "{{count}} попереджень",

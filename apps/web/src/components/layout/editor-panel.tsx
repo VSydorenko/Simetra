@@ -6,10 +6,11 @@ import { Taskbar } from "../window-manager/taskbar"
 import { ObjectEditor } from "../editor/object-editor"
 import { WelcomeScreen } from "../editor/welcome-screen"
 import { RecoveryBanner } from "../editor/recovery-banner"
-import { SqlPreviewPanel } from "../sql-preview/sql-preview-panel"
 import { isObjectTab, isSqlPreviewTab, useUiStore } from "@/stores/ui-store"
 import { useProjectStore } from "@/stores/project-store"
-import { useCallback } from "react"
+
+const SqlPreviewPanel = lazy(() => import('../sql-preview/sql-preview-panel'))
+import { Suspense, lazy, useCallback } from "react"
 
 /** Центральна панель: TabBar + вміст активної вкладки + floating windows */
 export function EditorPanel() {
@@ -96,7 +97,15 @@ export function EditorPanel() {
               onSectionChange={handleSectionChange}
             />
           ) : isSqlPreviewTab(activeTab) ? (
-            <SqlPreviewPanel key={activeTab.id} />
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  {t("sqlPreview.title")}…
+                </div>
+              }
+            >
+              <SqlPreviewPanel key={activeTab.id} />
+            </Suspense>
           ) : null
         ) : showWelcome ? (
           <WelcomeScreen />

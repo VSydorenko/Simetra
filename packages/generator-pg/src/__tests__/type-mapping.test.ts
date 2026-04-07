@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { mapFieldType } from "../type-mapping"
+import { mapFieldType, attributeToColumn } from "../type-mapping"
 
 describe("mapFieldType", () => {
   it("maps UUID", () => {
@@ -56,5 +56,84 @@ describe("mapFieldType", () => {
 
   it("falls back to text for unknown type", () => {
     expect(mapFieldType({ type: "Unknown" })).toBe("text")
+  })
+})
+
+describe("attributeToColumn", () => {
+  const noopResolve = () => "target_table"
+  const noopEnumResolve = () => undefined
+
+  it("single Ref + required: true → NOT NULL", () => {
+    const col = attributeToColumn(
+      {
+        name: "customer",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Customers" },
+        required: true,
+        indexed: false,
+        unique: false,
+        defaultValue: null,
+      },
+      noopResolve,
+      noopEnumResolve,
+    )
+    expect(col.sqlType).toBe("uuid")
+    expect(col.constraints).toContain("NOT NULL")
+    expect(col.constraints).toContain("REFERENCES target_table(id)")
+  })
+
+  it("single Ref + unique: true → UNIQUE", () => {
+    const col = attributeToColumn(
+      {
+        name: "serial_no",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Serials" },
+        required: false,
+        indexed: false,
+        unique: true,
+        defaultValue: null,
+      },
+      noopResolve,
+      noopEnumResolve,
+    )
+    expect(col.sqlType).toBe("uuid")
+    expect(col.constraints).toContain("UNIQUE")
+    expect(col.constraints).not.toContain("NOT NULL")
+  })
+
+  it("single enum Ref + required: true → NOT NULL", () => {
+    const col = attributeToColumn(
+      {
+        name: "status",
+        type: "Ref",
+        ref: { kind: "Enumeration", name: "Status" },
+        required: true,
+        indexed: false,
+        unique: false,
+        defaultValue: null,
+      },
+      noopResolve,
+      () => "public.status",
+    )
+    expect(col.sqlType).toBe("public.status")
+    expect(col.constraints).toContain("NOT NULL")
+  })
+
+  it("single Ref without required/unique → no constraints besides FK", () => {
+    const col = attributeToColumn(
+      {
+        name: "warehouse",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Warehouses" },
+        required: false,
+        indexed: false,
+        unique: false,
+        defaultValue: null,
+      },
+      noopResolve,
+      noopEnumResolve,
+    )
+    expect(col.sqlType).toBe("uuid")
+    expect(col.constraints).toEqual(["REFERENCES target_table(id)"])
   })
 })

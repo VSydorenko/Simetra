@@ -110,3 +110,5 @@ export function SqlPreviewPanel() {
     </div>
   )
 }
+
+export default SqlPreviewPanel

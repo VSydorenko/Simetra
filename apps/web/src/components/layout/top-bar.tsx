@@ -24,6 +24,7 @@ import { useProjectStore } from "@/stores/project-store"
 import { useDdlStore } from "@/stores/ddl-store"
 import { useUiStore } from "@/stores/ui-store"
 import { useIsDirty } from "@/hooks/use-is-dirty"
+import { formatShortcut } from "@/lib/format-shortcut"
 
 export function TopBar() {
   const { t } = useTranslation()
@@ -183,7 +184,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t("action.save")} (Ctrl+S)
+            {t("action.save")} ({formatShortcut("Mod+S")})
           </TooltipContent>
         </Tooltip>
 
@@ -204,7 +205,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t("sqlPreview.generateSql")} (Ctrl+G)
+            {t("sqlPreview.generateSql")} ({formatShortcut("Mod+G")})
           </TooltipContent>
         </Tooltip>
 
@@ -265,7 +266,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t("action.undo")} (Ctrl+Z)
+            {t("action.undo")} ({formatShortcut("Mod+Z")})
           </TooltipContent>
         </Tooltip>
 
@@ -286,7 +287,7 @@ export function TopBar() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t("action.redo")} (Ctrl+Shift+Z)
+            {t("action.redo")} ({formatShortcut("Mod+Shift+Z")})
           </TooltipContent>
         </Tooltip>
       </div>

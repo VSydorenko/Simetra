@@ -645,8 +645,7 @@ metadata/
   "defaultLocale": "uk",
   "database": {
     "target": "postgresql",
-    "schema": "public",
-    "namingConvention": "snake_case"
+    "schema": "public"
   },
   "generation": {
     "tablePrefix": "",

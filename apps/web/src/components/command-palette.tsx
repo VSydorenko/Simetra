@@ -13,6 +13,7 @@ import { useUiStore } from "@/stores/ui-store"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useProjectStore } from "@/stores/project-store"
 import { useDdlStore } from "@/stores/ddl-store"
+import { formatShortcut } from "@/lib/format-shortcut"
 import {
   createDefaultObject,
   generateUniqueName,
@@ -130,22 +131,22 @@ export function CommandPalette() {
         <CommandGroup heading={t("commandPalette.group.actions")}>
           <CommandItem onSelect={handleSave}>
             {t("action.save")}
-            <CommandShortcut>Ctrl+S</CommandShortcut>
+            <CommandShortcut>{formatShortcut("Mod+S")}</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={handleExport}>
             {t("action.export")}
           </CommandItem>
           <CommandItem onSelect={handleUndo}>
             {t("action.undo")}
-            <CommandShortcut>Ctrl+Z</CommandShortcut>
+            <CommandShortcut>{formatShortcut("Mod+Z")}</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={handleRedo}>
             {t("action.redo")}
-            <CommandShortcut>Ctrl+Shift+Z</CommandShortcut>
+            <CommandShortcut>{formatShortcut("Mod+Shift+Z")}</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={handleGenerateSql}>
             {t("sqlPreview.generateSql")}
-            <CommandShortcut>Ctrl+G</CommandShortcut>
+            <CommandShortcut>{formatShortcut("Mod+G")}</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 
