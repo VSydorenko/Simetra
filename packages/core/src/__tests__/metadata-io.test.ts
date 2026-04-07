@@ -371,7 +371,7 @@ describe('buildProjectModelFromParsed', () => {
 
   it('resolves form objectSlug to objectName in model.forms', () => {
     // SalesOrder → slug "sales-order"
-    const formData = { kind: 'ItemForm', layout: { element: 'Group' } }
+    const formData = { kind: 'ItemForm', layout: { element: 'Group', children: [] } }
     const files = makeFiles({
       'project.meta.json': MINIMAL_PROJECT,
       'documents/sales-order/sales-order.meta.json': VALID_DOCUMENT,

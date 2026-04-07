@@ -237,7 +237,7 @@ flowchart TD
 
 ### Етап 3: Zod-схеми form metadata у `@simetra/core`
 
-- [ ] Створити `packages/core/src/schemas/form.ts`:
+- [X] Створити `packages/core/src/schemas/form.ts`:
   - `formKindSchema` — `z.enum(["ItemForm", "ListForm"])`
   - `formFieldSchema` — `{ element: "Field", ref: string, label?, component?, readOnly?, autoFocus?, placeholder?, className?, hidden? }`
   - `formGroupSchema` — `{ element: "Group", title?, children[] }`
@@ -251,10 +251,10 @@ flowchart TD
   - `toolbarButtonSchema` — `{ type: "SaveButton" | "SaveAndCloseButton" | "PostButton" | "UnpostButton" | "DeletionMarkButton" | "Separator" | "CustomButton", ... }`
   - `formSchema` — `{ $schema?, kind: FormKind, objectRef: MetadataRef, title?, width?, layout: FormLayoutElement, toolbar?, commandBar? }`
   - **Важливо:** `objectRef: MetadataRef` є обов'язковим полем — це explicit зв'язок форми з конкретним об'єктом у ProjectModel
-- [ ] Додати export у `packages/core/src/schemas/index.ts`
-- [ ] Серіалізація: `FORM_KEY_ORDER` у `serialization.ts`
-- [ ] `serializeForm()` function у `serialization.ts` — canonical JSON для form.json файлів
-- [ ] **Тести:**
+- [X] Додати export у `packages/core/src/schemas/index.ts`
+- [X] Серіалізація: `FORM_KEY_ORDER` у `serialization.ts` (додано `width`)
+- [X] `serializeForm()` function у `serialization.ts` — canonical JSON для form.json файлів
+- [X] **Тести:**
   - Валідний item form → pass
   - Валідний list form → pass
   - Порожній layout → pass
@@ -263,7 +263,7 @@ flowchart TD
 
 ### Етап 4: Алгоритм автоформи у `@simetra/core`
 
-- [ ] Створити `packages/core/src/autoform.ts`:
+- [X] Створити `packages/core/src/autoform.ts`:
   - `generateItemForm(object, kind, metadata)` — генерує canonical `FormSchema` з metadata:
     1. Стандартні реквізити НЕ включаються в тіло форми (вони readonly, показуються в header або sidebar). Використовувати `getStandardAttributes()` з `packages/core/src/schemas/standard-attributes.ts` для визначення набору стандартних полів — **не** власний перелік
     2. Узяти всі user-defined attributes у порядку, визначеному масивом `attributes`
@@ -284,7 +284,7 @@ flowchart TD
     1. Шукає explicit form у `model.forms` де `objectRef` і `kind` збігаються
     2. Якщо знайдено → повертає її
     3. Якщо ні → викликає `generateItemForm` / `generateListForm`
-- [ ] **Тести:**
+- [X] **Тести:**
   - Autoform для Catalog без ТЧ → вертикальний список
   - Autoform для Document з ТЧ → Tabs
   - Autoform для Catalog з >6 полів → Columns

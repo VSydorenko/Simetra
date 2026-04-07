@@ -173,6 +173,7 @@ const FORM_KEY_ORDER = [
   'kind',
   'objectRef',
   'title',
+  'width',
   'layout',
   'toolbar',
   'commandBar',

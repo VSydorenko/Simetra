@@ -25,6 +25,9 @@ import {
   postingSchema,
   formSchema,
   formKindSchema,
+  formLayoutElementSchema,
+  toolbarItemSchema,
+  commandBarItemSchema,
 } from "../schemas"
 import {
   serializeMetadataObject,
@@ -1708,5 +1711,462 @@ describe("projectModelSchema forms validation", () => {
       project: { name: "TestApp" },
     })
     expect(result.forms).toEqual([])
+  })
+})
+
+// ============================================================
+// formLayoutElementSchema (Phase 3 — Stage 3)
+// ============================================================
+
+describe("formLayoutElementSchema — leaf elements", () => {
+  it("parses valid Field element", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Field",
+      ref: "product_name",
+    })
+    expect(result.element).toBe("Field")
+    if (result.element === "Field") {
+      expect(result.ref).toBe("product_name")
+    }
+  })
+
+  it("parses Field with all optional properties", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Field",
+      ref: "description",
+      label: { uk: "Опис", en: "Description" },
+      component: "Textarea",
+      readOnly: true,
+      autoFocus: false,
+      placeholder: { uk: "Введіть опис..." },
+      className: "col-span-2",
+      hidden: false,
+    })
+    expect(result.element).toBe("Field")
+    if (result.element === "Field") {
+      expect(result.component).toBe("Textarea")
+      expect(result.readOnly).toBe(true)
+    }
+  })
+
+  it("rejects Field without ref", () => {
+    expect(() =>
+      formLayoutElementSchema.parse({
+        element: "Field",
+      }),
+    ).toThrow()
+  })
+
+  it("rejects Field with empty ref", () => {
+    expect(() =>
+      formLayoutElementSchema.parse({
+        element: "Field",
+        ref: "",
+      }),
+    ).toThrow()
+  })
+
+  it("parses valid TabularSection element", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "TabularSection",
+      ref: "order_items",
+    })
+    expect(result.element).toBe("TabularSection")
+    if (result.element === "TabularSection") {
+      expect(result.ref).toBe("order_items")
+    }
+  })
+
+  it("parses TabularSection with columns restriction", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "TabularSection",
+      ref: "order_items",
+      columns: ["name", "quantity", "price"],
+      allowAdd: true,
+      allowDelete: false,
+      allowReorder: true,
+    })
+    if (result.element === "TabularSection") {
+      expect(result.columns).toEqual(["name", "quantity", "price"])
+      expect(result.allowDelete).toBe(false)
+    }
+  })
+
+  it("parses valid Separator element", () => {
+    const result = formLayoutElementSchema.parse({ element: "Separator" })
+    expect(result.element).toBe("Separator")
+  })
+
+  it("parses valid Label element", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Label",
+      text: { uk: "Основні реквізити", en: "Main attributes" },
+    })
+    expect(result.element).toBe("Label")
+    if (result.element === "Label") {
+      expect(result.text).toEqual({ uk: "Основні реквізити", en: "Main attributes" })
+    }
+  })
+
+  it("rejects Label without text", () => {
+    expect(() =>
+      formLayoutElementSchema.parse({
+        element: "Label",
+      }),
+    ).toThrow()
+  })
+
+  it("rejects unknown element type", () => {
+    expect(() =>
+      formLayoutElementSchema.parse({
+        element: "UnknownElement",
+      }),
+    ).toThrow()
+  })
+})
+
+describe("formLayoutElementSchema — container elements", () => {
+  it("parses Group with Field children", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Group",
+      title: { uk: "Загальна інформація" },
+      children: [
+        { element: "Field", ref: "name" },
+        { element: "Field", ref: "code" },
+      ],
+    })
+    expect(result.element).toBe("Group")
+    if (result.element === "Group") {
+      expect(result.children).toHaveLength(2)
+    }
+  })
+
+  it("parses Group with empty children", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Group",
+      children: [],
+    })
+    expect(result.element).toBe("Group")
+  })
+
+  it("parses Columns with Column children", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Columns",
+      columns: [
+        {
+          element: "Column",
+          children: [{ element: "Field", ref: "left_field" }],
+        },
+        {
+          element: "Column",
+          children: [{ element: "Field", ref: "right_field" }],
+        },
+      ],
+    })
+    expect(result.element).toBe("Columns")
+    if (result.element === "Columns") {
+      expect(result.columns).toHaveLength(2)
+    }
+  })
+
+  it("rejects Columns with non-Column children", () => {
+    expect(() =>
+      formLayoutElementSchema.parse({
+        element: "Columns",
+        columns: [
+          { element: "Field", ref: "some_field" },
+        ],
+      }),
+    ).toThrow()
+  })
+
+  it("parses Tabs with Tab children", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Tabs",
+      tabs: [
+        {
+          element: "Tab",
+          title: { uk: "Основне" },
+          children: [{ element: "Field", ref: "name" }],
+        },
+        {
+          element: "Tab",
+          title: { uk: "Деталі" },
+          children: [{ element: "TabularSection", ref: "items" }],
+        },
+      ],
+    })
+    expect(result.element).toBe("Tabs")
+    if (result.element === "Tabs") {
+      expect(result.tabs).toHaveLength(2)
+    }
+  })
+
+  it("rejects Tab without title", () => {
+    expect(() =>
+      formLayoutElementSchema.parse({
+        element: "Tab",
+        children: [],
+      }),
+    ).toThrow()
+  })
+
+  it("parses Accordion element", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Accordion",
+      title: { uk: "Додаткові дані" },
+      children: [{ element: "Field", ref: "notes" }],
+    })
+    expect(result.element).toBe("Accordion")
+    if (result.element === "Accordion") {
+      expect(result.children).toHaveLength(1)
+    }
+  })
+
+  it("parses nested Group inside Group (deep recursion)", () => {
+    const result = formLayoutElementSchema.parse({
+      element: "Group",
+      title: { uk: "Outer" },
+      children: [
+        {
+          element: "Group",
+          title: { uk: "Inner" },
+          children: [
+            { element: "Field", ref: "deep_field" },
+          ],
+        },
+      ],
+    })
+    expect(result.element).toBe("Group")
+    if (result.element === "Group") {
+      const inner = result.children[0]
+      expect(inner.element).toBe("Group")
+    }
+  })
+})
+
+// ============================================================
+// toolbarItemSchema (Phase 3 — Stage 3)
+// ============================================================
+
+describe("toolbarItemSchema", () => {
+  it("parses SaveButton", () => {
+    const result = toolbarItemSchema.parse({ type: "SaveButton" })
+    expect(result.type).toBe("SaveButton")
+  })
+
+  it("parses all standard button types", () => {
+    const types = [
+      "SaveButton",
+      "SaveAndCloseButton",
+      "PostButton",
+      "UnpostButton",
+      "DeletionMarkButton",
+      "Separator",
+    ] as const
+    for (const type of types) {
+      const result = toolbarItemSchema.parse({ type })
+      expect(result.type).toBe(type)
+    }
+  })
+
+  it("parses CustomButton with required fields", () => {
+    const result = toolbarItemSchema.parse({
+      type: "CustomButton",
+      name: "printForm",
+      label: { uk: "Друк", en: "Print" },
+    })
+    expect(result.type).toBe("CustomButton")
+    if (result.type === "CustomButton") {
+      expect(result.name).toBe("printForm")
+    }
+  })
+
+  it("parses CustomButton with all optional fields", () => {
+    const result = toolbarItemSchema.parse({
+      type: "CustomButton",
+      name: "export",
+      label: { uk: "Експорт" },
+      icon: "DownloadIcon",
+      action: "handleExport",
+    })
+    if (result.type === "CustomButton") {
+      expect(result.icon).toBe("DownloadIcon")
+      expect(result.action).toBe("handleExport")
+    }
+  })
+
+  it("rejects CustomButton without name", () => {
+    expect(() =>
+      toolbarItemSchema.parse({
+        type: "CustomButton",
+        label: { uk: "Без імені" },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects unknown toolbar item type", () => {
+    expect(() =>
+      toolbarItemSchema.parse({ type: "PrintButton" }),
+    ).toThrow()
+  })
+})
+
+// ============================================================
+// commandBarItemSchema (Phase 3 — Stage 3)
+// ============================================================
+
+describe("commandBarItemSchema", () => {
+  it("parses NavigationLink", () => {
+    const result = commandBarItemSchema.parse({
+      type: "NavigationLink",
+      label: { uk: "Документи продажу", en: "Sales documents" },
+      target: { kind: "Document", name: "SalesOrder" },
+    })
+    expect(result.type).toBe("NavigationLink")
+    if (result.type === "NavigationLink") {
+      expect(result.target).toEqual({ kind: "Document", name: "SalesOrder" })
+    }
+  })
+
+  it("parses NavigationLink with filter", () => {
+    const result = commandBarItemSchema.parse({
+      type: "NavigationLink",
+      label: { uk: "Рахунки контрагента" },
+      target: { kind: "Document", name: "Invoice" },
+      filter: { counterparty_id: "$id" },
+    })
+    if (result.type === "NavigationLink") {
+      expect(result.filter).toEqual({ counterparty_id: "$id" })
+    }
+  })
+
+  it("rejects NavigationLink without label", () => {
+    expect(() =>
+      commandBarItemSchema.parse({
+        type: "NavigationLink",
+        target: { kind: "Document", name: "SalesOrder" },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects unknown commandBar item type", () => {
+    expect(() =>
+      commandBarItemSchema.parse({ type: "BackButton" }),
+    ).toThrow()
+  })
+})
+
+// ============================================================
+// formSchema — Stage 3 розширення (width, toolbar, commandBar, layout)
+// ============================================================
+
+describe("formSchema — Stage 3 extensions", () => {
+  it("parses form with width field", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+      width: "2xl",
+    })
+    expect(result.width).toBe("2xl")
+  })
+
+  it("rejects invalid width value", () => {
+    expect(() =>
+      formSchema.parse({
+        kind: "ItemForm",
+        objectRef: { kind: "Catalog", name: "Products" },
+        width: "gigantic",
+      }),
+    ).toThrow()
+  })
+
+  it("parses form with layout Field element", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+      layout: {
+        element: "Group",
+        children: [
+          { element: "Field", ref: "name" },
+          { element: "Field", ref: "code" },
+        ],
+      },
+    })
+    expect(result.layout).toBeDefined()
+    if (result.layout?.element === "Group") {
+      expect(result.layout.children).toHaveLength(2)
+    }
+  })
+
+  it("parses form with toolbar", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Document", name: "SalesOrder" },
+      toolbar: [
+        { type: "SaveButton" },
+        { type: "PostButton" },
+        { type: "Separator" },
+        { type: "DeletionMarkButton" },
+      ],
+    })
+    expect(result.toolbar).toHaveLength(4)
+  })
+
+  it("parses form with commandBar", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Counterparties" },
+      commandBar: [
+        {
+          type: "NavigationLink",
+          label: { uk: "Договори" },
+          target: { kind: "Document", name: "Contract" },
+          filter: { counterparty_id: "$id" },
+        },
+      ],
+    })
+    expect(result.commandBar).toHaveLength(1)
+  })
+
+  it("parses full form with all fields", () => {
+    const result = formSchema.parse({
+      $schema: "https://simetra.dev/schemas/v1/form.schema.json",
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+      title: { uk: "Товар", en: "Product" },
+      width: "xl",
+      layout: {
+        element: "Group",
+        children: [{ element: "Field", ref: "name" }],
+      },
+      toolbar: [{ type: "SaveButton" }, { type: "DeletionMarkButton" }],
+      commandBar: [],
+    })
+    expect(result.kind).toBe("ItemForm")
+    expect(result.width).toBe("xl")
+    expect(result.toolbar).toHaveLength(2)
+  })
+
+  it("accepts form without optional fields", () => {
+    const result = formSchema.parse({
+      kind: "ListForm",
+      objectRef: { kind: "Document", name: "Invoice" },
+    })
+    expect(result.layout).toBeUndefined()
+    expect(result.toolbar).toBeUndefined()
+    expect(result.commandBar).toBeUndefined()
+    expect(result.width).toBeUndefined()
+  })
+
+  it("treats empty layout {} as undefined (backward-compatible BRD placeholder)", () => {
+    // BRD §10.5.2 показує "layout": {} як структурний placeholder
+    // Backward-compatibility: пустий об'єкт має бути рівний відсутньому layout
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+      layout: {},
+    })
+    expect(result.layout).toBeUndefined()
   })
 })

@@ -21,6 +21,9 @@ export {
   type PostingCompatibilityResult,
 } from "./posting-compatibility"
 
+// Autoform — алгоритм автоформи
+export { generateItemForm, generateListForm, resolveForm } from "./autoform"
+
 // Metadata IO — shared parsing/serialization layer
 export {
   parseMetadataFiles,
