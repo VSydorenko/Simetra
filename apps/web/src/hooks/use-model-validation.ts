@@ -235,13 +235,20 @@ function validateSingleObject(
             })
           }
           // Перевірка неповних маппінгів dimensions
-          const missingDims = reg.dimensions.filter(
-            (d) => !movement.mappings.dimensions[d.name],
+          // AR — всі dimensions обов'язкові (ключ агрегації), IR — тільки required
+          const missingDims = reg.dimensions.filter((d) =>
+            reg.kind === 'AccumulationRegister'
+              ? !movement.mappings.dimensions[d.name]
+              : d.required && !movement.mappings.dimensions[d.name],
           )
           if (missingDims.length > 0) {
+            const label =
+              reg.kind === 'AccumulationRegister'
+                ? 'не заповнені dimensions'
+                : `не заповнені обов'язкові dimensions`
             errors.push({
               path: 'posting.movements',
-              message: `Рух до ${movement.register.name}: не заповнені dimensions: ${missingDims.map((d) => d.name).join(', ')}`,
+              message: `Рух до ${movement.register.name}: ${label}: ${missingDims.map((d) => d.name).join(', ')}`,
             })
           }
         }

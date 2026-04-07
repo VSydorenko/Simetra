@@ -213,7 +213,7 @@ export function TabularSectionProperties({
           kind={selection.objectRef.kind}
           objectName={selection.objectRef.name}
           object={object}
-          onUpdateObject={() => {}}
+          onUpdateObject={() => null}
           tabularSectionName={section.name}
         />
       </div>

@@ -62,7 +62,7 @@ export function TabularSectionsEditor({
 
   const handleUpdateObject = useCallback(
     (updates: Partial<MetadataObject>) => {
-      updateObject(kind, objectName, updates)
+      return updateObject(kind, objectName, updates)
     },
     [kind, objectName, updateObject]
   )

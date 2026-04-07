@@ -29,7 +29,8 @@ import type {
   PostingMovement,
 } from "@simetra/core"
 import { getStandardAttributes } from "@simetra/core"
-import { useMetadataStore } from "@/stores/metadata-store"
+import { toast } from "@workspace/ui/components/sonner"
+import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 import { buildExpressionOptions } from "@/lib/build-expression-options"
 import { isExpressionInvalid, validateExpressionFields } from "@/lib/expression-validation"
 
@@ -39,7 +40,7 @@ interface MovementConstructorDialogProps {
   registerRef: MetadataRef
   document: Document
   existingMovement?: PostingMovement | null
-  onSave: (movement: PostingMovement) => void
+  onSave: (movement: PostingMovement) => ValidationError[] | null
 }
 
 interface MovementDraft {
@@ -104,7 +105,7 @@ function MovementConstructorBody({
   registerRef: MetadataRef
   document: Document
   existingMovement?: PostingMovement | null
-  onSave: (movement: PostingMovement) => void
+  onSave: (movement: PostingMovement) => ValidationError[] | null
   onCancel: () => void
 }) {
   const { t } = useTranslation()
@@ -302,7 +303,11 @@ function MovementConstructorBody({
         attributes: cleanMappings(draft.mappings.attributes),
       },
     }
-    onSave(movement)
+    const errors = onSave(movement)
+    if (errors) {
+      toast.error(errors[0].message)
+      return
+    }
     onCancel()
   }, [draft, registerRef, onSave, onCancel])
 

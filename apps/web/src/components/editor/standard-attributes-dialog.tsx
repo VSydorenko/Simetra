@@ -34,7 +34,8 @@ import {
 } from "@simetra/core"
 import { extractStandardAttributeSettings } from "@/lib/extract-settings"
 import { formatTypeLabel } from "@/lib/format-type-label"
-import { useMetadataStore } from "@/stores/metadata-store"
+import { toast } from "@workspace/ui/components/sonner"
+import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 
 interface StandardAttributesDialogProps {
   open: boolean
@@ -42,7 +43,7 @@ interface StandardAttributesDialogProps {
   kind: MetadataKind
   objectName: string
   object: MetadataObject
-  onUpdateObject: (updates: Partial<MetadataObject>) => void
+  onUpdateObject: (updates: Partial<MetadataObject>) => ValidationError[] | null
   /** Якщо задано — показати стандартні реквізити табличної частини */
   tabularSectionName?: string
 }
@@ -109,7 +110,7 @@ function StandardAttributesDialogBody({
   kind: MetadataKind
   objectName: string
   object: MetadataObject
-  onUpdateObject: (updates: Partial<MetadataObject>) => void
+  onUpdateObject: (updates: Partial<MetadataObject>) => ValidationError[] | null
   onCancel: () => void
   tabularSectionName?: string
   t: TFunction
@@ -186,16 +187,24 @@ function StandardAttributesDialogBody({
 
   const handleSave = useCallback(() => {
     if (tabularSectionName && section) {
-      updateTabularSection(kind, objectName, tabularSectionName, {
+      const errors = updateTabularSection(kind, objectName, tabularSectionName, {
         standardAttributeOverrides: draftOverrides,
       })
+      if (errors) {
+        toast.error(errors[0].message)
+        return
+      }
       onCancel()
       return
     }
 
-    onUpdateObject({
+    const errors = onUpdateObject({
       standardAttributeOverrides: draftOverrides,
     } as Partial<MetadataObject>)
+    if (errors) {
+      toast.error(errors[0].message)
+      return
+    }
     onCancel()
   }, [
     draftOverrides,

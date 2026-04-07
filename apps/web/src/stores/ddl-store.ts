@@ -184,12 +184,19 @@ function collectValidationErrors(model: ProjectModel): string[] {
                 )
               }
               // Перевірка неповних dimensions
-              const missingDims = reg.dimensions.filter(
-                (d) => !m.mappings.dimensions[d.name],
+              // AR — всі dimensions обов'язкові (ключ агрегації), IR — тільки required
+              const missingDims = reg.dimensions.filter((d) =>
+                reg.kind === 'AccumulationRegister'
+                  ? !m.mappings.dimensions[d.name]
+                  : d.required && !m.mappings.dimensions[d.name],
               )
               if (missingDims.length > 0) {
+                const label =
+                  reg.kind === 'AccumulationRegister'
+                    ? 'не заповнені dimensions'
+                    : `не заповнені обов'язкові dimensions`
                 errors.push(
-                  `${kind}/${obj.name}: Рух до ${m.register.name} — не заповнені dimensions: ${missingDims.map((d) => d.name).join(', ')}`
+                  `${kind}/${obj.name}: Рух до ${m.register.name} — ${label}: ${missingDims.map((d) => d.name).join(', ')}`
                 )
               }
             }

@@ -195,7 +195,7 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
 
   const handleUpdate = useCallback(
     (updates: Partial<MetadataObject>) => {
-      updateObject(objectRef.kind, objectRef.name, updates)
+      return updateObject(objectRef.kind, objectRef.name, updates)
     },
     [objectRef.kind, objectRef.name, updateObject]
   )

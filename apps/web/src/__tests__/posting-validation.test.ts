@@ -147,4 +147,145 @@ describe("posting cross-check: posting register refs subset of registerMovements
       ),
     ).toBe(true)
   })
+
+  it("AR: all dimensions required regardless of required flag", () => {
+    const model: ProjectModel = projectModelSchema.parse({
+      project: { name: "Test" },
+      accumulationRegisters: [
+        {
+          kind: "AccumulationRegister",
+          name: "InventoryBalance",
+          registerType: "Balance",
+          dimensions: [
+            { name: "product", type: "String" },
+            { name: "warehouse", type: "String", required: false },
+          ],
+          resources: [
+            { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
+          ],
+        },
+      ],
+      documents: [
+        {
+          kind: "Document",
+          name: "Invoice",
+          attributes: [],
+          tabularSections: [
+            {
+              name: "items",
+              attributes: [{ name: "product", type: "String" }],
+            },
+          ],
+          registerMovements: [
+            { kind: "AccumulationRegister", name: "InventoryBalance" },
+          ],
+          posting: {
+            movements: [
+              {
+                register: {
+                  kind: "AccumulationRegister",
+                  name: "InventoryBalance",
+                },
+                movementType: "Receipt",
+                source: "tabularSection:items",
+                mappings: { dimensions: {}, resources: {} },
+              },
+            ],
+            validations: [],
+          },
+        },
+      ],
+    })
+
+    useMetadataStore.setState({
+      model,
+      version: 1,
+      objectVersions: {},
+      validationErrors: {},
+      modelErrors: {},
+    })
+
+    renderHook(() => useModelValidation())
+
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+
+    const modelErrors = useMetadataStore.getState().modelErrors
+    const docErrors = modelErrors["Document/Invoice"] ?? []
+    const dimError = docErrors.find((e) =>
+      e.message.includes("не заповнені dimensions"),
+    )
+    expect(dimError).toBeDefined()
+    expect(dimError!.message).toContain("product")
+    expect(dimError!.message).toContain("warehouse")
+  })
+
+  it("IR: only required dimensions reported as missing", () => {
+    const model: ProjectModel = projectModelSchema.parse({
+      project: { name: "Test" },
+      informationRegisters: [
+        {
+          kind: "InformationRegister",
+          name: "CurrencyRates",
+          periodicity: "Day",
+          dimensions: [
+            { name: "currency", type: "String", required: true },
+            { name: "warehouse", type: "String", required: false },
+          ],
+          resources: [
+            { name: "rate", type: "Numeric", precision: 15, scale: 4 },
+          ],
+        },
+      ],
+      documents: [
+        {
+          kind: "Document",
+          name: "RateUpdate",
+          attributes: [],
+          tabularSections: [],
+          registerMovements: [
+            { kind: "InformationRegister", name: "CurrencyRates" },
+          ],
+          posting: {
+            movements: [
+              {
+                register: {
+                  kind: "InformationRegister",
+                  name: "CurrencyRates",
+                },
+                movementType: "Receipt",
+                source: "document",
+                mappings: { dimensions: {}, resources: {} },
+              },
+            ],
+            validations: [],
+          },
+        },
+      ],
+    })
+
+    useMetadataStore.setState({
+      model,
+      version: 1,
+      objectVersions: {},
+      validationErrors: {},
+      modelErrors: {},
+    })
+
+    renderHook(() => useModelValidation())
+
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+
+    const modelErrors = useMetadataStore.getState().modelErrors
+    const docErrors = modelErrors["Document/RateUpdate"] ?? []
+    const dimError = docErrors.find((e) =>
+      e.message.includes("обов'язкові dimensions"),
+    )
+    expect(dimError).toBeDefined()
+    expect(dimError!.message).toContain("currency")
+    expect(dimError!.message).not.toContain("warehouse")
+  })
 })

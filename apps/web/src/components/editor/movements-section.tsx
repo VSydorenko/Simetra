@@ -83,7 +83,7 @@ export function MovementsSection({
 
   const handleSaveMovement = useCallback(
     (movement: PostingMovement) => {
-      storeUpdateMovement(objectName, movement.register, movement)
+      return storeUpdateMovement(objectName, movement.register, movement)
     },
     [objectName, storeUpdateMovement],
   )

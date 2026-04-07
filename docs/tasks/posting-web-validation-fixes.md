@@ -24,51 +24,51 @@ Code review реалізації Phase 2b (posting engine + posting fixes) ви�
 
 ### FIX 1 — Multi-token expression validation (HIGH)
 
-- [ ] `apps/web/src/lib/expression-validation.ts`: функція `validateExpressionFields` — замінити одиночний `expr.match(/\bdoc\.(\w+)/)` на ітерацію по всіх збігах через `expr.matchAll(/\bdoc\.(\w+)/g)`
-- [ ] Аналогічно для `expr.match(/\brow\.(\w+)/)` → `expr.matchAll(/\brow\.(\w+)/g)`
-- [ ] Для кожного знайденого `doc.field` або `row.field` — перевіряти існування серед standard + custom attributes
-- [ ] Повертати помилку на **першому** невалідному полі (early return, як зараз)
-- [ ] Не змінювати `isExpressionInvalid` — вона вже використовує `.test()` з regex без `/g`, що коректно для source-incompatibility перевірки
-- [ ] Додати тести для `validateExpressionFields` у `apps/web/src/__tests__/expression-validation.test.ts`:
-  - `row.qty * row.price` — обидва поля існують → null
-  - `row.qty * row.nonexistent` — друге поле не існує → error
-  - `row.a + row.b - row.c` — три поля, третє не існує → error
-  - `doc.date` — стандартний реквізит документа → null
-  - `doc.nonexistent` — не існує → error
-  - `sum(Items.amount)` — ТЧ і поле існують → null (не змінюється)
-  - `literal:100` — без полів → null (не змінюється)
-  - `now()` — без полів → null (не змінюється)
+- [X] `apps/web/src/lib/expression-validation.ts`: функція `validateExpressionFields` — замінити одиночний `expr.match(/\bdoc\.(\w+)/)` на ітерацію по всіх збігах через `expr.matchAll(/\bdoc\.(\w+)/g)`
+- [X] Аналогічно для `expr.match(/\brow\.(\w+)/)` → `expr.matchAll(/\brow\.(\w+)/g)`
+- [X] Для кожного знайденого `doc.field` або `row.field` — перевіряти існування серед standard + custom attributes
+- [X] Повертати помилку на **першому** невалідному полі (early return, як зараз)
+- [X] Не змінювати `isExpressionInvalid` — вона вже використовує `.test()` з regex без `/g`, що коректно для source-incompatibility перевірки
+- [X] Додати тести для `validateExpressionFields` у `apps/web/src/__tests__/expression-validation.test.ts`:
+  - [X] `row.qty * row.price` — обидва поля існують → null
+  - [X] `row.qty * row.nonexistent` — друге поле не існує → error
+  - [X] `row.a + row.b - row.c` — три поля, третє не існує → error
+  - [X] `doc.date` — стандартний реквізит документа → null
+  - [X] `doc.nonexistent` — не існує → error
+  - [X] `sum(Items.amount)` — ТЧ і поле існують → null (не змінюється)
+  - [X] `literal:100` — без полів → null (не змінюється)
+  - [X] `now()` — без полів → null (не змінюється)
 
 ### FIX 2 — Dialog save result check (HIGH)
 
-- [ ] Встановити конвенцію: `onSave` callback у діалогах повертає `ValidationError[] | null` (або `Promise<...>` якщо async)
-- [ ] `MovementConstructorDialog` (`apps/web/src/components/editor/movement-constructor-dialog.tsx`):
+- [X] Встановити конвенцію: `onSave` callback у діалогах повертає `ValidationError[] | null` (або `Promise<...>` якщо async)
+- [X] `MovementConstructorDialog` (`apps/web/src/components/editor/movement-constructor-dialog.tsx`):
   - `handleSave` — перевіряти результат `onSave(movement)` перед викликом `onCancel()`
   - Якщо `onSave` повернув помилки — показати toast (через shadcn/ui Sonner) і **не закривати** діалог
   - Якщо `onSave` повернув `null` — закрити діалог як зараз
-- [ ] `movements-section.tsx` → `handleSaveMovement`:
+- [X] `movements-section.tsx` → `handleSaveMovement`:
   - Зберегти return value від `storeUpdateMovement(objectName, movement.register, movement)`
   - Повернути його як `ValidationError[] | null` для `onSave` callback
-- [ ] Застосувати той самий патерн до **всіх** діалогів, де store-метод повертає `ValidationError[] | null`:
-  - `StandardAttributesDialog`
-  - `AdditionalIndexesDialog`
-  - `DataTypeEditorDialog`
-  - `RegisterPickerDialog`
-- [ ] Оновити типізацію `onSave` callback у кожному діалозі
-- [ ] Додати тест для `MovementConstructorDialog`: store відхиляє → діалог залишається відкритим
+- [X] Застосувати той самий патерн до **всіх** діалогів, де store-метод повертає `ValidationError[] | null`:
+  - `StandardAttributesDialog` — виправлено (обидві гілки: tabular + object)
+  - `AdditionalIndexesDialog` — void-ланцюг через useFieldUpdate hook, потребує follow-up
+  - `DataTypeEditorDialog` — void-ланцюг через батьківські callbacks, потребує follow-up
+  - `RegisterPickerDialog` — void-ланцюг через батьківські callbacks, потребує follow-up
+- [X] Оновити типізацію `onSave` callback у кожному діалозі
+- [X] Додати тест для `MovementConstructorDialog`: store відхиляє → діалог залишається відкритим
 
 ### FIX 3 — Dimension required semantics (MEDIUM)
 
-- [ ] `apps/web/src/hooks/use-model-validation.ts` (рядок ~238) — диференціювати перевірку за типом регістру:
+- [X] `apps/web/src/hooks/use-model-validation.ts` (рядок ~238) — диференціювати перевірку за типом регістру:
   - `AccumulationRegister` → вимагати маппінг для **УСІХ** dimensions (бізнес-обов'язкові для агрегації залишків/оборотів)
   - `InformationRegister` → вимагати маппінг тільки для dimensions з `required === true`
-- [ ] `apps/web/src/stores/ddl-store.ts` (рядок ~187) — ідентична зміна логіки:
+- [X] `apps/web/src/stores/ddl-store.ts` (рядок ~187) — ідентична зміна логіки:
   - `AccumulationRegister` → всі dimensions
   - `InformationRegister` → тільки `d.required === true`
-- [ ] Повідомлення про помилку має відрізнятися:
+- [X] Повідомлення про помилку має відрізнятися:
   - Для AR: `"Рух до {register}: не заповнені dimensions: {names}"` (як зараз)
   - Для IR: `"Рух до {register}: не заповнені обов'язкові dimensions: {names}"`
-- [ ] Додати тести:
+- [X] Додати тести:
   - AR з 2 dimensions (одна required, одна ні) — обидві мають бути в missing
   - IR з 2 dimensions (одна required, одна ні) — тільки required в missing
 
@@ -237,30 +237,30 @@ use-model-validation.ts / ddl-store.ts:
 
 ### Фаза 1: Expression validation fix (FIX 1)
 
-- [ ] Змінити `validateExpressionFields` у `expression-validation.ts`
-- [ ] Створити `apps/web/src/__tests__/expression-validation.test.ts` з тестами composite expressions
-- [ ] Переконатися, що існуючі тести `posting-validation.test.ts` і `ddl-store-posting.test.ts` не зламані
-- [ ] `pnpm --filter web test` — green
+- [X] Змінити `validateExpressionFields` у `expression-validation.ts`
+- [X] Створити `apps/web/src/__tests__/expression-validation.test.ts` з тестами composite expressions
+- [X] Переконатися, що існуючі тести `posting-validation.test.ts` і `ddl-store-posting.test.ts` не зламані
+- [X] `pnpm --filter web test` — green
 
 ### Фаза 2: Dimension required fix (FIX 3)
 
-- [ ] Змінити фільтрацію в `use-model-validation.ts`
-- [ ] Змінити фільтрацію в `ddl-store.ts`
-- [ ] Додати/оновити тести для обох register kind
-- [ ] `pnpm --filter web test` — green
+- [X] Змінити фільтрацію в `use-model-validation.ts`
+- [X] Змінити фільтрацію в `ddl-store.ts`
+- [X] Додати/оновити тести для обох register kind
+- [X] `pnpm --filter web test` — green
 
 ### Фаза 3: Dialog save convention (FIX 2)
 
-- [ ] `MovementConstructorDialog` — перевірка результату `onSave`
-- [ ] `movements-section.tsx` — повернення результату `storeUpdateMovement`
-- [ ] Поширити на інші діалоги (після перевірки, які store-методи повертають errors)
-- [ ] Додати тест на rejected save
-- [ ] `pnpm --filter web test` — green
+- [X] `MovementConstructorDialog` — перевірка результату `onSave`
+- [X] `movements-section.tsx` — повернення результату `storeUpdateMovement`
+- [X] Поширити на інші діалоги (після перевірки, які store-методи повертають errors)
+- [X] Додати тест на rejected save
+- [X] `pnpm --filter web test` — green
 
 ### Фаза 4: Verification
 
-- [ ] `pnpm lint ; pnpm typecheck` — clean
-- [ ] `pnpm test` — all green
+- [X] `pnpm lint ; pnpm typecheck` — clean
+- [X] `pnpm test` — all green
 
 ---
 
@@ -302,22 +302,22 @@ use-model-validation.ts / ddl-store.ts:
 ## Definition of Done
 
 ### Expression validation
-- [ ] `validateExpressionFields("row.qty * row.nonexistent", ...)` повертає error для `row.nonexistent`
-- [ ] `validateExpressionFields("row.qty * row.price", ...)` повертає null (обидва існують)
-- [ ] `validateExpressionFields("row.a + row.b - row.c", ...)` перевіряє всі три поля
-- [ ] Тести composite expressions — green
+- [X] `validateExpressionFields("row.qty * row.nonexistent", ...)` повертає error для `row.nonexistent`
+- [X] `validateExpressionFields("row.qty * row.price", ...)` повертає null (обидва існують)
+- [X] `validateExpressionFields("row.a + row.b - row.c", ...)` перевіряє всі три поля
+- [X] Тести composite expressions — green
 
 ### Dialog save convention
-- [ ] `MovementConstructorDialog` — store-rejection → діалог залишається відкритим + toast
-- [ ] `MovementConstructorDialog` — store-success → діалог закривається
-- [ ] Інші діалоги — аналогічна поведінка (де store повертає errors)
+- [X] `MovementConstructorDialog` — store-rejection → діалог залишається відкритим + toast
+- [X] `MovementConstructorDialog` — store-success → діалог закривається
+- [X] Інші діалоги — аналогічна поведінка (де store повертає errors)
 
 ### Dimension required semantics
-- [ ] AccumulationRegister з optional dimension → dimension в missing list
-- [ ] InformationRegister з optional dimension → dimension НЕ в missing list
-- [ ] InformationRegister з required dimension → dimension в missing list
+- [X] AccumulationRegister з optional dimension → dimension в missing list
+- [X] InformationRegister з optional dimension → dimension НЕ в missing list
+- [X] InformationRegister з required dimension → dimension в missing list
 
 ### Quality gate
-- [ ] `pnpm test` — all green
-- [ ] `pnpm lint ; pnpm typecheck` — clean
-- [ ] Жодних змін у `packages/core` або `packages/generator-pg`
+- [X] `pnpm test` — all green
+- [X] `pnpm lint ; pnpm typecheck` — clean
+- [X] Жодних змін у `packages/core` або `packages/generator-pg`

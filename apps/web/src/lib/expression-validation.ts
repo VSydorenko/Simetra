@@ -33,23 +33,21 @@ export function validateExpressionFields(
 ): string | null {
   if (!expr) return null
 
-  // Перевірка doc.field
-  const docFieldMatch = expr.match(/\bdoc\.(\w+)/)
-  if (docFieldMatch) {
+  // Перевірка всіх doc.field токенів у виразі
+  const docStdAttrs = getStandardAttributes('Document')
+  for (const docFieldMatch of expr.matchAll(/\bdoc\.(\w+)/g)) {
     const fieldName = docFieldMatch[1]
-    const docStdAttrs = getStandardAttributes('Document')
     const exists =
       docStdAttrs.some((a) => a.name !== 'id' && a.name === fieldName) ||
       docAttributes.some((a) => a.name === fieldName)
     if (!exists) return `Поле doc.${fieldName} не існує в документі`
   }
 
-  // Перевірка row.field (тільки для TS source)
+  // Перевірка всіх row.field токенів (тільки для TS source)
   if (source.startsWith('tabularSection:') && tabularSectionAttributes) {
-    const rowFieldMatch = expr.match(/\brow\.(\w+)/)
-    if (rowFieldMatch) {
+    const tsStdAttrs = getTabularSectionStandardAttributes()
+    for (const rowFieldMatch of expr.matchAll(/\brow\.(\w+)/g)) {
       const fieldName = rowFieldMatch[1]
-      const tsStdAttrs = getTabularSectionStandardAttributes()
       const exists =
         tsStdAttrs.some((a) => a.name !== 'id' && a.name === fieldName) ||
         tabularSectionAttributes.some((a) => a.name === fieldName)
