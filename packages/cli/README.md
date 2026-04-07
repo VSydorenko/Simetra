@@ -6,9 +6,9 @@ CLI для генерації SQL з метаданих Simetra.
 
 ```bash
 # З кореня монорепо
-node packages/cli/bin/simetra.mjs generate --help
+pnpm simetra generate --help
 
-# Або через pnpm
+# Або напряму для пакета CLI
 pnpm --filter @simetra/cli exec tsx src/index.ts generate --help
 ```
 
@@ -35,7 +35,7 @@ simetra generate [OPTIONS]
 ### Приклад
 
 ```bash
-simetra generate --input ./temp/metadata --output ./output --schema public
+pnpm simetra generate --input ./temp/metadata --output ./output --schema public
 ```
 
 ## Технічні деталі

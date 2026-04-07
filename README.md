@@ -23,8 +23,11 @@ pnpm dev
 ## CLI Usage
 
 ```bash
+# Show CLI help
+pnpm simetra generate --help
+
 # Generate SQL from metadata directory
-node packages/cli/bin/simetra.mjs generate --input ./temp/metadata --output ./output
+pnpm simetra generate --input ./temp/metadata --output ./output
 ```
 
 ## Adding UI Components
