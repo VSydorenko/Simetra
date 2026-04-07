@@ -610,7 +610,7 @@ metadata/
 ├── catalogs/
 │   └── products/
 │       ├── products.meta.json
-│       └── forms/                             # Phase 3+: форми об'єкта
+│       └── forms/                             # Phase 3: canonical частина file structure
 │           ├── item.form.json
 │           └── list.form.json
 ├── documents/
@@ -633,6 +633,8 @@ metadata/
 ```
 
 Один файл на об'єкт. Ім'я каталогу = kebab-case від імені об'єкта. Файли серіалізуються з сортованими ключами, 2-пробільним відступом і trailing newline для чистих Git-дифів.
+
+Підкаталог `forms/` є canonical частиною file structure об'єкта. Форми серіалізуються як окремі файли `{form-kind-kebab}.form.json` у підкаталозі `forms/` відповідного об'єкта. Kinds що підтримують форми: `Catalog`, `Document`, `CustomTable`. Serializer записує forms як частину canonical snapshot разом з `*.meta.json` файлами.
 
 ### 7.3. Формат файлу проєкту
 
@@ -1189,7 +1191,7 @@ Simetra знає все необхідне для генерації форм: �
 
 #### 10.5.2. Формат файлу форми (`*.form.json`)
 
-Layout описується як дерево елементів. Кожен файл — один тип форми для одного об'єкта:
+Layout описується як дерево елементів. Кожен файл — один тип форми для одного об'єкта. Кожна `formSchema` має `objectRef: MetadataRef` (`{ kind, name }`) для explicit прив'язки до конкретного об'єкта — це canonical зв'язок форми з її об'єктом у `ProjectModel`:
 
 ```
 metadata/catalogs/counterparties/
@@ -1328,6 +1330,8 @@ React-компонент, який зчитує `form.json` + `meta.json` і р�
 
 #### 10.5.8. Візуальний конструктор форм (`apps/web`, Phase 4)
 
+Візуальний конструктор працює з forms як частиною `ProjectModel` у конфігураторі, а не як окремою файловою системою. Forms є top-level колекцією `model.forms` з `objectRef` зв'язком — конструктор читає і мутує цю колекцію через store, а serializer записує результат у файли `forms/` підкаталогу.
+
 **Layout:**
 - Ліва палітра: список нерозміщених полів + layout-елементи (Group, Tabs, Columns, Separator)
 - Canvas: структурне представлення форми з рамками елементів. Drag-and-drop через @dnd-kit
@@ -1340,16 +1344,19 @@ React-компонент, який зчитує `form.json` + `meta.json` і р�
 - Delete елемент (повертається у палітру)
 - Preview: рендерінг форми через `@simetra/form-runtime`
 
-**Збереження:** зміни зберігаються у `*.form.json` у каталозі `forms/` об'єкта.
+**Збереження:** зміни зберігаються у `model.forms` колекції `ProjectModel` і серіалізуються canonical serializer-ом у `*.form.json` файли у каталозі `forms/` об'єкта.
 
 #### 10.5.9. Фазування форм
 
 | Крок | Пакет | Фаза |
 |---|---|---|
-| Zod-схеми для form.json | `@simetra/core` | Phase 3 |
+| Zod-схеми для form.json + інтеграція forms у `ProjectModel` | `@simetra/core` | Phase 3 |
+| Shared metadata IO layer (parsing + serialization forms) | `@simetra/core` | Phase 3 |
 | Алгоритм автоформи | `@simetra/core` | Phase 3 |
 | Runtime-рендерер | `@simetra/form-runtime` | Phase 3 |
-| Бібліотека доменних компонентів | `@simetra/ui` | Phase 3 |
+| Data provider contract + PostgREST adapter | `@simetra/data-provider`, `@simetra/data-provider-postgrest` | Phase 3 |
+| Dev preview shell | `apps/runtime` | Phase 3 |
+| Бібліотека доменних компонентів | `@simetra/form-runtime` (domain components) | Phase 3 |
 | Codegen React | `@simetra/generator-react` | Phase 4 |
 | Візуальний конструктор форм | `apps/web` | Phase 4 |
 

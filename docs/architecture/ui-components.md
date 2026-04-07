@@ -106,7 +106,7 @@ Tree layer побудований навколо явного поділу мі�
 
 Для різних metadata kinds дерево деталізується по-різному:
 
-- `Catalog`, `Document`, `CustomTable` — групи `attributes`, а для `Catalog` і `Document` ще й `tabularSections`.
+- `Catalog`, `Document`, `CustomTable` — групи `attributes`, а для `Catalog` і `Document` ще й `tabularSections`. Для `Catalog`, `Document` і `CustomTable` — додатково дочірня група «Forms» (Phase 3).
 - `InformationRegister`, `AccumulationRegister` — групи `dimensions`, `resources`, `attributes`.
 - `Enumeration` — група `values`, значення представлені як field-like вузли.
 - `Constant` — без глибоких структурних груп.
@@ -174,6 +174,7 @@ Editor layer зведений навколо одного reusable редакт�
 
 - `main` — readonly summary для `displayName` і `description`;
 - `data` — основна структурна робота з полями;
+- `forms` — секція «Форми» для `Catalog`, `Document`, `CustomTable` (Phase 3): перегляд і редагування explicit forms, прив'язаних до об'єкта через `objectRef`;
 - `values` — спеціалізована секція для `Enumeration`;
 - `numbering`, `movements`, `settings` — placeholder-секції з явним повідомленням `coming soon`.
 

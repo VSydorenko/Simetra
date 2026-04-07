@@ -123,7 +123,8 @@ Canonical serializer живе в [../../packages/core/src/serialization.ts](../.
 `saveToDirectory()` перед записом очищає весь `metadata/` каталог. Це поточний інваріант write-path:
 
 - rename або delete об'єкта не повинні залишати orphaned files;
-- запис є rewrite всієї canonical snapshot, а не patch поверх існуючих файлів.
+- запис є rewrite всієї canonical snapshot, а не patch поверх існуючих файлів;
+- forms серіалізуються canonical serializer-ом як окремі файли у `forms/` підкаталозі відповідного об'єкта (наприклад `catalogs/products/forms/item.form.json`), а не як частина `*.meta.json`.
 
 Ігнорування цього правила призвело б до розсинхронізації між in-memory model і директорією проєкту.
 
@@ -137,7 +138,7 @@ flowchart TD
 
   Provider --> FsCheck{File System Access API доступний?}
   FsCheck -- так --> DirSave[saveToDirectory]
-  DirSave --> Serialize[serializeToFiles + enrichSchemaUrl helpers]
+  DirSave --> Serialize[serializeToFiles + enrichSchemaUrl helpers\nінклюдить forms файли]
   Serialize --> Clear[Очистити metadata/]
   Clear --> Write[Записати canonical files]
 
@@ -154,6 +155,8 @@ flowchart TD
 ### Інваріанти save-path
 
 - write-path завжди працює з одним store snapshot, узятим до `await`, щоб baseline не змістився під час асинхронного save;
+- `serializeToFiles()` тепер включає forms файли — кожна форма з `model.forms` серіалізується у `{kind-dir}/{object-kebab}/forms/{form-kind-kebab}.form.json`;
+- повний rewrite `metadata/` каталогу зберігається як інваріант — forms записуються serializer-ом разом з `*.meta.json` файлами;
 - після успішного save `project-store` оновлює session snapshot в IndexedDB;
 - після успішного disk-save чернетка очищується, бо recovery state вже не новіший за збережений baseline.
 
