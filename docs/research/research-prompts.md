@@ -475,6 +475,58 @@ Frappe — це, мабуть, найближчий у відкритому св
 
 ---
 
+## Завдання 8: PostgREST як runtime API layer для metadata-driven системи
+
+```
+Мені потрібне окреме технічне дослідження PostgREST як open-source REST layer над PostgreSQL. Це дослідження буде використано для Phase 3 runtime-архітектури open-source візуального конфігуратора бізнес-метаданих.
+
+Результат має бути українською мовою у вигляді структурованого документа.
+
+Що потрібно дослідити:
+
+1. **Що таке PostgREST технічно**:
+   - чи є це частиною PostgreSQL чи окремим сервером
+   - як він експонує таблиці, views і SQL-функції як REST API
+   - які HTTP-патерни підтримує (CRUD, filtering, ordering, pagination, RPC)
+
+2. **Open-source статус і екосистема**:
+   - офіційний репозиторій, ліцензія, документація, Docker image
+   - хто використовує PostgREST у production
+   - як він пов'язаний із Supabase
+
+3. **Deployment моделі**:
+   - standalone PostgreSQL + PostgREST
+   - self-hosted варіант
+   - Supabase як managed deployment target
+   - що саме потрібно для запуску automatic REST над plain PostgreSQL
+
+4. **Безпека і доступ**:
+   - роль PostgreSQL grants
+   - JWT support
+   - Row Level Security
+   - які межі між application auth і database auth
+
+5. **Наскільки PostgREST підходить для runtime Simetra**:
+   - як мапляться операції DataProvider (`list`, `get`, `create`, `update`, `delete`, `searchRef`, `postDocument`, `getConstants`)
+   - чи підходить він для CRUD по довідниках і документах
+   - чи підходить для RPC викликів posting/unposting
+   - які є обмеження для polymorphic refs, складних join-сценаріїв і constants strategy
+
+6. **Порівняння PostgREST vs Supabase як deployment target**:
+   - що дає чистий PostgREST
+   - що додатково дає Supabase
+   - коли для продукту достатньо PostgreSQL + PostgREST, а коли потрібен ширший стек
+
+7. **Рекомендації для BRD і архітектури runtime**:
+   - чи варто використовувати PostgREST як перший runtime adapter
+   - чому transport layer має бути абстрактним (`DataProvider`), а не жорстко прив'язаним до SDK
+   - який MVP scope є реалістичним
+
+Формат результату: короткий, але технічно насичений документ з таблицями, практичними висновками і окремою секцією "Що це дає Simetra".
+```
+
+---
+
 ## Примітки для запуску
 
 - Кожен промт — це окремий чат
