@@ -1,6 +1,7 @@
 import type { MetadataObject } from "./schemas/project-model"
 import type { Project } from "./schemas/project"
 import type { MetadataKind } from "./schemas/metadata-kind"
+import type { FormSchema } from "./schemas/form"
 
 // MetadataKind → kebab-case slug for $schema URL
 const KIND_SLUG: Record<MetadataKind, string> = {
@@ -167,6 +168,16 @@ const CUSTOM_TABLE_KEY_ORDER = [
   "attributes",
 ]
 
+const FORM_KEY_ORDER = [
+  '$schema',
+  'kind',
+  'objectRef',
+  'title',
+  'layout',
+  'toolbar',
+  'commandBar',
+]
+
 const ATTRIBUTE_KEY_ORDER = [
   "name",
   "displayName",
@@ -232,10 +243,12 @@ const NESTED_OBJECT_KEY_ORDERS: Record<string, string[]> = {
   deployment: DEPLOYMENT_KEY_ORDER,
   supabase: DEPLOYMENT_SUPABASE_KEY_ORDER,
   ref: METADATA_REF_KEY_ORDER,
+  objectRef: METADATA_REF_KEY_ORDER,
   posting: POSTING_KEY_ORDER,
   register: METADATA_REF_KEY_ORDER,
   mappings: POSTING_MAPPING_SET_KEY_ORDER,
   message: LOCALIZED_STRING_KEY_ORDER,
+  title: LOCALIZED_STRING_KEY_ORDER,
 }
 
 // Ключі, масиви яких містять об'єкти зі специфічним порядком
@@ -342,4 +355,22 @@ export function serializeProject(project: Project): string {
     PROJECT_KEY_ORDER
   )
   return JSON.stringify(canonical, null, 2) + "\n"
+}
+
+/**
+ * Серіалізує форму у canonical JSON.
+ */
+export function serializeForm(form: FormSchema): string {
+  const canonical = canonicalizeObject(
+    form as unknown as Record<string, unknown>,
+    FORM_KEY_ORDER,
+  )
+  return JSON.stringify(canonical, null, 2) + '\n'
+}
+
+/**
+ * Build $schema URL для form файлу.
+ */
+export function buildFormSchemaUrl(schemaVersion: string): string {
+  return buildSchemaUrl('form', schemaVersion)
 }

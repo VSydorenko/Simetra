@@ -11,6 +11,9 @@ import {
   type TabularSection,
   type PostingMovement,
   type PostingValidation,
+  type FormSchema,
+  type FormKind,
+  formSupportedKinds,
   projectModelSchema,
   metadataObjectSchema,
 } from "@simetra/core"
@@ -242,6 +245,27 @@ export interface MetadataActions {
     name: string,
     index: number,
   ) => void
+
+  // --- Form actions (Phase 3) ---
+  /** Додати форму для об'єкта */
+  addForm: (
+    objectKind: MetadataKind,
+    objectName: string,
+    formKind: FormKind,
+  ) => ValidationError[] | null
+  /** Оновити дані форми */
+  updateForm: (
+    objectKind: MetadataKind,
+    objectName: string,
+    formKind: FormKind,
+    data: Partial<FormSchema>,
+  ) => ValidationError[] | null
+  /** Видалити форму */
+  deleteForm: (
+    objectKind: MetadataKind,
+    objectName: string,
+    formKind: FormKind,
+  ) => void
 }
 
 function createEmptyModel(projectName: string): ProjectModel {
@@ -254,6 +278,7 @@ function createEmptyModel(projectName: string): ProjectModel {
     accumulationRegisters: [],
     constants: [],
     customTables: [],
+    forms: [],
   })
 }
 
@@ -421,6 +446,15 @@ function cascadeRenameRefs(
       }
     }
   }
+
+  // Cascade forms: оновити objectRef.name
+  if (state.model.forms) {
+    for (const form of state.model.forms) {
+      if (form.objectRef.kind === kind && form.objectRef.name === oldName) {
+        form.objectRef.name = newName
+      }
+    }
+  }
 }
 
 export type MetadataStore = MetadataState & MetadataActions
@@ -584,6 +618,12 @@ export const useMetadataStore = create<MetadataStore>()(
             arr.splice(index, 1)
             delete state.validationErrors[`${kind}/${name}`]
             delete state.objectVersions[`${kind}/${name}`]
+            // Каскадне видалення форм об'єкта
+            if (state.model.forms) {
+              state.model.forms = state.model.forms.filter(
+                (f) => !(f.objectRef.kind === kind && f.objectRef.name === name),
+              )
+            }
             state.version++
           }
         })
@@ -1817,6 +1857,109 @@ export const useMetadataStore = create<MetadataStore>()(
           }
           state.version++
           bumpObjectVersion(state, 'Document', name)
+        })
+      },
+
+      // --- Form actions (Phase 3) ---
+
+      addForm: (objectKind, objectName, formKind) => {
+        const errorKey = `${objectKind}/${objectName}`
+        // Перевірка що kind підтримує forms
+        if (
+          !formSupportedKinds.includes(
+            objectKind as (typeof formSupportedKinds)[number],
+          )
+        ) {
+          const errors = [
+            {
+              path: 'forms',
+              message: `${objectKind} does not support forms`,
+            },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+        // Перевірка що об'єкт існує
+        const key = KIND_TO_KEY[objectKind]
+        const objects = get().model[key] as MetadataObject[]
+        if (!objects.some((o) => o.name === objectName)) {
+          const errors = [
+            {
+              path: 'forms',
+              message: `Object "${objectName}" not found in ${objectKind}`,
+            },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+        // Перевірка дублікатів
+        const existing = get().model.forms?.find(
+          (f) =>
+            f.objectRef.kind === objectKind &&
+            f.objectRef.name === objectName &&
+            f.kind === formKind,
+        )
+        if (existing) {
+          const errors = [
+            {
+              path: 'forms',
+              message: `${formKind} already exists for ${objectKind}/${objectName}`,
+            },
+          ]
+          set((state) => {
+            state.validationErrors[errorKey] = errors
+          })
+          return errors
+        }
+        set((state) => {
+          const newForm: FormSchema = {
+            kind: formKind,
+            objectRef: { kind: objectKind, name: objectName },
+          }
+          if (!state.model.forms) state.model.forms = []
+          state.model.forms.push(newForm)
+          delete state.validationErrors[errorKey]
+          state.version++
+          bumpObjectVersion(state, objectKind, objectName)
+        })
+        return null
+      },
+
+      updateForm: (objectKind, objectName, formKind, data) => {
+        set((state) => {
+          const forms = state.model.forms ?? []
+          const index = forms.findIndex(
+            (f) =>
+              f.objectRef.kind === objectKind &&
+              f.objectRef.name === objectName &&
+              f.kind === formKind,
+          )
+          if (index === -1) return
+          Object.assign(forms[index], data)
+          state.version++
+          bumpObjectVersion(state, objectKind, objectName)
+        })
+        return null
+      },
+
+      deleteForm: (objectKind, objectName, formKind) => {
+        set((state) => {
+          if (!state.model.forms) return
+          const index = state.model.forms.findIndex(
+            (f) =>
+              f.objectRef.kind === objectKind &&
+              f.objectRef.name === objectName &&
+              f.kind === formKind,
+          )
+          if (index !== -1) {
+            state.model.forms.splice(index, 1)
+            state.version++
+            bumpObjectVersion(state, objectKind, objectName)
+          }
         })
       },
     })),

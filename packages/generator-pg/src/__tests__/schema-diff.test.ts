@@ -34,6 +34,7 @@ function emptyProject(overrides?: Partial<ProjectModel>): ProjectModel {
     accumulationRegisters: [],
     constants: [],
     customTables: [],
+    forms: [],
     ...overrides,
   }
 }

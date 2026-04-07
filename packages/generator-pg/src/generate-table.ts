@@ -15,7 +15,6 @@ import type {
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
-  toSnakeCase,
 } from "@simetra/core"
 import type { GeneratorOptions, GeneratorOutput } from "@simetra/generator-api"
 import {

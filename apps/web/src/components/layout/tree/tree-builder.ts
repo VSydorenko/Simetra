@@ -56,7 +56,8 @@ function buildGroupNode(
 /** Дочірні вузли обʼєкта залежно від kind */
 function buildObjectChildren(
   kind: MetadataKind,
-  obj: MetadataObject
+  obj: MetadataObject,
+  model: ProjectModel,
 ): TreeNodeData[] {
   const children: TreeNodeData[] = []
 
@@ -175,13 +176,47 @@ function buildObjectChildren(
         )
       )
     }
+
+    // Forms група (Phase 3)
+    if (
+      kind === "Catalog" ||
+      kind === "Document" ||
+      kind === "CustomTable"
+    ) {
+      const objectForms =
+        model.forms?.filter(
+          (f) =>
+            f.objectRef.kind === kind &&
+            f.objectRef.name === obj.name,
+        ) ?? []
+      children.push(
+        buildGroupNode(
+          kind,
+          obj.name,
+          "forms",
+          objectForms.map((form) => ({
+            id: `${kind}/${obj.name}/forms/${form.kind}`,
+            name: form.kind,
+            kind,
+            nodeType: "form" as const,
+            objectName: obj.name,
+            groupKey: "forms",
+          })),
+        ),
+      )
+    }
   }
 
   return children
 }
 
 /** Перевірка, чи будь-який нащадок обʼєкта містить збіг з пошуковим запитом */
-function objectMatchesSearch(obj: MetadataObject, lowerQuery: string): boolean {
+function objectMatchesSearch(
+  obj: MetadataObject,
+  lowerQuery: string,
+  kind?: MetadataKind,
+  model?: ProjectModel,
+): boolean {
   if (obj.name.toLowerCase().includes(lowerQuery)) return true
 
   if ("attributes" in obj) {
@@ -237,6 +272,16 @@ function objectMatchesSearch(obj: MetadataObject, lowerQuery: string): boolean {
     }
   }
 
+  // Пошук у формах
+  if (model?.forms && kind) {
+    const objectForms = model.forms.filter(
+      (f) => f.objectRef.kind === kind && f.objectRef.name === obj.name,
+    )
+    if (objectForms.some((f) => f.kind.toLowerCase().includes(lowerQuery))) {
+      return true
+    }
+  }
+
   return false
 }
 
@@ -251,7 +296,7 @@ export function buildTreeData(
     const objects = model[key] as MetadataObject[]
 
     const filtered = searchQuery
-      ? objects.filter((o) => objectMatchesSearch(o, lowerQuery))
+      ? objects.filter((o) => objectMatchesSearch(o, lowerQuery, kind, model))
       : objects
 
     return {
@@ -266,7 +311,7 @@ export function buildTreeData(
         kind,
         nodeType: "object" as const,
         objectName: obj.name,
-        children: buildObjectChildren(kind, obj),
+        children: buildObjectChildren(kind, obj, model),
       })),
     }
   })

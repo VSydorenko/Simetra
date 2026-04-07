@@ -1,6 +1,7 @@
 import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { Badge } from "@workspace/ui/components/badge"
+import { Button } from "@workspace/ui/components/button"
 import { Label } from "@workspace/ui/components/label"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 import { cn } from "@workspace/ui/lib/utils"
@@ -166,6 +167,14 @@ function SectionContent({
         <MovementsSection kind={kind} objectName={objectName} object={object} />
       )
 
+    case "forms":
+      return (
+        <FormsSectionContent
+          kind={kind}
+          objectName={objectName}
+        />
+      )
+
     case "numbering":
     case "settings":
       return (
@@ -297,5 +306,86 @@ function MainSectionContent({
         )}
       </div>
     </ScrollArea>
+  )
+}
+
+/** Секція "Форми": перелік forms обʼєкта з кнопками додавання */
+function FormsSectionContent({
+  kind,
+  objectName,
+}: {
+  kind: MetadataRef["kind"]
+  objectName: string
+}) {
+  const { t } = useTranslation()
+  const forms = useMetadataStore(
+    (s) =>
+      s.model.forms?.filter(
+        (f) =>
+          f.objectRef.kind === kind && f.objectRef.name === objectName,
+      ) ?? [],
+  )
+  const addForm = useMetadataStore((s) => s.addForm)
+  const deleteForm = useMetadataStore((s) => s.deleteForm)
+
+  const hasItemForm = forms.some((f) => f.kind === "ItemForm")
+  const hasListForm = forms.some((f) => f.kind === "ListForm")
+
+  return (
+    <div className="flex h-full flex-col gap-4 p-4">
+      <div className="flex items-center gap-2">
+        {!hasItemForm && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => addForm(kind, objectName, "ItemForm")}
+          >
+            {t("editor.addItemForm")}
+          </Button>
+        )}
+        {!hasListForm && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => addForm(kind, objectName, "ListForm")}
+          >
+            {t("editor.addListForm")}
+          </Button>
+        )}
+      </div>
+      {forms.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          {t("editor.emptyForms")}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {forms.map((form) => (
+            <div
+              key={form.kind}
+              className="flex items-center justify-between rounded-md border p-3"
+            >
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">{form.kind}</span>
+                {form.title && (
+                  <span className="text-xs text-muted-foreground">
+                    {form.title.uk ?? form.title.en ?? ""}
+                  </span>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => deleteForm(kind, objectName, form.kind)}
+              >
+                {t("action.delete")}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="text-xs text-muted-foreground">
+        {t("editor.formsDesignerComingSoon")}
+      </div>
+    </div>
   )
 }

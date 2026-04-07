@@ -20,6 +20,7 @@ import {
   Key01Icon,
   Attachment01Icon,
   Link04Icon,
+  TextIcon,
 } from "@hugeicons/core-free-icons"
 import type { MetadataKind } from "@simetra/core"
 
@@ -41,6 +42,7 @@ export const GROUP_ICONS: Record<string, IconSvgElement> = {
   resources: Calculator01Icon,
   tabularSections: Table01Icon,
   values: Tag01Icon,
+  forms: TextIcon,
 }
 
 /** Іконки для типів полів */

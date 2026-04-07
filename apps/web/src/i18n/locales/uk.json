@@ -60,7 +60,8 @@
       "dimensions": "Виміри",
       "resources": "Ресурси",
       "values": "Значення",
-      "settings": "Налаштування"
+      "settings": "Налаштування",
+      "forms": "Форми"
     },
     "setting": {
       "codeLength": "Довжина коду",
@@ -96,6 +97,7 @@
     "addResource": "Додати ресурс",
     "addTabularSection": "Додати табличну частину",
     "addValue": "Додати значення",
+    "addForm": "Додати форму",
     "deleteField": "Видалити",
     "moveUp": "Вгору",
     "moveDown": "Вниз",
@@ -125,7 +127,11 @@
     "order": "Порядок",
     "tabularSectionName": "Імʼя табличної частини",
     "standardAttributes": "Стандартні реквізити",
-    "comingSoon": "буде доступно пізніше"
+    "comingSoon": "буде доступно пізніше",
+    "addItemForm": "Додати форму елемента",
+    "addListForm": "Додати форму списку",
+    "emptyForms": "Натисніть «Додати», щоб створити форму",
+    "formsDesignerComingSoon": "Візуальний конструктор форм буде доступний у Phase 4"
   },
   "properties": {
     "title": "Властивості",

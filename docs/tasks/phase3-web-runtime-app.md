@@ -166,64 +166,64 @@ flowchart TD
 
 #### 2.1. Core: розширення ProjectModel
 
-- [ ] Додати `forms: z.array(formSchema).optional().default([])` до `projectModelSchema` у `packages/core/src/schemas/project-model.ts`
+- [X] Додати `forms: z.array(formSchema).optional().default([])` до `projectModelSchema` у `packages/core/src/schemas/project-model.ts`
   - `formSchema` з Етапу 3 є prerequisite — або створити мінімальну версію тут і розширити в Етапі 3
   - Object schemas (catalogSchema, documentSchema, etc.) **НЕ змінюються** — forms не вбудовуються в об'єкти
-- [ ] Валідація: `objectRef` кожної форми має посилатись на існуючий об'єкт у моделі (`.refine()`)
-- [ ] Валідація: kinds що підтримують forms: `Catalog`, `Document`, `CustomTable`. Інші — відхиляти
-- [ ] Валідація: не більше одної форми кожного `kind` (ItemForm, ListForm) per object
+- [X] Валідація: `objectRef` кожної форми має посилатись на існуючий об'єкт у моделі (`.refine()`)
+- [X] Валідація: kinds що підтримують forms: `Catalog`, `Document`, `CustomTable`. Інші — відхиляти
+- [X] Валідація: не більше одної форми кожного `kind` (ItemForm, ListForm) per object
 
 #### 2.2. Serialization: forms → окремі файли
 
-- [ ] Розширити `serializeToFiles()` у `packages/core/src/metadata-io.ts`:
+- [X] Розширити `serializeToFiles()` у `packages/core/src/metadata-io.ts`:
   - Після серіалізації `*.meta.json` файлів — серіалізувати кожну форму з `model.forms`
   - Path: `{kind-dir}/{object-kebab}/forms/{form-kind-kebab}.form.json` (наприклад `catalogs/products/forms/item.form.json`)
   - Використовувати `FORM_KEY_ORDER` з `serialization.ts` для canonical key ordering
-- [ ] Оновити `buildProjectModelFromParsed()` у `metadata-io.ts`:
+- [X] Оновити `buildProjectModelFromParsed()` у `metadata-io.ts`:
   - Замість повернення окремої `Map<string, unknown>` — вкладати parsed forms у `model.forms` колекцію
   - Кожна `ParsedForm` з `objectSlug` + `objectKind` перетворюється на `FormSchema` з `objectRef: { kind, name }`
-- [ ] `$schema` URL для form.json: додати `buildFormSchemaUrl()` helper аналогічно до `buildConstantsSchemaUrl()`
+- [X] `$schema` URL для form.json: додати `buildFormSchemaUrl()` helper аналогічно до `buildConstantsSchemaUrl()`
 
 #### 2.3. Store: metadata-store мутації для forms
 
-- [ ] `apps/web/src/stores/metadata-store.ts` — додати мутації:
+- [X] `apps/web/src/stores/metadata-store.ts` — додати мутації:
   - `addForm(objectKind, objectName, formKind)` — створює порожню/autoform FormSchema і додає в `model.forms`
   - `updateForm(objectKind, objectName, formKind, data)` — оновлює існуючу форму
   - `deleteForm(objectKind, objectName, formKind)` — видаляє форму з `model.forms`
-- [ ] Каскадна логіка в існуючих мутаціях:
+- [X] Каскадна логіка в існуючих мутаціях:
   - `renameObject(kind, oldName, newName)` — оновити `objectRef.name` у всіх forms де `objectRef.kind === kind && objectRef.name === oldName`
   - `deleteObject(kind, name)` — видалити всі forms де `objectRef.kind === kind && objectRef.name === name`
-- [ ] Forms мутації мають збільшувати `version` і `objectVersions` для undo/redo
+- [X] Forms мутації мають збільшувати `version` і `objectVersions` для undo/redo
 
 #### 2.4. UI: секція Forms в ObjectEditor
 
-- [ ] `apps/web/src/components/editor/section-config.ts` — додати секцію `forms` для Catalog, Document, CustomTable:
+- [X] `apps/web/src/components/editor/section-config.ts` — додати секцію `forms` для Catalog, Document, CustomTable:
   - `{ id: "forms", labelKey: "metadata.section.forms", icon: FormIcon }`
   - Не додавати для Enumeration, Constant, InformationRegister, AccumulationRegister
-- [ ] `apps/web/src/components/editor/object-editor.tsx` — рендерити секцію forms:
+- [X] `apps/web/src/components/editor/object-editor.tsx` — рендерити секцію forms:
   - Список форм об'єкта (фільтрація `model.forms` по `objectRef`)
   - Кнопки: «Додати ItemForm», «Додати ListForm»
   - Для MVP: read-only перегляд JSON форми або placeholder для Phase 4 form designer
 
 #### 2.5. UI: форми в дереві метаданих
 
-- [ ] `apps/web/src/components/layout/tree/tree-types.ts`:
+- [X] `apps/web/src/components/layout/tree/tree-types.ts`:
   - Додати `TreeNodeType = "form"` до union
   - Додати `groupKey: "forms"` до `GROUP_ADD_KEYS`
-- [ ] `apps/web/src/components/layout/tree/tree-builder.ts`:
+- [X] `apps/web/src/components/layout/tree/tree-builder.ts`:
   - У `buildObjectChildren()` для Catalog, Document, CustomTable — додати групу «Forms»
   - Дочірні вузли = форми з `model.forms` відфільтровані по `objectRef`
   - Кожен вузол: `{ nodeType: "form", name: form.kind }` (наприклад «ItemForm», «ListForm»)
-- [ ] i18n: додати ключі `tree.forms`, `tree.addForm`, `metadata.section.forms`
+- [X] i18n: додати ключі `tree.forms`, `tree.addForm`, `metadata.section.forms`
 
 #### 2.6. project-store: завантаження forms
 
-- [ ] `apps/web/src/stores/project-store.ts` — `openProject`:
+- [X] `apps/web/src/stores/project-store.ts` — `openProject`:
   - `result.model` тепер включає `forms` (бо вони частина ProjectModel) — жодних додаткових дій
   - Видалити будь-який код що ігнорує `result.forms` окрему Map (якщо є)
-- [ ] Session persistence: forms зберігаються/відновлюються автоматично через `model: ProjectModel`
+- [X] Session persistence: forms зберігаються/відновлюються автоматично через `model: ProjectModel`
 
-- [ ] **Тести:**
+- [X] **Тести:**
   - Round-trip: save → open → forms збережені і відновлені в model.forms
   - Rename об'єкта → forms.objectRef.name оновлено
   - Delete об'єкта → forms видалені з model.forms

@@ -350,6 +350,74 @@ describe('buildProjectModelFromParsed', () => {
     expect(model.constants).toHaveLength(2)
     expect(model.constants[0].name).toBe('CompanyName')
   })
+
+  // --- Forms в buildProjectModelFromParsed (Phase 3 — Stage 2) ---
+
+  it('includes validated forms in model.forms', () => {
+    const formData = { kind: 'ItemForm', layout: { element: 'Group', children: [] } }
+    const files = makeFiles({
+      'project.meta.json': MINIMAL_PROJECT,
+      'catalogs/products/products.meta.json': VALID_CATALOG,
+      'catalogs/products/forms/item.form.json': JSON.stringify(formData),
+    })
+    const { parsed } = parseMetadataFiles(files)
+    const { model, warnings } = buildProjectModelFromParsed(parsed)
+
+    expect(warnings).toHaveLength(0)
+    expect(model.forms).toHaveLength(1)
+    expect(model.forms[0].kind).toBe('ItemForm')
+    expect(model.forms[0].objectRef).toEqual({ kind: 'Catalog', name: 'Products' })
+  })
+
+  it('resolves form objectSlug to objectName in model.forms', () => {
+    // SalesOrder → slug "sales-order"
+    const formData = { kind: 'ItemForm', layout: { element: 'Group' } }
+    const files = makeFiles({
+      'project.meta.json': MINIMAL_PROJECT,
+      'documents/sales-order/sales-order.meta.json': VALID_DOCUMENT,
+      'documents/sales-order/forms/item.form.json': JSON.stringify(formData),
+    })
+    const { parsed } = parseMetadataFiles(files)
+    const { model, warnings } = buildProjectModelFromParsed(parsed)
+
+    expect(warnings).toHaveLength(0)
+    expect(model.forms).toHaveLength(1)
+    // slug "sales-order" резолвиться у PascalCase "SalesOrder"
+    expect(model.forms[0].objectRef.name).toBe('SalesOrder')
+  })
+
+  it('skips form for unknown object slug with warning', () => {
+    const formData = { kind: 'ItemForm', layout: { element: 'Group' } }
+    const files = makeFiles({
+      'project.meta.json': MINIMAL_PROJECT,
+      'catalogs/unknown-catalog/forms/item.form.json': JSON.stringify(formData),
+    })
+    const { parsed } = parseMetadataFiles(files)
+    const { model, warnings } = buildProjectModelFromParsed(parsed)
+
+    expect(model.forms).toHaveLength(0)
+    expect(warnings.length).toBeGreaterThan(0)
+    const formWarnings = warnings.filter((w) => w.filePath.includes('forms/'))
+    expect(formWarnings.length).toBeGreaterThan(0)
+    expect(formWarnings[0].errors[0]).toContain('unknown-catalog')
+  })
+
+  it('skips form with unknown form file name with warning', () => {
+    const formData = { kind: 'ItemForm', layout: { element: 'Group' } }
+    const files = makeFiles({
+      'project.meta.json': MINIMAL_PROJECT,
+      'catalogs/products/products.meta.json': VALID_CATALOG,
+      'catalogs/products/forms/custom.form.json': JSON.stringify(formData),
+    })
+    const { parsed } = parseMetadataFiles(files)
+    const { model, warnings } = buildProjectModelFromParsed(parsed)
+
+    expect(model.forms).toHaveLength(0)
+    expect(warnings.length).toBeGreaterThan(0)
+    const formWarnings = warnings.filter((w) => w.filePath.includes('forms/'))
+    expect(formWarnings.length).toBeGreaterThan(0)
+    expect(formWarnings[0].errors[0]).toContain('custom.form.json')
+  })
 })
 
 // --- serializeToFiles ---
@@ -418,6 +486,73 @@ describe('serializeToFiles', () => {
   it('deterministic output', () => {
     const model = createModelWithObjects()
     expect(serializeToFiles(model)).toEqual(serializeToFiles(model))
+  })
+
+  // --- Forms серіалізація (Phase 3 — Stage 2) ---
+
+  it('serializes forms as separate files in forms/ subdirectory', () => {
+    const model = projectModelSchema.parse({
+      project: { name: 'TestProject' },
+      catalogs: [
+        {
+          kind: 'Catalog',
+          name: 'Products',
+          codeLength: 9,
+          codeType: 'String',
+          descriptionLength: 100,
+          hierarchyType: 'None',
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+      forms: [
+        {
+          kind: 'ItemForm',
+          objectRef: { kind: 'Catalog', name: 'Products' },
+        },
+        {
+          kind: 'ListForm',
+          objectRef: { kind: 'Catalog', name: 'Products' },
+        },
+      ],
+    })
+    const files = serializeToFiles(model)
+    const formFiles = files.filter((f) => f.path.includes('/forms/'))
+
+    expect(formFiles).toHaveLength(2)
+    expect(formFiles.map((f) => f.path).sort()).toEqual([
+      'catalogs/products/forms/item.form.json',
+      'catalogs/products/forms/list.form.json',
+    ])
+  })
+
+  it('serializes forms with $schema URL', () => {
+    const model = projectModelSchema.parse({
+      project: { name: 'TestProject' },
+      catalogs: [{ kind: 'Catalog', name: 'Products' }],
+      forms: [
+        {
+          kind: 'ItemForm',
+          objectRef: { kind: 'Catalog', name: 'Products' },
+        },
+      ],
+    })
+    const files = serializeToFiles(model)
+    const formFile = files.find((f) => f.path.includes('/forms/'))
+    expect(formFile).toBeDefined()
+
+    const parsed = JSON.parse(formFile!.content)
+    expect(parsed.$schema).toContain('form.schema.json')
+  })
+
+  it('does not write forms if model.forms is empty', () => {
+    const model = projectModelSchema.parse({
+      project: { name: 'TestProject' },
+      catalogs: [{ kind: 'Catalog', name: 'Products' }],
+    })
+    const files = serializeToFiles(model)
+    const formFiles = files.filter((f) => f.path.includes('/forms/'))
+    expect(formFiles).toHaveLength(0)
   })
 })
 
@@ -528,6 +663,70 @@ describe('round-trip', () => {
     const { parsed } = parseMetadataFiles(fileMap)
     const { model } = buildProjectModelFromParsed(parsed)
 
+    const files2 = serializeToFiles(model)
+    expect(files2).toEqual(files)
+  })
+})
+
+// --- Round-trip з forms (Phase 3 — Stage 2) ---
+
+describe('round-trip with forms', () => {
+  it('survives serialize → parse → build cycle', () => {
+    const original = projectModelSchema.parse({
+      project: { name: 'TestProject' },
+      catalogs: [
+        {
+          kind: 'Catalog',
+          name: 'Products',
+          codeLength: 9,
+          codeType: 'String',
+          descriptionLength: 100,
+          hierarchyType: 'None',
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+      documents: [
+        {
+          kind: 'Document',
+          name: 'SalesOrder',
+          numberLength: 11,
+          numberType: 'String',
+          attributes: [],
+          tabularSections: [],
+        },
+      ],
+      forms: [
+        {
+          kind: 'ItemForm',
+          objectRef: { kind: 'Catalog', name: 'Products' },
+          title: { uk: 'Картка товару' },
+        },
+        {
+          kind: 'ListForm',
+          objectRef: { kind: 'Catalog', name: 'Products' },
+        },
+        {
+          kind: 'ItemForm',
+          objectRef: { kind: 'Document', name: 'SalesOrder' },
+        },
+      ],
+    })
+    const files = serializeToFiles(original)
+
+    // Перевірка що form-файли були створені
+    const formFiles = files.filter((f) => f.path.includes('/forms/'))
+    expect(formFiles).toHaveLength(3)
+
+    // Parse назад
+    const fileMap = new Map(files.map((f) => [f.path, f.content]))
+    const { parsed } = parseMetadataFiles(fileMap)
+    const { model, warnings } = buildProjectModelFromParsed(parsed)
+
+    expect(warnings).toHaveLength(0)
+    expect(model.forms).toHaveLength(3)
+
+    // Другий серіалізаційний цикл має бути ідентичний
     const files2 = serializeToFiles(model)
     expect(files2).toEqual(files)
   })

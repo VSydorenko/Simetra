@@ -63,6 +63,8 @@ export function TreeNode({
       return <GroupNode node={node} style={style} dragHandle={dragHandle} />
     case "field":
       return <FieldNode node={node} style={style} dragHandle={dragHandle} />
+    case "form":
+      return <FormNode node={node} style={style} dragHandle={dragHandle} />
     case "tabularSection":
       return (
         <TabularSectionNode node={node} style={style} dragHandle={dragHandle} />
@@ -368,6 +370,19 @@ function GroupNode({
 
       node.open()
       uiStore.selectObject(objectRef)
+    } else if (data.groupKey === "forms") {
+      // Додати форму: спочатку ItemForm, якщо вже є — ListForm
+      const existingForms = store.model.forms?.filter(
+        (f) =>
+          f.objectRef.kind === kind && f.objectRef.name === data.objectName,
+      ) ?? []
+      const hasItem = existingForms.some((f) => f.kind === "ItemForm")
+      const hasList = existingForms.some((f) => f.kind === "ListForm")
+      const formKind = !hasItem ? "ItemForm" : !hasList ? "ListForm" : null
+      if (!formKind) return // обидві форми вже існують
+      store.addForm(kind, data.objectName, formKind)
+      node.open()
+      uiStore.selectObject(objectRef)
     }
   }, [data, kind, node])
 
@@ -550,6 +565,65 @@ function FieldNode({
         >
           <HugeiconsIcon icon={Delete02Icon} size={14} className="mr-2" />
           {t("tree.deleteField")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
+// --- Вузол форми ---
+
+function FormNode({
+  node,
+  style,
+  dragHandle,
+}: {
+  node: NodeApi<TreeNodeData>
+  style: React.CSSProperties
+  dragHandle?: (el: HTMLDivElement | null) => void
+}) {
+  const { t } = useTranslation()
+  const data = node.data
+  const kind = data.kind!
+  const formIcon = GROUP_ICONS.forms
+
+  const handleDelete = useCallback(() => {
+    if (!data.objectName) return
+    const formKind = data.name as "ItemForm" | "ListForm"
+    useMetadataStore.getState().deleteForm(kind, data.objectName, formKind)
+  }, [data, kind])
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={dragHandle}
+          style={style}
+          className={cn(
+            "flex cursor-pointer items-center gap-1.5 rounded-sm px-1 text-xs",
+            "hover:bg-accent/50",
+            node.isSelected &&
+              "border-l-2 border-primary bg-accent text-accent-foreground",
+            node.isFocused && !node.isSelected && "ring-1 ring-ring",
+          )}
+        >
+          {formIcon && (
+            <HugeiconsIcon
+              icon={formIcon}
+              size={13}
+              className="shrink-0 text-muted-foreground"
+            />
+          )}
+          <span className="truncate text-[0.75rem]">{data.name}</span>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onClick={handleDelete}
+          className="text-destructive focus:text-destructive"
+        >
+          <HugeiconsIcon icon={Delete02Icon} size={14} className="mr-2" />
+          {t("action.delete")}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

@@ -60,7 +60,8 @@
       "dimensions": "Dimensions",
       "resources": "Resources",
       "values": "Values",
-      "settings": "Settings"
+      "settings": "Settings",
+      "forms": "Forms"
     },
     "setting": {
       "codeLength": "Code length",
@@ -96,6 +97,7 @@
     "addResource": "Add resource",
     "addTabularSection": "Add tabular section",
     "addValue": "Add value",
+    "addForm": "Add form",
     "deleteField": "Delete",
     "moveUp": "Move up",
     "moveDown": "Move down",
@@ -125,7 +127,11 @@
     "order": "Order",
     "tabularSectionName": "Tabular section name",
     "standardAttributes": "Standard attributes",
-    "comingSoon": "coming soon"
+    "comingSoon": "coming soon",
+    "addItemForm": "Add item form",
+    "addListForm": "Add list form",
+    "emptyForms": "Click \"Add\" to create a form",
+    "formsDesignerComingSoon": "Visual form designer will be available in Phase 4"
   },
   "properties": {
     "title": "Properties",

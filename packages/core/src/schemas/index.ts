@@ -63,6 +63,16 @@ export {
 } from "./constant"
 export { customTableSchema, type CustomTable } from "./custom-table"
 
+// Forms (Phase 3)
+export {
+  formKindSchema,
+  formSchema,
+  formSupportedKinds,
+  type FormKind,
+  type FormSchema,
+  type FormSupportedKind,
+} from './form'
+
 // Project
 export { projectSchema, type Project } from "./project"
 export {

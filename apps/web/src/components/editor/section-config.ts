@@ -6,6 +6,7 @@ import {
   Exchange01Icon,
   Menu01Icon,
   Settings02Icon,
+  TextIcon,
 } from "@hugeicons/core-free-icons"
 import type { MetadataKind } from "@simetra/core"
 
@@ -30,6 +31,7 @@ export const SECTION_CONFIG: Record<MetadataKind, SectionDef[]> = {
       labelKey: "metadata.section.numbering",
       icon: HashtagIcon,
     },
+    { id: "forms", labelKey: "metadata.section.forms", icon: TextIcon },
     {
       id: "settings",
       labelKey: "metadata.section.settings",
@@ -53,6 +55,7 @@ export const SECTION_CONFIG: Record<MetadataKind, SectionDef[]> = {
       labelKey: "metadata.section.movements",
       icon: Exchange01Icon,
     },
+    { id: "forms", labelKey: "metadata.section.forms", icon: TextIcon },
     {
       id: "settings",
       labelKey: "metadata.section.settings",
@@ -107,6 +110,7 @@ export const SECTION_CONFIG: Record<MetadataKind, SectionDef[]> = {
       icon: InformationCircleIcon,
     },
     { id: "data", labelKey: "metadata.section.data", icon: Database02Icon },
+    { id: "forms", labelKey: "metadata.section.forms", icon: TextIcon },
     {
       id: "settings",
       labelKey: "metadata.section.settings",

@@ -1,5 +1,5 @@
 import type { MetadataKind } from "@simetra/core"
-import { physicalObjectName, physicalTabularName, toSnakeCase } from "@simetra/core"
+import { physicalObjectName, physicalTabularName } from "@simetra/core"
 
 // Re-export toSnakeCase від core для зворотної сумісності імпортів
 export { toSnakeCase } from "@simetra/core"

@@ -18,7 +18,9 @@ import {
   informationRegisterSchema,
   accumulationRegisterSchema,
   customTableSchema,
+  formSchema,
 } from './schemas'
+import type { FormSchema } from './schemas'
 import { KIND_TO_KEY } from './find-references'
 import {
   serializeMetadataObject,
@@ -26,6 +28,8 @@ import {
   enrichSchemaUrl,
   enrichProjectSchemaUrl,
   buildConstantsSchemaUrl,
+  serializeForm,
+  buildFormSchemaUrl,
 } from './serialization'
 
 // --- Типи ---
@@ -349,12 +353,107 @@ export function buildProjectModelFromParsed(
     }
   }
 
-  const model = projectModelSchema.parse({
-    project,
-    ...collections,
-  })
+  // Валідація forms: slug → objectName resolution + formSchema
+  const validatedForms: FormSchema[] = []
+  for (const parsedForm of parsed.forms) {
+    const { objectSlug, objectKind, formFileName, data, filePath } = parsedForm
 
-  // Forms map: ключ = filePath
+    // Визначити kind форми за ім'ям файлу
+    let formKind: string | undefined
+    if (formFileName === 'item.form.json') formKind = 'ItemForm'
+    else if (formFileName === 'list.form.json') formKind = 'ListForm'
+
+    if (!formKind) {
+      warnings.push({
+        filePath,
+        errors: [`Невідомий тип форми: ${formFileName}`],
+      })
+      continue
+    }
+
+    // Резолвінг objectSlug → objectName через пошук в колекціях
+    const collKey = KIND_TO_KEY[objectKind]
+    const objectsInCollection = collections[collKey] ?? []
+    const matchingObj = objectsInCollection.find(
+      (obj) => toKebabCase((obj as { name: string }).name) === objectSlug,
+    )
+
+    if (!matchingObj) {
+      warnings.push({
+        filePath,
+        errors: [
+          `Не знайдено об'єкт "${objectKind}" зі slug "${objectSlug}"`,
+        ],
+      })
+      continue
+    }
+
+    const objectName = (matchingObj as { name: string }).name
+
+    // Побудувати FormSchema об'єкт і валідувати
+    const formData = {
+      ...(typeof data === 'object' && data !== null ? data : {}),
+      kind: formKind,
+      objectRef: { kind: objectKind, name: objectName },
+    }
+    const result = formSchema.safeParse(formData)
+    if (result.success) {
+      validatedForms.push(result.data)
+    } else {
+      const errors = result.error.issues.map(
+        (i) => `${i.path.join('.')}: ${i.message}`,
+      )
+      if (strict) {
+        throw new Error(
+          `Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join('\n')}`,
+        )
+      }
+      warnings.push({ filePath, errors })
+    }
+  }
+
+  const model = strict
+    ? projectModelSchema.parse({
+        project,
+        ...collections,
+        forms: validatedForms,
+      })
+    : (() => {
+        const result = projectModelSchema.safeParse({
+          project,
+          ...collections,
+          forms: validatedForms,
+        })
+        if (result.success) return result.data
+        // Lenient mode: form-related issues → warnings, retry без forms
+        const formIssues = result.error.issues.filter(
+          (i) => i.path[0] === 'forms',
+        )
+        const otherIssues = result.error.issues.filter(
+          (i) => i.path[0] !== 'forms',
+        )
+        if (otherIssues.length > 0) {
+          throw new Error(
+            `ProjectModel validation failed:\n${otherIssues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n')}`,
+          )
+        }
+        // Лише form-related помилки — зберігаємо як warnings, будуємо модель без forms
+        if (formIssues.length > 0) {
+          warnings.push({
+            filePath: 'forms',
+            errors: formIssues.map(
+              (i) => `${i.path.join('.')}: ${i.message}`,
+            ),
+          })
+        }
+        return projectModelSchema.parse({
+          project,
+          ...collections,
+          forms: [],
+        })
+      })()
+
+  // Forms map: ключ = filePath (backward compat для web-storage/cli)
   const forms = new Map<string, unknown>()
   for (const form of parsed.forms) {
     forms.set(form.filePath, form.data)
@@ -419,6 +518,21 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
           content: serializeMetadataObject(enriched),
         })
       }
+    }
+  }
+
+  // Forms → окремі файли (Phase 3)
+  if (model.forms && model.forms.length > 0) {
+    for (const form of model.forms) {
+      const dirName = KIND_TO_DIR[form.objectRef.kind as MetadataKind]
+      if (!dirName) continue
+      const kebabName = toKebabCase(form.objectRef.name)
+      const formKindKebab = form.kind === 'ItemForm' ? 'item' : 'list'
+      const enrichedForm = { ...form, $schema: buildFormSchemaUrl(schemaVersion) }
+      files.push({
+        path: `${dirName}/${kebabName}/forms/${formKindKebab}.form.json`,
+        content: serializeForm(enrichedForm),
+      })
     }
   }
 

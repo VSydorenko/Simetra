@@ -34,6 +34,7 @@ function emptyProject(overrides?: Partial<ProjectModel>): ProjectModel {
     accumulationRegisters: [],
     constants: [],
     customTables: [],
+    forms: [],
     ...overrides,
   }
 }
@@ -1345,6 +1346,7 @@ describe("kind-prefix with tablePrefix", () => {
     accumulationRegisters: [],
     constants: [],
     customTables: [],
+    forms: [],
   }
 
   const sql = generateSQL(project)

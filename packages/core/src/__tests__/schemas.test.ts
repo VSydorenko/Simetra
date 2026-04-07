@@ -23,6 +23,8 @@ import {
   postingMovementSchema,
   postingValidationSchema,
   postingSchema,
+  formSchema,
+  formKindSchema,
 } from "../schemas"
 import {
   serializeMetadataObject,
@@ -1518,5 +1520,193 @@ describe("$schema enrichment", () => {
     expect(buildConstantsSchemaUrl("2.1")).toBe(
       "https://simetra.dev/schemas/v2.1/constants.schema.json"
     )
+  })
+})
+
+// ============================================================
+// formSchema (Phase 3 — Stage 2)
+// ============================================================
+
+describe("formSchema", () => {
+  it("parses valid ItemForm", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+    })
+    expect(result.kind).toBe("ItemForm")
+    expect(result.objectRef).toEqual({ kind: "Catalog", name: "Products" })
+  })
+
+  it("parses valid ListForm", () => {
+    const result = formSchema.parse({
+      kind: "ListForm",
+      objectRef: { kind: "Document", name: "SalesOrder" },
+    })
+    expect(result.kind).toBe("ListForm")
+  })
+
+  it("rejects invalid form kind", () => {
+    expect(() =>
+      formSchema.parse({
+        kind: "EditForm",
+        objectRef: { kind: "Catalog", name: "Products" },
+      }),
+    ).toThrow()
+  })
+
+  it("requires objectRef", () => {
+    expect(() =>
+      formSchema.parse({ kind: "ItemForm" }),
+    ).toThrow()
+  })
+
+  it("accepts optional layout", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+      layout: { element: "Group", children: [] },
+    })
+    expect(result.layout).toEqual({ element: "Group", children: [] })
+  })
+
+  it("accepts optional title", () => {
+    const result = formSchema.parse({
+      kind: "ItemForm",
+      objectRef: { kind: "Catalog", name: "Products" },
+      title: { uk: "Форма товару", en: "Product form" },
+    })
+    expect(result.title).toEqual({ uk: "Форма товару", en: "Product form" })
+  })
+
+  it("formKindSchema accepts only ItemForm and ListForm", () => {
+    expect(() => formKindSchema.parse("ItemForm")).not.toThrow()
+    expect(() => formKindSchema.parse("ListForm")).not.toThrow()
+    expect(() => formKindSchema.parse("CustomForm")).toThrow()
+  })
+})
+
+// ============================================================
+// projectModelSchema — forms validation (Phase 3 — Stage 2)
+// ============================================================
+
+describe("projectModelSchema forms validation", () => {
+  it("accepts forms with valid objectRef", () => {
+    const result = projectModelSchema.parse({
+      project: { name: "TestApp" },
+      catalogs: [{ kind: "Catalog", name: "Products" }],
+      forms: [
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Catalog", name: "Products" },
+        },
+      ],
+    })
+    expect(result.forms).toHaveLength(1)
+    expect(result.forms[0].objectRef.name).toBe("Products")
+  })
+
+  it("rejects form with objectRef to non-existing object", () => {
+    const result = projectModelSchema.safeParse({
+      project: { name: "TestApp" },
+      catalogs: [],
+      forms: [
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Catalog", name: "NonExistent" },
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message)
+      expect(messages.some((m) => m.includes("не знайдено"))).toBe(true)
+    }
+  })
+
+  it("rejects form for unsupported kind (Enumeration)", () => {
+    const result = projectModelSchema.safeParse({
+      project: { name: "TestApp" },
+      enumerations: [
+        { kind: "Enumeration", name: "OrderStatus", values: [] },
+      ],
+      forms: [
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Enumeration", name: "OrderStatus" },
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message)
+      expect(messages.some((m) => m.includes("не підтримуються"))).toBe(true)
+    }
+  })
+
+  it("rejects form for unsupported kind (Constant)", () => {
+    const result = projectModelSchema.safeParse({
+      project: { name: "TestApp" },
+      constants: [
+        { kind: "Constant", name: "AppName", valueType: "String" },
+      ],
+      forms: [
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Constant", name: "AppName" },
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message)
+      expect(messages.some((m) => m.includes("не підтримуються"))).toBe(true)
+    }
+  })
+
+  it("rejects duplicate ItemForm for same object", () => {
+    const result = projectModelSchema.safeParse({
+      project: { name: "TestApp" },
+      catalogs: [{ kind: "Catalog", name: "Products" }],
+      forms: [
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Catalog", name: "Products" },
+        },
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Catalog", name: "Products" },
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message)
+      expect(messages.some((m) => m.includes("Дублікат"))).toBe(true)
+    }
+  })
+
+  it("accepts ItemForm and ListForm for same object", () => {
+    const result = projectModelSchema.parse({
+      project: { name: "TestApp" },
+      catalogs: [{ kind: "Catalog", name: "Products" }],
+      forms: [
+        {
+          kind: "ItemForm",
+          objectRef: { kind: "Catalog", name: "Products" },
+        },
+        {
+          kind: "ListForm",
+          objectRef: { kind: "Catalog", name: "Products" },
+        },
+      ],
+    })
+    expect(result.forms).toHaveLength(2)
+  })
+
+  it("defaults forms to empty array", () => {
+    const result = projectModelSchema.parse({
+      project: { name: "TestApp" },
+    })
+    expect(result.forms).toEqual([])
   })
 })

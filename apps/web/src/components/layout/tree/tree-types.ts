@@ -9,6 +9,7 @@ export type TreeNodeType =
   | "group"
   | "field"
   | "tabularSection"
+  | "form"
   | "primitiveType"
   | "refKindGroup"
   | "refTarget"
@@ -57,6 +58,7 @@ export const GROUP_ADD_KEYS: Record<string, string> = {
   resources: "tree.addResource",
   tabularSections: "tree.addTabularSection",
   values: "tree.addValue",
+  forms: "tree.addForm",
 }
 
 // --- Контекст для діалогу видалення (один на все дерево) ---
