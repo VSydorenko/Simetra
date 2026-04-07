@@ -1,9 +1,11 @@
 import { create } from "zustand"
 import type { GeneratorOutput } from "@simetra/generator-api"
 import { PostgresGenerator } from "@simetra/generator-pg"
-import { KIND_TO_KEY } from "@simetra/core"
+import { KIND_TO_KEY, isPostingCompatible } from "@simetra/core"
 import type {
+  AccumulationRegister,
   Attribute,
+  InformationRegister,
   MetadataKind,
   MetadataObject,
   ProjectModel,
@@ -29,6 +31,20 @@ function refExists(
   const key = KIND_TO_KEY[kind]
   const objects = model[key] as MetadataObject[]
   return objects.some((o) => o.name === name)
+}
+
+/** Знаходить регістр у моделі за ref */
+function findRegisterInModel(
+  model: ProjectModel,
+  ref: { kind: MetadataKind; name: string },
+): AccumulationRegister | InformationRegister | undefined {
+  if (ref.kind === 'AccumulationRegister') {
+    return model.accumulationRegisters.find((r) => r.name === ref.name)
+  }
+  if (ref.kind === 'InformationRegister') {
+    return model.informationRegisters.find((r) => r.name === ref.name)
+  }
+  return undefined
 }
 
 /** Збирає всі атрибути обʼєкта з path-міткою */
@@ -142,8 +158,14 @@ function collectValidationErrors(model: ProjectModel): string[] {
         obj.posting !== null
       ) {
         const posting = obj.posting as {
-          movements?: { register: { kind: MetadataKind; name: string } }[]
-          validations?: { register: { kind: MetadataKind; name: string } }[]
+          movements?: {
+            register: { kind: MetadataKind; name: string }
+            mappings: { dimensions: Record<string, string> }
+          }[]
+          validations?: {
+            register: { kind: MetadataKind; name: string }
+            resource: string
+          }[]
         }
         if (posting.movements) {
           for (const m of posting.movements) {
@@ -151,6 +173,25 @@ function collectValidationErrors(model: ProjectModel): string[] {
               errors.push(
                 `${kind}.${obj.name}.posting.movements: посилання на неіснуючий обʼєкт ${m.register.kind}/${m.register.name}`
               )
+            }
+            // Перевірка сумісності регістру з проведенням
+            const reg = findRegisterInModel(model, m.register)
+            if (reg) {
+              const compat = isPostingCompatible(reg)
+              if (!compat.compatible) {
+                errors.push(
+                  `${kind}/${obj.name}: Регістр ${m.register.name} не сумісний з проведенням`
+                )
+              }
+              // Перевірка неповних dimensions
+              const missingDims = reg.dimensions.filter(
+                (d) => !m.mappings.dimensions[d.name],
+              )
+              if (missingDims.length > 0) {
+                errors.push(
+                  `${kind}/${obj.name}: Рух до ${m.register.name} — не заповнені dimensions: ${missingDims.map((d) => d.name).join(', ')}`
+                )
+              }
             }
           }
         }
@@ -160,6 +201,16 @@ function collectValidationErrors(model: ProjectModel): string[] {
               errors.push(
                 `${kind}.${obj.name}.posting.validations: посилання на неіснуючий обʼєкт ${v.register.kind}/${v.register.name}`
               )
+            }
+            // Перевірка що ресурс валідації має числовий тип
+            const reg = findRegisterInModel(model, v.register)
+            if (reg) {
+              const resourceAttr = reg.resources.find((r) => r.name === v.resource)
+              if (resourceAttr && resourceAttr.type !== 'Numeric' && resourceAttr.type !== 'Integer') {
+                errors.push(
+                  `${kind}/${obj.name}: Валідація NonNegativeBalance для ${v.resource} — ресурс має тип ${resourceAttr.type}, очікується Numeric або Integer`
+                )
+              }
             }
           }
         }

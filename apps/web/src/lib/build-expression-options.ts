@@ -116,11 +116,22 @@ export function buildExpressionOptions(
     // Агрегати — sum({ts}.{field}), count({ts})
     if (document.tabularSections.length > 0) {
       const aggOptions: ExpressionOption[] = []
+      // Стандартні реквізити ТЧ для агрегатів (без id)
+      const tsStdAttrs = getTabularSectionStandardAttributes().filter(
+        (a) => a.name !== 'id',
+      )
       for (const ts of document.tabularSections) {
         aggOptions.push({
           value: `count(${ts.name})`,
           label: `count(${ts.name})`,
         })
+        // Стандартні реквізити ТЧ (напр. line_number)
+        for (const stdAttr of tsStdAttrs) {
+          aggOptions.push({
+            value: `sum(${ts.name}.${stdAttr.name})`,
+            label: `sum(${ts.name}.${stdAttr.name})`,
+          })
+        }
         for (const attr of ts.attributes) {
           aggOptions.push({
             value: `sum(${ts.name}.${attr.name})`,

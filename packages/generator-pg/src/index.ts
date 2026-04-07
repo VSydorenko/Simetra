@@ -22,6 +22,7 @@ export {
 } from "./type-mapping"
 export { generateProjectDDL } from "./generate-table"
 export { generatePostingFunctions, expressionToSql } from "./generate-posting"
+export { resolveColumnName, resolveStdColumnName } from "./column-naming"
 
 export const DEFAULT_OPTIONS: Required<GeneratorOptions> = {
   enumStrategy: "pgEnum",

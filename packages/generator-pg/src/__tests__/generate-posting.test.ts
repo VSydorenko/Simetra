@@ -555,7 +555,7 @@ describe('posting: condition with document source', () => {
               register: { kind: 'AccumulationRegister', name: 'SettlementsBalance' },
               movementType: 'Expense',
               source: 'document',
-              condition: 'doc.isActive',
+              condition: 'doc.is_active',
               mappings: {
                 dimensions: { partner: 'doc.partner' },
                 resources: { amount: 'doc.amount' },
@@ -569,7 +569,7 @@ describe('posting: condition with document source', () => {
         attributes: [
           attr('partner', 'String'),
           attr('amount', 'Numeric'),
-          attr('isActive', 'Boolean'),
+          attr('is_active', 'Boolean'),
         ],
         tabularSections: [],
         standardAttributeOverrides: {},
@@ -729,5 +729,672 @@ describe('posting: InformationRegister movement', () => {
   it('generates unpost function for InformationRegister movement', () => {
     const sql = generateSQL(project)
     expect(sql).toContain('DELETE FROM product_prices WHERE recorder_id')
+  })
+})
+
+// ─── AR.Balance з Ref dimension → INSERT має {name}_id ─────
+describe('posting: AR.Balance with Ref dimension', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'GoodsReceipt',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              movementType: 'Receipt',
+              source: 'tabularSection:items',
+              mappings: {
+                dimensions: {
+                  warehouse: 'doc.warehouse',
+                  product: 'row.product',
+                },
+                resources: { quantity: 'row.quantity' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('warehouse', 'Ref', {
+            ref: { kind: 'Catalog', name: 'Warehouses' },
+          }),
+        ],
+        tabularSections: [
+          {
+            name: 'items',
+            standardAttributeOverrides: {},
+            attributes: [
+              attr('product', 'Ref', {
+                ref: { kind: 'Catalog', name: 'Products' },
+              }),
+              attr('quantity', 'Numeric'),
+            ],
+          },
+        ],
+        standardAttributeOverrides: {},
+      },
+    ],
+    catalogs: [
+      {
+        kind: 'Catalog',
+        name: 'Warehouses',
+        codeLength: 5,
+        codeType: 'String',
+        descriptionLength: 150,
+        hierarchyType: 'None',
+        owners: [],
+        autonumber: true,
+        codeUnique: true,
+        mainPresentation: 'Description',
+        predefinedItems: [],
+        attributes: [],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+      {
+        kind: 'Catalog',
+        name: 'Products',
+        codeLength: 5,
+        codeType: 'String',
+        descriptionLength: 150,
+        hierarchyType: 'None',
+        owners: [],
+        autonumber: true,
+        codeUnique: true,
+        mainPresentation: 'Description',
+        predefinedItems: [],
+        attributes: [],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'InventoryBalance',
+        registerType: 'Balance',
+        recorderTypes: [{ kind: 'Document', name: 'GoodsReceipt' }],
+        dimensions: [
+          attr('warehouse', 'Ref', {
+            ref: { kind: 'Catalog', name: 'Warehouses' },
+          }),
+          attr('product', 'Ref', {
+            ref: { kind: 'Catalog', name: 'Products' },
+          }),
+        ],
+        resources: [attr('quantity', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('INSERT has warehouse_id and product_id (not warehouse, product)', () => {
+    const sql = generateSQL(project)
+    expect(sql).toContain('warehouse_id')
+    expect(sql).toContain('product_id')
+    // Не повинно бути warehouse без _id у INSERT columns
+    const postFunc = sql.slice(sql.indexOf('post_goods_receipt'))
+    const insertMatch = postFunc.match(/INSERT INTO inventory_balance \(\n\s+(.+?)\n\s+\)/)
+    expect(insertMatch).toBeTruthy()
+    if (insertMatch) {
+      const cols = insertMatch[1]
+      expect(cols).toContain('warehouse_id')
+      expect(cols).toContain('product_id')
+    }
+  })
+})
+
+// ─── Polymorphic recorder → DELETE з recorder_id_type ───────
+describe('posting: polymorphic recorder', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'GoodsReceipt',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              movementType: 'Receipt',
+              source: 'document',
+              mappings: {
+                dimensions: { warehouse: 'doc.warehouse' },
+                resources: { quantity: 'doc.quantity' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('warehouse', 'String'),
+          attr('quantity', 'Numeric'),
+        ],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'InventoryBalance',
+        registerType: 'Balance',
+        recorderTypes: [
+          { kind: 'Document', name: 'GoodsReceipt' },
+          { kind: 'Document', name: 'GoodsShipment' },
+        ],
+        dimensions: [attr('warehouse', 'String')],
+        resources: [attr('quantity', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('DELETE uses recorder_id_type + recorder_id_id for polymorphic recorder', () => {
+    const sql = generateSQL(project)
+    expect(sql).toContain("recorder_id_type = 'Document.GoodsReceipt'")
+    expect(sql).toContain('recorder_id_id = p_doc_id')
+  })
+
+  it('INSERT has recorder_id_type and recorder_id_id columns', () => {
+    const sql = generateSQL(project)
+    const postFunc = sql.slice(sql.indexOf('post_goods_receipt'))
+    expect(postFunc).toContain('recorder_id_type, recorder_id_id')
+    expect(postFunc).toContain("'Document.GoodsReceipt'")
+  })
+
+  it('unpost also uses polymorphic DELETE', () => {
+    const sql = generateSQL(project)
+    const unpostFunc = sql.slice(sql.indexOf('unpost_goods_receipt'))
+    expect(unpostFunc).toContain("recorder_id_type = 'Document.GoodsReceipt'")
+    expect(unpostFunc).toContain('recorder_id_id = p_doc_id')
+  })
+})
+
+// ─── IR.RecorderSubordinate → without movement_type ─────────
+describe('posting: IR.RecorderSubordinate without movement_type', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'PriceChange',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'InformationRegister', name: 'ProductPrices' },
+              movementType: 'Receipt',
+              source: 'tabularSection:prices',
+              mappings: {
+                dimensions: { product: 'row.product' },
+                resources: { price: 'row.price' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [],
+        },
+        registerMovements: [],
+        attributes: [],
+        tabularSections: [
+          {
+            name: 'prices',
+            standardAttributeOverrides: {},
+            attributes: [
+              attr('product', 'String'),
+              attr('price', 'Numeric'),
+            ],
+          },
+        ],
+        standardAttributeOverrides: {},
+      },
+    ],
+    informationRegisters: [
+      {
+        kind: 'InformationRegister',
+        name: 'ProductPrices',
+        periodicity: 'Day',
+        writeMode: 'RecorderSubordinate',
+        recorderTypes: [{ kind: 'Document', name: 'PriceChange' }],
+        dimensions: [attr('product', 'String')],
+        resources: [attr('price', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('INSERT does NOT include movement_type column', () => {
+    const sql = generateSQL(project)
+    const postFunc = sql.slice(sql.indexOf('post_price_change'))
+    const insertSection = postFunc.slice(0, postFunc.indexOf(';'))
+    expect(insertSection).not.toContain('movement_type')
+  })
+})
+
+// ─── AR.Turnover → without movement_type ────────────────────
+describe('posting: AR.Turnover without movement_type', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'Sale',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'Revenue' },
+              movementType: 'Receipt',
+              source: 'document',
+              mappings: {
+                dimensions: { client: 'doc.client' },
+                resources: { total: 'doc.total' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('client', 'String'),
+          attr('total', 'Numeric'),
+        ],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'Revenue',
+        registerType: 'Turnover',
+        recorderTypes: [{ kind: 'Document', name: 'Sale' }],
+        dimensions: [attr('client', 'String')],
+        resources: [attr('total', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('INSERT does NOT include movement_type column for Turnover register', () => {
+    const sql = generateSQL(project)
+    const postFunc = sql.slice(sql.indexOf('post_sale'))
+    const insertSection = postFunc.slice(0, postFunc.indexOf(';'))
+    expect(insertSection).not.toContain('movement_type')
+  })
+})
+
+// ─── Check function: AR.Balance → CASE WHEN movement_type ──
+describe('posting: check function for AR.Balance', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'GoodsReceipt',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              movementType: 'Receipt',
+              source: 'document',
+              mappings: {
+                dimensions: { warehouse: 'doc.warehouse' },
+                resources: { quantity: 'doc.quantity' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [
+            {
+              type: 'NonNegativeBalance',
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              dimensions: ['warehouse'],
+              resource: 'quantity',
+              message: { uk: 'Від\'ємний залишок', en: 'Negative balance' },
+              applyTo: 'Both',
+            },
+          ],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('warehouse', 'String'),
+          attr('quantity', 'Numeric'),
+        ],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'InventoryBalance',
+        registerType: 'Balance',
+        recorderTypes: [{ kind: 'Document', name: 'GoodsReceipt' }],
+        dimensions: [attr('warehouse', 'String')],
+        resources: [attr('quantity', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('uses CASE WHEN movement_type for Balance register', () => {
+    const sql = generateSQL(project)
+    expect(sql).toContain("CASE WHEN movement_type = 'Receipt' THEN quantity ELSE -quantity END")
+  })
+
+  it('applyTo=Both → no movement_type filter in check function', () => {
+    const sql = generateSQL(project)
+    const checkFunc = sql.slice(sql.indexOf('check_inventory_balance_quantity'))
+    expect(checkFunc).not.toContain("AND movement_type = ")
+  })
+})
+
+// ─── Check function: AR.Turnover → SUM без CASE WHEN ───────
+describe('posting: check function for AR.Turnover', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'Sale',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'Revenue' },
+              movementType: 'Receipt',
+              source: 'document',
+              mappings: {
+                dimensions: { client: 'doc.client' },
+                resources: { total: 'doc.total' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [
+            {
+              type: 'NonNegativeBalance',
+              register: { kind: 'AccumulationRegister', name: 'Revenue' },
+              dimensions: ['client'],
+              resource: 'total',
+              message: { uk: 'Від\'ємне значення', en: 'Negative value' },
+              applyTo: 'Both',
+            },
+          ],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('client', 'String'),
+          attr('total', 'Numeric'),
+        ],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'Revenue',
+        registerType: 'Turnover',
+        recorderTypes: [{ kind: 'Document', name: 'Sale' }],
+        dimensions: [attr('client', 'String')],
+        resources: [attr('total', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('uses plain SUM without CASE WHEN for Turnover register', () => {
+    const sql = generateSQL(project)
+    const checkFunc = sql.slice(sql.indexOf('check_revenue_total'))
+    expect(checkFunc).not.toContain('CASE WHEN movement_type')
+    expect(checkFunc).toContain('SUM(')
+    expect(checkFunc).toContain('total')
+  })
+})
+
+// ─── applyTo=Receipt → WHERE movement_type filter ───────────
+describe('posting: applyTo=Receipt filter', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'GoodsReceipt',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              movementType: 'Receipt',
+              source: 'document',
+              mappings: {
+                dimensions: { warehouse: 'doc.warehouse' },
+                resources: { quantity: 'doc.quantity' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [
+            {
+              type: 'NonNegativeBalance',
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              dimensions: ['warehouse'],
+              resource: 'quantity',
+              message: { uk: 'Від\'ємний залишок', en: 'Negative balance' },
+              applyTo: 'Receipt',
+            },
+          ],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('warehouse', 'String'),
+          attr('quantity', 'Numeric'),
+        ],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'InventoryBalance',
+        registerType: 'Balance',
+        recorderTypes: [{ kind: 'Document', name: 'GoodsReceipt' }],
+        dimensions: [attr('warehouse', 'String')],
+        resources: [attr('quantity', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('check function has WHERE movement_type = Receipt filter', () => {
+    const sql = generateSQL(project)
+    const checkFunc = sql.slice(sql.indexOf('check_inventory_balance_quantity'))
+    expect(checkFunc).toContain("AND movement_type = 'Receipt'")
+  })
+})
+
+// ─── applyTo=Expense → WHERE movement_type filter ──────────
+describe('posting: applyTo=Expense filter', () => {
+  const project: ProjectModel = emptyProject({
+    documents: [
+      {
+        kind: 'Document',
+        name: 'GoodsSale',
+        numberLength: 11,
+        numberType: 'String',
+        autonumber: true,
+        numberPeriodicity: 'Year',
+        posting: {
+          movements: [
+            {
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              movementType: 'Expense',
+              source: 'document',
+              mappings: {
+                dimensions: { warehouse: 'doc.warehouse' },
+                resources: { quantity: 'doc.quantity' },
+                attributes: {},
+              },
+            },
+          ],
+          validations: [
+            {
+              type: 'NonNegativeBalance',
+              register: { kind: 'AccumulationRegister', name: 'InventoryBalance' },
+              dimensions: ['warehouse'],
+              resource: 'quantity',
+              message: { uk: 'Від\'ємний залишок', en: 'Negative balance' },
+              applyTo: 'Expense',
+            },
+          ],
+        },
+        registerMovements: [],
+        attributes: [
+          attr('warehouse', 'String'),
+          attr('quantity', 'Numeric'),
+        ],
+        tabularSections: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+    accumulationRegisters: [
+      {
+        kind: 'AccumulationRegister',
+        name: 'InventoryBalance',
+        registerType: 'Balance',
+        recorderTypes: [{ kind: 'Document', name: 'GoodsSale' }],
+        dimensions: [attr('warehouse', 'String')],
+        resources: [attr('quantity', 'Numeric')],
+        attributes: [],
+        standardAttributeOverrides: {},
+      },
+    ],
+  })
+
+  it('check function has WHERE movement_type = Expense filter', () => {
+    const sql = generateSQL(project)
+    const checkFunc = sql.slice(sql.indexOf('check_inventory_balance_quantity'))
+    expect(checkFunc).toContain("AND movement_type = 'Expense'")
+  })
+})
+
+// ─── Invalid expression → throw ────────────────────────────
+describe('expressionToSql: invalid expression', () => {
+  it('throws on unknown expression format', () => {
+    expect(() => expressionToSql('unknownExpr', 'd', 'ts', 'X', '')).toThrow(
+      'Unknown expression format',
+    )
+  })
+})
+
+// ─── Condition з SQL injection → throw ──────────────────────
+describe('posting: condition SQL injection protection', () => {
+  const makeProjectWithCondition = (condition: string): ProjectModel =>
+    emptyProject({
+      documents: [
+        {
+          kind: 'Document',
+          name: 'TestDoc',
+          numberLength: 11,
+          numberType: 'String',
+          autonumber: true,
+          numberPeriodicity: 'Year',
+          posting: {
+            movements: [
+              {
+                register: { kind: 'AccumulationRegister', name: 'TestReg' },
+                movementType: 'Receipt',
+                source: 'tabularSection:items',
+                condition,
+                mappings: {
+                  dimensions: { dim: 'row.dim' },
+                  resources: { val: 'row.val' },
+                  attributes: {},
+                },
+              },
+            ],
+            validations: [],
+          },
+          registerMovements: [],
+          attributes: [],
+          tabularSections: [
+            {
+              name: 'items',
+              standardAttributeOverrides: {},
+              attributes: [
+                attr('dim', 'String'),
+                attr('val', 'Numeric'),
+              ],
+            },
+          ],
+          standardAttributeOverrides: {},
+        },
+      ],
+      accumulationRegisters: [
+        {
+          kind: 'AccumulationRegister',
+          name: 'TestReg',
+          registerType: 'Balance',
+          recorderTypes: [{ kind: 'Document', name: 'TestDoc' }],
+          dimensions: [attr('dim', 'String')],
+          resources: [attr('val', 'Numeric')],
+          attributes: [],
+          standardAttributeOverrides: {},
+        },
+      ],
+    })
+
+  it('throws on DROP keyword in condition', () => {
+    expect(() => generateSQL(makeProjectWithCondition('row.val > 0 AND DROP TABLE'))).toThrow(
+      'forbidden SQL keyword',
+    )
+  })
+
+  it('throws on semicolon in condition', () => {
+    expect(() => generateSQL(makeProjectWithCondition('row.val > 0; row.dim = 1'))).toThrow(
+      'forbidden characters',
+    )
+  })
+
+  it('throws on SQL comment in condition', () => {
+    expect(() => generateSQL(makeProjectWithCondition('row.val > 0 -- comment'))).toThrow(
+      'forbidden characters',
+    )
   })
 })

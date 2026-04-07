@@ -31,6 +31,7 @@ import type {
 import { getStandardAttributes } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { buildExpressionOptions } from "@/lib/build-expression-options"
+import { isExpressionInvalid, validateExpressionFields } from "@/lib/expression-validation"
 
 interface MovementConstructorDialogProps {
   open: boolean
@@ -238,19 +239,41 @@ function MovementConstructorBody({
     [doc, draft.source, translate]
   )
 
-  // Валідація виразу для поточного source
-  const isExpressionInvalid = useCallback(
+  // Валідація виразу для поточного source — обгортка над shared helper
+  const checkExpressionInvalid = useCallback(
     (expr: string): boolean => {
-      if (!expr) return false
-      const isDocSource = draft.source === "document"
-      // row.* тільки для tabularSection
-      if (isDocSource && /\brow\.\w+/.test(expr)) return true
-      // sum()/count() тільки для document source
-      if (!isDocSource && /^(sum|count)\(/.test(expr)) return true
-      return false
+      return isExpressionInvalid(expr, draft.source)
     },
     [draft.source]
   )
+
+  // Атрибути вибраної ТЧ (для валідації field references)
+  const selectedTsAttributes = useMemo(() => {
+    if (draft.source.startsWith('tabularSection:')) {
+      const tsName = draft.source.slice('tabularSection:'.length)
+      const ts = doc.tabularSections.find((t) => t.name === tsName)
+      return ts?.attributes
+    }
+    return undefined
+  }, [draft.source, doc.tabularSections])
+
+  // Блокування Save при наявності невалідних виразів
+  const hasInvalidExpressions = useMemo(() => {
+    const allMappings = [
+      ...Object.values(draft.mappings.dimensions),
+      ...Object.values(draft.mappings.resources),
+      ...Object.values(draft.mappings.attributes),
+    ]
+    return allMappings.some(
+      (expr) =>
+        expr &&
+        (isExpressionInvalid(expr, draft.source) ||
+          validateExpressionFields(
+            expr, draft.source, doc.attributes,
+            selectedTsAttributes, doc.tabularSections,
+          ) !== null),
+    )
+  }, [draft, doc.attributes, doc.tabularSections, selectedTsAttributes])
 
   // Save
   const handleSave = useCallback(() => {
@@ -420,7 +443,7 @@ function MovementConstructorBody({
                 mappings={draft.mappings.dimensions}
                 group="dimensions"
                 expressionGroups={expressionGroups}
-                isExpressionInvalid={isExpressionInvalid}
+                isExpressionInvalid={checkExpressionInvalid}
                 onSetMapping={setMapping}
               />
               <MappingGroup
@@ -429,7 +452,7 @@ function MovementConstructorBody({
                 mappings={draft.mappings.resources}
                 group="resources"
                 expressionGroups={expressionGroups}
-                isExpressionInvalid={isExpressionInvalid}
+                isExpressionInvalid={checkExpressionInvalid}
                 onSetMapping={setMapping}
               />
               <MappingGroup
@@ -438,7 +461,7 @@ function MovementConstructorBody({
                 mappings={draft.mappings.attributes}
                 group="attributes"
                 expressionGroups={expressionGroups}
-                isExpressionInvalid={isExpressionInvalid}
+                isExpressionInvalid={checkExpressionInvalid}
                 onSetMapping={setMapping}
               />
             </div>
@@ -450,7 +473,7 @@ function MovementConstructorBody({
         <Button variant="outline" size="sm" onClick={onCancel}>
           {t("action.cancel")}
         </Button>
-        <Button size="sm" disabled={!isDirty} onClick={handleSave}>
+        <Button size="sm" disabled={!isDirty || hasInvalidExpressions} onClick={handleSave}>
           {t("action.save")}
         </Button>
       </DialogFooter>

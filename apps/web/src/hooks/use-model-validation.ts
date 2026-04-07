@@ -1,13 +1,14 @@
 import { useEffect } from "react"
-import { metadataObjectSchema } from "@simetra/core"
+import { metadataObjectSchema, isPostingCompatible, KIND_TO_KEY } from "@simetra/core"
 import type {
+  AccumulationRegister,
+  InformationRegister,
   MetadataKind,
   MetadataObject,
   Attribute,
   ProjectModel,
 } from "@simetra/core"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
-import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { resolveZodPath } from "@/lib/resolve-zod-path"
 
 /** Перевіряє, чи існує обʼєкт за kind/name у моделі */
@@ -19,6 +20,20 @@ function refExists(
   const key = KIND_TO_KEY[kind]
   const objects = model[key] as MetadataObject[]
   return objects.some((o) => o.name === name)
+}
+
+/** Знаходить регістр у моделі за ref */
+function findRegisterInModel(
+  model: ProjectModel,
+  ref: { kind: MetadataKind; name: string },
+): AccumulationRegister | InformationRegister | undefined {
+  if (ref.kind === 'AccumulationRegister') {
+    return model.accumulationRegisters.find((r) => r.name === ref.name)
+  }
+  if (ref.kind === 'InformationRegister') {
+    return model.informationRegisters.find((r) => r.name === ref.name)
+  }
+  return undefined
 }
 
 /** Збирає всі атрибути обʼєкта з усіх колекцій з path-міткою */
@@ -196,7 +211,45 @@ function validateSingleObject(
     }
   }
 
-  // 6. Warning: validations без movements не мають сенсу
+  // 6. Перевірка сумісності регістрів у posting.movements
+  if (
+    "posting" in obj &&
+    typeof obj.posting === "object" &&
+    obj.posting !== null
+  ) {
+    const posting = obj.posting as {
+      movements?: {
+        register: { kind: MetadataKind; name: string }
+        mappings: { dimensions: Record<string, string> }
+      }[]
+    }
+    if (posting.movements) {
+      for (const movement of posting.movements) {
+        const reg = findRegisterInModel(model, movement.register)
+        if (reg) {
+          const compat = isPostingCompatible(reg)
+          if (!compat.compatible) {
+            errors.push({
+              path: 'posting.movements',
+              message: `Регістр ${movement.register.kind}/${movement.register.name} не сумісний з проведенням: ${compat.reason}`,
+            })
+          }
+          // Перевірка неповних маппінгів dimensions
+          const missingDims = reg.dimensions.filter(
+            (d) => !movement.mappings.dimensions[d.name],
+          )
+          if (missingDims.length > 0) {
+            errors.push({
+              path: 'posting.movements',
+              message: `Рух до ${movement.register.name}: не заповнені dimensions: ${missingDims.map((d) => d.name).join(', ')}`,
+            })
+          }
+        }
+      }
+    }
+  }
+
+  // 7. Warning: validations без movements не мають сенсу
   if (
     "posting" in obj &&
     typeof obj.posting === "object" &&

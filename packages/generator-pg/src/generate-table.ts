@@ -28,6 +28,7 @@ import {
   attributeToColumn,
 } from "./type-mapping"
 import { generatePostingFunctions } from "./generate-posting"
+import { resolveColumnName, resolveStdColumnName } from "./column-naming"
 
 // Побудувати lookup: MetadataRef → qualified table name
 function buildRefTableLookup(
@@ -518,32 +519,6 @@ function generateTabularSection(
 }
 
 // ─── Indexes ────────────────────────────────────────────────
-
-// Визначити реальне ім'я колонки для атрибута (з урахуванням _id суфікса)
-function resolveColumnName(
-  attr: Attribute,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
-): string[] {
-  if (attr.type === "Ref" && attr.allowedTypes?.length) {
-    return [`${attr.name}_type`, `${attr.name}_id`]
-  }
-  if (attr.type === "Ref" && attr.ref) {
-    const isEnumRef = resolveEnumType(attr.ref) != null
-    return [isEnumRef ? attr.name : `${attr.name}_id`]
-  }
-  return [attr.name]
-}
-
-// Визначити реальне ім'я колонки для стандартного реквізиту
-function resolveStdColumnName(attr: StandardAttribute): string[] {
-  if (attr.type === "Ref" && attr.allowedTypes?.length) {
-    return [`${attr.name}_type`, `${attr.name}_id`]
-  }
-  if (attr.type === "Ref" && attr.ref) {
-    return [`${attr.name}`]
-  }
-  return [attr.name]
-}
 
 // Зібрати індекси для одного об'єкту метаданих
 function collectIndexes(

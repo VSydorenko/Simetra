@@ -15,6 +15,8 @@ export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
 export {
   mappingExpressionSchema,
   type MappingExpression,
+  conditionExpressionSchema,
+  type ConditionExpression,
   registerKindSchema,
   type RegisterKind,
   registerRefSchema,

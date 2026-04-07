@@ -16,62 +16,62 @@ Code review Phase 2b Posting Engine виявив 9 проблем у чотир�
 
 ### PROBLEM 1 — Column resolution mismatch (CRITICAL)
 
-- [ ] Екстрагувати `resolveColumnName` і `resolveStdColumnName` з `generate-table.ts` у shared `packages/generator-pg/src/column-naming.ts`
-- [ ] `expressionToSql` має приймати register metadata як параметр і резолвити Ref-атрибути:
+- [X] Екстрагувати `resolveColumnName` і `resolveStdColumnName` з `generate-table.ts` у shared `packages/generator-pg/src/column-naming.ts`
+- [X] `expressionToSql` має приймати register metadata як параметр і резолвити Ref-атрибути:
   - Single Ref (не enum) → `{name}_id`
   - Enum Ref → `{name}` (без суфікса)
   - Polymorphic Ref → throw error (не підтримується mapping grammar)
-- [ ] `generateMovementInsert` має резолвити column names через shared utility замість `toSnakeCase`
-- [ ] DELETE statements мають перевіряти polymorphic recorder:
+- [X] `generateMovementInsert` має резолвити column names через shared utility замість `toSnakeCase`
+- [X] DELETE statements мають перевіряти polymorphic recorder:
   - Single recorder → `WHERE recorder_id = p_doc_id`
   - Polymorphic recorder → `WHERE recorder_id_type = '{DocKind}.{DocName}' AND recorder_id_id = p_doc_id`
-- [ ] Використати shared utility і в `generate-table.ts` (index/view generation) замість локальних функцій
+- [X] Використати shared utility і в `generate-table.ts` (index/view generation) замість локальних функцій
 
 ### PROBLEM 2 — Hardcoded standard attribute columns (HIGH)
 
-- [ ] Замінити hardcoded масив `['period', 'recorder_id', 'line_number', 'active', 'movement_type']` на виклик `getStandardAttributes(register.kind, registerSettings)` з core
-- [ ] Побудувати `registerSettings` з register object: для IR — `periodicity`, `writeMode`, `recorderTypes`; для AR — `registerType`, `recorderTypes`
-- [ ] Маппити standard attributes через shared column-naming utility (для polymorphic recorder → `recorder_id_type` + `recorder_id_id`)
-- [ ] Адаптувати SELECT expressions per register kind:
+- [X] Замінити hardcoded масив `['period', 'recorder_id', 'line_number', 'active', 'movement_type']` на виклик `getStandardAttributes(register.kind, registerSettings)` з core
+- [X] Побудувати `registerSettings` з register object: для IR — `periodicity`, `writeMode`, `recorderTypes`; для AR — `registerType`, `recorderTypes`
+- [X] Маппити standard attributes через shared column-naming utility (для polymorphic recorder → `recorder_id_type` + `recorder_id_id`)
+- [X] Адаптувати SELECT expressions per register kind:
   - `period` → `d.date` (якщо register має period)
   - `recorder_id` → `d.id` (single) або `'{DocKind}.{DocName}'` + `d.id` (polymorphic)
   - `line_number` → `ts.line_number` (tabularSection source) або `1` (document source)
   - `active` → `TRUE`
   - `movement_type` → `mvtTypeExpr` (тільки для AccumulationRegister Balance)
-- [ ] InformationRegister ніколи не має отримувати `movement_type`
-- [ ] AccumulationRegister `registerType=Turnover` не має отримувати `movement_type`
+- [X] InformationRegister ніколи не має отримувати `movement_type`
+- [X] AccumulationRegister `registerType=Turnover` не має отримувати `movement_type`
 
 ### PROBLEM 3 — applyTo field ignored + register-aware check function (HIGH)
 
-- [ ] `generateCheckFunction` має адаптуватися до типу регістра:
+- [X] `generateCheckFunction` має адаптуватися до типу регістра:
   - AccumulationRegister Balance: `CASE WHEN movement_type = 'Receipt' THEN resource ELSE -resource END` (поточна логіка, правильна)
   - AccumulationRegister Turnover: `SUM(resource)` без CASE (немає movement_type колонки)
   - InformationRegister RecorderSubordinate: `SUM(resource)` без CASE
-- [ ] `applyTo` фільтр у check function — тільки для Balance регістрів (де існує movement_type):
+- [X] `applyTo` фільтр у check function — тільки для Balance регістрів (де існує movement_type):
   - `applyTo = "Both"` → без додаткового WHERE
   - `applyTo = "Receipt"` → `AND movement_type = 'Receipt'`
   - `applyTo = "Expense"` → `AND movement_type = 'Expense'`
-- [ ] Для регістрів без movement_type (Turnover, IR) — `applyTo` ігнорується (фільтрувати нема чим)
-- [ ] Validation loop (`SELECT DISTINCT`) має включати `applyTo` filter для Balance регістрів
-- [ ] NonNegativeBalance НЕ обмежується тільки Balance регістрами — це бізнес-перевірка рівня документа
-- [ ] Для NonNegativeBalance з non-numeric resource — generator має throw error
+- [X] Для регістрів без movement_type (Turnover, IR) — `applyTo` ігнорується (фільтрувати нема чим)
+- [X] Validation loop (`SELECT DISTINCT`) має включати `applyTo` filter для Balance регістрів
+- [X] NonNegativeBalance НЕ обмежується тільки Balance регістрами — це бізнес-перевірка рівня документа
+- [X] Для NonNegativeBalance з non-numeric resource — generator має throw error
 
 ### PROBLEM 4 — Condition field SQL injection (HIGH)
 
-- [ ] Додати `conditionExpressionSchema` в core — regex-based DSL:
+- [X] Додати `conditionExpressionSchema` в core — regex-based DSL:
   - Дозволено: `(doc|row).\w+`, оператори `=|!=|>|<|>=|<=`, літерали `'...'|number|true|false|null`, зв'язки `AND|OR`
   - Заборонено: SQL keywords, крапки з комою, коментарі, вкладені запити
-- [ ] `translateCondition` у generator має працювати через **програмний SQL-builder** з regex-matched частин, а **не через String.replace**
-- [ ] Generator додатково блокує SQL keywords як другий шар захисту: `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `EXEC`, `--`, `/*`, `;`, `UNION`
-- [ ] Structured AST — планувати як наступну фазу, не в scope цієї задачі
+- [X] `translateCondition` у generator має працювати через **програмний SQL-builder** з regex-matched частин, а **не через String.replace**
+- [X] Generator додатково блокує SQL keywords як другий шар захисту: `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `EXEC`, `--`, `/*`, `;`, `UNION`
+- [X] Structured AST — планувати як наступну фазу, не в scope цієї задачі
 
 ### PROBLEM 5 — Register posting compatibility (MEDIUM)
 
-- [ ] Створити `isPostingCompatible(register)` helper у `packages/core/src/posting-compatibility.ts`:
+- [X] Створити `isPostingCompatible(register)` helper у `packages/core/src/posting-compatibility.ts`:
   - AccumulationRegister → завжди compatible
   - InformationRegister `writeMode=RecorderSubordinate` → compatible
   - InformationRegister `writeMode=Independent` → incompatible (reason: no recorder lifecycle)
-- [ ] Enforcement на 4 рівнях:
+- [X] Enforcement на 4 рівнях:
   - `RegisterPickerDialog` — фільтрувати incompatible registers з дерева вибору
   - `use-model-validation.ts` — warning якщо posting.movements містить incompatible register
   - `ddl-store.ts` — blocking error перед генерацією
@@ -79,32 +79,32 @@ Code review Phase 2b Posting Engine виявив 9 проблем у чотир�
 
 ### PROBLEM 6 — Expression validation gaps + Save blocking (MEDIUM)
 
-- [ ] Екстрагувати `isExpressionInvalid` з `movement-constructor-dialog.tsx` у `apps/web/src/lib/expression-validation.ts`
-- [ ] Додати `validateExpressionFields(expr, source, doc, register)` — перевірка існування полів:
+- [X] Екстрагувати `isExpressionInvalid` з `movement-constructor-dialog.tsx` у `apps/web/src/lib/expression-validation.ts`
+- [X] Додати `validateExpressionFields(expr, source, doc, register)` — перевірка існування полів:
   - `doc.fieldName` → перевірити серед `getStandardAttributes("Document")` (без id) та `doc.attributes`
   - `row.fieldName` → перевірити серед `getTabularSectionStandardAttributes()` (без id) та `ts.attributes`
   - `sum(tsName.fieldName)` і `count(tsName)` → перевірити існування ТЧ
-- [ ] **Блокувати Save** якщо хоча б один mapping expression невалідний (зараз Save не блокується — тільки візуальна індикація)
-- [ ] Validation активується тільки для non-empty expressions (щоб не блокувати draft-стан)
+- [X] **Блокувати Save** якщо хоча б один mapping expression невалідний (зараз Save не блокується — тільки візуальна індикація)
+- [X] Validation активується тільки для non-empty expressions (щоб не блокувати draft-стан)
 
 ### PROBLEM 7 — Aggregate options missing standard TS fields (LOW)
 
-- [ ] `buildExpressionOptions` секція агрегатів має включати стандартні реквізити ТЧ (`line_number`) з `getTabularSectionStandardAttributes()`, а не лише `ts.attributes`
-- [ ] Skip `id` з standard TS attrs (не має сенсу як aggregate target)
+- [X] `buildExpressionOptions` секція агрегатів має включати стандартні реквізити ТЧ (`line_number`) з `getTabularSectionStandardAttributes()`, а не лише `ts.attributes`
+- [X] Skip `id` з standard TS attrs (не має сенсу як aggregate target)
 
 ### PROBLEM 8 — Термінологічна помилка (LOW)
 
-- [ ] Виправити "Turnovers" → "Turnover" у всіх місцях кодової бази та документації (core enum value: `z.enum(["Balance", "Turnover"])`)
+- [X] Виправити "Turnovers" → "Turnover" у всіх місцях кодової бази та документації (core enum value: `z.enum(["Balance", "Turnover"])`) — перевірено: кодова база вже використовує правильне значення "Turnover"; "_turnovers" у SQL view names є навмисною конвенцією іменування
 
 ### PROBLEM 9 — Architectural gaps: ddl-store + fail-fast (HIGH)
 
-- [ ] `ddl-store.ts` (`collectValidationErrors`) — додати blocking перевірки:
+- [X] `ddl-store.ts` (`collectValidationErrors`) — додати blocking перевірки:
   - Posting compatibility: IR з writeMode=Independent → blocking error
   - Incomplete mappings: всі NOT NULL dimensions регістру мають мати mapping → blocking error
   - Resource type для NonNegativeBalance: якщо resource не Numeric/Integer → blocking error
-- [ ] Generator — **fail-fast**, не skip/warn: якщо generator отримує incompatible register або невалідний expression → `throw Error`
-- [ ] `expressionToSql` fallback (рядок ~66): замінити `return expr` на throw з повідомленням про невідомий формат
-- [ ] `use-model-validation.ts` — warning для incomplete mappings (не blocking, бо draft-flow)
+- [X] Generator — **fail-fast**, не skip/warn: якщо generator отримує incompatible register або невалідний expression → `throw Error`
+- [X] `expressionToSql` fallback (рядок ~66): замінити `return expr` на throw з повідомленням про невідомий формат
+- [X] `use-model-validation.ts` — warning для incomplete mappings (не blocking, бо draft-flow)
 
 ---
 
@@ -299,15 +299,15 @@ SQL WHERE clause (побудований програмно, не інтерпо
 
 **Scope:** `packages/core/src/schemas/posting.ts`, новий `packages/core/src/posting-compatibility.ts`
 
-- [ ] Додати `conditionExpressionSchema` — regex-based DSL validation для condition field
-- [ ] Замінити `z.string().nullable().optional()` для condition на `conditionExpressionSchema.nullable().optional()`
-- [ ] Створити `isPostingCompatible(register)` у `packages/core/src/posting-compatibility.ts`:
+- [X] Додати `conditionExpressionSchema` — regex-based DSL validation для condition field
+- [X] Замінити `z.string().nullable().optional()` для condition на `conditionExpressionSchema.nullable().optional()`
+- [X] Створити `isPostingCompatible(register)` у `packages/core/src/posting-compatibility.ts`:
   - AccumulationRegister → compatible
   - InformationRegister `writeMode=RecorderSubordinate` → compatible
   - InformationRegister `writeMode=Independent` → incompatible (reason string)
-- [ ] Експортувати `isPostingCompatible` з `packages/core/src/index.ts`
-- [ ] Тести: condition validation (valid patterns, invalid/injection patterns), posting compatibility (IR independent → incompatible, IR recorder → compatible, AR both types → compatible)
-- [ ] `pnpm --filter @simetra/core test` — green
+- [X] Експортувати `isPostingCompatible` з `packages/core/src/index.ts`
+- [X] Тести: condition validation (valid patterns, invalid/injection patterns), posting compatibility (IR independent → incompatible, IR recorder → compatible, AR both types → compatible)
+- [X] `pnpm --filter @simetra/core test` — green
 
 ### Фаза 2: Generator fixes (CRITICAL + HIGH)
 
@@ -315,59 +315,59 @@ SQL WHERE clause (побудований програмно, не інтерпо
 
 #### 2.1. Shared column-naming utility (PROBLEM 1)
 
-- [ ] Екстрагувати `resolveColumnName` і `resolveStdColumnName` з `generate-table.ts` у `packages/generator-pg/src/column-naming.ts`
-- [ ] Оновити `generate-table.ts` — імпортувати з нового модуля замість локальних функцій
-- [ ] Адаптувати `expressionToSql`:
+- [X] Екстрагувати `resolveColumnName` і `resolveStdColumnName` з `generate-table.ts` у `packages/generator-pg/src/column-naming.ts`
+- [X] Оновити `generate-table.ts` — імпортувати з нового модуля замість локальних функцій
+- [X] Адаптувати `expressionToSql`:
   - Додати параметр `register: RegisterDef`
   - Для `doc.field` та `row.field` — резолвити target field через register metadata + shared utility
   - Для polymorphic Ref як mapping target → throw error
-- [ ] Адаптувати `generateMovementInsert` — column names через shared utility замість `toSnakeCase`
-- [ ] Адаптувати DELETE statements — перевірка polymorphic recorder:
+- [X] Адаптувати `generateMovementInsert` — column names через shared utility замість `toSnakeCase`
+- [X] Адаптувати DELETE statements — перевірка polymorphic recorder:
   - Single → `WHERE recorder_id = p_doc_id`
   - Polymorphic → `WHERE recorder_id_type = '{DocKind}.{DocName}' AND recorder_id_id = p_doc_id`
-- [ ] Замінити fallback `return expr` на throw з повідомленням
+- [X] Замінити fallback `return expr` на throw з повідомленням
 
 #### 2.2. Dynamic standard columns (PROBLEM 2)
 
-- [ ] Замінити hardcoded масив на `getStandardAttributes(register.kind, settings)` з core
-- [ ] Побудувати registerSettings з register object
-- [ ] Маппити standard attributes через shared column-naming utility
-- [ ] Адаптувати SELECT expressions per register kind (period, recorder_id, line_number, active, movement_type)
+- [X] Замінити hardcoded масив на `getStandardAttributes(register.kind, settings)` з core
+- [X] Побудувати registerSettings з register object
+- [X] Маппити standard attributes через shared column-naming utility
+- [X] Адаптувати SELECT expressions per register kind (period, recorder_id, line_number, active, movement_type)
 
 #### 2.3. Register-aware check function + applyTo (PROBLEM 3)
 
-- [ ] `generateCheckFunction` — різна SQL-структура per register type:
+- [X] `generateCheckFunction` — різна SQL-структура per register type:
   - AR Balance: `CASE WHEN movement_type = 'Receipt' THEN +res ELSE -res END`
   - AR Turnover: `SUM(resource)` без CASE WHEN
   - IR RecorderSubordinate: `SUM(resource)` без CASE WHEN
-- [ ] `applyTo` фільтр — тільки для Balance (де існує movement_type):
+- [X] `applyTo` фільтр — тільки для Balance (де існує movement_type):
   - Both → без WHERE; Receipt → `AND movement_type = 'Receipt'`; Expense → аналогічно
-- [ ] Для Turnover/IR — `applyTo` ігнорується
-- [ ] NonNegativeBalance з non-numeric resource → throw error
-- [ ] Validation loop — `applyTo` filter у `SELECT DISTINCT` query для Balance
+- [X] Для Turnover/IR — `applyTo` ігнорується
+- [X] NonNegativeBalance з non-numeric resource → throw error
+- [X] Validation loop — `applyTo` filter у `SELECT DISTINCT` query для Balance
 
 #### 2.4. Condition safety (PROBLEM 4, generator side)
 
-- [ ] Замінити `translateCondition` на програмний flow: `parseConditionTokens` → `buildConditionSql`
+- [X] Замінити `translateCondition` на програмний flow: `parseConditionTokens` → `buildConditionSql`
   - `parseConditionTokens`: regex match → масив структурованих tokens (left, op, right, combinator)
   - `buildConditionSql`: програмна побудова SQL з tokens + aliases (не String.replace)
-- [ ] Додати SQL keyword blocklist як другий шар захисту
-- [ ] Додати assert перед генерацією: `isPostingCompatible(register)` — throw якщо incompatible
+- [X] Додати SQL keyword blocklist як другий шар захисту
+- [X] Додати assert перед генерацією: `isPostingCompatible(register)` — throw якщо incompatible
 
 #### 2.5. Тести генератора
 
-- [ ] Golden test: AR.Balance з Ref dimension → INSERT має `warehouse_id` (не `warehouse`)
-- [ ] Golden test: polymorphic recorder → DELETE з `recorder_id_type` + `recorder_id_id`
-- [ ] Golden test: IR.RecorderSubordinate → correct standard columns (без `movement_type`)
-- [ ] Golden test: AR.Turnover → correct standard columns (без `movement_type`)
-- [ ] Test: check function AR.Balance — CASE WHEN movement_type
-- [ ] Test: check function AR.Turnover — SUM без CASE WHEN
-- [ ] Test: applyTo=Receipt → check function має `WHERE movement_type = 'Receipt'`
-- [ ] Test: applyTo=Expense → check function має `WHERE movement_type = 'Expense'`
-- [ ] Test: applyTo=Both → check function без movement_type filter
-- [ ] Test: invalid expression → throw error (не silent fallback)
-- [ ] Test: condition з SQL injection patterns → throw або block
-- [ ] `pnpm --filter @simetra/generator-pg test` — green
+- [X] Golden test: AR.Balance з Ref dimension → INSERT має `warehouse_id` (не `warehouse`)
+- [X] Golden test: polymorphic recorder → DELETE з `recorder_id_type` + `recorder_id_id`
+- [X] Golden test: IR.RecorderSubordinate → correct standard columns (без `movement_type`)
+- [X] Golden test: AR.Turnover → correct standard columns (без `movement_type`)
+- [X] Test: check function AR.Balance — CASE WHEN movement_type
+- [X] Test: check function AR.Turnover — SUM без CASE WHEN
+- [X] Test: applyTo=Receipt → check function має `WHERE movement_type = 'Receipt'`
+- [X] Test: applyTo=Expense → check function має `WHERE movement_type = 'Expense'`
+- [X] Test: applyTo=Both → check function без movement_type filter
+- [X] Test: invalid expression → throw error (не silent fallback)
+- [X] Test: condition з SQL injection patterns → throw або block
+- [X] `pnpm --filter @simetra/generator-pg test` — green
 
 ### Фаза 3: Web fixes
 
@@ -375,40 +375,40 @@ SQL WHERE clause (побудований програмно, не інтерпо
 
 #### 3.1. Register picker + model validation (PROBLEM 5)
 
-- [ ] `RegisterPickerDialog` — фільтрувати через `isPostingCompatible` з core (видалити incompatible з дерева)
-- [ ] `use-model-validation.ts` — додати warning якщо posting.movements містить incompatible register
-- [ ] `use-model-validation.ts` — додати warning для incomplete mappings (не blocking, draft-flow)
+- [X] `RegisterPickerDialog` — фільтрувати через `isPostingCompatible` з core (видалити incompatible з дерева)
+- [X] `use-model-validation.ts` — додати warning якщо posting.movements містить incompatible register
+- [X] `use-model-validation.ts` — додати warning для incomplete mappings (не blocking, draft-flow)
 
 #### 3.2. DDL store — blocking checks (PROBLEM 9)
 
-- [ ] `ddl-store.ts` (`collectValidationErrors`) — додати:
+- [X] `ddl-store.ts` (`collectValidationErrors`) — додати:
   - Posting compatibility check через `isPostingCompatible` → blocking error
   - Incomplete mappings: всі NOT NULL dimensions мають мати mapping → blocking error
   - Resource type для NonNegativeBalance: non-numeric resource → blocking error
 
 #### 3.3. Expression validation + Save blocking (PROBLEM 6)
 
-- [ ] Екстрагувати `isExpressionInvalid` з `movement-constructor-dialog.tsx` у `apps/web/src/lib/expression-validation.ts`
-- [ ] Додати `validateExpressionFields(expr, source, doc, register)` — перевірка існування полів у source (doc attrs, TS attrs, standard attrs)
-- [ ] Блокувати Save при невалідних expressions (зараз — тільки візуальна індикація)
-- [ ] Validation активується тільки для non-empty expressions
+- [X] Екстрагувати `isExpressionInvalid` з `movement-constructor-dialog.tsx` у `apps/web/src/lib/expression-validation.ts`
+- [X] Додати `validateExpressionFields(expr, source, doc, register)` — перевірка існування полів у source (doc attrs, TS attrs, standard attrs)
+- [X] Блокувати Save при невалідних expressions (зараз — тільки візуальна індикація)
+- [X] Validation активується тільки для non-empty expressions
 
 #### 3.4. Aggregate options (PROBLEM 7)
 
-- [ ] `buildExpressionOptions` — додати стандартні реквізити ТЧ з `getTabularSectionStandardAttributes()` до sum() опцій (skip `id`)
+- [X] `buildExpressionOptions` — додати стандартні реквізити ТЧ з `getTabularSectionStandardAttributes()` до sum() опцій (skip `id`)
 
 #### 3.5. Web тести
 
-- [ ] Test: `buildExpressionOptions` aggregate includes `sum(TsName.line_number)`
+- [X] Test: `buildExpressionOptions` aggregate includes `sum(TsName.line_number)`
 - [ ] Test: register picker excludes IR with writeMode=Independent
 - [ ] Test: expression validation blocks Save on invalid expression
-- [ ] `pnpm --filter web test` — green
+- [X] `pnpm --filter web test` — green
 
 ### Фаза 4: Terminology + Verification
 
-- [ ] Виправити "Turnovers" → "Turnover" у всіх місцях кодової бази та документації (PROBLEM 8)
-- [ ] `pnpm lint ; pnpm typecheck` — clean
-- [ ] `pnpm test` — all green
+- [X] Виправити "Turnovers" → "Turnover" у всіх місцях кодової бази та документації (PROBLEM 8) — перевірено, вже коректно
+- [X] `pnpm lint ; pnpm typecheck` — clean
+- [X] `pnpm test` — all green
 - [ ] Manual review: SQL output для golden fixtures має відповідати DDL
 
 ---
@@ -450,39 +450,39 @@ _Таблиця non-exhaustive — тести та файли імпортів �
 ## Definition of Done
 
 ### Generator correctness
-- [ ] Генерований SQL для AR.Balance з Ref-dimensions має правильні `_id` суфікси
-- [ ] Генерований SQL для polymorphic recorder має `recorder_id_type` + `recorder_id_id`
-- [ ] IR.RecorderSubordinate генерує правильний набір standard columns (без `movement_type`)
-- [ ] AR.Turnover генерує правильний набір standard columns (без `movement_type`)
-- [ ] Check function для AR.Balance використовує `CASE WHEN movement_type`
-- [ ] Check function для AR.Turnover використовує простий `SUM` (без CASE WHEN)
-- [ ] Check function для IR.RecorderSubordinate використовує простий `SUM` (без CASE WHEN)
-- [ ] Check function фільтрує за `applyTo` тільки для Balance (де є movement_type)
-- [ ] `expressionToSql` не має silent fallback — invalid expression → throw
-- [ ] Generator fail-fast: incompatible register або invalid input → throw Error
+- [X] Генерований SQL для AR.Balance з Ref-dimensions має правильні `_id` суфікси
+- [X] Генерований SQL для polymorphic recorder має `recorder_id_type` + `recorder_id_id`
+- [X] IR.RecorderSubordinate генерує правильний набір standard columns (без `movement_type`)
+- [X] AR.Turnover генерує правильний набір standard columns (без `movement_type`)
+- [X] Check function для AR.Balance використовує `CASE WHEN movement_type`
+- [X] Check function для AR.Turnover використовує простий `SUM` (без CASE WHEN)
+- [X] Check function для IR.RecorderSubordinate використовує простий `SUM` (без CASE WHEN)
+- [X] Check function фільтрує за `applyTo` тільки для Balance (де є movement_type)
+- [X] `expressionToSql` не має silent fallback — invalid expression → throw
+- [X] Generator fail-fast: incompatible register або invalid input → throw Error
 
 ### Security
-- [ ] Condition field має `conditionExpressionSchema` validation (regex DSL, не raw string)
-- [ ] `translateCondition` замінений на програмний SQL-builder (не String.replace)
-- [ ] SQL keyword blocklist як другий шар захисту
+- [X] Condition field має `conditionExpressionSchema` validation (regex DSL, не raw string)
+- [X] `translateCondition` замінений на програмний SQL-builder (не String.replace)
+- [X] SQL keyword blocklist як другий шар захисту
 
 ### Validation layers
-- [ ] Register picker не показує IR з `writeMode=Independent`
-- [ ] Model validation попереджає про incompatible registers в posting
-- [ ] Model validation попереджає про incomplete mappings
-- [ ] DDL store блокує генерацію для incompatible registers
-- [ ] DDL store блокує генерацію для incomplete mappings
-- [ ] DDL store блокує генерацію для NonNegativeBalance з non-numeric resource
+- [X] Register picker не показує IR з `writeMode=Independent`
+- [X] Model validation попереджає про incompatible registers в posting
+- [X] Model validation попереджає про incomplete mappings
+- [X] DDL store блокує генерацію для incompatible registers
+- [X] DDL store блокує генерацію для incomplete mappings
+- [X] DDL store блокує генерацію для NonNegativeBalance з non-numeric resource
 
 ### UI
-- [ ] `buildExpressionOptions` агрегати включають стандартні TS fields (`line_number`)
-- [ ] Expression validation перевіряє існування полів у source
-- [ ] Expression validation блокує Save при невалідних expressions
+- [X] `buildExpressionOptions` агрегати включають стандартні TS fields (`line_number`)
+- [X] Expression validation перевіряє існування полів у source
+- [X] Expression validation блокує Save при невалідних expressions
 
 ### Terminology
-- [ ] "Turnovers" виправлено на "Turnover" у всій кодовій базі та документації
+- [X] "Turnovers" виправлено на "Turnover" у всій кодовій базі та документації
 
 ### Quality gate
 - [ ] Всі golden тести генератора оновлені під нову поведінку
-- [ ] `pnpm test` — all green
-- [ ] `pnpm lint ; pnpm typecheck` — clean
+- [X] `pnpm test` — all green
+- [X] `pnpm lint ; pnpm typecheck` — clean

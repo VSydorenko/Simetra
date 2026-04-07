@@ -26,6 +26,121 @@ export const mappingExpressionSchema = z
 
 export type MappingExpression = z.infer<typeof mappingExpressionSchema>
 
+/**
+ * Condition DSL — regex-based валідація умови для фільтрації рухів.
+ *
+ * Дозволені токени:
+ * - Посилання: doc.field_name, row.field_name
+ * - Оператори: =, !=, >=, <=, >, <
+ * - Літерали: 'строка', число, true, false, null
+ * - Зв'язки: AND, OR
+ * - Круглі дужки для групування
+ */
+
+// Патерн для окремих дозволених токенів
+const CONDITION_TOKEN_PATTERN =
+  /(?:(?:doc|row)\.\w+|!=|>=|<=|[=><]|'[^']*'|-?\d+(?:\.\d+)?|true|false|null|AND|OR|[()])/g
+
+// Blocklist SQL keywords — захист від ін'єкцій
+const SQL_KEYWORDS_BLOCKLIST =
+  /\b(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC|UNION|SELECT)\b/i
+
+/**
+ * Видалити рядкові літерали ('...') з виразу перед перевіркою blocklist,
+ * щоб doc.status = 'SELECT' не блокувався помилково.
+ */
+function stripStringLiterals(val: string): string {
+  return val.replace(/'[^']*'/g, "''")
+}
+
+export const conditionExpressionSchema = z.string().superRefine((val, ctx) => {
+  // Непорожній рядок після trim
+  if (val.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Condition must not be empty or whitespace-only",
+    })
+    return
+  }
+
+  // Заборонені символи: крапка з комою, коментарі
+  if (/;/.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Condition must not contain semicolons",
+    })
+    return
+  }
+
+  if (/--/.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Condition must not contain line comments (--)",
+    })
+    return
+  }
+
+  if (/\/\*/.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Condition must not contain block comments (/* */)",
+    })
+    return
+  }
+
+  // Blocklist SQL keywords — перевіряємо тільки поза рядковими літералами
+  const withoutLiterals = stripStringLiterals(val)
+  if (SQL_KEYWORDS_BLOCKLIST.test(withoutLiterals)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Condition contains forbidden SQL keyword",
+    })
+    return
+  }
+
+  // Токенізуємо — перевіряємо, що весь рядок покритий дозволеними токенами
+  const stripped = val.replace(CONDITION_TOKEN_PATTERN, "").replace(/\s/g, "")
+  if (stripped.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Condition contains invalid tokens: "${stripped}"`,
+    })
+    return
+  }
+
+  // Перевірка балансу дужок
+  let depth = 0
+  for (const ch of val) {
+    if (ch === "(") depth++
+    if (ch === ")") depth--
+    if (depth < 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Condition has unbalanced parentheses",
+      })
+      return
+    }
+  }
+  if (depth !== 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Condition has unbalanced parentheses",
+    })
+    return
+  }
+
+  // Мінімальна перевірка граматики: повинен бути хоча б один term (doc.* або row.*)
+  if (!/(?:doc|row)\.\w+/.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "Condition must contain at least one field reference (doc.field or row.field)",
+    })
+  }
+})
+
+export type ConditionExpression = z.infer<typeof conditionExpressionSchema>
+
 /** Kinds, на які може посилатися posting (тільки регістри) */
 export const registerKindSchema = z.enum([
   "InformationRegister",
@@ -91,7 +206,7 @@ export const postingMovementSchema = z
     register: registerRefSchema,
     movementType: movementTypeSchema,
     source: movementSourceSchema,
-    condition: z.string().nullable().optional(),
+    condition: conditionExpressionSchema.nullable().optional(),
     mappings: movementMappingSetSchema,
   })
   .superRefine((movement, ctx) => {

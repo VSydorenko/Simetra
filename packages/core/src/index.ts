@@ -14,3 +14,7 @@ export {
   type Reference,
   type ReferenceKind,
 } from "./find-references"
+export {
+  isPostingCompatible,
+  type PostingCompatibilityResult,
+} from "./posting-compatibility"

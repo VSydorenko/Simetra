@@ -10,6 +10,7 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Button } from "@workspace/ui/components/button"
 import type { MetadataKind, MetadataRef } from "@simetra/core"
+import { isPostingCompatible } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { computeKindCheckedStates } from "@/lib/kind-checked-states"
@@ -79,6 +80,14 @@ function RegisterPickerBody({
   const { t } = useTranslation()
   const model = useMetadataStore((s) => s.model)
 
+  // Фільтруємо несумісні регістри щоб вони не зʼявлялись у picker
+  const filteredModel = useMemo(() => ({
+    ...model,
+    informationRegisters: model.informationRegisters.filter(
+      (ir) => isPostingCompatible(ir).compatible,
+    ),
+  }), [model])
+
   // Local draft — починаємо з existingRefs (pre-checked)
   const [selectedRefs, setSelectedRefs] = useState<MetadataRef[]>(() =>
     structuredClone(existingRefs)
@@ -94,8 +103,8 @@ function RegisterPickerBody({
   }, [selectedRefs])
 
   const kindCheckedStates = useMemo(
-    () => computeKindCheckedStates(model, REGISTER_KINDS, selectedRefs),
-    [model, selectedRefs]
+    () => computeKindCheckedStates(filteredModel, REGISTER_KINDS, selectedRefs),
+    [filteredModel, selectedRefs]
   )
 
   const handleSelectTarget = useCallback((ref: MetadataRef) => {
@@ -113,7 +122,7 @@ function RegisterPickerBody({
   const handleToggleKindGroup = useCallback(
     (kind: MetadataKind) => {
       const modelKey = KIND_TO_KEY[kind]
-      const objects = (model[modelKey] as { name: string }[]) ?? []
+      const objects = (filteredModel[modelKey] as { name: string }[]) ?? []
       const kindTargets: MetadataRef[] = objects.map((obj) => ({
         kind,
         name: obj.name,
@@ -137,7 +146,7 @@ function RegisterPickerBody({
         return [...prev, ...toAdd]
       })
     },
-    [model]
+    [filteredModel]
   )
 
   const isDirty = useMemo(() => {
@@ -163,7 +172,7 @@ function RegisterPickerBody({
       </DialogHeader>
 
       <MetadataObjectTreeSelector
-        model={model}
+        model={filteredModel}
         allowedKinds={REGISTER_KINDS}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
