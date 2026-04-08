@@ -940,7 +940,7 @@ packages/
 ├── @simetra/cli                 ← CLI обгортка (citty) над core + generators (Phase 2a)
 ├── @simetra/ui                  ← Domain-компоненти: CatalogCombobox, PostButton, DataTable (Phase 3)
 ├── @simetra/form-runtime        ← JSON → React form renderer (Phase 3)
-├── @simetra/app-runtime         ← JSON → full app renderer (Phase 4)
+├── @simetra/app-runtime         ← Unified runtime: fallback shell (Phase 3) + configured mode (Phase 4)
 ├── @simetra/generator-react     ← Form codegen (.tsx eject) (Phase 4)
 └── @simetra/generator-react-app ← Full app codegen (Phase 5)
 apps/
@@ -1355,7 +1355,7 @@ React-компонент, який зчитує `form.json` + `meta.json` і р�
 | Алгоритм автоформи | `@simetra/core` | Phase 3 |
 | Runtime-рендерер | `@simetra/form-runtime` | Phase 3 |
 | Data provider contract + PostgREST adapter | `@simetra/data-provider`, `@simetra/data-provider-postgrest` | Phase 3 |
-| Dev preview shell | `apps/runtime` | Phase 3 |
+| Dev preview shell (unified app-runtime, fallback mode) | `@simetra/app-runtime` + `apps/runtime` | Phase 3 |
 | Бібліотека доменних компонентів | `@simetra/form-runtime` (domain components) | Phase 3 |
 | Codegen React | `@simetra/generator-react` | Phase 4 |
 | Візуальний конструктор форм | `apps/web` | Phase 4 |
@@ -1544,9 +1544,9 @@ exported-app/
 | Крок | Пакет | Фаза |
 |---|---|---|
 | Zod-схеми для application.meta.json | `@simetra/core` | Phase 4 |
-| Shell layouts (SidebarWithHeader) | `@simetra/ui` | Phase 4 |
-| Runtime app renderer | `@simetra/app-runtime` | Phase 4 |
-| Dashboard widgets (RecentDocuments, RegisterBalance, Counter, QuickLinks) | `@simetra/ui` | Phase 4 |
+| Configured shell layouts (TopNavWithTabs, MinimalSidebar) | `@simetra/app-runtime` | Phase 4 |
+| Subsystem routing + configured mode | `@simetra/app-runtime` | Phase 4 |
+| Dashboard widgets (RecentDocuments, RegisterBalance, Counter, QuickLinks) | `@simetra/app-runtime` | Phase 4 |
 | Codegen React App | `@simetra/generator-react-app` | Phase 5 |
 | Generated .NET/Node.js API | `@simetra/generator-dotnet` / `generator-node` | Phase 5 |
 

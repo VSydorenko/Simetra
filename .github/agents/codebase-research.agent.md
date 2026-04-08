@@ -3,6 +3,7 @@ description: "Fast read-only codebase exploration for Simetra. Use this agent IN
 tools: [read/problems, read/readFile, agent, search/codebase, search/fileSearch, search/listDirectory, search/searchResults, search/textSearch, search/usages, web, todo]
 model: GPT-5.4 (copilot)
 agents: []
+user-invocable: false
 ---
 
 ## User Input
