@@ -62,7 +62,7 @@ Fetch metadata працює fail-fast: помилка `index.json` або буд
 | `VITE_SIMETRA_METADATA_PATH` | Browser runtime (`apps/runtime/src/config.ts`) | required | HTTP base path для fetch metadata, типовий value: `/metadata` |
 | `VITE_SIMETRA_DATA_PROVIDER` | Browser runtime | optional | Тип provider: `mock` за замовчуванням або `postgrest` |
 | `VITE_SIMETRA_API_URL` | Browser runtime | required для `postgrest` | Base URL PostgREST / Supabase REST API |
-| `VITE_SIMETRA_ANON_KEY` | Browser runtime | optional | Anon key для auth header у PostgREST/Supabase сценарії |
+| `VITE_SIMETRA_ANON_KEY` | Browser runtime | optional | Supabase project publishable key або legacy anon key для auth header у PostgREST/Supabase сценарії. Account token з dashboard/account/tokens не підходить |
 
 Різниця між двома metadata env принципова:
 
@@ -88,6 +88,8 @@ Runtime створює provider на bootstrap і далі працює тіль
 Якщо `VITE_SIMETRA_DATA_PROVIDER=postgrest`, runtime створює `PostgRestDataProvider`.
 
 - `VITE_SIMETRA_API_URL` стає обов'язковим.
+- `VITE_SIMETRA_ANON_KEY` для Supabase має бути саме project publishable key або legacy anon key з `Project Settings -> API Keys`.
+- Personal account token з `dashboard/account/tokens` не підходить для browser запитів до `/rest/v1` і приводить до `401 Unauthorized`.
 - Адаптер працює через generic `fetch`, без прив'язки до окремого SDK.
 - `MetadataRef` мапиться на physical table names через naming helpers з generator/core stack.
 - Runtime продовжує читати metadata локально або через Vite host, але records читає і змінює через HTTP API.

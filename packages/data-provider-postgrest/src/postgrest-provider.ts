@@ -12,7 +12,10 @@ import { tableName, toSnakeCase } from '@simetra/generator-pg'
 export interface PostgRestConfig {
   /** PostgREST base URL, наприклад http://localhost:3000 */
   url: string
-  /** Supabase anon key (опціонально, для auth header) */
+  /**
+   * Supabase project publishable key або legacy anon key.
+   * Account token з dashboard/account/tokens тут не підходить.
+   */
   anonKey?: string
   /** SQL table prefix (наприклад "app_"), передається в tableName() */
   tablePrefix?: string
