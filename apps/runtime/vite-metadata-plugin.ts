@@ -6,8 +6,8 @@ import type { Plugin } from 'vite'
  * Vite plugin що проєктує каталог metadata як static assets.
  * Автоматично генерує index.json зі списком усіх .json файлів.
  */
-export function metadataPlugin(metadataDir: string): Plugin {
-  const resolvedDir = path.resolve(metadataDir)
+export function metadataPlugin(metadataDir?: string): Plugin {
+  const resolvedDir = metadataDir ? path.resolve(metadataDir) : null
 
   function collectJsonFiles(dir: string, prefix = ''): string[] {
     if (!fs.existsSync(dir)) return []
@@ -30,6 +30,20 @@ export function metadataPlugin(metadataDir: string): Plugin {
     name: 'simetra-metadata',
     configureServer(server) {
       server.middlewares.use('/metadata', (req, res, next) => {
+        if (!resolvedDir) {
+          res.statusCode = 500
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+          res.end('Environment variable SIMETRA_METADATA_PATH is not set')
+          return
+        }
+
+        if (!fs.existsSync(resolvedDir)) {
+          res.statusCode = 500
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+          res.end(`Metadata directory does not exist: ${resolvedDir}`)
+          return
+        }
+
         const urlPath = req.url?.split('?')[0] ?? '/'
 
         // index.json — динамічно згенерований список файлів

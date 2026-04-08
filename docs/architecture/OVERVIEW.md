@@ -12,7 +12,7 @@ Simetra — open-source візуальний конфігуратор бізне
 
 ## 2. Монорепо структура
 
-Поточна структура монорепо зосереджена на web SPA, core-моделі, UI kit, генераторах, CLI і наборі архітектурної документації.
+Поточна структура монорепо охоплює configurator (`apps/web`), Phase 3 runtime preview, core-модель, UI kit, генератори, CLI і набір архітектурної документації.
 
 ### apps/web
 
@@ -26,13 +26,44 @@ Simetra — open-source візуальний конфігуратор бізне
 - `src/i18n` — ініціалізація локалізації й ресурси `uk`/`en`.
 - `src/lib` — похідні утиліти UI-рівня, що працюють поверх `@simetra/core`.
 
+### apps/runtime
+
+- thin Vite host для Phase 3 runtime preview.
+- Підключає `metadataPlugin()` і проєктує явно заданий каталог metadata під HTTP base path `/metadata`.
+- Не містить власного shell або form-logic: браузерний bootstrap лише читає env, завантажує metadata read-only, створює `DataProvider` і монтує `@simetra/app-runtime`.
+- Fallback на `temp/metadata` відсутній; filesystem path до metadata має бути заданий явно через `SIMETRA_METADATA_PATH`, а browser base URL через `VITE_SIMETRA_METADATA_PATH`.
+
 ### packages/core/src
 
 - `schemas` — Zod-схеми всіх типів метаданих, `Project`, `ProjectModel`, reference model, `FormSchema` (Phase 3).
 - `serialization.ts` — canonical JSON serializer, порядок ключів і `$schema` URL helpers.
 - `metadata-io.ts` — shared metadata IO layer: pure parsing і model building з `Map<string, string>` (Phase 3). DRY: один parser/validator для конфігуратора, CLI і runtime.
+- `autoform.ts` — генерація стандартних `ItemForm`/`ListForm` і `resolveForm()` з правилом explicit-over-auto.
 - `find-references.ts` — пошук міжоб'єктних посилань у `ProjectModel`.
 - `index.ts` — публічний barrel export для UI та тестів.
+
+### packages/app-runtime/src
+
+- unified runtime library для shell, routing, navigation і page composition.
+- `simetra-app.tsx` збирає root layout, providers і browser router.
+- `router-builder.tsx` задає поточні Phase 3 маршрути без subsystem filtering.
+- `pages/` містить Home, List, Item, Constants і NotFound сторінки.
+
+### packages/form-runtime/src
+
+- React-бібліотека рендерингу runtime-форм поверх `ProjectModel` і `DataProvider`.
+- `MetadataProvider` і `DataProviderProvider` інжектять metadata model та runtime data access у дерево компонентів.
+- `ItemFormRenderer`, `ListRenderer`, `ConstantsForm` і field-level renderers реалізують відображення explicit form або autoform model.
+
+### packages/data-provider/src
+
+- canonical data-access contract для runtime CRUD, ref lookups, constants і posting actions.
+- Містить `DataProvider` interface і `InMemoryDataProvider` як mock/default adapter для dev preview, тестів і isolated runtime сценаріїв.
+
+### packages/data-provider-postgrest/src
+
+- адаптер `PostgRestDataProvider` для PostgREST/Supabase-compatible HTTP API.
+- Мапить `MetadataRef` на physical table names через `@simetra/generator-pg` і реалізує той самий `DataProvider` contract, що й mock adapter.
 
 ### packages/ui/src
 
@@ -66,7 +97,14 @@ Simetra — open-source візуальний конфігуратор бізне
 - `OVERVIEW.md` — коротка карта поточної архітектури.
 - Тематичні документи цього розділу деталізують state, UI, storage і рішення без дублювання коду.
 
-Генератори (`generator-api`, `generator-pg`), CLI з командами `generate` та `apply`, posting SQL generation і schema diff — реалізовані повністю.
+Boundary Phase 3 runtime такий:
+
+- `apps/runtime` — thin host і Vite dev server integration.
+- `@simetra/app-runtime` — shell, routing, navigation, pages.
+- `@simetra/form-runtime` — rendering і runtime interaction з формами.
+- `@simetra/data-provider` / `@simetra/data-provider-postgrest` — data-access contract та adapters.
+
+Генератори (`generator-api`, `generator-pg`), CLI з командами `generate` та `apply`, posting SQL generation, schema diff і Phase 3 runtime preview — реалізовані в репозиторії.
 
 Ключові файли: [../../apps/web/src/components/layout/app-shell.tsx](../../apps/web/src/components/layout/app-shell.tsx), [../../apps/web/src/stores/metadata-store.ts](../../apps/web/src/stores/metadata-store.ts), [../../apps/web/src/storage/storage-provider.ts](../../apps/web/src/storage/storage-provider.ts), [../../packages/core/src/schemas/project-model.ts](../../packages/core/src/schemas/project-model.ts), [../../packages/core/src/serialization.ts](../../packages/core/src/serialization.ts)
 
@@ -115,6 +153,17 @@ Simetra — open-source візуальний конфігуратор бізне
 | Tables | @tanstack/react-table v8 |
 | Command palette | cmdk |
 | Hotkeys | react-hotkeys-hook |
+
+### Runtime layer
+
+| Компонент | Поточний стек |
+|-----------|---------------|
+| Host | `apps/runtime` + Vite 8 |
+| Shell / routing | `@simetra/app-runtime` + React Router 7 |
+| Form rendering | `@simetra/form-runtime` + React Hook Form |
+| Data access | `@simetra/data-provider` contract |
+| Default provider | `InMemoryDataProvider` |
+| Optional provider | `@simetra/data-provider-postgrest` |
 
 ### Core layer
 
@@ -233,6 +282,7 @@ SQL Preview відкривається як вкладка в центральн
 - `ui-components.md` — component hierarchy, tree layer, window system, dialogs.
 - `storage-and-persistence.md` — storage provider, filesystem flows, IndexedDB persistence.
 - `metadata-model.md` — `ProjectModel`, reference model, validation boundaries, serializer contract.
+- `runtime-architecture.md` — Phase 3 runtime host, metadata loading, env contract, data providers і form resolution.
 - `patterns-and-decisions.md` — стабільні архітектурні рішення й повторно вживані патерни.
 
 ## 11. Roadmap
@@ -244,6 +294,7 @@ SQL Preview відкривається як вкладка в центральн
 | Phase 1 closure | Дошліфування поточного web configurator: документація, UX gaps, перевірки, завершення архітектурного набору документів | roadmap |
 | Phase 2a | Генерація PostgreSQL DDL, SQL Preview, CLI | implemented |
 | Phase 2b-c | Posting engine (Zod-схеми, movements editor, SQL generation), deployment flow (manual apply, CLI apply, schema diff) | implemented |
-| Phase 3 | Form Runtime & Dev Preview: `@simetra/form-runtime` (React-бібліотека рендерингу форм), `@simetra/data-provider` (абстрактний data-access contract), `@simetra/data-provider-postgrest` (PostgREST adapter), `apps/runtime` (dev preview shell). Core: Zod-схеми forms, shared metadata IO layer, autoform алгоритм, `resolveForm()` | roadmap |
+| Phase 3 | Runtime preview і runtime libraries: `@simetra/app-runtime`, `@simetra/form-runtime`, `@simetra/data-provider`, `@simetra/data-provider-postgrest`, `apps/runtime`. Core: Zod-схеми forms, shared metadata IO layer, autoform алгоритм, `resolveForm()` | implemented |
+| Phase 4 | Application-level runtime orchestration поверх Phase 3: `application.meta.json`, subsystem-based routing/navigation filtering, richer application config і deployment-specific hosts | roadmap |
 
 Усі інші пакети, рантайми й deployment targets мають з'являтися в overview тільки після появи реального коду в репозиторії.

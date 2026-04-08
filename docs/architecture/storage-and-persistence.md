@@ -49,7 +49,7 @@ Storage/persistence layer у Simetra розв'язує три різні зад�
 
 ## Поточна реалізація: WebStorage
 
-Поточний provider один: [../../apps/web/src/storage/web-storage.ts](../../apps/web/src/storage/web-storage.ts). Інших runtime-провайдерів у репозиторії немає.
+Поточний storage provider для configurator один: [../../apps/web/src/storage/web-storage.ts](../../apps/web/src/storage/web-storage.ts). Окремо від нього в репозиторії вже існують Phase 3 runtime data providers (`@simetra/data-provider`, `@simetra/data-provider-postgrest`), але вони працюють з бізнес-записами, а не з metadata storage contract.
 
 ### Поточна поведінка
 
@@ -387,6 +387,7 @@ Import/export не залежать від File System Access API і тому є
 - canonical serializer у core;
 - directory save/open через File System Access API;
 - ZIP import/export fallback;
+- runtime dev preview читає metadata read-only через окремий HTTP host і не має власного metadata write-path;
 - session і drafts в IndexedDB;
 - recovery UI через `WelcomeScreen` і `RecoveryBanner`.
 
@@ -402,5 +403,6 @@ Import/export не залежать від File System Access API і тому є
 - [state-management.md](./state-management.md)
 - [ui-components.md](./ui-components.md)
 - [metadata-model.md](./metadata-model.md)
+- [runtime-architecture.md](./runtime-architecture.md)
 - [patterns-and-decisions.md](./patterns-and-decisions.md)
 - [../BRD-metadata-configurator.md](../BRD-metadata-configurator.md)

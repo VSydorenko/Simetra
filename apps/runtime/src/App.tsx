@@ -12,6 +12,18 @@ import {
   SIMETRA_DATA_PROVIDER,
 } from './config'
 
+function getRuntimeConfigError(): string | null {
+  if (!SIMETRA_METADATA_PATH) {
+    return 'Не задано env-параметр VITE_SIMETRA_METADATA_PATH для browser runtime'
+  }
+
+  if (SIMETRA_DATA_PROVIDER === 'postgrest' && !SIMETRA_API_URL) {
+    return 'Не задано env-параметр VITE_SIMETRA_API_URL для PostgREST provider'
+  }
+
+  return null
+}
+
 /** Завантажити metadata files через HTTP */
 async function loadMetadata(basePath: string): Promise<ProjectModel> {
   // Завантажуємо index.json з переліком файлів
@@ -54,19 +66,29 @@ export function App() {
   const [model, setModel] = useState<ProjectModel | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [dataProvider] = useState<DataProvider>(() => createDataProvider())
+  const configError = getRuntimeConfigError()
 
   useEffect(() => {
-    loadMetadata(SIMETRA_METADATA_PATH)
+    if (configError) {
+      return
+    }
+
+    const metadataBasePath = SIMETRA_METADATA_PATH
+    if (!metadataBasePath) {
+      return
+    }
+
+    loadMetadata(metadataBasePath)
       .then(setModel)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-  }, [])
+  }, [configError])
 
-  if (error) {
+  if (configError || error) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
           <h1 className="text-xl font-bold text-destructive">Помилка завантаження</h1>
-          <p className="mt-2 text-muted-foreground">{error}</p>
+          <p className="mt-2 text-muted-foreground">{configError ?? error}</p>
         </div>
       </div>
     )
