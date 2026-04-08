@@ -50,7 +50,7 @@ function createModelWith2Catalogs(): ProjectModel {
       {
         kind: "Enumeration",
         name: "PriceTypes",
-        values: [{ name: "retail" }, { name: "wholesale" }],
+        values: [{ name: "Retail" }, { name: "Wholesale" }],
       },
     ],
   })

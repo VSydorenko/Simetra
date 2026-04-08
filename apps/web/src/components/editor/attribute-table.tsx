@@ -29,7 +29,13 @@ import {
   ArrowUp01Icon,
   ArrowDown01Icon,
 } from "@hugeicons/core-free-icons"
-import type { Attribute, MetadataKind } from "@simetra/core"
+import {
+  NUMERIC_PRECISION,
+  NUMERIC_SCALE,
+  STRING_LENGTH,
+  type Attribute,
+  type MetadataKind,
+} from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useUiStore } from "@/stores/ui-store"
 import { useFieldUpdate, type FieldRole } from "@/hooks/use-field-update"
@@ -88,6 +94,9 @@ export function AttributeTable({
       indexed: false,
       unique: false,
       defaultValue: null,
+      ...(field === "resources"
+        ? { precision: NUMERIC_PRECISION, scale: NUMERIC_SCALE }
+        : { length: STRING_LENGTH }),
     }
 
     if (tabularSectionName) {
@@ -191,9 +200,9 @@ export function AttributeTable({
   /** Зберігає зміни типу через відповідний store action */
   const handleTypeUpdate = useCallback(
     (updates: Partial<Attribute>) => {
-      if (!editingTypeAttr) return
+      if (!editingTypeAttr) return null
       const role: FieldRole = tabularSectionName ? "tabularSection" : field
-      dispatchFieldUpdate(
+      return dispatchFieldUpdate(
         {
           kind,
           objectName,

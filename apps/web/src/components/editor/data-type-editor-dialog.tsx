@@ -20,6 +20,9 @@ import {
 } from "@workspace/ui/components/tooltip"
 import {
   referenceableKindSchema,
+  NUMERIC_PRECISION,
+  NUMERIC_SCALE,
+  STRING_LENGTH,
   type Attribute,
   type FieldType,
   type ProjectModel,
@@ -27,6 +30,7 @@ import {
 } from "@simetra/core"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { MetadataObjectTreeSelector } from "@/components/editor/metadata-object-tree-selector"
+import type { ValidationError } from "@/stores/metadata-store"
 
 const REFERENCEABLE_KINDS = referenceableKindSchema.options
 
@@ -53,7 +57,7 @@ interface DataTypeEditorDialogProps {
   onOpenChange: (open: boolean) => void
   attribute: Attribute
   model: ProjectModel
-  onSave: (updates: Partial<Attribute>) => void
+  onSave: (updates: Partial<Attribute>) => ValidationError[] | null
 }
 
 // --- Утиліти ---
@@ -75,11 +79,14 @@ function cleanupDraftForType(draft: TypeDraft): TypeDraft {
   const cleaned: TypeDraft = { ...draft }
 
   if (cleaned.type === "String") {
+    cleaned.length ??= STRING_LENGTH
     cleaned.precision = undefined
     cleaned.scale = undefined
     cleaned.ref = undefined
     cleaned.allowedTypes = undefined
   } else if (cleaned.type === "Numeric") {
+    cleaned.precision ??= NUMERIC_PRECISION
+    cleaned.scale ??= NUMERIC_SCALE
     cleaned.length = undefined
     cleaned.ref = undefined
     cleaned.allowedTypes = undefined
@@ -152,7 +159,7 @@ function DataTypeEditorBody({
 }: {
   attribute: Attribute
   model: ProjectModel
-  onSave: (updates: Partial<Attribute>) => void
+  onSave: (updates: Partial<Attribute>) => ValidationError[] | null
   onCancel: () => void
 }) {
   const { t } = useTranslation()
@@ -174,12 +181,39 @@ function DataTypeEditorBody({
 
   // Пошук
   const [searchQuery, setSearchQuery] = useState("")
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // isDirty — порівняння draft зі snapshot
   const isDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(snapshot),
     [draft, snapshot]
   )
+
+  const typeValidationError = useMemo(() => {
+    if (draft.type === "String" && draft.length == null) {
+      return t("validation.field.stringLengthRequired", {
+        defaultValue: STRING_LENGTH,
+      })
+    }
+    if (draft.type === "Numeric" && draft.precision == null) {
+      return t("validation.field.numericPrecisionRequired", {
+        defaultValue: NUMERIC_PRECISION,
+      })
+    }
+    if (draft.type === "Numeric" && draft.scale == null) {
+      return t("validation.field.numericScaleRequired", {
+        defaultValue: NUMERIC_SCALE,
+      })
+    }
+    if (
+      draft.type === "Ref" &&
+      !draft.ref &&
+      !(draft.allowedTypes && draft.allowedTypes.length > 0)
+    ) {
+      return t("validation.field.refTargetRequired")
+    }
+    return null
+  }, [draft, t])
 
   // --- Обрані вузли: визначаються з draft ---
 
@@ -238,6 +272,7 @@ function DataTypeEditorBody({
           allowedTypes: undefined,
         })
       )
+      setSaveError(null)
     },
     [compoundEnabled]
   )
@@ -277,6 +312,7 @@ function DataTypeEditorBody({
           })
         )
       }
+      setSaveError(null)
     },
     [compoundEnabled]
   )
@@ -332,6 +368,7 @@ function DataTypeEditorBody({
 
   const handleCompoundToggle = useCallback((checked: boolean) => {
     setCompoundEnabled(checked)
+    setSaveError(null)
 
     if (checked) {
       // single → compound: якщо обрано single ref — перенести в allowedTypes
@@ -375,7 +412,7 @@ function DataTypeEditorBody({
   // --- Save ---
 
   const handleSave = useCallback(() => {
-    onSave({
+    const result = onSave({
       type: draft.type,
       ref: draft.ref,
       allowedTypes: draft.allowedTypes,
@@ -383,8 +420,13 @@ function DataTypeEditorBody({
       precision: draft.precision,
       scale: draft.scale,
     })
+    if (result) {
+      setSaveError(result[0]?.message ?? t("validation.saveFieldTypeFailed"))
+      return
+    }
+    setSaveError(null)
     onCancel()
-  }, [draft, onSave, onCancel])
+  }, [draft, onSave, onCancel, t])
 
   // --- Type params display ---
 
@@ -471,7 +513,9 @@ function DataTypeEditorBody({
         )
       }
       return (
-        <p className="text-xs text-muted-foreground">{t("fieldType.Ref")}</p>
+        <p className="text-xs text-destructive">
+          {t("validation.field.refTargetRequiredShort")}
+        </p>
       )
     }
 
@@ -549,14 +593,24 @@ function DataTypeEditorBody({
         <Separator />
         <p className="text-xs font-medium">{t("dataTypeEditor.typeParams")}</p>
         {typeParamsSection}
+        {typeValidationError ? (
+          <p className="text-xs text-destructive">{typeValidationError}</p>
+        ) : null}
       </div>
 
       {/* Footer */}
       <DialogFooter>
+        {saveError ? (
+          <p className="mr-auto text-xs text-destructive">{saveError}</p>
+        ) : null}
         <Button variant="outline" size="sm" onClick={onCancel}>
           {t("action.cancel")}
         </Button>
-        <Button size="sm" onClick={handleSave} disabled={!isDirty}>
+        <Button
+          size="sm"
+          onClick={handleSave}
+          disabled={!isDirty || typeValidationError !== null}
+        >
           {t("action.save")}
         </Button>
       </DialogFooter>

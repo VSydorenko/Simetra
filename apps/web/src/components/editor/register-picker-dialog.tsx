@@ -24,6 +24,7 @@ const REGISTER_KINDS: readonly MetadataKind[] = [
 interface RegisterPickerDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  documentRef: MetadataRef
   /** Вже додані регістри (для pre-check) */
   existingRefs: MetadataRef[]
   /** Callback при Save — повертає обрані MetadataRef[] */
@@ -33,6 +34,7 @@ interface RegisterPickerDialogProps {
 export function RegisterPickerDialog({
   open,
   onOpenChange,
+  documentRef,
   existingRefs,
   onSave,
 }: RegisterPickerDialogProps) {
@@ -58,6 +60,7 @@ export function RegisterPickerDialog({
         {open && (
           <RegisterPickerBody
             key={revisionKey}
+            documentRef={documentRef}
             existingRefs={existingRefs}
             onSave={onSave}
             onCancel={handleCancel}
@@ -69,10 +72,12 @@ export function RegisterPickerDialog({
 }
 
 function RegisterPickerBody({
+  documentRef,
   existingRefs,
   onSave,
   onCancel,
 }: {
+  documentRef: MetadataRef
   existingRefs: MetadataRef[]
   onSave: (refs: MetadataRef[]) => void
   onCancel: () => void
@@ -81,12 +86,18 @@ function RegisterPickerBody({
   const model = useMetadataStore((s) => s.model)
 
   // Фільтруємо несумісні регістри щоб вони не зʼявлялись у picker
-  const filteredModel = useMemo(() => ({
-    ...model,
-    informationRegisters: model.informationRegisters.filter(
-      (ir) => isPostingCompatible(ir).compatible,
-    ),
-  }), [model])
+  const filteredModel = useMemo(
+    () => ({
+      ...model,
+      informationRegisters: model.informationRegisters.filter((register) =>
+        isPostingCompatible(register, { recorder: documentRef }).compatible
+      ),
+      accumulationRegisters: model.accumulationRegisters.filter((register) =>
+        isPostingCompatible(register, { recorder: documentRef }).compatible
+      ),
+    }),
+    [documentRef, model]
+  )
 
   // Local draft — починаємо з existingRefs (pre-checked)
   const [selectedRefs, setSelectedRefs] = useState<MetadataRef[]>(() =>

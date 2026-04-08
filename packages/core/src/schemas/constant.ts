@@ -2,6 +2,7 @@ import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { fieldTypeSchema } from "./field-type"
 import { isSqlReservedWord } from "./sql-reserved-words"
+import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
 
 /**
  * BRD §5.7 — Constants cannot use Ref as valueType because they lack
@@ -18,7 +19,7 @@ export const constantSchema = z.object({
   kind: z.literal("Constant"),
   name: z
     .string()
-    .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
+    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
     .refine((n) => !isSqlReservedWord(n), {
       message: "Name is a SQL reserved word",
     }),

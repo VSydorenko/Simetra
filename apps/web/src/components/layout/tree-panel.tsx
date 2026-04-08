@@ -229,33 +229,6 @@ export function TreePanel() {
     })
   }, [])
 
-  const handleRename = useCallback(
-    ({
-      id,
-      name,
-    }: {
-      id: string
-      name: string
-      node: NodeApi<TreeNodeData>
-    }) => {
-      const parts = id.split("/")
-      if (parts.length !== 2) return
-      const kind = parts[0] as MetadataKind
-      const oldName = parts[1]
-      if (name === oldName) return
-
-      const errors = useMetadataStore
-        .getState()
-        .renameObject(kind, oldName, name)
-      if (errors) return
-
-      useUiStore
-        .getState()
-        .updateTabObjectRef({ kind, name: oldName }, { kind, name })
-    },
-    []
-  )
-
   // --- Hotkeys ---
   useHotkeys(
     "mod+f",
@@ -379,7 +352,6 @@ export function TreePanel() {
               selection={selectedNodeId}
               onSelect={handleSelect}
               onActivate={handleActivate}
-              onRename={handleRename}
               disableDrag
               disableDrop
               disableMultiSelection

@@ -12,7 +12,7 @@ function validModel(overrides: Partial<ProjectModel> = {}): ProjectModel {
         kind: 'Catalog',
         name: 'Products',
         codeLength: 9,
-        attributes: [{ name: 'description', type: 'String' }],
+        attributes: [{ name: 'description', type: 'String', length: 50 }],
       },
     ],
     ...overrides,

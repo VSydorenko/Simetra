@@ -2,6 +2,7 @@ import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { isSqlReservedWord } from "./sql-reserved-words"
+import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
 
 /** BRD §5.9 — Custom Table */
 export const customTableSchema = z.object({
@@ -9,7 +10,7 @@ export const customTableSchema = z.object({
   kind: z.literal("CustomTable"),
   name: z
     .string()
-    .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
+    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
     .refine((n) => !isSqlReservedWord(n), {
       message: "Name is a SQL reserved word",
     }),

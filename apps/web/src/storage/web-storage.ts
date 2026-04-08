@@ -2,11 +2,14 @@ import type { ProjectModel, FileEntry } from "@simetra/core"
 import {
   parseMetadataFiles,
   buildProjectModelFromParsed,
+  formatValidationMessage,
   serializeToFiles,
   toKebabCase,
 } from "@simetra/core"
 import { unzip, zip } from "fflate"
+import i18n from "@/i18n"
 import type {
+  FileValidationError,
   OpenResult,
   OpenProjectResult,
   StorageProvider,
@@ -66,6 +69,19 @@ async function dirExists(
 
 // Re-export для зворотної сумісності модулів, що імпортували з web-storage
 export { toKebabCase, serializeToFiles }
+
+function localizeWarnings(
+  warnings: FileValidationError[]
+): FileValidationError[] {
+  return warnings.map((warning) => ({
+    filePath: warning.filePath,
+    errors: warning.errors.map((error) =>
+      formatValidationMessage(error, {
+        translate: (key, values) => i18n.t(key, values),
+      })
+    ),
+  }))
+}
 
 // --- File System Access API storage ---
 
@@ -278,7 +294,7 @@ export class WebStorage implements StorageProvider {
     return {
       model,
       handle,
-      warnings: [...parseWarnings, ...validationWarnings],
+      warnings: localizeWarnings([...parseWarnings, ...validationWarnings]),
     }
   }
 
@@ -293,7 +309,7 @@ export class WebStorage implements StorageProvider {
     return {
       model,
       handle,
-      warnings: [...parseWarnings, ...validationWarnings],
+      warnings: localizeWarnings([...parseWarnings, ...validationWarnings]),
     }
   }
 
@@ -320,7 +336,7 @@ export class WebStorage implements StorageProvider {
 
     return {
       model,
-      warnings: [...parseWarnings, ...validationWarnings],
+      warnings: localizeWarnings([...parseWarnings, ...validationWarnings]),
     }
   }
 }

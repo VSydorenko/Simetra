@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Accordion,
@@ -11,7 +11,9 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { Label } from "@workspace/ui/components/label"
 import { StandardAttributesDialog } from "@/components/editor/standard-attributes-dialog"
+import i18n from "@/i18n"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
+import { validateTechnicalName } from "@/lib/validate-technical-name"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 import { type TabularSectionSelection } from "@/stores/ui-store"
 import type { MetadataObject, MetadataRef, TabularSection } from "@simetra/core"
@@ -50,16 +52,20 @@ function TabularSectionNameEditor({
   ) => ValidationError[] | null
 }) {
   const [draft, setDraft] = useState(currentName)
-
-  useEffect(() => {
-    setDraft(currentName)
-  }, [currentName])
+  const [error, setError] = useState<string | null>(null)
 
   const commit = useCallback(() => {
     const trimmed = draft.trim()
-    if (!trimmed || trimmed === currentName) {
+    if (trimmed === currentName) {
       setDraft(currentName)
-      return
+      setError(null)
+      return true
+    }
+
+    const validationError = validateTechnicalName(trimmed, "snake_case")
+    if (validationError) {
+      setError(validationError)
+      return false
     }
 
     const errors = renameTabularSection(
@@ -70,27 +76,47 @@ function TabularSectionNameEditor({
     )
 
     if (errors) {
-      setDraft(currentName)
-      return
+      setError(
+        errors.find((issue) => issue.path === "name")?.message ??
+          errors[0]?.message ??
+          i18n.t("validation.renameFailed")
+      )
+      return false
     }
+
+    setError(null)
+    return true
   }, [currentName, draft, objectRef, renameTabularSection])
 
   return (
-    <Input
-      className="h-7 font-mono text-xs"
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
+    <div className="space-y-1">
+      <Input
+        className="h-7 font-mono text-xs"
+        value={draft}
+        aria-invalid={error ? "true" : "false"}
+        onChange={(event) => {
+          setDraft(event.target.value)
+          if (error) setError(null)
+        }}
+        onBlur={() => {
           commit()
-          ;(event.target as HTMLInputElement).blur()
-        } else if (event.key === "Escape") {
-          setDraft(currentName)
-          ;(event.target as HTMLInputElement).blur()
-        }
-      }}
-    />
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            if (commit()) {
+              ;(event.target as HTMLInputElement).blur()
+            } else {
+              event.preventDefault()
+            }
+          } else if (event.key === "Escape") {
+            setDraft(currentName)
+            setError(null)
+            ;(event.target as HTMLInputElement).blur()
+          }
+        }}
+      />
+      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+    </div>
   )
 }
 
@@ -166,6 +192,7 @@ export function TabularSectionProperties({
           <AccordionContent className="space-y-2 px-3 pb-3">
             <SettingRow label={t("metadata.field.name")}>
               <TabularSectionNameEditor
+                key={`${selection.objectRef.kind}/${selection.objectRef.name}/${section.name}`}
                 objectRef={selection.objectRef}
                 currentName={section.name}
                 renameTabularSection={renameTabularSection}

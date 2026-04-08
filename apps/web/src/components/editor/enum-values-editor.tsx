@@ -24,6 +24,7 @@ import {
   ArrowUp01Icon,
   ArrowDown01Icon,
 } from "@hugeicons/core-free-icons"
+import { validateTechnicalName } from "@/lib/validate-technical-name"
 import { useMetadataStore } from "@/stores/metadata-store"
 
 interface EnumValue {
@@ -228,14 +229,35 @@ function EnumValueRow({
   const [nameDraft, setNameDraft] = useState(value.name)
   const [ukDraft, setUkDraft] = useState(value.displayName?.uk ?? "")
   const [enDraft, setEnDraft] = useState(value.displayName?.en ?? "")
+  const [nameError, setNameError] = useState<string | null>(null)
 
   const commitName = () => {
     const trimmed = nameDraft.trim()
-    if (trimmed && trimmed !== value.name) {
-      updateEnumValue(objectName, value.name, { name: trimmed })
-    } else {
+    if (trimmed === value.name) {
       setNameDraft(value.name)
+      setNameError(null)
+      return true
     }
+
+    const validationError = validateTechnicalName(trimmed, "PascalCase")
+    if (validationError) {
+      setNameError(validationError)
+      return false
+    }
+
+    const errors = updateEnumValue(objectName, value.name, { name: trimmed })
+    if (errors) {
+      setNameError(
+        errors.find((issue) => issue.path === "values.name")?.message ??
+          errors.find((issue) => issue.path === "name")?.message ??
+          errors[0]?.message ??
+          t("validation.renameFailed")
+      )
+      return false
+    }
+
+    setNameError(null)
+    return true
   }
 
   const commitDisplayName = (lang: "uk" | "en") => {
@@ -254,21 +276,36 @@ function EnumValueRow({
       onClick={onSelect}
     >
       <TableCell className="px-2 py-0.5">
-        <Input
-          className="h-6 border-none bg-transparent px-1 font-mono text-xs shadow-none focus-visible:ring-1"
-          value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
-          onBlur={commitName}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
+        <div className="space-y-1">
+          <Input
+            className="h-6 border-none bg-transparent px-1 font-mono text-xs shadow-none focus-visible:ring-1"
+            value={nameDraft}
+            aria-invalid={nameError ? "true" : "false"}
+            onChange={(e) => {
+              setNameDraft(e.target.value)
+              if (nameError) setNameError(null)
+            }}
+            onBlur={() => {
               commitName()
-              ;(e.target as HTMLInputElement).blur()
-            } else if (e.key === "Escape") {
-              setNameDraft(value.name)
-              ;(e.target as HTMLInputElement).blur()
-            }
-          }}
-        />
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                if (commitName()) {
+                  ;(e.target as HTMLInputElement).blur()
+                } else {
+                  e.preventDefault()
+                }
+              } else if (e.key === "Escape") {
+                setNameDraft(value.name)
+                setNameError(null)
+                ;(e.target as HTMLInputElement).blur()
+              }
+            }}
+          />
+          {nameError ? (
+            <p className="text-[11px] text-destructive">{nameError}</p>
+          ) : null}
+        </div>
       </TableCell>
       <TableCell className="px-2 py-0.5">
         <Input

@@ -20,7 +20,7 @@ describe("DDL store posting ref validation", () => {
           tabularSections: [
             {
               name: "items",
-              attributes: [{ name: "product", type: "String" }],
+              attributes: [{ name: "product", type: "String", length: 50 }],
             },
           ],
           registerMovements: [
@@ -104,7 +104,7 @@ describe("DDL store posting ref validation", () => {
           name: "InventoryBalance",
           registerType: "Balance",
           recorderTypes: [{ kind: "Document", name: "Invoice" }],
-          dimensions: [{ name: "product", type: "String" }],
+          dimensions: [{ name: "product", type: "String", length: 50 }],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
           ],
@@ -118,7 +118,7 @@ describe("DDL store posting ref validation", () => {
           tabularSections: [
             {
               name: "items",
-              attributes: [{ name: "product", type: "String" }],
+              attributes: [{ name: "product", type: "String", length: 50 }],
             },
           ],
           registerMovements: [
@@ -168,8 +168,8 @@ describe("DDL store posting ref validation", () => {
           registerType: "Balance",
           recorderTypes: [{ kind: "Document", name: "Invoice" }],
           dimensions: [
-            { name: "product", type: "String" },
-            { name: "warehouse", type: "String", required: false },
+            { name: "product", type: "String", length: 50 },
+            { name: "warehouse", type: "String", length: 50, required: false },
           ],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
@@ -184,7 +184,7 @@ describe("DDL store posting ref validation", () => {
           tabularSections: [
             {
               name: "items",
-              attributes: [{ name: "product", type: "String" }],
+              attributes: [{ name: "product", type: "String", length: 50 }],
             },
           ],
           registerMovements: [
@@ -234,8 +234,8 @@ describe("DDL store posting ref validation", () => {
           periodicity: "Day",
           recorderTypes: [{ kind: "Document", name: "RateUpdate" }],
           dimensions: [
-            { name: "currency", type: "String", required: true },
-            { name: "warehouse", type: "String", required: false },
+            { name: "currency", type: "String", length: 50, required: true },
+            { name: "warehouse", type: "String", length: 50, required: false },
           ],
           resources: [
             { name: "rate", type: "Numeric", precision: 15, scale: 4 },

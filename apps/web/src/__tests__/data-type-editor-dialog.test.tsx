@@ -51,7 +51,7 @@ function createModel(): ProjectModel {
       {
         kind: "Enumeration",
         name: "PriceTypes",
-        values: [{ name: "retail" }],
+        values: [{ name: "Retail" }],
       },
     ],
   })
@@ -61,6 +61,7 @@ function makeAttr(overrides: Partial<Attribute> = {}): Attribute {
   return {
     name: "test_field",
     type: "String",
+    length: 50,
     required: false,
     indexed: false,
     unique: false,
@@ -71,7 +72,7 @@ function makeAttr(overrides: Partial<Attribute> = {}): Attribute {
 
 function renderDialog(
   attribute: Attribute = makeAttr(),
-  onSave = vi.fn(),
+  onSave = vi.fn(() => null),
   model = createModel()
 ) {
   const onOpenChange = vi.fn()

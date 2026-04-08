@@ -40,6 +40,8 @@ function createModel(): ProjectModel {
               {
                 name: "quantity",
                 type: "Numeric",
+                precision: 15,
+                scale: 2,
                 required: false,
                 indexed: false,
                 unique: false,

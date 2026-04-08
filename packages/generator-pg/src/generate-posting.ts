@@ -10,7 +10,12 @@ import type {
   StandardAttributeSettings,
   MetadataKind,
 } from '@simetra/core'
-import { getStandardAttributes, getTabularSectionStandardAttributes, isPostingCompatible } from '@simetra/core'
+import {
+  formatValidationMessage,
+  getStandardAttributes,
+  getTabularSectionStandardAttributes,
+  isPostingCompatible,
+} from '@simetra/core'
 import { toSnakeCase, tableName, tabularTableName, qualifiedName, escapeLiteral } from './naming'
 import { mapFieldType } from './type-mapping'
 import { resolveColumnName } from './column-naming'
@@ -235,10 +240,12 @@ function generateMovementInsert(
   }
 
   // Fail-fast: posting compatibility
-  const compat = isPostingCompatible(register)
+  const compat = isPostingCompatible(register, {
+    recorder: { kind: "Document", name: doc.name },
+  })
   if (!compat.compatible) {
     throw new Error(
-      `Register ${register.kind}/${register.name} is not posting-compatible: ${compat.reason}`,
+      `Register ${register.kind}/${register.name} is not posting-compatible: ${formatValidationMessage(compat.reason ?? '')}`,
     )
   }
 

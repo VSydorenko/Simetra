@@ -1,5 +1,6 @@
 import { create } from "zustand"
-import { projectSchema } from "@simetra/core"
+import { formatValidationMessage, projectSchema } from "@simetra/core"
+import i18n from "@/i18n"
 import { useMetadataStore } from "./metadata-store"
 import { WebStorage } from "@/storage/web-storage"
 import type { FileValidationError } from "@/storage/storage-provider"
@@ -110,7 +111,9 @@ function formatProjectIssues(
   return issues
     .map((issue) => {
       const path = issue.path.length > 0 ? issue.path.join(".") : "project"
-      return `${path}: ${issue.message}`
+      return `${path}: ${formatValidationMessage(issue.message, {
+        translate: (key, values) => i18n.t(key, values),
+      })}`
     })
     .join("; ")
 }

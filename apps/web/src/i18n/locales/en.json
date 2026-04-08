@@ -216,7 +216,57 @@
     "warnings_other": "{{count}} warnings",
     "noErrors": "No errors",
     "objectErrors": "Validation errors",
-    "refNotFound": "Reference not found: {{kind}}/{{name}}"
+    "refNotFound": "Reference not found: {{kind}}/{{name}}",
+    "duplicateName": "Duplicate name \"{{name}}\" in {{kind}}",
+    "renameFailed": "Failed to update technical name",
+    "resolveObjectTypeFailed": "Failed to determine object type",
+    "saveFieldTypeFailed": "Failed to save field type",
+    "technicalName": {
+      "required": "Technical name must not be empty",
+      "PascalCase": "Technical name must use PascalCase with Latin letters and digits only",
+      "snake_case": "Technical name must use snake_case with Latin letters, digits, and _ only"
+    },
+    "enumValue": {
+      "nameRequired": "Enumeration value name must not be empty",
+      "namePascalCase": "Enumeration value name must use PascalCase with Latin letters and digits only"
+    },
+    "field": {
+      "stringLengthRequired": "String type requires length. Default value: {{defaultValue}}.",
+      "numericPrecisionRequired": "Numeric type requires precision. Default value: {{defaultValue}}.",
+      "numericScaleRequired": "Numeric type requires scale. Default value: {{defaultValue}}.",
+      "refTargetRequired": "Ref type requires a target object or at least one allowed type.",
+      "refTargetRequiredShort": "Ref type requires a target object."
+    },
+    "expression": {
+      "literalUnsupported": "literal: expressions are not supported for type {{type}}",
+      "literalIncompatible": "Literal \"{{value}}\" is not compatible with field type {{type}}",
+      "typeMismatch": "Expression type {{expressionType}} does not match field type {{targetType}}",
+      "documentFieldMissing": "Field doc.{{fieldName}} does not exist in the document",
+      "rowFieldMissing": "Field row.{{fieldName}} does not exist in the tabular section",
+      "tabularSectionMissing": "Tabular section {{name}} does not exist",
+      "tabularSectionFieldMissing": "Field {{tabularSection}}.{{fieldName}} does not exist in the tabular section"
+    },
+    "posting": {
+      "registerIncompatible": "Register {{register}} is not compatible with posting: {{reason}}",
+      "registerWarning": "Register {{register}}: {{warning}}",
+      "missingDimensionsLabel": "dimensions are not filled",
+      "missingRequiredDimensionsLabel": "required dimensions are not filled",
+      "movementMissingDimensions": "Movement to {{register}}: {{label}}: {{dimensions}}",
+      "validationsWithoutMovements": "posting has validations without movements and they will have no effect",
+      "nonNegativeBalanceResourceType": "NonNegativeBalance validation for {{resource}} requires Numeric or Integer resource type, got {{type}}",
+      "acceptsAnyRecorder": "AccumulationRegister has an empty recorderTypes list and accepts movements from any document",
+      "missingRecorderContext": "Cannot verify recorderTypes without the current document reference",
+      "allowedRecorderTypes": "AccumulationRegister allows only {{types}} in recorderTypes",
+      "informationRegisterIndependent": "InformationRegister with writeMode=Independent has no recorder lifecycle and cannot be used as a posting target",
+      "unknownRegisterKind": "Unknown register kind"
+    },
+    "preflight": {
+      "stringLengthMissing": "{{path}}: String length is missing",
+      "numericPrecisionMissing": "{{path}}: Numeric precision is missing",
+      "numericScaleMissing": "{{path}}: Numeric scale is missing",
+      "refTargetMissing": "{{path}}: Ref must define ref or allowedTypes",
+      "refObjectMissing": "{{path}}: reference to missing object {{target}}"
+    }
   },
   "dialog": {
     "deleteTitle": "Delete Object",
@@ -338,6 +388,7 @@
     "movementType": "Movement type",
     "source": "Source",
     "noRegisters": "No registers for movements",
+    "registerNotFound": "Register not found",
     "noValidations": "No validations",
     "pickRegisters": "Select registers",
     "validations": "Validations",
@@ -363,7 +414,7 @@
     "dynamicField": "Document field"
   },
   "expression": {
-    "tsRow": "Tabular section row",
+    "tsRow": "TS \"{{name}}\"",
     "document": "Document",
     "freeInput": "Expression",
     "freeInputHint": "Free input",

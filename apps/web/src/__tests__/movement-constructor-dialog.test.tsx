@@ -14,7 +14,7 @@ const model = projectModelSchema.parse({
       kind: 'AccumulationRegister',
       name: 'InventoryBalance',
       registerType: 'Balance',
-      dimensions: [{ name: 'product', type: 'String' }],
+      dimensions: [{ name: 'product', type: 'String', length: 50 }],
       resources: [{ name: 'quantity', type: 'Numeric', precision: 15, scale: 2 }],
     },
   ],
@@ -22,9 +22,12 @@ const model = projectModelSchema.parse({
     {
       kind: 'Document',
       name: 'Invoice',
-      attributes: [{ name: 'warehouse', type: 'String' }],
+      attributes: [{ name: 'warehouse', type: 'String', length: 50 }],
       tabularSections: [
-        { name: 'items', attributes: [{ name: 'product', type: 'String' }] },
+        {
+          name: 'items',
+          attributes: [{ name: 'product', type: 'String', length: 50 }],
+        },
       ],
       registerMovements: [{ kind: 'AccumulationRegister', name: 'InventoryBalance' }],
     },
@@ -38,7 +41,7 @@ const existingMovement: PostingMovement = {
   source: 'document',
   condition: null,
   mappings: {
-    dimensions: { product: 'warehouse' },
+    dimensions: { product: 'doc.warehouse' },
     resources: { quantity: '' },
     attributes: {},
   },

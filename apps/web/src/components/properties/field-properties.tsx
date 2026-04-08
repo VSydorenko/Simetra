@@ -100,18 +100,43 @@ function FieldValidationErrors({
   })
   if (fieldErrors.length === 0) return null
 
+  const blockingErrors = fieldErrors.filter(
+    (error) => error.severity !== "warning"
+  )
+  const warningErrors = fieldErrors.filter(
+    (error) => error.severity === "warning"
+  )
+
   return (
-    <div className="mb-2 rounded border border-destructive/20 bg-destructive/5 px-3 py-2">
-      <p className="mb-1 text-[10px] font-medium tracking-wide text-destructive uppercase">
-        {t("validation.objectErrors")}
-      </p>
-      <ul className="space-y-0.5">
-        {fieldErrors.map((err, i) => (
-          <li key={i} className="text-[11px] text-destructive">
-            {formatErrorMessage(err.message, t)}
-          </li>
-        ))}
-      </ul>
+    <div className="mb-2 space-y-2">
+      {blockingErrors.length > 0 && (
+        <div className="rounded border border-destructive/20 bg-destructive/5 px-3 py-2">
+          <p className="mb-1 text-[10px] font-medium tracking-wide text-destructive uppercase">
+            {t("validation.objectErrors")}
+          </p>
+          <ul className="space-y-0.5">
+            {blockingErrors.map((err, i) => (
+              <li key={i} className="text-[11px] text-destructive">
+                {formatErrorMessage(err.message, t)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {warningErrors.length > 0 && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="mb-1 text-[10px] font-medium tracking-wide text-amber-700 uppercase">
+            {t("validation.warnings", { count: warningErrors.length })}
+          </p>
+          <ul className="space-y-0.5">
+            {warningErrors.map((err, i) => (
+              <li key={i} className="text-[11px] text-amber-700">
+                {formatErrorMessage(err.message, t)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
@@ -211,7 +236,7 @@ export function FieldProperties({ selection }: FieldPropertiesProps) {
 
   const handleUpdate = useCallback(
     (updates: Partial<Attribute>) => {
-      dispatchFieldUpdate(
+      return dispatchFieldUpdate(
         {
           kind,
           objectName,
@@ -256,7 +281,7 @@ function FieldPropertiesInner({
   attribute: Attribute
   model: ProjectModel
   objectErrors: ValidationError[]
-  handleUpdate: (updates: Partial<Attribute>) => void
+  handleUpdate: (updates: Partial<Attribute>) => ValidationError[] | null
 }) {
   const { t } = useTranslation()
   const [typeEditorOpen, setTypeEditorOpen] = useState(false)

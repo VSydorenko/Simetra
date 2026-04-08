@@ -219,7 +219,57 @@
     "warnings_many": "{{count}} попереджень",
     "noErrors": "Без помилок",
     "objectErrors": "Помилки валідації",
-    "refNotFound": "Посилання не знайдено: {{kind}}/{{name}}"
+    "refNotFound": "Посилання не знайдено: {{kind}}/{{name}}",
+    "duplicateName": "Дубльоване ім'я \"{{name}}\" у {{kind}}",
+    "renameFailed": "Не вдалося оновити технічне ім'я",
+    "resolveObjectTypeFailed": "Не вдалося визначити тип об'єкта",
+    "saveFieldTypeFailed": "Не вдалося зберегти тип поля",
+    "technicalName": {
+      "required": "Технічне ім'я не може бути порожнім",
+      "PascalCase": "Технічне ім'я має бути у форматі PascalCase, лише латиниця та цифри",
+      "snake_case": "Технічне ім'я має бути у форматі snake_case, лише латиниця, цифри та _"
+    },
+    "enumValue": {
+      "nameRequired": "Ім'я значення перелічення не може бути порожнім",
+      "namePascalCase": "Ім'я значення перелічення має бути у форматі PascalCase, лише латиниця та цифри"
+    },
+    "field": {
+      "stringLengthRequired": "Для типу String потрібно вказати довжину. Типове значення: {{defaultValue}}.",
+      "numericPrecisionRequired": "Для типу Numeric потрібно вказати precision. Типове значення: {{defaultValue}}.",
+      "numericScaleRequired": "Для типу Numeric потрібно вказати scale. Типове значення: {{defaultValue}}.",
+      "refTargetRequired": "Для типу Ref потрібно вибрати цільовий об'єкт або принаймні один allowed type.",
+      "refTargetRequiredShort": "Для типу Ref потрібно вибрати цільовий об'єкт."
+    },
+    "expression": {
+      "literalUnsupported": "Вираз literal: не підтримується для типу {{type}}",
+      "literalIncompatible": "Літерал \"{{value}}\" не сумісний з типом поля {{type}}",
+      "typeMismatch": "Тип виразу {{expressionType}} не збігається з типом поля {{targetType}}",
+      "documentFieldMissing": "Поле doc.{{fieldName}} не існує в документі",
+      "rowFieldMissing": "Поле row.{{fieldName}} не існує в ТЧ",
+      "tabularSectionMissing": "Таблична частина {{name}} не існує",
+      "tabularSectionFieldMissing": "Поле {{tabularSection}}.{{fieldName}} не існує в ТЧ"
+    },
+    "posting": {
+      "registerIncompatible": "Регістр {{register}} не сумісний з проведенням: {{reason}}",
+      "registerWarning": "Регістр {{register}}: {{warning}}",
+      "missingDimensionsLabel": "не заповнені dimensions",
+      "missingRequiredDimensionsLabel": "не заповнені обов'язкові dimensions",
+      "movementMissingDimensions": "Рух до {{register}}: {{label}}: {{dimensions}}",
+      "validationsWithoutMovements": "posting має validations без movements — перевірки не спрацюють",
+      "nonNegativeBalanceResourceType": "Валідація NonNegativeBalance для {{resource}} — ресурс має тип {{type}}, очікується Numeric або Integer",
+      "acceptsAnyRecorder": "AccumulationRegister має порожній recorderTypes і приймає рухи від будь-якого документа",
+      "missingRecorderContext": "Неможливо перевірити recorderTypes без посилання на поточний документ",
+      "allowedRecorderTypes": "AccumulationRegister дозволяє лише {{types}} у recorderTypes",
+      "informationRegisterIndependent": "InformationRegister з writeMode=Independent не має життєвого циклу реєстратора і не може бути ціллю проведення",
+      "unknownRegisterKind": "Невідомий тип регістру"
+    },
+    "preflight": {
+      "stringLengthMissing": "{{path}}: відсутня довжина для String",
+      "numericPrecisionMissing": "{{path}}: відсутній precision для Numeric",
+      "numericScaleMissing": "{{path}}: відсутній scale для Numeric",
+      "refTargetMissing": "{{path}}: Ref не має ref або allowedTypes",
+      "refObjectMissing": "{{path}}: посилання на неіснуючий обʼєкт {{target}}"
+    }
   },
   "dialog": {
     "deleteTitle": "Видалення обʼєкта",
@@ -342,6 +392,7 @@
     "movementType": "Тип руху",
     "source": "Джерело",
     "noRegisters": "Немає регістрів для рухів",
+    "registerNotFound": "Регістр не знайдено",
     "noValidations": "Немає валідацій",
     "pickRegisters": "Вибір регістрів",
     "validations": "Валідації",
@@ -367,7 +418,7 @@
     "dynamicField": "Поле документа"
   },
   "expression": {
-    "tsRow": "Рядок ТЧ",
+    "tsRow": "ТЧ \"{{name}}\"",
     "document": "Документ",
     "freeInput": "Вираз",
     "freeInputHint": "Вільний ввід",

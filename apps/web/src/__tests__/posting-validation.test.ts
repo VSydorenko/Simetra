@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest"
 import { renderHook, act } from "@testing-library/react"
 import { projectModelSchema, type ProjectModel } from "@simetra/core"
+import i18n from "@/i18n"
 import "@/i18n"
 import { useMetadataStore } from "../stores/metadata-store"
 import { useModelValidation } from "../hooks/use-model-validation"
@@ -22,7 +23,7 @@ describe("posting cross-check: posting register refs subset of registerMovements
           kind: "AccumulationRegister",
           name: "InventoryBalance",
           registerType: "Balance",
-          dimensions: [{ name: "product", type: "String" }],
+          dimensions: [{ name: "product", type: "String", length: 50 }],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
           ],
@@ -36,7 +37,7 @@ describe("posting cross-check: posting register refs subset of registerMovements
           tabularSections: [
             {
               name: "items",
-              attributes: [{ name: "product", type: "String" }],
+              attributes: [{ name: "product", type: "String", length: 50 }],
             },
           ],
           registerMovements: [],
@@ -91,7 +92,7 @@ describe("posting cross-check: posting register refs subset of registerMovements
           kind: "AccumulationRegister",
           name: "InventoryBalance",
           registerType: "Balance",
-          dimensions: [{ name: "product", type: "String" }],
+          dimensions: [{ name: "product", type: "String", length: 50 }],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
           ],
@@ -143,7 +144,9 @@ describe("posting cross-check: posting register refs subset of registerMovements
     const docErrors = modelErrors["Document/Invoice"] ?? []
     expect(
       docErrors.some((e) =>
-        e.message.includes("validations but no movements"),
+        e.message.includes(
+          i18n.t("validation.posting.validationsWithoutMovements")
+        ),
       ),
     ).toBe(true)
   })
@@ -157,8 +160,8 @@ describe("posting cross-check: posting register refs subset of registerMovements
           name: "InventoryBalance",
           registerType: "Balance",
           dimensions: [
-            { name: "product", type: "String" },
-            { name: "warehouse", type: "String", required: false },
+            { name: "product", type: "String", length: 50 },
+            { name: "warehouse", type: "String", length: 50, required: false },
           ],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
@@ -173,7 +176,7 @@ describe("posting cross-check: posting register refs subset of registerMovements
           tabularSections: [
             {
               name: "items",
-              attributes: [{ name: "product", type: "String" }],
+              attributes: [{ name: "product", type: "String", length: 50 }],
             },
           ],
           registerMovements: [
@@ -230,8 +233,8 @@ describe("posting cross-check: posting register refs subset of registerMovements
           name: "CurrencyRates",
           periodicity: "Day",
           dimensions: [
-            { name: "currency", type: "String", required: true },
-            { name: "warehouse", type: "String", required: false },
+            { name: "currency", type: "String", length: 50, required: true },
+            { name: "warehouse", type: "String", length: 50, required: false },
           ],
           resources: [
             { name: "rate", type: "Numeric", precision: 15, scale: 4 },

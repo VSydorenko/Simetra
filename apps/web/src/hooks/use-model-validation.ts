@@ -1,15 +1,26 @@
 import { useEffect } from "react"
-import { metadataObjectSchema, isPostingCompatible, KIND_TO_KEY } from "@simetra/core"
+import {
+  metadataObjectSchema,
+  isPostingCompatible,
+  KIND_TO_KEY,
+} from "@simetra/core"
 import type {
   AccumulationRegister,
+  Document,
   InformationRegister,
   MetadataKind,
   MetadataObject,
   Attribute,
   ProjectModel,
 } from "@simetra/core"
+import i18n from "@/i18n"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
+import {
+  validateExpressionCompatibility,
+  validateExpressionFields,
+} from "@/lib/expression-validation"
 import { resolveZodPath } from "@/lib/resolve-zod-path"
+import { translateValidationMessage } from "@/lib/translate-validation-message"
 
 /** Перевіряє, чи існує обʼєкт за kind/name у моделі */
 function refExists(
@@ -85,7 +96,7 @@ function validateSingleObject(
     for (const issue of zodResult.error.issues) {
       errors.push({
         path: resolveZodPath(obj, issue.path as (string | number)[]),
-        message: issue.message,
+        message: translateValidationMessage(issue.message),
       })
     }
   }
@@ -217,39 +228,116 @@ function validateSingleObject(
     typeof obj.posting === "object" &&
     obj.posting !== null
   ) {
+    const documentObject = obj as Document
+    const recorderRef = { kind: "Document" as const, name: obj.name }
     const posting = obj.posting as {
       movements?: {
         register: { kind: MetadataKind; name: string }
-        mappings: { dimensions: Record<string, string> }
+        source: string
+        mappings: {
+          dimensions: Record<string, string>
+          resources: Record<string, string>
+          attributes: Record<string, string>
+        }
       }[]
     }
     if (posting.movements) {
       for (const movement of posting.movements) {
         const reg = findRegisterInModel(model, movement.register)
         if (reg) {
-          const compat = isPostingCompatible(reg)
+          const compat = isPostingCompatible(reg, { recorder: recorderRef })
           if (!compat.compatible) {
             errors.push({
-              path: 'posting.movements',
-              message: `Регістр ${movement.register.kind}/${movement.register.name} не сумісний з проведенням: ${compat.reason}`,
+              path: "posting.movements",
+              message: i18n.t("validation.posting.registerIncompatible", {
+                register: `${movement.register.kind}/${movement.register.name}`,
+                reason: translateValidationMessage(compat.reason ?? ""),
+              }),
+            })
+          }
+          for (const warning of compat.warnings ?? []) {
+            errors.push({
+              path: "posting.movements",
+              message: i18n.t("validation.posting.registerWarning", {
+                register: `${movement.register.kind}/${movement.register.name}`,
+                warning: translateValidationMessage(warning),
+              }),
+              severity: "warning",
             })
           }
           // Перевірка неповних маппінгів dimensions
           // AR — всі dimensions обов'язкові (ключ агрегації), IR — тільки required
           const missingDims = reg.dimensions.filter((d) =>
-            reg.kind === 'AccumulationRegister'
+            reg.kind === "AccumulationRegister"
               ? !movement.mappings.dimensions[d.name]
               : d.required && !movement.mappings.dimensions[d.name],
           )
           if (missingDims.length > 0) {
             const label =
-              reg.kind === 'AccumulationRegister'
-                ? 'не заповнені dimensions'
-                : `не заповнені обов'язкові dimensions`
+              reg.kind === "AccumulationRegister"
+                ? i18n.t("validation.posting.missingDimensionsLabel")
+                : i18n.t("validation.posting.missingRequiredDimensionsLabel")
             errors.push({
-              path: 'posting.movements',
-              message: `Рух до ${movement.register.name}: ${label}: ${missingDims.map((d) => d.name).join(', ')}`,
+              path: "posting.movements",
+              message: i18n.t("validation.posting.movementMissingDimensions", {
+                register: movement.register.name,
+                label,
+                dimensions: missingDims.map((d) => d.name).join(", "),
+              }),
             })
+          }
+
+          const selectedTsAttributes = movement.source.startsWith(
+            "tabularSection:"
+          )
+            ? documentObject.tabularSections.find(
+                (section) =>
+                  section.name === movement.source.slice("tabularSection:".length)
+              )?.attributes
+            : undefined
+
+          const mappingGroups: Array<
+            [group: "dimensions" | "resources" | "attributes", fields: Attribute[]]
+          > = [
+            ["dimensions", reg.dimensions],
+            ["resources", reg.resources],
+            ["attributes", reg.attributes],
+          ]
+
+          for (const [groupName, fields] of mappingGroups) {
+            for (const field of fields) {
+              const expr = movement.mappings[groupName]?.[field.name]
+              if (!expr) {
+                continue
+              }
+
+              const fieldError = validateExpressionFields(
+                expr,
+                movement.source,
+                documentObject.attributes,
+                selectedTsAttributes,
+                documentObject.tabularSections
+              )
+              if (fieldError) {
+                errors.push({
+                  path: `posting.movements.${groupName}.${field.name}`,
+                  message: fieldError,
+                })
+                continue
+              }
+
+              const typeWarning = validateExpressionCompatibility(expr, field, {
+                source: movement.source,
+                document: documentObject,
+              })
+              if (typeWarning) {
+                errors.push({
+                  path: `posting.movements.${groupName}.${field.name}`,
+                  message: typeWarning,
+                  severity: "warning",
+                })
+              }
+            }
           }
         }
       }
@@ -273,8 +361,8 @@ function validateSingleObject(
     ) {
       errors.push({
         path: "posting.validations",
-        message:
-          "posting has validations but no movements — validations will have no effect",
+        message: i18n.t("validation.posting.validationsWithoutMovements"),
+        severity: "warning",
       })
     }
   }
@@ -322,7 +410,7 @@ export function useModelValidation() {
             const existing = newErrors[dupKey] ?? []
             existing.push({
               path: "name",
-              message: `Duplicate name "${name}" in ${kind}`,
+              message: i18n.t("validation.duplicateName", { name, kind }),
             })
             newErrors[dupKey] = existing
           }

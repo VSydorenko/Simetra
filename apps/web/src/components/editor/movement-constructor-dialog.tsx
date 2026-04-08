@@ -23,6 +23,7 @@ import {
 } from "@workspace/ui/components/select"
 import type {
   AccumulationRegister,
+  Attribute,
   Document,
   InformationRegister,
   MetadataRef,
@@ -32,7 +33,11 @@ import { getStandardAttributes } from "@simetra/core"
 import { toast } from "@workspace/ui/components/sonner"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 import { buildExpressionOptions } from "@/lib/build-expression-options"
-import { isExpressionInvalid, validateExpressionFields } from "@/lib/expression-validation"
+import {
+  isExpressionInvalid,
+  validateExpressionCompatibility,
+  validateExpressionFields,
+} from "@/lib/expression-validation"
 
 interface MovementConstructorDialogProps {
   open: boolean
@@ -216,7 +221,7 @@ function MovementConstructorBody({
   // Джерела для Select
   const sourceOptions = useMemo(() => {
     const opts = [
-      { value: "document", label: t("movements.sourceDocument", "Документ") },
+      { value: "document", label: t("movements.sourceDocument") },
     ]
     for (const ts of doc.tabularSections) {
       opts.push({
@@ -226,27 +231,6 @@ function MovementConstructorBody({
     }
     return opts
   }, [doc.tabularSections, t])
-
-  const translate = useCallback(
-    (key: string, fallback?: string): string => {
-      return fallback ? t(key, fallback) : t(key)
-    },
-    [t]
-  )
-
-  // Опції виразів з buildExpressionOptions
-  const expressionGroups = useMemo(
-    () => buildExpressionOptions(doc, draft.source, translate),
-    [doc, draft.source, translate]
-  )
-
-  // Валідація виразу для поточного source — обгортка над shared helper
-  const checkExpressionInvalid = useCallback(
-    (expr: string): boolean => {
-      return isExpressionInvalid(expr, draft.source)
-    },
-    [draft.source]
-  )
 
   // Атрибути вибраної ТЧ (для валідації field references)
   const selectedTsAttributes = useMemo(() => {
@@ -260,21 +244,45 @@ function MovementConstructorBody({
 
   // Блокування Save при наявності невалідних виразів
   const hasInvalidExpressions = useMemo(() => {
-    const allMappings = [
-      ...Object.values(draft.mappings.dimensions),
-      ...Object.values(draft.mappings.resources),
-      ...Object.values(draft.mappings.attributes),
+    if (!register) {
+      return false
+    }
+
+    const mappingsByGroup: Array<
+      [keyof MovementDraft["mappings"], Attribute[]]
+    > = [
+      ["dimensions", register.dimensions],
+      ["resources", register.resources],
+      ["attributes", register.attributes],
     ]
-    return allMappings.some(
-      (expr) =>
-        expr &&
-        (isExpressionInvalid(expr, draft.source) ||
+
+    return mappingsByGroup.some(([groupName, fields]) =>
+      fields.some((field) => {
+        const expr = draft.mappings[groupName][field.name] ?? ""
+        if (!expr) {
+          return false
+        }
+
+        return (
+          isExpressionInvalid(expr, draft.source) ||
           validateExpressionFields(
-            expr, draft.source, doc.attributes,
-            selectedTsAttributes, doc.tabularSections,
-          ) !== null),
+            expr,
+            draft.source,
+            doc.attributes,
+            selectedTsAttributes,
+            doc.tabularSections
+          ) !== null
+        )
+      })
     )
-  }, [draft, doc.attributes, doc.tabularSections, selectedTsAttributes])
+  }, [
+    doc.attributes,
+    doc.tabularSections,
+    draft.mappings,
+    draft.source,
+    register,
+    selectedTsAttributes,
+  ])
 
   // Save
   const handleSave = useCallback(() => {
@@ -320,7 +328,7 @@ function MovementConstructorBody({
           </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          {t("movements.noRegisters", "Регістр не знайдено")}
+          {t("movements.registerNotFound")}
         </p>
       </>
     )
@@ -360,13 +368,13 @@ function MovementConstructorBody({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="Receipt">
-                  {t("movements.receipt", "Прихід")}
+                  {t("movements.receipt")}
                 </SelectItem>
                 <SelectItem value="Expense">
-                  {t("movements.expense", "Розхід")}
+                  {t("movements.expense")}
                 </SelectItem>
                 <SelectItem value="dynamic">
-                  {t("movements.dynamic", "Динамічний")}
+                  {t("movements.dynamic")}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -376,7 +384,7 @@ function MovementConstructorBody({
           {isDynamicType && (
             <div className="space-y-1">
               <Label className="text-xs">
-                {t("movements.dynamicField", "Поле документа")}
+                {t("movements.dynamicField")}
               </Label>
               <Select
                 value={dynamicTypeField}
@@ -416,11 +424,11 @@ function MovementConstructorBody({
           {/* Умова */}
           <div className="space-y-1">
             <Label className="text-xs">
-              {t("movements.condition", "Умова")}
+              {t("movements.condition")}
             </Label>
             <Input
               className="h-8 text-xs"
-              placeholder={t("movements.condition", "Умова")}
+              placeholder={t("movements.condition")}
               value={draft.condition ?? ""}
               onChange={(e) => setCondition(e.target.value)}
             />
@@ -432,10 +440,10 @@ function MovementConstructorBody({
           {/* Header */}
           <div className="grid grid-cols-[180px_1fr_32px_20px] gap-2 border-b bg-muted/50 px-3 py-1.5">
             <span className="text-xs font-medium">
-              {t('movements.registerField', 'Поле регістру')}
+              {t("movements.registerField")}
             </span>
             <span className="text-xs font-medium">
-              {t('movements.expression', 'Вираз')}
+              {t("movements.expression")}
             </span>
             <span />
             <span />
@@ -443,30 +451,30 @@ function MovementConstructorBody({
           <ScrollArea className="max-h-72">
             <div className="space-y-1 p-2">
               <MappingGroup
-                title={t('movements.dimensionsGroup', 'Виміри')}
+                title={t("movements.dimensionsGroup")}
                 fields={register.dimensions}
                 mappings={draft.mappings.dimensions}
                 group="dimensions"
-                expressionGroups={expressionGroups}
-                isExpressionInvalid={checkExpressionInvalid}
+                document={doc}
+                source={draft.source}
                 onSetMapping={setMapping}
               />
               <MappingGroup
-                title={t('movements.resourcesGroup', 'Ресурси')}
+                title={t("movements.resourcesGroup")}
                 fields={register.resources}
                 mappings={draft.mappings.resources}
                 group="resources"
-                expressionGroups={expressionGroups}
-                isExpressionInvalid={checkExpressionInvalid}
+                document={doc}
+                source={draft.source}
                 onSetMapping={setMapping}
               />
               <MappingGroup
-                title={t('movements.attributesGroup', 'Реквізити')}
+                title={t("movements.attributesGroup")}
                 fields={register.attributes}
                 mappings={draft.mappings.attributes}
                 group="attributes"
-                expressionGroups={expressionGroups}
-                isExpressionInvalid={checkExpressionInvalid}
+                document={doc}
+                source={draft.source}
                 onSetMapping={setMapping}
               />
             </div>
@@ -492,19 +500,16 @@ function MappingGroup({
   fields,
   mappings,
   group,
-  expressionGroups,
-  isExpressionInvalid,
+  document,
+  source,
   onSetMapping,
 }: {
   title: string
-  fields: { name: string }[]
+  fields: Attribute[]
   mappings: Record<string, string>
   group: "dimensions" | "resources" | "attributes"
-  expressionGroups: {
-    group: string
-    options: { value: string; label: string }[]
-  }[]
-  isExpressionInvalid: (expr: string) => boolean
+  document: Document
+  source: string
   onSetMapping: (
     group: "dimensions" | "resources" | "attributes",
     field: string,
@@ -513,8 +518,8 @@ function MappingGroup({
 }) {
   const { t } = useTranslation()
   const translate = useCallback(
-    (key: string, fallback?: string): string => {
-      return fallback ? t(key, fallback) : t(key)
+    (key: string, options?: Record<string, unknown>): string => {
+      return t(key, options)
     },
     [t]
   )
@@ -530,10 +535,10 @@ function MappingGroup({
         {fields.map((field) => (
           <MappingRow
             key={field.name}
-            fieldName={field.name}
+            targetField={field}
             value={mappings[field.name] ?? ""}
-            expressionGroups={expressionGroups}
-            isInvalid={isExpressionInvalid(mappings[field.name] ?? "")}
+            document={document}
+            source={source}
             onChange={(v) => onSetMapping(group, field.name, v)}
             t={translate}
           />
@@ -545,23 +550,25 @@ function MappingGroup({
 
 // --- Рядок маппінгу ---
 function MappingRow({
-  fieldName,
+  targetField,
   value,
-  expressionGroups,
-  isInvalid,
+  document,
+  source,
   onChange,
   t,
 }: {
-  fieldName: string
+  targetField: Attribute
   value: string
-  expressionGroups: {
-    group: string
-    options: { value: string; label: string }[]
-  }[]
-  isInvalid: boolean
+  document: Document
+  source: string
   onChange: (value: string) => void
-  t: (key: string, fallback?: string) => string
+  t: (key: string, options?: Record<string, unknown>) => string
 }) {
+  const expressionGroups = useMemo(
+    () => buildExpressionOptions(document, source, targetField, t),
+    [document, source, targetField, t]
+  )
+
   // Чи ввід ручний — якщо значення не серед опцій Select
   const allSelectValues = useMemo(() => {
     const vals = new Set<string>()
@@ -579,6 +586,51 @@ function MappingRow({
   // manualMode — computed: або юзер увімкнув, або значення відсутнє серед опцій
   const manualMode = forceManual || (!!value && !allSelectValues.has(value))
 
+  const selectedTsAttributes = useMemo(() => {
+    if (!source.startsWith("tabularSection:")) {
+      return undefined
+    }
+
+    const tsName = source.slice("tabularSection:".length)
+    return document.tabularSections.find((ts) => ts.name === tsName)?.attributes
+  }, [document.tabularSections, source])
+
+  const errorMessage = useMemo(() => {
+    if (!value) {
+      return null
+    }
+
+    if (isExpressionInvalid(value, source)) {
+      return t("movements.invalidExpression")
+    }
+
+    return validateExpressionFields(
+      value,
+      source,
+      document.attributes,
+      selectedTsAttributes,
+      document.tabularSections
+    )
+  }, [
+    document.attributes,
+    document.tabularSections,
+    selectedTsAttributes,
+    source,
+    t,
+    value,
+  ])
+
+  const warningMessage = useMemo(() => {
+    if (!value || errorMessage) {
+      return null
+    }
+
+    return validateExpressionCompatibility(value, targetField, {
+      source,
+      document,
+    })
+  }, [document, errorMessage, source, targetField, value])
+
   const handleSelectChange = useCallback(
     (v: string) => {
       if (v === FREE_INPUT_SENTINEL) {
@@ -592,73 +644,90 @@ function MappingRow({
   )
 
   return (
-    <div className="grid grid-cols-[180px_1fr_32px_20px] items-center gap-2 px-1">
-      <span className="truncate font-mono text-xs">
-        {fieldName}
-      </span>
-      {manualMode ? (
-        <Input
-          className={`h-7 font-mono text-xs ${isInvalid ? "border-destructive" : ""}`}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={t("movements.manualInput", "Ручний ввід")}
-        />
-      ) : (
-        <Select value={value || undefined} onValueChange={handleSelectChange}>
-          <SelectTrigger
-            className={`h-7 text-xs ${isInvalid ? "border-destructive" : ""}`}
-          >
-            <SelectValue placeholder={t("movements.selectExpression", "—")} />
-          </SelectTrigger>
-          <SelectContent>
-            {expressionGroups.map((g) => (
-              <SelectGroup key={g.group}>
-                <SelectLabel>{g.group}</SelectLabel>
-                {g.options.map((o) =>
-                  // Пропускаємо порожній value (hint для вільного вводу)
-                  o.value ? (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ) : null
-                )}
+    <div className="space-y-1 px-1">
+      <div className="grid grid-cols-[180px_1fr_32px_20px] items-center gap-2">
+        <span className="truncate font-mono text-xs">{targetField.name}</span>
+        {manualMode ? (
+          <Input
+            className={`h-7 font-mono text-xs ${
+              errorMessage
+                ? "border-destructive"
+                : warningMessage
+                  ? "border-amber-500"
+                  : ""
+            }`}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={t("movements.manualInput")}
+          />
+        ) : (
+          <Select value={value || undefined} onValueChange={handleSelectChange}>
+            <SelectTrigger
+              className={`h-7 text-xs ${
+                errorMessage
+                  ? "border-destructive"
+                  : warningMessage
+                    ? "border-amber-500"
+                    : ""
+              }`}
+            >
+              <SelectValue placeholder={t("movements.selectExpression")} />
+            </SelectTrigger>
+            <SelectContent>
+              {expressionGroups.map((g) => (
+                <SelectGroup key={g.group}>
+                  <SelectLabel>{g.group}</SelectLabel>
+                  {g.options.map((o) =>
+                    o.value ? (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ) : null
+                  )}
+                </SelectGroup>
+              ))}
+              <SelectGroup>
+                <SelectItem value={FREE_INPUT_SENTINEL}>
+                  {t("movements.manualInput")}
+                </SelectItem>
               </SelectGroup>
-            ))}
-            <SelectGroup>
-              <SelectItem value={FREE_INPUT_SENTINEL}>
-                {t("movements.manualInput", "Ручний ввід")}
-              </SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      )}
-      {/* Перемикач між Select і ручним режимом */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 w-7 shrink-0 p-0"
-        title={
-          manualMode
-            ? t("movements.selectExpression", "Оберіть вираз")
-            : t("movements.manualInput", "Ручний ввід")
-        }
-        onClick={() => setForceManual((prev) => !prev)}
-      >
-        <span className="text-xs">{manualMode ? "▼" : "✎"}</span>
-      </Button>
-      {isInvalid ? (
-        <span
-          className="text-xs text-destructive"
-          title={t(
-            "movements.invalidExpression",
-            "Вираз невалідний для поточного джерела"
-          )}
+            </SelectContent>
+          </Select>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 shrink-0 p-0"
+          title={
+            manualMode
+              ? t("movements.selectExpression")
+              : t("movements.manualInput")
+          }
+          onClick={() => setForceManual((prev) => !prev)}
         >
-          ⚠
-        </span>
-      ) : (
-        <span />
-      )}
+          <span className="text-xs">{manualMode ? "▼" : "✎"}</span>
+        </Button>
+        {errorMessage ? (
+          <span className="text-xs text-destructive" title={errorMessage}>
+            ⚠
+          </span>
+        ) : warningMessage ? (
+          <span className="text-xs text-amber-500" title={warningMessage}>
+            !
+          </span>
+        ) : (
+          <span />
+        )}
+      </div>
+      {errorMessage ? (
+        <p className="pl-[188px] text-[11px] text-destructive">
+          {errorMessage}
+        </p>
+      ) : warningMessage ? (
+        <p className="pl-[188px] text-[11px] text-amber-600">
+          {warningMessage}
+        </p>
+      ) : null}
     </div>
   )
 }

@@ -25,7 +25,7 @@ describe('generateItemForm', () => {
       kind: 'Catalog' as const,
       name: 'Products',
       attributes: [
-        { name: 'sku', type: 'String', required: true },
+        { name: 'sku', type: 'String', length: 50, required: true },
         { name: 'weight', type: 'Numeric', precision: 10, scale: 2 },
       ],
       tabularSections: [],
@@ -49,10 +49,10 @@ describe('generateItemForm', () => {
       kind: 'Catalog' as const,
       name: 'Products',
       attributes: [
-        { name: 'sku', type: 'String', required: true },
+        { name: 'sku', type: 'String', length: 50, required: true },
         // Стандартні реквізити Catalog — не повинні потрапити в layout
-        { name: 'code', type: 'String' },
-        { name: 'description', type: 'String' },
+        { name: 'code', type: 'String', length: 50 },
+        { name: 'description', type: 'String', length: 50 },
         { name: 'deletion_mark', type: 'Boolean' },
       ],
       tabularSections: [],
@@ -80,12 +80,20 @@ describe('generateItemForm', () => {
         {
           name: 'items',
           displayName: { uk: 'Товари', en: 'Items' },
-          attributes: [{ name: 'product', type: 'Ref' }],
+          attributes: [
+            {
+              name: 'product',
+              type: 'Ref',
+              ref: { kind: 'Catalog', name: 'Products' },
+            },
+          ],
         },
         {
           name: 'payments',
           displayName: { uk: 'Оплати', en: 'Payments' },
-          attributes: [{ name: 'amount', type: 'Numeric' }],
+          attributes: [
+            { name: 'amount', type: 'Numeric', precision: 15, scale: 2 },
+          ],
         },
       ],
     }
@@ -118,13 +126,13 @@ describe('generateItemForm', () => {
       kind: 'Catalog' as const,
       name: 'Products',
       attributes: [
-        { name: 'sku', type: 'String' },
-        { name: 'barcode', type: 'String' },
+        { name: 'sku', type: 'String', length: 50 },
+        { name: 'barcode', type: 'String', length: 50 },
         { name: 'weight', type: 'Numeric', precision: 10, scale: 2 },
         { name: 'height', type: 'Numeric', precision: 10, scale: 2 },
         { name: 'width_val', type: 'Numeric', precision: 10, scale: 2 },
         { name: 'depth', type: 'Numeric', precision: 10, scale: 2 },
-        { name: 'color', type: 'String' },
+        { name: 'color', type: 'String', length: 50 },
       ],
       tabularSections: [],
     }
@@ -219,7 +227,7 @@ describe('generateListForm', () => {
       kind: 'Catalog' as const,
       name: 'Products',
       attributes: [
-        { name: 'sku', type: 'String' },
+        { name: 'sku', type: 'String', length: 50 },
         { name: 'weight', type: 'Numeric', precision: 10, scale: 2 },
       ],
       tabularSections: [],
@@ -266,6 +274,7 @@ describe('generateListForm', () => {
       attributes: Array.from({ length: 12 }, (_, i) => ({
         name: `field_${i}`,
         type: 'String' as const,
+        length: 50,
       })),
       tabularSections: [],
     }
@@ -286,6 +295,7 @@ describe('generateListForm', () => {
       attributes: Array.from({ length: 8 }, (_, i) => ({
         name: `field_${i}`,
         type: 'String' as const,
+        length: 50,
       })),
       tabularSections: [],
     }
@@ -306,6 +316,7 @@ describe('generateListForm', () => {
       attributes: Array.from({ length: 9 }, (_, i) => ({
         name: `field_${i}`,
         type: 'String' as const,
+        length: 50,
       })),
       tabularSections: [],
     }
@@ -322,8 +333,8 @@ describe('generateListForm', () => {
       kind: 'CustomTable' as const,
       name: 'Logs',
       attributes: [
-        { name: 'message', type: 'String' },
-        { name: 'level', type: 'String' },
+        { name: 'message', type: 'String', length: 50 },
+        { name: 'level', type: 'String', length: 50 },
       ],
     }
 
@@ -375,7 +386,7 @@ describe('resolveForm', () => {
         {
           kind: 'Catalog',
           name: 'Products',
-          attributes: [{ name: 'sku', type: 'String' }],
+          attributes: [{ name: 'sku', type: 'String', length: 50 }],
         },
       ],
     })
@@ -396,7 +407,7 @@ describe('resolveForm', () => {
         {
           kind: 'Catalog',
           name: 'Products',
-          attributes: [{ name: 'sku', type: 'String' }],
+          attributes: [{ name: 'sku', type: 'String', length: 50 }],
         },
       ],
     })
@@ -442,15 +453,15 @@ describe('autoform determinism', () => {
       kind: 'Catalog' as const,
       name: 'Products',
       attributes: [
-        { name: 'sku', type: 'String' },
+        { name: 'sku', type: 'String', length: 50 },
         { name: 'weight', type: 'Numeric', precision: 10, scale: 2 },
-        { name: 'color', type: 'String' },
+        { name: 'color', type: 'String', length: 50 },
       ],
       tabularSections: [
         {
           name: 'barcodes',
           displayName: { uk: 'Штрихкоди', en: 'Barcodes' },
-          attributes: [{ name: 'value', type: 'String' }],
+          attributes: [{ name: 'value', type: 'String', length: 50 }],
         },
       ],
     }
@@ -466,7 +477,7 @@ describe('autoform determinism', () => {
       kind: 'Catalog' as const,
       name: 'Products',
       attributes: [
-        { name: 'sku', type: 'String' },
+        { name: 'sku', type: 'String', length: 50 },
         { name: 'weight', type: 'Numeric', precision: 10, scale: 2 },
       ],
       tabularSections: [],
@@ -496,7 +507,13 @@ describe('autoform schema sanity', () => {
         {
           name: 'items',
           displayName: { uk: 'Товари', en: 'Items' },
-          attributes: [{ name: 'product', type: 'Ref' }],
+          attributes: [
+            {
+              name: 'product',
+              type: 'Ref',
+              ref: { kind: 'Catalog', name: 'Products' },
+            },
+          ],
         },
       ],
     }
@@ -512,7 +529,7 @@ describe('autoform schema sanity', () => {
     const catalog = {
       kind: 'Catalog' as const,
       name: 'Products',
-      attributes: [{ name: 'sku', type: 'String' }],
+      attributes: [{ name: 'sku', type: 'String', length: 50 }],
       tabularSections: [],
     }
 

@@ -636,7 +636,7 @@ describe('round-trip', () => {
           name: 'CurrencyRates',
           periodicity: 'Day',
           writeMode: 'Independent',
-          dimensions: [{ name: 'currency', type: 'String' }],
+          dimensions: [{ name: 'currency', type: 'String', length: 50 }],
           resources: [{ name: 'rate', type: 'Numeric', precision: 15, scale: 4 }],
         },
       ],
@@ -653,7 +653,7 @@ describe('round-trip', () => {
         {
           kind: 'CustomTable',
           name: 'AuditLog',
-          attributes: [{ name: 'action', type: 'String' }],
+          attributes: [{ name: 'action', type: 'String', length: 50 }],
         },
       ],
     })

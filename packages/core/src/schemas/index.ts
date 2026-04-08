@@ -13,6 +13,14 @@ export { attributeSchema, type Attribute } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
 export {
+  TECHNICAL_NAME_PATTERNS,
+  STRING_LENGTH,
+  NUMERIC_PRECISION,
+  NUMERIC_SCALE,
+  matchesTechnicalName,
+  type TechnicalNameFormat,
+} from "./technical-name"
+export {
   KIND_PREFIX,
   toSnakeCase,
   physicalObjectName,

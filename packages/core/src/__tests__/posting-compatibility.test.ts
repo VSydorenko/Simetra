@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { isPostingCompatible } from "../posting-compatibility"
+import { formatValidationMessage } from "../validation-message"
 import type { AccumulationRegister, InformationRegister } from "../schemas"
 
 /** Мінімальний AccumulationRegister для тестів */
@@ -59,7 +60,11 @@ describe("isPostingCompatible", () => {
   it("InformationRegister Independent -> incompatible with reason", () => {
     const result = isPostingCompatible(makeInformationRegister("Independent"))
     expect(result.compatible).toBe(false)
-    expect(result.reason).toContain("writeMode=Independent")
-    expect(result.reason).toContain("cannot be used as posting target")
+    expect(formatValidationMessage(result.reason ?? "")).toContain(
+      "writeMode=Independent"
+    )
+    expect(formatValidationMessage(result.reason ?? "")).toContain(
+      "cannot be used as a posting target"
+    )
   })
 })

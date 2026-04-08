@@ -202,7 +202,7 @@ export function MovementsSection({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-medium">
-              {t("movements.validations", "Валідації")}
+              {t("movements.validations")}
             </h3>
             <Button
               variant="ghost"
@@ -222,7 +222,7 @@ export function MovementsSection({
             />
           ) : (
             <p className="text-xs text-muted-foreground">
-              {t("movements.noValidations", "Немає валідацій")}
+              {t("movements.noValidations")}
             </p>
           )}
         </div>
@@ -231,6 +231,7 @@ export function MovementsSection({
       <RegisterPickerDialog
         open={pickerOpen}
         onOpenChange={setPickerOpen}
+        documentRef={{ kind: "Document", name: objectName }}
         existingRefs={registerMovements}
         onSave={handleAddRegisters}
       />
@@ -265,7 +266,7 @@ function RegisterMovementsTable({
   if (registerMovements.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        {t("movements.noRegisters", "Немає регістрів для рухів")}
+        {t("movements.noRegisters")}
       </p>
     )
   }
@@ -275,13 +276,13 @@ function RegisterMovementsTable({
       <TableHeader>
         <TableRow>
           <TableHead className="h-7 text-xs">
-            {t("movements.register", "Регістр")}
+            {t("movements.register")}
           </TableHead>
           <TableHead className="h-7 text-xs">
-            {t("movements.movementType", "Тип руху")}
+            {t("movements.movementType")}
           </TableHead>
           <TableHead className="h-7 text-xs">
-            {t("movements.source", "Джерело")}
+            {t("movements.source")}
           </TableHead>
           <TableHead className="h-7 w-10 text-xs" />
         </TableRow>
@@ -345,16 +346,16 @@ function ValidationsTable({
       <TableHeader>
         <TableRow>
           <TableHead className="h-7 text-xs">
-            {t("movements.register", "Регістр")}
+            {t("movements.register")}
           </TableHead>
           <TableHead className="h-7 text-xs">
-            {t("movements.dimensions", "Виміри")}
+            {t("movements.dimensions")}
           </TableHead>
           <TableHead className="h-7 text-xs">
-            {t("movements.resource", "Ресурс")}
+            {t("movements.resource")}
           </TableHead>
           <TableHead className="h-7 text-xs">
-            {t("movements.message", "Повідомлення")}
+            {t("movements.message")}
           </TableHead>
           <TableHead className="h-7 w-10 text-xs" />
         </TableRow>

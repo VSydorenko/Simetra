@@ -3,6 +3,7 @@ import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { metadataRefSchema } from "./metadata-ref"
 import { isSqlReservedWord } from "./sql-reserved-words"
+import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
 
 /** BRD §5.6 — Accumulation Register */
 export const accumulationRegisterSchema = z.object({
@@ -10,7 +11,7 @@ export const accumulationRegisterSchema = z.object({
   kind: z.literal("AccumulationRegister"),
   name: z
     .string()
-    .regex(/^[A-Z][A-Za-z0-9]*$/, "PascalCase, Latin only")
+    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
     .refine((n) => !isSqlReservedWord(n), {
       message: "Name is a SQL reserved word",
     }),

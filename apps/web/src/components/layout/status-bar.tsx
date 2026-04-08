@@ -49,7 +49,6 @@ export function StatusBar() {
   )
 
   const errorCount = useMetadataStore((s) => {
-    // Дедуплікуємо помилки за ключем `path:message` в межах кожного обʼєкта
     const allObjectKeys = new Set([
       ...Object.keys(s.validationErrors),
       ...Object.keys(s.modelErrors),
@@ -61,6 +60,9 @@ export function StatusBar() {
         ...(s.validationErrors[key] ?? []),
         ...(s.modelErrors[key] ?? []),
       ]) {
+        if (err.severity === "warning") {
+          continue
+        }
         const dedupeKey = `${err.path}:${err.message}`
         if (!seen.has(dedupeKey)) {
           seen.add(dedupeKey)
@@ -71,7 +73,32 @@ export function StatusBar() {
     return total
   })
 
-  const warningCount = useProjectStore((s) => s.openWarnings.length)
+  const warningCount = useMetadataStore((s) => {
+    const allObjectKeys = new Set([
+      ...Object.keys(s.validationErrors),
+      ...Object.keys(s.modelErrors),
+    ])
+    let total = 0
+    for (const key of allObjectKeys) {
+      const seen = new Set<string>()
+      for (const err of [
+        ...(s.validationErrors[key] ?? []),
+        ...(s.modelErrors[key] ?? []),
+      ]) {
+        if (err.severity !== "warning") {
+          continue
+        }
+        const dedupeKey = `${err.path}:${err.message}`
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey)
+          total++
+        }
+      }
+    }
+    return total
+  })
+
+  const openWarningCount = useProjectStore((s) => s.openWarnings.length)
 
   const openTabsCount = useUiStore((s) => s.openTabs.length)
   const floatingWindowsCount = useUiStore((s) => s.floatingWindows.length)
@@ -85,9 +112,11 @@ export function StatusBar() {
           ? t("validation.errors", { count: errorCount })
           : t("validation.noErrors")}
       </span>
-      {warningCount > 0 && (
+      {warningCount + openWarningCount > 0 && (
         <span className="text-amber-500">
-          {t("validation.warnings", { count: warningCount })}
+          {t("validation.warnings", {
+            count: warningCount + openWarningCount,
+          })}
         </span>
       )}
       {(openTabsCount > 0 || floatingWindowsCount > 0) && (

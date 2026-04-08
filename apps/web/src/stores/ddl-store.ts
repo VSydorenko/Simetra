@@ -5,12 +5,19 @@ import { KIND_TO_KEY, isPostingCompatible } from "@simetra/core"
 import type {
   AccumulationRegister,
   Attribute,
+  Document,
   InformationRegister,
   MetadataKind,
   MetadataObject,
   ProjectModel,
 } from "@simetra/core"
+import i18n from "@/i18n"
 import { useMetadataStore } from "@/stores/metadata-store"
+import {
+  validateExpressionCompatibility,
+  validateExpressionFields,
+} from "@/lib/expression-validation"
+import { translateValidationMessage } from "@/lib/translate-validation-message"
 
 const ALL_KINDS: MetadataKind[] = [
   "Catalog",
@@ -85,9 +92,57 @@ function collectAllAttributes(
   return result
 }
 
-/** Збирає помилки валідації broken refs перед генерацією DDL */
-function collectValidationErrors(model: ProjectModel): string[] {
+function addAttributePreflightWarnings(
+  warnings: string[],
+  kind: MetadataKind,
+  objectName: string,
+  path: string,
+  attr: Attribute
+): void {
+  if (attr.type === "String" && attr.length == null) {
+    warnings.push(
+      i18n.t("validation.preflight.stringLengthMissing", {
+        path: `${kind}.${objectName}.${path}.length`,
+      })
+    )
+  }
+
+  if (attr.type === "Numeric" && attr.precision == null) {
+    warnings.push(
+      i18n.t("validation.preflight.numericPrecisionMissing", {
+        path: `${kind}.${objectName}.${path}.precision`,
+      })
+    )
+  }
+
+  if (attr.type === "Numeric" && attr.scale == null) {
+    warnings.push(
+      i18n.t("validation.preflight.numericScaleMissing", {
+        path: `${kind}.${objectName}.${path}.scale`,
+      })
+    )
+  }
+
+  if (
+    attr.type === "Ref" &&
+    !attr.ref &&
+    !(attr.allowedTypes && attr.allowedTypes.length > 0)
+  ) {
+    warnings.push(
+      i18n.t("validation.preflight.refTargetMissing", {
+        path: `${kind}.${objectName}.${path}`,
+      })
+    )
+  }
+}
+
+/** Збирає помилки та warnings preflight перед генерацією DDL */
+function collectValidationMessages(model: ProjectModel): {
+  errors: string[]
+  warnings: string[]
+} {
   const errors: string[] = []
+  const warnings: string[] = []
 
   for (const kind of ALL_KINDS) {
     const key = KIND_TO_KEY[kind]
@@ -96,10 +151,14 @@ function collectValidationErrors(model: ProjectModel): string[] {
     for (const obj of objects) {
       const allAttrs = collectAllAttributes(obj)
       for (const { path, attr } of allAttrs) {
+        addAttributePreflightWarnings(warnings, kind, obj.name, path, attr)
         if (attr.type === "Ref" && attr.ref) {
           if (!refExists(model, attr.ref.kind, attr.ref.name)) {
             errors.push(
-              `${kind}.${obj.name}.${path}: посилання на неіснуючий обʼєкт ${attr.ref.kind}/${attr.ref.name}`
+              i18n.t("validation.preflight.refObjectMissing", {
+                path: `${kind}.${obj.name}.${path}`,
+                target: `${attr.ref.kind}/${attr.ref.name}`,
+              })
             )
           }
         }
@@ -107,7 +166,10 @@ function collectValidationErrors(model: ProjectModel): string[] {
           for (const allowed of attr.allowedTypes) {
             if (!refExists(model, allowed.kind, allowed.name)) {
               errors.push(
-                `${kind}.${obj.name}.${path}: посилання на неіснуючий обʼєкт ${allowed.kind}/${allowed.name}`
+                i18n.t("validation.preflight.refObjectMissing", {
+                  path: `${kind}.${obj.name}.${path}`,
+                  target: `${allowed.kind}/${allowed.name}`,
+                })
               )
             }
           }
@@ -122,7 +184,10 @@ function collectValidationErrors(model: ProjectModel): string[] {
         }[]) {
           if (!refExists(model, ref.kind, ref.name)) {
             errors.push(
-              `${kind}.${obj.name}.owners: посилання на неіснуючий обʼєкт ${ref.kind}/${ref.name}`
+              i18n.t("validation.preflight.refObjectMissing", {
+                path: `${kind}.${obj.name}.owners`,
+                target: `${ref.kind}/${ref.name}`,
+              })
             )
           }
         }
@@ -134,7 +199,10 @@ function collectValidationErrors(model: ProjectModel): string[] {
         }[]) {
           if (!refExists(model, ref.kind, ref.name)) {
             errors.push(
-              `${kind}.${obj.name}.recorderTypes: посилання на неіснуючий обʼєкт ${ref.kind}/${ref.name}`
+              i18n.t("validation.preflight.refObjectMissing", {
+                path: `${kind}.${obj.name}.recorderTypes`,
+                target: `${ref.kind}/${ref.name}`,
+              })
             )
           }
         }
@@ -146,7 +214,10 @@ function collectValidationErrors(model: ProjectModel): string[] {
         }[]) {
           if (!refExists(model, ref.kind, ref.name)) {
             errors.push(
-              `${kind}.${obj.name}.registerMovements: посилання на неіснуючий обʼєкт ${ref.kind}/${ref.name}`
+              i18n.t("validation.preflight.refObjectMissing", {
+                path: `${kind}.${obj.name}.registerMovements`,
+                target: `${ref.kind}/${ref.name}`,
+              })
             )
           }
         }
@@ -157,10 +228,17 @@ function collectValidationErrors(model: ProjectModel): string[] {
         typeof obj.posting === "object" &&
         obj.posting !== null
       ) {
+        const documentObject = obj as Document
+        const recorderRef = { kind: "Document" as const, name: obj.name }
         const posting = obj.posting as {
           movements?: {
             register: { kind: MetadataKind; name: string }
-            mappings: { dimensions: Record<string, string> }
+            source: string
+            mappings: {
+              dimensions: Record<string, string>
+              resources: Record<string, string>
+              attributes: Record<string, string>
+            }
           }[]
           validations?: {
             register: { kind: MetadataKind; name: string }
@@ -171,16 +249,36 @@ function collectValidationErrors(model: ProjectModel): string[] {
           for (const m of posting.movements) {
             if (!refExists(model, m.register.kind, m.register.name)) {
               errors.push(
-                `${kind}.${obj.name}.posting.movements: посилання на неіснуючий обʼєкт ${m.register.kind}/${m.register.name}`
+                i18n.t("validation.preflight.refObjectMissing", {
+                  path: `${kind}.${obj.name}.posting.movements`,
+                  target: `${m.register.kind}/${m.register.name}`,
+                })
               )
             }
             // Перевірка сумісності регістру з проведенням
             const reg = findRegisterInModel(model, m.register)
             if (reg) {
-              const compat = isPostingCompatible(reg)
+              const compat = isPostingCompatible(reg, { recorder: recorderRef })
               if (!compat.compatible) {
                 errors.push(
-                  `${kind}/${obj.name}: Регістр ${m.register.name} не сумісний з проведенням`
+                  `${kind}/${obj.name}: ${i18n.t(
+                    "validation.posting.registerIncompatible",
+                    {
+                      register: m.register.name,
+                      reason: translateValidationMessage(compat.reason ?? ""),
+                    }
+                  )}`
+                )
+              }
+              for (const warning of compat.warnings ?? []) {
+                warnings.push(
+                  `${kind}/${obj.name}: ${i18n.t(
+                    "validation.posting.registerWarning",
+                    {
+                      register: m.register.name,
+                      warning: translateValidationMessage(warning),
+                    }
+                  )}`
                 )
               }
               // Перевірка неповних dimensions
@@ -192,12 +290,67 @@ function collectValidationErrors(model: ProjectModel): string[] {
               )
               if (missingDims.length > 0) {
                 const label =
-                  reg.kind === 'AccumulationRegister'
-                    ? 'не заповнені dimensions'
-                    : `не заповнені обов'язкові dimensions`
+                  reg.kind === "AccumulationRegister"
+                    ? i18n.t("validation.posting.missingDimensionsLabel")
+                    : i18n.t("validation.posting.missingRequiredDimensionsLabel")
                 errors.push(
-                  `${kind}/${obj.name}: Рух до ${m.register.name} — ${label}: ${missingDims.map((d) => d.name).join(', ')}`
+                  `${kind}/${obj.name}: ${i18n.t(
+                    "validation.posting.movementMissingDimensions",
+                    {
+                      register: m.register.name,
+                      label,
+                      dimensions: missingDims.map((d) => d.name).join(", "),
+                    }
+                  )}`
                 )
+              }
+
+              const selectedTsAttributes = m.source.startsWith("tabularSection:")
+                ? documentObject.tabularSections.find(
+                    (section) =>
+                      section.name === m.source.slice("tabularSection:".length)
+                  )?.attributes
+                : undefined
+
+              const mappingGroups: Array<
+                [group: "dimensions" | "resources" | "attributes", fields: Attribute[]]
+              > = [
+                ["dimensions", reg.dimensions],
+                ["resources", reg.resources],
+                ["attributes", reg.attributes],
+              ]
+
+              for (const [groupName, fields] of mappingGroups) {
+                for (const field of fields) {
+                  const expr = m.mappings[groupName]?.[field.name]
+                  if (!expr) {
+                    continue
+                  }
+
+                  const fieldError = validateExpressionFields(
+                    expr,
+                    m.source,
+                    documentObject.attributes,
+                    selectedTsAttributes,
+                    documentObject.tabularSections
+                  )
+                  if (fieldError) {
+                    errors.push(
+                      `${kind}/${obj.name}: ${m.register.name}.${groupName}.${field.name} — ${fieldError}`
+                    )
+                    continue
+                  }
+
+                  const typeWarning = validateExpressionCompatibility(expr, field, {
+                    source: m.source,
+                    document: documentObject,
+                  })
+                  if (typeWarning) {
+                    warnings.push(
+                      `${kind}/${obj.name}: ${m.register.name}.${groupName}.${field.name} — ${typeWarning}`
+                    )
+                  }
+                }
               }
             }
           }
@@ -206,7 +359,10 @@ function collectValidationErrors(model: ProjectModel): string[] {
           for (const v of posting.validations) {
             if (!refExists(model, v.register.kind, v.register.name)) {
               errors.push(
-                `${kind}.${obj.name}.posting.validations: посилання на неіснуючий обʼєкт ${v.register.kind}/${v.register.name}`
+                i18n.t("validation.preflight.refObjectMissing", {
+                  path: `${kind}.${obj.name}.posting.validations`,
+                  target: `${v.register.kind}/${v.register.name}`,
+                })
               )
             }
             // Перевірка що ресурс валідації має числовий тип
@@ -215,17 +371,34 @@ function collectValidationErrors(model: ProjectModel): string[] {
               const resourceAttr = reg.resources.find((r) => r.name === v.resource)
               if (resourceAttr && resourceAttr.type !== 'Numeric' && resourceAttr.type !== 'Integer') {
                 errors.push(
-                  `${kind}/${obj.name}: Валідація NonNegativeBalance для ${v.resource} — ресурс має тип ${resourceAttr.type}, очікується Numeric або Integer`
+                  `${kind}/${obj.name}: ${i18n.t(
+                    "validation.posting.nonNegativeBalanceResourceType",
+                    {
+                      resource: v.resource,
+                      type: resourceAttr.type,
+                    }
+                  )}`
                 )
               }
             }
           }
         }
+        if (
+          posting.validations &&
+          posting.validations.length > 0 &&
+          (!posting.movements || posting.movements.length === 0)
+        ) {
+          warnings.push(
+            `${kind}/${obj.name}: ${i18n.t(
+              "validation.posting.validationsWithoutMovements"
+            )}`
+          )
+        }
       }
     }
   }
 
-  return errors
+  return { errors, warnings }
 }
 
 interface DdlState {
@@ -239,6 +412,8 @@ interface DdlState {
   generationError: string | null
   // Помилки валідації перед генерацією
   validationErrors: string[]
+  // Non-blocking warnings preflight перед генерацією
+  validationWarnings: string[]
 }
 
 interface DdlActions {
@@ -255,7 +430,10 @@ interface DdlActions {
 }
 
 /** Виконує генерацію DDL без перевірки валідації */
-function runGeneration(set: (partial: Partial<DdlState>) => void) {
+function runGeneration(
+  set: (partial: Partial<DdlState>) => void,
+  validationWarnings: string[] = []
+) {
   set({ isGenerating: true, generationError: null })
   try {
     const { model } = useMetadataStore.getState()
@@ -265,6 +443,7 @@ function runGeneration(set: (partial: Partial<DdlState>) => void) {
       output,
       selectedFilePath: output.files[0]?.path ?? null,
       validationErrors: [],
+      validationWarnings,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -280,19 +459,22 @@ export const useDdlStore = create<DdlState & DdlActions>()((set) => ({
   isGenerating: false,
   generationError: null,
   validationErrors: [],
+  validationWarnings: [],
 
   generateDdl: () => {
     const { model } = useMetadataStore.getState()
-    const errors = collectValidationErrors(model)
+    const { errors, warnings } = collectValidationMessages(model)
     if (errors.length > 0) {
-      set({ validationErrors: errors })
+      set({ validationErrors: errors, validationWarnings: warnings, output: null })
       return
     }
-    runGeneration(set)
+    runGeneration(set, warnings)
   },
 
   generateDdlForce: () => {
-    runGeneration(set)
+    const { model } = useMetadataStore.getState()
+    const { warnings } = collectValidationMessages(model)
+    runGeneration(set, warnings)
   },
 
   selectFile: (path) => {
@@ -304,10 +486,11 @@ export const useDdlStore = create<DdlState & DdlActions>()((set) => ({
       output: null,
       selectedFilePath: null,
       generationError: null,
+      validationWarnings: [],
     })
   },
 
   clearValidationErrors: () => {
-    set({ validationErrors: [] })
+    set({ validationErrors: [], validationWarnings: [] })
   },
 }))

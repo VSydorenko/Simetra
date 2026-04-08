@@ -11,7 +11,7 @@ describe("posting normalization — empty posting becomes undefined", () => {
           kind: "AccumulationRegister",
           name: "InventoryBalance",
           registerType: "Balance",
-          dimensions: [{ name: "product", type: "String" }],
+          dimensions: [{ name: "product", type: "String", length: 50 }],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
           ],
@@ -25,7 +25,7 @@ describe("posting normalization — empty posting becomes undefined", () => {
           tabularSections: [
             {
               name: "items",
-              attributes: [{ name: "product", type: "String" }],
+              attributes: [{ name: "product", type: "String", length: 50 }],
             },
           ],
           registerMovements: [
@@ -94,7 +94,7 @@ describe("posting normalization — empty posting becomes undefined", () => {
           kind: "AccumulationRegister",
           name: "InventoryBalance",
           registerType: "Balance",
-          dimensions: [{ name: "product", type: "String" }],
+          dimensions: [{ name: "product", type: "String", length: 50 }],
           resources: [
             { name: "quantity", type: "Numeric", precision: 15, scale: 2 },
           ],

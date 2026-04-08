@@ -36,6 +36,7 @@ import {
   enrichProjectSchemaUrl,
   buildConstantsSchemaUrl,
 } from "../serialization"
+import { formatValidationMessage } from "../validation-message"
 
 describe("localizedStringSchema", () => {
   it("accepts uk only", () => {
@@ -684,7 +685,7 @@ describe("customTableSchema", () => {
 describe("attributeSchema", () => {
   it("rejects non-snake_case name", () => {
     expect(() =>
-      attributeSchema.parse({ name: "CamelCase", type: "String" })
+      attributeSchema.parse({ name: "CamelCase", type: "String", length: 50 })
     ).toThrow()
   })
 
@@ -725,13 +726,18 @@ describe("attributeSchema", () => {
     expect(result.ref).toEqual({ kind: "Catalog", name: "Contractors" })
   })
 
-  it("accepts Ref without ref and allowedTypes (not yet selected)", () => {
-    const result = attributeSchema.parse({
+  it("rejects Ref without ref and allowedTypes", () => {
+    const result = attributeSchema.safeParse({
       name: "target",
       type: "Ref",
     })
-    expect(result.ref).toBeUndefined()
-    expect(result.allowedTypes).toBeUndefined()
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        formatValidationMessage(result.error.issues[0]?.message ?? "")
+      ).toContain("Ref type requires a target object")
+    }
   })
 
   it("rejects attribute with both ref and allowedTypes", () => {
@@ -750,6 +756,7 @@ describe("attributeSchema", () => {
       attributeSchema.parse({
         name: "bad_field",
         type: "String",
+        length: 50,
         ref: { kind: "Catalog", name: "Products" },
       })
     ).toThrow(/only valid when type is Ref/)
@@ -904,16 +911,16 @@ describe("SQL reserved words", () => {
 
   it("rejects reserved word as attribute name", () => {
     expect(() =>
-      attributeSchema.parse({ name: "order", type: "String" })
+      attributeSchema.parse({ name: "order", type: "String", length: 50 })
     ).toThrow(/SQL reserved word/)
     expect(() =>
       attributeSchema.parse({ name: "group", type: "Integer" })
     ).toThrow(/SQL reserved word/)
     expect(() =>
-      attributeSchema.parse({ name: "user", type: "String" })
+      attributeSchema.parse({ name: "user", type: "String", length: 50 })
     ).toThrow(/SQL reserved word/)
     expect(() =>
-      attributeSchema.parse({ name: "table", type: "String" })
+      attributeSchema.parse({ name: "table", type: "String", length: 50 })
     ).toThrow(/SQL reserved word/)
   })
 
@@ -937,8 +944,8 @@ describe("attribute name uniqueness", () => {
         kind: "Catalog",
         name: "Products",
         attributes: [
-          { name: "price", type: "Numeric" },
-          { name: "price", type: "String" },
+          { name: "price", type: "Numeric", precision: 15, scale: 2 },
+          { name: "price", type: "String", length: 50 },
         ],
       })
     ).toThrow(/unique/)
@@ -954,7 +961,7 @@ describe("attribute name uniqueness", () => {
             name: "details",
             attributes: [
               { name: "qty", type: "Integer" },
-              { name: "qty", type: "Numeric" },
+              { name: "qty", type: "Numeric", precision: 15, scale: 2 },
             ],
           },
         ],
@@ -981,7 +988,7 @@ describe("attribute name uniqueness", () => {
         kind: "Catalog",
         name: "Products",
         attributes: [
-          { name: "price", type: "Numeric" },
+          { name: "price", type: "Numeric", precision: 15, scale: 2 },
           { name: "quantity", type: "Integer" },
         ],
       })
@@ -995,7 +1002,7 @@ describe("AccumulationRegister numeric resources", () => {
       accumulationRegisterSchema.parse({
         kind: "AccumulationRegister",
         name: "TestRegister",
-        resources: [{ name: "description", type: "String" }],
+        resources: [{ name: "description", type: "String", length: 50 }],
       })
     ).toThrow(/Numeric or Integer/)
   })

@@ -73,6 +73,7 @@ export function TabularSectionsEditor({
     while (existing.has(`section_${i}`)) i++
     const section: TabularSection = {
       name: `section_${i}`,
+      standardAttributeOverrides: {},
       attributes: [],
     }
     addTabularSection(kind, objectName, section)

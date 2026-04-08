@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { projectModelSchema, type Document } from "@simetra/core"
+import { projectModelSchema, type Attribute, type Document } from "@simetra/core"
+import i18n from "../i18n"
 import { buildExpressionOptions } from "../lib/build-expression-options"
 
-const identity = (key: string, fallback?: string) => fallback ?? key
+const translate = (key: string, options?: Record<string, unknown>) =>
+  i18n.t(key, options)
 
 function createDocumentWithTS(): Document {
   const model = projectModelSchema.parse({
@@ -43,34 +45,68 @@ function createDocumentWithTS(): Document {
   return model.documents[0]
 }
 
+function targetField(
+  type: Attribute["type"],
+  overrides: Partial<Attribute> = {}
+): Attribute {
+  return {
+    name: "target_field",
+    type,
+    required: false,
+    indexed: false,
+    unique: false,
+    defaultValue: null,
+    ...(type === "String" ? { length: 50 } : {}),
+    ...(type === "Numeric" ? { precision: 15, scale: 2 } : {}),
+    ...overrides,
+  }
+}
+
 describe("buildExpressionOptions", () => {
-  it('source=document → групи: Документ, Агрегати, Константи', () => {
+  it("source=document + Ref target → показує тільки сумісні doc.* поля", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "document", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "document",
+      targetField("Ref", {
+        ref: { kind: "Catalog", name: "Warehouses" },
+      }),
+      translate
+    )
     const groupNames = groups.map((g) => g.group)
 
     expect(groupNames).toContain("Документ")
-    expect(groupNames).toContain("Агрегати")
-    expect(groupNames).toContain("Константи")
+    expect(groupNames).not.toContain("Агрегати")
+    expect(groupNames).not.toContain("Константи")
   })
 
-  it("source=document → Документ включає standard + custom fields", () => {
+  it("source=document + Ref target → Документ включає тільки Ref-поля документа", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "document", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "document",
+      targetField("Ref", {
+        ref: { kind: "Catalog", name: "Warehouses" },
+      }),
+      translate
+    )
     const docGroup = groups.find((g) => g.group === "Документ")!
 
     const values = docGroup.options.map((o) => o.value)
-    // Стандартні реквізити документа (без id)
-    expect(values).toContain("doc.number")
-    expect(values).toContain("doc.date")
-    // Користувацькі реквізити
     expect(values).toContain("doc.warehouse")
     expect(values).toContain("doc.supplier")
+    expect(values).not.toContain("doc.number")
+    expect(values).not.toContain("doc.date")
   })
 
-  it("source=document → Агрегати включає sum і count для ТЧ", () => {
+  it("source=document + Numeric target → Агрегати включає sum і count для ТЧ", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "document", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "document",
+      targetField("Numeric"),
+      translate
+    )
     const aggGroup = groups.find((g) => g.group === "Агрегати")!
 
     const values = aggGroup.options.map((o) => o.value)
@@ -79,9 +115,14 @@ describe("buildExpressionOptions", () => {
     expect(values).toContain("sum(items.price)")
   })
 
-  it("source=document → Константи включає now() і literal:", () => {
+  it("source=document + DateTime target → Константи включає now() і literal:", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "document", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "document",
+      targetField("DateTime"),
+      translate
+    )
     const constGroup = groups.find((g) => g.group === "Константи")!
 
     const values = constGroup.options.map((o) => o.value)
@@ -89,41 +130,58 @@ describe("buildExpressionOptions", () => {
     expect(values).toContain("literal:")
   })
 
-  it("source=tabularSection:items → має групу ТЧ рядок і Документ", () => {
+  it("source=tabularSection:items + Ref target → має групу ТЧ рядок і Документ", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "tabularSection:items", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "tabularSection:items",
+      targetField("Ref", {
+        ref: { kind: "Catalog", name: "Products" },
+      }),
+      translate
+    )
     const groupNames = groups.map((g) => g.group)
 
-    // Перша група — рядок ТЧ
     expect(groupNames.some((n) => n.includes("items") || n.includes("ТЧ"))).toBe(true)
     expect(groupNames).toContain("Документ")
   })
 
-  it("source=tabularSection:items → row.* опції для полів ТЧ", () => {
+  it("source=tabularSection:items + Numeric target → row.* опції для числових полів ТЧ", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "tabularSection:items", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "tabularSection:items",
+      targetField("Numeric"),
+      translate
+    )
     const tsGroup = groups[0] // перша група — рядок ТЧ
 
     const values = tsGroup.options.map((o) => o.value)
-    expect(values).toContain("row.product")
     expect(values).toContain("row.quantity")
     expect(values).toContain("row.price")
-    // Стандартний реквізит ТЧ
     expect(values).toContain("row.line_number")
+    expect(values).not.toContain("row.product")
   })
 
-  it("source=tabularSection:items → doc.* для полів документа", () => {
+  it("source=tabularSection:items + Ref target → doc.* для Ref-полів документа", () => {
     const doc = createDocumentWithTS()
-    const groups = buildExpressionOptions(doc, "tabularSection:items", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "tabularSection:items",
+      targetField("Ref", {
+        ref: { kind: "Catalog", name: "Products" },
+      }),
+      translate
+    )
     const docGroup = groups.find((g) => g.group === "Документ")!
 
     const values = docGroup.options.map((o) => o.value)
     expect(values).toContain("doc.warehouse")
     expect(values).toContain("doc.supplier")
-    expect(values).toContain("doc.number")
+    expect(values).not.toContain("doc.number")
   })
 
-  it("документ без ТЧ → source=document → не має групи Агрегати", () => {
+  it("документ без ТЧ + Numeric target → source=document не має групи Агрегати", () => {
     const model = projectModelSchema.parse({
       project: { name: "Test" },
       documents: [
@@ -136,7 +194,12 @@ describe("buildExpressionOptions", () => {
       ],
     })
     const doc = model.documents[0]
-    const groups = buildExpressionOptions(doc, "document", identity)
+    const groups = buildExpressionOptions(
+      doc,
+      "document",
+      targetField("Numeric"),
+      translate
+    )
     const aggGroup = groups.find((g) => g.group === "Агрегати")
     expect(aggGroup).toBeUndefined()
   })

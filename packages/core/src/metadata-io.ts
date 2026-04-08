@@ -19,6 +19,9 @@ import {
   accumulationRegisterSchema,
   customTableSchema,
   formSchema,
+  STRING_LENGTH,
+  NUMERIC_PRECISION,
+  NUMERIC_SCALE,
 } from './schemas'
 import type { FormSchema } from './schemas'
 import { KIND_TO_KEY } from './find-references'
@@ -31,6 +34,7 @@ import {
   serializeForm,
   buildFormSchemaUrl,
 } from './serialization'
+import { formatValidationMessage } from './validation-message'
 
 // --- Типи ---
 
@@ -79,6 +83,11 @@ export interface BuildModelResult {
   model: ProjectModel
   forms: Map<string, unknown>
   warnings: FileWarning[]
+}
+
+interface NormalizationResult {
+  data: unknown
+  warnings: string[]
 }
 
 // --- Маппінг MetadataKind ↔ назва каталогу (BRD §7.2) ---
@@ -231,7 +240,7 @@ export function parseMetadataFiles(files: Map<string, string>): {
                   filePath: path,
                   errors: itemResult.error.issues.map(
                     (issue) =>
-                      `constants[${i}].${issue.path.join('.')}: ${issue.message}`,
+                      `constants[${i}].${issue.path.join('.')}: ${formatValidationMessage(issue.message)}`,
                   ),
                 })
               }
@@ -258,6 +267,115 @@ export function parseMetadataFiles(files: Map<string, string>): {
   }
 
   return { parsed, warnings }
+}
+
+function normalizeLegacyAttribute(
+  value: unknown,
+  path: string,
+): NormalizationResult {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { data: value, warnings: [] }
+  }
+
+  const attribute = { ...(value as Record<string, unknown>) }
+  const warnings: string[] = []
+
+  if (attribute.type === 'String' && attribute.length == null) {
+    attribute.length = STRING_LENGTH
+    warnings.push(
+      `${path}.length: missing String length normalized to ${STRING_LENGTH}`,
+    )
+  }
+
+  if (attribute.type === 'Numeric') {
+    if (attribute.precision == null) {
+      attribute.precision = NUMERIC_PRECISION
+      warnings.push(
+        `${path}.precision: missing Numeric precision normalized to ${NUMERIC_PRECISION}`,
+      )
+    }
+    if (attribute.scale == null) {
+      attribute.scale = NUMERIC_SCALE
+      warnings.push(
+        `${path}.scale: missing Numeric scale normalized to ${NUMERIC_SCALE}`,
+      )
+    }
+  }
+
+  return { data: attribute, warnings }
+}
+
+function normalizeLegacyAttributes(
+  list: unknown,
+  path: string,
+): NormalizationResult {
+  if (!Array.isArray(list)) {
+    return { data: list, warnings: [] }
+  }
+
+  const normalized: unknown[] = []
+  const warnings: string[] = []
+
+  for (let index = 0; index < list.length; index++) {
+    const item = list[index]
+    const itemName =
+      item && typeof item === 'object' && 'name' in item
+        ? String((item as { name?: unknown }).name ?? index)
+        : String(index)
+    const result = normalizeLegacyAttribute(item, `${path}.${itemName}`)
+    normalized.push(result.data)
+    warnings.push(...result.warnings)
+  }
+
+  return { data: normalized, warnings }
+}
+
+function normalizeLegacyMetadataObject(
+  kind: MetadataKind,
+  value: unknown,
+): NormalizationResult {
+  if (
+    kind === 'Constant' ||
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value)
+  ) {
+    return { data: value, warnings: [] }
+  }
+
+  const object = { ...(value as Record<string, unknown>) }
+  const warnings: string[] = []
+
+  for (const key of ['attributes', 'dimensions', 'resources'] as const) {
+    const result = normalizeLegacyAttributes(object[key], key)
+    object[key] = result.data
+    warnings.push(...result.warnings)
+  }
+
+  if (Array.isArray(object.tabularSections)) {
+    object.tabularSections = object.tabularSections.map((section, index) => {
+      if (section === null || typeof section !== 'object' || Array.isArray(section)) {
+        return section
+      }
+
+      const normalizedSection = {
+        ...(section as Record<string, unknown>),
+      }
+      const sectionName =
+        'name' in normalizedSection
+          ? String(normalizedSection.name ?? index)
+          : String(index)
+      const result = normalizeLegacyAttributes(
+        normalizedSection.attributes,
+        `tabularSections.${sectionName}`,
+      )
+      normalizedSection.attributes = result.data
+      warnings.push(...result.warnings)
+      return normalizedSection
+    })
+  }
+
+  return { data: object, warnings }
 }
 
 // --- Побудова ProjectModel ---
@@ -293,7 +411,9 @@ export function buildProjectModelFromParsed(
     if (result.success) {
       project = result.data
     } else {
-      const errors = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
+      const errors = result.error.issues.map(
+        (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`
+      )
       warnings.push({ filePath: 'project.meta.json', errors })
 
       throw new Error(`project.meta.json is invalid: ${errors.join('; ')}`)
@@ -316,14 +436,25 @@ export function buildProjectModelFromParsed(
   }
 
   for (const { kind, data, filePath } of parsed.objects) {
+    const normalization = strict
+      ? { data, warnings: [] }
+      : normalizeLegacyMetadataObject(kind, data)
+    const candidateData = normalization.data
+
     if (kind === 'Constant') {
-      const result = constantSchema.safeParse(data)
+      const result = constantSchema.safeParse(candidateData)
       if (result.success) {
         collections.constants.push(result.data as unknown as MetadataObject)
+        if (normalization.warnings.length > 0) {
+          warnings.push({ filePath, errors: normalization.warnings })
+        }
       } else {
-        const errors = result.error.issues.map(
-          (i) => `${i.path.join('.')}: ${i.message}`,
-        )
+        const errors = [
+          ...normalization.warnings,
+          ...result.error.issues.map(
+            (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
+          ),
+        ]
         if (strict) {
           throw new Error(`Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
         }
@@ -335,16 +466,22 @@ export function buildProjectModelFromParsed(
         ? DIR_TO_SCHEMA[KIND_TO_DIR[kind]]
         : metadataObjectSchema
       const result = schema
-        ? schema.safeParse(data)
-        : metadataObjectSchema.safeParse(data)
+        ? schema.safeParse(candidateData)
+        : metadataObjectSchema.safeParse(candidateData)
 
       if (result.success) {
         const key = KIND_TO_KEY[kind]
         collections[key].push(result.data as MetadataObject)
+        if (normalization.warnings.length > 0) {
+          warnings.push({ filePath, errors: normalization.warnings })
+        }
       } else {
-        const errors = result.error.issues.map(
-          (i) => `${i.path.join('.')}: ${i.message}`,
-        )
+        const errors = [
+          ...normalization.warnings,
+          ...result.error.issues.map(
+            (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
+          ),
+        ]
         if (strict) {
           throw new Error(`Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
         }
@@ -401,7 +538,7 @@ export function buildProjectModelFromParsed(
       validatedForms.push(result.data)
     } else {
       const errors = result.error.issues.map(
-        (i) => `${i.path.join('.')}: ${i.message}`,
+        (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
       )
       if (strict) {
         throw new Error(
@@ -434,7 +571,12 @@ export function buildProjectModelFromParsed(
         )
         if (otherIssues.length > 0) {
           throw new Error(
-            `ProjectModel validation failed:\n${otherIssues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n')}`,
+            `ProjectModel validation failed:\n${otherIssues
+              .map(
+                (i) =>
+                  `  - ${i.path.join('.')}: ${formatValidationMessage(i.message)}`
+              )
+              .join('\n')}`,
           )
         }
         // Лише form-related помилки — зберігаємо як warnings, будуємо модель без forms
@@ -442,7 +584,7 @@ export function buildProjectModelFromParsed(
           warnings.push({
             filePath: 'forms',
             errors: formIssues.map(
-              (i) => `${i.path.join('.')}: ${i.message}`,
+              (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
             ),
           })
         }

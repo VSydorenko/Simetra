@@ -16,6 +16,7 @@ export function SqlPreviewPanel() {
   const output = useDdlStore((s) => s.output)
   const generationError = useDdlStore((s) => s.generationError)
   const validationErrors = useDdlStore((s) => s.validationErrors)
+  const validationWarnings = useDdlStore((s) => s.validationWarnings)
   const clearValidationErrors = useDdlStore((s) => s.clearValidationErrors)
   const generateDdlForce = useDdlStore((s) => s.generateDdlForce)
 
@@ -42,6 +43,20 @@ export function SqlPreviewPanel() {
               </li>
             ))}
           </ul>
+          {validationWarnings.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-medium text-amber-600">
+                {t("validation.warnings", { count: validationWarnings.length })}
+              </p>
+              <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                {validationWarnings.map((warning, index) => (
+                  <li key={index}>
+                    {"\u2022"} {warning}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="mt-4 flex gap-2">
             <Button variant="outline" size="sm" onClick={clearValidationErrors}>
               {t("action.cancel")}
@@ -51,7 +66,6 @@ export function SqlPreviewPanel() {
               size="sm"
               onClick={() => {
                 generateDdlForce()
-                clearValidationErrors()
               }}
             >
               {t("sqlPreview.generateAnyway")}
@@ -88,6 +102,25 @@ export function SqlPreviewPanel() {
   return (
     <div className="flex h-full flex-col">
       <SqlToolbar />
+      {validationWarnings.length > 0 && (
+        <Collapsible defaultOpen={false}>
+          <CollapsibleTrigger className="flex w-full items-center gap-1 border-b border-border bg-amber-50 px-3 py-1 text-xs text-amber-700 hover:bg-amber-100">
+            <span>!</span>
+            <span>
+              {t("validation.warnings", { count: validationWarnings.length })}
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="border-b border-border bg-amber-50 px-3 py-2">
+              <ul className="space-y-0.5 text-xs text-amber-700">
+                {validationWarnings.map((warning, index) => (
+                  <li key={index}>• {warning}</li>
+                ))}
+              </ul>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
       {output.warnings.length > 0 && (
         <Collapsible defaultOpen={false}>
           <CollapsibleTrigger className="flex w-full items-center gap-1 border-b border-border bg-warning/5 px-3 py-1 text-xs text-warning hover:bg-warning/10">

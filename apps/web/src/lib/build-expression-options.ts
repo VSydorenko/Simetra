@@ -1,8 +1,15 @@
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
+  type Attribute,
   type Document,
 } from "@simetra/core"
+import {
+  canUseLiteralExpression,
+  inferExpressionType,
+  isExpressionSuggestionRelevant,
+  type ExpressionValidationContext,
+} from "@/lib/expression-validation"
 
 export interface ExpressionOption {
   value: string
@@ -25,12 +32,34 @@ export interface ExpressionOptionGroup {
 export function buildExpressionOptions(
   document: Document,
   source: string,
-  t: (key: string, fallback?: string) => string
+  targetField: Attribute,
+  t: (key: string, options?: Record<string, unknown>) => string
 ): ExpressionOptionGroup[] {
   const groups: ExpressionOptionGroup[] = []
+  const context: ExpressionValidationContext = {
+    source,
+    document,
+  }
 
   const isTabularSection = source.startsWith("tabularSection:")
   const tsName = isTabularSection ? source.replace("tabularSection:", "") : null
+
+  const shouldIncludeExpression = (expression: string): boolean => {
+    if (expression === "literal:") {
+      return canUseLiteralExpression(targetField)
+    }
+
+    if (expression === "now()") {
+      return targetField.type === "Date" || targetField.type === "DateTime"
+    }
+
+    const inferredType = inferExpressionType(expression, context)
+    if (!inferredType) {
+      return true
+    }
+
+    return isExpressionSuggestionRelevant(inferredType.type, targetField.type)
+  }
 
   if (isTabularSection && tsName) {
     // Рядок ТЧ — row.{field}
@@ -42,24 +71,32 @@ export function buildExpressionOptions(
       const tsStandard = getTabularSectionStandardAttributes()
       for (const attr of tsStandard) {
         if (attr.name === "id") continue
-        rowOptions.push({
-          value: `row.${attr.name}`,
-          label: `row.${attr.name}`,
-        })
+        const expression = `row.${attr.name}`
+        if (shouldIncludeExpression(expression)) {
+          rowOptions.push({
+            value: expression,
+            label: expression,
+          })
+        }
       }
 
       // Користувацькі реквізити ТЧ
       for (const attr of ts.attributes) {
-        rowOptions.push({
-          value: `row.${attr.name}`,
-          label: `row.${attr.name}`,
-        })
+        const expression = `row.${attr.name}`
+        if (shouldIncludeExpression(expression)) {
+          rowOptions.push({
+            value: expression,
+            label: expression,
+          })
+        }
       }
 
-      groups.push({
-        group: t("expression.tsRow", `ТЧ "${tsName}"`),
-        options: rowOptions,
-      })
+      if (rowOptions.length > 0) {
+        groups.push({
+          group: t("expression.tsRow", { name: tsName }),
+          options: rowOptions,
+        })
+      }
     }
 
     // Документ — doc.{field} (стандартні + custom)
@@ -67,28 +104,34 @@ export function buildExpressionOptions(
     const docStandard = getStandardAttributes("Document")
     for (const attr of docStandard) {
       if (attr.name === "id") continue
-      docOptions.push({
-        value: `doc.${attr.name}`,
-        label: `doc.${attr.name}`,
-      })
+      const expression = `doc.${attr.name}`
+      if (shouldIncludeExpression(expression)) {
+        docOptions.push({
+          value: expression,
+          label: expression,
+        })
+      }
     }
     for (const attr of document.attributes) {
-      docOptions.push({
-        value: `doc.${attr.name}`,
-        label: `doc.${attr.name}`,
+      const expression = `doc.${attr.name}`
+      if (shouldIncludeExpression(expression)) {
+        docOptions.push({
+          value: expression,
+          label: expression,
+        })
+      }
+    }
+    if (docOptions.length > 0) {
+      groups.push({
+        group: t("expression.document"),
+        options: docOptions,
       })
     }
-    groups.push({
-      group: t("expression.document", "Документ"),
-      options: docOptions,
-    })
 
     // Вирази
     groups.push({
-      group: t("expression.freeInput", "Вираз"),
-      options: [
-        { value: "", label: t("expression.freeInputHint", "Вільний ввід") },
-      ],
+      group: t("expression.freeInput"),
+      options: [{ value: "", label: t("expression.freeInputHint") }],
     })
   } else {
     // Source = document
@@ -97,21 +140,29 @@ export function buildExpressionOptions(
     const docStandard = getStandardAttributes("Document")
     for (const attr of docStandard) {
       if (attr.name === "id") continue
-      docOptions.push({
-        value: `doc.${attr.name}`,
-        label: `doc.${attr.name}`,
-      })
+      const expression = `doc.${attr.name}`
+      if (shouldIncludeExpression(expression)) {
+        docOptions.push({
+          value: expression,
+          label: expression,
+        })
+      }
     }
     for (const attr of document.attributes) {
-      docOptions.push({
-        value: `doc.${attr.name}`,
-        label: `doc.${attr.name}`,
+      const expression = `doc.${attr.name}`
+      if (shouldIncludeExpression(expression)) {
+        docOptions.push({
+          value: expression,
+          label: expression,
+        })
+      }
+    }
+    if (docOptions.length > 0) {
+      groups.push({
+        group: t("expression.document"),
+        options: docOptions,
       })
     }
-    groups.push({
-      group: t("expression.document", "Документ"),
-      options: docOptions,
-    })
 
     // Агрегати — sum({ts}.{field}), count({ts})
     if (document.tabularSections.length > 0) {
@@ -121,41 +172,65 @@ export function buildExpressionOptions(
         (a) => a.name !== 'id',
       )
       for (const ts of document.tabularSections) {
-        aggOptions.push({
-          value: `count(${ts.name})`,
-          label: `count(${ts.name})`,
-        })
+        const countExpression = `count(${ts.name})`
+        if (shouldIncludeExpression(countExpression)) {
+          aggOptions.push({
+            value: countExpression,
+            label: countExpression,
+          })
+        }
         // Стандартні реквізити ТЧ (напр. line_number)
         for (const stdAttr of tsStdAttrs) {
-          aggOptions.push({
-            value: `sum(${ts.name}.${stdAttr.name})`,
-            label: `sum(${ts.name}.${stdAttr.name})`,
-          })
+          if (stdAttr.type !== "Integer" && stdAttr.type !== "Numeric") {
+            continue
+          }
+          const expression = `sum(${ts.name}.${stdAttr.name})`
+          if (shouldIncludeExpression(expression)) {
+            aggOptions.push({
+              value: expression,
+              label: expression,
+            })
+          }
         }
         for (const attr of ts.attributes) {
-          aggOptions.push({
-            value: `sum(${ts.name}.${attr.name})`,
-            label: `sum(${ts.name}.${attr.name})`,
-          })
+          if (attr.type !== "Integer" && attr.type !== "Numeric") {
+            continue
+          }
+          const expression = `sum(${ts.name}.${attr.name})`
+          if (shouldIncludeExpression(expression)) {
+            aggOptions.push({
+              value: expression,
+              label: expression,
+            })
+          }
         }
       }
-      groups.push({
-        group: t("expression.aggregates", "Агрегати"),
-        options: aggOptions,
-      })
+      if (aggOptions.length > 0) {
+        groups.push({
+          group: t("expression.aggregates"),
+          options: aggOptions,
+        })
+      }
     }
 
     // Константи
-    groups.push({
-      group: t("expression.constants", "Константи"),
-      options: [
-        { value: "now()", label: "now()" },
-        {
-          value: "literal:",
-          label: t("expression.literalHint", "literal:{значення}"),
-        },
-      ],
-    })
+    const constantOptions: ExpressionOption[] = []
+    if (shouldIncludeExpression("now()")) {
+      constantOptions.push({ value: "now()", label: "now()" })
+    }
+    if (shouldIncludeExpression("literal:")) {
+      constantOptions.push({
+        value: "literal:",
+        label: t("expression.literalHint"),
+      })
+    }
+
+    if (constantOptions.length > 0) {
+      groups.push({
+        group: t("expression.constants"),
+        options: constantOptions,
+      })
+    }
   }
 
   return groups

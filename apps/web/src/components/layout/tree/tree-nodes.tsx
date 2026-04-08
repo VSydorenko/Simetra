@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect, useContext } from "react"
+import { useCallback, useRef, useEffect, useContext, useState } from "react"
 import { useTranslation } from "react-i18next"
 import type { NodeRendererProps, NodeApi } from "react-arborist"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -20,7 +20,14 @@ import {
 } from "@workspace/ui/components/context-menu"
 import { Badge } from "@workspace/ui/components/badge"
 import { cn } from "@workspace/ui/lib/utils"
-import type { MetadataObject, Attribute, TabularSection } from "@simetra/core"
+import {
+  NUMERIC_PRECISION,
+  NUMERIC_SCALE,
+  STRING_LENGTH,
+  type MetadataObject,
+  type Attribute,
+  type TabularSection,
+} from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
 import { useUiStore } from "@/stores/ui-store"
 import {
@@ -36,6 +43,7 @@ import {
   getObjectNames,
   KIND_TO_KEY,
 } from "@/lib/metadata-defaults"
+import { validateTechnicalName } from "@/lib/validate-technical-name"
 import {
   DeleteDialogContext,
   WhereUsedDialogContext,
@@ -321,6 +329,9 @@ function GroupNode({
         indexed: false,
         unique: false,
         defaultValue: null,
+        ...(data.groupKey === "resources"
+          ? { precision: NUMERIC_PRECISION, scale: NUMERIC_SCALE }
+          : { length: STRING_LENGTH }),
       }
 
       if (data.groupKey === "dimensions") {
@@ -348,7 +359,11 @@ function GroupNode({
       let i = 1
       const existing = new Set(sections.map((s) => s.name))
       while (existing.has(`section_${i}`)) i++
-      const section: TabularSection = { name: `section_${i}`, attributes: [] }
+      const section: TabularSection = {
+        name: `section_${i}`,
+        standardAttributeOverrides: {},
+        attributes: [],
+      }
       store.addTabularSection(kind, data.objectName, section)
 
       node.open()
@@ -669,6 +684,7 @@ function TabularSectionNode({
       indexed: false,
       unique: false,
       defaultValue: null,
+      length: STRING_LENGTH,
     }
     store.addTabularSectionAttribute(kind, data.objectName, data.name, attr)
 
@@ -750,28 +766,95 @@ function TabularSectionNode({
 // --- Inline rename input ---
 
 function RenameInput({ node }: { node: NodeApi<TreeNodeData> }) {
+  const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
+  const [draft, setDraft] = useState(node.data.name)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
   }, [])
 
+  const commit = useCallback(() => {
+    const trimmed = draft.trim()
+    const validationError = validateTechnicalName(trimmed, "PascalCase")
+
+    if (validationError) {
+      setError(validationError)
+      setTimeout(() => inputRef.current?.focus(), 0)
+      return false
+    }
+
+    if (trimmed === node.data.name) {
+      setError(null)
+      node.reset()
+      return true
+    }
+
+    const kind = node.data.kind
+    if (!kind) {
+      setError(t("validation.resolveObjectTypeFailed"))
+      return false
+    }
+
+    const errors = useMetadataStore
+      .getState()
+      .renameObject(kind, node.data.name, trimmed)
+    if (errors) {
+      setError(
+        errors.find((issue) => issue.path === "name")?.message ??
+          errors[0]?.message ??
+          t("validation.renameFailed")
+      )
+      setTimeout(() => inputRef.current?.focus(), 0)
+      return false
+    }
+
+    useUiStore
+      .getState()
+      .updateTabObjectRef(
+        { kind, name: node.data.name },
+        { kind, name: trimmed }
+      )
+    setError(null)
+    node.reset()
+    return true
+  }, [draft, node, t])
+
   return (
-    <input
-      ref={inputRef}
-      type="text"
-      defaultValue={node.data.name}
-      className="h-5 w-full rounded-sm border border-ring bg-background px-1 font-mono text-[0.75rem] outline-none"
-      onBlur={() => node.reset()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          node.submit(e.currentTarget.value)
-        }
-        if (e.key === "Escape") {
-          node.reset()
-        }
-      }}
-    />
+    <div className="relative flex-1 overflow-visible">
+      <input
+        ref={inputRef}
+        type="text"
+        value={draft}
+        className="h-5 w-full rounded-sm border border-ring bg-background px-1 font-mono text-[0.75rem] outline-none"
+        aria-invalid={error ? "true" : "false"}
+        onChange={(e) => {
+          setDraft(e.currentTarget.value)
+          if (error) setError(null)
+        }}
+        onBlur={() => {
+          commit()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            if (!commit()) {
+              e.preventDefault()
+            }
+          }
+          if (e.key === "Escape") {
+            setDraft(node.data.name)
+            setError(null)
+            node.reset()
+          }
+        }}
+      />
+      {error ? (
+        <div className="absolute top-full left-0 z-10 mt-1 max-w-56 rounded border border-destructive/20 bg-background px-2 py-1 text-[11px] text-destructive shadow-sm">
+          {error}
+        </div>
+      ) : null}
+    </div>
   )
 }

@@ -3,13 +3,23 @@ import { localizedStringSchema } from "./localized-string"
 import { fieldTypeSchema } from "./field-type"
 import { attributeRefTargetSchema } from "./metadata-ref"
 import { isSqlReservedWord } from "./sql-reserved-words"
+import {
+  TECHNICAL_NAME_PATTERNS,
+  STRING_LENGTH,
+  NUMERIC_PRECISION,
+  NUMERIC_SCALE,
+} from "./technical-name"
+import { createValidationMessage } from "../validation-message"
 
 /** BRD §6.3 — Attribute (field) properties */
 export const attributeSchema = z
   .object({
     name: z
       .string()
-      .regex(/^[a-z][a-z0-9_]*$/, "Must be snake_case, Latin only")
+      .regex(
+        TECHNICAL_NAME_PATTERNS.snake_case,
+        "Must be snake_case, Latin only",
+      )
       .refine((n) => !isSqlReservedWord(n), {
         message: "Name is a SQL reserved word",
       }),
@@ -33,6 +43,16 @@ export const attributeSchema = z
   })
   .superRefine((attr, ctx) => {
     // Валідація type-specific полів
+    if (attr.type === "String" && attr.length == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: createValidationMessage(
+          "validation.field.stringLengthRequired",
+          { defaultValue: STRING_LENGTH }
+        ),
+        path: ["length"],
+      })
+    }
     if (attr.type !== "String" && attr.length != null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -40,11 +60,31 @@ export const attributeSchema = z
         path: ["length"],
       })
     }
+    if (attr.type === "Numeric" && attr.precision == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: createValidationMessage(
+          "validation.field.numericPrecisionRequired",
+          { defaultValue: NUMERIC_PRECISION }
+        ),
+        path: ["precision"],
+      })
+    }
     if (attr.type !== "Numeric" && attr.precision != null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "precision is only valid when type is Numeric",
         path: ["precision"],
+      })
+    }
+    if (attr.type === "Numeric" && attr.scale == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: createValidationMessage(
+          "validation.field.numericScaleRequired",
+          { defaultValue: NUMERIC_SCALE }
+        ),
+        path: ["scale"],
       })
     }
     if (attr.type !== "Numeric" && attr.scale != null) {
@@ -81,6 +121,13 @@ export const attributeSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "ref and allowedTypes are mutually exclusive",
+        path: ["ref"],
+      })
+    }
+    if (!hasRef && !hasAllowedTypes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: createValidationMessage("validation.field.refTargetRequired"),
         path: ["ref"],
       })
     }

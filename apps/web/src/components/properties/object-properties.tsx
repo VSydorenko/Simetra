@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   Accordion,
@@ -22,6 +22,8 @@ import { StandardAttributesDialog } from "@/components/editor/standard-attribute
 import { AdditionalIndexesDialog } from "@/components/editor/additional-indexes-dialog"
 import { FieldTypeSelect } from "@/components/editor/field-type-select"
 import { MetadataRefMultiPicker } from "@/components/properties/metadata-ref-picker"
+import i18n from "@/i18n"
+import { validateTechnicalName } from "@/lib/validate-technical-name"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 import { useUiStore } from "@/stores/ui-store"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
@@ -79,28 +81,65 @@ function ValidationErrorsPanel({ errors }: { errors: ValidationError[] }) {
   const { t } = useTranslation()
   if (errors.length === 0) return null
 
+  const blockingErrors = errors.filter((error) => error.severity !== "warning")
+  const warningErrors = errors.filter((error) => error.severity === "warning")
+
   return (
-    <div className="border-b border-destructive/20 bg-destructive/5 px-3 py-2">
-      <p className="mb-1 text-[10px] font-medium tracking-wide text-destructive uppercase">
-        {t("validation.objectErrors")}
-      </p>
-      <ul className="space-y-0.5">
-        {errors.map((err, i) => (
-          <li key={i} className="text-[11px] text-destructive">
-            {err.path ? (
-              <span>
-                <span className="font-mono opacity-70">{err.path}: </span>
-                {formatErrorMessage(err.message, t)}
-              </span>
-            ) : (
-              formatErrorMessage(err.message, t)
-            )}
-          </li>
-        ))}
-      </ul>
+    <div className="space-y-2 border-b border-border px-3 py-2">
+      {blockingErrors.length > 0 && (
+        <div className="rounded border border-destructive/20 bg-destructive/5 px-2 py-2">
+          <p className="mb-1 text-[10px] font-medium tracking-wide text-destructive uppercase">
+            {t("validation.objectErrors")}
+          </p>
+          <ul className="space-y-0.5">
+            {blockingErrors.map((err, i) => (
+              <li key={i} className="text-[11px] text-destructive">
+                {err.path ? (
+                  <span>
+                    <span className="font-mono opacity-70">{err.path}: </span>
+                    {formatErrorMessage(err.message, t)}
+                  </span>
+                ) : (
+                  formatErrorMessage(err.message, t)
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {warningErrors.length > 0 && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-2 py-2">
+          <p className="mb-1 text-[10px] font-medium tracking-wide text-amber-700 uppercase">
+            {t("validation.warnings", { count: warningErrors.length })}
+          </p>
+          <ul className="space-y-0.5">
+            {warningErrors.map((err, i) => (
+              <li key={i} className="text-[11px] text-amber-700">
+                {err.path ? (
+                  <span>
+                    <span className="font-mono opacity-70">{err.path}: </span>
+                    {formatErrorMessage(err.message, t)}
+                  </span>
+                ) : (
+                  formatErrorMessage(err.message, t)
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
+
+function extractInlineNameError(errors: ValidationError[]): string {
+  return (
+    errors.find((error) => error.path === "name")?.message ??
+    errors[0]?.message ??
+    i18n.t("validation.renameFailed")
+  )
+}
+
 function NameEditor({
   kind,
   currentName,
@@ -117,42 +156,63 @@ function NameEditor({
   updateTabObjectRef: (oldRef: MetadataRef, newRef: MetadataRef) => void
 }) {
   const [draft, setDraft] = useState(currentName)
-
-  // Синхронізація draft при зміні objectRef ззовні
-  useEffect(() => {
-    setDraft(currentName)
-  }, [currentName])
+  const [error, setError] = useState<string | null>(null)
 
   const commit = () => {
     const trimmed = draft.trim()
-    if (trimmed && trimmed !== currentName) {
-      const errors = renameObject(kind, currentName, trimmed)
-      if (!errors) {
-        updateTabObjectRef({ kind, name: currentName }, { kind, name: trimmed })
-      } else {
-        setDraft(currentName)
-      }
-    } else {
+
+    if (trimmed === currentName) {
       setDraft(currentName)
+      setError(null)
+      return true
     }
+
+    const validationError = validateTechnicalName(trimmed, "PascalCase")
+    if (validationError) {
+      setError(validationError)
+      return false
+    }
+
+    const errors = renameObject(kind, currentName, trimmed)
+    if (errors) {
+      setError(extractInlineNameError(errors))
+      return false
+    }
+
+    setError(null)
+    updateTabObjectRef({ kind, name: currentName }, { kind, name: trimmed })
+    return true
   }
 
   return (
-    <Input
-      className="h-7 font-mono text-xs"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
+    <div className="space-y-1">
+      <Input
+        className="h-7 font-mono text-xs"
+        value={draft}
+        aria-invalid={error ? "true" : "false"}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          if (error) setError(null)
+        }}
+        onBlur={() => {
           commit()
-          ;(e.target as HTMLInputElement).blur()
-        } else if (e.key === "Escape") {
-          setDraft(currentName)
-          ;(e.target as HTMLInputElement).blur()
-        }
-      }}
-    />
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            if (commit()) {
+              ;(e.target as HTMLInputElement).blur()
+            } else {
+              e.preventDefault()
+            }
+          } else if (e.key === "Escape") {
+            setDraft(currentName)
+            setError(null)
+            ;(e.target as HTMLInputElement).blur()
+          }
+        }}
+      />
+      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+    </div>
   )
 }
 
@@ -261,6 +321,7 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
           <AccordionContent className="space-y-2 px-3 pb-3">
             <SettingRow label={t("metadata.field.name")}>
               <NameEditor
+                key={`${objectRef.kind}/${object.name}`}
                 kind={objectRef.kind}
                 currentName={object.name}
                 renameObject={renameObject}

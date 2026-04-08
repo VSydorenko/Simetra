@@ -20,6 +20,13 @@ export {
   isPostingCompatible,
   type PostingCompatibilityResult,
 } from "./posting-compatibility"
+export {
+  createValidationMessage,
+  parseValidationMessage,
+  formatValidationMessage,
+  type ValidationMessageDescriptor,
+  type ValidationMessageValues,
+} from "./validation-message"
 
 // Autoform — алгоритм автоформи
 export { generateItemForm, generateListForm, resolveForm } from "./autoform"

@@ -19,10 +19,12 @@ import {
 } from "@simetra/core"
 import { KIND_TO_KEY } from "@/lib/metadata-defaults"
 import { resolveZodPath } from "@/lib/resolve-zod-path"
+import { translateValidationMessage } from "@/lib/translate-validation-message"
 
 export interface ValidationError {
   path: string
   message: string
+  severity?: "error" | "warning"
 }
 
 export interface MetadataState {
@@ -288,7 +290,7 @@ function validateObject(obj: MetadataObject): ValidationError[] | null {
   if (result.success) return null
   return result.error.issues.map((issue) => ({
     path: resolveZodPath(obj, issue.path as (string | number)[]),
-    message: issue.message,
+    message: translateValidationMessage(issue.message),
   }))
 }
 
