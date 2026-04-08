@@ -466,13 +466,13 @@ flowchart TD
 
 #### 8.1. Пакет `@simetra/app-runtime`
 
-- [ ] Створити `packages/app-runtime/`:
+- [X] Створити `packages/app-runtime/`:
   - `package.json` — `@simetra/app-runtime`, залежить від `@simetra/form-runtime`, `@simetra/data-provider`, `@simetra/core`, `@workspace/ui`, `react-router`
   - **Не** залежить від `@simetra/data-provider-postgrest` — конкретний adapter інжектується хостом
   - Entry point: `<SimetraApp />` React-компонент
   - Це **publishable npm library**, не application
 
-- [ ] `src/simetra-app.tsx` — головний entry point:
+- [X] `src/simetra-app.tsx` — головний entry point:
   ```tsx
   <SimetraApp
     model={projectModel}
@@ -487,7 +487,7 @@ flowchart TD
 
 #### 8.2. Navigation builder
 
-- [ ] `src/navigation-builder.ts`:
+- [X] `src/navigation-builder.ts`:
   - `buildFlatNavigation(model: ProjectModel): NavigationItem[]` — групує об'єкти по kind:
     - Catalogs, Documents, CustomTables → секції в sidebar з посиланнями на list pages
     - Constants → окремий пункт «Налаштування»
@@ -497,7 +497,7 @@ flowchart TD
 
 #### 8.3. Router builder
 
-- [ ] `src/router-builder.ts`:
+- [X] `src/router-builder.ts`:
   - `buildRoutes(model: ProjectModel): RouteObject[]` — react-router route objects:
     - `/` → `HomePage`
     - `/{kind}/{objectName}` → `ListPage`
@@ -509,7 +509,7 @@ flowchart TD
 
 #### 8.4. Default shell layout
 
-- [ ] `src/shell/sidebar-layout.tsx`:
+- [X] `src/shell/sidebar-layout.tsx`:
   - `SidebarWithHeader` — default і єдиний layout у Phase 3
   - Sidebar зліва: renders `NavigationItem[]` grouped by kind
   - Header зверху: breadcrumbs, project displayName
@@ -519,22 +519,22 @@ flowchart TD
 
 #### 8.5. Standard pages
 
-- [ ] `src/pages/home-page.tsx`:
+- [X] `src/pages/home-page.tsx`:
   - Список усіх об'єктів by kind з лінками
-- [ ] `src/pages/list-page.tsx`:
+- [X] `src/pages/list-page.tsx`:
   - Використовує `resolveForm(objectRef, "ListForm", model)` → `ListRenderer`
   - Кнопка "Створити" → navigate to `./new`
   - Клік по рядку → navigate to `./:id`
-- [ ] `src/pages/item-page.tsx`:
+- [X] `src/pages/item-page.tsx`:
   - Використовує `resolveForm(objectRef, "ItemForm", model)` → `ItemFormRenderer`
   - Після save → navigate back to list
-- [ ] `src/pages/constants-page.tsx`:
+- [X] `src/pages/constants-page.tsx`:
   - Використовує `ConstantsForm` з form-runtime
-- [ ] `src/pages/not-found-page.tsx`
+- [X] `src/pages/not-found-page.tsx`
 
 #### 8.6. InMemoryDataProvider — reusable mock adapter
 
-- [ ] Створити `packages/data-provider/src/in-memory-provider.ts`:
+- [X] Створити `packages/data-provider/src/in-memory-provider.ts`:
   - `InMemoryDataProvider` реалізує `DataProvider` contract
   - `list()` → фільтрація/пагінація по in-memory Map
   - `create()` / `update()` → зберігає в `Map<string, Map<string, Record<string, unknown>>>`
@@ -550,19 +550,19 @@ flowchart TD
 
 > **Важливо:** `apps/runtime` — це **thin host**, не business logic. Він лише з'єднує metadata loading + data provider + `<SimetraApp />`. Вся shell/routing/pages логіка живе в `@simetra/app-runtime`.
 
-- [ ] Створити `apps/runtime/`:
+- [X] Створити `apps/runtime/`:
   - `package.json` — `runtime`, залежить від `@simetra/app-runtime`, `@simetra/data-provider`, `@simetra/data-provider-postgrest`, `@simetra/core`
   - `vite.config.ts` — dev server на порті 5174
   - i18n: реюзати `i18next` setup з `apps/web`
 
-- [ ] `src/main.tsx`:
+- [X] `src/main.tsx`:
   - Завантажує metadata через HTTP (Vite plugin serves metadata directory)
   - Парсить через shared IO layer з `@simetra/core`
   - Створює `DataProvider`: `InMemoryDataProvider` або `PostgRestDataProvider` залежно від env
   - Рендерить `<SimetraApp model={model} dataProvider={provider} />`
   - **Жодної** shell, routing або page logic — все делеговано до `@simetra/app-runtime`
 
-- [ ] `src/config.ts`:
+- [X] `src/config.ts`:
   - `SIMETRA_API_URL` — URL PostgREST
   - `SIMETRA_ANON_KEY` — anon key (optional)
   - `SIMETRA_METADATA_PATH` — шлях до каталогу metadata
@@ -570,7 +570,7 @@ flowchart TD
 
 - [ ] **Тести:**
   - `@simetra/app-runtime`: navigation builder, router builder, standard pages з InMemoryDataProvider
-  - `@simetra/data-provider`: InMemoryDataProvider unit-тести
+  - [X] `@simetra/data-provider`: InMemoryDataProvider unit-тести
   - Integration: `<SimetraApp />` з InMemoryDataProvider рендерить sidebar, pages, forms
 
 ### Етап 9: Інтеграційний сценарій та тести

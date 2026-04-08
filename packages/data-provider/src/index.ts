@@ -95,3 +95,5 @@ export interface DataProvider<T = Record<string, unknown>> {
   /** Оновити значення однієї константи */
   updateConstant(name: string, value: unknown): Promise<void>
 }
+
+export { InMemoryDataProvider } from './in-memory-provider'
