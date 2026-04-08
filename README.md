@@ -6,8 +6,13 @@
 
 ```
 apps/web               — React SPA (Vite + Tailwind CSS 4 + shadcn/ui)
+apps/runtime           — Runtime dev preview host (Vite + metadata serving + provider bootstrap)
 packages/ui            — Спільні UI-компоненти (shadcn/ui)
 packages/core          — Zod-схеми бізнес-метаданих
+packages/form-runtime  — Runtime-рендерінг форм і domain-компоненти
+packages/app-runtime   — Runtime shell, routing і стандартні сторінки
+packages/data-provider — Контракт доступу до даних і in-memory provider
+packages/data-provider-postgrest — PostgREST adapter для runtime data access
 packages/cli           — CLI для генерації та застосування SQL з метаданих
 packages/generator-pg  — Генератор PostgreSQL DDL і posting SQL
 packages/generator-api — Контракти API генераторів
@@ -19,6 +24,17 @@ packages/generator-api — Контракти API генераторів
 pnpm install
 pnpm dev
 ```
+
+## Runtime Dev Preview
+
+```bash
+cp apps/runtime/.env.example apps/runtime/.env.local
+
+# Вкажіть абсолютний шлях до каталогу metadata в apps/runtime/.env.local
+pnpm dev:runtime
+```
+
+За замовчуванням runtime запускається з `VITE_SIMETRA_DATA_PROVIDER=mock`. Для PostgREST/Supabase-compatible API змініть `.env.local` на `VITE_SIMETRA_DATA_PROVIDER=postgrest` і задайте `VITE_SIMETRA_API_URL`.
 
 ## Використання CLI
 

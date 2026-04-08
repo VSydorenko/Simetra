@@ -1,11 +1,11 @@
 # Task: Phase 4 — Application Shell & Configured Runtime
 
-> **Prerequisite:** Phase 3 (Form Runtime & Dev Preview) — `@simetra/form-runtime`, `@simetra/app-runtime` (fallback mode), `@simetra/data-provider` + PostgREST adapter — мають працювати.
+> **Prerequisite:** Runtime foundation already implemented and documented in [../architecture/runtime-architecture.md](../architecture/runtime-architecture.md) and [../architecture/OVERVIEW.md](../architecture/OVERVIEW.md): `@simetra/form-runtime`, `@simetra/app-runtime` (fallback mode), `@simetra/data-provider` + PostgREST adapter працюють end-to-end.
 > **Prerequisite:** Phase 2 DDL pipeline: metadata → SQL → PostgreSQL → PostgREST — має бути end-to-end.
 
 ## Контекст
 
-Phase 3 створила unified `@simetra/app-runtime` з fallback mode: flat навігація по kinds з `ProjectModel`, default `SidebarWithHeader` shell, стандартні list/item pages, `InMemoryDataProvider` для dev preview без БД.
+Поточний runtime baseline зафіксований у [../architecture/runtime-architecture.md](../architecture/runtime-architecture.md) та [../architecture/OVERVIEW.md](../architecture/OVERVIEW.md): unified `@simetra/app-runtime` уже надає fallback mode з flat навігацією по kinds з `ProjectModel`, default `SidebarWithHeader` shell, стандартними list/item pages і `InMemoryDataProvider` для dev preview без БД.
 
 Phase 4 розширює **той самий пакет** до production-ready configured mode: subsystems, configurable shell layouts, dashboard widgets, theming — все контролюється через `application.meta.json`.
 
@@ -39,7 +39,7 @@ packages/
 ├── form-runtime/               ← без змін (library рендерингу форм)
 ├── data-provider/              ← без змін
 ├── data-provider-postgrest/    ← без змін
-├── ui/                         ← розширюється: shell layout компоненти, dashboard widget компоненти
+├── ui/                         ← без змін (shadcn/ui примітиви: Sheet, Sidebar, Tabs тощо)
 ├── generator-api/              ← без змін
 ├── generator-pg/               ← без змін
 └── cli/                        ← без змін
@@ -245,7 +245,7 @@ interface SimetraAppProps {
 
 ### Етап 4: Configured shell layouts
 
-**Пакет:** `packages/app-runtime`, `packages/ui`
+**Пакет:** `packages/app-runtime`
 
 #### 4.1. Shell layout компоненти
 

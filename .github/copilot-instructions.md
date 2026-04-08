@@ -27,8 +27,16 @@ Specialized agents for delegating specific workflows:
 | Package | Purpose |
 |---------|---------|
 | `packages/core` (`@simetra/core`) | Zod-схеми метаданих, типи, валідація. Чистий TS — без UI, без Node API |
+| `packages/app-runtime` (`@simetra/app-runtime`) | Runtime shell, routing, navigation і стандартні сторінки для fallback/configured mode |
+| `packages/form-runtime` (`@simetra/form-runtime`) | JSON → React runtime renderer і domain-компоненти форм |
+| `packages/data-provider` (`@simetra/data-provider`) | Data access contract і in-memory реалізація для runtime |
+| `packages/data-provider-postgrest` (`@simetra/data-provider-postgrest`) | PostgREST/Supabase-compatible fetch adapter для `DataProvider` |
+| `packages/generator-api` (`@simetra/generator-api`) | Контракт генератора: інтерфейси `GeneratorOptions`, `GeneratorOutput`, `GeneratedFile` |
+| `packages/generator-pg` (`@simetra/generator-pg`) | PostgreSQL DDL + posting SQL генератор |
+| `packages/cli` (`@simetra/cli`) | CLI обгортка (citty) над core + generators: команди `generate`, `apply` |
 | `packages/ui` (`@workspace/ui`) | shadcn/ui компоненти з Tailwind CSS 4 |
-| `apps/web` | React SPA (Vite 6) — основний інтерфейс конфігуратора |
+| `apps/web` | React SPA (Vite 8) — основний інтерфейс конфігуратора |
+| `apps/runtime` | Vite host для runtime dev preview: env/bootstrap, metadata serving, вибір data provider |
 
 ### Key Domain Concepts
 
@@ -48,8 +56,10 @@ Simetra працює з **бізнес-метаданими** — не табл�
 
 | Component | Technology |
 |-----------|------------|
-| Framework | React 18+ / Vite 6 |
+| Framework | React 19 / Vite 8 |
 | UI Kit | shadcn/ui + Tailwind CSS 4 |
+| Routing | React Router 7 |
+| Forms | React Hook Form (`react-hook-form`) + `@hookform/resolvers` |
 | State | Zustand + immer |
 | Undo/Redo | zundo |
 | Validation | Zod (v4) |

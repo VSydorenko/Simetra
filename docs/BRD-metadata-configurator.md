@@ -78,8 +78,8 @@ Open-source візуальний конфігуратор бізнес-мета�
 - Не ORM (як Prisma або EF Core) — не генерує клієнтський код для запитів
 - Не редактор таблиць БД (як pgAdmin) — працює на рівні бізнес-об'єктів, а не SQL
 
-**Phase 3+ (Runtime-рендерінг форм):**
-- Може рендерити форми і додатки з JSON-метаданих напряму (JSON → React)
+**Phase 3+ (Реалізований runtime-шар):**
+- Рендерить форми і runtime preview додатка з JSON-метаданих напряму (JSON → React)
 - Але НЕ є повноцінною application platform з власним server runtime (як 1С або Frappe)
 - Бізнес-логіка генерується як PostgreSQL функції або React код, а не інтерпретується
 
@@ -88,15 +88,15 @@ Open-source візуальний конфігуратор бізнес-мета�
 
 ### 3.4. Дорожня карта розвитку
 
-| Можливість | Фаза |
-|------------|------|
-| Runtime-рендерінг форм з JSON-метаданих | Phase 3 |
-| Бібліотека domain-компонентів (@simetra/ui) | Phase 3 |
+| Можливість | Статус / фаза |
+|------------|---------------|
+| Runtime-рендерінг форм з JSON-метаданих | Implemented (Phase 3) |
+| Бібліотека domain-компонентів (@simetra/form-runtime) | Implemented (Phase 3) |
 | Візуальний конструктор форм | Phase 4 |
 | Application Shell (навігація, маршрутизація, dashboard) | Phase 4 |
 | Codegen React-додатку (eject) | Phase 4–5 |
 | Generated .NET/Node.js API | Phase 5 |
-| Імпорт існуючих схем БД з розпізнаванням бізнес-типів | Phase 3 |
+| Імпорт існуючих схем БД з розпізнаванням бізнес-типів | Phase 5+ |
 | Колаборативне редагування метаданих (cloud-версія) | Phase 5+ |
 
 ---
@@ -867,10 +867,10 @@ metadata/
 | FR-062 | Згенерувати EF Core entity classes + IEntityTypeConfiguration | Phase 2+ | — Deferred |
 | FR-063 | Згенерувати view/materialized view для віртуальних таблиць регістрів | Phase 2a | Implemented |
 | FR-064 | Показати diff між поточними метаданими та applied schema snapshot | Phase 2c | Implemented |
-| FR-065 | Підключитися до живої PostgreSQL БД для schema introspection | Phase 3 | — |
+| FR-065 | Підключитися до живої PostgreSQL БД для schema introspection | Phase 5+ | — |
 | FR-066 | Згенерувати SQL-функції проведення/скасування з posting-метаданих | Phase 2b | Implemented |
 | FR-067 | Візуальний редактор маппінгів проведення (movements editor) | Phase 2b | Implemented |
-| FR-068 | Runtime-рендерінг форм з JSON-метаданих (form.json → React) | Phase 3 | — |
+| FR-068 | Runtime-рендерінг форм з JSON-метаданих (form.json → React) | Phase 3 | Implemented |
 | FR-069 | Генерація каркасу додатку (Application Shell) з метаданих | Phase 4 | — |
 
 ### 8.8. Import / Export
@@ -879,7 +879,7 @@ metadata/
 |---|---|---|---|
 | FR-070 | Експортувати проєкт як ZIP-архів JSON-файлів | MVP | ✅ Done |
 | FR-071 | Імпортувати проєкт з ZIP-архіву | MVP | ✅ Done |
-| FR-072 | Імпортувати схему з існуючої PostgreSQL БД (schema introspection) | Phase 3 | — |
+| FR-072 | Імпортувати схему з існуючої PostgreSQL БД (schema introspection) | Phase 5+ | — |
 
 ### 8.9. Undo/Redo
 
@@ -918,8 +918,8 @@ metadata/
 | Keyboard | react-hotkeys-hook | Scoped hotkeys |
 | Icons | hugeicons (@hugeicons/react + @hugeicons/core-free-icons) | Візуальна тема shadcn "mira" працює з hugeicons |
 | CLI (Phase 2) | citty (unjs) | Lightweight CLI framework для generate/validate/init |
-| Desktop shell (Phase 3) | Tauri 2.0 | Кросплатформний desktop-додаток, Rust-бекенд для нативного FS |
-| VS Code extension (Phase 3) | VS Code Extension API | Інтеграція в IDE, sidebar panel |
+| Desktop shell (Phase 5+) | Tauri 2.0 | Кросплатформний desktop-додаток, Rust-бекенд для нативного FS |
+| VS Code extension (Phase 5+) | VS Code Extension API | Інтеграція в IDE, sidebar panel |
 | Тести | Vitest + Testing Library | Vite-native, швидкий запуск |
 | Монорепо | pnpm workspaces + turborepo | Розділення пакетів, кешовані збірки |
 
@@ -936,15 +936,15 @@ packages/
 ├── @simetra/generator-pg        ← PostgreSQL DDL + posting SQL генератор
 ├── @simetra/generator-efcore    ← EF Core генератор (Phase 2+, deferred)
 ├── @simetra/cli                 ← CLI обгортка (citty) над core + generators
-├── @simetra/ui                  ← Domain-компоненти: CatalogCombobox, PostButton, DataTable (Phase 3)
-├── @simetra/form-runtime        ← JSON → React form renderer (Phase 3)
+├── @simetra/form-runtime        ← JSON → React form renderer + domain-компоненти (Phase 3)
 ├── @simetra/app-runtime         ← Unified runtime: fallback shell (Phase 3) + configured mode (Phase 4)
-├── @simetra/generator-react     ← Form codegen (.tsx eject) (Phase 4)
+├── @simetra/generator-react     ← Form codegen (.tsx eject) (Phase 5)
 └── @simetra/generator-react-app ← Full app codegen (Phase 5)
 apps/
 ├── web/                         ← React SPA (Vite) — основний інтерфейс (Phase 1)
-├── desktop/                     ← Tauri 2.0 обгортка web-додатку з нативним FS (Phase 3)
-└── vscode/                      ← VS Code extension — sidebar panel (Phase 3)
+├── runtime/                     ← Thin Vite host для runtime dev preview (Phase 3, implemented)
+├── desktop/                     ← Tauri 2.0 обгортка web-додатку з нативним FS (Phase 5+)
+└── vscode/                      ← VS Code extension — sidebar panel (Phase 5+)
 ```
 
 **Ключовий принцип:** `@simetra/core` — це серцевина. Вона не залежить ні від React, ні від Tauri, ні від Node.js API. Чистий TypeScript з Zod. Це дозволяє:
@@ -956,7 +956,7 @@ apps/
 
 Оскільки Phase 1 — це web SPA без серверу, доступ до файлів абстрагований через інтерфейс `StorageProvider`:
 - `WebStorage` (Phase 1) — File System Access API (Chrome/Edge) + download/upload fallback для Safari/Firefox
-- `TauriStorage` (Phase 3) — нативний FS через Tauri FS API
+- `TauriStorage` (Phase 5+) — нативний FS через Tauri FS API
 - `NodeStorage` (Phase 2) — для CLI
 
 **JSON Schema генерується, не пишеться вручну:** `zod-to-json-schema` як build step генерує JSON Schema з Zod-схем пакету `@simetra/core`. Zod є єдиним джерелом правди для структури метаданих.
@@ -1312,14 +1312,14 @@ React-компонент, який зчитує `form.json` + `meta.json` і р�
 - `{object}-columns.tsx` — column definitions для TanStack Table (для list form)
 - `{object}-api.ts` — typed API client (Supabase або generic fetch)
 
-**Бібліотека доменних компонентів `@simetra/ui` (Phase 3):**
+**Бібліотека доменних компонентів `@simetra/form-runtime` (Phase 3):**
 - `<CatalogCombobox catalogRef="Products" />` — combobox з пошуком по довіднику
 - `<EnumSelect enumRef="OrderStatus" />` — select з значеннями перелічення
 - `<EditableDataTable />` — таблиця для табличних частин з inline edit
 - `<DocumentNumberInput />` — поле номера з автонумерацією
 - `<PostButton />` / `<UnpostButton />` — кнопки проведення з RPC-викликом
 
-#### 10.5.8. Візуальний конструктор форм (`apps/web`, Phase 4)
+#### 10.5.8. Візуальний конструктор форм (`apps/web`, Phase 5)
 
 Візуальний конструктор працює з forms як частиною `ProjectModel` у конфігураторі, а не як окремою файловою системою. Forms є top-level колекцією `model.forms` з `objectRef` зв'язком — конструктор читає і мутує цю колекцію через store, а serializer записує результат у файли `forms/` підкаталогу.
 
@@ -1348,8 +1348,8 @@ React-компонент, який зчитує `form.json` + `meta.json` і р�
 | Data provider contract + PostgREST adapter | `@simetra/data-provider`, `@simetra/data-provider-postgrest` | Phase 3 |
 | Dev preview shell (unified app-runtime, fallback mode) | `@simetra/app-runtime` + `apps/runtime` | Phase 3 |
 | Бібліотека доменних компонентів | `@simetra/form-runtime` (domain components) | Phase 3 |
-| Codegen React | `@simetra/generator-react` | Phase 4 |
-| Візуальний конструктор форм | `apps/web` | Phase 4 |
+| Codegen React | `@simetra/generator-react` | Phase 5 |
+| Візуальний конструктор форм | `apps/web` | Phase 5 |
 
 ### 10.6. Генерація каркасу додатку — Application Shell (Phase 4–5)
 
@@ -1462,7 +1462,7 @@ React-компонент, який зчитує `form.json` + `meta.json` і р�
 | TopNavWithTabs | Горизонтальна навігація вгорі | 1С:Fresh, Odoo |
 | MinimalSidebar | Іконки без тексту зліва | Slack |
 
-Кожен layout — React-компонент у `@simetra/ui`, параметризований через `application.meta.json`.
+Кожен layout — React-компонент у `@simetra/app-runtime`, параметризований через `application.meta.json`.
 
 #### 10.6.5. Автогенерація маршрутів
 
@@ -1526,7 +1526,7 @@ exported-app/
 
 | Стратегія | Опис | Коли |
 |---|---|---|
-| Supabase | Simetra створила таблиці в Supabase → PostgREST дає API автоматично. Фронтенд працює через supabase-js | Phase 2–3, основний шлях |
+| Supabase | Simetra створила таблиці в Supabase → PostgREST дає API автоматично. Фронтенд працює через `@simetra/data-provider-postgrest`, який використовує generic fetch без залежності від supabase-js | Phase 2–3, основний шлях |
 | Generated API | Simetra генерує .NET/Node.js API з метаданих (контролери, сервіси, маршрути) | Phase 5 |
 | Embedded | Simetra як Tauri-додаток має вбудований сервер, що працює з локальною PostgreSQL напряму | Phase 5 |
 
@@ -1553,8 +1553,8 @@ exported-app/
 
 ### 11.2. Портативність
 - Web SPA (Phase 1): працює в Chrome, Firefox, Safari, Edge (останні 2 мажорні версії). File System Access API для повноцінної роботи з файлами (Chrome/Edge), download/upload fallback (інші браузери)
-- Tauri desktop (Phase 3): Windows 10+, macOS 12+, Ubuntu 22.04+ — нативний FS, file dialogs
-- VS Code extension (Phase 3): будь-яка платформа з VS Code 1.85+
+- Tauri desktop (Phase 5+): Windows 10+, macOS 12+, Ubuntu 22.04+ — нативний FS, file dialogs
+- VS Code extension (Phase 5+): будь-яка платформа з VS Code 1.85+
 - Метадані: read/write без серверу (файлова система або browser storage)
 
 ### 11.3. Якість коду
@@ -1636,9 +1636,9 @@ exported-app/
 - Генерацію `ALTER TABLE` замість повного `CREATE TABLE` для існуючих об'єктів
 - Захист від destructive changes (DROP) через явне підтвердження / `--allow-destructive`
 
-### Phase 3 — Form Runtime + Domain Components
+### Phase 3 — Form Runtime + Dev Preview (implemented)
 
-**Ціль:** Runtime-рендерінг форм з JSON-метаданих і бібліотека domain-компонентів.
+**Реалізований результат:** Runtime-рендерінг форм з JSON-метаданих, data provider layer і dev preview host.
 
 **Результат:**
 - **Zod-схеми для `form.json`** — layout-елементи (Field, Group, Columns, Tabs, TabularSection, Separator, Accordion)
@@ -1646,15 +1646,15 @@ exported-app/
   - Маппінг типів полів → shadcn/ui компоненти (String→Input, Ref(Catalog)→Combobox, Boolean→Switch тощо)
   - Якщо полів > 6 → 2 колонки; якщо є ТЧ → Tabs
 - **`@simetra/form-runtime`** — React-компонент `<SimetraForm>`, який читає `*.form.json` + `*.meta.json` і рендерить форму на льоту (react-hook-form + zodResolver + shadcn/ui)
-- **`@simetra/ui`** — domain-компоненти: `<CatalogCombobox>`, `<EnumSelect>`, `<EditableDataTable>`, `<DocumentNumberInput>`, `<PostButton>`, `<UnpostButton>`
+- **`@simetra/form-runtime`** — domain-компоненти: `<CatalogCombobox>`, `<EnumSelect>`, `<EditableDataTable>`, `<DocumentNumberInput>`, `<PostButton>`, `<UnpostButton>`
+- **`@simetra/data-provider` + `@simetra/data-provider-postgrest`** — контракт доступу до даних, `InMemoryDataProvider` для preview і PostgREST adapter на generic fetch
+- **`@simetra/app-runtime` + `apps/runtime`** — unified runtime shell у fallback mode і thin Vite host для dev preview
 - **`computedFields` у TabularSection** — формули автоперерахунку (§5.8)
-- **Desktop (Tauri 2.0)** — обгортка web-додатку з нативним FS (Windows, macOS, Linux)
-- **VS Code extension** — sidebar panel з деревом метаданих у webview
-- Schema introspection, live DB connection, import існуючої БД
+- Tauri desktop, VS Code extension, schema introspection і live DB connection залишаються у future scope (Phase 5+)
 
-### Phase 4 — Application Shell + Visual Form Designer
+### Phase 4 — Application Shell
 
-**Ціль:** Повний каркас додатку і візуальний конструктор форм.
+**Ціль:** Повний каркас додатку з configured mode.
 
 **Результат:**
 - **`application.meta.json`** — новий файл метаданих рівня проєкту:
@@ -1663,18 +1663,18 @@ exported-app/
   - Dashboard з типізованими віджетами (RecentDocuments, RegisterBalance, Counter, QuickLinks)
   - Тема (base color, mode, radius, accent)
 - **Автогенерація маршрутів** з subsystems: `/{subsystem}/{object}`, `/{subsystem}/{object}/:id`
-- **`@simetra/app-runtime`** — `<SimetraApp>` рендерить повний додаток з JSON-метаданих
-- **Візуальний конструктор форм** у `apps/web`: палітра полів + canvas + drag-and-drop (@dnd-kit)
-- **Codegen React (eject):** `@simetra/generator-react` → `.tsx` файли з shadcn/ui, react-hook-form, Zod
-- **Advanced Modeling:** ChartOfAccounts, AccountingRegister, Schema Visualizer (React Flow)
+- **`@simetra/app-runtime`** — configured mode: subsystem routing, shell layouts, dashboard поверх fallback mode
 
 ### Phase 5 — Platform + Full App Codegen
 
 **Ціль:** Повноцінний low-code app builder з codegen-eject.
 
 **Результат:**
+- **Візуальний конструктор форм** у `apps/web`: палітра полів + canvas + drag-and-drop (@dnd-kit)
+- **Codegen React (eject):** `@simetra/generator-react` → `.tsx` файли з shadcn/ui, react-hook-form, Zod
 - `@simetra/generator-react-app` — повний Next.js/Vite проєкт (shell, forms, lists, routing)
 - Generated .NET/Node.js API з метаданих (контролери, сервіси, маршрути)
+- **Advanced Modeling:** ChartOfAccounts, AccountingRegister, Schema Visualizer (React Flow)
 - Бізнес-процеси та Задачі
 - Embedded server mode (Tauri + local PostgreSQL)
 - Плагінна архітектура для генераторів
@@ -1701,7 +1701,7 @@ exported-app/
 | Складність UI для дерева з DnD та inline editing | Середня | Середній | react-arborist як перевірене рішення, Phase 1 без DnD |
 | Конфлікти merge у JSON-файлах при командній роботі | Низька | Середній | Один файл на об'єкт, сортовані ключі, canonical JSON |
 | Високий обсяг JSON Schema підтримки (7+ схем у MVP, 12+ у Phase 4) | Середня | Середній | Генерація JSON Schema з Zod-схем (zod-to-json-schema) — Zod як single source of truth |
-| Tauri 2.0 екосистема плагінів ще молода | Низька | Низький | Web-first стратегія: Tauri — Phase 3, не блокує MVP. Валідувати file dialogs, FS watcher перед інтеграцією |
+| Tauri 2.0 екосистема плагінів ще молода | Низька | Низький | Web-first стратегія: Tauri — Phase 5+, не блокує MVP/runtime. Валідувати file dialogs, FS watcher перед інтеграцією |
 | File System Access API не підтримується у Safari/Firefox | Середня | Середній | Download/upload fallback для браузерів без FS Access API; повноцінна робота в Chrome/Edge |
 
 ---
@@ -1782,10 +1782,10 @@ exported-app/
 ### Вирішені питання
 
 - ~~**Назва продукту**~~ → **Simetra**. GitHub repo: `Simetra`, npm scope: `@simetra/*`, CLI command: `simetra`, домен: `simetra.dev`.
-- ~~**Мова ядра конфігуратора**~~ → **TypeScript** для всього бізнес-ядра (core, generators, UI, CLI). Rust мінімальний — тільки Tauri commands для FS у Phase 3. Обґрунтування: єдина кодова база, Zod як shared source of truth, відсутність потреби в Rust-performance для проєктів до 200 об'єктів.
-- ~~**Стратегія зберігання стану**~~ → **Zustand** (in-memory) з серіалізацією у файлову систему через абстракцію `StorageProvider` при Save. Phase 1: `WebStorage` (File System Access API + download/upload fallback). Phase 3: `TauriStorage` (нативний FS).
+- ~~**Мова ядра конфігуратора**~~ → **TypeScript** для всього бізнес-ядра (core, generators, UI, CLI). Rust мінімальний — тільки Tauri commands для FS у Phase 5+. Обґрунтування: єдина кодова база, Zod як shared source of truth, відсутність потреби в Rust-performance для проєктів до 200 об'єктів.
+- ~~**Стратегія зберігання стану**~~ → **Zustand** (in-memory) з серіалізацією у файлову систему через абстракцію `StorageProvider` при Save. Phase 1: `WebStorage` (File System Access API + download/upload fallback). Phase 5+: `TauriStorage` (нативний FS).
 - ~~**Як обробляти compound types**~~ → Єдиний тип `Ref` з двома режимами: single ref (`ref: { kind, name }`) і polymorphic ref (`allowedTypes: [{ kind, name }, ...]`). `ref` і `allowedTypes` — взаємовиключні. Polymorphic ref генерується як `{field}_type` + `{field}_id` (Dynamic Link pattern).
-- ~~**Web vs Desktop first**~~ → **Web-first**. Phase 1 — React SPA у браузері, без серверу. Tauri desktop та VS Code extension — Phase 3. Обґрунтування: нижчий бар'єр для adoption (не потрібно встановлювати), швидший прототип, спільний код між усіма платформами.
+- ~~**Web vs Desktop first**~~ → **Web-first**. Phase 1 — React SPA у браузері, без серверу. Tauri desktop та VS Code extension — Phase 5+. Обґрунтування: нижчий бар'єр для adoption (не потрібно встановлювати), швидший прототип, спільний код між усіма платформами.
 - ~~**Як генерувати код проведення**~~ → **Декларативний mapping** у секції `posting` метаданих документа (§5.3.1). Покриває 90% шаблонних випадків. Для складної логіки — точка розширення `_post_custom()`.
 
 ### Потребують рішення до Phase 2
