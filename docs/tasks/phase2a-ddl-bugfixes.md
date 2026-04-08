@@ -365,7 +365,7 @@ ALTER TABLE doc_sales_order
 - `docs/architecture/OVERVIEW.md` — загальна архітектура, шари core/generator-pg
 - `docs/architecture/metadata-model.md` — MetadataKind, reference-модель, стандартні реквізити
 - `docs/BRD-metadata-configurator.md` — бізнес-вимоги, секції 5 (types), 6 (fields), 7 (JSON), 10.4 (generator plugin)
-- `docs/tasks/phase2a-ddl-generator.md` — оригінальна специфікація (рядок 93: FK constraints як окрема фаза — ця задача повертає до того контракту)
+- `docs/architecture/OVERVIEW.md` — архітектура generator-pg; `docs/BRD-metadata-configurator.md` §10.4 — генерація DDL
 - `packages/core/src/serialization.ts` — прецедент KIND_SLUG маппінгу
 - `packages/core/src/find-references.ts` — прецедент KIND_TO_KEY маппінгу
 - `packages/core/src/schemas/sql-reserved-words.ts` — прецедент SQL awareness в core

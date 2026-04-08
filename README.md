@@ -1,47 +1,53 @@
 # Simetra
 
-Open-source visual business metadata configurator.
+Відкритий візуальний конфігуратор бізнес-метаданих.
 
-## Structure
+## Структура
 
 ```
-apps/web            — React SPA (Vite + Tailwind CSS 4 + shadcn/ui)
-packages/ui         — Shared UI components (shadcn/ui)
-packages/core       — Business metadata schemas (Zod)
-packages/cli        — CLI for SQL generation from metadata
-packages/generator-pg  — PostgreSQL DDL generator
-packages/generator-api — Generator API contracts
+apps/web               — React SPA (Vite + Tailwind CSS 4 + shadcn/ui)
+packages/ui            — Спільні UI-компоненти (shadcn/ui)
+packages/core          — Zod-схеми бізнес-метаданих
+packages/cli           — CLI для генерації та застосування SQL з метаданих
+packages/generator-pg  — Генератор PostgreSQL DDL і posting SQL
+packages/generator-api — Контракти API генераторів
 ```
 
-## Getting Started
+## Швидкий старт
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-## CLI Usage
+## Використання CLI
 
 ```bash
-# Show CLI help
+# Показати довідку CLI
 pnpm simetra generate --help
 
-# Generate SQL from metadata directory
+# Згенерувати SQL з директорії метаданих
 pnpm simetra generate --input ./temp/metadata --output ./output
+
+# Застосувати SQL до PostgreSQL бази даних
+pnpm simetra apply --connection-string "$SIMETRA_DATABASE_URL" --input ./temp/metadata
+
+# Переглянути SQL без застосування
+pnpm simetra apply --dry-run --input ./temp/metadata
 ```
 
-## Adding UI Components
+## Додавання UI-компонентів
 
 ```bash
 pnpm dlx shadcn@latest add button -c apps/web
 ```
 
-Components are placed in `packages/ui/src/components` and imported as:
+Компоненти створюються в `packages/ui/src/components` і імпортуються так:
 
 ```tsx
-import { Button } from "@workspace/ui/components/button";
+import { Button } from '@workspace/ui/components/button'
 ```
 
-## License
+## Ліцензія
 
 [Apache-2.0](LICENSE)

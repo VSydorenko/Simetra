@@ -56,6 +56,9 @@ Simetra — open-source візуальний конфігуратор бізне
 
 - `index.ts` — точка входу CLI (citty).
 - `commands/generate.ts` — команда `generate`: зчитує метадані з директорії, валідує через Zod, генерує DDL.
+- `commands/apply.ts` — команда `apply`: застосування SQL на PostgreSQL через connection string, `dry-run`, schema diff, destructive change guards.
+- `db-client.ts` — обгортка над PostgreSQL client для підключення і транзакційного виконання.
+- `snapshot.ts` — читання і збереження schema snapshots для diff-міграцій.
 - `read-metadata.ts` — рекурсивне зчитування файлів метаданих.
 
 ### docs/architecture
@@ -63,7 +66,7 @@ Simetra — open-source візуальний конфігуратор бізне
 - `OVERVIEW.md` — коротка карта поточної архітектури.
 - Тематичні документи цього розділу деталізують state, UI, storage і рішення без дублювання коду.
 
-Генератори (`generator-api`, `generator-pg`) і CLI створені в Phase 2a. Інші deployment targets описуються тільки в roadmap.
+Генератори (`generator-api`, `generator-pg`), CLI з командами `generate` та `apply`, posting SQL generation і schema diff — реалізовані повністю.
 
 Ключові файли: [../../apps/web/src/components/layout/app-shell.tsx](../../apps/web/src/components/layout/app-shell.tsx), [../../apps/web/src/stores/metadata-store.ts](../../apps/web/src/stores/metadata-store.ts), [../../apps/web/src/storage/storage-provider.ts](../../apps/web/src/storage/storage-provider.ts), [../../packages/core/src/schemas/project-model.ts](../../packages/core/src/schemas/project-model.ts), [../../packages/core/src/serialization.ts](../../packages/core/src/serialization.ts)
 
@@ -240,7 +243,7 @@ SQL Preview відкривається як вкладка в центральн
 |------|-------|--------|
 | Phase 1 closure | Дошліфування поточного web configurator: документація, UX gaps, перевірки, завершення архітектурного набору документів | roadmap |
 | Phase 2a | Генерація PostgreSQL DDL, SQL Preview, CLI | implemented |
-| Phase 2b-c | Posting engine, deployment targets | roadmap |
+| Phase 2b-c | Posting engine (Zod-схеми, movements editor, SQL generation), deployment flow (manual apply, CLI apply, schema diff) | implemented |
 | Phase 3 | Form Runtime & Dev Preview: `@simetra/form-runtime` (React-бібліотека рендерингу форм), `@simetra/data-provider` (абстрактний data-access contract), `@simetra/data-provider-postgrest` (PostgREST adapter), `apps/runtime` (dev preview shell). Core: Zod-схеми forms, shared metadata IO layer, autoform алгоритм, `resolveForm()` | roadmap |
 
 Усі інші пакети, рантайми й deployment targets мають з'являтися в overview тільки після появи реального коду в репозиторії.

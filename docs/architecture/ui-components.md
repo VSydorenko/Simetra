@@ -176,13 +176,15 @@ Editor layer зведений навколо одного reusable редакт�
 - `data` — основна структурна робота з полями;
 - `forms` — секція «Форми» для `Catalog`, `Document`, `CustomTable` (Phase 3): перегляд і редагування explicit forms, прив'язаних до об'єкта через `objectRef`;
 - `values` — спеціалізована секція для `Enumeration`;
-- `numbering`, `movements`, `settings` — placeholder-секції з явним повідомленням `coming soon`.
+- `movements` — реалізована секція для `Document`: таблиця register movements, запуск `RegisterPickerDialog`, редагування через `MovementConstructorDialog`, таблиця posting validations;
+- `numbering`, `settings` — placeholder-секції з явним повідомленням `coming soon` у центральній панелі.
 
 Реально реалізовані редактори контенту:
 
 - [attribute-table.tsx](../../apps/web/src/components/editor/attribute-table.tsx)
 - [tabular-sections-editor.tsx](../../apps/web/src/components/editor/tabular-sections-editor.tsx)
 - [enum-values-editor.tsx](../../apps/web/src/components/editor/enum-values-editor.tsx)
+- [movements-section.tsx](../../apps/web/src/components/editor/movements-section.tsx)
 
 Для регістрів секція `data` збирає три таблиці підряд: `dimensions`, `resources`, `attributes`. Для `Catalog` і `Document` секція `data` поєднує `AttributeTable` і `TabularSectionsEditor`.
 
@@ -190,14 +192,14 @@ Editor layer зведений навколо одного reusable редакт�
 
 **Поточна реалізація:**
 
-- секції `main`, `data`, `values` мають реальний контент;
+- секції `main`, `data`, `values`, `movements` мають реальний контент;
 - вертикальна навігація вже є основною моделлю editor navigation;
 - `activeSection` не жорстко пришита до kind і перевизначається declarative config-ом.
 
 **Частково / planned:**
 
-- `numbering`, `movements`, `settings` уже присутні в навігації, але не є завершеними фічами;
-- ці placeholder-секції не можна трактувати як повноцінний функціонал лише тому, що вони відображаються в UI.
+- `numbering` і `settings` уже присутні в навігації, але в центральній панелі ще не є завершеними фічами;
+- `settings` логічно лишається прив'язаною до правої панелі `ObjectProperties`, тому placeholder у центрі не означає відсутність object-level settings загалом.
 
 ### Важливе архітектурне правило
 
@@ -387,7 +389,7 @@ I18n bootstrapping відбувається в [apps/web/src/i18n/index.ts](../.
 - Не дублювати editor logic окремо для tabs і floating windows: обидва режими мають триматися на спільному `ObjectEditor`.
 - Не перетворювати архітектурний документ на prop reference.
 - Не змішувати presentation і interaction layers у дереві без явного рішення; якщо межа неповна, це треба прямо позначати.
-- Не трактувати placeholder-секції `numbering`, `movements`, `settings` як завершені фічі лише тому, що вони присутні у вертикальній навігації.
+- Не трактувати placeholder-секції `numbering` і `settings` як завершені фічі лише тому, що вони присутні у вертикальній навігації.
 
 ## Пов'язана документація
 

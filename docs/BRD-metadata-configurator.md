@@ -88,11 +88,8 @@ Open-source візуальний конфігуратор бізнес-мета�
 
 ### 3.4. Дорожня карта розвитку
 
-| Горизонт | Можливість | Фаза |
-|----------|------------|------|
-| Декларативний движок проведення (posting engine) | Phase 2b |
-| Генерація PostgreSQL функцій проведення/валідації | Phase 2b |
-| Supabase як deployment target + auto REST API | Phase 2c |
+| Можливість | Фаза |
+|------------|------|
 | Runtime-рендерінг форм з JSON-метаданих | Phase 3 |
 | Бібліотека domain-компонентів (@simetra/ui) | Phase 3 |
 | Візуальний конструктор форм | Phase 4 |
@@ -864,14 +861,14 @@ metadata/
 
 | ID | Вимога | Пріоритет | Статус |
 |---|---|---|---|
-| FR-060 | Згенерувати PostgreSQL DDL (CREATE TABLE, CREATE INDEX, FK) з метаданих | Phase 2a | — Planned: phase2a-ddl-generator.md |
-| FR-061 | Згенерувати SQL-міграцію (ALTER TABLE) при зміні метаданих | Phase 2c | — Planned: phase2c-deployment-adapter.md |
+| FR-060 | Згенерувати PostgreSQL DDL (CREATE TABLE, CREATE INDEX, FK) з метаданих | Phase 2a | Implemented |
+| FR-061 | Згенерувати SQL-міграцію (ALTER TABLE) при зміні метаданих | Phase 2c | Implemented |
 | FR-062 | Згенерувати EF Core entity classes + IEntityTypeConfiguration | Phase 2+ | — Deferred |
-| FR-063 | Згенерувати view/materialized view для віртуальних таблиць регістрів | Phase 2a | — Planned: phase2a-ddl-generator.md |
-| FR-064 | Показати diff між поточними метаданими та станом БД | Phase 2c | — Planned: phase2c-deployment-adapter.md |
+| FR-063 | Згенерувати view/materialized view для віртуальних таблиць регістрів | Phase 2a | Implemented |
+| FR-064 | Показати diff між поточними метаданими та applied schema snapshot | Phase 2c | Implemented |
 | FR-065 | Підключитися до живої PostgreSQL БД для schema introspection | Phase 3 | — |
-| FR-066 | Згенерувати SQL-функції проведення/скасування з posting-метаданих | Phase 2b | — Planned: phase2b-posting-engine.md |
-| FR-067 | Візуальний редактор маппінгів проведення (movements editor) | Phase 2b | — Planned: phase2b-posting-engine.md |
+| FR-066 | Згенерувати SQL-функції проведення/скасування з posting-метаданих | Phase 2b | Implemented |
+| FR-067 | Візуальний редактор маппінгів проведення (movements editor) | Phase 2b | Implemented |
 | FR-068 | Runtime-рендерінг форм з JSON-метаданих (form.json → React) | Phase 3 | — |
 | FR-069 | Генерація каркасу додатку (Application Shell) з метаданих | Phase 4 | — |
 
@@ -934,10 +931,10 @@ packages/
 ├── @simetra/core                ← Zod-схеми, типи, валідація (чистий TS, без UI/Node API)
 ├── @workspace/ui                ← shadcn/ui примітиви (Phase 1, existing)
 ├── @simetra/json-schemas        ← Згенеровані JSON Schema (з Zod, build step)
-├── @simetra/generator-api       ← MetadataGenerator interface + спільні утиліти (Phase 2a)
-├── @simetra/generator-pg        ← PostgreSQL DDL + posting SQL генератор (Phase 2a–2b)
+├── @simetra/generator-api       ← MetadataGenerator interface + спільні утиліти
+├── @simetra/generator-pg        ← PostgreSQL DDL + posting SQL генератор
 ├── @simetra/generator-efcore    ← EF Core генератор (Phase 2+, deferred)
-├── @simetra/cli                 ← CLI обгортка (citty) над core + generators (Phase 2a)
+├── @simetra/cli                 ← CLI обгортка (citty) над core + generators
 ├── @simetra/ui                  ← Domain-компоненти: CatalogCombobox, PostButton, DataTable (Phase 3)
 ├── @simetra/form-runtime        ← JSON → React form renderer (Phase 3)
 ├── @simetra/app-runtime         ← Unified runtime: fallback shell (Phase 3) + configured mode (Phase 4)
@@ -1011,7 +1008,7 @@ apps/
 
 **Секції картки об'єкта** — вертикальна навігація зліва від контенту замість горизонтальних вкладок у центральній зоні. Набір секцій залежить від `kind` об'єкта:
 - **Catalog** — Основні, Дані, Нумерація, Налаштування
-- **Document** — Основні, Дані, Нумерація, Рухи (posting editor — візуальний редактор маппінгів, Phase 2b), Налаштування
+- **Document** — Основні, Дані, Нумерація, Рухи, Налаштування
 - **Enumeration** — Основні, Значення
 - **InformationRegister** — Основні, Дані, Налаштування
 - **AccumulationRegister** — Основні, Дані, Налаштування
@@ -1105,24 +1102,17 @@ Metadata JSON (canonical)
 
 ### 10.2. PostgreSQL SQL Generator (перший, вбудований)
 
-**Phase 2a — структурна генерація:**
+Поточна реалізація PostgreSQL generator покриває повний цикл генерації SQL для метаданих Simetra:
 
-- `CREATE TABLE` для кожного об'єкта з правильними типами, constraints, FK
-- `CREATE TYPE` для перелічень (якщо обрана стратегія pgEnum)
+- `CREATE TABLE` для кожного об'єкта з правильними типами, constraints і FK
+- `CREATE TYPE` для перелічень (якщо обрана стратегія `pgEnum`)
 - `CREATE INDEX` для індексованих полів
 - `CREATE VIEW` / `CREATE MATERIALIZED VIEW` для віртуальних таблиць регістрів
-- Trigger-функцію для автонумерації (якщо autonumber = true)
-
-**Phase 2b — генерація проведення (posting SQL):**
-
+- Trigger-функції для автонумерації (якщо `autonumber = true`)
 - `post_{document_name}(doc_id uuid)` — функція проведення документа (див. §5.3.1)
 - `unpost_{document_name}(doc_id uuid)` — функція скасування проведення
 - `check_{register}_{resource}(dims...)` — функція перевірки залишків
-- Всі функції доступні як Supabase RPC endpoints через PostgREST
-
-**Phase 2c — міграції:**
-
-- `ALTER TABLE` міграції при зміні метаданих (snapshot-based diff)
+- snapshot-based diff і генерацію `ALTER TABLE` міграцій для еволюції схеми
 
 **Джерела для реалізації** (ліцензійно безпечні):
 - SQL-запити introspection: supabase/pg_meta (Apache 2.0)
@@ -1612,39 +1602,32 @@ exported-app/
 
 **Не включено:** генерація, підключення до БД, schema introspection, Tauri desktop, VS Code extension.
 
-### Phase 2a — DDL Generator + SQL Preview
+### Phase 2a — DDL Generator + SQL Preview (реалізовано)
 
-**Ціль:** Перетворити метадані на PostgreSQL-схему та показати результат.
+**Реалізовано:**
+- `@simetra/generator-pg` генерує CREATE TABLE, INDEX, FK, ENUM types для всіх 7 типів метаданих
+- Генеруються view/materialized view для регістрів (залишки, обороти, зріз останніх)
+- Генеруються trigger-функції для автонумерації (Catalog, Document)
+- `@simetra/generator-api` визначає інтерфейс `MetadataGenerator`
+- У web configurator доступний SQL Preview: генерація, syntax-highlighted preview, download/copy
+- Перед генерацією виконується validation (referential integrity, обов'язкові поля)
+- `@simetra/cli` підтримує CLI-команду `simetra generate --target postgresql`
 
-**Результат:**
-- `@simetra/generator-pg` — новий пакет: CREATE TABLE, INDEX, FK, ENUM types для всіх 7 типів метаданих
-- View/materialized view для регістрів (залишки, обороти, зріз останніх)
-- Trigger для автонумерації (Catalog, Document)
-- `@simetra/generator-api` — інтерфейс MetadataGenerator
-- SQL Preview UI: кнопка "Generate" → syntax-highlighted preview → download/copy
-- Validation перед генерацією (referential integrity, обов'язкові поля)
-- `@simetra/cli` — CLI: `simetra generate --target postgresql`
+### Phase 2b — Posting Engine (реалізовано)
 
-### Phase 2b — Posting Engine
-
-**Ціль:** Декларативний маппінг проведення документів і генерація SQL-функцій.
-
-**Результат:**
+**Реалізовано:**
 - Zod-схеми `posting` секції у `@simetra/core` (movements, validations, mapping expressions)
-- Генерація `post_`/`unpost_`/`check_` SQL-функцій у `@simetra/generator-pg`
-- Візуальний editor маппінгів у `apps/web`: dropdown-based маппінг полів документа на виміри/ресурси регістру (MVP); drag-drop лінії як enhancement
-- SQL-функції доступні як Supabase RPC endpoints через PostgREST
+- Генерацію `post_`/`unpost_`/`check_` SQL-функцій у `@simetra/generator-pg`
+- Візуальний editor маппінгів у `apps/web`: movements section, вибір регістрів і конструктор рухів
 
-### Phase 2c — Deployment Adapter + Schema Diff
+### Phase 2c — Deployment Adapter + Schema Diff (реалізовано)
 
-**Ціль:** Задеплоїти згенерований SQL і підтримувати еволюцію схеми.
-
-**Результат:**
-- Supabase як перший deployment target (Edge Function proxy для Apply)
-- Connection settings у Project Settings (URL, API key — не в метаданих)
-- Schema snapshot + diff: порівняння new DDL vs applied state
-- Генерація ALTER TABLE замість CREATE TABLE для існуючих об'єктів
-- Destructive changes (DROP) з explicit confirmation
+**Реалізовано:**
+- Ручний deployment flow через generated SQL-файли або CLI-команду `simetra apply`
+- Застосування SQL на будь-яку PostgreSQL базу даних через connection string
+- Schema snapshot + diff: порівняння нового DDL зі збереженим applied state
+- Генерацію `ALTER TABLE` замість повного `CREATE TABLE` для існуючих об'єктів
+- Захист від destructive changes (DROP) через явне підтвердження / `--allow-destructive`
 
 ### Phase 3 — Form Runtime + Domain Components
 
@@ -1698,7 +1681,7 @@ exported-app/
 
 1. PostgreSQL — єдина підтримувана СУБД на старті. Архітектура дозволяє інші, але реалізація — тільки PG
 2. Метамодель підтримує тільки вбудовані типи метаданих — кастомні типи не в scope MVP
-3. Генератори в Phase 2a не виконують SQL — тільки генерують файли. Phase 2c додає Supabase Apply Adapter для виконання
+3. Генератори генерують SQL-файли. CLI команда `simetra apply` дозволяє застосувати SQL на будь-яку PostgreSQL базу даних через connection string
 4. Phase 1–2: продукт не виконує бізнес-логіку — це інструмент проєктування та генерації. Phase 3+ додає runtime-рендерінг форм
 
 ### 13.2. Ризики

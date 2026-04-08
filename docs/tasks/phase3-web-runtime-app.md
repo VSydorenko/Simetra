@@ -692,7 +692,7 @@ Runtime app **ніколи** не мутує metadata JSON. Він лише чи
 - `docs/architecture/OVERVIEW.md` — поточна архітектура
 - `docs/architecture/metadata-model.md` — metadata model contract, standard attributes
 - `docs/architecture/storage-and-persistence.md` — storage provider pattern, file layout, clearDirectory behavior
-- `docs/tasks/phase2c-deployment-adapter.md` — deployment і межа з runtime
+- `docs/architecture/OVERVIEW.md` — deployment flow і межа з runtime
 - `.github/instructions/architecture-core.instructions.md` — core: pure TS + Zod
 - `.github/instructions/metadata-model.instructions.md` — правила Zod schemas
 - `.github/instructions/ui-architecture.instructions.md` — UI patterns
