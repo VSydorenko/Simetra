@@ -16,21 +16,22 @@ description: 'Правила роботи з Zod-схемами метадани
 ```
 packages/core/src/schemas/
 ├── index.ts                    — barrel export (re-exports усіх схем і типів)
-├── localized-string.ts         — LocalizedString {uk, en}
-├── field-type.ts               — FieldType (єдиний enum: примітиви + "Ref")
-├── metadata-kind.ts            — MetadataKind enum
-├── metadata-ref.ts             — MetadataRef {kind, name}
-├── attribute.ts                — Attribute schema (поле об'єкта)
-├── tabular-section.ts          — TabularSection schema
-├── catalog.ts                  — Catalog (довідник)
-├── document.ts                 — Document (документ)
-├── enumeration.ts              — Enumeration (перелічення)
-├── information-register.ts     — InformationRegister (регістр відомостей)
 ├── accumulation-register.ts    — AccumulationRegister (регістр накопичення)
+├── attribute.ts                — Attribute schema (поле об'єкта)
+├── catalog.ts                  — Catalog (довідник)
 ├── constant.ts                 — Constant (константа)
 ├── custom-table.ts             — CustomTable (довільна таблиця)
+├── document.ts                 — Document (документ)
+├── enumeration.ts              — Enumeration (перелічення)
+├── field-type.ts               — FieldType (єдиний enum: примітиви + "Ref")
 ├── form.ts                     — FormSchema (форма об'єкта, Phase 3)
-└── project.ts                  — Project schema (налаштування проєкту)
+├── information-register.ts     — InformationRegister (регістр відомостей)
+├── localized-string.ts         — LocalizedString {uk, en}
+├── metadata-kind.ts            — MetadataKind enum
+├── metadata-ref.ts             — MetadataRef {kind, name}
+├── physical-naming.ts          — KIND_PREFIX, toSnakeCase, physicalObjectName, physicalTabularName
+├── project.ts                  — Project schema (налаштування проєкту)
+└── tabular-section.ts          — TabularSection schema
 ```
 
 ## ✅ ALWAYS

@@ -47,9 +47,9 @@ Simetra — open-source візуальний конфігуратор бізне
 
 ### packages/generator-pg/src
 
-- `generate-table.ts` — головна функція `generateProjectDDL()`: таблиці, views, тригери, indexes, posting functions.
+- `generate-table.ts` — головна функція `generateProjectDDL()`: `ENUM TYPES`, таблиці, late-emitted секція `FOREIGN KEYS` через `fkCollector`, далі indexes, views, тригери й posting functions.
 - `type-mapping.ts` — маппінг типів полів і Ref на PostgreSQL column definitions.
-- `naming.ts` — PascalCase → snake_case naming і кваліфіковані імена.
+- `naming.ts` — побудований поверх shared physical naming з core (`physicalObjectName`, `physicalTabularName`), реекспортує `toSnakeCase` і додає PostgreSQL-specific helper-и: `qualifiedName`, `quoteIdentifier`, `escapeLiteral`, `tableName(prefix, kind, objectName)` і `tabularTableName(prefix, kind, parentName, sectionName)`.
 - `generate-posting.ts` — генерація posting/unposting SQL функцій.
 
 ### packages/cli/src

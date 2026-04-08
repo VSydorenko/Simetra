@@ -239,6 +239,58 @@ state slices чи storage flows з тематичних документів. Н
   [./metadata-model.md](./metadata-model.md),
   [./ui-components.md](./ui-components.md)
 
+## ADR-014: Physical naming (KIND_PREFIX) живе в core, а не в generator-pg
+
+- Статус: прийнято
+- Контекст: фізичні SQL-імена мають розрізняти однойменні бізнес-об'єкти
+  різних kind-ів. Це доменне правило моделі метаданих, а не особливість лише
+  PostgreSQL-генератора.
+- Рішення: `KIND_PREFIX`, `toSnakeCase`, `physicalObjectName` і
+  `physicalTabularName` визначаються в `@simetra/core` і експортуються для
+  генераторів. `generator-pg` перевикористовує ці helper-и й додає тільки
+  dialect-specific речі на кшталт `qualifiedName`, `quoteIdentifier` та
+  `escapeLiteral`.
+- Наслідки: майбутні генератори не дублюють naming-логіку і не вводять власні
+  kind-prefix conventions. Physical naming стає частиною спільного доменного
+  контракту для всіх target-ів.
+- Джерела:
+  [../../packages/core/src/schemas/physical-naming.ts](../../packages/core/src/schemas/physical-naming.ts),
+  [../../packages/generator-pg/src/naming.ts](../../packages/generator-pg/src/naming.ts)
+
+## ADR-015: Foreign keys емітяться після CREATE TABLE через ALTER TABLE
+
+- Статус: прийнято
+- Контекст: inline `REFERENCES` у `CREATE TABLE` ускладнюють forward refs і
+  циклічні залежності між об'єктами. Вони вимагають топологічного сортування
+  або спеціальних винятків у порядку генерації.
+- Рішення: усі FK-констрейнти збираються під час генерації таблиць і
+  емітяться окремою секцією `FOREIGN KEYS` через
+  `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY ...` після всіх
+  `CREATE TABLE`. Ім'я констрейнта має формат `fk_{table}_{column}`.
+- Наслідки: порядок DDL стабільний: `ENUM TYPES` → `TABLES` →
+  `FOREIGN KEYS` → `INDEXES` → `VIEWS` → `TRIGGERS` →
+  `POSTING FUNCTIONS`. Генератор не покладається на inline FK для коректного
+  порядку створення таблиць.
+- Джерела:
+  [../../packages/generator-pg/src/generate-table.ts](../../packages/generator-pg/src/generate-table.ts),
+  [../../packages/generator-pg/src/type-mapping.ts](../../packages/generator-pg/src/type-mapping.ts)
+
+## ADR-016: Enum resolution спільний для DDL і posting generation
+
+- Статус: прийнято
+- Контекст: hardcoded `enum_` naming у posting-layer дрейфував би від основної
+  DDL-генерації та ламав би узгодженість між `pgEnum` і `lookupTable`
+  стратегіями.
+- Рішення: `generateProjectDDL()` один раз будує `resolveEnumType` callback і
+  передає його в table/type mapping та posting generation. `generate-posting.ts`
+  не містить власних hardcoded enum-prefix правил.
+- Наслідки: DDL і posting використовують однакову резолюцію enum physical
+  names. Kind-prefix `enum_` лишається спільним правилом physical naming, а не
+  локальною домовленістю окремого модуля.
+- Джерела:
+  [../../packages/generator-pg/src/generate-table.ts](../../packages/generator-pg/src/generate-table.ts),
+  [../../packages/generator-pg/src/generate-posting.ts](../../packages/generator-pg/src/generate-posting.ts)
+
 ## Загальні патерни
 
 - Commit-on-blur: локальний input draft фіксується в store при blur або явному

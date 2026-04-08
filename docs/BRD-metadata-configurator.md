@@ -144,9 +144,9 @@ Open-source візуальний конфігуратор бізнес-мета�
 | code | String / Number | `varchar(N)` / `integer` | Код елемента | Ні |
 | description | String | `varchar(N)` | Найменування | Ні |
 | deletion_mark | Boolean | `boolean DEFAULT false` | Позначка на видалення | Ні |
-| parent_id | UUID | `uuid REFERENCES ... NULL` | Батьківська група (якщо ієрархічний) | Ні¹ |
+| parent_id | UUID | `uuid NULL` | Батьківська група (якщо ієрархічний) | Ні¹ |
 | is_folder | Boolean | `boolean DEFAULT false` | Це група (якщо ієрархічний) | Ні¹ |
-| owner_id | Ref → {Owner} | `uuid REFERENCES ...` | Власник (якщо підпорядкований) | Ні² |
+| owner_id | Ref → {Owner} | `uuid NULL` | Власник (якщо підпорядкований) | Ні² |
 | predefined_name | String | `varchar(100) NULL` | Ім'я предефінованого елемента | Ні |
 | created_at | DateTime | `timestamptz DEFAULT now()` | Дата створення | Ні |
 | updated_at | DateTime | `timestamptz DEFAULT now()` | Дата останньої зміни | Ні |
@@ -548,7 +548,8 @@ Simetra генерує з цього:
 }
 ```
 
-Генерується як `product_id uuid REFERENCES products(id) NOT NULL` у PostgreSQL.
+Генерується як `product_id uuid NOT NULL`, а зовнішній ключ додається окремо,
+наприклад: `ALTER TABLE doc_sales_order ADD CONSTRAINT fk_doc_sales_order_product_id FOREIGN KEY (product_id) REFERENCES cat_products(id)`.
 
 **Приклад polymorphic ref у JSON-метаданих:**
 
@@ -1605,12 +1606,18 @@ exported-app/
 ### Phase 2a — DDL Generator + SQL Preview (реалізовано)
 
 **Реалізовано:**
-- `@simetra/generator-pg` генерує CREATE TABLE, INDEX, FK, ENUM types для всіх 7 типів метаданих
+- `@simetra/generator-pg` генерує PostgreSQL DDL для всіх 7 типів метаданих з kind-prefixed physical names: `cat_`, `doc_`, `enum_`, `ir_`, `ar_`, `const_`, `ct_`
+- Physical naming винесений у `@simetra/core` як shared helper-и (`KIND_PREFIX`, `toSnakeCase`, `physicalObjectName`, `physicalTabularName`) для всіх генераторів
+- DDL має стабільний порядок секцій: `ENUM TYPES` → `TABLES` → `FOREIGN KEYS` → `INDEXES` → `VIEWS` → `TRIGGERS` → `POSTING FUNCTIONS`
+- Foreign keys емітяться окремою секцією `FOREIGN KEYS` через `ALTER TABLE ... ADD CONSTRAINT`; inline `REFERENCES` для Ref-колонок не використовуються
+- Константи: `singleTable` → фіксоване ім'я `{tablePrefix}const_settings`; `separateTables` → `{tablePrefix}const_{snake_case(name)}`
+- DDL і posting generation використовують спільну резолюцію enum physical names; `generate-posting` не містить hardcoded `enum_` naming
 - Генеруються view/materialized view для регістрів (залишки, обороти, зріз останніх)
 - Генеруються trigger-функції для автонумерації (Catalog, Document)
 - `@simetra/generator-api` визначає інтерфейс `MetadataGenerator`
 - У web configurator доступний SQL Preview: генерація, syntax-highlighted preview, download/copy
 - Перед генерацією виконується validation (referential integrity, обов'язкові поля)
+- Генератор додає warning у `GeneratorOutput.warnings[]`, якщо згенерований ідентифікатор перевищує 63 символи (PostgreSQL `NAMEDATALEN-1`)
 - `@simetra/cli` підтримує CLI-команду `simetra generate --target postgresql`
 
 ### Phase 2b — Posting Engine (реалізовано)

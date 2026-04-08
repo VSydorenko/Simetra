@@ -15,9 +15,13 @@ Web-рівень працює поверх цієї моделі, але не д
 довідники, документи, перелічення, регістри відомостей, регістри
 накопичення, константи і довільні таблиці. Генерація SQL, міграції БД і
 runtime-поведінка бізнес-логіки не є частиною поточного model contract.
+Водночас core містить shared helper-и physical naming (`KIND_PREFIX`,
+`toSnakeCase`, `physicalObjectName`, `physicalTabularName`), які генератори
+імпортують як спільний доменний контракт фізичних ідентифікаторів.
 
 Джерела: [../../packages/core/src/schemas/project-model.ts](../../packages/core/src/schemas/project-model.ts),
 [../../packages/core/src/schemas/project.ts](../../packages/core/src/schemas/project.ts),
+[../../packages/core/src/schemas/physical-naming.ts](../../packages/core/src/schemas/physical-naming.ts),
 [../../packages/core/src/serialization.ts](../../packages/core/src/serialization.ts),
 [../BRD-metadata-configurator.md](../BRD-metadata-configurator.md)
 
