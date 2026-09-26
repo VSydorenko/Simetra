@@ -28,19 +28,10 @@ export type SessionRestoreStatus =
   | "draft-available"
 
 export type ProjectOrigin =
-  | "new"
-  | "directory"
-  | "zip-import"
-  | "draft-recovery"
-  | null
+  "new" | "directory" | "zip-import" | "draft-recovery" | null
 
 export type ProjectErrorContext =
-  | "save"
-  | "open"
-  | "export"
-  | "import"
-  | "restore"
-  | null
+  "save" | "open" | "export" | "import" | "restore" | null
 
 export interface ProjectState {
   // Шлях або handle до директорії проєкту (File System Access API)
@@ -106,7 +97,7 @@ export interface ProjectActions {
 }
 
 function formatProjectIssues(
-  issues: { path: PropertyKey[]; message: string }[],
+  issues: { path: PropertyKey[]; message: string }[]
 ): string {
   return issues
     .map((issue) => {

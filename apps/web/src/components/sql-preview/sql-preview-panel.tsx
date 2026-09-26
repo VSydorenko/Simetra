@@ -1,15 +1,15 @@
-import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Button } from '@workspace/ui/components/button'
-import { useDdlStore } from '@/stores/ddl-store'
+import { useMemo } from "react"
+import { useTranslation } from "react-i18next"
+import { Button } from "@workspace/ui/components/button"
+import { useDdlStore } from "@/stores/ddl-store"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from '@workspace/ui/components/collapsible'
-import { SqlFileTree } from './sql-file-tree'
-import { SqlViewer } from './sql-viewer'
-import { SqlToolbar } from './sql-toolbar'
+} from "@workspace/ui/components/collapsible"
+import { SqlFileTree } from "./sql-file-tree"
+import { SqlViewer } from "./sql-viewer"
+import { SqlToolbar } from "./sql-toolbar"
 
 export function SqlPreviewPanel() {
   const { t } = useTranslation()
@@ -23,7 +23,7 @@ export function SqlPreviewPanel() {
   // Підрахунок статистики по всіх файлах output
   const stats = useMemo(() => {
     if (!output) return { statements: 0, tables: 0 }
-    const allContent = output.files.map((f) => f.content).join('\n')
+    const allContent = output.files.map((f) => f.content).join("\n")
     const statements = (allContent.match(/;/g) || []).length
     const tables = (allContent.match(/CREATE TABLE/gi) || []).length
     return { statements, tables }
@@ -153,9 +153,7 @@ export function SqlPreviewPanel() {
       <div className="flex h-6 shrink-0 items-center gap-2 border-t border-border bg-muted/30 px-3 text-[10px] text-muted-foreground">
         <span>~{stats.statements} statements</span>
         <span>·</span>
-        <span>
-          {t('sqlPreview.tablesCount', { count: stats.tables })}
-        </span>
+        <span>{t("sqlPreview.tablesCount", { count: stats.tables })}</span>
       </div>
     </div>
   )

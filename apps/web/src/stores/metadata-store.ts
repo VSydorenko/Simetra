@@ -230,43 +230,37 @@ export interface MetadataActions {
   updateMovement: (
     name: string,
     registerRef: MetadataRef,
-    movement: PostingMovement,
+    movement: PostingMovement
   ) => ValidationError[] | null
   /** Видалити movement для документа */
-  removeMovement: (
-    name: string,
-    registerRef: MetadataRef,
-  ) => void
+  removeMovement: (name: string, registerRef: MetadataRef) => void
   /** Додати валідацію проведення */
   addPostingValidation: (
     name: string,
-    validation: PostingValidation,
+    validation: PostingValidation
   ) => ValidationError[] | null
   /** Видалити валідацію проведення за індексом */
-  removePostingValidation: (
-    name: string,
-    index: number,
-  ) => void
+  removePostingValidation: (name: string, index: number) => void
 
   // --- Form actions (Phase 3) ---
   /** Додати форму для об'єкта */
   addForm: (
     objectKind: MetadataKind,
     objectName: string,
-    formKind: FormKind,
+    formKind: FormKind
   ) => ValidationError[] | null
   /** Оновити дані форми */
   updateForm: (
     objectKind: MetadataKind,
     objectName: string,
     formKind: FormKind,
-    data: Partial<FormSchema>,
+    data: Partial<FormSchema>
   ) => ValidationError[] | null
   /** Видалити форму */
   deleteForm: (
     objectKind: MetadataKind,
     objectName: string,
-    formKind: FormKind,
+    formKind: FormKind
   ) => void
 }
 
@@ -574,22 +568,22 @@ export const useMetadataStore = create<MetadataStore>()(
           if (
             "registerMovements" in updates &&
             updates.registerMovements &&
-            arr[index].kind === 'Document'
+            arr[index].kind === "Document"
           ) {
             const doc = arr[index] as Record<string, unknown>
             const newRegs = updates.registerMovements as MetadataRef[]
             const regSet = new Set(newRegs.map((r) => `${r.kind}/${r.name}`))
 
-            if (typeof doc.posting === 'object' && doc.posting !== null) {
+            if (typeof doc.posting === "object" && doc.posting !== null) {
               const posting = doc.posting as {
                 movements: { register: MetadataRef }[]
                 validations: { register: MetadataRef }[]
               }
               const filteredMovements = posting.movements.filter((m) =>
-                regSet.has(`${m.register.kind}/${m.register.name}`),
+                regSet.has(`${m.register.kind}/${m.register.name}`)
               )
               const filteredValidations = posting.validations.filter((v) =>
-                regSet.has(`${v.register.kind}/${v.register.name}`),
+                regSet.has(`${v.register.kind}/${v.register.name}`)
               )
               if (
                 filteredMovements.length !== posting.movements.length ||
@@ -600,7 +594,10 @@ export const useMetadataStore = create<MetadataStore>()(
                 ;(doc.posting as Record<string, unknown>).validations =
                   filteredValidations
                 // Нормалізація: порожній posting -> undefined
-                if (filteredMovements.length === 0 && filteredValidations.length === 0) {
+                if (
+                  filteredMovements.length === 0 &&
+                  filteredValidations.length === 0
+                ) {
                   doc.posting = undefined
                 }
               }
@@ -628,7 +625,7 @@ export const useMetadataStore = create<MetadataStore>()(
             // Каскадне видалення форм об'єкта
             if (state.model.forms) {
               state.model.forms = state.model.forms.filter(
-                (f) => !(f.objectRef.kind === kind && f.objectRef.name === name),
+                (f) => !(f.objectRef.kind === kind && f.objectRef.name === name)
               )
             }
             state.version++
@@ -1718,27 +1715,37 @@ export const useMetadataStore = create<MetadataStore>()(
         const objects = get().model.documents as MetadataObject[]
         const index = findObjectIndex(objects, name)
         const errorKey = `Document/${name}`
-        if (index === -1) return [{ path: '', message: `Object "${name}" not found` }]
+        if (index === -1)
+          return [{ path: "", message: `Object "${name}" not found` }]
 
         const doc = objects[index] as Record<string, unknown>
         const currentPosting =
-          typeof doc.posting === 'object' && doc.posting !== null
-            ? (doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] })
-            : { movements: [] as PostingMovement[], validations: [] as PostingValidation[] }
+          typeof doc.posting === "object" && doc.posting !== null
+            ? (doc.posting as {
+                movements: PostingMovement[]
+                validations: PostingValidation[]
+              })
+            : {
+                movements: [] as PostingMovement[],
+                validations: [] as PostingValidation[],
+              }
 
         const existingIdx = currentPosting.movements.findIndex(
           (m) =>
             m.register.kind === registerRef.kind &&
-            m.register.name === registerRef.name,
+            m.register.name === registerRef.name
         )
         const updatedMovements =
           existingIdx >= 0
             ? currentPosting.movements.map((m, i) =>
-                i === existingIdx ? movement : m,
+                i === existingIdx ? movement : m
               )
             : [...currentPosting.movements, movement]
 
-        const updatedPosting = { ...currentPosting, movements: updatedMovements }
+        const updatedPosting = {
+          ...currentPosting,
+          movements: updatedMovements,
+        }
         const merged = { ...objects[index], posting: updatedPosting }
         const errors = validateObject(merged as MetadataObject)
         if (errors) {
@@ -1753,7 +1760,7 @@ export const useMetadataStore = create<MetadataStore>()(
           ;(arr[index] as Record<string, unknown>).posting = updatedPosting
           delete state.validationErrors[errorKey]
           state.version++
-          bumpObjectVersion(state, 'Document', name)
+          bumpObjectVersion(state, "Document", name)
         })
         return null
       },
@@ -1764,7 +1771,7 @@ export const useMetadataStore = create<MetadataStore>()(
         if (index === -1) return
 
         const doc = objects[index] as Record<string, unknown>
-        if (typeof doc.posting !== 'object' || doc.posting === null) return
+        if (typeof doc.posting !== "object" || doc.posting === null) return
 
         set((state) => {
           const arr = state.model.documents as MetadataObject[]
@@ -1780,7 +1787,7 @@ export const useMetadataStore = create<MetadataStore>()(
                 !(
                   m.register.kind === registerRef.kind &&
                   m.register.name === registerRef.name
-                ),
+                )
             ),
             // Також видаляємо validations для цього регістру
             validations: posting.validations.filter(
@@ -1788,16 +1795,22 @@ export const useMetadataStore = create<MetadataStore>()(
                 !(
                   v.register.kind === registerRef.kind &&
                   v.register.name === registerRef.name
-                ),
+                )
             ),
           }
           // Нормалізація: порожній posting -> undefined
-          const updated = d.posting as { movements: unknown[]; validations: unknown[] }
-          if (updated.movements.length === 0 && updated.validations.length === 0) {
+          const updated = d.posting as {
+            movements: unknown[]
+            validations: unknown[]
+          }
+          if (
+            updated.movements.length === 0 &&
+            updated.validations.length === 0
+          ) {
             d.posting = undefined
           }
           state.version++
-          bumpObjectVersion(state, 'Document', name)
+          bumpObjectVersion(state, "Document", name)
         })
       },
 
@@ -1805,13 +1818,20 @@ export const useMetadataStore = create<MetadataStore>()(
         const objects = get().model.documents as MetadataObject[]
         const index = findObjectIndex(objects, name)
         const errorKey = `Document/${name}`
-        if (index === -1) return [{ path: '', message: `Object "${name}" not found` }]
+        if (index === -1)
+          return [{ path: "", message: `Object "${name}" not found` }]
 
         const doc = objects[index] as Record<string, unknown>
         const currentPosting =
-          typeof doc.posting === 'object' && doc.posting !== null
-            ? (doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] })
-            : { movements: [] as PostingMovement[], validations: [] as PostingValidation[] }
+          typeof doc.posting === "object" && doc.posting !== null
+            ? (doc.posting as {
+                movements: PostingMovement[]
+                validations: PostingValidation[]
+              })
+            : {
+                movements: [] as PostingMovement[],
+                validations: [] as PostingValidation[],
+              }
 
         const updatedPosting = {
           ...currentPosting,
@@ -1831,7 +1851,7 @@ export const useMetadataStore = create<MetadataStore>()(
           ;(arr[index] as Record<string, unknown>).posting = updatedPosting
           delete state.validationErrors[errorKey]
           state.version++
-          bumpObjectVersion(state, 'Document', name)
+          bumpObjectVersion(state, "Document", name)
         })
         return null
       },
@@ -1842,7 +1862,7 @@ export const useMetadataStore = create<MetadataStore>()(
         if (objIdx === -1) return
 
         const doc = objects[objIdx] as Record<string, unknown>
-        if (typeof doc.posting !== 'object' || doc.posting === null) return
+        if (typeof doc.posting !== "object" || doc.posting === null) return
 
         set((state) => {
           const arr = state.model.documents as MetadataObject[]
@@ -1854,16 +1874,22 @@ export const useMetadataStore = create<MetadataStore>()(
           d.posting = {
             ...posting,
             validations: posting.validations.filter(
-              (_, i) => i !== validationIndex,
+              (_, i) => i !== validationIndex
             ),
           }
           // Нормалізація: порожній posting -> undefined
-          const updated = d.posting as { movements: unknown[]; validations: unknown[] }
-          if (updated.movements.length === 0 && updated.validations.length === 0) {
+          const updated = d.posting as {
+            movements: unknown[]
+            validations: unknown[]
+          }
+          if (
+            updated.movements.length === 0 &&
+            updated.validations.length === 0
+          ) {
             d.posting = undefined
           }
           state.version++
-          bumpObjectVersion(state, 'Document', name)
+          bumpObjectVersion(state, "Document", name)
         })
       },
 
@@ -1874,12 +1900,12 @@ export const useMetadataStore = create<MetadataStore>()(
         // Перевірка що kind підтримує forms
         if (
           !formSupportedKinds.includes(
-            objectKind as (typeof formSupportedKinds)[number],
+            objectKind as (typeof formSupportedKinds)[number]
           )
         ) {
           const errors = [
             {
-              path: 'forms',
+              path: "forms",
               message: `${objectKind} does not support forms`,
             },
           ]
@@ -1894,7 +1920,7 @@ export const useMetadataStore = create<MetadataStore>()(
         if (!objects.some((o) => o.name === objectName)) {
           const errors = [
             {
-              path: 'forms',
+              path: "forms",
               message: `Object "${objectName}" not found in ${objectKind}`,
             },
           ]
@@ -1908,12 +1934,12 @@ export const useMetadataStore = create<MetadataStore>()(
           (f) =>
             f.objectRef.kind === objectKind &&
             f.objectRef.name === objectName &&
-            f.kind === formKind,
+            f.kind === formKind
         )
         if (existing) {
           const errors = [
             {
-              path: 'forms',
+              path: "forms",
               message: `${formKind} already exists for ${objectKind}/${objectName}`,
             },
           ]
@@ -1943,7 +1969,7 @@ export const useMetadataStore = create<MetadataStore>()(
             (f) =>
               f.objectRef.kind === objectKind &&
               f.objectRef.name === objectName &&
-              f.kind === formKind,
+              f.kind === formKind
           )
           if (index === -1) return
           Object.assign(forms[index], data)
@@ -1960,7 +1986,7 @@ export const useMetadataStore = create<MetadataStore>()(
             (f) =>
               f.objectRef.kind === objectKind &&
               f.objectRef.name === objectName &&
-              f.kind === formKind,
+              f.kind === formKind
           )
           if (index !== -1) {
             state.model.forms.splice(index, 1)

@@ -1,12 +1,12 @@
-import type { MetadataRef } from '@simetra/core'
+import type { MetadataRef } from "@simetra/core"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@workspace/ui/components/select'
-import { useMetadata } from '../context'
+} from "@workspace/ui/components/select"
+import { useMetadata } from "../context"
 
 export interface EnumSelectProps {
   enumRef: MetadataRef
@@ -44,7 +44,7 @@ export function EnumSelect({
 
   const handleChange = (val: string) => {
     // Radix Select не дозволяє пустий value — використовуємо спеціальний маркер
-    onChange?.(val === '__clear__' ? null : val)
+    onChange?.(val === "__clear__" ? null : val)
   }
 
   return (

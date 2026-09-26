@@ -1,6 +1,6 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import type { Plugin } from 'vite'
+import fs from "node:fs"
+import path from "node:path"
+import type { Plugin } from "vite"
 
 /**
  * Vite plugin що проєктує каталог metadata як static assets.
@@ -9,7 +9,7 @@ import type { Plugin } from 'vite'
 export function metadataPlugin(metadataDir?: string): Plugin {
   const resolvedDir = metadataDir ? path.resolve(metadataDir) : null
 
-  function collectJsonFiles(dir: string, prefix = ''): string[] {
+  function collectJsonFiles(dir: string, prefix = ""): string[] {
     if (!fs.existsSync(dir)) return []
     const entries = fs.readdirSync(dir, { withFileTypes: true })
     const result: string[] = []
@@ -17,8 +17,10 @@ export function metadataPlugin(metadataDir?: string): Plugin {
     for (const entry of entries) {
       const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
-        result.push(...collectJsonFiles(path.join(dir, entry.name), relativePath))
-      } else if (entry.name.endsWith('.json')) {
+        result.push(
+          ...collectJsonFiles(path.join(dir, entry.name), relativePath)
+        )
+      } else if (entry.name.endsWith(".json")) {
         result.push(relativePath)
       }
     }
@@ -27,29 +29,29 @@ export function metadataPlugin(metadataDir?: string): Plugin {
   }
 
   return {
-    name: 'simetra-metadata',
+    name: "simetra-metadata",
     configureServer(server) {
-      server.middlewares.use('/metadata', (req, res, next) => {
+      server.middlewares.use("/metadata", (req, res, next) => {
         if (!resolvedDir) {
           res.statusCode = 500
-          res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-          res.end('Environment variable SIMETRA_METADATA_PATH is not set')
+          res.setHeader("Content-Type", "text/plain; charset=utf-8")
+          res.end("Environment variable SIMETRA_METADATA_PATH is not set")
           return
         }
 
         if (!fs.existsSync(resolvedDir)) {
           res.statusCode = 500
-          res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+          res.setHeader("Content-Type", "text/plain; charset=utf-8")
           res.end(`Metadata directory does not exist: ${resolvedDir}`)
           return
         }
 
-        const urlPath = req.url?.split('?')[0] ?? '/'
+        const urlPath = req.url?.split("?")[0] ?? "/"
 
         // index.json — динамічно згенерований список файлів
-        if (urlPath === '/index.json') {
+        if (urlPath === "/index.json") {
           const files = collectJsonFiles(resolvedDir)
-          res.setHeader('Content-Type', 'application/json')
+          res.setHeader("Content-Type", "application/json")
           res.end(JSON.stringify(files))
           return
         }
@@ -60,13 +62,13 @@ export function metadataPlugin(metadataDir?: string): Plugin {
         // Запобігти path traversal
         if (!filePath.startsWith(resolvedDir)) {
           res.statusCode = 403
-          res.end('Forbidden')
+          res.end("Forbidden")
           return
         }
 
         if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          res.setHeader('Content-Type', 'application/json')
-          res.end(fs.readFileSync(filePath, 'utf-8'))
+          res.setHeader("Content-Type", "application/json")
+          res.end(fs.readFileSync(filePath, "utf-8"))
           return
         }
 

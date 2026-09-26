@@ -33,7 +33,10 @@ export function toSnakeCase(name: string): string {
  * Будує фізичне SQL-ім'я об'єкта: {KIND_PREFIX[kind]}{snake_case(objectName)}.
  * Наприклад: physicalObjectName("Catalog", "Products") → "cat_products".
  */
-export function physicalObjectName(kind: MetadataKind, objectName: string): string {
+export function physicalObjectName(
+  kind: MetadataKind,
+  objectName: string
+): string {
   return `${KIND_PREFIX[kind]}${toSnakeCase(objectName)}`
 }
 
@@ -45,7 +48,7 @@ export function physicalObjectName(kind: MetadataKind, objectName: string): stri
 export function physicalTabularName(
   kind: MetadataKind,
   parentName: string,
-  sectionName: string,
+  sectionName: string
 ): string {
   return `${physicalObjectName(kind, parentName)}_${sectionName}`
 }

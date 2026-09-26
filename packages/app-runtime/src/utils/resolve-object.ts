@@ -1,11 +1,14 @@
-import type { MetadataRef, ProjectModel } from '@simetra/core'
-import { toKebabCase } from '@simetra/core'
+import type { MetadataRef, ProjectModel } from "@simetra/core"
+import { toKebabCase } from "@simetra/core"
 
 // Маппінг URL kind slug → MetadataKind + collection key
-const SLUG_MAP: Record<string, { kind: string; collectionKey: keyof ProjectModel }> = {
-  catalogs: { kind: 'Catalog', collectionKey: 'catalogs' },
-  documents: { kind: 'Document', collectionKey: 'documents' },
-  'custom-tables': { kind: 'CustomTable', collectionKey: 'customTables' },
+const SLUG_MAP: Record<
+  string,
+  { kind: string; collectionKey: keyof ProjectModel }
+> = {
+  catalogs: { kind: "Catalog", collectionKey: "catalogs" },
+  documents: { kind: "Document", collectionKey: "documents" },
+  "custom-tables": { kind: "CustomTable", collectionKey: "customTables" },
 }
 
 export interface ResolvedObject {
@@ -16,7 +19,7 @@ export interface ResolvedObject {
 export function resolveObjectFromSlug(
   kindSlug: string,
   objectSlug: string,
-  model: ProjectModel,
+  model: ProjectModel
 ): ResolvedObject | null {
   const config = SLUG_MAP[kindSlug]
   if (!config) return null

@@ -66,15 +66,17 @@ function toKnownField(field: Attribute | StandardLikeField): KnownField | null {
   }
 }
 
-function getDocumentFields(document: Pick<Document, "attributes">): KnownField[] {
+function getDocumentFields(
+  document: Pick<Document, "attributes">
+): KnownField[] {
   return [
     ...getStandardAttributes("Document")
       .filter((attr) => attr.name !== "id")
       .map(toKnownField)
       .filter((field): field is KnownField => field !== null),
-    ...document.attributes.map((attr) => toKnownField(attr)).filter(
-      (field): field is KnownField => field !== null
-    ),
+    ...document.attributes
+      .map((attr) => toKnownField(attr))
+      .filter((field): field is KnownField => field !== null),
   ]
 }
 
@@ -99,9 +101,9 @@ function getTabularSectionFields(
       .filter((attr) => attr.name !== "id")
       .map(toKnownField)
       .filter((field): field is KnownField => field !== null),
-    ...section.attributes.map((attr) => toKnownField(attr)).filter(
-      (field): field is KnownField => field !== null
-    ),
+    ...section.attributes
+      .map((attr) => toKnownField(attr))
+      .filter((field): field is KnownField => field !== null),
   ]
 }
 
@@ -163,8 +165,11 @@ export function inferExpressionType(
 
   if (expr.startsWith("row.")) {
     return (
-      findTabularSectionField(context.document, context.source, expr.slice(4)) ??
-      null
+      findTabularSectionField(
+        context.document,
+        context.source,
+        expr.slice(4)
+      ) ?? null
     )
   }
 
@@ -232,7 +237,9 @@ function isLiteralCompatible(value: string, targetType: FieldType): boolean {
         value
       )
     case "Date":
-      return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
+      return (
+        /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
+      )
     case "DateTime":
       return !Number.isNaN(Date.parse(value))
     case "Binary":

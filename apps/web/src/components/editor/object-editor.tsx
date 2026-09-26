@@ -171,12 +171,7 @@ function SectionContent({
       )
 
     case "forms":
-      return (
-        <FormsSectionContent
-          kind={kind}
-          objectName={objectName}
-        />
-      )
+      return <FormsSectionContent kind={kind} objectName={objectName} />
 
     case "numbering":
     case "settings":
@@ -321,16 +316,13 @@ function FormsSectionContent({
   objectName: string
 }) {
   const { t } = useTranslation()
-  const allForms = useMetadataStore(
-    (s) => s.model.forms ?? EMPTY_FORMS,
-  )
+  const allForms = useMetadataStore((s) => s.model.forms ?? EMPTY_FORMS)
   const forms = useMemo(
     () =>
       allForms.filter(
-        (f) =>
-          f.objectRef.kind === kind && f.objectRef.name === objectName,
+        (f) => f.objectRef.kind === kind && f.objectRef.name === objectName
       ),
-    [allForms, kind, objectName],
+    [allForms, kind, objectName]
   )
   const addForm = useMetadataStore((s) => s.addForm)
   const deleteForm = useMetadataStore((s) => s.deleteForm)

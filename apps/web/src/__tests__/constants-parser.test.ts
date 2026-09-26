@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest"
-import {
-  parseMetadataFiles,
-  buildProjectModelFromParsed,
-} from "@simetra/core"
+import { parseMetadataFiles, buildProjectModelFromParsed } from "@simetra/core"
 
 // Helper: створити файлову карту для constants parse
 function makeConstantsFiles(
@@ -106,7 +103,8 @@ describe("parseMetadataFiles: constants", () => {
     }
     const files = makeConstantsFiles(JSON.stringify(wrapper))
     const { parsed, warnings: parseWarnings } = parseMetadataFiles(files)
-    const { model, warnings: buildWarnings } = buildProjectModelFromParsed(parsed)
+    const { model, warnings: buildWarnings } =
+      buildProjectModelFromParsed(parsed)
 
     // Parse-time warnings for broken constant
     expect(parseWarnings).toHaveLength(1)
@@ -123,7 +121,7 @@ describe("parseMetadataFiles: constants", () => {
         name: "TestProject",
         schemaVersion: "1.0",
         deployment: { target: "supabase" },
-      }),
+      })
     )
 
     const { parsed } = parseMetadataFiles(files)

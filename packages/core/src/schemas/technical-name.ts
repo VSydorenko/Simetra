@@ -11,7 +11,7 @@ export const NUMERIC_SCALE = 2
 
 export function matchesTechnicalName(
   value: string,
-  format: TechnicalNameFormat,
+  format: TechnicalNameFormat
 ): boolean {
   return TECHNICAL_NAME_PATTERNS[format].test(value)
 }

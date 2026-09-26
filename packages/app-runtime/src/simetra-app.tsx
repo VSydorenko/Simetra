@@ -1,11 +1,11 @@
-import type { ProjectModel } from '@simetra/core'
-import type { DataProvider } from '@simetra/data-provider'
-import { DataProviderProvider, MetadataProvider } from '@simetra/form-runtime'
-import { createBrowserRouter, RouterProvider } from 'react-router'
-import { useMemo } from 'react'
-import { buildFlatNavigation } from './navigation-builder'
-import { buildRoutes } from './router-builder'
-import { SidebarLayout } from './shell/sidebar-layout'
+import type { ProjectModel } from "@simetra/core"
+import type { DataProvider } from "@simetra/data-provider"
+import { DataProviderProvider, MetadataProvider } from "@simetra/form-runtime"
+import { createBrowserRouter, RouterProvider } from "react-router"
+import { useMemo } from "react"
+import { buildFlatNavigation } from "./navigation-builder"
+import { buildRoutes } from "./router-builder"
+import { SidebarLayout } from "./shell/sidebar-layout"
 
 export interface SimetraAppProps {
   model: ProjectModel

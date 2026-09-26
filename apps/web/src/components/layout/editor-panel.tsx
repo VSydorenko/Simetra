@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback } from 'react'
+import { Suspense, lazy, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@workspace/ui/components/button"
 import { TabBar } from "../window-manager/tab-bar"
@@ -10,7 +10,7 @@ import { RecoveryBanner } from "../editor/recovery-banner"
 import { isObjectTab, isSqlPreviewTab, useUiStore } from "@/stores/ui-store"
 import { useProjectStore } from "@/stores/project-store"
 
-const SqlPreviewPanel = lazy(() => import('../sql-preview/sql-preview-panel'))
+const SqlPreviewPanel = lazy(() => import("../sql-preview/sql-preview-panel"))
 
 /** Центральна панель: TabBar + вміст активної вкладки + floating windows */
 export function EditorPanel() {

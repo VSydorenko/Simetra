@@ -1,4 +1,4 @@
-import { useMetadata, ConstantsForm } from '@simetra/form-runtime'
+import { useMetadata, ConstantsForm } from "@simetra/form-runtime"
 
 export function ConstantsPage() {
   const model = useMetadata()

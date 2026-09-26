@@ -48,9 +48,9 @@ describe("conditionExpressionSchema", () => {
     })
 
     it("accepts SQL keyword inside string literal (quote-aware)", () => {
-      expect(
-        conditionExpressionSchema.parse("doc.status = 'SELECT'")
-      ).toBe("doc.status = 'SELECT'")
+      expect(conditionExpressionSchema.parse("doc.status = 'SELECT'")).toBe(
+        "doc.status = 'SELECT'"
+      )
     })
 
     it("accepts negative number literal", () => {

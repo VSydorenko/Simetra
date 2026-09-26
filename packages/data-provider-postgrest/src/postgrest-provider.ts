@@ -1,12 +1,12 @@
-import type { MetadataRef } from '@simetra/core'
+import type { MetadataRef } from "@simetra/core"
 import type {
   DataProvider,
   ListOptions,
   ListResult,
   RefOption,
   FilterExpression,
-} from '@simetra/data-provider'
-import { tableName, toSnakeCase } from '@simetra/generator-pg'
+} from "@simetra/data-provider"
+import { tableName, toSnakeCase } from "@simetra/generator-pg"
 
 /** Конфігурація підключення до PostgREST / Supabase */
 export interface PostgRestConfig {
@@ -34,7 +34,7 @@ export class PostgRestDataProvider implements DataProvider {
 
   async list(
     objectRef: MetadataRef,
-    options?: ListOptions,
+    options?: ListOptions
   ): Promise<ListResult> {
     const table = this.resolveTable(objectRef)
     const page = options?.page ?? 1
@@ -42,25 +42,23 @@ export class PostgRestDataProvider implements DataProvider {
     const offset = (page - 1) * pageSize
 
     const params = new URLSearchParams()
-    params.set('select', '*')
+    params.set("select", "*")
 
     // Сортування
-    const sortBy = options?.sortBy ?? 'id'
-    const sortDir = options?.sortDirection ?? 'asc'
-    params.set('order', `${sortBy}.${sortDir}`)
+    const sortBy = options?.sortBy ?? "id"
+    const sortDir = options?.sortDirection ?? "asc"
+    params.set("order", `${sortBy}.${sortDir}`)
 
     // Пагінація
-    params.set('limit', String(pageSize))
-    params.set('offset', String(offset))
+    params.set("limit", String(pageSize))
+    params.set("offset", String(offset))
 
     // Пошук по presentation-полях (залежить від kind об'єкта)
     if (options?.search) {
       const q = options.search
       const searchFields = getPresentationFields(objectRef.kind)
-      const conditions = searchFields
-        .map((f) => `${f}.ilike.*${q}*`)
-        .join(',')
-      params.set('or', `(${conditions})`)
+      const conditions = searchFields.map((f) => `${f}.ilike.*${q}*`).join(",")
+      params.set("or", `(${conditions})`)
     }
 
     // Фільтри
@@ -72,35 +70,33 @@ export class PostgRestDataProvider implements DataProvider {
 
     const url = `${this.config.url}/${table}?${params.toString()}`
     const res = await fetch(url, {
-      method: 'GET',
+      method: "GET",
       headers: {
         ...this.baseHeaders(),
-        'Prefer': 'count=exact',
+        Prefer: "count=exact",
       },
     })
 
     this.assertOk(res)
 
     const data = (await res.json()) as Record<string, unknown>[]
-    const total = parseContentRange(
-      res.headers.get('Content-Range'),
-    )
+    const total = parseContentRange(res.headers.get("Content-Range"))
 
     return { data, total, page, pageSize }
   }
 
   async get(
     objectRef: MetadataRef,
-    id: string,
+    id: string
   ): Promise<Record<string, unknown> | null> {
     const table = this.resolveTable(objectRef)
     const url = `${this.config.url}/${table}?id=eq.${id}`
 
     const res = await fetch(url, {
-      method: 'GET',
+      method: "GET",
       headers: {
         ...this.baseHeaders(),
-        'Accept': 'application/vnd.pgrst.object+json',
+        Accept: "application/vnd.pgrst.object+json",
       },
     })
 
@@ -113,16 +109,16 @@ export class PostgRestDataProvider implements DataProvider {
 
   async create(
     objectRef: MetadataRef,
-    data: Record<string, unknown>,
+    data: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const table = this.resolveTable(objectRef)
     const url = `${this.config.url}/${table}`
 
     const res = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
         ...this.baseHeaders(),
-        'Prefer': 'return=representation',
+        Prefer: "return=representation",
       },
       body: JSON.stringify(data),
     })
@@ -135,16 +131,16 @@ export class PostgRestDataProvider implements DataProvider {
   async update(
     objectRef: MetadataRef,
     id: string,
-    data: Partial<Record<string, unknown>>,
+    data: Partial<Record<string, unknown>>
   ): Promise<Record<string, unknown>> {
     const table = this.resolveTable(objectRef)
     const url = `${this.config.url}/${table}?id=eq.${id}`
 
     const res = await fetch(url, {
-      method: 'PATCH',
+      method: "PATCH",
       headers: {
         ...this.baseHeaders(),
-        'Prefer': 'return=representation',
+        Prefer: "return=representation",
       },
       body: JSON.stringify(data),
     })
@@ -154,15 +150,12 @@ export class PostgRestDataProvider implements DataProvider {
     return rows[0]
   }
 
-  async delete(
-    objectRef: MetadataRef,
-    id: string,
-  ): Promise<void> {
+  async delete(objectRef: MetadataRef, id: string): Promise<void> {
     const table = this.resolveTable(objectRef)
     const url = `${this.config.url}/${table}?id=eq.${id}`
 
     const res = await fetch(url, {
-      method: 'DELETE',
+      method: "DELETE",
       headers: this.baseHeaders(),
     })
 
@@ -172,7 +165,7 @@ export class PostgRestDataProvider implements DataProvider {
   async searchRef(
     targetRef: MetadataRef,
     query: string,
-    options?: { limit?: number },
+    options?: { limit?: number }
   ): Promise<RefOption[]> {
     const table = this.resolveTable(targetRef)
     const limit = options?.limit ?? 20
@@ -181,8 +174,8 @@ export class PostgRestDataProvider implements DataProvider {
     const searchFields = getPresentationFields(targetRef.kind)
     const conditions = searchFields
       .map((f) => `${f}.ilike.*${encoded}*`)
-      .join(',')
-    const selectFields = ['id', ...searchFields].join(',')
+      .join(",")
+    const selectFields = ["id", ...searchFields].join(",")
     const url =
       `${this.config.url}/${table}` +
       `?or=(${conditions})` +
@@ -190,7 +183,7 @@ export class PostgRestDataProvider implements DataProvider {
       `&select=${selectFields}`
 
     const res = await fetch(url, {
-      method: 'GET',
+      method: "GET",
       headers: this.baseHeaders(),
     })
 
@@ -203,20 +196,16 @@ export class PostgRestDataProvider implements DataProvider {
     }))
   }
 
-  async getRefDisplay(
-    targetRef: MetadataRef,
-    id: string,
-  ): Promise<string> {
+  async getRefDisplay(targetRef: MetadataRef, id: string): Promise<string> {
     const table = this.resolveTable(targetRef)
-    const selectFields = getPresentationFields(targetRef.kind).join(',')
-    const url =
-      `${this.config.url}/${table}?id=eq.${id}&select=${selectFields}`
+    const selectFields = getPresentationFields(targetRef.kind).join(",")
+    const url = `${this.config.url}/${table}?id=eq.${id}&select=${selectFields}`
 
     const res = await fetch(url, {
-      method: 'GET',
+      method: "GET",
       headers: {
         ...this.baseHeaders(),
-        'Accept': 'application/vnd.pgrst.object+json',
+        Accept: "application/vnd.pgrst.object+json",
       },
     })
 
@@ -228,15 +217,12 @@ export class PostgRestDataProvider implements DataProvider {
     return formatRefDisplay(row) || id
   }
 
-  async postDocument(
-    objectRef: MetadataRef,
-    id: string,
-  ): Promise<void> {
+  async postDocument(objectRef: MetadataRef, id: string): Promise<void> {
     const rpcName = `post_${toSnakeCase(objectRef.name)}`
     const url = `${this.config.url}/rpc/${rpcName}`
 
     const res = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: this.baseHeaders(),
       body: JSON.stringify({ p_doc_id: id }),
     })
@@ -244,15 +230,12 @@ export class PostgRestDataProvider implements DataProvider {
     this.assertOk(res)
   }
 
-  async unpostDocument(
-    objectRef: MetadataRef,
-    id: string,
-  ): Promise<void> {
+  async unpostDocument(objectRef: MetadataRef, id: string): Promise<void> {
     const rpcName = `unpost_${toSnakeCase(objectRef.name)}`
     const url = `${this.config.url}/rpc/${rpcName}`
 
     const res = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: this.baseHeaders(),
       body: JSON.stringify({ p_doc_id: id }),
     })
@@ -265,7 +248,7 @@ export class PostgRestDataProvider implements DataProvider {
     const url = `${this.config.url}/${table}`
 
     const res = await fetch(url, {
-      method: 'GET',
+      method: "GET",
       headers: this.baseHeaders(),
     })
 
@@ -282,15 +265,12 @@ export class PostgRestDataProvider implements DataProvider {
     return result
   }
 
-  async updateConstant(
-    name: string,
-    value: unknown,
-  ): Promise<void> {
+  async updateConstant(name: string, value: unknown): Promise<void> {
     const table = this.resolveConstantsTable()
     const url = `${this.config.url}/${table}?key=eq.${name}`
 
     const res = await fetch(url, {
-      method: 'PATCH',
+      method: "PATCH",
       headers: this.baseHeaders(),
       body: JSON.stringify({ value }),
     })
@@ -303,37 +283,30 @@ export class PostgRestDataProvider implements DataProvider {
   /** Базові headers для всіх запитів */
   private baseHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     }
     if (this.config.anonKey) {
-      headers['apikey'] = this.config.anonKey
-      headers['Authorization'] =
-        `Bearer ${this.config.anonKey}`
+      headers["apikey"] = this.config.anonKey
+      headers["Authorization"] = `Bearer ${this.config.anonKey}`
     }
     return headers
   }
 
   /** Resolve table name для metadata-об'єкта */
   private resolveTable(ref: MetadataRef): string {
-    return tableName(
-      this.config.tablePrefix ?? '',
-      ref.kind,
-      ref.name,
-    )
+    return tableName(this.config.tablePrefix ?? "", ref.kind, ref.name)
   }
 
   /** Таблиця констант — singleTable strategy */
   private resolveConstantsTable(): string {
-    const prefix = this.config.tablePrefix ?? ''
+    const prefix = this.config.tablePrefix ?? ""
     return `${prefix}constants`
   }
 
   /** Перевірити HTTP response, кинути помилку якщо !ok */
   private assertOk(res: Response): void {
     if (!res.ok) {
-      throw new Error(
-        `PostgREST error ${res.status}: ${res.statusText}`,
-      )
+      throw new Error(`PostgREST error ${res.status}: ${res.statusText}`)
     }
   }
 }
@@ -342,9 +315,9 @@ export class PostgRestDataProvider implements DataProvider {
 
 /** Конвертація FilterExpression в PostgREST filter string */
 function formatFilter(f: FilterExpression): string {
-  if (f.operator === 'in') {
+  if (f.operator === "in") {
     const vals = Array.isArray(f.value)
-      ? (f.value as unknown[]).join(',')
+      ? (f.value as unknown[]).join(",")
       : String(f.value)
     return `in.(${vals})`
   }
@@ -355,7 +328,7 @@ function formatFilter(f: FilterExpression): string {
 function parseContentRange(header: string | null): number {
   if (!header) return 0
   const match = header.match(/\/(\d+|\*)$/)
-  if (!match || match[1] === '*') return 0
+  if (!match || match[1] === "*") return 0
   return parseInt(match[1], 10)
 }
 
@@ -365,34 +338,30 @@ function parseContentRange(header: string | null): number {
  * Document → number, date
  * Enumeration → code (predefined values)
  */
-function getPresentationFields(
-  kind: string,
-): string[] {
+function getPresentationFields(kind: string): string[] {
   switch (kind) {
-    case 'Document':
-      return ['number', 'date']
-    case 'Enumeration':
-      return ['code']
+    case "Document":
+      return ["number", "date"]
+    case "Enumeration":
+      return ["code"]
     default:
-      return ['code', 'description']
+      return ["code", "description"]
   }
 }
 
 /** Форматування display для RefOption */
-function formatRefDisplay(
-  row: Record<string, unknown>,
-): string {
+function formatRefDisplay(row: Record<string, unknown>): string {
   // Спробуємо Catalog-style: code — description
-  const code = row.code ? String(row.code) : ''
-  const desc = row.description ? String(row.description) : ''
+  const code = row.code ? String(row.code) : ""
+  const desc = row.description ? String(row.description) : ""
   if (code && desc) return `${code} — ${desc}`
   if (code || desc) return code || desc
 
   // Document-style: number від date
-  const num = row.number ? String(row.number) : ''
-  const date = row.date ? String(row.date) : ''
+  const num = row.number ? String(row.number) : ""
+  const date = row.date ? String(row.date) : ""
   if (num && date) return `${num} від ${date}`
   if (num || date) return num || date
 
-  return ''
+  return ""
 }

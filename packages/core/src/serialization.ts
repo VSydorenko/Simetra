@@ -169,14 +169,14 @@ const CUSTOM_TABLE_KEY_ORDER = [
 ]
 
 const FORM_KEY_ORDER = [
-  '$schema',
-  'kind',
-  'objectRef',
-  'title',
-  'width',
-  'layout',
-  'toolbar',
-  'commandBar',
+  "$schema",
+  "kind",
+  "objectRef",
+  "title",
+  "width",
+  "layout",
+  "toolbar",
+  "commandBar",
 ]
 
 const ATTRIBUTE_KEY_ORDER = [
@@ -364,14 +364,14 @@ export function serializeProject(project: Project): string {
 export function serializeForm(form: FormSchema): string {
   const canonical = canonicalizeObject(
     form as unknown as Record<string, unknown>,
-    FORM_KEY_ORDER,
+    FORM_KEY_ORDER
   )
-  return JSON.stringify(canonical, null, 2) + '\n'
+  return JSON.stringify(canonical, null, 2) + "\n"
 }
 
 /**
  * Build $schema URL для form файлу.
  */
 export function buildFormSchemaUrl(schemaVersion: string): string {
-  return buildSchemaUrl('form', schemaVersion)
+  return buildSchemaUrl("form", schemaVersion)
 }

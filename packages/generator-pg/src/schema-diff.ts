@@ -1,7 +1,4 @@
-import type {
-  SchemaSnapshot,
-  SnapshotColumn,
-} from './schema-snapshot'
+import type { SchemaSnapshot, SnapshotColumn } from "./schema-snapshot"
 
 // ─── Типи diff-у ────────────────────────────────────────────
 
@@ -35,9 +32,9 @@ function columnsEqual(a: SnapshotColumn, b: SnapshotColumn): boolean {
     a.notNull === b.notNull &&
     a.unique === b.unique &&
     a.primaryKey === b.primaryKey &&
-    (a.defaultExpr ?? '') === (b.defaultExpr ?? '') &&
-    (a.references ?? '') === (b.references ?? '') &&
-    (a.check ?? '') === (b.check ?? '')
+    (a.defaultExpr ?? "") === (b.defaultExpr ?? "") &&
+    (a.references ?? "") === (b.references ?? "") &&
+    (a.check ?? "") === (b.check ?? "")
   )
 }
 
@@ -45,17 +42,17 @@ function columnsEqual(a: SnapshotColumn, b: SnapshotColumn): boolean {
 
 export function computeDiff(
   oldSnapshot: SchemaSnapshot,
-  newSnapshot: SchemaSnapshot,
+  newSnapshot: SchemaSnapshot
 ): SchemaDiff {
   const addedTables: string[] = []
   const droppedTables: string[] = []
-  const addedColumns: SchemaDiff['addedColumns'] = []
-  const droppedColumns: SchemaDiff['droppedColumns'] = []
+  const addedColumns: SchemaDiff["addedColumns"] = []
+  const droppedColumns: SchemaDiff["droppedColumns"] = []
   const modifiedColumns: ColumnChange[] = []
   const addedEnums: string[] = []
   const droppedEnums: string[] = []
-  const addedEnumValues: SchemaDiff['addedEnumValues'] = []
-  const droppedEnumValues: SchemaDiff['droppedEnumValues'] = []
+  const addedEnumValues: SchemaDiff["addedEnumValues"] = []
+  const droppedEnumValues: SchemaDiff["droppedEnumValues"] = []
   const addedIndexes: string[] = []
   const droppedIndexes: string[] = []
 
@@ -118,12 +115,8 @@ export function computeDiff(
     const oldVals = new Set(oldSnapshot.enums[key].values)
     const newVals = new Set(newSnapshot.enums[key].values)
 
-    const added = newSnapshot.enums[key].values.filter(
-      (v) => !oldVals.has(v),
-    )
-    const dropped = oldSnapshot.enums[key].values.filter(
-      (v) => !newVals.has(v),
-    )
+    const added = newSnapshot.enums[key].values.filter((v) => !oldVals.has(v))
+    const dropped = oldSnapshot.enums[key].values.filter((v) => !newVals.has(v))
 
     if (added.length > 0) {
       addedEnumValues.push({ enumName: key, values: added })
@@ -188,7 +181,7 @@ export function formatDiffSummary(diff: SchemaDiff): string[] {
   }
   for (const c of diff.droppedColumns) {
     lines.push(
-      `[DESTRUCTIVE] - Column ${c.table}.${c.column} (${c.def.sqlType})`,
+      `[DESTRUCTIVE] - Column ${c.table}.${c.column} (${c.def.sqlType})`
     )
   }
   for (const c of diff.modifiedColumns) {
@@ -197,19 +190,17 @@ export function formatDiffSummary(diff: SchemaDiff): string[] {
       changes.push(`type: ${c.old.sqlType} → ${c.new.sqlType}`)
     }
     if (c.old.notNull !== c.new.notNull) {
-      changes.push(c.new.notNull ? 'add NOT NULL' : 'drop NOT NULL')
+      changes.push(c.new.notNull ? "add NOT NULL" : "drop NOT NULL")
     }
     if (c.old.unique !== c.new.unique) {
-      changes.push(c.new.unique ? 'add UNIQUE' : 'drop UNIQUE')
+      changes.push(c.new.unique ? "add UNIQUE" : "drop UNIQUE")
     }
-    if ((c.old.defaultExpr ?? '') !== (c.new.defaultExpr ?? '')) {
+    if ((c.old.defaultExpr ?? "") !== (c.new.defaultExpr ?? "")) {
       changes.push(
-        `default: ${c.old.defaultExpr ?? 'none'} → ${c.new.defaultExpr ?? 'none'}`,
+        `default: ${c.old.defaultExpr ?? "none"} → ${c.new.defaultExpr ?? "none"}`
       )
     }
-    lines.push(
-      `~ Column ${c.table}.${c.column}: ${changes.join(', ')}`,
-    )
+    lines.push(`~ Column ${c.table}.${c.column}: ${changes.join(", ")}`)
   }
   for (const e of diff.addedEnums) {
     lines.push(`+ Enum ${e}`)
@@ -218,13 +209,11 @@ export function formatDiffSummary(diff: SchemaDiff): string[] {
     lines.push(`[DESTRUCTIVE] - Enum ${e}`)
   }
   for (const e of diff.addedEnumValues) {
-    lines.push(
-      `+ Enum ${e.enumName}: add values ${e.values.join(', ')}`,
-    )
+    lines.push(`+ Enum ${e.enumName}: add values ${e.values.join(", ")}`)
   }
   for (const e of diff.droppedEnumValues) {
     lines.push(
-      `[DESTRUCTIVE] - Enum ${e.enumName}: drop values ${e.values.join(', ')}`,
+      `[DESTRUCTIVE] - Enum ${e.enumName}: drop values ${e.values.join(", ")}`
     )
   }
   for (const i of diff.addedIndexes) {

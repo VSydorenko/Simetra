@@ -153,7 +153,10 @@ async function readFromDirectory(
     if (depth > MAX_DEPTH) return
     for await (const [name, entry] of dir.entries()) {
       const fullPath = prefix ? `${prefix}/${name}` : name
-      if (entry.kind === "file" && (name.endsWith(".meta.json") || name.endsWith(".form.json"))) {
+      if (
+        entry.kind === "file" &&
+        (name.endsWith(".meta.json") || name.endsWith(".form.json"))
+      ) {
         const file = await entry.getFile()
         files.set(fullPath, await file.text())
       } else if (entry.kind === "directory") {
@@ -194,7 +197,11 @@ function unzipEntries(data: Uint8Array): Promise<Map<string, string>> {
         const normalizedPath = entryPath.startsWith("metadata/")
           ? entryPath.slice("metadata/".length)
           : entryPath
-        if (normalizedPath && (normalizedPath.endsWith(".meta.json") || normalizedPath.endsWith(".form.json"))) {
+        if (
+          normalizedPath &&
+          (normalizedPath.endsWith(".meta.json") ||
+            normalizedPath.endsWith(".form.json"))
+        ) {
           files.set(normalizedPath, decoder.decode(content))
         }
       }
@@ -289,7 +296,8 @@ export class WebStorage implements StorageProvider {
   async openFromHandle(handle: FileSystemDirectoryHandle): Promise<OpenResult> {
     const fileMap = await readFromDirectory(handle)
     const { parsed, warnings: parseWarnings } = parseMetadataFiles(fileMap)
-    const { model, warnings: validationWarnings } = buildProjectModelFromParsed(parsed)
+    const { model, warnings: validationWarnings } =
+      buildProjectModelFromParsed(parsed)
 
     return {
       model,
@@ -304,7 +312,8 @@ export class WebStorage implements StorageProvider {
     const handle = await window.showDirectoryPicker({ mode: "readwrite" })
     const fileMap = await readFromDirectory(handle)
     const { parsed, warnings: parseWarnings } = parseMetadataFiles(fileMap)
-    const { model, warnings: validationWarnings } = buildProjectModelFromParsed(parsed)
+    const { model, warnings: validationWarnings } =
+      buildProjectModelFromParsed(parsed)
 
     return {
       model,
@@ -332,7 +341,8 @@ export class WebStorage implements StorageProvider {
     const data = new Uint8Array(buffer)
     const fileMap = await unzipEntries(data)
     const { parsed, warnings: parseWarnings } = parseMetadataFiles(fileMap)
-    const { model, warnings: validationWarnings } = buildProjectModelFromParsed(parsed)
+    const { model, warnings: validationWarnings } =
+      buildProjectModelFromParsed(parsed)
 
     return {
       model,

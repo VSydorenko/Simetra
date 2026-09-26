@@ -1,7 +1,7 @@
-import { Outlet, NavLink, useLocation, Link } from 'react-router'
-import { ScrollArea } from '@workspace/ui/components/scroll-area'
-import { cn } from '@workspace/ui/lib/utils'
-import type { NavigationGroup } from '../navigation-builder'
+import { Outlet, NavLink, useLocation, Link } from "react-router"
+import { ScrollArea } from "@workspace/ui/components/scroll-area"
+import { cn } from "@workspace/ui/lib/utils"
+import type { NavigationGroup } from "../navigation-builder"
 
 export interface SidebarLayoutProps {
   navigation: NavigationGroup[]
@@ -11,25 +11,29 @@ export interface SidebarLayoutProps {
 /** Побудувати breadcrumbs з поточного pathname */
 function useBreadcrumbs(navigation: NavigationGroup[]) {
   const { pathname } = useLocation()
-  const segments = pathname.split('/').filter(Boolean)
+  const segments = pathname.split("/").filter(Boolean)
 
   if (segments.length === 0) return []
 
-  const crumbs: { label: string; path: string }[] = [{ label: 'Головна', path: '/' }]
+  const crumbs: { label: string; path: string }[] = [
+    { label: "Головна", path: "/" },
+  ]
 
   // Знайти відповідну навігаційну групу
   const kindSlug = segments[0]
   const group = navigation.find((g) =>
-    g.items.some((item) => item.path.startsWith(`/${kindSlug}/`)),
+    g.items.some((item) => item.path.startsWith(`/${kindSlug}/`))
   )
   if (group) {
-    crumbs.push({ label: group.label, path: '/' })
+    crumbs.push({ label: group.label, path: "/" })
   }
 
   // Знайти конкретний об'єкт
   if (segments.length >= 2) {
     const itemPath = `/${segments[0]}/${segments[1]}`
-    const item = navigation.flatMap((g) => g.items).find((i) => i.path === itemPath)
+    const item = navigation
+      .flatMap((g) => g.items)
+      .find((i) => i.path === itemPath)
     if (item) {
       crumbs.push({ label: item.displayName, path: item.path })
     }
@@ -39,7 +43,7 @@ function useBreadcrumbs(navigation: NavigationGroup[]) {
 }
 
 export function SidebarLayout({ navigation, projectName }: SidebarLayoutProps) {
-  const title = projectName?.uk ?? projectName?.en ?? 'Simetra Runtime'
+  const title = projectName?.uk ?? projectName?.en ?? "Simetra Runtime"
   const breadcrumbs = useBreadcrumbs(navigation)
 
   return (
@@ -54,7 +58,7 @@ export function SidebarLayout({ navigation, projectName }: SidebarLayoutProps) {
                 {i > 0 && <span>/</span>}
                 <Link
                   to={crumb.path}
-                  className="hover:text-foreground transition-colors"
+                  className="transition-colors hover:text-foreground"
                 >
                   {crumb.label}
                 </Link>
@@ -71,7 +75,7 @@ export function SidebarLayout({ navigation, projectName }: SidebarLayoutProps) {
             <nav className="flex flex-col gap-4 p-3">
               {navigation.map((group) => (
                 <div key={group.kind}>
-                  <p className="mb-1 px-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <p className="mb-1 px-2 text-xs font-medium tracking-wider text-muted-foreground uppercase">
                     {group.label}
                   </p>
                   <ul className="flex flex-col gap-0.5">
@@ -81,10 +85,10 @@ export function SidebarLayout({ navigation, projectName }: SidebarLayoutProps) {
                           to={item.path}
                           className={({ isActive }) =>
                             cn(
-                              'block rounded-md px-2 py-1.5 text-sm transition-colors',
+                              "block rounded-md px-2 py-1.5 text-sm transition-colors",
                               isActive
-                                ? 'bg-accent text-accent-foreground font-medium'
-                                : 'text-foreground/70 hover:bg-accent/50 hover:text-foreground',
+                                ? "bg-accent font-medium text-accent-foreground"
+                                : "text-foreground/70 hover:bg-accent/50 hover:text-foreground"
                             )
                           }
                         >

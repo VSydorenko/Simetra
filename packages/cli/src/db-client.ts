@@ -1,4 +1,4 @@
-import postgres from 'postgres'
+import postgres from "postgres"
 
 export interface DbClient {
   sql: postgres.Sql
@@ -18,7 +18,7 @@ export async function connect(connectionString: string): Promise<DbClient> {
 // Виконання SQL у транзакції
 export async function executeInTransaction(
   client: DbClient,
-  sqlText: string,
+  sqlText: string
 ): Promise<void> {
   await client.sql.begin(async (tx) => {
     await tx.unsafe(sqlText)

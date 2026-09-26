@@ -89,11 +89,13 @@ function RegisterPickerBody({
   const filteredModel = useMemo(
     () => ({
       ...model,
-      informationRegisters: model.informationRegisters.filter((register) =>
-        isPostingCompatible(register, { recorder: documentRef }).compatible
+      informationRegisters: model.informationRegisters.filter(
+        (register) =>
+          isPostingCompatible(register, { recorder: documentRef }).compatible
       ),
-      accumulationRegisters: model.accumulationRegisters.filter((register) =>
-        isPostingCompatible(register, { recorder: documentRef }).compatible
+      accumulationRegisters: model.accumulationRegisters.filter(
+        (register) =>
+          isPostingCompatible(register, { recorder: documentRef }).compatible
       ),
     }),
     [documentRef, model]

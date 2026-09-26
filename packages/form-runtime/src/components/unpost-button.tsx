@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
-import type { MetadataRef } from '@simetra/core'
-import { Button } from '@workspace/ui/components/button'
-import { useDataProvider } from '../context'
+import { useState, useCallback } from "react"
+import type { MetadataRef } from "@simetra/core"
+import { Button } from "@workspace/ui/components/button"
+import { useDataProvider } from "../context"
 
 export interface UnpostButtonProps {
   objectRef: MetadataRef
@@ -9,7 +9,11 @@ export interface UnpostButtonProps {
   onSuccess?: () => void
 }
 
-export function UnpostButton({ objectRef, recordId, onSuccess }: UnpostButtonProps) {
+export function UnpostButton({
+  objectRef,
+  recordId,
+  onSuccess,
+}: UnpostButtonProps) {
   const dataProvider = useDataProvider()
   const [loading, setLoading] = useState(false)
 
@@ -25,7 +29,7 @@ export function UnpostButton({ objectRef, recordId, onSuccess }: UnpostButtonPro
 
   return (
     <Button variant="outline" onClick={handleUnpost} disabled={loading}>
-      {loading ? 'Скасування...' : 'Скасувати проведення'}
+      {loading ? "Скасування..." : "Скасувати проведення"}
     </Button>
   )
 }

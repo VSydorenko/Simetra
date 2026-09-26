@@ -169,7 +169,7 @@ export function buildExpressionOptions(
       const aggOptions: ExpressionOption[] = []
       // Стандартні реквізити ТЧ для агрегатів (без id)
       const tsStdAttrs = getTabularSectionStandardAttributes().filter(
-        (a) => a.name !== 'id',
+        (a) => a.name !== "id"
       )
       for (const ts of document.tabularSections) {
         const countExpression = `count(${ts.name})`

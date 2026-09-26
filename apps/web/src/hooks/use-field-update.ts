@@ -3,10 +3,7 @@ import type { Attribute, MetadataKind, MetadataObject } from "@simetra/core"
 import { useMetadataStore, type ValidationError } from "@/stores/metadata-store"
 
 export type FieldRole =
-  | "attributes"
-  | "dimensions"
-  | "resources"
-  | "tabularSection"
+  "attributes" | "dimensions" | "resources" | "tabularSection"
 
 export interface FieldTarget {
   kind: MetadataKind
@@ -47,7 +44,10 @@ export function useFieldUpdate() {
   } = useMetadataStore()
 
   return useCallback(
-    (target: FieldTarget, updates: Partial<Attribute>): ValidationError[] | null => {
+    (
+      target: FieldTarget,
+      updates: Partial<Attribute>
+    ): ValidationError[] | null => {
       switch (target.role) {
         case "dimensions":
           return updateDimension(

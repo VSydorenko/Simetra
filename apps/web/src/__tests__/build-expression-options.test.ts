@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest"
-import { projectModelSchema, type Attribute, type Document } from "@simetra/core"
+import {
+  projectModelSchema,
+  type Attribute,
+  type Document,
+} from "@simetra/core"
 import i18n from "../i18n"
 import { buildExpressionOptions } from "../lib/build-expression-options"
 
@@ -142,7 +146,9 @@ describe("buildExpressionOptions", () => {
     )
     const groupNames = groups.map((g) => g.group)
 
-    expect(groupNames.some((n) => n.includes("items") || n.includes("ТЧ"))).toBe(true)
+    expect(
+      groupNames.some((n) => n.includes("items") || n.includes("ТЧ"))
+    ).toBe(true)
     expect(groupNames).toContain("Документ")
   })
 
@@ -188,7 +194,9 @@ describe("buildExpressionOptions", () => {
         {
           kind: "Document",
           name: "Payment",
-          attributes: [{ name: "amount", type: "Numeric", precision: 15, scale: 2 }],
+          attributes: [
+            { name: "amount", type: "Numeric", precision: 15, scale: 2 },
+          ],
           tabularSections: [],
         },
       ],

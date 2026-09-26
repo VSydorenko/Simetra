@@ -16,10 +16,7 @@ import {
 import { Button } from "@workspace/ui/components/button"
 import type { MetadataKind, MetadataRef } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
-import {
-  useUiStore,
-  type TabularSectionSelection,
-} from "@/stores/ui-store"
+import { useUiStore, type TabularSectionSelection } from "@/stores/ui-store"
 import {
   findReferences,
   formatReference,
@@ -143,8 +140,8 @@ export function TreePanel() {
   // Вибраний вузол дерева синхронізується з вибором у сторі. Синхронізацію
   // робимо під час рендеру (патерн «adjusting state when a prop changes»),
   // а не в useEffect: setState в ефекті дає зайвий каскадний рендер.
-  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(
-    () => selectionToNodeId(selectedObject, selectedTabularSection)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(() =>
+    selectionToNodeId(selectedObject, selectedTabularSection)
   )
   const [prevSelection, setPrevSelection] = useState({
     selectedObject,
@@ -155,9 +152,7 @@ export function TreePanel() {
     prevSelection.selectedTabularSection !== selectedTabularSection
   ) {
     setPrevSelection({ selectedObject, selectedTabularSection })
-    setSelectedNodeId(
-      selectionToNodeId(selectedObject, selectedTabularSection)
-    )
+    setSelectedNodeId(selectionToNodeId(selectedObject, selectedTabularSection))
   }
 
   // --- Обробники ---

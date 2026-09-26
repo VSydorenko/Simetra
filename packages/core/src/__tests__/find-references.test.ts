@@ -457,10 +457,10 @@ describe("findReferences", () => {
     const refs = findReferences(
       model,
       "AccumulationRegister",
-      "InventoryBalance",
+      "InventoryBalance"
     )
     const movementRefs = refs.filter(
-      (r) => r.referenceKind === "postingMovement",
+      (r) => r.referenceKind === "postingMovement"
     )
     expect(movementRefs).toHaveLength(1)
     expect(movementRefs[0].from).toMatchObject({
@@ -526,10 +526,10 @@ describe("findReferences", () => {
     const refs = findReferences(
       model,
       "AccumulationRegister",
-      "InventoryBalance",
+      "InventoryBalance"
     )
     const validationRefs = refs.filter(
-      (r) => r.referenceKind === "postingValidation",
+      (r) => r.referenceKind === "postingValidation"
     )
     expect(validationRefs).toHaveLength(1)
   })
@@ -557,15 +557,11 @@ describe("findReferences", () => {
         },
       ],
     })
-    const refs = findReferences(
-      model,
-      "AccumulationRegister",
-      "SomeRegister",
-    )
+    const refs = findReferences(model, "AccumulationRegister", "SomeRegister")
     const postingRefs = refs.filter(
       (r) =>
         r.referenceKind === "postingMovement" ||
-        r.referenceKind === "postingValidation",
+        r.referenceKind === "postingValidation"
     )
     expect(postingRefs).toHaveLength(0)
   })

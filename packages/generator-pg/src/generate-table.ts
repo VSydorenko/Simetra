@@ -64,20 +64,32 @@ function buildRefTableLookup(
     const key = `Enumeration.${e.name}`
     // Для pgEnum — немає таблиці, але для lookupTable — є
     if (opts.enumStrategy === "lookupTable") {
-      map.set(key, qualifiedName(schema, tableName(prefix, "Enumeration", e.name)))
+      map.set(
+        key,
+        qualifiedName(schema, tableName(prefix, "Enumeration", e.name))
+      )
     }
   }
   for (const r of project.informationRegisters) {
     const key = `InformationRegister.${r.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, "InformationRegister", r.name)))
+    map.set(
+      key,
+      qualifiedName(schema, tableName(prefix, "InformationRegister", r.name))
+    )
   }
   for (const r of project.accumulationRegisters) {
     const key = `AccumulationRegister.${r.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, "AccumulationRegister", r.name)))
+    map.set(
+      key,
+      qualifiedName(schema, tableName(prefix, "AccumulationRegister", r.name))
+    )
   }
   for (const t of project.customTables) {
     const key = `CustomTable.${t.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, "CustomTable", t.name)))
+    map.set(
+      key,
+      qualifiedName(schema, tableName(prefix, "CustomTable", t.name))
+    )
   }
 
   return map
@@ -102,7 +114,10 @@ function buildEnumTypeLookup(
   const map = new Map<string, string>()
   for (const e of project.enumerations) {
     const key = `Enumeration.${e.name}`
-    map.set(key, qualifiedName(schema, tableName(prefix, "Enumeration", e.name)))
+    map.set(
+      key,
+      qualifiedName(schema, tableName(prefix, "Enumeration", e.name))
+    )
   }
   return map
 }
@@ -150,7 +165,9 @@ function emitAttributeColumns(
   const lines: string[] = []
   for (const attr of attrs) {
     if (attr.type === "Ref" && attr.allowedTypes?.length) {
-      lines.push(...emitPolymorphicColumns(attr.name, attr.allowedTypes, attr.required))
+      lines.push(
+        ...emitPolymorphicColumns(attr.name, attr.allowedTypes, attr.required)
+      )
       continue
     }
     const col = attributeToColumn(attr, resolve, resolveEnumType)
@@ -341,13 +358,17 @@ function generateCatalog(
   }
 
   // FK для кастомних single-ref атрибутів (не enum, не polymorphic)
-  collectAttributeFKs(cat.attributes, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(
+    cat.attributes,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
 
   // UNIQUE constraint для code якщо codeUnique
   if (cat.codeUnique) {
-    columns.push(
-      `  CONSTRAINT uq_${tbl}_code UNIQUE (code)`
-    )
+    columns.push(`  CONSTRAINT uq_${tbl}_code UNIQUE (code)`)
   }
 
   const statements: string[] = []
@@ -400,7 +421,13 @@ function generateDocument(
   ]
 
   // FK для кастомних атрибутів
-  collectAttributeFKs(doc.attributes, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(
+    doc.attributes,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
 
   const statements: string[] = []
   const label = doc.displayName?.en ?? doc.name
@@ -537,9 +564,27 @@ function generateInformationRegister(
   // FK для standard attrs (recorder_id single ref)
   collectStandardAttrFKs(stdAttrs, tName, resolve, resolveEnumType, fkCollector)
   // FK для dimensions/resources/attributes
-  collectAttributeFKs(reg.dimensions, tName, resolve, resolveEnumType, fkCollector)
-  collectAttributeFKs(reg.resources, tName, resolve, resolveEnumType, fkCollector)
-  collectAttributeFKs(reg.attributes, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(
+    reg.dimensions,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
+  collectAttributeFKs(
+    reg.resources,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
+  collectAttributeFKs(
+    reg.attributes,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
 
   const label = reg.displayName?.en ?? reg.name
   return [createTable(tName, columns, `InformationRegister: ${label}`)]
@@ -571,9 +616,27 @@ function generateAccumulationRegister(
   // FK для standard attrs (recorder_id single ref)
   collectStandardAttrFKs(stdAttrs, tName, resolve, resolveEnumType, fkCollector)
   // FK для dimensions/resources/attributes
-  collectAttributeFKs(reg.dimensions, tName, resolve, resolveEnumType, fkCollector)
-  collectAttributeFKs(reg.resources, tName, resolve, resolveEnumType, fkCollector)
-  collectAttributeFKs(reg.attributes, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(
+    reg.dimensions,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
+  collectAttributeFKs(
+    reg.resources,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
+  collectAttributeFKs(
+    reg.attributes,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
 
   const label = reg.displayName?.en ?? reg.name
   return [createTable(tName, columns, `AccumulationRegister: ${label}`)]
@@ -642,7 +705,13 @@ function generateCustomTable(
   ]
 
   // FK для кастомних атрибутів
-  collectAttributeFKs(ct.attributes, tName, resolve, resolveEnumType, fkCollector)
+  collectAttributeFKs(
+    ct.attributes,
+    tName,
+    resolve,
+    resolveEnumType,
+    fkCollector
+  )
 
   const label = ct.displayName?.en ?? ct.name
   return [createTable(tName, columns, `CustomTable: ${label}`)]
@@ -679,7 +748,13 @@ function generateTabularSection(
     })
     // FK для кастомних атрибутів ТЧ
     if (resolveEnumType) {
-      collectAttributeFKs(ts.attributes, tName, resolve, resolveEnumType, fkCollector)
+      collectAttributeFKs(
+        ts.attributes,
+        tName,
+        resolve,
+        resolveEnumType,
+        fkCollector
+      )
     }
   }
   return createTable(tName, columns, `Tabular: ${ts.name}`)
@@ -879,15 +954,12 @@ function generateAccumulationViews(
       )
       .join(",\n")
 
-    const partitionBy = dimCols.length > 0 ? `PARTITION BY ${dimCols.join(", ")} ` : ""
-    const windowSpec =
-      `${partitionBy}ORDER BY period ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`
+    const partitionBy =
+      dimCols.length > 0 ? `PARTITION BY ${dimCols.join(", ")} ` : ""
+    const windowSpec = `${partitionBy}ORDER BY period ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`
 
     const cumulativeResources = reg.resources
-      .map(
-        (r) =>
-          `  SUM(${r.name}_delta) OVER (${windowSpec}) AS ${r.name}`
-      )
+      .map((r) => `  SUM(${r.name}_delta) OVER (${windowSpec}) AS ${r.name}`)
       .join(",\n")
 
     const cteCols = groupCols.map((c) => `    ${c}`).join(",\n")
@@ -1275,7 +1347,7 @@ export function generateProjectDDL(
         schema,
         resolve,
         resolveEnumType,
-        fkCollector,
+        fkCollector
       )
     )
   }
@@ -1287,7 +1359,7 @@ export function generateProjectDDL(
         schema,
         resolve,
         resolveEnumType,
-        fkCollector,
+        fkCollector
       )
     )
   }
@@ -1299,7 +1371,7 @@ export function generateProjectDDL(
         schema,
         resolve,
         resolveEnumType,
-        fkCollector,
+        fkCollector
       )
     )
   }
@@ -1311,7 +1383,7 @@ export function generateProjectDDL(
         schema,
         resolve,
         resolveEnumType,
-        fkCollector,
+        fkCollector
       )
     )
   }
@@ -1334,7 +1406,7 @@ export function generateProjectDDL(
         schema,
         resolve,
         resolveEnumType,
-        fkCollector,
+        fkCollector
       )
     )
   }
@@ -1368,7 +1440,7 @@ export function generateProjectDDL(
         stdAttrs,
         cat.attributes,
         resolveEnumType,
-        cat.tabularSections,
+        cat.tabularSections
       )
     )
   }
@@ -1383,7 +1455,7 @@ export function generateProjectDDL(
         stdAttrs,
         doc.attributes,
         resolveEnumType,
-        doc.tabularSections,
+        doc.tabularSections
       )
     )
   }
@@ -1403,7 +1475,7 @@ export function generateProjectDDL(
         reg.dimensions,
         reg.resources,
         reg.attributes,
-        resolveEnumType,
+        resolveEnumType
       )
     )
   }
@@ -1422,7 +1494,7 @@ export function generateProjectDDL(
         reg.dimensions,
         reg.resources,
         reg.attributes,
-        resolveEnumType,
+        resolveEnumType
       )
     )
   }
@@ -1438,7 +1510,7 @@ export function generateProjectDDL(
         schema,
         stdAttrs,
         ct.attributes,
-        resolveEnumType,
+        resolveEnumType
       )
     )
   }
@@ -1495,7 +1567,7 @@ export function generateProjectDDL(
     project,
     prefix,
     schema,
-    resolveEnumType,
+    resolveEnumType
   )
   if (postingStatements.length > 0) {
     sections.push(sectionHeader("POSTING FUNCTIONS"))
@@ -1508,19 +1580,30 @@ export function generateProjectDDL(
   for (const c of project.catalogs) {
     const t = tableName(prefix, "Catalog", c.name)
     identifiersToCheck.add(t)
-    for (const ts of c.tabularSections) identifiersToCheck.add(tabularTableName(prefix, "Catalog", c.name, ts.name))
+    for (const ts of c.tabularSections)
+      identifiersToCheck.add(
+        tabularTableName(prefix, "Catalog", c.name, ts.name)
+      )
   }
   for (const d of project.documents) {
     const t = tableName(prefix, "Document", d.name)
     identifiersToCheck.add(t)
-    for (const ts of d.tabularSections) identifiersToCheck.add(tabularTableName(prefix, "Document", d.name, ts.name))
+    for (const ts of d.tabularSections)
+      identifiersToCheck.add(
+        tabularTableName(prefix, "Document", d.name, ts.name)
+      )
   }
-  for (const e of project.enumerations) identifiersToCheck.add(tableName(prefix, "Enumeration", e.name))
-  for (const r of project.informationRegisters) identifiersToCheck.add(tableName(prefix, "InformationRegister", r.name))
-  for (const r of project.accumulationRegisters) identifiersToCheck.add(tableName(prefix, "AccumulationRegister", r.name))
-  for (const t of project.customTables) identifiersToCheck.add(tableName(prefix, "CustomTable", t.name))
+  for (const e of project.enumerations)
+    identifiersToCheck.add(tableName(prefix, "Enumeration", e.name))
+  for (const r of project.informationRegisters)
+    identifiersToCheck.add(tableName(prefix, "InformationRegister", r.name))
+  for (const r of project.accumulationRegisters)
+    identifiersToCheck.add(tableName(prefix, "AccumulationRegister", r.name))
+  for (const t of project.customTables)
+    identifiersToCheck.add(tableName(prefix, "CustomTable", t.name))
   // FK constraint names
-  for (const fk of fkCollector) identifiersToCheck.add(getForeignKeyConstraintName(fk))
+  for (const fk of fkCollector)
+    identifiersToCheck.add(getForeignKeyConstraintName(fk))
   for (const id of identifiersToCheck) {
     checkIdentifierLength(id, warnings)
   }

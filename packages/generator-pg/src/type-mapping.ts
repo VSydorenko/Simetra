@@ -138,7 +138,9 @@ export function attributeToColumn(
     col.constraints.push("UNIQUE")
   }
   if (attr.defaultValue != null) {
-    col.constraints.push(`DEFAULT '${escapeLiteral(String(attr.defaultValue))}'`)
+    col.constraints.push(
+      `DEFAULT '${escapeLiteral(String(attr.defaultValue))}'`
+    )
   }
   if (attr.type === "Boolean" && attr.defaultValue == null) {
     col.constraints.push("DEFAULT false")

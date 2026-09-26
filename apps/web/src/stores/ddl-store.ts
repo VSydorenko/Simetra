@@ -43,12 +43,12 @@ function refExists(
 /** Знаходить регістр у моделі за ref */
 function findRegisterInModel(
   model: ProjectModel,
-  ref: { kind: MetadataKind; name: string },
+  ref: { kind: MetadataKind; name: string }
 ): AccumulationRegister | InformationRegister | undefined {
-  if (ref.kind === 'AccumulationRegister') {
+  if (ref.kind === "AccumulationRegister") {
     return model.accumulationRegisters.find((r) => r.name === ref.name)
   }
-  if (ref.kind === 'InformationRegister') {
+  if (ref.kind === "InformationRegister") {
     return model.informationRegisters.find((r) => r.name === ref.name)
   }
   return undefined
@@ -284,15 +284,17 @@ function collectValidationMessages(model: ProjectModel): {
               // Перевірка неповних dimensions
               // AR — всі dimensions обов'язкові (ключ агрегації), IR — тільки required
               const missingDims = reg.dimensions.filter((d) =>
-                reg.kind === 'AccumulationRegister'
+                reg.kind === "AccumulationRegister"
                   ? !m.mappings.dimensions[d.name]
-                  : d.required && !m.mappings.dimensions[d.name],
+                  : d.required && !m.mappings.dimensions[d.name]
               )
               if (missingDims.length > 0) {
                 const label =
                   reg.kind === "AccumulationRegister"
                     ? i18n.t("validation.posting.missingDimensionsLabel")
-                    : i18n.t("validation.posting.missingRequiredDimensionsLabel")
+                    : i18n.t(
+                        "validation.posting.missingRequiredDimensionsLabel"
+                      )
                 errors.push(
                   `${kind}/${obj.name}: ${i18n.t(
                     "validation.posting.movementMissingDimensions",
@@ -305,7 +307,9 @@ function collectValidationMessages(model: ProjectModel): {
                 )
               }
 
-              const selectedTsAttributes = m.source.startsWith("tabularSection:")
+              const selectedTsAttributes = m.source.startsWith(
+                "tabularSection:"
+              )
                 ? documentObject.tabularSections.find(
                     (section) =>
                       section.name === m.source.slice("tabularSection:".length)
@@ -313,7 +317,10 @@ function collectValidationMessages(model: ProjectModel): {
                 : undefined
 
               const mappingGroups: Array<
-                [group: "dimensions" | "resources" | "attributes", fields: Attribute[]]
+                [
+                  group: "dimensions" | "resources" | "attributes",
+                  fields: Attribute[],
+                ]
               > = [
                 ["dimensions", reg.dimensions],
                 ["resources", reg.resources],
@@ -341,10 +348,14 @@ function collectValidationMessages(model: ProjectModel): {
                     continue
                   }
 
-                  const typeWarning = validateExpressionCompatibility(expr, field, {
-                    source: m.source,
-                    document: documentObject,
-                  })
+                  const typeWarning = validateExpressionCompatibility(
+                    expr,
+                    field,
+                    {
+                      source: m.source,
+                      document: documentObject,
+                    }
+                  )
                   if (typeWarning) {
                     warnings.push(
                       `${kind}/${obj.name}: ${m.register.name}.${groupName}.${field.name} — ${typeWarning}`
@@ -368,8 +379,14 @@ function collectValidationMessages(model: ProjectModel): {
             // Перевірка що ресурс валідації має числовий тип
             const reg = findRegisterInModel(model, v.register)
             if (reg) {
-              const resourceAttr = reg.resources.find((r) => r.name === v.resource)
-              if (resourceAttr && resourceAttr.type !== 'Numeric' && resourceAttr.type !== 'Integer') {
+              const resourceAttr = reg.resources.find(
+                (r) => r.name === v.resource
+              )
+              if (
+                resourceAttr &&
+                resourceAttr.type !== "Numeric" &&
+                resourceAttr.type !== "Integer"
+              ) {
                 errors.push(
                   `${kind}/${obj.name}: ${i18n.t(
                     "validation.posting.nonNegativeBalanceResourceType",
@@ -465,7 +482,11 @@ export const useDdlStore = create<DdlState & DdlActions>()((set) => ({
     const { model } = useMetadataStore.getState()
     const { errors, warnings } = collectValidationMessages(model)
     if (errors.length > 0) {
-      set({ validationErrors: errors, validationWarnings: warnings, output: null })
+      set({
+        validationErrors: errors,
+        validationWarnings: warnings,
+        output: null,
+      })
       return
     }
     runGeneration(set, warnings)

@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useForm, type FieldValues, type Control } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import { useForm, type FieldValues, type Control } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
 import type {
   MetadataRef,
   FormSchema,
@@ -9,31 +9,31 @@ import type {
   Attribute,
   TabularSection,
   StandardAttribute,
-} from '@simetra/core'
-import { getStandardAttributes } from '@simetra/core'
-import { Label } from '@workspace/ui/components/label'
-import { Separator } from '@workspace/ui/components/separator'
-import { Button } from '@workspace/ui/components/button'
+} from "@simetra/core"
+import { getStandardAttributes } from "@simetra/core"
+import { Label } from "@workspace/ui/components/label"
+import { Separator } from "@workspace/ui/components/separator"
+import { Button } from "@workspace/ui/components/button"
 import {
   Tabs,
   TabsList,
   TabsTrigger,
   TabsContent,
-} from '@workspace/ui/components/tabs'
+} from "@workspace/ui/components/tabs"
 import {
   Accordion,
   AccordionItem,
   AccordionTrigger,
   AccordionContent,
-} from '@workspace/ui/components/accordion'
-import { useDataProvider, useMetadata } from './context'
-import { buildFormSchema } from './schema-builder'
-import { FormFieldRenderer } from './components/form-field-renderer'
-import { RuntimeDataTable } from './components/runtime-data-table'
-import { SaveButton } from './components/save-button'
-import { PostButton } from './components/post-button'
-import { UnpostButton } from './components/unpost-button'
-import { DeletionMarkButton } from './components/deletion-mark-button'
+} from "@workspace/ui/components/accordion"
+import { useDataProvider, useMetadata } from "./context"
+import { buildFormSchema } from "./schema-builder"
+import { FormFieldRenderer } from "./components/form-field-renderer"
+import { RuntimeDataTable } from "./components/runtime-data-table"
+import { SaveButton } from "./components/save-button"
+import { PostButton } from "./components/post-button"
+import { UnpostButton } from "./components/unpost-button"
+import { DeletionMarkButton } from "./components/deletion-mark-button"
 
 export interface ItemFormRendererProps {
   objectRef: MetadataRef
@@ -45,23 +45,23 @@ export interface ItemFormRendererProps {
 
 // Маппінг width → Tailwind max-w класи
 const WIDTH_CLASS_MAP: Record<string, string> = {
-  sm: 'max-w-sm',
-  md: 'max-w-md',
-  lg: 'max-w-lg',
-  xl: 'max-w-xl',
-  '2xl': 'max-w-2xl',
-  full: 'max-w-full',
+  sm: "max-w-sm",
+  md: "max-w-md",
+  lg: "max-w-lg",
+  xl: "max-w-xl",
+  "2xl": "max-w-2xl",
+  full: "max-w-full",
 }
 
 // MetadataKind → ключ колекції в ProjectModel
 const KIND_TO_COLLECTION: Record<string, string> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  Enumeration: 'enumerations',
-  InformationRegister: 'informationRegisters',
-  AccumulationRegister: 'accumulationRegisters',
-  Constant: 'constants',
-  CustomTable: 'customTables',
+  Catalog: "catalogs",
+  Document: "documents",
+  Enumeration: "enumerations",
+  InformationRegister: "informationRegisters",
+  AccumulationRegister: "accumulationRegisters",
+  Constant: "constants",
+  CustomTable: "customTables",
 }
 
 /** Контекст для рекурсивного рендерингу layout дерева */
@@ -69,35 +69,34 @@ interface RenderContext {
   attributes: Attribute[]
   tabularSections: TabularSection[]
   control: Control<FieldValues>
-  getValues: ReturnType<typeof useForm<FieldValues>>['getValues']
-  setValue: ReturnType<typeof useForm<FieldValues>>['setValue']
+  getValues: ReturnType<typeof useForm<FieldValues>>["getValues"]
+  setValue: ReturnType<typeof useForm<FieldValues>>["setValue"]
 }
 
 /** Знайти metadata об'єкт з ProjectModel за ref */
 function findMetadataObject(
   model: Record<string, unknown>,
-  ref: MetadataRef,
+  ref: MetadataRef
 ): Record<string, unknown> | undefined {
   const collectionKey = KIND_TO_COLLECTION[ref.kind]
   if (!collectionKey) return undefined
   const collection = model[collectionKey] as { name: string }[] | undefined
   return collection?.find((obj) => obj.name === ref.name) as
-    | Record<string, unknown>
-    | undefined
+    Record<string, unknown> | undefined
 }
 
 /** Побудувати settings для getStandardAttributes з metadata об'єкта */
 function buildSettings(
   kind: string,
-  object: Record<string, unknown>,
+  object: Record<string, unknown>
 ): Record<string, unknown> {
   switch (kind) {
-    case 'Catalog':
+    case "Catalog":
       return {
-        hierarchyType: (object.hierarchyType as string) ?? 'None',
+        hierarchyType: (object.hierarchyType as string) ?? "None",
         owners: (object.owners as unknown[]) ?? [],
       }
-    case 'CustomTable':
+    case "CustomTable":
       return {
         autoAddPrimaryKey: (object.autoAddPrimaryKey as boolean) ?? true,
       }
@@ -123,8 +122,12 @@ export function ItemFormRenderer({
 
   // Знайти metadata об'єкт з моделі
   const metadataObject = useMemo(
-    () => findMetadataObject(model as unknown as Record<string, unknown>, objectRef),
-    [model, objectRef],
+    () =>
+      findMetadataObject(
+        model as unknown as Record<string, unknown>,
+        objectRef
+      ),
+    [model, objectRef]
   )
 
   // Список стандартних реквізитів
@@ -133,7 +136,7 @@ export function ItemFormRenderer({
     const settings = buildSettings(objectRef.kind, metadataObject)
     return getStandardAttributes(
       objectRef.kind as Parameters<typeof getStandardAttributes>[0],
-      settings,
+      settings
     )
   }, [metadataObject, objectRef.kind])
 
@@ -149,16 +152,14 @@ export function ItemFormRenderer({
   const allAttributes = useMemo(() => {
     const stdAsAttrs: Attribute[] = standardAttrs.map((sa) => ({
       name: sa.name,
-      type: sa.type as Attribute['type'],
+      type: sa.type as Attribute["type"],
       required: false,
       indexed: sa.indexed,
       unique: false,
       defaultValue: null,
-      ...(sa.ref
-        ? { ref: sa.ref as Attribute['ref'] }
-        : {}),
+      ...(sa.ref ? { ref: sa.ref as Attribute["ref"] } : {}),
       ...(sa.allowedTypes
-        ? { allowedTypes: sa.allowedTypes as Attribute['allowedTypes'] }
+        ? { allowedTypes: sa.allowedTypes as Attribute["allowedTypes"] }
         : {}),
     }))
     return [...stdAsAttrs, ...userAttributes]
@@ -167,27 +168,22 @@ export function ItemFormRenderer({
   // Tabular sections
   const tabularSections = useMemo(
     () => (metadataObject?.tabularSections as TabularSection[]) ?? [],
-    [metadataObject],
+    [metadataObject]
   )
 
   // Zod schema для react-hook-form
   const formSchema = useMemo(
     () => buildFormSchema(allAttributes),
-    [allAttributes],
+    [allAttributes]
   )
 
-  const {
-    control,
-    handleSubmit,
-    reset,
-    getValues,
-    setValue,
-  } = useForm<FieldValues>({
-    // Zod v4 compat layer потребує cast для zodResolver
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: zodResolver(formSchema as any),
-    defaultValues: {},
-  })
+  const { control, handleSubmit, reset, getValues, setValue } =
+    useForm<FieldValues>({
+      // Zod v4 compat layer потребує cast для zodResolver
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      resolver: zodResolver(formSchema as any),
+      defaultValues: {},
+    })
 
   // Завантаження запису при edit
   useEffect(() => {
@@ -230,10 +226,10 @@ export function ItemFormRenderer({
         setSaving(false)
       }
     },
-    [dataProvider, objectRef, recordId, onSave],
+    [dataProvider, objectRef, recordId, onSave]
   )
 
-  const widthClass = WIDTH_CLASS_MAP[formModel.width ?? 'lg'] ?? 'max-w-lg'
+  const widthClass = WIDTH_CLASS_MAP[formModel.width ?? "lg"] ?? "max-w-lg"
 
   if (loading) {
     return (
@@ -275,7 +271,7 @@ export function ItemFormRenderer({
               saving,
               onCancel,
               formRef,
-            }),
+            })
           )}
         </div>
       )}
@@ -331,9 +327,13 @@ function StandardAttributesHeader({
   // Фільтруємо системні поля (id, timestamps, deletion_mark)
   const visibleStdAttrs = standardAttrs.filter(
     (a) =>
-      !['id', 'deletion_mark', 'created_at', 'updated_at', 'predefined_name'].includes(
-        a.name,
-      ),
+      ![
+        "id",
+        "deletion_mark",
+        "created_at",
+        "updated_at",
+        "predefined_name",
+      ].includes(a.name)
   )
 
   if (visibleStdAttrs.length === 0) return null
@@ -345,16 +345,14 @@ function StandardAttributesHeader({
           key={sa.name}
           attribute={{
             name: sa.name,
-            type: sa.type as Attribute['type'],
+            type: sa.type as Attribute["type"],
             required: false,
             indexed: sa.indexed,
             unique: false,
             defaultValue: null,
-            ...(sa.ref
-              ? { ref: sa.ref as Attribute['ref'] }
-              : {}),
+            ...(sa.ref ? { ref: sa.ref as Attribute["ref"] } : {}),
             ...(sa.allowedTypes
-              ? { allowedTypes: sa.allowedTypes as Attribute['allowedTypes'] }
+              ? { allowedTypes: sa.allowedTypes as Attribute["allowedTypes"] }
               : {}),
           }}
           control={control}
@@ -370,20 +368,20 @@ function StandardAttributesHeader({
 
 function renderLayoutElement(
   element: FormLayoutElement,
-  ctx: RenderContext,
+  ctx: RenderContext
 ): React.ReactNode {
   switch (element.element) {
-    case 'Field':
+    case "Field":
       return renderFieldElement(element, ctx)
-    case 'Group':
+    case "Group":
       return renderGroupElement(element, ctx)
-    case 'Columns':
+    case "Columns":
       return renderColumnsElement(element, ctx)
-    case 'Column':
+    case "Column":
       return renderColumnElement(element, ctx)
-    case 'Tabs':
+    case "Tabs":
       return renderTabsElement(element, ctx)
-    case 'Tab':
+    case "Tab":
       // Tab поза Tabs — рендерити як Group
       return (
         <div className="space-y-4">
@@ -392,17 +390,17 @@ function renderLayoutElement(
           ))}
         </div>
       )
-    case 'TabularSection':
+    case "TabularSection":
       return renderTabularSectionElement(element, ctx)
-    case 'Separator':
+    case "Separator":
       return <Separator />
-    case 'Label':
+    case "Label":
       return (
         <Label className={element.className ?? undefined}>
           {element.text.uk ?? element.text.en}
         </Label>
       )
-    case 'Accordion':
+    case "Accordion":
       return renderAccordionElement(element, ctx)
     default:
       return null
@@ -410,8 +408,8 @@ function renderLayoutElement(
 }
 
 function renderFieldElement(
-  element: FormLayoutElement & { element: 'Field' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "Field" },
+  ctx: RenderContext
 ) {
   const attr = ctx.attributes.find((a) => a.name === element.ref)
   if (!attr) return null
@@ -427,18 +425,16 @@ function renderFieldElement(
 }
 
 function renderGroupElement(
-  element: FormLayoutElement & { element: 'Group' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "Group" },
+  ctx: RenderContext
 ) {
   const title = element.title?.uk ?? element.title?.en
 
   return (
     <div
-      className={`space-y-4 rounded-md border p-4 ${element.className ?? ''}`}
+      className={`space-y-4 rounded-md border p-4 ${element.className ?? ""}`}
     >
-      {title && (
-        <h3 className="text-sm font-semibold">{title}</h3>
-      )}
+      {title && <h3 className="text-sm font-semibold">{title}</h3>}
       {element.children.map((child, idx) => (
         <div key={idx}>{renderLayoutElement(child, ctx)}</div>
       ))}
@@ -447,8 +443,8 @@ function renderGroupElement(
 }
 
 function renderColumnsElement(
-  element: FormLayoutElement & { element: 'Columns' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "Columns" },
+  ctx: RenderContext
 ) {
   const colCount = element.columns.length
 
@@ -465,8 +461,8 @@ function renderColumnsElement(
 }
 
 function renderColumnElement(
-  element: FormLayoutElement & { element: 'Column' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "Column" },
+  ctx: RenderContext
 ) {
   return (
     <div className="space-y-4">
@@ -478,13 +474,13 @@ function renderColumnElement(
 }
 
 function renderTabsElement(
-  element: FormLayoutElement & { element: 'Tabs' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "Tabs" },
+  ctx: RenderContext
 ) {
   const firstTab = element.tabs[0]
   const defaultValue = firstTab
-    ? (firstTab.title.uk ?? firstTab.title.en ?? 'tab-0')
-    : 'tab-0'
+    ? (firstTab.title.uk ?? firstTab.title.en ?? "tab-0")
+    : "tab-0"
 
   return (
     <Tabs defaultValue={defaultValue}>
@@ -503,9 +499,7 @@ function renderTabsElement(
         return (
           <TabsContent key={idx} value={tabTitle} className="space-y-4">
             {tab.children.map((child, childIdx) => (
-              <div key={childIdx}>
-                {renderLayoutElement(child, ctx)}
-              </div>
+              <div key={childIdx}>{renderLayoutElement(child, ctx)}</div>
             ))}
           </TabsContent>
         )
@@ -515,8 +509,8 @@ function renderTabsElement(
 }
 
 function renderTabularSectionElement(
-  element: FormLayoutElement & { element: 'TabularSection' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "TabularSection" },
+  ctx: RenderContext
 ) {
   const ts = ctx.tabularSections.find((t) => t.name === element.ref)
   if (!ts) return null
@@ -535,10 +529,10 @@ function renderTabularSectionElement(
 }
 
 function renderAccordionElement(
-  element: FormLayoutElement & { element: 'Accordion' },
-  ctx: RenderContext,
+  element: FormLayoutElement & { element: "Accordion" },
+  ctx: RenderContext
 ) {
-  const title = element.title.uk ?? element.title.en ?? ''
+  const title = element.title.uk ?? element.title.en ?? ""
 
   return (
     <Accordion type="single" collapsible>
@@ -572,8 +566,8 @@ function TabularSectionField({
   allowAdd?: boolean
   allowDelete?: boolean
   allowReorder?: boolean
-  getValues: ReturnType<typeof useForm<FieldValues>>['getValues']
-  setValue: ReturnType<typeof useForm<FieldValues>>['setValue']
+  getValues: ReturnType<typeof useForm<FieldValues>>["getValues"]
+  setValue: ReturnType<typeof useForm<FieldValues>>["setValue"]
 }) {
   const fieldName = tabularSection.name
   const rows =
@@ -594,7 +588,7 @@ function TabularSectionField({
     (newRows: Record<string, unknown>[]) => {
       setValue(fieldName, newRows, { shouldValidate: true })
     },
-    [setValue, fieldName],
+    [setValue, fieldName]
   )
 
   return (
@@ -629,10 +623,10 @@ function renderToolbarItem(
     saving: boolean
     onCancel?: () => void
     formRef: React.RefObject<HTMLFormElement | null>
-  },
+  }
 ): React.ReactNode {
   switch (item.type) {
-    case 'SaveButton':
+    case "SaveButton":
       return (
         <SaveButton
           key={index}
@@ -643,7 +637,7 @@ function renderToolbarItem(
         />
       )
 
-    case 'SaveAndCloseButton':
+    case "SaveAndCloseButton":
       return (
         <Button
           key={index}
@@ -655,11 +649,11 @@ function renderToolbarItem(
             // onCancel буде викликано через onSave callback ланцюг
           }}
         >
-          {ctx.saving ? 'Збереження...' : 'Зберегти і закрити'}
+          {ctx.saving ? "Збереження..." : "Зберегти і закрити"}
         </Button>
       )
 
-    case 'PostButton':
+    case "PostButton":
       if (!ctx.recordId) return null
       return (
         <PostButton
@@ -669,7 +663,7 @@ function renderToolbarItem(
         />
       )
 
-    case 'UnpostButton':
+    case "UnpostButton":
       if (!ctx.recordId) return null
       return (
         <UnpostButton
@@ -679,7 +673,7 @@ function renderToolbarItem(
         />
       )
 
-    case 'DeletionMarkButton':
+    case "DeletionMarkButton":
       if (!ctx.recordId) return null
       return (
         <DeletionMarkButton
@@ -689,10 +683,10 @@ function renderToolbarItem(
         />
       )
 
-    case 'Separator':
+    case "Separator":
       return <Separator key={index} orientation="vertical" className="h-6" />
 
-    case 'CustomButton':
+    case "CustomButton":
       return (
         <Button key={index} variant="outline">
           {item.label.uk ?? item.label.en}

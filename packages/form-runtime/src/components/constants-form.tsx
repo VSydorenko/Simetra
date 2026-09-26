@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
-import type { Constant } from '@simetra/core'
-import { Input } from '@workspace/ui/components/input'
-import { Label } from '@workspace/ui/components/label'
-import { Switch } from '@workspace/ui/components/switch'
-import { Button } from '@workspace/ui/components/button'
-import { useDataProvider } from '../context'
+import { useState, useEffect, useCallback } from "react"
+import type { Constant } from "@simetra/core"
+import { Input } from "@workspace/ui/components/input"
+import { Label } from "@workspace/ui/components/label"
+import { Switch } from "@workspace/ui/components/switch"
+import { Button } from "@workspace/ui/components/button"
+import { useDataProvider } from "../context"
 
 export interface ConstantsFormProps {
   constants: Constant[]
@@ -19,7 +19,9 @@ export function ConstantsForm({ constants }: ConstantsFormProps) {
   const dataProvider = useDataProvider()
 
   const [values, setValues] = useState<Record<string, unknown>>({})
-  const [initialValues, setInitialValues] = useState<Record<string, unknown>>({})
+  const [initialValues, setInitialValues] = useState<Record<string, unknown>>(
+    {}
+  )
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -78,7 +80,7 @@ export function ConstantsForm({ constants }: ConstantsFormProps) {
 
       <div className="flex justify-end pt-4">
         <Button onClick={handleSave} disabled={saving}>
-          {saving ? 'Збереження...' : 'Зберегти'}
+          {saving ? "Збереження..." : "Зберегти"}
         </Button>
       </div>
     </div>
@@ -89,12 +91,12 @@ export function ConstantsForm({ constants }: ConstantsFormProps) {
 function renderControl(
   c: Constant,
   value: unknown,
-  onChange: (value: unknown) => void,
+  onChange: (value: unknown) => void
 ) {
   const id = `const-${c.name}`
 
   switch (c.valueType) {
-    case 'Boolean':
+    case "Boolean":
       return (
         <Switch
           id={id}
@@ -103,57 +105,55 @@ function renderControl(
         />
       )
 
-    case 'Integer':
-    case 'Numeric':
+    case "Integer":
+    case "Numeric":
       return (
         <Input
           id={id}
           type="number"
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) => {
             const raw = e.target.value
-            if (raw === '') {
+            if (raw === "") {
               onChange(null)
               return
             }
             onChange(
-              c.valueType === 'Integer'
-                ? parseInt(raw, 10)
-                : parseFloat(raw),
+              c.valueType === "Integer" ? parseInt(raw, 10) : parseFloat(raw)
             )
           }}
           className="max-w-sm"
         />
       )
 
-    case 'Date':
+    case "Date":
       return (
         <Input
           id={id}
           type="date"
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) => onChange(e.target.value || null)}
           className="max-w-sm"
         />
       )
 
-    case 'DateTime':
+    case "DateTime":
       return (
         <Input
           id={id}
           type="datetime-local"
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) => onChange(e.target.value || null)}
           className="max-w-sm"
         />
       )
 
-    case 'String':
+    case "String":
     default:
       return (
         <Input
           id={id}
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) => onChange(e.target.value)}
           className="max-w-sm"
         />

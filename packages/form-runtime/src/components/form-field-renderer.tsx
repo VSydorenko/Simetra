@@ -1,13 +1,13 @@
-import { Controller, type Control, type FieldValues } from 'react-hook-form'
-import type { Attribute } from '@simetra/core'
-import { Input } from '@workspace/ui/components/input'
-import { Textarea } from '@workspace/ui/components/textarea'
-import { Switch } from '@workspace/ui/components/switch'
-import { Label } from '@workspace/ui/components/label'
-import { resolveFieldComponent } from '../field-mapping'
-import { EnumSelect } from './enum-select'
-import { CatalogCombobox } from './catalog-combobox'
-import { PolymorphicRefPlaceholder } from './polymorphic-ref-placeholder'
+import { Controller, type Control, type FieldValues } from "react-hook-form"
+import type { Attribute } from "@simetra/core"
+import { Input } from "@workspace/ui/components/input"
+import { Textarea } from "@workspace/ui/components/textarea"
+import { Switch } from "@workspace/ui/components/switch"
+import { Label } from "@workspace/ui/components/label"
+import { resolveFieldComponent } from "../field-mapping"
+import { EnumSelect } from "./enum-select"
+import { CatalogCombobox } from "./catalog-combobox"
+import { PolymorphicRefPlaceholder } from "./polymorphic-ref-placeholder"
 
 export interface FormFieldRendererProps {
   attribute: Attribute
@@ -56,7 +56,7 @@ export function FormFieldRenderer({
 /** Маппінг FieldComponentType → конкретний UI-компонент */
 function renderFieldControl(
   component: string,
-  fieldProps: Record<string, unknown>,
+  fieldProps: Record<string, unknown>
 ) {
   const {
     attribute,
@@ -80,48 +80,48 @@ function renderFieldControl(
   }
 
   switch (component) {
-    case 'input':
+    case "input":
       return (
         <Input
           id={id}
           name={name}
-          type={(restProps.type as string) ?? 'text'}
-          value={(value as string) ?? ''}
+          type={(restProps.type as string) ?? "text"}
+          value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
           onBlur={onBlur}
           readOnly={readOnly}
         />
       )
 
-    case 'textarea':
+    case "textarea":
       return (
         <Textarea
           id={id}
           name={name}
-          value={(value as string) ?? ''}
+          value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
           onBlur={onBlur}
           readOnly={readOnly}
         />
       )
 
-    case 'number-input':
+    case "number-input":
       return (
         <Input
           id={id}
           name={name}
           type="number"
           step={restProps.step as number}
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) =>
-            onChange(e.target.value === '' ? null : Number(e.target.value))
+            onChange(e.target.value === "" ? null : Number(e.target.value))
           }
           onBlur={onBlur}
           readOnly={readOnly}
         />
       )
 
-    case 'switch':
+    case "switch":
       return (
         <Switch
           id={id}
@@ -131,33 +131,33 @@ function renderFieldControl(
         />
       )
 
-    case 'date-picker':
+    case "date-picker":
       return (
         <Input
           id={id}
           name={name}
           type="date"
-          value={(value as string) ?? ''}
+          value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
           onBlur={onBlur}
           readOnly={readOnly}
         />
       )
 
-    case 'datetime-picker':
+    case "datetime-picker":
       return (
         <Input
           id={id}
           name={name}
           type="datetime-local"
-          value={(value as string) ?? ''}
+          value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
           onBlur={onBlur}
           readOnly={readOnly}
         />
       )
 
-    case 'enum-select':
+    case "enum-select":
       return (
         <EnumSelect
           enumRef={attribute.ref!}
@@ -167,8 +167,8 @@ function renderFieldControl(
         />
       )
 
-    case 'catalog-combobox':
-    case 'document-combobox':
+    case "catalog-combobox":
+    case "document-combobox":
       return (
         <CatalogCombobox
           targetRef={attribute.ref!}
@@ -178,20 +178,15 @@ function renderFieldControl(
         />
       )
 
-    case 'polymorphic-ref-placeholder':
+    case "polymorphic-ref-placeholder":
       return <PolymorphicRefPlaceholder />
 
-    case 'uuid-input':
+    case "uuid-input":
       return (
-        <Input
-          id={id}
-          name={name}
-          value={(value as string) ?? ''}
-          readOnly
-        />
+        <Input id={id} name={name} value={(value as string) ?? ""} readOnly />
       )
 
-    case 'binary-placeholder':
+    case "binary-placeholder":
       return (
         <div className="rounded-md border border-dashed border-muted-foreground/30 px-3 py-2 text-xs text-muted-foreground">
           Binary — не підтримується в MVP
@@ -203,7 +198,7 @@ function renderFieldControl(
         <Input
           id={id}
           name={name}
-          value={(value as string) ?? ''}
+          value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
           onBlur={onBlur}
           readOnly={readOnly}

@@ -79,8 +79,8 @@ describe("posting cross-check: posting register refs subset of registerMovements
       docErrors.some(
         (e) =>
           e.message.includes("posting.movements contains register") &&
-          e.message.includes("not declared in registerMovements"),
-      ),
+          e.message.includes("not declared in registerMovements")
+      )
     ).toBe(true)
   })
 
@@ -146,8 +146,8 @@ describe("posting cross-check: posting register refs subset of registerMovements
       docErrors.some((e) =>
         e.message.includes(
           i18n.t("validation.posting.validationsWithoutMovements")
-        ),
-      ),
+        )
+      )
     ).toBe(true)
   })
 
@@ -217,7 +217,7 @@ describe("posting cross-check: posting register refs subset of registerMovements
     const modelErrors = useMetadataStore.getState().modelErrors
     const docErrors = modelErrors["Document/Invoice"] ?? []
     const dimError = docErrors.find((e) =>
-      e.message.includes("не заповнені dimensions"),
+      e.message.includes("не заповнені dimensions")
     )
     expect(dimError).toBeDefined()
     expect(dimError!.message).toContain("product")
@@ -285,7 +285,7 @@ describe("posting cross-check: posting register refs subset of registerMovements
     const modelErrors = useMetadataStore.getState().modelErrors
     const docErrors = modelErrors["Document/RateUpdate"] ?? []
     const dimError = docErrors.find((e) =>
-      e.message.includes("обов'язкові dimensions"),
+      e.message.includes("обов'язкові dimensions")
     )
     expect(dimError).toBeDefined()
     expect(dimError!.message).toContain("currency")

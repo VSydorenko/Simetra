@@ -1,19 +1,19 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   useTable,
   tableFeatures,
   flexRender,
   type ColumnDef,
-} from '@tanstack/react-table'
+} from "@tanstack/react-table"
 import type {
   MetadataRef,
   FormSchema,
   FormLayoutElement,
   FormFieldElement,
   Attribute,
-} from '@simetra/core'
-import { getStandardAttributes } from '@simetra/core'
-import type { ListOptions } from '@simetra/data-provider'
+} from "@simetra/core"
+import { getStandardAttributes } from "@simetra/core"
+import type { ListOptions } from "@simetra/data-provider"
 import {
   Table,
   TableHeader,
@@ -21,11 +21,11 @@ import {
   TableHead,
   TableBody,
   TableCell,
-} from '@workspace/ui/components/table'
-import { Button } from '@workspace/ui/components/button'
-import { Input } from '@workspace/ui/components/input'
-import { Badge } from '@workspace/ui/components/badge'
-import { useDataProvider, useMetadata } from './context'
+} from "@workspace/ui/components/table"
+import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
+import { Badge } from "@workspace/ui/components/badge"
+import { useDataProvider, useMetadata } from "./context"
 
 // TanStack Table v9 реєструє фічі явно; тут потрібне лише ядро (сортування
 // серверне), тож клітинки рендеримо через core-метод `getAllCells()`.
@@ -42,52 +42,51 @@ const DEFAULT_PAGE_SIZE = 25
 
 // MetadataKind → ключ колекції в ProjectModel
 const KIND_TO_COLLECTION: Record<string, string> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  Enumeration: 'enumerations',
-  InformationRegister: 'informationRegisters',
-  AccumulationRegister: 'accumulationRegisters',
-  Constant: 'constants',
-  CustomTable: 'customTables',
+  Catalog: "catalogs",
+  Document: "documents",
+  Enumeration: "enumerations",
+  InformationRegister: "informationRegisters",
+  AccumulationRegister: "accumulationRegisters",
+  Constant: "constants",
+  CustomTable: "customTables",
 }
 
 /** Витягнути імена колонок з FormSchema layout */
 function extractListColumns(layout?: FormLayoutElement): string[] {
   if (!layout) return []
-  if (layout.element === 'Group') {
+  if (layout.element === "Group") {
     return layout.children
-      .filter((c): c is FormFieldElement => c.element === 'Field')
+      .filter((c): c is FormFieldElement => c.element === "Field")
       .map((f) => f.ref)
   }
-  if (layout.element === 'Field') return [layout.ref]
+  if (layout.element === "Field") return [layout.ref]
   return []
 }
 
 /** Знайти metadata об'єкт з ProjectModel за ref */
 function findMetadataObject(
   model: Record<string, unknown>,
-  ref: MetadataRef,
+  ref: MetadataRef
 ): Record<string, unknown> | undefined {
   const collectionKey = KIND_TO_COLLECTION[ref.kind]
   if (!collectionKey) return undefined
   const collection = model[collectionKey] as { name: string }[] | undefined
   return collection?.find((obj) => obj.name === ref.name) as
-    | Record<string, unknown>
-    | undefined
+    Record<string, unknown> | undefined
 }
 
 /** Побудувати settings для getStandardAttributes */
 function buildSettings(
   kind: string,
-  object: Record<string, unknown>,
+  object: Record<string, unknown>
 ): Record<string, unknown> {
   switch (kind) {
-    case 'Catalog':
+    case "Catalog":
       return {
-        hierarchyType: (object.hierarchyType as string) ?? 'None',
+        hierarchyType: (object.hierarchyType as string) ?? "None",
         owners: (object.owners as unknown[]) ?? [],
       }
-    case 'CustomTable':
+    case "CustomTable":
       return {
         autoAddPrimaryKey: (object.autoAddPrimaryKey as boolean) ?? true,
       }
@@ -98,14 +97,14 @@ function buildSettings(
 
 /** Форматування значення комірки за типом атрибуту */
 function formatCellValue(value: unknown, type?: string): string {
-  if (value == null) return ''
-  if (type === 'Boolean') return ''
-  if (type === 'Date' || type === 'DateTime') {
+  if (value == null) return ""
+  if (type === "Boolean") return ""
+  if (type === "Date" || type === "DateTime") {
     const d = new Date(String(value))
     if (!isNaN(d.getTime())) {
-      return type === 'Date'
-        ? d.toLocaleDateString('uk-UA')
-        : d.toLocaleString('uk-UA')
+      return type === "Date"
+        ? d.toLocaleDateString("uk-UA")
+        : d.toLocaleString("uk-UA")
     }
   }
   return String(value)
@@ -119,7 +118,7 @@ function formatCellValue(value: unknown, type?: string): string {
 function useRefDisplayMap(
   data: Record<string, unknown>[],
   refColumns: { columnName: string; targetRef: MetadataRef }[],
-  dataProvider: ReturnType<typeof useDataProvider>,
+  dataProvider: ReturnType<typeof useDataProvider>
 ): Map<string, string> {
   const [displayMap, setDisplayMap] = useState<Map<string, string>>(new Map())
   // Глобальний кеш між page-перемиканнями
@@ -136,7 +135,7 @@ function useRefDisplayMap(
     for (const { columnName, targetRef } of refColumns) {
       for (const row of data) {
         const id = row[columnName]
-        if (typeof id !== 'string' || !id) continue
+        if (typeof id !== "string" || !id) continue
         const key = `${targetRef.kind}:${targetRef.name}:${id}`
         if (!cacheRef.current.has(key) && !seen.has(key)) {
           seen.add(key)
@@ -158,14 +157,14 @@ function useRefDisplayMap(
           dataProvider.getRefDisplay(targetRef, id).then((display) => ({
             key,
             display,
-          })),
-        ),
+          }))
+        )
       )
 
       if (cancelled) return
 
       for (const result of results) {
-        if (result.status === 'fulfilled') {
+        if (result.status === "fulfilled") {
           cacheRef.current.set(result.value.key, result.value.display)
         }
       }
@@ -196,8 +195,8 @@ export function ListRenderer({
   const [page, setPage] = useState(1)
   const [pageSize] = useState(DEFAULT_PAGE_SIZE)
   const [sortBy, setSortBy] = useState<string | undefined>()
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
-  const [search, setSearch] = useState('')
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
+  const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
 
   // Знайти metadata об'єкт для отримання атрибутів
@@ -205,9 +204,9 @@ export function ListRenderer({
     () =>
       findMetadataObject(
         model as unknown as Record<string, unknown>,
-        objectRef,
+        objectRef
       ),
-    [model, objectRef],
+    [model, objectRef]
   )
 
   // Всі атрибути (стандартні + user-defined)
@@ -216,18 +215,18 @@ export function ListRenderer({
     const settings = buildSettings(objectRef.kind, metadataObject)
     const stdAttrs = getStandardAttributes(
       objectRef.kind as Parameters<typeof getStandardAttributes>[0],
-      settings,
+      settings
     )
     const stdAsAttrs: Attribute[] = stdAttrs.map((sa) => ({
       name: sa.name,
-      type: sa.type as Attribute['type'],
+      type: sa.type as Attribute["type"],
       required: false,
       indexed: sa.indexed,
       unique: false,
       defaultValue: null,
-      ...(sa.ref ? { ref: sa.ref as Attribute['ref'] } : {}),
+      ...(sa.ref ? { ref: sa.ref as Attribute["ref"] } : {}),
       ...(sa.allowedTypes
-        ? { allowedTypes: sa.allowedTypes as Attribute['allowedTypes'] }
+        ? { allowedTypes: sa.allowedTypes as Attribute["allowedTypes"] }
         : {}),
     }))
     const userAttrs = (metadataObject.attributes as Attribute[]) ?? []
@@ -237,7 +236,7 @@ export function ListRenderer({
   // Колонки із layout
   const columnRefs = useMemo(
     () => extractListColumns(formModel.layout),
-    [formModel.layout],
+    [formModel.layout]
   )
 
   // Ref-колонки для batch display resolution
@@ -245,7 +244,7 @@ export function ListRenderer({
     const result: { columnName: string; targetRef: MetadataRef }[] = []
     for (const colName of columnRefs) {
       const attr = allAttributes.find((a) => a.name === colName)
-      if (attr?.type === 'Ref' && attr.ref) {
+      if (attr?.type === "Ref" && attr.ref) {
         result.push({ columnName: colName, targetRef: attr.ref })
       }
     }
@@ -287,79 +286,89 @@ export function ListRenderer({
   const handleSort = useCallback(
     (columnId: string) => {
       if (sortBy === columnId) {
-        setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+        setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"))
       } else {
         setSortBy(columnId)
-        setSortDirection('asc')
+        setSortDirection("asc")
       }
       setPage(1)
     },
-    [sortBy],
+    [sortBy]
   )
 
   // Визначити атрибут за ім'ям
   const findAttribute = useCallback(
     (name: string): Attribute | undefined =>
       allAttributes.find((a) => a.name === name),
-    [allAttributes],
+    [allAttributes]
   )
 
   // Batch display resolution для Ref-колонок
   const refDisplayMap = useRefDisplayMap(data, refColumns, dataProvider)
 
   // Побудова колонок для @tanstack/react-table
-  const tableColumns = useMemo<ColumnDef<typeof features, Record<string, unknown>>[]>(
+  const tableColumns = useMemo<
+    ColumnDef<typeof features, Record<string, unknown>>[]
+  >(
     () =>
-      columnRefs.map((ref): ColumnDef<typeof features, Record<string, unknown>> => {
-        const attr = findAttribute(ref)
-        const header =
-          attr?.displayName?.uk ?? attr?.displayName?.en ?? ref
+      columnRefs.map(
+        (ref): ColumnDef<typeof features, Record<string, unknown>> => {
+          const attr = findAttribute(ref)
+          const header = attr?.displayName?.uk ?? attr?.displayName?.en ?? ref
 
-        return {
-          id: ref,
-          header: () => (
-            <button
-              type="button"
-              className="flex items-center gap-1 text-left font-medium"
-              onClick={() => handleSort(ref)}
-            >
-              {header}
-              {sortBy === ref && (
-                <span className="text-xs">
-                  {sortDirection === 'asc' ? '↑' : '↓'}
-                </span>
-              )}
-            </button>
-          ),
-          cell: ({ row }) => {
-            const value = row.original[ref]
-            // Булеві значення — Badge
-            if (attr?.type === 'Boolean') {
-              return (
-                <Badge variant={value ? 'default' : 'secondary'}>
-                  {value ? 'Так' : 'Ні'}
-                </Badge>
-              )
-            }
-            // Ref-значення — показуємо display name замість UUID
-            if (attr?.type === 'Ref' && attr.ref && typeof value === 'string') {
-              const displayKey = `${attr.ref.kind}:${attr.ref.name}:${value}`
-              const display = refDisplayMap.get(displayKey)
+          return {
+            id: ref,
+            header: () => (
+              <button
+                type="button"
+                className="flex items-center gap-1 text-left font-medium"
+                onClick={() => handleSort(ref)}
+              >
+                {header}
+                {sortBy === ref && (
+                  <span className="text-xs">
+                    {sortDirection === "asc" ? "↑" : "↓"}
+                  </span>
+                )}
+              </button>
+            ),
+            cell: ({ row }) => {
+              const value = row.original[ref]
+              // Булеві значення — Badge
+              if (attr?.type === "Boolean") {
+                return (
+                  <Badge variant={value ? "default" : "secondary"}>
+                    {value ? "Так" : "Ні"}
+                  </Badge>
+                )
+              }
+              // Ref-значення — показуємо display name замість UUID
+              if (
+                attr?.type === "Ref" &&
+                attr.ref &&
+                typeof value === "string"
+              ) {
+                const displayKey = `${attr.ref.kind}:${attr.ref.name}:${value}`
+                const display = refDisplayMap.get(displayKey)
+                return <span className="truncate">{display ?? value}</span>
+              }
               return (
                 <span className="truncate">
-                  {display ?? value}
+                  {formatCellValue(value, attr?.type)}
                 </span>
               )
-            }
-            return (
-              <span className="truncate">
-                {formatCellValue(value, attr?.type)}
-              </span>
-            )
-          },
+            },
+          }
         }
-      }),
-    [columnRefs, findAttribute, handleSort, sortBy, sortDirection, refDisplayMap],
+      ),
+    [
+      columnRefs,
+      findAttribute,
+      handleSort,
+      sortBy,
+      sortDirection,
+      refDisplayMap,
+    ]
   )
 
   const table = useTable({
@@ -376,7 +385,7 @@ export function ListRenderer({
       setSearch(e.target.value)
       setPage(1)
     },
-    [],
+    []
   )
 
   return (
@@ -389,9 +398,7 @@ export function ListRenderer({
           onChange={handleSearchChange}
           className="max-w-sm"
         />
-        {onCreateClick && (
-          <Button onClick={onCreateClick}>Створити</Button>
-        )}
+        {onCreateClick && <Button onClick={onCreateClick}>Створити</Button>}
       </div>
 
       {/* Таблиця */}
@@ -406,7 +413,7 @@ export function ListRenderer({
                       ? null
                       : flexRender(
                           header.column.columnDef.header,
-                          header.getContext(),
+                          header.getContext()
                         )}
                   </TableHead>
                 ))}
@@ -436,7 +443,9 @@ export function ListRenderer({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
-                  className={onRowClick ? 'cursor-pointer hover:bg-muted/50' : ''}
+                  className={
+                    onRowClick ? "cursor-pointer hover:bg-muted/50" : ""
+                  }
                   onClick={() => {
                     const id = row.original.id as string | undefined
                     if (id && onRowClick) onRowClick(id)
@@ -446,7 +455,7 @@ export function ListRenderer({
                     <TableCell key={cell.id}>
                       {flexRender(
                         cell.column.columnDef.cell,
-                        cell.getContext(),
+                        cell.getContext()
                       )}
                     </TableCell>
                   ))}

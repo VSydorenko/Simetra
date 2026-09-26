@@ -4,10 +4,10 @@ import type {
   FormSupportedKind,
   FormTabElement,
   FormKind,
-} from './schemas/form'
-import type { ProjectModel } from './schemas/project-model'
-import type { MetadataRef } from './schemas/metadata-ref'
-import { getStandardAttributes } from './schemas/standard-attributes'
+} from "./schemas/form"
+import type { ProjectModel } from "./schemas/project-model"
+import type { MetadataRef } from "./schemas/metadata-ref"
+import { getStandardAttributes } from "./schemas/standard-attributes"
 
 // Типи об'єктів, з яких autoform витягує attributes і tabularSections
 interface AutoformObjectBase {
@@ -21,7 +21,7 @@ interface AutoformObjectWithTabular extends AutoformObjectBase {
 
 // Налаштування для отримання стандартних реквізитів
 interface CatalogSettings {
-  hierarchyType?: 'None' | 'FoldersAndItems' | 'ItemsOnly'
+  hierarchyType?: "None" | "FoldersAndItems" | "ItemsOnly"
   owners?: { kind: string; name: string }[]
 }
 
@@ -37,7 +37,7 @@ interface CustomTableSettings {
 /** Набір імен стандартних реквізитів для конкретного kind + settings */
 function getStandardAttributeNames(
   kind: FormSupportedKind,
-  object: Record<string, unknown>,
+  object: Record<string, unknown>
 ): Set<string> {
   const settings = buildStandardAttributeSettings(kind, object)
   const stdAttrs = getStandardAttributes(kind, settings)
@@ -47,19 +47,20 @@ function getStandardAttributeNames(
 /** Зібрати StandardAttributeSettings з полів об'єкта */
 function buildStandardAttributeSettings(
   kind: FormSupportedKind,
-  object: Record<string, unknown>,
+  object: Record<string, unknown>
 ): Record<string, unknown> {
   switch (kind) {
-    case 'Catalog':
+    case "Catalog":
       return {
-        hierarchyType: (object as CatalogSettings).hierarchyType ?? 'None',
+        hierarchyType: (object as CatalogSettings).hierarchyType ?? "None",
         owners: (object as CatalogSettings).owners ?? [],
       }
-    case 'CustomTable':
+    case "CustomTable":
       return {
-        autoAddPrimaryKey: (object as CustomTableSettings).autoAddPrimaryKey ?? true,
+        autoAddPrimaryKey:
+          (object as CustomTableSettings).autoAddPrimaryKey ?? true,
       }
-    case 'Document':
+    case "Document":
       return {}
     default:
       return {}
@@ -73,37 +74,35 @@ function buildStandardAttributeSettings(
 /** Presentation реквізити для списку відповідно до kind */
 function getPresentationColumns(kind: FormSupportedKind): string[] {
   switch (kind) {
-    case 'Catalog':
-      return ['code', 'description']
-    case 'Document':
-      return ['number', 'date']
-    case 'CustomTable':
+    case "Catalog":
+      return ["code", "description"]
+    case "Document":
+      return ["number", "date"]
+    case "CustomTable":
       return []
   }
 }
-
-
 
 // ============================================================
 // Toolbar generation
 // ============================================================
 
 /** Toolbar за типом об'єкта */
-function generateToolbar(kind: FormSupportedKind): FormSchema['toolbar'] {
+function generateToolbar(kind: FormSupportedKind): FormSchema["toolbar"] {
   switch (kind) {
-    case 'Catalog':
-      return [{ type: 'SaveButton' }, { type: 'DeletionMarkButton' }]
-    case 'Document':
+    case "Catalog":
+      return [{ type: "SaveButton" }, { type: "DeletionMarkButton" }]
+    case "Document":
       return [
-        { type: 'SaveButton' },
-        { type: 'PostButton' },
-        { type: 'UnpostButton' },
-        { type: 'DeletionMarkButton' },
+        { type: "SaveButton" },
+        { type: "PostButton" },
+        { type: "UnpostButton" },
+        { type: "DeletionMarkButton" },
       ]
-    case 'CustomTable':
-      return [{ type: 'SaveButton' }]
+    case "CustomTable":
+      return [{ type: "SaveButton" }]
     default:
-      return [{ type: 'SaveButton' }]
+      return [{ type: "SaveButton" }]
   }
 }
 
@@ -130,14 +129,14 @@ const MAX_LIST_COLUMNS_THRESHOLD = 10
  */
 export function generateItemForm(
   object: AutoformObjectWithTabular & Record<string, unknown>,
-  kind: FormSupportedKind,
+  kind: FormSupportedKind
 ): FormSchema {
   const stdNames = getStandardAttributeNames(kind, object)
   const userAttrs = object.attributes.filter((a) => !stdNames.has(a.name))
   const tabularSections = object.tabularSections ?? []
 
   const fieldElements: FormLayoutElement[] = userAttrs.map((a) => ({
-    element: 'Field' as const,
+    element: "Field" as const,
     ref: a.name,
   }))
 
@@ -146,38 +145,38 @@ export function generateItemForm(
   if (tabularSections.length > 0) {
     // Tabs: перша вкладка "Основні" з полями, решта — по одній на кожну ТЧ
     const mainTab: FormTabElement = {
-      element: 'Tab' as const,
-      title: { uk: 'Основні', en: 'General' },
+      element: "Tab" as const,
+      title: { uk: "Основні", en: "General" },
       children: fieldElements,
     }
 
     const tsTabsElements: FormTabElement[] = tabularSections.map((ts) => ({
-      element: 'Tab' as const,
+      element: "Tab" as const,
       title: ts.displayName ?? { uk: ts.name, en: ts.name },
       children: [
         {
-          element: 'TabularSection' as const,
+          element: "TabularSection" as const,
           ref: ts.name,
         } satisfies FormLayoutElement,
       ],
     }))
 
     layout = {
-      element: 'Tabs' as const,
+      element: "Tabs" as const,
       tabs: [mainTab, ...tsTabsElements],
     }
   } else if (userAttrs.length > 6) {
     // Два стовпці: поділити поля порівну
     const mid = Math.ceil(userAttrs.length / 2)
     layout = {
-      element: 'Columns' as const,
+      element: "Columns" as const,
       columns: [
         {
-          element: 'Column' as const,
+          element: "Column" as const,
           children: fieldElements.slice(0, mid),
         },
         {
-          element: 'Column' as const,
+          element: "Column" as const,
           children: fieldElements.slice(mid),
         },
       ],
@@ -185,13 +184,13 @@ export function generateItemForm(
   } else if (fieldElements.length > 0) {
     // Вертикальний список полів у Group
     layout = {
-      element: 'Group' as const,
+      element: "Group" as const,
       children: fieldElements,
     }
   }
 
   return {
-    kind: 'ItemForm',
+    kind: "ItemForm",
     objectRef: { kind, name: object.name },
     toolbar: generateToolbar(kind),
     ...(layout ? { layout } : {}),
@@ -214,7 +213,7 @@ export function generateItemForm(
  */
 export function generateListForm(
   object: AutoformObjectBase & Record<string, unknown>,
-  kind: FormSupportedKind,
+  kind: FormSupportedKind
 ): FormSchema {
   const stdNames = getStandardAttributeNames(kind, object)
   const presentationCols = getPresentationColumns(kind)
@@ -230,17 +229,17 @@ export function generateListForm(
       : allColumns
 
   const columnFields: FormLayoutElement[] = columns.map((col) => ({
-    element: 'Field' as const,
+    element: "Field" as const,
     ref: col,
   }))
 
   return {
-    kind: 'ListForm',
+    kind: "ListForm",
     objectRef: { kind, name: object.name },
     ...(columnFields.length > 0
       ? {
           layout: {
-            element: 'Group' as const,
+            element: "Group" as const,
             children: columnFields,
           },
         }
@@ -254,9 +253,9 @@ export function generateListForm(
 
 /** Колекція ProjectModel → ключ */
 const KIND_TO_COLLECTION: Record<FormSupportedKind, keyof ProjectModel> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  CustomTable: 'customTables',
+  Catalog: "catalogs",
+  Document: "documents",
+  CustomTable: "customTables",
 }
 
 /**
@@ -269,14 +268,14 @@ const KIND_TO_COLLECTION: Record<FormSupportedKind, keyof ProjectModel> = {
 export function resolveForm(
   objectRef: MetadataRef,
   formKind: FormKind,
-  model: ProjectModel,
+  model: ProjectModel
 ): FormSchema {
   // Спочатку шукаємо explicit form
   const explicit = model.forms?.find(
     (f) =>
       f.kind === formKind &&
       f.objectRef.kind === objectRef.kind &&
-      f.objectRef.name === objectRef.name,
+      f.objectRef.name === objectRef.name
   )
   if (explicit) return explicit
 
@@ -292,8 +291,7 @@ export function resolveForm(
   }
 
   const collection = model[collectionKey] as
-    | (AutoformObjectWithTabular & Record<string, unknown>)[]
-    | undefined
+    (AutoformObjectWithTabular & Record<string, unknown>)[] | undefined
   const object = collection?.find((o) => o.name === objectRef.name)
   if (!object) {
     // Об'єкт не знайдено — порожня форма
@@ -303,7 +301,7 @@ export function resolveForm(
     }
   }
 
-  return formKind === 'ItemForm'
+  return formKind === "ItemForm"
     ? generateItemForm(object, kind)
     : generateListForm(object, kind)
 }

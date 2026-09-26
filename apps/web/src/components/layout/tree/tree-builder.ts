@@ -57,7 +57,7 @@ function buildGroupNode(
 function buildObjectChildren(
   kind: MetadataKind,
   obj: MetadataObject,
-  model: ProjectModel,
+  model: ProjectModel
 ): TreeNodeData[] {
   const children: TreeNodeData[] = []
 
@@ -178,16 +178,10 @@ function buildObjectChildren(
     }
 
     // Forms група (Phase 3)
-    if (
-      kind === "Catalog" ||
-      kind === "Document" ||
-      kind === "CustomTable"
-    ) {
+    if (kind === "Catalog" || kind === "Document" || kind === "CustomTable") {
       const objectForms =
         model.forms?.filter(
-          (f) =>
-            f.objectRef.kind === kind &&
-            f.objectRef.name === obj.name,
+          (f) => f.objectRef.kind === kind && f.objectRef.name === obj.name
         ) ?? []
       children.push(
         buildGroupNode(
@@ -201,8 +195,8 @@ function buildObjectChildren(
             nodeType: "form" as const,
             objectName: obj.name,
             groupKey: "forms",
-          })),
-        ),
+          }))
+        )
       )
     }
   }
@@ -215,7 +209,7 @@ function objectMatchesSearch(
   obj: MetadataObject,
   lowerQuery: string,
   kind?: MetadataKind,
-  model?: ProjectModel,
+  model?: ProjectModel
 ): boolean {
   if (obj.name.toLowerCase().includes(lowerQuery)) return true
 
@@ -275,7 +269,7 @@ function objectMatchesSearch(
   // Пошук у формах
   if (model?.forms && kind) {
     const objectForms = model.forms.filter(
-      (f) => f.objectRef.kind === kind && f.objectRef.name === obj.name,
+      (f) => f.objectRef.kind === kind && f.objectRef.name === obj.name
     )
     if (objectForms.some((f) => f.kind.toLowerCase().includes(lowerQuery))) {
       return true

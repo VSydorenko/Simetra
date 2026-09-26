@@ -108,7 +108,13 @@ export function MetadataObjectTreeSelector({
         node.toggle()
       }
     },
-    [isCheckboxMode, primitivesDisabled, onSelectTarget, onSelectPrimitive, onToggleKindGroup]
+    [
+      isCheckboxMode,
+      primitivesDisabled,
+      onSelectTarget,
+      onSelectPrimitive,
+      onToggleKindGroup,
+    ]
   )
 
   const renderNode = useCallback(
