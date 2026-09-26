@@ -92,8 +92,8 @@ missing; point `ORIENT_DOC_VENV` at an existing venv to reuse it.
 `docs/*.md` (BRD, ROADMAP), `docs/superpowers/specs/`, `docs/research/`, every
 skill's `SKILL.md` and `references/` (in `.agents/skills/` and in packages'
 `skills/`), package and app READMEs. Out of the corpus: `CLAUDE.md` (already in
-every Claude session's context), `docs/superpowers/plans/**` and `docs/tasks/**`
-(execution plans, not canon), skills' `assets/**` (code templates, not prose).
+every Claude session's context), `docs/superpowers/plans/**` (execution plans,
+not canon), skills' `assets/**` (code templates, not prose).
 
 **Consequence for you: phrase a theme, not keywords.** A sentence in your own
 words beats a bag of terms — the ranking sees how rare a word is in the corpus
