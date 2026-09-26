@@ -1,0 +1,596 @@
+#!/usr/bin/env bash
+# orient — find your way around the codebase in one call.
+#
+# Two independent engines behind one facade:
+#   code layer (symbols, calls)    → codebase-memory-mcp (cbm), the live CLI binary
+#   docs and plan anchors          → orient itself: BM25 over the doc corpus (--map),
+#                                    filesystem + rg declarations (--plan)
+#
+# Degradation boundary (the main rule): fall back to lexical search ONLY where
+# lexical search is honest.
+#   <Symbol>  without cbm does NOT fall back to grep: it says the code layer is
+#             unavailable and exits non-zero. On "who calls X" grep lies through
+#             barrel files — it counts a transitive re-export as a real call.
+#   --map     BM25 scan of the doc corpus (scripts/map-search.py); needs no graph,
+#             works the same everywhere, cloud sessions included.
+#   --plan    paths and line numbers are checked against the filesystem (always
+#             works); symbols go to cbm, and without it rg looks for DECLARATIONS
+#             only — the report then says explicitly what was not verified
+#             (types, usages, renames).
+#
+# Usage:
+#   orient --map "<theme>"            plain-language theme → BM25 search over the doc corpus
+#   orient <Symbol> [Symbol...]       symbol map: where it lives + who calls it (needs cbm)
+#   orient --plan <file.md>           check a plan's anchors against the code (and cbm when present)
+#   orient --help
+#   (always the same path: .agents/skills/codebase-research/scripts/orient)
+#
+# Flags:
+#   --depth N      depth of the inbound call walk in cbm (default 1 — direct
+#                  callers only; N>1 — transitive, rows grouped by hop)
+#   --max N        how many rows to print: same-name declarations, and callers
+#                  per hop (default 12)
+#
+# Environment:
+#   ORIENT_CBM_PROJECT=<name>  cbm project to query; by default it is derived by
+#                              matching the repo root against `list_projects`
+#   ORIENT_DOC_VENV=<dir>      Python venv with pymorphy3 + pymorphy3-dicts-uk for
+#                              --map lemmas (default ~/.local/share/orient-doc-search/venv)
+#   ORIENT_NO_CBM=1            force the no-cbm fallback (for tests)
+#
+# Scope: ORIENTATION (where things are, what a change touches). Once the file is
+# known, read it directly — orient is not needed for implementation.
+
+set -uo pipefail
+
+# Корінь репо резолвимо через git, а не лічбою `..` від BASH_SOURCE: скрипт
+# кличуть прямим шляхом із будь-якої підтеки, а також через симлінк
+# .claude/skills/codebase-research.
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(git -C "$(dirname "$SELF")" rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$REPO_ROOT" ] || REPO_ROOT="$(cd "$(dirname "$SELF")/../../../.." && pwd)"
+
+# 🔴 Дефолтна глибина — 1, НЕ 2. «Хто кличе» — це прямі викликачі; глибина 2
+# за замовчуванням мовчки видає 2-хопового викликача за прямого, і на питанні
+# «чи можна видалити» це означає «не можна» там, де насправді можна.
+# Транзитивний обхід — свідомо, через --depth N>1.
+DEPTH=1
+MAX_CONSUMERS=12
+MODE=symbols
+PLAN=""
+THEME=""
+SYMBOLS=()
+# Піднімається в report_symbol, коли cbm живий, але конкретний запит до нього
+# впав — щоб зламаний двигун посеред символьного режиму не читався як успіх.
+# «Символ не знайдено» — легітимна відповідь і прапорець не чіпає.
+FAILED=0
+
+usage() {
+  # Друкуємо суцільний блок коментарів від рядка 2 до першого рядка без "#":
+  # шапка росте — межа їде сама, без захардкодженого номера рядка.
+  awk 'NR==1 { next } /^#/ { print; next } { exit }' "$SELF" | sed 's/^# \{0,1\}//'
+  exit 0
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage ;;
+    # 🔴 `shift 2` при одному аргументі нічого не зсуває — цикл крутився б
+    # вічно (`orient --plan` без файла). Тому по одному, другий — лише якщо є.
+    --plan) MODE=plan; PLAN="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --map) MODE=map; THEME="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --depth)
+      DEPTH="${2:-1}"; shift; [ $# -gt 0 ] && shift
+      # Без перевірки нечислове значення долітало б до python3 сирим
+      # ValueError посеред звіту з кодом виходу 0.
+      [[ "$DEPTH" =~ ^[0-9]+$ ]] || { echo "orient: --depth expects a non-negative integer, got '$DEPTH'" >&2; exit 2; }
+      ;;
+    --max)
+      MAX_CONSUMERS="${2:-12}"; shift; [ $# -gt 0 ] && shift
+      [[ "$MAX_CONSUMERS" =~ ^[0-9]+$ ]] || { echo "orient: --max expects a non-negative integer, got '$MAX_CONSUMERS'" >&2; exit 2; }
+      ;;
+    -*) echo "orient: unknown flag $1" >&2; exit 2 ;;
+    *) SYMBOLS+=("$1"); shift ;;
+  esac
+done
+
+cd "$REPO_ROOT" || exit 1
+
+# ---------------------------------------------------------------- детект cbm
+# Імʼя проєкту в cbm похідне від абсолютного шляху репо (його генерує сам
+# бінарник під час індексації) — хардкодити не можна: інший клон, машина чи
+# worktree мають інший корінь. list_projects віддає root_path; звіряємо з
+# REPO_ROOT і беремо відповідне імʼя, а не перше-ліпше (проєктів кілька).
+# ORIENT_CBM_PROJECT — явний override, напр. для worktree, який окремо не
+# індексовано (тоді граф відбиває проіндексований checkout, не worktree).
+# 🔴 python3 — теж частина детекту: запити до cbm шлються JSON-ом через нього,
+# тож без python3 код-шар так само недоступний, як і без бінарника.
+HAVE_CBM=0
+CBM_PROJECT=""
+if [ "${ORIENT_NO_CBM:-0}" != "1" ] \
+   && command -v codebase-memory-mcp >/dev/null 2>&1 \
+   && command -v python3 >/dev/null 2>&1; then
+  if [ -n "${ORIENT_CBM_PROJECT:-}" ]; then
+    CBM_PROJECT="$ORIENT_CBM_PROJECT"
+  else
+    CBM_PROJECT="$(codebase-memory-mcp cli --quiet list_projects '{}' 2>/dev/null \
+      | awk -v root="$REPO_ROOT" '$2 == root { print $1; exit }')"
+  fi
+  [ -n "$CBM_PROJECT" ] && HAVE_CBM=1
+fi
+
+if command -v rg >/dev/null 2>&1; then
+  GREP_CMD=rg
+else
+  GREP_CMD=grep
+fi
+
+# Лише теки з кодом, що існують: неіснуюча тека в rg/grep — шум у stderr.
+SEARCH_DIRS=()
+for d in packages apps scripts; do
+  [ -d "$d" ] && SEARCH_DIRS+=("$d")
+done
+
+# Місце оголошення символа — єдиний легальний фолбек для --plan без cbm:
+# тут лексика чесна (рядок або відповідає патерну function/const/class/…,
+# або ні), на відміну від «хто кличе».
+grep_definition() {
+  local needle="$1"
+  [ ${#SEARCH_DIRS[@]} -gt 0 ] || return 0
+  # TS/JS-оголошення; окремо — Python (`def`/`class` і присвоєння рівня
+  # модуля), бо службові скрипти репо написані на Python.
+  local ts_pat="(export[[:space:]]+)?(default[[:space:]]+)?(declare[[:space:]]+)?(async[[:space:]]+)?(function\\*?|const|let|class|interface|type|enum)[[:space:]]+${needle}\\b"
+  local py_pat="^[[:space:]]*(async[[:space:]]+)?(def|class)[[:space:]]+${needle}\\b|^${needle}[[:space:]]*(:[^=]*)?=[^=]"
+  if [ "$GREP_CMD" = rg ]; then
+    rg -n --no-heading --no-messages -m1 -g '!node_modules' -g '!dist' \
+       -e "$ts_pat" -e "$py_pat" "${SEARCH_DIRS[@]}" 2>/dev/null | head -1
+  else
+    grep -rnE --exclude-dir=node_modules --exclude-dir=dist \
+         -e "$ts_pat" -e "$py_pat" "${SEARCH_DIRS[@]}" 2>/dev/null | head -1
+  fi
+}
+
+# Пошук символа в cbm через search_graph name_pattern, а НЕ фаззі-релевантний
+# query — для «де лежить» фаззі шкодить. 🔴 name_pattern у cbm матчить БЕЗ
+# урахування регістру, тож точний регістр фільтруємо самі (name == sym) —
+# інакше «де лежить» видає омонім за відповідь.
+# Друкує TAB-рядок на кожен точний збіг, відсортовані спаданням fan-in+fan-out
+# (це порядок показу, не фільтр — однойменні йдуть на вивід усі):
+#   файл<TAB>рядок<TAB>label<TAB>qn_prefix<TAB>name<TAB>fan-in+out<TAB>усього
+# Код виходу: 0 — знайдено; 1 — запит до cbm не вдався (діагностика в stderr);
+# 2 — чесне «не знайдено» (це не те саме, що «запит впав»).
+cbm_where() {
+  local sym="$1"
+  python3 -c '
+import json, re, subprocess, sys
+
+sym, project = sys.argv[1], sys.argv[2]
+pattern = "^" + re.escape(sym) + "$"
+try:
+    proc = subprocess.run(
+        ["codebase-memory-mcp", "cli", "--quiet", "search_graph",
+         json.dumps({"project": project, "name_pattern": pattern, "format": "json"})],
+        capture_output=True, text=True, timeout=25,
+    )
+    data = json.loads(proc.stdout) if proc.stdout.strip() else {"error": proc.stderr.strip() or "empty response"}
+except Exception as exc:
+    data = {"error": str(exc)}
+
+if "error" in data:
+    # Окрема змінна, а не data["error"] прямо у f-рядку: вкладені лапки
+    # у {} ламають python3 до 3.12 (PEP 701).
+    err = data["error"]
+    print(f"cbm query failed: {err}", file=sys.stderr)
+    sys.exit(1)
+
+matches = []
+for g in data.get("groups", []):
+    prefix, file = g.get("qn_prefix", ""), g.get("file", "")
+    for row in g.get("rows", []):
+        name, label, lines = row[0], row[1], row[2]
+        if name != sym:
+            continue  # регістр не збігається — омонім, а не наш символ
+        indeg = row[3] if len(row) > 3 else 0
+        outdeg = row[4] if len(row) > 4 else 0
+        start = lines.split("-")[0] if lines else "?"
+        matches.append((indeg + outdeg, file, start, label, prefix, name))
+
+if not matches:
+    sys.exit(2)
+
+matches.sort(key=lambda m: -m[0])
+total = len(matches)
+for deg, file, start, label, prefix, name in matches:
+    print(f"{file}\t{start}\t{label}\t{prefix}\t{name}\t{deg}\t{total}")
+' "$sym" "$CBM_PROJECT"
+}
+
+# Батч-варіант cbm_where для --plan: та сама точна перевірка регістру, але
+# ОДИН search_graph на весь список (альтернація в regex) замість процесу на
+# символ — план перевіряє десятки символів, і послідовні запити множать час.
+# Вихід: TAB-рядок на кожен ЗНАЙДЕНИЙ символ (лише топ-збіг за fan-in/out —
+# повний перелік однойменних дає прямий `orient <Символ>`):
+#   символ<TAB>файл<TAB>рядок<TAB>label<TAB>усього_збігів
+# Код виходу: 0 — запит пройшов (0 знайдених — легітимно); 1 — весь батч не
+# вдався (жоден символ не перевірено, а не «жодного немає»).
+cbm_where_batch() {
+  python3 -c '
+import json, re, subprocess, sys
+
+project = sys.argv[1]
+syms = sys.argv[2:]
+if not syms:
+    sys.exit(0)
+
+pattern = "^(" + "|".join(re.escape(s) for s in syms) + ")$"
+try:
+    proc = subprocess.run(
+        ["codebase-memory-mcp", "cli", "--quiet", "search_graph",
+         json.dumps({"project": project, "name_pattern": pattern, "format": "json"})],
+        capture_output=True, text=True, timeout=45,
+    )
+    data = json.loads(proc.stdout) if proc.stdout.strip() else {"error": proc.stderr.strip() or "empty response"}
+except Exception as exc:
+    data = {"error": str(exc)}
+
+if "error" in data:
+    err = data["error"]
+    print(f"cbm query failed: {err}", file=sys.stderr)
+    sys.exit(1)
+
+wanted = set(syms)
+by_sym = {}
+for g in data.get("groups", []):
+    file = g.get("file", "")
+    for row in g.get("rows", []):
+        name, label, lines = row[0], row[1], row[2]
+        if name not in wanted:
+            continue  # альтернація теж без урахування регістру — фільтруємо самі
+        indeg = row[3] if len(row) > 3 else 0
+        outdeg = row[4] if len(row) > 4 else 0
+        start = lines.split("-")[0] if lines else "?"
+        by_sym.setdefault(name, []).append((indeg + outdeg, file, start, label))
+
+for sym, matches in by_sym.items():
+    matches.sort(key=lambda m: -m[0])
+    deg, file, start, label = matches[0]
+    print(f"{sym}\t{file}\t{start}\t{label}\t{len(matches)}")
+' "$CBM_PROJECT" "$@"
+}
+
+# Хто кличе символ (trace_path, inbound, mode=calls). Ребро CALLS у cbm не
+# змішує барели (imports/re-exports) — заради цього розділення код-шар і
+# потрібен, ручний фільтр барелів зайвий. Шум лишається лише від транзитивного
+# обходу (--depth N>1), тому рядки розбиваються за hop, а не змішуються.
+# Друкує ГОТОВІ рядки звіту. Код виходу: 0 — відповідь отримано (0 викликів —
+# теж легітимна знахідка); 1 — запит до cbm не вдався.
+cbm_callers() {
+  local full_qn="$1" depth="$2" max_consumers="$3"
+  python3 -c '
+import json, subprocess, sys
+
+full_qn, project, depth_s, max_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+depth, max_consumers = int(depth_s), int(max_s)
+
+try:
+    proc = subprocess.run(
+        ["codebase-memory-mcp", "cli", "--quiet", "trace_path", json.dumps({
+            "project": project, "function_name": full_qn, "direction": "inbound",
+            "mode": "calls", "depth": depth, "include_evidence": True, "format": "json",
+        })],
+        capture_output=True, text=True, timeout=25,
+    )
+    tp = json.loads(proc.stdout) if proc.stdout.strip() else {}
+except Exception as exc:
+    tp = {"error": str(exc)}
+
+if not tp or "error" in tp or tp.get("status") == "ambiguous":
+    reason = tp.get("error") or tp.get("message") or tp.get("hint") or "unknown reason"
+    print(f"  callers:   could not be retrieved ({reason})")
+    sys.exit(1)
+
+total = tp.get("callers_total", 0)
+rel = tp.get("callers_total_relation", "eq")
+rows = []
+for g in tp.get("callers", {}).get("groups", []):
+    gp = g.get("qn_prefix", "")
+    disp = gp[len(project) + 1:] if gp.startswith(project + ".") else gp
+    for row in g.get("rows", []):
+        cname, hop = row[0], row[1]
+        strategy = row[2] if len(row) > 2 else "?"
+        conf = row[3] if len(row) > 3 else None
+        rows.append((hop, disp, cname, strategy, conf))
+
+if total == 0:
+    print(f"  callers:   0 (cbm, calls, depth {depth})")
+    sys.exit(0)
+
+# callers_total_relation каже, чи число ТОЧНЕ (eq), чи cbm уперся в стелю
+# пагінації — друкуємо завжди, а неточне число виносимо окремим попередженням.
+scope_note = "direct calls only" if depth == 1 else f"depth {depth} — grouped by hop below"
+print(f"  callers:   {total} (cbm, {scope_note}, relation={rel}; confidence in brackets is not final truth)")
+if rel != "eq":
+    print(f"             ⚠ APPROXIMATE: cbm hit its pagination ceiling, the real number is above {total}")
+
+# Розбиваємо за hop: інакше «прямі рядки + число з домішкою 2-го хопу»
+# читається як «усе тут пряме».
+by_hop = {}
+for hop, disp, cname, strategy, conf in rows:
+    by_hop.setdefault(hop, []).append((disp, cname, strategy, conf))
+
+for hop in sorted(by_hop):
+    group = sorted(by_hop[hop], key=lambda r: (r[0], r[1]))
+    if depth > 1:
+        print(f"    hop {hop}: {len(group)}")
+    for disp, cname, strategy, conf in group[:max_consumers]:
+        conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "?"
+        print(f"    {cname}()  [hop {hop}, {strategy} {conf_s}]  {disp}")
+    if len(group) > max_consumers:
+        print(f"      … {len(group) - max_consumers} more at hop {hop}")
+' "$full_qn" "$CBM_PROJECT" "$depth" "$max_consumers"
+}
+
+# ---------------------------------------------------------------- режим: символи
+# Лише cbm: без HAVE_CBM диспетчер унизу цю функцію не кличе взагалі.
+# 🔴 Пише в глобальний $FAILED, коли cbm відповів помилкою (не «не знайдено»).
+report_symbol() {
+  local sym="$1"
+  echo "## $sym"
+
+  local out rc
+  out="$(cbm_where "$sym" 2>&1)"; rc=$?
+  case "$rc" in
+    0)
+      # Показуємо всі однойменні збіги до --max; fan-in+out — порядок, не
+      # фільтр (показ лише «переможця» ховав би решту за лічильником).
+      local first=1 total=0 shown=0 full_qn=""
+      while IFS=$'\t' read -r sfile sline slabel sprefix sname _sdeg stotal; do
+        [ -z "$sfile" ] && continue
+        total="$stotal"
+        if [ "$first" = 1 ]; then
+          echo "  where:     ${sfile}:${sline}  (${slabel}, cbm)"
+          full_qn="$sname"
+          [ -n "$sprefix" ] && full_qn="${sprefix}.${sname}"
+          first=0
+          shown=1
+        elif [ "$shown" -lt "$MAX_CONSUMERS" ]; then
+          echo "             + ${sfile}:${sline}  (${slabel})"
+          shown=$((shown + 1))
+        fi
+      done <<< "$out"
+      if [ "$total" -gt 1 ]; then
+        echo "             (${total} same-name declarations — ordered by fan-in/out above, not filtered)"
+      fi
+      if [ "$total" -gt "$shown" ]; then
+        echo "             … $((total - shown)) more not shown (raise --max to see all)"
+      fi
+      if [ "$total" -gt 1 ]; then
+        echo "  callers below are for the first entry only:"
+      fi
+      cbm_callers "$full_qn" "$DEPTH" "$MAX_CONSUMERS" || FAILED=1
+      ;;
+    2)
+      echo "  where:     not found in cbm (new / renamed / external symbol)"
+      ;;
+    *)
+      # $out порожній, коли впав сам `python3 -c …`: його try/except нічого не
+      # встиг перехопити — тож потрібна й діагностика на рівні bash.
+      local reason="$out"
+      [ -z "$reason" ] && reason="unknown reason (exit $rc — python3 or codebase-memory-mcp is likely broken)"
+      echo "  where:     cbm query failed ($reason)"
+      FAILED=1
+      ;;
+  esac
+  echo
+}
+
+# ---------------------------------------------------------------- режим: карта
+# Тема людською мовою → BM25 по корпусу доків. orient тут — тонкий фасад:
+# модель (корпус, BM25, лематизація з деградацією, групування references під
+# SKILL.md) живе в map-search.py — BM25 з IDF і леми в чистому bash нереальні.
+#
+# 🔴 Інтерпретатор обирається, а не хардкодиться: pymorphy3 не ставиться в
+# системний python (externally-managed), тож леми живуть в опційному venv.
+# Порядок: ORIENT_DOC_VENV → нейтральний дефолт. Venv, піднятий під інший
+# репо з тим самим скілом, підключається через ORIENT_DOC_VENV або симлінк на
+# дефолт — шляхи чужих репо в публічному скрипті не хардкодимо.
+# Без venv — сирі токени: робочий фолбек, не поломка.
+DOC_VENV_DEFAULT="$HOME/.local/share/orient-doc-search/venv"
+doc_search_python() {
+  local candidates=()
+  if [ -n "${ORIENT_DOC_VENV:-}" ]; then
+    candidates=("$ORIENT_DOC_VENV")
+  else
+    candidates=("$DOC_VENV_DEFAULT")
+  fi
+  local v
+  for v in "${candidates[@]}"; do
+    if [ -x "$v/bin/python" ]; then echo "$v/bin/python"; return; fi
+  done
+  echo "python3"
+}
+
+report_map() {
+  local theme="$1"
+  local py; py="$(doc_search_python)"
+  "$py" "$REPO_ROOT/.agents/skills/codebase-research/scripts/map-search.py" "$theme"
+  local rc=$?
+  # 🔴 Фолбек має бути ЧУТНИЙ: мовчазне «(level: raw tokens)» не відрізняє
+  # «так задумано» від «venv не підхопився» — втрата якості, яку ніхто не
+  # помітить.
+  if [ "$py" = "python3" ] && [ $rc -eq 0 ]; then
+    echo
+    echo "# ⚠ Lemmas unavailable — running on raw tokens (Ukrainian word forms will not match each other)."
+    echo "#   To enable (or point ORIENT_DOC_VENV at an existing venv):"
+    echo "#     uv venv ~/.local/share/orient-doc-search/venv"
+    echo "#     uv pip install --python ~/.local/share/orient-doc-search/venv/bin/python pymorphy3 pymorphy3-dicts-uk"
+    echo "#   In cloud sessions this is the normal mode."
+  fi
+  return $rc
+}
+
+# ---------------------------------------------------------------- режим: план
+# Витягує з плану/спеки перевірні якорі й звіряє їх із кодом:
+#   • шляхи файлів (у теках репо та відомі кореневі файли) — існують?
+#   • посилання path:NNN — чи є у файлі стільки рядків?
+#   • символи в беківках (PascalCase, camelCase з великою літерою всередині,
+#     use*) — де лежать за фактом? (cbm; без нього — rg лише за ОГОЛОШЕННЯМ,
+#     про що звіт явно попереджає)
+report_plan() {
+  local plan="$1"
+  [ -n "$plan" ] || { echo "orient: --plan needs a file: --plan <file.md>" >&2; exit 2; }
+  [ -f "$plan" ] || { echo "orient: plan file not found: $plan" >&2; exit 1; }
+
+  echo "# Plan anchor check: $plan"
+  echo
+
+  local ext='(ts|tsx|mts|cts|js|jsx|mjs|cjs|sql|md|json|py|sh|yml|yaml|toml)'
+  local paths
+  paths="$( {
+      grep -oE "(apps|packages|docs|scripts|\.agents|\.claude|\.github)/[A-Za-z0-9_@./-]+\.${ext}(:[0-9]+(-[0-9]+)?)?" "$plan"
+      # Кореневі файли без теки-префікса — лише з явного списку: довільне
+      # «щось.md» у прозі частіше є назвою, ніж шляхом від кореня.
+      grep -oE '(^|[^[:alnum:]_./@-])(AGENTS\.md|CLAUDE\.md|README\.md|package\.json|turbo\.json|pnpm-workspace\.yaml|tsconfig\.json)(:[0-9]+(-[0-9]+)?)?' "$plan" \
+        | sed -E 's/^[^A-Za-z]//'
+    } | sort -u)"
+
+  echo "## Paths"
+  local bad=0 good=0
+  while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    local file="${ref%%:*}"
+    local line="${ref#*:}"; [ "$line" = "$ref" ] && line=""
+    line="${line%%-*}"
+    if [ ! -e "$file" ]; then
+      echo "  ✗ MISSING $ref"
+      bad=$((bad + 1))
+    elif [ -n "$line" ]; then
+      local n; n="$(wc -l < "$file" 2>/dev/null || echo 0)"
+      if [ "$line" -gt "$n" ]; then
+        echo "  ✗ LINE    $ref — the file has only $n lines"
+        bad=$((bad + 1))
+      else
+        echo "  ✓ $ref"
+        good=$((good + 1))
+      fi
+    else
+      echo "  ✓ $file"
+      good=$((good + 1))
+    fi
+  done <<< "$paths"
+  echo "  total: ✓ $good | ✗ $bad"
+  echo
+
+  local syms_all syms_total syms
+  syms_all="$(grep -oE '`[A-Z][A-Za-z0-9_]{3,}`|`[a-z][a-z0-9]*[A-Z][A-Za-z0-9_]{2,}`' "$plan" \
+          | tr -d '`' | sort -u)"
+  syms_total="$(printf '%s\n' "$syms_all" | grep -c .)"
+  syms="$(printf '%s\n' "$syms_all" | head -40)"
+  if [ -n "$syms" ]; then
+    echo "## Symbols (where they actually live)"
+    if [ "$HAVE_CBM" = 1 ]; then
+      echo "# backend: cbm ($CBM_PROJECT)"
+    else
+      # 🔴 Не мовчати про те, чого не перевірено: rg бачить лише декларації
+      # за регексом — не типи, не використання, не перейменування.
+      echo "# backend: rg — DECLARATIONS by regex only (cbm unavailable). NOT verified: types, usages, renames."
+    fi
+    # head -40 ріже кандидатів на великих планах — кажемо про межу, а не
+    # приховуємо її.
+    if [ "$syms_total" -gt 40 ]; then
+      echo "# 🔴 symbol candidates: $syms_total, checked the first 40 alphabetically — $((syms_total - 40)) NOT checked."
+    fi
+    local -a syms_arr
+    mapfile -t syms_arr <<< "$syms"
+
+    local cbm_errors=0
+    if [ "$HAVE_CBM" = 1 ]; then
+      local batch_out batch_rc
+      batch_out="$(cbm_where_batch "${syms_arr[@]}" 2>/dev/null)"; batch_rc=$?
+      local -A batch_file batch_line batch_total
+      if [ "$batch_rc" -eq 0 ]; then
+        while IFS=$'\t' read -r bsym bfile bline _ btotal; do
+          [ -z "$bsym" ] && continue
+          batch_file["$bsym"]="$bfile"
+          batch_line["$bsym"]="$bline"
+          batch_total["$bsym"]="$btotal"
+        done <<< "$batch_out"
+      fi
+      for s in "${syms_arr[@]}"; do
+        [ -z "$s" ] && continue
+        if [ "$batch_rc" -ne 0 ]; then
+          # Увесь батч не вдався — це НЕ «символа немає», а «не перевірено».
+          echo "  ⚠ $s → cbm query failed, NOT CHECKED (this is not 'symbol missing')"
+          cbm_errors=$((cbm_errors + 1))
+        elif [ -n "${batch_file[$s]:-}" ]; then
+          if [ "${batch_total[$s]}" -gt 1 ]; then
+            echo "  ✓ $s → ${batch_file[$s]}:${batch_line[$s]}  (+$((batch_total[$s] - 1)) same-name, picked by fan-in/out — not guaranteed canonical; full list: orient $s)"
+          else
+            echo "  ✓ $s → ${batch_file[$s]}:${batch_line[$s]}"
+          fi
+        else
+          echo "  ? $s → not in cbm (new / renamed / external / not a code symbol)"
+        fi
+      done
+    else
+      for s in "${syms_arr[@]}"; do
+        [ -z "$s" ] && continue
+        local def; def="$(grep_definition "$s")"
+        if [ -n "$def" ]; then
+          echo "  ✓ $s → ${def%%:*} L$(echo "$def" | cut -d: -f2)"
+        else
+          echo "  ? $s → rg found no declaration"
+        fi
+      done
+    fi
+    if [ "$cbm_errors" -gt 0 ]; then
+      echo "# 🔴 cbm answered at start-up, but $cbm_errors symbol lookup(s) failed during the check —"
+      echo "#    rows marked ⚠ above are NOT verified; this is not 'symbol missing'."
+    fi
+    echo
+  fi
+
+  echo "# ✗ above = the plan disagrees with the code. A scope discrepancy is the task owner's"
+  echo "# decision, not a silent 'trust the code' inside the executor."
+}
+
+# ---------------------------------------------------------------- запуск
+if [ "$MODE" = plan ]; then
+  report_plan "$PLAN"
+  exit 0
+fi
+
+if [ "$MODE" = map ]; then
+  [ -n "$THEME" ] || { echo "orient: --map needs a theme: --map \"<theme>\"" >&2; exit 2; }
+  # 🔴 Не `exit 0` безумовно: падіння зовнішнього двигуна (немає python3, впав
+  # map-search.py) мусить дійти до виклику ненульовим кодом.
+  report_map "$THEME"
+  exit $?
+fi
+
+if [ ${#SYMBOLS[@]} -eq 0 ]; then
+  echo "orient: pass symbols, --map \"<theme>\" or --plan <file>. Help: .agents/skills/codebase-research/scripts/orient --help" >&2
+  exit 2
+fi
+
+if [ "$HAVE_CBM" != 1 ]; then
+  # Межа деградації: на «хто кличе» греп бреше через барели, тож без cbm
+  # режим чесно відмовляє, а НЕ підміняє відповідь грепом.
+  echo "# orient <Symbol> — code layer unavailable: cbm not found or this repo is not indexed." >&2
+  echo "#   Check: command -v codebase-memory-mcp && codebase-memory-mcp cli --quiet list_projects '{}'" >&2
+  echo "#   (the project's root_path must equal $REPO_ROOT, or set ORIENT_CBM_PROJECT)" >&2
+  echo "#   Without cbm this mode does NOT fall back to grep — grep lies on 'who calls' through barrels." >&2
+  echo "#   --plan checks plan paths/lines and --map searches doc themes; both work without cbm." >&2
+  exit 1
+fi
+
+echo "# orient — backend: cbm ($CBM_PROJECT)"
+echo
+for s in "${SYMBOLS[@]}"; do
+  report_symbol "$s"
+done
+echo "# This is a MAP (where and who), not the truth about content. Read the files for signatures/types/behaviour."
+# cbm був живий на старті, але якщо запит усередині циклу впав — це так само
+# «недоступно», і код виходу мусить це відбивати.
+[ "$FAILED" = 1 ] && exit 1
+exit 0
