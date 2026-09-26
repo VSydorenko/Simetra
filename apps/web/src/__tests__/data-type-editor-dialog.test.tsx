@@ -72,7 +72,7 @@ function makeAttr(overrides: Partial<Attribute> = {}): Attribute {
 
 function renderDialog(
   attribute: Attribute = makeAttr(),
-  onSave = vi.fn(() => null),
+  onSave = vi.fn<(updates: Partial<Attribute>) => null>(() => null),
   model = createModel()
 ) {
   const onOpenChange = vi.fn()

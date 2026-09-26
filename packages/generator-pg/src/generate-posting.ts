@@ -556,7 +556,6 @@ function generateCheckFunction(
 // Побудувати DELETE statement з урахуванням polymorphic recorder
 function buildDeleteStatement(
   regTable: string,
-  register: RegisterDef,
   doc: Document,
   stdAttrs: StandardAttribute[],
 ): string {
@@ -630,7 +629,7 @@ function generatePostFunction(
   const deleteStatements = [...uniqueDeleteRegs.values()].map(({ regTable, register }) => {
     const settings = buildRegisterSettings(register)
     const stdAttrs = getStandardAttributes(register.kind, settings)
-    return buildDeleteStatement(regTable, register, doc, stdAttrs)
+    return buildDeleteStatement(regTable, doc, stdAttrs)
   })
 
   // INSERT рухів
@@ -771,7 +770,7 @@ function generateUnpostFunction(
   const deleteStatements = [...uniqueRegisters.values()].map(({ regTable, register }) => {
     const settings = buildRegisterSettings(register)
     const stdAttrs = getStandardAttributes(register.kind, settings)
-    return buildDeleteStatement(regTable, register, doc, stdAttrs)
+    return buildDeleteStatement(regTable, doc, stdAttrs)
   })
 
   return (

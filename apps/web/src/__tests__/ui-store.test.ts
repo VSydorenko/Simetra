@@ -58,6 +58,7 @@ describe("persisted UI preferences", () => {
       expandedTreeNodes: ["Catalog", "Document"],
       openTabs: [
         {
+          type: "object",
           id: "Catalog/Products",
           objectRef: catalogRef("Products"),
           isPinned: false,
@@ -160,7 +161,7 @@ describe("openTab", () => {
     const state = useUiStore.getState()
     expect(state.openTabs).toHaveLength(1)
     expect(state.openTabs[0].id).toBe("Catalog/Products")
-    expect(state.openTabs[0].objectRef).toEqual(ref)
+    expect(state.openTabs[0]).toMatchObject({ type: "object", objectRef: ref })
     expect(state.openTabs[0].isPinned).toBe(false)
     expect(state.activeTabId).toBe("Catalog/Products")
     expect(state.selectedObject).toEqual(ref)
@@ -813,7 +814,10 @@ describe("updateTabObjectRef", () => {
     const newTabId = refToTabId(newRef)
     const tab = useUiStore.getState().openTabs.find((t) => t.id === newTabId)
     expect(tab?.isPinned).toBe(true)
-    expect(tab?.activeSection).toBe("tabular-sections")
+    expect(tab).toMatchObject({
+      type: "object",
+      activeSection: "tabular-sections",
+    })
   })
 
   it("оновлює floating window навіть без відкритої вкладки", () => {

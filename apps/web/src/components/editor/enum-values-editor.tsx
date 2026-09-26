@@ -225,6 +225,7 @@ function EnumValueRow({
   isSelected: boolean
   onSelect: () => void
 }) {
+  const { t } = useTranslation()
   const { updateEnumValue } = useMetadataStore()
   const [nameDraft, setNameDraft] = useState(value.name)
   const [ukDraft, setUkDraft] = useState(value.displayName?.uk ?? "")

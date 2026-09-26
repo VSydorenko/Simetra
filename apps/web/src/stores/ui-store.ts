@@ -224,8 +224,10 @@ function areTabularSectionsEquivalentExceptName(
   left: TabularSection,
   right: TabularSection
 ): boolean {
-  const leftRest = { ...left }
-  const rightRest = { ...right }
+  // Копії типізовані як Partial: `name` у TabularSection обов'язкове, а
+  // порівнювати треба все, крім нього
+  const leftRest: Partial<TabularSection> = { ...left }
+  const rightRest: Partial<TabularSection> = { ...right }
   delete leftRest.name
   delete rightRest.name
   return JSON.stringify(leftRest) === JSON.stringify(rightRest)

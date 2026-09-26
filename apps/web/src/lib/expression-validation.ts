@@ -1,22 +1,27 @@
-import type { Attribute, Document, FieldType } from "@simetra/core"
+import type {
+  Attribute,
+  Document,
+  FieldType,
+  StandardAttribute,
+} from "@simetra/core"
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
 } from "@simetra/core"
 import i18n from "@/i18n"
 
-type StandardLikeField = {
-  name: string
-  type: string
-  ref?: Attribute["ref"]
-  allowedTypes?: Attribute["allowedTypes"]
-}
+// Стандартні реквізити описують посилання ширшим `kind: string`, тож беремо
+// їхню форму — звичайний Attribute (з вужчим MetadataKind) їй теж відповідає.
+type StandardLikeField = Pick<
+  StandardAttribute,
+  "name" | "type" | "ref" | "allowedTypes"
+>
 
 type KnownField = {
   name: string
   type: FieldType
-  ref?: Attribute["ref"]
-  allowedTypes?: Attribute["allowedTypes"]
+  ref?: StandardAttribute["ref"]
+  allowedTypes?: StandardAttribute["allowedTypes"]
 }
 
 export interface ExpressionValidationContext {

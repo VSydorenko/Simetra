@@ -58,7 +58,6 @@ const STANDARD_ATTR_DEFAULTS: Record<string, string[]> = {
 function refToColumn(
   ref: { kind: string; name: string } | undefined,
   allowedTypes: { kind: string; name: string }[] | undefined,
-  resolveRefTable: (ref: { kind: string; name: string }) => string,
   resolveEnumType?: (ref: { kind: string; name: string }) => string | undefined
 ): ColumnDef {
   if (ref) {
@@ -90,7 +89,9 @@ function refToColumn(
 // Побудувати колонку для стандартного реквізиту
 export function standardAttrToColumn(
   attr: StandardAttribute,
-  resolveRefTable: (ref: { kind: string; name: string }) => string,
+  // FK для Ref тепер генерується окремою секцією ALTER TABLE, тож резолвер
+  // таблиці тут не потрібен; параметр лишено, щоб не ламати публічний API.
+  _resolveRefTable: (ref: { kind: string; name: string }) => string,
   resolveEnumType?: (ref: { kind: string; name: string }) => string | undefined
 ): ColumnDef {
   // Спеціальний тип Enum(Receipt,Expense) для movement_type
@@ -104,12 +105,7 @@ export function standardAttrToColumn(
   }
 
   if (attr.type === "Ref") {
-    return refToColumn(
-      attr.ref,
-      attr.allowedTypes,
-      resolveRefTable,
-      resolveEnumType
-    )
+    return refToColumn(attr.ref, attr.allowedTypes, resolveEnumType)
   }
 
   const sqlType = mapFieldType(attr)
@@ -121,13 +117,15 @@ export function standardAttrToColumn(
 // Побудувати колонку для кастомного реквізиту (Attribute)
 export function attributeToColumn(
   attr: Attribute,
-  resolveRefTable: (ref: { kind: string; name: string }) => string,
+  // FK для Ref тепер генерується окремою секцією ALTER TABLE, тож резолвер
+  // таблиці тут не потрібен; параметр лишено, щоб не ламати публічний API.
+  _resolveRefTable: (ref: { kind: string; name: string }) => string,
   resolveEnumType?: (ref: { kind: string; name: string }) => string | undefined
 ): ColumnDef {
   // Phase 1: base type
   let col: ColumnDef
   if (attr.type === "Ref") {
-    col = refToColumn(attr.ref, attr.allowedTypes, resolveRefTable, resolveEnumType)
+    col = refToColumn(attr.ref, attr.allowedTypes, resolveEnumType)
   } else {
     col = { sqlType: mapFieldType(attr), constraints: [] }
   }

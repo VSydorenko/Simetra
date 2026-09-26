@@ -570,7 +570,12 @@ export const useMetadataStore = create<MetadataStore>()(
           Object.assign(arr[index], updates)
 
           // Sync posting ↔ registerMovements: при оновленні registerMovements чистимо стейл записи
-          if (updates.registerMovements && arr[index].kind === 'Document') {
+          // `in` звужує Partial-обʼєднання до Document — лише він має registerMovements
+          if (
+            "registerMovements" in updates &&
+            updates.registerMovements &&
+            arr[index].kind === 'Document'
+          ) {
             const doc = arr[index] as Record<string, unknown>
             const newRegs = updates.registerMovements as MetadataRef[]
             const regSet = new Set(newRegs.map((r) => `${r.kind}/${r.name}`))
