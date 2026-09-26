@@ -1,71 +1,67 @@
-# Simetra CLI Command Recipes
+# Simetra CLI command recipes
 
-Ready-to-copy commands for common Simetra CLI scenarios.
+Copy-paste commands for the prototype CLI, run from the repository root.
+`<metadata-dir>` is the directory that holds `project.meta.json`.
 
-## Discover available commands
+## Discover the command surface
 
 ```bash
 pnpm simetra --help
-```
-
-## Show help for SQL generation
-
-```bash
 pnpm simetra generate --help
+pnpm simetra apply --help
 ```
 
-## Generate SQL with default PostgreSQL settings
+## Generate DDL with defaults
 
 ```bash
-pnpm simetra generate --input ./temp/metadata --output ./output
+pnpm simetra generate --input <metadata-dir> --output ./output
 ```
 
-## Generate SQL into a custom output directory
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./tmp/sql-output
-```
-
-## Generate SQL with explicit schema
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --schema public
-```
-
-## Generate one file per object
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --output-mode perObject
-```
-
-## Generate a single combined SQL file layout
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --output-mode singleFile
-```
-
-## Generate SQL with lookup-table enums
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --enum-strategy lookupTable
-```
-
-## Generate SQL with separate tables for constants
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --constants-strategy separateTables
-```
-
-## Generate SQL with multiple explicit options
+## Generate DDL with explicit schema and strategies
 
 ```bash
 pnpm simetra generate \
-  --input ./temp/metadata \
+  --input <metadata-dir> \
   --output ./output \
-  --schema public \
-  --output-mode perObject \
-  --enum-strategy pgEnum \
-  --constants-strategy singleTable
+  --schema app \
+  --enum-strategy lookupTable \
+  --constants-strategy separateTables
+```
+
+## Preview what `apply` would execute
+
+No database connection is needed; nothing is written.
+
+```bash
+pnpm simetra apply --input <metadata-dir> --dry-run
+```
+
+## Apply to a database
+
+Set `SIMETRA_DATABASE_URL` in the environment beforehand (for example from an
+untracked env file) so the password never lands in shell history or a
+transcript.
+
+```bash
+pnpm simetra apply --input <metadata-dir> --schema public
+```
+
+## Apply a migration that drops tables or columns
+
+Read the dropped objects in the dry-run output first.
+
+```bash
+pnpm simetra apply --input <metadata-dir> --dry-run --allow-destructive
+pnpm simetra apply --input <metadata-dir> --allow-destructive
+```
+
+## Start over against a fresh database
+
+The snapshot belongs to the last database this metadata was applied to.
+
+```bash
+rm <metadata-dir>/.simetra/applied-schema.json
+pnpm simetra apply --input <metadata-dir> --dry-run
 ```
 
 ## Debug the CLI package directly
@@ -73,10 +69,3 @@ pnpm simetra generate \
 ```bash
 pnpm --filter @simetra/cli exec tsx src/index.ts generate --help
 ```
-
-## When to use which recipe
-
-- Use the default command first when the user does not need special SQL layout or strategy options.
-- Use `--output-mode perObject` when the user wants file-per-object output for review or diffing.
-- Use `--enum-strategy lookupTable` when PostgreSQL enums are not desired.
-- Use the package-local debug command only for CLI package work, not for normal repository usage.

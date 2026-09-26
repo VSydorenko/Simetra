@@ -1,229 +1,152 @@
 ---
 name: simetra-cli
-description: 'Use when working with the Simetra CLI for metadata-related command-line workflows. Triggers: simetra cli, generate sql, metadata to sql, pnpm simetra, output-mode, enum-strategy, constants-strategy, project.meta.json, CLI usage, CLI troubleshooting, future simetra subcommands.'
-argument-hint: 'What do you need to do with the Simetra CLI?'
+description: "Use when running, explaining or debugging the prototype Simetra CLI (`pnpm simetra`): generating PostgreSQL DDL from a metadata directory (`simetra generate`), applying it to a database or previewing the migration (`simetra apply`, `--dry-run`, `--allow-destructive`, `SIMETRA_DATABASE_URL`), choosing `--schema`, `--enum-strategy`, `--constants-strategy`, `--output-mode`, laying out `project.meta.json` and kind folders, or reading CLI validation, snapshot and destructive-change errors."
+argument-hint: "What do you need to do with the Simetra CLI?"
 ---
 
-# Simetra CLI
+# Simetra CLI (prototype)
 
-This skill captures the standard workflow for working with the Simetra CLI from the repository root, so the agent can help without re-reading the CLI source each time.
+This skill documents the **prototype** CLI in `packages/cli`: two subcommands,
+`generate` and `apply`, over the PostgreSQL generator in `packages/generator-pg`.
+It is not the target CLI. The target `@simetra/cli` (compile, plan, apply,
+`explain`, `fix`, `studio`) is defined in
+`docs/superpowers/specs/2026-09-24-simetra-platform-design.md` §3.2 and will
+replace this one; the fate of the generator it wraps is in the same spec §14.
+Do not design new features on top of the prototype command surface — use it to
+run and debug what exists.
 
-The CLI currently exposes one main subcommand, `generate`, but this skill is intentionally broader: it defines the canonical invocation pattern, the way to inspect supported commands, and the decision points that should stay stable as new subcommands are added later.
+The source of truth is the code: `packages/cli/src/index.ts` (command list),
+`packages/cli/src/commands/generate.ts` and `packages/cli/src/commands/apply.ts`
+(options and flow). When this skill and the code disagree, the code wins —
+check `pnpm simetra <command> --help` and fix the skill.
 
-## When to Use
+## Invocation
 
-Use this skill when the user:
-
-- Wants to run SQL generation from metadata through the Simetra CLI
-- Asks how to invoke the CLI from the repository root
-- Needs help choosing `generate` options such as `--schema` or `--output-mode`
-- Needs to understand what directory structure the CLI expects
-- Hits validation or parsing errors while running `pnpm simetra generate ...`
-- Wants examples or a checklist for CLI-based SQL generation
-- Wants a reusable entrypoint for current or future Simetra CLI subcommands
-
-## Canonical Invocation
-
-From the repository root, use the root package script:
+From the repository root:
 
 ```bash
-pnpm simetra <subcommand> [options]
-```
-
-For package-local debugging, the fallback command is:
-
-```bash
-pnpm --filter @simetra/cli exec tsx src/index.ts <subcommand> [options]
-```
-
-To inspect what the CLI supports right now, start with:
-
-```bash
+pnpm simetra <command> [options]
 pnpm simetra --help
+pnpm simetra <command> --help
 ```
 
-## What the CLI Supports Now
+The root script runs `packages/cli/bin/simetra.mjs`, which spawns `tsx` on the
+TypeScript entry — there is no build step. For package-local debugging:
 
-- The top-level binary name is `simetra`
-- The currently implemented subcommand is `generate`
-- The only supported target is `postgresql`
-- The CLI reads JSON metadata files and writes generated SQL files into the output directory
-- The output directory is created automatically if it does not exist
+```bash
+pnpm --filter @simetra/cli exec tsx src/index.ts <command> [options]
+```
 
-## Stable CLI Pattern For Future Commands
+## Input layout
 
-When new subcommands appear later, keep the same reasoning model:
-
-1. Start from the repository root.
-2. Discover the command surface with `pnpm simetra --help` or `pnpm simetra <subcommand> --help`.
-3. Prefer the root script over direct `node packages/cli/bin/simetra.mjs ...` calls.
-4. Treat command-specific validation errors as either input problems or domain-model problems first, not as runtime wrapper problems.
-5. Fall back to the package-local `tsx` command only for debugging or package-focused work.
-
-## Expected Input Layout
-
-The input directory must contain `project.meta.json` at its root.
-
-Typical layout:
+`--input` points to the directory that holds `project.meta.json`. Kind folders
+live either directly next to it or under a `metadata/` subfolder of it:
 
 ```text
 <input>/
   project.meta.json
-  catalogs/
-  documents/
-  enumerations/
-  information-registers/
-  accumulation-registers/
-  constants/
-  custom-tables/
+  [metadata/]
+    catalogs/<kebab-name>/<kebab-name>.meta.json
+    catalogs/<kebab-name>/forms/*.form.json
+    documents/…  enumerations/…  information-registers/…
+    accumulation-registers/…  custom-tables/…     (same per-object shape)
+    constants/constants.meta.json                (one wrapper file)
 ```
 
-Notes:
+- Only these kind folders are read; any other folder is ignored **silently**.
+- A per-object file must be named after its folder, otherwise it is not read.
+- Parsing and validation go through `@simetra/core` in strict mode: invalid JSON
+  or a schema violation stops the command with a non-zero exit.
 
-- `constants/` uses the constants wrapper format expected by `constantsFileSchema`
-- Unknown metadata directories are skipped with a warning
-- Invalid JSON or schema validation errors stop execution with a non-zero exit
+## `generate` — write DDL to disk
 
-## Generate Workflow
+| Option | Values | Default |
+| --- | --- | --- |
+| `--input` | metadata directory | `.` |
+| `--output` | output directory (created if missing) | `./output` |
+| `--target` | `postgresql` only | `postgresql` |
+| `--schema` | SQL schema name | `public` |
+| `--enum-strategy` | `pgEnum`, `lookupTable` | `pgEnum` |
+| `--constants-strategy` | `singleTable`, `separateTables` | `singleTable` |
+| `--output-mode` | `singleFile`, `perObject` | `singleFile` |
 
-1. Confirm the user is in the repository root.
-2. Confirm the metadata directory contains `project.meta.json`.
-3. Choose the output directory.
-4. Decide whether the default options are enough or whether custom generation options are needed.
-5. Run `pnpm simetra generate ...`.
-6. Review warnings, if any.
-7. Confirm the expected SQL files were written into the output directory.
+Behaviour to know before promising a result:
 
-## Command Selection Guide
+- The generator writes **one file**, `<project name>.sql`, whatever
+  `--output-mode` says: `perObject` is accepted but not implemented, and an
+  unknown `--output-mode` value is not rejected either.
+- `--enum-strategy` and `--constants-strategy` are validated; a wrong value
+  exits with the list of allowed values.
+- Generator warnings are printed but do not fail the command.
+- The CLI always passes explicit schema and strategies, so the
+  `database`/`generation` defaults in `project.meta.json` never take effect
+  through the CLI — pass the flags explicitly.
 
-### If the user only wants to know what commands exist
-
-Use:
-
-```bash
-pnpm simetra --help
-```
-
-### If the user wants details for one command
-
-Use:
-
-```bash
-pnpm simetra generate --help
-```
-
-### If the user wants actual SQL generation
-
-Use the `generate` workflow below and the ready-to-copy command recipes in [command-recipes.md](./references/command-recipes.md).
-
-## Decision Guide
-
-### Choose the simplest command first
-
-Use this when the default PostgreSQL configuration is fine:
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output
-```
-
-### Choose a schema explicitly
-
-Use this when the user wants a non-default or explicit SQL schema:
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --schema public
-```
-
-### Choose output granularity
-
-- Use `--output-mode singleFile` when the user wants a single SQL file
-- Use `--output-mode perObject` when the user wants multiple generated files
-
-Example:
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --output-mode perObject
-```
-
-### Choose enum handling
-
-- Use `--enum-strategy pgEnum` for PostgreSQL enums
-- Use `--enum-strategy lookupTable` for lookup-table based enums
-
-Example:
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --enum-strategy lookupTable
-```
-
-### Choose constants handling
-
-- Use `--constants-strategy singleTable` for one shared table
-- Use `--constants-strategy separateTables` for separate tables
-
-Example:
-
-```bash
-pnpm simetra generate --input ./temp/metadata --output ./output --constants-strategy separateTables
-```
-
-## Supported Options for `generate`
+## `apply` — execute DDL or a migration
 
 | Option | Meaning | Default |
-|---|---|---|
-| `--target` | Target database | `postgresql` |
-| `--input` | Metadata input directory | `.` |
-| `--output` | Output directory for generated SQL | `./output` |
+| --- | --- | --- |
+| `--connection-string` | `postgres://` or `postgresql://` URL; falls back to `SIMETRA_DATABASE_URL` | — |
+| `--input` | metadata directory | `.` |
 | `--schema` | SQL schema name | `public` |
-| `--enum-strategy` | Enum strategy: `pgEnum`, `lookupTable` | `pgEnum` |
-| `--constants-strategy` | Constants strategy: `singleTable`, `separateTables` | `singleTable` |
-| `--output-mode` | Output mode: `singleFile`, `perObject` | `singleFile` |
+| `--enum-strategy` | `pgEnum`, `lookupTable` | `pgEnum` |
+| `--constants-strategy` | `singleTable`, `separateTables` | `singleTable` |
+| `--dry-run` | print the SQL instead of executing it | `false` |
+| `--allow-destructive` | allow `DROP TABLE` / `DROP COLUMN` changes | `false` |
 
-## Troubleshooting Guide
+Flow:
 
-### Unknown command or unsupported subcommand
+1. Without `--dry-run` the connection string is required and must be a valid
+   `postgres(ql)://` URL with a host.
+2. The metadata is loaded exactly as for `generate`.
+3. The applied-schema snapshot is read from `<input>/.simetra/applied-schema.json`.
+   - **No snapshot** → the full DDL is used (first apply).
+   - **Snapshot present** → a diff migration is computed. No changes → the
+     command reports that the schema matches and exits successfully.
+     Destructive changes without `--allow-destructive` → the command lists them
+     and exits with an error **before** `--dry-run` is honoured.
+4. `--dry-run` prints the SQL (and the diff summary for a migration) and stops:
+   no connection, no snapshot write.
+5. Otherwise the SQL runs in a single transaction; on success the new snapshot
+   is written. Credentials are masked in connection and execution errors.
 
-Start with `pnpm simetra --help` and verify that the requested subcommand actually exists in the current CLI version.
+Snapshot pitfalls — the prototype keeps the snapshot next to the metadata, not
+in the database:
 
-### `project.meta.json` not found
+- The snapshot describes **the last database this metadata was applied to**.
+  Applying the same `--input` to another database diffs against the wrong
+  state. Use a separate metadata copy per database, or delete the snapshot
+  before a first apply to a fresh database.
+- Deleting the snapshot while the database already has the tables makes the
+  next apply run the full DDL again; it fails inside the transaction and is
+  rolled back.
+- A snapshot of an unknown version or missing required fields aborts the
+  command with an uncaught error (a stack trace, not a formatted message)
+  whose text says to delete the file.
 
-Check that `--input` points to the metadata root, not to a nested folder.
+## Workflow
 
-### Invalid JSON
+1. Confirm the input directory holds `project.meta.json` and the expected kind
+   folders.
+2. Run `generate` into a scratch output directory and read the SQL, or run
+   `apply --dry-run` to see exactly what would execute.
+3. Only then run `apply` against a database, passing the connection string via
+   `SIMETRA_DATABASE_URL` rather than on the command line, so it stays out of
+   shell history.
+4. Review printed warnings; treat validation errors as metadata problems, not
+   CLI problems.
 
-One of the metadata files cannot be parsed. Fix the file contents before retrying.
+## Troubleshooting
 
-### Validation errors
+| Symptom | Cause |
+| --- | --- |
+| `project.meta.json` not found | `--input` points to a nested folder instead of the project root |
+| An object is missing from the SQL | its folder is not a known kind folder, or its file is not named `<folder>.meta.json` |
+| Validation error with a file path | that metadata file violates the core schema — fix the metadata |
+| Unsupported target | only `--target postgresql` exists |
+| `perObject` still gives one file | expected: not implemented in the prototype generator |
+| Apply refuses destructive changes | re-run with `--allow-destructive` only after reading the listed drops |
+| Apply fails with "already exists" | no snapshot for a database that already has the schema |
+| Unknown or corrupted snapshot | delete `<input>/.simetra/applied-schema.json` and re-apply deliberately |
 
-One of the parsed metadata files does not satisfy the corresponding Zod schema. Treat this as an input-model problem, not as a CLI runtime problem.
-
-### Unsupported target
-
-The CLI currently accepts only `--target postgresql`.
-
-### Unexpected output structure
-
-Check `--output-mode`. `singleFile` and `perObject` intentionally produce different file layouts.
-
-## Completion Checks
-
-The task is complete when all of the following are true:
-
-- The chosen subcommand matches the user's goal
-- The command exits successfully
-- The output directory contains the expected SQL files
-- The chosen schema and generation strategies match the user's intent
-- Any warnings were reviewed and either accepted or followed up
-
-## References
-
-- Ready-to-copy commands: [command-recipes.md](./references/command-recipes.md)
-
-## Example Prompts
-
-- `Use simetra-cli to generate SQL from ./temp/metadata into ./output`
-- `Use simetra-cli and explain which options I need for per-object SQL output`
-- `Use simetra-cli and troubleshoot why my metadata folder is not accepted`
-- `Use simetra-cli and show the safest default command for PostgreSQL`
-- `Use simetra-cli and show me which subcommands are available right now`
-- `Use simetra-cli and give me a copy-paste command for per-object SQL generation`
+Ready-to-copy commands: [command-recipes.md](./references/command-recipes.md).
