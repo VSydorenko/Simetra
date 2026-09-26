@@ -33,3 +33,6 @@ temp
 
 # Simetra schema snapshots
 .simetra/
+# Python bytecode
+__pycache__/
+*.pyc
