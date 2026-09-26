@@ -1,5 +1,5 @@
 // Полифіл для API, відсутніх у jsdom
-import "@testing-library/jest-dom"
+import "@testing-library/jest-dom/vitest"
 
 // ResizeObserver — використовується react-resizable-panels та react-arborist
 class ResizeObserverMock {

@@ -16,21 +16,22 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
     "@simetra/core": "workspace:*",
     "@simetra/data-provider": "workspace:*",
+    "@tanstack/react-table": "^9.2.4",
     "@workspace/ui": "workspace:*",
-    "react": "^19.1.0",
-    "react-hook-form": "^7.56.4",
-    "@hookform/resolvers": "^5.0.1",
-    "zod": "^4.3.6",
-    "@tanstack/react-table": "^8.21.3"
+    "react": "^19.3.0",
+    "react-hook-form": "^7.88.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@types/react": "^19.2.14",
-    "eslint": "^9.39.4",
-    "typescript": "^6.0.2",
-    "typescript-eslint": "^8.58.0",
-    "vitest": "^4.1.2"
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.3.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "eslint": "^10.11.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
   }
 }

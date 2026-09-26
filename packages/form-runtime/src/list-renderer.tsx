@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
-  useReactTable,
-  getCoreRowModel,
+  useTable,
+  tableFeatures,
   flexRender,
   type ColumnDef,
 } from '@tanstack/react-table'
@@ -26,6 +26,10 @@ import { Button } from '@workspace/ui/components/button'
 import { Input } from '@workspace/ui/components/input'
 import { Badge } from '@workspace/ui/components/badge'
 import { useDataProvider, useMetadata } from './context'
+
+// TanStack Table v9 реєструє фічі явно; тут потрібне лише ядро (сортування
+// серверне), тож клітинки рендеримо через core-метод `getAllCells()`.
+const features = tableFeatures({})
 
 export interface ListRendererProps {
   objectRef: MetadataRef
@@ -304,9 +308,9 @@ export function ListRenderer({
   const refDisplayMap = useRefDisplayMap(data, refColumns, dataProvider)
 
   // Побудова колонок для @tanstack/react-table
-  const tableColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(
+  const tableColumns = useMemo<ColumnDef<typeof features, Record<string, unknown>>[]>(
     () =>
-      columnRefs.map((ref): ColumnDef<Record<string, unknown>> => {
+      columnRefs.map((ref): ColumnDef<typeof features, Record<string, unknown>> => {
         const attr = findAttribute(ref)
         const header =
           attr?.displayName?.uk ?? attr?.displayName?.en ?? ref
@@ -358,10 +362,10 @@ export function ListRenderer({
     [columnRefs, findAttribute, handleSort, sortBy, sortDirection, refDisplayMap],
   )
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data,
     columns: tableColumns,
-    getCoreRowModel: getCoreRowModel(),
   })
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -438,7 +442,7 @@ export function ListRenderer({
                     if (id && onRowClick) onRowClick(id)
                   }}
                 >
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(
                         cell.column.columnDef.cell,

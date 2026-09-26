@@ -1,7 +1,8 @@
 import { useMemo, useCallback } from 'react'
 import {
-  useReactTable,
-  getCoreRowModel,
+  useTable,
+  tableFeatures,
+  columnSizingFeature,
   flexRender,
   type ColumnDef,
 } from '@tanstack/react-table'
@@ -16,6 +17,11 @@ import {
 import { Button } from '@workspace/ui/components/button'
 import { Input } from '@workspace/ui/components/input'
 import { Checkbox } from '@workspace/ui/components/checkbox'
+
+// TanStack Table v9 реєструє фічі явно: columnSizingFeature потрібна для `size`
+// і `header.getSize()`; приховування колонок немає, тож клітинки — через
+// core-метод `getAllCells()`.
+const features = tableFeatures({ columnSizingFeature })
 
 export interface RuntimeDataTableColumn {
   name: string
@@ -129,8 +135,8 @@ export function RuntimeDataTable({
     [value, onChange],
   )
 
-  const tableColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {
-    const cols: ColumnDef<Record<string, unknown>>[] = [
+  const tableColumns = useMemo<ColumnDef<typeof features, Record<string, unknown>>[]>(() => {
+    const cols: ColumnDef<typeof features, Record<string, unknown>>[] = [
       {
         id: 'line_number',
         header: '№',
@@ -140,7 +146,7 @@ export function RuntimeDataTable({
         ),
       },
       ...columns.map(
-        (col): ColumnDef<Record<string, unknown>> => ({
+        (col): ColumnDef<typeof features, Record<string, unknown>> => ({
           id: col.name,
           header: col.displayName?.uk ?? col.displayName?.en ?? col.name,
           cell: ({ row }) =>
@@ -172,10 +178,10 @@ export function RuntimeDataTable({
     return cols
   }, [columns, allowDelete, handleCellChange, handleDeleteRow])
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: value,
     columns: tableColumns,
-    getCoreRowModel: getCoreRowModel(),
   })
 
   return (
@@ -202,7 +208,7 @@ export function RuntimeDataTable({
             {table.getRowModel().rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(
                         cell.column.columnDef.cell,
