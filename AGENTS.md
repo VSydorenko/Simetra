@@ -39,9 +39,9 @@ specs. Claude Code specifics live in `CLAUDE.md`.
 2. **Code** — the real state. Where code and spec disagree, that is a defect:
    either the code is fixed or the spec is amended with the owner. Silent drift
    is not acceptable.
-3. **BRD** (docs/BRD.md) — vision and domain model: **what** and **for whom**.
+3. **BRD** (`docs/BRD.md`) — vision and domain model: **what** and **for whom**.
    No technical mechanisms there; it points to the spec.
-4. **ROADMAP** (docs/ROADMAP.md) — the one place for status of milestones.
+4. **ROADMAP** (`docs/ROADMAP.md`) — the one place for status of milestones.
 5. `docs/research/` — background for past decisions, not rules.
 
 Decisions that change the platform spec go through the owner. If you need to
@@ -68,9 +68,11 @@ exists only for a unit with its own life cycle (CLI, studio, app template);
 versions are lockstep.
 
 **Current code is a prototype.** The packages under `packages/` and the apps
-under `apps/` predate the platform spec; the fate of each one (becomes T0, stays
-as reference, is deleted) is defined in platform spec §14 — read it there, do
-not restate it. Consequences:
+under `apps/` predate the platform spec. Platform spec §14 sets the fate
+(becomes T0, stays as reference, is deleted) of the parts it names — read it
+there, do not restate it. A package §14 does not name has an **open** fate: treat
+it as neither slated for deletion nor adopted, and ask the owner before investing
+in it or removing it. Consequences:
 
 - Do not extend a package slated for deletion; touch it only to keep the gates
   green.

@@ -138,15 +138,21 @@ in the database:
 
 ## Troubleshooting
 
+The prototype CLI prints its messages in **Ukrainian**. The symptoms below quote
+the start of each message verbatim, so match real output (or grep the CLI
+sources) against these strings.
+
 | Symptom | Cause |
 | --- | --- |
-| `project.meta.json` not found | `--input` points to a nested folder instead of the project root |
-| An object is missing from the SQL | its folder is not a known kind folder, or its file is not named `<folder>.meta.json` |
+| `Файл project.meta.json не знайдено в …` | `--input` points to a nested folder instead of the project root |
+| An object is missing from the SQL (no message) | its folder is not a known kind folder, or its file is not named `<folder>.meta.json` |
 | Validation error with a file path | that metadata file violates the core schema — fix the metadata |
-| Unsupported target | only `--target postgresql` exists |
+| `Непідтримувана ціль: …` | only `--target postgresql` exists |
+| `Невідома enum-strategy: …` / `Невідома constants-strategy: …` | the value is not one of those listed after `Доступні:` |
 | `perObject` still gives one file | expected: not implemented in the prototype generator |
-| Apply refuses destructive changes | re-run with `--allow-destructive` only after reading the listed drops |
-| Apply fails with "already exists" | no snapshot for a database that already has the schema |
-| Unknown or corrupted snapshot | delete `<input>/.simetra/applied-schema.json` and re-apply deliberately |
+| `Виявлено деструктивні зміни:` then `Для застосування додай прапорець --allow-destructive` | re-run with `--allow-destructive` only after reading the listed drops |
+| `Connection string не вказано…` / `…має починатися з postgres://…` / `…не є валідним URL…` / `…не містить hostname` | missing or malformed connection string; expected form `postgresql://user:password@host:port/database` |
+| `Помилка виконання SQL: …` with "already exists" | no snapshot for a database that already has the schema |
+| `Невідома версія snapshot …` / `Пошкоджений snapshot: …` | delete `<input>/.simetra/applied-schema.json` and re-apply deliberately |
 
 Ready-to-copy commands: [command-recipes.md](./references/command-recipes.md).

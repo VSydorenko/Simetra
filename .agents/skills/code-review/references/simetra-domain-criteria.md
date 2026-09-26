@@ -16,7 +16,8 @@ A contradiction between code and a doc is itself a `drift` finding.
 Simetra is a general metadata platform for any business application, in the
 spirit of 1C:Enterprise; MetaHub is its first consumer, not its goal. The
 packages in this repo are a **prototype**; the target is the tier layout of the
-spec, and spec §14 decides each package's fate. Two rule sets follow from that:
+spec, and spec §14 decides the fate of the packages it names (a package it does
+not name has an open fate — the owner decides). Two rule sets follow from that:
 
 - **Target rules** (marked *target*) apply to new platform code, to code moving
   into a tier, and to anything the diff presents as the new mechanism.

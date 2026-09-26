@@ -25,7 +25,10 @@
   subagents. Every `agent()` gets an explicit `model` and `effort`:
   recon / collection → **Sonnet**; analysis / verification / synthesis →
   **Opus**; trivial mechanics → low effort. Match agent strength to task
-  difficulty.
+  difficulty. A named agent (`Agent(subagent_type: …)`) takes its model from
+  its frontmatter in `.claude/agents/`, and that frontmatter follows the same
+  rule: `codebase-research` (recon) is Sonnet, `code-review` and
+  `code-review-verifier` (analysis, verification) are Opus.
 - **Code research — two surfaces.** Code ("where does it live", "what does a
   change affect") — `codebase-memory-mcp` tools; docs and plan-anchor checks —
   `.agents/skills/codebase-research/scripts/orient` (`--map "<topic>"`,
@@ -86,8 +89,8 @@
 | Agent | Role |
 | --- | --- |
 | `codebase-research` | Read-only recon (Sonnet, plan mode); the only one with the code graph. Use instead of generic Explore when the reading volume is unknown |
-| `code-review` | Reviews landed work through one lens chosen by the caller; read-only, finds and proves defects, fixes nothing |
-| `code-review-verifier` | Adversarial skeptic: tries to refute one finding against the real code; one finding per call |
+| `code-review` | Reviews landed work through one lens chosen by the caller (Opus); read-only, finds and proves defects, fixes nothing |
+| `code-review-verifier` | Adversarial skeptic (Opus): tries to refute one finding against the real code; one finding per call |
 
 ## Slash commands (`.claude/commands/`)
 
@@ -127,6 +130,18 @@ a precise `description` matters more than presence in that block.
 Never commit a third-party skill or a skills lock file. Trade-off, accepted on
 purpose: cloud sessions see only repo skills, so third-party ones are
 unavailable there — in exchange for a single update channel.
+
+**Expected environment.** The commands and workflow above name these
+environment-level dependencies; install them per machine:
+
+| Dependency | Named by | Install |
+| --- | --- | --- |
+| `superpowers` plugin (`superpowers:brainstorming`, `superpowers:writing-plans`) | § "Workflow" above, `/discuss` | `claude plugin marketplace add obra/superpowers-marketplace`, then `claude plugin install superpowers@superpowers-marketplace` |
+| `vitest` skill | `/виконай-задачу` (test work) | `npx skills add antfu/skills -g -s vitest -y` |
+| `codebase-memory-mcp` | § "MCP" above | user-level binary, installed per machine |
+
+Where a dependency is missing (a fresh clone, a cloud session), the command
+still runs: follow its steps without the named skill.
 
 Skills for **consumers** of the platform ship inside the package (`skills/`),
 versioned with the code; the repo skills above are for developing the platform

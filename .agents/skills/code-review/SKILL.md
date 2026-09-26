@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Use when reviewing landed work before merge — a branch, an implementation phase, a plan's execution, or another agent's changes in this repo. Defines the relevance gate and diff boundary, the fixed severity × confidence scale with an 80 threshold, the review lenses chosen by what the diff touches, the mandatory adversarial refutation of every finding, the report format and known false-review patterns. Use INSTEAD of the generic code-review plugin: that one targets GitHub PR comments, this one reviews a local branch against Simetra's platform rules.
+description: "Use when reviewing landed work before merge — a branch, an implementation phase, a plan's execution, or another agent's changes in this repo. Defines the relevance gate and diff boundary, the fixed severity × confidence scale with an 80 threshold, the review lenses chosen by what the diff touches, the mandatory adversarial refutation of every finding, the report format and known false-review patterns. Use INSTEAD of the generic code-review plugin: that one targets GitHub PR comments, this one reviews a local branch against Simetra's platform rules."
 ---
 
 # Code Review — Simetra

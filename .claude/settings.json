@@ -36,7 +36,9 @@
       "mcp__codebase-memory-mcp__search_code",
       "mcp__codebase-memory-mcp__check_index_coverage",
       "mcp__codebase-memory-mcp__index_status",
-      "mcp__codebase-memory-mcp__detect_changes"
+      "mcp__codebase-memory-mcp__detect_changes",
+      "mcp__codebase-memory-mcp__get_graph_schema",
+      "mcp__codebase-memory-mcp__list_projects"
     ]
   }
 }
