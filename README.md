@@ -1,69 +1,90 @@
 # Simetra
 
-Відкритий візуальний конфігуратор бізнес-метаданих.
+Simetra is an open-source platform for business applications described by
+metadata, in the spirit of 1C:Enterprise. An application declares its objects —
+catalogs, documents, registers and the rest — and the platform derives
+everything mechanical from them: the database schema, permissions, server
+commands, the data runtime, standard screens, the application shell and the
+tooling. The application keeps only its declarations, business rules and
+non-standard screens.
 
-## Структура
+Simetra is meant for **any** business application. MetaHub is its first
+consumer, not the goal: that experience extends the concept, but does not narrow
+it.
 
-```
-apps/web               — React SPA (Vite + Tailwind CSS 4 + shadcn/ui)
-apps/runtime           — Runtime dev preview host (Vite + metadata serving + provider bootstrap)
-packages/ui            — Спільні UI-компоненти (shadcn/ui)
-packages/core          — Zod-схеми бізнес-метаданих
-packages/form-runtime  — Runtime-рендерінг форм і domain-компоненти
-packages/app-runtime   — Runtime shell, routing і стандартні сторінки
-packages/data-provider — Контракт доступу до даних і in-memory provider
-packages/data-provider-postgrest — PostgREST adapter для runtime data access
-packages/cli           — CLI для генерації та застосування SQL з метаданих
-packages/generator-pg  — Генератор PostgreSQL DDL і posting SQL
-packages/generator-api — Контракти API генераторів
-```
+## Status
 
-## Швидкий старт
+**Pre-alpha.** Nothing is published to npm yet, and there are no stable APIs.
+
+The repository currently contains a **prototype** that predates the platform
+design. The platform itself is being built according to the
+[platform design spec](docs/superpowers/specs/2026-09-24-simetra-platform-design.md);
+the prototype packages are reference material, and the spec decides which parts
+carry over and which are removed. Progress is tracked in the
+[roadmap](docs/ROADMAP.md).
+
+## Core ideas
+
+- **Metadata is the source of truth.** JSON declarations plus TypeScript
+  behaviour modules; types are generated from them.
+- **One compiler, one door.** The CLI, the Vite plugin, MCP and the configurator
+  all load a configuration through the same compiler — it is either accepted or
+  rejected with diagnostics.
+- **The schema is derived, not hand-written.** Stable ids for every object and
+  attribute let the schema engine tell a rename from a drop-and-add, and schema
+  changes roll out without downtime.
+- **Tenancy is optional and generic.** The application defines its own scope
+  kinds; a single-tenant application declares none. The platform knows no
+  consumer vocabulary.
+- **One flagship package** with tier folders — model, compiler, schema, server,
+  data, UI, shell — where imports go only downward.
+
+The full design, with the reasoning behind each decision, is in the platform
+design spec.
+
+## Repository layout
+
+- **Prototype** — the packages under `packages/` and the apps under `apps/`: a
+  Zod metamodel, a PostgreSQL DDL generator with a CLI, a web-based metadata
+  configurator and an experimental runtime. Useful to read and run; not the
+  target architecture.
+- **Target** — the flagship `simetra` package plus a few separate packages (CLI,
+  studio, app template), described in the platform design spec. The
+  reorganisation into it is a roadmap milestone.
+
+## Getting started
+
+Prerequisites: the Node.js version in [`.node-version`](.node-version) and pnpm
+via Corepack (the exact version is pinned in `package.json`).
 
 ```bash
+corepack enable
 pnpm install
-pnpm dev
+pnpm test           # run the test suites
+pnpm dev:web        # run the prototype metadata configurator
 ```
 
-## Runtime Dev Preview
+Before opening a pull request, run the same gates as CI:
 
 ```bash
-cp apps/runtime/.env.example apps/runtime/.env.local
-
-# Вкажіть абсолютний шлях до каталогу metadata в apps/runtime/.env.local
-pnpm dev:runtime
+pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
 ```
 
-За замовчуванням runtime запускається з `VITE_SIMETRA_DATA_PROVIDER=mock`. Для PostgREST/Supabase-compatible API змініть `.env.local` на `VITE_SIMETRA_DATA_PROVIDER=postgrest` і задайте `VITE_SIMETRA_API_URL`.
+Contributor and agent rules — language policy, boundaries, gates, git
+discipline — are in [AGENTS.md](AGENTS.md).
 
-## Використання CLI
+## Documentation
 
-```bash
-# Показати довідку CLI
-pnpm simetra generate --help
+- [docs/BRD.md](docs/BRD.md) — vision and domain model: what Simetra is and for
+  whom.
+- [Platform design spec](docs/superpowers/specs/2026-09-24-simetra-platform-design.md)
+  — architecture and mechanisms: how it works.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — milestones and their status.
+- [AGENTS.md](AGENTS.md) — rules for contributors and coding agents.
 
-# Згенерувати SQL з директорії метаданих
-pnpm simetra generate --input ./temp/metadata --output ./output
+Internal design documents are written in Ukrainian; everything a consumer or
+contributor reads first is in English.
 
-# Застосувати SQL до PostgreSQL бази даних
-pnpm simetra apply --connection-string "$SIMETRA_DATABASE_URL" --input ./temp/metadata
-
-# Переглянути SQL без застосування
-pnpm simetra apply --dry-run --input ./temp/metadata
-```
-
-## Додавання UI-компонентів
-
-```bash
-pnpm dlx shadcn@latest add button -c apps/web
-```
-
-Компоненти створюються в `packages/ui/src/components` і імпортуються так:
-
-```tsx
-import { Button } from '@workspace/ui/components/button'
-```
-
-## Ліцензія
+## License
 
 [Apache-2.0](LICENSE)
