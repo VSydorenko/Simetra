@@ -9,10 +9,11 @@ on:
 permissions:
   contents: read
 
-# Новий пуш у ту саму гілку/PR скасовує застарілий прогін
+# Новий пуш у той самий PR скасовує застарілий прогін; на main не скасовуємо,
+# щоб кожен коміт у main мав власний результат CI
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
