@@ -36,12 +36,12 @@ function refExists(
 /** Знаходить регістр у моделі за ref */
 function findRegisterInModel(
   model: ProjectModel,
-  ref: { kind: MetadataKind; name: string },
+  ref: { kind: MetadataKind; name: string }
 ): AccumulationRegister | InformationRegister | undefined {
-  if (ref.kind === 'AccumulationRegister') {
+  if (ref.kind === "AccumulationRegister") {
     return model.accumulationRegisters.find((r) => r.name === ref.name)
   }
-  if (ref.kind === 'InformationRegister') {
+  if (ref.kind === "InformationRegister") {
     return model.informationRegisters.find((r) => r.name === ref.name)
   }
   return undefined
@@ -204,13 +204,16 @@ function validateSingleObject(
     const posting = obj.posting as {
       movements?: { register: { kind: string; name: string } }[]
     }
-    const regMovements = obj.registerMovements as { kind: string; name: string }[]
+    const regMovements = obj.registerMovements as {
+      kind: string
+      name: string
+    }[]
     if (posting.movements) {
       for (const movement of posting.movements) {
         const declared = regMovements.some(
           (r) =>
             r.kind === movement.register.kind &&
-            r.name === movement.register.name,
+            r.name === movement.register.name
         )
         if (!declared) {
           errors.push({
@@ -270,7 +273,7 @@ function validateSingleObject(
           const missingDims = reg.dimensions.filter((d) =>
             reg.kind === "AccumulationRegister"
               ? !movement.mappings.dimensions[d.name]
-              : d.required && !movement.mappings.dimensions[d.name],
+              : d.required && !movement.mappings.dimensions[d.name]
           )
           if (missingDims.length > 0) {
             const label =
@@ -292,12 +295,16 @@ function validateSingleObject(
           )
             ? documentObject.tabularSections.find(
                 (section) =>
-                  section.name === movement.source.slice("tabularSection:".length)
+                  section.name ===
+                  movement.source.slice("tabularSection:".length)
               )?.attributes
             : undefined
 
           const mappingGroups: Array<
-            [group: "dimensions" | "resources" | "attributes", fields: Attribute[]]
+            [
+              group: "dimensions" | "resources" | "attributes",
+              fields: Attribute[],
+            ]
           > = [
             ["dimensions", reg.dimensions],
             ["resources", reg.resources],

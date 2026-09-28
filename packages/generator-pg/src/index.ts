@@ -67,12 +67,12 @@ export {
   type SnapshotTable,
   type SnapshotEnum,
   type SnapshotIndex,
-} from './schema-snapshot'
+} from "./schema-snapshot"
 export {
   computeDiff,
   isDestructiveChange,
   formatDiffSummary,
   type SchemaDiff,
   type ColumnChange,
-} from './schema-diff'
-export { generateMigrationSQL } from './generate-migration'
+} from "./schema-diff"
+export { generateMigrationSQL } from "./generate-migration"

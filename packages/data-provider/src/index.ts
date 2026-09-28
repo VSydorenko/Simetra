@@ -1,4 +1,4 @@
-import type { MetadataRef } from '@simetra/core'
+import type { MetadataRef } from "@simetra/core"
 
 /**
  * Опції фільтрації списку
@@ -6,16 +6,7 @@ import type { MetadataRef } from '@simetra/core'
 export interface FilterExpression {
   field: string
   operator:
-    | 'eq'
-    | 'neq'
-    | 'gt'
-    | 'gte'
-    | 'lt'
-    | 'lte'
-    | 'like'
-    | 'ilike'
-    | 'in'
-    | 'is'
+    "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "like" | "ilike" | "in" | "is"
   value: unknown
 }
 
@@ -26,7 +17,7 @@ export interface ListOptions {
   page?: number
   pageSize?: number
   sortBy?: string
-  sortDirection?: 'asc' | 'desc'
+  sortDirection?: "asc" | "desc"
   filters?: FilterExpression[]
   search?: string
 }
@@ -77,7 +68,7 @@ export interface DataProvider<T = Record<string, unknown>> {
   searchRef(
     targetRef: MetadataRef,
     query: string,
-    options?: { limit?: number },
+    options?: { limit?: number }
   ): Promise<RefOption[]>
 
   /** Отримати display-значення для ref-поля */
@@ -96,4 +87,4 @@ export interface DataProvider<T = Record<string, unknown>> {
   updateConstant(name: string, value: unknown): Promise<void>
 }
 
-export { InMemoryDataProvider } from './in-memory-provider'
+export { InMemoryDataProvider } from "./in-memory-provider"

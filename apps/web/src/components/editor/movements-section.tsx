@@ -40,10 +40,10 @@ export function MovementsSection({
   const updateObject = useMetadataStore((s) => s.updateObject)
   const storeUpdateMovement = useMetadataStore((s) => s.updateMovement)
   const storeAddPostingValidation = useMetadataStore(
-    (s) => s.addPostingValidation,
+    (s) => s.addPostingValidation
   )
   const storeRemovePostingValidation = useMetadataStore(
-    (s) => s.removePostingValidation,
+    (s) => s.removePostingValidation
   )
 
   const doc = object as DocumentObject
@@ -85,7 +85,7 @@ export function MovementsSection({
     (movement: PostingMovement) => {
       return storeUpdateMovement(objectName, movement.register, movement)
     },
-    [objectName, storeUpdateMovement],
+    [objectName, storeUpdateMovement]
   )
 
   const handleAddRegisters = useCallback(
@@ -107,14 +107,14 @@ export function MovementsSection({
   const handleRemoveRegister = useCallback(
     (ref: MetadataRef) => {
       const updatedRegs = registerMovements.filter(
-        (r) => !(r.kind === ref.kind && r.name === ref.name),
+        (r) => !(r.kind === ref.kind && r.name === ref.name)
       )
       // Sync posting ↔ registerMovements тепер обробляється в store
       updateObject(kind, objectName, {
         registerMovements: updatedRegs,
       } as Partial<MetadataObject>)
     },
-    [registerMovements, kind, objectName, updateObject],
+    [registerMovements, kind, objectName, updateObject]
   )
 
   // --- Validations ---
@@ -126,17 +126,17 @@ export function MovementsSection({
 
     // Знаходимо регістр для отримання першого resource та dimensions
     const register =
-      firstReg.kind === 'AccumulationRegister'
+      firstReg.kind === "AccumulationRegister"
         ? model.accumulationRegisters.find((r) => r.name === firstReg.name)
         : model.informationRegisters.find((r) => r.name === firstReg.name)
 
-    const firstResource = register?.resources?.[0]?.name ?? 'amount'
+    const firstResource = register?.resources?.[0]?.name ?? "amount"
     const firstDimensions = register?.dimensions?.map((d) => d.name) ?? []
 
     const template: PostingValidation = {
       type: "NonNegativeBalance" as const,
       register: {
-        kind: firstReg.kind as 'AccumulationRegister' | 'InformationRegister',
+        kind: firstReg.kind as "AccumulationRegister" | "InformationRegister",
         name: firstReg.name,
       },
       dimensions: firstDimensions,
@@ -151,7 +151,7 @@ export function MovementsSection({
     (index: number) => {
       storeRemovePostingValidation(objectName, index)
     },
-    [objectName, storeRemovePostingValidation],
+    [objectName, storeRemovePostingValidation]
   )
 
   // Знаходимо movement info для кожного регістру
@@ -208,7 +208,10 @@ export function MovementsSection({
               variant="ghost"
               size="sm"
               className="h-6 px-2 text-xs"
-              disabled={registerMovements.length === 0 || !postingData?.movements?.length}
+              disabled={
+                registerMovements.length === 0 ||
+                !postingData?.movements?.length
+              }
               onClick={handleAddValidation}
             >
               <HugeiconsIcon icon={Add01Icon} size={14} className="mr-1" />
@@ -281,9 +284,7 @@ function RegisterMovementsTable({
           <TableHead className="h-7 text-xs">
             {t("movements.movementType")}
           </TableHead>
-          <TableHead className="h-7 text-xs">
-            {t("movements.source")}
-          </TableHead>
+          <TableHead className="h-7 text-xs">{t("movements.source")}</TableHead>
           <TableHead className="h-7 w-10 text-xs" />
         </TableRow>
       </TableHeader>

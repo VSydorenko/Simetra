@@ -32,8 +32,7 @@ export function SqlFileTree({ files }: SqlFileTreeProps) {
           className={cn(
             "flex w-full items-center gap-1.5 px-3 py-1 text-xs",
             "transition-colors hover:bg-accent/50",
-            selectedFilePath === file.path &&
-              "bg-accent text-accent-foreground",
+            selectedFilePath === file.path && "bg-accent text-accent-foreground"
           )}
         >
           <button

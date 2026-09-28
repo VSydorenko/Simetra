@@ -1,10 +1,14 @@
-import { useParams, useNavigate } from 'react-router'
-import { resolveForm } from '@simetra/core'
-import { useMetadata, ItemFormRenderer } from '@simetra/form-runtime'
-import { resolveObjectFromSlug } from '../utils/resolve-object'
+import { useParams, useNavigate } from "react-router"
+import { resolveForm } from "@simetra/core"
+import { useMetadata, ItemFormRenderer } from "@simetra/form-runtime"
+import { resolveObjectFromSlug } from "../utils/resolve-object"
 
 export function ItemPage() {
-  const { kindSlug = '', objectSlug, id } = useParams<{ kindSlug: string; objectSlug: string; id: string }>()
+  const {
+    kindSlug = "",
+    objectSlug,
+    id,
+  } = useParams<{ kindSlug: string; objectSlug: string; id: string }>()
   const navigate = useNavigate()
   const model = useMetadata()
 
@@ -21,7 +25,7 @@ export function ItemPage() {
   }
 
   const { objectRef } = resolved
-  const formModel = resolveForm(objectRef, 'ItemForm', model)
+  const formModel = resolveForm(objectRef, "ItemForm", model)
 
   return (
     <div className="p-6">

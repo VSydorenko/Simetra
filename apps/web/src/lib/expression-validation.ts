@@ -1,22 +1,27 @@
-import type { Attribute, Document, FieldType } from "@simetra/core"
+import type {
+  Attribute,
+  Document,
+  FieldType,
+  StandardAttribute,
+} from "@simetra/core"
 import {
   getStandardAttributes,
   getTabularSectionStandardAttributes,
 } from "@simetra/core"
 import i18n from "@/i18n"
 
-type StandardLikeField = {
-  name: string
-  type: string
-  ref?: Attribute["ref"]
-  allowedTypes?: Attribute["allowedTypes"]
-}
+// Стандартні реквізити описують посилання ширшим `kind: string`, тож беремо
+// їхню форму — звичайний Attribute (з вужчим MetadataKind) їй теж відповідає.
+type StandardLikeField = Pick<
+  StandardAttribute,
+  "name" | "type" | "ref" | "allowedTypes"
+>
 
 type KnownField = {
   name: string
   type: FieldType
-  ref?: Attribute["ref"]
-  allowedTypes?: Attribute["allowedTypes"]
+  ref?: StandardAttribute["ref"]
+  allowedTypes?: StandardAttribute["allowedTypes"]
 }
 
 export interface ExpressionValidationContext {
@@ -61,15 +66,17 @@ function toKnownField(field: Attribute | StandardLikeField): KnownField | null {
   }
 }
 
-function getDocumentFields(document: Pick<Document, "attributes">): KnownField[] {
+function getDocumentFields(
+  document: Pick<Document, "attributes">
+): KnownField[] {
   return [
     ...getStandardAttributes("Document")
       .filter((attr) => attr.name !== "id")
       .map(toKnownField)
       .filter((field): field is KnownField => field !== null),
-    ...document.attributes.map((attr) => toKnownField(attr)).filter(
-      (field): field is KnownField => field !== null
-    ),
+    ...document.attributes
+      .map((attr) => toKnownField(attr))
+      .filter((field): field is KnownField => field !== null),
   ]
 }
 
@@ -94,9 +101,9 @@ function getTabularSectionFields(
       .filter((attr) => attr.name !== "id")
       .map(toKnownField)
       .filter((field): field is KnownField => field !== null),
-    ...section.attributes.map((attr) => toKnownField(attr)).filter(
-      (field): field is KnownField => field !== null
-    ),
+    ...section.attributes
+      .map((attr) => toKnownField(attr))
+      .filter((field): field is KnownField => field !== null),
   ]
 }
 
@@ -158,8 +165,11 @@ export function inferExpressionType(
 
   if (expr.startsWith("row.")) {
     return (
-      findTabularSectionField(context.document, context.source, expr.slice(4)) ??
-      null
+      findTabularSectionField(
+        context.document,
+        context.source,
+        expr.slice(4)
+      ) ?? null
     )
   }
 
@@ -227,7 +237,9 @@ function isLiteralCompatible(value: string, targetType: FieldType): boolean {
         value
       )
     case "Date":
-      return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
+      return (
+        /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
+      )
     case "DateTime":
       return !Number.isNaN(Date.parse(value))
     case "Binary":

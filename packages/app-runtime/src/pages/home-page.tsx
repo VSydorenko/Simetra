@@ -1,6 +1,6 @@
-import { Link } from 'react-router'
-import { useMetadata } from '@simetra/form-runtime'
-import { buildFlatNavigation } from '../navigation-builder'
+import { Link } from "react-router"
+import { useMetadata } from "@simetra/form-runtime"
+import { buildFlatNavigation } from "../navigation-builder"
 
 export function HomePage() {
   const model = useMetadata()

@@ -196,13 +196,17 @@ describe("Catalog DDL", () => {
   })
 
   it("generates autonumber trigger", () => {
-    expect(sql).toContain("CREATE OR REPLACE FUNCTION cat_products_autonumber()")
+    expect(sql).toContain(
+      "CREATE OR REPLACE FUNCTION cat_products_autonumber()"
+    )
     expect(sql).toContain("CREATE TRIGGER trg_cat_products_autonumber")
     expect(sql).toContain("LPAD")
   })
 
   it("generates indexes for indexed attributes", () => {
-    expect(sql).toContain("CREATE INDEX idx_cat_products_code ON cat_products (code)")
+    expect(sql).toContain(
+      "CREATE INDEX idx_cat_products_code ON cat_products (code)"
+    )
   })
 
   it("generates FK index for tabular section parent", () => {
@@ -1239,9 +1243,7 @@ describe("Single Ref required/unique in DDL", () => {
     })
 
     const sql = generateSQL(project)
-    expect(sql).toContain(
-      "default_warehouse_id uuid NOT NULL",
-    )
+    expect(sql).toContain("default_warehouse_id uuid NOT NULL")
   })
 })
 

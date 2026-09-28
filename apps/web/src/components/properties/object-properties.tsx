@@ -270,8 +270,7 @@ export function ObjectProperties({ objectRef }: ObjectPropertiesProps) {
   const hasCustomDescriptions = useMemo(() => {
     if (!object || !("standardAttributeOverrides" in object)) return false
     const overrides = object.standardAttributeOverrides as
-      | Record<string, { description?: LocalizedString }>
-      | undefined
+      Record<string, { description?: LocalizedString }> | undefined
     if (!overrides) return false
     return Object.values(overrides).some((o) => {
       const d = o?.description

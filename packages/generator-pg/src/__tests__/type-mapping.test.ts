@@ -75,7 +75,7 @@ describe("attributeToColumn", () => {
         defaultValue: null,
       },
       noopResolve,
-      noopEnumResolve,
+      noopEnumResolve
     )
     expect(col.sqlType).toBe("uuid")
     expect(col.constraints).toContain("NOT NULL")
@@ -94,7 +94,7 @@ describe("attributeToColumn", () => {
         defaultValue: null,
       },
       noopResolve,
-      noopEnumResolve,
+      noopEnumResolve
     )
     expect(col.sqlType).toBe("uuid")
     expect(col.constraints).toContain("UNIQUE")
@@ -113,7 +113,7 @@ describe("attributeToColumn", () => {
         defaultValue: null,
       },
       noopResolve,
-      () => "public.status",
+      () => "public.status"
     )
     expect(col.sqlType).toBe("public.status")
     expect(col.constraints).toContain("NOT NULL")
@@ -131,7 +131,7 @@ describe("attributeToColumn", () => {
         defaultValue: null,
       },
       noopResolve,
-      noopEnumResolve,
+      noopEnumResolve
     )
     expect(col.sqlType).toBe("uuid")
     expect(col.constraints).toEqual([])

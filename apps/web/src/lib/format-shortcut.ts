@@ -1,31 +1,31 @@
 // Визначає платформу та форматує shortcut рядок
 const isMac =
-  typeof navigator !== 'undefined' &&
-  (navigator.platform?.startsWith('Mac') ||
+  typeof navigator !== "undefined" &&
+  (navigator.platform?.startsWith("Mac") ||
     (navigator as unknown as { userAgentData?: { platform: string } })
-      .userAgentData?.platform === 'macOS')
+      .userAgentData?.platform === "macOS")
 
 const KEY_MAP_MAC: Record<string, string> = {
-  mod: '⌘',
-  shift: '⇧',
-  alt: '⌥',
-  ctrl: '⌃',
+  mod: "⌘",
+  shift: "⇧",
+  alt: "⌥",
+  ctrl: "⌃",
 }
 
 const KEY_MAP_OTHER: Record<string, string> = {
-  mod: 'Ctrl',
-  shift: 'Shift',
-  alt: 'Alt',
-  ctrl: 'Ctrl',
+  mod: "Ctrl",
+  shift: "Shift",
+  alt: "Alt",
+  ctrl: "Ctrl",
 }
 
 export function formatShortcut(combo: string): string {
   const map = isMac ? KEY_MAP_MAC : KEY_MAP_OTHER
   return combo
-    .split('+')
+    .split("+")
     .map((key) => {
       const lower = key.trim().toLowerCase()
       return map[lower] ?? key.trim()
     })
-    .join(isMac ? '' : '+')
+    .join(isMac ? "" : "+")
 }

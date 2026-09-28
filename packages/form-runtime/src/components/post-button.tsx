@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
-import type { MetadataRef } from '@simetra/core'
-import { Button } from '@workspace/ui/components/button'
-import { useDataProvider } from '../context'
+import { useState, useCallback } from "react"
+import type { MetadataRef } from "@simetra/core"
+import { Button } from "@workspace/ui/components/button"
+import { useDataProvider } from "../context"
 
 export interface PostButtonProps {
   objectRef: MetadataRef
@@ -9,7 +9,11 @@ export interface PostButtonProps {
   onSuccess?: () => void
 }
 
-export function PostButton({ objectRef, recordId, onSuccess }: PostButtonProps) {
+export function PostButton({
+  objectRef,
+  recordId,
+  onSuccess,
+}: PostButtonProps) {
   const dataProvider = useDataProvider()
   const [loading, setLoading] = useState(false)
 
@@ -25,7 +29,7 @@ export function PostButton({ objectRef, recordId, onSuccess }: PostButtonProps) 
 
   return (
     <Button onClick={handlePost} disabled={loading}>
-      {loading ? 'Проведення...' : 'Провести'}
+      {loading ? "Проведення..." : "Провести"}
     </Button>
   )
 }

@@ -102,7 +102,7 @@ describe("MovementsSection", () => {
         kind="Document"
         objectName="GoodsReceipt"
         object={doc}
-      />,
+      />
     )
 
     // Назва регістру відображається у таблиці
@@ -115,17 +115,11 @@ describe("MovementsSection", () => {
     const doc = model.documents[0]
 
     render(
-      <MovementsSection
-        kind="Document"
-        objectName="Payment"
-        object={doc}
-      />,
+      <MovementsSection kind="Document" objectName="Payment" object={doc} />
     )
 
     // Текст про відсутність регістрів (з i18n fallback)
-    expect(
-      screen.getByText(/Немає регістрів/i),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Немає регістрів/i)).toBeInTheDocument()
   })
 
   it('має кнопку "Додати"', () => {
@@ -136,13 +130,14 @@ describe("MovementsSection", () => {
         kind="Document"
         objectName="GoodsReceipt"
         object={doc}
-      />,
+      />
     )
 
     // Кнопка додавання регістрів
     const addButtons = screen.getAllByRole("button")
     const addBtn = addButtons.find(
-      (btn) => btn.textContent?.includes("Додати") || btn.textContent?.includes("Add"),
+      (btn) =>
+        btn.textContent?.includes("Додати") || btn.textContent?.includes("Add")
     )
     expect(addBtn).toBeDefined()
   })

@@ -279,9 +279,7 @@ describe("DDL store posting ref validation", () => {
 
     useDdlStore.getState().generateDdl()
     const errors = useDdlStore.getState().validationErrors
-    const dimError = errors.find((e) =>
-      e.includes("обов'язкові dimensions"),
-    )
+    const dimError = errors.find((e) => e.includes("обов'язкові dimensions"))
     expect(dimError).toBeDefined()
     expect(dimError).toContain("currency")
     expect(dimError).not.toContain("warehouse")

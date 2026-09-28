@@ -45,7 +45,7 @@ export function ProjectSettings() {
     (updates: Partial<Project>) => {
       updateProject(updates)
     },
-    [updateProject],
+    [updateProject]
   )
 
   const handleProjectRefChange = useCallback(
@@ -59,7 +59,7 @@ export function ProjectSettings() {
         },
       })
     },
-    [handleUpdate, project.deployment],
+    [handleUpdate, project.deployment]
   )
 
   const deploymentTarget = project.deployment?.target ?? "none"
@@ -266,7 +266,7 @@ export function ProjectSettings() {
                   <Input
                     className="h-7 text-xs"
                     placeholder={t(
-                      "properties.deployment.supabaseProjectRefPlaceholder",
+                      "properties.deployment.supabaseProjectRefPlaceholder"
                     )}
                     value={projectRef}
                     onChange={(e) => handleProjectRefChange(e.target.value)}

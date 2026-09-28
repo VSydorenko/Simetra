@@ -89,9 +89,7 @@ describe("projectSchema", () => {
       },
     })
     expect(result.deployment?.target).toBe("supabase")
-    expect(result.deployment?.supabase?.projectRef).toBe(
-      "abcdefghijklmnopqrst",
-    )
+    expect(result.deployment?.supabase?.projectRef).toBe("abcdefghijklmnopqrst")
   })
 
   it("parses project with deployment manual target (no supabase block)", () => {
@@ -1395,13 +1393,11 @@ describe("canonical serialization", () => {
     const serialized = serializeProject(project)
     const parsed = JSON.parse(serialized)
     expect(parsed.deployment.target).toBe("supabase")
-    expect(parsed.deployment.supabase.projectRef).toBe(
-      "abcdefghijklmnopqrst",
-    )
+    expect(parsed.deployment.supabase.projectRef).toBe("abcdefghijklmnopqrst")
     // Порядок ключів: target перед supabase
     const deploymentKeys = Object.keys(parsed.deployment)
     expect(deploymentKeys.indexOf("target")).toBeLessThan(
-      deploymentKeys.indexOf("supabase"),
+      deploymentKeys.indexOf("supabase")
     )
   })
 })
@@ -1560,14 +1556,12 @@ describe("formSchema", () => {
       formSchema.parse({
         kind: "EditForm",
         objectRef: { kind: "Catalog", name: "Products" },
-      }),
+      })
     ).toThrow()
   })
 
   it("requires objectRef", () => {
-    expect(() =>
-      formSchema.parse({ kind: "ItemForm" }),
-    ).toThrow()
+    expect(() => formSchema.parse({ kind: "ItemForm" })).toThrow()
   })
 
   it("accepts optional layout", () => {
@@ -1636,9 +1630,7 @@ describe("projectModelSchema forms validation", () => {
   it("rejects form for unsupported kind (Enumeration)", () => {
     const result = projectModelSchema.safeParse({
       project: { name: "TestApp" },
-      enumerations: [
-        { kind: "Enumeration", name: "OrderStatus", values: [] },
-      ],
+      enumerations: [{ kind: "Enumeration", name: "OrderStatus", values: [] }],
       forms: [
         {
           kind: "ItemForm",
@@ -1656,9 +1648,7 @@ describe("projectModelSchema forms validation", () => {
   it("rejects form for unsupported kind (Constant)", () => {
     const result = projectModelSchema.safeParse({
       project: { name: "TestApp" },
-      constants: [
-        { kind: "Constant", name: "AppName", valueType: "String" },
-      ],
+      constants: [{ kind: "Constant", name: "AppName", valueType: "String" }],
       forms: [
         {
           kind: "ItemForm",
@@ -1760,7 +1750,7 @@ describe("formLayoutElementSchema — leaf elements", () => {
     expect(() =>
       formLayoutElementSchema.parse({
         element: "Field",
-      }),
+      })
     ).toThrow()
   })
 
@@ -1769,7 +1759,7 @@ describe("formLayoutElementSchema — leaf elements", () => {
       formLayoutElementSchema.parse({
         element: "Field",
         ref: "",
-      }),
+      })
     ).toThrow()
   })
 
@@ -1811,7 +1801,10 @@ describe("formLayoutElementSchema — leaf elements", () => {
     })
     expect(result.element).toBe("Label")
     if (result.element === "Label") {
-      expect(result.text).toEqual({ uk: "Основні реквізити", en: "Main attributes" })
+      expect(result.text).toEqual({
+        uk: "Основні реквізити",
+        en: "Main attributes",
+      })
     }
   })
 
@@ -1819,7 +1812,7 @@ describe("formLayoutElementSchema — leaf elements", () => {
     expect(() =>
       formLayoutElementSchema.parse({
         element: "Label",
-      }),
+      })
     ).toThrow()
   })
 
@@ -1827,7 +1820,7 @@ describe("formLayoutElementSchema — leaf elements", () => {
     expect(() =>
       formLayoutElementSchema.parse({
         element: "UnknownElement",
-      }),
+      })
     ).toThrow()
   })
 })
@@ -1880,10 +1873,8 @@ describe("formLayoutElementSchema — container elements", () => {
     expect(() =>
       formLayoutElementSchema.parse({
         element: "Columns",
-        columns: [
-          { element: "Field", ref: "some_field" },
-        ],
-      }),
+        columns: [{ element: "Field", ref: "some_field" }],
+      })
     ).toThrow()
   })
 
@@ -1914,7 +1905,7 @@ describe("formLayoutElementSchema — container elements", () => {
       formLayoutElementSchema.parse({
         element: "Tab",
         children: [],
-      }),
+      })
     ).toThrow()
   })
 
@@ -1938,9 +1929,7 @@ describe("formLayoutElementSchema — container elements", () => {
         {
           element: "Group",
           title: { uk: "Inner" },
-          children: [
-            { element: "Field", ref: "deep_field" },
-          ],
+          children: [{ element: "Field", ref: "deep_field" }],
         },
       ],
     })
@@ -2008,14 +1997,12 @@ describe("toolbarItemSchema", () => {
       toolbarItemSchema.parse({
         type: "CustomButton",
         label: { uk: "Без імені" },
-      }),
+      })
     ).toThrow()
   })
 
   it("rejects unknown toolbar item type", () => {
-    expect(() =>
-      toolbarItemSchema.parse({ type: "PrintButton" }),
-    ).toThrow()
+    expect(() => toolbarItemSchema.parse({ type: "PrintButton" })).toThrow()
   })
 })
 
@@ -2053,14 +2040,12 @@ describe("commandBarItemSchema", () => {
       commandBarItemSchema.parse({
         type: "NavigationLink",
         target: { kind: "Document", name: "SalesOrder" },
-      }),
+      })
     ).toThrow()
   })
 
   it("rejects unknown commandBar item type", () => {
-    expect(() =>
-      commandBarItemSchema.parse({ type: "BackButton" }),
-    ).toThrow()
+    expect(() => commandBarItemSchema.parse({ type: "BackButton" })).toThrow()
   })
 })
 
@@ -2084,7 +2069,7 @@ describe("formSchema — Stage 3 extensions", () => {
         kind: "ItemForm",
         objectRef: { kind: "Catalog", name: "Products" },
         width: "gigantic",
-      }),
+      })
     ).toThrow()
   })
 

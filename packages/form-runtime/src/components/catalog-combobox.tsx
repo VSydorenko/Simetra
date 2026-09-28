@@ -1,16 +1,20 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import type { MetadataRef } from '@simetra/core'
-import { Popover, PopoverContent, PopoverTrigger } from '@workspace/ui/components/popover'
+import { useState, useEffect, useCallback, useRef } from "react"
+import type { MetadataRef } from "@simetra/core"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
 import {
   Command,
   CommandInput,
   CommandList,
   CommandEmpty,
   CommandItem,
-} from '@workspace/ui/components/command'
-import { Button } from '@workspace/ui/components/button'
-import { cn } from '@workspace/ui/lib/utils'
-import { useDataProvider } from '../context'
+} from "@workspace/ui/components/command"
+import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
+import { useDataProvider } from "../context"
 
 export interface CatalogComboboxProps {
   targetRef: MetadataRef
@@ -29,14 +33,14 @@ export function CatalogCombobox({
   targetRef,
   value,
   onChange,
-  placeholder = 'Оберіть...',
+  placeholder = "Оберіть...",
   disabled,
 }: CatalogComboboxProps) {
   const dataProvider = useDataProvider()
   const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState("")
   const [options, setOptions] = useState<RefOption[]>([])
-  const [displayValue, setDisplayValue] = useState('')
+  const [displayValue, setDisplayValue] = useState("")
   const [loading, setLoading] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
   // Захист від race conditions при пошуку
@@ -45,7 +49,7 @@ export function CatalogCombobox({
   // Завантажити display value при зміні value prop
   useEffect(() => {
     if (!value) {
-      setDisplayValue('')
+      setDisplayValue("")
       return
     }
     let cancelled = false
@@ -75,7 +79,7 @@ export function CatalogCombobox({
           }
         })
     },
-    [dataProvider, targetRef],
+    [dataProvider, targetRef]
   )
 
   // Debounce пошук при зміні тексту
@@ -85,7 +89,7 @@ export function CatalogCombobox({
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(() => doSearch(query), 300)
     },
-    [doSearch],
+    [doSearch]
   )
 
   // Початковий пошук при відкритті
@@ -93,11 +97,11 @@ export function CatalogCombobox({
     (isOpen: boolean) => {
       setOpen(isOpen)
       if (isOpen) {
-        setSearch('')
-        doSearch('')
+        setSearch("")
+        doSearch("")
       }
     },
-    [doSearch],
+    [doSearch]
   )
 
   const handleSelect = useCallback(
@@ -105,7 +109,7 @@ export function CatalogCombobox({
       onChange?.(id)
       setOpen(false)
     },
-    [onChange],
+    [onChange]
   )
 
   const handleClear = useCallback(() => {
@@ -121,8 +125,8 @@ export function CatalogCombobox({
           aria-expanded={open}
           disabled={disabled}
           className={cn(
-            'w-full justify-between font-normal',
-            !value && 'text-muted-foreground',
+            "w-full justify-between font-normal",
+            !value && "text-muted-foreground"
           )}
         >
           <span className="truncate">
@@ -139,7 +143,7 @@ export function CatalogCombobox({
           />
           <CommandList>
             <CommandEmpty>
-              {loading ? 'Завантаження...' : 'Нічого не знайдено'}
+              {loading ? "Завантаження..." : "Нічого не знайдено"}
             </CommandEmpty>
             {options.map((option) => (
               <CommandItem

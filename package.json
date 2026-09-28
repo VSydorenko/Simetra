@@ -2,7 +2,7 @@
   "name": "simetra",
   "version": "0.0.1",
   "private": true,
-  "description": "Open-source visual business metadata configurator",
+  "description": "Open-source metadata-driven platform for business applications, in the spirit of 1C:Enterprise",
   "license": "Apache-2.0",
   "scripts": {
     "build": "turbo build",
@@ -21,14 +21,15 @@
     "deps:update": "pnpm update -r && syncpack fix"
   },
   "devDependencies": {
-    "prettier": "^3.8.1",
-    "prettier-plugin-tailwindcss": "^0.7.2",
-    "syncpack": "^14.3.0",
-    "turbo": "^2.9.3",
-    "typescript": "^6.0.2"
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "prettier": "^3.9.9",
+    "prettier-plugin-tailwindcss": "^0.8.1",
+    "syncpack": "^15.3.3",
+    "turbo": "^2.11.4",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   },
-  "packageManager": "pnpm@10.26.1",
+  "packageManager": "pnpm@11.4.0+sha512.f0febc7e37552ab485494a914241b338e0b3580b93d54ce31f00933015880863129038a1b4ae4e414a0ee63ac35bf21197e990172c4a68256450b5636310968f",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   }
 }

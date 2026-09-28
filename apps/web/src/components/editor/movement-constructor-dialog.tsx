@@ -118,9 +118,7 @@ function MovementConstructorBody({
 
   // Знаходимо регістр у моделі
   const register = useMemo(():
-    | AccumulationRegister
-    | InformationRegister
-    | undefined => {
+    AccumulationRegister | InformationRegister | undefined => {
     if (registerRef.kind === "AccumulationRegister") {
       return model.accumulationRegisters.find(
         (r) => r.name === registerRef.name
@@ -211,8 +209,8 @@ function MovementConstructorBody({
 
   // Поля документа для динамічного типу руху (стандартні + custom)
   const docFieldsForDynamicType = useMemo(() => {
-    const standard = getStandardAttributes('Document')
-      .filter((a) => a.name !== 'id')
+    const standard = getStandardAttributes("Document")
+      .filter((a) => a.name !== "id")
       .map((a) => a.name)
     const custom = doc.attributes.map((a) => a.name)
     return [...standard, ...custom]
@@ -220,9 +218,7 @@ function MovementConstructorBody({
 
   // Джерела для Select
   const sourceOptions = useMemo(() => {
-    const opts = [
-      { value: "document", label: t("movements.sourceDocument") },
-    ]
+    const opts = [{ value: "document", label: t("movements.sourceDocument") }]
     for (const ts of doc.tabularSections) {
       opts.push({
         value: `tabularSection:${ts.name}`,
@@ -234,8 +230,8 @@ function MovementConstructorBody({
 
   // Атрибути вибраної ТЧ (для валідації field references)
   const selectedTsAttributes = useMemo(() => {
-    if (draft.source.startsWith('tabularSection:')) {
-      const tsName = draft.source.slice('tabularSection:'.length)
+    if (draft.source.startsWith("tabularSection:")) {
+      const tsName = draft.source.slice("tabularSection:".length)
       const ts = doc.tabularSections.find((t) => t.name === tsName)
       return ts?.attributes
     }
@@ -298,8 +294,7 @@ function MovementConstructorBody({
     const movement: PostingMovement = {
       register: {
         kind: registerRef.kind as
-          | "AccumulationRegister"
-          | "InformationRegister",
+          "AccumulationRegister" | "InformationRegister",
         name: registerRef.name,
       },
       movementType: draft.movementType,
@@ -383,9 +378,7 @@ function MovementConstructorBody({
           {/* Динамічне поле документа (якщо dynamic) */}
           {isDynamicType && (
             <div className="space-y-1">
-              <Label className="text-xs">
-                {t("movements.dynamicField")}
-              </Label>
+              <Label className="text-xs">{t("movements.dynamicField")}</Label>
               <Select
                 value={dynamicTypeField}
                 onValueChange={(v) => setMovementType(`doc.${v}`)}
@@ -423,9 +416,7 @@ function MovementConstructorBody({
 
           {/* Умова */}
           <div className="space-y-1">
-            <Label className="text-xs">
-              {t("movements.condition")}
-            </Label>
+            <Label className="text-xs">{t("movements.condition")}</Label>
             <Input
               className="h-8 text-xs"
               placeholder={t("movements.condition")}
@@ -486,7 +477,11 @@ function MovementConstructorBody({
         <Button variant="outline" size="sm" onClick={onCancel}>
           {t("action.cancel")}
         </Button>
-        <Button size="sm" disabled={!isDirty || hasInvalidExpressions} onClick={handleSave}>
+        <Button
+          size="sm"
+          disabled={!isDirty || hasInvalidExpressions}
+          onClick={handleSave}
+        >
           {t("action.save")}
         </Button>
       </DialogFooter>

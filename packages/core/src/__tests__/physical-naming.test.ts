@@ -58,9 +58,12 @@ describe("KIND_PREFIX", () => {
 
   it("Catalog → cat_", () => expect(KIND_PREFIX["Catalog"]).toBe("cat_"))
   it("Document → doc_", () => expect(KIND_PREFIX["Document"]).toBe("doc_"))
-  it("Enumeration → enum_", () => expect(KIND_PREFIX["Enumeration"]).toBe("enum_"))
-  it("InformationRegister → ir_", () => expect(KIND_PREFIX["InformationRegister"]).toBe("ir_"))
-  it("AccumulationRegister → ar_", () => expect(KIND_PREFIX["AccumulationRegister"]).toBe("ar_"))
+  it("Enumeration → enum_", () =>
+    expect(KIND_PREFIX["Enumeration"]).toBe("enum_"))
+  it("InformationRegister → ir_", () =>
+    expect(KIND_PREFIX["InformationRegister"]).toBe("ir_"))
+  it("AccumulationRegister → ar_", () =>
+    expect(KIND_PREFIX["AccumulationRegister"]).toBe("ar_"))
   it("Constant → const_", () => expect(KIND_PREFIX["Constant"]).toBe("const_"))
   it("CustomTable → ct_", () => expect(KIND_PREFIX["CustomTable"]).toBe("ct_"))
 })
@@ -82,13 +85,15 @@ describe("physicalObjectName", () => {
   })
 
   it("InformationRegister + CurrencyExchangeRates → ir_currency_exchange_rates", () => {
-    expect(physicalObjectName("InformationRegister", "CurrencyExchangeRates")).toBe(
-      "ir_currency_exchange_rates",
-    )
+    expect(
+      physicalObjectName("InformationRegister", "CurrencyExchangeRates")
+    ).toBe("ir_currency_exchange_rates")
   })
 
   it("AccumulationRegister + Stocks → ar_stocks", () => {
-    expect(physicalObjectName("AccumulationRegister", "Stocks")).toBe("ar_stocks")
+    expect(physicalObjectName("AccumulationRegister", "Stocks")).toBe(
+      "ar_stocks"
+    )
   })
 
   it("Constant + Settings → const_settings", () => {
@@ -135,25 +140,25 @@ describe("barrel export", () => {
 describe("physicalTabularName", () => {
   it("Catalog + Products + barcodes → cat_products_barcodes", () => {
     expect(physicalTabularName("Catalog", "Products", "barcodes")).toBe(
-      "cat_products_barcodes",
+      "cat_products_barcodes"
     )
   })
 
   it("Document + SalesOrder + goods → doc_sales_order_goods", () => {
     expect(physicalTabularName("Document", "SalesOrder", "goods")).toBe(
-      "doc_sales_order_goods",
+      "doc_sales_order_goods"
     )
   })
 
   it("CustomTable + EventLog + details → ct_event_log_details", () => {
     expect(physicalTabularName("CustomTable", "EventLog", "details")).toBe(
-      "ct_event_log_details",
+      "ct_event_log_details"
     )
   })
 
   it("Document + SalesOrder + line_items → doc_sales_order_line_items", () => {
     expect(physicalTabularName("Document", "SalesOrder", "line_items")).toBe(
-      "doc_sales_order_line_items",
+      "doc_sales_order_line_items"
     )
   })
 })

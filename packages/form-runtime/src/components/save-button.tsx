@@ -1,4 +1,4 @@
-import { Button } from '@workspace/ui/components/button'
+import { Button } from "@workspace/ui/components/button"
 
 export interface SaveButtonProps {
   onClick: () => void
@@ -9,7 +9,7 @@ export interface SaveButtonProps {
 export function SaveButton({ onClick, disabled, loading }: SaveButtonProps) {
   return (
     <Button onClick={onClick} disabled={disabled || loading}>
-      {loading ? 'Збереження...' : 'Зберегти'}
+      {loading ? "Збереження..." : "Зберегти"}
     </Button>
   )
 }

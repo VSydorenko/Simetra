@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
+  columnSizingFeature,
   createColumnHelper,
   flexRender,
-  getCoreRowModel,
-  useReactTable,
+  tableFeatures,
+  useTable,
 } from "@tanstack/react-table"
 import {
   Table,
@@ -42,7 +43,11 @@ import { useFieldUpdate, type FieldRole } from "@/hooks/use-field-update"
 import { formatTypeLabel } from "@/lib/format-type-label"
 import { DataTypeEditorDialog } from "@/components/editor/data-type-editor-dialog"
 
-const columnHelper = createColumnHelper<Attribute>()
+// TanStack Table v9 реєструє фічі явно; columnSizingFeature потрібна для
+// `size` у колонках і `header.getSize()` у розмітці. Приховування колонок
+// не використовуємо, тому рядки рендеримо через core-метод `getAllCells()`.
+const features = tableFeatures({ columnSizingFeature })
+const columnHelper = createColumnHelper<typeof features, Attribute>()
 
 interface AttributeTableProps {
   kind: MetadataKind
@@ -224,74 +229,74 @@ export function AttributeTable({
   )
 
   const columns = useMemo(
-    () => [
-      columnHelper.accessor("name", {
-        header: () => t("metadata.field.name"),
-        cell: (info) => (
-          <span className="font-mono text-xs">{info.getValue()}</span>
-        ),
-        size: 160,
-      }),
-      columnHelper.accessor("type", {
-        header: () => t("metadata.field.type"),
-        cell: (info) => (
-          <button
-            type="button"
-            className="inline-flex cursor-pointer items-center rounded-md border bg-transparent px-1.5 py-0 text-[10px] font-semibold text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-            onClick={(e) => {
-              e.stopPropagation()
-              setEditingTypeAttr(info.row.original.name)
-            }}
-          >
-            {formatTypeLabel(info.row.original, t)}
-          </button>
-        ),
-        size: 130,
-      }),
-      columnHelper.accessor("required", {
-        header: () => t("metadata.field.required"),
-        cell: (info) =>
-          info.getValue() ? (
-            <span className="mx-auto block w-fit text-xs text-foreground">
-              ✓
-            </span>
-          ) : null,
-        size: 80,
-      }),
-      columnHelper.accessor("indexed", {
-        header: () => t("metadata.field.indexed"),
-        cell: (info) =>
-          info.getValue() ? (
-            <span className="mx-auto block w-fit text-xs text-foreground">
-              ✓
-            </span>
-          ) : null,
-        size: 80,
-      }),
-      columnHelper.display({
-        id: "description",
-        header: () => t("metadata.field.description"),
-        cell: (info) => {
-          const desc = info.row.original.description
-          if (!desc) return null
-          const lang = i18n.language as "uk" | "en"
-          return (
-            <span className="truncate text-xs text-muted-foreground">
-              {desc[lang] ?? desc.uk ?? desc.en ?? ""}
-            </span>
-          )
-        },
-        size: 200,
-      }),
-    ],
+    () =>
+      columnHelper.columns([
+        columnHelper.accessor("name", {
+          header: () => t("metadata.field.name"),
+          cell: (info) => (
+            <span className="font-mono text-xs">{info.getValue()}</span>
+          ),
+          size: 160,
+        }),
+        columnHelper.accessor("type", {
+          header: () => t("metadata.field.type"),
+          cell: (info) => (
+            <button
+              type="button"
+              className="inline-flex cursor-pointer items-center rounded-md border bg-transparent px-1.5 py-0 text-[10px] font-semibold text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingTypeAttr(info.row.original.name)
+              }}
+            >
+              {formatTypeLabel(info.row.original, t)}
+            </button>
+          ),
+          size: 130,
+        }),
+        columnHelper.accessor("required", {
+          header: () => t("metadata.field.required"),
+          cell: (info) =>
+            info.getValue() ? (
+              <span className="mx-auto block w-fit text-xs text-foreground">
+                ✓
+              </span>
+            ) : null,
+          size: 80,
+        }),
+        columnHelper.accessor("indexed", {
+          header: () => t("metadata.field.indexed"),
+          cell: (info) =>
+            info.getValue() ? (
+              <span className="mx-auto block w-fit text-xs text-foreground">
+                ✓
+              </span>
+            ) : null,
+          size: 80,
+        }),
+        columnHelper.display({
+          id: "description",
+          header: () => t("metadata.field.description"),
+          cell: (info) => {
+            const desc = info.row.original.description
+            if (!desc) return null
+            const lang = i18n.language as "uk" | "en"
+            return (
+              <span className="truncate text-xs text-muted-foreground">
+                {desc[lang] ?? desc.uk ?? desc.en ?? ""}
+              </span>
+            )
+          },
+          size: 200,
+        }),
+      ]),
     [t, i18n.language]
   )
 
-  // eslint-disable-next-line react-hooks/incompatible-library -- відомий false positive для TanStack Table
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: attributes,
     columns,
-    getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => row.name,
   })
 
@@ -441,7 +446,7 @@ export function AttributeTable({
                     })
                   }}
                 >
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id} className="px-2 py-0.5">
                       {flexRender(
                         cell.column.columnDef.cell,

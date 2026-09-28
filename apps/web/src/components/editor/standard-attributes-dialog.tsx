@@ -187,9 +187,14 @@ function StandardAttributesDialogBody({
 
   const handleSave = useCallback(() => {
     if (tabularSectionName && section) {
-      const errors = updateTabularSection(kind, objectName, tabularSectionName, {
-        standardAttributeOverrides: draftOverrides,
-      })
+      const errors = updateTabularSection(
+        kind,
+        objectName,
+        tabularSectionName,
+        {
+          standardAttributeOverrides: draftOverrides,
+        }
+      )
       if (errors) {
         toast.error(errors[0].message)
         return

@@ -20,7 +20,7 @@ export interface PostingCompatibilityResult {
 /** Перевіряє чи регістр може бути цільовим для posting документа */
 export function isPostingCompatible(
   register: RegisterDef,
-  options: PostingCompatibilityOptions = {},
+  options: PostingCompatibilityOptions = {}
 ): PostingCompatibilityResult {
   const warnings: string[] = []
 
@@ -28,14 +28,14 @@ export function isPostingCompatible(
   if (register.kind === "AccumulationRegister") {
     if (register.recorderTypes.length === 0) {
       warnings.push(
-        createValidationMessage("validation.posting.acceptsAnyRecorder"),
+        createValidationMessage("validation.posting.acceptsAnyRecorder")
       )
       return { compatible: true, warnings }
     }
 
     if (!options.recorder) {
       warnings.push(
-        createValidationMessage("validation.posting.missingRecorderContext"),
+        createValidationMessage("validation.posting.missingRecorderContext")
       )
       return { compatible: true, warnings }
     }
@@ -43,7 +43,7 @@ export function isPostingCompatible(
     const isAllowed = register.recorderTypes.some(
       (recorder) =>
         recorder.kind === options.recorder?.kind &&
-        recorder.name === options.recorder?.name,
+        recorder.name === options.recorder?.name
     )
 
     if (!isAllowed) {

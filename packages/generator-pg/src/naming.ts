@@ -5,7 +5,11 @@ import { physicalObjectName, physicalTabularName } from "@simetra/core"
 export { toSnakeCase } from "@simetra/core"
 
 // Повна назва таблиці з prefix та kind-prefix
-export function tableName(prefix: string, kind: MetadataKind, objectName: string): string {
+export function tableName(
+  prefix: string,
+  kind: MetadataKind,
+  objectName: string
+): string {
   const physical = physicalObjectName(kind, objectName)
   return prefix ? `${prefix}${physical}` : physical
 }

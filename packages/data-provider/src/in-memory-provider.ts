@@ -1,11 +1,11 @@
-import type { MetadataRef } from '@simetra/core'
+import type { MetadataRef } from "@simetra/core"
 import type {
   DataProvider,
   FilterExpression,
   ListOptions,
   ListResult,
   RefOption,
-} from './index'
+} from "./index"
 
 type Row = Record<string, unknown>
 
@@ -35,7 +35,7 @@ export class InMemoryDataProvider implements DataProvider {
 
   async list(
     objectRef: MetadataRef,
-    options?: ListOptions,
+    options?: ListOptions
   ): Promise<ListResult> {
     const col = this.collection(objectRef)
     let rows = Array.from(col.values())
@@ -43,7 +43,7 @@ export class InMemoryDataProvider implements DataProvider {
     // Фільтрація
     if (options?.filters?.length) {
       rows = rows.filter((row) =>
-        options.filters!.every((f) => matchFilter(row, f)),
+        options.filters!.every((f) => matchFilter(row, f))
       )
     }
 
@@ -52,14 +52,14 @@ export class InMemoryDataProvider implements DataProvider {
       const q = options.search.toLowerCase()
       rows = rows.filter((row) =>
         Object.values(row).some(
-          (v) => typeof v === 'string' && v.toLowerCase().includes(q),
-        ),
+          (v) => typeof v === "string" && v.toLowerCase().includes(q)
+        )
       )
     }
 
     // Сортування
     if (options?.sortBy) {
-      const dir = options.sortDirection === 'desc' ? -1 : 1
+      const dir = options.sortDirection === "desc" ? -1 : 1
       const field = options.sortBy
       rows.sort((a, b) => {
         const va = a[field]
@@ -96,7 +96,7 @@ export class InMemoryDataProvider implements DataProvider {
   async update(
     objectRef: MetadataRef,
     id: string,
-    data: Partial<Row>,
+    data: Partial<Row>
   ): Promise<Row> {
     const col = this.collection(objectRef)
     const existing = col.get(id)
@@ -115,7 +115,7 @@ export class InMemoryDataProvider implements DataProvider {
   async searchRef(
     targetRef: MetadataRef,
     query: string,
-    options?: { limit?: number },
+    options?: { limit?: number }
   ): Promise<RefOption[]> {
     const col = this.collection(targetRef)
     const q = query.toLowerCase()
@@ -124,8 +124,8 @@ export class InMemoryDataProvider implements DataProvider {
 
     for (const row of col.values()) {
       if (results.length >= limit) break
-      const code = typeof row.code === 'string' ? row.code : ''
-      const desc = typeof row.description === 'string' ? row.description : ''
+      const code = typeof row.code === "string" ? row.code : ""
+      const desc = typeof row.description === "string" ? row.description : ""
       if (code.toLowerCase().includes(q) || desc.toLowerCase().includes(q)) {
         results.push({
           id: row.id as string,
@@ -140,10 +140,10 @@ export class InMemoryDataProvider implements DataProvider {
   async getRefDisplay(targetRef: MetadataRef, id: string): Promise<string> {
     const row = this.collection(targetRef).get(id)
     if (!row) return id
-    if (typeof row.description === 'string' && row.description) {
+    if (typeof row.description === "string" && row.description) {
       return row.description
     }
-    if (typeof row.code === 'string' && row.code) {
+    if (typeof row.code === "string" && row.code) {
       return row.code
     }
     return id
@@ -181,33 +181,33 @@ function matchFilter(row: Row, filter: FilterExpression): boolean {
   const val = row[filter.field]
 
   switch (filter.operator) {
-    case 'eq':
+    case "eq":
       return val === filter.value
-    case 'neq':
+    case "neq":
       return val !== filter.value
-    case 'gt':
+    case "gt":
       return (val as number) > (filter.value as number)
-    case 'gte':
+    case "gte":
       return (val as number) >= (filter.value as number)
-    case 'lt':
+    case "lt":
       return (val as number) < (filter.value as number)
-    case 'lte':
+    case "lte":
       return (val as number) <= (filter.value as number)
-    case 'like':
+    case "like":
       return (
-        typeof val === 'string' &&
-        typeof filter.value === 'string' &&
+        typeof val === "string" &&
+        typeof filter.value === "string" &&
         val.includes(filter.value)
       )
-    case 'ilike':
+    case "ilike":
       return (
-        typeof val === 'string' &&
-        typeof filter.value === 'string' &&
+        typeof val === "string" &&
+        typeof filter.value === "string" &&
         val.toLowerCase().includes(filter.value.toLowerCase())
       )
-    case 'in':
+    case "in":
       return Array.isArray(filter.value) && filter.value.includes(val)
-    case 'is':
+    case "is":
       return val === filter.value
     default:
       return true

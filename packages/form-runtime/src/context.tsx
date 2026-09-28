@@ -1,6 +1,6 @@
-import { createContext, useContext } from 'react'
-import type { DataProvider } from '@simetra/data-provider'
-import type { ProjectModel } from '@simetra/core'
+import { createContext, useContext } from "react"
+import type { DataProvider } from "@simetra/data-provider"
+import type { ProjectModel } from "@simetra/core"
 
 // Контекст DataProvider для runtime форм
 const DataProviderContext = createContext<DataProvider | null>(null)
@@ -12,15 +12,13 @@ export function DataProviderProvider({
   provider: DataProvider
   children: React.ReactNode
 }) {
-  return (
-    <DataProviderContext value={provider}>{children}</DataProviderContext>
-  )
+  return <DataProviderContext value={provider}>{children}</DataProviderContext>
 }
 
 export function useDataProvider(): DataProvider {
   const ctx = useContext(DataProviderContext)
   if (!ctx)
-    throw new Error('useDataProvider must be used within DataProviderProvider')
+    throw new Error("useDataProvider must be used within DataProviderProvider")
   return ctx
 }
 
@@ -39,7 +37,6 @@ export function MetadataProvider({
 
 export function useMetadata(): ProjectModel {
   const ctx = useContext(MetadataContext)
-  if (!ctx)
-    throw new Error('useMetadata must be used within MetadataProvider')
+  if (!ctx) throw new Error("useMetadata must be used within MetadataProvider")
   return ctx
 }

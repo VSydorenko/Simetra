@@ -1,10 +1,13 @@
-import { useParams, useNavigate } from 'react-router'
-import { resolveForm } from '@simetra/core'
-import { useMetadata, ListRenderer } from '@simetra/form-runtime'
-import { resolveObjectFromSlug } from '../utils/resolve-object'
+import { useParams, useNavigate } from "react-router"
+import { resolveForm } from "@simetra/core"
+import { useMetadata, ListRenderer } from "@simetra/form-runtime"
+import { resolveObjectFromSlug } from "../utils/resolve-object"
 
 export function ListPage() {
-  const { kindSlug = '', objectSlug } = useParams<{ kindSlug: string; objectSlug: string }>()
+  const { kindSlug = "", objectSlug } = useParams<{
+    kindSlug: string
+    objectSlug: string
+  }>()
   const navigate = useNavigate()
   const model = useMetadata()
 
@@ -22,11 +25,13 @@ export function ListPage() {
 
   const { objectRef, object } = resolved
   const displayName =
-    (object as { displayName?: { uk?: string; en?: string } | null }).displayName?.uk ??
-    (object as { displayName?: { uk?: string; en?: string } | null }).displayName?.en ??
+    (object as { displayName?: { uk?: string; en?: string } | null })
+      .displayName?.uk ??
+    (object as { displayName?: { uk?: string; en?: string } | null })
+      .displayName?.en ??
     objectRef.name
 
-  const formModel = resolveForm(objectRef, 'ListForm', model)
+  const formModel = resolveForm(objectRef, "ListForm", model)
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -35,7 +40,7 @@ export function ListPage() {
         objectRef={objectRef}
         formModel={formModel}
         onRowClick={(id) => navigate(id)}
-        onCreateClick={() => navigate('new')}
+        onCreateClick={() => navigate("new")}
       />
     </div>
   )

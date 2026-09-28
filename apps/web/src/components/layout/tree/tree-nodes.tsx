@@ -387,10 +387,11 @@ function GroupNode({
       uiStore.selectObject(objectRef)
     } else if (data.groupKey === "forms") {
       // Додати форму: спочатку ItemForm, якщо вже є — ListForm
-      const existingForms = store.model.forms?.filter(
-        (f) =>
-          f.objectRef.kind === kind && f.objectRef.name === data.objectName,
-      ) ?? []
+      const existingForms =
+        store.model.forms?.filter(
+          (f) =>
+            f.objectRef.kind === kind && f.objectRef.name === data.objectName
+        ) ?? []
       const hasItem = existingForms.some((f) => f.kind === "ItemForm")
       const hasList = existingForms.some((f) => f.kind === "ListForm")
       const formKind = !hasItem ? "ItemForm" : !hasList ? "ListForm" : null
@@ -619,7 +620,7 @@ function FormNode({
             "hover:bg-accent/50",
             node.isSelected &&
               "border-l-2 border-primary bg-accent text-accent-foreground",
-            node.isFocused && !node.isSelected && "ring-1 ring-ring",
+            node.isFocused && !node.isSelected && "ring-1 ring-ring"
           )}
         >
           {formIcon && (

@@ -65,9 +65,9 @@ export const generate = defineCommand({
     let options
     try {
       options = validateGeneratorOptions({
-        'enum-strategy': args["enum-strategy"],
-        'constants-strategy': args["constants-strategy"],
-        'output-mode': args["output-mode"],
+        "enum-strategy": args["enum-strategy"],
+        "constants-strategy": args["constants-strategy"],
+        "output-mode": args["output-mode"],
         schema: args.schema,
       })
     } catch (err) {
@@ -80,9 +80,7 @@ export const generate = defineCommand({
     try {
       projectModel = buildProjectModel(inputDir)
     } catch (err) {
-      console.error(
-        err instanceof Error ? err.message : String(err),
-      )
+      console.error(err instanceof Error ? err.message : String(err))
       process.exit(1)
     }
 

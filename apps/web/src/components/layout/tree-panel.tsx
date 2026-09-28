@@ -14,9 +14,9 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Button } from "@workspace/ui/components/button"
-import type { MetadataKind } from "@simetra/core"
+import type { MetadataKind, MetadataRef } from "@simetra/core"
 import { useMetadataStore } from "@/stores/metadata-store"
-import { useUiStore } from "@/stores/ui-store"
+import { useUiStore, type TabularSectionSelection } from "@/stores/ui-store"
 import {
   findReferences,
   formatReference,
@@ -32,6 +32,21 @@ import { TreeNode } from "./tree/tree-nodes"
 import { WhereUsedDialog } from "@/components/editor/where-used-dialog"
 
 // --- Головний компонент ---
+
+/** Ідентифікатор вузла дерева, що відповідає поточному вибору в сторі */
+function selectionToNodeId(
+  selectedObject: MetadataRef | null,
+  selectedTabularSection: TabularSectionSelection | null
+): string | undefined {
+  if (selectedTabularSection) {
+    const { objectRef, tabularSectionName } = selectedTabularSection
+    return `${objectRef.kind}/${objectRef.name}/tabularSections/${tabularSectionName}`
+  }
+  if (selectedObject) {
+    return `${selectedObject.kind}/${selectedObject.name}`
+  }
+  return undefined
+}
 
 export function TreePanel() {
   const { t } = useTranslation()
@@ -122,29 +137,23 @@ export function TreePanel() {
   }, [expandedTreeNodes])
 
   // --- Selection ---
-  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(
-    undefined
+  // Вибраний вузол дерева синхронізується з вибором у сторі. Синхронізацію
+  // робимо під час рендеру (патерн «adjusting state when a prop changes»),
+  // а не в useEffect: setState в ефекті дає зайвий каскадний рендер.
+  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(() =>
+    selectionToNodeId(selectedObject, selectedTabularSection)
   )
-
-  useEffect(() => {
-    if (selectedTabularSection) {
-      const sectionId = `${selectedTabularSection.objectRef.kind}/${selectedTabularSection.objectRef.name}/tabularSections/${selectedTabularSection.tabularSectionName}`
-      if (selectedNodeId !== sectionId) {
-        setSelectedNodeId(sectionId)
-      }
-      return
-    }
-
-    if (selectedObject) {
-      const objId = `${selectedObject.kind}/${selectedObject.name}`
-      if (selectedNodeId !== objId) {
-        setSelectedNodeId(objId)
-      }
-    } else {
-      setSelectedNodeId(undefined)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedObject, selectedTabularSection])
+  const [prevSelection, setPrevSelection] = useState({
+    selectedObject,
+    selectedTabularSection,
+  })
+  if (
+    prevSelection.selectedObject !== selectedObject ||
+    prevSelection.selectedTabularSection !== selectedTabularSection
+  ) {
+    setPrevSelection({ selectedObject, selectedTabularSection })
+    setSelectedNodeId(selectionToNodeId(selectedObject, selectedTabularSection))
+  }
 
   // --- Обробники ---
   const handleSelect = useCallback((nodes: NodeApi<TreeNodeData>[]) => {

@@ -1,22 +1,22 @@
-import { useCallback } from 'react'
-import { useTranslation } from 'react-i18next'
-import { toast } from '@workspace/ui/components/sonner'
-import { Button } from '@workspace/ui/components/button'
-import { Badge } from '@workspace/ui/components/badge'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { useCallback } from "react"
+import { useTranslation } from "react-i18next"
+import { toast } from "@workspace/ui/components/sonner"
+import { Button } from "@workspace/ui/components/button"
+import { Badge } from "@workspace/ui/components/badge"
+import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Copy01Icon,
   Download04Icon,
   FolderZipIcon,
   LinkSquare02Icon,
-} from '@hugeicons/core-free-icons'
-import { useDdlStore } from '@/stores/ddl-store'
-import { useMetadataStore } from '@/stores/metadata-store'
+} from "@hugeicons/core-free-icons"
+import { useDdlStore } from "@/stores/ddl-store"
+import { useMetadataStore } from "@/stores/metadata-store"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@workspace/ui/components/tooltip'
+} from "@workspace/ui/components/tooltip"
 
 export function SqlToolbar() {
   const { t } = useTranslation()
@@ -37,10 +37,10 @@ export function SqlToolbar() {
       const timestamp = new Date()
         .toISOString()
         .slice(0, 19)
-        .replace(/[:T]/g, '-')
+        .replace(/[:T]/g, "-")
       return `${project.name}_${timestamp}.sql`
     },
-    [project.name],
+    [project.name]
   )
 
   const handleCopy = useCallback(async () => {
@@ -49,30 +49,30 @@ export function SqlToolbar() {
       if (isMultiFile && selectedFile) {
         await navigator.clipboard.writeText(selectedFile.content)
       } else {
-        const allSql = output.files.map((f) => f.content).join('\n\n')
+        const allSql = output.files.map((f) => f.content).join("\n\n")
         await navigator.clipboard.writeText(allSql)
       }
-      toast(t('sqlPreview.copiedToast'))
+      toast(t("sqlPreview.copiedToast"))
     } catch {
-      toast.error(t('sqlPreview.copyError'))
+      toast.error(t("sqlPreview.copyError"))
     }
   }, [output, isMultiFile, selectedFile, t])
 
   const handleDownload = useCallback(() => {
     if (!output) return
     if (isMultiFile && selectedFile) {
-      const blob = new Blob([selectedFile.content], { type: 'application/sql' })
+      const blob = new Blob([selectedFile.content], { type: "application/sql" })
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
+      const a = document.createElement("a")
       a.href = url
       a.download = selectedFile.path
       a.click()
       URL.revokeObjectURL(url)
     } else {
-      const allSql = output.files.map((f) => f.content).join('\n\n')
-      const blob = new Blob([allSql], { type: 'application/sql' })
+      const allSql = output.files.map((f) => f.content).join("\n\n")
+      const blob = new Blob([allSql], { type: "application/sql" })
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
+      const a = document.createElement("a")
       a.href = url
       a.download = makeDownloadFilename()
       a.click()
@@ -82,10 +82,10 @@ export function SqlToolbar() {
 
   const handleDownloadAll = useCallback(() => {
     if (!output) return
-    const allSql = output.files.map((f) => f.content).join('\n\n')
-    const blob = new Blob([allSql], { type: 'application/sql' })
+    const allSql = output.files.map((f) => f.content).join("\n\n")
+    const blob = new Blob([allSql], { type: "application/sql" })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
+    const a = document.createElement("a")
     a.href = url
     a.download = makeDownloadFilename()
     a.click()
@@ -95,16 +95,17 @@ export function SqlToolbar() {
   // Відкрити Supabase SQL Editor — тільки коли target = supabase і є projectRef
   const deploymentTarget = project.deployment?.target
   const projectRef = project.deployment?.supabase?.projectRef
-  const showSupabaseLink =
-    deploymentTarget === 'supabase' && !!projectRef
+  const showSupabaseLink = deploymentTarget === "supabase" && !!projectRef
 
   const handleOpenSupabase = useCallback(() => {
     if (!projectRef) return
     const url = `https://supabase.com/dashboard/project/${encodeURIComponent(projectRef)}/sql/new`
-    window.open(url, '_blank', 'noopener,noreferrer')
+    window.open(url, "_blank", "noopener,noreferrer")
   }, [projectRef])
 
-  const copyLabel = isMultiFile ? t("sqlPreview.copyFile") : t("sqlPreview.copyAll")
+  const copyLabel = isMultiFile
+    ? t("sqlPreview.copyFile")
+    : t("sqlPreview.copyAll")
   const downloadLabel = isMultiFile
     ? t("sqlPreview.downloadFile")
     : t("sqlPreview.download")
@@ -148,9 +149,7 @@ export function SqlToolbar() {
             />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {downloadLabel}
-        </TooltipContent>
+        <TooltipContent side="bottom">{downloadLabel}</TooltipContent>
       </Tooltip>
 
       {isMultiFile && (
@@ -199,11 +198,11 @@ export function SqlToolbar() {
                 strokeWidth={2}
                 className="size-3.5"
               />
-              {t('sqlPreview.openSupabaseSqlEditor')}
+              {t("sqlPreview.openSupabaseSqlEditor")}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {t('sqlPreview.openSupabaseSqlEditor')}
+            {t("sqlPreview.openSupabaseSqlEditor")}
           </TooltipContent>
         </Tooltip>
       )}

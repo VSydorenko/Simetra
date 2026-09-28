@@ -18,7 +18,7 @@ export const attributeSchema = z
       .string()
       .regex(
         TECHNICAL_NAME_PATTERNS.snake_case,
-        "Must be snake_case, Latin only",
+        "Must be snake_case, Latin only"
       )
       .refine((n) => !isSqlReservedWord(n), {
         message: "Name is a SQL reserved word",

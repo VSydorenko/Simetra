@@ -1,10 +1,11 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback } from "react"
 import {
-  useReactTable,
-  getCoreRowModel,
+  useTable,
+  tableFeatures,
+  columnSizingFeature,
   flexRender,
   type ColumnDef,
-} from '@tanstack/react-table'
+} from "@tanstack/react-table"
 import {
   Table,
   TableHeader,
@@ -12,10 +13,15 @@ import {
   TableHead,
   TableBody,
   TableCell,
-} from '@workspace/ui/components/table'
-import { Button } from '@workspace/ui/components/button'
-import { Input } from '@workspace/ui/components/input'
-import { Checkbox } from '@workspace/ui/components/checkbox'
+} from "@workspace/ui/components/table"
+import { Button } from "@workspace/ui/components/button"
+import { Input } from "@workspace/ui/components/input"
+import { Checkbox } from "@workspace/ui/components/checkbox"
+
+// TanStack Table v9 реєструє фічі явно: columnSizingFeature потрібна для `size`
+// і `header.getSize()`; приховування колонок немає, тож клітинки — через
+// core-метод `getAllCells()`.
+const features = tableFeatures({ columnSizingFeature })
 
 export interface RuntimeDataTableColumn {
   name: string
@@ -36,10 +42,10 @@ export interface RuntimeDataTableProps {
 function renderCellEditor(
   col: RuntimeDataTableColumn,
   value: unknown,
-  onCellChange: (val: unknown) => void,
+  onCellChange: (val: unknown) => void
 ) {
   switch (col.type) {
-    case 'Boolean':
+    case "Boolean":
       return (
         <Checkbox
           checked={!!value}
@@ -47,25 +53,25 @@ function renderCellEditor(
           className="mx-auto block"
         />
       )
-    case 'Integer':
+    case "Integer":
       return (
         <Input
           type="number"
           step="1"
           className="h-6 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-1"
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) => {
             const parsed = parseInt(e.target.value, 10)
             onCellChange(isNaN(parsed) ? null : parsed)
           }}
         />
       )
-    case 'Numeric':
+    case "Numeric":
       return (
         <Input
           type="number"
           className="h-6 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-1"
-          value={value != null ? String(value) : ''}
+          value={value != null ? String(value) : ""}
           onChange={(e) => {
             const parsed = parseFloat(e.target.value)
             onCellChange(isNaN(parsed) ? null : parsed)
@@ -77,7 +83,7 @@ function renderCellEditor(
       return (
         <Input
           className="h-6 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-1"
-          value={String(value ?? '')}
+          value={String(value ?? "")}
           onChange={(e) => onCellChange(e.target.value)}
         />
       )
@@ -94,11 +100,11 @@ export function RuntimeDataTable({
   const handleCellChange = useCallback(
     (rowIndex: number, columnName: string, cellValue: unknown) => {
       const updated = value.map((row, i) =>
-        i === rowIndex ? { ...row, [columnName]: cellValue } : row,
+        i === rowIndex ? { ...row, [columnName]: cellValue } : row
       )
       onChange(updated)
     },
-    [value, onChange],
+    [value, onChange]
   )
 
   const handleAddRow = useCallback(() => {
@@ -107,12 +113,12 @@ export function RuntimeDataTable({
     }
     for (const col of columns) {
       // Значення за замовчуванням залежить від типу
-      if (col.type === 'Boolean') {
+      if (col.type === "Boolean") {
         emptyRow[col.name] = false
-      } else if (col.type === 'Integer' || col.type === 'Numeric') {
+      } else if (col.type === "Integer" || col.type === "Numeric") {
         emptyRow[col.name] = null
       } else {
-        emptyRow[col.name] = ''
+        emptyRow[col.name] = ""
       }
     }
     onChange([...value, emptyRow])
@@ -126,35 +132,37 @@ export function RuntimeDataTable({
         .map((row, i) => ({ ...row, line_number: i + 1 }))
       onChange(updated)
     },
-    [value, onChange],
+    [value, onChange]
   )
 
-  const tableColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {
-    const cols: ColumnDef<Record<string, unknown>>[] = [
+  const tableColumns = useMemo<
+    ColumnDef<typeof features, Record<string, unknown>>[]
+  >(() => {
+    const cols: ColumnDef<typeof features, Record<string, unknown>>[] = [
       {
-        id: 'line_number',
-        header: '№',
+        id: "line_number",
+        header: "№",
         size: 50,
         cell: ({ row }) => (
           <span className="text-muted-foreground">{row.index + 1}</span>
         ),
       },
       ...columns.map(
-        (col): ColumnDef<Record<string, unknown>> => ({
+        (col): ColumnDef<typeof features, Record<string, unknown>> => ({
           id: col.name,
           header: col.displayName?.uk ?? col.displayName?.en ?? col.name,
           cell: ({ row }) =>
             renderCellEditor(col, row.original[col.name], (val) =>
-              handleCellChange(row.index, col.name, val),
+              handleCellChange(row.index, col.name, val)
             ),
-        }),
+        })
       ),
     ]
 
     if (allowDelete) {
       cols.push({
-        id: 'actions',
-        header: '',
+        id: "actions",
+        header: "",
         size: 40,
         cell: ({ row }) => (
           <Button
@@ -172,10 +180,10 @@ export function RuntimeDataTable({
     return cols
   }, [columns, allowDelete, handleCellChange, handleDeleteRow])
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: value,
     columns: tableColumns,
-    getCoreRowModel: getCoreRowModel(),
   })
 
   return (
@@ -186,12 +194,15 @@ export function RuntimeDataTable({
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id} style={{ width: header.getSize() }}>
+                  <TableHead
+                    key={header.id}
+                    style={{ width: header.getSize() }}
+                  >
                     {header.isPlaceholder
                       ? null
                       : flexRender(
                           header.column.columnDef.header,
-                          header.getContext(),
+                          header.getContext()
                         )}
                   </TableHead>
                 ))}
@@ -202,11 +213,11 @@ export function RuntimeDataTable({
             {table.getRowModel().rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(
                         cell.column.columnDef.cell,
-                        cell.getContext(),
+                        cell.getContext()
                       )}
                     </TableCell>
                   ))}

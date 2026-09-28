@@ -24,13 +24,13 @@ export type MetadataObject = z.infer<typeof metadataObjectSchema>
 
 // MetadataKind → ключ колекції в ProjectModel
 const KIND_TO_COLLECTION_KEY: Record<MetadataKind, string> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  Enumeration: 'enumerations',
-  InformationRegister: 'informationRegisters',
-  AccumulationRegister: 'accumulationRegisters',
-  Constant: 'constants',
-  CustomTable: 'customTables',
+  Catalog: "catalogs",
+  Document: "documents",
+  Enumeration: "enumerations",
+  InformationRegister: "informationRegisters",
+  AccumulationRegister: "accumulationRegisters",
+  Constant: "constants",
+  CustomTable: "customTables",
 }
 
 export const projectModelSchema = z
@@ -58,8 +58,8 @@ export const projectModelSchema = z
       if (!(formSupportedKinds as readonly string[]).includes(kind)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['forms', i, 'objectRef', 'kind'],
-          message: `Forms не підтримуються для kind "${kind}". Дозволені: ${formSupportedKinds.join(', ')}`,
+          path: ["forms", i, "objectRef", "kind"],
+          message: `Forms не підтримуються для kind "${kind}". Дозволені: ${formSupportedKinds.join(", ")}`,
         })
         continue
       }
@@ -67,13 +67,12 @@ export const projectModelSchema = z
       // objectRef має посилатись на існуючий об'єкт
       const collectionKey = KIND_TO_COLLECTION_KEY[kind as MetadataKind]
       const collection = data[collectionKey as keyof typeof data] as
-        | { name: string }[]
-        | undefined
+        { name: string }[] | undefined
       const exists = collection?.some((obj) => obj.name === name)
       if (!exists) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['forms', i, 'objectRef'],
+          path: ["forms", i, "objectRef"],
           message: `Об'єкт "${kind}.${name}" не знайдено в моделі`,
         })
       }
@@ -83,7 +82,7 @@ export const projectModelSchema = z
       if (duplicateCheck.has(uniqueKey)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['forms', i],
+          path: ["forms", i],
           message: `Дублікат форми ${form.kind} для ${kind}.${name}`,
         })
       }

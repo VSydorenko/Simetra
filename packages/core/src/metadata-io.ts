@@ -5,7 +5,12 @@
  * Використовується в: apps/web (WebStorage), packages/cli, apps/runtime (Phase 3).
  */
 
-import type { MetadataKind, MetadataObject, ProjectModel, Project } from './schemas'
+import type {
+  MetadataKind,
+  MetadataObject,
+  ProjectModel,
+  Project,
+} from "./schemas"
 import {
   projectSchema,
   projectModelSchema,
@@ -22,9 +27,9 @@ import {
   STRING_LENGTH,
   NUMERIC_PRECISION,
   NUMERIC_SCALE,
-} from './schemas'
-import type { FormSchema } from './schemas'
-import { KIND_TO_KEY } from './find-references'
+} from "./schemas"
+import type { FormSchema } from "./schemas"
+import { KIND_TO_KEY } from "./find-references"
 import {
   serializeMetadataObject,
   serializeProject,
@@ -33,8 +38,8 @@ import {
   buildConstantsSchemaUrl,
   serializeForm,
   buildFormSchemaUrl,
-} from './serialization'
-import { formatValidationMessage } from './validation-message'
+} from "./serialization"
+import { formatValidationMessage } from "./validation-message"
 
 // --- Типи ---
 
@@ -93,38 +98,38 @@ interface NormalizationResult {
 // --- Маппінг MetadataKind ↔ назва каталогу (BRD §7.2) ---
 
 export const KIND_TO_DIR: Record<MetadataKind, string> = {
-  Catalog: 'catalogs',
-  Document: 'documents',
-  Enumeration: 'enumerations',
-  InformationRegister: 'information-registers',
-  AccumulationRegister: 'accumulation-registers',
-  Constant: 'constants',
-  CustomTable: 'custom-tables',
+  Catalog: "catalogs",
+  Document: "documents",
+  Enumeration: "enumerations",
+  InformationRegister: "information-registers",
+  AccumulationRegister: "accumulation-registers",
+  Constant: "constants",
+  CustomTable: "custom-tables",
 }
 
 export const DIR_TO_KIND: Record<string, MetadataKind> = Object.fromEntries(
-  Object.entries(KIND_TO_DIR).map(([k, v]) => [v, k as MetadataKind]),
+  Object.entries(KIND_TO_DIR).map(([k, v]) => [v, k as MetadataKind])
 ) as Record<string, MetadataKind>
 
 // Маппінг директорій → Zod-схема (для strict-валідації за kind)
-const DIR_TO_SCHEMA: Record<string, import('zod').ZodTypeAny> = {
+const DIR_TO_SCHEMA: Record<string, import("zod").ZodTypeAny> = {
   catalogs: catalogSchema,
   documents: documentSchema,
   enumerations: enumerationSchema,
-  'information-registers': informationRegisterSchema,
-  'accumulation-registers': accumulationRegisterSchema,
-  'custom-tables': customTableSchema,
+  "information-registers": informationRegisterSchema,
+  "accumulation-registers": accumulationRegisterSchema,
+  "custom-tables": customTableSchema,
 }
 
 // Ключі ProjectModel → MetadataKind
 const MODEL_KEY_TO_KIND: Record<string, MetadataKind> = {
-  catalogs: 'Catalog',
-  documents: 'Document',
-  enumerations: 'Enumeration',
-  informationRegisters: 'InformationRegister',
-  accumulationRegisters: 'AccumulationRegister',
-  constants: 'Constant',
-  customTables: 'CustomTable',
+  catalogs: "Catalog",
+  documents: "Document",
+  enumerations: "Enumeration",
+  informationRegisters: "InformationRegister",
+  accumulationRegisters: "AccumulationRegister",
+  constants: "Constant",
+  customTables: "CustomTable",
 }
 
 // --- PascalCase → kebab-case ---
@@ -132,8 +137,8 @@ const MODEL_KEY_TO_KIND: Record<string, MetadataKind> = {
 /** PascalCase → kebab-case: SalesOrder → sales-order */
 export function toKebabCase(name: string): string {
   return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
     .toLowerCase()
 }
 
@@ -155,20 +160,22 @@ export function parseMetadataFiles(files: Map<string, string>): {
 
   for (const [path, content] of files) {
     // project.meta.json
-    if (path === 'project.meta.json') {
+    if (path === "project.meta.json") {
       try {
         parsed.project = JSON.parse(content)
       } catch (e) {
         warnings.push({
           filePath: path,
-          errors: [`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`],
+          errors: [
+            `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
+          ],
         })
       }
       continue
     }
 
     // Визначити тип за назвою каталогу
-    const parts = path.split('/')
+    const parts = path.split("/")
     if (parts.length < 2) continue
 
     const dirName = parts[0]
@@ -183,9 +190,9 @@ export function parseMetadataFiles(files: Map<string, string>): {
 
     // forms/*.form.json — Phase 3: форми об'єктів
     // Формат: {kind-dir}/{object-kebab}/forms/{form-name}.form.json
-    if (parts.length >= 4 && parts[parts.length - 2] === 'forms') {
+    if (parts.length >= 4 && parts[parts.length - 2] === "forms") {
       const fileName = parts[parts.length - 1]
-      if (!fileName.endsWith('.form.json')) continue
+      if (!fileName.endsWith(".form.json")) continue
 
       try {
         const data = JSON.parse(content)
@@ -199,7 +206,9 @@ export function parseMetadataFiles(files: Map<string, string>): {
       } catch (e) {
         warnings.push({
           filePath: path,
-          errors: [`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`],
+          errors: [
+            `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
+          ],
         })
       }
       continue
@@ -207,12 +216,12 @@ export function parseMetadataFiles(files: Map<string, string>): {
 
     // Файл має закінчуватись на .meta.json
     const fileName = parts[parts.length - 1]
-    if (!fileName.endsWith('.meta.json')) continue
+    if (!fileName.endsWith(".meta.json")) continue
 
     try {
       const data = JSON.parse(content)
 
-      if (kind === 'Constant') {
+      if (kind === "Constant") {
         // constants.meta.json — object wrapper або legacy array (backward compat)
         let items: unknown[] | null = null
         if (Array.isArray(data)) {
@@ -224,12 +233,13 @@ export function parseMetadataFiles(files: Map<string, string>): {
             items = wrapperResult.data.constants
           } else if (
             data !== null &&
-            typeof data === 'object' &&
-            'constants' in data &&
+            typeof data === "object" &&
+            "constants" in data &&
             Array.isArray((data as Record<string, unknown>).constants)
           ) {
             // Wrapper schema failed — graceful degradation: парсимо кожен constant окремо
-            const rawConstants = (data as Record<string, unknown>).constants as unknown[]
+            const rawConstants = (data as Record<string, unknown>)
+              .constants as unknown[]
             items = []
             for (let i = 0; i < rawConstants.length; i++) {
               const itemResult = constantSchema.safeParse(rawConstants[i])
@@ -240,7 +250,7 @@ export function parseMetadataFiles(files: Map<string, string>): {
                   filePath: path,
                   errors: itemResult.error.issues.map(
                     (issue) =>
-                      `constants[${i}].${issue.path.join('.')}: ${formatValidationMessage(issue.message)}`,
+                      `constants[${i}].${issue.path.join(".")}: ${formatValidationMessage(issue.message)}`
                   ),
                 })
               }
@@ -271,33 +281,33 @@ export function parseMetadataFiles(files: Map<string, string>): {
 
 function normalizeLegacyAttribute(
   value: unknown,
-  path: string,
+  path: string
 ): NormalizationResult {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return { data: value, warnings: [] }
   }
 
   const attribute = { ...(value as Record<string, unknown>) }
   const warnings: string[] = []
 
-  if (attribute.type === 'String' && attribute.length == null) {
+  if (attribute.type === "String" && attribute.length == null) {
     attribute.length = STRING_LENGTH
     warnings.push(
-      `${path}.length: missing String length normalized to ${STRING_LENGTH}`,
+      `${path}.length: missing String length normalized to ${STRING_LENGTH}`
     )
   }
 
-  if (attribute.type === 'Numeric') {
+  if (attribute.type === "Numeric") {
     if (attribute.precision == null) {
       attribute.precision = NUMERIC_PRECISION
       warnings.push(
-        `${path}.precision: missing Numeric precision normalized to ${NUMERIC_PRECISION}`,
+        `${path}.precision: missing Numeric precision normalized to ${NUMERIC_PRECISION}`
       )
     }
     if (attribute.scale == null) {
       attribute.scale = NUMERIC_SCALE
       warnings.push(
-        `${path}.scale: missing Numeric scale normalized to ${NUMERIC_SCALE}`,
+        `${path}.scale: missing Numeric scale normalized to ${NUMERIC_SCALE}`
       )
     }
   }
@@ -307,7 +317,7 @@ function normalizeLegacyAttribute(
 
 function normalizeLegacyAttributes(
   list: unknown,
-  path: string,
+  path: string
 ): NormalizationResult {
   if (!Array.isArray(list)) {
     return { data: list, warnings: [] }
@@ -319,7 +329,7 @@ function normalizeLegacyAttributes(
   for (let index = 0; index < list.length; index++) {
     const item = list[index]
     const itemName =
-      item && typeof item === 'object' && 'name' in item
+      item && typeof item === "object" && "name" in item
         ? String((item as { name?: unknown }).name ?? index)
         : String(index)
     const result = normalizeLegacyAttribute(item, `${path}.${itemName}`)
@@ -332,12 +342,12 @@ function normalizeLegacyAttributes(
 
 function normalizeLegacyMetadataObject(
   kind: MetadataKind,
-  value: unknown,
+  value: unknown
 ): NormalizationResult {
   if (
-    kind === 'Constant' ||
+    kind === "Constant" ||
     value === null ||
-    typeof value !== 'object' ||
+    typeof value !== "object" ||
     Array.isArray(value)
   ) {
     return { data: value, warnings: [] }
@@ -346,7 +356,7 @@ function normalizeLegacyMetadataObject(
   const object = { ...(value as Record<string, unknown>) }
   const warnings: string[] = []
 
-  for (const key of ['attributes', 'dimensions', 'resources'] as const) {
+  for (const key of ["attributes", "dimensions", "resources"] as const) {
     const result = normalizeLegacyAttributes(object[key], key)
     object[key] = result.data
     warnings.push(...result.warnings)
@@ -354,7 +364,11 @@ function normalizeLegacyMetadataObject(
 
   if (Array.isArray(object.tabularSections)) {
     object.tabularSections = object.tabularSections.map((section, index) => {
-      if (section === null || typeof section !== 'object' || Array.isArray(section)) {
+      if (
+        section === null ||
+        typeof section !== "object" ||
+        Array.isArray(section)
+      ) {
         return section
       }
 
@@ -362,12 +376,12 @@ function normalizeLegacyMetadataObject(
         ...(section as Record<string, unknown>),
       }
       const sectionName =
-        'name' in normalizedSection
+        "name" in normalizedSection
           ? String(normalizedSection.name ?? index)
           : String(index)
       const result = normalizeLegacyAttributes(
         normalizedSection.attributes,
-        `tabularSections.${sectionName}`,
+        `tabularSections.${sectionName}`
       )
       normalizedSection.attributes = result.data
       warnings.push(...result.warnings)
@@ -399,7 +413,7 @@ export interface BuildModelOptions {
  */
 export function buildProjectModelFromParsed(
   parsed: ParsedFiles,
-  options: BuildModelOptions = {},
+  options: BuildModelOptions = {}
 ): BuildModelResult {
   const { strict = false } = options
   const warnings: FileWarning[] = []
@@ -412,16 +426,16 @@ export function buildProjectModelFromParsed(
       project = result.data
     } else {
       const errors = result.error.issues.map(
-        (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`
+        (i) => `${i.path.join(".")}: ${formatValidationMessage(i.message)}`
       )
-      warnings.push({ filePath: 'project.meta.json', errors })
+      warnings.push({ filePath: "project.meta.json", errors })
 
-      throw new Error(`project.meta.json is invalid: ${errors.join('; ')}`)
+      throw new Error(`project.meta.json is invalid: ${errors.join("; ")}`)
     }
   }
 
   if (!project) {
-    throw new Error('project.meta.json is missing or invalid')
+    throw new Error("project.meta.json is missing or invalid")
   }
 
   // Валідація об'єктів по типах
@@ -441,7 +455,7 @@ export function buildProjectModelFromParsed(
       : normalizeLegacyMetadataObject(kind, data)
     const candidateData = normalization.data
 
-    if (kind === 'Constant') {
+    if (kind === "Constant") {
       const result = constantSchema.safeParse(candidateData)
       if (result.success) {
         collections.constants.push(result.data as unknown as MetadataObject)
@@ -452,11 +466,13 @@ export function buildProjectModelFromParsed(
         const errors = [
           ...normalization.warnings,
           ...result.error.issues.map(
-            (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
+            (i) => `${i.path.join(".")}: ${formatValidationMessage(i.message)}`
           ),
         ]
         if (strict) {
-          throw new Error(`Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
+          throw new Error(
+            `Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join("\n")}`
+          )
         }
         warnings.push({ filePath, errors })
       }
@@ -479,11 +495,13 @@ export function buildProjectModelFromParsed(
         const errors = [
           ...normalization.warnings,
           ...result.error.issues.map(
-            (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
+            (i) => `${i.path.join(".")}: ${formatValidationMessage(i.message)}`
           ),
         ]
         if (strict) {
-          throw new Error(`Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
+          throw new Error(
+            `Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join("\n")}`
+          )
         }
         warnings.push({ filePath, errors })
       }
@@ -497,8 +515,8 @@ export function buildProjectModelFromParsed(
 
     // Визначити kind форми за ім'ям файлу
     let formKind: string | undefined
-    if (formFileName === 'item.form.json') formKind = 'ItemForm'
-    else if (formFileName === 'list.form.json') formKind = 'ListForm'
+    if (formFileName === "item.form.json") formKind = "ItemForm"
+    else if (formFileName === "list.form.json") formKind = "ListForm"
 
     if (!formKind) {
       warnings.push({
@@ -512,15 +530,13 @@ export function buildProjectModelFromParsed(
     const collKey = KIND_TO_KEY[objectKind]
     const objectsInCollection = collections[collKey] ?? []
     const matchingObj = objectsInCollection.find(
-      (obj) => toKebabCase((obj as { name: string }).name) === objectSlug,
+      (obj) => toKebabCase((obj as { name: string }).name) === objectSlug
     )
 
     if (!matchingObj) {
       warnings.push({
         filePath,
-        errors: [
-          `Не знайдено об'єкт "${objectKind}" зі slug "${objectSlug}"`,
-        ],
+        errors: [`Не знайдено об'єкт "${objectKind}" зі slug "${objectSlug}"`],
       })
       continue
     }
@@ -529,7 +545,7 @@ export function buildProjectModelFromParsed(
 
     // Побудувати FormSchema об'єкт і валідувати
     const formData = {
-      ...(typeof data === 'object' && data !== null ? data : {}),
+      ...(typeof data === "object" && data !== null ? data : {}),
       kind: formKind,
       objectRef: { kind: objectKind, name: objectName },
     }
@@ -538,11 +554,11 @@ export function buildProjectModelFromParsed(
       validatedForms.push(result.data)
     } else {
       const errors = result.error.issues.map(
-        (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
+        (i) => `${i.path.join(".")}: ${formatValidationMessage(i.message)}`
       )
       if (strict) {
         throw new Error(
-          `Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join('\n')}`,
+          `Помилка валідації ${filePath}:\n${errors.map((e) => `  - ${e}`).join("\n")}`
         )
       }
       warnings.push({ filePath, errors })
@@ -564,27 +580,28 @@ export function buildProjectModelFromParsed(
         if (result.success) return result.data
         // Lenient mode: form-related issues → warnings, retry без forms
         const formIssues = result.error.issues.filter(
-          (i) => i.path[0] === 'forms',
+          (i) => i.path[0] === "forms"
         )
         const otherIssues = result.error.issues.filter(
-          (i) => i.path[0] !== 'forms',
+          (i) => i.path[0] !== "forms"
         )
         if (otherIssues.length > 0) {
           throw new Error(
             `ProjectModel validation failed:\n${otherIssues
               .map(
                 (i) =>
-                  `  - ${i.path.join('.')}: ${formatValidationMessage(i.message)}`
+                  `  - ${i.path.join(".")}: ${formatValidationMessage(i.message)}`
               )
-              .join('\n')}`,
+              .join("\n")}`
           )
         }
         // Лише form-related помилки — зберігаємо як warnings, будуємо модель без forms
         if (formIssues.length > 0) {
           warnings.push({
-            filePath: 'forms',
+            filePath: "forms",
             errors: formIssues.map(
-              (i) => `${i.path.join('.')}: ${formatValidationMessage(i.message)}`,
+              (i) =>
+                `${i.path.join(".")}: ${formatValidationMessage(i.message)}`
             ),
           })
         }
@@ -617,7 +634,7 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
   // project.meta.json — enrich $schema before serialization
   const enrichedProject = enrichProjectSchemaUrl(model.project, schemaVersion)
   files.push({
-    path: 'project.meta.json',
+    path: "project.meta.json",
     content: serializeProject(enrichedProject),
   })
 
@@ -628,24 +645,26 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
 
     const dirName = KIND_TO_DIR[kind]
 
-    if (kind === 'Constant') {
+    if (kind === "Constant") {
       // Усі константи — в одному файлі, object wrapper (BRD §7.2 + §7.6)
-      const enrichedConstants = objects.map((obj) => enrichSchemaUrl(obj, schemaVersion))
+      const enrichedConstants = objects.map((obj) =>
+        enrichSchemaUrl(obj, schemaVersion)
+      )
       const serializedItems = enrichedConstants.map((obj) =>
-        serializeMetadataObject(obj).trimEnd(),
+        serializeMetadataObject(obj).trimEnd()
       )
       const indentedItems = serializedItems.map((item) =>
         item
-          .split('\n')
-          .map((line) => '    ' + line)
-          .join('\n'),
+          .split("\n")
+          .map((line) => "    " + line)
+          .join("\n")
       )
       const constantsJson =
-        '{\n' +
+        "{\n" +
         `  "$schema": "${buildConstantsSchemaUrl(schemaVersion)}",\n` +
         '  "constants": [\n' +
-        indentedItems.join(',\n') +
-        '\n  ]\n}\n'
+        indentedItems.join(",\n") +
+        "\n  ]\n}\n"
       files.push({
         path: `${dirName}/constants.meta.json`,
         content: constantsJson,
@@ -669,8 +688,11 @@ export function serializeToFiles(model: ProjectModel): FileEntry[] {
       const dirName = KIND_TO_DIR[form.objectRef.kind as MetadataKind]
       if (!dirName) continue
       const kebabName = toKebabCase(form.objectRef.name)
-      const formKindKebab = form.kind === 'ItemForm' ? 'item' : 'list'
-      const enrichedForm = { ...form, $schema: buildFormSchemaUrl(schemaVersion) }
+      const formKindKebab = form.kind === "ItemForm" ? "item" : "list"
+      const enrichedForm = {
+        ...form,
+        $schema: buildFormSchemaUrl(schemaVersion),
+      }
       files.push({
         path: `${dirName}/${kebabName}/forms/${formKindKebab}.form.json`,
         content: serializeForm(enrichedForm),

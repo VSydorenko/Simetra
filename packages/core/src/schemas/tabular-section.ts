@@ -8,10 +8,7 @@ import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
 export const tabularSectionSchema = z.object({
   name: z
     .string()
-    .regex(
-      TECHNICAL_NAME_PATTERNS.snake_case,
-      "Must be snake_case, Latin only",
-    )
+    .regex(TECHNICAL_NAME_PATTERNS.snake_case, "Must be snake_case, Latin only")
     .refine((n) => !isSqlReservedWord(n), {
       message: "Name is a SQL reserved word",
     }),

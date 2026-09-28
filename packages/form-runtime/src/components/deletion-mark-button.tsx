@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
-import type { MetadataRef } from '@simetra/core'
-import { Button } from '@workspace/ui/components/button'
-import { useDataProvider } from '../context'
+import { useState, useCallback } from "react"
+import type { MetadataRef } from "@simetra/core"
+import { Button } from "@workspace/ui/components/button"
+import { useDataProvider } from "../context"
 
 export interface DeletionMarkButtonProps {
   objectRef: MetadataRef
@@ -33,15 +33,15 @@ export function DeletionMarkButton({
 
   return (
     <Button
-      variant={isDeletionMarked ? 'outline' : 'destructive'}
+      variant={isDeletionMarked ? "outline" : "destructive"}
       onClick={handleToggle}
       disabled={loading}
     >
       {loading
-        ? 'Обробка...'
+        ? "Обробка..."
         : isDeletionMarked
-          ? 'Зняти позначку видалення'
-          : 'Позначити на видалення'}
+          ? "Зняти позначку видалення"
+          : "Позначити на видалення"}
     </Button>
   )
 }

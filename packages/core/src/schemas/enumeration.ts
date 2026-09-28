@@ -10,7 +10,7 @@ export const enumValueSchema = z.object({
     .min(1, createValidationMessage("validation.enumValue.nameRequired"))
     .regex(
       TECHNICAL_NAME_PATTERNS.PascalCase,
-      createValidationMessage("validation.enumValue.namePascalCase"),
+      createValidationMessage("validation.enumValue.namePascalCase")
     ),
   displayName: localizedStringSchema.optional(),
   order: z.number().int().nonnegative().optional(),

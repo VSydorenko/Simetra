@@ -5,3 +5,6 @@ coverage/
 pnpm-lock.yaml
 .pnpm-store/
 **/*.md
+# Фікстури канонічної серіалізації: тести порівнюють їх побайтно з виводом
+# JSON.stringify, тож Prettier не повинен їх переформатовувати
+packages/core/src/__tests__/fixtures/

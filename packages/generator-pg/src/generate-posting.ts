@@ -9,16 +9,22 @@ import type {
   StandardAttribute,
   StandardAttributeSettings,
   MetadataKind,
-} from '@simetra/core'
+} from "@simetra/core"
 import {
   formatValidationMessage,
   getStandardAttributes,
   getTabularSectionStandardAttributes,
   isPostingCompatible,
-} from '@simetra/core'
-import { toSnakeCase, tableName, tabularTableName, qualifiedName, escapeLiteral } from './naming'
-import { mapFieldType } from './type-mapping'
-import { resolveColumnName } from './column-naming'
+} from "@simetra/core"
+import {
+  toSnakeCase,
+  tableName,
+  tabularTableName,
+  qualifiedName,
+  escapeLiteral,
+} from "./naming"
+import { mapFieldType } from "./type-mapping"
+import { resolveColumnName } from "./column-naming"
 
 // Об'єднаний тип регістру для posting
 type RegisterDef = AccumulationRegister | InformationRegister
@@ -34,25 +40,30 @@ export function expressionToSql(
   tsAlias: string,
   docTableName: string,
   prefix: string,
-  schema: string = 'public',
-  resolveField?: (source: 'doc' | 'row', fieldName: string) => string,
+  schema: string = "public",
+  resolveField?: (source: "doc" | "row", fieldName: string) => string
 ): string {
   // literal:value → екранований літерал або число
-  if (expr.startsWith('literal:')) {
-    const val = expr.slice('literal:'.length)
+  if (expr.startsWith("literal:")) {
+    const val = expr.slice("literal:".length)
     if (/^-?\d+(\.\d+)?$/.test(val)) return val
     return `'${escapeLiteral(val)}'`
   }
 
   // now() → NOW()
-  if (expr === 'now()') return 'NOW()'
+  if (expr === "now()") return "NOW()"
 
   // sum(TsName.field) → підзапит (поле резолвиться через resolveField якщо доступний)
   const sumMatch = expr.match(/^sum\((\w+)\.(\w+)\)$/)
   if (sumMatch) {
     const [, tsName, field] = sumMatch
-    const tsTbl = qualifiedName(schema, tabularTableName(prefix, "Document", docTableName, tsName))
-    const physicalField = resolveField ? resolveField('row', field) : toSnakeCase(field)
+    const tsTbl = qualifiedName(
+      schema,
+      tabularTableName(prefix, "Document", docTableName, tsName)
+    )
+    const physicalField = resolveField
+      ? resolveField("row", field)
+      : toSnakeCase(field)
     return `(SELECT COALESCE(SUM(${physicalField}), 0) FROM ${tsTbl} WHERE parent_id = ${docAlias}.id)`
   }
 
@@ -60,22 +71,29 @@ export function expressionToSql(
   const countMatch = expr.match(/^count\((\w+)\)$/)
   if (countMatch) {
     const [, tsName] = countMatch
-    const tsTbl = qualifiedName(schema, tabularTableName(prefix, "Document", docTableName, tsName))
+    const tsTbl = qualifiedName(
+      schema,
+      tabularTableName(prefix, "Document", docTableName, tsName)
+    )
     return `(SELECT COUNT(*) FROM ${tsTbl} WHERE parent_id = ${docAlias}.id)`
   }
 
   // row.a * row.b → ts.a * ts.b (арифметика з row.*, поля резолвяться)
-  if (expr.includes('row.')) {
+  if (expr.includes("row.")) {
     return expr.replace(/row\.(\w+)/g, (_, field) => {
-      const physicalField = resolveField ? resolveField('row', field) : toSnakeCase(field)
+      const physicalField = resolveField
+        ? resolveField("row", field)
+        : toSnakeCase(field)
       return `${tsAlias}.${physicalField}`
     })
   }
 
   // doc.field → d.field_name (поле резолвиться через resolveField якщо доступний)
-  if (expr.startsWith('doc.')) {
+  if (expr.startsWith("doc.")) {
     const field = expr.slice(4)
-    const physicalField = resolveField ? resolveField('doc', field) : toSnakeCase(field)
+    const physicalField = resolveField
+      ? resolveField("doc", field)
+      : toSnakeCase(field)
     return `${docAlias}.${physicalField}`
   }
 
@@ -86,19 +104,20 @@ export function expressionToSql(
 // Знайти регістр за MetadataRef у проєкті
 function findRegister(
   project: ProjectModel,
-  ref: { kind: string; name: string },
+  ref: { kind: string; name: string }
 ): RegisterDef | undefined {
-  if (ref.kind === 'AccumulationRegister') {
+  if (ref.kind === "AccumulationRegister") {
     return project.accumulationRegisters.find((r) => r.name === ref.name)
   }
-  if (ref.kind === 'InformationRegister') {
+  if (ref.kind === "InformationRegister") {
     return project.informationRegisters.find((r) => r.name === ref.name)
   }
   return undefined
 }
 
 // Дозволені токени condition DSL
-const CONDITION_TOKENS = /(?:(?:doc|row)\.(\w+))|(!?=|>=?|<=?)|('[^']*'|-?\d+(?:\.\d+)?|true|false|null)|(\bAND\b|\bOR\b)|([()])/gi
+const CONDITION_TOKENS =
+  /(?:(?:doc|row)\.(\w+))|(!?=|>=?|<=?)|('[^']*'|-?\d+(?:\.\d+)?|true|false|null)|(\bAND\b|\bOR\b)|([()])/gi
 
 // SQL keywords blocklist — додатковий шар захисту
 const SQL_KEYWORDS = /\b(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC|UNION|SELECT)\b/i
@@ -108,7 +127,7 @@ function translateCondition(
   condition: string,
   docAlias: string,
   tsAlias: string,
-  resolveField?: (source: 'doc' | 'row', fieldName: string) => string,
+  resolveField?: (source: "doc" | "row", fieldName: string) => string
 ): string {
   // Видаляємо string literals перед перевіркою на SQL keywords
   const withoutLiterals = condition.replace(/'[^']*'/g, "''")
@@ -137,16 +156,16 @@ function translateCondition(
     const fullMatch = match[0]
 
     // doc.field → docAlias.resolved_field
-    if (fullMatch.startsWith('doc.')) {
+    if (fullMatch.startsWith("doc.")) {
       const field = fullMatch.slice(4)
-      const col = resolveField ? resolveField('doc', field) : toSnakeCase(field)
+      const col = resolveField ? resolveField("doc", field) : toSnakeCase(field)
       parts.push(`${docAlias}.${col}`)
       continue
     }
     // row.field → tsAlias.resolved_field
-    if (fullMatch.startsWith('row.')) {
+    if (fullMatch.startsWith("row.")) {
       const field = fullMatch.slice(4)
-      const col = resolveField ? resolveField('row', field) : toSnakeCase(field)
+      const col = resolveField ? resolveField("row", field) : toSnakeCase(field)
       parts.push(`${tsAlias}.${col}`)
       continue
     }
@@ -157,20 +176,19 @@ function translateCondition(
   // Перевіряємо хвіст
   const tail = condition.slice(lastIndex)
   if (tail.trim().length > 0) {
-    throw new Error(`Condition contains invalid tokens at end: "${tail.trim()}"`)
+    throw new Error(
+      `Condition contains invalid tokens at end: "${tail.trim()}"`
+    )
   }
 
-  return parts.join(' ')
+  return parts.join(" ")
 }
 
 // Визначити SQL тип dimension за атрибутом регістру
-function resolveDimensionType(
-  register: RegisterDef,
-  dimName: string,
-): string {
+function resolveDimensionType(register: RegisterDef, dimName: string): string {
   const dim = register.dimensions.find((d) => d.name === dimName)
-  if (!dim) return 'uuid'
-  if (dim.type === 'Ref') return 'uuid'
+  if (!dim) return "uuid"
+  if (dim.type === "Ref") return "uuid"
   return mapFieldType(dim)
 }
 
@@ -181,20 +199,20 @@ function resolveDimensionType(
 function createFieldResolver(
   doc: Document,
   tsAttrs: Attribute[],
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
-): (source: 'doc' | 'row', fieldName: string) => string {
-  const docStdAttrs = getStandardAttributes('Document')
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
+): (source: "doc" | "row", fieldName: string) => string {
+  const docStdAttrs = getStandardAttributes("Document")
   const tsStdAttrs = getTabularSectionStandardAttributes()
 
-  return (source: 'doc' | 'row', fieldName: string): string => {
-    if (source === 'doc') {
+  return (source: "doc" | "row", fieldName: string): string => {
+    if (source === "doc") {
       // Спочатку шукаємо серед custom attributes документа
       const attr = doc.attributes.find((a) => a.name === fieldName)
       if (attr) {
         const cols = resolveColumnName(attr, resolveEnumType)
         if (cols.length > 1) {
           throw new Error(
-            `Polymorphic Ref field "doc.${fieldName}" is not supported in posting expressions`,
+            `Polymorphic Ref field "doc.${fieldName}" is not supported in posting expressions`
           )
         }
         return cols[0]
@@ -211,7 +229,7 @@ function createFieldResolver(
       const cols = resolveColumnName(attr, resolveEnumType)
       if (cols.length > 1) {
         throw new Error(
-          `Polymorphic Ref field "row.${fieldName}" is not supported in posting expressions`,
+          `Polymorphic Ref field "row.${fieldName}" is not supported in posting expressions`
         )
       }
       return cols[0]
@@ -230,12 +248,12 @@ function generateMovementInsert(
   prefix: string,
   schema: string,
   project: ProjectModel,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
 ): string {
   const register = findRegister(project, movement.register)
   if (!register) {
     throw new Error(
-      `Register ${movement.register.kind}/${movement.register.name} not found in project`,
+      `Register ${movement.register.kind}/${movement.register.name} not found in project`
     )
   }
 
@@ -245,20 +263,23 @@ function generateMovementInsert(
   })
   if (!compat.compatible) {
     throw new Error(
-      `Register ${register.kind}/${register.name} is not posting-compatible: ${formatValidationMessage(compat.reason ?? '')}`,
+      `Register ${register.kind}/${register.name} is not posting-compatible: ${formatValidationMessage(compat.reason ?? "")}`
     )
   }
 
-  const regTable = qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, register.name))
+  const regTable = qualifiedName(
+    schema,
+    tableName(prefix, register.kind as MetadataKind, register.name)
+  )
 
   // Побудувати registerSettings для getStandardAttributes
   const registerSettings: StandardAttributeSettings = {
     recorderTypes: register.recorderTypes,
   }
-  if (register.kind === 'AccumulationRegister') {
+  if (register.kind === "AccumulationRegister") {
     registerSettings.registerType = register.registerType
   }
-  if (register.kind === 'InformationRegister') {
+  if (register.kind === "InformationRegister") {
     registerSettings.periodicity = register.periodicity
     registerSettings.writeMode = register.writeMode
   }
@@ -266,12 +287,12 @@ function generateMovementInsert(
   // Динамічні standard columns через getStandardAttributes
   const stdAttrs = getStandardAttributes(register.kind, registerSettings)
   // Фільтруємо id — він не вставляється через INSERT (auto-generated)
-  const insertableStdAttrs = stdAttrs.filter((a) => a.name !== 'id')
+  const insertableStdAttrs = stdAttrs.filter((a) => a.name !== "id")
 
   // Standard column names (з урахуванням polymorphic)
   const stdCols: string[] = []
   for (const attr of insertableStdAttrs) {
-    if (attr.type === 'Ref' && attr.allowedTypes?.length) {
+    if (attr.type === "Ref" && attr.allowedTypes?.length) {
       stdCols.push(`${attr.name}_type`, `${attr.name}_id`)
     } else {
       stdCols.push(attr.name)
@@ -279,24 +300,33 @@ function generateMovementInsert(
   }
 
   // Визначити чи recorder_id polymorphic
-  const recorderAttr = stdAttrs.find((a) => a.name === 'recorder_id')
-  const isPolymorphicRecorder = recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
+  const recorderAttr = stdAttrs.find((a) => a.name === "recorder_id")
+  const isPolymorphicRecorder =
+    recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
 
   // Визначити атрибути source (ТЧ або документ) для резолюції фізичних імен полів
   let sourceAttrs: Attribute[] = []
-  if (movement.source.startsWith('tabularSection:')) {
-    const tsName = movement.source.slice('tabularSection:'.length)
+  if (movement.source.startsWith("tabularSection:")) {
+    const tsName = movement.source.slice("tabularSection:".length)
     const ts = doc.tabularSections.find((t) => t.name === tsName)
     if (ts) sourceAttrs = ts.attributes
   }
   const resolveField = createFieldResolver(doc, sourceAttrs, resolveEnumType)
 
   // Визначити movementType SQL
-  const hasMovementType = stdAttrs.some((a) => a.name === 'movement_type')
+  const hasMovementType = stdAttrs.some((a) => a.name === "movement_type")
   const mvtTypeExpr = hasMovementType
-    ? (movement.movementType === 'Receipt' || movement.movementType === 'Expense'
-        ? `'${movement.movementType}'`
-        : expressionToSql(movement.movementType, 'd', 'ts', doc.name, prefix, schema, resolveField))
+    ? movement.movementType === "Receipt" || movement.movementType === "Expense"
+      ? `'${movement.movementType}'`
+      : expressionToSql(
+          movement.movementType,
+          "d",
+          "ts",
+          doc.name,
+          prefix,
+          schema,
+          resolveField
+        )
     : null
 
   const dimMappingEntries = Object.entries(movement.mappings.dimensions)
@@ -314,14 +344,16 @@ function generateMovementInsert(
       if (cols.length > 1) {
         // Polymorphic Ref dimension — не підтримується в mapping grammar
         throw new Error(
-          `Polymorphic Ref dimension "${fieldName}" in register "${register.name}" is not supported in posting mappings`,
+          `Polymorphic Ref dimension "${fieldName}" in register "${register.name}" is not supported in posting mappings`
         )
       }
       mappingCols.push(cols[0])
     } else {
       mappingCols.push(toSnakeCase(fieldName))
     }
-    mappingExprs.push(expressionToSql(expr, 'd', 'ts', doc.name, prefix, schema, resolveField))
+    mappingExprs.push(
+      expressionToSql(expr, "d", "ts", doc.name, prefix, schema, resolveField)
+    )
   }
   for (const [fieldName, expr] of resMappingEntries) {
     const res = register.resources.find((r) => r.name === fieldName)
@@ -329,14 +361,16 @@ function generateMovementInsert(
       const cols = resolveColumnName(res, resolveEnumType)
       if (cols.length > 1) {
         throw new Error(
-          `Polymorphic Ref resource "${fieldName}" in register "${register.name}" is not supported in posting mappings`,
+          `Polymorphic Ref resource "${fieldName}" in register "${register.name}" is not supported in posting mappings`
         )
       }
       mappingCols.push(cols[0])
     } else {
       mappingCols.push(toSnakeCase(fieldName))
     }
-    mappingExprs.push(expressionToSql(expr, 'd', 'ts', doc.name, prefix, schema, resolveField))
+    mappingExprs.push(
+      expressionToSql(expr, "d", "ts", doc.name, prefix, schema, resolveField)
+    )
   }
   for (const [fieldName, expr] of attrMappingEntries) {
     const regAttr = register.attributes.find((a) => a.name === fieldName)
@@ -344,14 +378,16 @@ function generateMovementInsert(
       const cols = resolveColumnName(regAttr, resolveEnumType)
       if (cols.length > 1) {
         throw new Error(
-          `Polymorphic Ref attribute "${fieldName}" in register "${register.name}" is not supported in posting mappings`,
+          `Polymorphic Ref attribute "${fieldName}" in register "${register.name}" is not supported in posting mappings`
         )
       }
       mappingCols.push(cols[0])
     } else {
       mappingCols.push(toSnakeCase(fieldName))
     }
-    mappingExprs.push(expressionToSql(expr, 'd', 'ts', doc.name, prefix, schema, resolveField))
+    mappingExprs.push(
+      expressionToSql(expr, "d", "ts", doc.name, prefix, schema, resolveField)
+    )
   }
 
   const allCols = [...stdCols, ...mappingCols]
@@ -361,37 +397,37 @@ function generateMovementInsert(
     const exprs: string[] = []
     for (const attr of insertableStdAttrs) {
       switch (attr.name) {
-        case 'period':
-          exprs.push(isSelect ? '    d.date' : 'd.date')
+        case "period":
+          exprs.push(isSelect ? "    d.date" : "d.date")
           break
-        case 'recorder_id':
+        case "recorder_id":
           if (isPolymorphicRecorder) {
             // Polymorphic: recorder_id_type + recorder_id_id
             const docKindName = `${doc.kind}.${doc.name}`
             exprs.push(isSelect ? `    '${docKindName}'` : `'${docKindName}'`)
-            exprs.push(isSelect ? '    d.id' : 'd.id')
+            exprs.push(isSelect ? "    d.id" : "d.id")
           } else {
-            exprs.push(isSelect ? '    d.id' : 'd.id')
+            exprs.push(isSelect ? "    d.id" : "d.id")
           }
           break
-        case 'line_number':
-          if (movement.source.startsWith('tabularSection:')) {
-            exprs.push(isSelect ? '    ts.line_number' : 'ts.line_number')
+        case "line_number":
+          if (movement.source.startsWith("tabularSection:")) {
+            exprs.push(isSelect ? "    ts.line_number" : "ts.line_number")
           } else {
-            exprs.push(isSelect ? '    1' : '1')
+            exprs.push(isSelect ? "    1" : "1")
           }
           break
-        case 'active':
-          exprs.push(isSelect ? '    TRUE' : 'TRUE')
+        case "active":
+          exprs.push(isSelect ? "    TRUE" : "TRUE")
           break
-        case 'movement_type':
+        case "movement_type":
           if (mvtTypeExpr) {
             exprs.push(isSelect ? `    ${mvtTypeExpr}` : mvtTypeExpr)
           }
           break
         default:
           // Інші standard attrs — fallback
-          exprs.push(isSelect ? '    NULL' : 'NULL')
+          exprs.push(isSelect ? "    NULL" : "NULL")
           break
       }
     }
@@ -399,22 +435,31 @@ function generateMovementInsert(
   }
 
   // Транслювати condition у SQL
-  const isDocumentSource = movement.source === 'document'
-  if (isDocumentSource && movement.condition && /\brow\.\w+/i.test(movement.condition)) {
+  const isDocumentSource = movement.source === "document"
+  if (
+    isDocumentSource &&
+    movement.condition &&
+    /\brow\.\w+/i.test(movement.condition)
+  ) {
     throw new Error(
-      `Condition references "row.*" but source is "document" (no tabular section alias available)`,
+      `Condition references "row.*" but source is "document" (no tabular section alias available)`
     )
   }
   const translatedCondition = movement.condition
-    ? translateCondition(movement.condition, 'd', 'ts', resolveField)
-    : ''
+    ? translateCondition(movement.condition, "d", "ts", resolveField)
+    : ""
 
   // tabularSection source → SELECT ... FROM tabular_table
-  if (movement.source.startsWith('tabularSection:')) {
-    const tsName = movement.source.slice('tabularSection:'.length)
-    const tsTable = qualifiedName(schema, tabularTableName(prefix, "Document", doc.name, tsName))
+  if (movement.source.startsWith("tabularSection:")) {
+    const tsName = movement.source.slice("tabularSection:".length)
+    const tsTable = qualifiedName(
+      schema,
+      tabularTableName(prefix, "Document", doc.name, tsName)
+    )
 
-    const condition = translatedCondition ? `\n  AND (${translatedCondition})` : ''
+    const condition = translatedCondition
+      ? `\n  AND (${translatedCondition})`
+      : ""
 
     const selectExprs = [
       ...buildStdExpressions(true),
@@ -423,34 +468,30 @@ function generateMovementInsert(
 
     return (
       `  INSERT INTO ${regTable} (\n` +
-      `    ${allCols.join(', ')}\n` +
+      `    ${allCols.join(", ")}\n` +
       `  )\n` +
       `  SELECT\n` +
-      selectExprs.join(',\n') + '\n' +
+      selectExprs.join(",\n") +
+      "\n" +
       `  FROM ${tsTable} ts\n` +
       `  WHERE ts.parent_id = p_doc_id${condition};`
     )
   }
 
   // document source → VALUES
-  const valueExprs = [
-    ...buildStdExpressions(false),
-    ...mappingExprs,
-  ]
+  const valueExprs = [...buildStdExpressions(false), ...mappingExprs]
 
   const insertSql =
     `  INSERT INTO ${regTable} (\n` +
-    `    ${allCols.join(', ')}\n` +
+    `    ${allCols.join(", ")}\n` +
     `  )\n` +
     `  VALUES (\n` +
-    `    ${valueExprs.join(', ')}\n` +
+    `    ${valueExprs.join(", ")}\n` +
     `  );`
 
   if (translatedCondition) {
     return (
-      `  IF (${translatedCondition}) THEN\n` +
-      `  ${insertSql}\n` +
-      `  END IF;`
+      `  IF (${translatedCondition}) THEN\n` + `  ${insertSql}\n` + `  END IF;`
     )
   }
 
@@ -463,24 +504,33 @@ function generateCheckFunction(
   prefix: string,
   schema: string,
   project: ProjectModel,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
 ): string {
   const register = findRegister(project, validation.register)
   if (!register) {
     throw new Error(
-      `Register ${validation.register.kind}/${validation.register.name} not found for NonNegativeBalance validation`,
+      `Register ${validation.register.kind}/${validation.register.name} not found for NonNegativeBalance validation`
     )
   }
 
   // Перевірка: resource має бути numeric для NonNegativeBalance
-  const resourceAttr = register.resources.find((r) => r.name === validation.resource)
-  if (resourceAttr && resourceAttr.type !== 'Numeric' && resourceAttr.type !== 'Integer') {
+  const resourceAttr = register.resources.find(
+    (r) => r.name === validation.resource
+  )
+  if (
+    resourceAttr &&
+    resourceAttr.type !== "Numeric" &&
+    resourceAttr.type !== "Integer"
+  ) {
     throw new Error(
-      `NonNegativeBalance validation for "${register.name}.${validation.resource}": resource type must be Numeric or Integer, got "${resourceAttr.type}"`,
+      `NonNegativeBalance validation for "${register.name}.${validation.resource}": resource type must be Numeric or Integer, got "${resourceAttr.type}"`
     )
   }
 
-  const regTable = qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, register.name))
+  const regTable = qualifiedName(
+    schema,
+    tableName(prefix, register.kind as MetadataKind, register.name)
+  )
   const regSnake = toSnakeCase(register.name)
   const resource = toSnakeCase(validation.resource)
   const funcName = qualifiedName(schema, `check_${regSnake}_${resource}`)
@@ -492,7 +542,7 @@ function generateCheckFunction(
       const cols = resolveColumnName(dim, resolveEnumType)
       if (cols.length > 1) {
         throw new Error(
-          `Polymorphic Ref dimension "${d}" in register "${register.name}" is not supported in NonNegativeBalance validation`,
+          `Polymorphic Ref dimension "${d}" in register "${register.name}" is not supported in NonNegativeBalance validation`
         )
       }
       return { logicalName: d, physicalCol: cols[0] }
@@ -502,24 +552,29 @@ function generateCheckFunction(
 
   // Параметри — dimensions з правильними типами і фізичними іменами
   const params = resolvedDims
-    .map((d) => `p_${d.physicalCol} ${resolveDimensionType(register, d.logicalName)}`)
-    .join(', ')
+    .map(
+      (d) =>
+        `p_${d.physicalCol} ${resolveDimensionType(register, d.logicalName)}`
+    )
+    .join(", ")
 
   // WHERE conditions для dimensions
   const dimConditions = resolvedDims
     .map((d) => `AND ${d.physicalCol} = p_${d.physicalCol}`)
-    .join('\n    ')
+    .join("\n    ")
 
   // Повідомлення помилки
-  const msg = validation.message.en ?? validation.message.uk ?? 'Negative balance'
+  const msg =
+    validation.message.en ?? validation.message.uk ?? "Negative balance"
 
   // Визначити тип регістра для правильної SQL-структури
   const isBalanceRegister =
-    register.kind === 'AccumulationRegister' && register.registerType === 'Balance'
+    register.kind === "AccumulationRegister" &&
+    register.registerType === "Balance"
 
   // applyTo фільтр — тільки для Balance (де є movement_type)
-  let applyToFilter = ''
-  if (isBalanceRegister && validation.applyTo !== 'Both') {
+  let applyToFilter = ""
+  if (isBalanceRegister && validation.applyTo !== "Both") {
     applyToFilter = `\n    AND movement_type = '${validation.applyTo}'`
   }
 
@@ -556,12 +611,12 @@ function generateCheckFunction(
 // Побудувати DELETE statement з урахуванням polymorphic recorder
 function buildDeleteStatement(
   regTable: string,
-  register: RegisterDef,
   doc: Document,
-  stdAttrs: StandardAttribute[],
+  stdAttrs: StandardAttribute[]
 ): string {
-  const recorderAttr = stdAttrs.find((a) => a.name === 'recorder_id')
-  const isPolymorphic = recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
+  const recorderAttr = stdAttrs.find((a) => a.name === "recorder_id")
+  const isPolymorphic =
+    recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
 
   if (isPolymorphic) {
     const docKindName = `${doc.kind}.${doc.name}`
@@ -573,27 +628,30 @@ function buildDeleteStatement(
 // Побудувати recorder WHERE filter для validation SELECT DISTINCT
 function buildRecorderFilter(
   doc: Document,
-  stdAttrs: StandardAttribute[],
+  stdAttrs: StandardAttribute[]
 ): string {
-  const recorderAttr = stdAttrs.find((a) => a.name === 'recorder_id')
-  const isPolymorphic = recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
+  const recorderAttr = stdAttrs.find((a) => a.name === "recorder_id")
+  const isPolymorphic =
+    recorderAttr?.allowedTypes && recorderAttr.allowedTypes.length > 0
 
   if (isPolymorphic) {
     const docKindName = `${doc.kind}.${doc.name}`
     return `WHERE recorder_id_type = '${docKindName}' AND recorder_id_id = p_doc_id`
   }
-  return 'WHERE recorder_id = p_doc_id'
+  return "WHERE recorder_id = p_doc_id"
 }
 
 // Побудувати StandardAttributeSettings для регістру
-function buildRegisterSettings(register: RegisterDef): StandardAttributeSettings {
+function buildRegisterSettings(
+  register: RegisterDef
+): StandardAttributeSettings {
   const settings: StandardAttributeSettings = {
     recorderTypes: register.recorderTypes,
   }
-  if (register.kind === 'AccumulationRegister') {
+  if (register.kind === "AccumulationRegister") {
     settings.registerType = register.registerType
   }
-  if (register.kind === 'InformationRegister') {
+  if (register.kind === "InformationRegister") {
     settings.periodicity = register.periodicity
     settings.writeMode = register.writeMode
   }
@@ -606,36 +664,50 @@ function generatePostFunction(
   prefix: string,
   schema: string,
   project: ProjectModel,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
 ): string {
-  const posting = doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] }
+  const posting = doc.posting as {
+    movements: PostingMovement[]
+    validations: PostingValidation[]
+  }
   const docSnake = toSnakeCase(doc.name)
-  const docTable = qualifiedName(schema, tableName(prefix, "Document", doc.name))
+  const docTable = qualifiedName(
+    schema,
+    tableName(prefix, "Document", doc.name)
+  )
   const funcName = qualifiedName(schema, `post_${docSnake}`)
 
   // Очистка попередніх рухів (дедупліковані за регістром)
-  const uniqueDeleteRegs = new Map<string, { regTable: string; register: RegisterDef }>()
+  const uniqueDeleteRegs = new Map<
+    string,
+    { regTable: string; register: RegisterDef }
+  >()
   for (const m of posting.movements) {
     const key = `${m.register.kind}.${m.register.name}`
     if (!uniqueDeleteRegs.has(key)) {
       const register = findRegister(project, m.register)
       if (register) {
         uniqueDeleteRegs.set(key, {
-          regTable: qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, m.register.name)),
+          regTable: qualifiedName(
+            schema,
+            tableName(prefix, register.kind as MetadataKind, m.register.name)
+          ),
           register,
         })
       }
     }
   }
-  const deleteStatements = [...uniqueDeleteRegs.values()].map(({ regTable, register }) => {
-    const settings = buildRegisterSettings(register)
-    const stdAttrs = getStandardAttributes(register.kind, settings)
-    return buildDeleteStatement(regTable, register, doc, stdAttrs)
-  })
+  const deleteStatements = [...uniqueDeleteRegs.values()].map(
+    ({ regTable, register }) => {
+      const settings = buildRegisterSettings(register)
+      const stdAttrs = getStandardAttributes(register.kind, settings)
+      return buildDeleteStatement(regTable, doc, stdAttrs)
+    }
+  )
 
   // INSERT рухів
   const insertStatements = posting.movements.map((m) =>
-    generateMovementInsert(m, doc, prefix, schema, project, resolveEnumType),
+    generateMovementInsert(m, doc, prefix, schema, project, resolveEnumType)
   )
 
   // Валідації — FOR loop по DISTINCT dimension combinations з регістру
@@ -643,11 +715,14 @@ function generatePostFunction(
     const register = findRegister(project, v.register)
     if (!register) {
       throw new Error(
-        `Register ${v.register.kind}/${v.register.name} not found for validation`,
+        `Register ${v.register.kind}/${v.register.name} not found for validation`
       )
     }
 
-    const regTable = qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, register.name))
+    const regTable = qualifiedName(
+      schema,
+      tableName(prefix, register.kind as MetadataKind, register.name)
+    )
     const regSnake = toSnakeCase(register.name)
     const resource = toSnakeCase(v.resource)
     const checkFunc = qualifiedName(schema, `check_${regSnake}_${resource}`)
@@ -655,7 +730,7 @@ function generatePostFunction(
     // Резолвити фізичні імена dimension колонок
     if (v.dimensions.length === 0) {
       throw new Error(
-        `Validation for ${register.name}.${v.resource} must have at least one dimension`,
+        `Validation for ${register.name}.${v.resource} must have at least one dimension`
       )
     }
     const resolvedDims = v.dimensions.map((d) => {
@@ -664,15 +739,15 @@ function generatePostFunction(
         const cols = resolveColumnName(dim, resolveEnumType)
         if (cols.length > 1) {
           throw new Error(
-            `Polymorphic Ref dimension "${d}" in register "${register.name}" is not supported in validation`,
+            `Polymorphic Ref dimension "${d}" in register "${register.name}" is not supported in validation`
           )
         }
         return cols[0]
       }
       return toSnakeCase(d)
     })
-    const dimSelect = resolvedDims.join(', ')
-    const dimArgs = resolvedDims.map((c) => `v_rec.${c}`).join(', ')
+    const dimSelect = resolvedDims.join(", ")
+    const dimArgs = resolvedDims.map((c) => `v_rec.${c}`).join(", ")
 
     const settings = buildRegisterSettings(register)
     const stdAttrs = getStandardAttributes(register.kind, settings)
@@ -680,9 +755,10 @@ function generatePostFunction(
 
     // applyTo filter для Balance регістрів
     const isBalanceReg =
-      register.kind === 'AccumulationRegister' && register.registerType === 'Balance'
-    let applyToValidationFilter = ''
-    if (isBalanceReg && v.applyTo !== 'Both') {
+      register.kind === "AccumulationRegister" &&
+      register.registerType === "Balance"
+    let applyToValidationFilter = ""
+    if (isBalanceReg && v.applyTo !== "Both") {
       applyToValidationFilter = `\n      AND movement_type = '${v.applyTo}'`
     }
 
@@ -707,7 +783,7 @@ function generatePostFunction(
     `AS $$\n` +
     `DECLARE\n` +
     `  d ${docTable}%ROWTYPE;\n` +
-    (hasValidations ? `  v_rec RECORD;\n` : '') +
+    (hasValidations ? `  v_rec RECORD;\n` : "") +
     `BEGIN\n` +
     `  -- Отримати документ\n` +
     `  SELECT * INTO STRICT d FROM ${docTable} WHERE id = p_doc_id;\n` +
@@ -718,12 +794,14 @@ function generatePostFunction(
     `  END IF;\n` +
     `\n` +
     `  -- Очистка попередніх рухів\n` +
-    (deleteStatements.length > 0 ? deleteStatements.join('\n') + '\n\n' : '') +
+    (deleteStatements.length > 0 ? deleteStatements.join("\n") + "\n\n" : "") +
     `  -- Рухи\n` +
-    (insertStatements.length > 0 ? insertStatements.join('\n\n') + '\n\n' : '') +
+    (insertStatements.length > 0
+      ? insertStatements.join("\n\n") + "\n\n"
+      : "") +
     (validationStatements.length > 0
-      ? `  -- Валідації\n` + validationStatements.join('\n') + '\n\n'
-      : '') +
+      ? `  -- Валідації\n` + validationStatements.join("\n") + "\n\n"
+      : "") +
     `  -- Оновити статус\n` +
     `  UPDATE ${docTable} SET posted = TRUE, updated_at = NOW() WHERE id = p_doc_id;\n` +
     `\n` +
@@ -746,33 +824,44 @@ function generateUnpostFunction(
   doc: Document,
   prefix: string,
   schema: string,
-  project: ProjectModel,
+  project: ProjectModel
 ): string {
   const posting = doc.posting as { movements: PostingMovement[] }
   const docSnake = toSnakeCase(doc.name)
-  const docTable = qualifiedName(schema, tableName(prefix, "Document", doc.name))
+  const docTable = qualifiedName(
+    schema,
+    tableName(prefix, "Document", doc.name)
+  )
   const funcName = qualifiedName(schema, `unpost_${docSnake}`)
 
   // Видалення рухів з кожного регістру
-  const uniqueRegisters = new Map<string, { regTable: string; register: RegisterDef }>()
+  const uniqueRegisters = new Map<
+    string,
+    { regTable: string; register: RegisterDef }
+  >()
   for (const m of posting.movements) {
     const key = `${m.register.kind}.${m.register.name}`
     if (!uniqueRegisters.has(key)) {
       const register = findRegister(project, m.register)
       if (register) {
         uniqueRegisters.set(key, {
-          regTable: qualifiedName(schema, tableName(prefix, register.kind as MetadataKind, m.register.name)),
+          regTable: qualifiedName(
+            schema,
+            tableName(prefix, register.kind as MetadataKind, m.register.name)
+          ),
           register,
         })
       }
     }
   }
 
-  const deleteStatements = [...uniqueRegisters.values()].map(({ regTable, register }) => {
-    const settings = buildRegisterSettings(register)
-    const stdAttrs = getStandardAttributes(register.kind, settings)
-    return buildDeleteStatement(regTable, register, doc, stdAttrs)
-  })
+  const deleteStatements = [...uniqueRegisters.values()].map(
+    ({ regTable, register }) => {
+      const settings = buildRegisterSettings(register)
+      const stdAttrs = getStandardAttributes(register.kind, settings)
+      return buildDeleteStatement(regTable, doc, stdAttrs)
+    }
+  )
 
   return (
     `CREATE OR REPLACE FUNCTION ${funcName}(p_doc_id UUID)\n` +
@@ -781,7 +870,7 @@ function generateUnpostFunction(
     `AS $$\n` +
     `BEGIN\n` +
     `  -- Видалити рухи\n` +
-    (deleteStatements.length > 0 ? deleteStatements.join('\n') + '\n\n' : '') +
+    (deleteStatements.length > 0 ? deleteStatements.join("\n") + "\n\n" : "") +
     `  -- Зняти позначку проведення\n` +
     `  UPDATE ${docTable} SET posted = FALSE, updated_at = NOW() WHERE id = p_doc_id;\n` +
     `END;\n` +
@@ -797,29 +886,36 @@ export function generatePostingFunctions(
   project: ProjectModel,
   prefix: string,
   schema: string,
-  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined,
+  resolveEnumType: (ref: { kind: string; name: string }) => string | undefined
 ): string[] {
   const statements: string[] = []
 
   for (const doc of project.documents) {
     // Тільки документи з об'єктним posting та непорожніми movements
     if (
-      typeof doc.posting !== 'object' ||
+      typeof doc.posting !== "object" ||
       doc.posting === null ||
-      !('movements' in doc.posting) ||
+      !("movements" in doc.posting) ||
       doc.posting.movements.length === 0
     ) {
       continue
     }
 
-    const posting = doc.posting as { movements: PostingMovement[]; validations: PostingValidation[] }
+    const posting = doc.posting as {
+      movements: PostingMovement[]
+      validations: PostingValidation[]
+    }
 
-    statements.push(generatePostFunction(doc, prefix, schema, project, resolveEnumType))
+    statements.push(
+      generatePostFunction(doc, prefix, schema, project, resolveEnumType)
+    )
     statements.push(generateUnpostFunction(doc, prefix, schema, project))
 
     // Check functions для кожної валідації
     for (const v of posting.validations ?? []) {
-      statements.push(generateCheckFunction(v, prefix, schema, project, resolveEnumType))
+      statements.push(
+        generateCheckFunction(v, prefix, schema, project, resolveEnumType)
+      )
     }
   }
 
