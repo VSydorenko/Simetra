@@ -145,12 +145,19 @@ pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # before a PR
 pnpm format:fix                           # fixes what format:check reports
 
 python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
+
+pnpm db:start                             # local Supabase stack (needs Docker)
+pnpm test:db                              # provider base-state pgTAP tests
+pnpm db:stop
 ```
 
 - 🔴 **No `--` before a vitest pattern** with `pnpm --filter`: the pattern is
   then silently ignored and the whole suite runs, so a "green" filtered run
   proves nothing.
-- CI (`.github/workflows/ci.yml`) runs the same four gates. It does not run
+- The local stack is started only through `pnpm db:*` (pinned CLI version),
+  never through a global `supabase`.
+- CI (`.github/workflows/ci.yml`) runs the same four gates plus a `db` job
+  that starts the stack and runs `pnpm test:db`. It does not run
   the anchor check — run it yourself whenever you edit docs or skills, or
   rename or move a file.
 - Versions live in `.node-version` and `package.json`, not here.
