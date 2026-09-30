@@ -66,11 +66,15 @@ deviate from a spec, stop and report the deviation — never decide it silently.
 under lint zones — T0 `model`, T1 `compiler`, T2 `schema`, T3 `server`,
 T4 `data`, T5 `ui`, T6 `shell`. **Imports go only downward.** A separate package
 exists only for a unit with its own life cycle (CLI, studio, app template);
-versions are lockstep.
+versions are lockstep. Both this tier order and the framework boundary below are
+enforced by `packages/simetra/eslint.tier-zones.js` with the negative test
+`packages/simetra/test/tier-boundary.test.ts`; changing the tier table is an
+owner decision.
 
 **Framework boundary** (a lint zone): T5 imports only React, T4 contracts and
 the navigation adapter interface; framework adapters live in T6; the host
-template and the studio are the only places that import TanStack Start.
+template and the studio are the only places that import TanStack Start. It is
+held by the same `packages/simetra/eslint.tier-zones.js` and its negative test.
 
 **Current code is a prototype.** The prototype metamodel now lives in T0
 (`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest of the prototype (CLI, generators, UI, web
