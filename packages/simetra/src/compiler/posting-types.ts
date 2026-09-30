@@ -67,6 +67,7 @@ export interface OperandError {
 
 const ARITHMETIC: ReadonlySet<string> = new Set(["+", "-", "*", "/"])
 const LOGICAL: ReadonlySet<string> = new Set(["and", "or"])
+const ORDERING: ReadonlySet<string> = new Set(["<", "<=", ">", ">="])
 
 /**
  * Тип виразу. Операнд невідповідного типу потрапляє в `errors`, а вузол над
@@ -149,6 +150,20 @@ function inferNode(
           expected: describeType(left),
           actual: right,
         })
+      } else if (ORDERING.has(expr.op)) {
+        // Порядок має сенс лише для чисел, тексту й дат: посилання (UUID) і
+        // булеве лише рівні чи ні, а `<` на них SQL або відкине, або
+        // порівняє довільно.
+        const unordered = [left, right].find(
+          (t) => t.kind === "ref" || t.kind === "boolean"
+        )
+        if (unordered !== undefined) {
+          errors.push({
+            node: expr,
+            expected: "numeric, text or date",
+            actual: unordered,
+          })
+        }
       }
       return { kind: "boolean" }
     }

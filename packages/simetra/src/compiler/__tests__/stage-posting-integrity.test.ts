@@ -703,6 +703,24 @@ describe("stage 4: operand types", () => {
     ).toMatchObject({ offset: 11 })
   })
 
+  it("ordering is only for numeric, text and date operands", () => {
+    // Зміщення — початок самого порівняння, не операнда.
+    expect(one({ condition: "row.item < row.item" }, condition)).toMatchObject({
+      offset: 0,
+    })
+    expect(one({ condition: "doc.posted > true" }, condition)).toMatchObject({
+      offset: 0,
+    })
+    for (const text of [
+      "row.item = row.item",
+      "row.item != row.item",
+      "doc.date < doc.date",
+      "row.title >= 'a'",
+    ]) {
+      expect(build({ condition: text }, adjust).diagnostics, text).toEqual([])
+    }
+  })
+
   it("a failed operand does not cascade to the field", () => {
     // Вкладена помилка звітує лише операнд, а не результат проти поля.
     one({ fields: { item: "row.item", qty: "(row.title * 2) > 1" } }, qty)
