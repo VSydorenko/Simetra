@@ -535,6 +535,8 @@ function checkScope(
       rootKindOf.get(objectKey(source.kind, source.name)) ?? scopeOf(source)
 
     if (role === "register.recorder") {
+      // Не-документ уже отримав register.recorder-kind; скоуп йому — зайвий шум.
+      if (!KIND_REGISTRY[target.kind].actions.includes(POST_ACTION)) continue
       const recorderKind = scopeOf(target)
       if (recorderKind !== sourceKind) {
         found.push(
@@ -865,7 +867,20 @@ function checkPosting(
         }
       }
       expectKind(movement.condition, at("condition"), { kind: "boolean" })
-      expectKind(movement.period, at("period"), { kind: "date" })
+      // Період — стандартна колонка регістра: без неї (неперіодичний регістр
+      // відомостей) значенню періоду нема куди лягти.
+      const hasPeriod = registerDef
+        .standardColumns(register.data)
+        .some((column) => column.logicalName === "period")
+      if (movement.period !== undefined && !hasPeriod) {
+        found.push(
+          diagnostic("posting.period-not-allowed", object.file, at("period"), {
+            register: register.name,
+          })
+        )
+      } else {
+        expectKind(movement.period, at("period"), { kind: "date" })
+      }
 
       // Вид руху — стандартна колонка регістра, тож її наявність і є фактом
       // реєстру про те, чи потрібен рух виду.
@@ -893,7 +908,18 @@ function checkPosting(
         const pointer = at("movementType")
         const expr = expression(movementType, pointer)
         const actual = expr === undefined ? UNKNOWN : typeAt(expr, pointer)
-        if (
+        // Рядковий літерал відомий статично: лише два значення стають видом руху.
+        if (expr?.type === "string") {
+          if (expr.value !== "Receipt" && expr.value !== "Expense") {
+            found.push(
+              diagnostic("posting.movement-type", object.file, pointer, {
+                problem: "value",
+                value: expr.value,
+                offset: expr.start,
+              })
+            )
+          }
+        } else if (
           expr !== undefined &&
           actual.kind !== "unknown" &&
           actual.kind !== "text"
@@ -909,11 +935,13 @@ function checkPosting(
       }
 
       const fields = register.data as Record<RegisterFieldRole, Attribute[]>
+      // Порядок оголошення — виміри, ресурси, реквізити: так і `missing`.
       const required = [
         ...fields.dimensions,
         ...fields.resources.filter(
           (resource) => keys.additiveResources || resource.required
         ),
+        ...fields.attributes.filter((attribute) => attribute.required),
       ].map((field) => field.name)
       const missing = required.filter((name) => !(name in movement.fields))
       if (missing.length > 0) {

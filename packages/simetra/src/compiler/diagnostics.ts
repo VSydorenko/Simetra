@@ -48,6 +48,7 @@ export const COMPILER_RULES = [
   "posting.row-in-document-source",
   "posting.aggregate-in-section-source",
   "posting.movement-type",
+  "posting.period-not-allowed",
   "posting.type-mismatch",
   "physical.table-duplicate",
   "physical.column-duplicate",

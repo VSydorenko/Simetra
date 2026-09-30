@@ -238,6 +238,16 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
+  it("recorder that is not a document gets no scope mismatch", () => {
+    const result = compileScoped({
+      [CP]: counterparty(),
+      [STOCK]: register("user", [{ kind: "Catalog", name: "Counterparty" }]),
+    })
+    expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+      ["register.recorder-kind", "/recorderTypes/0"],
+    ])
+  })
+
   it("register scope none differs from scoped recorder", () => {
     const result = compileScoped({
       [SALE]: document("Sale", { scope: "org" }),

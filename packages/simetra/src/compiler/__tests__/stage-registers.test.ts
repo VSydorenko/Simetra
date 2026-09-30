@@ -191,6 +191,17 @@ describe("stage 3: register keys", () => {
     expect(turnover.tables.map((t) => t.name)).not.toContain("stock_totals")
   })
 
+  it("accumulation movement resources are NOT NULL without a default", () => {
+    const stock = tableOf(physicalOf(stockFiles()), "stock")
+    expect(column(stock, "qty").notNull).toBe(true)
+    expect(column(stock, "qty").default).toBeUndefined()
+    const totals = tableOf(physicalOf(stockFiles()), "stock_totals")
+    expect(column(totals, "qty")).toMatchObject({ notNull: true, default: "0" })
+    // Ресурс регістра відомостей — значення: без `required` він може бути порожнім.
+    const rates = tableOf(physicalOf(ratesFiles()), "rates")
+    expect(column(rates, "rate").notNull).toBe(false)
+  })
+
   it("degenerate totals key is a singleton", () => {
     const physical = physicalOf(
       metaFiles({

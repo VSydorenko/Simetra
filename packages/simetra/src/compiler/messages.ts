@@ -265,8 +265,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Balance register "${p.register}" needs movementType`
         : p.problem === "forbidden"
           ? `Register "${p.register}" has no movement type`
-          : `movementType expression gives ${p.actual}, not text`,
+          : p.problem === "value"
+            ? `movementType '${p.value}' is neither 'Receipt' nor 'Expense'`
+            : `movementType expression gives ${p.actual}, not text`,
     hint: 'Use the literal "Receipt" or "Expense", or an expression that gives one of them.',
+  },
+  "posting.period-not-allowed": {
+    message: (p) =>
+      `Register "${p.register}" is not periodic and has no period`,
+    hint: "Remove period from the movement, or make the register periodic.",
   },
   "posting.type-mismatch": {
     message: (p) =>

@@ -503,6 +503,148 @@ describe("stage 4: movement constructor semantics", () => {
   })
 })
 
+describe("stage 4: movement constructor, fix round 1", () => {
+  const pricesFile = "information-registers/Prices/Prices.meta.json"
+  /** Рух у регістр відомостей `Prices` замість `Stock`. */
+  const intoPrices = (
+    movement: Record<string, unknown>,
+    register: Record<string, unknown> = {}
+  ) =>
+    build(
+      {
+        register: { kind: "InformationRegister", name: "Prices" },
+        movementType: undefined,
+        ...movement,
+      },
+      ({ files, sale }) => {
+        sale.registerMovements = [
+          { kind: "InformationRegister", name: "Prices" },
+        ]
+        delete files[STOCK_FILE]
+        files[pricesFile] = {
+          id: "00000000-0000-4000-8000-000000000903",
+          kind: "InformationRegister",
+          name: "Prices",
+          physicalName: "prices",
+          writeMode: "RecorderSubordinate",
+          recorderTypes: [{ kind: "Document", name: "Sale" }],
+          dimensions: [attribute("item", ref("Item"))],
+          resources: [
+            attribute("price", { type: "Numeric", precision: 15, scale: 2 }),
+          ],
+          ...register,
+        }
+      }
+    )
+
+  it("fields incomplete includes required attributes in declaration order", () => {
+    const result = build({ fields: {} }, ({ stock }) => {
+      stock.attributes.push(
+        attribute("note", { type: "String", length: 50, required: true }),
+        attribute("memo", { type: "String", length: 50 })
+      )
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "posting.fields-incomplete",
+        pointer: "/posting/movements/0/fields",
+        params: expect.objectContaining({ missing: "item, qty, note" }),
+      }),
+    ])
+  })
+
+  it("information register requires its required attributes", () => {
+    const result = intoPrices(
+      { fields: { item: "row.item" } },
+      { attributes: [attribute("source", { type: "Boolean", required: true })] }
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "posting.fields-incomplete",
+        params: expect.objectContaining({ missing: "source" }),
+      }),
+    ])
+  })
+
+  it("period is not allowed for a non-periodic information register", () => {
+    const fields = { item: "row.item", price: "row.amount" }
+    expect(intoPrices({ fields }).diagnostics).toEqual([])
+    expect(codes(intoPrices({ fields, period: "doc.date" }))).toEqual([
+      ["posting.period-not-allowed", SALE_FILE, "/posting/movements/0/period"],
+    ])
+    expect(
+      intoPrices({ fields, period: "doc.date" }, { periodicity: "Month" })
+        .diagnostics
+    ).toEqual([])
+  })
+
+  it("movement type string literal must be Receipt or Expense", () => {
+    const result = build({ movementType: "'Incoming'" })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "posting.movement-type",
+        pointer: "/posting/movements/0/movementType",
+        params: expect.objectContaining({ value: "Incoming", offset: 0 }),
+      }),
+    ])
+    expect(build({ movementType: "'Receipt'" }).diagnostics).toEqual([])
+  })
+
+  it("sum takes the attribute type", () => {
+    const run = (count: string) =>
+      build(
+        {
+          source: "document",
+          fields: { item: "doc.item", qty: "sum(goods.qty)", count },
+        },
+        ({ sale, stock }) => {
+          sale.attributes.push(attribute("item", ref("Item")))
+          sale.tabularSections[0]!.attributes.push(
+            attribute("pieces", { type: "Integer" })
+          )
+          stock.resources.push(attribute("count", { type: "Integer" }))
+        }
+      )
+    expect(run("sum(goods.pieces)").diagnostics).toEqual([])
+    expect(codes(run("sum(goods.qty)"))).toEqual([
+      ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/count"],
+    ])
+  })
+
+  it("row DateTime and Date attributes are dates", () => {
+    const adjust = ({ sale }: Fixture) => {
+      sale.tabularSections[0]!.attributes.push(
+        attribute("shippedAt", { type: "DateTime" }),
+        attribute("shippedOn", { type: "Date" })
+      )
+    }
+    expect(build({ period: "row.shippedAt" }, adjust).diagnostics).toEqual([])
+    expect(build({ period: "row.shippedOn" }, adjust).diagnostics).toEqual([])
+  })
+
+  it("row.parent is a Ref to the document", () => {
+    const adjust = ({ stock }: Fixture) => {
+      stock.attributes.push(
+        attribute("source", {
+          type: "Ref",
+          ref: { kind: "Document", name: "Sale" },
+        })
+      )
+    }
+    expect(
+      build(
+        { fields: { item: "row.item", qty: "row.qty", source: "row.parent" } },
+        adjust
+      ).diagnostics
+    ).toEqual([])
+    expect(
+      codes(build({ fields: { item: "row.parent", qty: "row.qty" } }, adjust))
+    ).toEqual([
+      ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/item"],
+    ])
+  })
+})
+
 describe("stage 4: robustness", () => {
   it("names that stage 2 could not resolve produce no stage 4 noise", () => {
     const files = salesDocument({

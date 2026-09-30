@@ -277,6 +277,12 @@ class SnapshotBuilder {
           built.notNull = registerKeys.dimensionsNotNull
           dimensionFields.push(built)
         }
+        // Адитивний ресурс сумується в залишки й обороти: порожнє значення
+        // зіпсувало б суму, а платформного DEFAULT рух не має — значення дає
+        // кожен рух (спека §7).
+        if (field === "resources" && registerKeys?.additiveResources === true) {
+          built.notNull = true
+        }
         fields.push(built)
         this.declare(
           object.file,
