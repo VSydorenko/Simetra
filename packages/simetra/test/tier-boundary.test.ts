@@ -18,6 +18,15 @@ async function restricted(code: string, file: string): Promise<string[]> {
     .filter((m) => m.ruleId === "no-restricted-imports")
     .map((m) => m.message)
 }
+async function purity(code: string, file: string): Promise<string[]> {
+  const [result] = await eslint.lintText(code, {
+    filePath: join(PKG, file),
+    warnIgnored: true,
+  })
+  return (result?.messages ?? [])
+    .filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports")
+    .map((m) => m.message)
+}
 const importOf = (s: string) =>
   `import { probe } from "${s}"\nexport const used = probe\n`
 
@@ -153,6 +162,53 @@ describe("tier zones", () => {
         await eslint.isPathIgnored(join(PKG, `src/${t}/__fixture.ts`)),
         t
       ).toBe(false)
+    }
+  })
+
+  it("model imports only zod", async () => {
+    const file = "src/model/__fixture.ts"
+    for (const spec of ["zod", "zod/v4", "./local", "../model/x"]) {
+      expect(await purity(importOf(spec), file), spec).toEqual([])
+    }
+    for (const spec of [
+      "react",
+      "node:fs",
+      "fs",
+      "@supabase/supabase-js",
+      "jsonc-parser",
+    ]) {
+      const msgs = await purity(importOf(spec), file)
+      expect(msgs, spec).toHaveLength(1)
+      expect(msgs[0]).toContain("T0 purity")
+    }
+  })
+
+  it("model tests may use node", async () => {
+    expect(
+      await purity(importOf("node:fs"), "src/model/__tests__/__fixture.ts")
+    ).toEqual([])
+  })
+
+  it("compiler uses no node api", async () => {
+    const file = "src/compiler/__fixture.ts"
+    for (const spec of ["node:fs", "node:path", "fs", "path", "node:crypto"]) {
+      const msgs = await purity(importOf(spec), file)
+      expect(msgs, spec).toHaveLength(1)
+      expect(msgs[0]).toContain("T1 purity")
+    }
+    expect(await purity(importOf("zod"), file)).toEqual([])
+    expect(
+      await purity(importOf("node:fs"), "src/compiler/__tests__/__fixture.ts")
+    ).toEqual([])
+  })
+
+  it("mts and cts are covered", async () => {
+    for (const ext of ["mts", "cts"]) {
+      const msgs = await restricted(
+        importOf("simetra/compiler"),
+        `src/model/__fixture.${ext}`
+      )
+      expect(msgs, ext).toHaveLength(1)
     }
   })
 })

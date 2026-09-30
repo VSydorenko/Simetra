@@ -31,7 +31,7 @@ function tierMessage(tier, index) {
   )
 }
 
-export const tierZoneConfigs = TIERS.flatMap((tier, index) => {
+const tierConfigs = TIERS.flatMap((tier, index) => {
   const higher = TIERS.slice(index + 1)
   const patterns = []
   if (higher.length > 0) {
@@ -49,8 +49,57 @@ export const tierZoneConfigs = TIERS.flatMap((tier, index) => {
   if (patterns.length === 0) return []
   return [
     {
-      files: [`src/${tier}/**/*.{ts,tsx}`],
+      files: [`src/${tier}/**/*.{ts,tsx,mts,cts}`],
       rules: { "no-restricted-imports": ["error", { patterns }] },
     },
   ]
 })
+
+// Межі чистоти T0 і T1. Окреме правило `@typescript-eslint/no-restricted-imports`,
+// а не `no-restricted-imports`: flat config замінює опції правила цілком, тож
+// ті самі опції в ярусному блоці затерли б ярусну зону (і навпаки). Тести
+// виключено: за правилом AGENTS.md тести можуть читати фікстури через Node API.
+const PURITY_FILES = (tier) => [`src/${tier}/**/*.{ts,tsx,mts,cts}`]
+const PURITY_IGNORES = ["**/__tests__/**"]
+
+export const purityConfigs = [
+  {
+    files: PURITY_FILES("model"),
+    ignores: PURITY_IGNORES,
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "^(?!zod(?:/|$)|\\.|simetra/model(?:/|$))",
+              message:
+                "T0 purity: src/model imports only zod at runtime (AGENTS.md, metamodel rules).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: PURITY_FILES("compiler"),
+    ignores: PURITY_IGNORES,
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex:
+                "^(?:node:|(?:fs|path|os|crypto|url|child_process)(?:/|$))",
+              message:
+                "T1 purity: the compiler is a pure function over a file map; disk access belongs to the CLI (P2 spec §8.2).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+]
+
+export const tierZoneConfigs = [...tierConfigs, ...purityConfigs]

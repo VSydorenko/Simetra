@@ -6,7 +6,7 @@ import { tierZoneConfigs } from "./eslint.tier-zones.js"
 export default defineConfig([
   globalIgnores(["dist"]),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ["**/*.{ts,tsx,mts,cts}"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
   },
   ...tierZoneConfigs,
