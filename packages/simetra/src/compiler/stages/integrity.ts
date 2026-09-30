@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  postsMovements,
   isSqlReservedWord,
   parseExpression,
   type Attribute,
@@ -29,12 +30,7 @@ import {
   type OperandError,
   type PostingContext,
 } from "../posting-types"
-import {
-  POST_ACTION,
-  PROJECT_FILE,
-  objectKey,
-  type ParsedObject,
-} from "./files"
+import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
 import {
   isDeclaredTable,
@@ -214,9 +210,7 @@ function referenceTargetError(
     return def.registerKeys === undefined ? "posting.register-kind" : undefined
   }
   if (role === "register.recorder") {
-    return def.actions.includes(POST_ACTION)
-      ? undefined
-      : "register.recorder-kind"
+    return postsMovements(target.kind) ? undefined : "register.recorder-kind"
   }
   if (role === "catalog.owner") {
     const source = byId.get(reference.from.objectId)
@@ -539,7 +533,7 @@ function checkScope(
 
     if (role === "register.recorder") {
       // Не-документ уже отримав register.recorder-kind; скоуп йому — зайвий шум.
-      if (!KIND_REGISTRY[target.kind].actions.includes(POST_ACTION)) continue
+      if (!postsMovements(target.kind)) continue
       const recorderKind = scopeOf(target)
       if (recorderKind !== sourceKind) {
         found.push(

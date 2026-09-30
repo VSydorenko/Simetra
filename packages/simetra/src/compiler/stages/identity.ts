@@ -526,11 +526,12 @@ function namedNodes(expr: Expr): Expr[] {
  * перевірила T0 (`posting.parse`), тож зламаний вираз тут пропускається.
  */
 /**
- * Ім'я регістра в маркері блоку запиту рухів — логічне ім'я регістра будь-якого
- * виду регістра (факт реєстру). Маркер без виду: якщо одне ім'я носять регістри
- * двох видів, перевагу має той, що в `registerMovements` документа, а далі
- * неоднозначність — помилка, не мовчазний вибір. Маркер мусить бути в індексі
- * посилань, щоб перейменування регістра його переписало.
+ * Маркер блоку — `<Name>` або `<Kind>.<Name>`. Кваліфікована форма однозначна;
+ * проста допустима, лише коли таке ім'я носить рівно один вид регістра.
+ * Ціль не залежить від сусідніх оголошень документа: перейменування чи
+ * додавання регістра в `registerMovements` не має тихо перемкнути блок.
+ * Маркер мусить бути в індексі посилань, щоб каскад перейменування його
+ * переписав.
  */
 function resolveMovementBlocks(
   object: ParsedObject,
@@ -540,48 +541,54 @@ function resolveMovementBlocks(
   diagnostics: Diagnostic[]
 ) {
   if (object.id === undefined) return
-  const declared = new Set(
-    (
-      (object.data as { registerMovements?: { kind: string; name: string }[] })
-        .registerMovements ?? []
-    ).map((ref) => objectKey(ref.kind, ref.name))
-  )
   for (const block of object.movementBlocks ?? []) {
-    const candidates = objects.filter(
-      (o) =>
-        o.name === block.register &&
-        KIND_REGISTRY[o.kind].registerKeys !== undefined
-    )
-    const preferred = candidates.filter((o) =>
-      declared.has(objectKey(o.kind, o.name))
-    )
-    const pool = preferred.length > 0 ? preferred : candidates
-    if (pool.length === 0) {
-      const broken = [...brokenNames].some((key) =>
-        key.endsWith(`/${block.register}`)
+    const at = (
+      code: "reference.unresolved" | "posting.register-kind",
+      params: Record<string, string | number>
+    ) =>
+      diagnostics.push(
+        diagnostic(code, block.file, "", { ...params, line: block.line })
       )
-      if (!broken) {
+    const dot = block.register.indexOf(".")
+    const kind = dot < 0 ? undefined : block.register.slice(0, dot)
+    const name = dot < 0 ? block.register : block.register.slice(dot + 1)
+
+    let target: ParsedObject | undefined
+    if (kind !== undefined) {
+      target = objects.find((o) => o.kind === kind && o.name === name)
+      if (target === undefined) {
+        if (!brokenNames.has(objectKey(kind, name))) {
+          at("reference.unresolved", { kind, name })
+        }
+        continue
+      }
+      if (KIND_REGISTRY[target.kind].registerKeys === undefined) {
+        at("posting.register-kind", { kind: target.kind, name: target.name })
+        continue
+      }
+    } else {
+      const candidates = objects.filter(
+        (o) =>
+          o.name === name && KIND_REGISTRY[o.kind].registerKeys !== undefined
+      )
+      if (candidates.length === 0) {
+        const broken = [...brokenNames].some((key) => key.endsWith(`/${name}`))
+        if (!broken) at("reference.unresolved", { kind: "Register", name })
+        continue
+      }
+      if (candidates.length > 1) {
         diagnostics.push(
-          diagnostic("reference.unresolved", block.file, "", {
-            kind: "Register",
-            name: block.register,
+          diagnostic("reference.ambiguous", block.file, "", {
+            name,
+            candidates: candidates.map((o) => `${o.kind}.${o.name}`).join(", "),
             line: block.line,
           })
         )
+        continue
       }
-      continue
+      target = candidates[0]
     }
-    if (pool.length > 1) {
-      diagnostics.push(
-        diagnostic("file.movements-block", block.file, "", {
-          detail: `register name "${block.register}" is ambiguous between ${pool.map((o) => o.kind).join(" and ")}`,
-          line: block.line,
-        })
-      )
-      continue
-    }
-    const target = pool[0]!
-    if (target.id === undefined) continue
+    if (target?.id === undefined) continue
     references.push({
       from: { file: block.file, pointer: "", objectId: object.id },
       to: { kind: target.kind, id: target.id },

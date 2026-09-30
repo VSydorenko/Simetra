@@ -44,3 +44,14 @@ const KINDS_BY_DIR = new Map(
 export function kindByDir(dir: string): KindDefinition | undefined {
   return KINDS_BY_DIR.get(dir)
 }
+
+/** Дія виду, що пише рухи: документ, який проводиться. */
+const POST_ACTION = "post"
+
+/**
+ * Чи вид проводиться (пише рухи в регістри). Факт реєстру, що його читають і
+ * перевірка реєстратора, і розбір `.sql`, тож назви дії ніхто не дублює.
+ */
+export function postsMovements(kind: MetadataKind): boolean {
+  return KIND_REGISTRY[kind].actions.includes(POST_ACTION)
+}

@@ -20,6 +20,7 @@ export const COMPILER_RULES = [
   "identity.name-case",
   "identity.name-reserved",
   "reference.unresolved",
+  "reference.ambiguous",
   "register.balance-control-resource",
   "posting.field-unknown",
   "posting.register-field-unknown",

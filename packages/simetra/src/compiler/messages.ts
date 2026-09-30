@@ -125,6 +125,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "reference.unresolved": {
     message: (p) => `${p.kind} "${p.name}" does not exist`,
   },
+  "reference.ambiguous": {
+    message: (p) => `Name "${p.name}" is ambiguous between ${p.candidates}`,
+    hint: (p) =>
+      `Qualify the marker as <Kind>.<Name>, for example ${String(p.candidates).split(", ")[0]}.`,
+  },
   "register.balance-control-resource": {
     message: (p) => `Register has no resource "${p.name}"`,
     hint: "balanceControl lists logical names of the register's resources.",

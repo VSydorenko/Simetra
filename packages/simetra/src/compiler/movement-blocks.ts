@@ -1,5 +1,5 @@
 export interface MovementBlock {
-  /** Логічне ім'я регістра з маркера. */
+  /** З маркера: `<Name>` або `<Kind>.<Name>`. */
   register: string
   /** Рядки між маркерами, без самих маркерів. */
   sql: string

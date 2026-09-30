@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   SALE_FILE,
-  STOCK_FILE,
+  attribute,
   metaFiles,
   project,
   salesDocument,
@@ -77,20 +77,19 @@ describe("stage 5: movement sources", () => {
   })
 
   it("block marker is indexed", () => {
-    const stock = salesDocument()[STOCK_FILE] as { id: string }
     const result = build({
       withConstructor: false,
       sql: `-- comment\n${BLOCK}`,
     })
+    const stock = result.model!.objects.find((o) => o.name === "Stock")!
     expect(result.model!.references).toContainEqual(
       expect.objectContaining({
         role: "posting.movementsBlock",
         from: expect.objectContaining({ file: SALE_SQL, pointer: "" }),
-        to: { kind: "AccumulationRegister", id: expect.any(String) },
+        to: { kind: "AccumulationRegister", id: stock.id },
         line: 2,
       })
     )
-    expect(stock.id).toEqual(expect.any(String))
   })
 
   it("unknown register in a marker", () => {
@@ -131,5 +130,97 @@ describe("stage 5: movement sources", () => {
         params: expect.objectContaining({ line: 2 }),
       })
     )
+  })
+
+  it("CRLF line endings are accepted", () => {
+    const result = build({
+      withConstructor: false,
+      sql: "-- @movements Stock\r\nSELECT 1\r\n-- @end\r\n",
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("empty block", () => {
+    const result = build({
+      withConstructor: false,
+      sql: "-- @movements Stock\n  \n-- @end",
+    })
+    expect(codes(result)).toEqual([["file.movements-block", SALE_SQL, ""]])
+    expect(result.diagnostics[0]!.params).toEqual(
+      expect.objectContaining({ line: 1 })
+    )
+  })
+
+  it("sidecar of a broken owner is skipped", () => {
+    const result = build({
+      extra: {
+        "catalogs/Broken/Broken.meta.json": "{",
+        "catalogs/Broken/Broken.sql": BLOCK,
+      },
+    })
+    expect(codes(result)).toEqual([
+      ["file.invalid-json", "catalogs/Broken/Broken.meta.json", ""],
+    ])
+  })
+})
+
+describe("movement block marker forms", () => {
+  const informationStock = {
+    "information-registers/Stock/Stock.meta.json": {
+      id: "00000000-0000-4000-8000-000000009001",
+      kind: "InformationRegister",
+      name: "Stock",
+      physicalName: "stock_info",
+      resources: [{ ...attribute("threshold", { type: "Integer" }) }],
+    },
+  }
+  const marked = (marker: string, extra: Record<string, unknown> = {}) =>
+    build({
+      withConstructor: false,
+      sql: `-- @movements ${marker}\nSELECT 1\n-- @end`,
+      extra,
+    })
+
+  it("qualified form resolves", () => {
+    const result = marked("AccumulationRegister.Stock", informationStock)
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("unqualified form is ambiguous between register kinds", () => {
+    const result = marked("Stock", informationStock)
+    expect(codes(result)).toEqual([["reference.ambiguous", SALE_SQL, ""]])
+    expect(result.diagnostics[0]!.params).toEqual({
+      name: "Stock",
+      candidates: "AccumulationRegister.Stock, InformationRegister.Stock",
+      line: 1,
+    })
+  })
+
+  it("the document's declarations do not disambiguate", () => {
+    // Stock оголошено в registerMovements, але маркер від цього не міняє ціль.
+    expect(codes(marked("Stock", informationStock))[0]).toEqual([
+      "reference.ambiguous",
+      SALE_SQL,
+      "",
+    ])
+  })
+
+  it("qualified non-register kind", () => {
+    expect(codes(marked("Catalog.Item"))).toEqual([
+      ["posting.register-kind", SALE_SQL, ""],
+    ])
+  })
+
+  it("unknown qualified name", () => {
+    expect(codes(marked("AccumulationRegister.Nope"))).toContainEqual([
+      "reference.unresolved",
+      SALE_SQL,
+      "",
+    ])
+    expect(codes(marked("Nonsense.Stock"))).toContainEqual([
+      "reference.unresolved",
+      SALE_SQL,
+      "",
+    ])
   })
 })

@@ -7,7 +7,7 @@ import {
   type MetadataKind,
   type Project,
   type SchemaRule,
-  KIND_REGISTRY,
+  postsMovements,
 } from "simetra/model"
 import {
   compareStrings,
@@ -22,9 +22,6 @@ export const PROJECT_FILE = "project.meta.json"
 const META_SUFFIX = ".meta.json"
 const MODULE_SUFFIX = ".module.ts"
 const SQL_SUFFIX = ".sql"
-
-/** Дія виду, що проводиться: лише такі документи мають рухи й блоки запиту. */
-export const POST_ACTION = "post"
 
 /**
  * Роздільник долар-лапок обгортки запиту рухів (задача обгортки): блок, що
@@ -146,6 +143,7 @@ export function readFiles(
 
   // Супутній файл належить об'єкту, чий `.meta.json` лежить поруч з тим самим
   // іменем; чи цей файл валідний — окреме питання, про яке звітує він сам.
+  const objectsByFile = new Map(result.objects.map((o) => [o.file, o]))
   for (const sidecar of sidecars) {
     if (!files.has(sidecar.ownerFile)) {
       result.diagnostics.push(
@@ -161,7 +159,7 @@ export function readFiles(
     } else {
       result.sqlFiles.push({ file: sidecar.file, ownerFile: sidecar.ownerFile })
       // Зламаний власник (його немає серед objects) причину вже назвав сам.
-      const owner = result.objects.find((o) => o.file === sidecar.ownerFile)
+      const owner = objectsByFile.get(sidecar.ownerFile)
       if (owner !== undefined) {
         readMovementBlocks(
           sidecar.file,
@@ -191,9 +189,7 @@ function readMovementBlocks(
       diagnostic("file.movements-block", file, "", { detail, line })
     )
   for (const error of errors) report(error.message, error.line)
-  const postable =
-    owner !== undefined &&
-    KIND_REGISTRY[owner.kind].actions.includes(POST_ACTION)
+  const postable = owner !== undefined && postsMovements(owner.kind)
   if (!postable) {
     for (const block of blocks) {
       report(
@@ -205,7 +201,10 @@ function readMovementBlocks(
   }
   const kept: ParsedMovementBlock[] = []
   for (const block of blocks) {
-    if (block.sql.includes(WRAPPER_DELIMITER)) {
+    if (block.sql.trim() === "") {
+      // Порожній блок дав би обгортку без запиту, що мовчки не пише рухів.
+      report("the block has no query", block.line)
+    } else if (block.sql.includes(WRAPPER_DELIMITER)) {
       report(`a block must not contain ${WRAPPER_DELIMITER}`, block.line)
     } else {
       kept.push({ file, ...block })
