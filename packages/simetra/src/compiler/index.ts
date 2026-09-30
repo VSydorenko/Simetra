@@ -14,3 +14,4 @@ export {
   type SourceObject,
 } from "./compile"
 export type { ResolvedReference } from "./stages/identity"
+export type { SqlUnit } from "./movement-functions"

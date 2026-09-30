@@ -4,7 +4,7 @@ import type { SchemaRule } from "./rules"
 import { ATTRIBUTE_CASES } from "./identity"
 import { NO_SCOPE, scopeKindSchema } from "./scope"
 
-/** Файл проєкту: лише ідентичність і правила іменування застосунку. */
+/** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */
 export const projectSchema = z
   .object({
     $schema: z.string().optional(),
@@ -17,6 +17,12 @@ export const projectSchema = z
         attributeCase: z.enum(ATTRIBUTE_CASES).default("camelCase"),
       })
       .default({ attributeCase: "camelCase" }),
+    /**
+     * IANA-пояс, у якому платформа визначає день, місяць, квартал і рік
+     * моменту (спека П2 §3). Існування імені T0 перевірити не може — таблиці
+     * поясів немає без Node API; хибний пояс відкине тінь при розгортанні.
+     */
+    timezone: z.string().min(1).default("UTC"),
     scopeKinds: z.array(scopeKindSchema).default([]),
   })
   .superRefine((project, ctx) => {

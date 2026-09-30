@@ -296,6 +296,7 @@ describe("projectSchema", () => {
       defaultLocale: "uk",
       defaultSchema: "public",
       naming: { attributeCase: "camelCase" },
+      timezone: "UTC",
       scopeKinds: [],
     })
   })

@@ -10,6 +10,7 @@ import { checkIdentity, type ResolvedReference } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel } from "./stages/model"
+import { buildMovementFunctions, type SqlUnit } from "./movement-functions"
 
 export interface SourceObject {
   id: string
@@ -44,6 +45,8 @@ export interface CompiledModel {
   sqlFiles: { file: string; ownerObjectId?: string; schema?: string }[]
   moduleFiles: { file: string; ownerObjectId: string }[]
   physical: PhysicalSnapshot
+  /** За `(schema, name)`. */
+  sqlUnits: SqlUnit[]
 }
 
 export interface CompileResult {
@@ -158,6 +161,12 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
         }))
         .sort((a, b) => compareStrings(a.file, b.file)),
       physical: stage3.physical,
+      sqlUnits: buildMovementFunctions(
+        stage1.objects,
+        stage2.references,
+        stage3.physical,
+        stage1.project
+      ),
     },
   }
 }
