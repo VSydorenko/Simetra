@@ -16,7 +16,7 @@ T1 над скомпільованою моделлю; T0 отримує лиш�
 описи `.meta`) і факти реєстру.
 
 **Технології:** TypeScript 7, Zod 4 (`z.toJSONSchema`, `.meta`), Vitest 5;
-нові залежності T1: `libpg-query` **18.1.5** (MIT, WASM, точний пін),
+нові залежності T1: `libpg-query` **17.7.4** (MIT, WASM, граматика Postgres 17 — цільової мінімальної версії, тег `pg17`; точний пін),
 `jsonc-parser` **3.3.1** (MIT). Хеш — `globalThis.crypto.subtle` (Node 24,
 браузер), канонізація RFC 8785 — власна.
 
@@ -58,7 +58,7 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 
 - Чистота: T0 — лише `zod`; T1 — без Node API (libpg-query, jsonc-parser і
   Web Crypto дозволені). Тести можуть використовувати Node API.
-- Нові залежності — точний пін (`"libpg-query": "18.1.5"`,
+- Нові залежності — точний пін (`"libpg-query": "17.7.4"`,
   `"jsonc-parser": "3.3.1"`), без каретки; ліцензії перевірено (MIT).
 - Детермінізм: той самий вхід → побайтно той самий знімок, порядок і хеш;
   порядок вставки в мапу файлів нічого не змінює.
@@ -94,7 +94,7 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 **Files:**
 - Modify: `packages/simetra/src/compiler/stages/identity.ts`, `stages/integrity.ts`, `compiler/movement-blocks.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
 - Create: `packages/simetra/src/model/posting/walk.ts` (спільний обхід AST)
-- Test: `packages/simetra/src/compiler/__tests__/stage-posting-identity.test.ts`, `movement-blocks.test.ts`, `stage-registers.test.ts`, `packages/simetra/src/model/__tests__/posting-parse.test.ts`
+- Test: `packages/simetra/src/compiler/__tests__/stage-posting-identity.test.ts`, `stage-links.test.ts` (попередження маркера — на рівні `compile`), `stage-registers.test.ts`, `packages/simetra/src/model/__tests__/posting-parse.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -110,7 +110,7 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 - [ ] **Step 1: Тести** — `sum and count references carry spans`;
   `condition references are indexed`; `movementType expression references are indexed`;
   `duplicate balance control resource`; `indented marker is a warning`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity movement-blocks stage-registers` → FAIL.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity stage-links stage-registers` → FAIL.
 - [ ] **Step 3: Реалізація.**
 - [ ] **Step 4: Зелені** — PASS; повні гейти.
 - [ ] **Step 5: Commit**
@@ -152,7 +152,30 @@ git commit -m "fix(compiler): хвости C2 — спільний обхід AS
   }
   ```
   `CompiledModel.sqlUnits: SqlUnit[]` (сортування тут — за `identity`;
-  порядок створення — задача 2); `CompiledModel.sqlFiles` видалено.
+  порядок створення — задача 2); `CompiledModel.sqlFiles` видалено. Ця форма
+  **замінює** C2-шний `SqlUnit { kind: "movementQuery", … }` (без шиму):
+  контракти й тести C2 переходять на `class`.
+  **Ідентичність за класами** (імена — `schema.name`, частини в списках
+  відсортовано, типи аргументів — як у дереві розбору, без імен параметрів):
+
+  | Клас | `identity` |
+  | --- | --- |
+  | function, procedure, aggregate, functionSettings | `<class>:<schema>.<name>(<типи аргументів через ,>)` |
+  | movementQuery | `function:<schema>.<name>(uuid)` — той самий простір, що й функції |
+  | trigger, policy | `<class>:<schema>.<table>.<name>` |
+  | view, materializedView, sequence, domain | `<class>:<schema>.<name>` |
+  | extension | `extension:<name>` |
+  | sequenceOwnedBy, replicaIdentity | `<class>:<schema>.<name>` (послідовність / таблиця) |
+  | grant | `grant:<grant\|revoke>:<тип об'єкта>:<об'єкти>:<отримувачі>:<привілеї>` |
+  | defaultPrivileges | `defaultPrivileges:<роль>:<схеми>:<тип об'єкта>:<grant\|revoke>:<отримувачі>:<привілеї>` |
+  | comment | `comment:<тип об'єкта>:<об'єкт>` |
+  | publication | `publication:<ім'я>:<add\|drop\|set>:<таблиці>` |
+
+  Отже `GRANT SELECT` і `GRANT INSERT` на ту саму таблицю тому самому
+  отримувачу — різні одиниці. Користувацька функція з ім'ям і сигнатурою
+  обгортки рухів дає лише `sql.unit-duplicate`; `physical.function-duplicate`
+  лишається для імен функцій контрактів (оболонка, віртуальні таблиці,
+  перерахунок) проти таблиць і одиниць.
   Правила: `sql.parse` (помилка розбору; `params.line`, `params.column` з
   `cursorPosition`), `sql.statement-not-allowed` (`params.statement` — тип
   вузла, напр. `CreateStmt`), `sql.unit-duplicate` (друга одиниця з тією
@@ -172,6 +195,9 @@ git commit -m "fix(compiler): хвости C2 — спільний обхід AS
 `sql-units.test.ts`:
 - `function identity includes argument types` — `CREATE FUNCTION public.f(a uuid, b text) …` → `identity === "function:public.f(uuid,text)"`;
 - `trigger and policy identity include table`;
+- `grants with different privileges are different units`;
+- `two ALTER PUBLICATION ADD TABLE for different tables are different units`;
+- `user function colliding with a movement wrapper gives one diagnostic`;
 - `accepted-schema dump compiles` — один `sql/public/misc.sql` з
   `CREATE EXTENSION IF NOT EXISTS pgcrypto`, `CREATE SEQUENCE s`,
   `ALTER SEQUENCE s OWNED BY t.c`, `CREATE DOMAIN d AS text`,
@@ -189,7 +215,7 @@ git commit -m "fix(compiler): хвости C2 — спільний обхід AS
 - `compile is async` — `compile(...)` повертає `Promise`.
 
 - [ ] **Step 2: Червоні** — `pnpm --filter simetra test sql-units` → FAIL.
-- [ ] **Step 3: Реалізація** — `pnpm --filter simetra add libpg-query@18.1.5 --save-exact`;
+- [ ] **Step 3: Реалізація** — `pnpm --filter simetra add libpg-query@17.7.4 --save-exact`;
   `loadModule()` мемоізовано в `sql/parse.ts`; усі тести компілятора
   переходять на `await`.
 - [ ] **Step 4: Зелені** — PASS; повні гейти.
@@ -217,8 +243,14 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
     (довідник, документ, регістри, константа); `PhysicalTable.rowLevelSecurity: "off" | "enabled" | "forced"`
     (таблиця підсумків і рядка ТЧ — як у власника).
   - `CompiledModel.creationOrder: ({ type: "enumType"; schema: string; name: string } | { type: "table"; schema: string; name: string } | { type: "unit"; identity: string })[]`
-    — топологічний порядок; tie-break — `(тип вузла в порядку enumType, table, unit; schema; name/identity)`.
+    — топологічний порядок; **розширення — перші вузли взагалі** (їхні типи й
+    функції потрібні колонкам і `DEFAULT`); серед решти готових вузлів
+    tie-break — `(тип вузла в порядку enumType, table, unit; schema; name/identity)`.
+    Tie-break лише впорядковує незалежні вузли, тож кожна залежність таблиці
+    від одиниці мусить бути ребром.
   - Ребра (залежність → залежний): енам-тип → таблиця з колонкою цього типу;
+    домен → таблиця з колонкою цього типу (`Raw pgType`); послідовність →
+    таблиця, у чиєму `DEFAULT` є `nextval('<послідовність>')`;
     таблиця-ціль FK → таблиця з FK; функція (за іменем, усі перевантаження)
     → таблиця, у чиєму `DEFAULT`/`CHECK`/предикаті індексу є виклик
     (вирази розбираються як `SELECT (<вираз>)`); відношення й функції запиту
@@ -230,7 +262,9 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
     відстежується (розширення завжди перші серед одиниць). Тіла plpgsql не
     аналізуються. Ребра на об'єкти поза моделлю (`auth.users`) ігноруються.
   - Правило: `sql.dependency-cycle` (`params.cycle` — перелік вузлів циклу),
-    pointer — перша одиниця циклу за порядком.
+    pointer — перша одиниця циклу за порядком. Зокрема цикл «`DEFAULT` таблиці
+    → `LANGUAGE sql`-функція, що читає цю таблицю» — діагностика (Postgres
+    із `check_function_bodies` так не створить), а не безкінечний цикл.
 
 - [ ] **Step 1: Тести**
 
@@ -240,7 +274,9 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
   перед таблицею;
 - `view after its tables and functions`;
 - `trigger after table and function`;
-- `extensions first among units`;
+- `extensions come before everything` — таблиця з `DEFAULT extensions.uuid_generate_v4()` після розширення;
+- `domain and sequence before the table` — колонка-домен і `DEFAULT nextval('s')`;
+- `table default reading its own table through a sql function is a cycle`;
 - `cycle is reported` — в'юха `v` читає функцію `f`, а `LANGUAGE sql`-функція
   `f` читає `v` → `sql.dependency-cycle` з обома у `params.cycle`;
 - `deterministic regardless of map order`;
@@ -272,7 +308,8 @@ git commit -m "feat(compiler): rowLevelSecurity таблиці й спільни
     `project.meta.json`); `scope.set-function-signature` (є, але з
     аргументами, не `RETURNS SETOF uuid` чи не `STABLE`; `params.problem`);
     `posting.query-not-select` (блок рухів — не рівно один `SelectStmt`;
-    `params.line` маркера); `posting.query-order-missing` — **warning** (у
+    `params.line` маркера; `WITH … SELECT` і `SELECT … UNION ALL …` — теж
+    `SelectStmt`, дозволені); `posting.query-order-missing` — **warning** (у
     `SelectStmt` немає `sortClause`).
   - `CompiledModel.modules: { name: string }[]` (один — `project.name`);
     `SourceObject.module: string`; `SqlUnit.module` (задача 1).
@@ -304,7 +341,8 @@ git commit -m "feat(compiler): стадія 5 — функції множини,
 
 **Interfaces:**
 - Produces:
-  - `MESSAGES: Record<RuleCode, { en: (p) => string; uk: (p) => string; hint?: { en: string; uk: string } }>`;
+  - `MESSAGES: Record<RuleCode, { en: (p) => string; uk: (p) => string; hint?: { en: string | ((p) => string); uk: string | ((p) => string) } }>`
+    (параметричні підказки C1/C2 зберігаються);
     `Diagnostic.message`/`hint` — en; `localize(d: Diagnostic, locale: "en" | "uk"): { message: string; hint?: string }`.
   - `Diagnostic.range` заповнюється для кожної діагностики з файлом, що є в
     мапі: JSON — `jsonc-parser` (`parseTree` + `findNodeAtLocation` за
@@ -312,8 +350,11 @@ git commit -m "feat(compiler): стадія 5 — функції множини,
     наявний предок; якщо помилка про сам ключ (`identity.name-duplicate` на
     `/…/name`) — вузол значення); вираз конструктора — вузол рядка + `params.offset`,
     переведений з декодованого індексу в сирий з урахуванням JSON-екранування
-    (`\"`, `\\`, `\uXXXX`); `.sql` — `params.line`/`params.column`. Рядки й
-    колонки — 0-базні (LSP).
+    (`\"`, `\\`, `\uXXXX`); `.sql` — `params.line` (1-базний, як у C2) →
+    `range.start.line = line - 1`; `cursorPosition` libpg-query — 1-базне
+    **байтове** зміщення в тексті оператора, тож переводиться в символьне з
+    урахуванням UTF-8 і зміщення оператора у файлі. У `range` рядки й колонки
+    — 0-базні (LSP).
   - Тест повноти каталогу: кожен `RuleCode` має непорожні `en` і `uk`.
 
 - [ ] **Step 1: Тести**
@@ -379,7 +420,7 @@ git commit -m "feat(model): канонічний порядок ключів н�
 **Files:**
 - Modify: схеми T0 (`packages/simetra/src/model/schemas/*.ts`) — `.meta({ description })` англійською на кожному полі верхнього рівня й ключових вкладених
 - Create: `packages/simetra/src/compiler/json-schema.ts`, `packages/simetra/schemas/<kind-dir>.schema.json` (по файлу на вид) і `project.schema.json`
-- Modify: `packages/simetra/package.json` (`exports["./schemas/*"]: "./schemas/*"`, `files` за потреби), `.prettierignore` (згенеровані схеми не форматуються вручну — генератор пише канонічний JSON)
+- Modify: `packages/simetra/package.json` (`exports["./schemas/*"]: "./schemas/*"`; перевір, що лінт-зони й typecheck не зачіпають JSON), `.prettierignore` (згенеровані схеми не форматуються вручну — генератор пише канонічний JSON)
 - Test: `packages/simetra/src/compiler/__tests__/json-schema.test.ts`
 
 **Interfaces:**
@@ -521,13 +562,20 @@ git commit -m "feat(compiler): канонічний знімок і sha256-хе�
 ### Task 10: Ратчет «поле без споживача»; канон і статус
 
 **Files:**
-- Create: `packages/simetra/src/compiler/__tests__/field-ratchet.test.ts`, `__tests__/fixtures/kitchen-sink.ts`
+- Create: `packages/simetra/src/compiler/pipeline.ts`, `__tests__/field-ratchet.test.ts`, `__tests__/fixtures/kitchen-sink.ts`
+- Modify: `packages/simetra/src/compiler/compile.ts`
 - Modify (канон): `.agents/skills/code-review/references/simetra-domain-criteria.md`, `docs/ROADMAP.md`
 
 **Interfaces:**
 - Consumes: усе з задач 1–9.
+- Шов: `compile()` ділиться у внутрішньому модулі `compiler/pipeline.ts` на
+  `readFiles(files)` (стадія 1, вже є) і `runStages(stage1: FilesStageResult): Promise<CompileResult>`
+  (стадії 2–5 і вихід); `compile = files => runStages(readFiles(files))`.
+  `pipeline.ts` не експортується з `simetra/compiler` — тест імпортує його
+  відносним шляхом; публічний API не змінюється (це не тестовий хук).
 - Produces: тест — «kitchen-sink»-проєкт, де кожне поле кожної схеми видів і
-  проєкту задане (вкладені включно); розібрані дані загортаються в Proxy, що
+  проєкту задане (вкладені включно); між `readFiles` і `runStages` розібрані
+  дані загортаються в Proxy, що
   записує прочитані шляхи (масиви — за елементами, шлях нормалізується до
   `kind.field.subfield`); прогін `compile` + `emitEntityTypes` +
   `canonicalSnapshot`; тест порівнює множину шляхів схем (зі Zod-форм) із
