@@ -123,6 +123,16 @@ export type CustomTableColumn = z.infer<typeof customTableColumnSchema>
 const constraintName = z.string().min(1).optional()
 const columnList = z.array(elementNameSchema).min(1)
 
+export const fkActionSchema = z.enum([
+  "noAction",
+  "restrict",
+  "cascade",
+  "setNull",
+  "setDefault",
+])
+
+export type FkAction = z.infer<typeof fkActionSchema>
+
 const foreignKeySchema = z.object({
   name: constraintName,
   columns: columnList,
@@ -137,12 +147,8 @@ const foreignKeySchema = z.object({
       }),
     }),
   ]),
-  onDelete: z
-    .enum(["noAction", "restrict", "cascade", "setNull", "setDefault"])
-    .default("noAction"),
-  onUpdate: z
-    .enum(["noAction", "restrict", "cascade", "setNull", "setDefault"])
-    .default("noAction"),
+  onDelete: fkActionSchema.default("noAction"),
+  onUpdate: fkActionSchema.default("noAction"),
   deferrable: z.enum(["no", "deferrable", "initiallyDeferred"]).default("no"),
 })
 
