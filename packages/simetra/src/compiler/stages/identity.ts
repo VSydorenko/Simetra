@@ -45,12 +45,6 @@ interface NamedElement {
 }
 
 /**
- * Поля з елементами, що стають колонками основної таблиці об'єкта. Разом із
- * табличними частинами вони ділять один простір імен об'єкта (спека П2 §8.2).
- */
-const COLUMN_FIELDS = ["attributes", "dimensions", "resources", "columns"]
-
-/**
  * Стадія 2 (спека П2 §3, §8.2): id і physicalName присутні, id унікальні в
  * усій моделі, імена унікальні в межах власника й дотримуються стилю, а
  * посилання за іменем резолвляться в UUID. Першим вважається елемент, що
@@ -193,27 +187,20 @@ export function checkIdentity(
   return { references, diagnostics }
 }
 
+/** Поле — з реєстру видів, тож схема виду гарантує масив (з типовим `[]`). */
 function elementsAt(data: Element, field: string, base = ""): NamedElement[] {
-  const list = data[field]
-  if (!Array.isArray(list)) return []
-  // Значення PgEnum — рядки без ідентичності; елемент — лише об'єкт.
-  return list.flatMap((element: unknown, index) =>
-    typeof element === "object" && element !== null
-      ? [
-          {
-            pointer: `${base}/${field}/${index}`,
-            element: element as Element,
-            column: true,
-          },
-        ]
-      : []
-  )
+  return (data[field] as Element[]).map((element, index) => ({
+    pointer: `${base}/${field}/${index}`,
+    element,
+    column: true,
+  }))
 }
 
 /**
- * Простори імен об'єкта. Які поля несуть елементи, визначає форма даних, а не
- * вид: реквізити, виміри, ресурси й колонки однаково стають колонками, тож
- * правила для них спільні.
+ * Простори імен об'єкта. Які поля несуть елементи, каже реєстр видів:
+ * елементи всіх колонкових полів виду однаково стають колонками, тож і
+ * правила для них спільні, а спільний простір імен вони ділять із ТЧ
+ * (спека П2 §8.2).
  */
 function namespacesOf(
   object: ParsedObject,
@@ -223,12 +210,13 @@ function namespacesOf(
   const data = object.data as Element
   const namespaces: Namespace[] = []
 
-  const columns = COLUMN_FIELDS.flatMap((field) => elementsAt(data, field))
+  const columns = def.columnFields.flatMap((field) => elementsAt(data, field))
   // Таблична частина — окрема таблиця, а не колонка основної.
-  const sections = elementsAt(data, "tabularSections").map((section) => ({
-    ...section,
-    column: false,
-  }))
+  const sections = (
+    def.tabularSectionColumns === undefined
+      ? []
+      : elementsAt(data, "tabularSections")
+  ).map((section) => ({ ...section, column: false }))
   namespaces.push({
     scope: `${object.kind} ${object.name}`,
     styled: true,
@@ -248,13 +236,12 @@ function namespacesOf(
   }
 
   // Значення перерахування — PascalCase за схемою, тож стиль до них не застосовний.
-  const values = elementsAt(data, "values")
-  if (values.length > 0) {
+  if (def.valueElements) {
     namespaces.push({
       scope: `${object.kind} ${object.name} values`,
       styled: false,
       reserved: [],
-      elements: values,
+      elements: elementsAt(data, "values"),
     })
   }
   return namespaces

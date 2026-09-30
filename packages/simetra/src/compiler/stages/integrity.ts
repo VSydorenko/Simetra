@@ -9,7 +9,12 @@ import {
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
-import { keyColumnOf, logicalColumnsOf, type ModelStageResult } from "./model"
+import {
+  isDeclaredTable,
+  keyColumnOf,
+  logicalColumnsOf,
+  type ModelStageResult,
+} from "./model"
 
 /** NAMEDATALEN Postgres мінус завершальний нуль: довше ім'я БД мовчки обріже. */
 const MAX_IDENT_BYTES = 63
@@ -24,6 +29,15 @@ const REF_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "attribute.allowedType",
   "constant.ref",
   "constant.allowedType",
+  "catalog.owner",
+  "customTable.foreignKey",
+])
+
+/**
+ * Ролі, чия ціль мусить мати таблицю, а не лише право на посилання: FK
+ * прийнятої таблиці й колонка власника довідника (FK на ключ власника).
+ */
+const TABLE_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "catalog.owner",
   "customTable.foreignKey",
 ])
@@ -53,14 +67,15 @@ export function checkIntegrity(
     const def = KIND_REGISTRY[target.kind]
     const { file, pointer } = reference.from
     const params = { kind: target.kind, name: target.name }
-    // FK прийнятої таблиці потребує таблиці цілі, а не лише права посилатися.
-    const needsTable = reference.role === "customTable.foreignKey"
+    const needsTable = TABLE_ROLES.has(reference.role)
     if (!def.referenceable || (needsTable && def.materializes !== "table")) {
       diagnostics.push(
         diagnostic("reference.not-referenceable", file, pointer, params)
       )
     } else if (
-      !needsTable &&
+      // FK прийнятої таблиці сам називає колонки цілі, тож одноколонковий
+      // uuid-ключ потрібен лише посиланням на ключ.
+      reference.role !== "customTable.foreignKey" &&
       def.materializes === "table" &&
       keyColumnOf(target) === undefined
     ) {
@@ -138,7 +153,7 @@ export function checkIntegrity(
   }
 
   for (const object of objects) {
-    if (Array.isArray((object.data as { columns?: unknown }).columns)) {
+    if (isDeclaredTable(object)) {
       diagnostics.push(...checkDeclaredTable(object, byKey, style))
     }
   }
@@ -158,10 +173,10 @@ function byteLength(name: string): number {
 }
 
 /**
- * Поліморфні множини об'єкта з pointer на масив. Де вони лежать, визначає
- * форма даних (як у стадії 2): `allowedTypes` — у реквізитів, вимірів,
- * ресурсів, колонок і самої константи, списки власників і реєстраторів — на
- * верхньому рівні.
+ * Поліморфні множини об'єкта з pointer на масив. Обхід іде за формою даних,
+ * бо ключі множин однакові в усіх видах: `allowedTypes` — у реквізитів,
+ * вимірів, ресурсів, колонок і самої константи, списки власників і
+ * реєстраторів — на верхньому рівні.
  */
 function polymorphicSets(
   data: unknown

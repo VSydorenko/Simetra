@@ -38,6 +38,9 @@ export const accumulationRegisterKind: KindDefinition = {
   writePattern: "server",
   actions: ["read"],
   materializes: "table",
+  declared: false,
+  columnFields: ["dimensions", "resources", "attributes"],
+  valueElements: false,
   standardColumns,
   references(obj) {
     const register = obj as AccumulationRegister

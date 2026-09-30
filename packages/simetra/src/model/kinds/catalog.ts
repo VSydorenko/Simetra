@@ -100,6 +100,9 @@ export const catalogKind: KindDefinition = {
   writePattern: "optimistic",
   actions: ["read", "create", "update", "markDeletion", "delete"],
   materializes: "table",
+  declared: false,
+  columnFields: ["attributes"],
+  valueElements: false,
   standardColumns,
   tabularSectionColumns: () => tabularRowColumns(false),
   references(obj) {

@@ -135,6 +135,36 @@ describe("stage 4: integrity", () => {
     ])
   })
 
+  it("catalog owner must materialize a table with a uuid key", () => {
+    const result = compileWith({
+      "enumerations/Status/Status.meta.json": {
+        id: uuid(730),
+        kind: "Enumeration",
+        name: "Status",
+        physicalName: "status",
+        values: [{ id: uuid(731), name: "Open", physicalName: "open" }],
+      },
+      "custom-tables/Log/Log.meta.json": customTable("Log", {
+        columns: [
+          { id: uuid(732), name: "id", physicalName: "id", type: "BigInt" },
+        ],
+        primaryKey: { columns: ["id"] },
+      }),
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      [NOTE]: catalog("Note", {
+        owners: [
+          { kind: "Enumeration", name: "Status" },
+          { kind: "CustomTable", name: "Log" },
+          { kind: "Catalog", name: "Owner" },
+        ],
+      }),
+    })
+    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
+      ["reference.not-referenceable", NOTE, "/owners/0"],
+      ["reference.custom-table-key", NOTE, "/owners/1"],
+    ])
+  })
+
   it("two tables with the same physicalName in one schema", () => {
     const result = compileWith({
       "catalogs/A/A.meta.json": catalog("A", { physicalName: "shared" }),
@@ -363,6 +393,38 @@ describe("stage 4: integrity", () => {
       })
       expect(codes(result)).toEqual([
         ["physical.constraint-name-required", "error", LOG, "/checks/1"],
+      ])
+    })
+
+    it("fk to a pg enum is not referenceable, not a table", () => {
+      const result = compileWith({
+        "pg-enums/Mood/Mood.meta.json": {
+          id: uuid(742),
+          kind: "PgEnum",
+          name: "Mood",
+          physicalName: "mood",
+          values: ["ok"],
+        },
+        [LOG]: customTable("Log", {
+          columns,
+          foreignKeys: [
+            {
+              columns: ["email"],
+              references: {
+                object: { kind: "PgEnum", name: "Mood" },
+                columns: ["ok"],
+              },
+            },
+          ],
+        }),
+      })
+      expect(codes(result)).toEqual([
+        [
+          "reference.not-referenceable",
+          "error",
+          LOG,
+          "/foreignKeys/0/references/object",
+        ],
       ])
     })
 

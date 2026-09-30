@@ -63,8 +63,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | Check | Defect signal | Model |
 | --- | --- | --- |
 | physical snapshot is the model's (*target*) | a table, column, key, constraint or index shape derived outside compiler stage 3; a derived constraint or index name built by hand instead of the Postgres algorithm (`chooseConstraintName`, `makeObjectName`); a type string not in `format_type()` form | `packages/simetra/src/compiler/stages/model.ts`, `packages/simetra/src/model/physical/` |
-| physical names come from helpers (*prototype*) | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `legacy/generator-pg/src/column-naming.ts` |
-| escaping (*prototype*) | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `legacy/generator-pg/src/naming.ts` |
+| escaping (*target*) | a metadata identifier interpolated into SQL without `quoteIdent` | `packages/simetra/src/model/physical/` |
 
 ### Schema engine and data runtime (*target*)
 

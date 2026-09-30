@@ -74,6 +74,45 @@ describe("KIND_REGISTRY", () => {
   })
 })
 
+describe("physical form and child elements", () => {
+  it("only accepted kinds declare their physical form as is", () => {
+    const declared = METADATA_KINDS.filter((k) => KIND_REGISTRY[k].declared)
+    expect(declared).toEqual(["CustomTable", "PgEnum"])
+  })
+
+  it("column-producing fields follow the kind, in column order", () => {
+    expect(KIND_REGISTRY.Catalog.columnFields).toEqual(["attributes"])
+    expect(KIND_REGISTRY.Document.columnFields).toEqual(["attributes"])
+    for (const kind of [
+      "InformationRegister",
+      "AccumulationRegister",
+    ] as const) {
+      expect(KIND_REGISTRY[kind].columnFields).toEqual([
+        "dimensions",
+        "resources",
+        "attributes",
+      ])
+    }
+    expect(KIND_REGISTRY.CustomTable.columnFields).toEqual(["columns"])
+    for (const kind of ["Constant", "Enumeration", "PgEnum"] as const) {
+      expect(KIND_REGISTRY[kind].columnFields).toEqual([])
+    }
+  })
+
+  it("every column-producing field is a field of the kind schema", () => {
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      const shape = (def.schema as z.ZodObject).shape
+      for (const field of def.columnFields) expect(shape).toHaveProperty(field)
+    }
+  })
+
+  it("only enumeration values are elements with identity", () => {
+    const kinds = METADATA_KINDS.filter((k) => KIND_REGISTRY[k].valueElements)
+    expect(kinds).toEqual(["Enumeration"])
+  })
+})
+
 describe("standard columns", () => {
   it("catalog code and description follow settings", () => {
     const full = catalogColumns({ codeLength: 5, descriptionLength: 40 })

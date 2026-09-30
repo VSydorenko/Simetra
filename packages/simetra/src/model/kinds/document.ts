@@ -80,6 +80,9 @@ export const documentKind: KindDefinition = {
     "unpost",
   ],
   materializes: "table",
+  declared: false,
+  columnFields: ["attributes"],
+  valueElements: false,
   standardColumns,
   tabularSectionColumns: () => tabularRowColumns(true),
   references(obj) {

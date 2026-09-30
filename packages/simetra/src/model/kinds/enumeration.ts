@@ -14,6 +14,9 @@ export const enumerationKind: KindDefinition = {
   writePattern: "none",
   actions: [],
   materializes: "none",
+  declared: false,
+  columnFields: [],
+  valueElements: true,
   standardColumns: () => [],
   references: () => [],
 }

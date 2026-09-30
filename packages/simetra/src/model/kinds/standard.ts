@@ -82,9 +82,28 @@ export interface KindDefinition {
   writePattern: WritePattern
   actions: readonly string[]
   materializes: "table" | "enumType" | "none"
+  /**
+   * Фізичну форму файл описує як є (спека §4): прийнята таблиця й енам-тип
+   * нічого не виводять із виду, тож стадія 3 бере їх з опису.
+   */
+  declared: boolean
+  /**
+   * Поля з дочірніми елементами, що стають колонками основної таблиці, — у
+   * порядку колонок (спека §8.1). Разом із табличними частинами вони ділять
+   * простір імен об'єкта.
+   */
+  columnFields: readonly string[]
+  /**
+   * Значення виду — елементи з ідентичністю (id, physicalName), а не голі
+   * мітки: вони мають власний простір імен, але колонок не дають.
+   */
+  valueElements: boolean
   /** Стандартні колонки основної таблиці для розібраного файлу виду. */
   standardColumns(obj: unknown): StandardColumnDef[]
-  /** Стандартні колонки рядка табличної частини — лише у видів із ТЧ. */
+  /**
+   * Стандартні колонки рядка табличної частини. Є лише у видів, яким
+   * дозволені ТЧ, тож його наявність і є цим дозволом.
+   */
   tabularSectionColumns?(obj: unknown): StandardColumnDef[]
   references(obj: unknown): FoundReference[]
 }

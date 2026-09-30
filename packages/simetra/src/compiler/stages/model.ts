@@ -169,7 +169,7 @@ class SnapshotBuilder {
 
     // Прийнята таблиця описана фізично повністю (спека §4): нічого не
     // виводиться, тож її форма береться з файлу, а не з виду.
-    if (Array.isArray(data.columns)) {
+    if (isDeclaredTable(object)) {
       this.addDeclaredTable(object, data as unknown as CustomTable)
       return
     }
@@ -178,22 +178,25 @@ class SnapshotBuilder {
     const fields = def
       .standardColumns(data)
       .map((column) => this.standardField(column, object, main))
-    // Порядок ролей регістра — виміри, ресурси, реквізити; у решти видів є
-    // лише реквізити.
-    for (const role of ["dimensions", "resources", "attributes"]) {
-      const list = (data[role] ?? []) as Attribute[]
+    // Колонкові поля й їхній порядок дає реєстр: у регістра — виміри,
+    // ресурси, реквізити, у решти видів — лише реквізити.
+    for (const field of def.columnFields) {
+      const list = data[field] as Attribute[]
       list.forEach((attribute, index) => {
-        fields.push(this.attributeField(attribute, `/${role}/${index}`))
+        fields.push(this.attributeField(attribute, `/${field}/${index}`))
         this.declare(
           object.file,
-          `/${role}/${index}/physicalName`,
+          `/${field}/${index}/physicalName`,
           attribute.physicalName!
         )
       })
     }
     this.addTable(main, fields, object.file, "/physicalName")
 
-    const sections = (data.tabularSections ?? []) as TabularSection[]
+    const sections =
+      def.tabularSectionColumns === undefined
+        ? []
+        : (data.tabularSections as TabularSection[])
     sections.forEach((section, index) => {
       const pointer = `/tabularSections/${index}`
       const table = this.pendingTable(schema, section.physicalName!, {
@@ -224,8 +227,11 @@ class SnapshotBuilder {
   }
 
   finish(): ModelStageResult {
-    // Імена призначаються в порядку знімка: рендер, що йде тим самим
-    // порядком, отримає від Postgres ті самі імена навіть за колізій.
+    // Імена призначаються в порядку знімка, а явні імена резервуються наперед
+    // в усій схемі, тож знімок самоузгоджений: жодне похідне ім'я не збігається
+    // з іншим. Postgres за колізій обрав би інакше (він не знає наперед про
+    // явні імена пізніших таблиць), тож рендер не покладається на його вибір і
+    // виводить кожне ім'я явно зі знімка.
     const pending = [...this.tables].sort(bySchemaAndName)
     const tables = assignNames(pending)
     return {
@@ -573,6 +579,16 @@ function physicalNameOf(object: ParsedObject): string {
 }
 
 /**
+ * Прийнята таблиця: вид дає таблицю, але її форму описує файл (спека §4).
+ * Одного `declared` замало — прийнятий енам-тип теж описаний як є, а стадія 3
+ * бачить цілі посилань ще до того, як стадія 4 відкине невідповідні.
+ */
+export function isDeclaredTable(object: ParsedObject): boolean {
+  const def = KIND_REGISTRY[object.kind]
+  return def.declared && def.materializes === "table"
+}
+
+/**
  * Логічне ім'я колонки → фізичне для таблиці об'єкта: у прийнятої таблиці —
  * її колонки, у виду — стандартні колонки з реєстру (крім поліморфних пар,
  * що не мають однієї колонки) і реквізити.
@@ -581,18 +597,19 @@ export function logicalColumnsOf(
   object: ParsedObject,
   style: AttributeCase
 ): Map<string, string> {
+  const def = KIND_REGISTRY[object.kind]
   const data = object.data as Element
-  if (Array.isArray(data.columns)) {
+  if (isDeclaredTable(object)) {
     return declaredColumnMap(data as unknown as CustomTable)
   }
   const map = new Map<string, string>()
-  for (const column of KIND_REGISTRY[object.kind].standardColumns(data)) {
+  for (const column of def.standardColumns(data)) {
     if (column.polymorphic === undefined) {
       map.set(standardLogicalName(column, style), column.physicalName)
     }
   }
-  for (const role of ["dimensions", "resources", "attributes"]) {
-    for (const attribute of (data[role] ?? []) as Attribute[]) {
+  for (const field of def.columnFields) {
+    for (const attribute of data[field] as Attribute[]) {
       map.set(attribute.name, attribute.physicalName!)
     }
   }
@@ -609,8 +626,9 @@ function declaredColumnMap(data: CustomTable): Map<string, string> {
  * `Ref` на ціль неможливий (стадія 4, `reference.custom-table-key`).
  */
 export function keyColumnOf(object: ParsedObject): string | undefined {
+  const def = KIND_REGISTRY[object.kind]
   const data = object.data as Element
-  if (Array.isArray(data.columns)) {
+  if (isDeclaredTable(object)) {
     const table = data as unknown as CustomTable
     const key = table.primaryKey?.columns
     if (key?.length !== 1) return undefined
@@ -621,7 +639,7 @@ export function keyColumnOf(object: ParsedObject): string | undefined {
       (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid")
     return isUuid ? column.physicalName : undefined
   }
-  const keys = KIND_REGISTRY[object.kind]
+  const keys = def
     .standardColumns(data)
     .filter((column) => column.primaryKey === true)
   const key = keys[0]

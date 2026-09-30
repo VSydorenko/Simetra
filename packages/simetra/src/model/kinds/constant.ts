@@ -53,6 +53,9 @@ export const constantKind: KindDefinition = {
   writePattern: "server",
   actions: ["read", "update"],
   materializes: "table",
+  declared: false,
+  columnFields: [],
+  valueElements: false,
   standardColumns,
   references: (obj) =>
     valueTypeReferences(obj as Constant, "", {

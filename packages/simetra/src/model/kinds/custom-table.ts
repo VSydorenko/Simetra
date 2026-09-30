@@ -49,6 +49,9 @@ export const customTableKind: KindDefinition = {
   writePattern: "optimistic",
   actions: ["read", "create", "update", "delete"],
   materializes: "table",
+  declared: true,
+  columnFields: ["columns"],
+  valueElements: false,
   standardColumns: () => [],
   references,
 }
