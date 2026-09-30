@@ -323,5 +323,7 @@ export function getStandardAttributes(
       return []
     case "CustomTable":
       return customTableStandardAttributes(settings)
+    case "PgEnum":
+      return []
   }
 }

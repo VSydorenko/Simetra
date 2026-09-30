@@ -1,66 +1,39 @@
 import { z } from "zod"
-import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { metadataRefSchema } from "./metadata-ref"
-import { isSqlReservedWord } from "./sql-reserved-words"
-import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
+import {
+  objectHeaderShape,
+  standardAttributeOverridesSchema,
+} from "./object-header"
 
-/** BRD §5.6 — Accumulation Register */
-export const accumulationRegisterSchema = z.object({
-  $schema: z.string().optional(),
-  kind: z.literal("AccumulationRegister"),
-  name: z
-    .string()
-    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), {
-      message: "Name is a SQL reserved word",
-    }),
-  displayName: localizedStringSchema.optional(),
+/** Регістр накопичення. */
+export const accumulationRegisterSchema = z
+  .object({
+    ...objectHeaderShape,
+    kind: z.literal("AccumulationRegister"),
 
-  // Type settings
-  registerType: z.enum(["Balance", "Turnover"]).default("Balance"),
-  recorderTypes: z.array(metadataRefSchema).default([]),
+    registerType: z.enum(["Balance", "Turnover"]).default("Balance"),
+    recorderTypes: z.array(metadataRefSchema).default([]),
 
-  // Користувацькі перевизначення описів стандартних реквізитів
-  standardAttributeOverrides: z
-    .record(
-      z.string(),
-      z.object({ description: localizedStringSchema.optional() })
-    )
-    .optional()
-    .default({}),
+    standardAttributeOverrides: standardAttributeOverridesSchema,
 
-  // Field roles
-  dimensions: z
-    .array(attributeSchema)
-    .refine(
-      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Dimension names must be unique" }
-    )
-    .default([]),
-  /** Resources must be Numeric or Integer for accumulation registers */
-  resources: z
-    .array(attributeSchema)
-    .refine(
-      (attrs) =>
-        attrs.every((a) => a.type === "Integer" || a.type === "Numeric"),
-      {
-        message:
-          "AccumulationRegister resources must be Numeric or Integer type",
+    // Ролі полів
+    dimensions: z.array(attributeSchema).default([]),
+    resources: z.array(attributeSchema).default([]),
+    attributes: z.array(attributeSchema).default([]),
+  })
+  .superRefine((register, ctx) => {
+    // Ресурси регістра накопичення сумуються, тож вони лише числові.
+    register.resources.forEach((resource, index) => {
+      if (resource.type !== "Integer" && resource.type !== "Numeric") {
+        ctx.addIssue({
+          code: "custom",
+          message: "AccumulationRegister resources must be Integer or Numeric",
+          path: ["resources", index, "type"],
+          params: { rule: "register.resource-type" },
+        })
       }
-    )
-    .refine(
-      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Resource names must be unique" }
-    )
-    .default([]),
-  attributes: z
-    .array(attributeSchema)
-    .refine(
-      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Attribute names must be unique" }
-    )
-    .default([]),
-})
+    })
+  })
 
 export type AccumulationRegister = z.infer<typeof accumulationRegisterSchema>

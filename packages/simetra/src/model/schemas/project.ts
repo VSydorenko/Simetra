@@ -1,46 +1,19 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
+import { ATTRIBUTE_CASES } from "./identity"
 
-/** BRD §7.3 — Project file */
+/** Файл проєкту: лише ідентичність і правила іменування застосунку. */
 export const projectSchema = z.object({
   $schema: z.string().optional(),
-  schemaVersion: z.string().default("1.0"),
   name: z.string(),
-  displayName: localizedStringSchema.optional(),
+  title: localizedStringSchema.optional(),
   defaultLocale: z.enum(["uk", "en"]).default("uk"),
-  database: z
+  defaultSchema: z.string().default("public"),
+  naming: z
     .object({
-      target: z.literal("postgresql").default("postgresql"),
-      schema: z.string().default("public"),
+      attributeCase: z.enum(ATTRIBUTE_CASES).default("camelCase"),
     })
-    .default(() => ({
-      target: "postgresql" as const,
-      schema: "public",
-    })),
-  generation: z
-    .object({
-      tablePrefix: z.string().default(""),
-      enumStrategy: z.enum(["pgEnum", "lookupTable"]).default("pgEnum"),
-      constantsStrategy: z
-        .enum(["singleTable", "separateTables"])
-        .default("singleTable"),
-    })
-    .default(() => ({
-      tablePrefix: "",
-      enumStrategy: "pgEnum" as const,
-      constantsStrategy: "singleTable" as const,
-    })),
-  /** BRD Phase2c — налаштування деплою (не зберігає Access Token) */
-  deployment: z
-    .object({
-      target: z.enum(["supabase", "manual", "none"]).default("none"),
-      supabase: z
-        .object({
-          projectRef: z.string().optional(),
-        })
-        .optional(),
-    })
-    .optional(),
+    .default({ attributeCase: "camelCase" }),
 })
 
 export type Project = z.infer<typeof projectSchema>

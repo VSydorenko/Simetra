@@ -1,18 +1,17 @@
 // Base types
 export { localizedStringSchema, type LocalizedString } from "./localized-string"
-export { fieldTypeSchema, type FieldType } from "./field-type"
-export { metadataKindSchema, type MetadataKind } from "./metadata-kind"
 export {
-  metadataRefSchema,
-  type MetadataRef,
-  referenceableKindSchema,
-  type ReferenceableKind,
-  attributeRefTargetSchema,
-} from "./metadata-ref"
+  METADATA_KINDS,
+  metadataKindSchema,
+  type MetadataKind,
+} from "./metadata-kind"
+export { metadataRefSchema, type MetadataRef } from "./metadata-ref"
 export { attributeSchema, type Attribute } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
-// Нові модулі T0 (P2). toSnakeCase тут не реекспортується: його вже віддає
-// physical-naming, а той файл видаляє задача 3 — тоді експорт перейде сюди.
+export {
+  objectHeaderShape,
+  standardAttributeOverridesSchema,
+} from "./object-header"
 export {
   metadataIdSchema,
   objectNameSchema,
@@ -20,6 +19,7 @@ export {
   physicalNameSchema,
   ATTRIBUTE_CASES,
   matchesAttributeCase,
+  toSnakeCase,
   type MetadataId,
   type AttributeCase,
 } from "./identity"
@@ -32,20 +32,6 @@ export {
 } from "./value-type"
 export { SCHEMA_RULES, type SchemaRule } from "./rules"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
-export {
-  TECHNICAL_NAME_PATTERNS,
-  STRING_LENGTH,
-  NUMERIC_PRECISION,
-  NUMERIC_SCALE,
-  matchesTechnicalName,
-  type TechnicalNameFormat,
-} from "./technical-name"
-export {
-  KIND_PREFIX,
-  toSnakeCase,
-  physicalObjectName,
-  physicalTabularName,
-} from "./physical-naming"
 export {
   mappingExpressionSchema,
   type MappingExpression,
@@ -72,7 +58,12 @@ export {
 // Metadata types
 export { catalogSchema, type Catalog } from "./catalog"
 export { documentSchema, type Document } from "./document"
-export { enumerationSchema, type Enumeration } from "./enumeration"
+export {
+  enumerationSchema,
+  enumValueSchema,
+  type Enumeration,
+  type EnumValue,
+} from "./enumeration"
 export {
   informationRegisterSchema,
   type InformationRegister,
@@ -81,52 +72,11 @@ export {
   accumulationRegisterSchema,
   type AccumulationRegister,
 } from "./accumulation-register"
-export {
-  constantSchema,
-  constantValueTypeSchema,
-  constantsFileSchema,
-  type Constant,
-  type ConstantValueType,
-  type ConstantsFile,
-} from "./constant"
+export { constantSchema, type Constant } from "./constant"
 export { customTableSchema, type CustomTable } from "./custom-table"
-
-// Forms (Phase 3)
-export {
-  formKindSchema,
-  formSchema,
-  formSupportedKinds,
-  formLayoutElementSchema,
-  toolbarItemSchema,
-  commandBarItemSchema,
-  formWidthSchema,
-  type FormKind,
-  type FormSchema,
-  type FormSupportedKind,
-  type FormLayoutElement,
-  type FormFieldElement,
-  type FormTabularSectionElement,
-  type FormSeparatorElement,
-  type FormLabelElement,
-  type FormGroupElement,
-  type FormColumnElement,
-  type FormColumnsElement,
-  type FormTabElement,
-  type FormTabsElement,
-  type FormAccordionElement,
-  type ToolbarItem,
-  type CommandBarItem,
-  type FormWidth,
-} from "./form"
 
 // Project
 export { projectSchema, type Project } from "./project"
-export {
-  metadataObjectSchema,
-  projectModelSchema,
-  type MetadataObject,
-  type ProjectModel,
-} from "./project-model"
 
 // Standard attributes
 export {

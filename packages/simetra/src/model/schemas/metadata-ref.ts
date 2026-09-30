@@ -1,25 +1,14 @@
 import { z } from "zod"
 import { metadataKindSchema } from "./metadata-kind"
+import { objectNameSchema } from "./identity"
 
-/** BRD §6.2 — Reference to another metadata object (used in recorderTypes, owners, allowedTypes) */
+/**
+ * Посилання на інший об'єкт метаданих. Чи можна на цей вид посилатися —
+ * факт реєстру видів і перевірка стадії 4, а не схеми.
+ */
 export const metadataRefSchema = z.object({
   kind: metadataKindSchema,
-  name: z.string(),
+  name: objectNameSchema,
 })
 
 export type MetadataRef = z.infer<typeof metadataRefSchema>
-
-/** Kinds, на які може посилатися реквізит (attribute.ref / attribute.allowedTypes) */
-export const referenceableKindSchema = z.enum([
-  "Catalog",
-  "Document",
-  "Enumeration",
-])
-
-export type ReferenceableKind = z.infer<typeof referenceableKindSchema>
-
-/** Обмежений MetadataRef для attribute references — лише referenceable kinds */
-export const attributeRefTargetSchema = z.object({
-  kind: referenceableKindSchema,
-  name: z.string(),
-})

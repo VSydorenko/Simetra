@@ -1,32 +1,21 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
-import { isSqlReservedWord } from "./sql-reserved-words"
-import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
+import {
+  elementNameSchema,
+  metadataIdSchema,
+  physicalNameSchema,
+} from "./identity"
+import { standardAttributeOverridesSchema } from "./object-header"
 
-/** BRD §5.8 — Tabular section */
+/** Таблична частина об'єкта. */
 export const tabularSectionSchema = z.object({
-  name: z
-    .string()
-    .regex(TECHNICAL_NAME_PATTERNS.snake_case, "Must be snake_case, Latin only")
-    .refine((n) => !isSqlReservedWord(n), {
-      message: "Name is a SQL reserved word",
-    }),
-  displayName: localizedStringSchema.optional(),
-  standardAttributeOverrides: z
-    .record(
-      z.string(),
-      z.object({ description: localizedStringSchema.optional() })
-    )
-    .optional()
-    .default({}),
-  attributes: z
-    .array(attributeSchema)
-    .refine(
-      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Attribute names must be unique" }
-    )
-    .default([]),
+  id: metadataIdSchema.optional(),
+  name: elementNameSchema,
+  physicalName: physicalNameSchema.optional(),
+  title: localizedStringSchema.optional(),
+  standardAttributeOverrides: standardAttributeOverridesSchema,
+  attributes: z.array(attributeSchema).default([]),
 })
 
 export type TabularSection = z.infer<typeof tabularSectionSchema>

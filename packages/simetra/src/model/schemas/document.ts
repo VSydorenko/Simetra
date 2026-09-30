@@ -1,25 +1,18 @@
 import { z } from "zod"
-import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
 import { metadataRefSchema } from "./metadata-ref"
-import { isSqlReservedWord } from "./sql-reserved-words"
 import { postingSchema } from "./posting"
-import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
+import {
+  objectHeaderShape,
+  standardAttributeOverridesSchema,
+} from "./object-header"
 
-/** BRD §5.3 — Document */
+/** Документ. */
 export const documentSchema = z.object({
-  $schema: z.string().optional(),
+  ...objectHeaderShape,
   kind: z.literal("Document"),
-  name: z
-    .string()
-    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), {
-      message: "Name is a SQL reserved word",
-    }),
-  displayName: localizedStringSchema.optional(),
 
-  // Type settings
   numberLength: z.number().int().positive().default(11),
   numberType: z.enum(["String", "Number"]).default("String"),
   autonumber: z.boolean().default(true),
@@ -29,31 +22,10 @@ export const documentSchema = z.object({
   posting: postingSchema.optional(),
   registerMovements: z.array(metadataRefSchema).default([]),
 
-  // Користувацькі перевизначення описів стандартних реквізитів
-  standardAttributeOverrides: z
-    .record(
-      z.string(),
-      z.object({ description: localizedStringSchema.optional() })
-    )
-    .optional()
-    .default({}),
+  standardAttributeOverrides: standardAttributeOverridesSchema,
 
-  // User-defined sub-objects
-  attributes: z
-    .array(attributeSchema)
-    .refine(
-      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Attribute names must be unique" }
-    )
-    .default([]),
-  tabularSections: z
-    .array(tabularSectionSchema)
-    .refine(
-      (sections) =>
-        new Set(sections.map((s) => s.name)).size === sections.length,
-      { message: "Tabular section names must be unique" }
-    )
-    .default([]),
+  attributes: z.array(attributeSchema).default([]),
+  tabularSections: z.array(tabularSectionSchema).default([]),
 })
 
 export type Document = z.infer<typeof documentSchema>

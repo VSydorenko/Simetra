@@ -53,15 +53,15 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | standard attributes derive from the kind | standard columns listed by hand in a generator or UI instead of calling `getStandardAttributes`; standard attributes persisted as user attributes; anything but description overrides stored for them | `packages/simetra/src/model/schemas/standard-attributes.ts` |
 | one Ref model | a new per-kind reference type; a `Ref` attribute with both `ref` and `allowedTypes`, or neither; `ref`/`allowedTypes` on a non-`Ref` type; a reference target outside the referenceable kinds; `parent_id` modelled as a Ref | `packages/simetra/src/model/schemas/attribute.ts`, `packages/simetra/src/model/schemas/metadata-ref.ts` |
 | register field roles | dimensions, resources and attributes merged or bypassed; an accumulation-register resource that is not `Integer` or `Numeric` | `packages/simetra/src/model/schemas/accumulation-register.ts` |
-| names and reserved words | a new name-bearing field with its own regex instead of `TECHNICAL_NAME_PATTERNS`, or without the `isSqlReservedWord` refinement; missing uniqueness within the parent array | `packages/simetra/src/model/schemas/technical-name.ts`, `packages/simetra/src/model/schemas/sql-reserved-words.ts` |
-| deterministic files | serializer output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | `packages/simetra/src/model/serialization.ts` |
+| names and reserved words | a new name-bearing field with its own regex instead of `TECHNICAL_NAME_PATTERNS`, or without the `isSqlReservedWord` refinement; missing uniqueness within the parent array | `packages/simetra/src/model/schemas/identity.ts`, `packages/simetra/src/model/schemas/sql-reserved-words.ts` |
+| deterministic files | serializer output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | — |
 | posting and condition DSL | an expression reaching SQL without passing the mapping or condition schema; the grammar widened in the generator but not in the schema and its tests | `packages/simetra/src/model/schemas/posting.ts` |
 
 ### Physical naming and SQL (*prototype*)
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
-| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `packages/simetra/src/model/schemas/physical-naming.ts`, `legacy/generator-pg/src/column-naming.ts` |
+| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `legacy/generator-pg/src/column-naming.ts` |
 | escaping | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `legacy/generator-pg/src/naming.ts` |
 
 ### Schema engine and data runtime (*target*)
@@ -83,7 +83,6 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | --- | --- |
 | nothing silenced to go green | `.skip`, `.only` or `.todo` added; an assertion deleted or loosened; a threshold lowered; a file excluded from test, lint or typecheck config |
 | no suppressions | `@ts-ignore`, `@ts-expect-error`, `eslint-disable` or `as any` added to pass a gate; an unavoidable one without a Ukrainian comment saying why |
-| canonical fixtures | serialization fixtures under `packages/simetra/src/model/__tests__/fixtures/` are compared byte for byte with serializer output: editing the fixture to match new output changes the on-disk format and must be what the task asked for |
 | schema changes carry tests | a new or changed Zod schema without accept and reject cases in core's tests |
 | generated SQL assertions | `toContain` on a fragment proves presence, not the statement; mutate the generator branch and confirm red |
 | tests do not time the machine | an assertion that depends on wall-clock speed or contention |

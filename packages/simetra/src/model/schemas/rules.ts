@@ -12,6 +12,7 @@ export const SCHEMA_RULES = [
   "type.ref-target-required",
   "type.ref-exclusive",
   "type.ref-not-allowed",
+  "register.resource-type",
 ] as const
 
 export type SchemaRule = (typeof SCHEMA_RULES)[number]

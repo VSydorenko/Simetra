@@ -3,7 +3,6 @@ import type {
   InformationRegister,
   MetadataRef,
 } from "./schemas"
-import { createValidationMessage } from "./validation-message"
 
 type RegisterDef = AccumulationRegister | InformationRegister
 
@@ -28,14 +27,14 @@ export function isPostingCompatible(
   if (register.kind === "AccumulationRegister") {
     if (register.recorderTypes.length === 0) {
       warnings.push(
-        createValidationMessage("validation.posting.acceptsAnyRecorder")
+        "AccumulationRegister has an empty recorderTypes list and accepts movements from any document"
       )
       return { compatible: true, warnings }
     }
 
     if (!options.recorder) {
       warnings.push(
-        createValidationMessage("validation.posting.missingRecorderContext")
+        "Cannot verify recorderTypes without the current document reference"
       )
       return { compatible: true, warnings }
     }
@@ -49,14 +48,9 @@ export function isPostingCompatible(
     if (!isAllowed) {
       return {
         compatible: false,
-        reason: createValidationMessage(
-          "validation.posting.allowedRecorderTypes",
-          {
-            types: register.recorderTypes
-              .map((recorder) => `${recorder.kind}/${recorder.name}`)
-              .join(", "),
-          }
-        ),
+        reason: `AccumulationRegister allows only ${register.recorderTypes
+          .map((recorder) => `${recorder.kind}/${recorder.name}`)
+          .join(", ")} in recorderTypes`,
       }
     }
 
@@ -70,14 +64,13 @@ export function isPostingCompatible(
     }
     return {
       compatible: false,
-      reason: createValidationMessage(
-        "validation.posting.informationRegisterIndependent"
-      ),
+      reason:
+        "InformationRegister with writeMode=Independent has no recorder lifecycle and cannot be used as a posting target",
     }
   }
 
   return {
     compatible: false,
-    reason: createValidationMessage("validation.posting.unknownRegisterKind"),
+    reason: "Unknown register kind",
   }
 }

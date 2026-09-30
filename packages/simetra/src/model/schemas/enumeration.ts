@@ -1,34 +1,26 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
-import { isSqlReservedWord } from "./sql-reserved-words"
-import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
-import { createValidationMessage } from "../validation-message"
+import {
+  metadataIdSchema,
+  objectNameSchema,
+  physicalNameSchema,
+} from "./identity"
+import { objectHeaderShape } from "./object-header"
 
 export const enumValueSchema = z.object({
-  name: z
-    .string()
-    .min(1, createValidationMessage("validation.enumValue.nameRequired"))
-    .regex(
-      TECHNICAL_NAME_PATTERNS.PascalCase,
-      createValidationMessage("validation.enumValue.namePascalCase")
-    ),
-  displayName: localizedStringSchema.optional(),
-  order: z.number().int().nonnegative().optional(),
+  id: metadataIdSchema.optional(),
+  name: objectNameSchema,
+  /** Фізична мітка значення в БД. */
+  physicalName: physicalNameSchema.optional(),
+  title: localizedStringSchema.optional(),
 })
 
 export type EnumValue = z.infer<typeof enumValueSchema>
 
-/** BRD §5.4 — Enumeration */
+/** Перелік. Порядок значень — порядок масиву, окремого поля порядку немає. */
 export const enumerationSchema = z.object({
-  $schema: z.string().optional(),
+  ...objectHeaderShape,
   kind: z.literal("Enumeration"),
-  name: z
-    .string()
-    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), {
-      message: "Name is a SQL reserved word",
-    }),
-  displayName: localizedStringSchema.optional(),
 
   values: z.array(enumValueSchema).default([]),
 })

@@ -3,25 +3,20 @@ import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
 import { metadataRefSchema } from "./metadata-ref"
-import { isSqlReservedWord } from "./sql-reserved-words"
-import { TECHNICAL_NAME_PATTERNS } from "./technical-name"
+import {
+  objectHeaderShape,
+  standardAttributeOverridesSchema,
+} from "./object-header"
 
-/** BRD §5.2 — Catalog */
+/** Довідник. */
 export const catalogSchema = z.object({
-  $schema: z.string().optional(),
+  ...objectHeaderShape,
   kind: z.literal("Catalog"),
-  name: z
-    .string()
-    .regex(TECHNICAL_NAME_PATTERNS.PascalCase, "PascalCase, Latin only")
-    .refine((n) => !isSqlReservedWord(n), {
-      message: "Name is a SQL reserved word",
-    }),
-  displayName: localizedStringSchema.optional(),
 
-  // Type settings
-  codeLength: z.number().int().positive().default(9),
+  // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
+  codeLength: z.number().int().nonnegative().default(9),
   codeType: z.enum(["String", "Number"]).default("String"),
-  descriptionLength: z.number().int().positive().default(150),
+  descriptionLength: z.number().int().nonnegative().default(150),
   hierarchyType: z
     .enum(["None", "FoldersAndItems", "ItemsOnly"])
     .default("None"),
@@ -38,31 +33,10 @@ export const catalogSchema = z.object({
     )
     .default([]),
 
-  // Користувацькі перевизначення описів стандартних реквізитів
-  standardAttributeOverrides: z
-    .record(
-      z.string(),
-      z.object({ description: localizedStringSchema.optional() })
-    )
-    .optional()
-    .default({}),
+  standardAttributeOverrides: standardAttributeOverridesSchema,
 
-  // User-defined sub-objects
-  attributes: z
-    .array(attributeSchema)
-    .refine(
-      (attrs) => new Set(attrs.map((a) => a.name)).size === attrs.length,
-      { message: "Attribute names must be unique" }
-    )
-    .default([]),
-  tabularSections: z
-    .array(tabularSectionSchema)
-    .refine(
-      (sections) =>
-        new Set(sections.map((s) => s.name)).size === sections.length,
-      { message: "Tabular section names must be unique" }
-    )
-    .default([]),
+  attributes: z.array(attributeSchema).default([]),
+  tabularSections: z.array(tabularSectionSchema).default([]),
 })
 
 export type Catalog = z.infer<typeof catalogSchema>

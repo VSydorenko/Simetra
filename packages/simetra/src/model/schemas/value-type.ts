@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { SchemaRule } from "./rules"
+import { metadataRefSchema } from "./metadata-ref"
 
 export const LOGICAL_TYPES = [
   "UUID",
@@ -19,20 +20,14 @@ export const LOGICAL_TYPES = [
 
 export type LogicalType = (typeof LOGICAL_TYPES)[number]
 
-/**
- * Форма посилання {kind, name} без обмеження набору kind-ів: реєстр видів
- * відомий лише вищим шарам, а T0 перевіряє тільки форму.
- */
-const typeRefShape = z.object({ kind: z.string(), name: z.string() })
-
 /** Поля типу, спільні для реквізиту, константи й колонки. */
 export const valueTypeShape = {
   type: z.enum(LOGICAL_TYPES),
   length: z.number().int().positive().optional(),
   precision: z.number().int().positive().optional(),
   scale: z.number().int().nonnegative().optional(),
-  ref: typeRefShape.optional(),
-  allowedTypes: z.array(typeRefShape).optional(),
+  ref: metadataRefSchema.optional(),
+  allowedTypes: z.array(metadataRefSchema).optional(),
   array: z.boolean().optional(),
 }
 
