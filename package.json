@@ -1,5 +1,5 @@
 {
-  "name": "simetra",
+  "name": "simetra-monorepo",
   "version": "0.0.1",
   "private": true,
   "description": "Open-source metadata-driven platform for business applications, in the spirit of 1C:Enterprise",

@@ -7,6 +7,6 @@ pnpm-lock.yaml
 **/*.md
 # Фікстури канонічної серіалізації: тести порівнюють їх побайтно з виводом
 # JSON.stringify, тож Prettier не повинен їх переформатовувати
-packages/core/src/__tests__/fixtures/
+packages/simetra/src/model/__tests__/fixtures/
 # Заморожений референс прототипу (М8): не переформатовується й не змінюється
 legacy/

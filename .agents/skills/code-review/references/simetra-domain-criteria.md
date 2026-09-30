@@ -32,8 +32,8 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | Check | Defect signal | Model |
 | --- | --- | --- |
 | imports go downward (*target*) | a tier imports a higher-numbered tier (T0 `model`, T1 `compiler`, T2 `schema`, T3 `server`, T4 `data`, T5 `ui`, T6 `shell`); a tier boundary crossed with no lint zone and negative test covering it | spec §3.1 |
-| package direction (*prototype*) | a package imports a package that depends on it; `@simetra/core` gains any workspace dependency | each package's `package.json` |
-| core stays pure (*prototype*, carries into T0) | `@simetra/core` gains a runtime dependency other than `zod`, or its non-test source imports React, `node:*`, `fs` or `process`. Tests may read fixtures with Node APIs | `packages/core/package.json` |
+| package direction (*prototype*) | a package imports a package that depends on it; `simetra/model` gains any workspace dependency | each package's `package.json` |
+| core stays pure (*prototype*, carries into T0) | `simetra/model` gains a runtime dependency other than `zod`, or its non-test source imports React, `node:*`, `fs` or `process`. Tests may read fixtures with Node APIs | `packages/simetra/package.json` |
 | client/server split (*target*) | a server entry point or secret reachable from a client entry or the browser catalog; a static import of an implementation into runtime registration instead of a lazy thunk | spec §3.1, §3.3 |
 | platform/consumer boundary | platform code names a consumer's concepts (tenant kinds such as company or hub, membership, billing, role archetypes); scope hard-coded instead of the "scope kind + id" pair the application defines; a single-tenant application forced to declare scope | spec §1, §2 (Р10) |
 | public repo hygiene — `blocker` | a consumer's private detail committed: real project refs, deployment or infrastructure IDs, tenant or customer names, private domains, secrets, dumps of a consumer's schema | spec header |
@@ -45,23 +45,23 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 
 ## Lens `data-layer`
 
-### Metamodel (*prototype*, verified in `packages/core`)
+### Metamodel (*prototype*, verified in `packages/simetra/src/model`)
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
-| Zod is the source of truth | a hand-written type duplicating a schema shape instead of `z.infer`; a schema or enum re-declared outside core instead of imported from `@simetra/core`; `z.any()` in a schema | `packages/core/src/schemas/` |
-| standard attributes derive from the kind | standard columns listed by hand in a generator or UI instead of calling `getStandardAttributes`; standard attributes persisted as user attributes; anything but description overrides stored for them | `packages/core/src/schemas/standard-attributes.ts` |
-| one Ref model | a new per-kind reference type; a `Ref` attribute with both `ref` and `allowedTypes`, or neither; `ref`/`allowedTypes` on a non-`Ref` type; a reference target outside the referenceable kinds; `parent_id` modelled as a Ref | `packages/core/src/schemas/attribute.ts`, `packages/core/src/schemas/metadata-ref.ts` |
-| register field roles | dimensions, resources and attributes merged or bypassed; an accumulation-register resource that is not `Integer` or `Numeric` | `packages/core/src/schemas/accumulation-register.ts` |
-| names and reserved words | a new name-bearing field with its own regex instead of `TECHNICAL_NAME_PATTERNS`, or without the `isSqlReservedWord` refinement; missing uniqueness within the parent array | `packages/core/src/schemas/technical-name.ts`, `packages/core/src/schemas/sql-reserved-words.ts` |
-| deterministic files | serializer output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | `packages/core/src/serialization.ts` |
-| posting and condition DSL | an expression reaching SQL without passing the mapping or condition schema; the grammar widened in the generator but not in the schema and its tests | `packages/core/src/schemas/posting.ts` |
+| Zod is the source of truth | a hand-written type duplicating a schema shape instead of `z.infer`; a schema or enum re-declared outside T0 instead of imported from `simetra/model`; `z.any()` in a schema | `packages/simetra/src/model/schemas/` |
+| standard attributes derive from the kind | standard columns listed by hand in a generator or UI instead of calling `getStandardAttributes`; standard attributes persisted as user attributes; anything but description overrides stored for them | `packages/simetra/src/model/schemas/standard-attributes.ts` |
+| one Ref model | a new per-kind reference type; a `Ref` attribute with both `ref` and `allowedTypes`, or neither; `ref`/`allowedTypes` on a non-`Ref` type; a reference target outside the referenceable kinds; `parent_id` modelled as a Ref | `packages/simetra/src/model/schemas/attribute.ts`, `packages/simetra/src/model/schemas/metadata-ref.ts` |
+| register field roles | dimensions, resources and attributes merged or bypassed; an accumulation-register resource that is not `Integer` or `Numeric` | `packages/simetra/src/model/schemas/accumulation-register.ts` |
+| names and reserved words | a new name-bearing field with its own regex instead of `TECHNICAL_NAME_PATTERNS`, or without the `isSqlReservedWord` refinement; missing uniqueness within the parent array | `packages/simetra/src/model/schemas/technical-name.ts`, `packages/simetra/src/model/schemas/sql-reserved-words.ts` |
+| deterministic files | serializer output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | `packages/simetra/src/model/serialization.ts` |
+| posting and condition DSL | an expression reaching SQL without passing the mapping or condition schema; the grammar widened in the generator but not in the schema and its tests | `packages/simetra/src/model/schemas/posting.ts` |
 
 ### Physical naming and SQL (*prototype*)
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
-| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `packages/core/src/schemas/physical-naming.ts`, `legacy/generator-pg/src/column-naming.ts` |
+| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `packages/simetra/src/model/schemas/physical-naming.ts`, `legacy/generator-pg/src/column-naming.ts` |
 | escaping | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `legacy/generator-pg/src/naming.ts` |
 
 ### Schema engine and data runtime (*target*)
@@ -83,7 +83,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | --- | --- |
 | nothing silenced to go green | `.skip`, `.only` or `.todo` added; an assertion deleted or loosened; a threshold lowered; a file excluded from test, lint or typecheck config |
 | no suppressions | `@ts-ignore`, `@ts-expect-error`, `eslint-disable` or `as any` added to pass a gate; an unavoidable one without a Ukrainian comment saying why |
-| canonical fixtures | serialization fixtures under `packages/core/src/__tests__/fixtures/` are compared byte for byte with serializer output: editing the fixture to match new output changes the on-disk format and must be what the task asked for |
+| canonical fixtures | serialization fixtures under `packages/simetra/src/model/__tests__/fixtures/` are compared byte for byte with serializer output: editing the fixture to match new output changes the on-disk format and must be what the task asked for |
 | schema changes carry tests | a new or changed Zod schema without accept and reject cases in core's tests |
 | generated SQL assertions | `toContain` on a fragment proves presence, not the statement; mutate the generator branch and confirm red |
 | tests do not time the machine | an assertion that depends on wall-clock speed or contention |

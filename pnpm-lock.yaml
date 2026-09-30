@@ -27,7 +27,7 @@ importers:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
 
-  packages/core:
+  packages/simetra:
     dependencies:
       zod:
         specifier: ^4.6.5

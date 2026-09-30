@@ -72,8 +72,8 @@ versions are lockstep.
 the navigation adapter interface; framework adapters live in T6; the host
 template and the studio are the only places that import TanStack Start.
 
-**Current code is a prototype.** The prototype metamodel in `packages/core`
-stays in the workspace. The rest of the prototype (CLI, generators, UI, web
+**Current code is a prototype.** The prototype metamodel now lives in T0
+(`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest of the prototype (CLI, generators, UI, web
 configurator) is frozen in `legacy/`: read it, but do not build, test, import
 or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
 is deleted) of the parts it names — read it there, do not restate it. A package
@@ -87,18 +87,18 @@ Consequences:
 - Treat prototype behaviour as a reference, not as a contract, unless the spec
   adopts it.
 
-## Metamodel rules (`packages/core`)
+## Metamodel rules (T0 `packages/simetra/src/model`)
 
 These hold today and carry over into T0:
 
-- **Zod schemas in `@simetra/core` are the single source of truth** for
+- **Zod schemas in T0 `simetra/model` are the single source of truth** for
   metadata types. TypeScript types are `z.infer` of them; other packages
-  import schemas and types from core and never re-declare them.
-- **Core has no runtime dependency except `zod`.** No React, no UI, no Node
+  import schemas and types from `simetra/model` and never re-declare them.
+- **T0 `simetra/model` has no runtime dependency except `zod`.** No React, no UI, no Node
   APIs in library source (tests may use Node).
 - Every kind schema carries a `kind` literal; no `z.any()` in schemas.
 - **Standard attributes are derived from the kind** and its settings
-  (`packages/core/src/schemas/standard-attributes.ts`). They are never stored
+  (`packages/simetra/src/model/schemas/standard-attributes.ts`). They are never stored
   as custom attributes in metadata files, and derivation rules change only
   together with the spec.
 - **One reference type, `Ref`.** A single target is `ref`, a polymorphic one is

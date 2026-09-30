@@ -44,7 +44,7 @@ design spec.
 
 ## Repository layout
 
-- **Prototype** — the Zod metamodel in `packages/core` stays in the workspace.
+- **Prototype** — the Zod metamodel lives in tier T0 (`packages/simetra/src/model`) and is rebuilt in place.
   The rest of the prototype (PostgreSQL DDL generator with a CLI, web-based
   metadata configurator, UI) is frozen in `legacy/` as a read-only reference.
   Not the target architecture.

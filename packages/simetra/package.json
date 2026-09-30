@@ -1,5 +1,5 @@
 {
-  "name": "@simetra/core",
+  "name": "simetra",
   "version": "0.0.1",
   "type": "module",
   "private": true,
@@ -25,7 +25,12 @@
     "vitest": "^5.0.2"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./schemas": "./src/schemas/index.ts"
+    "./model": "./src/model/index.ts",
+    "./compiler": "./src/compiler/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./server": "./src/server/index.ts",
+    "./data": "./src/data/index.ts",
+    "./ui": "./src/ui/index.ts",
+    "./shell": "./src/shell/index.ts"
   }
 }
