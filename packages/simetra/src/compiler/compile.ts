@@ -59,7 +59,12 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
   const stage3 = buildModel(stage1.objects, stage1.project)
   const diagnostics = sortDiagnostics([
     ...early,
-    ...checkIntegrity(stage1.objects, stage2.references, stage3),
+    ...checkIntegrity(
+      stage1.objects,
+      stage2.references,
+      stage3,
+      stage1.project.naming.attributeCase
+    ),
   ])
   const ok = !hasErrors(diagnostics)
   if (!ok) return { ok, diagnostics }

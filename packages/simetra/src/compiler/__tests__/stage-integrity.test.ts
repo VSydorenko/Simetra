@@ -328,4 +328,160 @@ describe("stage 4: integrity", () => {
       ["physical.name-too-long", "/uniques/0/name"],
     ])
   })
+
+  describe("custom table constraints", () => {
+    const LOG = "custom-tables/Log/Log.meta.json"
+    const columns = [
+      { id: uuid(740), name: "id", physicalName: "id", type: "UUID" },
+      { id: uuid(741), name: "email", physicalName: "email", type: "Text" },
+    ]
+    const log = (overrides: Record<string, unknown>) =>
+      compileWith({ [LOG]: customTable("Log", { columns, ...overrides }) })
+    const codes = (result: ReturnType<typeof compileWith>) =>
+      result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+
+    it("unnamed index with an expression key needs a name", () => {
+      const result = log({
+        indexes: [
+          { name: "log_lower_idx", keys: [{ expression: "lower(email)" }] },
+          { keys: [{ column: "email" }] },
+          { keys: [{ column: "id" }, { expression: "lower(email)" }] },
+        ],
+      })
+      expect(codes(result)).toEqual([
+        ["physical.constraint-name-required", "error", LOG, "/indexes/2"],
+      ])
+      expect(result.diagnostics[0]!.hint).toContain("explicit name")
+    })
+
+    it("unnamed check needs a name", () => {
+      const result = log({
+        checks: [
+          { name: "log_email_len", expression: "length(email) > 0" },
+          { expression: "length(email) > 0" },
+        ],
+      })
+      expect(codes(result)).toEqual([
+        ["physical.constraint-name-required", "error", LOG, "/checks/1"],
+      ])
+    })
+
+    it("unknown column in primary key, unique, fk and index", () => {
+      const result = log({
+        primaryKey: { columns: ["uuid"] },
+        uniques: [{ columns: ["id", "mail"] }],
+        foreignKeys: [
+          {
+            columns: ["owner"],
+            references: {
+              external: { schema: "auth", table: "users", columns: ["id"] },
+            },
+          },
+        ],
+        indexes: [
+          { keys: [{ column: "id" }, { column: "nope" }], include: ["gone"] },
+        ],
+      })
+      expect(codes(result)).toEqual([
+        [
+          "customTable.column-unknown",
+          "error",
+          LOG,
+          "/foreignKeys/0/columns/0",
+        ],
+        ["customTable.column-unknown", "error", LOG, "/indexes/0/include/0"],
+        ["customTable.column-unknown", "error", LOG, "/indexes/0/keys/1"],
+        ["customTable.column-unknown", "error", LOG, "/primaryKey/columns/0"],
+        ["customTable.column-unknown", "error", LOG, "/uniques/0/columns/1"],
+      ])
+    })
+
+    it("fk target columns resolve as logical names of the target", () => {
+      const result = compileWith({
+        "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+          attributes: [attribute("isoCode", { physicalName: "iso_code" })],
+        }),
+        "custom-tables/Other/Other.meta.json": customTable("Other"),
+        [LOG]: customTable("Log", {
+          columns,
+          foreignKeys: [
+            {
+              columns: ["id"],
+              references: {
+                object: { kind: "Catalog", name: "Currency" },
+                columns: ["ref"],
+              },
+            },
+            {
+              columns: ["email"],
+              references: {
+                object: { kind: "Catalog", name: "Currency" },
+                columns: ["isoCode"],
+              },
+            },
+            {
+              columns: ["id"],
+              references: {
+                object: { kind: "Catalog", name: "Currency" },
+                columns: ["id"],
+              },
+            },
+            {
+              columns: ["id"],
+              references: {
+                object: { kind: "CustomTable", name: "Other" },
+                columns: ["missing"],
+              },
+            },
+          ],
+        }),
+      })
+      expect(codes(result)).toEqual([
+        [
+          "customTable.column-unknown",
+          "error",
+          LOG,
+          "/foreignKeys/2/references/columns/0",
+        ],
+        [
+          "customTable.column-unknown",
+          "error",
+          LOG,
+          "/foreignKeys/3/references/columns/0",
+        ],
+      ])
+    })
+
+    it("fk column count must match the referenced columns", () => {
+      const result = compileWith({
+        "custom-tables/Other/Other.meta.json": customTable("Other"),
+        [LOG]: customTable("Log", {
+          columns,
+          foreignKeys: [
+            {
+              columns: ["id", "email"],
+              references: {
+                object: { kind: "CustomTable", name: "Other" },
+                columns: ["id"],
+              },
+            },
+            {
+              columns: ["id"],
+              references: {
+                external: {
+                  schema: "auth",
+                  table: "users",
+                  columns: ["id", "aud"],
+                },
+              },
+            },
+          ],
+        }),
+      })
+      expect(codes(result)).toEqual([
+        ["customTable.foreign-key-arity", "error", LOG, "/foreignKeys/0"],
+        ["customTable.foreign-key-arity", "error", LOG, "/foreignKeys/1"],
+      ])
+    })
+  })
 })

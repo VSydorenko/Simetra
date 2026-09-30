@@ -481,7 +481,9 @@ describe("stage 3: physical snapshot", () => {
         ],
         primaryKey: { columns: ["id"] },
         uniques: [{ columns: ["userId", "status"], nullsNotDistinct: true }],
-        checks: [{ expression: "counter > 0" }],
+        checks: [
+          { name: "profile_counter_positive", expression: "counter > 0" },
+        ],
         foreignKeys: [
           {
             name: "profile_user_fk",
@@ -495,6 +497,7 @@ describe("stage 3: physical snapshot", () => {
         indexes: [
           { keys: [{ column: "status" }], where: "status IS NOT NULL" },
           {
+            name: "profile_status_lower_idx",
             keys: [{ expression: "lower(status::text)" }],
             include: ["counter"],
           },
@@ -532,7 +535,7 @@ describe("stage 3: physical snapshot", () => {
       },
     ])
     expect(profile.checks).toEqual([
-      { name: "profile_counter_check", expression: "counter > 0" },
+      { name: "profile_counter_positive", expression: "counter > 0" },
     ])
     expect(profile.foreignKeys).toEqual([
       {
@@ -546,14 +549,14 @@ describe("stage 3: physical snapshot", () => {
     ])
     expect(profile.indexes).toEqual([
       expect.objectContaining({
-        name: "profile_expr_counter_idx",
-        keys: [{ expression: "lower(status::text)" }],
-        include: ["counter"],
-      }),
-      expect.objectContaining({
         name: "profile_status_idx",
         keys: [{ column: "status" }],
         where: "status IS NOT NULL",
+      }),
+      expect.objectContaining({
+        name: "profile_status_lower_idx",
+        keys: [{ expression: "lower(status::text)" }],
+        include: ["counter"],
       }),
     ])
   })
@@ -723,13 +726,7 @@ describe("stage 3: physical snapshot", () => {
         indexes: [
           { keys: [{ column: wide }, { column: "bb" }, { column: "cc" }] },
           { keys: [{ column: "bb" }], include: ["cc", "dd"] },
-          {
-            keys: [
-              { expression: "(bb + 1)" },
-              { expression: "(cc + 1)" },
-              { column: "dd" },
-            ],
-          },
+          { keys: [{ column: "dd" }, { column: "dd" }] },
         ],
       }),
     })
@@ -744,11 +741,7 @@ describe("stage 3: physical snapshot", () => {
         .indexes.map((i) => i.name)
         .sort()
     ).toEqual(
-      [
-        `t3_${"a".repeat(56)}_idx`,
-        "t3_bb_cc_dd_idx",
-        "t3_expr_expr1_dd_idx",
-      ].sort()
+      [`t3_${"a".repeat(56)}_idx`, "t3_bb_cc_dd_idx", "t3_dd_dd1_idx"].sort()
     )
   })
 

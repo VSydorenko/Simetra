@@ -26,6 +26,9 @@ export const COMPILER_RULES = [
   "physical.discriminator-duplicate",
   "physical.reserved-word",
   "physical.name-too-long",
+  "physical.constraint-name-required",
+  "customTable.column-unknown",
+  "customTable.foreign-key-arity",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

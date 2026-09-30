@@ -101,7 +101,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // --- Стадія 4: цілісність ---
   "reference.not-referenceable": {
     message: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
-    hint: "Ref targets are catalogs, documents, enumerations and custom tables; a PgEnum is referenced only by a CustomTable column, and a foreign key needs a target with a table.",
+    hint: "The kind registry decides which kinds a Ref may target; a PgEnum is referenced only by a CustomTable column, and a foreign key needs a target that has a table.",
   },
   "reference.custom-table-key": {
     message: (p) =>
@@ -124,6 +124,19 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "physical.reserved-word": {
     message: (p) => `Physical name ${p.name} is an SQL reserved word`,
     hint: "It works when quoted, but new elements should not take reserved words.",
+  },
+  "physical.constraint-name-required": {
+    message: () =>
+      "Postgres names this constraint or index from its expression, so the name cannot be derived",
+    hint: "Give the index/constraint an explicit name; the reverse generator always writes names.",
+  },
+  "customTable.column-unknown": {
+    message: (p) => `${p.table} has no column "${p.column}"`,
+    hint: "Constraints, indexes and foreign keys refer to columns by logical name.",
+  },
+  "customTable.foreign-key-arity": {
+    message: (p) =>
+      `Foreign key has ${p.local} column(s) but references ${p.referenced}`,
   },
   "physical.name-too-long": {
     message: (p) =>

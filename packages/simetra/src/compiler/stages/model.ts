@@ -97,7 +97,10 @@ interface PendingTable {
  * Стадія 3 (спека П2 §5, §8.2–§8.3): фізичний знімок з реєстру видів —
  * стандартні колонки виду, колонки реквізитів, ключі, обмеження й індекси,
  * а також таблиці `CustomTable` і енам-типи `PgEnum` як є. Імена похідних
- * обмежень — за алгоритмом Postgres, тож збігаються з тими, що дала б сама БД.
+ * обмежень — за алгоритмом Postgres над іменами колонок, тож збігаються з
+ * тими, що дала б сама БД; ім'я над виразом (безіменні CHECK та індекси з
+ * виразом у `CustomTable`) Postgres бере з дерева виразу, тож для них стадія 4
+ * вимагає явне ім'я.
  * Вхід — без помилок стадій 1–2: id, physicalName і цілі посилань є.
  */
 export function buildModel(
@@ -452,9 +455,9 @@ class SnapshotBuilder {
     })
 
     const own = declaredColumnMap(data)
+    // Невідоме ім'я колонки звітує стадія 4; тут воно лише не ламає побудову.
     const map = (names: readonly string[], columns = own) =>
       names.map((n) => columns.get(n) ?? n)
-    const physicalColumns = new Set(own.values())
 
     if (data.primaryKey !== undefined) {
       table.primaryKey = {
@@ -469,11 +472,11 @@ class SnapshotBuilder {
         nullsNotDistinct: unique.nullsNotDistinct,
       })
     })
+    // Безіменний CHECK чи індекс з виразом Postgres назвав би за деревом
+    // виразу, якого тут немає, тож стадія 4 вимагає для них явне ім'я.
     data.checks.forEach((check, i) => {
-      const column = soleColumnOf(check.expression, physicalColumns)
       table.checks.push({
         ...explicit(check.name, `/checks/${i}/name`),
-        ...(column !== undefined ? { column } : {}),
         expression: check.expression,
       })
     })
@@ -485,7 +488,10 @@ class SnapshotBuilder {
         target = {
           schema: this.schemaOf(object),
           table: physicalNameOf(object),
-          columns: map(references.columns, this.columnMapOf(object)),
+          columns: map(
+            references.columns,
+            logicalColumnsOf(object, this.style)
+          ),
         }
       } else {
         target = { ...references.external }
@@ -531,26 +537,6 @@ class SnapshotBuilder {
     return pgTypeOf(value, target)
   }
 
-  /** Логічне ім'я колонки → фізичне для таблиці цілі FK. */
-  private columnMapOf(object: ParsedObject): Map<string, string> {
-    const data = object.data as Element
-    if (Array.isArray(data.columns)) {
-      return declaredColumnMap(data as unknown as CustomTable)
-    }
-    const map = new Map<string, string>()
-    for (const column of KIND_REGISTRY[object.kind].standardColumns(data)) {
-      if (column.polymorphic === undefined) {
-        map.set(standardLogicalName(column, this.style), column.physicalName)
-      }
-    }
-    for (const role of ["dimensions", "resources", "attributes"]) {
-      for (const attribute of (data[role] ?? []) as Attribute[]) {
-        map.set(attribute.name, attribute.physicalName!)
-      }
-    }
-    return map
-  }
-
   // --- Допоміжне ----------------------------------------------------------
 
   private lookup(ref: MetadataRef): ParsedObject {
@@ -574,6 +560,33 @@ const NONE: Target = { form: "none" }
 
 function physicalNameOf(object: ParsedObject): string {
   return (object.data as { physicalName: string }).physicalName
+}
+
+/**
+ * Логічне ім'я колонки → фізичне для таблиці об'єкта: у прийнятої таблиці —
+ * її колонки, у виду — стандартні колонки з реєстру (крім поліморфних пар,
+ * що не мають однієї колонки) і реквізити.
+ */
+export function logicalColumnsOf(
+  object: ParsedObject,
+  style: AttributeCase
+): Map<string, string> {
+  const data = object.data as Element
+  if (Array.isArray(data.columns)) {
+    return declaredColumnMap(data as unknown as CustomTable)
+  }
+  const map = new Map<string, string>()
+  for (const column of KIND_REGISTRY[object.kind].standardColumns(data)) {
+    if (column.polymorphic === undefined) {
+      map.set(standardLogicalName(column, style), column.physicalName)
+    }
+  }
+  for (const role of ["dimensions", "resources", "attributes"]) {
+    for (const attribute of (data[role] ?? []) as Attribute[]) {
+      map.set(attribute.name, attribute.physicalName!)
+    }
+  }
+  return map
 }
 
 function declaredColumnMap(data: CustomTable): Map<string, string> {
@@ -703,28 +716,6 @@ function addField(table: PendingTable, field: Field): string[] {
 function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === "string") return `'${value.replaceAll("'", "''")}'`
   return String(value)
-}
-
-/**
- * Єдина колонка таблиці, яку згадує вираз CHECK, — як у Postgres, що називає
- * обмеження `<таблиця>_<колонка>_check` лише для виразу над однією колонкою.
- * Наближення: Postgres рахує змінні дерева виразу, тут — ідентифікатори
- * тексту поза рядковими літералами, що збігаються з колонками таблиці.
- */
-function soleColumnOf(
-  expression: string,
-  columns: ReadonlySet<string>
-): string | undefined {
-  const found = new Set<string>()
-  const token = /'(?:[^']|'')*'|"((?:[^"]|"")*)"|([A-Za-z_][A-Za-z0-9_$]*)/g
-  for (const match of expression.matchAll(token)) {
-    const name =
-      match[1] !== undefined
-        ? match[1].replaceAll('""', '"')
-        : match[2]?.toLowerCase()
-    if (name !== undefined && columns.has(name)) found.add(name)
-  }
-  return found.size === 1 ? [...found][0] : undefined
 }
 
 function bySchemaAndName(
@@ -873,13 +864,14 @@ function byName(a: { name: string }, b: { name: string }): number {
 }
 
 /**
- * Імена колонок індексу як у `ChooseIndexColumnNames`: вираз — `expr`, а
- * повтор імені отримує числовий суфікс (`expr1`, …). INCLUDE теж входить.
+ * Імена колонок індексу як у `ChooseIndexColumnNames`: повтор імені отримує
+ * числовий суфікс (`dd`, `dd1`), INCLUDE теж входить. Ключ-вираз сюди не
+ * доходить: безіменний індекс з виразом — помилка стадії 4.
  */
 function indexColumnNames(index: Omit<Index, "name">): string[] {
   const result: string[] = []
   const all = [
-    ...index.keys.map((key) => ("column" in key ? key.column : "expr")),
+    ...index.keys.flatMap((key) => ("column" in key ? [key.column] : [])),
     ...index.include,
   ]
   for (const original of all) {
