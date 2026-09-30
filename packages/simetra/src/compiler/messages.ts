@@ -78,6 +78,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: () => "File is not part of the metadata layout",
     hint: "Objects live in <kind folder>/<Name>/<Name>.meta.json with optional <Name>.module.ts and <Name>.sql; shared SQL lives in sql/<schema>/<file>.sql.",
   },
+  "file.movements-block": {
+    message: (p) =>
+      p.line === undefined
+        ? `Invalid movement query block: ${p.detail}`
+        : `Invalid movement query block at line ${p.line}: ${p.detail}`,
+    hint: "Movement queries live in <Document>.sql between '-- @movements <Register>' and '-- @end'.",
+  },
   "file.orphan": {
     message: (p) => `No ${p.expected} next to this file`,
   },
@@ -240,6 +247,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: (p) =>
       `Register "${p.name}" is not listed in the document's registerMovements`,
     hint: "Add the register to registerMovements.",
+  },
+  "posting.source-missing": {
+    message: (p) =>
+      `Register "${p.name}" has no movement source: neither a constructor movement nor a query block`,
+    hint: "Add a movement for this register to posting, or a '-- @movements' block to the document's .sql file.",
+  },
+  "posting.source-ambiguous": {
+    message: (p) =>
+      `Register "${p.name}" has more than one movement source: ${p.sources}`,
+    hint: "Keep exactly one source: the constructor or a single query block.",
   },
   "posting.recorder-not-allowed": {
     message: (p) =>

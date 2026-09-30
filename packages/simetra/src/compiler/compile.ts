@@ -8,6 +8,7 @@ import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { readFiles } from "./stages/files"
 import { checkIdentity, type ResolvedReference } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
+import { checkLinks } from "./stages/links"
 import { buildModel } from "./stages/model"
 
 export interface SourceObject {
@@ -81,6 +82,7 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
       stage1.project.naming.attributeCase,
       stage1.project.scopeKinds
     ),
+    ...checkLinks(stage1.objects, stage2.references),
   ])
   const ok = !hasErrors(diagnostics)
   if (!ok) return { ok, diagnostics }

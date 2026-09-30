@@ -29,7 +29,12 @@ import {
   type OperandError,
   type PostingContext,
 } from "../posting-types"
-import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
+import {
+  POST_ACTION,
+  PROJECT_FILE,
+  objectKey,
+  type ParsedObject,
+} from "./files"
 import type { ResolvedReference } from "./identity"
 import {
   isDeclaredTable,
@@ -71,9 +76,6 @@ const POLYMORPHIC_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
 /** Ролі, чия ціль — регістр, у який документ пише рухи (спека §8.2). */
 const REGISTER_TARGET_ROLES: ReadonlySet<ReferenceRole> =
   new Set<ReferenceRole>(["document.registerMovement", "posting.register"])
-
-/** Дія виду, що пише рухи: реєстратором може бути лише вид, який проводиться. */
-const POST_ACTION = "post"
 
 /** Поліморфні множини: їхні цілі розрізняє `physicalName` (спека §5). */
 const POLYMORPHIC_SETS = ["allowedTypes", "owners", "recorderTypes"] as const

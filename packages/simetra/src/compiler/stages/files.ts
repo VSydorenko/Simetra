@@ -7,6 +7,7 @@ import {
   type MetadataKind,
   type Project,
   type SchemaRule,
+  KIND_REGISTRY,
 } from "simetra/model"
 import {
   compareStrings,
@@ -14,12 +15,30 @@ import {
   toPointer,
   type Diagnostic,
 } from "../diagnostics"
+import { extractMovementBlocks } from "../movement-blocks"
 
 export const PROJECT_FILE = "project.meta.json"
 
 const META_SUFFIX = ".meta.json"
 const MODULE_SUFFIX = ".module.ts"
 const SQL_SUFFIX = ".sql"
+
+/** Дія виду, що проводиться: лише такі документи мають рухи й блоки запиту. */
+export const POST_ACTION = "post"
+
+/**
+ * Роздільник долар-лапок обгортки запиту рухів (задача обгортки): блок, що
+ * його містить, закрив би літерал обгортки раніше й став би ін'єкцією.
+ */
+const WRAPPER_DELIMITER = "$simetra$"
+
+/** Блок запиту рухів з `.sql` документа; `file` — сам `.sql`. */
+export interface ParsedMovementBlock {
+  file: string
+  register: string
+  sql: string
+  line: number
+}
 
 /** Об'єкт, чий файл пройшов схему виду; id може бути відсутнім до стадії 2. */
 export interface ParsedObject {
@@ -29,6 +48,8 @@ export interface ParsedObject {
   id?: string
   /** Вихід Zod-схеми виду — з уже застосованими значеннями за замовчуванням. */
   data: unknown
+  /** Блоки запиту рухів з `<Name>.sql` документа, у порядку файлу. */
+  movementBlocks?: ParsedMovementBlock[]
 }
 
 export interface FilesStageResult {
@@ -84,6 +105,7 @@ export function readFiles(
       hasBase(segments[2]!, SQL_SUFFIX)
     ) {
       result.sqlFiles.push({ file, schema: segments[1]! })
+      readMovementBlocks(file, text, undefined, result.diagnostics)
       continue
     }
 
@@ -138,9 +160,58 @@ export function readFiles(
       })
     } else {
       result.sqlFiles.push({ file: sidecar.file, ownerFile: sidecar.ownerFile })
+      // Зламаний власник (його немає серед objects) причину вже назвав сам.
+      const owner = result.objects.find((o) => o.file === sidecar.ownerFile)
+      if (owner !== undefined) {
+        readMovementBlocks(
+          sidecar.file,
+          files.get(sidecar.file) ?? "",
+          owner,
+          result.diagnostics
+        )
+      }
     }
   }
   return result
+}
+
+/**
+ * Блоки запиту рухів у `.sql`: лише документ (вид із дією проведення) може їх
+ * мати. `owner` відсутній — файл спільний (`sql/<схема>/`).
+ */
+function readMovementBlocks(
+  file: string,
+  text: string,
+  owner: ParsedObject | undefined,
+  diagnostics: Diagnostic[]
+): void {
+  const { blocks, errors } = extractMovementBlocks(text)
+  const report = (detail: string, line: number) =>
+    diagnostics.push(
+      diagnostic("file.movements-block", file, "", { detail, line })
+    )
+  for (const error of errors) report(error.message, error.line)
+  const postable =
+    owner !== undefined &&
+    KIND_REGISTRY[owner.kind].actions.includes(POST_ACTION)
+  if (!postable) {
+    for (const block of blocks) {
+      report(
+        "movement query blocks are allowed only in the .sql file of a document",
+        block.line
+      )
+    }
+    return
+  }
+  const kept: ParsedMovementBlock[] = []
+  for (const block of blocks) {
+    if (block.sql.includes(WRAPPER_DELIMITER)) {
+      report(`a block must not contain ${WRAPPER_DELIMITER}`, block.line)
+    } else {
+      kept.push({ file, ...block })
+    }
+  }
+  if (kept.length > 0) owner.movementBlocks = kept
 }
 
 function hasBase(fileName: string, suffix: string): boolean {

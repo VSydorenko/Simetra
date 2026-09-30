@@ -29,6 +29,8 @@ export interface ResolvedReference {
   role: ReferenceRole
   /** Вузол виразу всередині поля, на яке вказує pointer: пів-інтервал [start, end). */
   span?: { start: number; end: number }
+  /** 1-базний рядок маркера в `.sql`: pointer на весь файл місця не вказує. */
+  line?: number
 }
 
 export interface IdentityStageResult {
@@ -333,11 +335,13 @@ export function checkIdentity(
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
     }
+    resolveMovementBlocks(object, objects, brokenNames, references, diagnostics)
   }
   references.sort(
     (a, b) =>
       compareStrings(a.from.file, b.from.file) ||
-      compareStrings(a.from.pointer, b.from.pointer)
+      compareStrings(a.from.pointer, b.from.pointer) ||
+      (a.line ?? 0) - (b.line ?? 0)
   )
 
   return { references, diagnostics }
@@ -521,6 +525,72 @@ function namedNodes(expr: Expr): Expr[] {
  * не знайдені, звітується лише відсутність імені, а розбір виразу вже
  * перевірила T0 (`posting.parse`), тож зламаний вираз тут пропускається.
  */
+/**
+ * Ім'я регістра в маркері блоку запиту рухів — логічне ім'я регістра будь-якого
+ * виду регістра (факт реєстру). Маркер без виду: якщо одне ім'я носять регістри
+ * двох видів, перевагу має той, що в `registerMovements` документа, а далі
+ * неоднозначність — помилка, не мовчазний вибір. Маркер мусить бути в індексі
+ * посилань, щоб перейменування регістра його переписало.
+ */
+function resolveMovementBlocks(
+  object: ParsedObject,
+  objects: readonly ParsedObject[],
+  brokenNames: ReadonlySet<string>,
+  references: ResolvedReference[],
+  diagnostics: Diagnostic[]
+) {
+  if (object.id === undefined) return
+  const declared = new Set(
+    (
+      (object.data as { registerMovements?: { kind: string; name: string }[] })
+        .registerMovements ?? []
+    ).map((ref) => objectKey(ref.kind, ref.name))
+  )
+  for (const block of object.movementBlocks ?? []) {
+    const candidates = objects.filter(
+      (o) =>
+        o.name === block.register &&
+        KIND_REGISTRY[o.kind].registerKeys !== undefined
+    )
+    const preferred = candidates.filter((o) =>
+      declared.has(objectKey(o.kind, o.name))
+    )
+    const pool = preferred.length > 0 ? preferred : candidates
+    if (pool.length === 0) {
+      const broken = [...brokenNames].some((key) =>
+        key.endsWith(`/${block.register}`)
+      )
+      if (!broken) {
+        diagnostics.push(
+          diagnostic("reference.unresolved", block.file, "", {
+            kind: "Register",
+            name: block.register,
+            line: block.line,
+          })
+        )
+      }
+      continue
+    }
+    if (pool.length > 1) {
+      diagnostics.push(
+        diagnostic("file.movements-block", block.file, "", {
+          detail: `register name "${block.register}" is ambiguous between ${pool.map((o) => o.kind).join(" and ")}`,
+          line: block.line,
+        })
+      )
+      continue
+    }
+    const target = pool[0]!
+    if (target.id === undefined) continue
+    references.push({
+      from: { file: block.file, pointer: "", objectId: object.id },
+      to: { kind: target.kind, id: target.id },
+      role: "posting.movementsBlock",
+      line: block.line,
+    })
+  }
+}
+
 function resolveMovements(
   object: ParsedObject,
   objectsByName: ReadonlyMap<string, ParsedObject>,

@@ -74,6 +74,7 @@ export type ReferenceRole =
   | "posting.docField"
   | "posting.rowField"
   | "posting.tabularSection"
+  | "posting.movementsBlock"
   | "customTable.foreignKey"
   | "customTable.pgEnum"
   | "customTable.scopeColumn"
