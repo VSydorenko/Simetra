@@ -44,10 +44,10 @@ design spec.
 
 ## Repository layout
 
-- **Prototype** — the packages under `packages/` and the apps under `apps/`: a
-  Zod metamodel, a PostgreSQL DDL generator with a CLI, a web-based metadata
-  configurator and an experimental runtime. Useful to read and run; not the
-  target architecture.
+- **Prototype** — the Zod metamodel in `packages/core` stays in the workspace.
+  The rest of the prototype (PostgreSQL DDL generator with a CLI, web-based
+  metadata configurator, UI) is frozen in `legacy/` as a read-only reference.
+  Not the target architecture.
 - **Target** — the flagship `simetra` package plus a few separate packages (CLI,
   studio, app template), described in the platform design spec. The
   reorganisation into it is a roadmap milestone.

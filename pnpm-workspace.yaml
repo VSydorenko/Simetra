@@ -1,11 +1,2 @@
 packages:
-  - "apps/*"
   - "packages/*"
-
-# pnpm 11 за замовчуванням падає на невідомих build-скриптах (strictDepBuilds),
-# тому явно перелічуємо, кому дозволено виконувати postinstall.
-allowBuilds:
-  # esbuild ставить нативний бінарник платформи — без нього не працюють vite/tsx
-  esbuild: true
-  # msw (транзитивно через shadcn) лише копіює service worker — нам не потрібен
-  msw: false

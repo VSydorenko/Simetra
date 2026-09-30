@@ -61,8 +61,8 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
-| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `packages/core/src/schemas/physical-naming.ts`, `packages/generator-pg/src/column-naming.ts` |
-| escaping | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `packages/generator-pg/src/naming.ts` |
+| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `packages/core/src/schemas/physical-naming.ts`, `legacy/generator-pg/src/column-naming.ts` |
+| escaping | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `legacy/generator-pg/src/naming.ts` |
 
 ### Schema engine and data runtime (*target*)
 

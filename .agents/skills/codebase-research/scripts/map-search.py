@@ -36,7 +36,6 @@ INCLUDE_GLOBS = [
     ".agents/skills/*/SKILL.md",
     ".agents/skills/*/references/**/*.md",
     "packages/*/README.md",
-    "apps/*/README.md",
     # Скіли для споживачів їдуть у пакеті (платформна спека, «Доставка»).
     "packages/*/skills/*/SKILL.md",
     "packages/*/skills/*/references/**/*.md",

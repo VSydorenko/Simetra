@@ -72,17 +72,18 @@ versions are lockstep.
 the navigation adapter interface; framework adapters live in T6; the host
 template and the studio are the only places that import TanStack Start.
 
-**Current code is a prototype.** The packages under `packages/` and the apps
-under `apps/` predate the platform spec. Platform spec §14 sets the fate
-(becomes T0, stays as reference, is deleted) of the parts it names — read it
-there, do not restate it. A package §14 does not name has an **open** fate: treat
-it as neither slated for deletion nor adopted, and ask the owner before investing
-in it or removing it. Consequences:
+**Current code is a prototype.** The prototype metamodel in `packages/core`
+stays in the workspace. The rest of the prototype (CLI, generators, UI, web
+configurator) is frozen in `legacy/`: read it, but do not build, test, import
+or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
+is deleted) of the parts it names — read it there, do not restate it. A package
+§14 does not name has an **open** fate: treat it as neither slated for deletion
+nor adopted, and ask the owner before investing in it or removing it.
+Consequences:
 
 - Do not extend a package slated for deletion; touch it only to keep the gates
   green.
-- Do not start the tier reorganisation or delete prototype packages outside an
-  approved plan.
+- Code from `legacy/` is taken only as a reference for a new implementation.
 - Treat prototype behaviour as a reference, not as a contract, unless the spec
   adopts it.
 
@@ -261,6 +262,4 @@ skills:
   load: ".agents/skills/codebase-research/SKILL.md"
 - task: "review landed work before merge: choosing lenses, severity x confidence scale, adversarial verification of findings"
   load: ".agents/skills/code-review/SKILL.md"
-- task: "run or troubleshoot the Simetra CLI: generating or applying SQL from metadata, CLI options, expected project layout"
-  load: ".agents/skills/simetra-cli/SKILL.md"
 <!-- intent-skills:end -->

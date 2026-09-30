@@ -90,7 +90,7 @@ SOURCE_FILES = ["AGENTS.md", "CLAUDE.md", "README.md"]
 # Чому саме ці два — див. докстрінг, абзац «Корпус».
 SOURCE_EXCLUDE = ["docs/research/**", "docs/superpowers/**"]
 
-REPO_ROOTS = ("apps", "packages", "docs", "scripts", ".agents", ".claude", ".github", "supabase")
+REPO_ROOTS = ("apps", "packages", "docs", "scripts", ".agents", ".claude", ".github", "supabase", "legacy")
 
 # Плейсхолдер або glob — не якір: перевіряти нічого.
 PLACEHOLDER = re.compile(r"[<>{}*|]|\.\.\.|\$\{|\$[A-Za-z_]")
