@@ -271,16 +271,19 @@ function registerContract(
     attributes: Attribute[]
     balanceControl?: { resources: string[] }
   }
-  // Носій скоупу не колонка віртуальної таблиці: скоуп дає RLS (спека §7).
   const columnsOf = (attributes: readonly Attribute[]): PhysicalColumn[] => {
     const ids = new Set(attributes.map((a) => a.id))
     return table.columns.filter(
-      (c) =>
-        c.origin.scopeKindId === undefined &&
-        c.origin.elementId !== undefined &&
-        ids.has(c.origin.elementId)
+      (c) => c.origin.elementId !== undefined && ids.has(c.origin.elementId)
     )
   }
+  // Носій скоупу — перша колонка кожної віртуальної таблиці й частина ключа
+  // групування `(носій, виміри…)` (спека §7): RLS ріже рядки за скоупом, а
+  // групувати без носія не можна. Параметром він не є, окремого поля ключа
+  // контракт не має — порядок колонок несе ключ.
+  const carrier = table.columns.filter(
+    (c) => c.origin.scopeKindId !== undefined
+  )
   const column = ({ name, type }: PhysicalColumn) => ({ name, type })
   const dimensions = columnsOf(data.dimensions)
   const resources = columnsOf(data.resources)
@@ -293,11 +296,18 @@ function registerContract(
       c.origin.standard === standardLogicalName(periodDef, style)
   )
 
+  const slice = [
+    ...carrier,
+    ...period,
+    ...dimensions,
+    ...resources,
+    ...columnsOf(data.attributes),
+  ].map(column)
   const columnsFor: Record<VirtualTableKind, { name: string; type: string }[]> =
     {
-      balance: [...dimensions, ...resources].map(column),
+      balance: [...carrier, ...dimensions, ...resources].map(column),
       balanceAndTurnovers: [
-        ...dimensions.map(column),
+        ...[...carrier, ...dimensions].map(column),
         ...resources.flatMap((r) =>
           ["opening", "receipt", "expense", "closing"].map((label) => ({
             name: makeObjectName(r.name, undefined, label),
@@ -305,16 +315,10 @@ function registerContract(
           }))
         ),
       ],
-      turnovers: [...dimensions, ...resources].map(column),
-      sliceLast: [
-        ...period,
-        ...dimensions,
-        ...resources,
-        ...columnsOf(data.attributes),
-      ].map(column),
-      sliceFirst: [],
+      turnovers: [...carrier, ...dimensions, ...resources].map(column),
+      sliceLast: slice,
+      sliceFirst: slice,
     }
-  columnsFor.sliceFirst = columnsFor.sliceLast
 
   const totals = totalsTableOf(physical, id)
   const balanceControl =

@@ -6,8 +6,10 @@ import {
   attribute,
   catalog,
   metaFiles,
+  organization,
   project,
   salesDocument,
+  scopedProject,
 } from "./helpers"
 
 function contracts(entries: Record<string, unknown>) {
@@ -160,5 +162,178 @@ describe("posting and register contracts", () => {
     expect(
       result.diagnostics.filter((d) => d.code === "physical.function-duplicate")
     ).toHaveLength(1)
+  })
+
+  it("scope carrier is the first column of every virtual table", () => {
+    const build = (scoped: boolean) => {
+      const entries = withStock({ dimensions: [] })
+      const sale = entries[SALE_FILE] as {
+        posting: { movements: { fields: Record<string, string> }[] }
+      }
+      sale.posting.movements[0]!.fields = { qty: "row.qty" }
+      if (scoped) {
+        Object.assign(entries[SALE_FILE] as object, { scope: "org" })
+        Object.assign(entries[STOCK_FILE] as object, { scope: "org" })
+        entries["project.meta.json"] = scopedProject()
+        entries["catalogs/Organization/Organization.meta.json"] = organization()
+        entries["catalogs/Item/Item.meta.json"] = catalog("Item", {
+          scope: "org",
+        })
+      }
+      return contracts(entries).registers[0]!.virtualTables
+    }
+    const scoped = build(true)
+    expect(scoped.map((t) => t.columns[0])).toEqual([
+      { name: "org_id", type: "uuid" },
+      { name: "org_id", type: "uuid" },
+    ])
+    expect(scoped.flatMap((t) => t.parameters.map((p) => p.name))).toEqual([
+      "p_at",
+      "p_from",
+      "p_to",
+    ])
+    const plain = build(false)
+    expect(plain.flatMap((t) => t.columns.map((c) => c.name))).not.toContain(
+      "org_id"
+    )
+  })
+
+  it("polymorphic dimension gives both pair columns", () => {
+    const entries = withStock({})
+    entries["catalogs/Service/Service.meta.json"] = catalog("Service")
+    const stock = entries[STOCK_FILE] as { dimensions: unknown[] }
+    stock.dimensions.push(
+      attribute("origin", {
+        physicalName: "origin",
+        type: "Ref",
+        allowedTypes: [
+          { kind: "Catalog", name: "Item" },
+          { kind: "Catalog", name: "Service" },
+        ],
+      })
+    )
+    const sale = entries[SALE_FILE] as {
+      tabularSections: { attributes: unknown[] }[]
+      posting: { movements: { fields: Record<string, string> }[] }
+    }
+    sale.tabularSections[0]!.attributes.push(
+      attribute("origin", {
+        physicalName: "origin",
+        type: "Ref",
+        allowedTypes: [
+          { kind: "Catalog", name: "Item" },
+          { kind: "Catalog", name: "Service" },
+        ],
+      })
+    )
+    sale.posting.movements[0]!.fields.origin = "row.origin"
+    const result = compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const [balance] = result.model!.contracts.registers[0]!.virtualTables
+    expect(balance!.columns.map((c) => c.name)).toEqual([
+      "item_id",
+      "origin_type",
+      "origin_id",
+      "qty",
+    ])
+    // Обидві колонки пари мають елемент виміру своїм origin.
+    const table = result.model!.physical.tables.find((t) => t.name === "stock")!
+    const dimension = (stock.dimensions[1] as { id: string }).id
+    expect(
+      table.columns
+        .filter((c) => c.origin.elementId === dimension)
+        .map((c) => c.name)
+    ).toEqual(["origin_type", "origin_id"])
+  })
+
+  it("wrapper name collides with a table", () => {
+    const entries = withStock({})
+    entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
+      physicalName: "sale_stock_movements",
+    })
+    const found = compile(metaFiles(entries)).diagnostics.filter(
+      (d) => d.code === "physical.function-duplicate"
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({
+      file: SALE_FILE,
+      pointer: "/registerMovements/0",
+    })
+  })
+
+  it("wrapper name collides with another wrapper", () => {
+    // Довгі імена документів скорочуються до однакового початку, тож дві
+    // обгортки в один регістр мають однакове ім'я.
+    const entries = withStock({})
+    const prefix = "D" + "d".repeat(57)
+    const sale = entries[SALE_FILE] as Record<string, unknown>
+    const other = (name: string, n: number) => ({
+      ...sale,
+      id: `00000000-0000-4000-8000-00000000097${n}`,
+      name,
+      physicalName: name.toLowerCase(),
+      tabularSections: [],
+      posting: {
+        movements: [
+          {
+            register: { kind: "AccumulationRegister", name: "Stock" },
+            source: "document",
+            movementType: "Expense",
+            fields: { item: "doc.ref", qty: "1" },
+          },
+        ],
+      },
+    })
+    delete entries[SALE_FILE]
+    Object.assign(entries[STOCK_FILE] as object, {
+      recorderTypes: [
+        { kind: "Document", name: `${prefix}Aa` },
+        { kind: "Document", name: `${prefix}Bb` },
+      ],
+    })
+    entries[`documents/${prefix}Aa/${prefix}Aa.meta.json`] = other(
+      `${prefix}Aa`,
+      1
+    )
+    entries[`documents/${prefix}Bb/${prefix}Bb.meta.json`] = other(
+      `${prefix}Bb`,
+      2
+    )
+    const found = compile(metaFiles(entries)).diagnostics.filter(
+      (d) => d.code === "physical.function-duplicate"
+    )
+    expect(found.some((d) => d.message.includes("movement query"))).toBe(true)
+    expect(found.some((d) => d.message.includes("function of"))).toBe(true)
+  })
+
+  it("contract function collides with contract function", () => {
+    // Мітка `_turnovers` скорочує ім'я регістра до 53 байтів, тож два довгі
+    // регістри з однаковим початком дають однакові функції за різних таблиць.
+    const register = (name: string, n: number) => ({
+      id: `00000000-0000-4000-8000-00000000099${n}`,
+      kind: "AccumulationRegister",
+      name,
+      physicalName: name.toLowerCase(),
+      registerType: "Turnover",
+      resources: [
+        attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),
+      ],
+    })
+    const prefix = "R" + "r".repeat(57)
+    const found = compile(
+      metaFiles({
+        "project.meta.json": project(),
+        [`accumulation-registers/${prefix}Aa/${prefix}Aa.meta.json`]: register(
+          `${prefix}Aa`,
+          1
+        ),
+        [`accumulation-registers/${prefix}Bb/${prefix}Bb.meta.json`]: register(
+          `${prefix}Bb`,
+          2
+        ),
+      })
+    ).diagnostics.filter((d) => d.code === "physical.function-duplicate")
+    expect(found).toHaveLength(1)
+    expect(found[0]!.message).toContain("function of")
   })
 })

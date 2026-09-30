@@ -93,13 +93,13 @@ export interface FoundReference {
   role: ReferenceRole
 }
 
+export type VirtualTableKind =
+  "balance" | "balanceAndTurnovers" | "turnovers" | "sliceLast" | "sliceFirst"
+
 /**
  * Ключі таблиць регістра (спека П2 §7, «Ключі й індекси регістрів»): факт
  * виду, тож стадія 3 будує ключі за ним, а не за назвою виду.
  */
-export type VirtualTableKind =
-  "balance" | "balanceAndTurnovers" | "turnovers" | "sliceLast" | "sliceFirst"
-
 export interface RegisterKeySpec {
   /**
    * PK таблиці рухів: `recorder` — `(recorder_type, recorder_id, line_number)`,
