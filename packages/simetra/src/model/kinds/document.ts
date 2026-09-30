@@ -80,6 +80,7 @@ export const documentKind: KindDefinition = {
     "unpost",
   ],
   materializes: "table",
+  scope: "required",
   declared: false,
   columnFields: ["attributes"],
   valueElements: false,

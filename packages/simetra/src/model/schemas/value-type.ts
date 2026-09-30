@@ -30,6 +30,8 @@ export const valueTypeShape = {
   // Порожня множина дала б пару колонок без CHECK на дискримінатор.
   allowedTypes: z.array(metadataRefSchema).min(1).optional(),
   array: z.boolean().optional(),
+  /** Свідомо міжскоуповий Ref: FK без скоупної частини ключа. */
+  crossScope: z.literal(true).optional(),
 }
 
 export type ValueType = z.infer<z.ZodObject<typeof valueTypeShape>>
@@ -55,6 +57,12 @@ export function refineValueType(value: ValueType, ctx: z.RefinementCtx): void {
   if (value.scale !== undefined && value.precision === undefined) {
     issue("type.scale-requires-precision", "Scale requires precision", [
       "scale",
+    ])
+  }
+
+  if (value.crossScope !== undefined && value.type !== "Ref") {
+    issue("type.cross-scope-not-allowed", "Only Ref type accepts crossScope", [
+      "crossScope",
     ])
   }
 

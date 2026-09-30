@@ -14,6 +14,7 @@ export const pgEnumKind: KindDefinition = {
   writePattern: "none",
   actions: [],
   materializes: "enumType",
+  scope: "absent",
   declared: true,
   columnFields: [],
   valueElements: false,

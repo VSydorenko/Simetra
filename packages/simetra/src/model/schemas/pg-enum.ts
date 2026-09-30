@@ -7,7 +7,8 @@ import { objectHeaderShape } from "./object-header"
  */
 export const pgEnumSchema = z
   .object({
-    ...objectHeaderShape,
+    // Енам-тип живе в схемі, а не в скоупі: поля `scope` у нього немає.
+    ...z.object(objectHeaderShape).omit({ scope: true }).shape,
     kind: z.literal("PgEnum"),
     values: z.array(z.string().min(1)).min(1),
   })

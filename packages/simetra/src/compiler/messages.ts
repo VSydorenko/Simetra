@@ -47,6 +47,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "pgEnum.value-duplicate": {
     message: () => "Enum label is already declared earlier in values",
   },
+  "scope.name-reserved": {
+    message: () => 'Scope kind name "none" is reserved',
+  },
+  "scope.not-allowed": {
+    message: () => 'Enumeration scope can only be "none"',
+  },
+  "type.cross-scope-not-allowed": {
+    message: () => "Only Ref type accepts crossScope",
+  },
 
   // --- Стадія 1: файли ---
   "project.missing": {

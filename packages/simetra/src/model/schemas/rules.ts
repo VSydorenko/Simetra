@@ -16,6 +16,9 @@ export const SCHEMA_RULES = [
   "customTable.column-type",
   "customTable.identity-type",
   "pgEnum.value-duplicate",
+  "scope.name-reserved",
+  "scope.not-allowed",
+  "type.cross-scope-not-allowed",
 ] as const
 
 export type SchemaRule = (typeof SCHEMA_RULES)[number]

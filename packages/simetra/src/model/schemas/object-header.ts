@@ -18,6 +18,11 @@ export const objectHeaderShape = {
   physicalName: physicalNameSchema.optional(),
   /** PG-схема об'єкта; за відсутності діє `defaultSchema` проєкту. */
   schema: z.string().optional(),
+  /**
+   * Вид скоупу об'єкта або `none`. Обов'язковість за наявності видів скоупу
+   * в проєкті — правило стадії, а не схеми: лише вона бачить проєкт.
+   */
+  scope: z.string().optional(),
   title: localizedStringSchema.optional(),
   description: localizedStringSchema.optional(),
 }

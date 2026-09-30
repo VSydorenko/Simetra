@@ -48,6 +48,7 @@ export const customTableColumnSchema = z
       "scale",
       "ref",
       "allowedTypes",
+      "crossScope",
     ] as const
 
     if (column.type === "PgEnum") {
@@ -196,6 +197,8 @@ export const customTableSchema = z.object({
     .default([]),
   foreignKeys: z.array(foreignKeySchema).default([]),
   indexes: z.array(indexSchema).default([]),
+  /** Логічне ім'я власної колонки таблиці, що несе скоуп. */
+  scopeColumn: elementNameSchema.optional(),
 })
 
 export type CustomTable = z.infer<typeof customTableSchema>

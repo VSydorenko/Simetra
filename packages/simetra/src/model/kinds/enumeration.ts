@@ -14,6 +14,7 @@ export const enumerationKind: KindDefinition = {
   writePattern: "none",
   actions: [],
   materializes: "none",
+  scope: "noneOnly",
   declared: false,
   columnFields: [],
   valueElements: true,

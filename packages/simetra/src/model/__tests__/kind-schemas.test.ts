@@ -300,6 +300,7 @@ describe("projectSchema", () => {
       defaultLocale: "uk",
       defaultSchema: "public",
       naming: { attributeCase: "camelCase" },
+      scopeKinds: [],
     })
   })
 

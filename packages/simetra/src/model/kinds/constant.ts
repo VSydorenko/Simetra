@@ -53,6 +53,7 @@ export const constantKind: KindDefinition = {
   writePattern: "server",
   actions: ["read", "update"],
   materializes: "table",
+  scope: "required",
   declared: false,
   columnFields: [],
   valueElements: false,

@@ -83,6 +83,11 @@ export interface KindDefinition {
   actions: readonly string[]
   materializes: "table" | "enumType" | "none"
   /**
+   * Політика скоупу виду: `required` — об'єкт має вказати вид скоупу або
+   * `none`, `noneOnly` — допустиме лише `none`, `absent` — поля немає.
+   */
+  scope: "required" | "noneOnly" | "absent"
+  /**
    * Фізичну форму файл описує як є (спека §4): прийнята таблиця й енам-тип
    * нічого не виводять із виду, тож стадія 3 бере їх з опису.
    */
@@ -98,6 +103,11 @@ export interface KindDefinition {
    * мітки: вони мають власний простір імен, але колонок не дають.
    */
   valueElements: boolean
+  /**
+   * Види, що можуть бути власником об'єкта цього виду (`owners`). Є лише у
+   * видів із підпорядкуванням власнику: як у 1С, власник довідника — довідник.
+   */
+  ownerKinds?: readonly MetadataKind[]
   /** Стандартні колонки основної таблиці для розібраного файлу виду. */
   standardColumns(obj: unknown): StandardColumnDef[]
   /**
@@ -128,6 +138,7 @@ const HEADER_KEY_ORDER = [
   "name",
   "physicalName",
   "schema",
+  "scope",
   "title",
   "description",
 ] as const
@@ -138,8 +149,12 @@ const HEADER_KEY_ORDER = [
  */
 export function keyOrderOf(schema: z.ZodObject): readonly string[] {
   const header: readonly string[] = HEADER_KEY_ORDER
-  const rest = Object.keys(schema.shape).filter((key) => !header.includes(key))
-  return [...header, ...rest]
+  const keys = Object.keys(schema.shape)
+  // У виду може не бути частини шапки (PgEnum без `scope`).
+  return [
+    ...header.filter((key) => keys.includes(key)),
+    ...keys.filter((key) => !header.includes(key)),
+  ]
 }
 
 // --- Будівельні блоки стандартних колонок ---------------------------------

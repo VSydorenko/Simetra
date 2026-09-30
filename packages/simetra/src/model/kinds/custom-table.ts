@@ -49,6 +49,7 @@ export const customTableKind: KindDefinition = {
   writePattern: "optimistic",
   actions: ["read", "create", "update", "delete"],
   materializes: "table",
+  scope: "required",
   declared: true,
   columnFields: ["columns"],
   valueElements: false,
