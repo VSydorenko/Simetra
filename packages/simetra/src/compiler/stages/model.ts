@@ -93,7 +93,7 @@ interface Field {
   unique: boolean
   /** Скоуп-колонка, що передує колонці в UNIQUE: унікальність у межах скоупу. */
   uniqueWithin?: string
-  /** Скоуп-колонка, з якої починається кожен похідний індекс поля. */
+  /** Скоуп-колонка, з якої починається пошуковий індекс поля. */
   indexWithin?: string
   target: Target
   onDelete: FkAction
@@ -774,10 +774,11 @@ class SnapshotBuilder {
 const NONE: Target = { form: "none" }
 
 /**
- * Похідні індекси таблиці зі скоуп-колонкою починаються з неї: під RLS кожен
+ * Пошукові індекси таблиці зі скоуп-колонкою починаються з неї: під RLS кожен
  * запит несе предикат скоупу, тож `indexed` («шукаємо за полем») означає
- * пошук у межах скоупу. Корінь і рядок ТЧ кореня власної колонки не мають —
- * їхні індекси як у нескоупленого об'єкта.
+ * пошук у межах скоупу. Індекс FK — ні: він служить перевірці з боку цілі.
+ * Корінь і рядок ТЧ кореня власної колонки не мають — їхні індекси як у
+ * нескоупленого об'єкта.
  */
 function indexWithin(scope: TableScope | undefined): { indexWithin?: string } {
   return scope?.own === true ? { indexWithin: scope.carrier! } : {}
@@ -957,11 +958,11 @@ function addField(table: PendingTable, field: Field): string[] {
       onUpdate: "noAction",
       deferrable: "no",
     })
-    // FK сам індексу не має, а перевірка при видаленні цілі шукає рядки за
-    // всіма його колонками — тож індекс на повний набір у порядку FK.
-    table.derivedIndexes.push(withinScope(columns, field.indexWithin))
-  }
-  if (field.indexed) {
+    // FK сам індексу не має, а перевірка при DELETE/UPDATE ключа цілі шукає
+    // рядки рівно за колонками FK — тож індекс саме на них, у порядку FK.
+    table.derivedIndexes.push(columns)
+  } else if (field.indexed) {
+    // Пошуковий індекс; `indexed` посилання вже задоволено індексом його FK.
     table.derivedIndexes.push(withinScope(names, field.indexWithin))
   }
   return names

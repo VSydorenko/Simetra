@@ -688,7 +688,7 @@ describe("stage 3: scope indexes", () => {
         attributes: [
           attribute("counterparty", {
             physicalName: "counterparty_id",
-            // Явний `indexed` дає той самий (org_id, counterparty_id) — не дублюється.
+            // Явний `indexed` посилання задоволено індексом FK — другого немає.
             indexed: true,
             ...ref("Catalog", "Counterparty"),
           }),
@@ -703,7 +703,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("plain reference from a scoped table leads with the scope column", () => {
+  it("plain reference from a scoped table is indexed on the FK only", () => {
+    // Індекс FK служить перевірці при видаленні валюти — за currency_id.
     const physical = compileScoped({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         scope: "none",
@@ -712,16 +713,31 @@ describe("stage 3: scope indexes", () => {
         attributes: [
           attribute("currency", {
             physicalName: "currency_id",
+            indexed: true,
             ...ref("Catalog", "Currency"),
           }),
         ],
       }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      {
-        name: "counterparty_org_id_currency_id_idx",
-        keys: ["org_id", "currency_id"],
-      },
+      { name: "counterparty_currency_id_idx", keys: ["currency_id"] },
+    ])
+  })
+
+  it("crossScope reference is indexed on the FK only", () => {
+    const physical = compileScoped({
+      "catalogs/Draft/Draft.meta.json": catalog("Draft", { scope: "user" }),
+      [CP]: counterparty({
+        attributes: [
+          attribute("draft", {
+            physicalName: "draft_id",
+            ...ref("Catalog", "Draft", { crossScope: true }),
+          }),
+        ],
+      }),
+    })
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      { name: "counterparty_draft_id_idx", keys: ["draft_id"] },
     ])
   })
 
