@@ -19,6 +19,13 @@ export const COMPILER_RULES = [
   "identity.name-case",
   "identity.name-reserved",
   "reference.unresolved",
+  "reference.not-referenceable",
+  "reference.custom-table-key",
+  "physical.table-duplicate",
+  "physical.column-duplicate",
+  "physical.discriminator-duplicate",
+  "physical.reserved-word",
+  "physical.name-too-long",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]
@@ -51,7 +58,16 @@ export interface Diagnostic {
   range?: { start: Position; end: Position }
 }
 
-/** Діагностика з каталогу повідомлень; усі правила стадій 1–2 — помилки. */
+/**
+ * Правила-попередження: прогін лишається успішним. Зарезервоване слово в
+ * `physicalName` не ламає SQL, бо рендер квотує імена, а прийняте ім'я
+ * лишається як є (спека П2 §3).
+ */
+const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
+  "physical.reserved-word",
+])
+
+/** Діагностика з каталогу повідомлень; серйозність — властивість правила. */
 export function diagnostic(
   code: RuleCode,
   file: string,
@@ -61,7 +77,7 @@ export function diagnostic(
   const entry = MESSAGES[code]
   return {
     code,
-    severity: "error",
+    severity: WARNING_RULES.has(code) ? "warning" : "error",
     file,
     pointer,
     message: entry.message(params),

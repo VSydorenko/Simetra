@@ -51,18 +51,20 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | --- | --- | --- |
 | Zod is the source of truth | a hand-written type duplicating a schema shape instead of `z.infer`; a schema or enum re-declared outside T0 instead of imported from `simetra/model`; `z.any()` in a schema | `packages/simetra/src/model/schemas/` |
 | standard attributes derive from the kind | standard columns listed by hand in a generator or UI instead of reading the kind registry (`standardColumns`); standard attributes persisted as user attributes; anything but description overrides stored for them | `packages/simetra/src/model/kinds/` |
-| one Ref model | a new per-kind reference type; a `Ref` attribute with both `ref` and `allowedTypes`, or neither; `ref`/`allowedTypes` on a non-`Ref` type; a reference target outside the referenceable kinds; `parent_id` modelled as a Ref | `packages/simetra/src/model/schemas/attribute.ts`, `packages/simetra/src/model/schemas/metadata-ref.ts` |
+| one Ref model | a new per-kind reference type; a `Ref` attribute with both `ref` and `allowedTypes`, or neither; `ref`/`allowedTypes` on a non-`Ref` type; `parent_id` modelled as a Ref; a schema-level list of "referenceable kinds" — whether a kind can be referenced is the registry's `referenceable` fact, checked by compiler stage 4 (`reference.not-referenceable`, `reference.custom-table-key`) | `packages/simetra/src/model/schemas/value-type.ts`, `packages/simetra/src/model/schemas/metadata-ref.ts`, `packages/simetra/src/compiler/stages/integrity.ts` |
 | register field roles | dimensions, resources and attributes merged or bypassed; an accumulation-register resource that is not `Integer` or `Numeric` | `packages/simetra/src/model/schemas/accumulation-register.ts` |
-| names and reserved words | a new name-bearing field with its own regex instead of `TECHNICAL_NAME_PATTERNS`, or without the `isSqlReservedWord` refinement; missing uniqueness within the parent array | `packages/simetra/src/model/schemas/identity.ts`, `packages/simetra/src/model/schemas/sql-reserved-words.ts` |
-| deterministic files | serializer output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | — |
+| names and reserved words | a new name-bearing field with its own regex instead of the name schemas (`objectNameSchema`, `elementNameSchema`, `physicalNameSchema`); name uniqueness or naming style enforced in a Zod schema — those are compiler diagnostics (stage 2 for logical names, stage 4 for physical names); a reserved word in `physicalName` treated as an error — it is the stage-4 warning `physical.reserved-word`; SQL restrictions applied to logical names | `packages/simetra/src/model/schemas/identity.ts`, `packages/simetra/src/compiler/stages/identity.ts`, `packages/simetra/src/compiler/stages/integrity.ts` |
+| deterministic files | a metadata file written without the canonical formatter, or key order taken from anything but the registry's `keyOrder`; output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | `packages/simetra/src/model/format.ts` |
+| canonical fixtures | a formatter change without a case in its tests; a fixture or expected file that the formatter would rewrite | `packages/simetra/src/model/__tests__/format.test.ts` |
 | posting and condition DSL | an expression reaching SQL without passing the mapping or condition schema; the grammar widened in the generator but not in the schema and its tests | `packages/simetra/src/model/schemas/posting.ts` |
 
-### Physical naming and SQL (*prototype*)
+### Physical naming and SQL
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
-| physical names come from helpers | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `legacy/generator-pg/src/column-naming.ts` |
-| escaping | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `legacy/generator-pg/src/naming.ts` |
+| physical snapshot is the model's (*target*) | a table, column, key, constraint or index shape derived outside compiler stage 3; a derived constraint or index name built by hand instead of the Postgres algorithm (`chooseConstraintName`, `makeObjectName`); a type string not in `format_type()` form | `packages/simetra/src/compiler/stages/model.ts`, `packages/simetra/src/model/physical/` |
+| physical names come from helpers (*prototype*) | table names built by string concatenation instead of `physicalObjectName` / `physicalTabularName` (and the generator's prefixing wrappers); column names for `Ref` attributes built by hand instead of the column-naming helpers | `legacy/generator-pg/src/column-naming.ts` |
+| escaping (*prototype*) | a metadata value interpolated into SQL without `quoteIdentifier` or `escapeLiteral` | `legacy/generator-pg/src/naming.ts` |
 
 ### Schema engine and data runtime (*target*)
 

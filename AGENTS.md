@@ -93,7 +93,7 @@ Consequences:
 
 ## Metamodel rules (T0 `packages/simetra/src/model`)
 
-These hold today and carry over into T0:
+These hold for T0 and for every tier that reads metadata:
 
 - **Zod schemas in T0 `simetra/model` are the single source of truth** for
   metadata types. TypeScript types are `z.infer` of them; other packages
@@ -101,10 +101,13 @@ These hold today and carry over into T0:
 - **T0 `simetra/model` has no runtime dependency except `zod`.** No React, no UI, no Node
   APIs in library source (tests may use Node).
 - Every kind schema carries a `kind` literal; no `z.any()` in schemas.
-- **Standard attributes are derived from the kind** and its settings
-  (the kind registry, `packages/simetra/src/model/kinds/`). They are never stored
-  as custom attributes in metadata files, and derivation rules change only
-  together with the spec.
+- **Standard attributes are derived from the kind** and its settings; the
+  kind registry (`packages/simetra/src/model/kinds/`) is their single source
+  of truth. They are never stored as custom attributes in metadata files, and
+  derivation rules change only together with the spec.
+- **Every branch on the kind reads the kind registry.** Code that behaves
+  differently per kind takes the fact from the kind's registry entry instead
+  of switching on the kind name; a new kind is a new registry entry plus tests.
 - **One reference type, `Ref`.** A single target is `ref`, a polymorphic one is
   `allowedTypes`; the two are mutually exclusive. Every cross-object reference
   uses the same `MetadataRef` shape — no per-kind reference types.
@@ -113,12 +116,13 @@ These hold today and carry over into T0:
 - Metadata files are diff/merge-friendly JSON: no volatile data (timestamps,
   checksums) inside them.
 - New or changed schemas come with tests.
-
-⚠️ **Identity and naming will change** (platform spec decisions Р4, Р5):
-every object and attribute gets a stable UUID, and the logical name is
-separated from a `physicalName` assigned once at creation. Today's rule "the name is the
-identity and the column name" is prototype behaviour — do not build new
-mechanisms on it.
+- **Identity is a UUID, not a name** (platform spec decisions Р4, Р5). Every
+  named element — object, attribute, tabular section, enumeration value,
+  `CustomTable` column — carries a UUID `id` that is never reused. References
+  in files use the logical name, `{ kind, name }`; the compiler resolves them
+  to ids. `physicalName` is assigned once at creation and never changes, so a
+  rename emits no DDL. The style of logical attribute names is the project's
+  `naming.attributeCase`. Never build a mechanism on the name as identity.
 
 ## Behavioural principles
 

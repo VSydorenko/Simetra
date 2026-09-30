@@ -7,6 +7,8 @@ import {
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { readFiles } from "./stages/files"
 import { checkIdentity, type ResolvedReference } from "./stages/identity"
+import { checkIntegrity } from "./stages/integrity"
+import { buildModel } from "./stages/model"
 
 export interface SourceObject {
   id: string
@@ -47,12 +49,20 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
     stage1.brokenNames,
     stage1.project
   )
+  const early = [...stage1.diagnostics, ...stage2.diagnostics]
+  // Стадії 3–4 спираються на резолвлені посилання й наявні id та
+  // physicalName, тож на зламаній моделі не запускаються.
+  if (hasErrors(early) || stage1.project === undefined) {
+    return { ok: false, diagnostics: sortDiagnostics(early) }
+  }
+
+  const stage3 = buildModel(stage1.objects, stage1.project)
   const diagnostics = sortDiagnostics([
-    ...stage1.diagnostics,
-    ...stage2.diagnostics,
+    ...early,
+    ...checkIntegrity(stage1.objects, stage2.references, stage3),
   ])
-  const ok = !diagnostics.some((d) => d.severity === "error")
-  if (!ok || stage1.project === undefined) return { ok, diagnostics }
+  const ok = !hasErrors(diagnostics)
+  if (!ok) return { ok, diagnostics }
 
   // Без помилок стадії 2 id є в кожного об'єкта.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -92,8 +102,11 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
           ownerObjectId: ownerId(ownerFile),
         }))
         .sort((a, b) => compareStrings(a.file, b.file)),
-      // Фізичний знімок будує стадія 3.
-      physical: { tables: [], enumTypes: [] },
+      physical: stage3.physical,
     },
   }
+}
+
+function hasErrors(diagnostics: readonly Diagnostic[]): boolean {
+  return diagnostics.some((d) => d.severity === "error")
 }

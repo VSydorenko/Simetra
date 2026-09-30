@@ -97,4 +97,36 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "reference.unresolved": {
     message: (p) => `${p.kind} "${p.name}" does not exist`,
   },
+
+  // --- Стадія 4: цілісність ---
+  "reference.not-referenceable": {
+    message: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
+    hint: "Ref targets are catalogs, documents, enumerations and custom tables; a PgEnum is referenced only by a CustomTable column, and a foreign key needs a target with a table.",
+  },
+  "reference.custom-table-key": {
+    message: (p) =>
+      `${p.kind} "${p.name}" has no single-column uuid primary key to reference`,
+    hint: "A Ref to a CustomTable is a foreign key to its single uuid primary key column.",
+  },
+  "physical.table-duplicate": {
+    message: (p) =>
+      `Physical name ${p.name} is already used by a table or enum type in ${p.firstFile}`,
+  },
+  "physical.column-duplicate": {
+    message: (p) => `Column ${p.name} is already declared in table ${p.table}`,
+    hint: "Standard columns of the kind and polymorphic <name>_type/<name>_id pairs take column names too.",
+  },
+  "physical.discriminator-duplicate": {
+    message: (p) =>
+      `Another target of this polymorphic reference has physical name ${p.name}`,
+    hint: "The type column stores the target's physicalName, so targets must differ by it regardless of schema.",
+  },
+  "physical.reserved-word": {
+    message: (p) => `Physical name ${p.name} is an SQL reserved word`,
+    hint: "It works when quoted, but new elements should not take reserved words.",
+  },
+  "physical.name-too-long": {
+    message: (p) =>
+      `Physical name ${p.name} is longer than 63 bytes and would be truncated by Postgres`,
+  },
 }

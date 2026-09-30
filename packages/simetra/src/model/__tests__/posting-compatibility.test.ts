@@ -62,4 +62,16 @@ describe("isPostingCompatible", () => {
     expect(result.reason ?? "").toContain("has no recorder")
     expect(result.reason ?? "").toContain("cannot be used as a posting target")
   })
+
+  it("InformationRegister RecorderSubordinate rejects a recorder outside recorderTypes", () => {
+    const register: InformationRegister = {
+      ...makeInformationRegister("RecorderSubordinate"),
+      recorderTypes: [{ kind: "Document", name: "Invoice" }],
+    }
+    const result = isPostingCompatible(register, {
+      recorder: { kind: "Document", name: "Receipt" },
+    })
+    expect(result.compatible).toBe(false)
+    expect(result.reason ?? "").toContain("Document/Invoice")
+  })
 })

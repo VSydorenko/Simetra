@@ -202,8 +202,8 @@ git commit -m "feat(simetra): лінт-межі чистоти T0 (лише zod)
     `type.precision-not-allowed`, `type.scale-requires-precision`,
     `type.ref-target-required`, `type.ref-exclusive`, `type.ref-not-allowed`;
     задачі 3–4 дописують свої.
-  - `valueTypeShape.ref` / `allowedTypes` мають форму `{ kind: string, name: string }`
-    (`MetadataRef` із задачі 3 переходить на неї без зміни форми).
+  - `valueTypeShape.ref` / `allowedTypes` використовують `metadataRefSchema`
+    `{ kind: MetadataKind, name: objectName }`.
 - Consumes: —
 
 - [ ] **Step 1: Тести типів і імен**
@@ -233,7 +233,7 @@ Expected: FAIL (модулів немає).
 - [ ] **Step 3: Реалізація**
 
 Створи `identity.ts`, `value-type.ts`, `rules.ts` за Interfaces. `toSnakeCase`
-тут — копія, оригінал у `physical-naming.ts` видаляє задача 6.
+тут — копія, оригінал у `physical-naming.ts` видаляє задача 3.
 
 - [ ] **Step 4: Зелені**
 

@@ -61,7 +61,11 @@ describe("stage 1: files", () => {
     expect(model.sqlFiles).toEqual([
       { file: "custom-tables/AuditLog/AuditLog.sql", ownerObjectId: table.id },
     ])
-    expect(model.physical).toEqual({ tables: [], enumTypes: [] })
+    expect(model.physical.tables.map((t) => `${t.schema}.${t.name}`)).toEqual([
+      "public.audit_log",
+      "public.contract",
+      "public.sales_order",
+    ])
   })
 
   it("kind mismatch", () => {
