@@ -164,35 +164,94 @@ describe("posting and register contracts", () => {
     ).toHaveLength(1)
   })
 
+  // Імена колізій стадії 4 і імена контракту мусять бути одними й тими
+  // самими: розбіжність пропустила б колізію, яку П3 зустріне на CREATE.
+  it("every contract function is checked for collisions, unpost included", () => {
+    const built = contracts(withStock({}))
+    const [posting] = built.posting
+    const [register] = built.registers
+    const names = [
+      posting!.post.name,
+      posting!.unpost.name,
+      ...register!.virtualTables.map((t) => t.function.name),
+      register!.totalsMaintenance!.recalculate.name,
+      register!.totalsMaintenance!.verify.name,
+    ]
+    expect(names).toContain("sale_unpost")
+    for (const name of names) {
+      const entries = withStock({})
+      entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
+        physicalName: name,
+      })
+      const found = compile(metaFiles(entries)).diagnostics.filter(
+        (d) => d.code === "physical.function-duplicate"
+      )
+      expect(found.map((d) => d.params?.name)).toEqual([name])
+    }
+  })
+
   it("scope carrier is the first column of every virtual table", () => {
+    // Регістр залишків дає balance і balanceAndTurnovers, оборотний —
+    // turnovers, періодичний регістр відомостей — зрізи.
     const build = (scoped: boolean) => {
       const entries = withStock({ dimensions: [] })
       const sale = entries[SALE_FILE] as {
         posting: { movements: { fields: Record<string, string> }[] }
       }
       sale.posting.movements[0]!.fields = { qty: "row.qty" }
+      const scope = scoped ? { scope: "org" } : {}
+      entries["accumulation-registers/Sales/Sales.meta.json"] = {
+        id: "00000000-0000-4000-8000-000000000981",
+        kind: "AccumulationRegister",
+        name: "Sales",
+        physicalName: "sales",
+        registerType: "Turnover",
+        resources: [
+          attribute("amount", { type: "Numeric", precision: 15, scale: 2 }),
+        ],
+        ...scope,
+      }
+      entries["information-registers/Rates/Rates.meta.json"] = {
+        id: "00000000-0000-4000-8000-000000000982",
+        kind: "InformationRegister",
+        name: "Rates",
+        physicalName: "rates",
+        periodicity: "Day",
+        writeMode: "RecorderSubordinate",
+        resources: [
+          attribute("rate", { type: "Numeric", precision: 15, scale: 4 }),
+        ],
+        ...scope,
+      }
       if (scoped) {
-        Object.assign(entries[SALE_FILE] as object, { scope: "org" })
-        Object.assign(entries[STOCK_FILE] as object, { scope: "org" })
+        Object.assign(entries[SALE_FILE] as object, scope)
+        Object.assign(entries[STOCK_FILE] as object, scope)
         entries["project.meta.json"] = scopedProject()
         entries["catalogs/Organization/Organization.meta.json"] = organization()
-        entries["catalogs/Item/Item.meta.json"] = catalog("Item", {
-          scope: "org",
-        })
+        entries["catalogs/Item/Item.meta.json"] = catalog("Item", scope)
       }
-      return contracts(entries).registers[0]!.virtualTables
+      return contracts(entries).registers.flatMap((r) => r.virtualTables)
     }
+    const carrier = { name: "org_id", type: "uuid" }
     const scoped = build(true)
-    expect(scoped.map((t) => t.columns[0])).toEqual([
-      { name: "org_id", type: "uuid" },
-      { name: "org_id", type: "uuid" },
-    ])
-    expect(scoped.flatMap((t) => t.parameters.map((p) => p.name))).toEqual([
-      "p_at",
-      "p_from",
-      "p_to",
-    ])
+    expect(
+      Object.fromEntries(scoped.map((t) => [t.kind, t.columns[0]]))
+    ).toEqual({
+      balance: carrier,
+      balanceAndTurnovers: carrier,
+      turnovers: carrier,
+      sliceLast: carrier,
+      sliceFirst: carrier,
+    })
+    // Носій — колонка, а не параметр: RLS ріже рядки сам.
+    for (const table of scoped) {
+      expect(table.parameters.map((p) => p.name)).not.toContain("org_id")
+      expect(table.columns.filter((c) => c.name === "org_id").length).toBe(1)
+    }
     const plain = build(false)
+    expect(plain.map((t) => t.kind).sort()).toEqual(
+      scoped.map((t) => t.kind).sort()
+    )
     expect(plain.flatMap((t) => t.columns.map((c) => c.name))).not.toContain(
       "org_id"
     )

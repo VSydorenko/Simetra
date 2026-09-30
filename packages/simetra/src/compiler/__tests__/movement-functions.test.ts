@@ -240,7 +240,7 @@ describe("movement query functions", () => {
       AS $simetra$
       SELECT m.period, m.item_id, m.price
       FROM (
-        SELECT date_trunc('month', d.date, 'Europe/Kyiv') AS period, r.item_id AS item_id, r.amount / r.qty AS price, 1 AS __movement, r.line_number AS __line
+        SELECT date_trunc('month', d.date, 'Europe/Kyiv') AS period, r.item_id AS item_id, (r.amount)::numeric / r.qty AS price, 1 AS __movement, r.line_number AS __line
         FROM public.goods r
         JOIN public.sale d ON d.id = r.parent_id
         WHERE d.id = sale_prices_movements.p_document_id
@@ -397,6 +397,17 @@ describe("movement query functions", () => {
     )
   })
 
+  it("snake_case project leaves shell columns out of the result", () => {
+    // Колонки оболонки впізнаються за іменем у стилі проєкту: канонічне
+    // camelCase-ім'я не збіглося б, і реєстратор потрапив би в результат.
+    const [unit] = units(
+      sales({}, {}, { naming: { attributeCase: "snake_case" } })
+    )
+    expect(unit!.sql).toContain(
+      "RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3), note character varying(100))"
+    )
+  })
+
   describe("polymorphic register field", () => {
     /** `Stock` з поліморфним реквізитом `source` і рядок ТЧ з поліморфним `origin`. */
     const polymorphic = (
@@ -467,6 +478,47 @@ describe("movement query functions", () => {
       ])
     })
 
+    it("standard references carry the document as their discriminator", () => {
+      const withSale = { allowedTypes: [{ kind: "Document", name: "Sale" }] }
+      const headerEntries = polymorphic(
+        {
+          source: "document",
+          fields: { item: "doc.item", qty: "1", source: "doc.ref" },
+        },
+        withSale
+      )
+      ;(headerEntries[SALE_FILE] as { attributes?: unknown[] }).attributes = [
+        attribute("item", {
+          physicalName: "item_id",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Item" },
+        }),
+      ]
+      const [header] = units(headerEntries)
+      expect(header!.sql).toContain("'sale' AS source_type, d.id AS source_id")
+      const [row] = units(polymorphic(fields("row.parent"), withSale))
+      expect(row!.sql).toContain(
+        "'sale' AS source_type, r.parent_id AS source_id"
+      )
+    })
+
+    it("a one-target pair into a single-target field gives its id", () => {
+      const entries = sales({ fields: { item: "row.origin", qty: "row.qty" } })
+      const goods = (
+        entries[SALE_FILE] as { tabularSections: { attributes: unknown[] }[] }
+      ).tabularSections[0]!
+      goods.attributes.push(
+        attribute("origin", {
+          physicalName: "origin",
+          type: "Ref",
+          allowedTypes: [{ kind: "Catalog", name: "Item" }],
+        })
+      )
+      const [unit] = units(entries)
+      expect(unit!.sql).toContain("r.origin_id AS item_id")
+      expect(unit!.sql).not.toContain("origin_type AS")
+    })
+
     it("comparison with null checks the id of the pair", () => {
       const [unit] = units(
         polymorphic({ condition: "row.origin = null or row.origin != null" })
@@ -474,6 +526,53 @@ describe("movement query functions", () => {
       expect(unit!.sql).toContain(
         "AND ((r.origin_id IS NOT DISTINCT FROM NULL) OR (r.origin_id IS DISTINCT FROM NULL))"
       )
+    })
+  })
+
+  it("division is numeric even over integers", () => {
+    const entries = sales({
+      fields: { item: "row.item", qty: "row.pieces / 2 + row.pieces / 4" },
+    })
+    const goods = (
+      entries[SALE_FILE] as { tabularSections: { attributes: unknown[] }[] }
+    ).tabularSections[0]!
+    goods.attributes.push(attribute("pieces", { type: "Integer" }))
+    const [unit] = units(entries)
+    // Цілочисельне ділення Postgres загубило б дріб, який стадія 4 уже
+    // дозволила покласти в ресурс Numeric.
+    expect(unit!.sql).toContain(
+      "((r.pieces)::numeric / 2) + ((r.pieces)::numeric / 4) AS qty"
+    )
+  })
+
+  describe("wrapper dollar-quote tag", () => {
+    it("a constructor literal with the tag switches to a free one", () => {
+      const [unit, ...rest] = units(
+        sales({
+          fields: {
+            item: "row.item",
+            qty: "row.qty",
+            note: "'$simetra$; DROP TABLE x'",
+          },
+        })
+      )
+      expect(rest).toEqual([])
+      expect(unit!.sql).toContain("AS $simetra_1$\n")
+      expect(unit!.sql.endsWith("\n$simetra_1$;")).toBe(true)
+      expect(unit!.sql).toContain("'$simetra$; DROP TABLE x' AS note")
+      // Тег з'являється лише як відкривач і закривач обгортки.
+      expect(unit!.sql.split("$simetra_1$")).toHaveLength(3)
+    })
+
+    it("a block with the tag compiles with the next free tag", () => {
+      const entries = salesDocument({}, { posting: undefined })
+      const block = "SELECT $simetra$x$simetra$, $simetra_1$y$simetra_1$"
+      const [unit] = units({
+        "project.meta.json": project(),
+        ...entries,
+        [SALE_SQL]: `-- @movements Stock\n${block}\n-- @end\n`,
+      })
+      expect(unit!.sql).toContain(`AS $simetra_2$\n${block}\n$simetra_2$;`)
     })
   })
 

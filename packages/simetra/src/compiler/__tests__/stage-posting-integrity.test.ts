@@ -611,6 +611,49 @@ describe("stage 4: movement constructor, fix round 1", () => {
     ])
   })
 
+  // Поле того самого типу не рятує: sum() додає числа, а над булевим чи
+  // текстом SQL або впаде, або порахує не те.
+  it("sum needs a numeric field", () => {
+    const mismatch = (field: string, text: string) => {
+      const result = build(
+        {
+          source: "document",
+          fields: { item: "doc.item", qty: "1", [field]: text },
+        },
+        ({ sale, stock }) => {
+          sale.attributes.push(attribute("item", ref("Item")))
+          sale.tabularSections[0]!.attributes.push(
+            attribute("flag", { type: "Boolean" }),
+            attribute("title", { type: "String", length: 50 })
+          )
+          stock.attributes.push(
+            attribute("flag", { type: "Boolean" }),
+            attribute("title", { type: "String", length: 50 })
+          )
+        }
+      )
+      expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+        ["posting.type-mismatch", `/posting/movements/0/fields/${field}`],
+      ])
+      return result.diagnostics[0]!.params
+    }
+    expect(mismatch("flag", "sum(goods.flag)")).toMatchObject({
+      expected: "numeric",
+      actual: "boolean",
+      offset: 0,
+    })
+    expect(mismatch("flag", "not sum(goods.flag)")).toMatchObject({
+      expected: "numeric",
+      actual: "boolean",
+      offset: 4,
+    })
+    expect(mismatch("title", "sum(goods.title)")).toMatchObject({
+      expected: "numeric",
+      actual: "text",
+      offset: 0,
+    })
+  })
+
   it("row DateTime and Date attributes are dates", () => {
     const adjust = ({ sale }: Fixture) => {
       sale.tabularSections[0]!.attributes.push(
@@ -641,6 +684,47 @@ describe("stage 4: movement constructor, fix round 1", () => {
       codes(build({ fields: { item: "row.parent", qty: "row.qty" } }, adjust))
     ).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/item"],
+    ])
+  })
+
+  // Незалежний регістр пишуть за ключем запису, без реєстратора: рухи
+  // документа йому нема куди покласти, а переписати їх за реєстратором нема за чим.
+  it("an independent register takes no document movements", () => {
+    const independent = { writeMode: "Independent", recorderTypes: [] }
+    const result = intoPrices(
+      { fields: { item: "row.item", price: "row.amount" } },
+      independent
+    )
+    expect(codes(result)).toEqual([
+      [
+        "posting.register-independent",
+        SALE_FILE,
+        "/posting/movements/0/register",
+      ],
+      ["posting.register-independent", SALE_FILE, "/registerMovements/0"],
+    ])
+    expect(result.diagnostics[0]!.hint).toContain(
+      "writeMode: RecorderSubordinate"
+    )
+  })
+
+  it("an independent register in registerMovements alone is one error", () => {
+    const declaredOnly = build({}, ({ files, sale }) => {
+      sale.registerMovements.push({
+        kind: "InformationRegister",
+        name: "Prices",
+      })
+      files[pricesFile] = {
+        id: "00000000-0000-4000-8000-000000000904",
+        kind: "InformationRegister",
+        name: "Prices",
+        physicalName: "prices",
+        dimensions: [attribute("item", ref("Item"))],
+      }
+    })
+    // Ні recorder-not-allowed, ні source-missing: причина одна.
+    expect(codes(declaredOnly)).toEqual([
+      ["posting.register-independent", SALE_FILE, "/registerMovements/1"],
     ])
   })
 })

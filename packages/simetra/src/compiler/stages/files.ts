@@ -23,12 +23,6 @@ const META_SUFFIX = ".meta.json"
 const MODULE_SUFFIX = ".module.ts"
 const SQL_SUFFIX = ".sql"
 
-/**
- * Роздільник долар-лапок обгортки запиту рухів (задача обгортки): блок, що
- * його містить, закрив би літерал обгортки раніше й став би ін'єкцією.
- */
-const WRAPPER_DELIMITER = "$simetra$"
-
 /** Блок запиту рухів з `.sql` документа; `file` — сам `.sql`. */
 export interface ParsedMovementBlock {
   file: string
@@ -204,8 +198,6 @@ function readMovementBlocks(
     if (block.sql.trim() === "") {
       // Порожній блок дав би обгортку без запиту, що мовчки не пише рухів.
       report("the block has no query", block.line)
-    } else if (block.sql.includes(WRAPPER_DELIMITER)) {
-      report(`a block must not contain ${WRAPPER_DELIMITER}`, block.line)
     } else {
       kept.push({ file, ...block })
     }

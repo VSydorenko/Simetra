@@ -44,6 +44,7 @@ export const COMPILER_RULES = [
   "catalog.owner-kind",
   "register.recorder-kind",
   "posting.register-kind",
+  "posting.register-independent",
   "posting.register-undeclared",
   "posting.source-missing",
   "posting.source-ambiguous",

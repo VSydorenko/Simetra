@@ -114,14 +114,6 @@ describe("stage 5: movement sources", () => {
     ])
   })
 
-  it("block containing the wrapper delimiter", () => {
-    const result = build({
-      withConstructor: false,
-      sql: "-- @movements Stock\nSELECT $simetra$\n-- @end",
-    })
-    expect(codes(result)).toEqual([["file.movements-block", SALE_SQL, ""]])
-  })
-
   it("malformed markers report the line", () => {
     const result = build({ sql: "SELECT 1\n-- @end" })
     expect(result.diagnostics[0]).toEqual(
@@ -209,6 +201,16 @@ describe("movement block marker forms", () => {
     expect(codes(marked("Catalog.Item"))).toEqual([
       ["posting.register-kind", SALE_SQL, ""],
     ])
+  })
+
+  it("marker of an independent register", () => {
+    const result = marked("InformationRegister.Stock", informationStock)
+    expect(codes(result)).toEqual([
+      ["posting.register-independent", SALE_SQL, ""],
+    ])
+    expect(result.diagnostics[0]!.params).toEqual(
+      expect.objectContaining({ name: "Stock", line: 1 })
+    )
   })
 
   it("unknown qualified name", () => {

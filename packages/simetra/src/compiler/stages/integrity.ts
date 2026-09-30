@@ -35,7 +35,7 @@ import {
 import { derivedFunctions, type DerivedFunction } from "../contracts"
 import { movementWrapperName } from "../movement-functions"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
-import type { ResolvedReference } from "./identity"
+import { registerTargetError, type ResolvedReference } from "./identity"
 import {
   isDeclaredTable,
   isUuidColumn,
@@ -223,7 +223,7 @@ function referenceTargetError(
   const { role } = reference
   // Регістр і вид, що проводиться, — факти реєстру, а не перелік імен видів.
   if (REGISTER_TARGET_ROLES.has(role)) {
-    return def.registerKeys === undefined ? "posting.register-kind" : undefined
+    return registerTargetError(target)
   }
   if (role === "register.recorder") {
     return postsMovements(target.kind) ? undefined : "register.recorder-kind"
@@ -723,8 +723,13 @@ function checkPosting(
     // його переліку — хоч би звідки йшли рухи (конструктор чи блок запиту).
     ;(data.registerMovements ?? []).forEach((ref, index) => {
       const register = byKey.get(objectKey(ref.kind, ref.name))
-      if (register === undefined) return
-      if (KIND_REGISTRY[register.kind].registerKeys === undefined) return
+      // Не регістр чи незалежний регістр уже звітовано за ціллю посилання.
+      if (
+        register === undefined ||
+        registerTargetError(register) !== undefined
+      ) {
+        return
+      }
       const { recorderTypes } = register.data as {
         recorderTypes?: MetadataRef[]
       }
@@ -800,7 +805,13 @@ function checkPosting(
       const register = byKey.get(
         objectKey(movement.register.kind, movement.register.name)
       )
-      if (register === undefined) return
+      // Непридатну ціль уже звітовано; перевірки полів над нею — лише шум.
+      if (
+        register === undefined ||
+        registerTargetError(register) !== undefined
+      ) {
+        return
+      }
       const registerDef = KIND_REGISTRY[register.kind]
       const keys = registerDef.registerKeys?.(register.data)
       if (keys === undefined) return

@@ -116,8 +116,15 @@ function inferNode(
     case "count":
       return { kind: "numeric", integer: true }
     case "field":
-    case "sum":
       return ctx.typeOf(expr)
+    case "sum": {
+      // sum() додає числа: над булевим чи текстом SQL упаде або порахує не
+      // те, хоч би поле, куди ляже результат, мало той самий тип.
+      const type = ctx.typeOf(expr)
+      if (type.kind === "unknown" || type.kind === "numeric") return type
+      errors.push({ node: expr, expected: "numeric", actual: type })
+      return UNKNOWN
+    }
     case "unary": {
       if (expr.op === "not") {
         operand(expr.operand, "boolean")

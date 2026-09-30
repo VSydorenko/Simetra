@@ -248,6 +248,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: (p) => `${p.kind} "${p.name}" is not a register`,
     hint: "registerMovements and movements of a document target only accumulation and information registers.",
   },
+  "posting.register-independent": {
+    message: (p) =>
+      `Register "${p.name}" is independent and takes no movements from documents`,
+    hint: "Set writeMode: RecorderSubordinate on the register: posting rewrites movements by their recorder, and an independent register has none.",
+  },
   "posting.register-undeclared": {
     message: (p) =>
       `Register "${p.name}" is not listed in the document's registerMovements`,
@@ -266,7 +271,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "posting.recorder-not-allowed": {
     message: (p) =>
       `Register "${p.name}" does not list document "${p.document}" in its recorderTypes`,
-    hint: "Add the document to the register's recorderTypes; an Independent information register takes no movements from documents.",
+    hint: "Add the document to the register's recorderTypes.",
   },
   "posting.fields-incomplete": {
     message: (p) => `Movement does not set register fields: ${p.missing}`,

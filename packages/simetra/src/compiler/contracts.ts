@@ -130,6 +130,36 @@ function derived(table: PhysicalTable, label: string): QualifiedName {
   }
 }
 
+/**
+ * Функції оболонки проведення документа. Одне джерело імен для контракту й
+ * перевірки колізій стадії 4: розбіжність пропустила б колізію до `CREATE` П3.
+ */
+function postingFunctions(table: PhysicalTable): {
+  post: QualifiedName
+  unpost: QualifiedName
+} {
+  return { post: derived(table, "post"), unpost: derived(table, "unpost") }
+}
+
+/** Функції перерахунку й звірки підсумків регістра; одне джерело, як вище. */
+function totalsFunctions(table: PhysicalTable): {
+  recalculate: QualifiedName
+  verify: QualifiedName
+} {
+  return {
+    recalculate: derived(table, "totals_recalculate"),
+    verify: derived(table, "totals_verify"),
+  }
+}
+
+/** Функція віртуальної таблиці регістра; одне джерело, як вище. */
+function virtualTableFunction(
+  table: PhysicalTable,
+  kind: VirtualTableKind
+): QualifiedName {
+  return derived(table, VIRTUAL_TABLES[kind].label)
+}
+
 function isRegister(object: ParsedObject): boolean {
   return KIND_REGISTRY[object.kind].registerKeys !== undefined
 }
@@ -159,29 +189,23 @@ export function derivedFunctions(
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue
     if (postsMovements(object.kind)) {
-      add(object, derived(table, "post"), `post of ${object.name}`)
-      add(object, derived(table, "unpost"), `unpost of ${object.name}`)
+      const { post, unpost } = postingFunctions(table)
+      add(object, post, `post of ${object.name}`)
+      add(object, unpost, `unpost of ${object.name}`)
     }
     const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
     if (keys === undefined) continue
     for (const kind of keys.virtualTables) {
       add(
         object,
-        derived(table, VIRTUAL_TABLES[kind].label),
+        virtualTableFunction(table, kind),
         `${kind} virtual table of ${object.name}`
       )
     }
     if (keys.totals) {
-      add(
-        object,
-        derived(table, "totals_recalculate"),
-        `totals recalculation of ${object.name}`
-      )
-      add(
-        object,
-        derived(table, "totals_verify"),
-        `totals verification of ${object.name}`
-      )
+      const { recalculate, verify } = totalsFunctions(table)
+      add(object, recalculate, `totals recalculation of ${object.name}`)
+      add(object, verify, `totals verification of ${object.name}`)
     }
   }
 
@@ -243,8 +267,7 @@ export function buildContracts(
         .sort((a, b) => compareStrings(a.registerId, b.registerId))
       return {
         documentId: document.id ?? "",
-        post: derived(table, "post"),
-        unpost: derived(table, "unpost"),
+        ...postingFunctions(table),
         movements,
         balanceControl: movements.flatMap(({ registerId }) => {
           const resources = controlById.get(registerId)
@@ -338,18 +361,11 @@ function registerContract(
       : { totals: { schema: totals.schema, name: totals.name } }),
     virtualTables: keys.virtualTables.map((kind) => ({
       kind,
-      function: derived(table, VIRTUAL_TABLES[kind].label),
+      function: virtualTableFunction(table, kind),
       parameters: VIRTUAL_TABLES[kind].parameters,
       columns: columnsFor[kind],
     })),
-    ...(keys.totals
-      ? {
-          totalsMaintenance: {
-            recalculate: derived(table, "totals_recalculate"),
-            verify: derived(table, "totals_verify"),
-          },
-        }
-      : {}),
+    ...(keys.totals ? { totalsMaintenance: totalsFunctions(table) } : {}),
     ...(balanceControl === undefined ? {} : { balanceControl }),
   }
 }

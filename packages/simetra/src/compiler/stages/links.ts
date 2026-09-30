@@ -1,11 +1,7 @@
-import {
-  KIND_REGISTRY,
-  type MetadataRef,
-  type MovementDecl,
-} from "simetra/model"
+import type { MetadataRef, MovementDecl } from "simetra/model"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { objectKey, type ParsedObject } from "./files"
-import type { ResolvedReference } from "./identity"
+import { registerTargetError, type ResolvedReference } from "./identity"
 
 /**
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
@@ -49,9 +45,14 @@ function checkMovementSources(
 
     ;(data.registerMovements ?? []).forEach((ref, index) => {
       const register = byKey.get(objectKey(ref.kind, ref.name))
-      // Не регістр чи неіснуючий — це вже помилка стадій 2 і 4.
-      if (register === undefined) return
-      if (KIND_REGISTRY[register.kind].registerKeys === undefined) return
+      // Неіснуючий, не регістр чи незалежний регістр — це вже помилка стадій
+      // 2 і 4; вимагати від нього джерело рухів — друга діагностика на одну причину.
+      if (
+        register === undefined ||
+        registerTargetError(register) !== undefined
+      ) {
+        return
+      }
       if (register.id !== undefined) declaredIds.add(register.id)
 
       const constructorCount = (data.posting?.movements ?? []).filter(

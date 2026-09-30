@@ -147,11 +147,13 @@ class Context {
     const signature = columns
       .map((c) => `${quoteIdent(c.name)} ${c.type}`)
       .join(", ")
+    const text = body(columns, name)
+    const tag = dollarTag(text)
     const sql =
       `CREATE OR REPLACE FUNCTION ${quoteIdent(documentTable.schema)}.${quoteIdent(name)}(p_document_id uuid)\n` +
       `RETURNS TABLE (${signature})\n` +
       `LANGUAGE sql STABLE\n` +
-      `AS $simetra$\n${body(columns, name)}\n$simetra$;`
+      `AS ${tag}\n${text}\n${tag};`
     return {
       kind: "movementQuery",
       schema: documentTable.schema,
@@ -527,6 +529,13 @@ class ExpressionTranslator {
             : `-${this.node(expr.operand, resolve, true)}`
         )
       case "binary": {
+        // Ділення в Postgres над цілими — цілочисельне й губить дріб, який
+        // стадія 4 типізує нецілим; `numeric` лівого операнда тягне й результат.
+        if (expr.op === "/") {
+          return wrap(
+            `(${this.node(expr.left, resolve, false)})::numeric / ${this.node(expr.right, resolve, true)}`
+          )
+        }
         const op =
           expr.op === "="
             ? "IS NOT DISTINCT FROM"
@@ -579,6 +588,18 @@ function qualified(table: PhysicalTable): string {
 
 function ref(column: PhysicalColumn): string {
   return quoteIdent(column.name)
+}
+
+/**
+ * Тег долар-лапок тіла обгортки, якого немає в самому тілі: інакше блок,
+ * рядковий літерал конструктора, ідентифікатор чи часовий пояс закрили б тіло
+ * раніше й стали б ін'єкцією. Один механізм для будь-якого джерела тіла, тож
+ * жодне джерело не потребує власної заборони.
+ */
+function dollarTag(body: string): string {
+  let tag = "$simetra$"
+  for (let n = 1; body.includes(tag); n += 1) tag = `$simetra_${n}$`
+  return tag
 }
 
 /** SQL-рядок: одинарні лапки подвоюються. */

@@ -2,15 +2,17 @@ import {
   KIND_REGISTRY,
   NO_SCOPE,
   matchesAttributeCase,
+  parseExpression,
   standardLogicalName,
   type AttributeCase,
+  type Expr,
   type MetadataKind,
+  type MovementDecl,
   type Project,
   type ReferenceRole,
   type ScopeKind,
   type StandardColumnDef,
 } from "simetra/model"
-import { parseExpression, type Expr, type MovementDecl } from "simetra/model"
 import {
   compareStrings,
   diagnostic,
@@ -519,12 +521,20 @@ function namedNodes(expr: Expr): Expr[] {
 }
 
 /**
- * Імена у виразах конструктора рухів документа резолвляться в UUID, щоб
- * перейменування поля, ТЧ чи реєстру не ламало рухи мовчки. Цілісність
- * (типи, `row.` без ТЧ, вид регістра) — справа стадії 4; якщо ім'я чи ціль
- * не знайдені, звітується лише відсутність імені, а розбір виразу вже
- * перевірила T0 (`posting.parse`), тож зламаний вираз тут пропускається.
+ * Регістр приймає рухи документа, лише коли рухи ключує реєстратор: оболонка
+ * проведення переписує їх за реєстратором (спека §7), а незалежний регістр
+ * пишуть за ключем запису, і реєстратора в нього немає.
  */
+export function registerTargetError(
+  target: ParsedObject
+): "posting.register-kind" | "posting.register-independent" | undefined {
+  const keys = KIND_REGISTRY[target.kind].registerKeys?.(target.data)
+  if (keys === undefined) return "posting.register-kind"
+  return keys.movementsPrimaryKey === "recorder"
+    ? undefined
+    : "posting.register-independent"
+}
+
 /**
  * Маркер блоку — `<Name>` або `<Kind>.<Name>`. Кваліфікована форма однозначна;
  * проста допустима, лише коли таке ім'я носить рівно один вид регістра.
@@ -543,7 +553,10 @@ function resolveMovementBlocks(
   if (object.id === undefined) return
   for (const block of object.movementBlocks ?? []) {
     const at = (
-      code: "reference.unresolved" | "posting.register-kind",
+      code:
+        | "reference.unresolved"
+        | "posting.register-kind"
+        | "posting.register-independent",
       params: Record<string, string | number>
     ) =>
       diagnostics.push(
@@ -560,10 +573,6 @@ function resolveMovementBlocks(
         if (!brokenNames.has(objectKey(kind, name))) {
           at("reference.unresolved", { kind, name })
         }
-        continue
-      }
-      if (KIND_REGISTRY[target.kind].registerKeys === undefined) {
-        at("posting.register-kind", { kind: target.kind, name: target.name })
         continue
       }
     } else {
@@ -586,9 +595,14 @@ function resolveMovementBlocks(
         )
         continue
       }
-      target = candidates[0]
+      target = candidates[0]!
     }
-    if (target?.id === undefined) continue
+    const error = registerTargetError(target)
+    if (error !== undefined) {
+      at(error, { kind: target.kind, name: target.name })
+      continue
+    }
+    if (target.id === undefined) continue
     references.push({
       from: { file: block.file, pointer: "", objectId: object.id },
       to: { kind: target.kind, id: target.id },
@@ -598,6 +612,13 @@ function resolveMovementBlocks(
   }
 }
 
+/**
+ * Імена у виразах конструктора рухів документа резолвляться в UUID, щоб
+ * перейменування поля, ТЧ чи реєстру не ламало рухи мовчки. Цілісність
+ * (типи, `row.` без ТЧ, вид регістра) — справа стадії 4; якщо ім'я чи ціль
+ * не знайдені, звітується лише відсутність імені, а розбір виразу вже
+ * перевірила T0 (`posting.parse`), тож зламаний вираз тут пропускається.
+ */
 function resolveMovements(
   object: ParsedObject,
   objectsByName: ReadonlyMap<string, ParsedObject>,
