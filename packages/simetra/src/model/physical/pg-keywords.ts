@@ -1,3 +1,10 @@
+// Portions copied from PostgreSQL (https://github.com/postgres/postgres, branch REL_17_STABLE):
+// src/include/parser/kwlist.h
+// Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+// Portions Copyright (c) 1994, Regents of the University of California
+// Licensed under the PostgreSQL License. Modified: only the keywords that are
+// not UNRESERVED_KEYWORD, as a TypeScript set grouped by category.
+
 /**
  * Ключові слова Postgres, які `quote_ident` бере в лапки: усі, що не
  * UNRESERVED_KEYWORD у `kwlist.h` (зарезервовані, col_name і

@@ -1,3 +1,12 @@
+// Portions copied from PostgreSQL (https://github.com/postgres/postgres, branch REL_17_STABLE):
+// src/backend/commands/indexcmds.c (makeObjectName),
+// src/backend/catalog/pg_constraint.c (ChooseConstraintName),
+// src/backend/utils/adt/ruleutils.c (quote_identifier)
+// Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+// Portions Copyright (c) 1994, Regents of the University of California
+// Licensed under the PostgreSQL License. Modified: translated from C to
+// TypeScript; takes a set of taken names instead of querying the catalog.
+
 import { PG_QUOTED_KEYWORDS } from "./pg-keywords"
 
 /** NAMEDATALEN у Postgres мінус завершальний нуль. */

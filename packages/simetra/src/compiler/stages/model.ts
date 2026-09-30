@@ -1,3 +1,13 @@
+// Portions copied from PostgreSQL (https://github.com/postgres/postgres, branch REL_17_STABLE):
+// src/backend/commands/indexcmds.c (ChooseIndexNameAddition,
+// ChooseIndexColumnNames), src/backend/commands/tablecmds.c
+// (ChooseForeignKeyConstraintNameAddition) — in nameAddition and
+// indexColumnNames below.
+// Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+// Portions Copyright (c) 1994, Regents of the University of California
+// Licensed under the PostgreSQL License. Modified: translated from C to
+// TypeScript; index key expressions are not handled.
+
 import {
   KIND_REGISTRY,
   chooseConstraintName,
