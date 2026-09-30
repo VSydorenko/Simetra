@@ -13,6 +13,9 @@ export const SCHEMA_RULES = [
   "type.ref-exclusive",
   "type.ref-not-allowed",
   "register.resource-type",
+  "customTable.column-type",
+  "customTable.identity-type",
+  "pgEnum.value-duplicate",
 ] as const
 
 export type SchemaRule = (typeof SCHEMA_RULES)[number]

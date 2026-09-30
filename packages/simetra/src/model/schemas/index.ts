@@ -73,7 +73,13 @@ export {
   type AccumulationRegister,
 } from "./accumulation-register"
 export { constantSchema, type Constant } from "./constant"
-export { customTableSchema, type CustomTable } from "./custom-table"
+export {
+  customTableSchema,
+  customTableColumnSchema,
+  type CustomTable,
+  type CustomTableColumn,
+} from "./custom-table"
+export { pgEnumSchema, type PgEnum } from "./pg-enum"
 
 // Project
 export { projectSchema, type Project } from "./project"
