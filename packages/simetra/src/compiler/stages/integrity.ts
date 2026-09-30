@@ -369,9 +369,29 @@ function checkScope(
   byId: ReadonlyMap<string, ParsedObject>,
   byKey: ReadonlyMap<string, ParsedObject>
 ): Diagnostic[] {
-  // Однотенантний проєкт скоуп-правил не має, навіть `crossScope` нічого не значить.
-  if (scopeKinds.length === 0) return []
   const found: Diagnostic[] = []
+  // `scopeColumn` без скоупу — хибна ознака й в однотенантному проєкті, тож це
+  // єдина перевірка, що не залежить від видів скоупу.
+  for (const object of objects) {
+    if (!isDeclaredTable(object)) continue
+    const { scope, scopeColumn, columns } = object.data as CustomTable
+    const unscoped = scope === undefined || scope === NO_SCOPE
+    // Невідому колонку вже звітувала стадія 2.
+    if (
+      unscoped &&
+      scopeColumn !== undefined &&
+      columns.some((c) => c.name === scopeColumn)
+    ) {
+      found.push(
+        diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
+          column: scopeColumn,
+          unscoped: 1,
+        })
+      )
+    }
+  }
+  // Однотенантний проєкт скоуп-правил не має, навіть `crossScope` нічого не значить.
+  if (scopeKinds.length === 0) return found
   const kindsByName = new Map(scopeKinds.map((kind) => [kind.name, kind]))
   const scopeOf = (object: ParsedObject): ScopeKind | undefined => {
     const { scope } = object.data as { scope?: string }
@@ -441,9 +461,10 @@ function checkScope(
   for (const object of objects) {
     if (!isDeclaredTable(object)) continue
     const kind = scopeOf(object)
-    // Корінь скоуп-колонки не має: його ключ і є значенням скоупу.
-    if (kind === undefined || isRoot(object, kind)) continue
     const table = object.data as CustomTable
+    if (kind === undefined) continue
+    // Корінь скоуп-колонки не має: його ключ і є значенням скоупу.
+    if (isRoot(object, kind)) continue
     if (table.scopeColumn === undefined) {
       found.push(diagnostic("scope.custom-table-column", object.file, ""))
       continue

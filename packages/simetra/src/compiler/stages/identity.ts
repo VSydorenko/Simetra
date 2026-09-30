@@ -16,10 +16,10 @@ import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 export interface ResolvedReference {
   from: { file: string; pointer: string; objectId: string }
   /**
-   * `ScopeKind` і `Column` — цілі, що не є об'єктами метаданих (вид скоупу
-   * проєкту, колонка `CustomTable`); їхні id живуть в одному просторі UUID.
+   * `ScopeKind` і `Element` — цілі, що не є об'єктами метаданих (вид скоупу
+   * проєкту, елемент усередині об'єкта: реквізит, ТЧ, колонка, поле); їхні id живуть в одному просторі UUID.
    */
-  to: { kind: MetadataKind | "ScopeKind" | "Column"; id: string }
+  to: { kind: MetadataKind | "ScopeKind" | "Element"; id: string }
   role: ReferenceRole
 }
 
@@ -205,6 +205,9 @@ export function checkIdentity(
       )
     }
 
+    // Скоуп-колонка займає логічне ім'я виду; стандартні реквізити об'єкта
+    // пишуться в стилі проєкту, тож звіряємо саме з ними. Один раз на об'єкт.
+    let standardCollision = false
     for (const namespace of namespacesOf(object, style)) {
       const seen = new Set<string>()
       const reserved = new Set(
@@ -214,6 +217,15 @@ export function checkIdentity(
               standardLogicalName(column, style)
             )
       )
+      if (collides && !standardCollision && reserved.has(scopeKind.name)) {
+        standardCollision = true
+        diagnostics.push(
+          diagnostic("scope.attribute-name-collision", object.file, "/scope", {
+            name: scopeKind.name,
+            kind: object.kind,
+          })
+        )
+      }
       for (const { pointer, element, column } of namespace.elements) {
         checkIdentified(object.file, pointer, element)
         const name = String(element.name)
@@ -406,7 +418,7 @@ function checkScopeColumn(
   if (typeof column.id !== "string" || object.id === undefined) return
   references.push({
     from: { file: object.file, pointer: "/scopeColumn", objectId: object.id },
-    to: { kind: "Column", id: column.id },
+    to: { kind: "Element", id: column.id },
     role: "customTable.scopeColumn",
   })
 }

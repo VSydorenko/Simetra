@@ -48,8 +48,18 @@ export const customTableColumnSchema = z
       "scale",
       "ref",
       "allowedTypes",
-      "crossScope",
     ] as const
+
+    // FK колонок `CustomTable` явні, тож міжскоуповий прапорець там безглуздий
+    // у будь-якій формі колонки; одна причина — один код, тому `refineValueType`
+    // прапорця не бачить.
+    if (column.crossScope !== undefined) {
+      issue(
+        "customTable.cross-scope-not-allowed",
+        "crossScope is not allowed on a custom table column",
+        ["crossScope"]
+      )
+    }
 
     if (column.type === "PgEnum") {
       if (column.enum === undefined) {
@@ -104,7 +114,10 @@ export const customTableColumnSchema = z
           ["pgType"]
         )
       }
-      refineValueType({ ...column, type: column.type }, ctx)
+      refineValueType(
+        { ...column, type: column.type, crossScope: undefined },
+        ctx
+      )
     }
 
     if (

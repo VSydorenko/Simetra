@@ -131,6 +131,39 @@ describe("customTableSchema", () => {
     ).toEqual(["customTable.column-type"])
   })
 
+  it("crossScope on custom table column", () => {
+    const cases = [
+      { name: "a", type: "Text", crossScope: true },
+      {
+        name: "d",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "X" },
+        crossScope: true,
+      },
+      {
+        name: "b",
+        type: "PgEnum",
+        enum: { kind: "PgEnum", name: "E" },
+        crossScope: true,
+      },
+      { name: "c", type: "Raw", pgType: "citext", crossScope: true },
+    ]
+    for (const column of cases) {
+      const res = customTableSchema.safeParse(table({ columns: [column] }))
+      expect(res.success).toBe(false)
+      if (!res.success) {
+        expect(
+          res.error.issues.map((i) => [
+            i.path.join("/"),
+            (i as { params?: { rule?: string } }).params?.rule,
+          ])
+        ).toEqual([
+          ["columns/0/crossScope", "customTable.cross-scope-not-allowed"],
+        ])
+      }
+    }
+  })
+
   it("accepts Raw pgType", () => {
     expect(
       customTableSchema.safeParse(

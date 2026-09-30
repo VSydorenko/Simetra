@@ -226,6 +226,27 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
+  it("scope kind named like a standard attribute", () => {
+    const base = scopedProject()
+    const renamed = {
+      ...base,
+      scopeKinds: [base.scopeKinds[0], { ...base.scopeKinds[1], name: "code" }],
+    }
+    const result = compileScoped(
+      { [CP]: catalog("Counterparty", { scope: "code", codeLength: 9 }) },
+      renamed
+    )
+    expect(codes(result)).toEqual([
+      ["scope.attribute-name-collision", CP, "/scope"],
+    ])
+    // Без коду в довідника імені `code` ніщо не займає.
+    const noCode = compileScoped(
+      { [CP]: catalog("Counterparty", { scope: "code", codeLength: 0 }) },
+      renamed
+    )
+    expect(codes(noCode)).toEqual([])
+  })
+
   it("custom table may name a column like its scope kind", () => {
     const result = compileScoped({
       [TABLE]: customTable("Log", {
@@ -287,7 +308,7 @@ describe("stage 2: scope identity", () => {
   it("references index", () => {
     const result = compileScoped({
       [CP]: catalog("Counterparty", { scope: "org" }),
-      [TABLE]: customTable("Log", { scope: "none", scopeColumn: "id" }),
+      [TABLE]: customTable("Log", { scope: "org", scopeColumn: "id" }),
     })
     expect(result.diagnostics).toEqual([])
     const { references, scopeKinds, objects } = result.model!
@@ -319,7 +340,7 @@ describe("stage 2: scope identity", () => {
       expect.objectContaining({
         role: "customTable.scopeColumn",
         from: expect.objectContaining({ file: TABLE, pointer: "/scopeColumn" }),
-        to: { kind: "Column", id: column.id },
+        to: { kind: "Element", id: column.id },
       })
     )
   })

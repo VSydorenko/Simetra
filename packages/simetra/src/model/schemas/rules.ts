@@ -15,6 +15,7 @@ export const SCHEMA_RULES = [
   "register.resource-type",
   "customTable.column-type",
   "customTable.identity-type",
+  "customTable.cross-scope-not-allowed",
   "pgEnum.value-duplicate",
   "scope.name-reserved",
   "scope.not-allowed",

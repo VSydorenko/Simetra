@@ -42,6 +42,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: (p) =>
       `Field "${p.field}" does not fit the column type form (logical type, PgEnum or Raw)`,
   },
+  "customTable.cross-scope-not-allowed": {
+    message: () => "crossScope is not allowed on a custom table column",
+    hint: "Foreign keys of a custom table are explicit; remove crossScope.",
+  },
   "customTable.identity-type": {
     message: () => "identity requires SmallInt, Integer or BigInt type",
   },
@@ -172,7 +176,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: (p) =>
       p.column === undefined
         ? "Scoped CustomTable must name its scope column in scopeColumn"
-        : `scopeColumn "${p.column}" must be a uuid column`,
+        : p.unscoped !== undefined
+          ? `scopeColumn "${p.column}" is set, but the table has no scope kind`
+          : `scopeColumn "${p.column}" must be a uuid column`,
   },
   "scope.cross-scope-redundant": {
     message: () =>

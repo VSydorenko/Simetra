@@ -7,6 +7,7 @@ import {
   document,
   metaFiles,
   organization,
+  project,
   scopedProject,
   uuid,
 } from "./helpers"
@@ -524,6 +525,22 @@ describe("стадія 4: скоуп", () => {
     })
     expect(scopeDiagnostics(result)).toEqual([
       ["scope.custom-table-column", "error", SETTINGS, ""],
+    ])
+  })
+
+  it("scopeColumn without scope", () => {
+    const table = (overrides: Record<string, unknown>) =>
+      customTable("UserSettings", { scopeColumn: "id", ...overrides })
+    const none = compileScoped({ [SETTINGS]: table({ scope: "none" }) })
+    expect(scopeDiagnostics(none)).toEqual([
+      ["scope.custom-table-column", "error", SETTINGS, "/scopeColumn"],
+    ])
+    // Однотенантний проєкт скоуп-правил не має, але хибна ознака лишається хибною.
+    const single = compile(
+      metaFiles({ [PROJECT]: project(), [SETTINGS]: table({}) })
+    )
+    expect(scopeDiagnostics(single)).toEqual([
+      ["scope.custom-table-column", "error", SETTINGS, "/scopeColumn"],
     ])
   })
 
