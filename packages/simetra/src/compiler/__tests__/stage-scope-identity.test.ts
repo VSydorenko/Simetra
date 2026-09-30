@@ -8,6 +8,7 @@ import {
   organization,
   project,
   scopedProject,
+  uuid,
 } from "./helpers"
 
 const ORG = "catalogs/Organization/Organization.meta.json"
@@ -170,6 +171,46 @@ describe("stage 2: scope identity", () => {
     )
     expect(codes(result)).toEqual([
       ["reference.unresolved", PROJECT, "/scopeKinds/0/root/object"],
+    ])
+  })
+
+  it("two scope kinds with the same object root", () => {
+    const base = scopedProject()
+    const [first, second] = base.scopeKinds
+    const result = compileScoped(
+      {},
+      {
+        ...base,
+        scopeKinds: [first, { ...second, root: first!.root }],
+      }
+    )
+    expect(result.ok).toBe(false)
+    expect(codes(result)).toEqual([
+      ["scope.root-duplicate", PROJECT, "/scopeKinds/1/root/object"],
+    ])
+  })
+
+  it("two scope kinds with the same external root", () => {
+    const base = scopedProject()
+    const [first, second] = base.scopeKinds
+    const result = compileScoped(
+      {},
+      {
+        ...base,
+        scopeKinds: [
+          first,
+          second,
+          {
+            ...second,
+            id: uuid(990),
+            name: "member",
+            physicalName: "member_id",
+          },
+        ],
+      }
+    )
+    expect(codes(result)).toEqual([
+      ["scope.root-duplicate", PROJECT, "/scopeKinds/2/root/external"],
     ])
   })
 

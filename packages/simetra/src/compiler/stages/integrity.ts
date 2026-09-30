@@ -13,6 +13,7 @@ import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
 import {
   isDeclaredTable,
+  isUuidColumn,
   keyColumnOf,
   logicalColumnsOf,
   type ModelStageResult,
@@ -368,6 +369,8 @@ function checkScope(
   byId: ReadonlyMap<string, ParsedObject>,
   byKey: ReadonlyMap<string, ParsedObject>
 ): Diagnostic[] {
+  // Однотенантний проєкт скоуп-правил не має, навіть `crossScope` нічого не значить.
+  if (scopeKinds.length === 0) return []
   const found: Diagnostic[] = []
   const kindsByName = new Map(scopeKinds.map((kind) => [kind.name, kind]))
   const scopeOf = (object: ParsedObject): ScopeKind | undefined => {
@@ -378,7 +381,8 @@ function checkScope(
   }
   const scopeName = (kind: ScopeKind | undefined) => kind?.name ?? NO_SCOPE
 
-  // Корінь-об'єкт: вид, який на нього вказує (на один об'єкт — один вид).
+  // Корінь-об'єкт: вид, який на нього вказує. Два види на одному корені
+  // стадія 2 відкидає (`scope.root-duplicate`), тож перезапису тут не буде.
   const rootKindOf = new Map<string, ScopeKind>()
   scopeKinds.forEach((kind, index) => {
     if (!("object" in kind.root)) return
@@ -391,6 +395,18 @@ function checkScope(
       kind: rootObject.kind,
       name: rootObject.name,
       scope: kind.name,
+    }
+    // Ієрархія видів скоупу відкладена спекою, а ієрархічний корінь її й дав би.
+    const { hierarchyType } = rootObject.data as { hierarchyType?: string }
+    if (hierarchyType !== undefined && hierarchyType !== "None") {
+      found.push(
+        diagnostic(
+          "scope.root-hierarchy",
+          rootObject.file,
+          "/hierarchyType",
+          at
+        )
+      )
     }
     if (
       KIND_REGISTRY[rootObject.kind].materializes !== "table" ||
@@ -435,10 +451,7 @@ function checkScope(
     const column = table.columns.find((c) => c.name === table.scopeColumn)
     // Невідому колонку вже звітувала стадія 2.
     if (column === undefined) continue
-    const isUuid =
-      column.array !== true &&
-      (column.type === "UUID" ||
-        (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid"))
+    const isUuid = isUuidColumn(column)
     if (!isUuid) {
       found.push(
         diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
@@ -459,7 +472,10 @@ function checkScope(
     const target = byId.get(reference.to.id)
     if (source === undefined || target === undefined) continue
     const { role, from } = reference
-    const sourceKind = scopeOf(source)
+    // Корінь, що хибно оголосив скоуп, лишається коренем свого виду: інакше
+    // до помилки оголошення додалися б каскадні помилки посилань.
+    const sourceKind =
+      rootKindOf.get(objectKey(source.kind, source.name)) ?? scopeOf(source)
 
     if (role === "register.recorder") {
       const recorderKind = scopeOf(target)
@@ -499,8 +515,10 @@ function checkScope(
     if (targetKind === undefined) {
       // Складеного FK немає за будь-якого `crossScope`.
     } else if (sourceKind === targetKind) {
-      if (rootOfTarget !== undefined && !isRoot(source, sourceKind)) {
-        // Значення скоупу вже є скоуп-колонкою джерела; `crossScope` не рятує.
+      // Значення скоупу вже є скоуп-колонкою джерела (або самим ключем
+      // кореня); посилання на корінь свого виду можливе лише свідомо між
+      // тенантами — тоді це звичайний FK на ключ кореня.
+      if (rootOfTarget !== undefined && !crossScope) {
         found.push(
           diagnostic(
             "scope.root-self-reference",
@@ -524,10 +542,15 @@ function checkScope(
     }
 
     if (crossScope) {
-      // У цілі без складеного FK (`CustomTable`, глобальна) ключ і так плоский.
+      // Прапорець зайвий, лише коли без нього посилання дозволене й фізично те
+      // саме: глобальна ціль або `CustomTable` того ж виду (FK і так плоский).
       const useful =
         targetKind !== undefined &&
-        !(sourceKind === targetKind && isDeclaredTable(target))
+        !(
+          sourceKind === targetKind &&
+          rootOfTarget === undefined &&
+          isDeclaredTable(target)
+        )
       const at = `${elementPointer}/crossScope`
       const key = `${from.file}\0${at}`
       const known = crossScopeUse.get(key)

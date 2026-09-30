@@ -122,6 +122,25 @@ export function checkIdentity(
       )
     }
   })
+  // Один корінь на вид: два види на одному корені зробили б значення скоупу
+  // двозначним, а скоуп-колонка цього об'єкта не мала б чийого імені.
+  const rootsSeen = new Set<string>()
+  scopeKinds.forEach((kind, index) => {
+    const [at, key] =
+      "object" in kind.root
+        ? [
+            `/scopeKinds/${index}/root/object`,
+            `object ${objectKey(kind.root.object.kind, kind.root.object.name)}`,
+          ]
+        : [
+            `/scopeKinds/${index}/root/external`,
+            `external ${kind.root.external.schema}.${kind.root.external.table}(${kind.root.external.column})`,
+          ]
+    if (rootsSeen.has(key)) {
+      diagnostics.push(diagnostic("scope.root-duplicate", PROJECT_FILE, at))
+    }
+    rootsSeen.add(key)
+  })
   // Корінь не має скоуп-колонки, тож ім'я виду в ньому нічого не займає.
   const rootKeys = new Set(
     scopeKinds.flatMap((kind) =>

@@ -119,6 +119,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Name "${p.name}" collides with the scope column of this ${p.kind}`,
     hint: "The scope column takes the scope kind's logical name in the object's table.",
   },
+  "scope.root-duplicate": {
+    message: () => "Another scope kind already uses this root",
+    hint: "Every scope kind has its own root.",
+  },
+  "scope.root-hierarchy": {
+    message: (p) =>
+      `Root ${p.kind} "${p.name}" of scope kind "${p.scope}" cannot be hierarchical`,
+    hint: 'Scope hierarchy is not supported; set hierarchyType to "None" and express a holding with an attribute that sets "crossScope".',
+  },
   "scope.root-key": {
     message: (p) =>
       `Root of scope kind "${p.scope}" (${p.kind} "${p.name}") has no single-column uuid key`,
@@ -131,8 +140,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "scope.root-self-reference": {
     message: (p) =>
-      `Reference to ${p.kind} "${p.name}", the root of scope kind "${p.scope}", from an object of the same scope kind`,
-    hint: "The root's key is already the scope column of the object; drop the reference.",
+      `Reference to ${p.kind} "${p.name}", the root of the same scope kind "${p.scope}"`,
+    hint: 'The root key is already the scope value of the object; drop the reference, or set "crossScope" if it deliberately points to another tenant.',
   },
   "scope.global-to-scoped": {
     message: (p) =>

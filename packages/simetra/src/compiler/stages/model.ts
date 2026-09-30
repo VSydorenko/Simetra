@@ -857,11 +857,9 @@ export function keyColumnOf(object: ParsedObject): string | undefined {
     const key = table.primaryKey?.columns
     if (key?.length !== 1) return undefined
     const column = table.columns.find((c) => c.name === key[0])
-    if (column === undefined || column.array === true) return undefined
-    const isUuid =
-      column.type === "UUID" ||
-      (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid")
-    return isUuid ? column.physicalName : undefined
+    return column !== undefined && isUuidColumn(column)
+      ? column.physicalName
+      : undefined
   }
   const keys = def
     .standardColumns(data)
@@ -873,6 +871,15 @@ export function keyColumnOf(object: ParsedObject): string | undefined {
     key.type.type === "UUID"
     ? key.physicalName
     : undefined
+}
+
+/** Скалярна колонка типу uuid: логічного `UUID` або `Raw` з `pgType` uuid. */
+export function isUuidColumn(column: CustomTable["columns"][number]): boolean {
+  return (
+    column.array !== true &&
+    (column.type === "UUID" ||
+      (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid"))
+  )
 }
 
 /**
