@@ -1,5 +1,13 @@
 # PostgREST як open-source REST layer над PostgreSQL для Simetra
 
+## Про цей документ
+
+- **Питання дослідження:** Чи годиться PostgREST як перший шар доступу до даних над згенерованою схемою PostgreSQL?
+- **Дата написання:** 2026-04.
+- **Контекст на момент написання:** Документ уже написано під назвою Simetra на TypeScript, але в термінах прототипу: «Phase 3», пакети `@simetra/data-provider*` і `generator-pg`, які за §14 платформної спеки видаляються.
+- **Що застаріло або сумнівне:** Термінологія «Phase 3» і пакети `@simetra/data-provider-postgrest`, `generator-pg` застаріли (пакети видаляються за §14 платформної спеки). Р8 у спеці сильніше за документ: PostgREST + RLS за замовчуванням, Server Function як другий адаптер.
+- **Куди лягли рішення:** Платформна спека ([файл](../../superpowers/specs/2026-09-24-simetra-platform-design.md)): Р8, §8.2.
+
 **PostgREST є окремим open-source сервером, що автоматично публікує REST API поверх звичайної PostgreSQL-бази.** Це не функція самої PostgreSQL і не ексклюзив Supabase: Supabase використовує PostgREST як частину свого managed-стеку, але той самий API-шар можна розгорнути самостійно через Docker, systemd або інший deployment. Для Simetra це сильний кандидат на перший runtime adapter у Phase 3: він добре покриває CRUD, фільтрацію, пагінацію, RPC-виклики для posting functions і працює поверх уже згенерованої PostgreSQL-схеми без написання окремого backend CRUD-шару.
 
 ---
