@@ -19,6 +19,7 @@ export const COMPILER_RULES = [
   "identity.name-case",
   "identity.name-reserved",
   "reference.unresolved",
+  "register.balance-control-resource",
   "scope.declaration-missing",
   "scope.unknown-kind",
   "scope.attribute-name-collision",

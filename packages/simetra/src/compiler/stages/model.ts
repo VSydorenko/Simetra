@@ -11,9 +11,11 @@
 import {
   KIND_REGISTRY,
   chooseConstraintName,
+  makeObjectName,
   pgEnumTypeName,
   pgTypeOf,
   quoteIdent,
+  singletonColumn,
   standardLogicalName,
   type Attribute,
   type AttributeCase,
@@ -25,6 +27,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
+  type RegisterKeySpec,
   type ScopeKind,
   type StandardColumnDef,
   type TabularSection,
@@ -238,15 +241,43 @@ class SnapshotBuilder {
               own: true,
               partitioned: true,
             }
-    const fields = this.withScope(def.standardColumns(data), scope, (column) =>
-      this.standardField(column, object, main, scope)
+    const registerKeys = def.registerKeys?.(data)
+    const standard = def.standardColumns(data)
+    const dimensions =
+      registerKeys === undefined ? [] : (data.dimensions as Attribute[])
+    // Ключ регістра без жодної частини (ні періоду, ні вимірів) — рядок-одинак;
+    // скоуп, якщо є, withScope робить ключем замість одинака.
+    const degenerate =
+      registerKeys !== undefined &&
+      dimensions.length === 0 &&
+      !standard.some((column) => column.logicalName === PERIOD)
+    const singleton = degenerate ? registerSingleton(registerKeys) : undefined
+    const standardFields = new Map<StandardColumnDef, Field>()
+    const fields = this.withScope(
+      singleton !== undefined ? [singleton, ...standard] : standard,
+      scope,
+      (column) => {
+        const field = this.standardField(column, object, main, scope)
+        standardFields.set(column, field)
+        return field
+      }
     )
+    const dimensionFields: Field[] = []
     // Колонкові поля й їхній порядок дає реєстр: у регістра — виміри,
     // ресурси, реквізити, у решти видів — лише реквізити.
     for (const field of def.columnFields) {
       const list = data[field] as Attribute[]
       list.forEach((attribute, index) => {
-        fields.push(this.attributeField(attribute, `/${field}/${index}`, scope))
+        const built = this.attributeField(
+          attribute,
+          `/${field}/${index}`,
+          scope
+        )
+        if (field === "dimensions" && registerKeys !== undefined) {
+          built.notNull = registerKeys.dimensionsNotNull
+          dimensionFields.push(built)
+        }
+        fields.push(built)
         this.declare(
           object.file,
           `/${field}/${index}/physicalName`,
@@ -254,7 +285,24 @@ class SnapshotBuilder {
         )
       })
     }
-    this.addTable(main, fields, object.file, "/physicalName")
+    const columnsOf = this.addTable(main, fields, object.file, "/physicalName")
+    if (registerKeys !== undefined) {
+      const columns = (field: Field | undefined) =>
+        field === undefined ? [] : (columnsOf.get(field) ?? [])
+      const standardOf = (match: (column: StandardColumnDef) => boolean) =>
+        columns([...standardFields].find(([column]) => match(column))?.[1])
+      this.addRegisterKeys(main, registerKeys, degenerate, scope, {
+        period: standardOf((column) => column.logicalName === PERIOD),
+        dimensions: dimensionFields.flatMap(columns),
+        recorder: [
+          ...standardOf((column) => column.ref === "recorders"),
+          ...standardOf((column) => column.logicalName === LINE_NUMBER),
+        ],
+      })
+      if (registerKeys.totals) {
+        this.addTotals(object, schema, name, origin, dimensions, scope)
+      }
+    }
     // Ціль складених FK у межах скоупу (спека §6).
     if (scope?.own === true && key !== undefined) {
       main.uniques.push({
@@ -309,6 +357,86 @@ class SnapshotBuilder {
     })
   }
 
+  /**
+   * Ключі й індекси таблиці рухів (спека §7): PK реєстратора або ключа
+   * запису, UNIQUE ключа запису поруч із реєстратором і індекси рухів
+   * `(носій, виміри…, period)` та `(носій, period)`. Покриті префіксом ключів
+   * індекси відкидає materializeIndexes.
+   */
+  private addRegisterKeys(
+    table: PendingTable,
+    keys: RegisterKeySpec,
+    degenerate: boolean,
+    scope: TableScope | undefined,
+    columns: { period: string[]; dimensions: string[]; recorder: string[] }
+  ): void {
+    const carrier = scope?.carrier !== undefined ? [scope.carrier] : []
+    const { period, dimensions, recorder } = columns
+    // Вироджений ключ уже дав одинак (чи скоуп-колонка замість нього).
+    const recordKey = [...carrier, ...period, ...dimensions]
+    if (keys.movementsPrimaryKey === "recorder") {
+      if (recorder.length > 0) table.primaryKey = { columns: recorder }
+      if (keys.dimensionsUnique && !degenerate) {
+        table.uniques.push({ columns: recordKey, nullsNotDistinct: false })
+      }
+    } else if (!degenerate) {
+      table.primaryKey = { columns: recordKey }
+    }
+    if (period.length > 0) {
+      table.derivedIndexes.push([...carrier, ...dimensions, ...period])
+      table.derivedIndexes.push([...carrier, ...period])
+    }
+  }
+
+  /**
+   * Поточні підсумки регістра залишків (спека §7): носій скоупу, виміри з
+   * тими самими FK і ресурси `NOT NULL DEFAULT 0` — рядок з'являється з
+   * першим рухом ключа, тож відсутнє значення ресурсу означає нуль.
+   * UNIQUE полів і пошукові індекси ресурсів тут не повторюються: підсумки
+   * похідні, а рядок знаходять за ключем; `indexed` вимірів лишається.
+   */
+  private addTotals(
+    object: ParsedObject,
+    schema: string,
+    register: string,
+    origin: PhysicalTable["origin"],
+    dimensions: readonly Attribute[],
+    scope: TableScope | undefined
+  ): void {
+    const table = this.pendingTable(
+      schema,
+      makeObjectName(register, undefined, "totals"),
+      { ...origin, part: "totals" }
+    )
+    const standard = dimensions.length === 0 ? [singletonColumn()] : []
+    const fields = this.withScope(standard, scope, (column) =>
+      this.standardField(column, object, table, scope)
+    )
+    const dimensionFields = dimensions.map((attribute, index) => ({
+      ...this.attributeField(attribute, `/dimensions/${index}`, scope),
+      notNull: true,
+      unique: false,
+    }))
+    const resources = (object.data as Element).resources as Attribute[]
+    const resourceFields = resources.map((attribute, index) => ({
+      ...this.attributeField(attribute, `/resources/${index}`, scope),
+      notNull: true,
+      default: "0",
+      indexed: false,
+      unique: false,
+    }))
+    fields.push(...dimensionFields, ...resourceFields)
+    const columnsOf = this.addTable(table, fields, object.file, "/physicalName")
+    if (dimensions.length > 0) {
+      table.primaryKey = {
+        columns: [
+          ...(scope?.carrier !== undefined ? [scope.carrier] : []),
+          ...dimensionFields.flatMap((field) => columnsOf.get(field) ?? []),
+        ],
+      }
+    }
+  }
+
   finish(): ModelStageResult {
     // Імена призначаються в порядку знімка, а явні імена резервуються наперед
     // в усій схемі, тож знімок самоузгоджений: жодне похідне ім'я не збігається
@@ -349,12 +477,13 @@ class SnapshotBuilder {
     }
   }
 
+  /** Повертає колонки кожного поля: поліморфне поле дає пару. */
   private addTable(
     table: PendingTable,
     fields: Field[],
     file: string,
     pointer: string
-  ): void {
+  ): Map<Field, string[]> {
     const source: PhysicalSource = {
       schema: table.schema,
       name: table.name,
@@ -363,8 +492,11 @@ class SnapshotBuilder {
       columns: [],
       explicitNames: [],
     }
+    const columnsOf = new Map<Field, string[]>()
     for (const field of fields) {
-      for (const column of addField(table, field)) {
+      const columns = addField(table, field)
+      columnsOf.set(field, columns)
+      for (const column of columns) {
         source.columns.push({
           name: column,
           ...(field.pointer !== undefined ? { pointer: field.pointer } : {}),
@@ -373,6 +505,7 @@ class SnapshotBuilder {
     }
     this.tables.push(table)
     this.sources.push(source)
+    return columnsOf
   }
 
   private standardField(
@@ -426,8 +559,9 @@ class SnapshotBuilder {
 
   /**
    * Стандартні поля таблиці разом зі скоуп-колонкою: вона йде одразу після
-   * ключа (без ключа — першою) і заміняє ключ-одинак — рядок один на значення
-   * скоупу. Корінь і рядок ТЧ кореня власної колонки не мають.
+   * ключа (без ключа — першою) і заміняє ключ-одинак у його ролі (PK чи
+   * UNIQUE) — рядок один на значення скоупу. Корінь і рядок ТЧ кореня
+   * власної колонки не мають.
    */
   private withScope(
     columns: readonly StandardColumnDef[],
@@ -435,7 +569,7 @@ class SnapshotBuilder {
     toField: (column: StandardColumnDef) => Field
   ): Field[] {
     if (scope?.own !== true) return columns.map(toField)
-    const singleton = columns.some((column) => column.singleton === true)
+    const singleton = columns.find((column) => column.singleton === true)
     const kept = columns.filter((column) => column.singleton !== true)
     const fields = kept.map(toField)
     const { kind } = scope
@@ -444,9 +578,9 @@ class SnapshotBuilder {
       type: "uuid",
       array: false,
       notNull: true,
-      primaryKey: singleton,
+      primaryKey: singleton?.primaryKey === true,
       indexed: false,
-      unique: false,
+      unique: singleton?.unique === true,
       target: this.rootTarget(kind),
       onDelete: kind.onRootDelete,
       origin: { scopeKindId: kind.id! },
@@ -772,6 +906,21 @@ class SnapshotBuilder {
 }
 
 const NONE: Target = { form: "none" }
+
+/** Стандартні реквізити, що входять у ключі регістра (канонічні імена). */
+const PERIOD = "period"
+const LINE_NUMBER = "lineNumber"
+
+/**
+ * Одинак регістра займає місце ключа запису: PK незалежного регістра або
+ * UNIQUE поруч із PK реєстратора в підлеглого.
+ */
+function registerSingleton(keys: RegisterKeySpec): StandardColumnDef {
+  const column = singletonColumn()
+  if (keys.movementsPrimaryKey === "dimensions") return column
+  delete column.primaryKey
+  return { ...column, unique: true }
+}
 
 /**
  * Пошукові індекси таблиці зі скоуп-колонкою починаються з неї: під RLS кожен

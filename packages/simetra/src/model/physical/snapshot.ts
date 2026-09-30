@@ -16,6 +16,8 @@ export interface PhysicalSnapshot {
 export interface PhysicalOrigin {
   objectId: string
   tabularSectionId?: string
+  /** Похідна таблиця об'єкта поруч з основною: поточні підсумки регістра. */
+  part?: "totals"
 }
 
 export interface PhysicalEnumType {

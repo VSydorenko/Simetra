@@ -321,6 +321,7 @@ export function checkIdentity(
       })
     }
     checkScopeColumn(object, references, diagnostics)
+    checkBalanceControl(object, references, diagnostics)
   }
   references.sort(
     (a, b) =>
@@ -420,5 +421,40 @@ function checkScopeColumn(
     from: { file: object.file, pointer: "/scopeColumn", objectId: object.id },
     to: { kind: "Element", id: column.id },
     role: "customTable.scopeColumn",
+  })
+}
+
+/**
+ * `balanceControl` регістра називає його ресурси за логічним іменем; як і
+ * `scopeColumn`, ім'я резолвиться тут і потрапляє в індекс посилань, щоб
+ * перейменування ресурсу не зламало налаштування мовчки.
+ */
+function checkBalanceControl(
+  object: ParsedObject,
+  references: ResolvedReference[],
+  diagnostics: Diagnostic[]
+) {
+  const { balanceControl, resources } = object.data as {
+    balanceControl?: { resources: string[] }
+    resources?: Element[]
+  }
+  if (balanceControl === undefined) return
+  balanceControl.resources.forEach((name, index) => {
+    const pointer = `/balanceControl/resources/${index}`
+    const resource = (resources ?? []).find((r) => r.name === name)
+    if (resource === undefined) {
+      diagnostics.push(
+        diagnostic("register.balance-control-resource", object.file, pointer, {
+          name,
+        })
+      )
+      return
+    }
+    if (typeof resource.id !== "string" || object.id === undefined) return
+    references.push({
+      from: { file: object.file, pointer, objectId: object.id },
+      to: { kind: "Element", id: resource.id },
+      role: "register.balanceControl",
+    })
   })
 }

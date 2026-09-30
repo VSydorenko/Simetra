@@ -13,6 +13,7 @@ export const SCHEMA_RULES = [
   "type.ref-exclusive",
   "type.ref-not-allowed",
   "register.resource-type",
+  "register.balance-control-type",
   "customTable.column-type",
   "customTable.identity-type",
   "customTable.cross-scope-not-allowed",

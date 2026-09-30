@@ -241,10 +241,9 @@ describe("standard columns", () => {
       notNull: true,
       check: "movement_type IN ('Receipt', 'Expense')",
     })
-    expect(column(columns, "period")).toMatchObject({
-      notNull: true,
-      indexed: true,
-    })
+    // Період входить в індекси рухів і ключі регістра, окремого індексу немає.
+    expect(column(columns, "period")).toMatchObject({ notNull: true })
+    expect(column(columns, "period")?.indexed).toBeUndefined()
     expect(column(columns, "recorder")).toMatchObject({
       physicalName: "recorder",
       polymorphic: "always",
@@ -264,6 +263,45 @@ describe("standard columns", () => {
         "movementType"
       )
     ).toBeUndefined()
+  })
+
+  it("register keys are a fact of the kind", () => {
+    const parse = (data: Record<string, unknown>) =>
+      accumulationRegisterSchema.parse({
+        kind: "AccumulationRegister",
+        name: "Stock",
+        ...data,
+      })
+    const keys = KIND_REGISTRY.AccumulationRegister.registerKeys!
+    expect(keys(parse({}))).toEqual({
+      movementsPrimaryKey: "recorder",
+      dimensionsUnique: false,
+      dimensionsNotNull: true,
+      totals: true,
+    })
+    expect(keys(parse({ registerType: "Turnover" })).totals).toBe(false)
+
+    const info = (writeMode: string) =>
+      KIND_REGISTRY.InformationRegister.registerKeys!(
+        informationRegisterSchema.parse({
+          kind: "InformationRegister",
+          name: "Prices",
+          writeMode,
+        })
+      )
+    expect(info("Independent")).toEqual({
+      movementsPrimaryKey: "dimensions",
+      dimensionsUnique: false,
+      dimensionsNotNull: true,
+      totals: false,
+    })
+    expect(info("RecorderSubordinate")).toEqual({
+      movementsPrimaryKey: "recorder",
+      dimensionsUnique: true,
+      dimensionsNotNull: true,
+      totals: false,
+    })
+    expect(KIND_REGISTRY.Catalog.registerKeys).toBeUndefined()
   })
 
   it("information register recorder columns only when RecorderSubordinate", () => {

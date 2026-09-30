@@ -819,10 +819,11 @@ describe("stage 3: scope indexes", () => {
         resources: [attribute("qty", { type: "Integer" })],
       },
     })
+    // Індекс FK `(org_id, counterparty_id)` покриває префікс індексу рухів.
     expect(indexesOf(tableOf(physical, "stock"))).toEqual([
       {
-        name: "stock_org_id_counterparty_id_idx",
-        keys: ["org_id", "counterparty_id"],
+        name: "stock_org_id_counterparty_id_period_idx",
+        keys: ["org_id", "counterparty_id", "period"],
       },
       { name: "stock_org_id_period_idx", keys: ["org_id", "period"] },
     ])

@@ -10,10 +10,12 @@ import { pgEnumKind } from "./pg-enum"
 import type { KindDefinition } from "./standard"
 
 export {
+  singletonColumn,
   standardLogicalName,
   type FoundReference,
   type KindDefinition,
   type ReferenceRole,
+  type RegisterKeySpec,
   type StandardColumnDef,
   type WritePattern,
 } from "./standard"

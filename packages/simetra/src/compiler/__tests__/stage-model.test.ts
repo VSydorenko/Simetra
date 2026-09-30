@@ -374,7 +374,10 @@ describe("stage 3: physical snapshot", () => {
     ])
 
     const stock = tableOf(physical, "stock")
-    expect(stock.primaryKey).toBeUndefined()
+    expect(stock.primaryKey).toEqual({
+      name: "stock_pkey",
+      columns: ["recorder_type", "recorder_id", "line_number"],
+    })
     expect(stock.columns.map((c) => `${c.name} ${c.type}`)).toEqual([
       "period timestamp with time zone",
       "recorder_type text",

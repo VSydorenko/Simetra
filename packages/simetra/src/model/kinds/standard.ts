@@ -35,9 +35,11 @@ export interface StandardColumnDef {
   check?: string
   primaryKey?: true
   /**
-   * Ключ рядка-одинака. Колонка існує лише в нескоупленій формі об'єкта; у
-   * скоупленій рядок один на значення скоупу, тож ключем стає скоуп-колонка,
-   * а ця колонка (з її CHECK) не матеріалізується.
+   * Ключ рядка-одинака: ключ без жодної частини — глобальна константа,
+   * регістр без вимірів і періоду, підсумки регістра без вимірів. Колонка
+   * існує лише в нескоупленій формі таблиці; у скоупленій рядок один на
+   * значення скоупу, тож скоуп-колонка перебирає роль ключа цієї колонки
+   * (PK чи UNIQUE), а сама вона (з її CHECK) не матеріалізується.
    */
   singleton?: true
   indexed?: true
@@ -65,6 +67,7 @@ export type ReferenceRole =
   | "constant.allowedType"
   | "catalog.owner"
   | "register.recorder"
+  | "register.balanceControl"
   | "document.registerMovement"
   | "document.postingRegister"
   | "customTable.foreignKey"
@@ -78,6 +81,25 @@ export interface FoundReference {
   pointer: string
   ref: MetadataRef
   role: ReferenceRole
+}
+
+/**
+ * Ключі таблиць регістра (спека П2 §7, «Ключі й індекси регістрів»): факт
+ * виду, тож стадія 3 будує ключі за ним, а не за назвою виду.
+ */
+export interface RegisterKeySpec {
+  /**
+   * PK таблиці рухів: `recorder` — `(recorder_type, recorder_id, line_number)`,
+   * бо оболонка переписує рухи за реєстратором; `dimensions` —
+   * `(носій скоупу, period, виміри…)` без відсутніх частин.
+   */
+  movementsPrimaryKey: "recorder" | "dimensions"
+  /** `UNIQUE (носій скоупу, period, виміри…)` поруч із PK реєстратора. */
+  dimensionsUnique: boolean
+  /** «Порожній» вимір — порожнє значення, а не NULL: виміри входять у ключі. */
+  dimensionsNotNull: true
+  /** Таблиця поточних підсумків `<регістр>_totals`. */
+  totals: boolean
 }
 
 export interface KindDefinition {
@@ -125,6 +147,8 @@ export interface KindDefinition {
    */
   tabularSectionColumns?(obj: unknown): StandardColumnDef[]
   references(obj: unknown): FoundReference[]
+  /** Ключі таблиць регістра; є лише у видів-регістрів. */
+  registerKeys?(obj: unknown): RegisterKeySpec
 }
 
 /**
@@ -221,14 +245,32 @@ export function numberingType(
   return kind === "String" ? { type: "String", length } : { type: "Integer" }
 }
 
+/**
+ * Окремого індексу на `period` немає: період входить в індекси рухів і в
+ * ключ регістра (стадія 3 за `registerKeys`).
+ */
 export function periodColumn(): StandardColumnDef {
   return {
     logicalName: "period",
     physicalName: "period",
     type: { type: "DateTime" },
     notNull: true,
-    indexed: true,
     title: { uk: "Період", en: "Period" },
+  }
+}
+
+/** Ключ рядка-одинака: колонка, що може мати лише значення true. */
+export function singletonColumn(): StandardColumnDef {
+  return {
+    logicalName: "singleton",
+    physicalName: "singleton",
+    type: { type: "Boolean" },
+    notNull: true,
+    primaryKey: true,
+    singleton: true,
+    default: "true",
+    check: "singleton",
+    title: { uk: "Одинак", en: "Singleton" },
   }
 }
 

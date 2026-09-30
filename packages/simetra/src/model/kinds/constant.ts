@@ -2,6 +2,7 @@ import { constantSchema, type Constant } from "../schemas/constant"
 import type { ValueType } from "../schemas/value-type"
 import {
   keyOrderOf,
+  singletonColumn,
   valueTypeReferences,
   type KindDefinition,
   type StandardColumnDef,
@@ -25,18 +26,8 @@ function valueTypeOf(constant: Constant): ValueType {
 function standardColumns(obj: unknown): StandardColumnDef[] {
   const constant = obj as Constant
   return [
-    // Глобальна константа — рядок-одинак: ключ, що може мати лише значення true.
-    {
-      logicalName: "singleton",
-      physicalName: "singleton",
-      type: { type: "Boolean" },
-      notNull: true,
-      primaryKey: true,
-      singleton: true,
-      default: "true",
-      check: "singleton",
-      title: { uk: "Одинак", en: "Singleton" },
-    },
+    // Глобальна константа — рядок-одинак.
+    singletonColumn(),
     {
       logicalName: "value",
       physicalName: "value",

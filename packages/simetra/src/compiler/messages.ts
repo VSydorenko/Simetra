@@ -38,6 +38,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "register.resource-type": {
     message: () => "Accumulation register resources must be Integer or Numeric",
   },
+  "register.balance-control-type": {
+    message: () => "balanceControl is allowed only on a Balance register",
+    hint: "A Turnover register keeps no balances to control.",
+  },
   "customTable.column-type": {
     message: (p) =>
       `Field "${p.field}" does not fit the column type form (logical type, PgEnum or Raw)`,
@@ -110,6 +114,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "reference.unresolved": {
     message: (p) => `${p.kind} "${p.name}" does not exist`,
+  },
+  "register.balance-control-resource": {
+    message: (p) => `Register has no resource "${p.name}"`,
+    hint: "balanceControl lists logical names of the register's resources.",
   },
   "scope.declaration-missing": {
     message: (p) => `${p.kind} "${p.name}" does not declare its scope`,

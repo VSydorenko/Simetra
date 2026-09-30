@@ -14,6 +14,11 @@ export const accumulationRegisterSchema = z
 
     registerType: z.enum(["Balance", "Turnover"]).default("Balance"),
     recorderTypes: z.array(metadataRefSchema).default([]),
+    /**
+     * Контроль залишків в оболонці проведення (спека П2 §7): ресурси — логічні
+     * імена ресурсів цього регістра, їхнє існування перевіряє стадія 2.
+     */
+    balanceControl: z.object({ resources: z.array(z.string()) }).optional(),
 
     standardAttributeOverrides: standardAttributeOverridesSchema,
 
@@ -23,6 +28,19 @@ export const accumulationRegisterSchema = z
     attributes: z.array(attributeSchema).default([]),
   })
   .superRefine((register, ctx) => {
+    // Від'ємний залишок має сенс лише там, де є залишки: оборотний регістр
+    // лише накопичує обороти.
+    if (
+      register.balanceControl !== undefined &&
+      register.registerType !== "Balance"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "balanceControl is allowed only on a Balance register",
+        path: ["balanceControl"],
+        params: { rule: "register.balance-control-type" },
+      })
+    }
     // Ресурси регістра накопичення сумуються, тож вони лише числові.
     register.resources.forEach((resource, index) => {
       if (resource.type !== "Integer" && resource.type !== "Numeric") {

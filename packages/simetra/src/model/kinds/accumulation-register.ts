@@ -43,6 +43,14 @@ export const accumulationRegisterKind: KindDefinition = {
   columnFields: ["dimensions", "resources", "attributes"],
   valueElements: false,
   standardColumns,
+  // Рухи пишуть кілька документів, тож ключ рядка — реєстратор; підсумки
+  // тримає лише регістр залишків.
+  registerKeys: (obj) => ({
+    movementsPrimaryKey: "recorder",
+    dimensionsUnique: false,
+    dimensionsNotNull: true,
+    totals: (obj as AccumulationRegister).registerType === "Balance",
+  }),
   references(obj) {
     const register = obj as AccumulationRegister
     return [
