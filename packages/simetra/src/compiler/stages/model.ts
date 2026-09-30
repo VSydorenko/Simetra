@@ -93,6 +93,8 @@ interface Field {
   unique: boolean
   /** Скоуп-колонка, що передує колонці в UNIQUE: унікальність у межах скоупу. */
   uniqueWithin?: string
+  /** Скоуп-колонка, з якої починається кожен похідний індекс поля. */
+  indexWithin?: string
   target: Target
   onDelete: FkAction
   origin: PhysicalColumn["origin"]
@@ -412,6 +414,7 @@ class SnapshotBuilder {
       indexed: column.indexed === true && target.form !== "foreignKey",
       unique: column.unique === true,
       ...uniqueWithin(column.unique === true, scope),
+      ...indexWithin(scope),
       target,
       onDelete: column.onDelete ?? "noAction",
       origin:
@@ -530,6 +533,7 @@ class SnapshotBuilder {
       indexed: attribute.indexed,
       unique: attribute.unique,
       ...uniqueWithin(attribute.unique, scope),
+      ...indexWithin(scope),
       onDelete: "noAction",
       origin: { elementId: attribute.id ?? "" },
       pointer: `${pointer}/physicalName`,
@@ -770,6 +774,16 @@ class SnapshotBuilder {
 const NONE: Target = { form: "none" }
 
 /**
+ * Похідні індекси таблиці зі скоуп-колонкою починаються з неї: під RLS кожен
+ * запит несе предикат скоупу, тож `indexed` («шукаємо за полем») означає
+ * пошук у межах скоупу. Корінь і рядок ТЧ кореня власної колонки не мають —
+ * їхні індекси як у нескоупленого об'єкта.
+ */
+function indexWithin(scope: TableScope | undefined): { indexWithin?: string } {
+  return scope?.own === true ? { indexWithin: scope.carrier! } : {}
+}
+
+/**
  * UNIQUE колонки скоупленої таблиці — у межах значення скоупу: інакше
  * значення одного тенанта заважало б іншому. Таблиця кореня — виняток, її
  * рядки і є значеннями скоупу, тож унікальність там глобальна.
@@ -945,9 +959,11 @@ function addField(table: PendingTable, field: Field): string[] {
     })
     // FK сам індексу не має, а перевірка при видаленні цілі шукає рядки за
     // всіма його колонками — тож індекс на повний набір у порядку FK.
-    table.derivedIndexes.push(columns)
+    table.derivedIndexes.push(withinScope(columns, field.indexWithin))
   }
-  if (field.indexed) table.derivedIndexes.push(names)
+  if (field.indexed) {
+    table.derivedIndexes.push(withinScope(names, field.indexWithin))
+  }
   return names
 }
 
@@ -980,6 +996,13 @@ function materializeIndexes(table: PendingTable): void {
       nullsNotDistinct: false,
     })
   })
+}
+
+/** Колонки індексу з провідною скоуп-колонкою, якщо її там ще немає. */
+function withinScope(columns: string[], scope: string | undefined): string[] {
+  return scope === undefined || columns[0] === scope
+    ? columns
+    : [scope, ...columns]
 }
 
 function startsWith(key: readonly string[], prefix: readonly string[]) {

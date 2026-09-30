@@ -637,36 +637,58 @@ const uniqueText = (name: string, physicalName: string) =>
   attribute(name, { physicalName, type: "String", length: 20, unique: true })
 
 describe("stage 3: scope indexes", () => {
-  it("scoped catalog has no index on the scope column", () => {
+  it("scoped catalog with codeUnique has no separate code or scope index", () => {
     const physical = compileScoped({ [CP]: counterparty() })
-    // `org_id` покриває UNIQUE (org_id, id); код лишає свій індекс, бо
-    // UNIQUE (org_id, code) з коду не починається.
+    // `org_id` покриває UNIQUE (org_id, id), `(org_id, code)` — UNIQUE (org_id, code).
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([])
+  })
+
+  it("scoped catalog without codeUnique indexes code within the scope", () => {
+    const physical = compileScoped({
+      [CP]: counterparty({ codeUnique: false }),
+    })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_code_idx", keys: ["code"] },
+      { name: "counterparty_org_id_code_idx", keys: ["org_id", "code"] },
+    ])
+  })
+
+  it("scoped document indexes number and date within the scope", () => {
+    const physical = compileScoped({
+      "documents/Invoice/Invoice.meta.json": document("Invoice", {
+        scope: "org",
+      }),
+    })
+    expect(indexesOf(tableOf(physical, "invoice"))).toEqual([
+      { name: "invoice_org_id_date_idx", keys: ["org_id", "date"] },
+      { name: "invoice_org_id_number_idx", keys: ["org_id", "number"] },
+    ])
+  })
+
+  it("indexed attribute of a scoped object leads with the scope column", () => {
+    const rank = () => attribute("rank", { type: "Integer", indexed: true })
+    const physical = compileScoped({
+      [CP]: counterparty({ attributes: [rank()] }),
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        scope: "none",
+        attributes: [rank()],
+      }),
+    })
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      { name: "counterparty_org_id_rank_idx", keys: ["org_id", "rank"] },
+    ])
+    expect(indexesOf(tableOf(physical, "currency"))).toEqual([
+      { name: "currency_rank_idx", keys: ["rank"] },
     ])
   })
 
   it("composite reference gets one index on the full FK", () => {
     const physical = compileScoped({
       [CP]: counterparty(),
-      [CONTRACT]: contract(),
-    })
-    expect(indexesOf(tableOf(physical, "contract"))).toEqual([
-      { name: "contract_code_idx", keys: ["code"] },
-      {
-        name: "contract_org_id_counterparty_id_idx",
-        keys: ["org_id", "counterparty_id"],
-      },
-    ])
-  })
-
-  it("explicitly indexed reference keeps its own index", () => {
-    const physical = compileScoped({
-      [CP]: counterparty(),
       [CONTRACT]: contract({
         attributes: [
           attribute("counterparty", {
             physicalName: "counterparty_id",
+            // Явний `indexed` дає той самий (org_id, counterparty_id) — не дублюється.
             indexed: true,
             ...ref("Catalog", "Counterparty"),
           }),
@@ -674,11 +696,31 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "contract"))).toEqual([
-      { name: "contract_code_idx", keys: ["code"] },
-      { name: "contract_counterparty_id_idx", keys: ["counterparty_id"] },
       {
         name: "contract_org_id_counterparty_id_idx",
         keys: ["org_id", "counterparty_id"],
+      },
+    ])
+  })
+
+  it("plain reference from a scoped table leads with the scope column", () => {
+    const physical = compileScoped({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        scope: "none",
+      }),
+      [CP]: counterparty({
+        attributes: [
+          attribute("currency", {
+            physicalName: "currency_id",
+            ...ref("Catalog", "Currency"),
+          }),
+        ],
+      }),
+    })
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      {
+        name: "counterparty_org_id_currency_id_idx",
+        keys: ["org_id", "currency_id"],
       },
     ])
   })
@@ -704,10 +746,6 @@ describe("stage 3: scope indexes", () => {
         keys: ["org_id", "parent_id"],
       },
     ])
-    expect(indexesOf(tableOf(physical, "invoice")).map((i) => i.name)).toEqual([
-      "invoice_date_idx",
-      "invoice_number_idx",
-    ])
   })
 
   it("hierarchy parent is indexed on the composite key", () => {
@@ -715,7 +753,6 @@ describe("stage 3: scope indexes", () => {
       [CP]: counterparty({ hierarchyType: "ItemsOnly" }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_code_idx", keys: ["code"] },
       {
         name: "counterparty_org_id_parent_id_idx",
         keys: ["org_id", "parent_id"],
@@ -723,7 +760,7 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("register indexes the composite dimension, covering the scope column", () => {
+  it("register indexes lead with the scope column", () => {
     const physical = compileScoped({
       [CP]: counterparty(),
       "documents/Sale/Sale.meta.json": document("Sale", { scope: "org" }),
@@ -748,7 +785,30 @@ describe("stage 3: scope indexes", () => {
         name: "stock_org_id_counterparty_id_idx",
         keys: ["org_id", "counterparty_id"],
       },
-      { name: "stock_period_idx", keys: ["period"] },
+      { name: "stock_org_id_period_idx", keys: ["org_id", "period"] },
+    ])
+  })
+
+  it("root and its tabular section rows keep single-column indexes", () => {
+    const physical = compileScoped({
+      [ORG]: organization({
+        codeUnique: false,
+        tabularSections: [
+          {
+            id: uuid(915),
+            name: "notes",
+            physicalName: "organization_notes",
+            attributes: [attribute("rank", { type: "Integer", indexed: true })],
+          },
+        ],
+      }),
+    })
+    expect(indexesOf(tableOf(physical, "organization"))).toEqual([
+      { name: "organization_code_idx", keys: ["code"] },
+    ])
+    expect(indexesOf(tableOf(physical, "organization_notes"))).toEqual([
+      { name: "organization_notes_parent_id_idx", keys: ["parent_id"] },
+      { name: "organization_notes_rank_idx", keys: ["rank"] },
     ])
   })
 
@@ -885,10 +945,9 @@ describe("stage 3: scoped owner", () => {
         onDelete: "noAction",
       }),
     ])
-    expect(indexesOf(table)).toContainEqual({
-      name: "contract_org_id_owner_id_idx",
-      keys: ["org_id", "owner_id"],
-    })
+    expect(indexesOf(table)).toEqual([
+      { name: "contract_org_id_owner_id_idx", keys: ["org_id", "owner_id"] },
+    ])
   })
 
   it("root as owner is plain", () => {
