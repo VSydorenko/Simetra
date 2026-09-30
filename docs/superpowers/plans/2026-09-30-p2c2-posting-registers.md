@@ -106,17 +106,17 @@ AST з перевірками, запит рухів як іменований �
   `scope.custom-table-column` також коли `scopeColumn` задано, а `scope` —
   `"none"` чи відсутнє.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 - `scope kind named like a standard attribute` — вид скоупу `code` у
   довідника з `codeLength > 0` → `scope.attribute-name-collision`;
 - `crossScope on custom table column` → issue `params.rule === "customTable.cross-scope-not-allowed"`;
 - `scopeColumn without scope` → `scope.custom-table-column`, pointer `/scopeColumn`;
 - наявні тести з `to.kind === "Column"` → `"Element"`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-scope custom-table` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-scope custom-table` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -170,7 +170,7 @@ git commit -m "fix(compiler): хвости скоупу — стандартні
   - Правило стадії 4 `physical.table-duplicate` покриває колізію таблиці
     підсумків (нового коду не треба).
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `stage-registers.test.ts`:
 - `accumulation movements key` — скоуплений регістр `stock` з вимірами
@@ -198,11 +198,11 @@ git commit -m "fix(compiler): хвости скоупу — стандартні
   `balanceControl names unknown resource` → `register.balance-control-resource`,
   pointer `/balanceControl/resources/0`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-registers` → FAIL.
-- [ ] **Step 3: Реалізація** — за Interfaces.
-- [ ] **Step 4: Зелені** — PASS; повні гейти (тести фізики планів B і C1 з
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-registers` → FAIL.
+- [x] **Step 3: Реалізація** — за Interfaces.
+- [x] **Step 4: Зелені** — PASS; повні гейти (тести фізики планів B і C1 з
   регістрами оновлюються під нові ключі — зміна очікувана, опиши в коміті).
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -251,7 +251,7 @@ git commit -m "feat(compiler): ключі, поточні підсумки й і
   літерал виду руху; будь-який інший рядок розбирається як вираз (тож
   `"doc.kind"` — вираз, а `"'Receipt'"` — вираз-рядок із тим самим значенням).
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `posting-parse.test.ts`:
 - `parses precedence` — `row.qty * row.price + doc.delivery` → `binary +` з
@@ -270,12 +270,12 @@ git commit -m "feat(compiler): ключі, поточні підсумки й і
   `params.offset` — число;
 - `validations are gone` — розібраний документ не має `posting.validations`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test posting-parse kind-schemas` → FAIL.
-- [ ] **Step 3: Реалізація й видалення** — за Interfaces; `kinds/document.ts`
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test posting-parse kind-schemas` → FAIL.
+- [x] **Step 3: Реалізація й видалення** — за Interfaces; `kinds/document.ts`
   повертає посилання `movements[].register` з роллю `posting.register`
   (роль `document.postingRegister` зникає).
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git rm packages/simetra/src/model/schemas/posting.ts packages/simetra/src/model/posting-compatibility.ts packages/simetra/src/model/__tests__/posting-compatibility.test.ts packages/simetra/src/model/__tests__/condition-expression.test.ts
@@ -310,7 +310,7 @@ git commit -m "feat(model): конструктор рухів — плаский
     `posting.tabular-section-unknown` (у `source` чи агрегаті). Pointer — на
     поле з виразом, `params.offset` — початок вузла.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `helpers.ts`: `salesDocument()` — документ `Sale` з ТЧ `goods` (`item` Ref,
 `qty` Numeric, `amount` Numeric), регістр залишків `Stock` (виміри `item`,
@@ -332,10 +332,10 @@ git commit -m "feat(model): конструктор рухів — плаский
 - `unknown tabular section` — `source: { tabularSection: "services" }` →
   `posting.tabular-section-unknown`, pointer `/posting/movements/0/source/tabularSection`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -375,7 +375,7 @@ git commit -m "feat(compiler): стадія 2 — резолв імен у ви�
     `null` — лише в поле, колонка якого nullable (не вимір, не ресурс
     регістра накопичення, не `required`); `condition` — boolean; `period` — date).
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `stage-posting-integrity.test.ts` — по тесту на кожне правило (code,
 pointer), серед них:
@@ -394,10 +394,10 @@ pointer), серед них:
 - `document not among recorders` → `posting.recorder-not-allowed`;
 - `register not declared in registerMovements` → `posting.register-undeclared`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-integrity` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-integrity` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -434,7 +434,7 @@ git commit -m "feat(compiler): стадія 4 — семантика рухів 
     регістра); блок для регістра поза `registerMovements` — `posting.register-undeclared`.
     `compile` запускає стадію 5 після 4, коли 1–2 без помилок.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `movement-blocks.test.ts`:
 - `extracts named blocks and keeps line numbers`;
@@ -453,10 +453,10 @@ git commit -m "feat(compiler): стадія 4 — семантика рухів 
 - `block containing the wrapper delimiter` — `$simetra$` у тексті блоку →
   `file.movements-block`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test movement-blocks stage-links` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test movement-blocks stage-links` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -507,7 +507,7 @@ git commit -m "feat(compiler): блоки запиту рухів у .sql док
     Ідентифікатори — `quoteIdent`.
   - Функція детермінована: той самий вхід — побайтно той самий `sql`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `movement-functions.test.ts` — порівняння з еталонними рядками (inline
 snapshot `toMatchInlineSnapshot` для читабельності):
@@ -520,10 +520,10 @@ snapshot `toMatchInlineSnapshot` для читабельності):
   `timezone: "Europe/Kyiv"`, `'UTC'` — за замовчуванням;
 - `deterministic output` — два прогони дають однаковий `sql`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test movement-functions` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test movement-functions` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -569,7 +569,7 @@ git commit -m "feat(compiler): обгортки запитів рухів і п�
 - Правило стадії 4: `physical.function-duplicate` — ім'я функції контракту чи
   обгортки збігається з іншою функцією чи таблицею в тій самій PG-схемі.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `contracts.test.ts`:
 - `posting contract of a document` — `post`/`unpost` імена, рух `Stock` з
@@ -583,10 +583,10 @@ git commit -m "feat(compiler): обгортки запитів рухів і п�
 - `function name collision` — довідник `physicalName: "stock_balance"` поруч
   із регістром залишків `stock` → `physical.function-duplicate`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test contracts` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Канон і статус**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test contracts` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Канон і статус**
 - `simetra-domain-criteria.md`: критерій «posting and condition DSL» —
   переписати під AST (`packages/simetra/src/model/posting/`) і блоки запиту;
   рецензент шукає вираз, що обходить AST, чи рух, що пише оболонкові колонки.
@@ -594,7 +594,7 @@ git commit -m "feat(compiler): обгортки запитів рухів і п�
 
 Run: `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/simetra .agents docs/ROADMAP.md
