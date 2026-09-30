@@ -2,7 +2,8 @@
  * Shared Metadata IO layer — чисті TS-функції для parsing/serialization
  * файлової структури метаданих. Без залежностей від Node.js API або browser API.
  *
- * Використовується в: apps/web (WebStorage), packages/cli, apps/runtime (Phase 3).
+ * Прототипні споживачі (legacy/web, legacy/cli) заморожені; модуль
+ * перебудовується разом із метамоделлю T0 (спека П2 М9).
  */
 
 import type {

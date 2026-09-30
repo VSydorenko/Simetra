@@ -4,7 +4,7 @@ import type { MetadataKind } from "./metadata-kind"
  * Маппінг MetadataKind → фізичний префікс для SQL-ідентифікаторів.
  * Призначення: усунення колізій між однойменними об'єктами різних kind-ів
  * (наприклад, Catalog.Status і Enumeration.Status → cat_status та enum_status).
- * Живе в core, а не в generator-pg, бо є доменним правилом — будь-який генератор
+ * Живе в метамоделі (T0), а не в генераторі SQL, бо є доменним правилом — будь-який генератор
  * (PostgreSQL, MSSQL, ...) мусить використовувати той самий маппінг.
  */
 export const KIND_PREFIX: Record<MetadataKind, string> = {

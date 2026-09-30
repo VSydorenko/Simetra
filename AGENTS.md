@@ -76,10 +76,10 @@ the navigation adapter interface; framework adapters live in T6; the host
 template and the studio are the only places that import TanStack Start. It is
 held by the same `packages/simetra/eslint.tier-zones.js` and its negative test.
 
-**Current code is a prototype.** The prototype metamodel now lives in T0
-(`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest of the prototype (CLI, generators, UI, web
-configurator) is frozen in `legacy/`: read it, but do not build, test, import
-or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
+**Current code is a prototype.** The prototype metamodel lives in T0
+(`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest
+of the prototype (CLI, generators, UI, web configurator) is frozen in
+`legacy/`: read it, but do not build, test, import or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
 is deleted) of the parts it names — read it there, do not restate it. A package
 §14 does not name has an **open** fate: treat it as neither slated for deletion
 nor adopted, and ask the owner before investing in it or removing it.
