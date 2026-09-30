@@ -1,0 +1,357 @@
+import {
+  KIND_REGISTRY,
+  makeObjectName,
+  postsMovements,
+  standardLogicalName,
+  type Attribute,
+  type AttributeCase,
+  type PhysicalColumn,
+  type PhysicalSnapshot,
+  type PhysicalTable,
+  type VirtualTableKind,
+} from "simetra/model"
+import { compareStrings } from "./diagnostics"
+import type { SqlUnit } from "./movement-functions"
+import type { ParsedObject } from "./stages/files"
+import type { ResolvedReference } from "./stages/identity"
+
+export interface QualifiedName {
+  schema: string
+  name: string
+}
+
+export interface PostingContract {
+  documentId: string
+  post: QualifiedName
+  unpost: QualifiedName
+  /** За `registerId`. */
+  movements: {
+    registerId: string
+    source: "query" | "constructor"
+    function: QualifiedName
+  }[]
+  /** Фізичні імена ресурсів; за `registerId`. */
+  balanceControl: { registerId: string; resources: string[] }[]
+}
+
+export interface VirtualTableContract {
+  kind: VirtualTableKind
+  function: QualifiedName
+  parameters: { name: "p_at" | "p_from" | "p_to"; type: string }[]
+  columns: { name: string; type: string }[]
+}
+
+export interface RegisterContract {
+  registerId: string
+  movements: QualifiedName
+  totals?: QualifiedName
+  virtualTables: VirtualTableContract[]
+  totalsMaintenance?: { recalculate: QualifiedName; verify: QualifiedName }
+  balanceControl?: { resources: string[] }
+}
+
+export interface Contracts {
+  /** За `documentId`. */
+  posting: PostingContract[]
+  /** За `registerId`. */
+  registers: RegisterContract[]
+}
+
+/** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
+export interface DerivedFunction extends QualifiedName {
+  file: string
+  pointer: string
+  /** Для тексту діагностики: що це за функція. */
+  description: string
+}
+
+const TIMESTAMP = "timestamp with time zone"
+
+/** Мітки імен віртуальних таблиць і їхні параметри (спека §7). */
+const VIRTUAL_TABLES: Record<
+  VirtualTableKind,
+  { label: string; parameters: VirtualTableContract["parameters"] }
+> = {
+  balance: {
+    label: "balance",
+    parameters: [{ name: "p_at", type: TIMESTAMP }],
+  },
+  balanceAndTurnovers: {
+    label: "balance_and_turnovers",
+    parameters: [
+      { name: "p_from", type: TIMESTAMP },
+      { name: "p_to", type: TIMESTAMP },
+    ],
+  },
+  turnovers: {
+    label: "turnovers",
+    parameters: [
+      { name: "p_from", type: TIMESTAMP },
+      { name: "p_to", type: TIMESTAMP },
+    ],
+  },
+  sliceLast: {
+    label: "slice_last",
+    parameters: [{ name: "p_at", type: TIMESTAMP }],
+  },
+  sliceFirst: {
+    label: "slice_first",
+    parameters: [{ name: "p_at", type: TIMESTAMP }],
+  },
+}
+
+/** Основна таблиця об'єкта (не ТЧ і не підсумки). */
+export function mainTableOf(
+  physical: PhysicalSnapshot,
+  objectId: string
+): PhysicalTable | undefined {
+  return physical.tables.find(
+    (t) =>
+      t.origin.objectId === objectId &&
+      t.origin.tabularSectionId === undefined &&
+      t.origin.part === undefined
+  )
+}
+
+function totalsTableOf(
+  physical: PhysicalSnapshot,
+  objectId: string
+): PhysicalTable | undefined {
+  return physical.tables.find(
+    (t) => t.origin.objectId === objectId && t.origin.part === "totals"
+  )
+}
+
+/** Ім'я похідної функції — алгоритм імен Postgres від таблиці власника. */
+function derived(table: PhysicalTable, label: string): QualifiedName {
+  return {
+    schema: table.schema,
+    name: makeObjectName(table.name, undefined, label),
+  }
+}
+
+function isRegister(object: ParsedObject): boolean {
+  return KIND_REGISTRY[object.kind].registerKeys !== undefined
+}
+
+/**
+ * Усі похідні імена функцій, що їх породжує модель, — для перевірки колізій
+ * на стадії 4 (спека §7). Обгортки запитів беруться з оголошених
+ * `registerMovements`: на моделі без помилок кожен оголошений регістр має
+ * рівно одне джерело рухів, тож обгортка є саме для нього.
+ */
+export function derivedFunctions(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  physical: PhysicalSnapshot,
+  wrapperName: (document: PhysicalTable, register: PhysicalTable) => string
+): DerivedFunction[] {
+  const result: DerivedFunction[] = []
+  const add = (
+    object: ParsedObject,
+    name: QualifiedName,
+    description: string,
+    pointer = "/physicalName"
+  ) => result.push({ ...name, file: object.file, pointer, description })
+
+  const byId = new Map(objects.map((o) => [o.id ?? "", o]))
+  for (const object of objects) {
+    const table = mainTableOf(physical, object.id ?? "")
+    if (table === undefined) continue
+    if (postsMovements(object.kind)) {
+      add(object, derived(table, "post"), `post of ${object.name}`)
+      add(object, derived(table, "unpost"), `unpost of ${object.name}`)
+    }
+    const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
+    if (keys === undefined) continue
+    for (const kind of keys.virtualTables) {
+      add(
+        object,
+        derived(table, VIRTUAL_TABLES[kind].label),
+        `${kind} virtual table of ${object.name}`
+      )
+    }
+    if (keys.totals) {
+      add(
+        object,
+        derived(table, "totals_recalculate"),
+        `totals recalculation of ${object.name}`
+      )
+      add(
+        object,
+        derived(table, "totals_verify"),
+        `totals verification of ${object.name}`
+      )
+    }
+  }
+
+  const seen = new Set<string>()
+  for (const reference of references) {
+    if (reference.role !== "document.registerMovement") continue
+    const document = byId.get(reference.from.objectId)
+    const register = byId.get(reference.to.id)
+    if (document === undefined || register === undefined) continue
+    const key = `${document.id}\0${register.id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const documentTable = mainTableOf(physical, document.id ?? "")
+    const registerTable = mainTableOf(physical, register.id ?? "")
+    if (documentTable === undefined || registerTable === undefined) continue
+    add(
+      document,
+      {
+        schema: documentTable.schema,
+        name: wrapperName(documentTable, registerTable),
+      },
+      `movement query of ${document.name} into ${register.name}`,
+      reference.from.pointer
+    )
+  }
+  return result
+}
+
+/**
+ * Контракти оболонки проведення, віртуальних таблиць і підсумків (спека §7,
+ * §8.3): П3 генерує з них SQL і не виводить їх удруге. Викликається лише на
+ * моделі без помилок; порядок скрізь за id, тож вихід детермінований.
+ */
+export function buildContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  style: AttributeCase,
+  sqlUnits: readonly SqlUnit[]
+): Contracts {
+  const registers = objects
+    .filter(isRegister)
+    .map((register) => registerContract(register, physical, style))
+    .sort((a, b) => compareStrings(a.registerId, b.registerId))
+  const controlById = new Map(
+    registers.map((r) => [r.registerId, r.balanceControl?.resources])
+  )
+
+  const posting = objects
+    .filter((object) => postsMovements(object.kind))
+    .map((document): PostingContract => {
+      const table = must(mainTableOf(physical, document.id ?? ""))
+      const movements = sqlUnits
+        .filter((unit) => unit.documentId === document.id)
+        .map((unit) => ({
+          registerId: unit.registerId,
+          source: unit.source,
+          function: { schema: unit.schema, name: unit.name },
+        }))
+        .sort((a, b) => compareStrings(a.registerId, b.registerId))
+      return {
+        documentId: document.id ?? "",
+        post: derived(table, "post"),
+        unpost: derived(table, "unpost"),
+        movements,
+        balanceControl: movements.flatMap(({ registerId }) => {
+          const resources = controlById.get(registerId)
+          return resources === undefined ? [] : [{ registerId, resources }]
+        }),
+      }
+    })
+    .sort((a, b) => compareStrings(a.documentId, b.documentId))
+  return { posting, registers }
+}
+
+function registerContract(
+  register: ParsedObject,
+  physical: PhysicalSnapshot,
+  style: AttributeCase
+): RegisterContract {
+  const id = register.id ?? ""
+  const table = must(mainTableOf(physical, id))
+  const def = KIND_REGISTRY[register.kind]
+  const keys = must(def.registerKeys?.(register.data))
+  const data = register.data as {
+    dimensions: Attribute[]
+    resources: Attribute[]
+    attributes: Attribute[]
+    balanceControl?: { resources: string[] }
+  }
+  // Носій скоупу не колонка віртуальної таблиці: скоуп дає RLS (спека §7).
+  const columnsOf = (attributes: readonly Attribute[]): PhysicalColumn[] => {
+    const ids = new Set(attributes.map((a) => a.id))
+    return table.columns.filter(
+      (c) =>
+        c.origin.scopeKindId === undefined &&
+        c.origin.elementId !== undefined &&
+        ids.has(c.origin.elementId)
+    )
+  }
+  const column = ({ name, type }: PhysicalColumn) => ({ name, type })
+  const dimensions = columnsOf(data.dimensions)
+  const resources = columnsOf(data.resources)
+  const periodDef = def
+    .standardColumns(register.data)
+    .find((c) => c.logicalName === "period")
+  const period = table.columns.filter(
+    (c) =>
+      periodDef !== undefined &&
+      c.origin.standard === standardLogicalName(periodDef, style)
+  )
+
+  const columnsFor: Record<VirtualTableKind, { name: string; type: string }[]> =
+    {
+      balance: [...dimensions, ...resources].map(column),
+      balanceAndTurnovers: [
+        ...dimensions.map(column),
+        ...resources.flatMap((r) =>
+          ["opening", "receipt", "expense", "closing"].map((label) => ({
+            name: makeObjectName(r.name, undefined, label),
+            type: r.type,
+          }))
+        ),
+      ],
+      turnovers: [...dimensions, ...resources].map(column),
+      sliceLast: [
+        ...period,
+        ...dimensions,
+        ...resources,
+        ...columnsOf(data.attributes),
+      ].map(column),
+      sliceFirst: [],
+    }
+  columnsFor.sliceFirst = columnsFor.sliceLast
+
+  const totals = totalsTableOf(physical, id)
+  const balanceControl =
+    data.balanceControl === undefined
+      ? undefined
+      : {
+          resources: data.balanceControl.resources.map((name) => {
+            const resource = must(data.resources.find((r) => r.name === name))
+            return must(columnsOf([resource])[0]).name
+          }),
+        }
+  return {
+    registerId: id,
+    movements: { schema: table.schema, name: table.name },
+    ...(totals === undefined
+      ? {}
+      : { totals: { schema: totals.schema, name: totals.name } }),
+    virtualTables: keys.virtualTables.map((kind) => ({
+      kind,
+      function: derived(table, VIRTUAL_TABLES[kind].label),
+      parameters: VIRTUAL_TABLES[kind].parameters,
+      columns: columnsFor[kind],
+    })),
+    ...(keys.totals
+      ? {
+          totalsMaintenance: {
+            recalculate: derived(table, "totals_recalculate"),
+            verify: derived(table, "totals_verify"),
+          },
+        }
+      : {}),
+    ...(balanceControl === undefined ? {} : { balanceControl }),
+  }
+}
+
+/** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */
+function must<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("internal: missing contract input")
+  return value
+}

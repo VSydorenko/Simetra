@@ -15,3 +15,10 @@ export {
 } from "./compile"
 export type { ResolvedReference } from "./stages/identity"
 export type { SqlUnit } from "./movement-functions"
+export type {
+  Contracts,
+  PostingContract,
+  QualifiedName,
+  RegisterContract,
+  VirtualTableContract,
+} from "./contracts"

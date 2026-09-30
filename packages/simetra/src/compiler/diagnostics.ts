@@ -57,6 +57,7 @@ export const COMPILER_RULES = [
   "physical.table-duplicate",
   "physical.column-duplicate",
   "physical.discriminator-duplicate",
+  "physical.function-duplicate",
   "physical.reserved-word",
   "physical.name-too-long",
   "physical.constraint-name-required",

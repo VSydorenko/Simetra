@@ -280,8 +280,12 @@ describe("standard columns", () => {
       movementIndexes: true,
       totals: true,
       additiveResources: true,
+      virtualTables: ["balance", "balanceAndTurnovers"],
     })
     expect(keys(parse({ registerType: "Turnover" })).totals).toBe(false)
+    expect(keys(parse({ registerType: "Turnover" })).virtualTables).toEqual([
+      "turnovers",
+    ])
 
     const info = (writeMode: string) =>
       KIND_REGISTRY.InformationRegister.registerKeys!(
@@ -298,6 +302,7 @@ describe("standard columns", () => {
       movementIndexes: false,
       totals: false,
       additiveResources: false,
+      virtualTables: [],
     })
     expect(info("RecorderSubordinate")).toEqual({
       movementsPrimaryKey: "recorder",
@@ -306,6 +311,7 @@ describe("standard columns", () => {
       movementIndexes: false,
       totals: false,
       additiveResources: false,
+      virtualTables: [],
     })
     expect(KIND_REGISTRY.Catalog.registerKeys).toBeUndefined()
   })

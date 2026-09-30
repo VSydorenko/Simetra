@@ -315,6 +315,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Another target of this polymorphic reference has physical name ${p.name}`,
     hint: "The type column stores the target's physicalName, so targets must differ by it regardless of schema.",
   },
+  "physical.function-duplicate": {
+    message: (p) =>
+      `Function ${p.name} (${p.description}) collides with ${p.other} in schema ${p.schema}`,
+    hint: "Function names are derived from physical names of documents and registers by the Postgres naming algorithm; change a physicalName so the names differ.",
+  },
   "physical.reserved-word": {
     message: (p) => `Physical name ${p.name} is an SQL reserved word`,
     hint: "It works when quoted, but new elements should not take reserved words.",

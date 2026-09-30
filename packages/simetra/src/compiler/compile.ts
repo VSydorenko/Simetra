@@ -5,6 +5,7 @@ import {
   type Project,
 } from "simetra/model"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
+import { buildContracts, type Contracts } from "./contracts"
 import { readFiles } from "./stages/files"
 import { checkIdentity, type ResolvedReference } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
@@ -47,6 +48,7 @@ export interface CompiledModel {
   physical: PhysicalSnapshot
   /** За `(schema, name)`. */
   sqlUnits: SqlUnit[]
+  contracts: Contracts
 }
 
 export interface CompileResult {
@@ -139,6 +141,12 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
         compareStrings(a.name, b.name)
     )
 
+  const sqlUnits = buildMovementFunctions(
+    stage1.objects,
+    stage2.references,
+    stage3.physical,
+    stage1.project
+  )
   return {
     ok,
     diagnostics,
@@ -161,11 +169,12 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
         }))
         .sort((a, b) => compareStrings(a.file, b.file)),
       physical: stage3.physical,
-      sqlUnits: buildMovementFunctions(
+      sqlUnits,
+      contracts: buildContracts(
         stage1.objects,
-        stage2.references,
         stage3.physical,
-        stage1.project
+        stage1.project.naming.attributeCase,
+        sqlUnits
       ),
     },
   }

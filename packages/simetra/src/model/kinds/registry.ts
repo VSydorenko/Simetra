@@ -17,6 +17,7 @@ export {
   type ReferenceRole,
   type RegisterKeySpec,
   type StandardColumnDef,
+  type VirtualTableKind,
   type WritePattern,
 } from "./standard"
 

@@ -10,12 +10,14 @@ import {
   NO_SCOPE,
   type MetadataRef,
   type MovementDecl,
+  type PhysicalTable,
   type ReferenceRole,
   type ScopeKind,
   type StandardColumnDef,
   type ValueType,
 } from "simetra/model"
 import {
+  compareStrings,
   diagnostic,
   toPointer,
   type CompilerRule,
@@ -30,6 +32,8 @@ import {
   type OperandError,
   type PostingContext,
 } from "../posting-types"
+import { derivedFunctions, type DerivedFunction } from "../contracts"
+import { movementWrapperName } from "../movement-functions"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
 import {
@@ -105,6 +109,18 @@ export function checkIntegrity(
       )
     }
   }
+
+  diagnostics.push(
+    ...functionCollisions(
+      derivedFunctions(
+        objects,
+        references,
+        model.physical,
+        movementWrapperName
+      ),
+      model.physical.tables
+    )
+  )
 
   // Таблиці й енам-типи ділять простір імен типів PG-схеми.
   const relations = new Map<string, string>()
@@ -1002,4 +1018,42 @@ function checkPosting(
     })
   }
   return found
+}
+
+/**
+ * Похідні функції (контракти й обгортки) не збігаються між собою й із
+ * таблицями тієї ж PG-схеми (спека §7): інакше `CREATE` П3 упаде чи мовчки
+ * перепише чуже. Першою вважається функція, раніша за файлом і шляхом.
+ */
+function functionCollisions(
+  functions: readonly DerivedFunction[],
+  tables: readonly PhysicalTable[]
+): Diagnostic[] {
+  const tableNames = new Set(tables.map((t) => `${t.schema}.${t.name}`))
+  const seen = new Map<string, DerivedFunction>()
+  const diagnostics: Diagnostic[] = []
+  const ordered = [...functions].sort(
+    (a, b) =>
+      compareStrings(a.file, b.file) || compareStrings(a.pointer, b.pointer)
+  )
+  for (const fn of ordered) {
+    const key = `${fn.schema}.${fn.name}`
+    const first = seen.get(key)
+    const other = tableNames.has(key)
+      ? "a table"
+      : first !== undefined
+        ? `function of ${first.description}`
+        : undefined
+    if (first === undefined) seen.set(key, fn)
+    if (other === undefined) continue
+    diagnostics.push(
+      diagnostic("physical.function-duplicate", fn.file, fn.pointer, {
+        schema: fn.schema,
+        name: fn.name,
+        description: fn.description,
+        other,
+      })
+    )
+  }
+  return diagnostics
 }

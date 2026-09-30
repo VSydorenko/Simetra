@@ -81,6 +81,17 @@ export function buildMovementFunctions(
   )
 }
 
+/**
+ * Ім'я обгортки запиту рухів — алгоритм імен Postgres від таблиць документа й
+ * регістра; спільне для обгортки й перевірки колізій стадії 4.
+ */
+export function movementWrapperName(
+  document: PhysicalTable,
+  register: PhysicalTable
+): string {
+  return makeObjectName(document.name, register.name, "movements")
+}
+
 type Element = Record<string, unknown>
 
 class Context {
@@ -132,11 +143,7 @@ class Context {
     const register = must(this.byId.get(registerId), `register ${registerId}`)
     const registerTable = this.table(registerId)
     const columns = this.resultColumns(register, registerTable)
-    const name = makeObjectName(
-      documentTable.name,
-      registerTable.name,
-      "movements"
-    )
+    const name = movementWrapperName(documentTable, registerTable)
     const signature = columns
       .map((c) => `${quoteIdent(c.name)} ${c.type}`)
       .join(", ")

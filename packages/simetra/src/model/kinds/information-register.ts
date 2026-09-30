@@ -48,6 +48,11 @@ export const informationRegisterKind: KindDefinition = {
       movementIndexes: false,
       totals: false,
       additiveResources: false,
+      // Зрізи мають сенс лише над періодом, а неперіодичний регістр його не має.
+      virtualTables:
+        (obj as InformationRegister).periodicity === "NonPeriodic"
+          ? []
+          : ["sliceLast", "sliceFirst"],
     }
   },
   references(obj) {
