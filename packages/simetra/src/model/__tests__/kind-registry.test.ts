@@ -442,7 +442,7 @@ describe("references()", () => {
             register: { kind: "AccumulationRegister", name: "Stock" },
             movementType: "Expense",
             source: "document",
-            mappings: {},
+            fields: {},
           },
         ],
       },
@@ -471,7 +471,7 @@ describe("references()", () => {
       {
         pointer: "/posting/movements/0/register",
         ref: { kind: "AccumulationRegister", name: "Stock" },
-        role: "document.postingRegister",
+        role: "posting.register",
       },
     ])
   })

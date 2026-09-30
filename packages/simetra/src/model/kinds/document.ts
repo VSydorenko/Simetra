@@ -53,12 +53,7 @@ function postingReferences(document: Document): FoundReference[] {
     ...document.posting.movements.map((movement, index) => ({
       pointer: `/posting/movements/${index}/register`,
       ref: movement.register,
-      role: "document.postingRegister" as const,
-    })),
-    ...document.posting.validations.map((validation, index) => ({
-      pointer: `/posting/validations/${index}/register`,
-      ref: validation.register,
-      role: "document.postingRegister" as const,
+      role: "posting.register" as const,
     })),
   ]
 }

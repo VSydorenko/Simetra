@@ -53,6 +53,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "customTable.identity-type": {
     message: () => "identity requires SmallInt, Integer or BigInt type",
   },
+  "posting.parse": {
+    message: (p) => `Invalid expression: ${p.detail ?? "syntax error"}`,
+  },
   "pgEnum.value-duplicate": {
     message: () => "Enum label is already declared earlier in values",
   },

@@ -21,6 +21,7 @@ export const SCHEMA_RULES = [
   "scope.name-reserved",
   "scope.not-allowed",
   "type.cross-scope-not-allowed",
+  "posting.parse",
 ] as const
 
 export type SchemaRule = (typeof SCHEMA_RULES)[number]

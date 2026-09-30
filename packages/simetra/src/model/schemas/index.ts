@@ -32,32 +32,10 @@ export {
 } from "./value-type"
 export { SCHEMA_RULES, type SchemaRule } from "./rules"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
-export {
-  mappingExpressionSchema,
-  type MappingExpression,
-  conditionExpressionSchema,
-  type ConditionExpression,
-  registerKindSchema,
-  type RegisterKind,
-  registerRefSchema,
-  type RegisterRef,
-  movementMappingSetSchema,
-  type MovementMappingSet,
-  movementTypeSchema,
-  type MovementType,
-  movementSourceSchema,
-  type MovementSource,
-  postingMovementSchema,
-  type PostingMovement,
-  postingValidationSchema,
-  type PostingValidation,
-  postingSchema,
-  type Posting,
-} from "./posting"
 
 // Metadata types
 export { catalogSchema, type Catalog } from "./catalog"
-export { documentSchema, type Document } from "./document"
+export { documentSchema, type Document, type MovementDecl } from "./document"
 export {
   enumerationSchema,
   enumValueSchema,

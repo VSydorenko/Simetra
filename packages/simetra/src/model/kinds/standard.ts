@@ -69,7 +69,7 @@ export type ReferenceRole =
   | "register.recorder"
   | "register.balanceControl"
   | "document.registerMovement"
-  | "document.postingRegister"
+  | "posting.register"
   | "customTable.foreignKey"
   | "customTable.pgEnum"
   | "customTable.scopeColumn"

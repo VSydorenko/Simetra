@@ -259,12 +259,14 @@ function zodDiagnostics(file: string, error: z.ZodError): Diagnostic[] {
       issue.code === "custom" ? issue.params?.rule : undefined
     if (isSchemaRule(rule)) {
       const field = issue.path.at(-1)
-      return diagnostic(
-        rule,
-        file,
-        pointer,
-        field === undefined ? {} : { field: String(field) }
-      )
+      const offset = issue.code === "custom" ? issue.params?.offset : undefined
+      return diagnostic(rule, file, pointer, {
+        ...(field === undefined ? {} : { field: String(field) }),
+        // Помилка розбору виразу: текст парсера й зміщення в рядку виразу.
+        ...(typeof offset === "number"
+          ? { offset, detail: issue.message }
+          : {}),
+      })
     }
     return diagnostic("file.schema", file, pointer, { detail: issue.message })
   })
