@@ -721,6 +721,32 @@ describe("stage 4: operand types", () => {
     }
   })
 
+  it("a polymorphic side compares only with null", () => {
+    // Зміщення — початок поліморфного операнда.
+    expect(
+      one({ condition: "row.product = doc.item" }, condition)
+    ).toMatchObject({ offset: 0, actual: "polymorphic reference" })
+    expect(
+      one({ condition: "doc.item != row.product" }, condition)
+    ).toMatchObject({ offset: 12 })
+    expect(
+      one({ condition: "row.product = row.product" }, condition)
+    ).toMatchObject({ offset: 0 })
+    expect(one({ condition: "row.product < null" }, condition)).toMatchObject({
+      offset: 0,
+    })
+  })
+
+  it("ordering with null is a type mismatch", () => {
+    expect(one({ condition: "row.qty < null" }, condition)).toMatchObject({
+      offset: 10,
+      actual: "null",
+    })
+    expect(one({ condition: "null >= row.title" }, condition)).toMatchObject({
+      offset: 0,
+    })
+  })
+
   it("a failed operand does not cascade to the field", () => {
     // Вкладена помилка звітує лише операнд, а не результат проти поля.
     one({ fields: { item: "row.item", qty: "(row.title * 2) > 1" } }, qty)
@@ -731,7 +757,8 @@ describe("stage 4: operand types", () => {
       "row.qty * 2 > 0",
       "doc.date = doc.date",
       "row.item = null",
-      "row.product = doc.item",
+      "row.product = null",
+      "row.product != null",
       "not doc.posted or row.qty <= 1",
     ]) {
       expect(build({ condition: text }, adjust).diagnostics, text).toEqual([])

@@ -10,7 +10,8 @@ export type InferredType =
   | { kind: "text" }
   | { kind: "boolean" }
   | { kind: "date" }
-  | { kind: "ref"; targets: string[] }
+  /** `pair` — поліморфне посилання: у таблиці це пара `<ім'я>_type` + `<ім'я>_id`. */
+  | { kind: "ref"; targets: string[]; pair?: true }
   | { kind: "null" }
   | { kind: "unknown" }
 
@@ -31,7 +32,8 @@ const UNKNOWN: InferredType = { kind: "unknown" }
 export function typeOfLogical(
   type: LogicalType,
   targets: readonly string[] = [],
-  array = false
+  array = false,
+  pair = false
 ): InferredType {
   if (array) return UNKNOWN
   switch (type) {
@@ -52,7 +54,7 @@ export function typeOfLogical(
     case "Ref":
       return targets.length === 0
         ? UNKNOWN
-        : { kind: "ref", targets: [...targets] }
+        : { kind: "ref", targets: [...targets], ...(pair ? { pair } : {}) }
     default:
       return UNKNOWN
   }
@@ -144,13 +146,36 @@ function inferNode(
       // Порівняння: результат завжди boolean, операнди — одного роду.
       const left = inferType(expr.left, ctx, errors)
       const right = inferType(expr.right, ctx, errors)
-      if (!comparable(left, right)) {
+      const ordering = ORDERING.has(expr.op)
+      // Поліморфна пара — дві колонки: у SQL її можна лише перевірити на
+      // порожнечу (`_id`), а порівняння зі значенням мовчки порівняло б лише
+      // id без виду цілі.
+      const pairSide = [expr.left, expr.right].find((_, i) => {
+        const type = i === 0 ? left : right
+        return type.kind === "ref" && type.pair === true
+      })
+      const otherIsNull = left.kind === "null" || right.kind === "null"
+      if (pairSide !== undefined && (ordering || !otherIsNull)) {
+        errors.push({
+          node: pairSide,
+          expected: "a single-target reference or null",
+          actual: pairSide === expr.left ? left : right,
+        })
+      } else if (ordering && otherIsNull) {
+        // Порожнє значення не має порядку: `x < null` у SQL ніколи не істинне.
+        const nullSide = left.kind === "null" ? expr.left : expr.right
+        errors.push({
+          node: nullSide,
+          expected: "numeric, text or date",
+          actual: { kind: "null" },
+        })
+      } else if (!comparable(left, right)) {
         errors.push({
           node: expr.right,
           expected: describeType(left),
           actual: right,
         })
-      } else if (ORDERING.has(expr.op)) {
+      } else if (ordering) {
         // Порядок має сенс лише для чисел, тексту й дат: посилання (UUID) і
         // булеве лише рівні чи ні, а `<` на них SQL або відкине, або
         // порівняє довільно.
@@ -209,7 +234,7 @@ export function describeType(type: InferredType): string {
     case "numeric":
       return type.integer ? "integer" : "numeric"
     case "ref":
-      return "reference"
+      return type.pair === true ? "polymorphic reference" : "reference"
     case "unknown":
       return "value"
     default:

@@ -686,7 +686,12 @@ function checkPosting(
       field.ref !== undefined ? [field.ref] : (field.allowedTypes ?? [])
     const targets = refs.map(idOf)
     if (targets.some((id) => id === undefined)) return UNKNOWN
-    return typeOfLogical(field.type, targets as string[], field.array === true)
+    return typeOfLogical(
+      field.type,
+      targets as string[],
+      field.array === true,
+      field.allowedTypes !== undefined
+    )
   }
 
   for (const object of objects) {

@@ -18,6 +18,7 @@ import {
 import { compareStrings, toPointer } from "./diagnostics"
 import { objectKey, type ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
+import { registerSingletonOf } from "./stages/model"
 
 /**
  * SQL-одиниця скомпільованої моделі. У C2 — лише обгортки запитів рухів;
@@ -32,9 +33,6 @@ export interface SqlUnit {
   source: "query" | "constructor"
   sql: string
 }
-
-/** Колонки, які заповнює оболонка проведення, а не запит рухів (спека §7). */
-const SHELL_FILLED = new Set(["lineNumber", "active"])
 
 /**
  * Обгортки запитів рухів (спека П2 §7): блок запиту — як є, рухи
@@ -71,8 +69,8 @@ export function buildMovementFunctions(
     })
     for (const [registerId, indexes] of byRegister) {
       units.push(
-        ctx.unit(document, registerId, "constructor", (columns) =>
-          ctx.translate(document, registerId, indexes, columns)
+        ctx.unit(document, registerId, "constructor", (columns, name) =>
+          ctx.translate(document, registerId, indexes, columns, name)
         )
       )
     }
@@ -128,7 +126,7 @@ class Context {
     document: ParsedObject,
     registerId: string,
     source: SqlUnit["source"],
-    body: (columns: readonly PhysicalColumn[]) => string
+    body: (columns: readonly PhysicalColumn[], name: string) => string
   ): SqlUnit {
     const documentTable = this.table(document.id ?? "")
     const register = must(this.byId.get(registerId), `register ${registerId}`)
@@ -146,7 +144,7 @@ class Context {
       `CREATE OR REPLACE FUNCTION ${quoteIdent(documentTable.schema)}.${quoteIdent(name)}(p_document_id uuid)\n` +
       `RETURNS TABLE (${signature})\n` +
       `LANGUAGE sql STABLE\n` +
-      `AS $simetra$\n${body(columns)}\n$simetra$;`
+      `AS $simetra$\n${body(columns, name)}\n$simetra$;`
     return {
       kind: "movementQuery",
       schema: documentTable.schema,
@@ -160,16 +158,20 @@ class Context {
 
   /**
    * Колонки `RETURNS TABLE`: колонки рухів у порядку таблиці мінус ті, що
-   * заповнює оболонка, — реєстратор, номер рядка, активність і носій скоупу.
+   * заповнює оболонка (реєстратор, номер рядка, активність, носій скоупу), і
+   * ключ-одинак, значення якого дає DEFAULT (спека §7).
    */
   private resultColumns(
     register: ParsedObject,
     table: PhysicalTable
   ): PhysicalColumn[] {
+    const singleton = registerSingletonOf(register)
     const shell = new Set(
-      KIND_REGISTRY[register.kind]
-        .standardColumns(register.data)
-        .filter((c) => c.ref === "recorders" || SHELL_FILLED.has(c.logicalName))
+      [
+        ...(singleton === undefined ? [] : [singleton]),
+        ...KIND_REGISTRY[register.kind].standardColumns(register.data),
+      ]
+        .filter((c) => c.filledByShell === true || c.singleton === true)
         .map((c) => standardLogicalName(c, this.style))
     )
     return table.columns.filter(
@@ -235,14 +237,22 @@ class Context {
     document: ParsedObject,
     registerId: string,
     indexes: readonly number[],
-    columns: readonly PhysicalColumn[]
+    columns: readonly PhysicalColumn[],
+    name: string
   ): string {
     const register = must(this.byId.get(registerId), `register ${registerId}`)
     const movements = (
       document.data as { posting: { movements: MovementDecl[] } }
     ).posting.movements
     const selects = indexes.map((index) =>
-      this.movementSelect(document, register, index, movements[index]!, columns)
+      this.movementSelect(
+        document,
+        register,
+        index,
+        movements[index]!,
+        columns,
+        name
+      )
     )
     const outer = columns.map((c) => `m.${quoteIdent(c.name)}`).join(", ")
     return (
@@ -257,7 +267,8 @@ class Context {
     register: ParsedObject,
     index: number,
     movement: MovementDecl,
-    columns: readonly PhysicalColumn[]
+    columns: readonly PhysicalColumn[],
+    name: string
   ): string {
     const documentId = document.id ?? ""
     const def = KIND_REGISTRY[document.kind]
@@ -318,6 +329,7 @@ class Context {
     })
     const expression = (text: string, ...path: (string | number)[]) =>
       translator.translate(parseExpression(text), toPointer([...base, ...path]))
+        .sql
 
     // Значення кожної колонки результату: ключ — ім'я колонки.
     const values = new Map<string, string>()
@@ -355,19 +367,16 @@ class Context {
       )
     }
     for (const [fieldName, text] of Object.entries(movement.fields)) {
+      const pointer = toPointer([...base, "fields", fieldName])
       const fieldId = this.lookup(
         document.file,
-        toPointer([...base, "fields", fieldName]),
+        pointer,
         "posting.registerField"
       )
       const targets = this.elementColumns(registerTable, [], fieldId)
-      const parsed = parseExpression(text)
-      const sources = expression(text, "fields", fieldName)
-      const assigned = assign(
-        targets,
-        sources,
-        parsed.ok && parsed.expr.type === "null",
-        () => this.discriminator(document, parsed, fieldName, index)
+      const { expr, sql } = translator.translate(parseExpression(text), pointer)
+      const assigned = assign(targets, expr, sql, () =>
+        this.discriminator(document, expr, pointer)
       )
       targets.forEach((target, i) => values.set(target.name, assigned[i]!))
     }
@@ -387,8 +396,10 @@ class Context {
         ? `  FROM ${qualified(documentTable)} d`
         : `  FROM ${qualified(rowTable)} r\n` +
           `  JOIN ${qualified(documentTable)} d ON ${documentKey} = r.${key(rowTable, rowDefs, "parent")}`
+    // Параметр кваліфіковано іменем функції: у тілі SQL-функції колонка з
+    // тим самим іменем перемогла б параметр.
     const where = [
-      `  WHERE ${documentKey} = p_document_id`,
+      `  WHERE ${documentKey} = ${quoteIdent(name)}.p_document_id`,
       ...(movement.condition === undefined
         ? []
         : [
@@ -405,21 +416,12 @@ class Context {
    */
   private discriminator(
     document: ParsedObject,
-    parsed: ReturnType<typeof parseExpression>,
-    fieldName: string,
-    index: number
+    expr: Expr,
+    pointer: string
   ): string {
-    const expr = parsed.ok ? parsed.expr : undefined
-    if (expr?.type !== "field") {
-      throw new Error(`internal: polymorphic value of ${fieldName}`)
+    if (expr.type !== "field") {
+      throw new Error(`internal: polymorphic value at ${pointer}`)
     }
-    const pointer = toPointer([
-      "posting",
-      "movements",
-      index,
-      "fields",
-      fieldName,
-    ])
     const id = this.lookup(
       document.file,
       pointer,
@@ -440,28 +442,35 @@ class Context {
 /**
  * Значення колонок поля регістра з колонок виразу: однакова кількість —
  * попарно; одноцільове посилання в поліморфне поле — дискримінатор цілі й id;
- * поліморфне значення в одноцільове — лише id пари; `null` — типізовані NULL,
- * бо тип рядка першого `SELECT` визначає тип колонки `UNION ALL`.
+ * поліморфне значення з однією ціллю в одноцільове поле — id пари; `null` —
+ * типізовані NULL у кожну колонку, бо тип рядка першого `SELECT` визначає тип
+ * колонки `UNION ALL`. Інша арність — дефект: стадія 4 її не пропускає.
  */
 function assign(
   targets: readonly PhysicalColumn[],
+  expr: Expr,
   sources: readonly string[],
-  isNull: boolean,
   discriminator: () => string
 ): string[] {
-  if (isNull) return targets.map((t) => `NULL::${t.type}`)
+  if (expr.type === "null") return targets.map((t) => `NULL::${t.type}`)
   if (targets.length === sources.length) return [...sources]
   if (targets.length === 2 && sources.length === 1) {
     return [discriminator(), sources[0]!]
   }
-  return [sources[sources.length - 1]!]
+  if (targets.length === 1 && sources.length === 2) return [sources[1]!]
+  throw new Error(
+    `internal: ${sources.length} value columns for ${targets.length} field columns`
+  )
 }
 
 /**
  * Переклад AST у SQL. Вкладені операції беруться в дужки, щоб пріоритет SQL
- * не розійшовся з пріоритетом граматики. Поле може дати пару колонок
- * (поліморфне посилання): у виразі це рядковий конструктор `(a, b)`, а
- * верхній рівень повертає колонки окремо, щоб лягти в пару поля регістра.
+ * не розійшовся з пріоритетом граматики. Рівність — `IS [NOT] DISTINCT FROM`:
+ * як у 1С, порожнє дорівнює порожньому, тож два порожні поля не відкидають
+ * рух мовчки, а `x = null` не потребує окремого випадку. Поле може дати пару
+ * колонок (поліморфне посилання): верхній рівень повертає обидві, щоб лягти в
+ * пару поля регістра, а у виразі пару стадія 4 пускає лише в порівняння з
+ * `null` — там достатньо `_id`.
  */
 class ExpressionTranslator {
   constructor(
@@ -473,11 +482,13 @@ class ExpressionTranslator {
   translate(
     parsed: ReturnType<typeof parseExpression>,
     pointer: string
-  ): string[] {
+  ): { expr: Expr; sql: string[] } {
     if (!parsed.ok) throw new Error(`internal: unparsed ${pointer}`)
+    const { expr } = parsed
     const resolve = this.named(pointer)
-    if (parsed.expr.type === "field") return resolve(parsed.expr)
-    return [this.node(parsed.expr, resolve, false)]
+    const sql =
+      expr.type === "field" ? resolve(expr) : [this.node(expr, resolve, false)]
+    return { expr, sql }
   }
 
   private node(
@@ -489,10 +500,8 @@ class ExpressionTranslator {
   ): string {
     const wrap = (sql: string) => (nested ? `(${sql})` : sql)
     switch (expr.type) {
-      case "field": {
-        const columns = resolve(expr)
-        return columns.length === 1 ? columns[0]! : `(${columns.join(", ")})`
-      }
+      case "field":
+        return resolve(expr).at(-1)!
       case "sum":
       case "count":
         return resolve(expr)[0]!
@@ -512,11 +521,13 @@ class ExpressionTranslator {
         )
       case "binary": {
         const op =
-          expr.op === "!="
-            ? "<>"
-            : expr.op === "and" || expr.op === "or"
-              ? expr.op.toUpperCase()
-              : expr.op
+          expr.op === "="
+            ? "IS NOT DISTINCT FROM"
+            : expr.op === "!="
+              ? "IS DISTINCT FROM"
+              : expr.op === "and" || expr.op === "or"
+                ? expr.op.toUpperCase()
+                : expr.op
         return wrap(
           `${this.node(expr.left, resolve, true)} ${op} ${this.node(expr.right, resolve, true)}`
         )

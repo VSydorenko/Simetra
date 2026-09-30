@@ -245,13 +245,8 @@ class SnapshotBuilder {
     const standard = def.standardColumns(data)
     const dimensions =
       registerKeys === undefined ? [] : (data.dimensions as Attribute[])
-    // Ключ регістра без жодної частини (ні періоду, ні вимірів) — рядок-одинак;
-    // скоуп, якщо є, withScope робить ключем замість одинака.
-    const degenerate =
-      registerKeys !== undefined &&
-      dimensions.length === 0 &&
-      !standard.some((column) => column.logicalName === PERIOD)
-    const singleton = degenerate ? registerSingleton(registerKeys) : undefined
+    const singleton = registerSingletonOf(object)
+    const degenerate = singleton !== undefined
     const standardFields = new Map<StandardColumnDef, Field>()
     const fields = this.withScope(
       singleton !== undefined ? [singleton, ...standard] : standard,
@@ -923,7 +918,25 @@ const LINE_NUMBER = "lineNumber"
  * Одинак регістра займає місце ключа запису: PK незалежного регістра або
  * UNIQUE поруч із PK реєстратора в підлеглого.
  */
-function registerSingleton(keys: RegisterKeySpec): StandardColumnDef {
+/**
+ * Ключ-одинак таблиці рухів регістра: ключ без жодної частини (ні періоду, ні
+ * вимірів) — рядок-одинак; скоуп, якщо є, withScope робить ключем замість
+ * одинака. Спільний для стадії 3 і обгорток запитів рухів, які його
+ * пропускають: значення дає DEFAULT.
+ */
+export function registerSingletonOf(
+  object: Pick<ParsedObject, "kind" | "data">
+): StandardColumnDef | undefined {
+  const def = KIND_REGISTRY[object.kind]
+  const keys = def.registerKeys?.(object.data)
+  if (keys === undefined) return undefined
+  const data = object.data as Element
+  const degenerate =
+    (data.dimensions as Attribute[]).length === 0 &&
+    !def
+      .standardColumns(object.data)
+      .some((column) => column.logicalName === PERIOD)
+  if (!degenerate) return undefined
   return singletonColumn(
     keys.movementsPrimaryKey === "dimensions" ? "primaryKey" : "unique"
   )

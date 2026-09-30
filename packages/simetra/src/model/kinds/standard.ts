@@ -42,6 +42,11 @@ export interface StandardColumnDef {
    * (PK чи UNIQUE), а сама вона (з її CHECK) не матеріалізується.
    */
   singleton?: true
+  /**
+   * Значення дає оболонка проведення, а не запит рухів (реєстратор, номер
+   * рядка, активність), тож колонки немає в `RETURNS TABLE` запиту (спека §7).
+   */
+  filledByShell?: true
   indexed?: true
   unique?: true
   /** Ціль посилання; сама колонка має тип UUID. */
@@ -309,15 +314,18 @@ export function recorderColumns(): StandardColumnDef[] {
       notNull: true,
       ref: "recorders",
       polymorphic: "always",
+      filledByShell: true,
       title: { uk: "Реєстратор", en: "Recorder" },
     },
-    lineNumberColumn(),
+    // Номер рядка ТЧ — дані рядка; номер рядка рухів нумерує оболонка.
+    { ...lineNumberColumn(), filledByShell: true },
     {
       logicalName: "active",
       physicalName: "active",
       type: { type: "Boolean" },
       notNull: true,
       default: "true",
+      filledByShell: true,
       title: { uk: "Активність", en: "Active" },
     },
   ]
