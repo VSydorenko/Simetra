@@ -110,6 +110,11 @@ interface TableScope {
   carrier: string | undefined
   /** Таблиця має власну скоуп-колонку (не корінь). */
   own: boolean
+  /**
+   * Рядки таблиці належать одному значенню скоупу, тож UNIQUE тримається в
+   * його межах. Лише таблиця самого кореня — ні: її рядки і є значеннями.
+   */
+  partitioned: boolean
 }
 
 /** Таблиця до призначення імен: `name` обмеження лише явне. */
@@ -126,6 +131,11 @@ interface PendingTable {
   checks: { name?: string; column?: string; expression: string }[]
   foreignKeys: (Omit<ForeignKey, "name"> & { name?: string })[]
   indexes: (Omit<Index, "name"> & { name?: string })[]
+  /**
+   * Похідні індекси виду (колонки в порядку ключа) — стають індексами після
+   * всіх ключів таблиці, бо покриття перевіряється за ними всіма.
+   */
+  derivedIndexes: string[][]
 }
 
 /**
@@ -219,8 +229,13 @@ class SnapshotBuilder {
       kind === undefined
         ? undefined
         : root
-          ? { kind, carrier: key, own: false }
-          : { kind, carrier: kind.physicalName!, own: true }
+          ? { kind, carrier: key, own: false, partitioned: false }
+          : {
+              kind,
+              carrier: kind.physicalName!,
+              own: true,
+              partitioned: true,
+            }
     const fields = this.withScope(def.standardColumns(data), scope, (column) =>
       this.standardField(column, object, main, scope)
     )
@@ -267,6 +282,7 @@ class SnapshotBuilder {
               carrier: rowColumns.find((c) => c.ref === "owningObject")
                 ?.physicalName,
               own: false,
+              partitioned: true,
             }
       const sectionFields = this.withScope(rowColumns, rowScope, (column) =>
         this.standardField(column, object, main, rowScope)
@@ -297,6 +313,7 @@ class SnapshotBuilder {
     // з іншим. Postgres за колізій обрав би інакше (він не знає наперед про
     // явні імена пізніших таблиць), тож рендер не покладається на його вибір і
     // виводить кожне ім'я явно зі знімка.
+    for (const table of this.tables) materializeIndexes(table)
     const pending = [...this.tables].sort(bySchemaAndName)
     const tables = assignNames(pending)
     return {
@@ -326,6 +343,7 @@ class SnapshotBuilder {
       checks: [],
       foreignKeys: [],
       indexes: [],
+      derivedIndexes: [],
     }
   }
 
@@ -377,7 +395,7 @@ class SnapshotBuilder {
               this.keyTarget(object, ownTable, scope)
             : refs[0] === undefined
               ? NONE
-              : this.tableTarget(refs[0], scope)
+              : this.tableTarget(refs[0], scope, false)
     }
     const logical = standardLogicalName(column, this.style)
     return {
@@ -388,12 +406,12 @@ class SnapshotBuilder {
       ...(column.default !== undefined ? { default: column.default } : {}),
       ...(column.check !== undefined ? { check: column.check } : {}),
       primaryKey: column.primaryKey === true,
-      indexed: column.indexed === true,
+      // Індекс стандартного посилання — похідний індекс його FK на повний
+      // набір колонок: у скоупленій таблиці `(scope, parent_id)` замість
+      // `parent_id`. Власний індекс реквізиту лишається (addField).
+      indexed: column.indexed === true && target.form !== "foreignKey",
       unique: column.unique === true,
-      // Корінь сам є значенням скоупу, тож його унікальність глобальна.
-      ...(column.unique === true && scope?.own === true
-        ? { uniqueWithin: scope.carrier! }
-        : {}),
+      ...uniqueWithin(column.unique === true, scope),
       target,
       onDelete: column.onDelete ?? "noAction",
       origin:
@@ -442,7 +460,8 @@ class SnapshotBuilder {
       const { schema, table, column } = kind.root.external
       return { form: "foreignKey", schema, table, column }
     }
-    return this.tableTarget(this.lookup(kind.root.object))
+    // Корінь скоуп-колонки не має: FK на нього лише одноколонковий.
+    return this.tableTarget(this.lookup(kind.root.object), undefined, false)
   }
 
   /** Вид скоупу, який об'єкт оголошує; `none` і відсутнє поле — без скоупу. */
@@ -510,6 +529,7 @@ class SnapshotBuilder {
       primaryKey: false,
       indexed: attribute.indexed,
       unique: attribute.unique,
+      ...uniqueWithin(attribute.unique, scope),
       onDelete: "noAction",
       origin: { elementId: attribute.id ?? "" },
       pointer: `${pointer}/physicalName`,
@@ -572,8 +592,8 @@ class SnapshotBuilder {
 
   private tableTarget(
     target: ParsedObject,
-    scope?: TableScope,
-    crossScope = false
+    scope: TableScope | undefined,
+    crossScope: boolean
   ): Target {
     const column = keyColumnOf(target)
     if (column === undefined) return NONE
@@ -749,6 +769,20 @@ class SnapshotBuilder {
 
 const NONE: Target = { form: "none" }
 
+/**
+ * UNIQUE колонки скоупленої таблиці — у межах значення скоупу: інакше
+ * значення одного тенанта заважало б іншому. Таблиця кореня — виняток, її
+ * рядки і є значеннями скоупу, тож унікальність там глобальна.
+ */
+function uniqueWithin(
+  unique: boolean,
+  scope: TableScope | undefined
+): { uniqueWithin?: string } {
+  return unique && scope?.partitioned === true && scope.carrier !== undefined
+    ? { uniqueWithin: scope.carrier }
+    : {}
+}
+
 function physicalNameOf(object: ParsedObject): string {
   return (object.data as { physicalName: string }).physicalName
 }
@@ -896,8 +930,9 @@ function addField(table: PendingTable, field: Field): string[] {
   if (target.form === "foreignKey") {
     // Складений FK тримає обидва кінці в одному значенні скоупу (спека §6).
     const { scope } = target
+    const columns = scope !== undefined ? [scope.from, ...names] : names
     table.foreignKeys.push({
-      columns: scope !== undefined ? [scope.from, ...names] : names,
+      columns,
       references: {
         schema: target.schema,
         table: target.table,
@@ -908,20 +943,47 @@ function addField(table: PendingTable, field: Field): string[] {
       onUpdate: "noAction",
       deferrable: "no",
     })
+    // FK сам індексу не має, а перевірка при видаленні цілі шукає рядки за
+    // всіма його колонками — тож індекс на повний набір у порядку FK.
+    table.derivedIndexes.push(columns)
   }
-  // UNIQUE і первинний ключ уже мають індекс; FK — ні, тож одиночне
-  // посилання індексується завжди.
-  const needsIndex = field.indexed || target.form === "foreignKey"
-  if (needsIndex && !field.unique && !field.primaryKey) {
+  if (field.indexed) table.derivedIndexes.push(names)
+  return names
+}
+
+/**
+ * Похідний індекс не будується, якщо його колонки вже є префіксом (у тому ж
+ * порядку) первинного ключа, UNIQUE чи іншого похідного індексу — B-дерево
+ * того ключа вже обслуговує такі пошуки. З однакових лишається перший.
+ */
+function materializeIndexes(table: PendingTable): void {
+  const keys = [
+    ...(table.primaryKey !== undefined ? [table.primaryKey.columns] : []),
+    ...table.uniques.map((unique) => unique.columns),
+  ]
+  const { derivedIndexes: candidates } = table
+  candidates.forEach((columns, i) => {
+    const covered =
+      keys.some((key) => startsWith(key, columns)) ||
+      candidates.some(
+        (other, j) =>
+          j !== i &&
+          startsWith(other, columns) &&
+          (other.length > columns.length || j < i)
+      )
+    if (covered) return
     table.indexes.push({
       unique: false,
       method: "btree",
-      keys: names.map((column) => ({ column })),
+      keys: columns.map((column) => ({ column })),
       include: [],
       nullsNotDistinct: false,
     })
-  }
-  return names
+  })
+}
+
+function startsWith(key: readonly string[], prefix: readonly string[]) {
+  return prefix.length <= key.length && prefix.every((c, i) => key[i] === c)
 }
 
 /** Значення за замовчуванням реквізиту як SQL-літерал. */

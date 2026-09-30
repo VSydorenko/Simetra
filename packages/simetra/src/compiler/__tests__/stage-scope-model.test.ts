@@ -622,6 +622,295 @@ describe("stage 3: scope", () => {
   })
 })
 
+function indexesOf(table: PhysicalTable) {
+  return table.indexes.map((index) => ({
+    name: index.name,
+    keys: index.keys.map((key) => ("column" in key ? key.column : "")),
+  }))
+}
+
+function uniquesOf(table: PhysicalTable) {
+  return table.uniques.map((unique) => unique.columns)
+}
+
+const uniqueText = (name: string, physicalName: string) =>
+  attribute(name, { physicalName, type: "String", length: 20, unique: true })
+
+describe("stage 3: scope indexes", () => {
+  it("scoped catalog has no index on the scope column", () => {
+    const physical = compileScoped({ [CP]: counterparty() })
+    // `org_id` покриває UNIQUE (org_id, id); код лишає свій індекс, бо
+    // UNIQUE (org_id, code) з коду не починається.
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      { name: "counterparty_code_idx", keys: ["code"] },
+    ])
+  })
+
+  it("composite reference gets one index on the full FK", () => {
+    const physical = compileScoped({
+      [CP]: counterparty(),
+      [CONTRACT]: contract(),
+    })
+    expect(indexesOf(tableOf(physical, "contract"))).toEqual([
+      { name: "contract_code_idx", keys: ["code"] },
+      {
+        name: "contract_org_id_counterparty_id_idx",
+        keys: ["org_id", "counterparty_id"],
+      },
+    ])
+  })
+
+  it("explicitly indexed reference keeps its own index", () => {
+    const physical = compileScoped({
+      [CP]: counterparty(),
+      [CONTRACT]: contract({
+        attributes: [
+          attribute("counterparty", {
+            physicalName: "counterparty_id",
+            indexed: true,
+            ...ref("Catalog", "Counterparty"),
+          }),
+        ],
+      }),
+    })
+    expect(indexesOf(tableOf(physical, "contract"))).toEqual([
+      { name: "contract_code_idx", keys: ["code"] },
+      { name: "contract_counterparty_id_idx", keys: ["counterparty_id"] },
+      {
+        name: "contract_org_id_counterparty_id_idx",
+        keys: ["org_id", "counterparty_id"],
+      },
+    ])
+  })
+
+  it("scoped tabular section row indexes the composite parent key", () => {
+    const physical = compileScoped({
+      "documents/Invoice/Invoice.meta.json": document("Invoice", {
+        scope: "org",
+        tabularSections: [
+          {
+            id: uuid(910),
+            name: "lines",
+            physicalName: "invoice_lines",
+            attributes: [attribute("qty", { type: "Integer" })],
+          },
+        ],
+      }),
+    })
+    // `org_id` FK на корінь покриває (org_id, parent_id).
+    expect(indexesOf(tableOf(physical, "invoice_lines"))).toEqual([
+      {
+        name: "invoice_lines_org_id_parent_id_idx",
+        keys: ["org_id", "parent_id"],
+      },
+    ])
+    expect(indexesOf(tableOf(physical, "invoice")).map((i) => i.name)).toEqual([
+      "invoice_date_idx",
+      "invoice_number_idx",
+    ])
+  })
+
+  it("hierarchy parent is indexed on the composite key", () => {
+    const physical = compileScoped({
+      [CP]: counterparty({ hierarchyType: "ItemsOnly" }),
+    })
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      { name: "counterparty_code_idx", keys: ["code"] },
+      {
+        name: "counterparty_org_id_parent_id_idx",
+        keys: ["org_id", "parent_id"],
+      },
+    ])
+  })
+
+  it("register indexes the composite dimension, covering the scope column", () => {
+    const physical = compileScoped({
+      [CP]: counterparty(),
+      "documents/Sale/Sale.meta.json": document("Sale", { scope: "org" }),
+      "accumulation-registers/Stock/Stock.meta.json": {
+        id: uuid(911),
+        kind: "AccumulationRegister",
+        name: "Stock",
+        physicalName: "stock",
+        scope: "org",
+        recorderTypes: [{ kind: "Document", name: "Sale" }],
+        dimensions: [
+          attribute("counterparty", {
+            physicalName: "counterparty_id",
+            ...ref("Catalog", "Counterparty"),
+          }),
+        ],
+        resources: [attribute("qty", { type: "Integer" })],
+      },
+    })
+    expect(indexesOf(tableOf(physical, "stock"))).toEqual([
+      {
+        name: "stock_org_id_counterparty_id_idx",
+        keys: ["org_id", "counterparty_id"],
+      },
+      { name: "stock_period_idx", keys: ["period"] },
+    ])
+  })
+
+  it("global catalog reference keeps its single-column index", () => {
+    const physical = compileScoped({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        scope: "none",
+      }),
+      "catalogs/Rate/Rate.meta.json": catalog("Rate", {
+        scope: "none",
+        attributes: [
+          attribute("currency", {
+            physicalName: "currency_id",
+            ...ref("Catalog", "Currency"),
+          }),
+        ],
+      }),
+    })
+    // Глобальний код покриває його власний UNIQUE (code).
+    expect(indexesOf(tableOf(physical, "rate"))).toEqual([
+      { name: "rate_currency_id_idx", keys: ["currency_id"] },
+    ])
+  })
+})
+
+describe("stage 3: uniqueness within scope", () => {
+  it("scoped catalog attribute is unique within the scope", () => {
+    const physical = compileScoped({
+      [CP]: counterparty({ attributes: [uniqueText("taxId", "tax_id")] }),
+    })
+    const cp = tableOf(physical, "counterparty")
+    expect(cp.uniques.map((u) => u.name)).toContain(
+      "counterparty_org_id_tax_id_key"
+    )
+    expect(uniquesOf(cp)).toContainEqual(["org_id", "tax_id"])
+    expect(uniquesOf(cp)).not.toContainEqual(["tax_id"])
+  })
+
+  it("scoped tabular section attribute is unique within the scope", () => {
+    const physical = compileScoped({
+      "documents/Invoice/Invoice.meta.json": document("Invoice", {
+        scope: "org",
+        tabularSections: [
+          {
+            id: uuid(912),
+            name: "lines",
+            physicalName: "invoice_lines",
+            attributes: [uniqueText("sku", "sku")],
+          },
+        ],
+      }),
+    })
+    expect(uniquesOf(tableOf(physical, "invoice_lines"))).toEqual([
+      ["org_id", "sku"],
+    ])
+  })
+
+  it("root tabular section attribute is unique within its parent", () => {
+    const physical = compileScoped({
+      [ORG]: organization({
+        attributes: [uniqueText("taxId", "tax_id")],
+        tabularSections: [
+          {
+            id: uuid(913),
+            name: "accounts",
+            physicalName: "organization_accounts",
+            attributes: [uniqueText("iban", "iban")],
+          },
+        ],
+      }),
+    })
+    expect(uniquesOf(tableOf(physical, "organization_accounts"))).toEqual([
+      ["parent_id", "iban"],
+    ])
+    // Рядки кореня самі є значеннями скоупу — унікальність глобальна.
+    expect(uniquesOf(tableOf(physical, "organization"))).toEqual([
+      ["code"],
+      ["tax_id"],
+    ])
+  })
+
+  it("register attribute is unique within the scope", () => {
+    const physical = compileScoped({
+      "documents/Sale/Sale.meta.json": document("Sale", { scope: "org" }),
+      "accumulation-registers/Stock/Stock.meta.json": {
+        id: uuid(914),
+        kind: "AccumulationRegister",
+        name: "Stock",
+        physicalName: "stock",
+        scope: "org",
+        recorderTypes: [{ kind: "Document", name: "Sale" }],
+        resources: [attribute("qty", { type: "Integer" })],
+        attributes: [uniqueText("ticket", "ticket")],
+      },
+    })
+    expect(uniquesOf(tableOf(physical, "stock"))).toEqual([
+      ["org_id", "ticket"],
+    ])
+  })
+
+  it("global object keeps plain uniqueness", () => {
+    const physical = compileScoped({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        scope: "none",
+        attributes: [uniqueText("isoCode", "iso_code")],
+      }),
+    })
+    expect(uniquesOf(tableOf(physical, "currency"))).toEqual([
+      ["code"],
+      ["iso_code"],
+    ])
+  })
+})
+
+describe("stage 3: scoped owner", () => {
+  it("owner of the same kind is composite", () => {
+    const physical = compileScoped({
+      [CP]: counterparty(),
+      [CONTRACT]: catalog("Contract", {
+        scope: "org",
+        owners: [{ kind: "Catalog", name: "Counterparty" }],
+      }),
+    })
+    const table = tableOf(physical, "contract")
+    expect(fkOn(table, "owner_id")).toEqual([
+      expect.objectContaining({
+        name: "contract_org_id_owner_id_fkey",
+        columns: ["org_id", "owner_id"],
+        references: {
+          schema: "public",
+          table: "counterparty",
+          columns: ["org_id", "id"],
+        },
+        onDelete: "noAction",
+      }),
+    ])
+    expect(indexesOf(table)).toContainEqual({
+      name: "contract_org_id_owner_id_idx",
+      keys: ["org_id", "owner_id"],
+    })
+  })
+
+  it("root as owner is plain", () => {
+    // Стадія 4 відкидає посилання на корінь власного виду; тут — лише форма.
+    const physical = buildScoped({
+      [CP]: counterparty({
+        owners: [{ kind: "Catalog", name: "Organization" }],
+      }),
+    })
+    expect(fkOn(tableOf(physical, "counterparty"), "owner_id")).toEqual([
+      expect.objectContaining({
+        columns: ["owner_id"],
+        references: {
+          schema: "public",
+          table: "organization",
+          columns: ["id"],
+        },
+      }),
+    ])
+  })
+})
+
 /** Скоуплена прийнята таблиця називає власну uuid-колонку скоупу. */
 function logTable() {
   return customTable("Log", {
