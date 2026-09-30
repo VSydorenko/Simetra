@@ -1,0 +1,271 @@
+import type { z } from "zod"
+import {
+  SCHEMA_RULES,
+  kindByDir,
+  projectSchema,
+  type KindDefinition,
+  type MetadataKind,
+  type Project,
+  type SchemaRule,
+} from "simetra/model"
+import {
+  compareStrings,
+  diagnostic,
+  toPointer,
+  type Diagnostic,
+} from "../diagnostics"
+
+export const PROJECT_FILE = "project.meta.json"
+
+const META_SUFFIX = ".meta.json"
+const MODULE_SUFFIX = ".module.ts"
+const SQL_SUFFIX = ".sql"
+
+/** Об'єкт, чий файл пройшов схему виду; id може бути відсутнім до стадії 2. */
+export interface ParsedObject {
+  kind: MetadataKind
+  name: string
+  file: string
+  id?: string
+  /** Вихід Zod-схеми виду — з уже застосованими значеннями за замовчуванням. */
+  data: unknown
+}
+
+export interface FilesStageResult {
+  project?: Project
+  /** Відсортовано за шляхом файлу. */
+  objects: ParsedObject[]
+  /**
+   * Імена об'єктів, чиї файли зламані. Посилання на них не резолвляться, але
+   * й не є помилкою посилання: причину вже названо в самому файлі.
+   */
+  brokenNames: Set<string>
+  /** `.sql` об'єкта несе шлях свого `.meta.json`; спільний — PG-схему. */
+  sqlFiles: { file: string; ownerFile?: string; schema?: string }[]
+  moduleFiles: { file: string; ownerFile: string }[]
+  diagnostics: Diagnostic[]
+}
+
+export function objectKey(kind: string, name: string): string {
+  return `${kind}/${name}`
+}
+
+type Sidecar = { file: string; ownerFile: string; type: "module" | "sql" }
+
+/**
+ * Стадія 1 (спека П2 §8.2): розкладка файлів, JSON і схема виду. Кожен файл
+ * перевіряється незалежно, тож прогін повертає всі проблеми, а не першу.
+ */
+export function readFiles(
+  files: ReadonlyMap<string, string>
+): FilesStageResult {
+  const result: FilesStageResult = {
+    objects: [],
+    brokenNames: new Set(),
+    sqlFiles: [],
+    moduleFiles: [],
+    diagnostics: [],
+  }
+  const sidecars: Sidecar[] = []
+  // Порядок мапи — випадковість того, хто її зібрав; шлях — ні.
+  const paths = [...files.keys()].sort(compareStrings)
+
+  for (const file of paths) {
+    const text = files.get(file) ?? ""
+    const segments = file.split("/")
+
+    if (file === PROJECT_FILE) {
+      result.project = readProject(text, result.diagnostics)
+      continue
+    }
+    if (
+      segments.length === 3 &&
+      segments[0] === "sql" &&
+      hasBase(segments[2]!, SQL_SUFFIX)
+    ) {
+      result.sqlFiles.push({ file, schema: segments[1]! })
+      continue
+    }
+
+    const def = segments.length === 3 ? kindByDir(segments[0]!) : undefined
+    const fileName = segments[2] ?? ""
+    const folder = `${segments[0]}/${segments[1]}/`
+    if (def !== undefined && hasBase(fileName, META_SUFFIX)) {
+      readObject(
+        file,
+        text,
+        def,
+        segments[1]!,
+        baseOf(fileName, META_SUFFIX),
+        result
+      )
+    } else if (def !== undefined && hasBase(fileName, MODULE_SUFFIX)) {
+      const base = baseOf(fileName, MODULE_SUFFIX)
+      sidecars.push({
+        file,
+        ownerFile: `${folder}${base}${META_SUFFIX}`,
+        type: "module",
+      })
+    } else if (def !== undefined && hasBase(fileName, SQL_SUFFIX)) {
+      const base = baseOf(fileName, SQL_SUFFIX)
+      sidecars.push({
+        file,
+        ownerFile: `${folder}${base}${META_SUFFIX}`,
+        type: "sql",
+      })
+    } else {
+      result.diagnostics.push(diagnostic("file.unknown-path", file, ""))
+    }
+  }
+
+  if (result.project === undefined && !files.has(PROJECT_FILE)) {
+    result.diagnostics.push(diagnostic("project.missing", PROJECT_FILE, ""))
+  }
+
+  // Супутній файл належить об'єкту, чий `.meta.json` лежить поруч з тим самим
+  // іменем; чи цей файл валідний — окреме питання, про яке звітує він сам.
+  for (const sidecar of sidecars) {
+    if (!files.has(sidecar.ownerFile)) {
+      result.diagnostics.push(
+        diagnostic("file.orphan", sidecar.file, "", {
+          expected: sidecar.ownerFile,
+        })
+      )
+    } else if (sidecar.type === "module") {
+      result.moduleFiles.push({
+        file: sidecar.file,
+        ownerFile: sidecar.ownerFile,
+      })
+    } else {
+      result.sqlFiles.push({ file: sidecar.file, ownerFile: sidecar.ownerFile })
+    }
+  }
+  return result
+}
+
+function hasBase(fileName: string, suffix: string): boolean {
+  return fileName.length > suffix.length && fileName.endsWith(suffix)
+}
+
+function baseOf(fileName: string, suffix: string): string {
+  return fileName.slice(0, -suffix.length)
+}
+
+function readProject(
+  text: string,
+  diagnostics: Diagnostic[]
+): Project | undefined {
+  const json = parseJson(PROJECT_FILE, text, diagnostics)
+  if (json === undefined) return undefined
+  const parsed = projectSchema.safeParse(json.value)
+  if (!parsed.success) {
+    diagnostics.push(...zodDiagnostics(PROJECT_FILE, parsed.error))
+    return undefined
+  }
+  return parsed.data
+}
+
+function readObject(
+  file: string,
+  text: string,
+  def: KindDefinition,
+  folderName: string,
+  fileBase: string,
+  result: FilesStageResult
+): void {
+  const broken = (rawName: unknown) => {
+    result.brokenNames.add(objectKey(def.kind, folderName))
+    if (typeof rawName === "string") {
+      result.brokenNames.add(objectKey(def.kind, rawName))
+    }
+  }
+
+  const json = parseJson(file, text, result.diagnostics)
+  if (json === undefined) {
+    broken(undefined)
+    return
+  }
+  const raw = isRecord(json.value) ? json.value : undefined
+
+  // Тека задає вид: файл чужого виду не проганяємо схемою теки, інакше
+  // справжня причина потонула б у помилках невідповідних полів.
+  if (raw !== undefined && raw.kind !== def.kind) {
+    result.diagnostics.push(
+      diagnostic("file.kind-mismatch", file, "/kind", {
+        dir: def.dir,
+        expected: def.kind,
+        actual: typeof raw.kind === "string" ? raw.kind : "missing",
+      })
+    )
+    broken(raw.name)
+    return
+  }
+
+  const parsed = def.schema.safeParse(json.value)
+  if (!parsed.success) {
+    result.diagnostics.push(...zodDiagnostics(file, parsed.error))
+    broken(raw?.name)
+    return
+  }
+
+  const data = parsed.data as { name: string; id?: string }
+  if (folderName !== data.name || fileBase !== data.name) {
+    result.diagnostics.push(
+      diagnostic("file.name-mismatch", file, "/name", { name: data.name })
+    )
+  }
+  result.objects.push({
+    kind: def.kind,
+    name: data.name,
+    file,
+    ...(data.id !== undefined ? { id: data.id } : {}),
+    data,
+  })
+}
+
+function parseJson(
+  file: string,
+  text: string,
+  diagnostics: Diagnostic[]
+): { value: unknown } | undefined {
+  try {
+    return { value: JSON.parse(text) as unknown }
+  } catch (error) {
+    diagnostics.push(
+      diagnostic("file.invalid-json", file, "", {
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    )
+    return undefined
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isSchemaRule(value: unknown): value is SchemaRule {
+  return (SCHEMA_RULES as readonly unknown[]).includes(value)
+}
+
+/**
+ * Власні перевірки T0 несуть код у `params.rule` — він і стає кодом
+ * діагностики; решта проблем Zod іде під `file.schema` зі своїм текстом.
+ */
+function zodDiagnostics(file: string, error: z.ZodError): Diagnostic[] {
+  return error.issues.map((issue) => {
+    const pointer = toPointer(issue.path)
+    const rule: unknown =
+      issue.code === "custom" ? issue.params?.rule : undefined
+    if (isSchemaRule(rule)) {
+      const field = issue.path.at(-1)
+      return diagnostic(
+        rule,
+        file,
+        pointer,
+        field === undefined ? {} : { field: String(field) }
+      )
+    }
+    return diagnostic("file.schema", file, pointer, { detail: issue.message })
+  })
+}

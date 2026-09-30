@@ -1,4 +1,16 @@
-// Вміст ярусу з'явиться в наступних кроках П2 чи підпроєктах (платформна
-// спека §3.1); тека й subpath існують від початку, бо лінт-зони й експорти
-// покривають кожен ярус.
-export {}
+export {
+  COMPILER_RULES,
+  type CompilerRule,
+  type Diagnostic,
+  type DiagnosticParams,
+  type RuleCode,
+  type Severity,
+} from "./diagnostics"
+export { MESSAGES, type MessageEntry } from "./messages"
+export {
+  compile,
+  type CompileResult,
+  type CompiledModel,
+  type SourceObject,
+} from "./compile"
+export type { ResolvedReference } from "./stages/identity"

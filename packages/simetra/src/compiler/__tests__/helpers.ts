@@ -1,0 +1,78 @@
+import { toSnakeCase } from "simetra/model"
+
+/** Детермінований UUID v4 для фікстур: номер видно в самому id. */
+export function uuid(n: number): string {
+  return `00000000-0000-4000-8000-${n.toString().padStart(12, "0")}`
+}
+
+// Лічильник дає кожній фікстурі унікальний id без ручної нумерації; тести,
+// яким важливе конкретне значення, передають id явно.
+let nextId = 1000
+function freshId(): string {
+  nextId += 1
+  return uuid(nextId)
+}
+
+export function project(overrides: Record<string, unknown> = {}) {
+  return { name: "TestApp", ...overrides }
+}
+
+/** Об'єкт серіалізується в JSON, рядок іде як є (для зламаного JSON). */
+export function metaFiles(
+  entries: Record<string, unknown>
+): Map<string, string> {
+  return new Map(
+    Object.entries(entries).map(([path, content]) => [
+      path,
+      typeof content === "string" ? content : JSON.stringify(content),
+    ])
+  )
+}
+
+export function attribute(
+  name: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    id: freshId(),
+    name,
+    physicalName: toSnakeCase(name),
+    type: "Boolean",
+    ...overrides,
+  }
+}
+
+function object(
+  kind: string,
+  name: string,
+  overrides: Record<string, unknown>
+) {
+  return {
+    id: freshId(),
+    kind,
+    name,
+    physicalName: toSnakeCase(name),
+    ...overrides,
+  }
+}
+
+export function catalog(name: string, overrides: Record<string, unknown> = {}) {
+  return object("Catalog", name, overrides)
+}
+
+export function document(
+  name: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return object("Document", name, overrides)
+}
+
+export function customTable(
+  name: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return object("CustomTable", name, {
+    columns: [{ id: freshId(), name: "id", physicalName: "id", type: "UUID" }],
+    ...overrides,
+  })
+}
