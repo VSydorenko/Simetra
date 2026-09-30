@@ -109,3 +109,67 @@ export function scopedProject(): {
 export function organization(overrides: Record<string, unknown> = {}) {
   return catalog("Organization", { scope: "org", ...overrides })
 }
+
+export const SALE_FILE = "documents/Sale/Sale.meta.json"
+export const STOCK_FILE = "accumulation-registers/Stock/Stock.meta.json"
+
+/**
+ * Документ `Sale` з ТЧ `goods` і регістр залишків `Stock`, що приймає його
+ * рухи. `movement` доповнює типовий рух, `sale` — сам документ; обидва
+ * перекривають типове.
+ */
+export function salesDocument(
+  movement: Record<string, unknown> = {},
+  sale: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const stockId = freshId()
+  const goods = {
+    id: freshId(),
+    name: "goods",
+    physicalName: "goods",
+    attributes: [
+      attribute("item", {
+        physicalName: "item_id",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Item" },
+      }),
+      attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),
+      attribute("amount", { type: "Numeric", precision: 15, scale: 2 }),
+    ],
+  }
+  return {
+    "catalogs/Item/Item.meta.json": catalog("Item"),
+    [SALE_FILE]: document("Sale", {
+      tabularSections: [goods],
+      posting: {
+        movements: [
+          {
+            register: { kind: "AccumulationRegister", name: "Stock" },
+            source: { tabularSection: "goods" },
+            movementType: "Expense",
+            fields: { item: "row.item", qty: "row.qty" },
+            ...movement,
+          },
+        ],
+      },
+      ...sale,
+    }),
+    [STOCK_FILE]: {
+      id: stockId,
+      kind: "AccumulationRegister",
+      name: "Stock",
+      physicalName: "stock",
+      recorderTypes: [{ kind: "Document", name: "Sale" }],
+      dimensions: [
+        attribute("item", {
+          physicalName: "item_id",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Item" },
+        }),
+      ],
+      resources: [
+        attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),
+      ],
+    },
+  }
+}

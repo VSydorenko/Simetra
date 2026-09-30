@@ -10,7 +10,13 @@ import {
   type ScopeKind,
   type StandardColumnDef,
 } from "simetra/model"
-import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
+import { parseExpression, type Expr, type MovementDecl } from "simetra/model"
+import {
+  compareStrings,
+  diagnostic,
+  toPointer,
+  type Diagnostic,
+} from "../diagnostics"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 
 export interface ResolvedReference {
@@ -21,6 +27,8 @@ export interface ResolvedReference {
    */
   to: { kind: MetadataKind | "ScopeKind" | "Element"; id: string }
   role: ReferenceRole
+  /** Вузол виразу всередині поля, на яке вказує pointer: пів-інтервал [start, end). */
+  span?: { start: number; end: number }
 }
 
 export interface IdentityStageResult {
@@ -322,6 +330,9 @@ export function checkIdentity(
     }
     checkScopeColumn(object, references, diagnostics)
     checkBalanceControl(object, references, diagnostics)
+    if (style !== undefined) {
+      resolveMovements(object, objectsByName, style, references, diagnostics)
+    }
   }
   references.sort(
     (a, b) =>
@@ -456,5 +467,279 @@ function checkBalanceControl(
       to: { kind: "Element", id: resource.id },
       role: "register.balanceControl",
     })
+  })
+}
+
+/** Елемент усередині об'єкта, на який можна послатися у виразі за іменем. */
+type NameTable = Map<string, string>
+
+/**
+ * Імена, доступні у виразі: власні елементи (за їх UUID) і стандартні
+ * реквізити (за логічним іменем у стилі проєкту; синтетичний id — канонічне
+ * ім'я, щоб зміна стилю не міняла id).
+ */
+function nameTable(
+  ownerId: string,
+  elements: readonly Element[],
+  standard: readonly StandardColumnDef[],
+  style: AttributeCase
+): NameTable {
+  const table: NameTable = new Map()
+  for (const column of standard) {
+    table.set(
+      standardLogicalName(column, style),
+      `${ownerId}#${column.logicalName}`
+    )
+  }
+  for (const element of elements) {
+    if (typeof element.id === "string")
+      table.set(String(element.name), element.id)
+  }
+  return table
+}
+
+/** Вузли виразу, що посилаються на імена, у порядку появи. */
+function namedNodes(expr: Expr): Expr[] {
+  switch (expr.type) {
+    case "field":
+    case "sum":
+    case "count":
+      return [expr]
+    case "unary":
+      return namedNodes(expr.operand)
+    case "binary":
+      return [...namedNodes(expr.left), ...namedNodes(expr.right)]
+    default:
+      return []
+  }
+}
+
+/**
+ * Імена у виразах конструктора рухів документа резолвляться в UUID, щоб
+ * перейменування поля, ТЧ чи реєстру не ламало рухи мовчки. Цілісність
+ * (типи, `row.` без ТЧ, вид регістра) — справа стадії 4; якщо ім'я чи ціль
+ * не знайдені, звітується лише відсутність імені, а розбір виразу вже
+ * перевірила T0 (`posting.parse`), тож зламаний вираз тут пропускається.
+ */
+function resolveMovements(
+  object: ParsedObject,
+  objectsByName: ReadonlyMap<string, ParsedObject>,
+  style: AttributeCase,
+  references: ResolvedReference[],
+  diagnostics: Diagnostic[]
+) {
+  const data = object.data as {
+    posting?: { movements: MovementDecl[] }
+    tabularSections?: Element[]
+  }
+  const movements = data.posting?.movements
+  if (movements === undefined || object.id === undefined) return
+  const ownerId = object.id
+  const def = KIND_REGISTRY[object.kind]
+  const sections = data.tabularSections ?? []
+  const header = nameTable(
+    ownerId,
+    def.columnFields.flatMap(
+      (field) => (data as Record<string, Element[]>)[field] ?? []
+    ),
+    def.standardColumns(data),
+    style
+  )
+  const rowTables = new Map<string, NameTable>()
+  const sectionNamed = (name: string) => sections.find((s) => s.name === name)
+  const rowTable = (section: Element): NameTable | undefined => {
+    if (typeof section.id !== "string") return undefined
+    let table = rowTables.get(section.id)
+    if (table === undefined) {
+      table = nameTable(
+        section.id,
+        (section.attributes as Element[]) ?? [],
+        def.tabularSectionColumns?.(data) ?? [],
+        style
+      )
+      rowTables.set(section.id, table)
+    }
+    return table
+  }
+  const from = (pointer: string) => ({
+    file: object.file,
+    pointer,
+    objectId: ownerId,
+  })
+  const toElement = (id: string) => ({ kind: "Element" as const, id })
+
+  const resolveSection = (
+    name: string,
+    pointer: string
+  ): Element | undefined => {
+    const section = sectionNamed(name)
+    if (section === undefined) {
+      diagnostics.push(
+        diagnostic("posting.tabular-section-unknown", object.file, pointer, {
+          name,
+        })
+      )
+    }
+    return section
+  }
+
+  movements.forEach((movement, index) => {
+    const base = `/posting/movements/${index}`
+    const source =
+      movement.source === "document"
+        ? undefined
+        : resolveSection(
+            movement.source.tabularSection,
+            `${base}/source/tabularSection`
+          )
+    if (source !== undefined && typeof source.id === "string") {
+      references.push({
+        from: from(`${base}/source/tabularSection`),
+        to: toElement(source.id),
+        role: "posting.tabularSection",
+      })
+    }
+
+    const resolveField = (
+      table: NameTable | undefined,
+      scope: string,
+      name: string,
+      pointer: string,
+      node: Expr,
+      role: "posting.docField" | "posting.rowField"
+    ) => {
+      // Без таблиці (документ-джерело з `row.`, ТЧ без id) звітувати нічого:
+      // причину називає інша стадія.
+      if (table === undefined) return
+      const id = table.get(name)
+      if (id === undefined) {
+        diagnostics.push(
+          diagnostic("posting.field-unknown", object.file, pointer, {
+            name,
+            scope,
+            offset: node.start,
+          })
+        )
+        return
+      }
+      references.push({
+        from: from(pointer),
+        to: toElement(id),
+        role,
+        span: { start: node.start, end: node.end },
+      })
+    }
+
+    const resolveExpression = (text: string | undefined, path: string[]) => {
+      if (text === undefined) return
+      const parsed = parseExpression(text)
+      if (!parsed.ok) return
+      const pointer = toPointer([...base.split("/").slice(1), ...path])
+      for (const node of namedNodes(parsed.expr)) {
+        if (node.type === "field") {
+          const inRow = node.base === "row"
+          resolveField(
+            inRow
+              ? source === undefined
+                ? undefined
+                : rowTable(source)
+              : header,
+            inRow
+              ? `tabular section ${String(source?.name)}`
+              : `${object.kind} ${object.name}`,
+            node.name,
+            pointer,
+            node,
+            inRow ? "posting.rowField" : "posting.docField"
+          )
+        } else if (node.type === "sum" || node.type === "count") {
+          const section = sectionNamed(node.section)
+          if (section === undefined) {
+            diagnostics.push(
+              diagnostic(
+                "posting.tabular-section-unknown",
+                object.file,
+                pointer,
+                {
+                  name: node.section,
+                  offset: node.start,
+                }
+              )
+            )
+            continue
+          }
+          if (typeof section.id === "string") {
+            references.push({
+              from: from(pointer),
+              to: toElement(section.id),
+              role: "posting.tabularSection",
+              span: { start: node.start, end: node.end },
+            })
+          }
+          if (node.type === "sum") {
+            resolveField(
+              rowTable(section),
+              `tabular section ${node.section}`,
+              node.field,
+              pointer,
+              node,
+              "posting.rowField"
+            )
+          }
+        }
+      }
+    }
+
+    resolveExpression(movement.condition, ["condition"])
+    if (
+      movement.movementType !== "Receipt" &&
+      movement.movementType !== "Expense"
+    ) {
+      resolveExpression(movement.movementType, ["movementType"])
+    }
+    resolveExpression(movement.period, ["period"])
+
+    // Ключі `fields` — імена полів регістра; їх перейменування каскад має
+    // переписувати в ключі, а не у значенні.
+    const register = objectsByName.get(
+      objectKey(movement.register.kind, movement.register.name)
+    )
+    const registerFields =
+      register === undefined
+        ? undefined
+        : nameTable(
+            register.id ?? "",
+            KIND_REGISTRY[register.kind].columnFields.flatMap(
+              (field) =>
+                (register.data as Record<string, Element[]>)[field] ?? []
+            ),
+            [],
+            style
+          )
+    for (const [key, text] of Object.entries(movement.fields)) {
+      const fieldPointer = `${base}/fields/${toPointer([key]).slice(1)}`
+      if (registerFields !== undefined) {
+        const id = registerFields.get(key)
+        if (id === undefined) {
+          diagnostics.push(
+            diagnostic(
+              "posting.register-field-unknown",
+              object.file,
+              fieldPointer,
+              {
+                name: key,
+              }
+            )
+          )
+        } else {
+          references.push({
+            from: from(fieldPointer),
+            to: toElement(id),
+            role: "posting.registerField",
+          })
+        }
+      }
+      resolveExpression(text, ["fields", key])
+    }
   })
 }

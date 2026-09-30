@@ -122,6 +122,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: (p) => `Register has no resource "${p.name}"`,
     hint: "balanceControl lists logical names of the register's resources.",
   },
+  "posting.field-unknown": {
+    message: (p) => `${p.scope} has no field "${p.name}"`,
+    hint: "Standard attributes are written by their logical name in the project naming style.",
+  },
+  "posting.register-field-unknown": {
+    message: (p) =>
+      `Register has no dimension, resource or attribute "${p.name}"`,
+    hint: "Keys of a movement's fields are logical names of the register's own fields.",
+  },
+  "posting.tabular-section-unknown": {
+    message: (p) => `Document has no tabular section "${p.name}"`,
+  },
   "scope.declaration-missing": {
     message: (p) => `${p.kind} "${p.name}" does not declare its scope`,
     hint: 'Once the project declares a scope kind, every scoped object sets "scope" to a kind name or "none".',
