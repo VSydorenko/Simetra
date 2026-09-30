@@ -645,6 +645,82 @@ describe("stage 4: movement constructor, fix round 1", () => {
   })
 })
 
+describe("stage 4: operand types", () => {
+  const adjust = ({ files, sale }: Fixture) => {
+    files["catalogs/Service/Service.meta.json"] = catalog("Service")
+    files["catalogs/Warehouse/Warehouse.meta.json"] = catalog("Warehouse")
+    sale.attributes.push(attribute("item", ref("Item")))
+    sale.tabularSections[0]!.attributes.push(
+      attribute("title", { type: "String", length: 50 }),
+      attribute("warehouse", ref("Warehouse")),
+      attribute("product", {
+        type: "Ref",
+        allowedTypes: [
+          { kind: "Catalog", name: "Item" },
+          { kind: "Catalog", name: "Service" },
+        ],
+      })
+    )
+  }
+  const one = (movement: Record<string, unknown>, pointer: string) => {
+    const result = build(movement, adjust)
+    expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+      ["posting.type-mismatch", pointer],
+    ])
+    return result.diagnostics[0]!.params
+  }
+  const qty = "/posting/movements/0/fields/qty"
+  const condition = "/posting/movements/0/condition"
+
+  it("arithmetic operand must be numeric", () => {
+    expect(
+      one({ fields: { item: "row.item", qty: "row.item + 1" } }, qty)
+    ).toMatchObject({ offset: 0 })
+  })
+
+  it("unary minus operand must be numeric", () => {
+    expect(
+      one({ fields: { item: "row.item", qty: "-row.title" } }, qty)
+    ).toMatchObject({ offset: 1 })
+  })
+
+  it("logical operand must be boolean", () => {
+    expect(
+      one({ condition: "row.qty and doc.posted" }, condition)
+    ).toMatchObject({ offset: 0 })
+    expect(one({ condition: "not row.title" }, condition)).toMatchObject({
+      offset: 4,
+    })
+  })
+
+  it("comparison operands must be of the same kind", () => {
+    expect(one({ condition: "row.qty = 'x'" }, condition)).toMatchObject({
+      offset: 10,
+    })
+    // Посилання без спільних цілей рівними не бувають.
+    expect(
+      one({ condition: "row.item = row.warehouse" }, condition)
+    ).toMatchObject({ offset: 11 })
+  })
+
+  it("a failed operand does not cascade to the field", () => {
+    // Вкладена помилка звітує лише операнд, а не результат проти поля.
+    one({ fields: { item: "row.item", qty: "(row.title * 2) > 1" } }, qty)
+  })
+
+  it("valid operands are clean", () => {
+    for (const text of [
+      "row.qty * 2 > 0",
+      "doc.date = doc.date",
+      "row.item = null",
+      "row.product = doc.item",
+      "not doc.posted or row.qty <= 1",
+    ]) {
+      expect(build({ condition: text }, adjust).diagnostics, text).toEqual([])
+    }
+  })
+})
+
 describe("stage 4: robustness", () => {
   it("names that stage 2 could not resolve produce no stage 4 noise", () => {
     const files = salesDocument({

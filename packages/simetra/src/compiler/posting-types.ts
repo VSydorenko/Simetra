@@ -58,7 +58,49 @@ export function typeOfLogical(
   }
 }
 
-export function inferType(expr: Expr, ctx: PostingContext): InferredType {
+/** Операнд, чий тип не підходить оператору: діагностика вказує на його початок. */
+export interface OperandError {
+  node: Expr
+  expected: string
+  actual: InferredType
+}
+
+const ARITHMETIC: ReadonlySet<string> = new Set(["+", "-", "*", "/"])
+const LOGICAL: ReadonlySet<string> = new Set(["and", "or"])
+
+/**
+ * Тип виразу. Операнд невідповідного типу потрапляє в `errors`, а вузол над
+ * ним стає `unknown`: одна причина — одна діагностика, без каскаду вгору до
+ * поля. `unknown` операнда (нерезолвлене ім'я, тип без аналога) мовчить.
+ */
+export function inferType(
+  expr: Expr,
+  ctx: PostingContext,
+  errors: OperandError[] = []
+): InferredType {
+  const before = errors.length
+  const result = inferNode(expr, ctx, errors)
+  return errors.length > before ? UNKNOWN : result
+}
+
+function inferNode(
+  expr: Expr,
+  ctx: PostingContext,
+  errors: OperandError[]
+): InferredType {
+  // Операнд, що мусить мати тип `kind`; false — уже звітовано або невідомий.
+  const operand = (
+    node: Expr,
+    kind: "numeric" | "boolean"
+  ): InferredType | undefined => {
+    const type = inferType(node, ctx, errors)
+    if (type.kind === "unknown") return undefined
+    if (type.kind !== kind) {
+      errors.push({ node, expected: kind, actual: type })
+      return undefined
+    }
+    return type
+  }
   switch (expr.type) {
     case "number":
       return { kind: "numeric", integer: !expr.value.includes(".") }
@@ -74,32 +116,57 @@ export function inferType(expr: Expr, ctx: PostingContext): InferredType {
     case "sum":
       return ctx.typeOf(expr)
     case "unary": {
-      if (expr.op === "not") return { kind: "boolean" }
-      const operand = inferType(expr.operand, ctx)
-      return operand.kind === "numeric" ? operand : UNKNOWN
+      if (expr.op === "not") {
+        operand(expr.operand, "boolean")
+        return { kind: "boolean" }
+      }
+      return operand(expr.operand, "numeric") ?? UNKNOWN
     }
     case "binary": {
-      if (
-        expr.op === "+" ||
-        expr.op === "-" ||
-        expr.op === "*" ||
-        expr.op === "/"
-      ) {
-        const left = inferType(expr.left, ctx)
-        const right = inferType(expr.right, ctx)
+      if (ARITHMETIC.has(expr.op)) {
+        const left = operand(expr.left, "numeric")
+        const right = operand(expr.right, "numeric")
         // Невідомий операнд робить невідомою й цілість результату.
-        if (left.kind === "unknown" || right.kind === "unknown") return UNKNOWN
-        const integer =
-          expr.op !== "/" &&
-          left.kind === "numeric" &&
-          left.integer &&
-          right.kind === "numeric" &&
-          right.integer
-        return { kind: "numeric", integer }
+        if (left?.kind !== "numeric" || right?.kind !== "numeric") {
+          return UNKNOWN
+        }
+        return {
+          kind: "numeric",
+          integer: expr.op !== "/" && left.integer && right.integer,
+        }
+      }
+      if (LOGICAL.has(expr.op)) {
+        operand(expr.left, "boolean")
+        operand(expr.right, "boolean")
+        return { kind: "boolean" }
+      }
+      // Порівняння: результат завжди boolean, операнди — одного роду.
+      const left = inferType(expr.left, ctx, errors)
+      const right = inferType(expr.right, ctx, errors)
+      if (!comparable(left, right)) {
+        errors.push({
+          node: expr.right,
+          expected: describeType(left),
+          actual: right,
+        })
       }
       return { kind: "boolean" }
     }
   }
+}
+
+/**
+ * Порівнянні типи: той самий рід, `null` — з будь-чим; посилання — лише коли
+ * множини цілей перетинаються, інакше рівність завжди хибна.
+ */
+function comparable(left: InferredType, right: InferredType): boolean {
+  if (left.kind === "unknown" || right.kind === "unknown") return true
+  if (left.kind === "null" || right.kind === "null") return true
+  if (left.kind !== right.kind) return false
+  if (left.kind === "ref" && right.kind === "ref") {
+    return left.targets.some((target) => right.targets.includes(target))
+  }
+  return true
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   inferType,
   typeOfLogical,
   type InferredType,
+  type OperandError,
   type PostingContext,
 } from "../posting-types"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
@@ -839,7 +840,19 @@ function checkPosting(
               : (elementTypes.get(id) ?? UNKNOWN)
           },
         }
-        return inferType(expr, ctx)
+        const errors: OperandError[] = []
+        const type = inferType(expr, ctx, errors)
+        // Операнд звітує сам; тип цілого тоді `unknown`, тож поле мовчить.
+        for (const error of errors) {
+          found.push(
+            diagnostic("posting.type-mismatch", object.file, pointer, {
+              expected: error.expected,
+              actual: describeType(error.actual),
+              offset: error.node.start,
+            })
+          )
+        }
+        return type
       }
       const mismatch = (
         pointer: string,
