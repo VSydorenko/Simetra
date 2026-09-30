@@ -397,6 +397,29 @@ describe("stage 3: scope", () => {
     ])
   })
 
+  it("scoped constant with crossScope is plain", () => {
+    const physical = compileScoped({
+      [CP]: counterparty(),
+      "constants/MainCounterparty/MainCounterparty.meta.json": {
+        id: uuid(902),
+        kind: "Constant",
+        name: "MainCounterparty",
+        physicalName: "main_counterparty",
+        scope: "org",
+        ...ref("Catalog", "Counterparty", { crossScope: true }),
+      },
+    })
+    expect(
+      tableOf(physical, "main_counterparty").foreignKeys.map((fk) => [
+        fk.columns,
+        fk.references.columns,
+      ])
+    ).toEqual([
+      [["org_id"], ["id"]],
+      [["value"], ["id"]],
+    ])
+  })
+
   it("register gets scope column only", () => {
     const physical = compileScoped({
       [CP]: counterparty(),

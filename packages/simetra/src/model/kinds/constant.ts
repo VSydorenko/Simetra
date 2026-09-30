@@ -10,6 +10,7 @@ import {
 /** Лише поля типу: решта полів константи до колонки `value` не належить. */
 function valueTypeOf(constant: Constant): ValueType {
   const { type, length, precision, scale, ref, allowedTypes, array } = constant
+  const { crossScope } = constant
   const value: ValueType = { type }
   if (length !== undefined) value.length = length
   if (precision !== undefined) value.precision = precision
@@ -17,6 +18,7 @@ function valueTypeOf(constant: Constant): ValueType {
   if (ref !== undefined) value.ref = ref
   if (allowedTypes !== undefined) value.allowedTypes = allowedTypes
   if (array !== undefined) value.array = array
+  if (crossScope !== undefined) value.crossScope = crossScope
   return value
 }
 

@@ -2,7 +2,8 @@ import type { DiagnosticParams, RuleCode } from "./diagnostics"
 
 export interface MessageEntry {
   message: (params: DiagnosticParams) => string
-  hint?: string
+  /** Функція, коли підказка залежить від параметрів (наприклад, від ролі посилання). */
+  hint?: string | ((params: DiagnosticParams) => string)
 }
 
 const FIX_IDS = "Run simetra fix to assign ids."
@@ -141,17 +142,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "scope.root-self-reference": {
     message: (p) =>
       `Reference to ${p.kind} "${p.name}", the root of the same scope kind "${p.scope}"`,
-    hint: 'The root key is already the scope value of the object; drop the reference, or set "crossScope" if it deliberately points to another tenant.',
+    hint: (p) =>
+      p.via === "owner"
+        ? "An owner cannot be the root of its own scope kind; a cross-scope owner is not supported."
+        : 'The root key is already the scope value of the object; drop the reference, or set "crossScope" if it deliberately points to another tenant.',
   },
   "scope.global-to-scoped": {
     message: (p) =>
       `Unscoped object references ${p.kind} "${p.name}" of scope kind "${p.scope}"`,
-    hint: 'Set "crossScope": true on the Ref if the link is intentional.',
+    hint: (p) =>
+      p.via === "owner"
+        ? "An owner must share the scope kind; a cross-scope owner is not supported."
+        : 'Set "crossScope": true on the Ref if the link is intentional.',
   },
   "scope.cross-kind": {
     message: (p) =>
       `Object of scope kind "${p.from}" references ${p.kind} "${p.name}" of scope kind "${p.scope}"`,
-    hint: 'Set "crossScope": true on the Ref if the link is intentional.',
+    hint: (p) =>
+      p.via === "owner"
+        ? "An owner must share the scope kind; a cross-scope owner is not supported."
+        : 'Set "crossScope": true on the Ref if the link is intentional.',
   },
   "scope.recorder-mismatch": {
     message: (p) =>

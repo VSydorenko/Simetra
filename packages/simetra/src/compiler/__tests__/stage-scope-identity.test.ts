@@ -226,6 +226,21 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
+  it("custom table may name a column like its scope kind", () => {
+    const result = compileScoped({
+      [TABLE]: customTable("Log", {
+        scope: "org",
+        scopeColumn: "org",
+        columns: [
+          { id: uuid(991), name: "id", physicalName: "id", type: "UUID" },
+          { id: uuid(992), name: "org", physicalName: "org_id", type: "UUID" },
+        ],
+      }),
+    })
+    expect(codes(result)).toEqual([])
+    expect(result.ok).toBe(true)
+  })
+
   it("scope name collides with a tabular section row attribute", () => {
     const result = compileScoped({
       [CP]: catalog("Counterparty", {

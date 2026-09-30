@@ -510,6 +510,7 @@ function checkScope(
       name: target.name,
       scope: scopeName(targetKind),
       from: scopeName(sourceKind),
+      via: role === "catalog.owner" ? "owner" : "reference",
     }
 
     if (targetKind === undefined) {

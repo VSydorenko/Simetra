@@ -101,7 +101,12 @@ export function diagnostic(
     file,
     pointer,
     message: entry.message(params),
-    ...(entry.hint !== undefined ? { hint: entry.hint } : {}),
+    ...(entry.hint !== undefined
+      ? {
+          hint:
+            typeof entry.hint === "string" ? entry.hint : entry.hint(params),
+        }
+      : {}),
     ...(Object.keys(params).length > 0 ? { params } : {}),
   }
 }

@@ -192,6 +192,10 @@ describe("стадія 4: скоуп", () => {
     expect(scopeDiagnostics(result)).toEqual([
       ["scope.cross-kind", "error", CONTRACT, "/owners/0"],
     ])
+    const [owner] = result.diagnostics
+    expect(owner?.params).toMatchObject({ via: "owner" })
+    expect(owner?.hint).toContain("owner")
+    expect(owner?.hint).not.toContain("crossScope")
   })
 
   it("polymorphic target across scope kinds", () => {
@@ -595,6 +599,15 @@ describe("стадія 4: скоуп", () => {
         polymorphic([
           { kind: "Catalog", name: "Currency" },
           { kind: "Catalog", name: "Counterparty" },
+        ])
+      )
+    ).toEqual([])
+    // Корисна ціль не мусить іти останньою.
+    expect(
+      scopeDiagnostics(
+        polymorphic([
+          { kind: "Catalog", name: "Counterparty" },
+          { kind: "Catalog", name: "Currency" },
         ])
       )
     ).toEqual([])

@@ -410,7 +410,7 @@ class SnapshotBuilder {
       primaryKey: column.primaryKey === true,
       // Індекс стандартного посилання — похідний індекс його FK на повний
       // набір колонок: у скоупленій таблиці `(scope, parent_id)` замість
-      // `parent_id`. Власний індекс реквізиту лишається (addField).
+      // `parent_id`. `indexed` посилання задовольняє індекс його FK (addField).
       indexed: column.indexed === true && target.form !== "foreignKey",
       unique: column.unique === true,
       ...uniqueWithin(column.unique === true, scope),
