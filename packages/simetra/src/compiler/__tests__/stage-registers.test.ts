@@ -234,17 +234,14 @@ describe("stage 3: register keys", () => {
     const rates = tableOf(physicalOf(ratesFiles()), "rates")
     expect(rates.primaryKey).toEqual({
       name: "rates_pkey",
-      columns: ["org_id", "period", "currency_id"],
+      columns: ["org_id", "currency_id", "period"],
     })
     expect(column(rates, "period").notNull).toBe(true)
     expect(column(rates, "currency_id").notNull).toBe(true)
     expect(rates.uniques).toEqual([])
-    expect(indexesOf(rates)).toEqual([
-      {
-        name: "rates_org_id_currency_id_period_idx",
-        keys: ["org_id", "currency_id", "period"],
-      },
-    ])
+    // Ключ запису служить і зрізу за ключем; оборотів у регістра відомостей
+    // немає, тож і індексів рухів немає (FK-індекси покриває префікс PK).
+    expect(indexesOf(rates)).toEqual([])
     expect(physicalOf(ratesFiles()).tables.map((t) => t.name)).not.toContain(
       "rates_totals"
     )
@@ -274,11 +271,51 @@ describe("stage 3: register keys", () => {
     })
     expect(rates.uniques).toEqual([
       {
-        name: "rates_org_id_period_currency_id_key",
-        columns: ["org_id", "period", "currency_id"],
+        name: "rates_org_id_currency_id_period_key",
+        columns: ["org_id", "currency_id", "period"],
         nullsNotDistinct: false,
       },
     ])
+    expect(indexesOf(rates)).toEqual([])
+  })
+
+  it("subordinate register without dimensions, period or scope", () => {
+    const physical = physicalOf(
+      metaFiles({
+        [PROJECT]: project(),
+        [SALE]: document("Sale"),
+        "information-registers/Settings/Settings.meta.json": {
+          id: uuid(5),
+          kind: "InformationRegister",
+          name: "Settings",
+          physicalName: "settings",
+          writeMode: "RecorderSubordinate",
+          recorderTypes: [{ kind: "Document", name: "Sale" }],
+          resources: [attribute("limit", { type: "Integer" })],
+        },
+      })
+    )
+    const settings = tableOf(physical, "settings")
+    // Як у 1С: одна множина записів на весь регістр — одинак як ключ запису
+    // поруч із PK реєстратора.
+    expect(settings.primaryKey).toEqual({
+      name: "settings_pkey",
+      columns: ["recorder_type", "recorder_id", "line_number"],
+    })
+    expect(settings.uniques).toEqual([
+      {
+        name: "settings_singleton_key",
+        columns: ["singleton"],
+        nullsNotDistinct: false,
+      },
+    ])
+    expect(column(settings, "singleton")).toMatchObject({
+      type: "boolean",
+      notNull: true,
+      default: "true",
+    })
+    expect(settings.checks.map((c) => c.expression)).toContain("singleton")
+    expect(settings.indexes).toEqual([])
   })
 
   it("independent non-periodic register without dimensions or scope", () => {

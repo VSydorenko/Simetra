@@ -359,8 +359,8 @@ class SnapshotBuilder {
 
   /**
    * Ключі й індекси таблиці рухів (спека §7): PK реєстратора або ключа
-   * запису, UNIQUE ключа запису поруч із реєстратором і індекси рухів
-   * `(носій, виміри…, period)` та `(носій, period)`. Покриті префіксом ключів
+   * запису, UNIQUE ключа запису поруч із реєстратором і, де їх вимагає вид,
+   * індекси рухів `(носій, виміри…, period)` та `(носій, period)`. Покриті префіксом ключів
    * індекси відкидає materializeIndexes.
    */
   private addRegisterKeys(
@@ -373,7 +373,9 @@ class SnapshotBuilder {
     const carrier = scope?.carrier !== undefined ? [scope.carrier] : []
     const { period, dimensions, recorder } = columns
     // Вироджений ключ уже дав одинак (чи скоуп-колонка замість нього).
-    const recordKey = [...carrier, ...period, ...dimensions]
+    // Ключ запису (носій, виміри…, period) служить і унікальності, і зрізу
+    // останніх/перших за ключем.
+    const recordKey = [...carrier, ...dimensions, ...period]
     if (keys.movementsPrimaryKey === "recorder") {
       if (recorder.length > 0) table.primaryKey = { columns: recorder }
       if (keys.dimensionsUnique && !degenerate) {
@@ -382,7 +384,7 @@ class SnapshotBuilder {
     } else if (!degenerate) {
       table.primaryKey = { columns: recordKey }
     }
-    if (period.length > 0) {
+    if (keys.movementIndexes && period.length > 0) {
       table.derivedIndexes.push([...carrier, ...dimensions, ...period])
       table.derivedIndexes.push([...carrier, ...period])
     }
@@ -916,10 +918,9 @@ const LINE_NUMBER = "lineNumber"
  * UNIQUE поруч із PK реєстратора в підлеглого.
  */
 function registerSingleton(keys: RegisterKeySpec): StandardColumnDef {
-  const column = singletonColumn()
-  if (keys.movementsPrimaryKey === "dimensions") return column
-  delete column.primaryKey
-  return { ...column, unique: true }
+  return singletonColumn(
+    keys.movementsPrimaryKey === "dimensions" ? "primaryKey" : "unique"
+  )
 }
 
 /**

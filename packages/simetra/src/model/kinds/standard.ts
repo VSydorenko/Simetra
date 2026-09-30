@@ -91,11 +91,20 @@ export interface RegisterKeySpec {
   /**
    * PK таблиці рухів: `recorder` — `(recorder_type, recorder_id, line_number)`,
    * бо оболонка переписує рухи за реєстратором; `dimensions` —
-   * `(носій скоупу, period, виміри…)` без відсутніх частин.
+   * `(носій скоупу, виміри…, period)` без відсутніх частин.
    */
   movementsPrimaryKey: "recorder" | "dimensions"
-  /** `UNIQUE (носій скоупу, period, виміри…)` поруч із PK реєстратора. */
+  /**
+   * `UNIQUE (носій скоупу, виміри…, period)` поруч із PK реєстратора. Той
+   * самий ключ запису служить і зрізу останніх/перших за ключем.
+   */
   dimensionsUnique: boolean
+  /**
+   * Індекси рухів `(носій, виміри…, period)` і `(носій, period)` — для
+   * залишків за ключем і оборотів за період; регістру відомостей їх дає ключ
+   * запису, а оборотів у нього немає.
+   */
+  movementIndexes: boolean
   /** «Порожній» вимір — порожнє значення, а не NULL: виміри входять у ключі. */
   dimensionsNotNull: true
   /** Таблиця поточних підсумків `<регістр>_totals`. */
@@ -259,14 +268,19 @@ export function periodColumn(): StandardColumnDef {
   }
 }
 
-/** Ключ рядка-одинака: колонка, що може мати лише значення true. */
-export function singletonColumn(): StandardColumnDef {
+/**
+ * Ключ рядка-одинака: колонка, що може мати лише значення true. `unique` —
+ * одинак як ключ запису поруч з іншим PK (підлеглий регістр відомостей).
+ */
+export function singletonColumn(
+  role: "primaryKey" | "unique" = "primaryKey"
+): StandardColumnDef {
   return {
     logicalName: "singleton",
     physicalName: "singleton",
     type: { type: "Boolean" },
     notNull: true,
-    primaryKey: true,
+    ...(role === "primaryKey" ? { primaryKey: true } : { unique: true }),
     singleton: true,
     default: "true",
     check: "singleton",

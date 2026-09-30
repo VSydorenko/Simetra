@@ -49,6 +49,7 @@ export const accumulationRegisterKind: KindDefinition = {
     movementsPrimaryKey: "recorder",
     dimensionsUnique: false,
     dimensionsNotNull: true,
+    movementIndexes: true,
     totals: (obj as AccumulationRegister).registerType === "Balance",
   }),
   references(obj) {

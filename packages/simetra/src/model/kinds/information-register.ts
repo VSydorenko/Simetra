@@ -45,6 +45,7 @@ export const informationRegisterKind: KindDefinition = {
       movementsPrimaryKey: subordinate ? "recorder" : "dimensions",
       dimensionsUnique: subordinate,
       dimensionsNotNull: true,
+      movementIndexes: false,
       totals: false,
     }
   },
