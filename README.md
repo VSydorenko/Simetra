@@ -70,9 +70,6 @@ Before opening a pull request, run the same gates as CI:
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
 ```
 
-Contributor and agent rules — language policy, boundaries, gates, git
-discipline — are in [AGENTS.md](AGENTS.md).
-
 ## Documentation
 
 - [docs/BRD.md](docs/BRD.md) — vision and domain model: what Simetra is and for
@@ -80,11 +77,29 @@ discipline — are in [AGENTS.md](AGENTS.md).
 - [Platform design spec](docs/superpowers/specs/2026-09-24-simetra-platform-design.md)
   — architecture and mechanisms: how it works.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones and their status.
+- [docs/research/README.md](docs/research/README.md) — the research behind
+  past decisions: 1C metadata model, analogues, schema engine, licensing, stack.
 - [AGENTS.md](AGENTS.md) — rules for contributors and coding agents.
 
 Internal design documents are written in Ukrainian; everything a consumer or
 contributor reads first is in English.
 
+## Contributing
+
+Contributions are signed off under the Developer Certificate of Origin. How to
+contribute — DCO, gates, the policy for copying code from other projects and
+for dependencies — is in [CONTRIBUTING.md](CONTRIBUTING.md); contributor and
+agent rules — language policy, boundaries, git discipline — are in
+[AGENTS.md](AGENTS.md).
+
 ## License
 
 [Apache-2.0](LICENSE)
+
+Copied third-party code and its notices are listed in
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+
+Simetra is not affiliated with, endorsed by or associated with 1C Company or
+its products. "1C" and "1C:Enterprise" are registered trademarks of their
+respective owners. Simetra is an independent open-source project inspired by
+the concepts of 1C:Enterprise.

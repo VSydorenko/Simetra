@@ -1,0 +1,35 @@
+THIRD-PARTY NOTICES
+===================
+
+Simetra is licensed under Apache-2.0 (see LICENSE). This file lists source code
+copied into this repository from other open-source projects, together with the
+copyright and licence notices those projects require.
+
+It covers copied code only. Ordinary package dependencies installed from npm
+are not listed here; their notices ship with the packages themselves.
+
+The rules for copying code (allowed licences, the per-file header,
+clean-room policy) are in CONTRIBUTING.md.
+
+Entry format
+------------
+
+An entry is added in the same change as the first file copied from a source,
+and extended when more files are copied from it. One entry per source:
+
+  Name:          <project name>
+  Source:        <repository URL>
+  License:       <SPDX identifier, as stated in the source's LICENSE file>
+  Copyright:     <copyright line exactly as in the source>
+  Files:         <paths in this repository that contain the copied code>
+  Modifications: <what was changed, or "none">
+  NOTICE:        <contents of the source's NOTICE file, when the source is
+                 Apache-2.0 and ships one; otherwise omit>
+
+  <full licence text of the source, reproduced for every allowed licence
+  (MIT, Apache-2.0, BSD, ISC, PostgreSQL License)>
+
+Entries
+-------
+
+None yet.

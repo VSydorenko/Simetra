@@ -42,7 +42,8 @@ specs. Claude Code specifics live in `CLAUDE.md`.
 3. **BRD** (`docs/BRD.md`) — vision and domain model: **what** and **for whom**.
    No technical mechanisms there; it points to the spec.
 4. **ROADMAP** (`docs/ROADMAP.md`) — the one place for status of milestones.
-5. `docs/research/` — background for past decisions, not rules.
+5. `docs/research/` — background for past decisions, not rules. The index and
+   the rules for adding new research are in `docs/research/README.md`.
 
 Decisions that change the platform spec go through the owner. If you need to
 deviate from a spec, stop and report the deviation — never decide it silently.
@@ -66,6 +67,10 @@ under lint zones — T0 `model`, T1 `compiler`, T2 `schema`, T3 `server`,
 T4 `data`, T5 `ui`, T6 `shell`. **Imports go only downward.** A separate package
 exists only for a unit with its own life cycle (CLI, studio, app template);
 versions are lockstep.
+
+**Framework boundary** (a lint zone): T5 imports only React, T4 contracts and
+the navigation adapter interface; framework adapters live in T6; the host
+template and the studio are the only places that import TanStack Start.
 
 **Current code is a prototype.** The packages under `packages/` and the apps
 under `apps/` predate the platform spec. Platform spec §14 sets the fate
@@ -161,7 +166,9 @@ python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
 
 - Conventional Commits with a Ukrainian description.
 - 🔴 **Never add `Co-Authored-By`, "Generated with" or any other trailer** to
-  commits or PRs — they are authored by the owner.
+  commits or PRs — they are authored by the owner. The one exception is the
+  author's own DCO `Signed-off-by`, added by `git commit -s` under the author's
+  git identity; an agent never adds it on its own or signs off for the owner.
 - Commit or push **only when the owner asks**.
 - A fix branch in the middle of a session starts from the **current** working
   branch, not from `main` — the working branch may hold unpushed commits.
@@ -169,6 +176,15 @@ python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
   without a backup ref. A commit you didn't make may come from a parallel
   session on the same checkout — find out where it came from first.
 - Never stage build output, `temp/`, local snapshots or secrets.
+
+## Reuse and licensing
+
+- Before copying code from another project or adding an alpha, beta or 0.x
+  dependency, read [CONTRIBUTING.md](CONTRIBUTING.md) § "Copying code from
+  other projects" and § "Dependencies" — the allowed licences live only there.
+- Never read NocoBase code: its licence forbids building low-code platforms on it.
+- Check a licence in the source repository's `LICENSE` file, not in npm or
+  GitHub metadata.
 
 ## Documentation style
 
