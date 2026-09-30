@@ -40,6 +40,15 @@ AST з перевірками, запит рухів як іменований �
    відомостей — поза П2 (спека §13).
 5. **Стадія 5** з'являється як окремий модуль `stages/links.ts`; у C2 вона
    перевіряє лише джерела рухів; модулі поведінки й функції множини додає D.
+6. **Часовий пояс проєкту** (власник, спека §3): `project.meta.json`
+   `timezone` (IANA, за замовчуванням `"UTC"`); обрізання періоду —
+   `date_trunc('<p>', <момент>, '<timezone>')` (Postgres ≥ 16).
+7. **Стандартні реквізити у виразах і файлах** пишуться логічним ім'ям у
+   стилі проєкту (`standardLogicalName`): у `snake_case`-проєкті —
+   `row.line_number`, `doc.deletion_mark`; `doc.date`, `doc.ref` — однаково.
+   Синтетичний id стандартного реквізиту в індексі посилань — канонічне
+   camelCase-ім'я, щоб зміна стилю проєкту не міняла id. Колізія задачі 1
+   звіряє з іменами в стилі проєкту.
 
 ## Global Constraints
 
@@ -89,8 +98,11 @@ AST з перевірками, запит рухів як іменований �
 - Produces: `ResolvedReference.to.kind: MetadataKind | "ScopeKind" | "Element"`
   (усі місця, що порівнюють із `"Column"`, переходять на `"Element"`);
   правила: `scope.attribute-name-collision` поширюється на логічні імена
-  стандартних реквізитів об'єкта (у стилі проєкту); `customTable.cross-scope-not-allowed`
-  (issue T0 — `crossScope` на колонці `CustomTable`: FK там явні);
+  стандартних реквізитів об'єкта (у стилі проєкту) — з тими самими винятками,
+  що в C1 (корінь, рядки ТЧ кореня, `CustomTable`); `customTable.cross-scope-not-allowed`
+  (issue T0 — `crossScope` на будь-якій формі колонки `CustomTable`: FK там
+  явні) **замінює** нинішній шлях через `customTable.column-type` для
+  PgEnum/Raw, щоб одна причина давала один код;
   `scope.custom-table-column` також коли `scopeColumn` задано, а `scope` —
   `"none"` чи відсутнє.
 
@@ -118,7 +130,8 @@ git commit -m "fix(compiler): хвости скоупу — стандартні
 **Files:**
 - Modify: `packages/simetra/src/model/schemas/accumulation-register.ts`, `information-register.ts`, `schemas/rules.ts`
 - Modify: `packages/simetra/src/model/kinds/standard.ts`, `kinds/accumulation-register.ts`, `kinds/information-register.ts`
-- Modify: `packages/simetra/src/compiler/stages/model.ts`, `stages/integrity.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
+- Modify: `packages/simetra/src/model/physical/snapshot.ts` (`PhysicalOrigin.part`)
+- Modify: `packages/simetra/src/compiler/stages/model.ts`, `stages/identity.ts` (`register.balance-control-resource`), `stages/integrity.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
 - Test: `packages/simetra/src/compiler/__tests__/stage-registers.test.ts`
 
 **Interfaces:**
@@ -160,11 +173,17 @@ git commit -m "fix(compiler): хвости скоупу — стандартні
 - [ ] **Step 1: Тести**
 
 `stage-registers.test.ts`:
-- `accumulation movements key` — PK `(recorder_type, recorder_id, line_number)`,
-  виміри `NOT NULL`, індекси `(org_id, warehouse_id, item_id, period)` і
-  `(org_id, period)` у скоупленому регістрі; жодного індексу лише на `period`;
-- `balance register has totals` — таблиця `stock_totals`: `org_id`, виміри,
-  ресурси `numeric(15,3) NOT NULL DEFAULT 0`, PK `(org_id, warehouse_id, item_id)`,
+- `accumulation movements key` — скоуплений регістр `stock` з вимірами
+  `warehouse`, `item` (обидва — скоуплені довідники `org`): повний набір
+  індексів таблиці рухів — PK `(recorder_type, recorder_id, line_number)`,
+  `(org_id, warehouse_id, item_id, period)`, `(org_id, period)` і FK-індекс
+  `(org_id, item_id)` (FK `(org_id)` на корінь і `(org_id, warehouse_id)`
+  покриті префіксом першого індексу, правило C1); виміри `NOT NULL`;
+  жодного індексу лише на `period`;
+- `balance register has totals` — таблиця `stock_totals`: `org_id` з FK на
+  корінь, виміри з тими самими складеними FK, ресурси
+  `numeric(15,3) NOT NULL DEFAULT 0`, PK `(org_id, warehouse_id, item_id)`,
+  повний набір індексів — PK і FK-індекс `(org_id, item_id)`;
   `origin.part === "totals"`; у оборотного регістра таблиці підсумків немає;
 - `degenerate totals key is a singleton` — регістр залишків без вимірів у
   однотенантному проєкті: у `<reg>_totals` PK — `singleton`;
@@ -205,7 +224,7 @@ git commit -m "feat(compiler): ключі, поточні підсумки й і
   ```ts
   // Вузли несуть [start, end) — зміщення в рядку виразу.
   type Expr =
-    | { type: "field"; scope: "doc" | "row"; name: string; start: number; end: number }
+    | { type: "field"; base: "doc" | "row"; name: string; start: number; end: number }
     | { type: "sum"; section: string; field: string; start: number; end: number }
     | { type: "count"; section: string; start: number; end: number }
     | { type: "number"; value: string; start: number; end: number }
@@ -218,7 +237,8 @@ git commit -m "feat(compiler): ключі, поточні підсумки й і
   function parseExpression(text: string): ParseResult
   ```
   Граматика (пріоритет зростає): `or` < `and` < `not` < порівняння <
-  `+ -` < `* /` < унарний `-` < первинні. Ключові слова `and`, `or`, `not`,
+  `+ -` < `* /` < унарний `-` < первинні; первинні — поле, агрегат,
+  літерал і вираз у дужках `( … )`. Ключові слова `and`, `or`, `not`,
   `true`, `false`, `null`, `sum`, `count` — без урахування регістру; рядок —
   `'…'` з подвоєнням `''`; число — `\d+(\.\d+)?`. Аргумент `sum` — лише
   `<ТЧ>.<реквізит>` (без виразу), `count` — лише `<ТЧ>`.
@@ -227,7 +247,9 @@ git commit -m "feat(compiler): ключі, поточні підсумки й і
   `validations` зникає (контроль залишків — задача 2). Рядки-вирази
   розбираються в `superRefine`: помилка → issue `params: { rule: "posting.parse", offset }`,
   path — на поле з виразом (`["posting","movements",i,"fields","qty"]`).
-  `movementType` — літерал `Receipt`/`Expense` або вираз.
+  `movementType`: рядок, що дорівнює рівно `"Receipt"` чи `"Expense"`, —
+  літерал виду руху; будь-який інший рядок розбирається як вираз (тож
+  `"doc.kind"` — вираз, а `"'Receipt'"` — вираз-рядок із тим самим значенням).
 
 - [ ] **Step 1: Тести**
 
@@ -256,7 +278,8 @@ git commit -m "feat(compiler): ключі, поточні підсумки й і
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A packages/simetra/src/model
+git rm packages/simetra/src/model/schemas/posting.ts packages/simetra/src/model/posting-compatibility.ts packages/simetra/src/model/__tests__/posting-compatibility.test.ts packages/simetra/src/model/__tests__/condition-expression.test.ts
+git add packages/simetra/src/model/posting packages/simetra/src/model/schemas packages/simetra/src/model/kinds packages/simetra/src/model/index.ts packages/simetra/src/model/__tests__
 git commit -m "feat(model): конструктор рухів — плаский fields і розбір виразів в AST; прототипні regex-схеми видалено"
 ```
 
@@ -277,7 +300,8 @@ git commit -m "feat(model): конструктор рухів — плаский
     роллю, що переписувати треба ключ, а не значення), `posting.docField`, `posting.rowField`,
     `posting.tabularSection` (`to.kind: "Element"`; pointer — на поле з
     виразом; зміщення вузла — у `ResolvedReference.span?: { start: number; end: number }`).
-    Стандартні реквізити документа (`doc.date`, `doc.ref`, `row.lineNumber`)
+    Стандартні реквізити (логічним ім'ям у стилі проєкту — «Рішення плану»
+    п. 7: `doc.date`, `doc.ref`, `row.lineNumber` чи `row.line_number`)
     резолвляться в `to: { kind: "Element", id: "<objectId>#<канонічне camelCase-ім'я>" }` —
     стабільний синтетичний id (стандартні реквізити не мають UUID і не
     перейменовуються).
@@ -298,6 +322,9 @@ git commit -m "feat(model): конструктор рухів — плаский
   рядка), `posting.tabularSection` (на UUID `goods`);
 - `standard document field resolves to synthetic id` — `period: "doc.date"` →
   `to.id === "<id Sale>#date"`;
+- `standard names follow project style` — у `snake_case`-проєкті
+  `row.line_number` резолвиться в `<id goods>#lineNumber`, а `row.lineNumber`
+  → `posting.field-unknown`;
 - `unknown row field` — `row.qtty` → `posting.field-unknown`, pointer
   `/posting/movements/0/fields/qty`, `params.offset === 0`;
 - `unknown register field key` — `fields.quantity` →
@@ -343,8 +370,10 @@ git commit -m "feat(compiler): стадія 2 — резолв імен у ви�
     (`sum`/`count` із джерелом ТЧ); `posting.movement-type` (відсутній у
     регістра залишків чи присутній у інших; вираз не text); `posting.type-mismatch`
     (ресурс регістра накопичення — numeric, `Integer`-ресурс не приймає
-    неціле; поле регістра відомостей — той самий тип; `Ref` — ті самі цілі або
-    `null`; `condition` — boolean; `period` — date).
+    неціле; поле регістра відомостей — той самий тип; `Ref` — цілі виразу ⊆
+    цілей поля (для поліморфного поля вираз може вести на частину цілей);
+    `null` — лише в поле, колонка якого nullable (не вимір, не ресурс
+    регістра накопичення, не `required`); `condition` — boolean; `period` — date).
 
 - [ ] **Step 1: Тести**
 
@@ -355,6 +384,10 @@ pointer), серед них:
 - `numeric resource accepts integer` — ресурс `Numeric`, вираз `count(goods)` → чисто;
 - `ref field requires the same target` — вимір `item` → `Item`, вираз
   `row.warehouse` (Ref на `Warehouse`) → `posting.type-mismatch`;
+- `polymorphic field accepts a subset of targets` — поле з
+  `allowedTypes [Item, Service]`, вираз `row.item` → чисто;
+- `null into a dimension` → `posting.type-mismatch`; `null` у необов'язковий
+  реквізит регістра → чисто;
 - `condition must be boolean` — `condition: "row.qty"` → `posting.type-mismatch`, pointer `/posting/movements/0/condition`;
 - `fields incomplete lists missing` — без `item` → `posting.fields-incomplete`, `params.missing === "item"`;
 - `movement type required for balance register` / `forbidden for turnover register`;
@@ -388,7 +421,9 @@ git commit -m "feat(compiler): стадія 4 — семантика рухів 
     `-- @end` без відкриття, порожнє ім'я.
   - Стадія 1: для `.sql` документа — блоки в `ParsedObject.movementBlocks`;
     помилки → `file.movements-block` (pointer `""`, `params.line`); блоки в
-    `.sql` не-документа чи в `sql/<схема>/` → `file.movements-block`.
+    `.sql` не-документа чи в `sql/<схема>/` → `file.movements-block`; блок,
+    текст якого містить `$simetra$` (роздільник обгортки, задача 7), →
+    `file.movements-block`.
   - Стадія 2: ім'я регістра маркера резолвиться (за логічним ім'ям регістра
     будь-якого виду регістра) → роль `posting.movementsBlock`
     (`from.pointer` — `""`, `ResolvedReference.line?: number`); невідоме —
@@ -414,7 +449,9 @@ git commit -m "feat(compiler): стадія 4 — семантика рухів 
 - `block for undeclared register` → `posting.register-undeclared`;
 - `block marker is indexed` — індекс має `posting.movementsBlock` на `Stock`
   з `line`;
-- `block in a catalog sql file` → `file.movements-block`.
+- `block in a catalog sql file` → `file.movements-block`;
+- `block containing the wrapper delimiter` — `$simetra$` у тексті блоку →
+  `file.movements-block`.
 
 - [ ] **Step 2: Червоні** — `pnpm --filter simetra test movement-blocks stage-links` → FAIL.
 - [ ] **Step 3: Реалізація.**
@@ -433,6 +470,7 @@ git commit -m "feat(compiler): блоки запиту рухів у .sql док
 **Files:**
 - Create: `packages/simetra/src/compiler/movement-functions.ts`
 - Modify: `packages/simetra/src/compiler/compile.ts` (`CompiledModel.sqlUnits`)
+- Modify: `packages/simetra/src/model/schemas/project.ts` (`timezone: string = "UTC"`; перевірка IANA-імені в T0 неможлива без Node API — хибний пояс зловить тінь плану E)
 - Test: `packages/simetra/src/compiler/__tests__/movement-functions.test.ts`
 
 **Interfaces:**
@@ -453,7 +491,7 @@ git commit -m "feat(compiler): блоки запиту рухів у .sql док
     Для блоку тіло — текст блоку як є. Для конструктора — `SELECT`-и рухів
     регістра через `UNION ALL`, кожен: колонки в порядку `RETURNS TABLE`;
     `period` — вираз руху або `d.date`, для періодичного регістра відомостей —
-    `date_trunc('<day|month|quarter|year>', …)`; `movement_type` — літерал чи
+    `date_trunc('<day|month|quarter|year>', …, '<timezone проєкту>')`; `movement_type` — літерал чи
     вираз; поля з `fields`; незмаплене необов'язкове — `NULL::<тип>`;
     `FROM <таблиця документа> d` (джерело шапка) або
     `FROM <таблиця ТЧ> r JOIN <таблиця документа> d ON d.id = r.parent_id`
@@ -477,7 +515,9 @@ snapshot `toMatchInlineSnapshot` для читабельності):
 - `translates constructor movement from tabular section`;
 - `union of two movements into one register`;
 - `aggregate from document source`;
-- `periodic information register truncates period` — `date_trunc('month', d.date)`;
+- `periodic information register truncates period in project timezone` —
+  `date_trunc('month', d.date, 'Europe/Kyiv')` для проєкту з
+  `timezone: "Europe/Kyiv"`, `'UTC'` — за замовчуванням;
 - `deterministic output` — два прогони дають однаковий `sql`.
 
 - [ ] **Step 2: Червоні** — `pnpm --filter simetra test movement-functions` → FAIL.
@@ -498,7 +538,7 @@ git commit -m "feat(compiler): обгортки запитів рухів і п�
 - Create: `packages/simetra/src/compiler/contracts.ts`
 - Modify: `packages/simetra/src/compiler/compile.ts`, `stages/integrity.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
 - Test: `packages/simetra/src/compiler/__tests__/contracts.test.ts`
-- Modify (канон): `AGENTS.md` § «Metamodel rules» (рядок про регістри), `.agents/skills/code-review/references/simetra-domain-criteria.md`, `docs/ROADMAP.md`
+- Modify (канон): `.agents/skills/code-review/references/simetra-domain-criteria.md`, `docs/ROADMAP.md`
 
 **Interfaces:**
 - Produces `CompiledModel.contracts`:
@@ -547,9 +587,6 @@ git commit -m "feat(compiler): обгортки запитів рухів і п�
 - [ ] **Step 3: Реалізація.**
 - [ ] **Step 4: Зелені** — PASS; повні гейти.
 - [ ] **Step 5: Канон і статус**
-- `AGENTS.md` § «Metamodel rules», рядок про ролі полів регістрів: додай, що
-  рухи пишуть лише запит рухів чи конструктор документа, а ключі, підсумки й
-  віртуальні таблиці регістра — стандартні елементи виду (спека П2 §7).
 - `simetra-domain-criteria.md`: критерій «posting and condition DSL» —
   переписати під AST (`packages/simetra/src/model/posting/`) і блоки запиту;
   рецензент шукає вираз, що обходить AST, чи рух, що пише оболонкові колонки.
@@ -560,7 +597,7 @@ Run: `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/simetra AGENTS.md .agents docs/ROADMAP.md
+git add packages/simetra .agents docs/ROADMAP.md
 git commit -m "feat(compiler): контракти проведення й регістрів у скомпільованій моделі"
 ```
 
