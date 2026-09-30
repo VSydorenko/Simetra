@@ -11,6 +11,26 @@ export {
 } from "./metadata-ref"
 export { attributeSchema, type Attribute } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
+// Нові модулі T0 (P2). toSnakeCase тут не реекспортується: його вже віддає
+// physical-naming, а той файл видаляє задача 3 — тоді експорт перейде сюди.
+export {
+  metadataIdSchema,
+  objectNameSchema,
+  elementNameSchema,
+  physicalNameSchema,
+  ATTRIBUTE_CASES,
+  matchesAttributeCase,
+  type MetadataId,
+  type AttributeCase,
+} from "./identity"
+export {
+  LOGICAL_TYPES,
+  valueTypeShape,
+  refineValueType,
+  type LogicalType,
+  type ValueType,
+} from "./value-type"
+export { SCHEMA_RULES, type SchemaRule } from "./rules"
 export { SQL_RESERVED_WORDS, isSqlReservedWord } from "./sql-reserved-words"
 export {
   TECHNICAL_NAME_PATTERNS,
