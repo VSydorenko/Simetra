@@ -89,6 +89,39 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 
 ---
 
+### Task 0: Хвости C2 (тріаж фінального рев'ю C2)
+
+**Files:**
+- Modify: `packages/simetra/src/compiler/stages/identity.ts`, `stages/integrity.ts`, `compiler/movement-blocks.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
+- Create: `packages/simetra/src/model/posting/walk.ts` (спільний обхід AST)
+- Test: `packages/simetra/src/compiler/__tests__/stage-posting-identity.test.ts`, `movement-blocks.test.ts`, `stage-registers.test.ts`, `packages/simetra/src/model/__tests__/posting-parse.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `walkExpr(expr: Expr, visit: (node: Expr) => void): void` у T0; `nodesOf` у
+    `integrity.ts` і `namedNodes` в `identity.ts` переходять на нього (один
+    обхід AST замість двох).
+  - Правила: `register.balance-control-duplicate` (ресурс повторюється в
+    `balanceControl.resources`, pointer на повтор); `file.movements-marker-indented`
+    — **warning** (рядок `^\s+-- @(movements|end)\b` у `.sql` документа).
+  - Тести індексу посилань (на них спирається каскад перейменування D2): ролі
+    й `span` для полів у `sum`/`count`, у `condition` і в `movementType`-виразі.
+
+- [ ] **Step 1: Тести** — `sum and count references carry spans`;
+  `condition references are indexed`; `movementType expression references are indexed`;
+  `duplicate balance control resource`; `indented marker is a warning`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity movement-blocks stage-registers` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src
+git commit -m "fix(compiler): хвости C2 — спільний обхід AST, повтори balanceControl, маркер з відступом, тести посилань у виразах"
+```
+
+---
+
 ### Task 1: Асинхронний `compile()` і SQL-одиниці з дослівних `.sql`
 
 **Files:**
