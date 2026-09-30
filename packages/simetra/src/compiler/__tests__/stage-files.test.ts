@@ -266,4 +266,34 @@ describe("stage 1: files", () => {
     const backward = compile(new Map([...metaFiles(entries)].reverse()))
     expect(backward).toEqual(forward)
   })
+
+  it("posting expression parse error becomes posting.parse with offset", () => {
+    const order = {
+      ...document("SalesOrder"),
+      posting: {
+        movements: [
+          {
+            register: { kind: "AccumulationRegister", name: "Stock" },
+            source: "document",
+            movementType: "Receipt",
+            fields: { qty: "row.qty +" },
+          },
+        ],
+      },
+    }
+    const result = compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "documents/SalesOrder/SalesOrder.meta.json": order,
+      })
+    )
+    expect(result.ok).toBe(false)
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "posting.parse",
+        pointer: "/posting/movements/0/fields/qty",
+        params: expect.objectContaining({ offset: 9 }),
+      })
+    )
+  })
 })

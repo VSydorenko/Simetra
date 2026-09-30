@@ -35,7 +35,7 @@ const movementDeclSchema = z
       if (result.ok) return
       ctx.addIssue({
         code: "custom",
-        message: `${result.message} (at offset ${result.offset})`,
+        message: result.message,
         path,
         params: { rule: "posting.parse", offset: result.offset },
       })

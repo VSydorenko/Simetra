@@ -424,6 +424,20 @@ describe("documentSchema — posting movements", () => {
     expect(result.data.posting).not.toHaveProperty("validations")
   })
 
+  it("document without posting -> posting is undefined", () => {
+    const result = documentSchema.parse({ kind: "Document", name: "Receipt" })
+    expect(result.posting).toBeUndefined()
+  })
+
+  it("empty posting object -> movements is []", () => {
+    const result = documentSchema.parse({
+      kind: "Document",
+      name: "Receipt",
+      posting: {},
+    })
+    expect(result.posting?.movements).toEqual([])
+  })
+
   it("rejects posting: boolean", () => {
     expect(parse(true).success).toBe(false)
   })

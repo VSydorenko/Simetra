@@ -263,10 +263,11 @@ class Parser {
       }
     }
     if (this.isOp("(")) {
-      this.advance()
+      const open = this.advance()
       const inner = this.parseOr()
-      this.expectOp(")")
-      return inner
+      const close = this.expectOp(")")
+      // Скобки входять у проміжок вузла, щоб діагностика підсвічувала їх разом зі вмістом.
+      return { ...inner, start: open.start, end: close.end }
     }
     if (token.kind === "ident") return this.parseWord(token)
     return this.fail("an expression")
@@ -303,13 +304,14 @@ class Parser {
       const close = this.expectOp(")")
       return { type: "count", section, start: token.start, end: close.end }
     }
-    if (token.text === "doc" || token.text === "row") {
+    // doc/row — ключові слова, тож регістр не важить; імена реквізитів і ТЧ чутливі.
+    if (word === "doc" || word === "row") {
       this.advance()
       this.expectOp(".")
       const name = this.expectIdent("a field name")
       return {
         type: "field",
-        base: token.text,
+        base: word,
         name: name.text,
         start: token.start,
         end: name.end,

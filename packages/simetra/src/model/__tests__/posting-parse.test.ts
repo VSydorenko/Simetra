@@ -83,4 +83,65 @@ describe("parseExpression", () => {
       offset: 6,
     })
   })
+
+  it("spans include parentheses", () => {
+    expect(ok("-(row.a + 1)")).toMatchObject({ start: 0, end: 12 })
+    expect(ok("(row.a) * 2")).toMatchObject({ start: 0, end: 11 })
+    expect(ok("(row.a)")).toMatchObject({ start: 0, end: 7 })
+  })
+
+  it("unary spans", () => {
+    expect(ok("-row.a")).toMatchObject({ type: "unary", start: 0, end: 6 })
+    expect(ok("not row.a")).toMatchObject({ type: "unary", start: 0, end: 9 })
+  })
+
+  it("identifiers starting with a keyword are fields", () => {
+    const expr = ok("row.order + doc.notes + row.sumTotal")
+    expect(expr).toMatchObject({ type: "binary", op: "+" })
+    if (expr.type !== "binary") return
+    expect(expr.right).toMatchObject({ type: "field", name: "sumTotal" })
+    expect(expr.left).toMatchObject({ type: "binary" })
+  })
+
+  it("rejects chained comparison", () => {
+    expect(parseExpression("row.a < row.b < row.c")).toMatchObject({
+      ok: false,
+      offset: 14,
+    })
+  })
+
+  it("is left-associative", () => {
+    const expr = ok("1 - 2 - 3")
+    expect(expr).toMatchObject({
+      type: "binary",
+      op: "-",
+      right: { type: "number", value: "3" },
+      left: {
+        type: "binary",
+        op: "-",
+        left: { value: "1" },
+        right: { value: "2" },
+      },
+    })
+  })
+
+  it("rejects malformed aggregate arguments", () => {
+    expect(parseExpression("count(goods.x)")).toMatchObject({
+      ok: false,
+      offset: 11,
+    })
+    expect(parseExpression("sum(goods)")).toMatchObject({
+      ok: false,
+      offset: 9,
+    })
+  })
+
+  it("doc and row are case-insensitive, names are not", () => {
+    expect(ok("DOC.date")).toMatchObject({
+      type: "field",
+      base: "doc",
+      name: "date",
+    })
+    expect(ok("Row.Qty")).toMatchObject({ base: "row", name: "Qty" })
+  })
 })

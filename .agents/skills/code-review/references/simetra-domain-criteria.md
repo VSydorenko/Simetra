@@ -56,7 +56,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | names and reserved words | a new name-bearing field with its own regex instead of the name schemas (`objectNameSchema`, `elementNameSchema`, `physicalNameSchema`); name uniqueness or naming style enforced in a Zod schema — those are compiler diagnostics (stage 2 for logical names, stage 4 for physical names); a reserved word in `physicalName` treated as an error — it is the stage-4 warning `physical.reserved-word`; SQL restrictions applied to logical names | `packages/simetra/src/model/schemas/identity.ts`, `packages/simetra/src/compiler/stages/identity.ts`, `packages/simetra/src/compiler/stages/integrity.ts` |
 | deterministic files | a metadata file written without the canonical formatter, or key order taken from anything but the registry's `keyOrder`; output that depends on insertion order; volatile data (timestamps, checksums) written into metadata files | `packages/simetra/src/model/format.ts` |
 | canonical fixtures | a formatter change without a case in its tests; a fixture or expected file that the formatter would rewrite | `packages/simetra/src/model/__tests__/format.test.ts` |
-| posting and condition DSL | an expression reaching SQL without passing the mapping or condition schema; the grammar widened in the generator but not in the schema and its tests | `packages/simetra/src/model/schemas/posting.ts` |
+| posting expressions | an expression reaching SQL without passing the expression parser; the grammar widened in the generator but not in the parser and its tests | `packages/simetra/src/model/posting/parse.ts` |
 
 ### Physical naming and SQL
 
