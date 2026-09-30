@@ -1,0 +1,538 @@
+# П2, план D1 — завершення API компілятора: план імплементації
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Мета:** API компілятора T1 повний: дослівний SQL розбирається в
+SQL-одиниці з ідентичністю, гейтом дозволених класів і спільним з таблицями
+порядком створення; стадія 5 перевіряє функції множини, блоки рухів і модулі;
+діагностика має каталог uk/en і позицію в тексті; є JSON Schema файлів,
+логічні TS-типи сутностей, канонічний знімок і хеш моделі, повний
+канонічний форматер і ратчет «поле без споживача». Двері (CLI, MCP,
+pre-commit) — план D2.
+
+**Архітектура:** `compile()` стає асинхронним (WASM-парсер libpg-query і
+Web Crypto). Розбір SQL, граф залежностей, хеш, JSON Schema, кодоген — модулі
+T1 над скомпільованою моделлю; T0 отримує лише поля схем (`rowLevelSecurity`,
+описи `.meta`) і факти реєстру.
+
+**Технології:** TypeScript 7, Zod 4 (`z.toJSONSchema`, `.meta`), Vitest 5;
+нові залежності T1: `libpg-query` **18.1.5** (MIT, WASM, точний пін),
+`jsonc-parser` **3.3.1** (MIT). Хеш — `globalThis.crypto.subtle` (Node 24,
+браузер), канонізація RFC 8785 — власна.
+
+**Спека:** [спека П2](../specs/2026-09-28-p2-metamodel-compiler-design.md) —
+§4 (`rowLevelSecurity`), §8.2 (стадії 1–5), §8.3 (SQL-одиниці, порядок,
+знімок, хеш), §8.4 (діагностика), §8.5 (JSON Schema, кодоген), §8.6 (ратчет,
+модулі), §11 крок 7; [платформна спека](../specs/2026-09-24-simetra-platform-design.md)
+§6.3, §6.9.
+
+**Серія планів П2:** A, B, C1, C2 (виконано) → **D1** (цей) → D2 (`@simetra/cli`
+compile/explain/fix з `--format json`, MCP-сервер з операціями й каскадом
+перейменування, pre-commit і CI, скіл CLI) → E.
+
+## Рішення плану (узгоджено з архітектором спеки; модельні — у спеці)
+
+1. **`compile()` async** — `Promise<CompileResult>`; `loadModule()` libpg-query
+   мемоізовано всередині. Синхронного фасаду немає.
+2. **Канонічна форма SQL-одиниці для хешу** — дерево розбору без полів
+   `location`, `stmt_location`, `stmt_len`; відбиток libpg-query не
+   годиться (ігнорує значення констант). Сирий текст — у знімку для рендера,
+   поза хешем.
+3. **RFC 8785** — власна реалізація (≈30 рядків): ключі — сортування за
+   UTF-16 code units, примітиви — `JSON.stringify` (це саме ES
+   Number::toString, якого вимагає RFC); тест на числа з JCS.
+4. **Модулі** — один неявний модуль, ім'я = `project.name`; `module` у
+   кожного об'єкта й SQL-одиниці. Декларація модулів і ключі поведінки — П4.
+5. **Ратчет** — тест із Proxy над розібраними даними «kitchen-sink»-фікстури;
+   розв'язки полів-сиріт: `autonumber`, `numberPeriodicity`,
+   `numberLength`/`numberType`, `codeType` → `contracts.numbering`;
+   `mainPresentation`, `standardAttributeOverrides` → блок
+   `CompiledModel.presentation`; `title`/`description` → JSDoc кодогену;
+   `predefinedItems` — видалити зі схеми (форма — П3).
+6. **JSON Schema** генерує `buildJsonSchemas()` (T1); файли в
+   `packages/simetra/schemas/` комітяться; тест дрейфу порівнює їх із
+   згенерованими й перезаписує при `UPDATE_JSON_SCHEMAS=1`.
+7. **`sqlFiles`** у `CompiledModel` зникає — його замінюють SQL-одиниці.
+
+## Global Constraints
+
+- Чистота: T0 — лише `zod`; T1 — без Node API (libpg-query, jsonc-parser і
+  Web Crypto дозволені). Тести можуть використовувати Node API.
+- Нові залежності — точний пін (`"libpg-query": "18.1.5"`,
+  `"jsonc-parser": "3.3.1"`), без каретки; ліцензії перевірено (MIT).
+- Детермінізм: той самий вхід → побайтно той самий знімок, порядок і хеш;
+  порядок вставки в мапу файлів нічого не змінює.
+- Тексти діагностики — en обов'язково, uk — поруч у тому самому каталозі;
+  коментарі — українською; описи `.meta` у схемах — англійською.
+- Без шимів: `sqlFiles`, `predefinedItems` — видаляються, не деприкуються.
+- Коміти — Conventional Commits, опис українською, без трейлерів; видалення
+  — `git rm` з явними шляхами.
+- Гейти після кожної задачі: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`;
+  після правки доків — `python3 scripts/check-doc-anchors.py`.
+
+## Review Focus
+
+1. **Реальний дамп прийнятої схеми** — розширення, publications, окремі
+   послідовності, домени, тригер на `auth.users`, політики на
+   `storage.objects` — компілюється без `sql.statement-not-allowed`. Тест —
+   задача 1.
+2. **Зміна лише форматування `.sql`** (пробіли, регістр ключових слів) не
+   змінює хеш, а зміна константи в тілі sql-функції — змінює. Тест — задача 9.
+3. **`DEFAULT` колонки `CustomTable`, що викликає функцію з одиниці** —
+   функція в порядку створення раніше за таблицю; цикл «в'юха ↔ функція» —
+   діагностика, а не безкінечний цикл. Тест — задача 2.
+4. **Позиція помилки у виразі з екранованими символами** (`'it''s'`, `\"` у
+   JSON-рядку) — `range` указує на правильні символи сирого тексту. Тест —
+   задача 4.
+5. **Функція множини з аргументом чи `RETURNS uuid`** — `scope.set-function-signature`,
+   а не мовчазний прохід до П3. Тест — задача 3.
+
+---
+
+### Task 1: Асинхронний `compile()` і SQL-одиниці з дослівних `.sql`
+
+**Files:**
+- Modify: `packages/simetra/package.json` (залежність `libpg-query`)
+- Create: `packages/simetra/src/compiler/sql/parse.ts`, `sql/units.ts`
+- Modify: `compiler/compile.ts`, `stages/files.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`, `compiler/movement-functions.ts` (одиниці рухів — у тому самому масиві)
+- Modify: усі тести компілятора (`await compile(...)`)
+- Test: `packages/simetra/src/compiler/__tests__/sql-units.test.ts`
+
+**Interfaces:**
+- Produces:
+  ```ts
+  function compile(files: ReadonlyMap<string, string>): Promise<CompileResult>
+  type SqlUnitClass = "function" | "procedure" | "aggregate" | "trigger" | "policy" | "view"
+    | "materializedView" | "grant" | "defaultPrivileges" | "comment" | "extension"
+    | "sequence" | "sequenceOwnedBy" | "domain" | "publication" | "replicaIdentity"
+    | "functionSettings" | "movementQuery"
+  interface SqlUnit {
+    class: SqlUnitClass
+    identity: string          // канонічний ключ, напр. "function:public.f(uuid,text)", "trigger:public.orders.trg_x"
+    schema: string; name: string
+    file?: string             // немає — згенерована одиниця (запит рухів)
+    ownerObjectId?: string    // `.sql` об'єкта; для рухів — документ
+    module: string
+    sql: string               // текст оператора як є (для рендера)
+    tree: unknown             // дерево розбору без location/stmt_location/stmt_len (для хешу)
+    registerId?: string; documentId?: string; source?: "query" | "constructor"   // лише movementQuery
+  }
+  ```
+  `CompiledModel.sqlUnits: SqlUnit[]` (сортування тут — за `identity`;
+  порядок створення — задача 2); `CompiledModel.sqlFiles` видалено.
+  Правила: `sql.parse` (помилка розбору; `params.line`, `params.column` з
+  `cursorPosition`), `sql.statement-not-allowed` (`params.statement` — тип
+  вузла, напр. `CreateStmt`), `sql.unit-duplicate` (друга одиниця з тією
+  самою `identity`, `params.line`).
+  Дозволені вузли верхнього рівня: `CreateFunctionStmt` (функція чи
+  процедура), `DefineStmt` з `kind: OBJECT_AGGREGATE`, `CreateTrigStmt`,
+  `CreatePolicyStmt`, `ViewStmt`, `CreateTableAsStmt` з
+  `objtype: OBJECT_MATVIEW`, `GrantStmt`, `AlterDefaultPrivilegesStmt`,
+  `CommentStmt`, `CreateExtensionStmt`, `CreateSeqStmt`, `AlterSeqStmt` лише з
+  `OWNED BY`, `CreateDomainStmt`, `AlterPublicationStmt`, `AlterTableStmt`
+  лише з `REPLICA IDENTITY`, `AlterFunctionStmt`. Решта (`CreateStmt`,
+  `IndexStmt`, `CreateEnumStmt`, `DropStmt`, DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`
+  — це поле таблиці, задача 2) — `sql.statement-not-allowed`.
+
+- [ ] **Step 1: Тести**
+
+`sql-units.test.ts`:
+- `function identity includes argument types` — `CREATE FUNCTION public.f(a uuid, b text) …` → `identity === "function:public.f(uuid,text)"`;
+- `trigger and policy identity include table`;
+- `accepted-schema dump compiles` — один `sql/public/misc.sql` з
+  `CREATE EXTENSION IF NOT EXISTS pgcrypto`, `CREATE SEQUENCE s`,
+  `ALTER SEQUENCE s OWNED BY t.c`, `CREATE DOMAIN d AS text`,
+  `ALTER PUBLICATION supabase_realtime ADD TABLE t`,
+  `CREATE TRIGGER on_auth_user AFTER INSERT ON auth.users …`,
+  `CREATE POLICY p ON storage.objects …` → жодної помилки;
+- `table, index, enum and drop are not allowed` — по діагностиці з
+  `params.statement`;
+- `enable rls statement is not allowed` → `sql.statement-not-allowed` з hint про поле `rowLevelSecurity`;
+- `duplicate unit` → `sql.unit-duplicate` з `params.line` другої;
+- `parse error has line and column`;
+- `tree has no locations` — `JSON.stringify(unit.tree)` не містить `"location"`;
+- `movement query wrappers are units` — клас `movementQuery`, `registerId`,
+  `documentId`, `source`;
+- `compile is async` — `compile(...)` повертає `Promise`.
+
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test sql-units` → FAIL.
+- [ ] **Step 3: Реалізація** — `pnpm --filter simetra add libpg-query@18.1.5 --save-exact`;
+  `loadModule()` мемоізовано в `sql/parse.ts`; усі тести компілятора
+  переходять на `await`.
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra pnpm-lock.yaml
+git commit -m "feat(compiler): async compile і SQL-одиниці з дослівних .sql — ідентичність, гейт дозволених класів"
+```
+
+---
+
+### Task 2: `rowLevelSecurity` і спільний порядок створення таблиць та одиниць
+
+**Files:**
+- Modify: `packages/simetra/src/model/schemas/custom-table.ts`, `model/kinds/standard.ts` і файли видів із таблицями (факт реєстру), `model/physical/snapshot.ts`
+- Create: `packages/simetra/src/compiler/sql/dependencies.ts`
+- Modify: `compiler/compile.ts`, `stages/model.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
+- Test: `packages/simetra/src/compiler/__tests__/creation-order.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `customTableSchema.rowLevelSecurity: "off" | "enabled" | "forced" = "off"`;
+    `KindDefinition.rowLevelSecurity?: "enabled"` для видів 1С з таблицями
+    (довідник, документ, регістри, константа); `PhysicalTable.rowLevelSecurity: "off" | "enabled" | "forced"`
+    (таблиця підсумків і рядка ТЧ — як у власника).
+  - `CompiledModel.creationOrder: ({ type: "enumType"; schema: string; name: string } | { type: "table"; schema: string; name: string } | { type: "unit"; identity: string })[]`
+    — топологічний порядок; tie-break — `(тип вузла в порядку enumType, table, unit; schema; name/identity)`.
+  - Ребра (залежність → залежний): енам-тип → таблиця з колонкою цього типу;
+    таблиця-ціль FK → таблиця з FK; функція (за іменем, усі перевантаження)
+    → таблиця, у чиєму `DEFAULT`/`CHECK`/предикаті індексу є виклик
+    (вирази розбираються як `SELECT (<вираз>)`); відношення й функції запиту
+    → в'юха / матеріалізована в'юха; функція тригера й таблиця → тригер;
+    функції виразів і таблиця → політика; відношення й функції тіла
+    `LANGUAGE sql` → функція; об'єкт → грант, коментар, `OWNED BY`,
+    `REPLICA IDENTITY`, `ALTER PUBLICATION`, налаштування функції;
+    розширення → усе, що використовує його типи чи функції, не
+    відстежується (розширення завжди перші серед одиниць). Тіла plpgsql не
+    аналізуються. Ребра на об'єкти поза моделлю (`auth.users`) ігноруються.
+  - Правило: `sql.dependency-cycle` (`params.cycle` — перелік вузлів циклу),
+    pointer — перша одиниця циклу за порядком.
+
+- [ ] **Step 1: Тести**
+
+`creation-order.test.ts`:
+- `custom table default calls a unit function` — колонка з
+  `default: "public.next_code()"` → одиниця `function:public.next_code()`
+  перед таблицею;
+- `view after its tables and functions`;
+- `trigger after table and function`;
+- `extensions first among units`;
+- `cycle is reported` — в'юха `v` читає функцію `f`, а `LANGUAGE sql`-функція
+  `f` читає `v` → `sql.dependency-cycle` з обома у `params.cycle`;
+- `deterministic regardless of map order`;
+- `1C kinds have rls enabled, custom table off by default` —
+  `PhysicalTable.rowLevelSecurity`.
+
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test creation-order` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src
+git commit -m "feat(compiler): rowLevelSecurity таблиці й спільний порядок створення таблиць і SQL-одиниць"
+```
+
+---
+
+### Task 3: Стадія 5 — функції множини, блоки рухів, модулі; каталог дій
+
+**Files:**
+- Modify: `packages/simetra/src/compiler/stages/links.ts`, `compiler/compile.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
+- Test: `packages/simetra/src/compiler/__tests__/stage-links.test.ts` (доповнення)
+
+**Interfaces:**
+- Produces:
+  - Правила: `scope.set-function-missing` (у одиницях немає
+    `function:<schema>.<name>()`; pointer `/scopeKinds/<i>/setFunction`, файл
+    `project.meta.json`); `scope.set-function-signature` (є, але з
+    аргументами, не `RETURNS SETOF uuid` чи не `STABLE`; `params.problem`);
+    `posting.query-not-select` (блок рухів — не рівно один `SelectStmt`;
+    `params.line` маркера); `posting.query-order-missing` — **warning** (у
+    `SelectStmt` немає `sortClause`).
+  - `CompiledModel.modules: { name: string }[]` (один — `project.name`);
+    `SourceObject.module: string`; `SqlUnit.module` (задача 1).
+  - `CompiledModel.actions: { objectId: string; actions: readonly string[] }[]`
+    — з `KindDefinition.actions`, сортування за `objectId`.
+  - `.module.ts` без `.meta.json` — наявне `file.orphan`; тест це закріплює.
+
+- [ ] **Step 1: Тести** — по тесту на кожне правило (code, pointer, severity);
+  `set function with the right signature passes`; `modules and actions in the model`;
+  `orphan module file` → `file.orphan`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-links` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): стадія 5 — функції множини, блоки рухів, модулі; каталог дій"
+```
+
+---
+
+### Task 4: Діагностика — каталог uk/en і позиція в тексті
+
+**Files:**
+- Modify: `packages/simetra/package.json` (`jsonc-parser`), `compiler/messages.ts`, `compiler/diagnostics.ts`, `compiler/compile.ts`
+- Create: `packages/simetra/src/compiler/locate.ts`
+- Test: `packages/simetra/src/compiler/__tests__/locate.test.ts`, `messages.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `MESSAGES: Record<RuleCode, { en: (p) => string; uk: (p) => string; hint?: { en: string; uk: string } }>`;
+    `Diagnostic.message`/`hint` — en; `localize(d: Diagnostic, locale: "en" | "uk"): { message: string; hint?: string }`.
+  - `Diagnostic.range` заповнюється для кожної діагностики з файлом, що є в
+    мапі: JSON — `jsonc-parser` (`parseTree` + `findNodeAtLocation` за
+    шляхом із pointer; для pointer на ключ, якого немає, — найближчий
+    наявний предок; якщо помилка про сам ключ (`identity.name-duplicate` на
+    `/…/name`) — вузол значення); вираз конструктора — вузол рядка + `params.offset`,
+    переведений з декодованого індексу в сирий з урахуванням JSON-екранування
+    (`\"`, `\\`, `\uXXXX`); `.sql` — `params.line`/`params.column`. Рядки й
+    колонки — 0-базні (LSP).
+  - Тест повноти каталогу: кожен `RuleCode` має непорожні `en` і `uk`.
+
+- [ ] **Step 1: Тести**
+
+`locate.test.ts`:
+- `pointer to a value` — `/attributes/1/length` дає рядок і колонку значення;
+- `missing key falls back to the parent`;
+- `expression offset with escapes` — значення `"row.qty + \"x\""` у JSON,
+  помилка на `"x"` → `range.start.character` указує на екранований `\"`
+  сирого тексту;
+- `sql diagnostics use line and column`;
+- `file-level diagnostic` (`pointer ""`) — range початку файлу.
+
+`messages.test.ts`: `every rule has en and uk`; `localize returns uk text`.
+
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test locate messages` → FAIL.
+- [ ] **Step 3: Реалізація** — `pnpm --filter simetra add jsonc-parser@3.3.1 --save-exact`.
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra pnpm-lock.yaml
+git commit -m "feat(compiler): діагностика з каталогом uk/en і позицією в тексті файлу"
+```
+
+---
+
+### Task 5: Повний канонічний порядок ключів форматера (T0)
+
+**Files:**
+- Modify: `packages/simetra/src/model/format.ts`, `model/kinds/standard.ts` (`keyOrderOf`)
+- Test: `packages/simetra/src/model/__tests__/format.test.ts`
+
+**Interfaces:**
+- Produces: `formatMetaFile`/`formatProjectFile` упорядковують ключі на
+  **кожному** рівні за порядком оголошення в Zod-схемі цього рівня
+  (реквізит, ТЧ, колонка `CustomTable`, обмеження, індекс, значення
+  перерахування, `MetadataRef`, рух конструктора, вид скоупу); для
+  union-схем — порядок варіанта, до якого належить об'єкт (за
+  дискримінатором або першим варіантом, чия схема приймає об'єкт); ключі
+  `record`-полів (`fields` руху) — у порядку входу. Порядок виводиться зі
+  схем, а не з рукописних списків.
+
+- [ ] **Step 1: Тести** — `nested keys follow schema order` (перемішаний
+  реквізит → `id, name, physicalName, …`); `custom table column variants`
+  (`PgEnum`- і `Raw`-колонки — кожна у своєму порядку); `foreign key
+  references internal and external`; `fields map keeps input order`;
+  `idempotent on a kitchen-sink file`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test format` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/model
+git commit -m "feat(model): канонічний порядок ключів на всіх рівнях файлу метаданих"
+```
+
+---
+
+### Task 6: JSON Schema файлів метаданих
+
+**Files:**
+- Modify: схеми T0 (`packages/simetra/src/model/schemas/*.ts`) — `.meta({ description })` англійською на кожному полі верхнього рівня й ключових вкладених
+- Create: `packages/simetra/src/compiler/json-schema.ts`, `packages/simetra/schemas/<kind-dir>.schema.json` (по файлу на вид) і `project.schema.json`
+- Modify: `packages/simetra/package.json` (`exports["./schemas/*"]: "./schemas/*"`, `files` за потреби), `.prettierignore` (згенеровані схеми не форматуються вручну — генератор пише канонічний JSON)
+- Test: `packages/simetra/src/compiler/__tests__/json-schema.test.ts`
+
+**Interfaces:**
+- Produces: `buildJsonSchemas(): Record<string, object>` — ключ — ім'я файлу
+  (`catalogs.schema.json`, …, `project.schema.json`); кожна схема —
+  `z.toJSONSchema(schema, { target: "draft-2020-12", io: "input", unrepresentable: "throw" })`
+  плюс `$id` = ім'я файлу; вміст файлу — `JSON.stringify(schema, null, 2) + "\n"`.
+- Тест дрейфу: для кожного ключа порівнює з файлом у `packages/simetra/schemas/`;
+  при `process.env.UPDATE_JSON_SCHEMAS === "1"` перезаписує файли (тест може
+  використовувати `node:fs`).
+
+- [ ] **Step 1: Тести** — `every kind has a schema`; `schemas are up to date`
+  (дрейф); `generation does not throw on any kind` (`unrepresentable: "throw"`);
+  `descriptions are present` (у `catalogs.schema.json` є `description` у
+  `properties.codeLength`); `kind is a const and required` — у кожній схемі
+  виду `properties.kind.const` дорівнює виду, а `kind` є в `required`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test json-schema` → FAIL.
+- [ ] **Step 3: Реалізація**; згенеруй файли:
+  `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`.
+- [ ] **Step 4: Зелені** — PASS без змінної; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra .prettierignore
+git commit -m "feat(compiler): JSON Schema файлів метаданих з описами полів і тестом дрейфу"
+```
+
+---
+
+### Task 7: Контракт нумерації, блок представлення, видалення `predefinedItems`
+
+**Files:**
+- Modify: `packages/simetra/src/model/schemas/catalog.ts` (видалити `predefinedItems`), `model/kinds/catalog.ts` (стандартна колонка `predefined_name` — прибрати разом із полем), `compiler/contracts.ts`, `compiler/compile.ts`
+- Test: `packages/simetra/src/compiler/__tests__/contracts.test.ts`, `stage-model.test.ts` (колонка `predefined_name` зникає), `kind-schemas.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `Contracts.numbering: { objectId: string; column: string; type: "String" | "Number"; length: number; autonumber: boolean; periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"; scoped: boolean }[]`
+    — для довідника з кодом (`codeLength > 0`; `periodicity: "None"`) і
+    документа (номер); генерація лічильників — П3.
+  - `CompiledModel.presentation: { objectId: string; mainPresentation?: "Code" | "Description"; standardAttributes: Record<string, { title?: LocalizedString; description?: LocalizedString }> }[]`
+    (ключі — канонічні camelCase-імена стандартних реквізитів з
+    `standardAttributeOverrides`); читачі — `explain` (D2) і хости (П4).
+  - `predefinedItems` і стандартна колонка `predefined_name` видаляються
+    (спека §13: предвизначені елементи — кандидат П3).
+
+- [ ] **Step 1: Тести** — `catalog code numbering contract`; `document number
+  numbering contract with periodicity and scope`; `catalog without code has
+  no numbering`; `presentation block carries overrides`; `catalog has no
+  predefined_name column`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test contracts stage-model kind-schemas` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src
+git commit -m "feat(compiler): контракт нумерації й блок представлення; предвизначені елементи прибрано до П3"
+```
+
+---
+
+### Task 8: Кодоген логічних TS-типів сутностей
+
+**Files:**
+- Create: `packages/simetra/src/compiler/codegen.ts`
+- Test: `packages/simetra/src/compiler/__tests__/codegen.test.ts`
+
+**Interfaces:**
+- Produces: `emitEntityTypes(model: CompiledModel): string` — TS-модуль:
+  `export type Json = string | number | boolean | null | Json[] | { [key: string]: Json }`;
+  інтерфейс на кожен об'єкт з таблицею (ім'я — логічне PascalCase; довідник,
+  документ, регістри, константа, `CustomTable`) і на кожну ТЧ
+  (`<Object><Section>` у PascalCase), поле-масив ТЧ у власника; поля — логічні
+  імена в стилі проєкту, стандартні реквізити включно, носій скоупу — ім'я виду;
+  типи (спека §8.5): `UUID`/`Ref`/`String`/`Text`/`Date`/`DateTime`/`Bytes` →
+  `string`, `Integer`/`SmallInt` → `number`, `BigInt`/`Numeric` → `string`,
+  `Boolean` → `boolean`, `Json` → `Json`, перерахування → union логічних
+  імен значень, масив → `T[]`, nullable (не `notNull`) → `T | null`;
+  поліморфний `Ref` → `{ type: "<Kind>.<Name>" | …; id: string }`;
+  `PgEnum`-колонка → union значень; `Raw` → `unknown`. JSDoc — `title.en ?? title.uk`
+  і `description`. Порядок — як у `model.objects`; вихід детермінований.
+
+- [ ] **Step 1: Тести** (`toMatchInlineSnapshot` для фрагментів):
+  `catalog interface with standard attributes and jsdoc`; `numeric and bigint
+  are strings`; `enumeration reference is a union of logical names`;
+  `tabular section interface and array field`; `snake_case project uses
+  snake_case fields`; `scoped object has scope field`; `deterministic`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test codegen` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): кодоген логічних TS-типів сутностей"
+```
+
+---
+
+### Task 9: Канонічний знімок і хеш моделі
+
+**Files:**
+- Create: `packages/simetra/src/compiler/canonical.ts`
+- Modify: `compiler/compile.ts`
+- Test: `packages/simetra/src/compiler/__tests__/canonical.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `canonicalize(value: unknown): string` — RFC 8785 («Рішення плану» п. 3);
+    кидає на `NaN`, `Infinity`, `undefined` у масиві й самотніх сурогатах.
+  - `canonicalSnapshot(model: CompiledModel): unknown` — `{ project, objects: [{ id, kind, name, module, scopeKindId?, data }] (у data кожен MetadataRef за індексом посилань → { kind, id }; вирази конструктора — AST без позицій), scopeKinds, physical, sqlUnits: [{ class, identity, module, tree }], creationOrder, contracts, actions, presentation, modules }`
+    — без шляхів файлів, діагностики, сирого SQL.
+  - `CompiledModel.hash: string` — hex sha256 від `canonicalize(canonicalSnapshot(model))`
+    через `crypto.subtle.digest("SHA-256", …)`.
+
+- [ ] **Step 1: Тести**
+- `canonicalize sorts keys by code units and serializes numbers like JCS` —
+  порядок ключів — звичайне порівняння рядків (кодові одиниці UTF-16, не
+  `localeCompare`), вектори з додатка RFC 8785 (`1E+30` → `1e+30`, `1e-7`,
+  `-0` → `0`, юнікодні ключі); `undefined`, `NaN`, `Infinity` — кидає;
+- `formatting and comments do not change the hash` — пробіли, регістр
+  ключових слів і SQL-коментарі в `.sql`;
+- `constant change in a sql function body changes the hash`;
+- `renaming a logical name changes the hash`; `key order in a file does not`;
+- `hash is stable across map insertion order`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test canonical` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): канонічний знімок і sha256-хеш моделі за RFC 8785"
+```
+
+---
+
+### Task 10: Ратчет «поле без споживача»; канон і статус
+
+**Files:**
+- Create: `packages/simetra/src/compiler/__tests__/field-ratchet.test.ts`, `__tests__/fixtures/kitchen-sink.ts`
+- Modify (канон): `.agents/skills/code-review/references/simetra-domain-criteria.md`, `docs/ROADMAP.md`
+
+**Interfaces:**
+- Consumes: усе з задач 1–9.
+- Produces: тест — «kitchen-sink»-проєкт, де кожне поле кожної схеми видів і
+  проєкту задане (вкладені включно); розібрані дані загортаються в Proxy, що
+  записує прочитані шляхи (масиви — за елементами, шлях нормалізується до
+  `kind.field.subfield`); прогін `compile` + `emitEntityTypes` +
+  `canonicalSnapshot`; тест порівнює множину шляхів схем (зі Zod-форм) із
+  прочитаними і падає з переліком непрочитаних. Службові ключі (`$schema`)
+  — у явному списку винятків з коментарем «чому».
+
+- [ ] **Step 1: Тест** — написати; прогнати.
+- [ ] **Step 2: Розв'язати сиріт** — кожне непрочитане поле: або споживач у
+  відповідній стадії/контракті/кодогені, або видалення зі схеми (без шиму);
+  нове рішення, не передбачене «Рішеннями плану» п. 5, — зупинись і спитай
+  архітектора (не вигадуй споживача).
+- [ ] **Step 3: Зелені** — `pnpm --filter simetra test field-ratchet` PASS; повні гейти.
+- [ ] **Step 4: Канон і статус**
+- `simetra-domain-criteria.md`: критерій «поле без споживача» — якір на
+  `packages/simetra/src/compiler/__tests__/field-ratchet.test.ts`; критерій
+  дослівного SQL — гейт класів `sql.statement-not-allowed`.
+- `docs/ROADMAP.md`: посилання на план; «Зараз» — D1 виконано, далі D2.
+
+Run: `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra .agents docs/ROADMAP.md
+git commit -m "test(compiler): ратчет «поле без споживача» для полів метамоделі"
+```
+
+---
+
+## Критерії приймання плану D1
+
+- `await compile(files)` повертає модель із SQL-одиницями, порядком
+  створення, модулями, діями, контрактами (нумерація включно), блоком
+  представлення, фізичним знімком і хешем; діагностики мають `range` і
+  перекладаються uk/en.
+- Дамп прийнятої схеми з об'єктами провайдера компілюється; заборонені класи
+  дають гучну помилку.
+- JSON Schema в `packages/simetra/schemas/` актуальні (тест дрейфу).
+- Кодоген дає детерміновані логічні типи за спекою §8.5.
+- Ратчет зелений: кожне поле метамоделі має споживача.
+- Гейти зелені; гард якорів чистий.
