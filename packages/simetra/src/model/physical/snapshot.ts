@@ -62,6 +62,10 @@ export interface PhysicalColumn {
   default?: string
   identity?: "always" | "byDefault"
   comment?: string
-  /** UUID реквізиту або логічне ім'я стандартного реквізиту. */
-  origin: { elementId?: string; standard?: string }
+  /**
+   * UUID реквізиту або логічне ім'я стандартного реквізиту; `scopeKindId` —
+   * у кожної колонки, що несе значення скоупу: доданої скоуп-колонки, ключа
+   * кореня й `parent_id` рядка ТЧ кореня.
+   */
+  origin: { elementId?: string; standard?: string; scopeKindId?: string }
 }

@@ -25,6 +25,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
+  type ScopeKind,
   type StandardColumnDef,
   type TabularSection,
   type ValueType,
@@ -63,9 +64,18 @@ export interface ModelStageResult {
   declaredNames: { file: string; pointer: string; name: string }[]
 }
 
-/** Як фізично виражена ціль посилання. */
+/**
+ * Як фізично виражена ціль посилання. `scope` — складений FK у межах скоупу:
+ * `from` — колонка джерела, що несе значення скоупу, `to` — скоуп-колонка цілі.
+ */
 type Target =
-  | { form: "foreignKey"; schema: string; table: string; column: string }
+  | {
+      form: "foreignKey"
+      schema: string
+      table: string
+      column: string
+      scope?: { from: string; to: string }
+    }
   | { form: "label"; labels: string[] }
   | { form: "pair"; discriminators: string[] }
   | { form: "none" }
@@ -81,10 +91,25 @@ interface Field {
   primaryKey: boolean
   indexed: boolean
   unique: boolean
+  /** Скоуп-колонка, що передує колонці в UNIQUE: унікальність у межах скоупу. */
+  uniqueWithin?: string
   target: Target
   onDelete: FkAction
   origin: PhysicalColumn["origin"]
   pointer?: string
+}
+
+/**
+ * Скоуп таблиці виду: вид і колонка, що несе значення скоупу. У звичайного
+ * скоупленого об'єкта це додана скоуп-колонка (`own`), у кореня — його ключ,
+ * у рядка ТЧ кореня — `parent_id`; без такої колонки (`undefined`) складений
+ * FK з таблиці неможливий.
+ */
+interface TableScope {
+  kind: ScopeKind
+  carrier: string | undefined
+  /** Таблиця має власну скоуп-колонку (не корінь). */
+  own: boolean
 }
 
 /** Таблиця до призначення імен: `name` обмеження лише явне. */
@@ -106,6 +131,7 @@ interface PendingTable {
 /**
  * Стадія 3 (спека П2 §5, §8.2–§8.3): фізичний знімок з реєстру видів —
  * стандартні колонки виду, колонки реквізитів, ключі, обмеження й індекси,
+ * скоуп-колонки, `UNIQUE (scope, id)` і складені FK у межах скоупу (§6),
  * а також таблиці `CustomTable` і енам-типи `PgEnum` як є. Імена похідних
  * обмежень — за алгоритмом Postgres над іменами колонок, тож збігаються з
  * тими, що дала б сама БД; ім'я над виразом (безіменні CHECK та індекси з
@@ -129,6 +155,9 @@ class SnapshotBuilder {
   private readonly enumTypes: PhysicalEnumType[] = []
   private readonly sources: PhysicalSource[] = []
   private readonly declaredNames: ModelStageResult["declaredNames"] = []
+  private readonly scopeKinds: Map<string, ScopeKind>
+  /** Об'єкт-корінь → вид, чиїм коренем він є. */
+  private readonly rootKinds: Map<string, ScopeKind>
 
   constructor(
     objects: readonly ParsedObject[],
@@ -136,6 +165,14 @@ class SnapshotBuilder {
   ) {
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
     this.style = project.naming.attributeCase
+    this.scopeKinds = new Map(project.scopeKinds.map((k) => [k.name, k]))
+    this.rootKinds = new Map(
+      project.scopeKinds.flatMap((kind) =>
+        "object" in kind.root
+          ? [[objectKey(kind.root.object.kind, kind.root.object.name), kind]]
+          : []
+      )
+    )
   }
 
   add(object: ParsedObject): void {
@@ -175,15 +212,24 @@ class SnapshotBuilder {
     }
 
     const main = this.pendingTable(schema, name, origin)
-    const fields = def
-      .standardColumns(data)
-      .map((column) => this.standardField(column, object, main))
+    const kind = this.scopeKindOf(object)
+    const root = kind !== undefined && this.isRoot(object, kind)
+    const key = keyColumnOf(object)
+    const scope: TableScope | undefined =
+      kind === undefined
+        ? undefined
+        : root
+          ? { kind, carrier: key, own: false }
+          : { kind, carrier: kind.physicalName!, own: true }
+    const fields = this.withScope(def.standardColumns(data), scope, (column) =>
+      this.standardField(column, object, main, scope)
+    )
     // Колонкові поля й їхній порядок дає реєстр: у регістра — виміри,
     // ресурси, реквізити, у решти видів — лише реквізити.
     for (const field of def.columnFields) {
       const list = data[field] as Attribute[]
       list.forEach((attribute, index) => {
-        fields.push(this.attributeField(attribute, `/${field}/${index}`))
+        fields.push(this.attributeField(attribute, `/${field}/${index}`, scope))
         this.declare(
           object.file,
           `/${field}/${index}/physicalName`,
@@ -192,6 +238,13 @@ class SnapshotBuilder {
       })
     }
     this.addTable(main, fields, object.file, "/physicalName")
+    // Ціль складених FK у межах скоупу (спека §6).
+    if (scope?.own === true && key !== undefined) {
+      main.uniques.push({
+        columns: [scope.carrier!, key],
+        nullsNotDistinct: false,
+      })
+    }
 
     const sections =
       def.tabularSectionColumns === undefined
@@ -203,12 +256,24 @@ class SnapshotBuilder {
         ...origin,
         tabularSectionId: section.id ?? "",
       })
-      const sectionFields = (def.tabularSectionColumns?.(data) ?? []).map(
-        (column) => this.standardField(column, object, main)
+      const rowColumns = def.tabularSectionColumns?.(data) ?? []
+      // Рядок ТЧ кореня несе скоуп у `parent_id` — окрема колонка лише
+      // дублювала б його.
+      const rowScope: TableScope | undefined =
+        scope === undefined || scope.own
+          ? scope
+          : {
+              kind: scope.kind,
+              carrier: rowColumns.find((c) => c.ref === "owningObject")
+                ?.physicalName,
+              own: false,
+            }
+      const sectionFields = this.withScope(rowColumns, rowScope, (column) =>
+        this.standardField(column, object, main, rowScope)
       )
       section.attributes.forEach((attribute, i) => {
         sectionFields.push(
-          this.attributeField(attribute, `${pointer}/attributes/${i}`)
+          this.attributeField(attribute, `${pointer}/attributes/${i}`, rowScope)
         )
         this.declare(
           object.file,
@@ -293,12 +358,13 @@ class SnapshotBuilder {
   private standardField(
     column: StandardColumnDef,
     object: ParsedObject,
-    ownTable: PendingTable
+    ownTable: PendingTable,
+    scope: TableScope | undefined
   ): Field {
     const resolved =
       "raw" in column.type
         ? { type: column.type.raw, array: false, target: NONE }
-        : this.resolveValue(column.type)
+        : this.resolveValue(column.type, scope)
     let target = resolved.target
     if (column.ref !== undefined) {
       const refs = this.standardTargets(column, object)
@@ -308,11 +374,12 @@ class SnapshotBuilder {
           : column.ref === "self" || column.ref === "owningObject"
             ? // Ключ власної таблиці: рядок ТЧ і батько ієрархії посилаються
               // на таблицю самого об'єкта.
-              this.keyTarget(object, ownTable)
+              this.keyTarget(object, ownTable, scope)
             : refs[0] === undefined
               ? NONE
-              : this.tableTarget(refs[0])
+              : this.tableTarget(refs[0], scope)
     }
+    const logical = standardLogicalName(column, this.style)
     return {
       name: column.physicalName,
       type: resolved.type,
@@ -323,10 +390,93 @@ class SnapshotBuilder {
       primaryKey: column.primaryKey === true,
       indexed: column.indexed === true,
       unique: column.unique === true,
+      // Корінь сам є значенням скоупу, тож його унікальність глобальна.
+      ...(column.unique === true && scope?.own === true
+        ? { uniqueWithin: scope.carrier! }
+        : {}),
       target,
       onDelete: column.onDelete ?? "noAction",
-      origin: { standard: standardLogicalName(column, this.style) },
+      origin:
+        scope?.own === false && column.physicalName === scope.carrier
+          ? { standard: logical, scopeKindId: scope.kind.id! }
+          : { standard: logical },
     }
+  }
+
+  /**
+   * Стандартні поля таблиці разом зі скоуп-колонкою: вона йде одразу після
+   * ключа (без ключа — першою) і заміняє ключ-одинак — рядок один на значення
+   * скоупу. Корінь і рядок ТЧ кореня власної колонки не мають.
+   */
+  private withScope(
+    columns: readonly StandardColumnDef[],
+    scope: TableScope | undefined,
+    toField: (column: StandardColumnDef) => Field
+  ): Field[] {
+    if (scope?.own !== true) return columns.map(toField)
+    const singleton = columns.some((column) => column.singleton === true)
+    const kept = columns.filter((column) => column.singleton !== true)
+    const fields = kept.map(toField)
+    const { kind } = scope
+    const scopeField: Field = {
+      name: kind.physicalName!,
+      type: "uuid",
+      array: false,
+      notNull: true,
+      primaryKey: singleton,
+      indexed: false,
+      unique: false,
+      target: this.rootTarget(kind),
+      onDelete: kind.onRootDelete,
+      origin: { scopeKindId: kind.id! },
+      pointer: "/scope",
+    }
+    const keyIndex = kept.findIndex((column) => column.primaryKey === true)
+    fields.splice(keyIndex + 1, 0, scopeField)
+    return fields
+  }
+
+  /** Ключ кореня виду: PK його таблиці або зовнішня колонка як є. */
+  private rootTarget(kind: ScopeKind): Target {
+    if ("external" in kind.root) {
+      const { schema, table, column } = kind.root.external
+      return { form: "foreignKey", schema, table, column }
+    }
+    return this.tableTarget(this.lookup(kind.root.object))
+  }
+
+  /** Вид скоупу, який об'єкт оголошує; `none` і відсутнє поле — без скоупу. */
+  private scopeKindOf(object: ParsedObject): ScopeKind | undefined {
+    const { scope } = object.data as { scope?: string }
+    return scope === undefined ? undefined : this.scopeKinds.get(scope)
+  }
+
+  /**
+   * Корінь — об'єкт, на який вказує вид, що його він і оголошує. Корінь, що
+   * оголошує чужий вид, — помилка стадії 4; тут він звичайний скоуплений.
+   */
+  private isRoot(object: ParsedObject, kind: ScopeKind): boolean {
+    return this.rootKinds.get(objectKey(object.kind, object.name)) === kind
+  }
+
+  /**
+   * Складений FK на ціль можливий, лише коли джерело несе значення того самого
+   * виду, а ціль має `UNIQUE (scope, id)` — скоуплений об'єкт виду 1С з
+   * uuid-ключем, не корінь (у нього скоуп-колонки немає) і не `CustomTable`
+   * (вона нічого не виводить, спека §4). Решта — звичайний FK: заборони
+   * звітує стадія 4, а стадія 3 не будує неможливого.
+   */
+  private scopedKey(
+    target: ParsedObject,
+    scope: TableScope | undefined,
+    crossScope: boolean
+  ): { from: string; to: string } | undefined {
+    if (scope?.carrier === undefined || crossScope) return undefined
+    const kind = this.scopeKindOf(target)
+    if (kind !== scope.kind || this.isRoot(target, kind)) return undefined
+    if (KIND_REGISTRY[target.kind].declared) return undefined
+    if (keyColumnOf(target) === undefined) return undefined
+    return { from: scope.carrier, to: kind.physicalName! }
   }
 
   /** Цілі стандартного посилання: список з налаштувань виду. */
@@ -344,8 +494,12 @@ class SnapshotBuilder {
     return ((refs ?? []) as MetadataRef[]).map((ref) => this.lookup(ref))
   }
 
-  private attributeField(attribute: Attribute, pointer: string): Field {
-    const resolved = this.resolveValue(attribute)
+  private attributeField(
+    attribute: Attribute,
+    pointer: string,
+    scope: TableScope | undefined
+  ): Field {
+    const resolved = this.resolveValue(attribute, scope)
     return {
       name: attribute.physicalName!,
       ...resolved,
@@ -363,7 +517,10 @@ class SnapshotBuilder {
   }
 
   /** Тип колонки й фізична форма цілі для логічного типу. */
-  private resolveValue(value: ValueType): {
+  private resolveValue(
+    value: ValueType,
+    scope: TableScope | undefined
+  ): {
     type: string
     array: boolean
     target: Target
@@ -404,28 +561,46 @@ class SnapshotBuilder {
       }
     }
     // FK на елементи масиву Postgres не має (спека §4).
-    return { type, array, target: array ? NONE : this.tableTarget(target) }
+    return {
+      type,
+      array,
+      target: array
+        ? NONE
+        : this.tableTarget(target, scope, value.crossScope === true),
+    }
   }
 
-  private tableTarget(target: ParsedObject): Target {
+  private tableTarget(
+    target: ParsedObject,
+    scope?: TableScope,
+    crossScope = false
+  ): Target {
     const column = keyColumnOf(target)
     if (column === undefined) return NONE
+    const composite = this.scopedKey(target, scope, crossScope)
     return {
       form: "foreignKey",
       schema: this.schemaOf(target),
       table: physicalNameOf(target),
       column,
+      ...(composite !== undefined ? { scope: composite } : {}),
     }
   }
 
-  private keyTarget(object: ParsedObject, table: PendingTable): Target {
+  private keyTarget(
+    object: ParsedObject,
+    table: PendingTable,
+    scope: TableScope | undefined
+  ): Target {
     const column = keyColumnOf(object)
     if (column === undefined) return NONE
+    const composite = this.scopedKey(object, scope, false)
     return {
       form: "foreignKey",
       schema: table.schema,
       table: table.name,
       column,
+      ...(composite !== undefined ? { scope: composite } : {}),
     }
   }
 
@@ -710,15 +885,24 @@ function addField(table: PendingTable, field: Field): string[] {
 
   if (field.primaryKey) table.primaryKey = { columns: names }
   if (field.unique) {
-    table.uniques.push({ columns: names, nullsNotDistinct: false })
+    table.uniques.push({
+      columns:
+        field.uniqueWithin !== undefined
+          ? [field.uniqueWithin, ...names]
+          : names,
+      nullsNotDistinct: false,
+    })
   }
   if (target.form === "foreignKey") {
+    // Складений FK тримає обидва кінці в одному значенні скоупу (спека §6).
+    const { scope } = target
     table.foreignKeys.push({
-      columns: names,
+      columns: scope !== undefined ? [scope.from, ...names] : names,
       references: {
         schema: target.schema,
         table: target.table,
-        columns: [target.column],
+        columns:
+          scope !== undefined ? [scope.to, target.column] : [target.column],
       },
       onDelete: field.onDelete,
       onUpdate: "noAction",

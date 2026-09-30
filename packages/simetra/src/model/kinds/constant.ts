@@ -30,6 +30,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       type: { type: "Boolean" },
       notNull: true,
       primaryKey: true,
+      singleton: true,
       default: "true",
       check: "singleton",
       title: { uk: "Одинак", en: "Singleton" },

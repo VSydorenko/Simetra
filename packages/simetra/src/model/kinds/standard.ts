@@ -34,6 +34,11 @@ export interface StandardColumnDef {
   /** Вираз CHECK колонки (без обгортки `CHECK (...)`). */
   check?: string
   primaryKey?: true
+  /**
+   * Ключ рядка-одинака. У скоупленого об'єкта рядок один на значення скоупу,
+   * тож ключем стає скоуп-колонка, а ця колонка не матеріалізується.
+   */
+  singleton?: true
   indexed?: true
   unique?: true
   /** Ціль посилання; сама колонка має тип UUID. */
