@@ -6,7 +6,7 @@ import {
   type MetadataRef,
   type ReferenceRole,
 } from "simetra/model"
-import { diagnostic, type Diagnostic } from "../diagnostics"
+import { diagnostic, type CompilerRule, type Diagnostic } from "../diagnostics"
 import { objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
 import {
@@ -20,26 +20,29 @@ import {
 const MAX_IDENT_BYTES = 63
 
 /**
- * Ролі, у яких посилання — значення `Ref`: ціль мусить бути видом, на який
- * можна посилатися. Реєстратори й рухи посилаються на регістри й документи за
- * іншими правилами, а колонка `CustomTable` — на `PgEnum` за власною роллю.
+ * Ролі, у яких посилання — значення `Ref` чи FK прийнятої таблиці: ціль
+ * мусить бути видом, на який можна посилатися. Реєстратори й рухи
+ * посилаються на регістри й документи за іншими правилами, власник довідника
+ * — за `ownerKinds` реєстру, а колонка `CustomTable` — на `PgEnum` за власною
+ * роллю.
  */
 const REF_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "attribute.ref",
   "attribute.allowedType",
   "constant.ref",
   "constant.allowedType",
-  "catalog.owner",
   "customTable.foreignKey",
 ])
 
 /**
- * Ролі, чия ціль мусить мати таблицю, а не лише право на посилання: FK
- * прийнятої таблиці й колонка власника довідника (FK на ключ власника).
+ * Ролі поліморфної пари `<основа>_type` + `<основа>_id uuid` (спека §5): ціль
+ * мусить мати одноколонковий uuid-ключ, тож перерахування з текстовою міткою
+ * (М15) сюди не підходить.
  */
-const TABLE_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
-  "catalog.owner",
-  "customTable.foreignKey",
+const POLYMORPHIC_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "attribute.allowedType",
+  "constant.allowedType",
+  "register.recorder",
 ])
 
 /** Поліморфні множини: їхні цілі розрізняє `physicalName` (спека §5). */
@@ -61,26 +64,15 @@ export function checkIntegrity(
   const byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
 
   for (const reference of references) {
-    if (!REF_ROLES.has(reference.role)) continue
     const target = byId.get(reference.to.id)
     if (target === undefined) continue
-    const def = KIND_REGISTRY[target.kind]
-    const { file, pointer } = reference.from
-    const params = { kind: target.kind, name: target.name }
-    const needsTable = TABLE_ROLES.has(reference.role)
-    if (!def.referenceable || (needsTable && def.materializes !== "table")) {
+    const code = referenceTargetError(reference, target, byId)
+    if (code !== undefined) {
       diagnostics.push(
-        diagnostic("reference.not-referenceable", file, pointer, params)
-      )
-    } else if (
-      // FK прийнятої таблиці сам називає колонки цілі, тож одноколонковий
-      // uuid-ключ потрібен лише посиланням на ключ.
-      reference.role !== "customTable.foreignKey" &&
-      def.materializes === "table" &&
-      keyColumnOf(target) === undefined
-    ) {
-      diagnostics.push(
-        diagnostic("reference.custom-table-key", file, pointer, params)
+        diagnostic(code, reference.from.file, reference.from.pointer, {
+          kind: target.kind,
+          name: target.name,
+        })
       )
     }
   }
@@ -166,6 +158,43 @@ export function checkIntegrity(
     }
   }
   return diagnostics
+}
+
+/**
+ * Одна причина на посилання: перша непридатність цілі поглинає наступні.
+ * Відсутній uuid-ключ прийнятої таблиці звітує `reference.custom-table-key`
+ * у будь-якій ролі, бо виправляють його в описі таблиці, а не в посиланні;
+ * `reference.polymorphic-target-kind` лишається видам без ключа взагалі.
+ */
+function referenceTargetError(
+  reference: ResolvedReference,
+  target: ParsedObject,
+  byId: ReadonlyMap<string, ParsedObject>
+): CompilerRule | undefined {
+  const def = KIND_REGISTRY[target.kind]
+  const { role } = reference
+  if (role === "catalog.owner") {
+    const source = byId.get(reference.from.objectId)
+    const allowed =
+      source === undefined ? [] : (KIND_REGISTRY[source.kind].ownerKinds ?? [])
+    return allowed.includes(target.kind) ? undefined : "catalog.owner-kind"
+  }
+  if (REF_ROLES.has(role)) {
+    if (!def.referenceable) return "reference.not-referenceable"
+    if (role === "customTable.foreignKey") {
+      // FK прийнятої таблиці сам називає колонки цілі, тож одноколонковий
+      // uuid-ключ йому не потрібен — лише таблиця.
+      return def.materializes === "table"
+        ? undefined
+        : "reference.not-referenceable"
+    }
+  }
+  const polymorphic = POLYMORPHIC_ROLES.has(role)
+  if (!polymorphic && !REF_ROLES.has(role)) return undefined
+  if (keyColumnOf(target) !== undefined) return undefined
+  if (isDeclaredTable(target)) return "reference.custom-table-key"
+  // Одиночний `Ref` на ціль без таблиці зберігає мітку (М15), ключ не потрібен.
+  return polymorphic ? "reference.polymorphic-target-kind" : undefined
 }
 
 function byteLength(name: string): number {

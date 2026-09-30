@@ -21,6 +21,8 @@ export const COMPILER_RULES = [
   "reference.unresolved",
   "reference.not-referenceable",
   "reference.custom-table-key",
+  "reference.polymorphic-target-kind",
+  "catalog.owner-kind",
   "physical.table-duplicate",
   "physical.column-duplicate",
   "physical.discriminator-duplicate",

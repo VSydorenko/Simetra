@@ -26,6 +26,22 @@ function register(name: string, overrides: Record<string, unknown> = {}) {
   }
 }
 
+const ENUMERATION = {
+  id: uuid(730),
+  kind: "Enumeration",
+  name: "Status",
+  physicalName: "status",
+  values: [{ id: uuid(731), name: "Open", physicalName: "open" }],
+}
+
+const CONSTANT = {
+  id: uuid(710),
+  kind: "Constant",
+  name: "Rate",
+  physicalName: "rate",
+  type: "Integer",
+}
+
 function refTo(kind: string, name: string) {
   return { type: "Ref", ref: { kind, name } }
 }
@@ -135,33 +151,161 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("catalog owner must materialize a table with a uuid key", () => {
+  it("catalog owner must be a catalog", () => {
     const result = compileWith({
-      "enumerations/Status/Status.meta.json": {
-        id: uuid(730),
-        kind: "Enumeration",
-        name: "Status",
-        physicalName: "status",
-        values: [{ id: uuid(731), name: "Open", physicalName: "open" }],
-      },
+      "enumerations/Status/Status.meta.json": ENUMERATION,
+      "documents/Invoice/Invoice.meta.json": document("Invoice"),
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
-          { id: uuid(732), name: "id", physicalName: "id", type: "BigInt" },
+          { id: uuid(732), name: "id", physicalName: "id", type: "UUID" },
         ],
         primaryKey: { columns: ["id"] },
       }),
+      "constants/Rate/Rate.meta.json": CONSTANT,
       "catalogs/Owner/Owner.meta.json": catalog("Owner"),
       [NOTE]: catalog("Note", {
         owners: [
           { kind: "Enumeration", name: "Status" },
+          { kind: "Document", name: "Invoice" },
           { kind: "CustomTable", name: "Log" },
+          { kind: "Constant", name: "Rate" },
           { kind: "Catalog", name: "Owner" },
         ],
       }),
     })
     expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
-      ["reference.not-referenceable", NOTE, "/owners/0"],
-      ["reference.custom-table-key", NOTE, "/owners/1"],
+      ["catalog.owner-kind", NOTE, "/owners/0"],
+      ["catalog.owner-kind", NOTE, "/owners/1"],
+      ["catalog.owner-kind", NOTE, "/owners/2"],
+      ["catalog.owner-kind", NOTE, "/owners/3"],
+    ])
+  })
+
+  it("catalog owned by a catalog is clean", () => {
+    const result = compileWith({
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      [NOTE]: catalog("Note", {
+        owners: [{ kind: "Catalog", name: "Owner" }],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+  })
+
+  it("enumeration cannot be a target of a polymorphic ref", () => {
+    const result = compileWith({
+      "enumerations/Status/Status.meta.json": ENUMERATION,
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      [NOTE]: catalog("Note", {
+        attributes: [
+          attribute("subject", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "Catalog", name: "Owner" },
+              { kind: "Enumeration", name: "Status" },
+            ],
+          }),
+        ],
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "reference.polymorphic-target-kind",
+        severity: "error",
+        file: NOTE,
+        pointer: "/attributes/0/allowedTypes/1",
+      }),
+    ])
+  })
+
+  it("enumeration cannot be a target of a polymorphic constant", () => {
+    const result = compileWith({
+      "enumerations/Status/Status.meta.json": ENUMERATION,
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      "constants/Subject/Subject.meta.json": {
+        id: uuid(733),
+        kind: "Constant",
+        name: "Subject",
+        physicalName: "subject",
+        type: "Ref",
+        allowedTypes: [
+          { kind: "Enumeration", name: "Status" },
+          { kind: "Catalog", name: "Owner" },
+        ],
+      },
+    })
+    expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+      ["reference.polymorphic-target-kind", "/allowedTypes/0"],
+    ])
+  })
+
+  it("catalog and document are valid polymorphic targets", () => {
+    const result = compileWith({
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      "documents/Invoice/Invoice.meta.json": document("Invoice"),
+      [NOTE]: catalog("Note", {
+        attributes: [
+          attribute("subject", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "Catalog", name: "Owner" },
+              { kind: "Document", name: "Invoice" },
+            ],
+          }),
+        ],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+  })
+
+  it("custom table without a uuid key in allowedTypes reports the key once", () => {
+    const result = compileWith({
+      "custom-tables/Log/Log.meta.json": customTable("Log", {
+        columns: [
+          { id: uuid(734), name: "id", physicalName: "id", type: "BigInt" },
+        ],
+        primaryKey: { columns: ["id"] },
+      }),
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      [NOTE]: catalog("Note", {
+        attributes: [
+          attribute("subject", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "Catalog", name: "Owner" },
+              { kind: "CustomTable", name: "Log" },
+            ],
+          }),
+        ],
+      }),
+    })
+    expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+      ["reference.custom-table-key", "/attributes/0/allowedTypes/1"],
+    ])
+  })
+
+  it("register recorder must have a single uuid key", () => {
+    const result = compileWith({
+      "enumerations/Status/Status.meta.json": ENUMERATION,
+      "documents/Invoice/Invoice.meta.json": document("Invoice"),
+      "catalogs/Owner/Owner.meta.json": catalog("Owner"),
+      "information-registers/Log/Log.meta.json": register("Log", {
+        writeMode: "RecorderSubordinate",
+        recorderTypes: [
+          { kind: "Document", name: "Invoice" },
+          { kind: "Enumeration", name: "Status" },
+          // Семантику виду реєстратора задає план C; тут лише ключ.
+          { kind: "Catalog", name: "Owner" },
+        ],
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "reference.polymorphic-target-kind",
+        file: "information-registers/Log/Log.meta.json",
+        pointer: "/recorderTypes/1",
+      }),
     ])
   })
 

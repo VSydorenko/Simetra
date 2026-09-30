@@ -115,7 +115,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "reference.custom-table-key": {
     message: (p) =>
       `${p.kind} "${p.name}" has no single-column uuid primary key to reference`,
-    hint: "A Ref to a CustomTable is a foreign key to its single uuid primary key column.",
+    hint: "A Ref to a CustomTable, single or polymorphic, stores the value of its single uuid primary key column.",
+  },
+  "reference.polymorphic-target-kind": {
+    message: (p) =>
+      `${p.kind} "${p.name}" cannot be a target of a polymorphic reference or a recorder`,
+    hint: "The pair stores a uuid key, so only a Catalog, a Document or a CustomTable with a single uuid primary key fits. Enumeration values are text labels and cannot share the uuid column of a polymorphic pair; use a separate attribute.",
+  },
+  "catalog.owner-kind": {
+    message: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
+    hint: "The owner of a catalog must be a catalog.",
   },
   "physical.table-duplicate": {
     message: (p) =>
