@@ -113,6 +113,12 @@ export interface RegisterKeySpec {
   dimensionsNotNull: true
   /** Таблиця поточних підсумків `<регістр>_totals`. */
   totals: boolean
+  /**
+   * Ресурси сумуються (регістр накопичення): кожен рух дає значення кожного
+   * ресурсу, і `NULL` його не заступить. Ресурс регістра відомостей —
+   * значення, тож обов'язковий лише `required`.
+   */
+  additiveResources: boolean
 }
 
 export interface KindDefinition {

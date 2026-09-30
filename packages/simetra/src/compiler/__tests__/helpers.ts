@@ -141,6 +141,7 @@ export function salesDocument(
     "catalogs/Item/Item.meta.json": catalog("Item"),
     [SALE_FILE]: document("Sale", {
       tabularSections: [goods],
+      registerMovements: [{ kind: "AccumulationRegister", name: "Stock" }],
       posting: {
         movements: [
           {

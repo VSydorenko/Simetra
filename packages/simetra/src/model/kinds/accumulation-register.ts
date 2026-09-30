@@ -51,6 +51,7 @@ export const accumulationRegisterKind: KindDefinition = {
     dimensionsNotNull: true,
     movementIndexes: true,
     totals: (obj as AccumulationRegister).registerType === "Balance",
+    additiveResources: true,
   }),
   references(obj) {
     const register = obj as AccumulationRegister

@@ -90,10 +90,18 @@ describe("stage 2: movement constructor references", () => {
 
   it("standard names follow project style", () => {
     const style = { naming: { attributeCase: "snake_case" } }
-    const ok = build({ fields: { qty: "row.line_number" } }, {}, style)
+    const ok = build(
+      { fields: { item: "row.item", qty: "row.line_number" } },
+      {},
+      style
+    )
     expect(ok.result.diagnostics).toEqual([])
     expect(
-      ok.result.model!.references.find((r) => r.role === "posting.rowField")?.to
+      ok.result.model!.references.find(
+        (r) =>
+          r.role === "posting.rowField" &&
+          r.from.pointer === "/posting/movements/0/fields/qty"
+      )?.to
     ).toEqual({
       kind: "Element",
       id: `${ok.sale.tabularSections[0]!.id}#lineNumber`,

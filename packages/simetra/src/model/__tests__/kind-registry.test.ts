@@ -279,6 +279,7 @@ describe("standard columns", () => {
       dimensionsNotNull: true,
       movementIndexes: true,
       totals: true,
+      additiveResources: true,
     })
     expect(keys(parse({ registerType: "Turnover" })).totals).toBe(false)
 
@@ -296,6 +297,7 @@ describe("standard columns", () => {
       dimensionsNotNull: true,
       movementIndexes: false,
       totals: false,
+      additiveResources: false,
     })
     expect(info("RecorderSubordinate")).toEqual({
       movementsPrimaryKey: "recorder",
@@ -303,6 +305,7 @@ describe("standard columns", () => {
       dimensionsNotNull: true,
       movementIndexes: false,
       totals: false,
+      additiveResources: false,
     })
     expect(KIND_REGISTRY.Catalog.registerKeys).toBeUndefined()
   })

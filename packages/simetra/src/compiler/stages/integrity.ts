@@ -1,14 +1,33 @@
 import {
   KIND_REGISTRY,
   isSqlReservedWord,
+  parseExpression,
+  type Attribute,
   type AttributeCase,
   type CustomTable,
+  type Expr,
   NO_SCOPE,
   type MetadataRef,
+  type MovementDecl,
   type ReferenceRole,
   type ScopeKind,
+  type StandardColumnDef,
+  type ValueType,
 } from "simetra/model"
-import { diagnostic, type CompilerRule, type Diagnostic } from "../diagnostics"
+import {
+  diagnostic,
+  toPointer,
+  type CompilerRule,
+  type Diagnostic,
+} from "../diagnostics"
+import {
+  accepts,
+  describeType,
+  inferType,
+  typeOfLogical,
+  type InferredType,
+  type PostingContext,
+} from "../posting-types"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
 import {
@@ -40,13 +59,20 @@ const REF_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
 /**
  * Ролі поліморфної пари `<основа>_type` + `<основа>_id uuid` (спека §5): ціль
  * мусить мати одноколонковий uuid-ключ, тож перерахування з текстовою міткою
- * (М15) сюди не підходить.
+ * (М15) сюди не підходить. Реєстратор теж пара, але його ціль звужує власне
+ * правило (лише документ), а ключ у документа є завжди.
  */
 const POLYMORPHIC_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "attribute.allowedType",
   "constant.allowedType",
-  "register.recorder",
 ])
+
+/** Ролі, чия ціль — регістр, у який документ пише рухи (спека §8.2). */
+const REGISTER_TARGET_ROLES: ReadonlySet<ReferenceRole> =
+  new Set<ReferenceRole>(["document.registerMovement", "posting.register"])
+
+/** Дія виду, що пише рухи: реєстратором може бути лише вид, який проводиться. */
+const POST_ACTION = "post"
 
 /** Поліморфні множини: їхні цілі розрізняє `physicalName` (спека §5). */
 const POLYMORPHIC_SETS = ["allowedTypes", "owners", "recorderTypes"] as const
@@ -155,6 +181,7 @@ export function checkIntegrity(
   }
 
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
+  diagnostics.push(...checkPosting(objects, references, byKey))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -179,6 +206,15 @@ function referenceTargetError(
 ): CompilerRule | undefined {
   const def = KIND_REGISTRY[target.kind]
   const { role } = reference
+  // Регістр і вид, що проводиться, — факти реєстру, а не перелік імен видів.
+  if (REGISTER_TARGET_ROLES.has(role)) {
+    return def.registerKeys === undefined ? "posting.register-kind" : undefined
+  }
+  if (role === "register.recorder") {
+    return def.actions.includes(POST_ACTION)
+      ? undefined
+      : "register.recorder-kind"
+  }
   if (role === "catalog.owner") {
     const source = byId.get(reference.from.objectId)
     const allowed =
@@ -599,4 +635,329 @@ function valueAt(data: unknown, pointer: string): unknown {
     current = (current as Record<string, unknown>)[segment]
   }
   return current
+}
+
+const UNKNOWN: InferredType = { kind: "unknown" }
+
+/** Поля регістра за роллю — у порядку `columnFields` реєстру видів. */
+type RegisterFieldRole = "dimensions" | "resources" | "attributes"
+
+/** Усі вузли виразу, у порядку появи. */
+function nodesOf(expr: Expr): Expr[] {
+  switch (expr.type) {
+    case "unary":
+      return [expr, ...nodesOf(expr.operand)]
+    case "binary":
+      return [expr, ...nodesOf(expr.left), ...nodesOf(expr.right)]
+    default:
+      return [expr]
+  }
+}
+
+/**
+ * Семантика рухів конструктора (спека П2 §7, §8.2): регістр оголошено й
+ * документ — його реєстратор, `fields` повні, `row.` і агрегати — за
+ * джерелом, вид руху — лише в регістра з ним, а типи виразів підходять
+ * полям. Ціль, що не регістр, уже звітувала перевірка посилань; рух у неї
+ * тут пропускається, щоб не дати каскаду.
+ */
+function checkPosting(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  byKey: ReadonlyMap<string, ParsedObject>
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  // Резолвлене ім'я виразу — за полем і початком вузла: так стадія 2 уже
+  // зв'язала вузол AST з елементом, і повторно резолвити імена не треба.
+  const resolved = new Map<string, string>()
+  const spanKey = (file: string, pointer: string, start: number) =>
+    `${file}\0${pointer}\0${start}`
+  for (const { role, from, to, span } of references) {
+    if (
+      span !== undefined &&
+      (role === "posting.docField" || role === "posting.rowField")
+    ) {
+      resolved.set(spanKey(from.file, from.pointer, span.start), to.id)
+    }
+  }
+  const idOf = (ref: MetadataRef) =>
+    byKey.get(objectKey(ref.kind, ref.name))?.id
+  const typeOfField = (field: ValueType): InferredType => {
+    const refs =
+      field.ref !== undefined ? [field.ref] : (field.allowedTypes ?? [])
+    const targets = refs.map(idOf)
+    if (targets.some((id) => id === undefined)) return UNKNOWN
+    return typeOfLogical(field.type, targets as string[], field.array === true)
+  }
+
+  for (const object of objects) {
+    const data = object.data as {
+      posting?: { movements: MovementDecl[] }
+      registerMovements?: MetadataRef[]
+      tabularSections?: { id?: string; attributes: Attribute[] }[]
+    }
+    const declared = new Set(
+      (data.registerMovements ?? []).map((ref) => objectKey(ref.kind, ref.name))
+    )
+    // Реєстратор оголошує регістр; документ, що пише в регістр, мусить бути в
+    // його переліку — хоч би звідки йшли рухи (конструктор чи блок запиту).
+    ;(data.registerMovements ?? []).forEach((ref, index) => {
+      const register = byKey.get(objectKey(ref.kind, ref.name))
+      if (register === undefined) return
+      if (KIND_REGISTRY[register.kind].registerKeys === undefined) return
+      const { recorderTypes } = register.data as {
+        recorderTypes?: MetadataRef[]
+      }
+      const own = objectKey(object.kind, object.name)
+      if (
+        !(recorderTypes ?? []).some((r) => objectKey(r.kind, r.name) === own)
+      ) {
+        found.push(
+          diagnostic(
+            "posting.recorder-not-allowed",
+            object.file,
+            `/registerMovements/${index}`,
+            { name: register.name, document: object.name }
+          )
+        )
+      }
+    })
+
+    const movements = data.posting?.movements
+    if (movements === undefined || object.id === undefined) continue
+    const def = KIND_REGISTRY[object.kind]
+    const ownerId = object.id
+    // Типи імен документа: власні елементи за UUID, стандартні реквізити — за
+    // синтетичним id `<власник>#<канонічне ім'я>`, як їх записала стадія 2.
+    const elementTypes = new Map<string, InferredType>()
+    const standardType = (
+      column: StandardColumnDef,
+      self: string | undefined
+    ): InferredType => {
+      if ("raw" in column.type) return UNKNOWN
+      if (column.ref === "self") {
+        return self === undefined ? UNKNOWN : { kind: "ref", targets: [self] }
+      }
+      if (column.ref === "owningObject") {
+        return { kind: "ref", targets: [ownerId] }
+      }
+      // Власник і реєстратор — поліморфні пари без цілі у виразі.
+      if (column.ref !== undefined) return UNKNOWN
+      return typeOfLogical(column.type.type)
+    }
+    for (const column of def.standardColumns(data)) {
+      elementTypes.set(
+        `${ownerId}#${column.logicalName}`,
+        standardType(column, ownerId)
+      )
+    }
+    for (const field of def.columnFields) {
+      for (const element of (data as Record<string, Attribute[]>)[field] ??
+        []) {
+        if (element.id !== undefined) {
+          elementTypes.set(element.id, typeOfField(element))
+        }
+      }
+    }
+    const rowColumns = def.tabularSectionColumns?.(data) ?? []
+    for (const section of data.tabularSections ?? []) {
+      if (section.id === undefined) continue
+      // Рядок ТЧ — не об'єкт метаданих, тож на нього самого `Ref` не веде.
+      for (const column of rowColumns) {
+        elementTypes.set(
+          `${section.id}#${column.logicalName}`,
+          standardType(column, undefined)
+        )
+      }
+      for (const element of section.attributes) {
+        if (element.id !== undefined) {
+          elementTypes.set(element.id, typeOfField(element))
+        }
+      }
+    }
+
+    movements.forEach((movement, index) => {
+      const register = byKey.get(
+        objectKey(movement.register.kind, movement.register.name)
+      )
+      if (register === undefined) return
+      const registerDef = KIND_REGISTRY[register.kind]
+      const keys = registerDef.registerKeys?.(register.data)
+      if (keys === undefined) return
+      const at = (...path: (string | number)[]) =>
+        toPointer(["posting", "movements", index, ...path])
+      if (!declared.has(objectKey(register.kind, register.name))) {
+        found.push(
+          diagnostic(
+            "posting.register-undeclared",
+            object.file,
+            at("register"),
+            {
+              name: register.name,
+            }
+          )
+        )
+      }
+
+      const fromDocument = movement.source === "document"
+      /**
+       * Розібраний вираз, придатний до типізації. Зламаний розбір (його звітує
+       * T0) і вираз із порушенням джерела типізувати нема сенсу: `row.` без
+       * ТЧ не резолвлено, і тип дав би лише другу помилку на тому ж місці.
+       */
+      const expression = (
+        text: string | undefined,
+        pointer: string
+      ): Expr | undefined => {
+        if (text === undefined) return undefined
+        const parsed = parseExpression(text)
+        if (!parsed.ok) return undefined
+        let valid = true
+        for (const node of nodesOf(parsed.expr)) {
+          const code =
+            fromDocument && node.type === "field" && node.base === "row"
+              ? "posting.row-in-document-source"
+              : !fromDocument && (node.type === "sum" || node.type === "count")
+                ? "posting.aggregate-in-section-source"
+                : undefined
+          if (code === undefined) continue
+          valid = false
+          found.push(
+            diagnostic(code, object.file, pointer, { offset: node.start })
+          )
+        }
+        return valid ? parsed.expr : undefined
+      }
+      const typeAt = (expr: Expr, pointer: string): InferredType => {
+        const ctx: PostingContext = {
+          typeOf: (node) => {
+            const id = resolved.get(spanKey(object.file, pointer, node.start))
+            return id === undefined
+              ? UNKNOWN
+              : (elementTypes.get(id) ?? UNKNOWN)
+          },
+        }
+        return inferType(expr, ctx)
+      }
+      const mismatch = (
+        pointer: string,
+        expr: Expr,
+        expected: string,
+        actual: InferredType
+      ) =>
+        found.push(
+          diagnostic("posting.type-mismatch", object.file, pointer, {
+            expected,
+            actual: describeType(actual),
+            offset: expr.start,
+          })
+        )
+      const expectKind = (
+        text: string | undefined,
+        pointer: string,
+        expected: InferredType
+      ) => {
+        const expr = expression(text, pointer)
+        if (expr === undefined) return
+        const actual = typeAt(expr, pointer)
+        if (actual.kind !== "unknown" && actual.kind !== expected.kind) {
+          mismatch(pointer, expr, describeType(expected), actual)
+        }
+      }
+      expectKind(movement.condition, at("condition"), { kind: "boolean" })
+      expectKind(movement.period, at("period"), { kind: "date" })
+
+      // Вид руху — стандартна колонка регістра, тож її наявність і є фактом
+      // реєстру про те, чи потрібен рух виду.
+      const hasMovementType = registerDef
+        .standardColumns(register.data)
+        .some((column) => column.logicalName === "movementType")
+      const { movementType } = movement
+      if (movementType === undefined) {
+        if (hasMovementType) {
+          found.push(
+            diagnostic("posting.movement-type", object.file, at(), {
+              problem: "missing",
+              register: register.name,
+            })
+          )
+        }
+      } else if (!hasMovementType) {
+        found.push(
+          diagnostic("posting.movement-type", object.file, at("movementType"), {
+            problem: "forbidden",
+            register: register.name,
+          })
+        )
+      } else if (movementType !== "Receipt" && movementType !== "Expense") {
+        const pointer = at("movementType")
+        const expr = expression(movementType, pointer)
+        const actual = expr === undefined ? UNKNOWN : typeAt(expr, pointer)
+        if (
+          expr !== undefined &&
+          actual.kind !== "unknown" &&
+          actual.kind !== "text"
+        ) {
+          found.push(
+            diagnostic("posting.movement-type", object.file, pointer, {
+              problem: "type",
+              actual: describeType(actual),
+              offset: expr.start,
+            })
+          )
+        }
+      }
+
+      const fields = register.data as Record<RegisterFieldRole, Attribute[]>
+      const required = [
+        ...fields.dimensions,
+        ...fields.resources.filter(
+          (resource) => keys.additiveResources || resource.required
+        ),
+      ].map((field) => field.name)
+      const missing = required.filter((name) => !(name in movement.fields))
+      if (missing.length > 0) {
+        found.push(
+          diagnostic("posting.fields-incomplete", object.file, at("fields"), {
+            missing: missing.join(", "),
+            register: register.name,
+          })
+        )
+      }
+
+      const roles: readonly RegisterFieldRole[] = [
+        "dimensions",
+        "resources",
+        "attributes",
+      ]
+      for (const [key, text] of Object.entries(movement.fields)) {
+        const role = roles.find((r) => fields[r].some((f) => f.name === key))
+        // Невідомий ключ уже звітувала стадія 2.
+        if (role === undefined) continue
+        const field = fields[role].find((f) => f.name === key)!
+        const pointer = at("fields", key)
+        const expr = expression(text, pointer)
+        if (expr === undefined) continue
+        const expected = typeOfField(field)
+        const actual = typeAt(expr, pointer)
+        // Порожнє значення приймає лише колонка, що може бути порожньою: не
+        // вимір (виміри входять у ключі), не адитивний ресурс і не `required`.
+        const nullable =
+          !(role === "dimensions" && keys.dimensionsNotNull) &&
+          !(role === "resources" && keys.additiveResources) &&
+          !field.required
+        if (actual.kind === "null" ? !nullable : !accepts(expected, actual)) {
+          mismatch(
+            pointer,
+            expr,
+            actual.kind === "null"
+              ? `a non-empty ${describeType(expected)}`
+              : describeType(expected),
+            actual
+          )
+        }
+      }
+    })
+  }
+  return found
 }

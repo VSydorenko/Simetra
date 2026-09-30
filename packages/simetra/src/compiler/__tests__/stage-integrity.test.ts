@@ -285,7 +285,7 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("register recorder must have a single uuid key", () => {
+  it("register recorder must be a document", () => {
     const result = compileWith({
       "enumerations/Status/Status.meta.json": ENUMERATION,
       "documents/Invoice/Invoice.meta.json": document("Invoice"),
@@ -295,17 +295,22 @@ describe("stage 4: integrity", () => {
         recorderTypes: [
           { kind: "Document", name: "Invoice" },
           { kind: "Enumeration", name: "Status" },
-          // Семантику виду реєстратора задає план C; тут лише ключ.
+          // Uuid-ключ довідника реєстратором його не робить: рухи пише проведення.
           { kind: "Catalog", name: "Owner" },
         ],
       }),
     })
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        code: "reference.polymorphic-target-kind",
-        file: "information-registers/Log/Log.meta.json",
-        pointer: "/recorderTypes/1",
-      }),
+    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
+      [
+        "register.recorder-kind",
+        "information-registers/Log/Log.meta.json",
+        "/recorderTypes/1",
+      ],
+      [
+        "register.recorder-kind",
+        "information-registers/Log/Log.meta.json",
+        "/recorderTypes/2",
+      ],
     ])
   })
 

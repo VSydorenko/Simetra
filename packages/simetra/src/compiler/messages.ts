@@ -221,12 +221,57 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "reference.polymorphic-target-kind": {
     message: (p) =>
-      `${p.kind} "${p.name}" cannot be a target of a polymorphic reference or a recorder`,
+      `${p.kind} "${p.name}" cannot be a target of a polymorphic reference`,
     hint: "The pair stores a uuid key, so only a Catalog, a Document or a CustomTable with a single uuid primary key fits. Enumeration values are text labels and cannot share the uuid column of a polymorphic pair; use a separate attribute.",
   },
   "catalog.owner-kind": {
     message: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
     hint: "The owner of a catalog must be a catalog.",
+  },
+  "register.recorder-kind": {
+    message: (p) => `${p.kind} "${p.name}" cannot be a recorder`,
+    hint: "Movements are written by posting, so a recorder must be a document.",
+  },
+  "posting.register-kind": {
+    message: (p) => `${p.kind} "${p.name}" is not a register`,
+    hint: "registerMovements and movements of a document target only accumulation and information registers.",
+  },
+  "posting.register-undeclared": {
+    message: (p) =>
+      `Register "${p.name}" is not listed in the document's registerMovements`,
+    hint: "Add the register to registerMovements.",
+  },
+  "posting.recorder-not-allowed": {
+    message: (p) =>
+      `Register "${p.name}" does not list document "${p.document}" in its recorderTypes`,
+    hint: "Add the document to the register's recorderTypes; an Independent information register takes no movements from documents.",
+  },
+  "posting.fields-incomplete": {
+    message: (p) => `Movement does not set register fields: ${p.missing}`,
+    hint: "An accumulation register movement sets every dimension and resource; an information register movement sets every dimension and required resource.",
+  },
+  "posting.row-in-document-source": {
+    message: () => "row. fields need a tabular section source",
+    hint: 'With source "document" the movement reads the document header: use doc. fields or sum()/count().',
+  },
+  "posting.aggregate-in-section-source": {
+    message: () =>
+      "sum() and count() are allowed only with the document source",
+    hint: "A tabular section source gives one movement per row; aggregate with the document source.",
+  },
+  "posting.movement-type": {
+    message: (p) =>
+      p.problem === "missing"
+        ? `Balance register "${p.register}" needs movementType`
+        : p.problem === "forbidden"
+          ? `Register "${p.register}" has no movement type`
+          : `movementType expression gives ${p.actual}, not text`,
+    hint: 'Use the literal "Receipt" or "Expense", or an expression that gives one of them.',
+  },
+  "posting.type-mismatch": {
+    message: (p) =>
+      `Expression gives ${p.actual}, but ${p.expected} is expected`,
+    hint: "An integer field does not take a fractional number, a reference field takes only its own targets, and null goes only into a column that may be empty.",
   },
   "physical.table-duplicate": {
     message: (p) =>

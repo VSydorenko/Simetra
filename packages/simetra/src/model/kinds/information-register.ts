@@ -47,6 +47,7 @@ export const informationRegisterKind: KindDefinition = {
       dimensionsNotNull: true,
       movementIndexes: false,
       totals: false,
+      additiveResources: false,
     }
   },
   references(obj) {
