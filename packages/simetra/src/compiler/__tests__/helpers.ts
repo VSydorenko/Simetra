@@ -76,3 +76,36 @@ export function customTable(
     ...overrides,
   })
 }
+
+/**
+ * Проєкт із двома видами скоупу: `org` (корінь — довідник `Organization`) і
+ * `user` (зовнішній корінь). Довідник-корінь дає `organization()`.
+ */
+export function scopedProject(): {
+  name: string
+  scopeKinds: Record<string, unknown>[]
+} {
+  return project({
+    scopeKinds: [
+      {
+        id: freshId(),
+        name: "org",
+        physicalName: "org_id",
+        root: { object: { kind: "Catalog", name: "Organization" } },
+        setFunction: { name: "org_ids" },
+      },
+      {
+        id: freshId(),
+        name: "user",
+        physicalName: "user_id",
+        root: { external: { schema: "auth", table: "users", column: "id" } },
+        setFunction: { name: "user_ids" },
+      },
+    ],
+  }) as { name: string; scopeKinds: Record<string, unknown>[] }
+}
+
+/** Довідник-корінь виду `org`: власний вид оголошує і він сам. */
+export function organization(overrides: Record<string, unknown> = {}) {
+  return catalog("Organization", { scope: "org", ...overrides })
+}

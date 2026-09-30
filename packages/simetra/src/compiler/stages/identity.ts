@@ -1,19 +1,25 @@
 import {
   KIND_REGISTRY,
+  NO_SCOPE,
   matchesAttributeCase,
   standardLogicalName,
   type AttributeCase,
   type MetadataKind,
   type Project,
   type ReferenceRole,
+  type ScopeKind,
   type StandardColumnDef,
 } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
-import { objectKey, type ParsedObject } from "./files"
+import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 
 export interface ResolvedReference {
   from: { file: string; pointer: string; objectId: string }
-  to: { kind: MetadataKind; id: string }
+  /**
+   * `ScopeKind` і `Column` — цілі, що не є об'єктами метаданих (вид скоупу
+   * проєкту, колонка `CustomTable`); їхні id живуть в одному просторі UUID.
+   */
+  to: { kind: MetadataKind | "ScopeKind" | "Column"; id: string }
   role: ReferenceRole
 }
 
@@ -89,9 +95,83 @@ export function checkIdentity(
     }
   }
 
+  // Види скоупу ідентифікуються раніше за об'єкти: за ними розпізнаються
+  // корені й резолвиться `scope` об'єктів.
+  const scopeKinds = project?.scopeKinds ?? []
+  const scopeKindsByName = new Map<string, ScopeKind>()
+  scopeKinds.forEach((kind, index) => {
+    const pointer = `/scopeKinds/${index}`
+    checkIdentified(PROJECT_FILE, pointer, kind)
+    const at = `${pointer}/name`
+    if (scopeKindsByName.has(kind.name)) {
+      diagnostics.push(
+        diagnostic("identity.name-duplicate", PROJECT_FILE, at, {
+          name: kind.name,
+          scope: "project scope kinds",
+        })
+      )
+    } else {
+      scopeKindsByName.set(kind.name, kind)
+    }
+    if (style !== undefined && !matchesAttributeCase(kind.name, style)) {
+      diagnostics.push(
+        diagnostic("identity.name-case", PROJECT_FILE, at, {
+          name: kind.name,
+          style,
+        })
+      )
+    }
+  })
+  // Корінь не має скоуп-колонки, тож ім'я виду в ньому нічого не займає.
+  const rootKeys = new Set(
+    scopeKinds.flatMap((kind) =>
+      "object" in kind.root
+        ? [objectKey(kind.root.object.kind, kind.root.object.name)]
+        : []
+    )
+  )
+
+  // Без валідного проєкту види невідомі, а про сам проєкт звітує стадія 1.
+  const checkDeclaration = (object: ParsedObject): ScopeKind | undefined => {
+    if (project === undefined) return undefined
+    const policy = KIND_REGISTRY[object.kind].scope
+    if (policy === "absent") return undefined
+    const { scope } = object.data as { scope?: string }
+    if (scope === undefined) {
+      if (policy === "required" && scopeKinds.length > 0) {
+        diagnostics.push(
+          diagnostic("scope.declaration-missing", object.file, "", {
+            kind: object.kind,
+            name: object.name,
+          })
+        )
+      }
+      return undefined
+    }
+    if (scope === NO_SCOPE) return undefined
+    const found = scopeKindsByName.get(scope)
+    if (found === undefined) {
+      diagnostics.push(
+        diagnostic("scope.unknown-kind", object.file, "/scope", {
+          name: scope,
+        })
+      )
+    }
+    return found
+  }
+  const scopeOf = new Map<ParsedObject, ScopeKind>()
+
   for (const object of objects) {
     const data = object.data as Element
     checkIdentified(object.file, "", data)
+    const scopeKind = checkDeclaration(object)
+    if (scopeKind !== undefined) scopeOf.set(object, scopeKind)
+    // `declared` — фізичну форму файл описує сам і скоуп-колонку називає
+    // `scopeColumn`, тож збігу з наміром платформи там немає.
+    const collides =
+      scopeKind !== undefined &&
+      !KIND_REGISTRY[object.kind].declared &&
+      !rootKeys.has(objectKey(object.kind, object.name))
 
     const key = objectKey(object.kind, object.name)
     const first = objectsByName.get(key)
@@ -137,6 +217,14 @@ export function checkIdentity(
             diagnostic("identity.name-case", object.file, at, { name, style })
           )
         }
+        if (collides && name === scopeKind.name) {
+          diagnostics.push(
+            diagnostic("scope.attribute-name-collision", object.file, at, {
+              name,
+              kind: object.kind,
+            })
+          )
+        }
         if (column && reserved.has(name)) {
           diagnostics.push(
             diagnostic("identity.name-reserved", object.file, at, {
@@ -150,33 +238,58 @@ export function checkIdentity(
   }
 
   const references: ResolvedReference[] = []
+  const resolveObjectRef = (
+    file: string,
+    fromId: string | undefined,
+    found: { pointer: string; ref: { kind: string; name: string } },
+    role: ReferenceRole
+  ) => {
+    const key = objectKey(found.ref.kind, found.ref.name)
+    const target = objectsByName.get(key)
+    if (target === undefined) {
+      if (!brokenNames.has(key)) {
+        diagnostics.push(
+          diagnostic("reference.unresolved", file, found.pointer, {
+            kind: found.ref.kind,
+            name: found.ref.name,
+          })
+        )
+      }
+      return
+    }
+    // Без id з обох боків резолвити нема в що; id-missing уже звітовано.
+    if (fromId === undefined || target.id === undefined) return
+    references.push({
+      from: { file, pointer: found.pointer, objectId: fromId },
+      to: { kind: target.kind, id: target.id },
+      role,
+    })
+  }
+  scopeKinds.forEach((kind, index) => {
+    if (!("object" in kind.root)) return
+    resolveObjectRef(
+      PROJECT_FILE,
+      kind.id,
+      {
+        pointer: `/scopeKinds/${index}/root/object`,
+        ref: kind.root.object,
+      },
+      "scopeKind.root"
+    )
+  })
   for (const object of objects) {
     for (const found of KIND_REGISTRY[object.kind].references(object.data)) {
-      const key = objectKey(found.ref.kind, found.ref.name)
-      const target = objectsByName.get(key)
-      if (target === undefined) {
-        if (!brokenNames.has(key)) {
-          diagnostics.push(
-            diagnostic("reference.unresolved", object.file, found.pointer, {
-              kind: found.ref.kind,
-              name: found.ref.name,
-            })
-          )
-        }
-        continue
-      }
-      // Без id з обох боків резолвити нема в що; id-missing уже звітовано.
-      if (object.id === undefined || target.id === undefined) continue
+      resolveObjectRef(object.file, object.id, found, found.role)
+    }
+    const scopeKind = scopeOf.get(object)
+    if (scopeKind?.id !== undefined && object.id !== undefined) {
       references.push({
-        from: {
-          file: object.file,
-          pointer: found.pointer,
-          objectId: object.id,
-        },
-        to: { kind: target.kind, id: target.id },
-        role: found.role,
+        from: { file: object.file, pointer: "/scope", objectId: object.id },
+        to: { kind: "ScopeKind", id: scopeKind.id },
+        role: "object.scope",
       })
     }
+    checkScopeColumn(object, references, diagnostics)
   }
   references.sort(
     (a, b) =>
@@ -245,4 +358,36 @@ function namespacesOf(
     })
   }
   return namespaces
+}
+
+/**
+ * `scopeColumn` прийнятої таблиці називає її власну колонку за логічним
+ * іменем; існування колонки — справа цієї стадії, бо імена резолвляться тут.
+ */
+function checkScopeColumn(
+  object: ParsedObject,
+  references: ResolvedReference[],
+  diagnostics: Diagnostic[]
+) {
+  const { scopeColumn, columns } = object.data as {
+    scopeColumn?: string
+    columns?: Element[]
+  }
+  if (scopeColumn === undefined) return
+  const column = (columns ?? []).find((c) => c.name === scopeColumn)
+  if (column === undefined) {
+    diagnostics.push(
+      diagnostic("customTable.column-unknown", object.file, "/scopeColumn", {
+        column: scopeColumn,
+        table: object.name,
+      })
+    )
+    return
+  }
+  if (typeof column.id !== "string" || object.id === undefined) return
+  references.push({
+    from: { file: object.file, pointer: "/scopeColumn", objectId: object.id },
+    to: { kind: "Column", id: column.id },
+    role: "customTable.scopeColumn",
+  })
 }

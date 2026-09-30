@@ -17,12 +17,27 @@ export interface SourceObject {
   file: string
   /** Вихід Zod-схеми виду. */
   data: unknown
+  /** Вид скоупу об'єкта; відсутній — «без скоупу» (`none`, поле або вид без скоупу). */
+  scopeKindId?: string
+}
+
+export interface CompiledScopeKind {
+  id: string
+  name: string
+  physicalName: string
+  root:
+    | { objectId: string }
+    | { external: { schema: string; table: string; column: string } }
+  setFunction: { schema: string; name: string }
+  onRootDelete: "restrict" | "cascade"
 }
 
 export interface CompiledModel {
   project: Project
   /** Порядок METADATA_KINDS, далі ім'я. */
   objects: SourceObject[]
+  /** За `name`. */
+  scopeKinds: CompiledScopeKind[]
   /** За (file, pointer). */
   references: ResolvedReference[]
   sqlFiles: { file: string; ownerObjectId?: string; schema?: string }[]
@@ -73,14 +88,45 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
   const ownerId = (ownerFile: string) => idByFile.get(ownerFile) ?? ""
 
-  const objects = stage1.objects
-    .map(({ id, kind, name, file, data }) => ({
-      id: id ?? "",
-      kind,
-      name,
-      file,
-      data,
+  const scopeKindIdByFile = new Map<string, string>()
+  const rootIdByPointer = new Map<string, string>()
+  for (const { role, from, to } of stage2.references) {
+    if (role === "object.scope") scopeKindIdByFile.set(from.file, to.id)
+    if (role === "scopeKind.root") rootIdByPointer.set(from.pointer, to.id)
+  }
+  const { defaultSchema } = stage1.project
+  const scopeKinds = stage1.project.scopeKinds
+    .map((kind, index): CompiledScopeKind => ({
+      id: kind.id ?? "",
+      name: kind.name,
+      physicalName: kind.physicalName ?? "",
+      root:
+        "object" in kind.root
+          ? {
+              objectId:
+                rootIdByPointer.get(`/scopeKinds/${index}/root/object`) ?? "",
+            }
+          : { external: kind.root.external },
+      setFunction: {
+        schema: kind.setFunction.schema ?? defaultSchema,
+        name: kind.setFunction.name,
+      },
+      onRootDelete: kind.onRootDelete,
     }))
+    .sort((a, b) => compareStrings(a.name, b.name))
+
+  const objects = stage1.objects
+    .map(({ id, kind, name, file, data }): SourceObject => {
+      const scopeKindId = scopeKindIdByFile.get(file)
+      return {
+        id: id ?? "",
+        kind,
+        name,
+        file,
+        data,
+        ...(scopeKindId !== undefined ? { scopeKindId } : {}),
+      }
+    })
     .sort(
       (a, b) =>
         METADATA_KINDS.indexOf(a.kind) - METADATA_KINDS.indexOf(b.kind) ||
@@ -93,6 +139,7 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
     model: {
       project: stage1.project,
       objects,
+      scopeKinds,
       references: stage2.references,
       sqlFiles: stage1.sqlFiles
         .map(({ file, ownerFile, schema }) =>

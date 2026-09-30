@@ -50,7 +50,7 @@ export interface StandardColumnDef {
 
 /**
  * Роль посилання у файлі — для індексу посилань і правил стадій. Перелік
- * відкритий: вирази конструктора рухів і скоуп додадуть свої ролі.
+ * відкритий: вирази конструктора рухів додадуть свої ролі.
  */
 export type ReferenceRole =
   | "attribute.ref"
@@ -63,6 +63,9 @@ export type ReferenceRole =
   | "document.postingRegister"
   | "customTable.foreignKey"
   | "customTable.pgEnum"
+  | "customTable.scopeColumn"
+  | "object.scope"
+  | "scopeKind.root"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */

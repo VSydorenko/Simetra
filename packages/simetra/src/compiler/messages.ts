@@ -106,6 +106,19 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "reference.unresolved": {
     message: (p) => `${p.kind} "${p.name}" does not exist`,
   },
+  "scope.declaration-missing": {
+    message: (p) => `${p.kind} "${p.name}" does not declare its scope`,
+    hint: 'Once the project declares a scope kind, every scoped object sets "scope" to a kind name or "none".',
+  },
+  "scope.unknown-kind": {
+    message: (p) => `Scope kind "${p.name}" is not declared in the project`,
+    hint: 'Scope kinds are declared in project.meta.json under "scopeKinds"; "none" opts the object out of scope.',
+  },
+  "scope.attribute-name-collision": {
+    message: (p) =>
+      `Name "${p.name}" collides with the scope column of this ${p.kind}`,
+    hint: "The scope column takes the scope kind's logical name in the object's table.",
+  },
 
   // --- Стадія 4: цілісність ---
   "reference.not-referenceable": {
