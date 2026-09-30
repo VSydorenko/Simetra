@@ -27,7 +27,8 @@ export const valueTypeShape = {
   precision: z.number().int().positive().optional(),
   scale: z.number().int().nonnegative().optional(),
   ref: metadataRefSchema.optional(),
-  allowedTypes: z.array(metadataRefSchema).optional(),
+  // Порожня множина дала б пару колонок без CHECK на дискримінатор.
+  allowedTypes: z.array(metadataRefSchema).min(1).optional(),
   array: z.boolean().optional(),
 }
 

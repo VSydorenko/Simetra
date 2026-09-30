@@ -56,6 +56,12 @@ describe("value type rules", () => {
     expect(rules({ type: "Ref", allowedTypes: [target] })).toEqual([])
   })
 
+  it("allowedTypes must not be empty: an empty set yields a pair without CHECK", () => {
+    expect(schema.safeParse({ type: "Ref", allowedTypes: [] }).success).toBe(
+      false
+    )
+  })
+
   it("ref only for Ref", () => {
     expect(rules({ type: "String", length: 5, ref: target })).toContain(
       "type.ref-not-allowed"

@@ -19,6 +19,15 @@ describe("metadataIdSchema", () => {
     ).toBe(false)
     expect(metadataIdSchema.safeParse("not-a-uuid").success).toBe(false)
   })
+
+  it("відхиляє верхній регістр: інакше той самий UUID обійде identity.id-duplicate", () => {
+    expect(
+      metadataIdSchema.safeParse("3F0C2A7E-1B2D-4C3E-9F4A-5B6C7D8E9F01").success
+    ).toBe(false)
+    expect(
+      metadataIdSchema.safeParse("3f0c2a7e-1b2d-4c3e-9f4a-5b6c7d8e9F01").success
+    ).toBe(false)
+  })
 })
 
 describe("physicalNameSchema", () => {

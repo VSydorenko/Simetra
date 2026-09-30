@@ -1,7 +1,15 @@
 import { z } from "zod"
 
-/** Стабільна ідентичність об'єкта чи реквізиту: ім'я можна змінювати, id — ні. */
-export const metadataIdSchema = z.uuid({ version: "v4" })
+/**
+ * Стабільна ідентичність об'єкта чи реквізиту: ім'я можна змінювати, id — ні.
+ * Лише нижній регістр (так генерує crypto.randomUUID): id порівнюються як
+ * рядки, тож той самий UUID у іншому регістрі обійшов би перевірку дублів.
+ */
+export const metadataIdSchema = z
+  .uuid({ version: "v4" })
+  .refine((id) => id === id.toLowerCase(), {
+    message: "UUID must be lowercase",
+  })
 export type MetadataId = string
 
 /** Логічне ім'я об'єкта — PascalCase. */
