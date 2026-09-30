@@ -3,11 +3,13 @@ import {
   isSqlReservedWord,
   type AttributeCase,
   type CustomTable,
+  NO_SCOPE,
   type MetadataRef,
   type ReferenceRole,
+  type ScopeKind,
 } from "simetra/model"
 import { diagnostic, type CompilerRule, type Diagnostic } from "../diagnostics"
-import { objectKey, type ParsedObject } from "./files"
+import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import type { ResolvedReference } from "./identity"
 import {
   isDeclaredTable,
@@ -57,7 +59,8 @@ export function checkIntegrity(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   model: ModelStageResult,
-  style: AttributeCase
+  style: AttributeCase,
+  scopeKinds: readonly ScopeKind[]
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
@@ -149,6 +152,8 @@ export function checkIntegrity(
       diagnostics.push(...checkDeclaredTable(object, byKey, style))
     }
   }
+
+  diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -335,4 +340,218 @@ function checkDeclaredTable(
     }
   })
   return found
+}
+
+/**
+ * Ролі посилань зі значенням скоупу: джерело — скоуплений об'єкт виду 1С,
+ * тож ціль мусить бути з того самого виду скоупу. Колонки `CustomTable` правил
+ * посилань не мають (FK явні, спека §4), рухи документа — не FK.
+ */
+const SCOPED_REFERENCE_ROLES: ReadonlySet<ReferenceRole> =
+  new Set<ReferenceRole>([
+    "attribute.ref",
+    "attribute.allowedType",
+    "constant.ref",
+    "constant.allowedType",
+    "catalog.owner",
+  ])
+
+/**
+ * Правила скоупу стадії 4 (спека П2 §6): корінь виду й посилання між
+ * скоупами. Рішення про заборону живе тут, а не в стадії 3: вона не будує
+ * неможливого FK і нічого не звітує.
+ */
+function checkScope(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  scopeKinds: readonly ScopeKind[],
+  byId: ReadonlyMap<string, ParsedObject>,
+  byKey: ReadonlyMap<string, ParsedObject>
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const kindsByName = new Map(scopeKinds.map((kind) => [kind.name, kind]))
+  const scopeOf = (object: ParsedObject): ScopeKind | undefined => {
+    const { scope } = object.data as { scope?: string }
+    return scope === undefined || scope === NO_SCOPE
+      ? undefined
+      : kindsByName.get(scope)
+  }
+  const scopeName = (kind: ScopeKind | undefined) => kind?.name ?? NO_SCOPE
+
+  // Корінь-об'єкт: вид, який на нього вказує (на один об'єкт — один вид).
+  const rootKindOf = new Map<string, ScopeKind>()
+  scopeKinds.forEach((kind, index) => {
+    if (!("object" in kind.root)) return
+    const { root } = kind
+    const key = objectKey(root.object.kind, root.object.name)
+    const rootObject = byKey.get(key)
+    if (rootObject === undefined) return
+    rootKindOf.set(key, kind)
+    const at = {
+      kind: rootObject.kind,
+      name: rootObject.name,
+      scope: kind.name,
+    }
+    if (
+      KIND_REGISTRY[rootObject.kind].materializes !== "table" ||
+      keyColumnOf(rootObject) === undefined
+    ) {
+      found.push(
+        diagnostic(
+          "scope.root-key",
+          PROJECT_FILE,
+          `/scopeKinds/${index}/root/object`,
+          at
+        )
+      )
+      return
+    }
+    if (scopeOf(rootObject) !== kind) {
+      const { scope } = rootObject.data as { scope?: string }
+      found.push(
+        diagnostic(
+          "scope.root-declaration",
+          rootObject.file,
+          scope === undefined ? "" : "/scope",
+          at
+        )
+      )
+    }
+  })
+  const isRoot = (object: ParsedObject, kind: ScopeKind | undefined) =>
+    kind !== undefined &&
+    rootKindOf.get(objectKey(object.kind, object.name)) === kind
+
+  for (const object of objects) {
+    if (!isDeclaredTable(object)) continue
+    const kind = scopeOf(object)
+    // Корінь скоуп-колонки не має: його ключ і є значенням скоупу.
+    if (kind === undefined || isRoot(object, kind)) continue
+    const table = object.data as CustomTable
+    if (table.scopeColumn === undefined) {
+      found.push(diagnostic("scope.custom-table-column", object.file, ""))
+      continue
+    }
+    const column = table.columns.find((c) => c.name === table.scopeColumn)
+    // Невідому колонку вже звітувала стадія 2.
+    if (column === undefined) continue
+    const isUuid =
+      column.array !== true &&
+      (column.type === "UUID" ||
+        (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid"))
+    if (!isUuid) {
+      found.push(
+        diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
+          column: table.scopeColumn,
+        })
+      )
+    }
+  }
+
+  // Поліморфний `Ref` дає кілька посилань з одним елементом: `crossScope`
+  // зайвий, лише якщо зайвий для кожної цілі.
+  const crossScopeUse = new Map<
+    string,
+    { file: string; pointer: string; useful: boolean }
+  >()
+  for (const reference of references) {
+    const source = byId.get(reference.from.objectId)
+    const target = byId.get(reference.to.id)
+    if (source === undefined || target === undefined) continue
+    const { role, from } = reference
+    const sourceKind = scopeOf(source)
+
+    if (role === "register.recorder") {
+      const recorderKind = scopeOf(target)
+      if (recorderKind !== sourceKind) {
+        found.push(
+          diagnostic("scope.recorder-mismatch", from.file, from.pointer, {
+            scope: scopeName(sourceKind),
+            recorderScope: scopeName(recorderKind),
+            kind: target.kind,
+            name: target.name,
+          })
+        )
+      }
+      continue
+    }
+    if (!SCOPED_REFERENCE_ROLES.has(role)) continue
+
+    // Корінь — ціль свого виду, хоч би що він сам оголошував.
+    const rootOfTarget = rootKindOf.get(objectKey(target.kind, target.name))
+    const targetKind = rootOfTarget ?? scopeOf(target)
+    const elementPointer = from.pointer.replace(
+      /\/(ref|allowedTypes\/\d+)$/,
+      ""
+    )
+    const crossScope =
+      (
+        valueAt(source.data, elementPointer) as
+          { crossScope?: true } | undefined
+      )?.crossScope === true
+    const params = {
+      kind: target.kind,
+      name: target.name,
+      scope: scopeName(targetKind),
+      from: scopeName(sourceKind),
+    }
+
+    if (targetKind === undefined) {
+      // Складеного FK немає за будь-якого `crossScope`.
+    } else if (sourceKind === targetKind) {
+      if (rootOfTarget !== undefined && !isRoot(source, sourceKind)) {
+        // Значення скоупу вже є скоуп-колонкою джерела; `crossScope` не рятує.
+        found.push(
+          diagnostic(
+            "scope.root-self-reference",
+            from.file,
+            from.pointer,
+            params
+          )
+        )
+      }
+    } else if (!crossScope) {
+      found.push(
+        diagnostic(
+          sourceKind === undefined
+            ? "scope.global-to-scoped"
+            : "scope.cross-kind",
+          from.file,
+          from.pointer,
+          params
+        )
+      )
+    }
+
+    if (crossScope) {
+      // У цілі без складеного FK (`CustomTable`, глобальна) ключ і так плоский.
+      const useful =
+        targetKind !== undefined &&
+        !(sourceKind === targetKind && isDeclaredTable(target))
+      const at = `${elementPointer}/crossScope`
+      const key = `${from.file}\0${at}`
+      const known = crossScopeUse.get(key)
+      crossScopeUse.set(key, {
+        file: from.file,
+        pointer: at,
+        useful: useful || (known?.useful ?? false),
+      })
+    }
+  }
+  for (const { file, pointer, useful } of crossScopeUse.values()) {
+    if (!useful) {
+      found.push(diagnostic("scope.cross-scope-redundant", file, pointer))
+    }
+  }
+  return found
+}
+
+/** Значення за JSON Pointer; `""` — сам корінь. */
+function valueAt(data: unknown, pointer: string): unknown {
+  let current = data
+  for (const segment of pointer.split("/").slice(1)) {
+    if (typeof current !== "object" || current === null) return undefined
+    current = (current as Record<string, unknown>)[segment]
+  }
+  return current
 }

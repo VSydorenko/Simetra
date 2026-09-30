@@ -78,7 +78,8 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
       stage1.objects,
       stage2.references,
       stage3,
-      stage1.project.naming.attributeCase
+      stage1.project.naming.attributeCase,
+      stage1.project.scopeKinds
     ),
   ])
   const ok = !hasErrors(diagnostics)

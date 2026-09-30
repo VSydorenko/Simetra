@@ -63,6 +63,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | Check | Defect signal | Model |
 | --- | --- | --- |
 | physical snapshot is the model's (*target*) | a table, column, key, constraint or index shape derived outside compiler stage 3; a derived constraint or index name built by hand instead of the Postgres algorithm (`chooseConstraintName`, `makeObjectName`); a type string not in `format_type()` form | `packages/simetra/src/compiler/stages/model.ts`, `packages/simetra/src/model/physical/` |
+| scope keys (*target*) | a scoped object's table without its scope column; a reference between scoped objects of one scope kind without the composite `(scope, id)` FK, or across scope kinds or from an unscoped object without `crossScope`; a same-scope check written by hand in code, a trigger or a policy instead of the key; a scope rule decided in a stage other than compiler stage 4 | P2 spec `docs/superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md` §6; `packages/simetra/src/compiler/stages/integrity.ts` |
 | escaping (*target*) | a metadata identifier interpolated into SQL without `quoteIdent` | `packages/simetra/src/model/physical/` |
 
 ### Schema engine and data runtime (*target*)

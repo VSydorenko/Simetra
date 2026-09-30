@@ -22,6 +22,14 @@ export const COMPILER_RULES = [
   "scope.declaration-missing",
   "scope.unknown-kind",
   "scope.attribute-name-collision",
+  "scope.root-key",
+  "scope.root-declaration",
+  "scope.root-self-reference",
+  "scope.global-to-scoped",
+  "scope.cross-kind",
+  "scope.recorder-mismatch",
+  "scope.custom-table-column",
+  "scope.cross-scope-redundant",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.polymorphic-target-kind",
@@ -69,10 +77,12 @@ export interface Diagnostic {
 /**
  * Правила-попередження: прогін лишається успішним. Зарезервоване слово в
  * `physicalName` не ламає SQL, бо рендер квотує імена, а прийняте ім'я
- * лишається як є (спека П2 §3).
+ * лишається як є (спека П2 §3). Зайвий `crossScope` теж не ламає FK — він
+ * лише вводить в оману читача.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
+  "scope.cross-scope-redundant",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */
