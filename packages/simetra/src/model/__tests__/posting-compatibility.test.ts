@@ -59,7 +59,7 @@ describe("isPostingCompatible", () => {
   it("InformationRegister Independent -> incompatible with reason", () => {
     const result = isPostingCompatible(makeInformationRegister("Independent"))
     expect(result.compatible).toBe(false)
-    expect(result.reason ?? "").toContain("writeMode=Independent")
+    expect(result.reason ?? "").toContain("has no recorder")
     expect(result.reason ?? "").toContain("cannot be used as a posting target")
   })
 })

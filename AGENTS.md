@@ -102,7 +102,7 @@ These hold today and carry over into T0:
   APIs in library source (tests may use Node).
 - Every kind schema carries a `kind` literal; no `z.any()` in schemas.
 - **Standard attributes are derived from the kind** and its settings
-  (`packages/simetra/src/model/schemas/standard-attributes.ts`). They are never stored
+  (the kind registry, `packages/simetra/src/model/kinds/`). They are never stored
   as custom attributes in metadata files, and derivation rules change only
   together with the spec.
 - **One reference type, `Ref`.** A single target is `ref`, a polymorphic one is

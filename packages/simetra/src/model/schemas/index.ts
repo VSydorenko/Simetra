@@ -83,11 +83,3 @@ export { pgEnumSchema, type PgEnum } from "./pg-enum"
 
 // Project
 export { projectSchema, type Project } from "./project"
-
-// Standard attributes
-export {
-  getStandardAttributes,
-  getTabularSectionStandardAttributes,
-  type StandardAttribute,
-  type StandardAttributeSettings,
-} from "./standard-attributes"

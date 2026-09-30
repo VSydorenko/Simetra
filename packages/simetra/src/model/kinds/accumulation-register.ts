@@ -1,0 +1,55 @@
+import {
+  accumulationRegisterSchema,
+  type AccumulationRegister,
+} from "../schemas/accumulation-register"
+import {
+  fieldListReferences,
+  keyOrderOf,
+  periodColumn,
+  recorderColumns,
+  refListReferences,
+  type KindDefinition,
+  type StandardColumnDef,
+} from "./standard"
+
+function standardColumns(obj: unknown): StandardColumnDef[] {
+  const register = obj as AccumulationRegister
+  const columns = [periodColumn(), ...recorderColumns()]
+  // Вид руху потрібен лише залишковому регістру: оборотний лише накопичує.
+  if (register.registerType === "Balance") {
+    columns.push({
+      logicalName: "movementType",
+      physicalName: "movement_type",
+      type: { type: "Text" },
+      notNull: true,
+      check: "movement_type IN ('Receipt', 'Expense')",
+      title: { uk: "Вид руху", en: "Movement type" },
+    })
+  }
+  return columns
+}
+
+export const accumulationRegisterKind: KindDefinition = {
+  kind: "AccumulationRegister",
+  dir: "accumulation-registers",
+  schema: accumulationRegisterSchema,
+  keyOrder: keyOrderOf(accumulationRegisterSchema),
+  referenceable: false,
+  writePattern: "server",
+  actions: ["read"],
+  materializes: "table",
+  standardColumns,
+  references(obj) {
+    const register = obj as AccumulationRegister
+    return [
+      ...refListReferences(
+        register.recorderTypes,
+        "/recorderTypes",
+        "register.recorder"
+      ),
+      ...fieldListReferences(register.dimensions, "/dimensions"),
+      ...fieldListReferences(register.resources, "/resources"),
+      ...fieldListReferences(register.attributes, "/attributes"),
+    ]
+  },
+}
