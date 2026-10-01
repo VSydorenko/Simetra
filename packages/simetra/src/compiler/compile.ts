@@ -8,6 +8,7 @@ import {
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { withRanges } from "./locate"
 import { buildContracts, type Contracts } from "./contracts"
+import { buildPresentation, type PresentationBlock } from "./presentation"
 import { readFiles } from "./stages/files"
 import { checkIdentity, type ResolvedReference } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
@@ -71,6 +72,8 @@ export interface CompiledModel {
    */
   creationOrder: CreationNode[]
   contracts: Contracts
+  /** За `objectId`; лише об'єкти з полями подання. */
+  presentation: PresentationBlock[]
 }
 
 export interface CompileResult {
@@ -274,6 +277,10 @@ async function runStages(
         sqlUnits,
         stage1.project.timezone,
         stage3.requiredChecks
+      ),
+      presentation: buildPresentation(
+        stage1.objects,
+        stage1.project.naming.attributeCase
       ),
     },
   }
