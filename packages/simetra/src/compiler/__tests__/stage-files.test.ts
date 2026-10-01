@@ -187,6 +187,50 @@ describe("stage 1: files", () => {
     ])
   })
 
+  it("lone surrogate in a value or a key is a file error, not a throw", async () => {
+    // `"\ud800"` — синтаксично коректний JSON, який Zod пропускає, але
+    // канонізація хешу (I-JSON) на ньому кидала б: compile мусить повернути
+    // діагностику з pointer, а не відхилити проміс.
+    const file = "catalogs/Contract/Contract.meta.json"
+    const compileWith = (data: unknown) =>
+      compile(metaFiles({ "project.meta.json": project(), [file]: data }))
+
+    const control = await compileWith(
+      catalog("Contract", { title: { en: "ok" } })
+    )
+    expect(control.ok).toBe(true)
+
+    const inValue = await compileWith(
+      catalog("Contract", { title: { en: "\ud800" } })
+    )
+    expect(inValue.ok).toBe(false)
+    expect(inValue.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "file.invalid-json",
+        file,
+        pointer: "/title/en",
+        range: expect.any(Object),
+      }),
+    ])
+
+    const inKey = await compileWith(
+      catalog("Contract", {
+        standardAttributeOverrides: { "a\udc00": { description: { en: "x" } } },
+      })
+    )
+    expect(inKey.ok).toBe(false)
+    expect(inKey.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "file.invalid-json",
+        file,
+        pointer: "/standardAttributeOverrides/a\udc00",
+      }),
+    ])
+    expect(localize(inKey.diagnostics[0]!, "en").message).toBe(
+      "Invalid JSON: lone surrogate (RFC 7493 I-JSON)"
+    )
+  })
+
   it("schema rule code survives mapping", async () => {
     const result = await compile(
       metaFiles({

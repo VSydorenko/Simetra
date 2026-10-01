@@ -54,7 +54,10 @@ export interface CompiledModel {
    */
   creationOrder: CreationNode[]
   contracts: Contracts
-  /** За `objectId`; лише об'єкти з полями подання. */
+  /**
+   * Подання: мова за замовчуванням і блоки об'єктів (`objects` — за
+   * `objectId`, лише об'єкти з полями подання).
+   */
   presentation: Presentation
   /** Hex sha256 канонічного знімка (RFC 8785); його звіряє П3. */
   hash: string

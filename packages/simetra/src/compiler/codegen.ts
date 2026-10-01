@@ -289,12 +289,12 @@ export function emitEntityTypes(model: CompiledModel): string {
             ? { name: value, title: undefined }
             : { name: value.name, title: titles.get(value.id ?? "") }
         )
-        // PG-енам заголовків значень не має, але список міток читачеві
-        // корисний; перелік — лише коли хоч одне значення має заголовок, бо
-        // інакше список повторював би сам union.
+        // Значення без елементів (факт реєстру `valueElements`, як у
+        // PG-енама) заголовків не мають, але список міток читачеві корисний;
+        // з елементами — перелік лише коли хоч одне має заголовок, бо інакше
+        // список повторював би сам union.
         const listed =
-          typeof data.values?.[0] === "string" ||
-          values.some(({ title }) => title !== undefined)
+          !def.valueElements || values.some(({ title }) => title !== undefined)
         const list = values.map(({ name, title }) =>
           title === undefined ? `- \`${name}\`` : `- \`${name}\`: ${title}`
         )

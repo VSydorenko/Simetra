@@ -15,6 +15,7 @@ import {
   toPointer,
   type Diagnostic,
 } from "../diagnostics"
+import { hasLoneSurrogate } from "../canonical"
 import { extractMovementBlocks, indentedMarkerLines } from "../movement-blocks"
 
 export const PROJECT_FILE = "project.meta.json"
@@ -308,8 +309,9 @@ function parseJson(
   text: string,
   diagnostics: Diagnostic[]
 ): { value: unknown } | undefined {
+  let value: unknown
   try {
-    return { value: JSON.parse(text) as unknown }
+    value = JSON.parse(text) as unknown
   } catch (error) {
     diagnostics.push(
       diagnostic("file.invalid-json", file, "", {
@@ -318,6 +320,44 @@ function parseJson(
     )
     return undefined
   }
+  // Екранований самотній сурогат (`"\ud800"`) — синтаксично коректний JSON,
+  // і Zod його пропускає, але це не I-JSON: канонізація хешу на ньому впала б
+  // винятком. Компілятор на вводі автора не кидає, тож це помилка файлу тут.
+  const path = loneSurrogatePath(value, [])
+  if (path !== undefined) {
+    diagnostics.push(
+      diagnostic("file.invalid-json", file, toPointer(path), {
+        detail: "lone surrogate (RFC 7493 I-JSON)",
+      })
+    )
+    return undefined
+  }
+  return { value }
+}
+
+/** Шлях до першого рядка чи ключа з самотнім сурогатом у порядку обходу. */
+function loneSurrogatePath(
+  value: unknown,
+  path: readonly PropertyKey[]
+): PropertyKey[] | undefined {
+  if (typeof value === "string") {
+    return hasLoneSurrogate(value) ? [...path] : undefined
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const found = loneSurrogatePath(value[i], [...path, i])
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (!isRecord(value)) return undefined
+  for (const [key, child] of Object.entries(value)) {
+    // Pointer на сам ключ: значення під ним може бути й коректним.
+    if (hasLoneSurrogate(key)) return [...path, key]
+    const found = loneSurrogatePath(child, [...path, key])
+    if (found !== undefined) return found
+  }
+  return undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

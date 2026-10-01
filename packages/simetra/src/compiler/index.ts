@@ -13,6 +13,7 @@ export {
   compile,
   type CompileResult,
   type CompiledModel,
+  type CompiledScopeKind,
   type SourceObject,
 } from "./compile"
 export type { ResolvedReference } from "./stages/identity"

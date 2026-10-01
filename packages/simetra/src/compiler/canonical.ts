@@ -43,8 +43,16 @@ export function canonicalize(value: unknown): string {
 const LONE_SURROGATE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
+/**
+ * Рядок не є коректним UTF-16 (RFC 7493 I-JSON): стадія 1 відхиляє такий
+ * вхід діагностикою, щоб інваріант канонізації нижче на даних автора не впав.
+ */
+export function hasLoneSurrogate(value: string): boolean {
+  return LONE_SURROGATE.test(value)
+}
+
 function serializeString(value: string): string {
-  if (LONE_SURROGATE.test(value)) {
+  if (hasLoneSurrogate(value)) {
     throw new TypeError("canonicalize: string contains a lone surrogate")
   }
   return JSON.stringify(value)

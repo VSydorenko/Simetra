@@ -101,14 +101,58 @@ function schemaPaths(schema: z.core.$ZodType, prefix: string): string[] {
   }
 }
 
-function requiredPaths(): string[] {
-  const paths = [
-    ...schemaPaths(projectSchema, "project"),
-    ...METADATA_KINDS.flatMap((kind) =>
-      schemaPaths(KIND_REGISTRY[kind].schema, kind)
-    ),
+function allSchemaPaths(): string[] {
+  return [
+    ...new Set([
+      ...schemaPaths(projectSchema, "project"),
+      ...METADATA_KINDS.flatMap((kind) =>
+        schemaPaths(KIND_REGISTRY[kind].schema, kind)
+      ),
+    ]),
   ]
-  return [...new Set(paths)].filter((path) => !(path in EXCEPTIONS)).sort()
+}
+
+function requiredPaths(): string[] {
+  return allSchemaPaths()
+    .filter((path) => !(path in EXCEPTIONS))
+    .sort()
+}
+
+/** Ключ-приманка, якого схема не має і жоден споживач не читає. */
+const BAIT = "zzUnread"
+
+/**
+ * Впорскує приманку в кожен вкладений об'єкт розібраних даних, що за схемою є
+ * об'єктом із полями (має підшляхи, і це не запис), і повертає шляхи схеми
+ * впорскувань. Позиції беруться з обходу фікстури за формою схеми, а не з
+ * ручного переліку: нова вкладена форма в kitchen-sink потрапляє сюди сама.
+ * Запис (`z.record`) — не позиція, але його значення-об'єкти — так; ключ
+ * запису в шляху схеми — `*`. Локалізований рядок підшляхів не має — лист.
+ */
+function injectBaitEverywhere(stage1: FilesStageResult): string[] {
+  const known = allSchemaPaths()
+  const isRecord = (path: string) => known.includes(`${path}.${ANY_KEY}`)
+  const hasFields = (path: string) =>
+    !isRecord(path) && known.some((k) => k.startsWith(`${path}.`))
+  const injected = new Set<string>()
+  const visit = (value: unknown, path: string) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, path))
+      return
+    }
+    if (typeof value !== "object" || value === null) return
+    const record = value as Record<string, unknown>
+    for (const [key, child] of Object.entries(record)) {
+      visit(child, `${path}.${isRecord(path) ? ANY_KEY : key}`)
+    }
+    if (hasFields(path)) {
+      record[BAIT] = "control"
+      injected.add(`${path}.${BAIT}`)
+    }
+  }
+  visit(stage1.project, "project")
+  stage1.objects.forEach((object) => visit(object.data, object.kind))
+  return [...injected].sort()
 }
 
 /**
@@ -165,8 +209,20 @@ function recorder(reads: Set<string>) {
   return wrap
 }
 
+/**
+ * Стек без ліміту: V8 тримає лише `Error.stackTraceLimit` кадрів (типово 10),
+ * а рекурсивний `visit` обходу на третьому рівні вкладеності витісняє кадр
+ * обходу зі стеку — і його перелік ключів зараховувався б як читання.
+ */
 function byShapeWalker(): boolean {
-  const stack = new Error().stack ?? ""
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = Infinity
+  let stack: string
+  try {
+    stack = new Error().stack ?? ""
+  } finally {
+    Error.stackTraceLimit = limit
+  }
   return SHAPE_WALKERS.some((name) => stack.includes(`at ${name} `))
 }
 
@@ -182,14 +238,14 @@ function covers(schemaPath: string, readPath: string): boolean {
 
 /**
  * Прогін компілятора й кодогену під записом. `tamper` змінює розібрані дані
- * до запису — для контрольного поля, яке ніхто не читає.
+ * до запису — для контрольних полів, які ніхто не читає, — і повертає їхні
+ * шляхи схеми, щоб ті теж увійшли до перевірки.
  */
 async function unreadPaths(
-  extraPaths: readonly string[] = [],
-  tamper: (stage1: FilesStageResult) => void = () => {}
+  tamper: (stage1: FilesStageResult) => readonly string[] = () => []
 ): Promise<string[]> {
   const stage1 = readFiles(kitchenSink())
-  tamper(stage1)
+  const extraPaths = tamper(stage1)
   const reads = new Set<string>()
   const wrap = recorder(reads)
   const recorded: FilesStageResult = {
@@ -241,17 +297,32 @@ describe("field ratchet", () => {
     expect(await unreadPaths()).toEqual([])
   })
 
-  it("a field that nobody reads turns the ratchet red", async () => {
-    // Контроль чутливості: поле, задане в даних і не прочитане жодним
-    // споживачем, мусить з'явитися серед непрочитаних — інакше ратчет
-    // порожній (так було б, якби копія `data` у знімку рахувалася читанням).
+  it("a field that nobody reads turns the ratchet red at every nested position", async () => {
+    // Контроль чутливості на кожній глибині: приманка в кожному вкладеному
+    // об'єкті мусить з'явитися серед непрочитаних — інакше ратчет там
+    // порожній (так було з переліком ключів загальним обходом за обрізаним
+    // стеком і зі spread колонок CustomTable й зовнішньої цілі FK).
     const baseline = await unreadPaths()
-    const tampered = await unreadPaths(["Catalog.zzUnread"], (stage1) => {
-      const item = stage1.objects.find((o) => o.name === "Item")!
-      ;(item.data as Record<string, unknown>).zzUnread = "control"
+    let injected: string[] = []
+    const tampered = await unreadPaths((stage1) => {
+      injected = injectBaitEverywhere(stage1)
+      return injected
     })
-    expect(tampered.filter((path) => !baseline.includes(path))).toEqual([
-      "Catalog.zzUnread",
-    ])
+    expect(tampered.filter((path) => !baseline.includes(path))).toEqual(
+      injected
+    )
+    expect(injected).toEqual(
+      expect.arrayContaining([
+        `project.${BAIT}`,
+        `project.scopeKinds.root.external.${BAIT}`,
+        `Catalog.${BAIT}`,
+        `Catalog.tabularSections.attributes.${BAIT}`,
+        `Catalog.standardAttributeOverrides.${ANY_KEY}.${BAIT}`,
+        `Document.posting.movements.source.${BAIT}`,
+        `CustomTable.columns.${BAIT}`,
+        `CustomTable.foreignKeys.references.external.${BAIT}`,
+        `CustomTable.indexes.keys.${BAIT}`,
+      ])
+    )
   })
 })

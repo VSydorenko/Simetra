@@ -1050,7 +1050,10 @@ class SnapshotBuilder {
           ),
         }
       } else {
-        target = { ...references.external }
+        // Поля цілі — поіменно: spread зарахував би ратчету полів кожен ключ
+        // `external`, і нове поле без споживача пройшло б непоміченим.
+        const { schema, table, columns } = references.external
+        target = { schema, table, columns }
       }
       table.foreignKeys.push({
         ...explicit(foreignKey.name, `/foreignKeys/${i}/name`),
@@ -1086,7 +1089,16 @@ class SnapshotBuilder {
       const type = pgEnumTypeName(this.schemaOf(target), physicalNameOf(target))
       return column.array === true ? `${type}[]` : type
     }
-    const value = { ...column, type: column.type }
+    // Лише поля типу й поіменно: spread колонки зарахував би ратчету полів
+    // кожен її ключ, і нове поле колонки без споживача пройшло б непоміченим.
+    const { length, precision, scale, ref, allowedTypes, array } = column
+    const value: ValueType = { type: column.type }
+    if (length !== undefined) value.length = length
+    if (precision !== undefined) value.precision = precision
+    if (scale !== undefined) value.scale = scale
+    if (ref !== undefined) value.ref = ref
+    if (allowedTypes !== undefined) value.allowedTypes = allowedTypes
+    if (array !== undefined) value.array = array
     // Прийнята таблиця нічого не виводить: `Ref` дає лише тип, без FK (спека §4).
     const target =
       column.ref !== undefined ? this.lookup(column.ref).kind : undefined
