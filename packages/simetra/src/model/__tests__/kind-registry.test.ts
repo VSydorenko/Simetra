@@ -180,6 +180,61 @@ describe("standard columns", () => {
     expect(column(columns, "parent")).toBeUndefined()
   })
 
+  it("catalog and document carry version", () => {
+    const doc = KIND_REGISTRY.Document.standardColumns(
+      documentSchema.parse({ kind: "Document", name: "Invoice" })
+    )
+    for (const columns of [catalogColumns(), doc]) {
+      expect(column(columns, "version")).toMatchObject({
+        physicalName: "version",
+        type: { type: "BigInt" },
+        notNull: true,
+        default: "1",
+      })
+      const names = columns.map((c) => c.logicalName)
+      expect(names.indexOf("version")).toBe(names.indexOf("createdAt") - 1)
+    }
+    const constant = constantSchema.parse({
+      kind: "Constant",
+      name: "BaseCurrency",
+      type: "String",
+      length: 5,
+    })
+    const registers = [
+      KIND_REGISTRY.AccumulationRegister.standardColumns(
+        accumulationRegisterSchema.parse({
+          kind: "AccumulationRegister",
+          name: "Stock",
+        })
+      ),
+      KIND_REGISTRY.InformationRegister.standardColumns(
+        informationRegisterSchema.parse({
+          kind: "InformationRegister",
+          name: "Prices",
+        })
+      ),
+      KIND_REGISTRY.Constant.standardColumns(constant),
+      KIND_REGISTRY.Catalog.tabularSectionColumns!(undefined),
+    ]
+    for (const columns of registers) {
+      expect(column(columns, "version")).toBeUndefined()
+    }
+  })
+
+  it("predefined name is a partial unique", () => {
+    expect(column(catalogColumns(), "predefinedName")?.partialUnique).toBe(
+      "predefined_name IS NOT NULL"
+    )
+    const doc = KIND_REGISTRY.Document.standardColumns(
+      documentSchema.parse({ kind: "Document", name: "Invoice" })
+    )
+    expect(column(doc, "predefinedName")).toBeUndefined()
+    expect(KIND_REGISTRY.Catalog.namedElementFields).toEqual([
+      "predefinedItems",
+    ])
+    expect(KIND_REGISTRY.Document.namedElementFields).toBeUndefined()
+  })
+
   it("ItemsOnly hierarchy has parent but no is_folder", () => {
     const itemsOnly = catalogColumns({ hierarchyType: "ItemsOnly" })
     expect(column(itemsOnly, "parent")).toMatchObject({

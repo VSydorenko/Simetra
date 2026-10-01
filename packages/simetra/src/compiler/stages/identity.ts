@@ -60,6 +60,8 @@ interface NamedElement {
   element: Element
   /** Стає колонкою таблиці, тож не може зайняти ім'я стандартної колонки. */
   column: boolean
+  /** Має фізичне ім'я; предвизначений елемент має лише `id`. */
+  physical: boolean
 }
 
 /**
@@ -79,7 +81,12 @@ export function checkIdentity(
   const idOwners = new Map<string, string>()
   const objectsByName = new Map<string, ParsedObject>()
 
-  const checkIdentified = (file: string, pointer: string, element: Element) => {
+  const checkIdentified = (
+    file: string,
+    pointer: string,
+    element: Element,
+    physical = true
+  ) => {
     const id = element.id
     if (typeof id !== "string") {
       diagnostics.push(diagnostic("identity.id-missing", file, `${pointer}/id`))
@@ -96,7 +103,7 @@ export function checkIdentity(
         )
       }
     }
-    if (element.physicalName === undefined) {
+    if (physical && element.physicalName === undefined) {
       diagnostics.push(
         diagnostic(
           "identity.physical-name-missing",
@@ -238,8 +245,8 @@ export function checkIdentity(
           })
         )
       }
-      for (const { pointer, element, column } of namespace.elements) {
-        checkIdentified(object.file, pointer, element)
+      for (const { pointer, element, column, physical } of namespace.elements) {
+        checkIdentified(object.file, pointer, element, physical)
         const name = String(element.name)
         const at = `${pointer}/name`
         if (seen.has(name)) {
@@ -355,6 +362,7 @@ function elementsAt(data: Element, field: string, base = ""): NamedElement[] {
     pointer: `${base}/${field}/${index}`,
     element,
     column: true,
+    physical: true,
   }))
 }
 
@@ -394,6 +402,21 @@ function namespacesOf(
       styled: true,
       reserved: sectionColumns,
       elements: elementsAt(section.element, "attributes", section.pointer),
+    })
+  }
+
+  // Іменовані елементи без колонок і фізичних імен (предвизначені елементи
+  // довідника): ім'я стилізоване, `id` глобальний, `physicalName` не потрібен.
+  for (const field of def.namedElementFields ?? []) {
+    namespaces.push({
+      scope: `${object.kind} ${object.name} predefined items`,
+      styled: true,
+      reserved: [],
+      elements: elementsAt(data, field).map((named) => ({
+        ...named,
+        column: false,
+        physical: false,
+      })),
     })
   }
 

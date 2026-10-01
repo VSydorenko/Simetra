@@ -28,6 +28,41 @@ const at = { name: "p_at", type: "timestamp with time zone" }
 const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
 
+describe("predefined contract", () => {
+  it("predefined contract lists items with ids", () => {
+    const { predefined } = contracts({
+      "project.meta.json": project(),
+      "catalogs/B/B.meta.json": catalog("B", {
+        id: "00000000-0000-4000-8000-000000000b02",
+        predefinedItems: [
+          { id: "00000000-0000-4000-8000-0000000000e2", name: "second" },
+          { id: "00000000-0000-4000-8000-0000000000e1", name: "first" },
+        ],
+      }),
+      "catalogs/A/A.meta.json": catalog("A", {
+        id: "00000000-0000-4000-8000-000000000a01",
+        predefinedItems: [
+          { id: "00000000-0000-4000-8000-0000000000e3", name: "only" },
+        ],
+      }),
+      "catalogs/C/C.meta.json": catalog("C"),
+    })
+    expect(predefined).toEqual([
+      {
+        objectId: "00000000-0000-4000-8000-000000000a01",
+        items: [{ id: "00000000-0000-4000-8000-0000000000e3", name: "only" }],
+      },
+      {
+        objectId: "00000000-0000-4000-8000-000000000b02",
+        items: [
+          { id: "00000000-0000-4000-8000-0000000000e2", name: "second" },
+          { id: "00000000-0000-4000-8000-0000000000e1", name: "first" },
+        ],
+      },
+    ])
+  })
+})
+
 describe("posting and register contracts", () => {
   it("posting contract of a document", () => {
     const { posting } = contracts(

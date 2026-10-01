@@ -50,11 +50,20 @@ export interface RegisterContract {
   balanceControl?: { resources: string[] }
 }
 
+/** Предвизначені елементи довідника: засів за `id` — П3. */
+export interface PredefinedContract {
+  objectId: string
+  /** У порядку файлу. */
+  items: { id: string; name: string }[]
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
   /** За `registerId`. */
   registers: RegisterContract[]
+  /** За `objectId`. */
+  predefined: PredefinedContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -276,7 +285,28 @@ export function buildContracts(
       }
     })
     .sort((a, b) => compareStrings(a.documentId, b.documentId))
-  return { posting, registers }
+  return { posting, registers, predefined: predefinedContracts(objects) }
+}
+
+/** Лише об'єкти з іменованими елементами; вид визначає реєстр, а не його назва. */
+function predefinedContracts(
+  objects: readonly ParsedObject[]
+): PredefinedContract[] {
+  return objects
+    .flatMap((object): PredefinedContract[] => {
+      const fields = KIND_REGISTRY[object.kind].namedElementFields ?? []
+      const items = fields
+        .flatMap(
+          (field) =>
+            (object.data as Record<string, unknown>)[field] as {
+              id: string
+              name: string
+            }[]
+        )
+        .map(({ id, name }) => ({ id, name }))
+      return items.length === 0 ? [] : [{ objectId: object.id ?? "", items }]
+    })
+    .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
 
 function registerContract(

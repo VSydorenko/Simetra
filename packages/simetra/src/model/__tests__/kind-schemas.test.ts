@@ -114,6 +114,21 @@ describe("tabularSectionSchema", () => {
 })
 
 describe("catalogSchema", () => {
+  it("predefinedItems accept id, name, description", () => {
+    const r = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Warehouse",
+      predefinedItems: [
+        { id: ID, name: "Main", description: { uk: "Основний" } },
+        { name: "Spare" },
+      ],
+    })
+    expect(r.predefinedItems).toEqual([
+      { id: ID, name: "Main", description: { uk: "Основний" } },
+      { name: "Spare" },
+    ])
+  })
+
   it("parses a minimal catalog with defaults", () => {
     const r = catalogSchema.parse({ kind: "Catalog", name: "Product" })
     expect(r.codeLength).toBe(9)

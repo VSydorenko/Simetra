@@ -8,6 +8,7 @@ import {
   refListReferences,
   serviceDateColumns,
   tabularRowColumns,
+  versionColumn,
   type KindDefinition,
   type StandardColumnDef,
 } from "./standard"
@@ -84,8 +85,11 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       physicalName: "predefined_name",
       type: { type: "Text" },
       notNull: false,
+      // Ім'я предвизначеного елемента унікальне, а звичайні елементи його не мають.
+      partialUnique: "predefined_name IS NOT NULL",
       title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
     },
+    versionColumn(),
     ...serviceDateColumns()
   )
   return columns
@@ -104,6 +108,7 @@ export const catalogKind: KindDefinition = {
   declared: false,
   columnFields: ["attributes"],
   valueElements: false,
+  namedElementFields: ["predefinedItems"],
   ownerKinds: ["Catalog"],
   standardColumns,
   tabularSectionColumns: () => tabularRowColumns(false),

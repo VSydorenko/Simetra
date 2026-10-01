@@ -2,6 +2,7 @@ import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
+import { metadataIdSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import {
   objectHeaderShape,
@@ -27,6 +28,8 @@ export const catalogSchema = z.object({
   predefinedItems: z
     .array(
       z.object({
+        // Як у attributeSchema: обов'язковість id дає стадія 2.
+        id: metadataIdSchema.optional(),
         name: z.string(),
         description: localizedStringSchema.optional(),
       })

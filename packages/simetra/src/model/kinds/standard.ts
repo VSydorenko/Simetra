@@ -49,6 +49,12 @@ export interface StandardColumnDef {
   filledByShell?: true
   indexed?: true
   unique?: true
+  /**
+   * Умова часткового унікального індексу колонки (без `WHERE`), у формі
+   * `quoteIdent` — просте ім'я не квотується. Значення поза умовою (`NULL`
+   * ім'я предвизначеного елемента) унікальності не підлягають.
+   */
+  partialUnique?: string
   /** Ціль посилання; сама колонка має тип UUID. */
   ref?: "self" | "owningObject" | "owners" | "recorders"
   /** Дія FK при видаленні цілі — лише там, де вона не типова. */
@@ -164,6 +170,12 @@ export interface KindDefinition {
    */
   valueElements: boolean
   /**
+   * Поля з елементами, що мають `id` і `name`, але не дають колонок і не мають
+   * `physicalName` (предвизначені елементи довідника): власний простір імен,
+   * `id` перевіряється глобально, фізичного імені немає.
+   */
+  namedElementFields?: readonly string[]
+  /**
    * Види, що можуть бути власником об'єкта цього виду (`owners`). Є лише у
    * видів із підпорядкуванням власнику: як у 1С, власник довідника — довідник.
    */
@@ -242,6 +254,21 @@ export function deletionMarkColumn(): StandardColumnDef {
     notNull: true,
     default: "false",
     title: { uk: "Позначка видалення", en: "Deletion mark" },
+  }
+}
+
+/**
+ * Версія рядка для оптимістичної конкурентності; тригер збільшення — П3.
+ * Іде одразу перед службовими датами.
+ */
+export function versionColumn(): StandardColumnDef {
+  return {
+    logicalName: "version",
+    physicalName: "version",
+    type: { type: "BigInt" },
+    notNull: true,
+    default: "1",
+    title: { uk: "Версія", en: "Version" },
   }
 }
 

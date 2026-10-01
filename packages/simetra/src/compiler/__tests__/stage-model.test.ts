@@ -7,7 +7,9 @@ import {
   customTable,
   document,
   metaFiles,
+  organization,
   project,
+  scopedProject,
   uuid,
 } from "./helpers"
 
@@ -17,6 +19,11 @@ function compileWith(entries: Record<string, unknown>) {
   )
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!.physical
+}
+
+/** Індекси без часткового унікального індексу `predefined_name` (окремий тест). */
+function searchIndexes(table: PhysicalTable) {
+  return table.indexes.filter((index) => index.where === undefined)
 }
 
 function tableOf(
@@ -48,6 +55,59 @@ function enumeration(name: string, labels: string[]) {
 }
 
 describe("stage 3: physical snapshot", () => {
+  it("predefined name partial unique index", () => {
+    const plain = tableOf(
+      compileWith({
+        "catalogs/Warehouse/Warehouse.meta.json": catalog("Warehouse"),
+      }),
+      "warehouse"
+    )
+    const index = plain.indexes.find((i) => i.unique)
+    expect(index).toEqual({
+      name: "warehouse_predefined_name_idx",
+      unique: true,
+      method: "btree",
+      keys: [{ column: "predefined_name" }],
+      include: [],
+      where: "predefined_name IS NOT NULL",
+      nullsNotDistinct: false,
+    })
+
+    const scoped = tableOf(
+      compileWith({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        "catalogs/Warehouse/Warehouse.meta.json": catalog("Warehouse", {
+          scope: "org",
+        }),
+      }),
+      "warehouse"
+    )
+    const scopedIndex = scoped.indexes.find((i) => i.where !== undefined)
+    expect(scopedIndex?.keys).toEqual([
+      { column: "org_id" },
+      { column: "predefined_name" },
+    ])
+    expect(scopedIndex?.unique).toBe(true)
+  })
+
+  it("user attribute named version", () => {
+    const result = compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          attributes: [attribute("version", { id: uuid(2) })],
+        }),
+      })
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "identity.name-reserved",
+        pointer: "/attributes/0/name",
+      }),
+    ])
+  })
+
   it("catalog table", () => {
     const physical = compileWith({
       "catalogs/Contract/Contract.meta.json": catalog("Contract", {
@@ -98,6 +158,7 @@ describe("stage 3: physical snapshot", () => {
         notNull: false,
         default: undefined,
       },
+      { name: "version", type: "bigint", notNull: true, default: "1" },
       {
         name: "created_at",
         type: "timestamp with time zone",
@@ -131,7 +192,7 @@ describe("stage 3: physical snapshot", () => {
     expect(contract.uniques).toEqual([
       { name: "contract_code_key", columns: ["code"], nullsNotDistinct: false },
     ])
-    expect(contract.indexes).toEqual([
+    expect(searchIndexes(contract)).toEqual([
       {
         name: "contract_currency_id_idx",
         unique: false,
@@ -174,7 +235,7 @@ describe("stage 3: physical snapshot", () => {
     expect(column("rank").default).toBe("3")
     expect(column("flag").default).toBe("true")
     expect(item.uniques.map((u) => u.name)).toEqual(["item_sku_key"])
-    expect(item.indexes.map((i) => i.name)).toEqual(["item_rank_idx"])
+    expect(searchIndexes(item).map((i) => i.name)).toEqual(["item_rank_idx"])
   })
 
   it("document tabular section", () => {
@@ -259,7 +320,7 @@ describe("stage 3: physical snapshot", () => {
       },
     ])
     expect(order.foreignKeys).toEqual([])
-    expect(order.indexes).toEqual([])
+    expect(searchIndexes(order)).toEqual([])
     expect(physical.tables.map((t) => t.name)).toEqual(["order"])
   })
 
@@ -276,7 +337,7 @@ describe("stage 3: physical snapshot", () => {
       type: "uuid[]",
     })
     expect(rate.foreignKeys).toEqual([])
-    expect(rate.indexes).toEqual([])
+    expect(searchIndexes(rate)).toEqual([])
   })
 
   it("polymorphic reference", () => {
@@ -366,7 +427,7 @@ describe("stage 3: physical snapshot", () => {
       { name: "many_owner_type_check", expression: "owner_type IN ('a', 'b')" },
     ])
     expect(many.foreignKeys).toEqual([])
-    expect(many.indexes).toEqual([
+    expect(searchIndexes(many)).toEqual([
       expect.objectContaining({
         name: "many_owner_type_owner_id_idx",
         keys: [{ column: "owner_type" }, { column: "owner_id" }],

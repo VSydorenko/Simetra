@@ -645,11 +645,15 @@ describe("stage 3: scope", () => {
   })
 })
 
+// Частковий унікальний індекс імені предвизначеного елемента перевіряє
+// stage-model.test.ts; тут — лише похідні пошукові індекси.
 function indexesOf(table: PhysicalTable) {
-  return table.indexes.map((index) => ({
-    name: index.name,
-    keys: index.keys.map((key) => ("column" in key ? key.column : "")),
-  }))
+  return table.indexes
+    .filter((index) => index.where === undefined)
+    .map((index) => ({
+      name: index.name,
+      keys: index.keys.map((key) => ("column" in key ? key.column : "")),
+    }))
 }
 
 function uniquesOf(table: PhysicalTable) {

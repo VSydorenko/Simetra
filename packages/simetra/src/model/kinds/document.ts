@@ -8,6 +8,7 @@ import {
   refListReferences,
   serviceDateColumns,
   tabularRowColumns,
+  versionColumn,
   type FoundReference,
   type KindDefinition,
   type StandardColumnDef,
@@ -43,6 +44,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       title: { uk: "Проведений", en: "Posted" },
     },
     deletionMarkColumn(),
+    versionColumn(),
     ...serviceDateColumns(),
   ]
 }

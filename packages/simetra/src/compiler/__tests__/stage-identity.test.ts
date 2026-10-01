@@ -31,6 +31,78 @@ describe("stage 2: identity", () => {
     expect(result.ok).toBe(false)
   })
 
+  it("predefined item without id", () => {
+    const result = compileWith({
+      [CONTRACT]: catalog("Contract", { predefinedItems: [{ name: "main" }] }),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "identity.id-missing",
+        pointer: "/predefinedItems/0/id",
+      }),
+    ])
+  })
+
+  it("duplicate predefined name", () => {
+    const result = compileWith({
+      [CONTRACT]: catalog("Contract", {
+        predefinedItems: [
+          { id: uuid(5), name: "main" },
+          { id: uuid(6), name: "main" },
+        ],
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "identity.name-duplicate",
+        pointer: "/predefinedItems/1/name",
+      }),
+    ])
+  })
+
+  it("predefined id duplicates attribute id", () => {
+    const result = compileWith({
+      [CONTRACT]: catalog("Contract", {
+        attributes: [attribute("note", { id: uuid(5) })],
+        predefinedItems: [{ id: uuid(5), name: "main" }],
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "identity.id-duplicate",
+        pointer: "/predefinedItems/0/id",
+      }),
+    ])
+  })
+
+  it("predefined item needs no physicalName", () => {
+    const result = compileWith({
+      [CONTRACT]: catalog("Contract", {
+        predefinedItems: [{ id: uuid(5), name: "main" }],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("predefined name follows project case", () => {
+    const result = compile(
+      metaFiles({
+        "project.meta.json": project({
+          naming: { attributeCase: "snake_case" },
+        }),
+        [CONTRACT]: catalog("Contract", {
+          predefinedItems: [{ id: uuid(5), name: "MainWarehouse" }],
+        }),
+      })
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "identity.name-case",
+        pointer: "/predefinedItems/0/name",
+      }),
+    ])
+  })
+
   it("missing id on an element", () => {
     const result = compileWith({
       [CONTRACT]: catalog("Contract", {

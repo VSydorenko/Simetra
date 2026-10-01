@@ -94,6 +94,8 @@ interface Field {
   primaryKey: boolean
   indexed: boolean
   unique: boolean
+  /** Умова часткового унікального індексу (див. StandardColumnDef). */
+  partialUnique?: string
   /** Скоуп-колонка, що передує колонці в UNIQUE: унікальність у межах скоупу. */
   uniqueWithin?: string
   /** Скоуп-колонка, з якої починається пошуковий індекс поля. */
@@ -548,7 +550,13 @@ class SnapshotBuilder {
       // `parent_id`. `indexed` посилання задовольняє індекс його FK (addField).
       indexed: column.indexed === true && target.form !== "foreignKey",
       unique: column.unique === true,
-      ...uniqueWithin(column.unique === true, scope),
+      ...(column.partialUnique !== undefined
+        ? { partialUnique: column.partialUnique }
+        : {}),
+      ...uniqueWithin(
+        column.unique === true || column.partialUnique !== undefined,
+        scope
+      ),
       ...indexWithin(scope),
       target,
       onDelete: column.onDelete ?? "noAction",
@@ -1112,6 +1120,21 @@ function addField(table: PendingTable, field: Field): string[] {
         field.uniqueWithin !== undefined
           ? [field.uniqueWithin, ...names]
           : names,
+      nullsNotDistinct: false,
+    })
+  }
+  if (field.partialUnique !== undefined) {
+    // Частковий унікальний індекс: UNIQUE-обмеження умови не має. Скоуп-колонка
+    // веде ключ, бо предвизначені елементи унікальні в межах тенанта.
+    table.indexes.push({
+      unique: true,
+      method: "btree",
+      keys: (field.uniqueWithin !== undefined
+        ? [field.uniqueWithin, ...names]
+        : names
+      ).map((column) => ({ column })),
+      include: [],
+      where: field.partialUnique,
       nullsNotDistinct: false,
     })
   }
