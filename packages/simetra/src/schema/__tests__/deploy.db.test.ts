@@ -520,13 +520,19 @@ const FIXTURES: [string, () => Map<string, string>][] = [
   ["movement query wrapper and a scope set function unit", movementQuery],
 ]
 
-/** Код помилки Postgres (SQLSTATE) з винятку `pg`. */
-async function sqlState(work: Promise<unknown>): Promise<string | undefined> {
+/** Код помилки Postgres (SQLSTATE) і порушене обмеження з винятку `pg`. */
+async function sqlError(
+  work: Promise<unknown>
+): Promise<{ code?: string; constraint?: string } | undefined> {
   try {
     await work
     return undefined
   } catch (error) {
-    return (error as { code?: string }).code
+    const { code, constraint } = error as {
+      code?: string
+      constraint?: string
+    }
+    return { code, constraint }
   }
 }
 
@@ -584,6 +590,26 @@ describe("deploy the desired state to Postgres", () => {
         }),
         (t) => ({ ...t, indexes: [] }),
         (t) => ({ ...t, rowLevelSecurity: "forced" }),
+        (t) => ({
+          ...t,
+          columns: t.columns.map((c) =>
+            c.name === "email" ? { ...c, notNull: true } : c
+          ),
+        }),
+        (t) => ({
+          ...t,
+          foreignKeys: t.foreignKeys.map((fk) => ({
+            ...fk,
+            references: { ...fk.references, table: "organization" },
+          })),
+        }),
+        (t) => ({
+          ...t,
+          indexes: t.indexes.map((index) => ({
+            ...index,
+            unique: !index.unique,
+          })),
+        }),
       ]
       for (const change of tampered) {
         const physical = {
@@ -594,6 +620,22 @@ describe("deploy the desired state to Postgres", () => {
         }
         expect(() => expectCatalogMatchesSnapshot(catalog, physical)).toThrow()
       }
+    })
+  })
+
+  it("the comparison notices enum values in another order", async () => {
+    const model = await compiled(enumerations())
+    await withRollback(async (client) => {
+      const catalog = await readCatalog(client, await deploy(client, model))
+      expect(model.physical.enumTypes).not.toEqual([])
+      const physical = {
+        ...model.physical,
+        enumTypes: model.physical.enumTypes.map((type) => ({
+          ...type,
+          values: [...type.values].reverse(),
+        })),
+      }
+      expect(() => expectCatalogMatchesSnapshot(catalog, physical)).toThrow()
     })
   })
 
@@ -609,7 +651,10 @@ describe("deploy the desired state to Postgres", () => {
           [org]
         )
       await insert()
-      expect(await sqlState(insert())).toBe("23505")
+      expect(await sqlError(insert())).toEqual({
+        code: "23505",
+        constraint: "stock_turnovers_month_org_id_item_id_lot_month_key",
+      })
     })
   })
 

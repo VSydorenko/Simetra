@@ -176,16 +176,15 @@ export function expectCatalogMatchesSnapshot(
   expect(catalog.tables.map(key).sort()).toEqual(
     physical.tables.map(key).sort()
   )
-  expect(
-    catalog.enumTypes.map((type) => ({ ...type, comment: undefined }))
-  ).toEqual(
-    physical.enumTypes.map((type) => ({
-      schema: type.schema,
-      name: type.name,
-      values: type.values,
-      comment: undefined,
-    }))
-  )
+  // Порядок типів — за (схема, ім'я) з обох боків: звіряється вміст, а не
+  // порядок обходу; порядок значень усередині типу — частина звірки.
+  const enumShape = (
+    types: { schema: string; name: string; values: string[] }[]
+  ) =>
+    types
+      .map(({ schema, name, values }) => ({ schema, name, values }))
+      .sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+  expect(enumShape(catalog.enumTypes)).toEqual(enumShape(physical.enumTypes))
 
   for (const table of physical.tables) {
     const found = catalog.tables.find((t) => key(t) === key(table))!
