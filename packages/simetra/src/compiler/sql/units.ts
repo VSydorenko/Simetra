@@ -126,7 +126,7 @@ export const FUNCTION_CLASSES: ReadonlySet<SqlUnitClass> = new Set([
 export function readSqlUnits(
   sources: readonly SqlSource[],
   parse: SqlParser,
-  enumTypes: readonly { schema: string; name: string }[]
+  known: readonly { schema: string; name: string }[]
 ): { units: VerbatimUnit[]; diagnostics: Diagnostic[] } {
   const units: VerbatimUnit[] = []
   const diagnostics: Diagnostic[] = []
@@ -153,16 +153,27 @@ export function readSqlUnits(
     }
     files.push({ source, text, statements: parsed.statements })
   }
-  // Некваліфікований тип аргументу резолвиться в типи моделі, тож домени
-  // всіх файлів зібрано до ідентичностей.
-  const domains = files.flatMap(({ source, statements }) =>
-    statements.flatMap(({ stmt }) =>
-      "CreateDomainStmt" in stmt
-        ? [qualify(strings(stmt.CreateDomainStmt.domainname), source.schema)]
-        : []
-    )
+  // Некваліфікований тип аргументу резолвиться в типи моделі, тож домени і
+  // типи рядків в'юх усіх файлів зібрано до ідентичностей.
+  const declared = files.flatMap(({ source, statements }) =>
+    statements.flatMap(({ stmt }) => {
+      if ("CreateDomainStmt" in stmt) {
+        return [
+          qualify(strings(stmt.CreateDomainStmt.domainname), source.schema),
+        ]
+      }
+      if ("ViewStmt" in stmt)
+        return [relation(stmt.ViewStmt.view, source.schema)]
+      if (
+        "CreateTableAsStmt" in stmt &&
+        stmt.CreateTableAsStmt.objtype === "OBJECT_MATVIEW"
+      ) {
+        return [relation(stmt.CreateTableAsStmt.into?.rel, source.schema)]
+      }
+      return []
+    })
   )
-  const types = modelTypes([...enumTypes, ...domains])
+  const types = modelTypes([...known, ...declared])
   for (const { source, text, statements } of files) {
     for (const statement of statements) {
       const start = firstToken(text, statement.start, statement.end)
@@ -284,7 +295,7 @@ function signature(
   return `${scope.schema}.${name}(${types})`
 }
 
-/** Типи, які знає модель (енам-типи знімка, домени `.sql`): ім'я → схеми. */
+/** Типи, які знає модель (енам-типи й таблиці знімка, домени й в'юхи `.sql`): ім'я → схеми. */
 type ModelTypes = ReadonlyMap<string, readonly string[]>
 
 /** Де читається некваліфікований тип: схема одиниці й типи моделі. */
@@ -747,18 +758,7 @@ const TARGET_PARTS: Readonly<Record<string, number>> = {
  * список із `TypeName` домену та іменем обмеження: `TypeName` розгорнуто.
  */
 export function targetParts(node: Node): string[] {
-  if ("List" in node) {
-    const items = node.List.items ?? []
-    // Ціль з кількома типами (`CAST (a.b AS c)`): межа між типами — частина
-    // ідентичності, інакше `(a.b AS c)` і `(a AS b.c)` злилися б.
-    if (items.filter((item) => "TypeName" in item).length > 1) {
-      return items.map(
-        (item) =>
-          `(${"TypeName" in item ? strings(item.TypeName.names).join(".") : targetParts(item).join(".")})`
-      )
-    }
-    return items.flatMap(targetParts)
-  }
+  if ("List" in node) return (node.List.items ?? []).flatMap(targetParts)
   if ("TypeName" in node) return strings(node.TypeName.names)
   if ("String" in node) return [node.String.sval ?? ""]
   return []
@@ -780,8 +780,24 @@ function targetName(
   }
   if ("ObjectWithArgs" in node)
     return functionObject(node.ObjectWithArgs, scope)
-  // Тип — за тим самим правилом, що й типи аргументів: вбудований —
-  // `pg_catalog`, відомий моделі — зі схемою, інший лишається як є.
+  // Типи — за тим самим правилом, що й типи аргументів: вбудований — без
+  // схеми (`pg_catalog` відкидається), відомий моделі — зі схемою, інший
+  // лишається як є.
+  if (objtype === "OBJECT_CAST" && "List" in node) {
+    // Межа між двома типами — частина ідентичності: `(a.b AS c)` ≠ `(a AS b.c)`.
+    return (node.List.items ?? [])
+      .map(
+        (item) =>
+          `(${"TypeName" in item ? typeName(item.TypeName, scope) : ""})`
+      )
+      .join(".")
+  }
+  if (objtype === "OBJECT_DOMCONSTRAINT" && "List" in node) {
+    const [domain, constraint] = node.List.items ?? []
+    if (domain !== undefined && "TypeName" in domain) {
+      return `${typeName(domain.TypeName, scope)}.${strings(constraint ? [constraint] : [])[0] ?? ""}`
+    }
+  }
   if (objtype === "OBJECT_TYPE" || objtype === "OBJECT_DOMAIN") {
     if ("TypeName" in node) return typeName(node.TypeName, scope)
     if ("List" in node) {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
   STOCK_FILE,
+  customTable,
   document,
   metaFiles,
   project,
@@ -299,13 +300,69 @@ describe("sql units", () => {
     ])
   })
 
-  it("comment on a cast keeps the boundary between its two types", async () => {
+  it("comment on a cast keeps the boundary between its two types and canonicalizes them", async () => {
     expect(
       await identities(
         "COMMENT ON CAST (a.b AS c) IS 'x';\n" +
-          "COMMENT ON CAST (a AS b.c) IS 'x';"
+          "COMMENT ON CAST (a AS b.c) IS 'x';\n" +
+          "COMMENT ON CAST (int AS text) IS 'x';"
       )
-    ).toHaveLength(2)
+    ).toEqual([
+      "comment:cast:(a).(b.c)",
+      "comment:cast:(a.b).(c)",
+      "comment:cast:(int4).(text)",
+    ])
+  })
+
+  it("comment on a domain constraint resolves the domain like a type target", async () => {
+    // Домен в іншій схемі файлу — відомий моделі, тож береться його схема, а
+    // не схема файлу з коментарем.
+    const result = await compileSql("", {
+      "sql/a/x.sql":
+        "CREATE DOMAIN d AS text CONSTRAINT c CHECK (VALUE <> '');",
+      "sql/b/y.sql": "COMMENT ON CONSTRAINT c ON DOMAIN d IS 'x';",
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.sqlUnits.map((u) => u.identity)).toContain(
+      "comment:domconstraint:a.d.c"
+    )
+  })
+
+  it("a table row type argument has one identity however it is written", async () => {
+    const tables = {
+      "custom-tables/Codes/Codes.meta.json": customTable("Codes"),
+    }
+    const fn = (arg: string) =>
+      `CREATE FUNCTION f(r ${arg}) RETURNS int LANGUAGE sql AS $$ select 1 $$;`
+    const result = await compileSql(
+      `${fn("codes")}\n${fn("public.codes")}`,
+      tables
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: "function:public.f(public.codes)",
+        }),
+      }),
+    ])
+  })
+
+  it("a same-named table in two schemas resolves to the schema of the unit", async () => {
+    const result = await compileSql(
+      "CREATE FUNCTION f(r codes) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+      {
+        "custom-tables/Codes/Codes.meta.json": customTable("Codes"),
+        "custom-tables/Other/Other.meta.json": customTable("Other", {
+          physicalName: "codes",
+          schema: "other",
+        }),
+      }
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual([
+      "function:public.f(public.codes)",
+    ])
   })
 
   it("aggregate, function settings, grant and comment name a signature canonically", async () => {

@@ -1142,6 +1142,16 @@ export function enumTypeOf(
     : undefined
 }
 
+/**
+ * Типи рядків таблиць знімка (кожна таблиця — ще й складений тип): разом з
+ * енам-типами — типи, відомі моделі при розборі `.sql`.
+ */
+export function rowTypesOf(
+  physical: Pick<PhysicalSnapshot, "tables">
+): { schema: string; name: string }[] {
+  return physical.tables.map(({ schema, name }) => ({ schema, name }))
+}
+
 const NONE: Target = { form: "none" }
 
 /** Мітка в імені CHECK обов'язковості при проведенні (`<таблиця>_<колонка>_required`). */

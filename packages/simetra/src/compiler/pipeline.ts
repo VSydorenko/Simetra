@@ -13,7 +13,7 @@ import { readFiles, type FilesStageResult } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
-import { buildModel, enumTypeOf } from "./stages/model"
+import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { creationOrder } from "./sql/dependencies"
 import { loadSqlParser } from "./sql/parse"
@@ -43,28 +43,32 @@ export async function runStages(
     stage1.brokenNames,
     stage1.project
   )
+  const upstream = [...stage1.diagnostics, ...stage2.diagnostics]
+  // Стадії 3–4 спираються на резолвлені посилання й наявні id та
+  // physicalName, тож на зламаній моделі не запускаються. Стадія 3 бігає до
+  // розбору `.sql`: типи рядків таблиць потрібні ідентичності аргументів.
+  const stage3 =
+    stage1.project === undefined || hasErrors(upstream)
+      ? undefined
+      : buildModel(stage1.objects, stage1.project)
   // Некваліфіковані імена `.sql` беруть схему проєкту, тож без валідного
   // проєкту одиниць немає: його помилку вже названо.
   const sql =
     stage1.project === undefined
       ? { units: [], diagnostics: [] }
-      : readSqlUnits(
-          sqlSources(stage1, stage1.project.defaultSchema),
-          parse,
-          enumTypes(stage1, stage1.project.defaultSchema)
-        )
-  const early = [
-    ...stage1.diagnostics,
-    ...stage2.diagnostics,
-    ...sql.diagnostics,
-  ]
-  // Стадії 3–4 спираються на резолвлені посилання й наявні id та
-  // physicalName, тож на зламаній моделі не запускаються.
-  if (hasErrors(early) || stage1.project === undefined) {
+      : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse, [
+          ...enumTypes(stage1, stage1.project.defaultSchema),
+          ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
+        ])
+  const early = [...upstream, ...sql.diagnostics]
+  if (
+    hasErrors(early) ||
+    stage1.project === undefined ||
+    stage3 === undefined
+  ) {
     return { ok: false, diagnostics: sortDiagnostics(early) }
   }
 
-  const stage3 = buildModel(stage1.objects, stage1.project)
   const diagnostics = sortDiagnostics([
     ...early,
     ...checkIntegrity(
