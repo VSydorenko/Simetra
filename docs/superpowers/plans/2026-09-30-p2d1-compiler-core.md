@@ -26,9 +26,17 @@ T1 над скомпільованою моделлю; T0 отримує лиш�
 модулі), §11 крок 7; [платформна спека](../specs/2026-09-24-simetra-platform-design.md)
 §6.3, §6.9.
 
-**Серія планів П2:** A, B, C1, C2 (виконано) → **D1** (цей) → D2 (`@simetra/cli`
+**Серія планів П2:** A, B, C1, C2 (виконано) → C3 (уточнення фізики за
+[спекою «Платформа в Postgres»](../specs/2026-10-01-platform-in-postgres-design.md),
+М17–М23; **виконується перед D1**) → **D1** (цей) → D2 (`@simetra/cli`
 compile/explain/fix з `--format json`, MCP-сервер з операціями й каскадом
 перейменування, pre-commit і CI, скіл CLI) → E.
+
+> **Правки 2026-10-01 за спекою «Платформа в Postgres» (М23):** D1 будується
+> на формі моделі після C3. Рішення плану 5 і задача 7 змінено: `predefinedItems`
+> і стандартна колонка `predefined_name` **лишаються** (читач —
+> `contracts.predefined`); контракт нумерації описує момент «перший запис»;
+> контракт оболонки містить `save`/`post`/`unpost`. Усе інше в плані чинне.
 
 ## Рішення плану (узгоджено з архітектором спеки; модельні — у спеці)
 
@@ -48,7 +56,8 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
    `numberLength`/`numberType`, `codeType` → `contracts.numbering`;
    `mainPresentation`, `standardAttributeOverrides` → блок
    `CompiledModel.presentation`; `title`/`description` → JSDoc кодогену;
-   `predefinedItems` — видалити зі схеми (форма — П3).
+   `predefinedItems` → `contracts.predefined` (М18; раніше планувалось
+   видалення — скасовано спекою 2026-10-01).
 6. **JSON Schema** генерує `buildJsonSchemas()` (T1); файли в
    `packages/simetra/schemas/` комітяться; тест дрейфу порівнює їх із
    згенерованими й перезаписує при `UPDATE_JSON_SCHEMAS=1`.
@@ -450,27 +459,31 @@ git commit -m "feat(compiler): JSON Schema файлів метаданих з о
 
 ---
 
-### Task 7: Контракт нумерації, блок представлення, видалення `predefinedItems`
+### Task 7: Контракт нумерації, блок представлення, контракт предвизначених
+
+> Змінено 2026-10-01 (М18, М21): колонка `predefined_name` і поле
+> `predefinedItems` лишаються; якщо C3 уже дав `contracts.numbering` і
+> `contracts.predefined`, тут лише блок представлення й звірка.
 
 **Files:**
-- Modify: `packages/simetra/src/model/schemas/catalog.ts` (видалити `predefinedItems`), `model/kinds/catalog.ts` (стандартна колонка `predefined_name` — прибрати разом із полем), `compiler/contracts.ts`, `compiler/compile.ts`
-- Test: `packages/simetra/src/compiler/__tests__/contracts.test.ts`, `stage-model.test.ts` (колонка `predefined_name` зникає), `kind-schemas.test.ts`
+- Modify: `packages/simetra/src/model/schemas/catalog.ts` (`predefinedItems` — `{ id, name, description? }`, якщо C3 цього не зробив), `compiler/contracts.ts`, `compiler/compile.ts`
+- Test: `packages/simetra/src/compiler/__tests__/contracts.test.ts`, `stage-model.test.ts`, `kind-schemas.test.ts`
 
 **Interfaces:**
 - Produces:
-  - `Contracts.numbering: { objectId: string; column: string; type: "String" | "Number"; length: number; autonumber: boolean; periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"; scoped: boolean }[]`
+  - `Contracts.numbering: { objectId: string; column: string; type: "String" | "Number"; length: number; autonumber: boolean; periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"; scoped: boolean; assignedAt: "firstWrite" }[]`
     — для довідника з кодом (`codeLength > 0`; `periodicity: "None"`) і
-    документа (номер); генерація лічильників — П3.
+    документа (номер); момент — перший запис (М21); генерація лічильників — П3.
+  - `Contracts.predefined: { objectId: string; items: { id: string; name: string }[] }[]`
+    — для довідника з `predefinedItems`; засів патчем даних — П3 (М18).
   - `CompiledModel.presentation: { objectId: string; mainPresentation?: "Code" | "Description"; standardAttributes: Record<string, { title?: LocalizedString; description?: LocalizedString }> }[]`
     (ключі — канонічні camelCase-імена стандартних реквізитів з
     `standardAttributeOverrides`); читачі — `explain` (D2) і хости (П4).
-  - `predefinedItems` і стандартна колонка `predefined_name` видаляються
-    (спека §13: предвизначені елементи — кандидат П3).
 
 - [ ] **Step 1: Тести** — `catalog code numbering contract`; `document number
   numbering contract with periodicity and scope`; `catalog without code has
-  no numbering`; `presentation block carries overrides`; `catalog has no
-  predefined_name column`.
+  no numbering`; `presentation block carries overrides`; `predefined contract
+  lists items with ids`; `catalog keeps predefined_name column`.
 - [ ] **Step 2: Червоні** — `pnpm --filter simetra test contracts stage-model kind-schemas` → FAIL.
 - [ ] **Step 3: Реалізація.**
 - [ ] **Step 4: Зелені** — PASS; повні гейти.
