@@ -232,7 +232,11 @@ export function functionIdentity(
 
 type Classified =
   | { class: SqlUnitClass; identity: string; schema: string; name: string }
-  | { notAllowed: string; detail?: string; feature?: "rowLevelSecurity" }
+  | {
+      notAllowed: string
+      detail?: string
+      feature?: "rowLevelSecurity" | "publication"
+    }
 
 const ROW_SECURITY: ReadonlySet<string> = new Set([
   "AT_EnableRowSecurity",
@@ -311,8 +315,11 @@ function classify(stmt: Node, schema: string): Classified {
   if ("GrantStmt" in stmt) {
     const node = stmt.GrantStmt
     const allInSchema = node.targtype === "ACL_TARGET_ALL_IN_SCHEMA"
+    // `ALL … IN SCHEMA` перелічує схеми, а не об'єкти.
     const objects = sorted(
-      (node.objects ?? []).map((o) => objectName(o, schema))
+      (node.objects ?? []).map((o) =>
+        allInSchema ? nodeText(o, schema) : targetName(o, node.objtype, schema)
+      )
     ).join(",")
     return unit(
       "grant",
@@ -356,7 +363,7 @@ function classify(stmt: Node, schema: string): Classified {
     const name =
       node.object === undefined
         ? ""
-        : commentTarget(node.object, node.objtype, schema)
+        : targetName(node.object, node.objtype, schema)
     return unit(
       "comment",
       { schema: "", name },
@@ -386,6 +393,10 @@ function classify(stmt: Node, schema: string): Classified {
   if ("CreateDomainStmt" in stmt) {
     const domain = qualify(strings(stmt.CreateDomainStmt.domainname), schema)
     return unit("domain", domain, `${domain.schema}.${domain.name}`)
+  }
+  if ("CreatePublicationStmt" in stmt) {
+    // Саму публікацію створює провайдер; `.sql` лише керує членством у ній.
+    return { notAllowed: statement, feature: "publication" }
   }
   if ("AlterPublicationStmt" in stmt) {
     const node = stmt.AlterPublicationStmt
@@ -497,17 +508,6 @@ function functionObject(fn: ObjectWithArgs, schema: string): string {
   return `${s}.${name}(${args.join(",")})`
 }
 
-/** Об'єкт гранту: відношення й функції кваліфіковано, решта — як у дереві. */
-function objectName(node: Node, schema: string): string {
-  if ("RangeVar" in node) {
-    const { schema: s, name } = relation(node.RangeVar, schema)
-    return `${s}.${name}`
-  }
-  if ("ObjectWithArgs" in node)
-    return functionObject(node.ObjectWithArgs, schema)
-  return nodeText(node, schema)
-}
-
 function nodeText(node: Node, schema: string): string {
   if ("String" in node) return node.String.sval ?? ""
   if ("RoleSpec" in node) return role(node.RoleSpec)
@@ -518,8 +518,11 @@ function nodeText(node: Node, schema: string): string {
   return ""
 }
 
-/** Скільки частин має повне ім'я об'єкта коментаря: бракує — додається схема. */
-const COMMENT_PARTS: Readonly<Record<string, number>> = {
+/**
+ * Скільки частин має повне ім'я цілі гранту чи коментаря: бракує — додається
+ * схема (спека П2 §8.3).
+ */
+const TARGET_PARTS: Readonly<Record<string, number>> = {
   OBJECT_TABLE: 2,
   OBJECT_VIEW: 2,
   OBJECT_MATVIEW: 2,
@@ -533,22 +536,37 @@ const COMMENT_PARTS: Readonly<Record<string, number>> = {
   OBJECT_POLICY: 3,
   OBJECT_RULE: 3,
   OBJECT_TABCONSTRAINT: 3,
+  OBJECT_DOMCONSTRAINT: 3,
 }
 
-function commentTarget(
+/**
+ * Частини імені цілі гранту чи коментаря як у тексті. Обмеження домену —
+ * список із `TypeName` домену та іменем обмеження: `TypeName` розгорнуто.
+ */
+export function targetParts(node: Node): string[] {
+  if ("List" in node) return (node.List.items ?? []).flatMap(targetParts)
+  if ("TypeName" in node) return strings(node.TypeName.names)
+  if ("String" in node) return [node.String.sval ?? ""]
+  return []
+}
+
+/** Ціль гранту чи коментаря: відношення, функції й імена з `TARGET_PARTS` кваліфіковано. */
+function targetName(
   node: Node,
   objtype: string | undefined,
   schema: string
 ): string {
+  if ("RangeVar" in node) {
+    const { schema: s, name } = relation(node.RangeVar, schema)
+    return `${s}.${name}`
+  }
   if ("ObjectWithArgs" in node)
     return functionObject(node.ObjectWithArgs, schema)
   const parts =
-    "List" in node
-      ? strings(node.List.items)
-      : "TypeName" in node
-        ? strings(node.TypeName.names)
-        : [nodeText(node, schema)]
-  const expected = COMMENT_PARTS[objtype ?? ""]
+    "List" in node || "TypeName" in node || "String" in node
+      ? targetParts(node)
+      : [nodeText(node, schema)]
+  const expected = TARGET_PARTS[objtype ?? ""]
   return (
     expected !== undefined && parts.length === expected - 1
       ? [schema, ...parts]

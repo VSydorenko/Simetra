@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import { KIND_REGISTRY } from "simetra/model"
+import { loadSqlParser } from "../sql/parse"
+import { withoutLocations } from "../sql/units"
 import {
   catalog,
   customTable,
@@ -430,6 +432,82 @@ describe("creation order", () => {
     ])
   })
 
+  it("same-named unqualified views, sequences and materialized views in two schemas are not a cycle", async () => {
+    // Створюване ім'я — не посилання: інакше голе `v` резолвилося б в обидві
+    // схеми й дало взаємні ребра.
+    const sql = [
+      "CREATE VIEW v AS SELECT 1 AS x;",
+      "CREATE SEQUENCE s;",
+      "CREATE MATERIALIZED VIEW m AS SELECT 1 AS x;",
+    ].join("\n")
+    const list = await order({ "sql/a/x.sql": sql, "sql/b/x.sql": sql })
+    expect(list).toEqual([
+      "materializedView:a.m",
+      "sequence:a.s",
+      "view:a.v",
+      "materializedView:b.m",
+      "sequence:b.s",
+      "view:b.v",
+    ])
+  })
+
+  it("a reference between same-named objects of two schemas gives only the real edge", async () => {
+    // Схема `a` у tie-break раніше за `z`: без ребра `a` йшли б першими.
+    const list = await order({
+      "sql/a/x.sql":
+        "CREATE VIEW v AS SELECT x FROM z.v;\n" +
+        "CREATE MATERIALIZED VIEW m AS SELECT x FROM z.m;",
+      "sql/z/x.sql":
+        "CREATE VIEW v AS SELECT 1 AS x;\n" +
+        "CREATE MATERIALIZED VIEW m AS SELECT 1 AS x;",
+    })
+    expectBefore(list, [
+      ["view:z.v", "view:a.v"],
+      ["materializedView:z.m", "materializedView:a.m"],
+    ])
+  })
+
+  it("grants on a domain and on a type go after it", async () => {
+    // Схема гранту порожня, тож без ребра він ішов би перед доменом.
+    const list = await order({
+      "sql/a/x.sql":
+        "GRANT USAGE ON DOMAIN d TO anon;\n" +
+        "GRANT USAGE ON TYPE a.t TO anon;\n" +
+        "CREATE DOMAIN d AS text;\n" +
+        "CREATE DOMAIN t AS text;",
+    })
+    expectBefore(list, [
+      ["domain:a.d", "grant:grant:domain:a.d:anon:usage"],
+      ["domain:a.t", "grant:grant:type:a.t:anon:usage"],
+    ])
+  })
+
+  it("comment on an index goes after the table that waits on a function", async () => {
+    // Індекс — у просторі імен відношень, з міткою таблиці-власника; без
+    // ребра коментар (порожня схема) ішов би раніше за таблицю.
+    const list = await order({
+      [CODES]: codes([column("code", { default: "z.next_code()" })], {
+        indexes: [{ name: "codes_code_idx", keys: [{ column: "code" }] }],
+      }),
+      [MISC]:
+        "COMMENT ON INDEX codes_code_idx IS 'x';\n" +
+        `CREATE FUNCTION z.next_code() RETURNS text ${PLPGSQL};`,
+    })
+    expectBefore(list, [
+      ["function:z.next_code()", "table:public.codes"],
+      ["table:public.codes", "comment:index:public.codes_code_idx"],
+    ])
+  })
+
+  it("comment on a domain constraint goes after the domain", async () => {
+    const list = await order({
+      "sql/a/x.sql":
+        "COMMENT ON CONSTRAINT c ON DOMAIN d IS 'x';\n" +
+        "CREATE DOMAIN d AS text CONSTRAINT c CHECK (VALUE <> '');",
+    })
+    expectBefore(list, [["domain:a.d", "comment:domconstraint:a.d.c"]])
+  })
+
   it("deterministic regardless of map order", async () => {
     const entries: Record<string, unknown> = {
       ...salesDocument(),
@@ -485,5 +563,85 @@ describe("creation order", () => {
         derivedTable ? "enabled" : undefined
       )
     }
+  })
+})
+
+/**
+ * Форми дерева libpg-query, на які спираються порядок створення й
+ * ідентичності одиниць: зміна форми в новій версії парсера має падати тут, а
+ * не мовчки губити ребро.
+ */
+describe("parse tree shapes", () => {
+  async function tree(sql: string): Promise<unknown> {
+    const parse = await loadSqlParser()
+    const parsed = parse(sql)
+    if (!parsed.ok) throw new Error(parsed.message)
+    return withoutLocations(parsed.statements[0]!.stmt)
+  }
+  const relation = (relname: string) => ({
+    relname,
+    inh: true,
+    relpersistence: "p",
+  })
+  const names = (...parts: string[]) =>
+    parts.map((sval) => ({ String: { sval } }))
+
+  it("the created name is a RangeVar of ViewStmt, CreateSeqStmt and CreateTableAsStmt", async () => {
+    expect(await tree("CREATE VIEW v AS SELECT 1")).toMatchObject({
+      ViewStmt: { view: relation("v") },
+    })
+    expect(await tree("CREATE SEQUENCE s")).toEqual({
+      CreateSeqStmt: { sequence: relation("s") },
+    })
+    expect(await tree("CREATE MATERIALIZED VIEW m AS SELECT 1")).toMatchObject({
+      CreateTableAsStmt: {
+        into: { rel: relation("m") },
+        objtype: "OBJECT_MATVIEW",
+      },
+    })
+  })
+
+  it("a grant on a domain or a type names it with a List of String", async () => {
+    for (const [sql, objtype, parts] of [
+      ["GRANT USAGE ON DOMAIN d TO r", "OBJECT_DOMAIN", ["d"]],
+      ["GRANT USAGE ON DOMAIN a.d TO r", "OBJECT_DOMAIN", ["a", "d"]],
+      ["GRANT USAGE ON TYPE t TO r", "OBJECT_TYPE", ["t"]],
+      ["GRANT USAGE ON TYPE a.t TO r", "OBJECT_TYPE", ["a", "t"]],
+    ] as const) {
+      expect(await tree(sql), sql).toMatchObject({
+        GrantStmt: {
+          targtype: "ACL_TARGET_OBJECT",
+          objtype,
+          objects: [{ List: { items: names(...parts) } }],
+        },
+      })
+    }
+  })
+
+  it("a comment on an index names it with a List of String", async () => {
+    expect(await tree("COMMENT ON INDEX a.i IS 'x'")).toEqual({
+      CommentStmt: {
+        objtype: "OBJECT_INDEX",
+        object: { List: { items: names("a", "i") } },
+        comment: "x",
+      },
+    })
+  })
+
+  it("a comment on a domain constraint names the domain with a TypeName", async () => {
+    expect(await tree("COMMENT ON CONSTRAINT c ON DOMAIN a.d IS 'x'")).toEqual({
+      CommentStmt: {
+        objtype: "OBJECT_DOMCONSTRAINT",
+        object: {
+          List: {
+            items: [
+              { TypeName: { names: names("a", "d"), typemod: -1 } },
+              { String: { sval: "c" } },
+            ],
+          },
+        },
+        comment: "x",
+      },
+    })
   })
 })

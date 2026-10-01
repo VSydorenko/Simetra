@@ -178,6 +178,52 @@ describe("sql units", () => {
     expect(result.diagnostics[0]!.message).not.toMatch(/got\s*$/)
   })
 
+  it("same-named grants on domains in two schemas are two units", async () => {
+    const sql = "CREATE DOMAIN d AS text;\nGRANT USAGE ON DOMAIN d TO anon;"
+    const result = await compileSql("", {
+      "sql/a/x.sql": sql,
+      "sql/b/x.sql": sql,
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual(
+      expect.arrayContaining([
+        "grant:grant:domain:a.d:anon:usage",
+        "grant:grant:domain:b.d:anon:usage",
+      ])
+    )
+  })
+
+  it("comments on same-named domain constraints in two schemas are two units", async () => {
+    const sql =
+      "CREATE DOMAIN d AS text CONSTRAINT c CHECK (VALUE <> '');\n" +
+      "COMMENT ON CONSTRAINT c ON DOMAIN d IS 'x';"
+    const result = await compileSql("", {
+      "sql/a/x.sql": sql,
+      "sql/b/x.sql": sql,
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual(
+      expect.arrayContaining([
+        "comment:domconstraint:a.d.c",
+        "comment:domconstraint:b.d.c",
+      ])
+    )
+  })
+
+  it("create publication is not allowed and points to ALTER PUBLICATION", async () => {
+    const result = await compileSql("CREATE PUBLICATION pub FOR TABLE t;")
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.statement-not-allowed",
+        params: expect.objectContaining({
+          statement: "CreatePublicationStmt",
+          feature: "publication",
+        }),
+        hint: expect.stringContaining("ALTER PUBLICATION"),
+      }),
+    ])
+  })
+
   it("duplicate unit", async () => {
     const result = await compileSql(
       "CREATE VIEW v AS SELECT 1;\n\n-- ще раз\nCREATE OR REPLACE VIEW public.v AS SELECT 2;"

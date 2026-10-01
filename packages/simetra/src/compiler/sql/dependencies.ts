@@ -1,7 +1,13 @@
+import type { Node } from "libpg-query"
 import type { PhysicalSnapshot } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { SqlParser } from "./parse"
-import { FUNCTION_CLASSES, type SqlUnit, type SqlUnitClass } from "./units"
+import {
+  FUNCTION_CLASSES,
+  targetParts,
+  type SqlUnit,
+  type SqlUnitClass,
+} from "./units"
 
 /** Вузол порядку створення: об'єкт моделі або SQL-одиниця. */
 export type CreationNode =
@@ -57,27 +63,35 @@ const ALL_IN_SCHEMA: Readonly<Record<string, Category>> = {
   OBJECT_ROUTINE: "function",
 }
 
-/** Об'єкти коментаря, що є відношенням або його членом. */
-const RELATION_COMMENTS: ReadonlySet<string> = new Set([
-  "OBJECT_TABLE",
-  "OBJECT_VIEW",
-  "OBJECT_MATVIEW",
-  "OBJECT_SEQUENCE",
-  "OBJECT_FOREIGN_TABLE",
-  "OBJECT_COLUMN",
-  "OBJECT_TRIGGER",
-  "OBJECT_POLICY",
-  "OBJECT_RULE",
-  "OBJECT_TABCONSTRAINT",
-])
+/**
+ * Простір імен цілі гранту чи коментаря за типом об'єкта. Індекс — у
+ * просторі відношень під міткою таблиці-власника.
+ */
+const TARGET_SPACES: Readonly<Record<string, Space>> = {
+  OBJECT_TABLE: "relation",
+  OBJECT_VIEW: "relation",
+  OBJECT_MATVIEW: "relation",
+  OBJECT_SEQUENCE: "relation",
+  OBJECT_FOREIGN_TABLE: "relation",
+  OBJECT_INDEX: "relation",
+  OBJECT_COLUMN: "relation",
+  OBJECT_TRIGGER: "relation",
+  OBJECT_POLICY: "relation",
+  OBJECT_RULE: "relation",
+  OBJECT_TABCONSTRAINT: "relation",
+  OBJECT_DOMAIN: "type",
+  OBJECT_TYPE: "type",
+  OBJECT_DOMCONSTRAINT: "type",
+}
 
-/** Коментар члена відношення: остання частина імені — сам член. */
-const MEMBER_COMMENTS: ReadonlySet<string> = new Set([
+/** Ціль — член відношення чи домену: остання частина імені — сам член. */
+const MEMBER_TARGETS: ReadonlySet<string> = new Set([
   "OBJECT_COLUMN",
   "OBJECT_TRIGGER",
   "OBJECT_POLICY",
   "OBJECT_RULE",
   "OBJECT_TABCONSTRAINT",
+  "OBJECT_DOMCONSTRAINT",
 ])
 
 /** Коментар тригера чи політики залежить і від самої одиниці. */
@@ -142,6 +156,11 @@ class Graph {
       // Таблиця — ще й складений тип (`RETURNS SETOF <таблиця>`).
       this.register("type", table.schema, table.name, label)
       this.categories.set(label, "relation")
+      // Індекс і таблиця ділять простір імен відношень; ціль
+      // `COMMENT ON INDEX` створюється разом із таблицею.
+      for (const index of table.indexes) {
+        this.register("relation", table.schema, index.name, label)
+      }
     }
     for (const unit of units) this.addUnit(unit)
 
@@ -260,24 +279,15 @@ class Graph {
     // Розширення — перші; що використовує їх, не відстежується.
     if (unit.class === "extension") return
     const label = unit.identity
+    const tree = unit.tree as Record<string, Record<string, unknown>>
     const refs: Reference[] = []
-    this.collect(unit.tree, refs, NO_CTES)
+    this.collect(unit.tree, refs, NO_CTES, createdName(tree))
     this.edges(label, refs)
 
-    const tree = unit.tree as Record<string, Record<string, unknown>>
     const comment = tree.CommentStmt
     if (comment !== undefined) {
       const objtype = String(comment.objtype)
-      if (RELATION_COMMENTS.has(objtype)) {
-        // Частини імені — з дерева: ім'я в лапках може містити крапку.
-        // Без схеми ім'я некваліфіковане й резолвиться як решта таких.
-        const object = comment.object as Record<string, Record<string, unknown>>
-        const parts = strings(object?.List?.items)
-        const relation = MEMBER_COMMENTS.has(objtype)
-          ? parts.slice(0, -1)
-          : parts
-        this.edges(label, [{ space: "relation", names: relation }])
-      }
+      this.edges(label, targetReferences(objtype, [comment.object]))
       const cls = UNIT_COMMENTS[objtype]
       if (cls !== undefined) {
         const target = `${cls}:${unit.name}`
@@ -285,6 +295,9 @@ class Graph {
       }
     }
     const grant = tree.GrantStmt
+    if (grant?.targtype === "ACL_TARGET_OBJECT") {
+      this.edges(label, targetReferences(String(grant.objtype), grant.objects))
+    }
     if (grant?.targtype === "ACL_TARGET_ALL_IN_SCHEMA") {
       const category = ALL_IN_SCHEMA[String(grant.objtype)] ?? "none"
       const schemas = new Set(strings(grant.objects))
@@ -302,17 +315,21 @@ class Graph {
    * і `TypeName` бувають і обгорнутими вузлами, і прямими полями
    * (`CreateTrigStmt.relation`, `TypeCast.typeName`). `ctes` — імена CTE в
    * області видимості: некваліфіковане таке ім'я — CTE, а не відношення.
+   * `created` — вузол імені, яке оператор створює: це не посилання.
    */
   private collect(
     value: unknown,
     refs: Reference[],
-    ctes: ReadonlySet<string>
+    ctes: ReadonlySet<string>,
+    created?: unknown
   ): void {
     if (Array.isArray(value)) {
-      for (const item of value) this.collect(item, refs, ctes)
+      for (const item of value) this.collect(item, refs, ctes, created)
       return
     }
-    if (typeof value !== "object" || value === null) return
+    if (typeof value !== "object" || value === null || value === created) {
+      return
+    }
     const node = value as Record<string, unknown>
     // Область CTE — увесь оператор з `WITH`, разом із тілами CTE (рекурсивне
     // посилається на себе); вкладені оператори її успадковують.
@@ -379,7 +396,9 @@ class Graph {
       }
     }
 
-    for (const child of Object.values(node)) this.collect(child, refs, ctes)
+    for (const child of Object.values(node)) {
+      this.collect(child, refs, ctes, created)
+    }
   }
 
   /**
@@ -545,6 +564,35 @@ function insertSorted(list: GraphNode[], node: GraphNode): void {
 }
 
 const NO_CTES: ReadonlySet<string> = new Set()
+
+/**
+ * Вузол імені, яке оператор створює (спека П2 §8.3): некваліфіковане, воно
+ * резолвилося б в однойменні об'єкти всіх схем і давало хибний цикл.
+ */
+function createdName(tree: Record<string, Record<string, unknown>>): unknown {
+  const into = tree.CreateTableAsStmt?.into as { rel?: unknown } | undefined
+  return tree.ViewStmt?.view ?? tree.CreateSeqStmt?.sequence ?? into?.rel
+}
+
+/**
+ * Цілі гранту чи коментаря як посилання. Частини імені — з дерева: ім'я в
+ * лапках може містити крапку. Без схеми ім'я некваліфіковане й резолвиться
+ * як решта таких.
+ */
+function targetReferences(objtype: string, nodes: unknown): Reference[] {
+  const space = TARGET_SPACES[objtype]
+  if (space === undefined || !Array.isArray(nodes)) return []
+  return nodes.flatMap((node) => {
+    if (typeof node !== "object" || node === null) return []
+    const parts = targetParts(node as Node)
+    return [
+      {
+        space,
+        names: MEMBER_TARGETS.has(objtype) ? parts.slice(0, -1) : parts,
+      },
+    ]
+  })
+}
 
 function cteNames(withClause: unknown): string[] {
   const ctes = (withClause as { ctes?: unknown } | undefined)?.ctes
