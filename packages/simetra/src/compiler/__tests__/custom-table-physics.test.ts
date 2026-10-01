@@ -122,12 +122,34 @@ describe("CustomTable physics round-trip", () => {
             opclass: "text_pattern_ops",
             collation: "C",
           },
-          { expression: "lower(code)", order: "asc", nulls: "first" },
+          // `ASC` — значення за замовчуванням, у знімку його немає.
+          { expression: "lower(code)", nulls: "first" },
           { column: "qty" },
         ],
         include: [],
         nullsNotDistinct: false,
       },
+    ])
+  })
+
+  it("default key order and nulls give one snapshot form", async () => {
+    const table = await logTable({
+      indexes: [
+        {
+          name: "log_a_idx",
+          keys: [{ column: "code", order: "asc", nulls: "last" }],
+        },
+        { name: "log_b_idx", keys: [{ column: "code" }] },
+        {
+          name: "log_c_idx",
+          keys: [{ column: "code", order: "desc", nulls: "first" }],
+        },
+      ],
+    })
+    expect(table.indexes.map((index) => index.keys)).toEqual([
+      [{ column: "code" }],
+      [{ column: "code" }],
+      [{ column: "code", order: "desc" }],
     ])
   })
 

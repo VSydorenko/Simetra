@@ -1114,8 +1114,14 @@ class SnapshotBuilder {
           ...("column" in key
             ? { column: column(`/indexes/${i}/keys/${k}/column`) }
             : { expression: key.expression }),
-          ...(key.order !== undefined ? { order: key.order } : {}),
-          ...(key.nulls !== undefined ? { nulls: key.nulls } : {}),
+          // Значення Postgres за замовчуванням (`ASC`; `NULLS LAST` для `ASC`,
+          // `NULLS FIRST` для `DESC`) у знімок не пишуться, як і в
+          // `pg_get_indexdef`: два записи одного індексу дають один знімок.
+          ...(key.order === "desc" ? { order: key.order } : {}),
+          ...(key.nulls !== undefined &&
+          key.nulls !== (key.order === "desc" ? "first" : "last")
+            ? { nulls: key.nulls }
+            : {}),
           ...(key.opclass !== undefined ? { opclass: key.opclass } : {}),
           ...(key.collation !== undefined ? { collation: key.collation } : {}),
         })),

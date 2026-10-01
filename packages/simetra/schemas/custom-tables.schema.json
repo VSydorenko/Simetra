@@ -139,7 +139,7 @@
             "additionalProperties": false
           },
           "collation": {
-            "description": "Collation of the column; absent means the type default.",
+            "description": "Collation of the column; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
             "type": "string",
             "minLength": 1
           },
@@ -608,12 +608,12 @@
                       ]
                     },
                     "opclass": {
-                      "description": "Operator class of the key; absent means the type default.",
+                      "description": "Operator class of the key; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_opclass, schema-qualified (schema.name) only when not in pg_catalog.",
                       "type": "string",
                       "minLength": 1
                     },
                     "collation": {
-                      "description": "Collation of the key; absent means the column default.",
+                      "description": "Collation of the key; absent means the column default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
                       "type": "string",
                       "minLength": 1
                     }
@@ -648,12 +648,12 @@
                       ]
                     },
                     "opclass": {
-                      "description": "Operator class of the key; absent means the type default.",
+                      "description": "Operator class of the key; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_opclass, schema-qualified (schema.name) only when not in pg_catalog.",
                       "type": "string",
                       "minLength": 1
                     },
                     "collation": {
-                      "description": "Collation of the key; absent means the column default.",
+                      "description": "Collation of the key; absent means the column default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
                       "type": "string",
                       "minLength": 1
                     }

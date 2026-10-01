@@ -64,6 +64,9 @@ export interface PhysicalTable {
     references: { schema: string; table: string; columns: string[] }
     onDelete: FkAction
     onUpdate: FkAction
+    // FK пише й «no», а PK/UNIQUE його пропускають (`DeferredConstraint`), щоб
+    // знімок і хеш таблиць видів 1С лишились тими самими; уніфікація — борг до
+    // наступного прийнятого злому фізичного хешу.
     deferrable: "no" | "deferrable" | "initiallyDeferred"
   }[]
   indexes: {
@@ -85,8 +88,9 @@ export interface PhysicalTable {
 export type DeferredConstraint = Exclude<Deferrable, "no">
 
 /**
- * Елемент ключа індексу. Параметри — лише явні: відсутні означають значення
- * Postgres за замовчуванням, як у `pg_get_indexdef`.
+ * Елемент ключа індексу. Значення Postgres за замовчуванням (`ASC`, типове
+ * розташування `NULL` для порядку) не пишуться, як у `pg_get_indexdef`: один
+ * фізичний індекс — одна форма знімка.
  */
 export type PhysicalIndexKey = ({ column: string } | { expression: string }) & {
   order?: "asc" | "desc"

@@ -56,7 +56,8 @@ export const customTableColumnSchema = z
           "Stored generated column; incompatible with default and identity.",
       }),
     collation: z.string().min(1).optional().meta({
-      description: "Collation of the column; absent means the type default.",
+      description:
+        "Collation of the column; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
     }),
     comment: z
       .string()
@@ -256,10 +257,12 @@ const indexKeyOptions = {
     description: "NULLS FIRST or NULLS LAST; absent means the order default.",
   }),
   opclass: z.string().min(1).optional().meta({
-    description: "Operator class of the key; absent means the type default.",
+    description:
+      "Operator class of the key; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_opclass, schema-qualified (schema.name) only when not in pg_catalog.",
   }),
   collation: z.string().min(1).optional().meta({
-    description: "Collation of the key; absent means the column default.",
+    description:
+      "Collation of the key; absent means the column default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
   }),
 }
 
