@@ -24,6 +24,16 @@ function withStock(patch: Record<string, unknown>): Record<string, unknown> {
   return { "project.meta.json": project(), ...entries }
 }
 
+/** Оборотний регістр: документ не вказує вид руху. */
+function turnoverStock(): Record<string, unknown> {
+  const entries = withStock({ registerType: "Turnover" })
+  const sale = entries[SALE_FILE] as {
+    posting: { movements: Record<string, unknown>[] }
+  }
+  delete sale.posting.movements[0]!.movementType
+  return entries
+}
+
 const at = { name: "p_at", type: "timestamp with time zone" }
 const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
@@ -103,7 +113,11 @@ describe("posting and register contracts", () => {
       {
         kind: "balance",
         function: { schema: "public", name: "stock_balance" },
-        parameters: [at],
+        parameters: [
+          at,
+          { name: "p_recorder_type", type: "text" },
+          { name: "p_recorder_id", type: "uuid" },
+        ],
         columns: [
           { name: "item_id", type: "uuid" },
           { name: "qty", type: "numeric(15,3)" },
@@ -139,7 +153,7 @@ describe("posting and register contracts", () => {
     delete sale.posting.movements[0]!.movementType
     const turnover = contracts(entries)
     expect(turnover.registers[0]).not.toHaveProperty("totals")
-    expect(turnover.registers[0]).not.toHaveProperty("totalsMaintenance")
+    expect(turnover.registers[0]).toHaveProperty("totalsMaintenance")
     expect(turnover.registers[0]!.virtualTables).toEqual([
       {
         kind: "turnovers",
@@ -182,6 +196,61 @@ describe("posting and register contracts", () => {
       ],
     })
     expect(info("NonPeriodic").virtualTables).toEqual([])
+  })
+
+  it("balance virtual table has recorder bound", () => {
+    const { registers } = contracts(withStock({}))
+    const balance = registers[0]!.virtualTables.find(
+      (t) => t.kind === "balance"
+    )
+    expect(balance!.parameters).toEqual([
+      at,
+      { name: "p_recorder_type", type: "text" },
+      { name: "p_recorder_id", type: "uuid" },
+    ])
+  })
+
+  it("monthly turnovers contract", () => {
+    const expression =
+      "date_trunc('month', (period AT TIME ZONE 'Europe/Kyiv'))::date"
+    const balance = contracts({
+      ...withStock({}),
+      "project.meta.json": project({ timezone: "Europe/Kyiv" }),
+    }).registers[0]!
+    expect(balance.turnoversMonth).toEqual({
+      table: { schema: "public", name: "stock_turnovers_month" },
+      monthExpression: expression,
+      split: true,
+    })
+    const turnover = contracts({
+      ...turnoverStock(),
+      "project.meta.json": project({ timezone: "Europe/Kyiv" }),
+    }).registers[0]!
+    expect(turnover.turnoversMonth).toMatchObject({
+      monthExpression: expression,
+      split: false,
+    })
+  })
+
+  it("turnover register maintains derived tables", () => {
+    const register = contracts(turnoverStock()).registers[0]!
+    expect(register).not.toHaveProperty("totals")
+    expect(register.turnoversMonth).toMatchObject({ split: false })
+    expect(register.totalsMaintenance).toEqual({
+      recalculate: { schema: "public", name: "stock_totals_recalculate" },
+      verify: { schema: "public", name: "stock_totals_verify" },
+    })
+  })
+
+  it("maintenance function name collision", () => {
+    const entries = turnoverStock()
+    entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
+      physicalName: "stock_totals_verify",
+    })
+    const found = compile(metaFiles(entries)).diagnostics.filter(
+      (d) => d.code === "physical.function-duplicate"
+    )
+    expect(found).toHaveLength(1)
   })
 
   it("function name collision", () => {
@@ -427,7 +496,9 @@ describe("posting and register contracts", () => {
         ),
       })
     ).diagnostics.filter((d) => d.code === "physical.function-duplicate")
-    expect(found).toHaveLength(1)
-    expect(found[0]!.message).toContain("function of")
+    // Оборотний регістр веде похідні таблиці, тож з функцією віртуальної
+    // таблиці збігаються й обидві функції перерахунку та звірки.
+    expect(found).toHaveLength(3)
+    expect(found.every((d) => d.message.includes("function of"))).toBe(true)
   })
 })

@@ -128,6 +128,12 @@ export interface RegisterKeySpec {
   /** Таблиця поточних підсумків `<регістр>_totals`. */
   totals: boolean
   /**
+   * Таблиця місячних оборотів `<регістр>_turnovers_month`; `split` — на
+   * ресурс пара прихід/витрата (регістр залишків), інакше одне значення
+   * (оборотний регістр). Немає — регістр обороти не веде.
+   */
+  turnoversMonth?: { split: boolean }
+  /**
    * Ресурси сумуються (регістр накопичення): кожен рух дає значення кожного
    * ресурсу, і `NULL` його не заступить. Ресурс регістра відомостей —
    * значення, тож обов'язковий лише `required`.
@@ -312,6 +318,20 @@ export function periodColumn(): StandardColumnDef {
     type: { type: "DateTime" },
     notNull: true,
     title: { uk: "Період", en: "Period" },
+  }
+}
+
+/**
+ * Місяць обороту в похідній таблиці регістра: перший день місяця за поясом
+ * проєкту (`truncatedPeriodExpression`), тож тип — `date`, а не момент.
+ */
+export function monthColumn(): StandardColumnDef {
+  return {
+    logicalName: "month",
+    physicalName: "month",
+    type: { type: "Date" },
+    notNull: true,
+    title: { uk: "Місяць", en: "Month" },
   }
 }
 

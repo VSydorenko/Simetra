@@ -333,10 +333,14 @@ describe("standard columns", () => {
       recordKeyUnique: false,
       movementIndexes: true,
       totals: true,
+      turnoversMonth: { split: true },
       additiveResources: true,
       virtualTables: ["balance", "balanceAndTurnovers"],
     })
     expect(keys(parse({ registerType: "Turnover" })).totals).toBe(false)
+    expect(keys(parse({ registerType: "Turnover" })).turnoversMonth).toEqual({
+      split: false,
+    })
     expect(keys(parse({ registerType: "Turnover" })).virtualTables).toEqual([
       "turnovers",
     ])

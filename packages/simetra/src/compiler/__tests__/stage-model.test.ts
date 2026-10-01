@@ -453,7 +453,9 @@ describe("stage 3: physical snapshot", () => {
       "stock_recorder_type_check",
     ])
     expect(stock.checks[1]!.expression).toBe("recorder_type IN ('sale')")
-    expect(stock.indexes.map((i) => i.name)).toEqual(["stock_period_idx"])
+    expect(stock.indexes.map((i) => i.name)).toEqual([
+      "stock_period_recorder_type_recorder_id_idx",
+    ])
   })
 
   it("constant is a singleton table with a typed value", () => {

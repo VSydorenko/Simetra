@@ -174,7 +174,8 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
         stage1.objects,
         stage3.physical,
         stage1.project.naming.attributeCase,
-        sqlUnits
+        sqlUnits,
+        stage1.project.timezone
       ),
     },
   }

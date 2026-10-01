@@ -10,6 +10,7 @@ import { pgEnumKind } from "./pg-enum"
 import type { KindDefinition } from "./standard"
 
 export {
+  monthColumn,
   singletonColumn,
   standardLogicalName,
   type FoundReference,

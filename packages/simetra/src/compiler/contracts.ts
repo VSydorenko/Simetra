@@ -2,12 +2,14 @@ import {
   KIND_REGISTRY,
   makeObjectName,
   postsMovements,
+  truncatedPeriodExpression,
   standardLogicalName,
   type Attribute,
   type AttributeCase,
   type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type RegisterKeySpec,
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
@@ -37,7 +39,16 @@ export interface PostingContract {
 export interface VirtualTableContract {
   kind: VirtualTableKind
   function: QualifiedName
-  parameters: { name: "p_at" | "p_from" | "p_to"; type: string }[]
+  /**
+   * `balance`: без реєстратора — рухи з `period <= p_at` включно; з
+   * реєстратором — `(period, recorder_type, recorder_id) <
+   * (p_at, p_recorder_type, p_recorder_id)`, строго до документа. `p_at` NULL —
+   * поточні `totals`. SQL — П3.
+   */
+  parameters: {
+    name: "p_at" | "p_from" | "p_to" | "p_recorder_type" | "p_recorder_id"
+    type: string
+  }[]
   columns: { name: string; type: string }[]
 }
 
@@ -45,7 +56,15 @@ export interface RegisterContract {
   registerId: string
   movements: QualifiedName
   totals?: QualifiedName
+  turnoversMonth?: {
+    table: QualifiedName
+    /** `truncatedPeriodExpression("period", "month", <timezone проєкту>)`. */
+    monthExpression: string
+    /** Пара `<r>_receipt`/`<r>_expense` на ресурс замість `<r>`. */
+    split: boolean
+  }
   virtualTables: VirtualTableContract[]
+  /** Перераховує й звіряє обидві похідні таблиці. */
   totalsMaintenance?: { recalculate: QualifiedName; verify: QualifiedName }
   balanceControl?: { resources: string[] }
 }
@@ -83,7 +102,13 @@ const VIRTUAL_TABLES: Record<
 > = {
   balance: {
     label: "balance",
-    parameters: [{ name: "p_at", type: TIMESTAMP }],
+    // Реєстратор межує вікно «строго до документа»: проведення читає
+    // залишок, не бачачи власних рухів.
+    parameters: [
+      { name: "p_at", type: TIMESTAMP },
+      { name: "p_recorder_type", type: "text" },
+      { name: "p_recorder_id", type: "uuid" },
+    ],
   },
   balanceAndTurnovers: {
     label: "balance_and_turnovers",
@@ -122,13 +147,19 @@ export function mainTableOf(
   )
 }
 
-function totalsTableOf(
+function derivedTableOf(
   physical: PhysicalSnapshot,
-  objectId: string
+  objectId: string,
+  part: "totals" | "turnoversMonth"
 ): PhysicalTable | undefined {
   return physical.tables.find(
-    (t) => t.origin.objectId === objectId && t.origin.part === "totals"
+    (t) => t.origin.objectId === objectId && t.origin.part === part
   )
+}
+
+/** Регістр веде похідні таблиці — і функції їх перерахунку та звірки. */
+function maintainsDerivedTables(keys: RegisterKeySpec): boolean {
+  return keys.totals || keys.turnoversMonth !== undefined
 }
 
 /** Ім'я похідної функції — алгоритм імен Postgres від таблиці власника. */
@@ -211,7 +242,7 @@ export function derivedFunctions(
         `${kind} virtual table of ${object.name}`
       )
     }
-    if (keys.totals) {
+    if (maintainsDerivedTables(keys)) {
       const { recalculate, verify } = totalsFunctions(table)
       add(object, recalculate, `totals recalculation of ${object.name}`)
       add(object, verify, `totals verification of ${object.name}`)
@@ -252,11 +283,12 @@ export function buildContracts(
   objects: readonly ParsedObject[],
   physical: PhysicalSnapshot,
   style: AttributeCase,
-  sqlUnits: readonly SqlUnit[]
+  sqlUnits: readonly SqlUnit[],
+  timezone: string
 ): Contracts {
   const registers = objects
     .filter(isRegister)
-    .map((register) => registerContract(register, physical, style))
+    .map((register) => registerContract(register, physical, style, timezone))
     .sort((a, b) => compareStrings(a.registerId, b.registerId))
   const controlById = new Map(
     registers.map((r) => [r.registerId, r.balanceControl?.resources])
@@ -314,7 +346,8 @@ function predefinedContracts(
 function registerContract(
   register: ParsedObject,
   physical: PhysicalSnapshot,
-  style: AttributeCase
+  style: AttributeCase,
+  timezone: string
 ): RegisterContract {
   const id = register.id ?? ""
   const table = must(mainTableOf(physical, id))
@@ -375,7 +408,8 @@ function registerContract(
       sliceFirst: slice,
     }
 
-  const totals = totalsTableOf(physical, id)
+  const totals = derivedTableOf(physical, id, "totals")
+  const turnoversMonth = derivedTableOf(physical, id, "turnoversMonth")
   const balanceControl =
     data.balanceControl === undefined
       ? undefined
@@ -391,13 +425,28 @@ function registerContract(
     ...(totals === undefined
       ? {}
       : { totals: { schema: totals.schema, name: totals.name } }),
+    ...(turnoversMonth === undefined || keys.turnoversMonth === undefined
+      ? {}
+      : {
+          turnoversMonth: {
+            table: { schema: turnoversMonth.schema, name: turnoversMonth.name },
+            monthExpression: truncatedPeriodExpression(
+              must(period[0]).name,
+              "month",
+              timezone
+            ),
+            split: keys.turnoversMonth.split,
+          },
+        }),
     virtualTables: keys.virtualTables.map((kind) => ({
       kind,
       function: virtualTableFunction(table, kind),
       parameters: VIRTUAL_TABLES[kind].parameters,
       columns: columnsFor[kind],
     })),
-    ...(keys.totals ? { totalsMaintenance: totalsFunctions(table) } : {}),
+    ...(maintainsDerivedTables(keys)
+      ? { totalsMaintenance: totalsFunctions(table) }
+      : {}),
     ...(balanceControl === undefined ? {} : { balanceControl }),
   }
 }

@@ -50,6 +50,9 @@ export const accumulationRegisterKind: KindDefinition = {
     recordKeyUnique: false,
     movementIndexes: true,
     totals: (obj as AccumulationRegister).registerType === "Balance",
+    turnoversMonth: {
+      split: (obj as AccumulationRegister).registerType === "Balance",
+    },
     additiveResources: true,
     virtualTables:
       (obj as AccumulationRegister).registerType === "Balance"

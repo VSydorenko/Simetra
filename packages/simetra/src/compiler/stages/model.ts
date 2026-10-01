@@ -12,6 +12,7 @@ import {
   KIND_REGISTRY,
   chooseConstraintName,
   makeObjectName,
+  monthColumn,
   pgEnumTypeName,
   pgTypeOf,
   quoteIdent,
@@ -298,13 +299,22 @@ class SnapshotBuilder {
       this.addRegisterKeys(main, registerKeys, degenerate, scope, {
         period: standardOf((column) => column.logicalName === PERIOD),
         dimensions: dimensionFields.flatMap(columns),
-        recorder: [
-          ...standardOf((column) => column.ref === "recorders"),
-          ...standardOf((column) => column.logicalName === LINE_NUMBER),
-        ],
+        recorder: standardOf((column) => column.ref === "recorders"),
+        lineNumber: standardOf((column) => column.logicalName === LINE_NUMBER),
       })
       if (registerKeys.totals) {
         this.addTotals(object, schema, name, origin, dimensions, scope)
+      }
+      if (registerKeys.turnoversMonth !== undefined) {
+        this.addTurnoversMonth(
+          object,
+          schema,
+          name,
+          origin,
+          dimensions,
+          scope,
+          registerKeys.turnoversMonth.split
+        )
       }
     }
     // Ціль складених FK у межах скоупу (спека §6).
@@ -364,30 +374,46 @@ class SnapshotBuilder {
   /**
    * Ключі й індекси таблиці рухів (спека §7): PK реєстратора (за його
    * наявності), UNIQUE NULLS NOT DISTINCT ключа запису і, де їх вимагає вид,
-   * індекси рухів `(носій, виміри…, period)` та `(носій, period)`. Покриті префіксом ключів
-   * індекси відкидає materializeIndexes.
+   * індекси рухів `(носій, виміри…, period, recorder_type, recorder_id)` та
+   * `(носій, period)`. Реєстратор у кінці індексу: вікно «строго до документа»
+   * (`balance` з реєстратором) читає рухи за впорядкованою трійкою
+   * `(period, recorder_type, recorder_id)`. Покриті префіксом ключів індекси
+   * відкидає materializeIndexes.
    */
   private addRegisterKeys(
     table: PendingTable,
     keys: RegisterKeySpec,
     degenerate: boolean,
     scope: TableScope | undefined,
-    columns: { period: string[]; dimensions: string[]; recorder: string[] }
+    columns: {
+      period: string[]
+      dimensions: string[]
+      /** Пара `recorder_type`/`recorder_id` без номера рядка. */
+      recorder: string[]
+      lineNumber: string[]
+    }
   ): void {
     const carrier = scope?.carrier !== undefined ? [scope.carrier] : []
-    const { period, dimensions, recorder } = columns
+    const { period, dimensions, recorder, lineNumber } = columns
     // Вироджений ключ уже дав одинак (чи скоуп-колонка замість нього).
     // Ключ запису (носій, виміри…, period) служить і унікальності, і зрізу
     // останніх/перших за ключем.
     const recordKey = [...carrier, ...dimensions, ...period]
     if (keys.movementsPrimaryKey === "recorder") {
-      if (recorder.length > 0) table.primaryKey = { columns: recorder }
+      if (recorder.length > 0) {
+        table.primaryKey = { columns: [...recorder, ...lineNumber] }
+      }
     }
     if (keys.recordKeyUnique && !degenerate) {
       table.uniques.push({ columns: recordKey, nullsNotDistinct: true })
     }
     if (keys.movementIndexes && period.length > 0) {
-      table.derivedIndexes.push([...carrier, ...dimensions, ...period])
+      table.derivedIndexes.push([
+        ...carrier,
+        ...dimensions,
+        ...period,
+        ...recorder,
+      ])
       table.derivedIndexes.push([...carrier, ...period])
     }
   }
@@ -396,6 +422,9 @@ class SnapshotBuilder {
    * Поточні підсумки регістра залишків (спека §7): носій скоупу, виміри з
    * тими самими FK і ресурси `NOT NULL DEFAULT 0` — рядок з'являється з
    * першим рухом ключа, тож відсутнє значення ресурсу означає нуль.
+   * Вимір `NOT NULL` лише за `required`, тож ключ — `UNIQUE NULLS NOT
+   * DISTINCT`, а не PK: PK не допускає `NULL`. Без вимірів ключ — одинак (чи
+   * скоуп-колонка замість нього).
    * UNIQUE полів і пошукові індекси ресурсів тут не повторюються: підсумки
    * похідні, а рядок знаходять за ключем; `indexed` вимірів лишається.
    */
@@ -416,29 +445,112 @@ class SnapshotBuilder {
     const fields = this.withScope(standard, scope, (column) =>
       this.standardField(column, object, table, scope)
     )
-    const dimensionFields = dimensions.map((attribute, index) => ({
+    const dimensionFields = this.derivedDimensions(dimensions, scope)
+    const resources = (object.data as Element).resources as Attribute[]
+    const resourceFields = resources.map((attribute, index) =>
+      this.derivedResource(attribute, index, scope)
+    )
+    fields.push(...dimensionFields, ...resourceFields)
+    const columnsOf = this.addTable(table, fields, object.file, "/physicalName")
+    this.addDerivedKey(
+      table,
+      dimensions.length > 0,
+      scope,
+      dimensionFields.flatMap((field) => columnsOf.get(field) ?? [])
+    )
+  }
+
+  /**
+   * Місячні обороти регістра накопичення: рядок на `(носій, виміри…, місяць)`.
+   * Оборотний регістр веде одне значення ресурсу, регістр залишків — пару
+   * прихід/витрата, бо з неї виходять і оборот, і залишок на межі місяця.
+   * Місяць рахується за поясом проєкту (`truncatedPeriodExpression`), тож
+   * тут лише колонка `date`; вираз лежить у контракті.
+   */
+  private addTurnoversMonth(
+    object: ParsedObject,
+    schema: string,
+    register: string,
+    origin: PhysicalTable["origin"],
+    dimensions: readonly Attribute[],
+    scope: TableScope | undefined,
+    split: boolean
+  ): void {
+    const table = this.pendingTable(
+      schema,
+      makeObjectName(register, undefined, "turnovers_month"),
+      { ...origin, part: "turnoversMonth" }
+    )
+    // Скоуп-колонка (за її наявності) іде першою, а ключа-одинака тут немає.
+    const fields = this.withScope([], scope, (column) =>
+      this.standardField(column, object, table, scope)
+    )
+    const dimensionFields = this.derivedDimensions(dimensions, scope)
+    const month = this.standardField(monthColumn(), object, table, scope)
+    const resources = (object.data as Element).resources as Attribute[]
+    const resourceFields = resources.flatMap((attribute, index) => {
+      const field = this.derivedResource(attribute, index, scope)
+      return split
+        ? ["receipt", "expense"].map((label) => ({
+            ...field,
+            name: makeObjectName(attribute.physicalName!, undefined, label),
+          }))
+        : [field]
+    })
+    fields.push(...dimensionFields, month, ...resourceFields)
+    const columnsOf = this.addTable(table, fields, object.file, "/physicalName")
+    this.addDerivedKey(table, dimensions.length > 0, scope, [
+      ...dimensionFields.flatMap((field) => columnsOf.get(field) ?? []),
+      ...(columnsOf.get(month) ?? []),
+    ])
+  }
+
+  /** Виміри похідної таблиці: `NOT NULL` лише `required`, без UNIQUE полів. */
+  private derivedDimensions(
+    dimensions: readonly Attribute[],
+    scope: TableScope | undefined
+  ): Field[] {
+    return dimensions.map((attribute, index) => ({
       ...this.attributeField(attribute, `/dimensions/${index}`, scope),
-      notNull: true,
       unique: false,
     }))
-    const resources = (object.data as Element).resources as Attribute[]
-    const resourceFields = resources.map((attribute, index) => ({
+  }
+
+  /** Ресурс похідної таблиці: `NOT NULL DEFAULT 0` — відсутнє означає нуль. */
+  private derivedResource(
+    attribute: Attribute,
+    index: number,
+    scope: TableScope | undefined
+  ): Field {
+    return {
       ...this.attributeField(attribute, `/resources/${index}`, scope),
       notNull: true,
       default: "0",
       indexed: false,
       unique: false,
-    }))
-    fields.push(...dimensionFields, ...resourceFields)
-    const columnsOf = this.addTable(table, fields, object.file, "/physicalName")
-    if (dimensions.length > 0) {
-      table.primaryKey = {
-        columns: [
-          ...(scope?.carrier !== undefined ? [scope.carrier] : []),
-          ...dimensionFields.flatMap((field) => columnsOf.get(field) ?? []),
-        ],
-      }
     }
+  }
+
+  /**
+   * Ключ похідної таблиці: `UNIQUE` носія скоупу й `keyColumns`; з вимірами —
+   * `NULLS NOT DISTINCT` (вимір може бути `NULL`, PK його не допускає). Без
+   * ключових колонок (підсумки без вимірів) ключ уже дає одинак чи
+   * скоуп-колонка (`withScope`), тож тут нічого додавати.
+   */
+  private addDerivedKey(
+    table: PendingTable,
+    hasDimensions: boolean,
+    scope: TableScope | undefined,
+    keyColumns: string[]
+  ): void {
+    if (keyColumns.length === 0) return
+    table.uniques.push({
+      columns: [
+        ...(scope?.carrier !== undefined ? [scope.carrier] : []),
+        ...keyColumns,
+      ],
+      nullsNotDistinct: hasDimensions,
+    })
   }
 
   finish(): ModelStageResult {

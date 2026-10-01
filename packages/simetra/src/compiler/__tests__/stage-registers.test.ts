@@ -136,8 +136,15 @@ describe("stage 3: register keys", () => {
       { name: "stock_org_id_item_id_idx", keys: ["org_id", "item_id"] },
       { name: "stock_org_id_period_idx", keys: ["org_id", "period"] },
       {
-        name: "stock_org_id_warehouse_id_item_id_period_idx",
-        keys: ["org_id", "warehouse_id", "item_id", "period"],
+        name: "stock_org_id_warehouse_id_item_id_period_recorder_type_reco_idx",
+        keys: [
+          "org_id",
+          "warehouse_id",
+          "item_id",
+          "period",
+          "recorder_type",
+          "recorder_id",
+        ],
       },
     ])
     expect(column(stock, "warehouse_id").notNull).toBe(true)
@@ -155,13 +162,22 @@ describe("stage 3: register keys", () => {
       "item_id uuid",
       "qty numeric(15,3)",
     ])
-    expect(totals.columns.every((c) => c.notNull)).toBe(true)
+    // NOT NULL лише в обов'язкових вимірів і ресурсів.
+    expect(totals.columns.map((c) => c.notNull)).toEqual([
+      true,
+      true,
+      false,
+      true,
+    ])
     expect(column(totals, "qty").default).toBe("0")
-    expect(totals.primaryKey).toEqual({
-      name: "stock_totals_pkey",
-      columns: ["org_id", "warehouse_id", "item_id"],
-    })
-    expect(totals.uniques).toEqual([])
+    expect(totals.primaryKey).toBeUndefined()
+    expect(totals.uniques).toEqual([
+      {
+        name: "stock_totals_org_id_warehouse_id_item_id_key",
+        columns: ["org_id", "warehouse_id", "item_id"],
+        nullsNotDistinct: true,
+      },
+    ])
     expect(totals.checks).toEqual([])
     expect(
       totals.foreignKeys.map((fk) => [
@@ -384,6 +400,151 @@ describe("stage 3: register keys", () => {
     expect(settings.columns.map((c) => c.name)).toEqual(["org_id", "limit"])
     expect(settings.primaryKey?.columns).toEqual(["org_id"])
     expect(settings.checks).toEqual([])
+  })
+
+  it("balance register monthly turnovers", () => {
+    const physical = physicalOf(stockFiles())
+    const month = tableOf(physical, "stock_turnovers_month")
+    expect(month.origin).toEqual({ objectId: STOCK_ID, part: "turnoversMonth" })
+    expect(
+      month.columns.map((c) => `${c.name} ${c.type} ${c.notNull}`)
+    ).toEqual([
+      "org_id uuid true",
+      "warehouse_id uuid true",
+      "item_id uuid false",
+      "month date true",
+      "qty_receipt numeric(15,3) true",
+      "qty_expense numeric(15,3) true",
+    ])
+    expect(column(month, "qty_receipt").default).toBe("0")
+    expect(column(month, "qty_expense").default).toBe("0")
+    expect(month.primaryKey).toBeUndefined()
+    expect(
+      month.uniques.map(({ columns, nullsNotDistinct }) => ({
+        columns,
+        nullsNotDistinct,
+      }))
+    ).toEqual([
+      {
+        columns: ["org_id", "warehouse_id", "item_id", "month"],
+        nullsNotDistinct: true,
+      },
+    ])
+  })
+
+  it("turnover register monthly turnovers", () => {
+    const physical = physicalOf(stockFiles({ registerType: "Turnover" }))
+    const month = tableOf(physical, "stock_turnovers_month")
+    expect(month.columns.map((c) => c.name)).toEqual([
+      "org_id",
+      "warehouse_id",
+      "item_id",
+      "month",
+      "qty",
+    ])
+    expect(column(month, "qty")).toMatchObject({ notNull: true, default: "0" })
+    expect(physical.tables.map((t) => t.name)).not.toContain("stock_totals")
+  })
+
+  it("information register has no monthly turnovers", () => {
+    const names = physicalOf(ratesFiles()).tables.map((t) => t.name)
+    expect(names).not.toContain("rates_turnovers_month")
+    expect(names).not.toContain("rates_totals")
+  })
+
+  it("totals key is unique nulls not distinct", () => {
+    const totals = tableOf(physicalOf(stockFiles()), "stock_totals")
+    expect(totals.primaryKey).toBeUndefined()
+    expect(totals.uniques.map((u) => [u.columns, u.nullsNotDistinct])).toEqual([
+      [["org_id", "warehouse_id", "item_id"], true],
+    ])
+    expect(column(totals, "warehouse_id").notNull).toBe(true)
+    expect(column(totals, "item_id").notNull).toBe(false)
+  })
+
+  it("scoped register without dimensions", () => {
+    const physical = physicalOf(
+      scopedFiles({
+        [STOCK]: {
+          id: STOCK_ID,
+          kind: "AccumulationRegister",
+          name: "Stock",
+          physicalName: "stock",
+          scope: "org",
+          resources: [attribute("qty", { type: "Integer" })],
+        },
+      })
+    )
+    const month = tableOf(physical, "stock_turnovers_month")
+    expect(month.uniques.map((u) => u.columns)).toEqual([["org_id", "month"]])
+    expect(month.primaryKey).toBeUndefined()
+    const totals = tableOf(physical, "stock_totals")
+    expect(totals.primaryKey?.columns).toEqual(["org_id"])
+    expect(totals.uniques).toEqual([])
+    expect(totals.columns.map((c) => c.name)).toEqual(["org_id", "qty"])
+  })
+
+  it("unscoped register without dimensions", () => {
+    const physical = physicalOf(
+      metaFiles({
+        [PROJECT]: project(),
+        [STOCK]: {
+          id: STOCK_ID,
+          kind: "AccumulationRegister",
+          name: "Stock",
+          physicalName: "stock",
+          resources: [attribute("qty", { type: "Integer" })],
+        },
+      })
+    )
+    const month = tableOf(physical, "stock_turnovers_month")
+    expect(month.uniques.map((u) => [u.columns, u.nullsNotDistinct])).toEqual([
+      [["month"], false],
+    ])
+    expect(tableOf(physical, "stock_totals").primaryKey?.columns).toEqual([
+      "singleton",
+    ])
+  })
+
+  it("movement indexes end with recorder", () => {
+    const stock = tableOf(physicalOf(stockFiles()), "stock")
+    const keys = indexesOf(stock).map((index) => index.keys)
+    expect(keys).toContainEqual([
+      "org_id",
+      "warehouse_id",
+      "item_id",
+      "period",
+      "recorder_type",
+      "recorder_id",
+    ])
+    expect(keys).toContainEqual(["org_id", "period"])
+    expect(keys).not.toContainEqual([
+      "org_id",
+      "warehouse_id",
+      "item_id",
+      "period",
+    ])
+  })
+
+  it("turnovers month name collision", () => {
+    const files = metaFiles({
+      [PROJECT]: project(),
+      "catalogs/Clash/Clash.meta.json": catalog("Clash", {
+        physicalName: "stock_turnovers_month",
+      }),
+      [STOCK]: {
+        id: STOCK_ID,
+        kind: "AccumulationRegister",
+        name: "Stock",
+        physicalName: "stock",
+        resources: [attribute("qty", { type: "Integer" })],
+      },
+    })
+    expect(
+      diagnosticsOf(files).filter(
+        ([code]) => code === "physical.table-duplicate"
+      )
+    ).toHaveLength(1)
   })
 
   it("totals table name collision", () => {
