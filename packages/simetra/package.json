@@ -10,7 +10,7 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
-    "test:watch": "vitest",
+    "test:watch": "vitest --project unit",
     "test:db": "vitest run --project db"
   },
   "dependencies": {
