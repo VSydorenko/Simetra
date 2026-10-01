@@ -199,7 +199,7 @@
   необов'язковий вимір. Пропущений необов'язковий вимір обгортка вже дає як
   `NULL::<тип>` (`movement-functions.ts`) — тест це закріплює.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `kind-registry.test.ts`:
 - `register key specs` — точні об'єкти `registerKeys` для регістра
@@ -234,12 +234,12 @@
   `NULL::uuid AS item_id` (точна форма квотування — як у наявних тестах
   цього файлу).
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry stage-registers stage-posting-integrity movement-functions` → FAIL.
-- [ ] **Step 3: Реалізація** — за Interfaces; `stage-scope-model.test.ts` і
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry stage-registers stage-posting-integrity movement-functions` → FAIL.
+- [x] **Step 3: Реалізація** — за Interfaces; `stage-scope-model.test.ts` і
   інші тести з PK незалежного регістра чи `NOT NULL` вимірів оновити під нову
   форму (зміна очікувана — назвати її в повідомленні коміту).
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/model/kinds packages/simetra/src/compiler packages/simetra/src/model/__tests__
@@ -289,7 +289,7 @@ git commit -m "feat(model): виміри регістрів nullable, ключі
     Лише довідники з непорожнім `predefinedItems`; сортування за `objectId`,
     `items` — у порядку файлу. Засів (`MERGE` за `id`) — П3.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 - `kind-registry.test.ts`: `catalog and document carry version` —
   `version` `bigint NOT NULL DEFAULT 1` у довідника й документа, немає в
   регістрів, константи й рядка ТЧ; `predefined name is a partial unique` —
@@ -312,11 +312,11 @@ git commit -m "feat(model): виміри регістрів nullable, ключі
   довідники, у порядку `objectId`; довідника без предвизначених у контракті
   немає.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry kind-schemas stage-model stage-identity contracts` → FAIL.
-- [ ] **Step 3: Реалізація** — за Interfaces.
-- [ ] **Step 4: Зелені** — PASS; повні гейти (тести зі списками колонок
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry kind-schemas stage-model stage-identity contracts` → FAIL.
+- [x] **Step 3: Реалізація** — за Interfaces.
+- [x] **Step 4: Зелені** — PASS; повні гейти (тести зі списками колонок
   довідника й документа в інших файлах оновлюються під `version`).
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -397,7 +397,7 @@ git commit -m "feat(model): стандартні реквізити version і p
     самою умовою.
   - `buildContracts(objects, physical, style, sqlUnits, timezone: string)`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 - `period.test.ts`: `truncates in project timezone` —
   `truncatedPeriodExpression("period", "month", "Europe/Kyiv")` →
   `date_trunc('month', (period AT TIME ZONE 'Europe/Kyiv'))::date`
@@ -437,11 +437,11 @@ git commit -m "feat(model): стандартні реквізити version і p
     "turnover_totals_verify"` поруч з оборотним регістром `turnover` →
     `physical.function-duplicate`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test period kind-registry stage-registers contracts` → FAIL.
-- [ ] **Step 3: Реалізація** — за Interfaces; `addTurnoversMonth` іде після
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test period kind-registry stage-registers contracts` → FAIL.
+- [x] **Step 3: Реалізація** — за Interfaces; `addTurnoversMonth` іде після
   `addTotals` у `add`, обидва — за фактами `registerKeys`.
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -507,7 +507,7 @@ git commit -m "feat(compiler): місячні обороти регістрів 
     ```
     Префікса немає (пізніше). Генерація лічильників — П3.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 - `kind-registry.test.ts`: `numbering spec of document and catalog`;
   `catalog without code has no numbering`.
 - `stage-model.test.ts`:
@@ -532,10 +532,10 @@ git commit -m "feat(compiler): місячні обороти регістрів 
   `assignedAt: "firstWrite"`; `catalog code numbering contract` — без
   `periodColumn`, `periodicity: "None"`; довідника з `codeLength: 0` немає.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry stage-model stage-scope-model contracts` → FAIL.
-- [ ] **Step 3: Реалізація** — за Interfaces.
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry stage-model stage-scope-model contracts` → FAIL.
+- [x] **Step 3: Реалізація** — за Interfaces.
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -586,7 +586,7 @@ git commit -m "feat(compiler): нумерація першим записом �
     `sections` немає. Команда `saveAndPost` — T3 (П4), у контракті її немає.
   - `derivedFunctions` реєструє `save` поруч із `post`/`unpost`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 - `kind-registry.test.ts`: `requiredOnPost` є лише в документа.
 - `stage-model.test.ts`:
   - `required document attribute is checked on posting` — реквізит шапки
@@ -607,10 +607,10 @@ git commit -m "feat(compiler): нумерація першим записом �
   - `save name collision` — довідник з `physicalName: "sale_save"` →
     `physical.function-duplicate`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry stage-model contracts` → FAIL.
-- [ ] **Step 3: Реалізація** — за Interfaces.
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test kind-registry stage-model contracts` → FAIL.
+- [x] **Step 3: Реалізація** — за Interfaces.
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -626,18 +626,18 @@ git commit -m "feat(compiler): обов'язковість за видом і к
 - Modify (якщо розходиться): `.agents/skills/code-review/references/simetra-domain-criteria.md`
 - Modify: цей план (галочки)
 
-- [ ] **Step 1: Пошук залишків старої форми** — без обрізання виводу:
+- [x] **Step 1: Пошук залишків старої форми** — без обрізання виводу:
   `grep -rn "dimensionsNotNull\|dimensionsUnique" packages .agents docs --include=*.ts --include=*.md`
   (у коді має бути 0 збігів; у доках — лише плани B–C2 як історичні записи,
   їх не правити) і `grep -rn "_totals" .agents docs/superpowers/specs` —
   жоден опис не каже, що ключ `totals` — PK.
-- [ ] **Step 2: Критерії рев'ю** — звірити рядки Р22, Р24/Р25, Р26 у
+- [x] **Step 2: Критерії рев'ю** — звірити рядки Р22, Р24/Р25, Р26 у
   `simetra-domain-criteria.md` з кодом після задач 1–5; правити лише там, де
   критерій указує на місце, якого вже немає.
-- [ ] **Step 3: ROADMAP** — «Зараз»: C3 виконано, далі D1; посилання на цей
+- [x] **Step 3: ROADMAP** — «Зараз»: C3 виконано, далі D1; посилання на цей
   план.
-- [ ] **Step 4: Гейти** — `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Гейти** — `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`.
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/ROADMAP.md docs/superpowers/plans/2026-10-01-p2c3-physics-refinement.md .agents/skills/code-review/references/simetra-domain-criteria.md
