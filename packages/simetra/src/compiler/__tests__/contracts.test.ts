@@ -44,6 +44,15 @@ function turnoverStock(): Record<string, unknown> {
   return entries
 }
 
+/**
+ * Дослівна функція з іменем функції контракту: збіг імені в `pg_proc` —
+ * колізія за будь-якої сигнатури (функції платформи RPC кличе за іменем).
+ */
+const CLASH_SQL = "sql/public/clash.sql"
+function clashFunction(name: string): string {
+  return `CREATE FUNCTION ${name}(a int) RETURNS int LANGUAGE sql AS $$ select 1 $$;`
+}
+
 const at = { name: "p_at", type: "timestamp with time zone" }
 const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
@@ -265,9 +274,7 @@ describe("posting and register contracts", () => {
 
   it("save name collision", async () => {
     const entries = withStock({})
-    entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
-      physicalName: "sale_save",
-    })
+    entries[CLASH_SQL] = clashFunction("sale_save")
     const found = (await compile(metaFiles(entries))).diagnostics.filter(
       (d) => d.code === "physical.function-duplicate"
     )
@@ -551,9 +558,7 @@ describe("posting and register contracts", () => {
 
   it("maintenance function name collision", async () => {
     const entries = turnoverStock()
-    entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
-      physicalName: "stock_totals_verify",
-    })
+    entries[CLASH_SQL] = clashFunction("stock_totals_verify")
     const found = (await compile(metaFiles(entries))).diagnostics.filter(
       (d) => d.code === "physical.function-duplicate"
     )
@@ -562,11 +567,7 @@ describe("posting and register contracts", () => {
 
   it("function name collision", async () => {
     const entries = withStock({})
-    Object.assign(entries, {
-      "catalogs/Clash/Clash.meta.json": catalog("Clash", {
-        physicalName: "stock_balance",
-      }),
-    })
+    entries[CLASH_SQL] = clashFunction("stock_balance")
     const result = await compile(metaFiles(entries))
     expect(result.ok).toBe(false)
     expect(result.model).toBeUndefined()
@@ -591,9 +592,7 @@ describe("posting and register contracts", () => {
     expect(names).toContain("sale_unpost")
     for (const name of names) {
       const entries = withStock({})
-      entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
-        physicalName: name,
-      })
+      entries[CLASH_SQL] = clashFunction(name)
       const found = (await compile(metaFiles(entries))).diagnostics.filter(
         (d) => d.code === "physical.function-duplicate"
       )
@@ -718,19 +717,14 @@ describe("posting and register contracts", () => {
     ).toEqual(["origin_type", "origin_id"])
   })
 
-  it("wrapper name collides with a table", async () => {
+  it("wrapper name may equal a table name", async () => {
+    // Обгортка — у `pg_proc`, таблиця — у `pg_class`: простори різні.
     const entries = withStock({})
     entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
       physicalName: "sale_stock_movements",
     })
-    const found = (await compile(metaFiles(entries))).diagnostics.filter(
-      (d) => d.code === "physical.function-duplicate"
-    )
-    expect(found).toHaveLength(1)
-    expect(found[0]).toMatchObject({
-      file: SALE_FILE,
-      pointer: "/registerMovements/0",
-    })
+    const result = await compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
   })
 
   it("wrapper name collides with another wrapper", async () => {

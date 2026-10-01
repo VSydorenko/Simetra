@@ -11,7 +11,6 @@ import {
   NO_SCOPE,
   type MetadataRef,
   type MovementDecl,
-  type PhysicalTable,
   type ReferenceRole,
   type ScopeKind,
   type StandardColumnDef,
@@ -36,7 +35,7 @@ import {
 import { derivedFunctions, type DerivedFunction } from "../contracts"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
-import { FUNCTION_CLASSES, type VerbatimUnit } from "../sql/units"
+import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import {
   registerTargetError,
@@ -131,7 +130,6 @@ export function checkIntegrity(
         model.physical,
         movementWrapperName
       ),
-      model.physical.tables,
       sqlUnits
     )
   )
@@ -1105,24 +1103,27 @@ function checkPosting(
 }
 
 /**
- * Похідні функції (контракти й обгортки) не збігаються між собою й із
- * таблицями тієї ж PG-схеми (спека §7), а функції контрактів — ще й із
- * функціями дослівних `.sql`: інакше `CREATE` П3 упаде чи мовчки перепише
- * чуже. Обгортку з дослівними одиницями звіряє за сигнатурою перевірка
- * просторів імен Postgres (`namespaceConflicts`). Першою вважається функція,
- * раніша за файлом і шляхом.
+ * Похідні функції (контракти й обгортки) не збігаються між собою (спека §7),
+ * а функції контрактів — ще й з іменами `pg_proc` дослівних `.sql`: інакше
+ * `CREATE` П3 упаде чи мовчки перепише чуже. Порівнюється ім'я без
+ * сигнатури: функції платформи RPC кличе за іменем, тож перевантаження їхніх
+ * імен заборонені. Таблиць перевірка не торкається: `pg_proc` і `pg_class` —
+ * різні простори, а PostgREST розводить `/table` і `/rpc/fn`. Обгортку з
+ * дослівними одиницями звіряє за сигнатурою перевірка просторів імен
+ * Postgres (`namespaceConflicts`). Першою вважається функція, раніша за
+ * файлом і шляхом.
  */
 function functionCollisions(
   functions: readonly DerivedFunction[],
-  tables: readonly PhysicalTable[],
   sqlUnits: readonly VerbatimUnit[]
 ): Diagnostic[] {
-  const tableNames = new Set(tables.map((t) => `${t.schema}.${t.name}`))
   const unitFiles = new Map<string, string>()
   for (const unit of sqlUnits) {
-    const key = `${unit.schema}.${unit.name}`
-    if (FUNCTION_CLASSES.has(unit.class) && !unitFiles.has(key)) {
-      unitFiles.set(key, unit.file)
+    for (const name of pgNamespaceKeys({ type: "unit", unit })) {
+      const key = `${name.schema}.${name.name}`
+      if (name.space === "proc" && !unitFiles.has(key)) {
+        unitFiles.set(key, unit.file)
+      }
     }
   }
   const seen = new Map<string, DerivedFunction>()
@@ -1135,9 +1136,8 @@ function functionCollisions(
     const key = `${fn.schema}.${fn.name}`
     const first = seen.get(key)
     const unitFile = fn.movementQuery === true ? undefined : unitFiles.get(key)
-    const other = tableNames.has(key)
-      ? "a table"
-      : first !== undefined
+    const other =
+      first !== undefined
         ? `function of ${first.description}`
         : unitFile !== undefined
           ? `a function in ${unitFile}`

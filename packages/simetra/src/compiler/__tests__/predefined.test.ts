@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   catalog,
+  document,
   metaFiles,
   organization,
   project,
@@ -193,14 +194,43 @@ describe("predefined catalog items", () => {
     expect(keyOf("store")).toEqual(["predefined_name"])
   })
 
-  it("lookup function name collides with a table → physical.function-duplicate", async () => {
+  it("a function may share its name with a table", async () => {
+    // `pg_proc` і `pg_class` — різні простори, а PostgREST розводить `/table`
+    // і `/rpc/fn`: функція пошуку предвизначених `warehouse_predefined` і
+    // `sale_post` контракту проведення не заважають однойменним таблицям ТЧ.
+    // Таблиця ТЧ має власне `physicalName` — тут воно навмисно дорівнює
+    // імені функції власника.
+    const table = (name: string, physicalName: string, n: number) => ({
+      id: uuid(n),
+      name,
+      physicalName,
+      attributes: [],
+    })
+    const result = await compileWith({
+      [WAREHOUSE]: warehouse(
+        [{ id: uuid(911), name: "Main", physicalName: "main" }],
+        { tabularSections: [table("predefined", "warehouse_predefined", 921)] }
+      ),
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        tabularSections: [table("post", "sale_post", 922)],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+    const names = result.model!.physical.tables.map((t) => t.name)
+    expect(names).toEqual(
+      expect.arrayContaining(["warehouse_predefined", "sale_post"])
+    )
+  })
+
+  it("lookup function name collides with a verbatim function", async () => {
     const result = await compileWith({
       [WAREHOUSE]: warehouse([
         { id: uuid(911), name: "Main", physicalName: "main" },
       ]),
-      "catalogs/WarehousePredefined/WarehousePredefined.meta.json": catalog(
-        "WarehousePredefined"
-      ),
+      // Інші типи аргументів — не виправдання: функції платформи RPC кличе за
+      // іменем, тож перевантаження їхніх імен заборонені.
+      "sql/public/misc.sql":
+        "CREATE FUNCTION warehouse_predefined(a int, b int) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
     })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
@@ -208,7 +238,7 @@ describe("predefined catalog items", () => {
         file: WAREHOUSE,
         params: expect.objectContaining({
           name: "warehouse_predefined",
-          other: "a table",
+          other: "a function in sql/public/misc.sql",
         }),
       }),
     ])

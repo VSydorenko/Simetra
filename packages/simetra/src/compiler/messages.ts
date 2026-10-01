@@ -746,8 +746,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція ${p.name} (${p.description}) збігається з ${p.other} у схемі ${p.schema}`,
     hint: {
-      en: "Function names are derived from physical names of catalogs, documents and registers by the Postgres naming algorithm; change a physicalName so the names differ.",
-      uk: "Імена функцій виводяться з фізичних імен довідників, документів і регістрів за алгоритмом іменування Postgres; змініть physicalName, щоб імена відрізнялися.",
+      en: "Function names are derived from physical names of catalogs, documents and registers by the Postgres naming algorithm; change a physicalName or rename the function in .sql so the names differ. Platform functions are called by name, so argument types do not tell them apart.",
+      uk: "Імена функцій виводяться з фізичних імен довідників, документів і регістрів за алгоритмом іменування Postgres; змініть physicalName або перейменуйте функцію в .sql, щоб імена відрізнялися. Функції платформи викликаються за іменем, тож типи аргументів їх не розрізняють.",
     },
   },
   "physical.reserved-word": {
