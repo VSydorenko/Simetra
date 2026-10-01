@@ -103,12 +103,12 @@ devDependency лише для тестів), локальний стек Supabas
   (каскад перейменування); друга форма знімка при явному типовому
   opclass/колляції й асиметрія `deferrable` — E2 (round-trip).
 
-- [ ] **Step 1: Тести** — `enumeration labels are unique`; `time zone is
+- [x] **Step 1: Тести** — `enumeration labels are unique`; `time zone is
   canonicalised` (`"europe/kyiv"` → `"Europe/Kyiv"` у моделі й однаковий хеш).
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-identity value-checks` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-identity value-checks` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -139,16 +139,16 @@ git commit -m "fix(compiler): унікальні мітки значень пе�
     функції (`proname`, аргументи); усе відсортоване; схема в дефініціях
     нормалізується до плейсхолдера `<schema>`, щоб дві схеми порівнювались.
 
-- [ ] **Step 1: Тест** `stack.db.test.ts`: `rollback leaves no trace`
+- [x] **Step 1: Тест** `stack.db.test.ts`: `rollback leaves no trace`
   (`CREATE SCHEMA e1_probe` у `withRollback`, після — схеми немає);
   `provider base state is visible` (`auth.users` існує); `readCatalog reads a
   table` (таблиця з PK, `NULLS NOT DISTINCT` UNIQUE і генерованою колонкою →
   очікувана форма).
-- [ ] **Step 2: Без стеку** — `pnpm --filter simetra test:db` → FAIL
+- [x] **Step 2: Без стеку** — `pnpm --filter simetra test:db` → FAIL
   (з'єднання). **Зі стеком** — `pnpm db:start && pnpm --filter simetra test:db` → PASS.
-- [ ] **Step 3:** `pnpm test` (юніти) не запускає `*.db.test.ts`; CI-джоба
+- [x] **Step 3:** `pnpm test` (юніти) не запускає `*.db.test.ts`; CI-джоба
   `db` запускає обидва набори (кореневий `test:db`).
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add packages/simetra package.json pnpm-lock.yaml AGENTS.md
@@ -186,15 +186,15 @@ git commit -m "test(schema): інфраструктура DB-тестів Vitest
   FK — `ALTER TABLE … ADD CONSTRAINT "<name>" FOREIGN KEY (…) REFERENCES <schema>.<table> (…) ON DELETE <a> ON UPDATE <a> [DEFERRABLE …]`;
   імена й схеми — `quoteIdent`.
 
-- [ ] **Step 1: Тести** (`toMatchInlineSnapshot`): `catalog table`;
+- [x] **Step 1: Тести** (`toMatchInlineSnapshot`): `catalog table`;
   `generated number period column`; `unique nulls not distinct and deferrable`;
   `partial and expression index with order and opclass`; `foreign key with
   actions`; `enum type keeps value order`; `rls enabled and forced`;
   `comments`; `identifiers are quoted` (ім'я колонки `order`); `deterministic`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test render-tables` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test render-tables` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/schema
@@ -223,14 +223,14 @@ git commit -m "feat(schema): рендер таблиць, енам-типів, �
   FK (`renderForeignKeys`) у порядку таблиць. Обгортки запитів рухів — одиниці
   класу `movementQuery` у тому самому порядку.
 
-- [ ] **Step 1: Тести** — `schemas first, then creation order, then foreign
+- [x] **Step 1: Тести** — `schemas first, then creation order, then foreign
   keys`; `extension unit before tables`; `movement wrapper after its
   tables`; `provider schemas are not created`; `map insertion order does not
   change the sql`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test desired-state` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test desired-state` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/schema
@@ -254,7 +254,7 @@ git commit -m "feat(schema): бажаний стан — схеми, поряд�
   структура; тексти виразів — через `pg_get_expr`/`pg_get_constraintdef` лише
   на наявність (канонічну форму дає Postgres, спека §9).
 
-- [ ] **Step 1: Тести** — для кожної фікстури: compile → `renderDesiredState`
+- [x] **Step 1: Тести** — для кожної фікстури: compile → `renderDesiredState`
   → виконати `sql` у `withRollback` → `readCatalog` → `expectCatalogMatchesSnapshot`.
   Фікстури (через наявні хелпери тестів компілятора, схема проєкту `app`):
   - `scoped catalog with hierarchy, owner, code numbering and predefined items`;
@@ -272,11 +272,11 @@ git commit -m "feat(schema): бажаний стан — схеми, поряд�
     з `date = '2026-01-31 23:30:00+00'` у проєкті `Europe/Kyiv` → `number_period = '2026-02-01'`;
   - `movement wrapper returns rows` — вставка документа й рядків ТЧ → виклик
     обгортки повертає очікувані рухи.
-- [ ] **Step 2:** `pnpm db:start && pnpm --filter simetra test:db` — PASS.
+- [x] **Step 2:** `pnpm db:start && pnpm --filter simetra test:db` — PASS.
   **Кожен збій Postgres — дефект компілятора чи рендера**: виправити в
   тому шарі (T1 — фізика, T2 — форма SQL) з юніт-тестом на причину; якщо
   виправлення змінює модель чи спеку — зупинитись і повідомити архітектора.
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add packages/simetra
@@ -297,7 +297,7 @@ git commit -m "test(schema): розгортання бажаного стану 
 фіксовані v4, `physicalName` і мітки — snake_case логічних імен (до D2 їх
 призначає автор; `simetra fix` з'явиться в D2).
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
   - `reference-domain.test.ts` (юніт; читає файли через `node:fs` у тесті):
     `compiles without diagnostics` (`ok: true`, жодної діагностики, зокрема
     попереджень); `files are in canonical form` (`formatMetaFile(JSON.parse(text)) === text`
@@ -308,9 +308,9 @@ git commit -m "test(schema): розгортання бажаного стану 
     `expectCatalogMatchesSnapshot`; плюс сценарій: вставити організацію,
     члена, контрагента, договір, документ із рядками ТЧ → обгортки рухів
     обох регістрів повертають рядки з очікуваними вимірами й ресурсами.
-- [ ] **Step 2:** юніти й `pnpm --filter simetra test:db` — PASS (збої —
+- [x] **Step 2:** юніти й `pnpm --filter simetra test:db` — PASS (збої —
   як у задачі 4, крок 2).
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add examples .prettierignore packages/simetra/src/schema/__tests__
@@ -339,18 +339,18 @@ git commit -m "feat(examples): синтетичний референсний д�
   `*_totals`); **жодного `drop` чи `alter`**. Фікстура `expected-diff.json` —
   точний перелік; будь-яка інша зміна валить тест.
 
-- [ ] **Step 1: Тест** — розгорнути «прийняту» форму й домен у двох схемах
+- [x] **Step 1: Тест** — розгорнути «прийняту» форму й домен у двох схемах
   однієї транзакції-відкату, прочитати обидві, `diffCatalogs`, порівняти з
   фікстурою.
-- [ ] **Step 2:** `pnpm --filter simetra test:db` — PASS. Якщо різниця
+- [x] **Step 2:** `pnpm --filter simetra test:db` — PASS. Якщо різниця
   містить `drop`/`alter`, які не є стандартним елементом виду, — це
   розбіжність моделі з «прийнятою» формою: зупинитись і повідомити
   архітектора (не підганяти фікстуру).
-- [ ] **Step 3: Канон і статус** — спека П2 §9/§10.4: тінь E1 —
+- [x] **Step 3: Канон і статус** — спека П2 §9/§10.4: тінь E1 —
   транзакція-відкат у базі стеку, окремі тіні й pg-delta — E2 (речення, без
   переказу плану); `docs/ROADMAP.md`: посилання на план, «Зараз» — E1
   виконано, далі D2. `python3 scripts/check-doc-anchors.py`.
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add examples packages/simetra docs
