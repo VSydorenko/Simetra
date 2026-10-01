@@ -72,9 +72,12 @@ const INTEGER_TEXT = /^[+-]?\d+$/
 const UUID_TEXT =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/
-/** ISO 8601 з поясом: момент без поясу Postgres прочитав би в поясі сесії. */
+/**
+ * ISO 8601 з поясом (`Z`, `±hh`, `±hh:mm`, `±hhmm`): момент без поясу Postgres
+ * прочитав би в поясі сесії.
+ */
 const DATE_TIME_TEXT =
-  /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):?(\d{2}))$/
+  /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2})(?::?(\d{2}))?)$/
 
 /**
  * JSON-форма скаляра для типу (спека П2 §5): булеве, число чи рядок. Чи
@@ -173,7 +176,9 @@ function isDate(text: string): boolean {
     number,
     number,
   ]
-  const date = new Date(Date.UTC(year, month - 1, day))
+  // `setUTCFullYear`, а не `Date.UTC`: той читає роки 0–99 як 1900+.
+  const date = new Date(0)
+  date.setUTCFullYear(year, month - 1, day)
   return (
     date.getUTCFullYear() === year &&
     date.getUTCMonth() === month - 1 &&
@@ -195,7 +200,8 @@ function isDateTime(text: string): boolean {
     hours < 24 &&
     minutes < 60 &&
     seconds < 60 &&
-    zoneHours < 24 &&
+    // Зсув поясу понад ±15:59 Postgres відхиляє (displacement out of range).
+    zoneHours <= 15 &&
     zoneMinutes < 60
   )
 }

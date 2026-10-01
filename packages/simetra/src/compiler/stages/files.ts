@@ -261,7 +261,8 @@ let timeZones: ReadonlySet<string> | undefined
  * Перелік рушія канонічний — без псевдонімів (`Europe/Kyiv` в ICU досі
  * зводиться до `Europe/Kiev`) і без `UTC`, тож ім'я спершу канонізує
  * `Intl.DateTimeFormat`. Зсув на кшталт `+05:00` рушій приймає, але це не
- * ім'я поясу, і в канонічному переліку його немає.
+ * ім'я поясу, і в канонічному переліку його немає; `Etc/GMT±N` — ім'я, хоч
+ * перелік його й не містить.
  */
 function isKnownTimeZone(name: string): boolean {
   let canonical: string
@@ -273,8 +274,13 @@ function isKnownTimeZone(name: string): boolean {
     return false
   }
   timeZones ??= new Set(Intl.supportedValuesOf("timeZone"))
-  return canonical === "UTC" || timeZones.has(canonical)
+  return (
+    canonical === "UTC" || ETC_GMT.test(canonical) || timeZones.has(canonical)
+  )
 }
+
+/** `Etc/GMT±N` — пояси IANA, яких немає в переліку рушія, але Postgres їх знає. */
+const ETC_GMT = /^Etc\/GMT[+-]\d{1,2}$/
 
 function readObject(
   file: string,

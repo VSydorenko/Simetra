@@ -16,7 +16,7 @@ function codes(result: CompileResult): [string, string, string][] {
 
 describe("project timezone", () => {
   it("unknown timezone", async () => {
-    for (const timezone of ["Mars/Olympus", "+05:00"]) {
+    for (const timezone of ["Mars/Olympus", "+05:00", "Etc/GMT+5:30"]) {
       const result = await compileWith({
         "project.meta.json": project({ timezone }),
       })
@@ -28,7 +28,13 @@ describe("project timezone", () => {
   })
 
   it("UTC and Europe/Kyiv are accepted", async () => {
-    for (const timezone of ["UTC", "Europe/Kyiv", "America/New_York"]) {
+    for (const timezone of [
+      "UTC",
+      "Europe/Kyiv",
+      "America/New_York",
+      "Etc/GMT+5",
+      "Etc/GMT-3",
+    ]) {
       const result = await compileWith({
         "project.meta.json": project({ timezone }),
       })
@@ -57,6 +63,9 @@ describe("default value checks", () => {
     expect(await check({ type: "Date" }, "2026-02-30")).toEqual(INVALID)
     expect(await check({ type: "Date" }, "28.02.2026")).toEqual(INVALID)
     expect(await check({ type: "Date" }, "2026-2-1")).toEqual(INVALID)
+    // Роки 0–99 — звичайні роки, а не 1900+ (пастка `Date.UTC`).
+    expect(await check({ type: "Date" }, "0050-01-01")).toEqual([])
+    expect(await check({ type: "Date" }, "0050-02-30")).toEqual(INVALID)
   })
 
   it("DateTime takes ISO 8601 with a zone", async () => {
@@ -64,6 +73,8 @@ describe("default value checks", () => {
       "2026-10-01T12:30:00Z",
       "2026-10-01T12:30:00.250+03:00",
       "2026-10-01T12:30-05:00",
+      "2026-10-01T12:30:00+03",
+      "2026-10-01T12:30:00+15:59",
     ]) {
       expect(await check({ type: "DateTime" }, value), value).toEqual([])
     }
@@ -72,6 +83,8 @@ describe("default value checks", () => {
       "2026-10-01",
       "2026-13-01T00:00:00Z",
       "2026-10-01T24:00:00Z",
+      "2026-10-01T12:30:00+16:00",
+      "2026-10-01T12:30:00-23",
       "now",
     ]) {
       expect(await check({ type: "DateTime" }, value), value).toEqual(INVALID)
