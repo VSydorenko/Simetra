@@ -12,6 +12,7 @@ import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
+import { creationOrder, type CreationNode } from "./sql/dependencies"
 import { loadSqlParser } from "./sql/parse"
 import {
   generatedDuplicates,
@@ -56,6 +57,11 @@ export interface CompiledModel {
   physical: PhysicalSnapshot
   /** Дослівні одиниці `.sql` і обгортки запитів рухів; за `identity`. */
   sqlUnits: SqlUnit[]
+  /**
+   * Спільний порядок створення енам-типів, таблиць і одиниць: розширення
+   * перші, далі топологічно з tie-break (тип вузла, схема, ім'я/ідентичність).
+   */
+  creationOrder: CreationNode[]
   contracts: Contracts
 }
 
@@ -195,6 +201,20 @@ export async function compile(
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
   ].sort((a, b) => compareStrings(a.identity, b.identity))
+  const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
+  const ordered = creationOrder(
+    stage3.physical,
+    sqlUnits,
+    parse,
+    // Обгортка рухів файлу не має: цикл через неї названо в документі.
+    (unit) => unit.file ?? fileById.get(unit.ownerObjectId ?? "") ?? ""
+  )
+  if (ordered.diagnostics.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...ordered.diagnostics]),
+    }
+  }
   return {
     ok,
     diagnostics,
@@ -211,6 +231,7 @@ export async function compile(
         .sort((a, b) => compareStrings(a.file, b.file)),
       physical: stage3.physical,
       sqlUnits,
+      creationOrder: ordered.order,
       contracts: buildContracts(
         stage1.objects,
         stage3.physical,

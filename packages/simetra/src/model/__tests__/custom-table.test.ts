@@ -208,6 +208,19 @@ describe("customTableSchema", () => {
     ).toEqual(["type.length-required"])
   })
 
+  it("rowLevelSecurity defaults to off and accepts enabled and forced only", () => {
+    expect(customTableSchema.parse(base).rowLevelSecurity).toBe("off")
+    for (const value of ["enabled", "forced"]) {
+      expect(
+        customTableSchema.parse(table({ rowLevelSecurity: value }))
+          .rowLevelSecurity
+      ).toBe(value)
+    }
+    expect(
+      customTableSchema.safeParse(table({ rowLevelSecurity: "on" })).success
+    ).toBe(false)
+  })
+
   it("custom table has no derived settings", () => {
     expect(customTableSchema.shape).not.toHaveProperty("autoAddPrimaryKey")
     expect(customTableSchema.shape).not.toHaveProperty(

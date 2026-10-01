@@ -56,6 +56,7 @@ export {
   customTableColumnSchema,
   type CustomTable,
   type CustomTableColumn,
+  type RowLevelSecurity,
 } from "./custom-table"
 export { NO_SCOPE, scopeKindSchema, type ScopeKind } from "./scope"
 export { pgEnumSchema, type PgEnum } from "./pg-enum"

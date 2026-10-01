@@ -125,6 +125,7 @@ export const documentKind: KindDefinition = {
     "unpost",
   ],
   materializes: "table",
+  rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
   requiredOnPost: true,

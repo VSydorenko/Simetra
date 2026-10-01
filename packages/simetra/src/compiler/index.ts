@@ -14,6 +14,7 @@ export {
   type SourceObject,
 } from "./compile"
 export type { ResolvedReference } from "./stages/identity"
+export type { CreationNode } from "./sql/dependencies"
 export type { SqlUnit, SqlUnitClass } from "./sql/units"
 export type {
   Contracts,

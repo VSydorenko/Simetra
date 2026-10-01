@@ -1,4 +1,4 @@
-import type { FkAction } from "../schemas/custom-table"
+import type { FkAction, RowLevelSecurity } from "../schemas/custom-table"
 
 /**
  * Контракт фізичного знімка (спека §8.3). Живе в T0, бо з нього будують
@@ -35,6 +35,11 @@ export interface PhysicalTable {
   name: string
   comment?: string
   origin: PhysicalOrigin
+  /**
+   * Похідні таблиці регістра й рядки ТЧ мають RLS власника: інакше вони
+   * відкривали б дані, закриті в основній таблиці.
+   */
+  rowLevelSecurity: RowLevelSecurity
   /** У порядку оголошення. */
   columns: PhysicalColumn[]
   primaryKey?: { name: string; columns: string[] }

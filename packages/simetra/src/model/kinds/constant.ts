@@ -47,6 +47,7 @@ export const constantKind: KindDefinition = {
   writePattern: "server",
   actions: ["read", "update"],
   materializes: "table",
+  rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
   columnFields: [],

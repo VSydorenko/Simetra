@@ -30,6 +30,7 @@ export const informationRegisterKind: KindDefinition = {
   writePattern: "server",
   actions: ["read"],
   materializes: "table",
+  rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
   columnFields: ["dimensions", "resources", "attributes"],

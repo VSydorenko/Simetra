@@ -147,6 +147,11 @@ export const fkActionSchema = z.enum([
 
 export type FkAction = z.infer<typeof fkActionSchema>
 
+/** `forced` — RLS діє і для власника таблиці (`FORCE ROW LEVEL SECURITY`). */
+export const rowLevelSecuritySchema = z.enum(["off", "enabled", "forced"])
+
+export type RowLevelSecurity = z.infer<typeof rowLevelSecuritySchema>
+
 const foreignKeySchema = z.object({
   name: constraintName,
   columns: columnList,
@@ -212,6 +217,11 @@ export const customTableSchema = z.object({
   indexes: z.array(indexSchema).default([]),
   /** Логічне ім'я власної колонки таблиці, що несе скоуп. */
   scopeColumn: elementNameSchema.optional(),
+  /**
+   * RLS таблиці — властивість метаданих, а не `ALTER TABLE` у `.sql`: стан
+   * таблиці описує одне місце. Прийнята таблиця за замовчуванням без RLS.
+   */
+  rowLevelSecurity: rowLevelSecuritySchema.default("off"),
 })
 
 export type CustomTable = z.infer<typeof customTableSchema>

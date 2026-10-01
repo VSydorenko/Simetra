@@ -109,6 +109,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `${p.identity} at line ${p.line} is already defined by ${p.first}`,
     hint: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
   },
+  "sql.dependency-cycle": {
+    message: (p) => `${p.identity} is part of a dependency cycle: ${p.cycle}`,
+    hint: "Each object in the cycle is needed to create the next one, so no creation order exists. A LANGUAGE sql body is checked when the function is created; a PL/pgSQL body is not, so moving the reading code into PL/pgSQL breaks the cycle.",
+  },
   "file.orphan": {
     message: (p) => `No ${p.expected} next to this file`,
   },

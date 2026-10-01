@@ -144,6 +144,7 @@ interface PendingTable {
   name: string
   comment?: string
   origin: PhysicalTable["origin"]
+  rowLevelSecurity: PhysicalTable["rowLevelSecurity"]
   columns: PhysicalColumn[]
   identityColumns: string[]
   primaryKey?: { name?: string; columns: string[] }
@@ -250,7 +251,7 @@ class SnapshotBuilder {
       return
     }
 
-    const main = this.pendingTable(schema, name, origin)
+    const main = this.pendingTable(schema, name, origin, object)
     const kind = this.scopeKindOf(object)
     const root = kind !== undefined && this.isRoot(object, kind)
     const key = keyColumnOf(object)
@@ -392,10 +393,12 @@ class SnapshotBuilder {
         : (data.tabularSections as TabularSection[])
     sections.forEach((section, index) => {
       const pointer = `/tabularSections/${index}`
-      const table = this.pendingTable(schema, section.physicalName!, {
-        ...origin,
-        tabularSectionId: section.id ?? "",
-      })
+      const table = this.pendingTable(
+        schema,
+        section.physicalName!,
+        { ...origin, tabularSectionId: section.id ?? "" },
+        object
+      )
       const rowColumns = def.tabularSectionColumns?.(data) ?? []
       // Рядок ТЧ кореня несе скоуп у `parent_id` — окрема колонка лише
       // дублювала б його.
@@ -505,7 +508,8 @@ class SnapshotBuilder {
     const table = this.pendingTable(
       schema,
       makeObjectName(register, undefined, "totals"),
-      { ...origin, part: "totals" }
+      { ...origin, part: "totals" },
+      object
     )
     const standard = dimensions.length === 0 ? [singletonColumn()] : []
     const fields = this.withScope(standard, scope, (column) =>
@@ -544,7 +548,8 @@ class SnapshotBuilder {
     const table = this.pendingTable(
       schema,
       makeObjectName(register, undefined, "turnovers_month"),
-      { ...origin, part: "turnoversMonth" }
+      { ...origin, part: "turnoversMonth" },
+      object
     )
     // Скоуп-колонка (за її наявності) іде першою, а ключа-одинака тут немає.
     const fields = this.withScope([], scope, (column) =>
@@ -639,15 +644,18 @@ class SnapshotBuilder {
 
   // --- Таблиці видів ------------------------------------------------------
 
+  /** RLS — за об'єктом: похідні таблиці й рядки ТЧ мають RLS власника. */
   private pendingTable(
     schema: string,
     name: string,
-    origin: PhysicalTable["origin"]
+    origin: PhysicalTable["origin"],
+    object: ParsedObject
   ): PendingTable {
     return {
       schema,
       name,
       origin,
+      rowLevelSecurity: rowLevelSecurityOf(object),
       columns: [],
       identityColumns: [],
       uniques: [],
@@ -967,7 +975,8 @@ class SnapshotBuilder {
     const table = this.pendingTable(
       this.schemaOf(object),
       physicalNameOf(object),
-      { objectId: object.id ?? "" }
+      { objectId: object.id ?? "" },
+      object
     )
     if (data.comment !== undefined) table.comment = data.comment
     const source: PhysicalSource = {
@@ -1174,6 +1183,18 @@ function uniqueWithin(
   return unique && scope?.partitioned === true && scope.carrier !== undefined
     ? { uniqueWithin: scope.carrier }
     : {}
+}
+
+/**
+ * Прийнята таблиця описує RLS полем файлу, решта видів — фактом реєстру.
+ */
+function rowLevelSecurityOf(
+  object: ParsedObject
+): PhysicalTable["rowLevelSecurity"] {
+  if (isDeclaredTable(object)) {
+    return (object.data as CustomTable).rowLevelSecurity
+  }
+  return KIND_REGISTRY[object.kind].rowLevelSecurity ?? "off"
 }
 
 function physicalNameOf(object: ParsedObject): string {
@@ -1566,6 +1587,7 @@ function assignNames(pending: readonly PendingTable[]): {
       name: table.name,
       ...(table.comment !== undefined ? { comment: table.comment } : {}),
       origin: table.origin,
+      rowLevelSecurity: table.rowLevelSecurity,
       columns: table.columns,
       ...(primaryKey !== undefined ? { primaryKey } : {}),
       uniques: uniques.sort(byName),

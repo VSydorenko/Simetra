@@ -118,6 +118,7 @@ export const catalogKind: KindDefinition = {
   writePattern: "optimistic",
   actions: ["read", "create", "update", "markDeletion", "delete"],
   materializes: "table",
+  rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
   columnFields: ["attributes"],
