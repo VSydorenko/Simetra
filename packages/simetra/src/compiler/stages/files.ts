@@ -52,8 +52,17 @@ export interface FilesStageResult {
    * й не є помилкою посилання: причину вже названо в самому файлі.
    */
   brokenNames: Set<string>
-  /** `.sql` об'єкта несе шлях свого `.meta.json`; спільний — PG-схему. */
-  sqlFiles: { file: string; ownerFile?: string; schema?: string }[]
+  /**
+   * `.sql` об'єкта несе шлях свого `.meta.json`; спільний — PG-схему. Текст
+   * їде разом зі шляхом: наступні стадії працюють над результатом стадії 1, а
+   * не над мапою файлів.
+   */
+  sqlFiles: {
+    file: string
+    text: string
+    ownerFile?: string
+    schema?: string
+  }[]
   moduleFiles: { file: string; ownerFile: string }[]
   diagnostics: Diagnostic[]
 }
@@ -95,7 +104,7 @@ export function readFiles(
       segments[0] === "sql" &&
       hasBase(segments[2]!, SQL_SUFFIX)
     ) {
-      result.sqlFiles.push({ file, schema: segments[1]! })
+      result.sqlFiles.push({ file, text, schema: segments[1]! })
       readMovementBlocks(file, text, undefined, result.diagnostics)
       continue
     }
@@ -151,16 +160,16 @@ export function readFiles(
         ownerFile: sidecar.ownerFile,
       })
     } else {
-      result.sqlFiles.push({ file: sidecar.file, ownerFile: sidecar.ownerFile })
+      const text = files.get(sidecar.file) ?? ""
+      result.sqlFiles.push({
+        file: sidecar.file,
+        text,
+        ownerFile: sidecar.ownerFile,
+      })
       // Зламаний власник (його немає серед objects) причину вже назвав сам.
       const owner = objectsByFile.get(sidecar.ownerFile)
       if (owner !== undefined) {
-        readMovementBlocks(
-          sidecar.file,
-          files.get(sidecar.file) ?? "",
-          owner,
-          result.diagnostics
-        )
+        readMovementBlocks(sidecar.file, text, owner, result.diagnostics)
       }
     }
   }

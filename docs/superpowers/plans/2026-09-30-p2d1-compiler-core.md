@@ -75,16 +75,34 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
    Number::toString, якого вимагає RFC); тест на числа з JCS.
 4. **Модулі** — один неявний модуль, ім'я = `project.name`; `module` у
    кожного об'єкта й SQL-одиниці. Декларація модулів і ключі поведінки — П4.
-5. **Ратчет** — тест із Proxy над розібраними даними «kitchen-sink»-фікстури;
-   розв'язки полів-сиріт: `autonumber`, `numberPeriodicity`,
-   `numberLength`/`numberType`, `codeType` → `contracts.numbering`;
-   `mainPresentation`, `standardAttributeOverrides` → блок
-   `CompiledModel.presentation`; `title`/`description` → JSDoc кодогену;
-   `predefinedItems[].id`/`name` → `contracts.predefined` (уже в коді C3);
-   `predefinedItems[].description` → `presentation[].predefined`
-   (задача 7) — там уже живуть заголовки й описи стандартних реквізитів.
-   Нова сирота, не названа тут, — зупинка й питання архітектору, не вигаданий
-   споживач.
+5. **Ратчет** — тест із Proxy над розібраними даними «kitchen-sink»-фікстури
+   між `readFiles` і `runStages`; остаточні розв'язки сиріт — за спекою П2
+   (§8.2, §8.3, §8.5, §8.6; коміт спеки 4becbee):
+   - `autonumber`, `numberPeriodicity`, `numberLength`/`numberType`,
+     `codeType` → `contracts.numbering`; `predefinedItems[].id`/`name` →
+     `contracts.predefined`; `mainPresentation`, `standardAttributeOverrides`
+     (об'єкта й ТЧ), `predefinedItems[].description` → блок
+     `CompiledModel.presentation`; `title`/`description` → JSDoc кодогену;
+   - поля, які правило схеми забороняло в окремих позиціях (`length`, `ref`,
+     `allowedTypes`, `crossScope` у ресурсах регістра накопичення,
+     `crossScope` у колонках `CustomTable`), — звужені схеми: власна схема
+     ресурсу, колонка без `crossScope`; схеми файлів строгі, невідомий ключ —
+     `file.unknown-key` стадії 1;
+   - `title`/`description` перерахувань і PgEnum → іменовані типи
+     `Enumerations`/`PgEnums` кодогену з JSDoc; заголовки значень перерахувань
+     → `presentation.objects[].values`;
+   - `project.title` → JSDoc шапки кодогену; `scopeKinds[].title` → JSDoc
+     поля скоупу; `project.defaultLocale` → `presentation.defaultLocale`;
+   - `Constant.defaultValue` → `DEFAULT` колонки `value`.
+
+   Межі ратчета: хеш і канонічний знімок — не споживачі (запис на час
+   `modelHash` вимкнено), як і загальні обходи форми, що перебирають усі
+   ключі; `LocalizedString` — лист (прочитане поле, без `.uk`/`.en`);
+   `kind` і `name` об'єкта — виняток «читає стадія 1» (копіюються в
+   `ParsedObject` до шва); `$schema` — службовий виняток; негативний тест
+   вприскує непрочитане поле й чекає, що ратчет почервоніє саме на ньому.
+   Нова сирота — зупинка й питання архітектору, не вигаданий споживач і не
+   новий виняток.
 6. **JSON Schema** генерує `buildJsonSchemas()` (T1); файли в
    `packages/simetra/schemas/` комітяться; тест дрейфу порівнює їх із
    згенерованими й перезаписує при `UPDATE_JSON_SCHEMAS=1`.
@@ -145,13 +163,13 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
   - Тести індексу посилань (на них спирається каскад перейменування D2): ролі
     й `span` для полів у `sum`/`count`, у `condition` і в `movementType`-виразі.
 
-- [ ] **Step 1: Тести** — `sum and count references carry spans`;
+- [x] **Step 1: Тести** — `sum and count references carry spans`;
   `condition references are indexed`; `movementType expression references are indexed`;
   `duplicate balance control resource`; `indented marker is a warning`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity stage-links stage-registers` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-posting-identity stage-links stage-registers` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -229,7 +247,7 @@ git commit -m "fix(compiler): хвости C2 і C3 — спільний обх�
   `IndexStmt`, `CreateEnumStmt`, `DropStmt`, DML, `ALTER TABLE … ENABLE ROW LEVEL SECURITY`
   — це поле таблиці, задача 2) — `sql.statement-not-allowed`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `sql-units.test.ts`:
 - `function identity includes argument types` — `CREATE FUNCTION public.f(a uuid, b text) …` → `identity === "function:public.f(uuid,text)"`;
@@ -253,12 +271,12 @@ git commit -m "fix(compiler): хвости C2 і C3 — спільний обх�
   `documentId`, `source`;
 - `compile is async` — `compile(...)` повертає `Promise`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test sql-units` → FAIL.
-- [ ] **Step 3: Реалізація** — `pnpm --filter simetra add libpg-query@17.7.4 --save-exact`;
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test sql-units` → FAIL.
+- [x] **Step 3: Реалізація** — `pnpm --filter simetra add libpg-query@17.7.4 --save-exact`;
   `loadModule()` мемоізовано в `sql/parse.ts`; усі тести компілятора
   переходять на `await`.
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra pnpm-lock.yaml
@@ -313,7 +331,7 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
     → `LANGUAGE sql`-функція, що читає цю таблицю» — діагностика (Postgres
     із `check_function_bodies` так не створить), а не безкінечний цикл.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `creation-order.test.ts`:
 - `custom table default calls a unit function` — колонка з
@@ -330,10 +348,10 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
 - `1C kinds have rls enabled, custom table off by default` —
   `PhysicalTable.rowLevelSecurity`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test creation-order` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test creation-order` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -364,13 +382,13 @@ git commit -m "feat(compiler): rowLevelSecurity таблиці й спільни
     — з `KindDefinition.actions`, сортування за `objectId`.
   - `.module.ts` без `.meta.json` — наявне `file.orphan`; тест це закріплює.
 
-- [ ] **Step 1: Тести** — по тесту на кожне правило (code, pointer, severity);
+- [x] **Step 1: Тести** — по тесту на кожне правило (code, pointer, severity);
   `set function with the right signature passes`; `modules and actions in the model`;
   `orphan module file` → `file.orphan`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-links` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test stage-links` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -401,7 +419,7 @@ git commit -m "feat(compiler): стадія 5 — функції множини,
     `range.start.line = line - 1`; `cursorPosition` libpg-query 17.7.4 — 0-базне зміщення в code points від початку розібраного тексту, `stmt_location`/`stmt_len` — байти UTF-8; переведення робить задача 1, `range` — 0-базні рядки й колонки в UTF-16 code units (LSP).
   - Тест повноти каталогу: кожен `RuleCode` має непорожні `en` і `uk`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 
 `locate.test.ts`:
 - `pointer to a value` — `/attributes/1/length` дає рядок і колонку значення;
@@ -414,10 +432,10 @@ git commit -m "feat(compiler): стадія 5 — функції множини,
 
 `messages.test.ts`: `every rule has en and uk`; `localize returns uk text`.
 
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test locate messages` → FAIL.
-- [ ] **Step 3: Реалізація** — `pnpm --filter simetra add jsonc-parser@3.3.1 --save-exact`.
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test locate messages` → FAIL.
+- [x] **Step 3: Реалізація** — `pnpm --filter simetra add jsonc-parser@3.3.1 --save-exact`.
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra pnpm-lock.yaml
@@ -442,15 +460,15 @@ git commit -m "feat(compiler): діагностика з каталогом uk/e
   `record`-полів (`fields` руху) — у порядку входу. Порядок виводиться зі
   схем, а не з рукописних списків.
 
-- [ ] **Step 1: Тести** — `nested keys follow schema order` (перемішаний
+- [x] **Step 1: Тести** — `nested keys follow schema order` (перемішаний
   реквізит → `id, name, physicalName, …`); `custom table column variants`
   (`PgEnum`- і `Raw`-колонки — кожна у своєму порядку); `foreign key
   references internal and external`; `fields map keeps input order`;
   `idempotent on a kitchen-sink file`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test format` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test format` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/model
@@ -476,16 +494,16 @@ git commit -m "feat(model): канонічний порядок ключів н�
   при `process.env.UPDATE_JSON_SCHEMAS === "1"` перезаписує файли (тест може
   використовувати `node:fs`).
 
-- [ ] **Step 1: Тести** — `every kind has a schema`; `schemas are up to date`
+- [x] **Step 1: Тести** — `every kind has a schema`; `schemas are up to date`
   (дрейф); `generation does not throw on any kind` (`unrepresentable: "throw"`);
   `descriptions are present` (у `catalogs.schema.json` є `description` у
   `properties.codeLength`); `kind is a const and required` — у кожній схемі
   виду `properties.kind.const` дорівнює виду, а `kind` є в `required`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test json-schema` → FAIL.
-- [ ] **Step 3: Реалізація**; згенеруй файли:
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test json-schema` → FAIL.
+- [x] **Step 3: Реалізація**; згенеруй файли:
   `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`.
-- [ ] **Step 4: Зелені** — PASS без змінної; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Зелені** — PASS без змінної; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra .prettierignore
@@ -525,14 +543,14 @@ git commit -m "feat(compiler): JSON Schema файлів метаданих з о
     реквізитів з `standardAttributeOverrides`; `predefined` — у порядку файлу.
     Читачі — `explain` (D2) і хости (П4).
 
-- [ ] **Step 1: Тести** — `presentation block carries overrides and main
+- [x] **Step 1: Тести** — `presentation block carries overrides and main
   presentation`; `predefined descriptions keyed by id` (елемент без
   `description` у блок не потрапляє; `id` збігається з `contracts.predefined`);
   `object without presentation fields has no block`; `deterministic order`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test presentation` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test presentation` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -596,15 +614,15 @@ git commit -m "feat(compiler): блок представлення — mainPrese
   (`scopeKinds[].title`), а шапка файлу після `// Generated by simetra — do not edit`
   — блок JSDoc із `project.title` (`@packageDocumentation`).
 
-- [ ] **Step 1: Тести** (`toMatchInlineSnapshot` для фрагментів):
+- [x] **Step 1: Тести** (`toMatchInlineSnapshot` для фрагментів):
   `catalog interface with standard attributes and jsdoc`; `numeric and bigint
   are strings`; `enumeration reference is a union of logical names`;
   `tabular section interface and array field`; `snake_case project uses
   snake_case fields`; `scoped object has scope field`; `deterministic`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test codegen` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test codegen` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -629,7 +647,7 @@ git commit -m "feat(compiler): кодоген логічних TS-типів с�
   - `CompiledModel.hash: string` — hex sha256 від `canonicalize(canonicalSnapshot(model))`
     через `crypto.subtle.digest("SHA-256", …)`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
 - `canonicalize sorts keys by code units and serializes numbers like JCS` —
   порядок ключів — звичайне порівняння рядків (кодові одиниці UTF-16, не
   `localeCompare`), вектори з додатка RFC 8785 (`1E+30` → `1e+30`, `1e-7`,
@@ -639,10 +657,10 @@ git commit -m "feat(compiler): кодоген логічних TS-типів с�
 - `constant change in a sql function body changes the hash`;
 - `renaming a logical name changes the hash`; `key order in a file does not`;
 - `hash is stable across map insertion order`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test canonical` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test canonical` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -669,18 +687,18 @@ git commit -m "feat(compiler): канонічний знімок і sha256-хе�
   проєкту задане (вкладені включно); між `readFiles` і `runStages` розібрані
   дані загортаються в Proxy, що
   записує прочитані шляхи (масиви — за елементами, шлях нормалізується до
-  `kind.field.subfield`); прогін `compile` + `emitEntityTypes` +
-  `canonicalSnapshot`; тест порівнює множину шляхів схем (зі Zod-форм) із
+  `kind.field.subfield`); прогін `compile` + `emitEntityTypes`, знімок і
+  хеш — поза записом (межі — «Рішення плану» п. 5); тест порівнює множину шляхів схем (зі Zod-форм) із
   прочитаними і падає з переліком непрочитаних. Службові ключі (`$schema`)
   — у явному списку винятків з коментарем «чому».
 
-- [ ] **Step 1: Тест** — написати; прогнати.
-- [ ] **Step 2: Розв'язати сиріт** — кожне непрочитане поле: або споживач у
+- [x] **Step 1: Тест** — написати; прогнати.
+- [x] **Step 2: Розв'язати сиріт** — кожне непрочитане поле: або споживач у
   відповідній стадії/контракті/кодогені, або видалення зі схеми (без шиму);
   нове рішення, не передбачене «Рішеннями плану» п. 5, — зупинись і спитай
   архітектора (не вигадуй споживача).
-- [ ] **Step 3: Зелені** — `pnpm --filter simetra test field-ratchet` PASS; повні гейти.
-- [ ] **Step 4: Канон і статус**
+- [x] **Step 3: Зелені** — `pnpm --filter simetra test field-ratchet` PASS; повні гейти.
+- [x] **Step 4: Канон і статус**
 - `simetra-domain-criteria.md`: критерій «поле без споживача» — якір на
   `packages/simetra/src/compiler/__tests__/field-ratchet.test.ts`; критерій
   дослівного SQL — гейт класів `sql.statement-not-allowed`.
@@ -688,7 +706,7 @@ git commit -m "feat(compiler): канонічний знімок і sha256-хе�
 
 Run: `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra .agents docs/ROADMAP.md
