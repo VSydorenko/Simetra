@@ -1,0 +1,76 @@
+{
+  "id": "7e0a5d53-4c02-4990-89ac-c6690bef2dd5",
+  "kind": "CustomTable",
+  "name": "UserSettings",
+  "physicalName": "user_settings",
+  "scope": "user",
+  "title": {
+    "uk": "Налаштування користувача"
+  },
+  "columns": [
+    {
+      "id": "e0e6be1c-06d1-4782-9e06-f313cb0703c9",
+      "name": "userId",
+      "physicalName": "user_id",
+      "title": {
+        "uk": "Користувач"
+      },
+      "notNull": true,
+      "type": "UUID"
+    },
+    {
+      "id": "8c1d7a42-4179-442e-bd5e-37ca2080f22b",
+      "name": "locale",
+      "physicalName": "locale",
+      "title": {
+        "uk": "Мова"
+      },
+      "notNull": true,
+      "default": "'uk'",
+      "type": "Text"
+    },
+    {
+      "id": "4ec1bb6d-ae63-4a62-a4ae-7b97a5055378",
+      "name": "pageSize",
+      "physicalName": "page_size",
+      "title": {
+        "uk": "Рядків на сторінці"
+      },
+      "notNull": true,
+      "default": "50",
+      "type": "Integer"
+    }
+  ],
+  "primaryKey": {
+    "name": "user_settings_pk",
+    "columns": [
+      "userId"
+    ]
+  },
+  "checks": [
+    {
+      "name": "user_settings_page_size_check",
+      "expression": "page_size > 0"
+    }
+  ],
+  "foreignKeys": [
+    {
+      "name": "user_settings_user_fk",
+      "columns": [
+        "userId"
+      ],
+      "references": {
+        "external": {
+          "schema": "auth",
+          "table": "users",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "onDelete": "cascade"
+    }
+  ],
+  "scopeColumn": "userId",
+  "rowLevelSecurity": "enabled"
+}

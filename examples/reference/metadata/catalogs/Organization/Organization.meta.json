@@ -1,0 +1,22 @@
+{
+  "id": "0f8552b0-d97a-4ad2-9975-0731ca4a7c18",
+  "kind": "Catalog",
+  "name": "Organization",
+  "physicalName": "organization",
+  "scope": "org",
+  "title": {
+    "uk": "Організації"
+  },
+  "attributes": [
+    {
+      "id": "64fd8e5f-6f4b-4175-8646-a15d886d99c2",
+      "name": "taxId",
+      "physicalName": "tax_id",
+      "title": {
+        "uk": "Податковий номер"
+      },
+      "type": "String",
+      "length": 12
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "11099343-16fb-4d45-a2c5-788192650589",
+  "kind": "Catalog",
+  "name": "Counterparty",
+  "physicalName": "counterparty",
+  "scope": "org",
+  "title": {
+    "uk": "Контрагенти"
+  },
+  "hierarchyType": "FoldersAndItems",
+  "attributes": [
+    {
+      "id": "7d988a42-51b2-46e9-9f5c-21ac655edcea",
+      "name": "taxId",
+      "physicalName": "tax_id",
+      "title": {
+        "uk": "Податковий номер"
+      },
+      "type": "String",
+      "length": 12,
+      "unique": true
+    }
+  ]
+}

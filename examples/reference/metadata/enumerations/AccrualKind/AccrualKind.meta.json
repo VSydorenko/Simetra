@@ -1,0 +1,36 @@
+{
+  "id": "dcde3ce2-23c1-49f1-994e-d37ed08a3195",
+  "kind": "Enumeration",
+  "name": "AccrualKind",
+  "physicalName": "accrual_kind",
+  "scope": "none",
+  "title": {
+    "uk": "Види нарахувань"
+  },
+  "values": [
+    {
+      "id": "38ab7627-8e82-47cc-83ca-0d72c9e51052",
+      "name": "Regular",
+      "physicalName": "regular",
+      "title": {
+        "uk": "Планове"
+      }
+    },
+    {
+      "id": "5771d3ed-ac41-48c8-95eb-b9890277fc12",
+      "name": "Bonus",
+      "physicalName": "bonus",
+      "title": {
+        "uk": "Премія"
+      }
+    },
+    {
+      "id": "32c8f950-2f87-4a5a-8230-81cf604b56d6",
+      "name": "Correction",
+      "physicalName": "correction",
+      "title": {
+        "uk": "Коригування"
+      }
+    }
+  ]
+}

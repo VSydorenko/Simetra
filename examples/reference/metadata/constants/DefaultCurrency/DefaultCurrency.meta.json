@@ -1,0 +1,15 @@
+{
+  "id": "720b1089-9c6f-4a5a-9337-12f5adbf8ac8",
+  "kind": "Constant",
+  "name": "DefaultCurrency",
+  "physicalName": "default_currency",
+  "scope": "org",
+  "title": {
+    "uk": "Основна валюта"
+  },
+  "type": "Ref",
+  "ref": {
+    "kind": "Catalog",
+    "name": "Currency"
+  }
+}

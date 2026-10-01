@@ -9,3 +9,5 @@ pnpm-lock.yaml
 legacy/
 # Згенеровані JSON Schema: генератор пише канонічний JSON, вручну не форматуються
 packages/simetra/schemas/
+# Канонічну форму файлів метаданих дає форматер T0 (formatMetaFile), а не Prettier
+examples/**/metadata/**
