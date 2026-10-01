@@ -82,9 +82,15 @@ export type RuleCode = SchemaRule | CompilerRule
 
 export type DiagnosticParams = Record<string, string | number>
 
-interface Position {
+/** Позиція LSP: 0-базні рядок і колонка в кодових одиницях UTF-16. */
+export interface Position {
   line: number
   character: number
+}
+
+export interface Range {
+  start: Position
+  end: Position
 }
 
 /**
@@ -102,8 +108,8 @@ export interface Diagnostic {
   message: string
   hint?: string
   params?: DiagnosticParams
-  /** Позицію в тексті дає відображення pointer → рядок і колонка. */
-  range?: { start: Position; end: Position }
+  /** Заповнює `locate` для файлів, що є в мапі; відображення pointer → рядок і колонка. */
+  range?: Range
 }
 
 /**
@@ -135,11 +141,13 @@ export function diagnostic(
     severity: WARNING_RULES.has(code) ? "warning" : "error",
     file,
     pointer,
-    message: entry.message(params),
+    message: entry.en(params),
     ...(entry.hint !== undefined
       ? {
           hint:
-            typeof entry.hint === "string" ? entry.hint : entry.hint(params),
+            typeof entry.hint.en === "string"
+              ? entry.hint.en
+              : entry.hint.en(params),
         }
       : {}),
     ...(Object.keys(params).length > 0 ? { params } : {}),

@@ -1,350 +1,619 @@
-import type { DiagnosticParams, RuleCode } from "./diagnostics"
+import type { Diagnostic, DiagnosticParams, RuleCode } from "./diagnostics"
+
+export type Locale = "en" | "uk"
+
+type Text = (params: DiagnosticParams) => string
+/** Функція, коли підказка залежить від параметрів (наприклад, від ролі посилання). */
+type Hint = string | Text
 
 export interface MessageEntry {
-  message: (params: DiagnosticParams) => string
-  /** Функція, коли підказка залежить від параметрів (наприклад, від ролі посилання). */
-  hint?: string | ((params: DiagnosticParams) => string)
+  en: Text
+  uk: Text
+  hint?: { en: Hint; uk: Hint }
 }
 
-const FIX_IDS = "Run simetra fix to assign ids."
-const FIX_PHYSICAL_NAMES = "Run simetra fix to assign physical names."
+const FIX_IDS = {
+  en: "Run simetra fix to assign ids.",
+  uk: "Виконайте simetra fix, щоб призначити id.",
+}
+const FIX_PHYSICAL_NAMES = {
+  en: "Run simetra fix to assign physical names.",
+  uk: "Виконайте simetra fix, щоб призначити фізичні імена.",
+}
 
 /**
- * Каталог англійських текстів за кодом правила (спека П2 §8.4). Тип
- * `Record<RuleCode, …>` робить каталог вичерпним: нове правило без тексту не
- * пройде typecheck. Українські тексти додасть каталог UI.
+ * Каталог текстів за кодом правила (спека П2 §8.4): англійські обов'язкові,
+ * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
+ * каталог вичерпним: нове правило без обох текстів не пройде typecheck.
  */
 export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // --- Перевірки схем T0 (issue з `params.rule`) ---
-  "type.length-required": { message: () => "String type requires length" },
+  "type.length-required": {
+    en: () => "String type requires length",
+    uk: () => "Тип String вимагає length",
+  },
   "type.length-not-allowed": {
-    message: () => "Only String type accepts length",
+    en: () => "Only String type accepts length",
+    uk: () => "length приймає лише тип String",
   },
   "type.precision-not-allowed": {
-    message: () => "Only Numeric type accepts precision",
+    en: () => "Only Numeric type accepts precision",
+    uk: () => "precision приймає лише тип Numeric",
   },
   "type.scale-requires-precision": {
-    message: () => "Scale requires precision",
+    en: () => "Scale requires precision",
+    uk: () => "scale вимагає precision",
   },
   "type.ref-target-required": {
-    message: () => "Ref type requires either ref or allowedTypes",
+    en: () => "Ref type requires either ref or allowedTypes",
+    uk: () => "Тип Ref вимагає ref або allowedTypes",
   },
   "type.ref-exclusive": {
-    message: () => "ref and allowedTypes are mutually exclusive",
+    en: () => "ref and allowedTypes are mutually exclusive",
+    uk: () => "ref і allowedTypes взаємовиключні",
   },
   "type.ref-not-allowed": {
-    message: (p) => `Only Ref type accepts ${p.field}`,
+    en: (p) => `Only Ref type accepts ${p.field}`,
+    uk: (p) => `${p.field} приймає лише тип Ref`,
   },
   "register.resource-type": {
-    message: () => "Accumulation register resources must be Integer or Numeric",
+    en: () => "Accumulation register resources must be Integer or Numeric",
+    uk: () => "Ресурси регістра накопичення мають бути Integer або Numeric",
   },
   "register.balance-control-type": {
-    message: () => "balanceControl is allowed only on a Balance register",
-    hint: "A Turnover register keeps no balances to control.",
+    en: () => "balanceControl is allowed only on a Balance register",
+    uk: () => "balanceControl дозволений лише для регістра типу Balance",
+    hint: {
+      en: "A Turnover register keeps no balances to control.",
+      uk: "Регістр типу Turnover не веде залишків, тож контролювати нічого.",
+    },
   },
   "customTable.column-type": {
-    message: (p) =>
+    en: (p) =>
       `Field "${p.field}" does not fit the column type form (logical type, PgEnum or Raw)`,
+    uk: (p) =>
+      `Поле "${p.field}" не підходить до форми типу колонки (логічний тип, PgEnum або Raw)`,
   },
   "customTable.cross-scope-not-allowed": {
-    message: () => "crossScope is not allowed on a custom table column",
-    hint: "Foreign keys of a custom table are explicit; remove crossScope.",
+    en: () => "crossScope is not allowed on a custom table column",
+    uk: () => "crossScope не дозволений на колонці довільної таблиці",
+    hint: {
+      en: "Foreign keys of a custom table are explicit; remove crossScope.",
+      uk: "Зовнішні ключі довільної таблиці явні; приберіть crossScope.",
+    },
   },
   "customTable.identity-type": {
-    message: () => "identity requires SmallInt, Integer or BigInt type",
+    en: () => "identity requires SmallInt, Integer or BigInt type",
+    uk: () => "identity вимагає тип SmallInt, Integer або BigInt",
   },
   "posting.parse": {
-    message: (p) => `Invalid expression: ${p.detail ?? "syntax error"}`,
+    en: (p) => `Invalid expression: ${p.detail ?? "syntax error"}`,
+    uk: (p) => `Некоректний вираз: ${p.detail ?? "синтаксична помилка"}`,
   },
   "pgEnum.value-duplicate": {
-    message: () => "Enum label is already declared earlier in values",
+    en: () => "Enum label is already declared earlier in values",
+    uk: () => "Мітка переліку вже оголошена раніше в values",
   },
   "scope.name-reserved": {
-    message: () => 'Scope kind name "none" is reserved',
+    en: () => 'Scope kind name "none" is reserved',
+    uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
   },
   "scope.not-allowed": {
-    message: () => 'Enumeration scope can only be "none"',
+    en: () => 'Enumeration scope can only be "none"',
+    uk: () => 'Скоуп переліку може бути лише "none"',
   },
   "type.cross-scope-not-allowed": {
-    message: () => "Only Ref type accepts crossScope",
+    en: () => "Only Ref type accepts crossScope",
+    uk: () => "crossScope приймає лише тип Ref",
   },
 
   // --- Стадія 1: файли ---
   "project.missing": {
-    message: () => "project.meta.json is missing",
-    hint: "Create project.meta.json at the root of metadata/.",
+    en: () => "project.meta.json is missing",
+    uk: () => "Немає project.meta.json",
+    hint: {
+      en: "Create project.meta.json at the root of metadata/.",
+      uk: "Створіть project.meta.json у корені metadata/.",
+    },
   },
   "file.unknown-path": {
-    message: () => "File is not part of the metadata layout",
-    hint: "Objects live in <kind folder>/<Name>/<Name>.meta.json with optional <Name>.module.ts and <Name>.sql; shared SQL lives in sql/<schema>/<file>.sql.",
+    en: () => "File is not part of the metadata layout",
+    uk: () => "Файл не входить до розкладки метаданих",
+    hint: {
+      en: "Objects live in <kind folder>/<Name>/<Name>.meta.json with optional <Name>.module.ts and <Name>.sql; shared SQL lives in sql/<schema>/<file>.sql.",
+      uk: "Об'єкти лежать у <тека виду>/<Name>/<Name>.meta.json з необов'язковими <Name>.module.ts і <Name>.sql; спільний SQL лежить у sql/<схема>/<файл>.sql.",
+    },
   },
   "file.movements-block": {
-    message: (p) =>
+    en: (p) =>
       p.line === undefined
         ? `Invalid movement query block: ${p.detail}`
         : `Invalid movement query block at line ${p.line}: ${p.detail}`,
-    hint: "Movement queries live in <Document>.sql between '-- @movements <Register>' and '-- @end'.",
+    uk: (p) =>
+      p.line === undefined
+        ? `Некоректний блок запиту рухів: ${p.detail}`
+        : `Некоректний блок запиту рухів у рядку ${p.line}: ${p.detail}`,
+    hint: {
+      en: "Movement queries live in <Document>.sql between '-- @movements <Register>' and '-- @end'.",
+      uk: "Запити рухів лежать у <Document>.sql між '-- @movements <Register>' і '-- @end'.",
+    },
   },
   "file.movements-marker-indented": {
-    message: (p) =>
+    en: (p) =>
       `Marker at line ${p.line} is indented and is not recognized as a movement query marker`,
-    hint: "Markers '-- @movements' and '-- @end' must start at the beginning of the line; an indented one is treated as a plain comment.",
+    uk: (p) =>
+      `Маркер у рядку ${p.line} має відступ і не розпізнається як маркер запиту рухів`,
+    hint: {
+      en: "Markers '-- @movements' and '-- @end' must start at the beginning of the line; an indented one is treated as a plain comment.",
+      uk: "Маркери '-- @movements' і '-- @end' мають починатися з початку рядка; маркер з відступом вважається звичайним коментарем.",
+    },
   },
   "sql.parse": {
-    message: (p) =>
+    en: (p) =>
       `SQL syntax error at line ${p.line}, column ${p.column}: ${p.detail}`,
+    uk: (p) =>
+      `Синтаксична помилка SQL у рядку ${p.line}, колонці ${p.column}: ${p.detail}`,
   },
   "sql.statement-not-allowed": {
-    message: (p) =>
+    en: (p) =>
       p.detail === undefined
         ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
         : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
-    hint: (p) =>
-      p.feature === "rowLevelSecurity"
-        ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
-        : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publications, REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
+    uk: (p) =>
+      p.detail === undefined
+        ? `${p.statement} у рядку ${p.line} не дозволений у файлі .sql`
+        : `${p.statement} у рядку ${p.line} не дозволений у файлі .sql: ${p.detail}`,
+    hint: {
+      en: (p) =>
+        p.feature === "rowLevelSecurity"
+          ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
+          : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publications, REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
+      uk: (p) =>
+        p.feature === "rowLevelSecurity"
+          ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
+          : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, публікації, REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
+    },
   },
   "sql.unit-duplicate": {
-    message: (p) =>
+    en: (p) =>
       `${p.identity} at line ${p.line} is already defined by ${p.first}`,
-    hint: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
+    uk: (p) => `${p.identity} у рядку ${p.line} уже визначений в ${p.first}`,
+    hint: {
+      en: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
+      uk: "Функцію ідентифікують схема, ім'я й типи аргументів; тригер або політику — таблиця й ім'я; грант — об'єкт, отримувачі й привілеї.",
+    },
   },
   "sql.dependency-cycle": {
-    message: (p) =>
+    en: (p) =>
       p.line === undefined
         ? `${p.identity} is part of a dependency cycle: ${p.cycle}`
         : `${p.identity} at line ${p.line} is part of a dependency cycle: ${p.cycle}`,
-    hint: "Each object in the cycle needs the next one to exist first, so no creation order exists. Unqualified names match objects of every schema, because the search_path is not known when compiling: qualify names with their schema so that a reference reaches only the object it means. A real cycle has to be broken by changing one of the objects.",
+    uk: (p) =>
+      p.line === undefined
+        ? `${p.identity} входить до циклу залежностей: ${p.cycle}`
+        : `${p.identity} у рядку ${p.line} входить до циклу залежностей: ${p.cycle}`,
+    hint: {
+      en: "Each object in the cycle needs the next one to exist first, so no creation order exists. Unqualified names match objects of every schema, because the search_path is not known when compiling: qualify names with their schema so that a reference reaches only the object it means. A real cycle has to be broken by changing one of the objects.",
+      uk: "Кожен об'єкт циклу потребує, щоб наступний уже існував, тож порядку створення немає. Некваліфіковані імена збігаються з об'єктами всіх схем, бо під час компіляції search_path невідомий: кваліфікуйте імена схемою, щоб посилання досягало лише потрібного об'єкта. Справжній цикл розриває зміна одного з об'єктів.",
+    },
   },
 
   "file.orphan": {
-    message: (p) => `No ${p.expected} next to this file`,
+    en: (p) => `No ${p.expected} next to this file`,
+    uk: (p) => `Поруч із цим файлом немає ${p.expected}`,
   },
   "file.invalid-json": {
-    message: (p) => `Invalid JSON: ${p.detail}`,
+    en: (p) => `Invalid JSON: ${p.detail}`,
+    uk: (p) => `Некоректний JSON: ${p.detail}`,
   },
-  "file.schema": { message: (p) => String(p.detail) },
+  "file.schema": {
+    en: (p) => String(p.detail),
+    // Текст валідації схеми приходить із Zod англійською; перекладу немає.
+    uk: (p) => String(p.detail),
+  },
   "file.kind-mismatch": {
-    message: (p) =>
+    en: (p) =>
       `Folder ${p.dir}/ holds ${p.expected} objects, but kind is ${p.actual}`,
+    uk: (p) =>
+      `Тека ${p.dir}/ містить об'єкти виду ${p.expected}, але kind — ${p.actual}`,
   },
   "file.name-mismatch": {
-    message: (p) =>
-      `Folder and file name must equal the logical name "${p.name}"`,
+    en: (p) => `Folder and file name must equal the logical name "${p.name}"`,
+    uk: (p) =>
+      `Тека й ім'я файлу мають збігатися з логічним іменем "${p.name}"`,
   },
 
   // --- Стадія 2: ідентичність, імена, посилання ---
-  "identity.id-missing": { message: () => "id is missing", hint: FIX_IDS },
+  "identity.id-missing": {
+    en: () => "id is missing",
+    uk: () => "Немає id",
+    hint: FIX_IDS,
+  },
   "identity.id-duplicate": {
-    message: (p) => `id ${p.id} is already used in ${p.firstFile}`,
-    hint: "Ids are never reused; assign a new id to one of the elements.",
+    en: (p) => `id ${p.id} is already used in ${p.firstFile}`,
+    uk: (p) => `id ${p.id} уже використано в ${p.firstFile}`,
+    hint: {
+      en: "Ids are never reused; assign a new id to one of the elements.",
+      uk: "Id не використовують повторно; призначте новий id одному з елементів.",
+    },
   },
   "identity.physical-name-missing": {
-    message: () => "physicalName is missing",
+    en: () => "physicalName is missing",
+    uk: () => "Немає physicalName",
     hint: FIX_PHYSICAL_NAMES,
   },
   "identity.name-duplicate": {
-    message: (p) => `Name "${p.name}" is already declared in ${p.scope}`,
+    en: (p) => `Name "${p.name}" is already declared in ${p.scope}`,
+    uk: (p) => `Ім'я "${p.name}" уже оголошене в ${p.scope}`,
   },
   "identity.name-case": {
-    message: (p) =>
+    en: (p) =>
       `Name "${p.name}" does not follow the project naming style ${p.style}`,
+    uk: (p) => `Ім'я "${p.name}" не відповідає стилю імен проєкту ${p.style}`,
   },
   "identity.name-reserved": {
-    message: (p) =>
-      `Name "${p.name}" is taken by a standard attribute of ${p.kind}`,
+    en: (p) => `Name "${p.name}" is taken by a standard attribute of ${p.kind}`,
+    uk: (p) => `Ім'я "${p.name}" зайняте стандартним реквізитом виду ${p.kind}`,
   },
   "reference.unresolved": {
-    message: (p) => `${p.kind} "${p.name}" does not exist`,
+    en: (p) => `${p.kind} "${p.name}" does not exist`,
+    uk: (p) => `${p.kind} "${p.name}" не існує`,
   },
   "reference.ambiguous": {
-    message: (p) => `Name "${p.name}" is ambiguous between ${p.candidates}`,
-    hint: (p) =>
-      `Qualify the marker as <Kind>.<Name>, for example ${String(p.candidates).split(", ")[0]}.`,
+    en: (p) => `Name "${p.name}" is ambiguous between ${p.candidates}`,
+    uk: (p) => `Ім'я "${p.name}" неоднозначне між ${p.candidates}`,
+    hint: {
+      en: (p) =>
+        `Qualify the marker as <Kind>.<Name>, for example ${String(p.candidates).split(", ")[0]}.`,
+      uk: (p) =>
+        `Кваліфікуйте маркер як <Kind>.<Name>, наприклад ${String(p.candidates).split(", ")[0]}.`,
+    },
   },
   "register.balance-control-resource": {
-    message: (p) => `Register has no resource "${p.name}"`,
-    hint: "balanceControl lists logical names of the register's resources.",
+    en: (p) => `Register has no resource "${p.name}"`,
+    uk: (p) => `У регістрі немає ресурсу "${p.name}"`,
+    hint: {
+      en: "balanceControl lists logical names of the register's resources.",
+      uk: "balanceControl перелічує логічні імена ресурсів регістра.",
+    },
   },
   "register.balance-control-duplicate": {
-    message: (p) => `Resource "${p.name}" is already listed in balanceControl`,
-    hint: "List each resource once.",
+    en: (p) => `Resource "${p.name}" is already listed in balanceControl`,
+    uk: (p) => `Ресурс "${p.name}" уже є в balanceControl`,
+    hint: {
+      en: "List each resource once.",
+      uk: "Перелічіть кожен ресурс один раз.",
+    },
   },
   "posting.field-unknown": {
-    message: (p) => `${p.scope} has no field "${p.name}"`,
-    hint: "Standard attributes are written by their logical name in the project naming style.",
+    en: (p) => `${p.scope} has no field "${p.name}"`,
+    uk: (p) => `У ${p.scope} немає поля "${p.name}"`,
+    hint: {
+      en: "Standard attributes are written by their logical name in the project naming style.",
+      uk: "Стандартні реквізити записують за логічним іменем у стилі імен проєкту.",
+    },
   },
   "posting.register-field-unknown": {
-    message: (p) =>
-      `Register has no dimension, resource or attribute "${p.name}"`,
-    hint: "Keys of a movement's fields are logical names of the register's own fields.",
+    en: (p) => `Register has no dimension, resource or attribute "${p.name}"`,
+    uk: (p) => `У регістрі немає виміру, ресурсу чи реквізиту "${p.name}"`,
+    hint: {
+      en: "Keys of a movement's fields are logical names of the register's own fields.",
+      uk: "Ключі fields руху — логічні імена власних полів регістра.",
+    },
   },
   "posting.tabular-section-unknown": {
-    message: (p) => `Document has no tabular section "${p.name}"`,
+    en: (p) => `Document has no tabular section "${p.name}"`,
+    uk: (p) => `У документі немає табличної частини "${p.name}"`,
   },
   "scope.declaration-missing": {
-    message: (p) => `${p.kind} "${p.name}" does not declare its scope`,
-    hint: 'Once the project declares a scope kind, every scoped object sets "scope" to a kind name or "none".',
+    en: (p) => `${p.kind} "${p.name}" does not declare its scope`,
+    uk: (p) => `${p.kind} "${p.name}" не оголошує свій скоуп`,
+    hint: {
+      en: 'Once the project declares a scope kind, every scoped object sets "scope" to a kind name or "none".',
+      uk: 'Щойно проєкт оголошує вид скоупу, кожен об\'єкт задає "scope" як ім\'я виду або "none".',
+    },
   },
   "scope.unknown-kind": {
-    message: (p) => `Scope kind "${p.name}" is not declared in the project`,
-    hint: 'Scope kinds are declared in project.meta.json under "scopeKinds"; "none" opts the object out of scope.',
+    en: (p) => `Scope kind "${p.name}" is not declared in the project`,
+    uk: (p) => `Вид скоупу "${p.name}" не оголошений у проєкті`,
+    hint: {
+      en: 'Scope kinds are declared in project.meta.json under "scopeKinds"; "none" opts the object out of scope.',
+      uk: 'Види скоупу оголошують у project.meta.json у "scopeKinds"; "none" виводить об\'єкт зі скоупу.',
+    },
   },
   "scope.attribute-name-collision": {
-    message: (p) =>
+    en: (p) =>
       `Name "${p.name}" collides with the scope column of this ${p.kind}`,
-    hint: "The scope column takes the scope kind's logical name in the object's table.",
+    uk: (p) =>
+      `Ім'я "${p.name}" збігається з колонкою скоупу цього об'єкта виду ${p.kind}`,
+    hint: {
+      en: "The scope column takes the scope kind's logical name in the object's table.",
+      uk: "Колонка скоупу в таблиці об'єкта бере логічне ім'я виду скоупу.",
+    },
   },
   "scope.root-duplicate": {
-    message: () => "Another scope kind already uses this root",
-    hint: "Every scope kind has its own root.",
+    en: () => "Another scope kind already uses this root",
+    uk: () => "Цей корінь уже використовує інший вид скоупу",
+    hint: {
+      en: "Every scope kind has its own root.",
+      uk: "Кожен вид скоупу має власний корінь.",
+    },
   },
   "scope.root-hierarchy": {
-    message: (p) =>
+    en: (p) =>
       `Root ${p.kind} "${p.name}" of scope kind "${p.scope}" cannot be hierarchical`,
-    hint: 'Scope hierarchy is not supported; set hierarchyType to "None" and express a holding with an attribute that sets "crossScope".',
+    uk: (p) =>
+      `Корінь ${p.kind} "${p.name}" виду скоупу "${p.scope}" не може бути ієрархічним`,
+    hint: {
+      en: 'Scope hierarchy is not supported; set hierarchyType to "None" and express a holding with an attribute that sets "crossScope".',
+      uk: 'Ієрархія скоупу не підтримується; задайте hierarchyType "None", а холдинг виразіть реквізитом із "crossScope".',
+    },
   },
   "scope.root-key": {
-    message: (p) =>
+    en: (p) =>
       `Root of scope kind "${p.scope}" (${p.kind} "${p.name}") has no single-column uuid key`,
-    hint: "A scope root is a table object with a single-column uuid primary key; its key is the scope value.",
+    uk: (p) =>
+      `Корінь виду скоупу "${p.scope}" (${p.kind} "${p.name}") не має одноколонкового ключа uuid`,
+    hint: {
+      en: "A scope root is a table object with a single-column uuid primary key; its key is the scope value.",
+      uk: "Корінь скоупу — табличний об'єкт з одноколонковим первинним ключем uuid; його ключ — значення скоупу.",
+    },
   },
   "scope.root-declaration": {
-    message: (p) =>
+    en: (p) =>
       `${p.kind} "${p.name}" is the root of scope kind "${p.scope}" but does not declare it`,
-    hint: 'Set "scope" of the root to its own scope kind.',
+    uk: (p) =>
+      `${p.kind} "${p.name}" — корінь виду скоупу "${p.scope}", але не оголошує його`,
+    hint: {
+      en: 'Set "scope" of the root to its own scope kind.',
+      uk: 'Задайте "scope" кореня як його власний вид скоупу.',
+    },
   },
   "scope.root-self-reference": {
-    message: (p) =>
+    en: (p) =>
       `Reference to ${p.kind} "${p.name}", the root of the same scope kind "${p.scope}"`,
-    hint: (p) =>
-      p.via === "owner"
-        ? "An owner cannot be the root of its own scope kind; a cross-scope owner is not supported."
-        : 'The root key is already the scope value of the object; drop the reference, or set "crossScope" if it deliberately points to another tenant.',
+    uk: (p) =>
+      `Посилання на ${p.kind} "${p.name}" — корінь того самого виду скоупу "${p.scope}"`,
+    hint: {
+      en: (p) =>
+        p.via === "owner"
+          ? "An owner cannot be the root of its own scope kind; a cross-scope owner is not supported."
+          : 'The root key is already the scope value of the object; drop the reference, or set "crossScope" if it deliberately points to another tenant.',
+      uk: (p) =>
+        p.via === "owner"
+          ? "Власник не може бути коренем власного виду скоупу; власник з іншого скоупу не підтримується."
+          : 'Ключ кореня вже є значенням скоупу об\'єкта; приберіть посилання або задайте "crossScope", якщо воно свідомо веде до іншого тенанта.',
+    },
   },
   "scope.global-to-scoped": {
-    message: (p) =>
+    en: (p) =>
       `Unscoped object references ${p.kind} "${p.name}" of scope kind "${p.scope}"`,
-    hint: (p) =>
-      p.via === "owner"
-        ? "An owner must share the scope kind; a cross-scope owner is not supported."
-        : 'Set "crossScope": true on the Ref if the link is intentional.',
+    uk: (p) =>
+      `Об'єкт без скоупу посилається на ${p.kind} "${p.name}" виду скоупу "${p.scope}"`,
+    hint: {
+      en: (p) =>
+        p.via === "owner"
+          ? "An owner must share the scope kind; a cross-scope owner is not supported."
+          : 'Set "crossScope": true on the Ref if the link is intentional.',
+      uk: (p) =>
+        p.via === "owner"
+          ? "Власник має мати той самий вид скоупу; власник з іншого скоупу не підтримується."
+          : 'Задайте "crossScope": true на Ref, якщо зв\'язок навмисний.',
+    },
   },
   "scope.cross-kind": {
-    message: (p) =>
+    en: (p) =>
       `Object of scope kind "${p.from}" references ${p.kind} "${p.name}" of scope kind "${p.scope}"`,
-    hint: (p) =>
-      p.via === "owner"
-        ? "An owner must share the scope kind; a cross-scope owner is not supported."
-        : 'Set "crossScope": true on the Ref if the link is intentional.',
+    uk: (p) =>
+      `Об'єкт виду скоупу "${p.from}" посилається на ${p.kind} "${p.name}" виду скоупу "${p.scope}"`,
+    hint: {
+      en: (p) =>
+        p.via === "owner"
+          ? "An owner must share the scope kind; a cross-scope owner is not supported."
+          : 'Set "crossScope": true on the Ref if the link is intentional.',
+      uk: (p) =>
+        p.via === "owner"
+          ? "Власник має мати той самий вид скоупу; власник з іншого скоупу не підтримується."
+          : 'Задайте "crossScope": true на Ref, якщо зв\'язок навмисний.',
+    },
   },
   "scope.recorder-mismatch": {
-    message: (p) =>
+    en: (p) =>
       `Register scope "${p.scope}" differs from the scope "${p.recorderScope}" of recorder ${p.kind} "${p.name}"`,
-    hint: "A register and all of its recorders share one scope kind.",
+    uk: (p) =>
+      `Скоуп регістра "${p.scope}" відрізняється від скоупу "${p.recorderScope}" реєстратора ${p.kind} "${p.name}"`,
+    hint: {
+      en: "A register and all of its recorders share one scope kind.",
+      uk: "Регістр і всі його реєстратори мають один вид скоупу.",
+    },
   },
   "scope.custom-table-column": {
-    message: (p) =>
+    en: (p) =>
       p.column === undefined
         ? "Scoped CustomTable must name its scope column in scopeColumn"
         : p.unscoped !== undefined
           ? `scopeColumn "${p.column}" is set, but the table has no scope kind`
           : `scopeColumn "${p.column}" must be a uuid column`,
+    uk: (p) =>
+      p.column === undefined
+        ? "CustomTable зі скоупом має назвати колонку скоупу в scopeColumn"
+        : p.unscoped !== undefined
+          ? `scopeColumn "${p.column}" задано, але таблиця не має виду скоупу`
+          : `scopeColumn "${p.column}" має бути колонкою uuid`,
   },
   "scope.cross-scope-redundant": {
-    message: () =>
-      "crossScope has no effect: the reference is allowed without it",
-    hint: "Remove crossScope.",
+    en: () => "crossScope has no effect: the reference is allowed without it",
+    uk: () => "crossScope нічого не змінює: посилання дозволене й без нього",
+    hint: { en: "Remove crossScope.", uk: "Приберіть crossScope." },
   },
 
   "scope.set-function-missing": {
-    message: (p) =>
+    en: (p) =>
       `Scope set function ${p.function}() is not defined in any .sql file`,
-    hint: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' to a .sql file.",
+    uk: (p) =>
+      `Функція множини скоупу ${p.function}() не визначена в жодному файлі .sql`,
+    hint: {
+      en: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' to a .sql file.",
+      uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' до файлу .sql.",
+    },
   },
   "scope.set-function-signature": {
-    message: (p) =>
+    en: (p) =>
       `Scope set function ${p.function}() has the wrong signature: ${p.problem}`,
-    hint: "A set function takes no arguments, returns SETOF uuid and is STABLE.",
+    uk: (p) =>
+      `Функція множини скоупу ${p.function}() має хибну сигнатуру: ${p.problem}`,
+    hint: {
+      en: "A set function takes no arguments, returns SETOF uuid and is STABLE.",
+      uk: "Функція множини не приймає аргументів, повертає SETOF uuid і є STABLE.",
+    },
   },
 
   // --- Стадія 4: цілісність ---
   "reference.not-referenceable": {
-    message: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
-    hint: "The kind registry decides which kinds a Ref may target; a PgEnum is referenced only by a CustomTable column, and a foreign key needs a target that has a table.",
+    en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
+    uk: (p) => `На ${p.kind} "${p.name}" тут не можна посилатися`,
+    hint: {
+      en: "The kind registry decides which kinds a Ref may target; a PgEnum is referenced only by a CustomTable column, and a foreign key needs a target that has a table.",
+      uk: "Реєстр видів вирішує, на які види може вказувати Ref; на PgEnum посилається лише колонка CustomTable, а зовнішньому ключу потрібна ціль із таблицею.",
+    },
   },
   "reference.custom-table-key": {
-    message: (p) =>
+    en: (p) =>
       `${p.kind} "${p.name}" has no single-column uuid primary key to reference`,
-    hint: "A Ref to a CustomTable, single or polymorphic, stores the value of its single uuid primary key column.",
+    uk: (p) =>
+      `${p.kind} "${p.name}" не має одноколонкового первинного ключа uuid, на який можна посилатися`,
+    hint: {
+      en: "A Ref to a CustomTable, single or polymorphic, stores the value of its single uuid primary key column.",
+      uk: "Ref на CustomTable, одиночний чи поліморфний, зберігає значення єдиної колонки первинного ключа uuid.",
+    },
   },
   "reference.polymorphic-target-kind": {
-    message: (p) =>
+    en: (p) =>
       `${p.kind} "${p.name}" cannot be a target of a polymorphic reference`,
-    hint: "The pair stores a uuid key, so only a Catalog, a Document or a CustomTable with a single uuid primary key fits. Enumeration values are text labels and cannot share the uuid column of a polymorphic pair; use a separate attribute.",
+    uk: (p) =>
+      `${p.kind} "${p.name}" не може бути ціллю поліморфного посилання`,
+    hint: {
+      en: "The pair stores a uuid key, so only a Catalog, a Document or a CustomTable with a single uuid primary key fits. Enumeration values are text labels and cannot share the uuid column of a polymorphic pair; use a separate attribute.",
+      uk: "Пара зберігає ключ uuid, тож підходить лише Catalog, Document або CustomTable з єдиним первинним ключем uuid. Значення переліку — текстові мітки й не можуть ділити колонку uuid поліморфної пари; використайте окремий реквізит.",
+    },
   },
   "catalog.owner-kind": {
-    message: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
-    hint: "The owner of a catalog must be a catalog.",
+    en: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
+    uk: (p) => `${p.kind} "${p.name}" не може бути власником довідника`,
+    hint: {
+      en: "The owner of a catalog must be a catalog.",
+      uk: "Власником довідника має бути довідник.",
+    },
   },
   "register.recorder-kind": {
-    message: (p) => `${p.kind} "${p.name}" cannot be a recorder`,
-    hint: "Movements are written by posting, so a recorder must be a document.",
+    en: (p) => `${p.kind} "${p.name}" cannot be a recorder`,
+    uk: (p) => `${p.kind} "${p.name}" не може бути реєстратором`,
+    hint: {
+      en: "Movements are written by posting, so a recorder must be a document.",
+      uk: "Рухи пише проведення, тож реєстратором має бути документ.",
+    },
   },
   "posting.register-kind": {
-    message: (p) => `${p.kind} "${p.name}" is not a register`,
-    hint: "registerMovements and movements of a document target only accumulation and information registers.",
+    en: (p) => `${p.kind} "${p.name}" is not a register`,
+    uk: (p) => `${p.kind} "${p.name}" не є регістром`,
+    hint: {
+      en: "registerMovements and movements of a document target only accumulation and information registers.",
+      uk: "registerMovements і movements документа вказують лише на регістри накопичення та відомостей.",
+    },
   },
   "posting.register-independent": {
-    message: (p) =>
+    en: (p) =>
       `Register "${p.name}" is independent and takes no movements from documents`,
-    hint: "Set writeMode: RecorderSubordinate on the register: posting rewrites movements by their recorder, and an independent register has none.",
+    uk: (p) =>
+      `Регістр "${p.name}" незалежний і не приймає рухів від документів`,
+    hint: {
+      en: "Set writeMode: RecorderSubordinate on the register: posting rewrites movements by their recorder, and an independent register has none.",
+      uk: "Задайте на регістрі writeMode: RecorderSubordinate: проведення перезаписує рухи за реєстратором, а незалежний регістр його не має.",
+    },
   },
   "posting.register-undeclared": {
-    message: (p) =>
+    en: (p) =>
       `Register "${p.name}" is not listed in the document's registerMovements`,
-    hint: "Add the register to registerMovements.",
+    uk: (p) => `Регістр "${p.name}" не вказаний у registerMovements документа`,
+    hint: {
+      en: "Add the register to registerMovements.",
+      uk: "Додайте регістр до registerMovements.",
+    },
   },
   "posting.source-missing": {
-    message: (p) =>
+    en: (p) =>
       `Register "${p.name}" has no movement source: neither a constructor movement nor a query block`,
-    hint: "Add a movement for this register to posting, or a '-- @movements' block to the document's .sql file.",
+    uk: (p) =>
+      `Регістр "${p.name}" не має джерела рухів: ні руху конструктора, ні блока запиту`,
+    hint: {
+      en: "Add a movement for this register to posting, or a '-- @movements' block to the document's .sql file.",
+      uk: "Додайте рух для цього регістра до posting або блок '-- @movements' до файлу .sql документа.",
+    },
   },
   "posting.source-ambiguous": {
-    message: (p) =>
+    en: (p) =>
       `Register "${p.name}" has more than one movement source: ${p.sources}`,
-    hint: "Keep exactly one source: the constructor or a single query block.",
+    uk: (p) =>
+      `Регістр "${p.name}" має більше одного джерела рухів: ${p.sources}`,
+    hint: {
+      en: "Keep exactly one source: the constructor or a single query block.",
+      uk: "Залиште рівно одне джерело: конструктор або один блок запиту.",
+    },
   },
   "posting.query-not-select": {
-    message: (p) =>
+    en: (p) =>
       `The movement query block at line ${p.line} must be exactly one SELECT statement${p.detail === undefined ? "" : `: ${p.detail}`}`,
-    hint: "WITH ... SELECT and SELECT ... UNION ALL ... are allowed; other statements and several statements are not.",
+    uk: (p) =>
+      `Блок запиту рухів у рядку ${p.line} має бути рівно одним оператором SELECT${p.detail === undefined ? "" : `: ${p.detail}`}`,
+    hint: {
+      en: "WITH ... SELECT and SELECT ... UNION ALL ... are allowed; other statements and several statements are not.",
+      uk: "WITH ... SELECT і SELECT ... UNION ALL ... дозволені; інші оператори й кілька операторів — ні.",
+    },
   },
   "posting.query-order-missing": {
-    message: (p) =>
-      `The movement query block at line ${p.line} has no ORDER BY`,
-    hint: "Add ORDER BY so that the movement rows are produced in a deterministic order.",
+    en: (p) => `The movement query block at line ${p.line} has no ORDER BY`,
+    uk: (p) => `Блок запиту рухів у рядку ${p.line} не має ORDER BY`,
+    hint: {
+      en: "Add ORDER BY so that the movement rows are produced in a deterministic order.",
+      uk: "Додайте ORDER BY, щоб рядки рухів видавалися в детермінованому порядку.",
+    },
   },
   "posting.recorder-not-allowed": {
-    message: (p) =>
+    en: (p) =>
       `Register "${p.name}" does not list document "${p.document}" in its recorderTypes`,
-    hint: "Add the document to the register's recorderTypes.",
+    uk: (p) =>
+      `Регістр "${p.name}" не містить документа "${p.document}" у своїх recorderTypes`,
+    hint: {
+      en: "Add the document to the register's recorderTypes.",
+      uk: "Додайте документ до recorderTypes регістра.",
+    },
   },
   "posting.fields-incomplete": {
-    message: (p) => `Movement does not set register fields: ${p.missing}`,
-    hint: "An accumulation register movement sets every dimension and resource; an information register movement sets every dimension and required resource.",
+    en: (p) => `Movement does not set register fields: ${p.missing}`,
+    uk: (p) => `Рух не задає поля регістра: ${p.missing}`,
+    hint: {
+      en: "An accumulation register movement sets every dimension and resource; an information register movement sets every dimension and required resource.",
+      uk: "Рух регістра накопичення задає кожен вимір і ресурс; рух регістра відомостей задає кожен вимір і обов'язковий ресурс.",
+    },
   },
   "posting.row-in-document-source": {
-    message: () => "row. fields need a tabular section source",
-    hint: 'With source "document" the movement reads the document header: use doc. fields or sum()/count().',
+    en: () => "row. fields need a tabular section source",
+    uk: () => "Поля row. потребують джерела — табличної частини",
+    hint: {
+      en: 'With source "document" the movement reads the document header: use doc. fields or sum()/count().',
+      uk: 'З джерелом "document" рух читає шапку документа: використовуйте поля doc. або sum()/count().',
+    },
   },
   "posting.aggregate-in-section-source": {
-    message: () =>
-      "sum() and count() are allowed only with the document source",
-    hint: "A tabular section source gives one movement per row; aggregate with the document source.",
+    en: () => "sum() and count() are allowed only with the document source",
+    uk: () => "sum() і count() дозволені лише з джерелом document",
+    hint: {
+      en: "A tabular section source gives one movement per row; aggregate with the document source.",
+      uk: "Джерело — таблична частина — дає один рух на рядок; агрегуйте з джерелом document.",
+    },
   },
   "posting.movement-type": {
-    message: (p) =>
+    en: (p) =>
       p.problem === "missing"
         ? `Balance register "${p.register}" needs movementType`
         : p.problem === "forbidden"
@@ -352,55 +621,121 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.problem === "value"
             ? `movementType '${p.value}' is neither 'Receipt' nor 'Expense'`
             : `movementType expression gives ${p.actual}, not text`,
-    hint: 'Use the literal "Receipt" or "Expense", or an expression that gives one of them.',
+    uk: (p) =>
+      p.problem === "missing"
+        ? `Регістр залишків "${p.register}" потребує movementType`
+        : p.problem === "forbidden"
+          ? `Регістр "${p.register}" не має виду руху`
+          : p.problem === "value"
+            ? `movementType '${p.value}' — ні 'Receipt', ні 'Expense'`
+            : `Вираз movementType дає ${p.actual}, а не текст`,
+    hint: {
+      en: 'Use the literal "Receipt" or "Expense", or an expression that gives one of them.',
+      uk: 'Використайте літерал "Receipt" або "Expense", або вираз, що дає одне з них.',
+    },
   },
   "posting.period-not-allowed": {
-    message: (p) =>
-      `Register "${p.register}" is not periodic and has no period`,
-    hint: "Remove period from the movement, or make the register periodic.",
+    en: (p) => `Register "${p.register}" is not periodic and has no period`,
+    uk: (p) => `Регістр "${p.register}" неперіодичний і не має періоду`,
+    hint: {
+      en: "Remove period from the movement, or make the register periodic.",
+      uk: "Приберіть period з руху або зробіть регістр періодичним.",
+    },
   },
   "posting.type-mismatch": {
-    message: (p) =>
-      `Expression gives ${p.actual}, but ${p.expected} is expected`,
-    hint: "An integer field does not take a fractional number, a reference field takes only its own targets, and null goes only into a column that may be empty.",
+    en: (p) => `Expression gives ${p.actual}, but ${p.expected} is expected`,
+    uk: (p) => `Вираз дає ${p.actual}, а очікується ${p.expected}`,
+    hint: {
+      en: "An integer field does not take a fractional number, a reference field takes only its own targets, and null goes only into a column that may be empty.",
+      uk: "Ціле поле не приймає дробового числа, поле-посилання приймає лише власні цілі, а null можна лише в колонку, що може бути порожньою.",
+    },
   },
   "physical.table-duplicate": {
-    message: (p) =>
+    en: (p) =>
       `Physical name ${p.name} is already used by a table or enum type in ${p.firstFile}`,
+    uk: (p) =>
+      `Фізичне ім'я ${p.name} уже використовує таблиця або енам-тип у ${p.firstFile}`,
   },
   "physical.column-duplicate": {
-    message: (p) => `Column ${p.name} is already declared in table ${p.table}`,
-    hint: "Standard columns of the kind and polymorphic <name>_type/<name>_id pairs take column names too.",
+    en: (p) => `Column ${p.name} is already declared in table ${p.table}`,
+    uk: (p) => `Колонка ${p.name} уже оголошена в таблиці ${p.table}`,
+    hint: {
+      en: "Standard columns of the kind and polymorphic <name>_type/<name>_id pairs take column names too.",
+      uk: "Стандартні колонки виду та поліморфні пари <ім'я>_type/<ім'я>_id теж займають імена колонок.",
+    },
   },
   "physical.discriminator-duplicate": {
-    message: (p) =>
+    en: (p) =>
       `Another target of this polymorphic reference has physical name ${p.name}`,
-    hint: "The type column stores the target's physicalName, so targets must differ by it regardless of schema.",
+    uk: (p) =>
+      `Інша ціль цього поліморфного посилання має фізичне ім'я ${p.name}`,
+    hint: {
+      en: "The type column stores the target's physicalName, so targets must differ by it regardless of schema.",
+      uk: "Колонка типу зберігає physicalName цілі, тож цілі мають відрізнятися ним незалежно від схеми.",
+    },
   },
   "physical.function-duplicate": {
-    message: (p) =>
+    en: (p) =>
       `Function ${p.name} (${p.description}) collides with ${p.other} in schema ${p.schema}`,
-    hint: "Function names are derived from physical names of documents and registers by the Postgres naming algorithm; change a physicalName so the names differ.",
+    uk: (p) =>
+      `Функція ${p.name} (${p.description}) збігається з ${p.other} у схемі ${p.schema}`,
+    hint: {
+      en: "Function names are derived from physical names of documents and registers by the Postgres naming algorithm; change a physicalName so the names differ.",
+      uk: "Імена функцій виводяться з фізичних імен документів і регістрів за алгоритмом іменування Postgres; змініть physicalName, щоб імена відрізнялися.",
+    },
   },
   "physical.reserved-word": {
-    message: (p) => `Physical name ${p.name} is an SQL reserved word`,
-    hint: "It works when quoted, but new elements should not take reserved words.",
+    en: (p) => `Physical name ${p.name} is an SQL reserved word`,
+    uk: (p) => `Фізичне ім'я ${p.name} — зарезервоване слово SQL`,
+    hint: {
+      en: "It works when quoted, but new elements should not take reserved words.",
+      uk: "У лапках воно працює, але нові елементи не мають брати зарезервованих слів.",
+    },
   },
   "physical.constraint-name-required": {
-    message: () =>
+    en: () =>
       "Postgres names this constraint or index from its expression, so the name cannot be derived",
-    hint: "Give the index/constraint an explicit name; the reverse generator always writes names.",
+    uk: () =>
+      "Postgres іменує це обмеження чи індекс за його виразом, тож ім'я не можна вивести",
+    hint: {
+      en: "Give the index/constraint an explicit name; the reverse generator always writes names.",
+      uk: "Задайте індексу чи обмеженню явне ім'я; зворотний генератор завжди записує імена.",
+    },
   },
   "customTable.column-unknown": {
-    message: (p) => `${p.table} has no column "${p.column}"`,
-    hint: "Constraints, indexes and foreign keys refer to columns by logical name.",
+    en: (p) => `${p.table} has no column "${p.column}"`,
+    uk: (p) => `У ${p.table} немає колонки "${p.column}"`,
+    hint: {
+      en: "Constraints, indexes and foreign keys refer to columns by logical name.",
+      uk: "Обмеження, індекси та зовнішні ключі посилаються на колонки за логічним іменем.",
+    },
   },
   "customTable.foreign-key-arity": {
-    message: (p) =>
+    en: (p) =>
       `Foreign key has ${p.local} column(s) but references ${p.referenced}`,
+    uk: (p) =>
+      `Зовнішній ключ має колонок: ${p.local}, а посилається на ${p.referenced}`,
   },
   "physical.name-too-long": {
-    message: (p) =>
+    en: (p) =>
       `Physical name ${p.name} is longer than 63 bytes and would be truncated by Postgres`,
+    uk: (p) =>
+      `Фізичне ім'я ${p.name} довше за 63 байти й було б усічене Postgres`,
   },
+}
+
+/** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */
+export function localize(
+  d: Pick<Diagnostic, "code" | "params">,
+  locale: Locale
+): { message: string; hint?: string } {
+  const entry = MESSAGES[d.code]
+  const params = d.params ?? {}
+  const hint = entry.hint?.[locale]
+  return {
+    message: entry[locale](params),
+    ...(hint === undefined
+      ? {}
+      : { hint: typeof hint === "string" ? hint : hint(params) }),
+  }
 }

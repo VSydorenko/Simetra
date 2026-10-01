@@ -6,6 +6,7 @@ import {
   type Project,
 } from "simetra/model"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
+import { withRanges } from "./locate"
 import { buildContracts, type Contracts } from "./contracts"
 import { readFiles } from "./stages/files"
 import { checkIdentity, type ResolvedReference } from "./stages/identity"
@@ -86,6 +87,18 @@ export interface CompileResult {
  * Асинхронна, бо парсер Postgres — WASM, який вантажиться один раз на процес.
  */
 export async function compile(
+  files: ReadonlyMap<string, string>
+): Promise<CompileResult> {
+  const result = await runStages(files)
+  // Діапазони дописуються в одному місці, а не стадіями: стадії знають лише
+  // pointer, а текст файлу їм не потрібен.
+  return {
+    ...result,
+    diagnostics: withRanges(result.diagnostics, files),
+  }
+}
+
+async function runStages(
   files: ReadonlyMap<string, string>
 ): Promise<CompileResult> {
   const parse = await loadSqlParser()

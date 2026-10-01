@@ -3,10 +3,12 @@ export {
   type CompilerRule,
   type Diagnostic,
   type DiagnosticParams,
+  type Position,
+  type Range,
   type RuleCode,
   type Severity,
 } from "./diagnostics"
-export { MESSAGES, type MessageEntry } from "./messages"
+export { MESSAGES, localize, type Locale, type MessageEntry } from "./messages"
 export {
   compile,
   type CompileResult,
