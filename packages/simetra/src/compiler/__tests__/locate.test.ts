@@ -70,10 +70,37 @@ describe("diagnostic range", () => {
   })
 
   it("expression offset counts \\u and \\\\ escapes as one character", () => {
-    const text = String.raw`{ "expr": "A\\z" }`
+    const text = String.raw`{ "expr": "\u0041\\z" }`
     // Декодовано: A\z; індекс 2 — `z`.
     const z = text.indexOf("z")
     expect(locateIn(text, "/expr", { offset: 2 })?.start.character).toBe(z)
+  })
+
+  it("a surrogate pair written as escapes counts as two characters", () => {
+    const text = String.raw`{ "expr": "\ud83d\ude00z" }`
+    // Декодовано: 😀z — дві кодові одиниці й `z` з індексом 2.
+    const z = text.indexOf("z")
+    expect(locateIn(text, "/expr", { offset: 2 })?.start.character).toBe(z)
+    // Індекс 1 — друга половина пари: другий `\u`-запис.
+    expect(locateIn(text, "/expr", { offset: 1 })?.start.character).toBe(
+      text.indexOf(String.raw`\ude00`)
+    )
+  })
+
+  it("an error about the key itself points at its value node", () => {
+    const d = diagnostic(
+      "identity.name-duplicate",
+      FILE,
+      "/attributes/1/name",
+      {
+        name: "b",
+        scope: "Item",
+      }
+    )
+    expect(withRanges([d], new Map([[FILE, json]]))[0]!.range).toEqual({
+      start: { line: 4, character: 14 },
+      end: { line: 4, character: 17 },
+    })
   })
 
   it("an invalid JSON file still gets a file-start range", () => {
@@ -127,6 +154,28 @@ describe("diagnostic range", () => {
     })
   })
 
+  it("sql.parse after a movements block with non-ASCII text keeps its line and column", async () => {
+    // Тіло блока вирізається з тексту розбору, але рядки зберігаються: помилка
+    // нижче має лишитися на своєму рядку й колонці вихідного файлу.
+    const text = [
+      "-- @movements Stock",
+      "SELECT 'жук😀' AS жук",
+      "-- @end",
+      "SELECT 'їж😀', 1 +;",
+      "",
+    ].join("\r\n")
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/a.sql": text,
+      })
+    )
+    const d = result.diagnostics.find((x) => x.code === "sql.parse")
+    const column = "SELECT 'їж😀', 1 +".length
+    expect(d?.params).toMatchObject({ line: 4, column: column + 1 })
+    expect(d?.range?.start).toEqual({ line: 3, character: column })
+  })
+
   it("compile fills range for diagnostics in files of the map", async () => {
     const result = await compile(
       metaFiles({
@@ -138,6 +187,10 @@ describe("diagnostic range", () => {
     const missingId = result.diagnostics.find(
       (d) => d.code === "identity.id-missing"
     )
-    expect(missingId?.range).toBeDefined()
+    // Без id адресується весь файл: pointer `/id` відсутній, діапазон — корінь.
+    expect(missingId?.range).toEqual({
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 32 },
+    })
   })
 })

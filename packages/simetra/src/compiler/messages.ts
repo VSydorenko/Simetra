@@ -34,11 +34,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "type.length-not-allowed": {
     en: () => "Only String type accepts length",
-    uk: () => "length приймає лише тип String",
+    uk: () => "Лише тип String приймає length",
   },
   "type.precision-not-allowed": {
     en: () => "Only Numeric type accepts precision",
-    uk: () => "precision приймає лише тип Numeric",
+    uk: () => "Лише тип Numeric приймає precision",
   },
   "type.scale-requires-precision": {
     en: () => "Scale requires precision",
@@ -54,7 +54,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "type.ref-not-allowed": {
     en: (p) => `Only Ref type accepts ${p.field}`,
-    uk: (p) => `${p.field} приймає лише тип Ref`,
+    uk: (p) => `Лише тип Ref приймає ${p.field}`,
   },
   "register.resource-type": {
     en: () => "Accumulation register resources must be Integer or Numeric",
@@ -62,7 +62,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "register.balance-control-type": {
     en: () => "balanceControl is allowed only on a Balance register",
-    uk: () => "balanceControl дозволений лише для регістра типу Balance",
+    uk: () => "balanceControl дозволений лише для регістра залишків (Balance)",
     hint: {
       en: "A Turnover register keeps no balances to control.",
       uk: "Регістр типу Turnover не веде залишків, тож контролювати нічого.",
@@ -104,7 +104,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "type.cross-scope-not-allowed": {
     en: () => "Only Ref type accepts crossScope",
-    uk: () => "crossScope приймає лише тип Ref",
+    uk: () => "Лише тип Ref приймає crossScope",
   },
 
   // --- Стадія 1: файли ---
@@ -177,7 +177,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "sql.unit-duplicate": {
     en: (p) =>
       `${p.identity} at line ${p.line} is already defined by ${p.first}`,
-    uk: (p) => `${p.identity} у рядку ${p.line} уже визначений в ${p.first}`,
+    uk: (p) => `${p.identity} у рядку ${p.line} уже визначений у ${p.first}`,
     hint: {
       en: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
       uk: "Функцію ідентифікують схема, ім'я й типи аргументів; тригер або політику — таблиця й ім'я; грант — об'єкт, отримувачі й привілеї.",
@@ -208,8 +208,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "file.schema": {
     en: (p) => String(p.detail),
-    // Текст валідації схеми приходить із Zod англійською; перекладу немає.
-    uk: (p) => String(p.detail),
+    // Український текст Zod рахує stage 1 (`detailUk`); власні повідомлення
+    // схем T0 англійські.
+    uk: (p) => String(p.detailUk ?? p.detail),
   },
   "file.kind-mismatch": {
     en: (p) =>
@@ -714,7 +715,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       `Foreign key has ${p.local} column(s) but references ${p.referenced}`,
     uk: (p) =>
-      `Зовнішній ключ має колонок: ${p.local}, а посилається на ${p.referenced}`,
+      `Зовнішній ключ має локальних колонок: ${p.local}, а цільових: ${p.referenced}`,
   },
   "physical.name-too-long": {
     en: (p) =>

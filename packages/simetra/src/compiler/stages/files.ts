@@ -1,4 +1,4 @@
-import type { z } from "zod"
+import { z, type ZodType } from "zod"
 import {
   SCHEMA_RULES,
   kindByDir,
@@ -230,7 +230,7 @@ function readProject(
   if (json === undefined) return undefined
   const parsed = projectSchema.safeParse(json.value)
   if (!parsed.success) {
-    diagnostics.push(...zodDiagnostics(PROJECT_FILE, parsed.error))
+    diagnostics.push(...zodDiagnostics(PROJECT_FILE, projectSchema, json.value))
     return undefined
   }
   return parsed.data
@@ -274,7 +274,7 @@ function readObject(
 
   const parsed = def.schema.safeParse(json.value)
   if (!parsed.success) {
-    result.diagnostics.push(...zodDiagnostics(file, parsed.error))
+    result.diagnostics.push(...zodDiagnostics(file, def.schema, json.value))
     broken(raw?.name)
     return
   }
@@ -319,12 +319,26 @@ function isSchemaRule(value: unknown): value is SchemaRule {
   return (SCHEMA_RULES as readonly unknown[]).includes(value)
 }
 
+const UK_LOCALE = z.locales.uk()
+
 /**
  * Власні перевірки T0 несуть код у `params.rule` — він і стає кодом
  * діагностики; решта проблем Zod іде під `file.schema` зі своїм текстом.
  */
-function zodDiagnostics(file: string, error: z.ZodError): Diagnostic[] {
-  return error.issues.map((issue) => {
+function zodDiagnostics(
+  file: string,
+  schema: ZodType,
+  value: unknown
+): Diagnostic[] {
+  // Другий розбір з українською локаллю лише для тексту: завершені issue вже
+  // без `input`, тож локаль не може відтворити «отримано …» з них. Локаль
+  // передано в розбір, а не в `z.config`: глобальна конфігурація зачепила б
+  // усіх споживачів бібліотеки. Порядок issue однаковий, бо схема та сама.
+  const issues = schema.safeParse(value).error?.issues ?? []
+  const ukIssues =
+    schema.safeParse(value, { error: UK_LOCALE.localeError }).error?.issues ??
+    []
+  return issues.map((issue, index) => {
     const pointer = toPointer(issue.path)
     const rule: unknown =
       issue.code === "custom" ? issue.params?.rule : undefined
@@ -339,6 +353,10 @@ function zodDiagnostics(file: string, error: z.ZodError): Diagnostic[] {
           : {}),
       })
     }
-    return diagnostic("file.schema", file, pointer, { detail: issue.message })
+    const detailUk = ukIssues[index]?.message
+    return diagnostic("file.schema", file, pointer, {
+      detail: issue.message,
+      ...(detailUk === undefined ? {} : { detailUk }),
+    })
   })
 }

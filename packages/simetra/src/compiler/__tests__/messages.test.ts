@@ -4,8 +4,10 @@ import {
   COMPILER_RULES,
   MESSAGES,
   localize,
+  compile,
   type RuleCode,
 } from "simetra/compiler"
+import { metaFiles, project } from "./helpers"
 import { diagnostic } from "../diagnostics"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
@@ -38,14 +40,24 @@ describe("messages catalog", () => {
   })
 
   it("a Ukrainian text differs from the English one", () => {
-    // Копія англійського тексту в uk — ознака забутого перекладу;
-    // `file.schema` несе текст Zod і є єдиним винятком.
+    // Копія англійського тексту в uk — ознака забутого перекладу.
     for (const code of ALL_RULES) {
-      if (code === "file.schema") continue
       expect(MESSAGES[code].uk(PARAMS), code).not.toBe(
         MESSAGES[code].en(PARAMS)
       )
     }
+  })
+
+  it("file.schema gets the Zod Ukrainian text", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Item/Item.meta.json": { kind: "Catalog", name: 7 },
+      })
+    )
+    const d = result.diagnostics.find((x) => x.code === "file.schema")
+    expect(d?.message).toMatch(/^Invalid input/)
+    expect(localize(d!, "uk").message).toMatch(/^Неправильн.*отримано число/)
   })
 
   it("localize returns uk text", () => {

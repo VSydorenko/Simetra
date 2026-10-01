@@ -409,7 +409,7 @@ git commit -m "feat(compiler): стадія 5 — функції множини,
 - `expression offset with escapes` — значення `"row.qty + \"x\""` у JSON,
   помилка на `"x"` → `range.start.character` указує на екранований `\"`
   сирого тексту;
-- `sql diagnostics use line and column`;
+- `sql diagnostics use line and column` — з кирилицею й символом поза BMP (наприклад, 😀) перед позицією помилки, щоб байти, code points і UTF-16 розрізнялися; очікується колонка в UTF-16;
 - `file-level diagnostic` (`pointer ""`) — range початку файлу.
 
 `messages.test.ts`: `every rule has en and uk`; `localize returns uk text`.
