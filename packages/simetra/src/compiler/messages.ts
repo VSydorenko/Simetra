@@ -317,7 +317,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "posting.query-not-select": {
     message: (p) =>
-      `The movement query block at line ${p.line} must be exactly one SELECT statement`,
+      `The movement query block at line ${p.line} must be exactly one SELECT statement${p.detail === undefined ? "" : `: ${p.detail}`}`,
     hint: "WITH ... SELECT and SELECT ... UNION ALL ... are allowed; other statements and several statements are not.",
   },
   "posting.query-order-missing": {

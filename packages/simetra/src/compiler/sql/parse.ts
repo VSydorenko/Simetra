@@ -36,6 +36,9 @@ export function loadSqlParser(): Promise<SqlParser> {
 }
 
 function parseText(text: string): SqlParseResult {
+  // Порожній текст libpg-query відхиляє винятком без `sqlDetails`, а порожній
+  // файл — не помилка автора: компілятор не кидає на користувацькому вводі.
+  if (text.trim() === "") return { ok: true, statements: [] }
   let result: ParseResult
   try {
     result = parseSync(text) as ParseResult

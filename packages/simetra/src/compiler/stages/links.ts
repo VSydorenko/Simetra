@@ -48,6 +48,11 @@ function checkMovementQueries(
         found.push(
           diagnostic("posting.query-not-select", block.file, "", {
             line: block.line,
+            ...(parsed.ok
+              ? {}
+              : {
+                  detail: `${parsed.message} (line ${block.line + 1 + lineOf(block.sql, parsed.offset)} of the file)`,
+                }),
           })
         )
       } else if ((stmt.sortClause ?? []).length === 0) {
@@ -60,6 +65,11 @@ function checkMovementQueries(
     }
   }
   return found
+}
+
+/** 0-базний рядок усередині тексту за індексом UTF-16. */
+function lineOf(text: string, offset: number): number {
+  return text.slice(0, offset).split("\n").length - 1
 }
 
 /**
@@ -126,7 +136,15 @@ interface FunctionNode {
 function signatureProblem(tree: Node): string | undefined {
   const fn = (tree as { CreateFunctionStmt?: FunctionNode }).CreateFunctionStmt
   if (fn === undefined) return "it is not a function"
-  if ((fn.parameters ?? []).length > 0) return "it takes arguments"
+  const modes = (fn.parameters ?? []).map(
+    (p) =>
+      (p as { FunctionParameter?: { mode?: string } }).FunctionParameter?.mode
+  )
+  if (modes.includes("FUNC_PARAM_TABLE")) return "it returns a table"
+  if (modes.some((m) => m === "FUNC_PARAM_OUT" || m === "FUNC_PARAM_INOUT")) {
+    return "it has OUT parameters"
+  }
+  if (modes.length > 0) return "it takes arguments"
   const type = fn.returnType
   const names = (type?.names ?? []).map((n) => n.String?.sval)
   const isUuid =

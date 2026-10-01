@@ -271,6 +271,38 @@ describe("stage 5: movement query blocks", () => {
     expect(result.diagnostics).toEqual([])
   })
 
+  it("an unparsable block keeps the parse detail and position", async () => {
+    const result = await run("SELECT 1\nFROM FROM")
+    expect(codes(result)).toEqual([["posting.query-not-select", SALE_SQL, ""]])
+    expect(result.diagnostics[0]!.params).toEqual({
+      line: 1,
+      detail: expect.stringContaining("line 3 of the file"),
+    })
+  })
+
+  it("an empty block is a diagnostic, not a throw", async () => {
+    const result = await build({
+      withConstructor: false,
+      sql: "-- @movements Stock\n-- @end\n",
+    })
+    expect(codes(result)).toContainEqual(["file.movements-block", SALE_SQL, ""])
+  })
+
+  it.each([
+    ["empty", ""],
+    ["whitespace", " \n\t\n"],
+  ])("%s sql file compiles without diagnostics", async (_name, text) => {
+    const result = await build({
+      extra: { "sql/public/blank.sql": text },
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("an empty object sql file compiles", async () => {
+    const result = await build({ sql: "" })
+    expect(codes(result)).not.toContainEqual(["sql.parse", SALE_SQL, ""])
+  })
+
   it("a select without ORDER BY is a warning", async () => {
     const result = await run("SELECT 1")
     expect(
@@ -317,6 +349,26 @@ describe("stage 5: scope set functions", () => {
   it("set function with the right signature passes", async () => {
     const result = await buildScoped(good("org_ids") + good("user_ids"))
     expect(result.diagnostics).toEqual([])
+  })
+
+  it.each([
+    [
+      "RETURNS TABLE",
+      "org_ids() RETURNS TABLE (id uuid) LANGUAGE sql STABLE",
+      "table",
+    ],
+    [
+      "OUT parameter",
+      "org_ids(OUT id uuid) RETURNS SETOF uuid LANGUAGE sql STABLE",
+      "OUT",
+    ],
+  ])("signature problem names the cause: %s", async (_name, def, word) => {
+    const result = await buildScoped(
+      `CREATE FUNCTION public.${def} AS $$ SELECT NULL::uuid $$;\n` +
+        good("user_ids")
+    )
+    expect(result.diagnostics[0]!.code).toBe("scope.set-function-signature")
+    expect(String(result.diagnostics[0]!.params?.problem)).toContain(word)
   })
 
   it.each([

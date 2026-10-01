@@ -34,23 +34,30 @@ export function metaFiles(
       typeof content === "string" ? content : JSON.stringify(content),
     ])
   )
-  const scopeKinds =
-    (entries["project.meta.json"] as { scopeKinds?: unknown } | undefined)
-      ?.scopeKinds ?? []
+  // Проєкт може прийти і рядком (зламаний JSON тоді не розбереться — функцій
+  // не додаємо, діагностика проєкту й так перша).
+  let projectData = entries["project.meta.json"]
+  if (typeof projectData === "string") {
+    try {
+      projectData = JSON.parse(projectData)
+    } catch {
+      projectData = undefined
+    }
+  }
+  const { scopeKinds, defaultSchema } = (projectData ?? {}) as {
+    scopeKinds?: { setFunction: { name: string; schema?: string } }[]
+    defaultSchema?: string
+  }
   if (!files.has(SCOPE_FUNCTIONS_FILE) && Array.isArray(scopeKinds)) {
-    const sql = (
-      scopeKinds as { setFunction: { name: string; schema?: string } }[]
+    const names = scopeKinds.map(
+      (kind) =>
+        `${kind.setFunction.schema ?? defaultSchema ?? "public"}.${kind.setFunction.name}`
     )
-      .filter((kind) => (kind.setFunction.schema ?? "public") === "public")
-      // Два види можуть ділити одну функцію множини.
-      .filter(
-        (kind, i, all) =>
-          all.findIndex((k) => k.setFunction.name === kind.setFunction.name) ===
-          i
-      )
+    // Два види можуть ділити одну функцію множини.
+    const sql = [...new Set(names)]
       .map(
-        (kind) =>
-          `CREATE FUNCTION public.${kind.setFunction.name}() RETURNS SETOF uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;`
+        (name) =>
+          `CREATE FUNCTION ${name}() RETURNS SETOF uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;`
       )
       .join("\n")
     if (sql !== "") files.set(SCOPE_FUNCTIONS_FILE, sql)
