@@ -44,6 +44,8 @@ export const COMPILER_RULES = [
   "scope.recorder-mismatch",
   "scope.custom-table-column",
   "scope.cross-scope-redundant",
+  "scope.set-function-missing",
+  "scope.set-function-signature",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.polymorphic-target-kind",
@@ -54,6 +56,8 @@ export const COMPILER_RULES = [
   "posting.register-undeclared",
   "posting.source-missing",
   "posting.source-ambiguous",
+  "posting.query-not-select",
+  "posting.query-order-missing",
   "posting.recorder-not-allowed",
   "posting.fields-incomplete",
   "posting.row-in-document-source",
@@ -106,13 +110,15 @@ export interface Diagnostic {
  * Правила-попередження: прогін лишається успішним. Зарезервоване слово в
  * `physicalName` не ламає SQL, бо рендер квотує імена, а прийняте ім'я
  * лишається як є (спека П2 §3). Зайвий `crossScope` теж не ламає FK — він
- * лише вводить в оману читача. Маркер з відступом не відкриває блок, тож
+ * лише вводить в оману читача. Запит рухів без ORDER BY дає рухи в
+ * недетермінованому порядку, але лишається чинним. Маркер з відступом не відкриває блок, тож
  * запит мовчки не потрапив би в рухи — але файл від цього не ламається.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
   "scope.cross-scope-redundant",
   "file.movements-marker-indented",
+  "posting.query-order-missing",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

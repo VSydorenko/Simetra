@@ -257,6 +257,17 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: "Remove crossScope.",
   },
 
+  "scope.set-function-missing": {
+    message: (p) =>
+      `Scope set function ${p.function}() is not defined in any .sql file`,
+    hint: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' to a .sql file.",
+  },
+  "scope.set-function-signature": {
+    message: (p) =>
+      `Scope set function ${p.function}() has the wrong signature: ${p.problem}`,
+    hint: "A set function takes no arguments, returns SETOF uuid and is STABLE.",
+  },
+
   // --- Стадія 4: цілісність ---
   "reference.not-referenceable": {
     message: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
@@ -303,6 +314,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     message: (p) =>
       `Register "${p.name}" has more than one movement source: ${p.sources}`,
     hint: "Keep exactly one source: the constructor or a single query block.",
+  },
+  "posting.query-not-select": {
+    message: (p) =>
+      `The movement query block at line ${p.line} must be exactly one SELECT statement`,
+    hint: "WITH ... SELECT and SELECT ... UNION ALL ... are allowed; other statements and several statements are not.",
+  },
+  "posting.query-order-missing": {
+    message: (p) =>
+      `The movement query block at line ${p.line} has no ORDER BY`,
+    hint: "Add ORDER BY so that the movement rows are produced in a deterministic order.",
   },
   "posting.recorder-not-allowed": {
     message: (p) =>

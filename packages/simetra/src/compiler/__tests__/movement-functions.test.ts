@@ -296,7 +296,10 @@ describe("movement query functions", () => {
       await compile(metaFiles(entries))
     ).model!.physical.tables.find((t) => t.name === "stock")
     expect(stock!.columns.map((c) => c.name)).toContain("org_id")
-    const [unit] = await units(entries)
+    // Серед одиниць є й функції множини скоупів з helpers.
+    const [unit] = (await units(entries)).filter(
+      (u) => u.class === "movementQuery"
+    )
     expect(unit!.sql).toContain(
       "RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3), note character varying(100))"
     )
@@ -576,7 +579,8 @@ describe("movement query functions", () => {
 
     it("a block with the tag compiles with the next free tag", async () => {
       const entries = salesDocument({}, { posting: undefined })
-      const block = "SELECT $simetra$x$simetra$, $simetra_1$y$simetra_1$"
+      const block =
+        "SELECT $simetra$x$simetra$, $simetra_1$y$simetra_1$ ORDER BY 1"
       const [unit] = await units({
         "project.meta.json": project(),
         ...entries,

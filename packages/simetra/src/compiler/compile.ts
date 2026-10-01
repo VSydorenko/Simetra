@@ -1,4 +1,5 @@
 import {
+  KIND_REGISTRY,
   METADATA_KINDS,
   type MetadataKind,
   type PhysicalSnapshot,
@@ -28,6 +29,8 @@ export interface SourceObject {
   kind: MetadataKind
   name: string
   file: string
+  /** Модуль об'єкта: один неявний модуль з іменем проєкту. */
+  module: string
   /** Вихід Zod-схеми виду. */
   data: unknown
   /** Вид скоупу об'єкта; відсутній — «без скоупу» (`none`, поле або вид без скоупу). */
@@ -49,6 +52,10 @@ export interface CompiledModel {
   project: Project
   /** Порядок METADATA_KINDS, далі ім'я. */
   objects: SourceObject[]
+  /** Один неявний модуль з іменем проєкту; за `name`. */
+  modules: { name: string }[]
+  /** Дії над кожним об'єктом з реєстру видів; за `objectId`. */
+  actions: { objectId: string; actions: readonly string[] }[]
   /** За `name`. */
   scopeKinds: CompiledScopeKind[]
   /** За (file, pointer). */
@@ -119,7 +126,13 @@ export async function compile(
       stage1.project.scopeKinds,
       sql.units
     ),
-    ...checkLinks(stage1.objects, stage2.references),
+    ...checkLinks(
+      stage1.objects,
+      stage2.references,
+      stage1.project,
+      sql.units,
+      parse
+    ),
   ])
   const ok = !hasErrors(diagnostics)
   if (!ok) return { ok, diagnostics }
@@ -155,6 +168,7 @@ export async function compile(
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
 
+  const projectModule = stage1.project.name
   const objects = stage1.objects
     .map(({ id, kind, name, file, data }): SourceObject => {
       const scopeKindId = scopeKindIdByFile.get(file)
@@ -163,6 +177,7 @@ export async function compile(
         kind,
         name,
         file,
+        module: projectModule,
         data,
         ...(scopeKindId !== undefined ? { scopeKindId } : {}),
       }
@@ -196,7 +211,7 @@ export async function compile(
       diagnostics: sortDiagnostics([...diagnostics, ...collisions]),
     }
   }
-  const module = stage1.project.name
+  const module = projectModule
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
@@ -221,6 +236,13 @@ export async function compile(
     model: {
       project: stage1.project,
       objects,
+      modules: [{ name: stage1.project.name }],
+      actions: objects
+        .map((o) => ({
+          objectId: o.id,
+          actions: KIND_REGISTRY[o.kind].actions,
+        }))
+        .sort((a, b) => compareStrings(a.objectId, b.objectId)),
       scopeKinds,
       references: stage2.references,
       moduleFiles: stage1.moduleFiles

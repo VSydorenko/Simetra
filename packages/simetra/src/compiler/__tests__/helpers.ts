@@ -17,16 +17,45 @@ export function project(overrides: Record<string, unknown> = {}) {
   return { name: "TestApp", ...overrides }
 }
 
-/** Об'єкт серіалізується в JSON, рядок іде як є (для зламаного JSON). */
+/** Спільний `.sql` з функціями множини скоупів проєкту фікстури. */
+export const SCOPE_FUNCTIONS_FILE = "sql/public/scope-functions.sql"
+
+/**
+ * Об'єкт серіалізується в JSON, рядок іде як є (для зламаного JSON). Проєкт зі
+ * скоупами без власного `SCOPE_FUNCTIONS_FILE` отримує коректні функції
+ * множини: стадія 5 вимагає їх, а більшості тестів вони не цікаві.
+ */
 export function metaFiles(
   entries: Record<string, unknown>
 ): Map<string, string> {
-  return new Map(
+  const files = new Map(
     Object.entries(entries).map(([path, content]) => [
       path,
       typeof content === "string" ? content : JSON.stringify(content),
     ])
   )
+  const scopeKinds =
+    (entries["project.meta.json"] as { scopeKinds?: unknown } | undefined)
+      ?.scopeKinds ?? []
+  if (!files.has(SCOPE_FUNCTIONS_FILE) && Array.isArray(scopeKinds)) {
+    const sql = (
+      scopeKinds as { setFunction: { name: string; schema?: string } }[]
+    )
+      .filter((kind) => (kind.setFunction.schema ?? "public") === "public")
+      // Два види можуть ділити одну функцію множини.
+      .filter(
+        (kind, i, all) =>
+          all.findIndex((k) => k.setFunction.name === kind.setFunction.name) ===
+          i
+      )
+      .map(
+        (kind) =>
+          `CREATE FUNCTION public.${kind.setFunction.name}() RETURNS SETOF uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;`
+      )
+      .join("\n")
+    if (sql !== "") files.set(SCOPE_FUNCTIONS_FILE, sql)
+  }
+  return files
 }
 
 export function attribute(

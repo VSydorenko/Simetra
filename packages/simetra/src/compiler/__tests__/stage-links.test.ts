@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
   SALE_FILE,
+  SCOPE_FUNCTIONS_FILE,
   attribute,
   metaFiles,
+  organization,
   project,
   salesDocument,
+  scopedProject,
 } from "./helpers"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
-const BLOCK = "-- @movements Stock\nSELECT 1\n-- @end\n"
+const BLOCK = "-- @movements Stock\nSELECT 1 ORDER BY 1\n-- @end\n"
 
 /** `withConstructor: false` прибирає рухи конструктора: залишається лише блок. */
 async function build(
@@ -143,7 +146,7 @@ describe("stage 5: movement sources", () => {
   it("CRLF line endings are accepted", async () => {
     const result = await build({
       withConstructor: false,
-      sql: "-- @movements Stock\r\nSELECT 1\r\n-- @end\r\n",
+      sql: "-- @movements Stock\r\nSELECT 1 ORDER BY 1\r\n-- @end\r\n",
     })
     expect(result.diagnostics).toEqual([])
   })
@@ -185,7 +188,7 @@ describe("movement block marker forms", () => {
   const marked = async (marker: string, extra: Record<string, unknown> = {}) =>
     await build({
       withConstructor: false,
-      sql: `-- @movements ${marker}\nSELECT 1\n-- @end`,
+      sql: `-- @movements ${marker}\nSELECT 1 ORDER BY 1\n-- @end`,
       extra,
     })
 
@@ -239,6 +242,131 @@ describe("movement block marker forms", () => {
       "reference.unresolved",
       SALE_SQL,
       "",
+    ])
+  })
+})
+
+describe("stage 5: movement query blocks", () => {
+  const block = (query: string) => `-- @movements Stock\n${query}\n-- @end\n`
+  const run = async (query: string) =>
+    await build({ withConstructor: false, sql: block(query) })
+
+  it("a non-select block is an error with the marker line", async () => {
+    const result = await run("DELETE FROM stock")
+    expect(codes(result)).toEqual([["posting.query-not-select", SALE_SQL, ""]])
+    expect(result.diagnostics[0]!.severity).toBe("error")
+    expect(result.diagnostics[0]!.params).toEqual({ line: 1 })
+  })
+
+  it("several statements are not one select", async () => {
+    expect(codes(await run("SELECT 1; SELECT 2"))).toEqual([
+      ["posting.query-not-select", SALE_SQL, ""],
+    ])
+  })
+
+  it("WITH and UNION ALL are selects", async () => {
+    const result = await run(
+      "WITH a AS (SELECT 1 AS x) SELECT x FROM a UNION ALL SELECT 2 ORDER BY 1"
+    )
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("a select without ORDER BY is a warning", async () => {
+    const result = await run("SELECT 1")
+    expect(
+      result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+    ).toEqual([["posting.query-order-missing", "warning", SALE_SQL, ""]])
+    expect(result.diagnostics[0]!.params).toEqual({ line: 1 })
+    expect(result.ok).toBe(true)
+  })
+})
+
+describe("stage 5: scope set functions", () => {
+  const FUNCTIONS = SCOPE_FUNCTIONS_FILE
+  const create = (
+    name: string,
+    tail = "RETURNS SETOF uuid LANGUAGE sql STABLE"
+  ) => `CREATE FUNCTION public.${name}${tail} AS $$ SELECT NULL::uuid $$;\n`
+  const good = (name: string) => create(`${name}()`)
+  const buildScoped = async (sql?: string) =>
+    await compile(
+      metaFiles({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        [FUNCTIONS]: sql ?? create("unrelated()"),
+      })
+    )
+
+  it("missing set functions", async () => {
+    const result = await buildScoped()
+    expect(codes(result)).toEqual([
+      [
+        "scope.set-function-missing",
+        "project.meta.json",
+        "/scopeKinds/0/setFunction",
+      ],
+      [
+        "scope.set-function-missing",
+        "project.meta.json",
+        "/scopeKinds/1/setFunction",
+      ],
+    ])
+    expect(result.diagnostics[0]!.severity).toBe("error")
+  })
+
+  it("set function with the right signature passes", async () => {
+    const result = await buildScoped(good("org_ids") + good("user_ids"))
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it.each([
+    ["arguments", create("org_ids(a uuid)")],
+    ["not setof", create("org_ids()", "RETURNS uuid LANGUAGE sql STABLE")],
+    ["not uuid", create("org_ids()", "RETURNS SETOF text LANGUAGE sql STABLE")],
+    ["volatile", create("org_ids()", "RETURNS SETOF uuid LANGUAGE sql")],
+    [
+      "immutable",
+      create("org_ids()", "RETURNS SETOF uuid LANGUAGE sql IMMUTABLE"),
+    ],
+  ])("wrong signature: %s", async (_name, bad) => {
+    const result = await buildScoped(bad + good("user_ids"))
+    expect(codes(result)).toEqual([
+      [
+        "scope.set-function-signature",
+        "project.meta.json",
+        "/scopeKinds/0/setFunction",
+      ],
+    ])
+    expect(result.diagnostics[0]!.severity).toBe("error")
+    expect(typeof result.diagnostics[0]!.params?.problem).toBe("string")
+  })
+})
+
+describe("stage 5: modules and actions", () => {
+  it("modules and actions in the model", async () => {
+    const result = await build({ sql: undefined })
+    const model = result.model!
+    expect(model.modules).toEqual([{ name: "TestApp" }])
+    expect(model.objects.every((o) => o.module === "TestApp")).toBe(true)
+    const sale = model.objects.find((o) => o.name === "Sale")!
+    const stock = model.objects.find((o) => o.name === "Stock")!
+    expect(model.actions.find((a) => a.objectId === stock.id)).toEqual({
+      objectId: stock.id,
+      actions: ["read"],
+    })
+    expect(
+      model.actions.find((a) => a.objectId === sale.id)!.actions
+    ).toContain("post")
+    const ids = model.actions.map((a) => a.objectId)
+    expect(ids).toEqual([...ids].sort())
+  })
+
+  it("orphan module file", async () => {
+    const result = await build({
+      extra: { "documents/Ghost/Ghost.module.ts": "export {}" },
+    })
+    expect(codes(result)).toEqual([
+      ["file.orphan", "documents/Ghost/Ghost.module.ts", ""],
     ])
   })
 })

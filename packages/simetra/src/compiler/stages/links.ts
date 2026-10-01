@@ -1,18 +1,146 @@
-import type { MetadataRef, MovementDecl } from "simetra/model"
+import type { MetadataRef, MovementDecl, Project } from "simetra/model"
+import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
+import type { SqlParser } from "../sql/parse"
+import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
 
 /**
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
- * одному файлі. У C2 це повнота джерел рухів; модулі поведінки й функції
- * множини додає наступний план у цей самий вхід.
+ * одному файлі: повнота й вигляд джерел рухів та функції множини скоупів у
+ * SQL-одиницях.
  */
 export function checkLinks(
   objects: readonly ParsedObject[],
-  references: readonly ResolvedReference[]
+  references: readonly ResolvedReference[],
+  project: Project,
+  units: readonly VerbatimUnit[],
+  parse: SqlParser
 ): Diagnostic[] {
-  return checkMovementSources(objects, references)
+  return [
+    ...checkMovementSources(objects, references),
+    ...checkMovementQueries(objects, parse),
+    ...checkSetFunctions(project, units),
+  ]
+}
+
+/**
+ * Блок рухів — рівно один `SelectStmt` (`WITH … SELECT` і `UNION ALL` теж
+ * він): тіло обгортки — `LANGUAGE sql`, і довільний оператор там виконувався б
+ * під час читання рухів. Без `ORDER BY` порядок рядків недетермінований, тому
+ * лише попередження: запит лишається чинним.
+ */
+function checkMovementQueries(
+  objects: readonly ParsedObject[],
+  parse: SqlParser
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const object of objects) {
+    for (const block of object.movementBlocks ?? []) {
+      const parsed = parse(block.sql)
+      const select =
+        parsed.ok && parsed.statements.length === 1
+          ? (parsed.statements[0]!.stmt as Record<string, unknown>)
+          : undefined
+      const stmt = select?.SelectStmt as { sortClause?: unknown[] } | undefined
+      if (stmt === undefined) {
+        found.push(
+          diagnostic("posting.query-not-select", block.file, "", {
+            line: block.line,
+          })
+        )
+      } else if ((stmt.sortClause ?? []).length === 0) {
+        found.push(
+          diagnostic("posting.query-order-missing", block.file, "", {
+            line: block.line,
+          })
+        )
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * Функція множини скоупу має бути в SQL-одиницях проєкту: компілятор не
+ * створює її сам, бо вона залежить від того, як застосунок визначає доступні
+ * значення. Підпис перевіряється за деревом розбору, а не за текстом.
+ */
+function checkSetFunctions(
+  project: Project,
+  units: readonly VerbatimUnit[]
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  project.scopeKinds.forEach((kind, index) => {
+    const schema = kind.setFunction.schema ?? project.defaultSchema
+    const name = kind.setFunction.name
+    const pointer = toPointer(["scopeKinds", index, "setFunction"])
+    const sameName = units.filter(
+      (u) => u.class === "function" && u.schema === schema && u.name === name
+    )
+    if (sameName.length === 0) {
+      found.push(
+        diagnostic("scope.set-function-missing", "project.meta.json", pointer, {
+          function: `${schema}.${name}`,
+        })
+      )
+      return
+    }
+    const exact = sameName.find(
+      (u) => u.identity === functionIdentity(schema, name, [])
+    )
+    const problem =
+      exact === undefined
+        ? "it takes arguments"
+        : signatureProblem(exact.tree as Node)
+    if (problem !== undefined) {
+      found.push(
+        diagnostic(
+          "scope.set-function-signature",
+          "project.meta.json",
+          pointer,
+          {
+            function: `${schema}.${name}`,
+            problem,
+          }
+        )
+      )
+    }
+  })
+  return found
+}
+
+interface FunctionNode {
+  parameters?: unknown[]
+  returnType?: {
+    names?: { String?: { sval?: string } }[]
+    setof?: boolean
+    arrayBounds?: unknown[]
+  }
+  options?: {
+    DefElem?: { defname?: string; arg?: { String?: { sval?: string } } }
+  }[]
+}
+
+function signatureProblem(tree: Node): string | undefined {
+  const fn = (tree as { CreateFunctionStmt?: FunctionNode }).CreateFunctionStmt
+  if (fn === undefined) return "it is not a function"
+  if ((fn.parameters ?? []).length > 0) return "it takes arguments"
+  const type = fn.returnType
+  const names = (type?.names ?? []).map((n) => n.String?.sval)
+  const isUuid =
+    names.length > 0 &&
+    names[names.length - 1] === "uuid" &&
+    (names.length === 1 || (names.length === 2 && names[0] === "pg_catalog"))
+  if (type?.setof !== true || !isUuid || (type.arrayBounds ?? []).length > 0) {
+    return "it does not return SETOF uuid"
+  }
+  const volatility = (fn.options ?? [])
+    .map((o) => o.DefElem)
+    .find((o) => o?.defname === "volatility")?.arg?.String?.sval
+  // Без ключового слова Postgres бере VOLATILE.
+  return volatility === "stable" ? undefined : "it is not STABLE"
 }
 
 /**
