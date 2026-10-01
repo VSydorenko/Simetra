@@ -136,7 +136,7 @@ describe("custom table column references", () => {
     }
   })
 
-  it("foreign key target columns of another object are indexed", async () => {
+  it("foreign key target columns map to physical names", async () => {
     const result = await compile(
       files({ [CURRENCY]: currency(), [LOG]: fullLog() })
     )
@@ -303,5 +303,101 @@ describe("custom table column references", () => {
       .filter((r) => r.from.file === LOG)
       .map((r) => r.from.pointer.replace(/\/\d+(?=\/|$)/g, "/*"))
     for (const path of paths) expect(indexed).toContain(path)
+  })
+})
+
+describe("stage 2: custom table column names", () => {
+  const columns = [
+    { id: uuid(740), name: "id", physicalName: "id", type: "UUID" },
+    { id: uuid(741), name: "email", physicalName: "email", type: "Text" },
+  ]
+  const compileWith = async (entries: Record<string, unknown>) =>
+    await compile(files(entries))
+  const log = async (overrides: Record<string, unknown>) =>
+    await compileWith({
+      [LOG]: customTable("Log", { columns, ...overrides }),
+    })
+  const codes = (result: CompileResult) =>
+    result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+
+  it("unknown column in primary key, unique, fk and index", async () => {
+    const result = await log({
+      primaryKey: { columns: ["uuid"] },
+      uniques: [{ columns: ["id", "mail"] }],
+      foreignKeys: [
+        {
+          columns: ["owner"],
+          references: {
+            external: { schema: "auth", table: "users", columns: ["id"] },
+          },
+        },
+      ],
+      indexes: [
+        { keys: [{ column: "id" }, { column: "nope" }], include: ["gone"] },
+      ],
+    })
+    expect(codes(result)).toEqual([
+      ["customTable.column-unknown", "error", LOG, "/foreignKeys/0/columns/0"],
+      ["customTable.column-unknown", "error", LOG, "/indexes/0/include/0"],
+      ["customTable.column-unknown", "error", LOG, "/indexes/0/keys/1/column"],
+      ["customTable.column-unknown", "error", LOG, "/primaryKey/columns/0"],
+      ["customTable.column-unknown", "error", LOG, "/uniques/0/columns/1"],
+    ])
+  })
+
+  it("fk target columns resolve as logical names of the target", async () => {
+    const result = await compileWith({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        attributes: [attribute("isoCode", { physicalName: "iso_code" })],
+      }),
+      "custom-tables/Other/Other.meta.json": customTable("Other"),
+      [LOG]: customTable("Log", {
+        columns,
+        foreignKeys: [
+          {
+            columns: ["id"],
+            references: {
+              object: { kind: "Catalog", name: "Currency" },
+              columns: ["ref"],
+            },
+          },
+          {
+            columns: ["email"],
+            references: {
+              object: { kind: "Catalog", name: "Currency" },
+              columns: ["isoCode"],
+            },
+          },
+          {
+            columns: ["id"],
+            references: {
+              object: { kind: "Catalog", name: "Currency" },
+              columns: ["id"],
+            },
+          },
+          {
+            columns: ["id"],
+            references: {
+              object: { kind: "CustomTable", name: "Other" },
+              columns: ["missing"],
+            },
+          },
+        ],
+      }),
+    })
+    expect(codes(result)).toEqual([
+      [
+        "customTable.column-unknown",
+        "error",
+        LOG,
+        "/foreignKeys/2/references/columns/0",
+      ],
+      [
+        "customTable.column-unknown",
+        "error",
+        LOG,
+        "/foreignKeys/3/references/columns/0",
+      ],
+    ])
   })
 })

@@ -8,7 +8,7 @@ import {
 import type { CompiledModel } from "./compile"
 import { compareStrings, toPointer } from "./diagnostics"
 import { isMovementQuery } from "./sql/units"
-import type { ResolvedReference } from "./stages/identity"
+import { COLUMN_NAME_ROLES, type ResolvedReference } from "./stages/identity"
 
 /**
  * Канонічна JSON-форма за RFC 8785 (JCS). Власна реалізація: примітиви
@@ -87,15 +87,6 @@ function serializeObject(value: Record<string, unknown>): string {
 }
 
 const METADATA_KIND_SET: ReadonlySet<string> = new Set(METADATA_KINDS)
-
-/**
- * Ролі, де рядок файлу — логічне ім'я колонки, а в знімку стає id елемента:
- * перейменування реквізиту цілі FK не має зсувати фрагмент прийнятої таблиці.
- */
-const COLUMN_NAME_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
-  "customTable.column",
-  "customTable.foreignKeyTarget",
-])
 
 /** Індекс посилань одного файлу: pointer → посилання з нього. */
 type FileReferences = ReadonlyMap<string, readonly ResolvedReference[]>

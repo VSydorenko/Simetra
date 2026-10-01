@@ -36,6 +36,15 @@ export interface ResolvedReference {
   line?: number
 }
 
+/**
+ * Ролі, де рядок файлу — логічне ім'я колонки прийнятої таблиці чи цілі її FK.
+ * Одна множина для знімка (ім'я → id елемента) і для стадії 3 (id → фізичне
+ * ім'я): розійдись вони, хеш і фізична модель читали б різні позиції.
+ * Перейменування реквізиту цілі FK тоді не зсуває фрагмент прийнятої таблиці.
+ */
+export const COLUMN_NAME_ROLES: ReadonlySet<ReferenceRole> =
+  new Set<ReferenceRole>(["customTable.column", "customTable.foreignKeyTarget"])
+
 export interface IdentityStageResult {
   /** Відсортовано за (file, pointer). */
   references: ResolvedReference[]

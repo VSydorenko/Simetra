@@ -29,7 +29,6 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
-  type ReferenceRole,
   type RegisterKeySpec,
   type ScopeKind,
   type StandardColumnDef,
@@ -38,7 +37,11 @@ import {
 } from "simetra/model"
 import { compareStrings } from "../diagnostics"
 import { objectKey, type ParsedObject } from "./files"
-import { standardElementId, type ResolvedReference } from "./identity"
+import {
+  COLUMN_NAME_ROLES,
+  standardElementId,
+  type ResolvedReference,
+} from "./identity"
 
 type ForeignKey = PhysicalTable["foreignKeys"][number]
 type FkAction = ForeignKey["onDelete"]
@@ -225,7 +228,7 @@ class SnapshotBuilder {
     )
     this.columnRefs = new Map(
       references
-        .filter((r) => COLUMN_ROLES.has(r.role))
+        .filter((r) => COLUMN_NAME_ROLES.has(r.role))
         .map((r) => [`${r.from.file}\0${r.from.pointer}`, r.to.id])
     )
     this.columnNames = new Map(objects.flatMap(physicalColumnsById))
@@ -1303,12 +1306,6 @@ export function isDeclaredTable(object: ParsedObject): boolean {
   const def = KIND_REGISTRY[object.kind]
   return def.declared && def.materializes === "table"
 }
-
-/** Ролі індексу посилань, що називають колонку прийнятої таблиці чи цілі її FK. */
-const COLUMN_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
-  "customTable.column",
-  "customTable.foreignKeyTarget",
-])
 
 /**
  * id колонки → фізичне ім'я для таблиці об'єкта: елементи колонкових полів і
