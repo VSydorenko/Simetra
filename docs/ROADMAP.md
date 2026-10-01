@@ -26,15 +26,16 @@
 фізики за спекою 01.10), [D1](superpowers/plans/2026-09-30-p2d1-compiler-core.md)
 (ядро компілятора: SQL-одиниці, знімок і хеш, кодоген, ратчет полів) і
 [F](superpowers/plans/2026-10-01-p2f-review-fixes.md) (виправлення за рев'ю C3
-і D1) виконано; далі [E1](superpowers/plans/2026-10-01-p2e1-render-deploy.md)
-(рендер DDL і розгортання в Postgres).
+і D1), [E1](superpowers/plans/2026-10-01-p2e1-render-deploy.md) (рендер DDL,
+розгортання в Postgres, паперовий тест) виконано; далі D2 (CLI, MCP,
+pre-commit).
 
 Рядки йдуть у порядку виконання; колонка «Після» — залежності зі спеки §12.
 
 | Підпроєкт | Мета | Після | Статус | Документи |
 | --- | --- | --- | --- | --- |
 | П0 (б), інвентаризація | карта «що з БД споживача виражається метамоделлю, а що лишається дослівним SQL» — вхід для П2 | — | виконано | [хартії П0](superpowers/specs/2026-09-26-p0-spike-charters.md); [спека §12](superpowers/specs/2026-09-24-simetra-platform-design.md) |
-| П2. Метамодель і компілятор (з мінімальним П1 першим кроком) | метамодель з UUID, фізичними іменами й скоупом та компілятор як єдині двері, над ним CLI і MCP-операції; першим кроком — мінімальний П1: прототипна метамодель → ярус T0 флагманського пакета, прототипний рантайм видалено | інвентаризація | в роботі | [спека П2](superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md); [план A](superpowers/plans/2026-09-30-p2a-environment-minimal-p1.md); [план B](superpowers/plans/2026-09-30-p2b-identity-types-kind-registry.md); [план C1](superpowers/plans/2026-09-30-p2c1-scope.md); [план C2](superpowers/plans/2026-09-30-p2c2-posting-registers.md); [план C3](superpowers/plans/2026-10-01-p2c3-physics-refinement.md); [план D1](superpowers/plans/2026-09-30-p2d1-compiler-core.md); [план F](superpowers/plans/2026-10-01-p2f-review-fixes.md); [спека «Платформа в Postgres»](superpowers/specs/2026-10-01-platform-in-postgres-design.md); спека §3, §4, §5, §14 |
+| П2. Метамодель і компілятор (з мінімальним П1 першим кроком) | метамодель з UUID, фізичними іменами й скоупом та компілятор як єдині двері, над ним CLI і MCP-операції; першим кроком — мінімальний П1: прототипна метамодель → ярус T0 флагманського пакета, прототипний рантайм видалено | інвентаризація | в роботі | [спека П2](superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md); [план A](superpowers/plans/2026-09-30-p2a-environment-minimal-p1.md); [план B](superpowers/plans/2026-09-30-p2b-identity-types-kind-registry.md); [план C1](superpowers/plans/2026-09-30-p2c1-scope.md); [план C2](superpowers/plans/2026-09-30-p2c2-posting-registers.md); [план C3](superpowers/plans/2026-10-01-p2c3-physics-refinement.md); [план D1](superpowers/plans/2026-09-30-p2d1-compiler-core.md); [план F](superpowers/plans/2026-10-01-p2f-review-fixes.md); [план E1](superpowers/plans/2026-10-01-p2e1-render-deploy.md); [спека «Платформа в Postgres»](superpowers/specs/2026-10-01-platform-in-postgres-design.md); спека §3, §4, §5, §14 |
 | П3. Рушій схеми і прийом, з П0 (в) і рештою (б) | схема БД виводиться з метаданих і змінюється без простою; наявна БД приймається до порожнього плану | П2 | не розпочато | спека §6, §7 |
 | Перша міграція споживача | перша зміна схеми споживача, вироблена й застосована рушієм | П3 | не розпочато | спека §12 |
 | П0 (г) | зняти ризики аліасів PostgREST, realtime і тригерів синхронізації | прийом БД | не розпочато | хартії П0 |
