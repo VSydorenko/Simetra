@@ -84,7 +84,7 @@ MCP, pre-commit) → E2 (pg-delta, зворотна генерація, round-tr
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md`, `docs/superpowers/specs/2026-10-01-platform-in-postgres-design.md`, `docs/superpowers/specs/2026-09-24-simetra-platform-design.md`, `docs/research/1c-model/platform-in-practice-2026-10.md`
 
-- [ ] **Step 1:** Спека П2:
+- [x] **Step 1:** Спека П2:
   - рядок М21 — замість формули `date_trunc(<періодичність>, date, '<пояс>')`
     посилання «генерована колонка періоду в поясі проєкту (§5)» (формула
     живе в одному місці);
@@ -102,16 +102,16 @@ MCP, pre-commit) → E2 (pg-delta, зворотна генерація, round-tr
   - §14 — прибрати закриті рядки (DSL в AST, імена в конструкторі); додати
     борги: псевдотипи (`anyelement`, `anyarray`) у сигнатурах, `COMMENT ON FUNCTION`
     без аргументів як друга ідентичність того самого об'єкта.
-- [ ] **Step 2:** «Платформа в Postgres»: §6 `balance` — з реєстратором
+- [x] **Step 2:** «Платформа в Postgres»: §6 `balance` — з реєстратором
   `(period, recorder_type, recorder_id) < (p_at, …)` (строго, як у Р26 і П2
   §7); §4 `predefined_name` і Р24 — за «Рішенням плану» п. 1 (замість «MERGE за
   `id`»). Платформна спека §4 і Р24 — те саме формулювання засіву.
-- [ ] **Step 3:** `platform-in-practice-2026-10.md` §2 — у `_PredefinedID`
+- [x] **Step 3:** `platform-in-practice-2026-10.md` §2 — у `_PredefinedID`
   зберігається ідентифікатор предвизначеного елемента з метаданих, а не ім'я;
   посилання предвизначеного в кожній базі своє, посилання значення
   перерахування однакове в усіх базах (виміряно на 8.3.27).
-- [ ] **Step 4:** `python3 scripts/check-doc-anchors.py` — чисто.
-- [ ] **Step 5: Commit**
+- [x] **Step 4:** `python3 scripts/check-doc-anchors.py` — чисто.
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/specs docs/research/1c-model/platform-in-practice-2026-10.md
@@ -139,7 +139,7 @@ git commit -m "docs(spec): виправлення за рев'ю C3/D1 — пр�
     іменем (`?? n`-фолбек і `columnsExist`) видаляється.
   - `canonicalData` пише id для цих pointer-ів (як для інших посилань).
 
-- [ ] **Step 1: Тести** — `custom table column lists are indexed` (усі шість
+- [x] **Step 1: Тести** — `custom table column lists are indexed` (усі шість
   позицій, ролі й pointer-и); `foreign key target columns of another object
   are indexed` (ціль — довідник, колонка `sku` → id реквізиту; ціль —
   стандартний `ref` → синтетичний id); `unknown column is reported by stage 2`;
@@ -147,10 +147,10 @@ git commit -m "docs(spec): виправлення за рев'ю C3/D1 — пр�
   `every element-name field of CustomTable yields index entries` (обхід схеми:
   кожне поле `elementNameSchema` у `customTableSchema`, крім імен самих
   колонок, дає запис індексу для заповненої фікстури).
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test custom-table-references` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test custom-table-references` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -182,15 +182,15 @@ git commit -m "fix(compiler): посилання на колонки CustomTable
   - Джерело класових множин — наявні `FUNCTION_CLASSES` і реєстрація вузлів
     у `sql/dependencies.ts` (одне місце).
 
-- [ ] **Step 1: Тести** — по тесту на кожну пару з рев'ю: `function and
+- [x] **Step 1: Тести** — по тесту на кожну пару з рев'ю: `function and
   procedure with the same signature`; `procedure with the movement wrapper
   signature`; `aggregate and function`; `model table and view / sequence /
   domain with the same name`; `view and materialized view`; контроль: функції
   з різними сигнатурами — чисто; однакове ім'я в різних схемах — чисто.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test sql-namespaces` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test sql-namespaces` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -220,16 +220,16 @@ git commit -m "fix(compiler): конфлікти імен у просторах 
   - Кодоген: для довідника з предвизначеними — union логічних імен і мапа
     «логічне ім'я → мітка» (як для перерахувань).
 
-- [ ] **Step 1: Тести** — `predefined item needs a label`; `labels are unique
+- [x] **Step 1: Тести** — `predefined item needs a label`; `labels are unique
   within a catalog`; `contract carries labels, scope column and lookup
   function`; `renaming a predefined item keeps its label and the physical
   snapshot`; `scoped catalog index starts with the scope carrier`;
   `lookup function name collides with a table → physical.function-duplicate`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test predefined` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти; JSON Schema оновлено
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test predefined` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти; JSON Schema оновлено
   (`UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`).
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -256,15 +256,15 @@ git commit -m "feat(model): предвизначені елементи з фі�
     полями; `deferrable` у `primaryKey` і `uniques`. Похідні види 1С —
     значення за замовчуванням (без змін виходу).
 
-- [ ] **Step 1: Тести** — `generated column reaches the snapshot`;
+- [x] **Step 1: Тести** — `generated column reaches the snapshot`;
   `generated with default is an error`; `desc nulls last opclass index key`;
   `deferrable unique and primary key`; `column collation`; `1C kinds
   snapshot unchanged` (знімок фікстури C3 побайтно той самий, крім нових
   необов'язкових полів).
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test custom-table-physics` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти; JSON Schema оновлено.
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test custom-table-physics` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти; JSON Schema оновлено.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -294,7 +294,7 @@ git commit -m "feat(model): CustomTable — генеровані колонки,
     свого визначення; посилання на `t` усередині тіла самого CTE
     (`WITH t AS (SELECT * FROM t)`) — ребро на справжню таблицю `t`.
 
-- [ ] **Step 1: Тести**
+- [x] **Step 1: Тести**
   - `unknown timezone`, `UTC and Europe/Kyiv are accepted`;
   - `default value checks` — по кейсу на тип;
   - `data-modifying CTE and FOR UPDATE in movement block are rejected`;
@@ -307,14 +307,14 @@ git commit -m "feat(model): CustomTable — генеровані колонки,
     документа-посилача не змінює);
   - `orphan json schema file fails the drift test` (файл у `schemas/`, якого
     генератор не дає).
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test value-checks creation-order canonical stage-links json-schema` → FAIL.
-- [ ] **Step 3: Реалізація.**
-- [ ] **Step 4: Зелені** — PASS; повні гейти.
-- [ ] **Step 5: Канон і статус** — `simetra-domain-criteria.md`: критерій
+- [x] **Step 2: Червоні** — `pnpm --filter simetra test value-checks creation-order canonical stage-links json-schema` → FAIL.
+- [x] **Step 3: Реалізація.**
+- [x] **Step 4: Зелені** — PASS; повні гейти.
+- [x] **Step 5: Канон і статус** — `simetra-domain-criteria.md`: критерій
   SQL-одиниць доповнити просторами імен Postgres; критерій `CustomTable` —
   колонки в індексі посилань. `docs/ROADMAP.md`: посилання на план, «Зараз» —
   F виконано, далі E1. `python3 scripts/check-doc-anchors.py`.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/simetra .agents docs/ROADMAP.md
