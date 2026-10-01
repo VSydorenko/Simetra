@@ -346,6 +346,10 @@ describe("canonical snapshot and hash", () => {
     expect(snapshot.physical).toEqual(model.physical)
     expect(snapshot.contracts).toEqual(model.contracts)
     expect(snapshot.presentation).toEqual(model.presentation)
+    expect(snapshot.presentation).toMatchObject({
+      defaultLocale: model.project.defaultLocale,
+      objects: expect.any(Array),
+    })
     expect(snapshot.creationOrder).toEqual(model.creationOrder)
     expect(snapshot.actions).toEqual(model.actions)
     expect(snapshot.modules).toEqual(model.modules)

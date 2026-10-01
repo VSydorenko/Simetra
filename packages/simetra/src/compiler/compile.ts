@@ -9,7 +9,7 @@ import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { withRanges } from "./locate"
 import { modelHash } from "./canonical"
 import { buildContracts, type Contracts } from "./contracts"
-import { buildPresentation, type PresentationBlock } from "./presentation"
+import { buildPresentation, type Presentation } from "./presentation"
 import { readFiles } from "./stages/files"
 import { checkIdentity, type ResolvedReference } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
@@ -74,7 +74,7 @@ export interface CompiledModel {
   creationOrder: CreationNode[]
   contracts: Contracts
   /** За `objectId`; лише об'єкти з полями подання. */
-  presentation: PresentationBlock[]
+  presentation: Presentation
   /** Hex sha256 канонічного знімка (RFC 8785); його звіряє П3. */
   hash: string
 }
@@ -280,7 +280,8 @@ async function runStages(
     ),
     presentation: buildPresentation(
       stage1.objects,
-      stage1.project.naming.attributeCase
+      stage1.project.naming.attributeCase,
+      stage1.project.defaultLocale
     ),
   }
   return { ok, diagnostics, model: { ...model, hash: await modelHash(model) } }

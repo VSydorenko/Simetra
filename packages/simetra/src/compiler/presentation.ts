@@ -30,6 +30,17 @@ export interface PresentationBlock {
   }[]
   /** Лише елементи з `description`; у порядку файлу, `id` — як у контракті. */
   predefined?: { id: string; description: LocalizedString }[]
+  /** Лише види зі значеннями-елементами; лише значення із `title`, у порядку файлу. */
+  values?: { id: string; title: LocalizedString }[]
+}
+
+/**
+ * Усе подання моделі: мова за замовчуванням потрібна читачам, щоб обрати
+ * текст із повного `LocalizedString`, який передається цілим.
+ */
+export interface Presentation {
+  defaultLocale: string
+  objects: PresentationBlock[]
 }
 
 interface PresentationFields {
@@ -80,9 +91,10 @@ function canonicalOverrides(
  */
 export function buildPresentation(
   objects: readonly ParsedObject[],
-  style: AttributeCase
-): PresentationBlock[] {
-  return objects
+  style: AttributeCase,
+  defaultLocale: string
+): Presentation {
+  const blocks = objects
     .flatMap((object): PresentationBlock[] => {
       const data = object.data as PresentationFields
       const def = KIND_REGISTRY[object.kind]
@@ -120,12 +132,26 @@ export function buildPresentation(
           description === undefined ? [] : [{ id, description }]
         )
 
+      // Значення-елементи — факт реєстру (`valueElements`); заголовок мають
+      // не всі, решта в блок не потрапляє.
+      const values = def.valueElements
+        ? (
+            ((object.data as { values?: unknown[] }).values ?? []) as {
+              id: string
+              title?: LocalizedString
+            }[]
+          ).flatMap(({ id, title }) =>
+            title === undefined ? [] : [{ id, title }]
+          )
+        : []
+
       const hasStandard = Object.keys(standardAttributes).length > 0
       if (
         data.mainPresentation === undefined &&
         !hasStandard &&
         sections.length === 0 &&
-        predefined.length === 0
+        predefined.length === 0 &&
+        values.length === 0
       ) {
         return []
       }
@@ -138,8 +164,10 @@ export function buildPresentation(
           standardAttributes,
           ...(sections.length === 0 ? {} : { sections }),
           ...(predefined.length === 0 ? {} : { predefined }),
+          ...(values.length === 0 ? {} : { values }),
         },
       ]
     })
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
+  return { defaultLocale, objects: blocks }
 }

@@ -27,6 +27,6 @@ export type {
   VirtualTableColumn,
   VirtualTableContract,
 } from "./contracts"
-export type { PresentationBlock } from "./presentation"
+export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
 export { canonicalSnapshot, canonicalize } from "./canonical"

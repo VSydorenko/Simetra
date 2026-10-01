@@ -302,7 +302,9 @@ export function emitEntityTypes(model: CompiledModel): string {
 
       const targetsOf = (column: StandardColumnDef) =>
         standardTargetRefs(column, object.data)
-      const block = model.presentation.find((p) => p.objectId === object.id)
+      const block = model.presentation.objects.find(
+        (p) => p.objectId === object.id
+      )
       const overrides = new Map(Object.entries(block?.standardAttributes ?? {}))
 
       const sectionNames = sections.map((section) => {

@@ -26,7 +26,7 @@ describe("presentation block", () => {
         },
       }),
     })
-    expect(presentation).toEqual([
+    expect(presentation.objects).toEqual([
       {
         objectId: A,
         mainPresentation: "Code",
@@ -57,7 +57,7 @@ describe("presentation block", () => {
         ],
       }),
     })
-    expect(presentation).toEqual([
+    expect(presentation.objects).toEqual([
       {
         objectId: A,
         mainPresentation: "Description",
@@ -84,7 +84,7 @@ describe("presentation block", () => {
         ],
       }),
     })
-    const block = model.presentation.find((p) => p.objectId === A)!
+    const block = model.presentation.objects.find((p) => p.objectId === A)!
     expect(block.predefined).toEqual([
       { id: E1, description: { uk: "Перший" } },
       { id: E3, description: { en: "Third" } },
@@ -102,7 +102,7 @@ describe("presentation block", () => {
         id: "00000000-0000-4000-8000-000000000d01",
       }),
     })
-    expect(presentation).toEqual([])
+    expect(presentation.objects).toEqual([])
   })
 
   it("deterministic order", async () => {
@@ -118,7 +118,70 @@ describe("presentation block", () => {
       }),
     }
     const { presentation } = await compiled(entries)
-    expect(presentation.map((p) => p.objectId)).toEqual([A, B])
-    expect(presentation[0]!.predefined!.map((p) => p.id)).toEqual([E2, E1])
+    expect(presentation.objects.map((p) => p.objectId)).toEqual([A, B])
+    expect(presentation.objects[0]!.predefined!.map((p) => p.id)).toEqual([
+      E2,
+      E1,
+    ])
+  })
+
+  it("carries the project default locale", async () => {
+    const uk = await compiled({ "project.meta.json": project() })
+    expect(uk.presentation).toEqual({ defaultLocale: "uk", objects: [] })
+    const en = await compiled({
+      "project.meta.json": project({ defaultLocale: "en" }),
+    })
+    expect(en.presentation.defaultLocale).toBe("en")
+  })
+
+  it("enumeration value titles are keyed by id, untitled values absent", async () => {
+    const T = uuid(900)
+    const entries = {
+      "project.meta.json": project(),
+      "enumerations/Status/Status.meta.json": {
+        id: T,
+        kind: "Enumeration",
+        name: "Status",
+        physicalName: "status",
+        values: [
+          {
+            id: uuid(901),
+            name: "Draft",
+            physicalName: "draft",
+            title: { uk: "Чернетка", en: "Draft" },
+          },
+          { id: uuid(902), name: "Plain", physicalName: "plain" },
+          {
+            id: uuid(903),
+            name: "Done",
+            physicalName: "done",
+            title: { en: "Done" },
+          },
+        ],
+      },
+      "enumerations/Bare/Bare.meta.json": {
+        id: uuid(910),
+        kind: "Enumeration",
+        name: "Bare",
+        physicalName: "bare",
+        values: [{ id: uuid(911), name: "One", physicalName: "one" }],
+      },
+    }
+    const first = await compiled(entries)
+    expect(first.presentation.objects).toEqual([
+      {
+        objectId: T,
+        standardAttributes: {},
+        values: [
+          { id: uuid(901), title: { uk: "Чернетка", en: "Draft" } },
+          { id: uuid(903), title: { en: "Done" } },
+        ],
+      },
+    ])
+    const second = await compiled(
+      Object.fromEntries(Object.entries(entries).reverse())
+    )
+    expect(second.presentation).toEqual(first.presentation)
+    expect(second.hash).toBe(first.hash)
   })
 })
