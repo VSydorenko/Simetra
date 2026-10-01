@@ -72,13 +72,20 @@ function attributes(prefix: string) {
       ...common(`${prefix}Tags`, `${prefix}_tags`),
       type: "Boolean",
       array: true,
+    },
+    // Типове значення масиву схема відхиляє (спека §5): лише скалярний елемент.
+    {
+      ...common(`${prefix}Active`, `${prefix}_active`),
+      type: "Boolean",
       defaultValue: false,
     },
   ]
 }
 
 /** Перевизначення стандартного реквізиту: ключ — ім'я стандартного реквізиту. */
-const overrides = (name: string) => ({ [name]: { description: text(name) } })
+const overrides = (name: string) => ({
+  [name]: { title: text(name), description: text(name) },
+})
 
 function header(kind: string, name: string, physicalName: string) {
   return {
@@ -292,7 +299,6 @@ export function kitchenSink(): Map<string, string> {
         type: "Numeric",
         precision: 15,
         scale: 3,
-        required: true,
       },
     ],
     attributes: attributes("stock"),

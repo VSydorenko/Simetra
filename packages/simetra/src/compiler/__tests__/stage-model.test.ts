@@ -624,6 +624,44 @@ describe("stage 3: physical snapshot", () => {
     expect(valueOf("plain")).not.toHaveProperty("default")
   })
 
+  it("enumeration default becomes its label in DEFAULT for attributes and constants", async () => {
+    const status = { kind: "Enumeration", name: "Status" }
+    const physical = await compileWith({
+      "enumerations/Status/Status.meta.json": {
+        id: uuid(64),
+        kind: "Enumeration",
+        name: "Status",
+        physicalName: "status",
+        values: [
+          { id: uuid(65), name: "Open", physicalName: "open_label" },
+          { id: uuid(66), name: "Closed", physicalName: "it's_closed" },
+        ],
+      },
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [
+          attribute("status", {
+            type: "Ref",
+            ref: status,
+            defaultValue: "Closed",
+          }),
+        ],
+      }),
+      "constants/Initial/Initial.meta.json": {
+        id: uuid(67),
+        kind: "Constant",
+        name: "Initial",
+        physicalName: "initial",
+        type: "Ref",
+        ref: status,
+        defaultValue: "Open",
+      },
+    })
+    const columnOf = (table: string, name: string) =>
+      tableOf(physical, table).columns.find((c) => c.name === name)!
+    expect(columnOf("item", "status").default).toBe("'it''s_closed'")
+    expect(columnOf("initial", "value").default).toBe("'open_label'")
+  })
+
   it("custom table with external fk and pg enum column", async () => {
     const physical = await compileWith({
       "pg-enums/OrderStatus/OrderStatus.meta.json": {

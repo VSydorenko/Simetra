@@ -193,7 +193,7 @@
     },
     "standardAttributeOverrides": {
       "default": {},
-      "description": "Custom descriptions of derived standard attributes, keyed by standard attribute name.",
+      "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -201,6 +201,21 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "title": {
+            "description": "Overridden title of the standard attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
           "description": {
             "description": "Overridden description of the standard attribute.",
             "type": "object",
@@ -455,7 +470,7 @@
           },
           "standardAttributeOverrides": {
             "default": {},
-            "description": "Custom descriptions of derived standard attributes, keyed by standard attribute name.",
+            "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",
             "type": "object",
             "propertyNames": {
               "type": "string"
@@ -463,6 +478,21 @@
             "additionalProperties": {
               "type": "object",
               "properties": {
+                "title": {
+                  "description": "Overridden title of the standard attribute.",
+                  "type": "object",
+                  "properties": {
+                    "uk": {
+                      "description": "Ukrainian text.",
+                      "type": "string"
+                    },
+                    "en": {
+                      "description": "English text.",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "description": {
                   "description": "Overridden description of the standard attribute.",
                   "type": "object",

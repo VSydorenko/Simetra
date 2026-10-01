@@ -49,6 +49,8 @@ export const COMPILER_RULES = [
   "scope.set-function-signature",
   "reference.not-referenceable",
   "reference.custom-table-key",
+  "reference.default-to-table",
+  "reference.default-unknown-value",
   "reference.polymorphic-target-kind",
   "catalog.owner-kind",
   "register.recorder-kind",
@@ -75,6 +77,7 @@ export const COMPILER_RULES = [
   "physical.constraint-name-required",
   "customTable.column-unknown",
   "customTable.foreign-key-arity",
+  "presentation.unknown-standard-attribute",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

@@ -91,7 +91,7 @@ type Target =
       column: string
       scope?: { from: string; to: string }
     }
-  | { form: "label"; labels: string[] }
+  | { form: "label"; labels: string[]; labelOf: ReadonlyMap<string, string> }
   | { form: "pair"; discriminators: string[] }
   | { form: "none" }
 
@@ -729,9 +729,7 @@ class SnapshotBuilder {
       notNull: column.notNull,
       ...(column.default !== undefined
         ? { default: column.default }
-        : column.defaultValue !== undefined
-          ? { default: sqlLiteral(column.defaultValue) }
-          : {}),
+        : defaultOf(column.defaultValue, target)),
       ...(column.generated !== undefined
         ? {
             generated: truncatedPeriodExpression(
@@ -865,10 +863,8 @@ class SnapshotBuilder {
       ...resolved,
       // Вид з обов'язковістю при проведенні тримає її не в схемі, а в CHECK
       // шапки й контракті: чернетка може бути неповною.
-      notNull: attribute.required && !requiredOnPost,
-      ...(attribute.defaultValue !== undefined
-        ? { default: sqlLiteral(attribute.defaultValue) }
-        : {}),
+      notNull: attribute.required === true && !requiredOnPost,
+      ...defaultOf(attribute.defaultValue, resolved.target),
       primaryKey: false,
       indexed: attribute.indexed === true,
       unique: attribute.unique === true,
@@ -913,6 +909,7 @@ class SnapshotBuilder {
       // Єдина ціль посилання без таблиці — перерахування: зберігається
       // міткою значення з CHECK (спека §5, М15).
       const values = ((target.data as Element).values ?? []) as {
+        name: string
         physicalName?: string
       }[]
       return {
@@ -921,6 +918,7 @@ class SnapshotBuilder {
         target: {
           form: "label",
           labels: values.map((v) => v.physicalName ?? ""),
+          labelOf: new Map(values.map((v) => [v.name, v.physicalName ?? ""])),
         },
       }
     }
@@ -1207,12 +1205,13 @@ function indexWithin(scope: TableScope | undefined): { indexWithin?: string } {
  */
 /**
  * Елемент з типом значення, що стає колонкою: реквізит, вимір чи ресурс.
- * Ресурс регістра накопичення (`AccumulationResource`) не має `indexed`,
- * `unique` і `defaultValue` — їхня відсутність означає «ні».
+ * Ресурс регістра накопичення (`AccumulationResource`) не має `required`,
+ * `indexed`, `unique` і `defaultValue` — їхня відсутність означає «ні»
+ * (NOT NULL ресурсу дає адитивність виду, а не прапорець).
  */
 type ColumnElement = ValueType &
-  Pick<Attribute, "id" | "name" | "physicalName" | "required"> &
-  Partial<Pick<Attribute, "indexed" | "unique" | "defaultValue">>
+  Pick<Attribute, "id" | "name" | "physicalName"> &
+  Partial<Pick<Attribute, "required" | "indexed" | "unique" | "defaultValue">>
 
 function uniqueWithin(
   unique: boolean,
@@ -1474,6 +1473,24 @@ function startsWith(key: readonly string[], prefix: readonly string[]) {
 }
 
 /** Значення за замовчуванням реквізиту як SQL-літерал. */
+/**
+ * `DEFAULT` з типового значення метаданих — один шлях для реквізиту й
+ * константи (спека §5). Для перерахування значення — логічне ім'я, а в
+ * колонці лежить мітка, тож ім'я перекладається тим самим переліком, що й
+ * `CHECK`; невідоме ім'я звітує стадія 4.
+ */
+function defaultOf(
+  value: string | number | boolean | undefined,
+  target: Target
+): { default?: string } {
+  if (value === undefined) return {}
+  const label =
+    target.form === "label" && typeof value === "string"
+      ? target.labelOf.get(value)
+      : undefined
+  return { default: sqlLiteral(label ?? value) }
+}
+
 function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === "string") return `'${value.replaceAll("'", "''")}'`
   return String(value)

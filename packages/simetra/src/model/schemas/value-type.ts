@@ -54,8 +54,59 @@ export const valueTypeShape = {
 
 export type ValueType = z.infer<z.ZodObject<typeof valueTypeShape>>
 
-/** Перевірки сумісності параметрів типу; кожне порушення несе код правила. */
-export function refineValueType(value: ValueType, ctx: z.RefinementCtx): void {
+/** Скаляр типового значення реквізиту й константи (спека П2 §5). */
+type DefaultValue = string | number | boolean
+
+/** Межі цілих типів Postgres; `BigInt` — у межах точного числа JSON. */
+const INTEGER_RANGES: Partial<Record<LogicalType, [number, number]>> = {
+  SmallInt: [-(2 ** 15), 2 ** 15 - 1],
+  Integer: [-(2 ** 31), 2 ** 31 - 1],
+  BigInt: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+}
+
+const DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/
+const UUID_TEXT =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Чи скаляр сумісний з логічним типом (спека П2 §5): інакше знімок містив би
+ * `DEFAULT`, який Postgres відхилить. Одиночний `Ref` бере логічне ім'я
+ * значення перерахування — його існування перевіряє стадія 4.
+ */
+function fitsType(type: LogicalType, value: DefaultValue): boolean {
+  const range = INTEGER_RANGES[type]
+  if (range !== undefined) {
+    return (
+      typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= range[0] &&
+      value <= range[1]
+    )
+  }
+  switch (type) {
+    case "Boolean":
+      return typeof value === "boolean"
+    case "Numeric":
+      return (
+        typeof value === "number" ||
+        (typeof value === "string" && DECIMAL.test(value))
+      )
+    case "UUID":
+      return typeof value === "string" && UUID_TEXT.test(value)
+    default:
+      return typeof value === "string"
+  }
+}
+
+/**
+ * Перевірки сумісності параметрів типу; кожне порушення несе код правила.
+ * Типове значення перевіряється тут же — для реквізиту й константи одним
+ * шляхом.
+ */
+export function refineValueType(
+  value: ValueType & { defaultValue?: DefaultValue },
+  ctx: z.RefinementCtx
+): void {
   const issue = (rule: SchemaRule, message: string, path: string[]) =>
     ctx.addIssue({ code: "custom", message, path, params: { rule } })
 
@@ -109,5 +160,28 @@ export function refineValueType(value: ValueType, ctx: z.RefinementCtx): void {
         "allowedTypes",
       ])
     }
+  }
+
+  const { defaultValue } = value
+  if (defaultValue === undefined) return
+  // Масив, поліморфна пара, байти й JSON не мають скалярного літерала, який
+  // дав би коректний `DEFAULT` (спека П2 §5).
+  if (
+    value.array === true ||
+    hasAllowed ||
+    value.type === "Bytes" ||
+    value.type === "Json"
+  ) {
+    issue(
+      "type.default-not-allowed",
+      "defaultValue is not allowed for an array, allowedTypes, Bytes or Json value",
+      ["defaultValue"]
+    )
+  } else if (!fitsType(value.type, defaultValue)) {
+    issue(
+      "type.default-mismatch",
+      "defaultValue does not match the logical type",
+      ["defaultValue"]
+    )
   }
 }

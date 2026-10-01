@@ -44,11 +44,14 @@ export const objectHeaderShape = {
   }),
 }
 
-/** Користувацькі перевизначення описів стандартних реквізитів. */
+/** Користувацькі перевизначення заголовків і описів стандартних реквізитів. */
 export const standardAttributeOverridesSchema = z
   .record(
     z.string(),
     z.strictObject({
+      title: localizedStringSchema.optional().meta({
+        description: "Overridden title of the standard attribute.",
+      }),
       description: localizedStringSchema.optional().meta({
         description: "Overridden description of the standard attribute.",
       }),
@@ -58,5 +61,5 @@ export const standardAttributeOverridesSchema = z
   .default({})
   .meta({
     description:
-      "Custom descriptions of derived standard attributes, keyed by standard attribute name.",
+      "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",
   })

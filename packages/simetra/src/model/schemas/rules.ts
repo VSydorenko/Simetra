@@ -12,7 +12,6 @@ export const SCHEMA_RULES = [
   "type.ref-target-required",
   "type.ref-exclusive",
   "type.ref-not-allowed",
-  "register.resource-type",
   "register.balance-control-type",
   "customTable.column-type",
   "customTable.identity-type",
@@ -20,6 +19,8 @@ export const SCHEMA_RULES = [
   "scope.name-reserved",
   "scope.not-allowed",
   "type.cross-scope-not-allowed",
+  "type.default-not-allowed",
+  "type.default-mismatch",
   "posting.parse",
 ] as const
 

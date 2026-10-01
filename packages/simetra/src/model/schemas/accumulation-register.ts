@@ -11,18 +11,14 @@ import {
   objectHeaderShape,
   standardAttributeOverridesSchema,
 } from "./object-header"
-import type { SchemaRule } from "./rules"
 import { refineValueType, valueTypeShape } from "./value-type"
-
-const NUMERIC_TYPES: readonly string[] = ["Integer", "Numeric"]
 
 /**
  * Ресурс регістра накопичення. Ресурси сумуються в залишки й обороти, тож
  * форма вужча за реквізит: лише число з precision/scale — без length,
  * посилань, crossScope чи ознак індексу; строга схема відкидає їх як
- * невідомі ключі. `type` лишає повний перелік логічних типів, щоб хибний тип
- * давав власне правило `register.resource-type`, а не загальну помилку
- * переліку.
+ * невідомі ключі. Прапорця `required` немає: ресурс завжди NOT NULL, бо
+ * значення дає кожен рух.
  */
 export const resourceSchema = z
   .strictObject({
@@ -35,30 +31,13 @@ export const resourceSchema = z
     description: localizedStringSchema.optional().meta({
       description: "Description of the resource.",
     }),
-    type: valueTypeShape.type.meta({
+    type: z.enum(["Integer", "Numeric"]).meta({
       description: "Logical value type; Integer or Numeric only.",
     }),
     precision: valueTypeShape.precision,
     scale: valueTypeShape.scale,
-    required: z
-      .boolean()
-      .default(false)
-      .meta({ description: "Whether a value is mandatory (NOT NULL)." }),
   })
-  .superRefine((resource, ctx) => {
-    // Нечисловий тип — одна причина й один код: перевірки параметрів типу
-    // (наприклад, length для String) тут лише дублювали б її.
-    if (!NUMERIC_TYPES.includes(resource.type)) {
-      ctx.addIssue({
-        code: "custom",
-        message: "AccumulationRegister resources must be Integer or Numeric",
-        path: ["type"],
-        params: { rule: "register.resource-type" satisfies SchemaRule },
-      })
-      return
-    }
-    refineValueType(resource, ctx)
-  })
+  .superRefine(refineValueType)
   .meta({
     description: "Resource of an accumulation register: a summed number.",
   })

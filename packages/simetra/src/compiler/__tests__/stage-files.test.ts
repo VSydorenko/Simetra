@@ -508,7 +508,7 @@ describe("stage 1: strict schemas", () => {
     ])
   })
 
-  it("an accumulation register resource of a wrong type keeps register.resource-type", async () => {
+  it("an accumulation register resource of a wrong type is a schema error on the type", async () => {
     const files = salesDocument()
     const stock = files[STOCK_FILE] as { resources: Record<string, unknown>[] }
     stock.resources[0] = { ...stock.resources[0], type: "Text" }
@@ -524,7 +524,19 @@ describe("stage 1: strict schemas", () => {
       result.diagnostics
         .filter((d) => d.file === STOCK_FILE)
         .map((d) => [d.code, d.pointer])
-    ).toEqual([["register.resource-type", "/resources/0/type"]])
+    ).toEqual([["file.schema", "/resources/0/type"]])
+  })
+
+  it("an accumulation register resource has no required flag", async () => {
+    const files = salesDocument()
+    const stock = files[STOCK_FILE] as { resources: Record<string, unknown>[] }
+    stock.resources[0] = { ...stock.resources[0], required: true }
+    const result = await compile(
+      metaFiles({ "project.meta.json": project(), ...files })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      [STOCK_FILE, "/resources/0/required", "required"],
+    ])
   })
 
   it("one diagnostic per unknown key", async () => {

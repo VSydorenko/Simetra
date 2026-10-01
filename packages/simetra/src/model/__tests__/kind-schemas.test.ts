@@ -295,13 +295,9 @@ describe("accumulationRegisterSchema", () => {
       resources: [{ name: "note", type: "Text" }],
     })
     expect(r.success).toBe(false)
-    const issue = r.error?.issues.find(
-      (i) =>
-        (i as { params?: { rule?: string } }).params?.rule ===
-        "register.resource-type"
-    )
-    expect(issue).toBeDefined()
-    expect(issue?.path).toEqual(["resources", 0, "type"])
+    expect(r.error?.issues.map((i) => [i.code, i.path])).toEqual([
+      ["invalid_value", ["resources", 0, "type"]],
+    ])
   })
 
   it("resources have no length, ref, allowedTypes, crossScope or indexed", () => {
@@ -311,6 +307,8 @@ describe("accumulationRegisterSchema", () => {
       { allowedTypes: [{ kind: "Catalog", name: "Item" }] },
       { crossScope: true },
       { indexed: true },
+      // Ресурс регістра накопичення завжди NOT NULL: прапорця немає.
+      { required: true },
     ]) {
       const r = accumulationRegisterSchema.safeParse({
         kind: "AccumulationRegister",
@@ -328,7 +326,7 @@ describe("accumulationRegisterSchema", () => {
     }
   })
 
-  it("resources keep the element fields, required and precision/scale", () => {
+  it("resources keep the element fields and precision/scale", () => {
     const r = accumulationRegisterSchema.parse({
       kind: "AccumulationRegister",
       name: "Stock",
@@ -354,7 +352,6 @@ describe("accumulationRegisterSchema", () => {
       type: "Numeric",
       precision: 15,
       scale: 2,
-      required: false,
     })
   })
 
@@ -598,7 +595,9 @@ describe("strict metadata schemas", () => {
     const ok = catalogSchema.safeParse({
       kind: "Catalog",
       name: "C",
-      standardAttributeOverrides: { anyName: { description: { en: "D" } } },
+      standardAttributeOverrides: {
+        anyName: { title: { en: "T" }, description: { en: "D" } },
+      },
     })
     expect(ok.success).toBe(true)
     expect(
@@ -606,10 +605,10 @@ describe("strict metadata schemas", () => {
         catalogSchema.safeParse({
           kind: "Catalog",
           name: "C",
-          standardAttributeOverrides: { code: { title: { en: "T" } } },
+          standardAttributeOverrides: { code: { hint: { en: "H" } } },
         })
       )
-    ).toEqual([["standardAttributeOverrides/code", ["title"]]])
+    ).toEqual([["standardAttributeOverrides/code", ["hint"]]])
   })
 
   it("unknown keys are reported at every nesting level", () => {

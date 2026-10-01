@@ -56,10 +56,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) => `Only Ref type accepts ${p.field}`,
     uk: (p) => `Лише тип Ref приймає ${p.field}`,
   },
-  "register.resource-type": {
-    en: () => "Accumulation register resources must be Integer or Numeric",
-    uk: () => "Ресурси регістра накопичення мають бути Integer або Numeric",
-  },
   "register.balance-control-type": {
     en: () => "balanceControl is allowed only on a Balance register",
     uk: () => "balanceControl дозволений лише для регістра залишків (Balance)",
@@ -97,6 +93,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "type.cross-scope-not-allowed": {
     en: () => "Only Ref type accepts crossScope",
     uk: () => "Лише тип Ref приймає crossScope",
+  },
+  "type.default-not-allowed": {
+    en: () =>
+      "defaultValue is not allowed for an array, allowedTypes, Bytes or Json value",
+    uk: () =>
+      "defaultValue не допускається для масиву, allowedTypes, Bytes чи Json",
+    hint: {
+      en: "Such a value has no scalar literal that would make a valid column DEFAULT.",
+      uk: "Таке значення не має скалярного літерала, з якого вийшов би коректний DEFAULT колонки.",
+    },
+  },
+  "type.default-mismatch": {
+    en: () => "defaultValue does not match the logical type",
+    uk: () => "defaultValue не відповідає логічному типу",
+    hint: {
+      en: "Boolean takes a boolean; SmallInt, Integer and BigInt take an integer in range; Numeric takes a number or a decimal string; UUID takes a UUID string; String, Text, Date, DateTime and a Ref to an enumeration take a string.",
+      uk: "Boolean приймає булеве значення; SmallInt, Integer і BigInt — ціле в межах типу; Numeric — число або рядок десяткового дробу; UUID — рядок UUID; String, Text, Date, DateTime і Ref на перерахування — рядок.",
+    },
   },
 
   // --- Стадія 1: файли ---
@@ -482,6 +496,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Реєстр видів вирішує, на які види може вказувати Ref; на PgEnum посилається лише колонка CustomTable, а зовнішньому ключу потрібна ціль із таблицею.",
     },
   },
+  "reference.default-to-table": {
+    en: (p) => `A Ref to ${p.kind} "${p.name}" cannot have a defaultValue`,
+    uk: (p) => `Ref на ${p.kind} "${p.name}" не може мати defaultValue`,
+    hint: {
+      en: "There is no default reference to a data row; only a Ref to an enumeration takes a default value.",
+      uk: "Типового посилання на рядок даних немає; типове значення приймає лише Ref на перерахування.",
+    },
+  },
+  "reference.default-unknown-value": {
+    en: (p) => `${p.kind} "${p.name}" has no value "${p.value}"`,
+    uk: (p) => `${p.kind} "${p.name}" не має значення "${p.value}"`,
+    hint: {
+      en: "A default of a Ref to an enumeration names the logical name of one of its values, not the physical label.",
+      uk: "Типове значення Ref на перерахування називає логічне ім'я одного з його значень, а не фізичну мітку.",
+    },
+  },
   "reference.custom-table-key": {
     en: (p) =>
       `${p.kind} "${p.name}" has no single-column uuid primary key to reference`,
@@ -720,6 +750,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Foreign key has ${p.local} column(s) but references ${p.referenced}`,
     uk: (p) =>
       `Зовнішній ключ має локальних колонок: ${p.local}, а цільових: ${p.referenced}`,
+  },
+  "presentation.unknown-standard-attribute": {
+    en: (p) =>
+      p.section === undefined
+        ? `${p.kind} has no standard attribute "${p.name}" to override`
+        : `Tabular section "${p.section}" of ${p.kind} has no standard attribute "${p.name}" to override`,
+    uk: (p) =>
+      p.section === undefined
+        ? `${p.kind} не має стандартного реквізиту "${p.name}", який можна перевизначити`
+        : `Таблична частина "${p.section}" виду ${p.kind} не має стандартного реквізиту "${p.name}", який можна перевизначити`,
+    hint: {
+      en: "Keys of standardAttributeOverrides name standard attributes derived from the kind and its settings, in camelCase or in the project attribute case.",
+      uk: "Ключі standardAttributeOverrides називають стандартні реквізити, похідні від виду та його налаштувань, у camelCase або в стилі імен реквізитів проєкту.",
+    },
   },
   "physical.name-too-long": {
     en: (p) =>

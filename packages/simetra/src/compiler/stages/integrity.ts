@@ -35,6 +35,7 @@ import {
 } from "../posting-types"
 import { derivedFunctions, type DerivedFunction } from "../contracts"
 import { movementWrapperName } from "../movement-functions"
+import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { FUNCTION_CLASSES, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -78,6 +79,12 @@ const POLYMORPHIC_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
 /** Ролі, чия ціль — регістр, у який документ пише рухи (спека §8.2). */
 const REGISTER_TARGET_ROLES: ReadonlySet<ReferenceRole> =
   new Set<ReferenceRole>(["document.registerMovement", "posting.register"])
+
+/** Ролі одиночного `Ref`, чий елемент може мати типове значення (спека §5). */
+const DEFAULT_VALUE_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "attribute.ref",
+  "constant.ref",
+])
 
 /** Поліморфні множини: їхні цілі розрізняє `physicalName` (спека §5). */
 const POLYMORPHIC_SETS = ["allowedTypes", "owners", "recorderTypes"] as const
@@ -204,6 +211,8 @@ export function checkIntegrity(
     }
   }
 
+  diagnostics.push(...checkDefaultValues(references, byId))
+  diagnostics.push(...checkStandardOverrides(objects, style))
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
 
@@ -259,6 +268,112 @@ function referenceTargetError(
   if (isDeclaredTable(target)) return "reference.custom-table-key"
   // Одиночний `Ref` на ціль без таблиці зберігає мітку (М15), ключ не потрібен.
   return polymorphic ? "reference.polymorphic-target-kind" : undefined
+}
+
+/**
+ * Типове значення одиночного `Ref` (спека §5): типового посилання на рядок
+ * даних немає, а для перерахування значення — логічне ім'я наявного значення.
+ * Форму скаляра вже перевірила схема; ціль, на яку посилатися не можна, уже
+ * звітує `referenceTargetError`.
+ */
+function checkDefaultValues(
+  references: readonly ResolvedReference[],
+  byId: ReadonlyMap<string, ParsedObject>
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const reference of references) {
+    if (!DEFAULT_VALUE_ROLES.has(reference.role)) continue
+    const source = byId.get(reference.from.objectId)
+    const target = byId.get(reference.to.id)
+    if (source === undefined || target === undefined) continue
+    const element = reference.from.pointer.replace(/\/ref$/, "")
+    const pointer = `${element}/defaultValue`
+    const value = valueAt(source.data, pointer)
+    if (typeof value !== "string") continue
+    const def = KIND_REGISTRY[target.kind]
+    if (!def.referenceable) continue
+    const params = { kind: target.kind, name: target.name }
+    if (def.materializes === "table") {
+      found.push(
+        diagnostic(
+          "reference.default-to-table",
+          reference.from.file,
+          pointer,
+          params
+        )
+      )
+    } else if (def.valueElements) {
+      const values = ((target.data as { values?: { name: string }[] }).values ??
+        []) as { name: string }[]
+      if (!values.some((v) => v.name === value)) {
+        found.push(
+          diagnostic(
+            "reference.default-unknown-value",
+            reference.from.file,
+            pointer,
+            { ...params, value }
+          )
+        )
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * Ключі `standardAttributeOverrides` — лише стандартні реквізити цього виду
+ * (спека §8.2): перелік дає реєстр за налаштуваннями об'єкта, для рядка ТЧ —
+ * `tabularSectionColumns`. Ім'я приймається канонічним або в стилі проєкту.
+ */
+function checkStandardOverrides(
+  objects: readonly ParsedObject[],
+  style: AttributeCase
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const object of objects) {
+    const def = KIND_REGISTRY[object.kind]
+    const data = object.data as PresentationFields
+    const report = (
+      overrides: PresentationFields["standardAttributeOverrides"],
+      columns: readonly StandardColumnDef[],
+      prefix: readonly PropertyKey[],
+      section?: string
+    ) => {
+      const names = standardOverrideNames(columns, style)
+      for (const name of Object.keys(overrides ?? {})) {
+        if (names.has(name)) continue
+        found.push(
+          diagnostic(
+            "presentation.unknown-standard-attribute",
+            object.file,
+            toPointer([...prefix, "standardAttributeOverrides", name]),
+            {
+              name,
+              kind: object.kind,
+              ...(section === undefined ? {} : { section }),
+            }
+          )
+        )
+      }
+    }
+    report(
+      data.standardAttributeOverrides,
+      def.standardColumns(object.data),
+      []
+    )
+    if (def.tabularSectionColumns !== undefined) {
+      const rowColumns = def.tabularSectionColumns(object.data)
+      ;(data.tabularSections ?? []).forEach((section, index) => {
+        report(
+          section.standardAttributeOverrides,
+          rowColumns,
+          ["tabularSections", index],
+          section.name
+        )
+      })
+    }
+  }
+  return found
 }
 
 function byteLength(name: string): number {

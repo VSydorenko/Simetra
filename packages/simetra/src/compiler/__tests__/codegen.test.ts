@@ -629,6 +629,21 @@ describe("emitEntityTypes", () => {
     expect(diagnosticsOf(code)).toEqual([])
   })
 
+  it("overridden standard attribute title replaces the kind title", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        standardAttributeOverrides: {
+          code: { title: { en: "Article" } },
+        },
+      }),
+    })
+    const item = block(code, "Catalogs.Item")
+    expect(item).toContain("/** Article */\n  code: string | null")
+    expect(item).not.toContain("/** Code */")
+    expect(diagnosticsOf(code)).toEqual([])
+  })
+
   it("section standard overrides feed the section interface jsdoc", async () => {
     const code = await emit({
       "project.meta.json": project(),

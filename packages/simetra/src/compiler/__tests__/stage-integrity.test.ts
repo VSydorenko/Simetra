@@ -699,4 +699,184 @@ describe("stage 4: integrity", () => {
       ])
     })
   })
+
+  describe("default value (spec §5)", () => {
+    const where = (result: Awaited<ReturnType<typeof compileWith>>) =>
+      result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+    const STATUS_FILE = "enumerations/Status/Status.meta.json"
+    const RATE_FILE = "constants/Rate/Rate.meta.json"
+
+    it("attribute default of a Ref to a table is forbidden", async () => {
+      const result = await compileWith({
+        "catalogs/Item/Item.meta.json": catalog("Item"),
+        [NOTE]: catalog("Note", {
+          attributes: [
+            attribute("item", {
+              ...refTo("Catalog", "Item"),
+              defaultValue: "Main",
+            }),
+          ],
+        }),
+      })
+      expect(where(result)).toEqual([
+        [
+          "reference.default-to-table",
+          "error",
+          NOTE,
+          "/attributes/0/defaultValue",
+        ],
+      ])
+    })
+
+    it("constant default of a Ref to a table is forbidden", async () => {
+      const result = await compileWith({
+        "catalogs/Item/Item.meta.json": catalog("Item"),
+        [RATE_FILE]: {
+          ...CONSTANT,
+          ...refTo("Catalog", "Item"),
+          defaultValue: "Main",
+        },
+      })
+      expect(where(result)).toEqual([
+        ["reference.default-to-table", "error", RATE_FILE, "/defaultValue"],
+      ])
+    })
+
+    it("attribute default of a Ref to an enumeration names an existing value", async () => {
+      const result = await compileWith({
+        [STATUS_FILE]: ENUMERATION,
+        [NOTE]: catalog("Note", {
+          attributes: [
+            attribute("status", {
+              ...refTo("Enumeration", "Status"),
+              defaultValue: "Closed",
+            }),
+            attribute("state", {
+              ...refTo("Enumeration", "Status"),
+              defaultValue: "Open",
+            }),
+          ],
+        }),
+      })
+      expect(where(result)).toEqual([
+        [
+          "reference.default-unknown-value",
+          "error",
+          NOTE,
+          "/attributes/0/defaultValue",
+        ],
+      ])
+    })
+
+    it("constant default of a Ref to an enumeration names an existing value", async () => {
+      const result = await compileWith({
+        [STATUS_FILE]: ENUMERATION,
+        [RATE_FILE]: {
+          ...CONSTANT,
+          ...refTo("Enumeration", "Status"),
+          defaultValue: "Closed",
+        },
+      })
+      expect(where(result)).toEqual([
+        [
+          "reference.default-unknown-value",
+          "error",
+          RATE_FILE,
+          "/defaultValue",
+        ],
+      ])
+    })
+
+    it("the enumeration value is matched by logical name, not by label", async () => {
+      const result = await compileWith({
+        [STATUS_FILE]: {
+          ...ENUMERATION,
+          values: [{ id: uuid(731), name: "Open", physicalName: "opened" }],
+        },
+        [RATE_FILE]: {
+          ...CONSTANT,
+          ...refTo("Enumeration", "Status"),
+          defaultValue: "opened",
+        },
+      })
+      expect(where(result)).toEqual([
+        [
+          "reference.default-unknown-value",
+          "error",
+          RATE_FILE,
+          "/defaultValue",
+        ],
+      ])
+    })
+  })
+
+  describe("standard attribute overrides", () => {
+    const where = (result: Awaited<ReturnType<typeof compileWith>>) =>
+      result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+
+    it("an override key the kind does not declare is an error on the key", async () => {
+      const result = await compileWith({
+        [NOTE]: catalog("Note", {
+          standardAttributeOverrides: {
+            code: { title: { en: "Code" } },
+            "bo/gus": { title: { en: "Bogus" } },
+          },
+        }),
+      })
+      expect(where(result)).toEqual([
+        [
+          "presentation.unknown-standard-attribute",
+          "error",
+          NOTE,
+          "/standardAttributeOverrides/bo~1gus",
+        ],
+      ])
+      expect(result.diagnostics[0]?.params).toEqual({
+        name: "bo/gus",
+        kind: "Catalog",
+      })
+    })
+
+    it("a tabular section override key the row does not declare is an error", async () => {
+      const result = await compileWith({
+        [NOTE]: catalog("Note", {
+          tabularSections: [
+            {
+              id: uuid(760),
+              name: "rows",
+              physicalName: "rows",
+              standardAttributeOverrides: {
+                lineNumber: { title: { en: "No." } },
+                code: { title: { en: "Code" } },
+              },
+            },
+          ],
+        }),
+      })
+      expect(where(result)).toEqual([
+        [
+          "presentation.unknown-standard-attribute",
+          "error",
+          NOTE,
+          "/tabularSections/0/standardAttributeOverrides/code",
+        ],
+      ])
+    })
+
+    it("an override key in the project attribute case is accepted", async () => {
+      const result = await compile(
+        metaFiles({
+          "project.meta.json": project({
+            naming: { attributeCase: "snake_case" },
+          }),
+          [NOTE]: catalog("Note", {
+            standardAttributeOverrides: {
+              deletion_mark: { title: { en: "Mark" } },
+            },
+          }),
+        })
+      )
+      expect(result.diagnostics).toEqual([])
+    })
+  })
 })

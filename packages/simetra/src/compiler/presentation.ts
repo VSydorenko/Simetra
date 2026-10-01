@@ -1,9 +1,11 @@
+import type { z } from "zod"
 import {
   KIND_REGISTRY,
   standardLogicalName,
   type AttributeCase,
   type LocalizedString,
   type StandardColumnDef,
+  type standardAttributeOverridesSchema,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
 import type { ParsedObject } from "./stages/files"
@@ -43,34 +45,46 @@ export interface Presentation {
   objects: PresentationBlock[]
 }
 
-interface PresentationFields {
+type Overrides = z.output<typeof standardAttributeOverridesSchema>
+
+/** Поля подання об'єкта, що їх читає блок і стадія 4. */
+export interface PresentationFields {
   mainPresentation?: "Code" | "Description"
-  standardAttributeOverrides?: Record<
-    string,
-    { title?: LocalizedString; description?: LocalizedString }
-  >
+  standardAttributeOverrides?: Overrides
   tabularSections?: {
     id?: string
-    standardAttributeOverrides?: PresentationFields["standardAttributeOverrides"]
+    name?: string
+    standardAttributeOverrides?: Overrides
   }[]
 }
 
-type Overrides = NonNullable<PresentationFields["standardAttributeOverrides"]>
-
-/** Перевизначення під канонічними іменами колонок; невідоме ім'я лишається як є. */
-function canonicalOverrides(
-  overrides: Overrides | undefined,
+/**
+ * Імена, якими файл може назвати стандартний реквізит, → канонічне ім'я.
+ * Файл може назвати реквізит у стилі проєкту (`deletion_mark`), а читачам
+ * потрібне одне канонічне ім'я. Ключ поза мапою — помилка стадії 4.
+ */
+export function standardOverrideNames(
   columns: readonly StandardColumnDef[],
   style: AttributeCase
-): PresentationBlock["standardAttributes"] {
-  // Файл може назвати реквізит у стилі проєкту (`deletion_mark`), а
-  // читачам потрібне одне канонічне ім'я.
-  const canonical = new Map(
+): ReadonlyMap<string, string> {
+  return new Map(
     columns.flatMap((column) => [
       [column.logicalName, column.logicalName],
       [standardLogicalName(column, style), column.logicalName],
     ])
   )
+}
+
+/**
+ * Перевизначення під канонічними іменами колонок; невідоме ім'я — помилка
+ * стадії 4 (`presentation.unknown-standard-attribute`).
+ */
+function canonicalOverrides(
+  overrides: Overrides | undefined,
+  columns: readonly StandardColumnDef[],
+  style: AttributeCase
+): PresentationBlock["standardAttributes"] {
+  const canonical = standardOverrideNames(columns, style)
   const result: PresentationBlock["standardAttributes"] = {}
   for (const [name, override] of Object.entries(overrides ?? {})) {
     result[canonical.get(name) ?? name] = {
