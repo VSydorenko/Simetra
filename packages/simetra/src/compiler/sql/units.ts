@@ -1,5 +1,6 @@
 import type {
   AccessPriv,
+  CreateFunctionStmt,
   FunctionParameter,
   Node,
   ObjectWithArgs,
@@ -225,9 +226,28 @@ export function withoutLocations(value: unknown): unknown {
 export function functionIdentity(
   schema: string,
   name: string,
-  argTypes: readonly string[]
+  argTypes: readonly (TypeName | undefined)[]
 ): string {
-  return `function:${schema}.${name}(${argTypes.join(",")})`
+  return `function:${signature(schema, name, argTypes)}`
+}
+
+/** Типи вхідних аргументів `CREATE FUNCTION`/`PROCEDURE` — те, що входить в ідентичність. */
+export function inputArgumentTypes(
+  node: CreateFunctionStmt
+): (TypeName | undefined)[] {
+  return (node.parameters ?? [])
+    .map((p) => ("FunctionParameter" in p ? p.FunctionParameter : {}))
+    .filter(isInputParameter)
+    .map((p) => p.argType)
+}
+
+/** `schema.name(типи)` — типи аргументів у канонічній формі (спека П2 §8.3). */
+function signature(
+  schema: string,
+  name: string,
+  argTypes: readonly (TypeName | undefined)[]
+): string {
+  return `${schema}.${name}(${argTypes.map(typeName).join(",")})`
 }
 
 type Classified =
@@ -261,25 +281,29 @@ function classify(stmt: Node, schema: string): Classified {
   if ("CreateFunctionStmt" in stmt) {
     const node = stmt.CreateFunctionStmt
     const fn = qualify(strings(node.funcname), schema)
-    const args = (node.parameters ?? [])
-      .map((p) => ("FunctionParameter" in p ? p.FunctionParameter : {}))
-      .filter(isInputParameter)
-      .map((p) => typeName(p.argType))
     const cls = node.is_procedure === true ? "procedure" : "function"
-    return unit(cls, fn, `${fn.schema}.${fn.name}(${args.join(",")})`)
+    return unit(
+      cls,
+      fn,
+      signature(fn.schema, fn.name, inputArgumentTypes(node))
+    )
   }
   if ("DefineStmt" in stmt && stmt.DefineStmt.kind === "OBJECT_AGGREGATE") {
     const node = stmt.DefineStmt
     const fn = qualify(strings(node.defnames), schema)
     const list = node.args?.[0]
-    const args =
+    // Без списку аргументів — агрегат `(*)`.
+    const key =
       list !== undefined && "List" in list
-        ? (list.List.items ?? [])
-            .map((p) => ("FunctionParameter" in p ? p.FunctionParameter : {}))
-            .map((p) => typeName(p.argType))
-            .join(",")
-        : "*"
-    return unit("aggregate", fn, `${fn.schema}.${fn.name}(${args})`)
+        ? signature(
+            fn.schema,
+            fn.name,
+            (list.List.items ?? []).map((p) =>
+              "FunctionParameter" in p ? p.FunctionParameter.argType : undefined
+            )
+          )
+        : `${fn.schema}.${fn.name}(*)`
+    return unit("aggregate", fn, key)
   }
   if ("CreateTrigStmt" in stmt) {
     const node = stmt.CreateTrigStmt
@@ -489,23 +513,35 @@ function relation(
   return { schema: rv?.schemaname ?? schema, name: rv?.relname ?? "" }
 }
 
-/** Тип як у дереві розбору: частини імені через `.`, масив — `[]`. */
+/**
+ * Тип у канонічній формі Postgres (спека П2 §8.3): одне написання на один тип
+ * `pg_type`, інакше один об'єкт `pg_proc` мав би дві ідентичності. Синоніми
+ * зводить до внутрішніх імен сама граматика (`integer` → `pg_catalog.int4`,
+ * `character varying` → `pg_catalog.varchar`), тож лишається прибрати
+ * `pg_catalog.`, модифікатор типу (`varchar(10)` — той самий тип) і
+ * кількість вимірів масиву; ім'я масиву `_int4` — те саме, що `int4[]`. Тип
+ * з іншої схеми лишається кваліфікованим як є.
+ */
 function typeName(type: TypeName | undefined): string {
   if (type === undefined) return ""
-  return (
-    strings(type.names).join(".") +
-    (type.pct_type === true ? "%type" : "") +
-    "[]".repeat(type.arrayBounds?.length ?? 0)
-  )
+  const names = strings(type.names)
+  if (names.length === 2 && names[0] === "pg_catalog") names.shift()
+  if (type.pct_type === true) return `${names.join(".")}%type`
+  const last = names.at(-1) ?? ""
+  const arrayName = last.length > 1 && last.startsWith("_")
+  if (arrayName) names[names.length - 1] = last.slice(1)
+  const array = arrayName || (type.arrayBounds?.length ?? 0) > 0
+  return names.join(".") + (array ? "[]" : "")
 }
 
 function functionObject(fn: ObjectWithArgs, schema: string): string {
   const { schema: s, name } = qualify(strings(fn.objname), schema)
   if (fn.args_unspecified === true) return `${s}.${name}`
-  const args = (fn.objargs ?? []).map((a) =>
-    "TypeName" in a ? typeName(a.TypeName) : ""
+  return signature(
+    s,
+    name,
+    (fn.objargs ?? []).map((a) => ("TypeName" in a ? a.TypeName : undefined))
   )
-  return `${s}.${name}(${args.join(",")})`
 }
 
 function nodeText(node: Node, schema: string): string {

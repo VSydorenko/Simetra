@@ -53,9 +53,131 @@ describe("sql units", () => {
         "CREATE FUNCTION g(x int, OUT y text) LANGUAGE sql AS $$ select '' $$;\n" +
           "CREATE PROCEDURE p(a text[]) LANGUAGE sql AS $$ select 1 $$;"
       )
+    ).toEqual(["function:public.g(int4)", "procedure:public.p(text[])"])
+  })
+
+  it("f(int) and f(int4) are one function", async () => {
+    const result = await compileSql(
+      "CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql AS $$ select 1 $$;\n" +
+        "CREATE FUNCTION f(b int4) RETURNS int LANGUAGE sql AS $$ select 2 $$;"
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: "function:public.f(int4)",
+          line: 2,
+        }),
+      }),
+    ])
+  })
+
+  it("f(uuid) and f(pg_catalog.uuid) are one function", async () => {
+    const result = await compileSql(
+      "CREATE FUNCTION f(a uuid) RETURNS int LANGUAGE sql AS $$ select 1 $$;\n" +
+        "CREATE FUNCTION f(a pg_catalog.uuid) RETURNS int LANGUAGE sql AS $$ select 2 $$;"
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: "function:public.f(uuid)",
+        }),
+      }),
+    ])
+  })
+
+  // Кожна пара — два написання одного типу `pg_proc`; третій стовпець —
+  // канонічна форма в ідентичності.
+  it.each([
+    ["int4", "integer", "int4"],
+    ["int", "pg_catalog.int4", "int4"],
+    ["smallint", "int2", "int2"],
+    ["bigint", "int8", "int8"],
+    ["boolean", "bool", "bool"],
+    ["real", "float4", "float4"],
+    ["float(10)", "float4", "float4"],
+    ["float", "float8", "float8"],
+    ["double precision", "float8", "float8"],
+    ["decimal", "numeric", "numeric"],
+    ["dec", "numeric", "numeric"],
+    ["timestamp with time zone", "timestamptz", "timestamptz"],
+    ["timestamp without time zone", "pg_catalog.timestamp", "timestamp"],
+    ["time with time zone", "timetz", "timetz"],
+    ["time without time zone", "pg_catalog.time", "time"],
+    ["character varying", "varchar", "varchar"],
+    ["char varying", "pg_catalog.varchar", "varchar"],
+    ["national character varying", "varchar", "varchar"],
+    ["character", "bpchar", "bpchar"],
+    ["char", "bpchar", "bpchar"],
+    ["nchar", "bpchar", "bpchar"],
+    ["bit varying", "varbit", "varbit"],
+    ["bit", '"bit"', "bit"],
+    ["json", '"json"', "json"],
+    ["interval", '"interval"', "interval"],
+    // Модифікатор типу не входить у тип функції.
+    ["varchar(10)", "character varying", "varchar"],
+    ["numeric(10,2)", "numeric", "numeric"],
+    ["char(5)", "bpchar", "bpchar"],
+    ["timestamp(3) with time zone", "timestamptz", "timestamptz"],
+    ["time(2)", "time", "time"],
+    ["bit(3)", '"bit"', "bit"],
+    ["interval day to second", '"interval"', "interval"],
+    // Масив — один тип незалежно від написання й кількості вимірів.
+    ["int[]", "_int4", "int4[]"],
+    ["integer[]", "int4[]", "int4[]"],
+    ["integer array", "pg_catalog._int4", "int4[]"],
+    ["int[][]", "int4[3]", "int4[]"],
+    ["varchar(10)[]", "_varchar", "varchar[]"],
+    ["other.item[]", "other._item", "other.item[]"],
+  ])("f(%s) and f(%s) are one function", async (first, second, canonical) => {
+    const result = await compileSql(
+      `CREATE FUNCTION f(a ${first}) RETURNS int LANGUAGE sql AS $$ select 1 $$;\n` +
+        `CREATE FUNCTION f(a ${second}) RETURNS int LANGUAGE sql AS $$ select 2 $$;`
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: `function:public.f(${canonical})`,
+        }),
+      }),
+    ])
+  })
+
+  it("distinct types stay distinct: quoted char, user types and their schemas", async () => {
+    expect(
+      await identities(
+        [
+          'CREATE FUNCTION f(a "char") RETURNS int LANGUAGE sql AS $$ select 1 $$;',
+          "CREATE FUNCTION f(a char) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+          "CREATE FUNCTION f(a item) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+          "CREATE FUNCTION f(a other.item) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+        ].join("\n")
+      )
     ).toEqual([
-      "function:public.g(pg_catalog.int4)",
-      "procedure:public.p(text[])",
+      "function:public.f(bpchar)",
+      "function:public.f(char)",
+      "function:public.f(item)",
+      "function:public.f(other.item)",
+    ])
+  })
+
+  it("aggregate, function settings, grant and comment name a signature canonically", async () => {
+    expect(
+      await identities(
+        [
+          "CREATE AGGREGATE agg(integer) (SFUNC = int4pl, STYPE = int);",
+          "ALTER FUNCTION f(integer, varchar(5)) SET search_path = '';",
+          "GRANT EXECUTE ON FUNCTION f(int, character varying) TO anon;",
+          "COMMENT ON FUNCTION f(pg_catalog.int4, pg_catalog.varchar) IS 'x';",
+        ].join("\n")
+      )
+    ).toEqual([
+      "aggregate:public.agg(int4)",
+      "comment:function:public.f(int4,varchar)",
+      "functionSettings:public.f(int4,varchar)",
+      "grant:grant:function:public.f(int4,varchar):anon:execute",
     ])
   })
 
@@ -105,6 +227,21 @@ describe("sql units", () => {
         params: expect.objectContaining({
           identity: "function:public.sale_stock_movements(uuid)",
           line: 1,
+        }),
+      }),
+    ])
+  })
+
+  it("user function on pg_catalog.uuid collides with a movement wrapper", async () => {
+    const result = await compileSql(
+      "CREATE FUNCTION public.sale_stock_movements(p pg_catalog.uuid) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+      salesDocument()
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: "function:public.sale_stock_movements(uuid)",
         }),
       }),
     ])

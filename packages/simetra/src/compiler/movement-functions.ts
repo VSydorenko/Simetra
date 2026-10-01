@@ -19,6 +19,7 @@ import { compareStrings, toPointer } from "./diagnostics"
 import type { SqlParser } from "./sql/parse"
 import {
   functionIdentity,
+  inputArgumentTypes,
   withoutLocations,
   type MovementQueryUnit,
 } from "./sql/units"
@@ -149,7 +150,7 @@ class Context {
     // запиту автора; збій тут — помилка генератора, а не метаданих.
     const parsed = this.parse(sql)
     const [statement] = parsed.ok ? parsed.statements : []
-    if (statement === undefined) {
+    if (statement === undefined || !("CreateFunctionStmt" in statement.stmt)) {
       throw new Error(`movement wrapper ${name} does not parse`)
     }
     // Для хешу — дерево самого запиту: у дереві обгортки він рядок
@@ -158,7 +159,12 @@ class Context {
     if (!query.ok) throw new Error(`movement query ${name} does not parse`)
     return {
       class: "movementQuery",
-      identity: functionIdentity(documentTable.schema, name, ["uuid"]),
+      // Ідентичність — з розібраної обгортки, як у функцій користувача.
+      identity: functionIdentity(
+        documentTable.schema,
+        name,
+        inputArgumentTypes(statement.stmt.CreateFunctionStmt)
+      ),
       schema: documentTable.schema,
       name,
       ownerObjectId: document.id ?? "",

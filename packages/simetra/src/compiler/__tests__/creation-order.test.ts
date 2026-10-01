@@ -355,10 +355,7 @@ describe("creation order", () => {
       [MISC]: `CREATE FUNCTION z.date_trunc(text, timestamp) RETURNS timestamp ${PLPGSQL};`,
     })
     expectBefore(list, [
-      [
-        "function:z.date_trunc(text,pg_catalog.timestamp)",
-        "table:public.invoice",
-      ],
+      ["function:z.date_trunc(text,timestamp)", "table:public.invoice"],
     ])
   })
 
