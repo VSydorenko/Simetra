@@ -156,7 +156,7 @@ pnpm format:fix                           # fixes what format:check reports
 python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
 
 pnpm db:start                             # local Supabase stack (needs Docker)
-pnpm test:db                              # provider base-state pgTAP tests
+pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) against the local stack
 pnpm db:stop
 ```
 
