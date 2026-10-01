@@ -144,6 +144,9 @@ export function readSqlUnits(
             ...(classified.detail === undefined
               ? {}
               : { detail: classified.detail }),
+            ...(classified.feature === undefined
+              ? {}
+              : { feature: classified.feature }),
           })
         )
         continue
@@ -218,7 +221,14 @@ export function functionIdentity(
 
 type Classified =
   | { class: SqlUnitClass; identity: string; schema: string; name: string }
-  | { notAllowed: string; detail?: string }
+  | { notAllowed: string; detail?: string; feature?: "rowLevelSecurity" }
+
+const ROW_SECURITY: ReadonlySet<string> = new Set([
+  "AT_EnableRowSecurity",
+  "AT_DisableRowSecurity",
+  "AT_ForceRowSecurity",
+  "AT_NoForceRowSecurity",
+])
 
 /**
  * Гейт дозволених класів (спека П2 §8.3): лише об'єкти, якими модель не
@@ -397,15 +407,19 @@ function classify(stmt: Node, schema: string): Classified {
     const subtypes = (node.cmds ?? []).map((c) =>
       "AlterTableCmd" in c ? (c.AlterTableCmd.subtype ?? "") : ""
     )
-    const others = subtypes.filter((s) => s !== "AT_ReplicaIdentity")
     if (
       node.objtype !== "OBJECT_TABLE" ||
       subtypes.length === 0 ||
-      others.length > 0
+      subtypes.some((s) => s !== "AT_ReplicaIdentity")
     ) {
       return {
         notAllowed: statement,
-        detail: `only REPLICA IDENTITY is allowed, got ${others.join(", ")}`,
+        detail: "only REPLICA IDENTITY is allowed",
+        // RLS — поле таблиці в метаданих; ознака йде окремим параметром, щоб
+        // підказка не розбирала текст і не показувала внутрішні імена вузлів.
+        ...(subtypes.some((s) => ROW_SECURITY.has(s))
+          ? { feature: "rowLevelSecurity" }
+          : {}),
       }
     }
     const table = relation(node.relation, schema)

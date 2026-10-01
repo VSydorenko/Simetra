@@ -167,10 +167,15 @@ describe("sql units", () => {
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "sql.statement-not-allowed",
-        params: expect.objectContaining({ statement: "AlterTableStmt" }),
+        params: expect.objectContaining({
+          statement: "AlterTableStmt",
+          feature: "rowLevelSecurity",
+        }),
         hint: expect.stringContaining("rowLevelSecurity"),
       }),
     ])
+    expect(result.diagnostics[0]!.message).not.toContain("AT_")
+    expect(result.diagnostics[0]!.message).not.toMatch(/got\s*$/)
   })
 
   it("duplicate unit", async () => {
@@ -187,15 +192,40 @@ describe("sql units", () => {
   })
 
   it("parse error has line and column", async () => {
+    // Перед помилкою на тому самому рядку — кирилиця (2 байти) і 😀 (4 байти,
+    // 2 одиниці UTF-16, 1 кодова точка): `;` — 33-тя колонка в UTF-16, а не
+    // 32 (кодові точки) і не 36 (байти).
     const result = await compileSql(
-      "CREATE VIEW v AS SELECT 1;\n-- коментар\nCREATE VIEW w AS SELEC 2;"
+      "CREATE VIEW v AS SELECT 'ї';\n-- коментар 😀\nCREATE VIEW w AS SELECT 'ї😀' + ;"
     )
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "sql.parse",
         file: MISC,
         pointer: "",
-        params: expect.objectContaining({ line: 3, column: 18 }),
+        params: expect.objectContaining({ line: 3, column: 33 }),
+      }),
+    ])
+  })
+
+  it("statement start after multi-byte text keeps its text and line", async () => {
+    // `stmt_location` — байти UTF-8: без перекладу в індекс UTF-16 текст і
+    // рядок другого оператора зсунулися б.
+    const text =
+      "CREATE VIEW a AS SELECT 'ї😀';\n-- ї 😀\n/* 😀 */ CREATE VIEW b AS SELECT 'ї😀 ї';"
+    const valid = await compileSql(text)
+    expect(valid.diagnostics).toEqual([])
+    expect(valid.model!.sqlUnits.map((u) => u.sql)).toEqual([
+      "CREATE VIEW a AS SELECT 'ї😀'",
+      "CREATE VIEW b AS SELECT 'ї😀 ї'",
+    ])
+    const duplicate = await compileSql(
+      `${text}\n/* ї😀 */ CREATE OR REPLACE VIEW b AS SELECT 3;`
+    )
+    expect(duplicate.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({ identity: "view:public.b", line: 4 }),
       }),
     ])
   })

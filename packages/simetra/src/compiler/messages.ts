@@ -100,7 +100,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
         : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
     hint: (p) =>
-      String(p.detail ?? "").includes("RowSecurity")
+      p.feature === "rowLevelSecurity"
         ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
         : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publications, REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
   },
