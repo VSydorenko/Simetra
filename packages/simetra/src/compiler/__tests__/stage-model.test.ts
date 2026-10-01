@@ -756,7 +756,10 @@ describe("stage 3: physical snapshot", () => {
       "tsvector",
     ])
     expect(profile.columns[1]!.comment).toBe("Owner")
-    expect(profile.columns[3]!.identity).toBe("always")
+    expect(profile.columns[3]!.identity).toEqual({
+      generation: "always",
+      sequence: "profile_counter_seq",
+    })
     expect(profile.primaryKey).toEqual({
       name: "profile_pkey",
       columns: ["id"],

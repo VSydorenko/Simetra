@@ -250,8 +250,8 @@ export type PgObject =
  * Імена об'єкта в просторах Postgres (спека П2 §8.3) — одне джерело для
  * конфліктів і для посилань порядку створення. Таблиця й в'юха — ще й
  * складений тип; індекси таблиці (разом з індексами первинного ключа й
- * UNIQUE) ділять із нею `pg_class`. Решта класів одиниць імен у цих
- * просторах не створює.
+ * UNIQUE) і послідовності її identity-колонок ділять із нею `pg_class`.
+ * Решта класів одиниць імен у цих просторах не створює.
  */
 export function pgNamespaceKeys(object: PgObject): PgName[] {
   const at = (space: PgSpace, schema: string, name: string): PgName => ({
@@ -264,7 +264,7 @@ export function pgNamespaceKeys(object: PgObject): PgName[] {
     return [at("type", object.schema, object.name)]
   }
   if (object.type === "table") {
-    const { schema, name, indexes, primaryKey, uniques } = object.table
+    const { schema, name, columns, indexes, primaryKey, uniques } = object.table
     return [
       at("rel", schema, name),
       at("type", schema, name),
@@ -272,7 +272,10 @@ export function pgNamespaceKeys(object: PgObject): PgName[] {
         ...indexes.map((index) => index.name),
         ...(primaryKey === undefined ? [] : [primaryKey.name]),
         ...uniques.map((unique) => unique.name),
-      ].map((index) => at("rel", schema, index)),
+        ...columns.flatMap((column) =>
+          column.identity === undefined ? [] : [column.identity.sequence]
+        ),
+      ].map((relation) => at("rel", schema, relation)),
     ]
   }
   const { unit } = object

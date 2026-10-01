@@ -155,8 +155,12 @@ interface PendingTable {
   comment?: string
   origin: PhysicalTable["origin"]
   rowLevelSecurity: PhysicalTable["rowLevelSecurity"]
+  /** Без `identity`: його послідовність отримує ім'я в `assignNames`. */
   columns: PhysicalColumn[]
-  identityColumns: string[]
+  identityColumns: {
+    column: string
+    generation: NonNullable<PhysicalColumn["identity"]>["generation"]
+  }[]
   primaryKey?: Omit<NonNullable<PhysicalTable["primaryKey"]>, "name"> & {
     name?: string
   }
@@ -1030,7 +1034,6 @@ class SnapshotBuilder {
         type: this.declaredColumnType(column),
         notNull: column.notNull,
         ...(column.default !== undefined ? { default: column.default } : {}),
-        ...(column.identity !== undefined ? { identity: column.identity } : {}),
         ...(column.generated !== undefined
           ? { generated: { expression: column.generated.expression } }
           : {}),
@@ -1040,7 +1043,12 @@ class SnapshotBuilder {
         ...(column.comment !== undefined ? { comment: column.comment } : {}),
         origin: { elementId: column.id ?? "" },
       })
-      if (column.identity !== undefined) table.identityColumns.push(name)
+      if (column.identity !== undefined) {
+        table.identityColumns.push({
+          column: name,
+          generation: column.identity,
+        })
+      }
       source.columns.push({
         name,
         pointer: `/columns/${index}/physicalName`,
@@ -1665,9 +1673,17 @@ function assignNames(pending: readonly PendingTable[]): {
 
     // Порядок — як у CREATE TABLE Postgres: послідовності identity, CHECK,
     // первинний ключ, UNIQUE, потім FK і окремі CREATE INDEX.
-    for (const column of table.identityColumns) {
-      choose(column, "seq", names.relations, true, false)
-    }
+    // Ім'я послідовності — у знімку, як імена індексів: воно займає
+    // `pg_class` схеми, і перевірка просторів імен має його бачити.
+    const identities = new Map(
+      table.identityColumns.map(({ column, generation }) => [
+        column,
+        {
+          generation,
+          sequence: choose(column, "seq", names.relations, true, false),
+        },
+      ])
+    )
     const checks = table.checks.map(
       ({ name, column, label, elementId, expression }) => {
         const assigned =
@@ -1737,7 +1753,10 @@ function assignNames(pending: readonly PendingTable[]): {
       ...(table.comment !== undefined ? { comment: table.comment } : {}),
       origin: table.origin,
       rowLevelSecurity: table.rowLevelSecurity,
-      columns: table.columns,
+      columns: table.columns.map((column) => {
+        const identity = identities.get(column.name)
+        return identity === undefined ? column : { ...column, identity }
+      }),
       ...(primaryKey !== undefined ? { primaryKey } : {}),
       uniques: uniques.sort(byName),
       checks: checks.sort(byName),

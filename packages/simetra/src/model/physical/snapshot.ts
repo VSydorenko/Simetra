@@ -105,7 +105,12 @@ export interface PhysicalColumn {
   type: string
   notNull: boolean
   default?: string
-  identity?: "always" | "byDefault"
+  /**
+   * Identity-колонка: режим і ім'я її послідовності. Ім'я обирає компілятор
+   * тим самим алгоритмом, що й Postgres (`<таблиця>_<колонка>_seq` з обходом
+   * зайнятих), і воно займає `pg_class` схеми поряд з таблицями й індексами.
+   */
+  identity?: { generation: "always" | "byDefault"; sequence: string }
   /**
    * Генерована колонка (`GENERATED ALWAYS AS (...) STORED`): значення дає
    * база, тож `default` у такої колонки немає.

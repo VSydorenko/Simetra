@@ -149,6 +149,39 @@ describe("postgres namespaces", () => {
     ])
   })
 
+  it("identity sequence of a model table and a verbatim sequence", async () => {
+    // Послідовність identity займає `pg_class` під іменем, яке обрав
+    // компілятор: `log_n_seq` уже зайняла таблиця, тож — `log_n_seq1`.
+    const log = customTable("Log", {
+      columns: [
+        {
+          id: uuid(941),
+          name: "n",
+          physicalName: "n",
+          type: "BigInt",
+          identity: "always",
+        },
+      ],
+    })
+    const result = await compileSql(
+      "CREATE SEQUENCE log_n_seq1;\nCREATE VIEW log_n_seq2 AS SELECT 1;",
+      {
+        "custom-tables/Log/Log.meta.json": log,
+        "catalogs/Clash/Clash.meta.json": catalog("Clash", {
+          physicalName: "log_n_seq",
+        }),
+      }
+    )
+    expect(result.diagnostics).toEqual([
+      conflict({
+        identity: "sequence:public.log_n_seq1",
+        space: "rel",
+        key: "public.log_n_seq1",
+        other: "table:public.log",
+      }),
+    ])
+  })
+
   it("model enum type and domain with the same name", async () => {
     const result = await compileSql("CREATE DOMAIN status AS text;", {
       "pg-enums/Status/Status.meta.json": PG_ENUM,
