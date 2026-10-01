@@ -153,6 +153,64 @@ describe("stage 4: integrity", () => {
     ])
   })
 
+  it("ref to a custom table with a deferrable uuid primary key", async () => {
+    const table = (
+      name: string,
+      n: number,
+      overrides: Record<string, unknown>
+    ) =>
+      customTable(name, {
+        columns: [
+          { id: uuid(n), name: "id", physicalName: "id", type: "UUID" },
+        ],
+        ...overrides,
+      })
+    const result = await compileWith({
+      "custom-tables/Log/Log.meta.json": table("Log", 733, {
+        primaryKey: { columns: ["id"], deferrable: "initiallyDeferred" },
+      }),
+      // Невідкладений UNIQUE на тій самій колонці — законна ціль FK.
+      "custom-tables/Pair/Pair.meta.json": table("Pair", 734, {
+        primaryKey: { columns: ["id"], deferrable: "deferrable" },
+        uniques: [{ name: "pair_id_key", columns: ["id"] }],
+      }),
+      [NOTE]: catalog("Note", {
+        attributes: [
+          attribute("log", refTo("CustomTable", "Log")),
+          attribute("pair", refTo("CustomTable", "Pair")),
+          // Масив посилань FK не має.
+          attribute("logs", { ...refTo("CustomTable", "Log"), array: true }),
+          attribute("anyLog", {
+            type: "Ref",
+            allowedTypes: [{ kind: "CustomTable", name: "Log" }],
+          }),
+        ],
+      }),
+      "constants/Main/Main.meta.json": {
+        ...CONSTANT,
+        name: "Main",
+        physicalName: "main",
+        ...refTo("CustomTable", "Log"),
+      },
+    })
+    expect(
+      result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+    ).toEqual([
+      [
+        "reference.custom-table-deferrable-key",
+        "error",
+        NOTE,
+        "/attributes/0/ref",
+      ],
+      [
+        "reference.custom-table-deferrable-key",
+        "error",
+        "constants/Main/Main.meta.json",
+        "/ref",
+      ],
+    ])
+  })
+
   it("catalog owner must be a catalog", async () => {
     const result = await compileWith({
       "enumerations/Status/Status.meta.json": ENUMERATION,
@@ -611,6 +669,81 @@ describe("stage 4: integrity", () => {
         ["customTable.foreign-key-arity", "error", LOG, "/foreignKeys/0"],
         ["customTable.foreign-key-arity", "error", LOG, "/foreignKeys/1"],
       ])
+    })
+
+    it("fk to a deferrable key without a non-deferrable twin", async () => {
+      const fk = (columns: string[]) => ({
+        columns: ["id"],
+        references: {
+          object: { kind: "CustomTable", name: "Other" },
+          columns,
+        },
+      })
+      const result = await compileWith({
+        "custom-tables/Other/Other.meta.json": customTable("Other", {
+          columns: [
+            { id: uuid(743), name: "id", physicalName: "id", type: "UUID" },
+            { id: uuid(744), name: "code", physicalName: "code", type: "UUID" },
+            { id: uuid(745), name: "tag", physicalName: "tag", type: "UUID" },
+          ],
+          primaryKey: { columns: ["id"], deferrable: "deferrable" },
+          uniques: [
+            {
+              name: "other_code_key",
+              columns: ["code"],
+              deferrable: "initiallyDeferred",
+            },
+            { name: "other_code_now_key", columns: ["code"] },
+            {
+              name: "other_tag_key",
+              columns: ["tag"],
+              deferrable: "deferrable",
+            },
+          ],
+          indexes: [
+            // Частковий унікальний індекс ціллю FK бути не може.
+            {
+              name: "other_tag_idx",
+              unique: true,
+              keys: [{ column: "tag" }],
+              where: "tag IS NOT NULL",
+            },
+          ],
+        }),
+        [LOG]: customTable("Log", {
+          columns,
+          foreignKeys: [fk(["id"]), fk(["code"]), fk(["tag"])],
+        }),
+      })
+      expect(codes(result)).toEqual([
+        [
+          "customTable.foreign-key-deferrable-target",
+          "error",
+          LOG,
+          "/foreignKeys/0/references/columns",
+        ],
+        [
+          "customTable.foreign-key-deferrable-target",
+          "error",
+          LOG,
+          "/foreignKeys/2/references/columns",
+        ],
+      ])
+    })
+
+    it("fk to a deferrable key of an external table is not checked", async () => {
+      const result = await log({
+        primaryKey: { columns: ["id"], deferrable: "deferrable" },
+        foreignKeys: [
+          {
+            columns: ["id"],
+            references: {
+              external: { schema: "auth", table: "users", columns: ["id"] },
+            },
+          },
+        ],
+      })
+      expect(codes(result)).toEqual([])
     })
   })
 

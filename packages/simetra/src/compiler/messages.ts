@@ -553,6 +553,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Ref на CustomTable, одиночний чи поліморфний, зберігає значення єдиної колонки первинного ключа uuid.",
     },
   },
+  "reference.custom-table-deferrable-key": {
+    en: (p) =>
+      `The primary key of ${p.kind} "${p.name}" is deferrable and cannot be the target of a foreign key`,
+    uk: (p) =>
+      `Первинний ключ ${p.kind} "${p.name}" відкладений і не може бути ціллю зовнішнього ключа`,
+    hint: {
+      en: "Postgres rejects a foreign key to a DEFERRABLE primary key or unique constraint; make the key not deferrable or add a non-deferrable unique constraint on the same column.",
+      uk: "Postgres відкидає зовнішній ключ на DEFERRABLE первинний ключ чи UNIQUE; зробіть ключ невідкладеним або додайте невідкладений UNIQUE на ту саму колонку.",
+    },
+  },
   "reference.polymorphic-target-kind": {
     en: (p) =>
       `${p.kind} "${p.name}" cannot be a target of a polymorphic reference`,
@@ -791,6 +801,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Foreign key has ${p.local} column(s) but references ${p.referenced}`,
     uk: (p) =>
       `Зовнішній ключ має локальних колонок: ${p.local}, а цільових: ${p.referenced}`,
+  },
+  "customTable.foreign-key-deferrable-target": {
+    en: (p) =>
+      `Foreign key references a deferrable key of ${p.kind} "${p.name}"`,
+    uk: (p) =>
+      `Зовнішній ключ посилається на відкладений ключ ${p.kind} "${p.name}"`,
+    hint: {
+      en: "Postgres rejects a foreign key to a DEFERRABLE primary key or unique constraint; reference a non-deferrable key on the same columns.",
+      uk: "Postgres відкидає зовнішній ключ на DEFERRABLE первинний ключ чи UNIQUE; посилайтеся на невідкладений ключ на тих самих колонках.",
+    },
   },
   "customTable.generated-conflict": {
     en: (p) => `Generated column cannot also have ${p.field}`,

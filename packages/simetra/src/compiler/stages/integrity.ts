@@ -209,7 +209,7 @@ export function checkIntegrity(
 
   for (const object of objects) {
     if (isDeclaredTable(object)) {
-      diagnostics.push(...checkDeclaredTable(object))
+      diagnostics.push(...checkDeclaredTable(object, byKey))
     }
   }
 
@@ -266,10 +266,82 @@ function referenceTargetError(
   }
   const polymorphic = POLYMORPHIC_ROLES.has(role)
   if (!polymorphic && !REF_ROLES.has(role)) return undefined
-  if (keyColumnOf(target) !== undefined) return undefined
+  if (keyColumnOf(target) !== undefined) {
+    return singleRefBuildsForeignKey(reference, byId) &&
+      isDeclaredTable(target) &&
+      onlyDeferrableKey(target.data as CustomTable, [
+        (target.data as CustomTable).primaryKey!.columns[0]!,
+      ])
+      ? "reference.custom-table-deferrable-key"
+      : undefined
+  }
   if (isDeclaredTable(target)) return "reference.custom-table-key"
   // Одиночний `Ref` на ціль без таблиці зберігає мітку (М15), ключ не потрібен.
   return polymorphic ? "reference.polymorphic-target-kind" : undefined
+}
+
+/**
+ * Одиночний скалярний `Ref` стає FK на ключ цілі; масив FK не має (спека §4),
+ * поліморфна пара — теж, тож відкладеність ключа цілі їм байдужа.
+ */
+function singleRefBuildsForeignKey(
+  reference: ResolvedReference,
+  byId: ReadonlyMap<string, ParsedObject>
+): boolean {
+  if (reference.role !== "attribute.ref" && reference.role !== "constant.ref")
+    return false
+  const source = byId.get(reference.from.objectId)
+  const { pointer } = reference.from
+  const element = valueAt(
+    source?.data,
+    pointer.slice(0, pointer.lastIndexOf("/"))
+  ) as { array?: boolean } | undefined
+  return element?.array !== true
+}
+
+/**
+ * Postgres відкидає FK, чиїм єдиним ключем цілі на цих колонках є DEFERRABLE
+ * PK чи UNIQUE (`cannot use a deferrable unique constraint for referenced
+ * table`). Ціль FK — будь-який невідкладений ключ на тій самій множині
+ * колонок, зокрема унікальний індекс без умови й виразів, тож лише його
+ * відсутність поруч із відкладеним ключем — помилка. Відсутність ключа взагалі
+ * — не ця перевірка: її лишено тіні (спека §4).
+ */
+function onlyDeferrableKey(
+  table: CustomTable,
+  columns: readonly string[]
+): boolean {
+  // Postgres зіставляє ключ цілі з колонками FK як множини, без порядку.
+  const asSet = (names: readonly string[]) =>
+    JSON.stringify([...new Set(names)].sort(compareStrings))
+  const wanted = asSet(columns)
+  const same = (names: readonly string[]) => asSet(names) === wanted
+  const keys: { columns: readonly string[]; deferred: boolean }[] = [
+    ...(table.primaryKey !== undefined
+      ? [
+          {
+            columns: table.primaryKey.columns,
+            deferred: table.primaryKey.deferrable !== "no",
+          },
+        ]
+      : []),
+    ...table.uniques.map((unique) => ({
+      columns: unique.columns,
+      deferred: unique.deferrable !== "no",
+    })),
+    ...table.indexes
+      .filter(
+        (index) =>
+          index.unique &&
+          index.where === undefined &&
+          index.keys.every((key) => "column" in key)
+      )
+      .map((index) => ({
+        columns: index.keys.map((key) => ("column" in key ? key.column : "")),
+        deferred: false,
+      })),
+  ].filter((key) => same(key.columns))
+  return keys.length > 0 && keys.every((key) => key.deferred)
 }
 
 /**
@@ -415,10 +487,14 @@ function polymorphicSets(
  * Опис прийнятої таблиці: генерована колонка без `DEFAULT` та identity,
  * кількість колонок FK і явні імена там, де Postgres назвав би обмеження за
  * деревом виразу. Імена колонок резолвила стадія 2
- * (`customTable.column-unknown`); сумісність типів і ключ цілі FK перевіряє
- * тінь, а не компілятор.
+ * (`customTable.column-unknown`); сумісність типів і наявність ключа цілі FK
+ * перевіряє тінь, а не компілятор. Виняток — відкладений ключ цілі
+ * (`customTable.foreign-key-deferrable-target`): він видний з опису цілі.
  */
-function checkDeclaredTable(object: ParsedObject): Diagnostic[] {
+function checkDeclaredTable(
+  object: ParsedObject,
+  byKey: ReadonlyMap<string, ParsedObject>
+): Diagnostic[] {
   const table = object.data as CustomTable
   const found: Diagnostic[] = []
   const nameRequired = (pointer: string) =>
@@ -463,6 +539,26 @@ function checkDeclaredTable(object: ParsedObject): Diagnostic[] {
           }
         )
       )
+    }
+    // Зовнішню таблицю компілятор не бачить — її ключі перевіряє тінь.
+    if ("object" in references) {
+      const target = byKey.get(
+        objectKey(references.object.kind, references.object.name)
+      )
+      if (
+        target !== undefined &&
+        isDeclaredTable(target) &&
+        onlyDeferrableKey(target.data as CustomTable, references.columns)
+      ) {
+        found.push(
+          diagnostic(
+            "customTable.foreign-key-deferrable-target",
+            object.file,
+            `/foreignKeys/${i}/references/columns`,
+            { kind: target.kind, name: target.name }
+          )
+        )
+      }
     }
   })
   table.indexes.forEach((index, i) => {

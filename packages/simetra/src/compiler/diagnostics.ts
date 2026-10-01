@@ -52,6 +52,7 @@ export const COMPILER_RULES = [
   "scope.set-function-signature",
   "reference.not-referenceable",
   "reference.custom-table-key",
+  "reference.custom-table-deferrable-key",
   "reference.default-to-table",
   "reference.default-unknown-value",
   "reference.polymorphic-target-kind",
@@ -80,6 +81,7 @@ export const COMPILER_RULES = [
   "physical.name-too-long",
   "physical.constraint-name-required",
   "customTable.foreign-key-arity",
+  "customTable.foreign-key-deferrable-target",
   "customTable.generated-conflict",
   "presentation.unknown-standard-attribute",
 ] as const
