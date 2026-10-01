@@ -1,5 +1,11 @@
 import type pg from "pg"
-import type { PgQualifiedName, RowLevelSecurity } from "../../src/model"
+import type {
+  PgQualifiedName,
+  PhysicalTable,
+  RowLevelSecurity,
+} from "../../src/model"
+
+type FkAction = PhysicalTable["foreignKeys"][number]["onDelete"]
 
 /**
  * Форма каталогу Postgres для звірки з фізичним знімком (спека §8.3). Лише для
@@ -59,15 +65,47 @@ export interface CatalogConstraint {
   type: CatalogConstraintType
   /** `pg_get_constraintdef`. */
   definition: string
+  /** Колонки обмеження за порядком `conkey`; у CHECK на рівні таблиці порожньо. */
+  columns: string[]
   deferrable: boolean
   initiallyDeferred: boolean
+  /** Індекс, що стоїть за PK/UNIQUE/EXCLUDE (`conindid`). */
+  index?: string
+  /** Ціль і дії FK — структурою, без розбору `definition`. */
+  references?: {
+    schema: string
+    table: string
+    columns: string[]
+    onDelete: FkAction
+    onUpdate: FkAction
+  }
   comment?: string
+}
+
+/**
+ * Елемент ключа індексу. Як у знімку, значення за замовчуванням (`ASC`,
+ * типове розташування `NULL`) не пишуться.
+ */
+export type CatalogIndexKey = ({ column: string } | { expression: string }) & {
+  order?: "desc"
+  nulls?: "first" | "last"
 }
 
 export interface CatalogIndex {
   name: string
   /** `pg_get_indexdef`. */
   definition: string
+  unique: boolean
+  /** `pg_am.amname`. */
+  method: string
+  keys: CatalogIndexKey[]
+  /** Неключові колонки `INCLUDE`. */
+  include: string[]
+  /** `pg_get_expr(indpred)` часткового індексу. */
+  where?: string
+  nullsNotDistinct: boolean
+  /** PK/UNIQUE/EXCLUDE тієї самої таблиці, що володіє індексом. */
+  constraint?: string
 }
 
 export interface CatalogFunction {
@@ -90,6 +128,14 @@ const CONSTRAINT_TYPES: Record<string, CatalogConstraintType> = {
   x: "exclusion",
 }
 
+const FK_ACTIONS: Record<string, FkAction> = {
+  a: "noAction",
+  r: "restrict",
+  c: "cascade",
+  n: "setNull",
+  d: "setDefault",
+}
+
 const byCodePoint = (a: string, b: string): number =>
   a < b ? -1 : a > b ? 1 : 0
 
@@ -98,7 +144,7 @@ function escapeRegExp(value: string): string {
 }
 
 /** Замінює `schema.` і `"schema".` на плейсхолдер у тексті з каталогу. */
-function normalizer(schemas: string[]): (text: string) => string {
+export function normalizer(schemas: string[]): (text: string) => string {
   const alternatives = schemas.map(
     (schema) => `"${escapeRegExp(schema)}"|(?<![\\w"$])${escapeRegExp(schema)}`
   )
@@ -145,15 +191,61 @@ interface ConstraintRow {
   name: string
   type: string
   definition: string
+  columns: string[]
   deferrable: boolean
   deferred: boolean
+  index: string | null
+  ref_schema: string | null
+  ref_table: string | null
+  ref_columns: string[] | null
+  on_delete: string
+  on_update: string
   comment: string | null
 }
 
 interface IndexRow {
+  oid: string
   table_oid: string
   name: string
   definition: string
+  unique: boolean
+  method: string
+  key_count: number
+  predicate: string | null
+  nulls_not_distinct: boolean
+  constraint: string | null
+}
+
+interface IndexKeyRow {
+  index_oid: string
+  position: number
+  column: string | null
+  expression: string
+  option: number | null
+}
+
+// Біти `pg_index.indoption` (INDOPTION_DESC, INDOPTION_NULLS_FIRST).
+const INDOPTION_DESC = 1
+const INDOPTION_NULLS_FIRST = 2
+
+/** Ключ індексу у формі знімка: напрям і `NULLS` лише відмінні від типових. */
+function indexKey(
+  key: IndexKeyRow,
+  text: (value: string) => string
+): CatalogIndexKey {
+  const option = key.option ?? 0
+  const desc = (option & INDOPTION_DESC) !== 0
+  const nullsFirst = (option & INDOPTION_NULLS_FIRST) !== 0
+  return {
+    ...(key.column !== null
+      ? { column: key.column }
+      : { expression: text(key.expression) }),
+    ...(desc ? { order: "desc" as const } : {}),
+    // Типово `NULLS LAST` для ASC і `NULLS FIRST` для DESC.
+    ...(nullsFirst !== desc
+      ? { nulls: nullsFirst ? ("first" as const) : ("last" as const) }
+      : {}),
+  }
 }
 
 export async function readCatalog(
@@ -205,11 +297,30 @@ export async function readCatalog(
     `SELECT k.conrelid::text AS table_oid, k.conname AS name,
             k.contype::text AS type,
             pg_get_constraintdef(k.oid) AS definition,
+            ARRAY(SELECT a.attname::text
+                    FROM unnest(k.conkey) WITH ORDINALITY u(attnum, ord)
+                    JOIN pg_attribute a
+                      ON a.attrelid = k.conrelid AND a.attnum = u.attnum
+                   ORDER BY u.ord) AS columns,
             k.condeferrable AS deferrable, k.condeferred AS deferred,
+            CASE WHEN k.contype IN ('p', 'u', 'x') THEN ic.relname END
+              AS index,
+            fn.nspname AS ref_schema, fc.relname AS ref_table,
+            CASE WHEN k.contype = 'f' THEN
+              ARRAY(SELECT a.attname::text
+                      FROM unnest(k.confkey) WITH ORDINALITY u(attnum, ord)
+                      JOIN pg_attribute a
+                        ON a.attrelid = k.confrelid AND a.attnum = u.attnum
+                     ORDER BY u.ord)
+            END AS ref_columns,
+            k.confdeltype::text AS on_delete, k.confupdtype::text AS on_update,
             obj_description(k.oid, 'pg_constraint') AS comment
        FROM pg_constraint k
        JOIN pg_class c ON c.oid = k.conrelid
        JOIN pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_class ic ON ic.oid = k.conindid
+       LEFT JOIN pg_class fc ON fc.oid = k.confrelid
+       LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
       WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p')
         AND k.contype IN ('p', 'u', 'c', 'f', 'x')
       ORDER BY k.conname COLLATE "C"`,
@@ -217,14 +328,43 @@ export async function readCatalog(
   )
 
   const indexes = await client.query<IndexRow>(
-    `SELECT i.indrelid::text AS table_oid, ic.relname AS name,
-            pg_get_indexdef(i.indexrelid) AS definition
+    `SELECT i.indexrelid::text AS oid, i.indrelid::text AS table_oid,
+            ic.relname AS name,
+            pg_get_indexdef(i.indexrelid) AS definition,
+            i.indisunique AS unique, am.amname AS method,
+            i.indnkeyatts::int AS key_count,
+            pg_get_expr(i.indpred, i.indrelid) AS predicate,
+            i.indnullsnotdistinct AS nulls_not_distinct,
+            (SELECT k.conname FROM pg_constraint k
+              WHERE k.conindid = i.indexrelid AND k.conrelid = i.indrelid
+                AND k.contype IN ('p', 'u', 'x')) AS constraint
        FROM pg_index i
        JOIN pg_class ic ON ic.oid = i.indexrelid
+       JOIN pg_am am ON am.oid = ic.relam
        JOIN pg_class c ON c.oid = i.indrelid
        JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p')
       ORDER BY ic.relname COLLATE "C"`,
+    [schemas]
+  )
+
+  // Позиції ключа: колонка (`indkey` ≠ 0) чи вираз; `indoption` є лише в
+  // ключових позицій, `INCLUDE` іде після них.
+  const indexKeys = await client.query<IndexKeyRow>(
+    `SELECT i.indexrelid::text AS index_oid, p.n::int AS position,
+            a.attname::text AS column,
+            pg_get_indexdef(i.indexrelid, p.n, true) AS expression,
+            CASE WHEN p.n <= i.indnkeyatts
+              THEN i.indoption[p.n - 1]::int END AS option
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL generate_series(1, i.indnatts) p(n)
+       LEFT JOIN pg_attribute a
+         ON a.attrelid = i.indrelid AND a.attnum = i.indkey[p.n - 1]
+        AND i.indkey[p.n - 1] <> 0
+      WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p')
+      ORDER BY i.indexrelid, p.n`,
     [schemas]
   )
 
@@ -333,17 +473,49 @@ export async function readCatalog(
           name: constraint.name,
           type: CONSTRAINT_TYPES[constraint.type] ?? "check",
           definition: text(constraint.definition),
+          columns: constraint.columns,
           deferrable: constraint.deferrable,
           initiallyDeferred: constraint.deferred,
+          ...optional("index", constraint.index),
+          ...(constraint.type === "f"
+            ? {
+                references: {
+                  schema: constraint.ref_schema ?? "",
+                  table: constraint.ref_table ?? "",
+                  columns: constraint.ref_columns ?? [],
+                  onDelete: FK_ACTIONS[constraint.on_delete] ?? "noAction",
+                  onUpdate: FK_ACTIONS[constraint.on_update] ?? "noAction",
+                },
+              }
+            : {}),
           ...optional("comment", constraint.comment),
         }))
         .sort((a, b) => byCodePoint(a.name, b.name)),
       indexes: indexes.rows
         .filter((index) => index.table_oid === table.oid)
-        .map((index) => ({
-          name: index.name,
-          definition: text(index.definition),
-        }))
+        .map((index): CatalogIndex => {
+          const positions = indexKeys.rows.filter(
+            (key) => key.index_oid === index.oid
+          )
+          return {
+            name: index.name,
+            definition: text(index.definition),
+            unique: index.unique,
+            method: index.method,
+            keys: positions
+              .filter((key) => key.position <= index.key_count)
+              .map((key) => indexKey(key, text)),
+            include: positions
+              .filter((key) => key.position > index.key_count)
+              .map((key) => key.column ?? text(key.expression)),
+            ...optional(
+              "where",
+              index.predicate === null ? null : text(index.predicate)
+            ),
+            nullsNotDistinct: index.nulls_not_distinct,
+            ...optional("constraint", index.constraint),
+          }
+        })
         .sort((a, b) => byCodePoint(a.name, b.name)),
     })),
     functions: functions.rows.map((fn) => ({

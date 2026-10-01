@@ -61,6 +61,13 @@ describe("DB test stack", () => {
           CONSTRAINT item_kind_ck CHECK (kind > 0)
         );
         CREATE INDEX item_state_ix ON e1_cat.item (state) WHERE kind IS NOT NULL;
+        CREATE INDEX item_lower_ix ON e1_cat.item
+          (lower(code) DESC NULLS LAST, kind NULLS FIRST) INCLUDE (state);
+        CREATE TABLE e1_cat.tag (
+          item_id uuid,
+          CONSTRAINT tag_item_fk FOREIGN KEY (item_id) REFERENCES e1_cat.item (id)
+            ON DELETE CASCADE ON UPDATE RESTRICT DEFERRABLE
+        );
         ALTER TABLE e1_cat.item ENABLE ROW LEVEL SECURITY;
         ALTER TABLE e1_cat.item FORCE ROW LEVEL SECURITY;
         COMMENT ON TABLE e1_cat.item IS 'Item';
@@ -122,13 +129,16 @@ describe("DB test stack", () => {
                 type: "unique",
                 definition:
                   "UNIQUE NULLS NOT DISTINCT (code, kind) DEFERRABLE INITIALLY DEFERRED",
+                columns: ["code", "kind"],
                 deferrable: true,
                 initiallyDeferred: true,
+                index: "item_code_kind_uq",
               },
               {
                 name: "item_kind_ck",
                 type: "check",
                 definition: "CHECK ((kind > 0))",
+                columns: ["kind"],
                 deferrable: false,
                 initiallyDeferred: false,
               },
@@ -136,8 +146,10 @@ describe("DB test stack", () => {
                 name: "item_pk",
                 type: "primaryKey",
                 definition: "PRIMARY KEY (id)",
+                columns: ["id"],
                 deferrable: false,
                 initiallyDeferred: false,
+                index: "item_pk",
               },
             ],
             indexes: [
@@ -145,18 +157,74 @@ describe("DB test stack", () => {
                 name: "item_code_kind_uq",
                 definition:
                   "CREATE UNIQUE INDEX item_code_kind_uq ON <schema>.item USING btree (code, kind) NULLS NOT DISTINCT",
+                unique: true,
+                method: "btree",
+                keys: [{ column: "code" }, { column: "kind" }],
+                include: [],
+                nullsNotDistinct: true,
+                constraint: "item_code_kind_uq",
+              },
+              {
+                name: "item_lower_ix",
+                definition:
+                  "CREATE INDEX item_lower_ix ON <schema>.item USING btree (lower(code) DESC NULLS LAST, kind NULLS FIRST) INCLUDE (state)",
+                unique: false,
+                method: "btree",
+                keys: [
+                  { expression: "lower(code)", order: "desc", nulls: "last" },
+                  { column: "kind", nulls: "first" },
+                ],
+                include: ["state"],
+                nullsNotDistinct: false,
               },
               {
                 name: "item_pk",
                 definition:
                   "CREATE UNIQUE INDEX item_pk ON <schema>.item USING btree (id)",
+                unique: true,
+                method: "btree",
+                keys: [{ column: "id" }],
+                include: [],
+                nullsNotDistinct: false,
+                constraint: "item_pk",
               },
               {
                 name: "item_state_ix",
                 definition:
                   "CREATE INDEX item_state_ix ON <schema>.item USING btree (state) WHERE (kind IS NOT NULL)",
+                unique: false,
+                method: "btree",
+                keys: [{ column: "state" }],
+                include: [],
+                where: "(kind IS NOT NULL)",
+                nullsNotDistinct: false,
               },
             ],
+          },
+          {
+            schema: "e1_cat",
+            name: "tag",
+            rowLevelSecurity: "off",
+            columns: [{ name: "item_id", type: "uuid", notNull: false }],
+            constraints: [
+              {
+                name: "tag_item_fk",
+                type: "foreignKey",
+                definition:
+                  "FOREIGN KEY (item_id) REFERENCES <schema>.item(id) ON UPDATE RESTRICT ON DELETE CASCADE DEFERRABLE",
+                columns: ["item_id"],
+                deferrable: true,
+                initiallyDeferred: false,
+                references: {
+                  schema: "e1_cat",
+                  table: "item",
+                  columns: ["id"],
+                  onDelete: "cascade",
+                  onUpdate: "restrict",
+                },
+              },
+            ],
+            indexes: [],
           },
         ],
         functions: [
