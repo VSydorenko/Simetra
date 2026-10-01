@@ -84,6 +84,39 @@ devDependency лише для тестів), локальний стек Supabas
 
 ---
 
+### Task 0: Хвости F, що зачіпають рендер
+
+**Files:**
+- Modify: `packages/simetra/src/compiler/stages/identity.ts`, `compiler/stages/integrity.ts` (або місце перевірки поясу), `compiler/compile.ts`, `compiler/messages.ts`
+- Test: `packages/simetra/src/compiler/__tests__/stage-identity.test.ts`, `value-checks.test.ts`
+
+**Interfaces:**
+- Produces:
+  - Мітки значень перерахування унікальні в межах перерахування
+    (`identity.name-duplicate` на `/values/<i>/physicalName`): дві однакові
+    мітки дали б `CHECK (… IN ('a','a'))` і нерозрізненні значення в даних.
+  - Часовий пояс проєкту нормалізується до канонічного написання IANA
+    (`Intl.DateTimeFormat(undefined, { timeZone }).resolvedOptions().timeZone`)
+    у скомпільованій моделі: рендер підставляє в генеровані колонки одне
+    написання, а хеш не залежить від регістру в файлі.
+- Борги F, що лишаються поза E1: `scopeColumn` на стадії 4 за іменем — D2
+  (каскад перейменування); друга форма знімка при явному типовому
+  opclass/колляції й асиметрія `deferrable` — E2 (round-trip).
+
+- [ ] **Step 1: Тести** — `enumeration labels are unique`; `time zone is
+  canonicalised` (`"europe/kyiv"` → `"Europe/Kyiv"` у моделі й однаковий хеш).
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test stage-identity value-checks` → FAIL.
+- [ ] **Step 3: Реалізація.**
+- [ ] **Step 4: Зелені** — PASS; повні гейти.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src
+git commit -m "fix(compiler): унікальні мітки значень перерахування, канонічний часовий пояс проєкту"
+```
+
+---
+
 ### Task 1: Інфраструктура DB-тестів
 
 **Files:**
