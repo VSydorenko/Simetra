@@ -181,6 +181,28 @@ describe("CustomTable physics round-trip", () => {
     ])
   })
 
+  it("primary key and identity columns are not null as Postgres makes them", async () => {
+    const table = await logTable({
+      columns: [
+        { id: uuid(1), name: "id", physicalName: "id", type: "UUID" },
+        {
+          id: uuid(2),
+          name: "seq",
+          physicalName: "seq",
+          type: "BigInt",
+          identity: "byDefault",
+        },
+        { id: uuid(3), name: "code", physicalName: "code", type: "Text" },
+      ],
+      primaryKey: { columns: ["id"] },
+    })
+    expect(table.columns.map((c) => [c.name, c.notNull])).toEqual([
+      ["id", true],
+      ["seq", true],
+      ["code", false],
+    ])
+  })
+
   it("column collation", async () => {
     const table = await logTable({
       columns: [

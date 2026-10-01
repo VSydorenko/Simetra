@@ -1028,12 +1028,19 @@ class SnapshotBuilder {
       return name !== undefined ? { name } : {}
     }
 
+    // Колонка ключа й identity-колонка в Postgres завжди `NOT NULL`, хоч би
+    // що писав автор: знімок описує те, що дасть каталог, інакше розгортання
+    // не збіглося б зі знімком, а прийом дав би іншу форму того самого стану.
+    const keyColumns = new Set(data.primaryKey?.columns ?? [])
     data.columns.forEach((column, index) => {
       const name = column.physicalName!
       table.columns.push({
         name,
         type: this.declaredColumnType(column),
-        notNull: column.notNull,
+        notNull:
+          column.notNull ||
+          column.identity !== undefined ||
+          keyColumns.has(column.name),
         ...(column.default !== undefined ? { default: column.default } : {}),
         ...(column.generated !== undefined
           ? { generated: { expression: column.generated.expression } }
