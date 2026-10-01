@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, type CompileResult } from "simetra/compiler"
 import type { Expr } from "simetra/model"
 import { inferType, type PostingContext } from "../posting-types"
 import { readFiles } from "../stages/files"
@@ -39,7 +39,7 @@ interface Fixture {
  * Типова фікстура — документ `Sale` з ТЧ `goods` і регістр залишків `Stock`;
  * `adjust` доповнює її перед компіляцією.
  */
-function build(
+async function build(
   movement: Record<string, unknown> = {},
   adjust: (fixture: Fixture) => void = () => {}
 ) {
@@ -49,10 +49,10 @@ function build(
   sale.attributes ??= []
   stock.attributes ??= []
   adjust({ files, sale, stock })
-  return compile(metaFiles({ "project.meta.json": project(), ...files }))
+  return await compile(metaFiles({ "project.meta.json": project(), ...files }))
 }
 
-function codes(result: ReturnType<typeof compile>) {
+function codes(result: CompileResult) {
   return result.diagnostics.map((d) => [d.code, d.file, d.pointer])
 }
 
@@ -62,12 +62,12 @@ const ref = (name: string) => ({
 })
 
 describe("stage 4: movement constructor semantics", () => {
-  it("the default movement is clean", () => {
-    expect(build().diagnostics).toEqual([])
+  it("the default movement is clean", async () => {
+    expect((await build()).diagnostics).toEqual([])
   })
 
-  it("integer resource rejects numeric expression", () => {
-    const result = build(
+  it("integer resource rejects numeric expression", async () => {
+    const result = await build(
       {
         fields: {
           item: "row.item",
@@ -92,19 +92,21 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("integer resource accepts integer arithmetic but not division", () => {
+  it("integer resource accepts integer arithmetic but not division", async () => {
     const adjust = ({ stock }: Fixture) => {
       stock.resources.push(attribute("count", { type: "Integer" }))
     }
     expect(
-      build(
-        { fields: { item: "row.item", qty: "row.qty", count: "2 * 3 - 1" } },
-        adjust
+      (
+        await build(
+          { fields: { item: "row.item", qty: "row.qty", count: "2 * 3 - 1" } },
+          adjust
+        )
       ).diagnostics
     ).toEqual([])
     expect(
       codes(
-        build(
+        await build(
           { fields: { item: "row.item", qty: "row.qty", count: "6 / 2" } },
           adjust
         )
@@ -114,8 +116,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("numeric resource accepts integer", () => {
-    const result = build(
+  it("numeric resource accepts integer", async () => {
+    const result = await build(
       { source: "document", fields: { item: "doc.item", qty: "count(goods)" } },
       ({ sale }) => {
         sale.attributes.push(attribute("item", ref("Item")))
@@ -124,15 +126,15 @@ describe("stage 4: movement constructor semantics", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("accumulation resource must be numeric", () => {
-    const result = build({ fields: { item: "row.item", qty: "'many'" } })
+  it("accumulation resource must be numeric", async () => {
+    const result = await build({ fields: { item: "row.item", qty: "'many'" } })
     expect(codes(result)).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/qty"],
     ])
   })
 
-  it("ref field requires the same target", () => {
-    const result = build(
+  it("ref field requires the same target", async () => {
+    const result = await build(
       { fields: { item: "row.warehouse", qty: "row.qty" } },
       ({ files, sale }) => {
         files["catalogs/Warehouse/Warehouse.meta.json"] = catalog("Warehouse")
@@ -150,8 +152,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("polymorphic field accepts a subset of targets", () => {
-    const result = build({}, ({ files, stock }) => {
+  it("polymorphic field accepts a subset of targets", async () => {
+    const result = await build({}, ({ files, stock }) => {
       files["catalogs/Service/Service.meta.json"] = catalog("Service")
       stock.dimensions[0] = attribute("item", {
         physicalName: "item",
@@ -165,8 +167,8 @@ describe("stage 4: movement constructor semantics", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("polymorphic expression does not fit a single-target field", () => {
-    const result = build(
+  it("polymorphic expression does not fit a single-target field", async () => {
+    const result = await build(
       { fields: { item: "row.product", qty: "row.qty" } },
       ({ files, sale }) => {
         files["catalogs/Service/Service.meta.json"] = catalog("Service")
@@ -186,8 +188,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("document standard ref is a Ref to the document", () => {
-    const result = build(
+  it("document standard ref is a Ref to the document", async () => {
+    const result = await build(
       { fields: { item: "row.item", qty: "row.qty", source: "doc.ref" } },
       ({ stock }) => {
         stock.attributes.push(
@@ -215,8 +217,8 @@ describe("stage 4: movement constructor semantics", () => {
     warehouseFiles(fixture)
   }
 
-  it("null into optional dimension", () => {
-    const result = build(
+  it("null into optional dimension", async () => {
+    const result = await build(
       { fields: { warehouse: "null", item: "null", qty: "1" } },
       (f) => {
         withRequired(f)
@@ -229,7 +231,7 @@ describe("stage 4: movement constructor semantics", () => {
         "/posting/movements/0/fields/warehouse",
       ],
     ])
-    const ok = build(
+    const ok = await build(
       { fields: { warehouse: "doc.warehouse", item: "null", qty: "1" } },
       (f) => {
         withRequired(f)
@@ -239,17 +241,21 @@ describe("stage 4: movement constructor semantics", () => {
     expect(ok.diagnostics).toEqual([])
   })
 
-  it("optional dimension may be omitted", () => {
+  it("optional dimension may be omitted", async () => {
     const fixture = (f: Fixture) => {
       withRequired(f)
       f.sale.attributes.push(attribute("warehouse", ref("Warehouse")))
     }
     expect(
-      build({ fields: { warehouse: "doc.warehouse", qty: "1" } }, fixture)
-        .diagnostics
+      (
+        await build(
+          { fields: { warehouse: "doc.warehouse", qty: "1" } },
+          fixture
+        )
+      ).diagnostics
     ).toEqual([])
     expect(
-      build({ fields: { item: "null", qty: "1" } }, fixture).diagnostics
+      (await build({ fields: { item: "null", qty: "1" } }, fixture)).diagnostics
     ).toEqual([
       expect.objectContaining({
         code: "posting.fields-incomplete",
@@ -258,15 +264,15 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("null into an accumulation register resource", () => {
-    const result = build({ fields: { item: "row.item", qty: "null" } })
+  it("null into an accumulation register resource", async () => {
+    const result = await build({ fields: { item: "row.item", qty: "null" } })
     expect(codes(result)).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/qty"],
     ])
   })
 
-  it("null into an optional register attribute is clean", () => {
-    const result = build(
+  it("null into an optional register attribute is clean", async () => {
+    const result = await build(
       { fields: { item: "row.item", qty: "row.qty", note: "null" } },
       ({ stock }) => {
         stock.attributes.push(attribute("note", { type: "String", length: 50 }))
@@ -275,8 +281,8 @@ describe("stage 4: movement constructor semantics", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("null into a required register attribute", () => {
-    const result = build(
+  it("null into a required register attribute", async () => {
+    const result = await build(
       { fields: { item: "row.item", qty: "row.qty", note: "null" } },
       ({ stock }) => {
         stock.attributes.push(
@@ -289,8 +295,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("condition must be boolean", () => {
-    const result = build({ condition: "row.qty" })
+  it("condition must be boolean", async () => {
+    const result = await build({ condition: "row.qty" })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.type-mismatch",
@@ -299,24 +305,24 @@ describe("stage 4: movement constructor semantics", () => {
       }),
     ])
     expect(
-      build({ condition: "row.qty > 0 and not false" }).diagnostics
+      (await build({ condition: "row.qty > 0 and not false" })).diagnostics
     ).toEqual([])
   })
 
-  it("period must be a date", () => {
-    expect(codes(build({ period: "row.qty" }))).toEqual([
+  it("period must be a date", async () => {
+    expect(codes(await build({ period: "row.qty" }))).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/period"],
     ])
-    expect(build({ period: "doc.date" }).diagnostics).toEqual([])
+    expect((await build({ period: "doc.date" })).diagnostics).toEqual([])
   })
 
-  it("offset is the start of the offending expression", () => {
-    const result = build({ condition: "  (row.qty)" })
+  it("offset is the start of the offending expression", async () => {
+    const result = await build({ condition: "  (row.qty)" })
     expect(result.diagnostics[0]?.params?.offset).toBe(2)
   })
 
-  it("fields incomplete lists missing", () => {
-    const result = build({ fields: { qty: "row.qty" } }, ({ stock }) => {
+  it("fields incomplete lists missing", async () => {
+    const result = await build({ fields: { qty: "row.qty" } }, ({ stock }) => {
       stock.dimensions[0]!.required = true
     })
     expect(result.diagnostics).toEqual([
@@ -329,8 +335,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("accumulation register needs every resource", () => {
-    const result = build({}, ({ stock }) => {
+  it("accumulation register needs every resource", async () => {
+    const result = await build({}, ({ stock }) => {
       stock.resources.push(
         attribute("amount", { type: "Numeric", precision: 15, scale: 2 })
       )
@@ -343,10 +349,10 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("information register needs dimensions and required resources", () => {
+  it("information register needs dimensions and required resources", async () => {
     const pricesFile = "information-registers/Prices/Prices.meta.json"
-    const run = (fields: Record<string, string>) =>
-      build(
+    const run = async (fields: Record<string, string>) =>
+      await build(
         {
           register: { kind: "InformationRegister", name: "Prices" },
           movementType: undefined,
@@ -378,22 +384,25 @@ describe("stage 4: movement constructor semantics", () => {
           }
         }
       )
-    expect(run({ item: "row.item", price: "row.amount" }).diagnostics).toEqual(
-      []
-    )
     expect(
-      run({ item: "row.item", price: "row.amount", note: "null" }).diagnostics
+      (await run({ item: "row.item", price: "row.amount" })).diagnostics
+    ).toEqual([])
+    expect(
+      (await run({ item: "row.item", price: "row.amount", note: "null" }))
+        .diagnostics
     ).toEqual([])
     // Регістр відомостей зберігає значення: тип поля — той самий, не лише число.
     expect(
-      codes(run({ item: "row.item", price: "row.amount", note: "row.qty" }))
+      codes(
+        await run({ item: "row.item", price: "row.amount", note: "row.qty" })
+      )
     ).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/note"],
     ])
-    expect(codes(run({ item: "row.item", price: "null" }))).toEqual([
+    expect(codes(await run({ item: "row.item", price: "null" }))).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/price"],
     ])
-    expect(run({ item: "row.item" }).diagnostics).toEqual([
+    expect((await run({ item: "row.item" })).diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.fields-incomplete",
         params: expect.objectContaining({ missing: "price" }),
@@ -402,7 +411,7 @@ describe("stage 4: movement constructor semantics", () => {
     // Вид руху — лише в регістра залишків.
     expect(
       codes(
-        build(
+        await build(
           {
             register: { kind: "InformationRegister", name: "Prices" },
             fields: { item: "row.item", price: "row.amount" },
@@ -436,15 +445,15 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("movement type required for balance register", () => {
-    const result = build({ movementType: undefined })
+  it("movement type required for balance register", async () => {
+    const result = await build({ movementType: undefined })
     expect(codes(result)).toEqual([
       ["posting.movement-type", SALE_FILE, "/posting/movements/0"],
     ])
   })
 
-  it("movement type forbidden for turnover register", () => {
-    const result = build({}, ({ stock }) => {
+  it("movement type forbidden for turnover register", async () => {
+    const result = await build({}, ({ stock }) => {
       stock.registerType = "Turnover"
     })
     expect(codes(result)).toEqual([
@@ -452,8 +461,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("movement type expression must be text", () => {
-    const result = build({ movementType: "row.qty" })
+  it("movement type expression must be text", async () => {
+    const result = await build({ movementType: "row.qty" })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.movement-type",
@@ -461,7 +470,7 @@ describe("stage 4: movement constructor semantics", () => {
         params: expect.objectContaining({ offset: 0 }),
       }),
     ])
-    const text = build({ movementType: "doc.direction" }, ({ sale }) => {
+    const text = await build({ movementType: "doc.direction" }, ({ sale }) => {
       sale.attributes.push(
         attribute("direction", { type: "String", length: 10 })
       )
@@ -469,8 +478,8 @@ describe("stage 4: movement constructor semantics", () => {
     expect(text.diagnostics).toEqual([])
   })
 
-  it("document not among recorders", () => {
-    const result = build({}, ({ stock }) => {
+  it("document not among recorders", async () => {
+    const result = await build({}, ({ stock }) => {
       stock.recorderTypes = []
     })
     expect(codes(result)).toEqual([
@@ -478,8 +487,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("register not declared in registerMovements", () => {
-    const result = build({}, ({ sale }) => {
+  it("register not declared in registerMovements", async () => {
+    const result = await build({}, ({ sale }) => {
       sale.registerMovements = []
     })
     expect(codes(result)).toEqual([
@@ -491,8 +500,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("row field with document source", () => {
-    const result = build(
+  it("row field with document source", async () => {
+    const result = await build(
       { source: "document", fields: { item: "doc.item", qty: "1 + row.qty" } },
       ({ sale }) => {
         sale.attributes.push(attribute("item", ref("Item")))
@@ -507,8 +516,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("aggregate with tabular section source", () => {
-    const result = build({
+  it("aggregate with tabular section source", async () => {
+    const result = await build({
       fields: { item: "row.item", qty: "sum(goods.qty)" },
     })
     expect(result.diagnostics).toEqual([
@@ -520,8 +529,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("movement target must be a register", () => {
-    const result = build(
+  it("movement target must be a register", async () => {
+    const result = await build(
       { register: { kind: "Catalog", name: "Item" }, fields: {} },
       ({ sale }) => {
         sale.registerMovements = [{ kind: "Catalog", name: "Item" }]
@@ -534,8 +543,8 @@ describe("stage 4: movement constructor semantics", () => {
     ])
   })
 
-  it("recorder must be a document", () => {
-    const result = build({}, ({ files, stock }) => {
+  it("recorder must be a document", async () => {
+    const result = await build({}, ({ files, stock }) => {
       files["catalogs/Owner/Owner.meta.json"] = catalog("Owner")
       files["custom-tables/Journal/Journal.meta.json"] = customTable(
         "Journal",
@@ -558,11 +567,11 @@ describe("stage 4: movement constructor semantics", () => {
 describe("stage 4: movement constructor, fix round 1", () => {
   const pricesFile = "information-registers/Prices/Prices.meta.json"
   /** Рух у регістр відомостей `Prices` замість `Stock`. */
-  const intoPrices = (
+  const intoPrices = async (
     movement: Record<string, unknown>,
     register: Record<string, unknown> = {}
   ) =>
-    build(
+    await build(
       {
         register: { kind: "InformationRegister", name: "Prices" },
         movementType: undefined,
@@ -589,8 +598,8 @@ describe("stage 4: movement constructor, fix round 1", () => {
       }
     )
 
-  it("fields incomplete includes required attributes in declaration order", () => {
-    const result = build({ fields: {} }, ({ stock }) => {
+  it("fields incomplete includes required attributes in declaration order", async () => {
+    const result = await build({ fields: {} }, ({ stock }) => {
       stock.dimensions[0]!.required = true
       stock.attributes.push(
         attribute("note", { type: "String", length: 50, required: true }),
@@ -606,8 +615,8 @@ describe("stage 4: movement constructor, fix round 1", () => {
     ])
   })
 
-  it("information register requires its required attributes", () => {
-    const result = intoPrices(
+  it("information register requires its required attributes", async () => {
+    const result = await intoPrices(
       { fields: { item: "row.item" } },
       { attributes: [attribute("source", { type: "Boolean", required: true })] }
     )
@@ -619,20 +628,24 @@ describe("stage 4: movement constructor, fix round 1", () => {
     ])
   })
 
-  it("period is not allowed for a non-periodic information register", () => {
+  it("period is not allowed for a non-periodic information register", async () => {
     const fields = { item: "row.item", price: "row.amount" }
-    expect(intoPrices({ fields }).diagnostics).toEqual([])
-    expect(codes(intoPrices({ fields, period: "doc.date" }))).toEqual([
+    expect((await intoPrices({ fields })).diagnostics).toEqual([])
+    expect(codes(await intoPrices({ fields, period: "doc.date" }))).toEqual([
       ["posting.period-not-allowed", SALE_FILE, "/posting/movements/0/period"],
     ])
     expect(
-      intoPrices({ fields, period: "doc.date" }, { periodicity: "Month" })
-        .diagnostics
+      (
+        await intoPrices(
+          { fields, period: "doc.date" },
+          { periodicity: "Month" }
+        )
+      ).diagnostics
     ).toEqual([])
   })
 
-  it("movement type string literal must be Receipt or Expense", () => {
-    const result = build({ movementType: "'Incoming'" })
+  it("movement type string literal must be Receipt or Expense", async () => {
+    const result = await build({ movementType: "'Incoming'" })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.movement-type",
@@ -640,12 +653,12 @@ describe("stage 4: movement constructor, fix round 1", () => {
         params: expect.objectContaining({ value: "Incoming", offset: 0 }),
       }),
     ])
-    expect(build({ movementType: "'Receipt'" }).diagnostics).toEqual([])
+    expect((await build({ movementType: "'Receipt'" })).diagnostics).toEqual([])
   })
 
-  it("sum takes the attribute type", () => {
-    const run = (count: string) =>
-      build(
+  it("sum takes the attribute type", async () => {
+    const run = async (count: string) =>
+      await build(
         {
           source: "document",
           fields: { item: "doc.item", qty: "sum(goods.qty)", count },
@@ -658,17 +671,17 @@ describe("stage 4: movement constructor, fix round 1", () => {
           stock.resources.push(attribute("count", { type: "Integer" }))
         }
       )
-    expect(run("sum(goods.pieces)").diagnostics).toEqual([])
-    expect(codes(run("sum(goods.qty)"))).toEqual([
+    expect((await run("sum(goods.pieces)")).diagnostics).toEqual([])
+    expect(codes(await run("sum(goods.qty)"))).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/count"],
     ])
   })
 
   // Поле того самого типу не рятує: sum() додає числа, а над булевим чи
   // текстом SQL або впаде, або порахує не те.
-  it("sum needs a numeric field", () => {
-    const mismatch = (field: string, text: string) => {
-      const result = build(
+  it("sum needs a numeric field", async () => {
+    const mismatch = async (field: string, text: string) => {
+      const result = await build(
         {
           source: "document",
           fields: { item: "doc.item", qty: "1", [field]: text },
@@ -690,35 +703,39 @@ describe("stage 4: movement constructor, fix round 1", () => {
       ])
       return result.diagnostics[0]!.params
     }
-    expect(mismatch("flag", "sum(goods.flag)")).toMatchObject({
+    expect(await mismatch("flag", "sum(goods.flag)")).toMatchObject({
       expected: "numeric",
       actual: "boolean",
       offset: 0,
     })
-    expect(mismatch("flag", "not sum(goods.flag)")).toMatchObject({
+    expect(await mismatch("flag", "not sum(goods.flag)")).toMatchObject({
       expected: "numeric",
       actual: "boolean",
       offset: 4,
     })
-    expect(mismatch("title", "sum(goods.title)")).toMatchObject({
+    expect(await mismatch("title", "sum(goods.title)")).toMatchObject({
       expected: "numeric",
       actual: "text",
       offset: 0,
     })
   })
 
-  it("row DateTime and Date attributes are dates", () => {
+  it("row DateTime and Date attributes are dates", async () => {
     const adjust = ({ sale }: Fixture) => {
       sale.tabularSections[0]!.attributes.push(
         attribute("shippedAt", { type: "DateTime" }),
         attribute("shippedOn", { type: "Date" })
       )
     }
-    expect(build({ period: "row.shippedAt" }, adjust).diagnostics).toEqual([])
-    expect(build({ period: "row.shippedOn" }, adjust).diagnostics).toEqual([])
+    expect(
+      (await build({ period: "row.shippedAt" }, adjust)).diagnostics
+    ).toEqual([])
+    expect(
+      (await build({ period: "row.shippedOn" }, adjust)).diagnostics
+    ).toEqual([])
   })
 
-  it("row.parent is a Ref to the document", () => {
+  it("row.parent is a Ref to the document", async () => {
     const adjust = ({ stock }: Fixture) => {
       stock.attributes.push(
         attribute("source", {
@@ -728,13 +745,19 @@ describe("stage 4: movement constructor, fix round 1", () => {
       )
     }
     expect(
-      build(
-        { fields: { item: "row.item", qty: "row.qty", source: "row.parent" } },
-        adjust
+      (
+        await build(
+          {
+            fields: { item: "row.item", qty: "row.qty", source: "row.parent" },
+          },
+          adjust
+        )
       ).diagnostics
     ).toEqual([])
     expect(
-      codes(build({ fields: { item: "row.parent", qty: "row.qty" } }, adjust))
+      codes(
+        await build({ fields: { item: "row.parent", qty: "row.qty" } }, adjust)
+      )
     ).toEqual([
       ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/item"],
     ])
@@ -742,9 +765,9 @@ describe("stage 4: movement constructor, fix round 1", () => {
 
   // Незалежний регістр пишуть за ключем запису, без реєстратора: рухи
   // документа йому нема куди покласти, а переписати їх за реєстратором нема за чим.
-  it("an independent register takes no document movements", () => {
+  it("an independent register takes no document movements", async () => {
     const independent = { writeMode: "Independent", recorderTypes: [] }
-    const result = intoPrices(
+    const result = await intoPrices(
       { fields: { item: "row.item", price: "row.amount" } },
       independent
     )
@@ -761,8 +784,8 @@ describe("stage 4: movement constructor, fix round 1", () => {
     )
   })
 
-  it("an independent register in registerMovements alone is one error", () => {
-    const declaredOnly = build({}, ({ files, sale }) => {
+  it("an independent register in registerMovements alone is one error", async () => {
+    const declaredOnly = await build({}, ({ files, sale }) => {
       sale.registerMovements.push({
         kind: "InformationRegister",
         name: "Prices",
@@ -799,8 +822,8 @@ describe("stage 4: operand types", () => {
       })
     )
   }
-  const one = (movement: Record<string, unknown>, pointer: string) => {
-    const result = build(movement, adjust)
+  const one = async (movement: Record<string, unknown>, pointer: string) => {
+    const result = await build(movement, adjust)
     expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
       ["posting.type-mismatch", pointer],
     ])
@@ -809,43 +832,47 @@ describe("stage 4: operand types", () => {
   const qty = "/posting/movements/0/fields/qty"
   const condition = "/posting/movements/0/condition"
 
-  it("arithmetic operand must be numeric", () => {
+  it("arithmetic operand must be numeric", async () => {
     expect(
-      one({ fields: { item: "row.item", qty: "row.item + 1" } }, qty)
+      await one({ fields: { item: "row.item", qty: "row.item + 1" } }, qty)
     ).toMatchObject({ offset: 0 })
   })
 
-  it("unary minus operand must be numeric", () => {
+  it("unary minus operand must be numeric", async () => {
     expect(
-      one({ fields: { item: "row.item", qty: "-row.title" } }, qty)
+      await one({ fields: { item: "row.item", qty: "-row.title" } }, qty)
     ).toMatchObject({ offset: 1 })
   })
 
-  it("logical operand must be boolean", () => {
+  it("logical operand must be boolean", async () => {
     expect(
-      one({ condition: "row.qty and doc.posted" }, condition)
+      await one({ condition: "row.qty and doc.posted" }, condition)
     ).toMatchObject({ offset: 0 })
-    expect(one({ condition: "not row.title" }, condition)).toMatchObject({
+    expect(await one({ condition: "not row.title" }, condition)).toMatchObject({
       offset: 4,
     })
   })
 
-  it("comparison operands must be of the same kind", () => {
-    expect(one({ condition: "row.qty = 'x'" }, condition)).toMatchObject({
+  it("comparison operands must be of the same kind", async () => {
+    expect(await one({ condition: "row.qty = 'x'" }, condition)).toMatchObject({
       offset: 10,
     })
     // Посилання без спільних цілей рівними не бувають.
     expect(
-      one({ condition: "row.item = row.warehouse" }, condition)
+      await one({ condition: "row.item = row.warehouse" }, condition)
     ).toMatchObject({ offset: 11 })
   })
 
-  it("ordering is only for numeric, text and date operands", () => {
+  it("ordering is only for numeric, text and date operands", async () => {
     // Зміщення — початок самого порівняння, не операнда.
-    expect(one({ condition: "row.item < row.item" }, condition)).toMatchObject({
+    expect(
+      await one({ condition: "row.item < row.item" }, condition)
+    ).toMatchObject({
       offset: 0,
     })
-    expect(one({ condition: "doc.posted > true" }, condition)).toMatchObject({
+    expect(
+      await one({ condition: "doc.posted > true" }, condition)
+    ).toMatchObject({
       offset: 0,
     })
     for (const text of [
@@ -854,42 +881,51 @@ describe("stage 4: operand types", () => {
       "doc.date < doc.date",
       "row.title >= 'a'",
     ]) {
-      expect(build({ condition: text }, adjust).diagnostics, text).toEqual([])
+      expect(
+        (await build({ condition: text }, adjust)).diagnostics,
+        text
+      ).toEqual([])
     }
   })
 
-  it("a polymorphic side compares only with null", () => {
+  it("a polymorphic side compares only with null", async () => {
     // Зміщення — початок поліморфного операнда.
     expect(
-      one({ condition: "row.product = doc.item" }, condition)
+      await one({ condition: "row.product = doc.item" }, condition)
     ).toMatchObject({ offset: 0, actual: "polymorphic reference" })
     expect(
-      one({ condition: "doc.item != row.product" }, condition)
+      await one({ condition: "doc.item != row.product" }, condition)
     ).toMatchObject({ offset: 12 })
     expect(
-      one({ condition: "row.product = row.product" }, condition)
+      await one({ condition: "row.product = row.product" }, condition)
     ).toMatchObject({ offset: 0 })
-    expect(one({ condition: "row.product < null" }, condition)).toMatchObject({
+    expect(
+      await one({ condition: "row.product < null" }, condition)
+    ).toMatchObject({
       offset: 0,
     })
   })
 
-  it("ordering with null is a type mismatch", () => {
-    expect(one({ condition: "row.qty < null" }, condition)).toMatchObject({
-      offset: 10,
-      actual: "null",
-    })
-    expect(one({ condition: "null >= row.title" }, condition)).toMatchObject({
+  it("ordering with null is a type mismatch", async () => {
+    expect(await one({ condition: "row.qty < null" }, condition)).toMatchObject(
+      {
+        offset: 10,
+        actual: "null",
+      }
+    )
+    expect(
+      await one({ condition: "null >= row.title" }, condition)
+    ).toMatchObject({
       offset: 0,
     })
   })
 
-  it("a failed operand does not cascade to the field", () => {
+  it("a failed operand does not cascade to the field", async () => {
     // Вкладена помилка звітує лише операнд, а не результат проти поля.
-    one({ fields: { item: "row.item", qty: "(row.title * 2) > 1" } }, qty)
+    await one({ fields: { item: "row.item", qty: "(row.title * 2) > 1" } }, qty)
   })
 
-  it("valid operands are clean", () => {
+  it("valid operands are clean", async () => {
     for (const text of [
       "row.qty * 2 > 0",
       "doc.date = doc.date",
@@ -898,7 +934,10 @@ describe("stage 4: operand types", () => {
       "row.product != null",
       "not doc.posted or row.qty <= 1",
     ]) {
-      expect(build({ condition: text }, adjust).diagnostics, text).toEqual([])
+      expect(
+        (await build({ condition: text }, adjust)).diagnostics,
+        text
+      ).toEqual([])
     }
   })
 })
@@ -927,6 +966,7 @@ describe("stage 4: robustness", () => {
       stage2.references,
       stage3,
       "camelCase",
+      [],
       []
     )
     expect(stage4).toEqual([])
@@ -956,6 +996,7 @@ describe("stage 4: robustness", () => {
       stage2.references,
       buildModel(stage1.objects, stage1.project!),
       "camelCase",
+      [],
       []
     )
     expect(stage4).toEqual([])

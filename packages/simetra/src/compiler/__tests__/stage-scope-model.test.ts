@@ -47,11 +47,11 @@ function files(
   })
 }
 
-function compileScoped(
+async function compileScoped(
   entries: Record<string, unknown>,
   projectFile?: unknown
-): PhysicalSnapshot {
-  const result = compile(files(entries, projectFile))
+): Promise<PhysicalSnapshot> {
+  const result = await compile(files(entries, projectFile))
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!.physical
 }
@@ -92,8 +92,8 @@ const contract = (overrides: Record<string, unknown> = {}) =>
   })
 
 describe("stage 3: scope", () => {
-  it("root has no scope column", () => {
-    const physical = compileScoped({ [CP]: counterparty() })
+  it("root has no scope column", async () => {
+    const physical = await compileScoped({ [CP]: counterparty() })
     const root = tableOf(physical, "organization")
     expect(root.columns.map((c) => c.name)).not.toContain("org_id")
     // Ключ кореня і є значенням скоупу.
@@ -105,8 +105,8 @@ describe("stage 3: scope", () => {
     expect(root.foreignKeys).toEqual([])
   })
 
-  it("scoped catalog", () => {
-    const physical = compileScoped({ [CP]: counterparty() })
+  it("scoped catalog", async () => {
+    const physical = await compileScoped({ [CP]: counterparty() })
     const cp = tableOf(physical, "counterparty")
     expect(cp.columns.slice(0, 3).map((c) => c.name)).toEqual([
       "id",
@@ -147,8 +147,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("onRootDelete cascade", () => {
-    const physical = compileScoped(
+  it("onRootDelete cascade", async () => {
+    const physical = await compileScoped(
       { [CP]: counterparty() },
       scopedProjectWith({ onRootDelete: "cascade" })
     )
@@ -157,8 +157,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("external root", () => {
-    const physical = compileScoped({
+  it("external root", async () => {
+    const physical = await compileScoped({
       "catalogs/Draft/Draft.meta.json": catalog("Draft", { scope: "user" }),
     })
     const draft = tableOf(physical, "draft")
@@ -177,8 +177,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("tabular section inherits scope", () => {
-    const physical = compileScoped({
+  it("tabular section inherits scope", async () => {
+    const physical = await compileScoped({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         scope: "org",
         tabularSections: [
@@ -226,8 +226,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("same-kind reference is composite", () => {
-    const physical = compileScoped({
+  it("same-kind reference is composite", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       [CONTRACT]: contract(),
     })
@@ -247,8 +247,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("hierarchy parent is composite", () => {
-    const physical = compileScoped({
+  it("hierarchy parent is composite", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty({ hierarchyType: "ItemsOnly" }),
     })
     expect(fkOn(tableOf(physical, "counterparty"), "parent_id")).toEqual([
@@ -265,8 +265,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("scoped to global is plain", () => {
-    const physical = compileScoped({
+  it("scoped to global is plain", async () => {
+    const physical = await compileScoped({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         scope: "none",
       }),
@@ -290,8 +290,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("crossScope is plain", () => {
-    const physical = compileScoped({
+  it("crossScope is plain", async () => {
+    const physical = await compileScoped({
       "catalogs/Draft/Draft.meta.json": catalog("Draft", { scope: "user" }),
       [CP]: counterparty({
         attributes: [
@@ -310,8 +310,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("crossScope is plain even within one kind", () => {
-    const physical = compileScoped({
+  it("crossScope is plain even within one kind", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       [CONTRACT]: contract({
         attributes: [
@@ -327,8 +327,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("reference to custom table is plain", () => {
-    const physical = compileScoped({
+  it("reference to custom table is plain", async () => {
+    const physical = await compileScoped({
       "custom-tables/Log/Log.meta.json": logTable(),
       [CP]: counterparty({
         attributes: [
@@ -351,8 +351,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("scoped constant", () => {
-    const physical = compileScoped({
+  it("scoped constant", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       "constants/MainCounterparty/MainCounterparty.meta.json": {
         id: uuid(902),
@@ -397,8 +397,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("scoped constant with crossScope is plain", () => {
-    const physical = compileScoped({
+  it("scoped constant with crossScope is plain", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       "constants/MainCounterparty/MainCounterparty.meta.json": {
         id: uuid(902),
@@ -420,8 +420,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("register gets scope column only", () => {
-    const physical = compileScoped({
+  it("register gets scope column only", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       "documents/Sale/Sale.meta.json": document("Sale", { scope: "org" }),
       "accumulation-registers/Stock/Stock.meta.json": {
@@ -470,8 +470,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("physical name collision with scope column", () => {
-    const result = compile(
+  it("physical name collision with scope column", async () => {
+    const result = await compile(
       files({
         [CP]: counterparty({
           attributes: [attribute("orgCode", { physicalName: "org_id" })],
@@ -487,8 +487,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("root tabular section keeps plain parent key", () => {
-    const physical = compileScoped({
+  it("root tabular section keeps plain parent key", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       [ORG]: organization({
         tabularSections: [
@@ -541,8 +541,8 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("root reference to own-kind target carries scope in its key", () => {
-    const physical = compileScoped({
+  it("root reference to own-kind target carries scope in its key", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       [CONTRACT]: contract(),
       "custom-tables/Log/Log.meta.json": logTable(),
@@ -618,13 +618,13 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  it("single-tenant project has no scope columns", () => {
+  it("single-tenant project has no scope columns", async () => {
     const strip = (o: Record<string, unknown>) => {
       const rest = { ...o }
       delete rest.scope
       return rest
     }
-    const result = compile(
+    const result = await compile(
       metaFiles({
         [PROJECT]: project(),
         [ORG]: strip(organization()),
@@ -664,8 +664,8 @@ const uniqueText = (name: string, physicalName: string) =>
   attribute(name, { physicalName, type: "String", length: 20, unique: true })
 
 describe("stage 3: numbering uniqueness in scope", () => {
-  it("scoped document number is unique within scope and period", () => {
-    const physical = compileScoped({
+  it("scoped document number is unique within scope and period", async () => {
+    const physical = await compileScoped({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         scope: "org",
       }),
@@ -677,8 +677,8 @@ describe("stage 3: numbering uniqueness in scope", () => {
     ])
   })
 
-  it("scoped catalog code uniqueness unchanged", () => {
-    const physical = compileScoped({ [CP]: counterparty() })
+  it("scoped catalog code uniqueness unchanged", async () => {
+    const physical = await compileScoped({ [CP]: counterparty() })
     expect(uniquesOf(tableOf(physical, "counterparty"))).toContainEqual([
       "org_id",
       "code",
@@ -687,14 +687,14 @@ describe("stage 3: numbering uniqueness in scope", () => {
 })
 
 describe("stage 3: scope indexes", () => {
-  it("scoped catalog with codeUnique has no separate code or scope index", () => {
-    const physical = compileScoped({ [CP]: counterparty() })
+  it("scoped catalog with codeUnique has no separate code or scope index", async () => {
+    const physical = await compileScoped({ [CP]: counterparty() })
     // `org_id` покриває UNIQUE (org_id, id), `(org_id, code)` — UNIQUE (org_id, code).
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([])
   })
 
-  it("scoped catalog without codeUnique indexes code within the scope", () => {
-    const physical = compileScoped({
+  it("scoped catalog without codeUnique indexes code within the scope", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty({ codeUnique: false }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
@@ -702,8 +702,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("scoped document indexes date within the scope; number is covered by UNIQUE", () => {
-    const physical = compileScoped({
+  it("scoped document indexes date within the scope; number is covered by UNIQUE", async () => {
+    const physical = await compileScoped({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         scope: "org",
       }),
@@ -713,9 +713,9 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("indexed attribute of a scoped object leads with the scope column", () => {
+  it("indexed attribute of a scoped object leads with the scope column", async () => {
     const rank = () => attribute("rank", { type: "Integer", indexed: true })
-    const physical = compileScoped({
+    const physical = await compileScoped({
       [CP]: counterparty({ attributes: [rank()] }),
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         scope: "none",
@@ -730,8 +730,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("composite reference gets one index on the full FK", () => {
-    const physical = compileScoped({
+  it("composite reference gets one index on the full FK", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       [CONTRACT]: contract({
         attributes: [
@@ -752,9 +752,9 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("plain reference from a scoped table is indexed on the FK only", () => {
+  it("plain reference from a scoped table is indexed on the FK only", async () => {
     // Індекс FK служить перевірці при видаленні валюти — за currency_id.
-    const physical = compileScoped({
+    const physical = await compileScoped({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         scope: "none",
       }),
@@ -773,8 +773,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("crossScope reference is indexed on the FK only", () => {
-    const physical = compileScoped({
+  it("crossScope reference is indexed on the FK only", async () => {
+    const physical = await compileScoped({
       "catalogs/Draft/Draft.meta.json": catalog("Draft", { scope: "user" }),
       [CP]: counterparty({
         attributes: [
@@ -790,8 +790,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("scoped tabular section row indexes the composite parent key", () => {
-    const physical = compileScoped({
+  it("scoped tabular section row indexes the composite parent key", async () => {
+    const physical = await compileScoped({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         scope: "org",
         tabularSections: [
@@ -813,8 +813,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("hierarchy parent is indexed on the composite key", () => {
-    const physical = compileScoped({
+  it("hierarchy parent is indexed on the composite key", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty({ hierarchyType: "ItemsOnly" }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
@@ -825,8 +825,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("register indexes lead with the scope column", () => {
-    const physical = compileScoped({
+  it("register indexes lead with the scope column", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       "documents/Sale/Sale.meta.json": document("Sale", { scope: "org" }),
       "accumulation-registers/Stock/Stock.meta.json": {
@@ -861,8 +861,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("root and its tabular section rows keep single-column indexes", () => {
-    const physical = compileScoped({
+  it("root and its tabular section rows keep single-column indexes", async () => {
+    const physical = await compileScoped({
       [ORG]: organization({
         codeUnique: false,
         tabularSections: [
@@ -884,8 +884,8 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("global catalog reference keeps its single-column index", () => {
-    const physical = compileScoped({
+  it("global catalog reference keeps its single-column index", async () => {
+    const physical = await compileScoped({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         scope: "none",
       }),
@@ -907,8 +907,8 @@ describe("stage 3: scope indexes", () => {
 })
 
 describe("stage 3: uniqueness within scope", () => {
-  it("scoped catalog attribute is unique within the scope", () => {
-    const physical = compileScoped({
+  it("scoped catalog attribute is unique within the scope", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty({ attributes: [uniqueText("taxId", "tax_id")] }),
     })
     const cp = tableOf(physical, "counterparty")
@@ -919,8 +919,8 @@ describe("stage 3: uniqueness within scope", () => {
     expect(uniquesOf(cp)).not.toContainEqual(["tax_id"])
   })
 
-  it("scoped tabular section attribute is unique within the scope", () => {
-    const physical = compileScoped({
+  it("scoped tabular section attribute is unique within the scope", async () => {
+    const physical = await compileScoped({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         scope: "org",
         tabularSections: [
@@ -938,8 +938,8 @@ describe("stage 3: uniqueness within scope", () => {
     ])
   })
 
-  it("root tabular section attribute is unique within its parent", () => {
-    const physical = compileScoped({
+  it("root tabular section attribute is unique within its parent", async () => {
+    const physical = await compileScoped({
       [ORG]: organization({
         attributes: [uniqueText("taxId", "tax_id")],
         tabularSections: [
@@ -962,8 +962,8 @@ describe("stage 3: uniqueness within scope", () => {
     ])
   })
 
-  it("register attribute is unique within the scope", () => {
-    const physical = compileScoped({
+  it("register attribute is unique within the scope", async () => {
+    const physical = await compileScoped({
       "documents/Sale/Sale.meta.json": document("Sale", { scope: "org" }),
       "accumulation-registers/Stock/Stock.meta.json": {
         id: uuid(914),
@@ -981,8 +981,8 @@ describe("stage 3: uniqueness within scope", () => {
     ])
   })
 
-  it("global object keeps plain uniqueness", () => {
-    const physical = compileScoped({
+  it("global object keeps plain uniqueness", async () => {
+    const physical = await compileScoped({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         scope: "none",
         attributes: [uniqueText("isoCode", "iso_code")],
@@ -996,8 +996,8 @@ describe("stage 3: uniqueness within scope", () => {
 })
 
 describe("stage 3: scoped owner", () => {
-  it("owner of the same kind is composite", () => {
-    const physical = compileScoped({
+  it("owner of the same kind is composite", async () => {
+    const physical = await compileScoped({
       [CP]: counterparty(),
       [CONTRACT]: catalog("Contract", {
         scope: "org",

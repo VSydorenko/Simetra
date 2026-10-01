@@ -31,8 +31,10 @@ function scopedFiles(entries: Record<string, unknown>) {
   })
 }
 
-function physicalOf(files: Map<string, string>): PhysicalSnapshot {
-  const result = compile(files)
+async function physicalOf(
+  files: Map<string, string>
+): Promise<PhysicalSnapshot> {
+  const result = await compile(files)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!.physical
 }
@@ -56,8 +58,12 @@ function column(table: PhysicalTable, name: string) {
   return found!
 }
 
-function diagnosticsOf(files: Map<string, string>) {
-  return compile(files).diagnostics.map((d) => [d.code, d.file, d.pointer])
+async function diagnosticsOf(files: Map<string, string>) {
+  return (await compile(files)).diagnostics.map((d) => [
+    d.code,
+    d.file,
+    d.pointer,
+  ])
 }
 
 /** Скоуплені довідники `Warehouse`, `Item` і документ `Sale` виду `org`. */
@@ -123,8 +129,8 @@ function ratesFiles(register: Record<string, unknown> = {}) {
 }
 
 describe("stage 3: register keys", () => {
-  it("accumulation movements key", () => {
-    const stock = tableOf(physicalOf(stockFiles()), "stock")
+  it("accumulation movements key", async () => {
+    const stock = tableOf(await physicalOf(stockFiles()), "stock")
     expect(stock.primaryKey).toEqual({
       name: "stock_pkey",
       columns: ["recorder_type", "recorder_id", "line_number"],
@@ -152,8 +158,8 @@ describe("stage 3: register keys", () => {
     expect(column(stock, "item_id").notNull).toBe(false)
   })
 
-  it("balance register has totals", () => {
-    const physical = physicalOf(stockFiles())
+  it("balance register has totals", async () => {
+    const physical = await physicalOf(stockFiles())
     const totals = tableOf(physical, "stock_totals")
     expect(totals.origin).toEqual({ objectId: STOCK_ID, part: "totals" })
     expect(totals.columns.map((c) => `${c.name} ${c.type}`)).toEqual([
@@ -205,23 +211,23 @@ describe("stage 3: register keys", () => {
       { name: "stock_totals_org_id_item_id_idx", keys: ["org_id", "item_id"] },
     ])
 
-    const turnover = physicalOf(stockFiles({ registerType: "Turnover" }))
+    const turnover = await physicalOf(stockFiles({ registerType: "Turnover" }))
     expect(turnover.tables.map((t) => t.name)).not.toContain("stock_totals")
   })
 
-  it("accumulation movement resources are NOT NULL without a default", () => {
-    const stock = tableOf(physicalOf(stockFiles()), "stock")
+  it("accumulation movement resources are NOT NULL without a default", async () => {
+    const stock = tableOf(await physicalOf(stockFiles()), "stock")
     expect(column(stock, "qty").notNull).toBe(true)
     expect(column(stock, "qty").default).toBeUndefined()
-    const totals = tableOf(physicalOf(stockFiles()), "stock_totals")
+    const totals = tableOf(await physicalOf(stockFiles()), "stock_totals")
     expect(column(totals, "qty")).toMatchObject({ notNull: true, default: "0" })
     // Ресурс регістра відомостей — значення: без `required` він може бути порожнім.
-    const rates = tableOf(physicalOf(ratesFiles()), "rates")
+    const rates = tableOf(await physicalOf(ratesFiles()), "rates")
     expect(column(rates, "rate").notNull).toBe(false)
   })
 
-  it("degenerate totals key is a singleton", () => {
-    const physical = physicalOf(
+  it("degenerate totals key is a singleton", async () => {
+    const physical = await physicalOf(
       metaFiles({
         [PROJECT]: project(),
         [STOCK]: {
@@ -259,8 +265,8 @@ describe("stage 3: register keys", () => {
     ])
   })
 
-  it("dimensions are nullable unless required", () => {
-    const stock = tableOf(physicalOf(stockFiles()), "stock")
+  it("dimensions are nullable unless required", async () => {
+    const stock = tableOf(await physicalOf(stockFiles()), "stock")
     expect(column(stock, "warehouse_id").notNull).toBe(true)
     expect(column(stock, "item_id").notNull).toBe(false)
     const targets = stock.foreignKeys.map((fk) => fk.columns)
@@ -268,8 +274,8 @@ describe("stage 3: register keys", () => {
     expect(targets).toContainEqual(["org_id", "item_id"])
   })
 
-  it("independent information register key", () => {
-    const rates = tableOf(physicalOf(ratesFiles()), "rates")
+  it("independent information register key", async () => {
+    const rates = tableOf(await physicalOf(ratesFiles()), "rates")
     expect(rates.primaryKey).toBeUndefined()
     expect(column(rates, "period").notNull).toBe(true)
     expect(rates.uniques).toContainEqual({
@@ -281,12 +287,12 @@ describe("stage 3: register keys", () => {
     // немає, тож і індексів рухів немає (FK-індекси покриває префікс ключа
     // запису, UNIQUE).
     expect(indexesOf(rates)).toEqual([])
-    expect(physicalOf(ratesFiles()).tables.map((t) => t.name)).not.toContain(
-      "rates_totals"
-    )
+    expect(
+      (await physicalOf(ratesFiles())).tables.map((t) => t.name)
+    ).not.toContain("rates_totals")
 
     const flat = tableOf(
-      physicalOf(ratesFiles({ periodicity: "NonPeriodic" })),
+      await physicalOf(ratesFiles({ periodicity: "NonPeriodic" })),
       "rates"
     )
     expect(flat.columns.map((c) => c.name)).not.toContain("period")
@@ -298,9 +304,9 @@ describe("stage 3: register keys", () => {
     expect(indexesOf(flat)).toEqual([])
   })
 
-  it("subordinate information register", () => {
+  it("subordinate information register", async () => {
     const rates = tableOf(
-      physicalOf(
+      await physicalOf(
         ratesFiles({
           writeMode: "RecorderSubordinate",
           recorderTypes: [{ kind: "Document", name: "Sale" }],
@@ -322,8 +328,8 @@ describe("stage 3: register keys", () => {
     expect(indexesOf(rates)).toEqual([])
   })
 
-  it("subordinate register without dimensions, period or scope", () => {
-    const physical = physicalOf(
+  it("subordinate register without dimensions, period or scope", async () => {
+    const physical = await physicalOf(
       metaFiles({
         [PROJECT]: project(),
         [SALE]: document("Sale"),
@@ -361,8 +367,8 @@ describe("stage 3: register keys", () => {
     expect(settings.indexes).toEqual([])
   })
 
-  it("independent non-periodic register without dimensions or scope", () => {
-    const physical = physicalOf(
+  it("independent non-periodic register without dimensions or scope", async () => {
+    const physical = await physicalOf(
       metaFiles({
         [PROJECT]: project(),
         "information-registers/Settings/Settings.meta.json": {
@@ -384,8 +390,8 @@ describe("stage 3: register keys", () => {
     expect(settings.indexes).toEqual([])
   })
 
-  it("scoped register without dimensions is keyed by the scope column", () => {
-    const physical = physicalOf(
+  it("scoped register without dimensions is keyed by the scope column", async () => {
+    const physical = await physicalOf(
       scopedFiles({
         "information-registers/Settings/Settings.meta.json": {
           id: uuid(4),
@@ -403,8 +409,8 @@ describe("stage 3: register keys", () => {
     expect(settings.checks).toEqual([])
   })
 
-  it("balance register monthly turnovers", () => {
-    const physical = physicalOf(stockFiles())
+  it("balance register monthly turnovers", async () => {
+    const physical = await physicalOf(stockFiles())
     const month = tableOf(physical, "stock_turnovers_month")
     expect(month.origin).toEqual({ objectId: STOCK_ID, part: "turnoversMonth" })
     expect(
@@ -433,8 +439,8 @@ describe("stage 3: register keys", () => {
     ])
   })
 
-  it("turnover register monthly turnovers", () => {
-    const physical = physicalOf(stockFiles({ registerType: "Turnover" }))
+  it("turnover register monthly turnovers", async () => {
+    const physical = await physicalOf(stockFiles({ registerType: "Turnover" }))
     const month = tableOf(physical, "stock_turnovers_month")
     expect(month.columns.map((c) => c.name)).toEqual([
       "org_id",
@@ -447,14 +453,14 @@ describe("stage 3: register keys", () => {
     expect(physical.tables.map((t) => t.name)).not.toContain("stock_totals")
   })
 
-  it("information register has no monthly turnovers", () => {
-    const names = physicalOf(ratesFiles()).tables.map((t) => t.name)
+  it("information register has no monthly turnovers", async () => {
+    const names = (await physicalOf(ratesFiles())).tables.map((t) => t.name)
     expect(names).not.toContain("rates_turnovers_month")
     expect(names).not.toContain("rates_totals")
   })
 
-  it("totals key is unique nulls not distinct", () => {
-    const totals = tableOf(physicalOf(stockFiles()), "stock_totals")
+  it("totals key is unique nulls not distinct", async () => {
+    const totals = tableOf(await physicalOf(stockFiles()), "stock_totals")
     expect(totals.primaryKey).toBeUndefined()
     expect(totals.uniques.map((u) => [u.columns, u.nullsNotDistinct])).toEqual([
       [["org_id", "warehouse_id", "item_id"], true],
@@ -463,8 +469,8 @@ describe("stage 3: register keys", () => {
     expect(column(totals, "item_id").notNull).toBe(false)
   })
 
-  it("scoped register without dimensions", () => {
-    const physical = physicalOf(
+  it("scoped register without dimensions", async () => {
+    const physical = await physicalOf(
       scopedFiles({
         [STOCK]: {
           id: STOCK_ID,
@@ -487,8 +493,8 @@ describe("stage 3: register keys", () => {
     expect(totals.columns.map((c) => c.name)).toEqual(["org_id", "qty"])
   })
 
-  it("unscoped register without dimensions", () => {
-    const physical = physicalOf(
+  it("unscoped register without dimensions", async () => {
+    const physical = await physicalOf(
       metaFiles({
         [PROJECT]: project(),
         [STOCK]: {
@@ -509,8 +515,8 @@ describe("stage 3: register keys", () => {
     ])
   })
 
-  it("movement indexes end with recorder", () => {
-    const stock = tableOf(physicalOf(stockFiles()), "stock")
+  it("movement indexes end with recorder", async () => {
+    const stock = tableOf(await physicalOf(stockFiles()), "stock")
     const keys = indexesOf(stock).map((index) => index.keys)
     expect(keys).toContainEqual([
       "org_id",
@@ -529,7 +535,7 @@ describe("stage 3: register keys", () => {
     ])
   })
 
-  it("turnovers month name collision", () => {
+  it("turnovers month name collision", async () => {
     const files = metaFiles({
       [PROJECT]: project(),
       "catalogs/Clash/Clash.meta.json": catalog("Clash", {
@@ -544,13 +550,13 @@ describe("stage 3: register keys", () => {
       },
     })
     expect(
-      diagnosticsOf(files).filter(
+      (await diagnosticsOf(files)).filter(
         ([code]) => code === "physical.table-duplicate"
       )
     ).toHaveLength(1)
   })
 
-  it("totals table name collision", () => {
+  it("totals table name collision", async () => {
     const files = metaFiles({
       [PROJECT]: project(),
       "catalogs/StockTotals/StockTotals.meta.json": catalog("StockTotals", {
@@ -565,7 +571,7 @@ describe("stage 3: register keys", () => {
       },
     })
     expect(
-      diagnosticsOf(files).filter(
+      (await diagnosticsOf(files)).filter(
         ([code]) => code === "physical.table-duplicate"
       )
     ).toHaveLength(1)
@@ -587,12 +593,12 @@ describe("derived table column collisions", () => {
     })
   }
 
-  it("dimension named month collides in turnovers_month at the dimension", () => {
+  it("dimension named month collides in turnovers_month at the dimension", async () => {
     const files = registerWith({
       dimensions: [attribute("period2", { physicalName: "month" })],
     })
     expect(
-      diagnosticsOf(files).filter(
+      (await diagnosticsOf(files)).filter(
         ([code]) => code === "physical.column-duplicate"
       )
     ).toEqual([
@@ -600,7 +606,7 @@ describe("derived table column collisions", () => {
     ])
   })
 
-  it("split resource column collides at the element that came second", () => {
+  it("split resource column collides at the element that came second", async () => {
     // Колонки `<reg>_turnovers_month`: виміри, month, потім пара ресурсу
     // `qty_receipt`/`qty_expense` — другим приходить ресурс, не вимір.
     const files = registerWith({
@@ -608,7 +614,7 @@ describe("derived table column collisions", () => {
       dimensions: [attribute("clash", { physicalName: "qty_receipt" })],
     })
     expect(
-      diagnosticsOf(files).filter(
+      (await diagnosticsOf(files)).filter(
         ([code]) => code === "physical.column-duplicate"
       )
     ).toEqual([
@@ -618,9 +624,9 @@ describe("derived table column collisions", () => {
 })
 
 describe("balance control", () => {
-  it("balanceControl only for balance registers", () => {
+  it("balanceControl only for balance registers", async () => {
     expect(
-      diagnosticsOf(
+      await diagnosticsOf(
         stockFiles({
           registerType: "Turnover",
           balanceControl: { resources: ["qty"] },
@@ -629,9 +635,11 @@ describe("balance control", () => {
     ).toEqual([["register.balance-control-type", STOCK, "/balanceControl"]])
   })
 
-  it("balanceControl names unknown resource", () => {
+  it("balanceControl names unknown resource", async () => {
     expect(
-      diagnosticsOf(stockFiles({ balanceControl: { resources: ["amount"] } }))
+      await diagnosticsOf(
+        stockFiles({ balanceControl: { resources: ["amount"] } })
+      )
     ).toEqual([
       [
         "register.balance-control-resource",
@@ -641,9 +649,9 @@ describe("balance control", () => {
     ])
   })
 
-  it("duplicate balance control resource", () => {
+  it("duplicate balance control resource", async () => {
     expect(
-      diagnosticsOf(
+      await diagnosticsOf(
         stockFiles({ balanceControl: { resources: ["qty", "qty"] } })
       )
     ).toEqual([
@@ -655,9 +663,9 @@ describe("balance control", () => {
     ])
   })
 
-  it("balanceControl over a known resource is in the reference index", () => {
+  it("balanceControl over a known resource is in the reference index", async () => {
     const qty = attribute("qty", { type: "Integer" })
-    const result = compile(
+    const result = await compile(
       stockFiles({ resources: [qty], balanceControl: { resources: ["qty"] } })
     )
     expect(result.diagnostics).toEqual([])

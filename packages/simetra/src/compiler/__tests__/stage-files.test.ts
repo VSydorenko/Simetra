@@ -14,8 +14,8 @@ function codes(diagnostics: Diagnostic[]): string[] {
 }
 
 describe("stage 1: files", () => {
-  it("empty map reports project.missing", () => {
-    const result = compile(new Map())
+  it("empty map reports project.missing", async () => {
+    const result = await compile(new Map())
     expect(result.ok).toBe(false)
     expect(result.model).toBeUndefined()
     expect(result.diagnostics).toEqual([
@@ -28,18 +28,19 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("valid minimal project compiles with ok true and no diagnostics", () => {
+  it("valid minimal project compiles with ok true and no diagnostics", async () => {
     const contract = catalog("Contract")
     const order = document("SalesOrder")
     const table = customTable("AuditLog")
-    const result = compile(
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": contract,
         "catalogs/Contract/Contract.module.ts": "export {}",
         "documents/SalesOrder/SalesOrder.meta.json": order,
         "custom-tables/AuditLog/AuditLog.meta.json": table,
-        "custom-tables/AuditLog/AuditLog.sql": "select 1;",
+        "custom-tables/AuditLog/AuditLog.sql":
+          "COMMENT ON TABLE audit_log IS 'Audit';",
       })
     )
     expect(result.diagnostics).toEqual([])
@@ -58,8 +59,18 @@ describe("stage 1: files", () => {
         ownerObjectId: contract.id,
       },
     ])
-    expect(model.sqlFiles).toEqual([
-      { file: "custom-tables/AuditLog/AuditLog.sql", ownerObjectId: table.id },
+    expect(
+      model.sqlUnits.map(({ identity, file, ownerObjectId }) => ({
+        identity,
+        file,
+        ownerObjectId,
+      }))
+    ).toEqual([
+      {
+        identity: "comment:table:public.audit_log",
+        file: "custom-tables/AuditLog/AuditLog.sql",
+        ownerObjectId: table.id,
+      },
     ])
     expect(model.physical.tables.map((t) => `${t.schema}.${t.name}`)).toEqual([
       "public.audit_log",
@@ -68,8 +79,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("kind mismatch", () => {
-    const result = compile(
+  it("kind mismatch", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": document("Contract"),
@@ -84,8 +95,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("folder and file name must equal logical name", () => {
-    const result = compile(
+  it("folder and file name must equal logical name", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/contract/contract.meta.json": catalog("Contract"),
@@ -100,8 +111,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("unknown path", () => {
-    const result = compile(
+  it("unknown path", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": catalog("Contract"),
@@ -123,8 +134,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("orphan sql", () => {
-    const result = compile(
+  it("orphan sql", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.sql": "select 1;",
@@ -138,21 +149,26 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("shared sql is registered", () => {
-    const result = compile(
+  it("shared sql is registered", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
-        "sql/public/scope_sets.sql": "select 1;",
+        "sql/app/scope_sets.sql":
+          "CREATE FUNCTION set_scope() RETURNS void LANGUAGE sql AS $$ select $$;",
       })
     )
     expect(result.ok).toBe(true)
-    expect(result.model!.sqlFiles).toEqual([
-      { file: "sql/public/scope_sets.sql", schema: "public" },
-    ])
+    const [unit] = result.model!.sqlUnits
+    expect(unit).toMatchObject({
+      identity: "function:app.set_scope()",
+      file: "sql/app/scope_sets.sql",
+      schema: "app",
+    })
+    expect(unit!.ownerObjectId).toBeUndefined()
   })
 
-  it("invalid json", () => {
-    const result = compile(
+  it("invalid json", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": "{ not json",
@@ -167,8 +183,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("schema rule code survives mapping", () => {
-    const result = compile(
+  it("schema rule code survives mapping", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": catalog("Contract", {
@@ -185,8 +201,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("zod issue without own rule maps to file.schema with zod text", () => {
-    const result = compile(
+  it("zod issue without own rule maps to file.schema with zod text", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": catalog("Contract", {
@@ -200,8 +216,8 @@ describe("stage 1: files", () => {
     expect(result.diagnostics[0]!.message.length).toBeGreaterThan(0)
   })
 
-  it("malformed reference points at the ref field, not the whole file", () => {
-    const result = compile(
+  it("malformed reference points at the ref field, not the whole file", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": catalog("Contract", {
@@ -236,8 +252,8 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("all diagnostics of stages 1-2 are returned", () => {
-    const result = compile(
+  it("all diagnostics of stages 1-2 are returned", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": "{",
@@ -254,7 +270,7 @@ describe("stage 1: files", () => {
     ])
   })
 
-  it("output does not depend on map insertion order", () => {
+  it("output does not depend on map insertion order", async () => {
     const entries = {
       "project.meta.json": project(),
       "catalogs/B/B.meta.json": catalog("B", { id: undefined }),
@@ -262,12 +278,12 @@ describe("stage 1: files", () => {
       "zzz.txt": "",
       "catalogs/C/C.meta.json": catalog("C"),
     }
-    const forward = compile(metaFiles(entries))
-    const backward = compile(new Map([...metaFiles(entries)].reverse()))
+    const forward = await compile(metaFiles(entries))
+    const backward = await compile(new Map([...metaFiles(entries)].reverse()))
     expect(backward).toEqual(forward)
   })
 
-  it("posting expression parse error becomes posting.parse with offset", () => {
+  it("posting expression parse error becomes posting.parse with offset", async () => {
     const order = {
       ...document("SalesOrder"),
       posting: {
@@ -281,7 +297,7 @@ describe("stage 1: files", () => {
         ],
       },
     }
-    const result = compile(
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "documents/SalesOrder/SalesOrder.meta.json": order,

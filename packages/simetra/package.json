@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "libpg-query": "17.7.4",
     "zod": "^4.6.5"
   },
   "devDependencies": {

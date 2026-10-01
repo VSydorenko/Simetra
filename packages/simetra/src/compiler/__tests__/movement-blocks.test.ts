@@ -19,6 +19,17 @@ describe("extractMovementBlocks", () => {
         { register: "Rates", sql: "SELECT 2", line: 6 },
       ],
       errors: [],
+      // Тіла блоків — порожні рядки: номери рядків решти файлу ті самі.
+      masked: [
+        "-- @movements Stock",
+        "",
+        "",
+        "-- @end  ",
+        "",
+        "-- @movements Rates",
+        "",
+        "-- @end",
+      ].join("\n"),
     })
   })
 

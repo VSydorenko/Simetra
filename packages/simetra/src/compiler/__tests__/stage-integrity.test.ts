@@ -10,8 +10,10 @@ import {
   uuid,
 } from "./helpers"
 
-function compileWith(entries: Record<string, unknown>) {
-  return compile(metaFiles({ "project.meta.json": project(), ...entries }))
+async function compileWith(entries: Record<string, unknown>) {
+  return await compile(
+    metaFiles({ "project.meta.json": project(), ...entries })
+  )
 }
 
 const NOTE = "catalogs/Note/Note.meta.json"
@@ -47,8 +49,8 @@ function refTo(kind: string, name: string) {
 }
 
 describe("stage 4: integrity", () => {
-  it("reference to a register is not referenceable", () => {
-    const result = compileWith({
+  it("reference to a register is not referenceable", async () => {
+    const result = await compileWith({
       "information-registers/Prices/Prices.meta.json": register("Prices"),
       [NOTE]: catalog("Note", {
         attributes: [
@@ -68,8 +70,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("reference to a constant or pg enum is not referenceable", () => {
-    const result = compileWith({
+  it("reference to a constant or pg enum is not referenceable", async () => {
+    const result = await compileWith({
       "constants/Rate/Rate.meta.json": {
         id: uuid(710),
         kind: "Constant",
@@ -102,8 +104,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("pg enum column of a custom table is allowed", () => {
-    const result = compileWith({
+  it("pg enum column of a custom table is allowed", async () => {
+    const result = await compileWith({
       "pg-enums/Mood/Mood.meta.json": {
         id: uuid(711),
         kind: "PgEnum",
@@ -127,8 +129,8 @@ describe("stage 4: integrity", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("reference to a custom table without a single uuid primary key", () => {
-    const result = compileWith({
+  it("reference to a custom table without a single uuid primary key", async () => {
+    const result = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
           { id: uuid(720), name: "id", physicalName: "id", type: "BigInt" },
@@ -151,8 +153,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("catalog owner must be a catalog", () => {
-    const result = compileWith({
+  it("catalog owner must be a catalog", async () => {
+    const result = await compileWith({
       "enumerations/Status/Status.meta.json": ENUMERATION,
       "documents/Invoice/Invoice.meta.json": document("Invoice"),
       "custom-tables/Log/Log.meta.json": customTable("Log", {
@@ -181,8 +183,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("catalog owned by a catalog is clean", () => {
-    const result = compileWith({
+  it("catalog owned by a catalog is clean", async () => {
+    const result = await compileWith({
       "catalogs/Owner/Owner.meta.json": catalog("Owner"),
       [NOTE]: catalog("Note", {
         owners: [{ kind: "Catalog", name: "Owner" }],
@@ -192,8 +194,8 @@ describe("stage 4: integrity", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("enumeration cannot be a target of a polymorphic ref", () => {
-    const result = compileWith({
+  it("enumeration cannot be a target of a polymorphic ref", async () => {
+    const result = await compileWith({
       "enumerations/Status/Status.meta.json": ENUMERATION,
       "catalogs/Owner/Owner.meta.json": catalog("Owner"),
       [NOTE]: catalog("Note", {
@@ -218,8 +220,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("enumeration cannot be a target of a polymorphic constant", () => {
-    const result = compileWith({
+  it("enumeration cannot be a target of a polymorphic constant", async () => {
+    const result = await compileWith({
       "enumerations/Status/Status.meta.json": ENUMERATION,
       "catalogs/Owner/Owner.meta.json": catalog("Owner"),
       "constants/Subject/Subject.meta.json": {
@@ -239,8 +241,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("catalog and document are valid polymorphic targets", () => {
-    const result = compileWith({
+  it("catalog and document are valid polymorphic targets", async () => {
+    const result = await compileWith({
       "catalogs/Owner/Owner.meta.json": catalog("Owner"),
       "documents/Invoice/Invoice.meta.json": document("Invoice"),
       [NOTE]: catalog("Note", {
@@ -259,8 +261,8 @@ describe("stage 4: integrity", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("custom table without a uuid key in allowedTypes reports the key once", () => {
-    const result = compileWith({
+  it("custom table without a uuid key in allowedTypes reports the key once", async () => {
+    const result = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
           { id: uuid(734), name: "id", physicalName: "id", type: "BigInt" },
@@ -285,8 +287,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("register recorder must be a document", () => {
-    const result = compileWith({
+  it("register recorder must be a document", async () => {
+    const result = await compileWith({
       "enumerations/Status/Status.meta.json": ENUMERATION,
       "documents/Invoice/Invoice.meta.json": document("Invoice"),
       "catalogs/Owner/Owner.meta.json": catalog("Owner"),
@@ -314,8 +316,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("two tables with the same physicalName in one schema", () => {
-    const result = compileWith({
+  it("two tables with the same physicalName in one schema", async () => {
+    const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A", { physicalName: "shared" }),
       "documents/B/B.meta.json": document("B", { physicalName: "shared" }),
     })
@@ -329,8 +331,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("same physicalName in different schemas is fine", () => {
-    const result = compileWith({
+  it("same physicalName in different schemas is fine", async () => {
+    const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A", { physicalName: "shared" }),
       "documents/B/B.meta.json": document("B", {
         physicalName: "shared",
@@ -340,8 +342,8 @@ describe("stage 4: integrity", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("tabular section and enum type share the table namespace", () => {
-    const result = compileWith({
+  it("tabular section and enum type share the table namespace", async () => {
+    const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A", {
         tabularSections: [
           {
@@ -369,8 +371,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("attribute column collides with a standard column", () => {
-    const result = compileWith({
+  it("attribute column collides with a standard column", async () => {
+    const result = await compileWith({
       [NOTE]: catalog("Note", {
         attributes: [
           attribute("label", { physicalName: "code" }),
@@ -385,8 +387,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("polymorphic pair collides with a plain column", () => {
-    const result = compileWith({
+  it("polymorphic pair collides with a plain column", async () => {
+    const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A"),
       [NOTE]: catalog("Note", {
         attributes: [
@@ -403,8 +405,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("two polymorphic targets with the same physicalName in different schemas", () => {
-    const result = compileWith({
+  it("two polymorphic targets with the same physicalName in different schemas", async () => {
+    const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A", { physicalName: "party" }),
       "catalogs/B/B.meta.json": catalog("B", {
         physicalName: "party",
@@ -432,8 +434,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("register recorders with the same physicalName", () => {
-    const result = compileWith({
+  it("register recorders with the same physicalName", async () => {
+    const result = await compileWith({
       "documents/A/A.meta.json": document("A", { physicalName: "doc" }),
       "documents/B/B.meta.json": document("B", {
         physicalName: "doc",
@@ -456,8 +458,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("reserved word is a warning", () => {
-    const result = compileWith({
+  it("reserved word is a warning", async () => {
+    const result = await compileWith({
       "catalogs/Order/Order.meta.json": catalog("Order", {
         attributes: [attribute("check", { physicalName: "check" })],
       }),
@@ -472,9 +474,9 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("derived name longer than 63 bytes", () => {
+  it("derived name longer than 63 bytes", async () => {
     const base = "s".repeat(60)
-    const result = compileWith({
+    const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A"),
       [NOTE]: catalog("Note", {
         attributes: [
@@ -497,8 +499,8 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("explicit constraint name longer than 63 bytes", () => {
-    const result = compileWith({
+  it("explicit constraint name longer than 63 bytes", async () => {
+    const result = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         uniques: [{ name: "u".repeat(64), columns: ["id"] }],
       }),
@@ -514,13 +516,15 @@ describe("stage 4: integrity", () => {
       { id: uuid(740), name: "id", physicalName: "id", type: "UUID" },
       { id: uuid(741), name: "email", physicalName: "email", type: "Text" },
     ]
-    const log = (overrides: Record<string, unknown>) =>
-      compileWith({ [LOG]: customTable("Log", { columns, ...overrides }) })
-    const codes = (result: ReturnType<typeof compileWith>) =>
+    const log = async (overrides: Record<string, unknown>) =>
+      await compileWith({
+        [LOG]: customTable("Log", { columns, ...overrides }),
+      })
+    const codes = (result: Awaited<ReturnType<typeof compileWith>>) =>
       result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
 
-    it("unnamed index with an expression key needs a name", () => {
-      const result = log({
+    it("unnamed index with an expression key needs a name", async () => {
+      const result = await log({
         indexes: [
           { name: "log_lower_idx", keys: [{ expression: "lower(email)" }] },
           { keys: [{ column: "email" }] },
@@ -533,8 +537,8 @@ describe("stage 4: integrity", () => {
       expect(result.diagnostics[0]!.hint).toContain("explicit name")
     })
 
-    it("unnamed check needs a name", () => {
-      const result = log({
+    it("unnamed check needs a name", async () => {
+      const result = await log({
         checks: [
           { name: "log_email_len", expression: "length(email) > 0" },
           { expression: "length(email) > 0" },
@@ -545,8 +549,8 @@ describe("stage 4: integrity", () => {
       ])
     })
 
-    it("fk to a pg enum is not referenceable, not a table", () => {
-      const result = compileWith({
+    it("fk to a pg enum is not referenceable, not a table", async () => {
+      const result = await compileWith({
         "pg-enums/Mood/Mood.meta.json": {
           id: uuid(742),
           kind: "PgEnum",
@@ -577,8 +581,8 @@ describe("stage 4: integrity", () => {
       ])
     })
 
-    it("unknown column in primary key, unique, fk and index", () => {
-      const result = log({
+    it("unknown column in primary key, unique, fk and index", async () => {
+      const result = await log({
         primaryKey: { columns: ["uuid"] },
         uniques: [{ columns: ["id", "mail"] }],
         foreignKeys: [
@@ -607,8 +611,8 @@ describe("stage 4: integrity", () => {
       ])
     })
 
-    it("fk target columns resolve as logical names of the target", () => {
-      const result = compileWith({
+    it("fk target columns resolve as logical names of the target", async () => {
+      const result = await compileWith({
         "catalogs/Currency/Currency.meta.json": catalog("Currency", {
           attributes: [attribute("isoCode", { physicalName: "iso_code" })],
         }),
@@ -663,8 +667,8 @@ describe("stage 4: integrity", () => {
       ])
     })
 
-    it("fk column count must match the referenced columns", () => {
-      const result = compileWith({
+    it("fk column count must match the referenced columns", async () => {
+      const result = await compileWith({
         "custom-tables/Other/Other.meta.json": customTable("Other"),
         [LOG]: customTable("Log", {
           columns,

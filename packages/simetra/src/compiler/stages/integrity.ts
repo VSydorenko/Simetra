@@ -35,6 +35,7 @@ import {
 } from "../posting-types"
 import { derivedFunctions, type DerivedFunction } from "../contracts"
 import { movementWrapperName } from "../movement-functions"
+import { FUNCTION_CLASSES, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
 import {
@@ -91,7 +92,8 @@ export function checkIntegrity(
   references: readonly ResolvedReference[],
   model: ModelStageResult,
   style: AttributeCase,
-  scopeKinds: readonly ScopeKind[]
+  scopeKinds: readonly ScopeKind[],
+  sqlUnits: readonly VerbatimUnit[]
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
@@ -119,7 +121,8 @@ export function checkIntegrity(
         model.physical,
         movementWrapperName
       ),
-      model.physical.tables
+      model.physical.tables,
+      sqlUnits
     )
   )
 
@@ -1026,14 +1029,24 @@ function checkPosting(
 
 /**
  * Похідні функції (контракти й обгортки) не збігаються між собою й із
- * таблицями тієї ж PG-схеми (спека §7): інакше `CREATE` П3 упаде чи мовчки
- * перепише чуже. Першою вважається функція, раніша за файлом і шляхом.
+ * таблицями тієї ж PG-схеми (спека §7), а функції контрактів — ще й із
+ * функціями дослівних `.sql`: інакше `CREATE` П3 упаде чи мовчки перепише
+ * чуже. Обгортку з дослівною одиницею звіряє ідентичність одиниць
+ * (`sql.unit-duplicate`). Першою вважається функція, раніша за файлом і шляхом.
  */
 function functionCollisions(
   functions: readonly DerivedFunction[],
-  tables: readonly PhysicalTable[]
+  tables: readonly PhysicalTable[],
+  sqlUnits: readonly VerbatimUnit[]
 ): Diagnostic[] {
   const tableNames = new Set(tables.map((t) => `${t.schema}.${t.name}`))
+  const unitFiles = new Map<string, string>()
+  for (const unit of sqlUnits) {
+    const key = `${unit.schema}.${unit.name}`
+    if (FUNCTION_CLASSES.has(unit.class) && !unitFiles.has(key)) {
+      unitFiles.set(key, unit.file)
+    }
+  }
   const seen = new Map<string, DerivedFunction>()
   const diagnostics: Diagnostic[] = []
   const ordered = [...functions].sort(
@@ -1043,11 +1056,14 @@ function functionCollisions(
   for (const fn of ordered) {
     const key = `${fn.schema}.${fn.name}`
     const first = seen.get(key)
+    const unitFile = fn.movementQuery === true ? undefined : unitFiles.get(key)
     const other = tableNames.has(key)
       ? "a table"
       : first !== undefined
         ? `function of ${first.description}`
-        : undefined
+        : unitFile !== undefined
+          ? `a function in ${unitFile}`
+          : undefined
     if (first === undefined) seen.set(key, fn)
     if (other === undefined) continue
     diagnostics.push(

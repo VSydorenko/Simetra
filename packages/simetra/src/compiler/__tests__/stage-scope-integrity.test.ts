@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, type CompileResult } from "simetra/compiler"
 import {
   attribute,
   catalog,
@@ -25,11 +25,11 @@ function ref(kind: string, name: string, extra: Record<string, unknown> = {}) {
   return { type: "Ref", ref: { kind, name }, ...extra }
 }
 
-function compileScoped(
+async function compileScoped(
   entries: Record<string, unknown>,
   projectFile: unknown = scopedProject()
 ) {
-  return compile(
+  return await compile(
     metaFiles({ [PROJECT]: projectFile, [ORG]: organization(), ...entries })
   )
 }
@@ -38,7 +38,7 @@ function compileScoped(
  * Усі діагностики прогону як (код, серйозність, файл, pointer): тест бачить і
  * побічні правила, а не лише скоуп.
  */
-function scopeDiagnostics(result: ReturnType<typeof compile>) {
+function scopeDiagnostics(result: CompileResult) {
   return result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
 }
 
@@ -81,8 +81,8 @@ function register(
 }
 
 describe("стадія 4: скоуп", () => {
-  it("коректний скоупований проєкт проходить без діагностик скоупу", () => {
-    const result = compileScoped({
+  it("коректний скоупований проєкт проходить без діагностик скоупу", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [
           attribute("currency", ref("Catalog", "Currency")),
@@ -97,8 +97,8 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("корінь може посилатися на скоуплений об'єкт власного виду", () => {
-    const result = compileScoped({
+  it("корінь може посилатися на скоуплений об'єкт власного виду", async () => {
+    const result = await compileScoped({
       [ORG]: organization({
         attributes: [attribute("main", ref("Catalog", "Counterparty"))],
         tabularSections: [
@@ -116,16 +116,16 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("missing scope declaration", () => {
-    const result = compileScoped({ [CP]: catalog("Counterparty") })
+  it("missing scope declaration", async () => {
+    const result = await compileScoped({ [CP]: catalog("Counterparty") })
     expect(result.ok).toBe(false)
     expect(scopeDiagnostics(result)).toEqual([
       ["scope.declaration-missing", "error", CP, ""],
     ])
   })
 
-  it("global references scoped", () => {
-    const result = compileScoped({
+  it("global references scoped", async () => {
+    const result = await compileScoped({
       [CP]: counterparty(),
       [CURRENCY]: currency({
         attributes: [attribute("cp", ref("Catalog", "Counterparty"))],
@@ -137,8 +137,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("global references scoped: crossScope дозволяє", () => {
-    const result = compileScoped({
+  it("global references scoped: crossScope дозволяє", async () => {
+    const result = await compileScoped({
       [CP]: counterparty(),
       [CURRENCY]: currency({
         attributes: [
@@ -150,8 +150,8 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("global references a scope root", () => {
-    const result = compileScoped({
+  it("global references a scope root", async () => {
+    const result = await compileScoped({
       [CURRENCY]: currency({
         attributes: [attribute("company", ref("Catalog", "Organization"))],
       }),
@@ -161,8 +161,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("reference across scope kinds without crossScope", () => {
-    const result = compileScoped({
+  it("reference across scope kinds without crossScope", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [attribute("settings", ref("CustomTable", "UserSettings"))],
       }),
@@ -182,8 +182,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("reference across scope kinds: owner каталогу", () => {
-    const result = compileScoped({
+  it("reference across scope kinds: owner каталогу", async () => {
+    const result = await compileScoped({
       [CP]: counterparty(),
       [CONTRACT]: catalog("Contract", {
         scope: "user",
@@ -199,8 +199,8 @@ describe("стадія 4: скоуп", () => {
     expect(owner?.hint).not.toContain("crossScope")
   })
 
-  it("polymorphic target across scope kinds", () => {
-    const result = compileScoped({
+  it("polymorphic target across scope kinds", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [
           attribute("target", {
@@ -227,8 +227,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("register scope differs from recorder", () => {
-    const result = compileScoped({
+  it("register scope differs from recorder", async () => {
+    const result = await compileScoped({
       [SALE]: document("Sale", { scope: "org" }),
       [STOCK]: register("user", [{ kind: "Document", name: "Sale" }]),
     })
@@ -238,8 +238,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("recorder that is not a document gets no scope mismatch", () => {
-    const result = compileScoped({
+  it("recorder that is not a document gets no scope mismatch", async () => {
+    const result = await compileScoped({
       [CP]: counterparty(),
       [STOCK]: register("user", [{ kind: "Catalog", name: "Counterparty" }]),
     })
@@ -248,8 +248,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("register scope none differs from scoped recorder", () => {
-    const result = compileScoped({
+  it("register scope none differs from scoped recorder", async () => {
+    const result = await compileScoped({
       [SALE]: document("Sale", { scope: "org" }),
       [STOCK]: register("none", [{ kind: "Document", name: "Sale" }]),
     })
@@ -258,8 +258,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("reference to own root", () => {
-    const result = compileScoped({
+  it("reference to own root", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [attribute("company", ref("Catalog", "Organization"))],
       }),
@@ -270,8 +270,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("reference to own root: рядок ТЧ, owner і ціль allowedTypes", () => {
-    const result = compileScoped({
+  it("reference to own root: рядок ТЧ, owner і ціль allowedTypes", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         owners: [{ kind: "Catalog", name: "Organization" }],
         attributes: [
@@ -310,8 +310,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("reference to own root: crossScope дозволяє свідому межтенантну ціль", () => {
-    const result = compileScoped({
+  it("reference to own root: crossScope дозволяє свідому межтенантну ціль", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [
           attribute(
@@ -325,25 +325,25 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("root references the root of its own kind", () => {
+  it("root references the root of its own kind", async () => {
     const attributes = (extra: Record<string, unknown>) => [
       attribute("head", ref("Catalog", "Organization", extra)),
     ]
-    const bare = compileScoped({
+    const bare = await compileScoped({
       [ORG]: organization({ attributes: attributes({}) }),
     })
     expect(scopeDiagnostics(bare)).toEqual([
       ["scope.root-self-reference", "error", ORG, "/attributes/0/ref"],
     ])
-    const cross = compileScoped({
+    const cross = await compileScoped({
       [ORG]: organization({ attributes: attributes({ crossScope: true }) }),
     })
     expect(scopeDiagnostics(cross)).toEqual([])
     expect(cross.ok).toBe(true)
   })
 
-  it("root owner is the root of its own kind", () => {
-    const result = compileScoped({
+  it("root owner is the root of its own kind", async () => {
+    const result = await compileScoped({
       [ORG]: organization({
         owners: [{ kind: "Catalog", name: "Organization" }],
       }),
@@ -353,8 +353,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("hierarchical root", () => {
-    const result = compileScoped({
+  it("hierarchical root", async () => {
+    const result = await compileScoped({
       [ORG]: organization({ hierarchyType: "FoldersAndItems" }),
     })
     expect(result.ok).toBe(false)
@@ -363,7 +363,7 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("reference to the root of another scope kind", () => {
+  it("reference to the root of another scope kind", async () => {
     const entries = (extra: Record<string, unknown>) => ({
       [ACCOUNT]: catalog("Account", { scope: "user" }),
       [CP]: counterparty({
@@ -381,18 +381,18 @@ describe("стадія 4: скоуп", () => {
       }),
     })
     const project = projectWithRoot(1, "Catalog", "Account")
-    const bare = compileScoped(entries({}), project)
+    const bare = await compileScoped(entries({}), project)
     expect(scopeDiagnostics(bare)).toEqual([
       ["scope.cross-kind", "error", CP, "/attributes/0/ref"],
       ["scope.cross-kind", "error", CP, "/attributes/1/allowedTypes/1"],
     ])
-    const cross = compileScoped(entries({ crossScope: true }), project)
+    const cross = await compileScoped(entries({ crossScope: true }), project)
     expect(scopeDiagnostics(cross)).toEqual([])
     expect(cross.ok).toBe(true)
   })
 
-  it("misdeclared root gets only its own error", () => {
-    const result = compileScoped({
+  it("misdeclared root gets only its own error", async () => {
+    const result = await compileScoped({
       [ORG]: organization({
         scope: "none",
         attributes: [attribute("cp", ref("Catalog", "Counterparty"))],
@@ -404,8 +404,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("root must declare own kind", () => {
-    const result = compileScoped({
+  it("root must declare own kind", async () => {
+    const result = await compileScoped({
       [ORG]: organization({ scope: "none" }),
     })
     expect(result.ok).toBe(false)
@@ -414,8 +414,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("root must declare own kind: чужий вид", () => {
-    const result = compileScoped({
+  it("root must declare own kind: чужий вид", async () => {
+    const result = await compileScoped({
       [ORG]: organization({ scope: "user" }),
     })
     expect(scopeDiagnostics(result)).toEqual([
@@ -423,10 +423,10 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("register cannot be a root", () => {
+  it("register cannot be a root", async () => {
     const base = scopedProject()
     const [first, ...rest] = base.scopeKinds
-    const result = compile(
+    const result = await compile(
       metaFiles({
         [PROJECT]: {
           ...base,
@@ -447,7 +447,7 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("root without a single uuid key: composite PK, constant, enumeration", () => {
+  it("root without a single uuid key: composite PK, constant, enumeration", async () => {
     const cases: [string, string, string, Record<string, unknown>][] = [
       [
         "CustomTable",
@@ -494,7 +494,7 @@ describe("стадія 4: скоуп", () => {
       ],
     ]
     for (const [kind, name, file, data] of cases) {
-      const result = compile(
+      const result = await compile(
         metaFiles({
           [PROJECT]: projectWithRoot(0, kind, name),
           [file]: data,
@@ -506,8 +506,8 @@ describe("стадія 4: скоуп", () => {
     }
   })
 
-  it("custom table scope column must be uuid", () => {
-    const result = compileScoped({
+  it("custom table scope column must be uuid", async () => {
+    const result = await compileScoped({
       [SETTINGS]: customTable("UserSettings", {
         scope: "user",
         scopeColumn: "owner",
@@ -529,8 +529,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("scoped custom table without scope column", () => {
-    const result = compileScoped({
+  it("scoped custom table without scope column", async () => {
+    const result = await compileScoped({
       [SETTINGS]: customTable("UserSettings", { scope: "user" }),
     })
     expect(scopeDiagnostics(result)).toEqual([
@@ -538,15 +538,15 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("scopeColumn without scope", () => {
+  it("scopeColumn without scope", async () => {
     const table = (overrides: Record<string, unknown>) =>
       customTable("UserSettings", { scopeColumn: "id", ...overrides })
-    const none = compileScoped({ [SETTINGS]: table({ scope: "none" }) })
+    const none = await compileScoped({ [SETTINGS]: table({ scope: "none" }) })
     expect(scopeDiagnostics(none)).toEqual([
       ["scope.custom-table-column", "error", SETTINGS, "/scopeColumn"],
     ])
     // Однотенантний проєкт скоуп-правил не має, але хибна ознака лишається хибною.
-    const single = compile(
+    const single = await compile(
       metaFiles({ [PROJECT]: project(), [SETTINGS]: table({}) })
     )
     expect(scopeDiagnostics(single)).toEqual([
@@ -554,8 +554,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("custom table with a uuid scope column is valid", () => {
-    const result = compileScoped({
+  it("custom table with a uuid scope column is valid", async () => {
+    const result = await compileScoped({
       [SETTINGS]: customTable("UserSettings", {
         scope: "user",
         scopeColumn: "owner",
@@ -569,8 +569,8 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("redundant crossScope is a warning", () => {
-    const result = compileScoped({
+  it("redundant crossScope is a warning", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [
           attribute(
@@ -592,8 +592,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("crossScope між скоупленими одного виду не зайвий", () => {
-    const result = compileScoped({
+  it("crossScope між скоупленими одного виду не зайвий", async () => {
+    const result = await compileScoped({
       [CP]: counterparty({
         attributes: [
           attribute(
@@ -607,9 +607,9 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("crossScope на поліморфному Ref зайвий, лише якщо зайвий для кожної цілі", () => {
-    const polymorphic = (targets: { kind: string; name: string }[]) =>
-      compileScoped({
+  it("crossScope на поліморфному Ref зайвий, лише якщо зайвий для кожної цілі", async () => {
+    const polymorphic = async (targets: { kind: string; name: string }[]) =>
+      await compileScoped({
         [CP]: counterparty({
           attributes: [
             attribute("target", {
@@ -623,7 +623,7 @@ describe("стадія 4: скоуп", () => {
       })
     expect(
       scopeDiagnostics(
-        polymorphic([
+        await polymorphic([
           { kind: "Catalog", name: "Currency" },
           { kind: "Catalog", name: "Counterparty" },
         ])
@@ -632,14 +632,16 @@ describe("стадія 4: скоуп", () => {
     // Корисна ціль не мусить іти останньою.
     expect(
       scopeDiagnostics(
-        polymorphic([
+        await polymorphic([
           { kind: "Catalog", name: "Counterparty" },
           { kind: "Catalog", name: "Currency" },
         ])
       )
     ).toEqual([])
     expect(
-      scopeDiagnostics(polymorphic([{ kind: "Catalog", name: "Currency" }]))
+      scopeDiagnostics(
+        await polymorphic([{ kind: "Catalog", name: "Currency" }])
+      )
     ).toEqual([
       [
         "scope.cross-scope-redundant",
@@ -650,8 +652,8 @@ describe("стадія 4: скоуп", () => {
     ])
   })
 
-  it("однотенантний проєкт: crossScope без діагностик", () => {
-    const result = compile(
+  it("однотенантний проєкт: crossScope без діагностик", async () => {
+    const result = await compile(
       metaFiles({
         [PROJECT]: { name: "TestApp" },
         [CP]: catalog("Counterparty", {
@@ -668,8 +670,8 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("однотенантний проєкт не дає діагностик скоупу", () => {
-    const result = compile(
+  it("однотенантний проєкт не дає діагностик скоупу", async () => {
+    const result = await compile(
       metaFiles({
         [PROJECT]: { name: "TestApp" },
         [CP]: catalog("Counterparty", {

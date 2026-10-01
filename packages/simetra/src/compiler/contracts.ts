@@ -15,7 +15,7 @@ import {
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
 import type { ModelStageResult } from "./stages/model"
-import type { SqlUnit } from "./movement-functions"
+import { isMovementQuery, type SqlUnit } from "./sql/units"
 import type { ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
 
@@ -165,6 +165,11 @@ export interface DerivedFunction extends QualifiedName {
   pointer: string
   /** Для тексту діагностики: що це за функція. */
   description: string
+  /**
+   * Обгортка запиту рухів — сама SQL-одиниця, тож збіг із дослівною одиницею
+   * звітує `sql.unit-duplicate`, а не перевірка імен функцій контрактів.
+   */
+  movementQuery?: true
 }
 
 const TIMESTAMP = "timestamp with time zone"
@@ -347,15 +352,14 @@ export function derivedFunctions(
     const documentTable = mainTableOf(physical, document.id ?? "")
     const registerTable = mainTableOf(physical, register.id ?? "")
     if (documentTable === undefined || registerTable === undefined) continue
-    add(
-      document,
-      {
-        schema: documentTable.schema,
-        name: wrapperName(documentTable, registerTable),
-      },
-      `movement query of ${document.name} into ${register.name}`,
-      reference.from.pointer
-    )
+    result.push({
+      schema: documentTable.schema,
+      name: wrapperName(documentTable, registerTable),
+      file: document.file,
+      pointer: reference.from.pointer,
+      description: `movement query of ${document.name} into ${register.name}`,
+      movementQuery: true,
+    })
   }
   return result
 }
@@ -386,6 +390,7 @@ export function buildContracts(
     .map((document): PostingContract => {
       const table = must(mainTableOf(physical, document.id ?? ""))
       const movements = sqlUnits
+        .filter(isMovementQuery)
         .filter((unit) => unit.documentId === document.id)
         .map((unit) => ({
           registerId: unit.registerId,

@@ -90,6 +90,25 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Marker at line ${p.line} is indented and is not recognized as a movement query marker`,
     hint: "Markers '-- @movements' and '-- @end' must start at the beginning of the line; an indented one is treated as a plain comment.",
   },
+  "sql.parse": {
+    message: (p) =>
+      `SQL syntax error at line ${p.line}, column ${p.column}: ${p.detail}`,
+  },
+  "sql.statement-not-allowed": {
+    message: (p) =>
+      p.detail === undefined
+        ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
+        : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
+    hint: (p) =>
+      String(p.detail ?? "").includes("RowSecurity")
+        ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
+        : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publications, REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
+  },
+  "sql.unit-duplicate": {
+    message: (p) =>
+      `${p.identity} at line ${p.line} is already defined by ${p.first}`,
+    hint: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
+  },
   "file.orphan": {
     message: (p) => `No ${p.expected} next to this file`,
   },

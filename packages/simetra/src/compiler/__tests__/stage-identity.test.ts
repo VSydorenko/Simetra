@@ -13,13 +13,15 @@ import {
 
 const CONTRACT = "catalogs/Contract/Contract.meta.json"
 
-function compileWith(entries: Record<string, unknown>) {
-  return compile(metaFiles({ "project.meta.json": project(), ...entries }))
+async function compileWith(entries: Record<string, unknown>) {
+  return await compile(
+    metaFiles({ "project.meta.json": project(), ...entries })
+  )
 }
 
 describe("stage 2: identity", () => {
-  it("missing id", () => {
-    const result = compileWith({
+  it("missing id", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", { id: undefined }),
     })
     expect(result.diagnostics).toEqual([
@@ -33,8 +35,8 @@ describe("stage 2: identity", () => {
     expect(result.ok).toBe(false)
   })
 
-  it("predefined item without id", () => {
-    const result = compileWith({
+  it("predefined item without id", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", { predefinedItems: [{ name: "main" }] }),
     })
     expect(result.diagnostics).toEqual([
@@ -45,8 +47,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate predefined name", () => {
-    const result = compileWith({
+  it("duplicate predefined name", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         predefinedItems: [
           { id: uuid(5), name: "main" },
@@ -62,8 +64,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("predefined id duplicates attribute id", () => {
-    const result = compileWith({
+  it("predefined id duplicates attribute id", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("note", { id: uuid(5) })],
         predefinedItems: [{ id: uuid(5), name: "main" }],
@@ -77,8 +79,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("predefined item may be named like the scope kind", () => {
-    const result = compile(
+  it("predefined item may be named like the scope kind", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": scopedProject(),
         "catalogs/Organization/Organization.meta.json": organization(),
@@ -91,8 +93,8 @@ describe("stage 2: identity", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("predefined item needs no physicalName", () => {
-    const result = compileWith({
+  it("predefined item needs no physicalName", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         predefinedItems: [{ id: uuid(5), name: "main" }],
       }),
@@ -100,8 +102,8 @@ describe("stage 2: identity", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("predefined name follows project case", () => {
-    const result = compile(
+  it("predefined name follows project case", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project({
           naming: { attributeCase: "snake_case" },
@@ -119,8 +121,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("missing id on an element", () => {
-    const result = compileWith({
+  it("missing id on an element", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("note", { id: undefined })],
       }),
@@ -133,8 +135,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate id across files", () => {
-    const result = compileWith({
+  it("duplicate id across files", async () => {
+    const result = await compileWith({
       "catalogs/B/B.meta.json": catalog("B", { id: uuid(1) }),
       "catalogs/A/A.meta.json": catalog("A", { id: uuid(1) }),
     })
@@ -147,8 +149,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate id between an object and an element", () => {
-    const result = compileWith({
+  it("duplicate id between an object and an element", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         id: uuid(7),
         attributes: [attribute("note", { id: uuid(7) })],
@@ -162,8 +164,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("missing physicalName on attribute", () => {
-    const result = compileWith({
+  it("missing physicalName on attribute", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("note", { physicalName: undefined })],
       }),
@@ -177,8 +179,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate attribute name", () => {
-    const result = compileWith({
+  it("duplicate attribute name", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("note"), attribute("note")],
       }),
@@ -191,8 +193,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("attribute and tabular section share the object's namespace", () => {
-    const result = compileWith({
+  it("attribute and tabular section share the object's namespace", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("lines")],
         tabularSections: [attribute("lines", { type: undefined })],
@@ -206,8 +208,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate column name in a custom table", () => {
-    const result = compileWith({
+  it("duplicate column name in a custom table", async () => {
+    const result = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
           attribute("id", { type: "UUID" }),
@@ -223,9 +225,9 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate enumeration value", () => {
+  it("duplicate enumeration value", async () => {
     const value = (name: string) => attribute(name, { type: undefined })
-    const result = compileWith({
+    const result = await compileWith({
       "enumerations/Status/Status.meta.json": {
         id: uuid(50),
         kind: "Enumeration",
@@ -242,8 +244,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("duplicate object name within a kind", () => {
-    const result = compileWith({
+  it("duplicate object name within a kind", async () => {
+    const result = await compileWith({
       "catalogs/Contract/Contract.meta.json": catalog("Contract"),
       "catalogs/Other/Other.meta.json": catalog("Contract"),
     })
@@ -253,13 +255,13 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("attribute case follows project style", () => {
+  it("attribute case follows project style", async () => {
     const entries = {
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("unit_price")],
       }),
     }
-    const camel = compile(
+    const camel = await compile(
       metaFiles({
         "project.meta.json": project({
           naming: { attributeCase: "camelCase" },
@@ -273,7 +275,7 @@ describe("stage 2: identity", () => {
         pointer: "/attributes/0/name",
       }),
     ])
-    const snake = compile(
+    const snake = await compile(
       metaFiles({
         "project.meta.json": project({
           naming: { attributeCase: "snake_case" },
@@ -284,8 +286,8 @@ describe("stage 2: identity", () => {
     expect(snake.diagnostics).toEqual([])
   })
 
-  it("attribute may not reuse a standard logical name", () => {
-    const result = compileWith({
+  it("attribute may not reuse a standard logical name", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("deletionMark")],
       }),
@@ -298,8 +300,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("reserved standard names follow the project style", () => {
-    const result = compile(
+  it("reserved standard names follow the project style", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project({
           naming: { attributeCase: "snake_case" },
@@ -321,8 +323,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("unresolved reference", () => {
-    const result = compileWith({
+  it("unresolved reference", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [
           attribute("currency", {
@@ -340,8 +342,8 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("reference to an object whose file is broken is not reported twice", () => {
-    const result = compileWith({
+  it("reference to an object whose file is broken is not reported twice", async () => {
+    const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [
           attribute("currency", {
@@ -355,7 +357,7 @@ describe("stage 2: identity", () => {
     expect(result.diagnostics.map((d) => d.code)).toEqual(["file.invalid-json"])
   })
 
-  it("references index", () => {
+  it("references index", async () => {
     const currency = catalog("Currency")
     const contract = catalog("Contract", {
       attributes: [
@@ -365,7 +367,7 @@ describe("stage 2: identity", () => {
         }),
       ],
     })
-    const result = compileWith({
+    const result = await compileWith({
       [CONTRACT]: contract,
       "catalogs/Currency/Currency.meta.json": currency,
     })

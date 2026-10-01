@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, type CompileResult } from "simetra/compiler"
 import {
   SALE_FILE,
   attribute,
@@ -12,7 +12,7 @@ const SALE_SQL = "documents/Sale/Sale.sql"
 const BLOCK = "-- @movements Stock\nSELECT 1\n-- @end\n"
 
 /** `withConstructor: false` прибирає рухи конструктора: залишається лише блок. */
-function build(
+async function build(
   options: {
     withConstructor?: boolean
     sql?: string
@@ -30,40 +30,40 @@ function build(
     ...extra,
   }
   if (sql !== undefined) entries[SALE_SQL] = sql
-  return compile(metaFiles(entries))
+  return await compile(metaFiles(entries))
 }
 
-function codes(result: ReturnType<typeof compile>) {
+function codes(result: CompileResult) {
   return result.diagnostics.map((d) => [d.code, d.file, d.pointer])
 }
 
 describe("stage 5: movement sources", () => {
-  it("query block satisfies register", () => {
-    const result = build({ withConstructor: false, sql: BLOCK })
+  it("query block satisfies register", async () => {
+    const result = await build({ withConstructor: false, sql: BLOCK })
     expect(result.diagnostics).toEqual([])
     expect(result.ok).toBe(true)
   })
 
-  it("missing source", () => {
-    expect(codes(build({ withConstructor: false }))).toEqual([
+  it("missing source", async () => {
+    expect(codes(await build({ withConstructor: false }))).toEqual([
       ["posting.source-missing", SALE_FILE, "/registerMovements/0"],
     ])
   })
 
-  it("both sources", () => {
-    expect(codes(build({ sql: BLOCK }))).toEqual([
+  it("both sources", async () => {
+    expect(codes(await build({ sql: BLOCK }))).toEqual([
       ["posting.source-ambiguous", SALE_FILE, "/registerMovements/0"],
     ])
   })
 
-  it("two blocks for one register", () => {
+  it("two blocks for one register", async () => {
     expect(
-      codes(build({ withConstructor: false, sql: BLOCK + BLOCK }))
+      codes(await build({ withConstructor: false, sql: BLOCK + BLOCK }))
     ).toEqual([["posting.source-ambiguous", SALE_FILE, "/registerMovements/0"]])
   })
 
-  it("block for undeclared register", () => {
-    const result = build({
+  it("block for undeclared register", async () => {
+    const result = await build({
       withConstructor: false,
       sql: BLOCK,
       sale: { registerMovements: [] },
@@ -76,8 +76,8 @@ describe("stage 5: movement sources", () => {
     )
   })
 
-  it("block marker is indexed", () => {
-    const result = build({
+  it("block marker is indexed", async () => {
+    const result = await build({
       withConstructor: false,
       sql: `-- comment\n${BLOCK}`,
     })
@@ -92,30 +92,30 @@ describe("stage 5: movement sources", () => {
     )
   })
 
-  it("unknown register in a marker", () => {
-    const result = build({
+  it("unknown register in a marker", async () => {
+    const result = await build({
       withConstructor: false,
       sql: "-- @movements Nope\nSELECT 1\n-- @end",
     })
     expect(codes(result)).toContainEqual(["reference.unresolved", SALE_SQL, ""])
   })
 
-  it("block in a catalog sql file", () => {
-    const result = build({ extra: { "catalogs/Item/Item.sql": BLOCK } })
+  it("block in a catalog sql file", async () => {
+    const result = await build({ extra: { "catalogs/Item/Item.sql": BLOCK } })
     expect(codes(result)).toEqual([
       ["file.movements-block", "catalogs/Item/Item.sql", ""],
     ])
   })
 
-  it("block in a shared sql file", () => {
-    const result = build({ extra: { "sql/public/shared.sql": BLOCK } })
+  it("block in a shared sql file", async () => {
+    const result = await build({ extra: { "sql/public/shared.sql": BLOCK } })
     expect(codes(result)).toEqual([
       ["file.movements-block", "sql/public/shared.sql", ""],
     ])
   })
 
-  it("malformed markers report the line", () => {
-    const result = build({ sql: "SELECT 1\n-- @end" })
+  it("malformed markers report the line", async () => {
+    const result = await build({ sql: "SELECT 1\n-- @end" })
     expect(result.diagnostics[0]).toEqual(
       expect.objectContaining({
         code: "file.movements-block",
@@ -124,30 +124,32 @@ describe("stage 5: movement sources", () => {
     )
   })
 
-  it("indented marker is a warning", () => {
-    const result = build({
+  it("indented marker is a warning", async () => {
+    const result = await build({
       withConstructor: false,
       sql: `${BLOCK}  -- @movements Stock\nSELECT 2\n\t-- @end\n`,
     })
-    expect(result.ok).toBe(true)
+    // Запит під маркером з відступом — уже не блок, а оператор файлу; SELECT
+    // не є одиницею бажаного стану, тож помилкою його називає гейт SQL-одиниць.
     expect(
       result.diagnostics.map((d) => [d.code, d.severity, d.params?.line])
     ).toEqual([
       ["file.movements-marker-indented", "warning", 4],
       ["file.movements-marker-indented", "warning", 6],
+      ["sql.statement-not-allowed", "error", 5],
     ])
   })
 
-  it("CRLF line endings are accepted", () => {
-    const result = build({
+  it("CRLF line endings are accepted", async () => {
+    const result = await build({
       withConstructor: false,
       sql: "-- @movements Stock\r\nSELECT 1\r\n-- @end\r\n",
     })
     expect(result.diagnostics).toEqual([])
   })
 
-  it("empty block", () => {
-    const result = build({
+  it("empty block", async () => {
+    const result = await build({
       withConstructor: false,
       sql: "-- @movements Stock\n  \n-- @end",
     })
@@ -157,8 +159,8 @@ describe("stage 5: movement sources", () => {
     )
   })
 
-  it("sidecar of a broken owner is skipped", () => {
-    const result = build({
+  it("sidecar of a broken owner is skipped", async () => {
+    const result = await build({
       extra: {
         "catalogs/Broken/Broken.meta.json": "{",
         "catalogs/Broken/Broken.sql": BLOCK,
@@ -180,20 +182,20 @@ describe("movement block marker forms", () => {
       resources: [{ ...attribute("threshold", { type: "Integer" }) }],
     },
   }
-  const marked = (marker: string, extra: Record<string, unknown> = {}) =>
-    build({
+  const marked = async (marker: string, extra: Record<string, unknown> = {}) =>
+    await build({
       withConstructor: false,
       sql: `-- @movements ${marker}\nSELECT 1\n-- @end`,
       extra,
     })
 
-  it("qualified form resolves", () => {
-    const result = marked("AccumulationRegister.Stock", informationStock)
+  it("qualified form resolves", async () => {
+    const result = await marked("AccumulationRegister.Stock", informationStock)
     expect(result.diagnostics).toEqual([])
   })
 
-  it("unqualified form is ambiguous between register kinds", () => {
-    const result = marked("Stock", informationStock)
+  it("unqualified form is ambiguous between register kinds", async () => {
+    const result = await marked("Stock", informationStock)
     expect(codes(result)).toEqual([["reference.ambiguous", SALE_SQL, ""]])
     expect(result.diagnostics[0]!.params).toEqual({
       name: "Stock",
@@ -202,23 +204,23 @@ describe("movement block marker forms", () => {
     })
   })
 
-  it("the document's declarations do not disambiguate", () => {
+  it("the document's declarations do not disambiguate", async () => {
     // Stock оголошено в registerMovements, але маркер від цього не міняє ціль.
-    expect(codes(marked("Stock", informationStock))[0]).toEqual([
+    expect(codes(await marked("Stock", informationStock))[0]).toEqual([
       "reference.ambiguous",
       SALE_SQL,
       "",
     ])
   })
 
-  it("qualified non-register kind", () => {
-    expect(codes(marked("Catalog.Item"))).toEqual([
+  it("qualified non-register kind", async () => {
+    expect(codes(await marked("Catalog.Item"))).toEqual([
       ["posting.register-kind", SALE_SQL, ""],
     ])
   })
 
-  it("marker of an independent register", () => {
-    const result = marked("InformationRegister.Stock", informationStock)
+  it("marker of an independent register", async () => {
+    const result = await marked("InformationRegister.Stock", informationStock)
     expect(codes(result)).toEqual([
       ["posting.register-independent", SALE_SQL, ""],
     ])
@@ -227,13 +229,13 @@ describe("movement block marker forms", () => {
     )
   })
 
-  it("unknown qualified name", () => {
-    expect(codes(marked("AccumulationRegister.Nope"))).toContainEqual([
+  it("unknown qualified name", async () => {
+    expect(codes(await marked("AccumulationRegister.Nope"))).toContainEqual([
       "reference.unresolved",
       SALE_SQL,
       "",
     ])
-    expect(codes(marked("Nonsense.Stock"))).toContainEqual([
+    expect(codes(await marked("Nonsense.Stock"))).toContainEqual([
       "reference.unresolved",
       SALE_SQL,
       "",

@@ -15,8 +15,8 @@ import {
   uuid,
 } from "./helpers"
 
-function contracts(entries: Record<string, unknown>) {
-  const result = compile(metaFiles(entries))
+async function contracts(entries: Record<string, unknown>) {
+  const result = await compile(metaFiles(entries))
   expect(result.diagnostics).toEqual([])
   return result.model!.contracts
 }
@@ -49,8 +49,8 @@ const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
 
 describe("numbering contract", () => {
-  it("document numbering contract", () => {
-    const { numbering } = contracts({
+  it("document numbering contract", async () => {
+    const { numbering } = await contracts({
       ...scopedProject2(),
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         id: "00000000-0000-4000-8000-000000000d01",
@@ -70,8 +70,8 @@ describe("numbering contract", () => {
     })
   })
 
-  it("catalog code numbering contract", () => {
-    const { numbering } = contracts({
+  it("catalog code numbering contract", async () => {
+    const { numbering } = await contracts({
       "project.meta.json": project(),
       "catalogs/A/A.meta.json": catalog("A", {
         id: "00000000-0000-4000-8000-000000000a01",
@@ -97,8 +97,8 @@ describe("numbering contract", () => {
 })
 
 describe("predefined contract", () => {
-  it("predefined contract lists items with ids", () => {
-    const { predefined } = contracts({
+  it("predefined contract lists items with ids", async () => {
+    const { predefined } = await contracts({
       "project.meta.json": project(),
       "catalogs/B/B.meta.json": catalog("B", {
         id: "00000000-0000-4000-8000-000000000b02",
@@ -132,8 +132,8 @@ describe("predefined contract", () => {
 })
 
 describe("posting and register contracts", () => {
-  it("posting contract of a document", () => {
-    const { posting } = contracts(
+  it("posting contract of a document", async () => {
+    const { posting } = await contracts(
       withStock({ balanceControl: { resources: ["qty"] } })
     )
     expect(posting).toHaveLength(1)
@@ -154,12 +154,12 @@ describe("posting and register contracts", () => {
     )
   })
 
-  it("posting contract names save", () => {
-    const { posting } = contracts(withStock({}))
+  it("posting contract names save", async () => {
+    const { posting } = await contracts(withStock({}))
     expect(posting[0]!.save).toEqual({ schema: "public", name: "sale_save" })
   })
 
-  it("required on post lists header and rows", () => {
+  it("required on post lists header and rows", async () => {
     const entries = withStock({})
     const sale = entries[SALE_FILE] as {
       attributes?: unknown[]
@@ -173,7 +173,7 @@ describe("posting and register contracts", () => {
     })
     sale.attributes = [customer]
     sale.tabularSections[0]!.attributes[1]!.required = true
-    const result = compile(metaFiles(entries))
+    const result = await compile(metaFiles(entries))
     expect(result.diagnostics).toEqual([])
     const [posting] = result.model!.contracts.posting
     const table = result.model!.physical.tables.find((t) => t.name === "sale")!
@@ -191,7 +191,7 @@ describe("posting and register contracts", () => {
     ])
   })
 
-  it("required check name comes from the name assignment", () => {
+  it("required check name comes from the name assignment", async () => {
     const entries = withStock({})
     const sale = entries[SALE_FILE] as { attributes?: unknown[] }
     const customer = attribute("customer", {
@@ -206,7 +206,7 @@ describe("posting and register contracts", () => {
     entries["custom-tables/Taken/Taken.meta.json"] = customTable("Taken", {
       checks: [{ name: "sale_customer_id_required", expression: "true" }],
     })
-    const result = compile(metaFiles(entries))
+    const result = await compile(metaFiles(entries))
     expect(result.diagnostics).toEqual([])
     const [posting] = result.model!.contracts.posting
     expect(posting!.requiredOnPost.header).toEqual([
@@ -222,8 +222,8 @@ describe("posting and register contracts", () => {
     )
   })
 
-  it("immutability covers header and sections", () => {
-    const { posting } = contracts(withStock({}))
+  it("immutability covers header and sections", async () => {
+    const { posting } = await contracts(withStock({}))
     expect(posting[0]!.immutability).toEqual({
       trigger: "sale_immutable",
       tables: [
@@ -233,19 +233,19 @@ describe("posting and register contracts", () => {
     })
   })
 
-  it("save name collision", () => {
+  it("save name collision", async () => {
     const entries = withStock({})
     entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
       physicalName: "sale_save",
     })
-    const found = compile(metaFiles(entries)).diagnostics.filter(
+    const found = (await compile(metaFiles(entries))).diagnostics.filter(
       (d) => d.code === "physical.function-duplicate"
     )
     expect(found).toHaveLength(1)
   })
 
-  it("balance register contract", () => {
-    const { registers } = contracts(withStock({}))
+  it("balance register contract", async () => {
+    const { registers } = await contracts(withStock({}))
     expect(registers).toHaveLength(1)
     const [stock] = registers
     expect(stock).toMatchObject({
@@ -306,20 +306,20 @@ describe("posting and register contracts", () => {
     ])
   })
 
-  it("balance control lists physical resource names", () => {
-    const { registers } = contracts(
+  it("balance control lists physical resource names", async () => {
+    const { registers } = await contracts(
       withStock({ balanceControl: { resources: ["qty"] } })
     )
     expect(registers[0]!.balanceControl).toEqual({ resources: ["qty"] })
   })
 
-  it("turnover and information registers", () => {
+  it("turnover and information registers", async () => {
     const entries = withStock({ registerType: "Turnover" })
     const sale = entries[SALE_FILE] as {
       posting: { movements: Record<string, unknown>[] }
     }
     delete sale.posting.movements[0]!.movementType
-    const turnover = contracts(entries)
+    const turnover = await contracts(entries)
     expect(turnover.registers[0]).not.toHaveProperty("totals")
     expect(turnover.registers[0]).toHaveProperty("totalsMaintenance")
     expect(turnover.registers[0]!.virtualTables).toEqual([
@@ -338,22 +338,24 @@ describe("posting and register contracts", () => {
       },
     ])
 
-    const info = (periodicity: string) =>
-      contracts({
-        "project.meta.json": project(),
-        "information-registers/Price/Price.meta.json": {
-          id: "00000000-0000-4000-8000-000000000999",
-          kind: "InformationRegister",
-          name: "Price",
-          physicalName: "price",
-          periodicity,
-          dimensions: [attribute("code", { type: "String", length: 10 })],
-          resources: [
-            attribute("value", { type: "Numeric", precision: 15, scale: 2 }),
-          ],
-        },
-      }).registers[0]!
-    const periodic = info("Month")
+    const info = async (periodicity: string) =>
+      (
+        await contracts({
+          "project.meta.json": project(),
+          "information-registers/Price/Price.meta.json": {
+            id: "00000000-0000-4000-8000-000000000999",
+            kind: "InformationRegister",
+            name: "Price",
+            physicalName: "price",
+            periodicity,
+            dimensions: [attribute("code", { type: "String", length: 10 })],
+            resources: [
+              attribute("value", { type: "Numeric", precision: 15, scale: 2 }),
+            ],
+          },
+        })
+      ).registers[0]!
+    const periodic = await info("Month")
     expect(periodic.virtualTables.map((t) => t.kind)).toEqual([
       "sliceLast",
       "sliceFirst",
@@ -368,11 +370,11 @@ describe("posting and register contracts", () => {
         { name: "value", type: "numeric(15,2)" },
       ],
     })
-    expect(info("NonPeriodic").virtualTables).toEqual([])
+    expect((await info("NonPeriodic")).virtualTables).toEqual([])
   })
 
-  it("balance virtual table has recorder bound", () => {
-    const { registers } = contracts(withStock({}))
+  it("balance virtual table has recorder bound", async () => {
+    const { registers } = await contracts(withStock({}))
     const balance = registers[0]!.virtualTables.find(
       (t) => t.kind === "balance"
     )
@@ -383,13 +385,15 @@ describe("posting and register contracts", () => {
     ])
   })
 
-  it("monthly turnovers contract", () => {
+  it("monthly turnovers contract", async () => {
     const expression =
       "date_trunc('month', (period AT TIME ZONE 'Europe/Kyiv'))::date"
-    const balance = contracts({
-      ...withStock({}),
-      "project.meta.json": project({ timezone: "Europe/Kyiv" }),
-    }).registers[0]!
+    const balance = (
+      await contracts({
+        ...withStock({}),
+        "project.meta.json": project({ timezone: "Europe/Kyiv" }),
+      })
+    ).registers[0]!
     expect(balance.turnoversMonth).toEqual({
       table: { schema: "public", name: "stock_turnovers_month" },
       monthExpression: expression,
@@ -402,10 +406,12 @@ describe("posting and register contracts", () => {
         },
       ],
     })
-    const turnover = contracts({
-      ...turnoverStock(),
-      "project.meta.json": project({ timezone: "Europe/Kyiv" }),
-    }).registers[0]!
+    const turnover = (
+      await contracts({
+        ...turnoverStock(),
+        "project.meta.json": project({ timezone: "Europe/Kyiv" }),
+      })
+    ).registers[0]!
     expect(turnover.turnoversMonth).toEqual({
       table: { schema: "public", name: "stock_turnovers_month" },
       monthExpression: expression,
@@ -414,7 +420,7 @@ describe("posting and register contracts", () => {
     })
   })
 
-  it("resources map to their columns by id, not by name suffix", () => {
+  it("resources map to their columns by id, not by name suffix", async () => {
     // Різні id й порядок `amount`, `qty` у файлі: відповідність береться з
     // origin колонок, а не з імен (спека П2 §8.3).
     const resourcesOf = (amountId: string, qtyId: string) => [
@@ -443,7 +449,7 @@ describe("posting and register contracts", () => {
         ...extra,
       },
     })
-    const { registers } = contracts({
+    const { registers } = await contracts({
       "project.meta.json": project(),
       ...register(uuid(1), "Stock", {
         resources: resourcesOf(amountId, qtyId),
@@ -498,8 +504,8 @@ describe("posting and register contracts", () => {
     ])
   })
 
-  it("turnover register maintains derived tables", () => {
-    const register = contracts(turnoverStock()).registers[0]!
+  it("turnover register maintains derived tables", async () => {
+    const register = (await contracts(turnoverStock())).registers[0]!
     expect(register).not.toHaveProperty("totals")
     expect(register.turnoversMonth).toEqual({
       table: { schema: "public", name: "stock_turnovers_month" },
@@ -513,25 +519,25 @@ describe("posting and register contracts", () => {
     })
   })
 
-  it("maintenance function name collision", () => {
+  it("maintenance function name collision", async () => {
     const entries = turnoverStock()
     entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
       physicalName: "stock_totals_verify",
     })
-    const found = compile(metaFiles(entries)).diagnostics.filter(
+    const found = (await compile(metaFiles(entries))).diagnostics.filter(
       (d) => d.code === "physical.function-duplicate"
     )
     expect(found).toHaveLength(1)
   })
 
-  it("function name collision", () => {
+  it("function name collision", async () => {
     const entries = withStock({})
     Object.assign(entries, {
       "catalogs/Clash/Clash.meta.json": catalog("Clash", {
         physicalName: "stock_balance",
       }),
     })
-    const result = compile(metaFiles(entries))
+    const result = await compile(metaFiles(entries))
     expect(result.ok).toBe(false)
     expect(result.model).toBeUndefined()
     expect(
@@ -541,8 +547,8 @@ describe("posting and register contracts", () => {
 
   // Імена колізій стадії 4 і імена контракту мусять бути одними й тими
   // самими: розбіжність пропустила б колізію, яку П3 зустріне на CREATE.
-  it("every contract function is checked for collisions, unpost included", () => {
-    const built = contracts(withStock({}))
+  it("every contract function is checked for collisions, unpost included", async () => {
+    const built = await contracts(withStock({}))
     const [posting] = built.posting
     const [register] = built.registers
     const names = [
@@ -558,17 +564,17 @@ describe("posting and register contracts", () => {
       entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
         physicalName: name,
       })
-      const found = compile(metaFiles(entries)).diagnostics.filter(
+      const found = (await compile(metaFiles(entries))).diagnostics.filter(
         (d) => d.code === "physical.function-duplicate"
       )
       expect(found.map((d) => d.params?.name)).toEqual([name])
     }
   })
 
-  it("scope carrier is the first column of every virtual table", () => {
+  it("scope carrier is the first column of every virtual table", async () => {
     // Регістр залишків дає balance і balanceAndTurnovers, оборотний —
     // turnovers, періодичний регістр відомостей — зрізи.
-    const build = (scoped: boolean) => {
+    const build = async (scoped: boolean) => {
       const entries = withStock({ dimensions: [] })
       const sale = entries[SALE_FILE] as {
         posting: { movements: { fields: Record<string, string> }[] }
@@ -605,10 +611,12 @@ describe("posting and register contracts", () => {
         entries["catalogs/Organization/Organization.meta.json"] = organization()
         entries["catalogs/Item/Item.meta.json"] = catalog("Item", scope)
       }
-      return contracts(entries).registers.flatMap((r) => r.virtualTables)
+      return (await contracts(entries)).registers.flatMap(
+        (r) => r.virtualTables
+      )
     }
     const carrier = { name: "org_id", type: "uuid" }
-    const scoped = build(true)
+    const scoped = await build(true)
     expect(
       Object.fromEntries(scoped.map((t) => [t.kind, t.columns[0]]))
     ).toEqual({
@@ -623,7 +631,7 @@ describe("posting and register contracts", () => {
       expect(table.parameters.map((p) => p.name)).not.toContain("org_id")
       expect(table.columns.filter((c) => c.name === "org_id").length).toBe(1)
     }
-    const plain = build(false)
+    const plain = await build(false)
     expect(plain.map((t) => t.kind).sort()).toEqual(
       scoped.map((t) => t.kind).sort()
     )
@@ -632,7 +640,7 @@ describe("posting and register contracts", () => {
     )
   })
 
-  it("polymorphic dimension gives both pair columns", () => {
+  it("polymorphic dimension gives both pair columns", async () => {
     const entries = withStock({})
     entries["catalogs/Service/Service.meta.json"] = catalog("Service")
     const stock = entries[STOCK_FILE] as { dimensions: unknown[] }
@@ -661,7 +669,7 @@ describe("posting and register contracts", () => {
       })
     )
     sale.posting.movements[0]!.fields.origin = "row.origin"
-    const result = compile(metaFiles(entries))
+    const result = await compile(metaFiles(entries))
     expect(result.diagnostics).toEqual([])
     const [balance] = result.model!.contracts.registers[0]!.virtualTables
     expect(balance!.columns.map((c) => c.name)).toEqual([
@@ -680,12 +688,12 @@ describe("posting and register contracts", () => {
     ).toEqual(["origin_type", "origin_id"])
   })
 
-  it("wrapper name collides with a table", () => {
+  it("wrapper name collides with a table", async () => {
     const entries = withStock({})
     entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
       physicalName: "sale_stock_movements",
     })
-    const found = compile(metaFiles(entries)).diagnostics.filter(
+    const found = (await compile(metaFiles(entries))).diagnostics.filter(
       (d) => d.code === "physical.function-duplicate"
     )
     expect(found).toHaveLength(1)
@@ -695,7 +703,7 @@ describe("posting and register contracts", () => {
     })
   })
 
-  it("wrapper name collides with another wrapper", () => {
+  it("wrapper name collides with another wrapper", async () => {
     // Довгі імена документів скорочуються до однакового початку, тож дві
     // обгортки в один регістр мають однакове ім'я.
     const entries = withStock({})
@@ -733,14 +741,14 @@ describe("posting and register contracts", () => {
       `${prefix}Bb`,
       2
     )
-    const found = compile(metaFiles(entries)).diagnostics.filter(
+    const found = (await compile(metaFiles(entries))).diagnostics.filter(
       (d) => d.code === "physical.function-duplicate"
     )
     expect(found.some((d) => d.message.includes("movement query"))).toBe(true)
     expect(found.some((d) => d.message.includes("function of"))).toBe(true)
   })
 
-  it("contract function collides with contract function", () => {
+  it("contract function collides with contract function", async () => {
     // Мітка `_turnovers` скорочує ім'я регістра до 53 байтів, тож два довгі
     // регістри з однаковим початком дають однакові функції за різних таблиць.
     const register = (name: string, n: number) => ({
@@ -754,18 +762,16 @@ describe("posting and register contracts", () => {
       ],
     })
     const prefix = "R" + "r".repeat(57)
-    const found = compile(
-      metaFiles({
-        "project.meta.json": project(),
-        [`accumulation-registers/${prefix}Aa/${prefix}Aa.meta.json`]: register(
-          `${prefix}Aa`,
-          1
-        ),
-        [`accumulation-registers/${prefix}Bb/${prefix}Bb.meta.json`]: register(
-          `${prefix}Bb`,
-          2
-        ),
-      })
+    const found = (
+      await compile(
+        metaFiles({
+          "project.meta.json": project(),
+          [`accumulation-registers/${prefix}Aa/${prefix}Aa.meta.json`]:
+            register(`${prefix}Aa`, 1),
+          [`accumulation-registers/${prefix}Bb/${prefix}Bb.meta.json`]:
+            register(`${prefix}Bb`, 2),
+        })
+      )
     ).diagnostics.filter((d) => d.code === "physical.function-duplicate")
     // Оборотний регістр веде похідні таблиці, тож з функцією віртуальної
     // таблиці збігаються й обидві функції перерахунку та звірки.

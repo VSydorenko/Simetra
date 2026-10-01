@@ -22,21 +22,21 @@ function idsOf(files: Record<string, unknown>) {
 }
 
 // Ідентифікатори фікстури лічильникові, тож беремо їх із того самого виклику.
-function build(
+async function build(
   movement: Record<string, unknown> = {},
   sale: Record<string, unknown> = {},
   projectOverrides: Record<string, unknown> = {}
 ) {
   const files = salesDocument(movement, sale)
-  const result = compile(
+  const result = await compile(
     metaFiles({ "project.meta.json": project(projectOverrides), ...files })
   )
   return { result, ...idsOf(files) }
 }
 
 describe("stage 2: movement constructor references", () => {
-  it("resolves movement references", () => {
-    const { result, sale, stock } = build()
+  it("resolves movement references", async () => {
+    const { result, sale, stock } = await build()
     expect(result.diagnostics).toEqual([])
     const refs = result.model!.references.filter((r) =>
       r.role.startsWith("posting.")
@@ -78,8 +78,8 @@ describe("stage 2: movement constructor references", () => {
     ])
   })
 
-  it("standard document field resolves to synthetic id", () => {
-    const { result, sale } = build({ period: "doc.date" })
+  it("standard document field resolves to synthetic id", async () => {
+    const { result, sale } = await build({ period: "doc.date" })
     expect(result.diagnostics).toEqual([])
     const found = result.model!.references.find(
       (r) => r.role === "posting.docField"
@@ -88,9 +88,9 @@ describe("stage 2: movement constructor references", () => {
     expect(found?.span).toEqual({ start: 0, end: 8 })
   })
 
-  it("standard names follow project style", () => {
+  it("standard names follow project style", async () => {
     const style = { naming: { attributeCase: "snake_case" } }
-    const ok = build(
+    const ok = await build(
       { fields: { item: "row.item", qty: "row.line_number" } },
       {},
       style
@@ -106,14 +106,14 @@ describe("stage 2: movement constructor references", () => {
       kind: "Element",
       id: `${ok.sale.tabularSections[0]!.id}#lineNumber`,
     })
-    const bad = build({ fields: { qty: "row.lineNumber" } }, {}, style)
+    const bad = await build({ fields: { qty: "row.lineNumber" } }, {}, style)
     expect(bad.result.diagnostics.map((d) => d.code)).toEqual([
       "posting.field-unknown",
     ])
   })
 
-  it("unknown row field", () => {
-    const { result } = build({ fields: { qty: "row.qtty" } })
+  it("unknown row field", async () => {
+    const { result } = await build({ fields: { qty: "row.qtty" } })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.field-unknown",
@@ -124,8 +124,8 @@ describe("stage 2: movement constructor references", () => {
     ])
   })
 
-  it("unknown register field key", () => {
-    const { result } = build({ fields: { quantity: "row.qty" } })
+  it("unknown register field key", async () => {
+    const { result } = await build({ fields: { quantity: "row.qty" } })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.register-field-unknown",
@@ -134,8 +134,8 @@ describe("stage 2: movement constructor references", () => {
     ])
   })
 
-  it("unknown tabular section", () => {
-    const { result } = build({
+  it("unknown tabular section", async () => {
+    const { result } = await build({
       source: { tabularSection: "services" },
       fields: { qty: "1" },
     })
@@ -147,8 +147,8 @@ describe("stage 2: movement constructor references", () => {
     ])
   })
 
-  it("resolves aggregates and skips unparsable expressions", () => {
-    const { result } = build({
+  it("resolves aggregates and skips unparsable expressions", async () => {
+    const { result } = await build({
       source: "document",
       condition: "sum(goods.amount) > 0",
       fields: { qty: "count(goods)", item: "doc.nope" },
@@ -156,14 +156,14 @@ describe("stage 2: movement constructor references", () => {
     expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
       ["posting.field-unknown", "/posting/movements/0/fields/item"],
     ])
-    const broken = build({ period: "doc.", source: "document" })
+    const broken = await build({ period: "doc.", source: "document" })
     expect(broken.result.diagnostics.map((d) => d.code)).toEqual([
       "posting.parse",
     ])
   })
 
-  it("sum and count references carry spans", () => {
-    const { result, sale } = build({
+  it("sum and count references carry spans", async () => {
+    const { result, sale } = await build({
       source: "document",
       fields: { qty: "sum(goods.qty) + count(goods)" },
     })
@@ -192,8 +192,8 @@ describe("stage 2: movement constructor references", () => {
     ])
   })
 
-  it("condition references are indexed", () => {
-    const { result, sale } = build({
+  it("condition references are indexed", async () => {
+    const { result, sale } = await build({
       condition: "row.qty > 0 and doc.number = 'A'",
     })
     const refs = result.model!.references.filter(
@@ -213,8 +213,8 @@ describe("stage 2: movement constructor references", () => {
     ])
   })
 
-  it("movementType expression references are indexed", () => {
-    const { result, sale } = build({ movementType: "doc.number" })
+  it("movementType expression references are indexed", async () => {
+    const { result, sale } = await build({ movementType: "doc.number" })
     const refs = result.model!.references.filter(
       (r) => r.from.pointer === "/posting/movements/0/movementType"
     )

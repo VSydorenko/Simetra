@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, type CompileResult } from "simetra/compiler"
 import {
   attribute,
   catalog,
@@ -16,11 +16,11 @@ const CP = "catalogs/Counterparty/Counterparty.meta.json"
 const TABLE = "custom-tables/Log/Log.meta.json"
 const PROJECT = "project.meta.json"
 
-function compileScoped(
+async function compileScoped(
   entries: Record<string, unknown>,
   projectFile: unknown = scopedProject()
 ) {
-  return compile(
+  return await compile(
     metaFiles({
       [PROJECT]: projectFile,
       [ORG]: organization(),
@@ -29,13 +29,13 @@ function compileScoped(
   )
 }
 
-function codes(result: ReturnType<typeof compile>) {
+function codes(result: CompileResult) {
   return result.diagnostics.map((d) => [d.code, d.file, d.pointer])
 }
 
 describe("stage 2: scope identity", () => {
-  it("scoped project compiles", () => {
-    const result = compileScoped({
+  it("scoped project compiles", async () => {
+    const result = await compileScoped({
       [CP]: catalog("Counterparty", { scope: "org" }),
     })
     expect(result.diagnostics).toEqual([])
@@ -55,8 +55,8 @@ describe("stage 2: scope identity", () => {
     })
   })
 
-  it("missing declaration", () => {
-    const result = compileScoped({ [CP]: catalog("Counterparty") })
+  it("missing declaration", async () => {
+    const result = await compileScoped({ [CP]: catalog("Counterparty") })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "scope.declaration-missing",
@@ -66,8 +66,8 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("none is always allowed", () => {
-    const result = compileScoped({
+  it("none is always allowed", async () => {
+    const result = await compileScoped({
       [CP]: catalog("Counterparty", { scope: "none" }),
     })
     expect(result.diagnostics).toEqual([])
@@ -75,8 +75,8 @@ describe("stage 2: scope identity", () => {
     expect(cp.scopeKindId).toBeUndefined()
   })
 
-  it("unknown kind", () => {
-    const result = compileScoped({
+  it("unknown kind", async () => {
+    const result = await compileScoped({
       [CP]: catalog("Counterparty", { scope: "tenant" }),
     })
     expect(result.diagnostics).toEqual([
@@ -88,14 +88,14 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("single-tenant project", () => {
-    const plain = compile(
+  it("single-tenant project", async () => {
+    const plain = await compile(
       metaFiles({ [PROJECT]: project(), [CP]: catalog("Counterparty") })
     )
     expect(plain.diagnostics).toEqual([])
     expect(plain.model!.scopeKinds).toEqual([])
 
-    const scoped = compile(
+    const scoped = await compile(
       metaFiles({
         [PROJECT]: project(),
         [CP]: catalog("Counterparty", { scope: "org" }),
@@ -104,7 +104,7 @@ describe("stage 2: scope identity", () => {
     expect(codes(scoped)).toEqual([["scope.unknown-kind", CP, "/scope"]])
   })
 
-  it("scope kind identity", () => {
+  it("scope kind identity", async () => {
     const base = scopedProject()
     const noId = {
       ...base,
@@ -113,7 +113,7 @@ describe("stage 2: scope identity", () => {
         base.scopeKinds[1],
       ],
     }
-    expect(codes(compileScoped({}, noId))).toEqual([
+    expect(codes(await compileScoped({}, noId))).toEqual([
       ["identity.id-missing", PROJECT, "/scopeKinds/0/id"],
     ])
 
@@ -124,7 +124,7 @@ describe("stage 2: scope identity", () => {
         base.scopeKinds[1],
       ],
     }
-    expect(codes(compileScoped({}, noPhysical))).toEqual([
+    expect(codes(await compileScoped({}, noPhysical))).toEqual([
       ["identity.physical-name-missing", PROJECT, "/scopeKinds/0/physicalName"],
     ])
 
@@ -132,7 +132,7 @@ describe("stage 2: scope identity", () => {
       ...base,
       scopeKinds: [base.scopeKinds[0], { ...base.scopeKinds[1], name: "org" }],
     }
-    expect(codes(compileScoped({}, twice))).toEqual([
+    expect(codes(await compileScoped({}, twice))).toEqual([
       ["identity.name-duplicate", PROJECT, "/scopeKinds/1/name"],
     ])
 
@@ -143,12 +143,12 @@ describe("stage 2: scope identity", () => {
         { ...base.scopeKinds[1], id: base.scopeKinds[0]!.id },
       ],
     }
-    expect(codes(compileScoped({}, sameId))).toEqual([
+    expect(codes(await compileScoped({}, sameId))).toEqual([
       ["identity.id-duplicate", PROJECT, "/scopeKinds/1/id"],
     ])
   })
 
-  it("scope kind name follows the project style", () => {
+  it("scope kind name follows the project style", async () => {
     const base = scopedProject()
     const styled = {
       ...base,
@@ -157,13 +157,13 @@ describe("stage 2: scope identity", () => {
         { ...base.scopeKinds[1], name: "app_user" },
       ],
     }
-    expect(codes(compileScoped({}, styled))).toEqual([
+    expect(codes(await compileScoped({}, styled))).toEqual([
       ["identity.name-case", PROJECT, "/scopeKinds/1/name"],
     ])
   })
 
-  it("unresolved root", () => {
-    const result = compile(
+  it("unresolved root", async () => {
+    const result = await compile(
       metaFiles({
         [PROJECT]: scopedProject(),
         [CP]: catalog("Counterparty", { scope: "none" }),
@@ -174,10 +174,10 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("two scope kinds with the same object root", () => {
+  it("two scope kinds with the same object root", async () => {
     const base = scopedProject()
     const [first, second] = base.scopeKinds
-    const result = compileScoped(
+    const result = await compileScoped(
       {},
       {
         ...base,
@@ -190,10 +190,10 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("two scope kinds with the same external root", () => {
+  it("two scope kinds with the same external root", async () => {
     const base = scopedProject()
     const [first, second] = base.scopeKinds
-    const result = compileScoped(
+    const result = await compileScoped(
       {},
       {
         ...base,
@@ -214,8 +214,8 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("scope name collides with attribute", () => {
-    const result = compileScoped({
+  it("scope name collides with attribute", async () => {
+    const result = await compileScoped({
       [CP]: catalog("Counterparty", {
         scope: "org",
         attributes: [attribute("org")],
@@ -226,13 +226,13 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("scope kind named like a standard attribute", () => {
+  it("scope kind named like a standard attribute", async () => {
     const base = scopedProject()
     const renamed = {
       ...base,
       scopeKinds: [base.scopeKinds[0], { ...base.scopeKinds[1], name: "code" }],
     }
-    const result = compileScoped(
+    const result = await compileScoped(
       { [CP]: catalog("Counterparty", { scope: "code", codeLength: 9 }) },
       renamed
     )
@@ -240,15 +240,15 @@ describe("stage 2: scope identity", () => {
       ["scope.attribute-name-collision", CP, "/scope"],
     ])
     // Без коду в довідника імені `code` ніщо не займає.
-    const noCode = compileScoped(
+    const noCode = await compileScoped(
       { [CP]: catalog("Counterparty", { scope: "code", codeLength: 0 }) },
       renamed
     )
     expect(codes(noCode)).toEqual([])
   })
 
-  it("custom table may name a column like its scope kind", () => {
-    const result = compileScoped({
+  it("custom table may name a column like its scope kind", async () => {
+    const result = await compileScoped({
       [TABLE]: customTable("Log", {
         scope: "org",
         scopeColumn: "org",
@@ -262,8 +262,8 @@ describe("stage 2: scope identity", () => {
     expect(result.ok).toBe(true)
   })
 
-  it("scope name collides with a tabular section row attribute", () => {
-    const result = compileScoped({
+  it("scope name collides with a tabular section row attribute", async () => {
+    const result = await compileScoped({
       [CP]: catalog("Counterparty", {
         scope: "org",
         tabularSections: [
@@ -285,15 +285,15 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("scope root may use the scope name for its own attribute", () => {
-    const result = compileScoped({
+  it("scope root may use the scope name for its own attribute", async () => {
+    const result = await compileScoped({
       [ORG]: organization({ attributes: [attribute("org")] }),
     })
     expect(result.diagnostics).toEqual([])
   })
 
-  it("custom table scope column must exist", () => {
-    const result = compileScoped({
+  it("custom table scope column must exist", async () => {
+    const result = await compileScoped({
       [TABLE]: customTable("Log", { scope: "none", scopeColumn: "tenant" }),
     })
     expect(result.diagnostics).toEqual([
@@ -305,8 +305,8 @@ describe("stage 2: scope identity", () => {
     ])
   })
 
-  it("references index", () => {
-    const result = compileScoped({
+  it("references index", async () => {
+    const result = await compileScoped({
       [CP]: catalog("Counterparty", { scope: "org" }),
       [TABLE]: customTable("Log", { scope: "org", scopeColumn: "id" }),
     })
@@ -345,8 +345,8 @@ describe("stage 2: scope identity", () => {
     )
   })
 
-  it("does not crash on a broken project", () => {
-    const result = compile(
+  it("does not crash on a broken project", async () => {
+    const result = await compile(
       metaFiles({
         [PROJECT]: "{",
         [CP]: catalog("Counterparty", { scope: "org" }),

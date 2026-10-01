@@ -13,8 +13,8 @@ import {
   uuid,
 } from "./helpers"
 
-function compileWith(entries: Record<string, unknown>) {
-  const result = compile(
+async function compileWith(entries: Record<string, unknown>) {
+  const result = await compile(
     metaFiles({ "project.meta.json": project(), ...entries })
   )
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
@@ -55,9 +55,9 @@ function enumeration(name: string, labels: string[]) {
 }
 
 describe("stage 3: physical snapshot", () => {
-  it("predefined name partial unique index", () => {
+  it("predefined name partial unique index", async () => {
     const plain = tableOf(
-      compileWith({
+      await compileWith({
         "catalogs/Warehouse/Warehouse.meta.json": catalog("Warehouse"),
       }),
       "warehouse"
@@ -74,7 +74,7 @@ describe("stage 3: physical snapshot", () => {
     })
 
     const scoped = tableOf(
-      compileWith({
+      await compileWith({
         "project.meta.json": scopedProject(),
         "catalogs/Organization/Organization.meta.json": organization(),
         "catalogs/Warehouse/Warehouse.meta.json": catalog("Warehouse", {
@@ -91,8 +91,8 @@ describe("stage 3: physical snapshot", () => {
     expect(scopedIndex?.unique).toBe(true)
   })
 
-  it("user attribute named version", () => {
-    const result = compile(
+  it("user attribute named version", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project(),
         "catalogs/Contract/Contract.meta.json": catalog("Contract", {
@@ -108,8 +108,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("catalog table", () => {
-    const physical = compileWith({
+  it("catalog table", async () => {
+    const physical = await compileWith({
       "catalogs/Contract/Contract.meta.json": catalog("Contract", {
         id: uuid(1),
         attributes: [
@@ -204,8 +204,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("attribute flags: required, default, unique, indexed", () => {
-    const physical = compileWith({
+  it("attribute flags: required, default, unique, indexed", async () => {
+    const physical = await compileWith({
       "catalogs/Item/Item.meta.json": catalog("Item", {
         codeLength: 0,
         attributes: [
@@ -238,8 +238,8 @@ describe("stage 3: physical snapshot", () => {
     expect(searchIndexes(item).map((i) => i.name)).toEqual(["item_rank_idx"])
   })
 
-  it("required document attribute is checked on posting", () => {
-    const physical = compileWith({
+  it("required document attribute is checked on posting", async () => {
+    const physical = await compileWith({
       "catalogs/Customer/Customer.meta.json": catalog("Customer"),
       "documents/Sale/Sale.meta.json": document("Sale", {
         attributes: [
@@ -262,8 +262,8 @@ describe("stage 3: physical snapshot", () => {
     })
   })
 
-  it("required polymorphic header attribute", () => {
-    const physical = compileWith({
+  it("required polymorphic header attribute", async () => {
+    const physical = await compileWith({
       "catalogs/Contract/Contract.meta.json": catalog("Contract"),
       "catalogs/Counterparty/Counterparty.meta.json": catalog("Counterparty"),
       "documents/Sale/Sale.meta.json": document("Sale", {
@@ -291,8 +291,8 @@ describe("stage 3: physical snapshot", () => {
     })
   })
 
-  it("required tabular row attribute", () => {
-    const physical = compileWith({
+  it("required tabular row attribute", async () => {
+    const physical = await compileWith({
       "documents/Sale/Sale.meta.json": document("Sale", {
         tabularSections: [
           {
@@ -312,8 +312,8 @@ describe("stage 3: physical snapshot", () => {
     expect(goods.checks).toEqual([])
   })
 
-  it("required catalog attribute stays not null", () => {
-    const physical = compileWith({
+  it("required catalog attribute stays not null", async () => {
+    const physical = await compileWith({
       "catalogs/Item/Item.meta.json": catalog("Item", {
         attributes: [attribute("note", { type: "Integer", required: true })],
       }),
@@ -340,8 +340,8 @@ describe("stage 3: physical snapshot", () => {
     }
   })
 
-  it("document tabular section", () => {
-    const physical = compileWith({
+  it("document tabular section", async () => {
+    const physical = await compileWith({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         id: uuid(10),
         tabularSections: [
@@ -388,8 +388,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("enumeration reference is text with check", () => {
-    const physical = compileWith({
+  it("enumeration reference is text with check", async () => {
+    const physical = await compileWith({
       "enumerations/Status/Status.meta.json": enumeration("Status", [
         "draft",
         "posted",
@@ -426,8 +426,8 @@ describe("stage 3: physical snapshot", () => {
     expect(physical.tables.map((t) => t.name)).toEqual(["order"])
   })
 
-  it("array of references is uuid[] without fk", () => {
-    const physical = compileWith({
+  it("array of references is uuid[] without fk", async () => {
+    const physical = await compileWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
       "catalogs/Rate/Rate.meta.json": catalog("Rate", {
         attributes: [attribute("currencies", { ...currencyRef, array: true })],
@@ -442,8 +442,8 @@ describe("stage 3: physical snapshot", () => {
     expect(searchIndexes(rate)).toEqual([])
   })
 
-  it("polymorphic reference", () => {
-    const physical = compileWith({
+  it("polymorphic reference", async () => {
+    const physical = await compileWith({
       "catalogs/Contract/Contract.meta.json": catalog("Contract"),
       "catalogs/Counterparty/Counterparty.meta.json": catalog("Counterparty"),
       "catalogs/Note/Note.meta.json": catalog("Note", {
@@ -484,8 +484,8 @@ describe("stage 3: physical snapshot", () => {
     expect(note.foreignKeys).toEqual([])
   })
 
-  it("standard polymorphic pairs: catalog owners and register recorder", () => {
-    const physical = compileWith({
+  it("standard polymorphic pairs: catalog owners and register recorder", async () => {
+    const physical = await compileWith({
       "catalogs/A/A.meta.json": catalog("A"),
       "catalogs/B/B.meta.json": catalog("B"),
       "catalogs/Single/Single.meta.json": catalog("Single", {
@@ -560,8 +560,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("constant is a singleton table with a typed value", () => {
-    const physical = compileWith({
+  it("constant is a singleton table with a typed value", async () => {
+    const physical = await compileWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
       "constants/MainCurrency/MainCurrency.meta.json": {
         id: uuid(40),
@@ -596,8 +596,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("custom table with external fk and pg enum column", () => {
-    const physical = compileWith({
+  it("custom table with external fk and pg enum column", async () => {
+    const physical = await compileWith({
       "pg-enums/OrderStatus/OrderStatus.meta.json": {
         id: uuid(50),
         kind: "PgEnum",
@@ -729,8 +729,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("reference to a custom table uses its uuid primary key", () => {
-    const physical = compileWith({
+  it("reference to a custom table uses its uuid primary key", async () => {
+    const physical = await compileWith({
       "custom-tables/Account/Account.meta.json": customTable("Account", {
         columns: [
           {
@@ -763,8 +763,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("custom table fk to a catalog maps logical columns to physical", () => {
-    const physical = compileWith({
+  it("custom table fk to a catalog maps logical columns to physical", async () => {
+    const physical = await compileWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
       "custom-tables/Rate/Rate.meta.json": customTable("Rate", {
         columns: [
@@ -794,8 +794,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("explicit constraint names win", () => {
-    const physical = compileWith({
+  it("explicit constraint names win", async () => {
+    const physical = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
           { id: uuid(80), name: "id", physicalName: "id", type: "UUID" },
@@ -821,9 +821,9 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("long names use postgres truncation", () => {
+  it("long names use postgres truncation", async () => {
     const longName = "x".repeat(60)
-    const physical = compileWith({
+    const physical = await compileWith({
       "catalogs/Customer/Customer.meta.json": catalog("Customer"),
       "catalogs/Long/Long.meta.json": catalog("Long", {
         physicalName: longName,
@@ -847,7 +847,7 @@ describe("stage 3: physical snapshot", () => {
     expect(table.primaryKey?.name).toBe(`${"x".repeat(58)}_pkey`)
   })
 
-  it("multi-column names stop growing at NAMEDATALEN like postgres", () => {
+  it("multi-column names stop growing at NAMEDATALEN like postgres", async () => {
     // Значення звірено з Postgres 17: доповнення з імен колонок перестає
     // рости, щойно досягає 64 байтів, решту обрізає makeObjectName.
     const first = "first_very_long_column_name_number_one_abcdefghij"
@@ -859,7 +859,7 @@ describe("stage 3: physical snapshot", () => {
       type: "UUID",
     })
     const wide = "a".repeat(62)
-    const physical = compileWith({
+    const physical = await compileWith({
       "custom-tables/T2/T2.meta.json": customTable("T2", {
         columns: [
           column(90, first),
@@ -913,7 +913,7 @@ describe("stage 3: physical snapshot", () => {
     )
   })
 
-  it("deterministic regardless of map order", () => {
+  it("deterministic regardless of map order", async () => {
     const entries: [string, unknown][] = [
       ["project.meta.json", project()],
       [
@@ -938,17 +938,17 @@ describe("stage 3: physical snapshot", () => {
         enumeration("Status", ["draft", "posted"]),
       ],
     ]
-    const forward = compile(metaFiles(Object.fromEntries(entries)))
-    const backward = compile(
+    const forward = await compile(metaFiles(Object.fromEntries(entries)))
+    const backward = await compile(
       metaFiles(Object.fromEntries([...entries].reverse()))
     )
     expect(forward.ok).toBe(true)
     expect(JSON.stringify(backward)).toBe(JSON.stringify(forward))
   })
 
-  it("document number period is generated", () => {
+  it("document number period is generated", async () => {
     const table = tableOf(
-      compileWith({
+      await compileWith({
         "documents/Invoice/Invoice.meta.json": document("Invoice"),
       }),
       "invoice"
@@ -980,15 +980,15 @@ describe("stage 3: physical snapshot", () => {
     ).toEqual([])
   })
 
-  it("quarter periodicity", () => {
+  it("quarter periodicity", async () => {
     const entries = {
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         numberPeriodicity: "Quarter",
       }),
     }
-    const column = (zone?: string) =>
+    const column = async (zone?: string) =>
       tableOf(
-        compileWith({
+        await compileWith({
           ...entries,
           ...(zone === undefined
             ? {}
@@ -996,17 +996,17 @@ describe("stage 3: physical snapshot", () => {
         }),
         "invoice"
       ).columns.find((c) => c.name === "number_period")?.generated?.expression
-    expect(column()).toBe(
+    expect(await column()).toBe(
       "date_trunc('quarter', (date AT TIME ZONE 'UTC'))::date"
     )
-    expect(column("Europe/Kyiv")).toBe(
+    expect(await column("Europe/Kyiv")).toBe(
       "date_trunc('quarter', (date AT TIME ZONE 'Europe/Kyiv'))::date"
     )
   })
 
-  it("document without number periodicity", () => {
+  it("document without number periodicity", async () => {
     const table = tableOf(
-      compileWith({
+      await compileWith({
         "documents/Invoice/Invoice.meta.json": document("Invoice", {
           numberPeriodicity: "None",
         }),
@@ -1017,9 +1017,9 @@ describe("stage 3: physical snapshot", () => {
     expect(table.uniques.map((u) => u.columns)).toEqual([["number"]])
   })
 
-  it("catalog code uniqueness unchanged", () => {
+  it("catalog code uniqueness unchanged", async () => {
     const unique = tableOf(
-      compileWith({
+      await compileWith({
         "catalogs/Item/Item.meta.json": catalog("Item", { codeUnique: true }),
       }),
       "item"
@@ -1027,7 +1027,7 @@ describe("stage 3: physical snapshot", () => {
     expect(unique.uniques.map((u) => u.columns)).toEqual([["code"]])
     expect(searchIndexes(unique)).toEqual([])
     const loose = tableOf(
-      compileWith({
+      await compileWith({
         "catalogs/Item/Item.meta.json": catalog("Item", { codeUnique: false }),
       }),
       "item"
@@ -1038,8 +1038,8 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
-  it("user attribute named number_period", () => {
-    const result = compile(
+  it("user attribute named number_period", async () => {
+    const result = await compile(
       metaFiles({
         "project.meta.json": project({
           naming: { attributeCase: "snake_case" },

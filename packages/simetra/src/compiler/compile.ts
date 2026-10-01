@@ -11,7 +11,16 @@ import { checkIdentity, type ResolvedReference } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel } from "./stages/model"
-import { buildMovementFunctions, type SqlUnit } from "./movement-functions"
+import { buildMovementFunctions } from "./movement-functions"
+import { loadSqlParser } from "./sql/parse"
+import {
+  generatedDuplicates,
+  readSqlUnits,
+  type SqlSource,
+  type SqlUnit,
+  type VerbatimUnit,
+} from "./sql/units"
+import type { FilesStageResult } from "./stages/files"
 
 export interface SourceObject {
   id: string
@@ -43,10 +52,9 @@ export interface CompiledModel {
   scopeKinds: CompiledScopeKind[]
   /** За (file, pointer). */
   references: ResolvedReference[]
-  sqlFiles: { file: string; ownerObjectId?: string; schema?: string }[]
   moduleFiles: { file: string; ownerObjectId: string }[]
   physical: PhysicalSnapshot
-  /** За `(schema, name)`. */
+  /** Дослівні одиниці `.sql` і обгортки запитів рухів; за `identity`. */
   sqlUnits: SqlUnit[]
   contracts: Contracts
 }
@@ -62,15 +70,32 @@ export interface CompileResult {
  * Компілятор — чиста функція над мапою «шлях відносно `metadata/` → вміст»
  * (спека П2 §8.2): читання диска — справа CLI, тож одна реалізація служить
  * CLI, MCP, тестам і студії. Повертає всі діагностики прогону, а не першу.
+ * Асинхронна, бо парсер Postgres — WASM, який вантажиться один раз на процес.
  */
-export function compile(files: ReadonlyMap<string, string>): CompileResult {
+export async function compile(
+  files: ReadonlyMap<string, string>
+): Promise<CompileResult> {
+  const parse = await loadSqlParser()
   const stage1 = readFiles(files)
   const stage2 = checkIdentity(
     stage1.objects,
     stage1.brokenNames,
     stage1.project
   )
-  const early = [...stage1.diagnostics, ...stage2.diagnostics]
+  // Некваліфіковані імена `.sql` беруть схему проєкту, тож без валідного
+  // проєкту одиниць немає: його помилку вже названо.
+  const sql =
+    stage1.project === undefined
+      ? { units: [], diagnostics: [] }
+      : readSqlUnits(
+          sqlSources(stage1, files, stage1.project.defaultSchema),
+          parse
+        )
+  const early = [
+    ...stage1.diagnostics,
+    ...stage2.diagnostics,
+    ...sql.diagnostics,
+  ]
   // Стадії 3–4 спираються на резолвлені посилання й наявні id та
   // physicalName, тож на зламаній моделі не запускаються.
   if (hasErrors(early) || stage1.project === undefined) {
@@ -85,7 +110,8 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
       stage2.references,
       stage3,
       stage1.project.naming.attributeCase,
-      stage1.project.scopeKinds
+      stage1.project.scopeKinds,
+      sql.units
     ),
     ...checkLinks(stage1.objects, stage2.references),
   ])
@@ -141,12 +167,34 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
         compareStrings(a.name, b.name)
     )
 
-  const sqlUnits = buildMovementFunctions(
+  const wrappers = buildMovementFunctions(
     stage1.objects,
     stage2.references,
     stage3.physical,
-    stage1.project
+    stage1.project,
+    parse
   )
+  const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
+  const collisions = generatedDuplicates(
+    sql.units,
+    new Map(
+      wrappers.map((w) => [
+        w.identity,
+        `the movement query of ${nameById.get(w.documentId)} into ${nameById.get(w.registerId)}`,
+      ])
+    )
+  )
+  if (collisions.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...collisions]),
+    }
+  }
+  const module = stage1.project.name
+  const sqlUnits = [
+    ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
+    ...wrappers,
+  ].sort((a, b) => compareStrings(a.identity, b.identity))
   return {
     ok,
     diagnostics,
@@ -155,13 +203,6 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
       objects,
       scopeKinds,
       references: stage2.references,
-      sqlFiles: stage1.sqlFiles
-        .map(({ file, ownerFile, schema }) =>
-          ownerFile !== undefined
-            ? { file, ownerObjectId: ownerId(ownerFile) }
-            : { file, schema: schema ?? "" }
-        )
-        .sort((a, b) => compareStrings(a.file, b.file)),
       moduleFiles: stage1.moduleFiles
         .map(({ file, ownerFile }) => ({
           file,
@@ -179,6 +220,52 @@ export function compile(files: ReadonlyMap<string, string>): CompileResult {
         stage3.requiredChecks
       ),
     },
+  }
+}
+
+/**
+ * `.sql` до розбору: спільний файл бере схему з теки, файл об'єкта — схему
+ * самого об'єкта (поле заголовка) або схему проєкту.
+ */
+function sqlSources(
+  stage1: FilesStageResult,
+  files: ReadonlyMap<string, string>,
+  defaultSchema: string
+): SqlSource[] {
+  const objectSchema = new Map(
+    stage1.objects.map((o) => [
+      o.file,
+      (o.data as { schema?: string }).schema ?? defaultSchema,
+    ])
+  )
+  return stage1.sqlFiles.map(({ file, ownerFile, schema }) => ({
+    file,
+    text: files.get(file) ?? "",
+    schema:
+      schema ??
+      (ownerFile === undefined ? undefined : objectSchema.get(ownerFile)) ??
+      defaultSchema,
+    ...(ownerFile === undefined ? {} : { ownerFile }),
+  }))
+}
+
+function verbatimUnit(
+  unit: VerbatimUnit,
+  ownerId: (ownerFile: string) => string,
+  module: string
+): SqlUnit {
+  return {
+    class: unit.class,
+    identity: unit.identity,
+    schema: unit.schema,
+    name: unit.name,
+    file: unit.file,
+    ...(unit.ownerFile === undefined
+      ? {}
+      : { ownerObjectId: ownerId(unit.ownerFile) }),
+    module,
+    sql: unit.sql,
+    tree: unit.tree,
   }
 }
 

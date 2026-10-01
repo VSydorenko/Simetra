@@ -24,14 +24,25 @@ const CLOSE = "-- @end"
 export function extractMovementBlocks(text: string): {
   blocks: MovementBlock[]
   errors: MovementBlockError[]
+  /**
+   * Текст файлу з порожніми рядками на місці тіл блоків (і незакритого
+   * хвоста): решту файлу розбирають як SQL-одиниці, а запит блока — не
+   * оператор бажаного стану. Номери рядків збережено для діагностики.
+   */
+  masked: string
 } {
   const blocks: MovementBlock[] = []
   const errors: MovementBlockError[] = []
+  const masked: string[] = []
   let open: { register: string; line: number; body: string[] } | undefined
 
   text.split(/\r?\n/).forEach((raw, index) => {
     const line = index + 1
     const trimmed = raw.trimEnd()
+    // Маркери — коментарі SQL, тож лишаються в тексті як є.
+    if (open === undefined || trimmed === CLOSE || isOpen(trimmed)) {
+      masked.push(raw)
+    }
     if (trimmed === CLOSE) {
       if (open === undefined) {
         errors.push({ message: `"${CLOSE}" without "${OPEN}"`, line })
@@ -48,7 +59,7 @@ export function extractMovementBlocks(text: string): {
       open = undefined
       return
     }
-    if (trimmed === OPEN || trimmed.startsWith(`${OPEN} `)) {
+    if (isOpen(trimmed)) {
       if (open !== undefined) {
         // Вкладений маркер не відкриває блок: інакше один пропущений `-- @end`
         // породив би лавину хибних помилок нижче.
@@ -65,7 +76,10 @@ export function extractMovementBlocks(text: string): {
       open = { register, line, body: [] }
       return
     }
-    open?.body.push(raw)
+    if (open !== undefined) {
+      open.body.push(raw)
+      masked.push("")
+    }
   })
 
   if (open !== undefined) {
@@ -74,7 +88,11 @@ export function extractMovementBlocks(text: string): {
       line: open.line,
     })
   }
-  return { blocks, errors }
+  return { blocks, errors, masked: masked.join("\n") }
+}
+
+function isOpen(trimmed: string): boolean {
+  return trimmed === OPEN || trimmed.startsWith(`${OPEN} `)
 }
 
 /**

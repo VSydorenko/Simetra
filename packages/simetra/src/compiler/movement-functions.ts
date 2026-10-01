@@ -16,23 +16,15 @@ import {
   type StandardColumnDef,
 } from "simetra/model"
 import { compareStrings, toPointer } from "./diagnostics"
+import type { SqlParser } from "./sql/parse"
+import {
+  functionIdentity,
+  withoutLocations,
+  type MovementQueryUnit,
+} from "./sql/units"
 import { objectKey, type ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
 import { registerSingletonOf } from "./stages/model"
-
-/**
- * SQL-одиниця скомпільованої моделі. У C2 — лише обгортки запитів рухів;
- * дослівні `.sql`-одиниці й топологічний порядок додають наступні плани.
- */
-export interface SqlUnit {
-  kind: "movementQuery"
-  schema: string
-  name: string
-  documentId: string
-  registerId: string
-  source: "query" | "constructor"
-  sql: string
-}
 
 /**
  * Обгортки запитів рухів (спека П2 §7): блок запиту — як є, рухи
@@ -44,10 +36,11 @@ export function buildMovementFunctions(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
-  project: Project
-): SqlUnit[] {
-  const ctx = new Context(objects, references, physical, project)
-  const units: SqlUnit[] = []
+  project: Project,
+  parse: SqlParser
+): MovementQueryUnit[] {
+  const ctx = new Context(objects, references, physical, project, parse)
+  const units: MovementQueryUnit[] = []
   for (const document of objects) {
     for (const block of document.movementBlocks ?? []) {
       const registerId = ctx.blockTarget(block.file, block.line)
@@ -75,10 +68,7 @@ export function buildMovementFunctions(
       )
     }
   }
-  return units.sort(
-    (a, b) =>
-      compareStrings(a.schema, b.schema) || compareStrings(a.name, b.name)
-  )
+  return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
 
 /**
@@ -105,7 +95,8 @@ class Context {
     objects: readonly ParsedObject[],
     references: readonly ResolvedReference[],
     private readonly physical: PhysicalSnapshot,
-    private readonly project: Project
+    private readonly project: Project,
+    private readonly parse: SqlParser
   ) {
     this.byId = new Map(objects.map((o) => [o.id ?? "", o]))
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
@@ -136,9 +127,9 @@ class Context {
   unit(
     document: ParsedObject,
     registerId: string,
-    source: SqlUnit["source"],
+    source: MovementQueryUnit["source"],
     body: (columns: readonly PhysicalColumn[], name: string) => string
-  ): SqlUnit {
+  ): MovementQueryUnit {
     const documentTable = this.table(document.id ?? "")
     const register = must(this.byId.get(registerId), `register ${registerId}`)
     const registerTable = this.table(registerId)
@@ -154,14 +145,25 @@ class Context {
       `RETURNS TABLE (${signature})\n` +
       `LANGUAGE sql STABLE\n` +
       `AS ${tag}\n${text}\n${tag};`
+    // Тіло — рядок у долар-лапках, тож розбір обгортки не залежить від
+    // запиту автора; збій тут — помилка генератора, а не метаданих.
+    const parsed = this.parse(sql)
+    const [statement] = parsed.ok ? parsed.statements : []
+    if (statement === undefined) {
+      throw new Error(`movement wrapper ${name} does not parse`)
+    }
     return {
-      kind: "movementQuery",
+      class: "movementQuery",
+      identity: functionIdentity(documentTable.schema, name, ["uuid"]),
       schema: documentTable.schema,
       name,
+      ownerObjectId: document.id ?? "",
+      module: this.project.name,
+      sql,
+      tree: withoutLocations(statement.stmt),
       documentId: document.id ?? "",
       registerId,
       source,
-      sql,
     }
   }
 
