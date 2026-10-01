@@ -33,19 +33,15 @@ T1 над скомпільованою моделлю; T0 отримує лиш�
 compile/explain/fix з `--format json`, MCP-сервер з операціями й каскадом
 перейменування, pre-commit і CI, скіл CLI) → E.
 
-> **Правки 2026-10-01 за спекою «Платформа в Postgres» (М23):** D1 будується
-> на формі моделі після C3. Рішення плану 5 і задача 7 змінено: `predefinedItems`
-> і стандартна колонка `predefined_name` **лишаються** (читач —
-> `contracts.predefined`); контракт нумерації описує момент «перший запис»;
-> контракт оболонки містить `save`/`post`/`unpost`. Усе інше в плані чинне.
->
-> **Вхід D1 — форма контрактів після C3** (`contracts.numbering` з
-> `assignedAt`, `contracts.predefined`, `posting.save`/`requiredOnPost`/
-> `immutability`, `registers[].turnoversMonth.resources`,
-> `virtualTables[].columns[].source`): задачі 7 (блок представлення, звірка
-> контрактів) і 9 (канонічний знімок і хеш) спираються на неї, а не на форми,
-> записані в цьому плані до C3; де план і код розходяться — правда в коді C3
-> і спеці (`754f54b`, `ec70277`). Хвости C3 — у задачі 0.
+> **Вхід D1 — форма моделі й контрактів після C3** (спека «Платформа в
+> Postgres», М17–М23): `predefinedItems` і колонка `predefined_name`
+> лишаються; у коді вже є `contracts.numbering` (з `periodColumn?` і
+> `assignedAt: "firstWrite"`), `contracts.predefined`, `posting.save`/
+> `requiredOnPost`/`immutability`, `registers[].turnoversMonth.resources`,
+> `virtualTables[].columns[].source`, стандартні реквізити `version`,
+> `predefined_name`, `number_period` (генерована колонка). Задачі 7–10
+> спираються на цю форму; де план і код розходяться — правда в коді C3 і спеці
+> (`754f54b`, `ec70277`). Хвости C3 — у задачі 0.
 
 ## Рішення плану (узгоджено з архітектором спеки; модельні — у спеці)
 
@@ -65,8 +61,11 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
    `numberLength`/`numberType`, `codeType` → `contracts.numbering`;
    `mainPresentation`, `standardAttributeOverrides` → блок
    `CompiledModel.presentation`; `title`/`description` → JSDoc кодогену;
-   `predefinedItems` → `contracts.predefined` (М18; раніше планувалось
-   видалення — скасовано спекою 2026-10-01).
+   `predefinedItems[].id`/`name` → `contracts.predefined` (уже в коді C3);
+   `predefinedItems[].description` → `presentation[].predefined`
+   (задача 7) — там уже живуть заголовки й описи стандартних реквізитів.
+   Нова сирота, не названа тут, — зупинка й питання архітектору, не вигаданий
+   споживач.
 6. **JSON Schema** генерує `buildJsonSchemas()` (T1); файли в
    `packages/simetra/schemas/` комітяться; тест дрейфу порівнює їх із
    згенерованими й перезаписує при `UPDATE_JSON_SCHEMAS=1`.
@@ -137,7 +136,7 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 
 ```bash
 git add packages/simetra/src
-git commit -m "fix(compiler): хвости C2 і C3 — спільний обхід AST, повтори balanceControl, маркер з відступом, JSDoc контрактів, тип нумерації зі схеми, строгі твердження контрактів"
+git commit -m "fix(compiler): хвости C2 і C3 — спільний обхід AST, повтори balanceControl, маркер з відступом, JSDoc контрактів, тип нумерації зі схеми, строгі твердження контрактів" --only -- packages/simetra/src
 ```
 
 ---
@@ -174,7 +173,8 @@ git commit -m "fix(compiler): хвости C2 і C3 — спільний обх�
   `CompiledModel.sqlUnits: SqlUnit[]` (сортування тут — за `identity`;
   порядок створення — задача 2); `CompiledModel.sqlFiles` видалено. Ця форма
   **замінює** C2-шний `SqlUnit { kind: "movementQuery", … }` (без шиму):
-  контракти й тести C2 переходять на `class`.
+  поле `kind` у `movement-functions.ts` зникає, а контракти C3
+  (`buildContracts` читає одиниці рухів) і тести C2/C3 переходять на `class`.
   **Ідентичність за класами** (імена — `schema.name`, частини в списках
   відсортовано, типи аргументів — як у дереві розбору, без імен параметрів):
 
@@ -243,7 +243,7 @@ git commit -m "fix(compiler): хвости C2 і C3 — спільний обх�
 
 ```bash
 git add packages/simetra pnpm-lock.yaml
-git commit -m "feat(compiler): async compile і SQL-одиниці з дослівних .sql — ідентичність, гейт дозволених класів"
+git commit -m "feat(compiler): async compile і SQL-одиниці з дослівних .sql — ідентичність, гейт дозволених класів" --only -- packages/simetra pnpm-lock.yaml
 ```
 
 ---
@@ -261,7 +261,8 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
   - `customTableSchema.rowLevelSecurity: "off" | "enabled" | "forced" = "off"`;
     `KindDefinition.rowLevelSecurity?: "enabled"` для видів 1С з таблицями
     (довідник, документ, регістри, константа); `PhysicalTable.rowLevelSecurity: "off" | "enabled" | "forced"`
-    (таблиця підсумків і рядка ТЧ — як у власника).
+    (похідні таблиці регістра — `totals`, `turnovers_month` — і рядки ТЧ — як
+    у власника).
   - `CompiledModel.creationOrder: ({ type: "enumType"; schema: string; name: string } | { type: "table"; schema: string; name: string } | { type: "unit"; identity: string })[]`
     — топологічний порядок; **розширення — перші вузли взагалі** (їхні типи й
     функції потрібні колонкам і `DEFAULT`); серед решти готових вузлів
@@ -272,7 +273,9 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
     домен → таблиця з колонкою цього типу (`Raw pgType`); послідовність →
     таблиця, у чиєму `DEFAULT` є `nextval('<послідовність>')`;
     таблиця-ціль FK → таблиця з FK; функція (за іменем, усі перевантаження)
-    → таблиця, у чиєму `DEFAULT`/`CHECK`/предикаті індексу є виклик
+    → таблиця, у чиєму `DEFAULT`/`CHECK`/предикаті індексу/виразі
+    генерованої колонки (`PhysicalColumn.generated.expression`, зараз лише
+    вбудовані функції — але це те саме місце виклику) є виклик
     (вирази розбираються як `SELECT (<вираз>)`); відношення й функції запиту
     → в'юха / матеріалізована в'юха; функція тригера й таблиця → тригер;
     функції виразів і таблиця → політика; відношення й функції тіла
@@ -310,7 +313,7 @@ git commit -m "feat(compiler): async compile і SQL-одиниці з дослі
 
 ```bash
 git add packages/simetra/src
-git commit -m "feat(compiler): rowLevelSecurity таблиці й спільний порядок створення таблиць і SQL-одиниць"
+git commit -m "feat(compiler): rowLevelSecurity таблиці й спільний порядок створення таблиць і SQL-одиниць" --only -- packages/simetra/src
 ```
 
 ---
@@ -347,7 +350,7 @@ git commit -m "feat(compiler): rowLevelSecurity таблиці й спільни
 
 ```bash
 git add packages/simetra/src/compiler
-git commit -m "feat(compiler): стадія 5 — функції множини, блоки рухів, модулі; каталог дій"
+git commit -m "feat(compiler): стадія 5 — функції множини, блоки рухів, модулі; каталог дій" --only -- packages/simetra/src/compiler
 ```
 
 ---
@@ -397,7 +400,7 @@ git commit -m "feat(compiler): стадія 5 — функції множини,
 
 ```bash
 git add packages/simetra pnpm-lock.yaml
-git commit -m "feat(compiler): діагностика з каталогом uk/en і позицією в тексті файлу"
+git commit -m "feat(compiler): діагностика з каталогом uk/en і позицією в тексті файлу" --only -- packages/simetra pnpm-lock.yaml
 ```
 
 ---
@@ -430,7 +433,7 @@ git commit -m "feat(compiler): діагностика з каталогом uk/e
 
 ```bash
 git add packages/simetra/src/model
-git commit -m "feat(model): канонічний порядок ключів на всіх рівнях файлу метаданих"
+git commit -m "feat(model): канонічний порядок ключів на всіх рівнях файлу метаданих" --only -- packages/simetra/src/model
 ```
 
 ---
@@ -465,44 +468,54 @@ git commit -m "feat(model): канонічний порядок ключів н�
 
 ```bash
 git add packages/simetra .prettierignore
-git commit -m "feat(compiler): JSON Schema файлів метаданих з описами полів і тестом дрейфу"
+git commit -m "feat(compiler): JSON Schema файлів метаданих з описами полів і тестом дрейфу" --only -- packages/simetra .prettierignore
 ```
 
 ---
 
-### Task 7: Контракт нумерації, блок представлення, контракт предвизначених
+### Task 7: Блок представлення
 
-> Змінено 2026-10-01 (М18, М21): колонка `predefined_name` і поле
-> `predefinedItems` лишаються; якщо C3 уже дав `contracts.numbering` і
-> `contracts.predefined`, тут лише блок представлення й звірка.
+> Контракти нумерації й предвизначених уже є в коді після C3
+> (`contracts.numbering` з `periodColumn?` і `assignedAt`,
+> `contracts.predefined` з `{ id, name }`); ця задача їх не чіпає. Тут —
+> лише споживачі полів подання, яких ратчет (задача 10) інакше назвав би
+> сиротами: `mainPresentation`, `standardAttributeOverrides`,
+> `predefinedItems[].description`.
 
 **Files:**
-- Modify: `packages/simetra/src/model/schemas/catalog.ts` (`predefinedItems` — `{ id, name, description? }`, якщо C3 цього не зробив), `compiler/contracts.ts`, `compiler/compile.ts`
-- Test: `packages/simetra/src/compiler/__tests__/contracts.test.ts`, `stage-model.test.ts`, `kind-schemas.test.ts`
+- Create: `packages/simetra/src/compiler/presentation.ts`
+- Modify: `compiler/compile.ts` (поле `CompiledModel.presentation`)
+- Test: `packages/simetra/src/compiler/__tests__/presentation.test.ts`
 
 **Interfaces:**
+- Consumes: `contracts.predefined` (id предвизначених) — щоб описи мали той
+  самий ключ, що й контракт засіву.
 - Produces:
-  - `Contracts.numbering: { objectId: string; column: string; type: "String" | "Number"; length: number; autonumber: boolean; periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"; scoped: boolean; assignedAt: "firstWrite" }[]`
-    — для довідника з кодом (`codeLength > 0`; `periodicity: "None"`) і
-    документа (номер); момент — перший запис (М21); генерація лічильників — П3.
-  - `Contracts.predefined: { objectId: string; items: { id: string; name: string }[] }[]`
-    — для довідника з `predefinedItems`; засів патчем даних — П3 (М18).
-  - `CompiledModel.presentation: { objectId: string; mainPresentation?: "Code" | "Description"; standardAttributes: Record<string, { title?: LocalizedString; description?: LocalizedString }> }[]`
-    (ключі — канонічні camelCase-імена стандартних реквізитів з
-    `standardAttributeOverrides`); читачі — `explain` (D2) і хости (П4).
+  - ```ts
+    interface PresentationBlock {
+      objectId: string
+      mainPresentation?: "Code" | "Description"           // лише довідник
+      standardAttributes: Record<string, { title?: LocalizedString; description?: LocalizedString }>
+      predefined?: { id: string; description: LocalizedString }[]   // лише елементи з description
+    }
+    CompiledModel.presentation: PresentationBlock[]     // за objectId; об'єкт без жодного з полів у блоці відсутній
+    ```
+    Ключі `standardAttributes` — канонічні camelCase-імена стандартних
+    реквізитів з `standardAttributeOverrides`; `predefined` — у порядку файлу.
+    Читачі — `explain` (D2) і хости (П4).
 
-- [ ] **Step 1: Тести** — `catalog code numbering contract`; `document number
-  numbering contract with periodicity and scope`; `catalog without code has
-  no numbering`; `presentation block carries overrides`; `predefined contract
-  lists items with ids`; `catalog keeps predefined_name column`.
-- [ ] **Step 2: Червоні** — `pnpm --filter simetra test contracts stage-model kind-schemas` → FAIL.
+- [ ] **Step 1: Тести** — `presentation block carries overrides and main
+  presentation`; `predefined descriptions keyed by id` (елемент без
+  `description` у блок не потрапляє; `id` збігається з `contracts.predefined`);
+  `object without presentation fields has no block`; `deterministic order`.
+- [ ] **Step 2: Червоні** — `pnpm --filter simetra test presentation` → FAIL.
 - [ ] **Step 3: Реалізація.**
 - [ ] **Step 4: Зелені** — PASS; повні гейти.
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
-git commit -m "feat(compiler): блок представлення; звірка контрактів нумерації й предвизначених"
+git commit -m "feat(compiler): блок представлення — mainPresentation, перекриття стандартних реквізитів, описи предвизначених" --only -- packages/simetra/src
 ```
 
 ---
@@ -523,7 +536,11 @@ git commit -m "feat(compiler): блок представлення; звірка
   типи (спека §8.5): `UUID`/`Ref`/`String`/`Text`/`Date`/`DateTime`/`Bytes` →
   `string`, `Integer`/`SmallInt` → `number`, `BigInt`/`Numeric` → `string`,
   `Boolean` → `boolean`, `Json` → `Json`, перерахування → union логічних
-  імен значень, масив → `T[]`, nullable (не `notNull`) → `T | null`;
+  імен значень, масив → `T[]`, nullable (не `notNull`) → `T | null` — зокрема
+  `required` реквізит документа (після C3 його колонка nullable), а
+  `version` (`BigInt`) → `string`; генерована колонка (`number_period`) —
+  `readonly` поле, бо її не пишуть; похідні таблиці регістрів (`totals`,
+  `turnovers_month`) інтерфейсів не мають;
   поліморфний `Ref` → `{ type: "<Kind>.<Name>" | …; id: string }`;
   `PgEnum`-колонка → union значень; `Raw` → `unknown`. JSDoc — `title.en ?? title.uk`
   і `description`. Порядок — як у `model.objects`; вихід детермінований.
@@ -540,7 +557,7 @@ git commit -m "feat(compiler): блок представлення; звірка
 
 ```bash
 git add packages/simetra/src/compiler
-git commit -m "feat(compiler): кодоген логічних TS-типів сутностей"
+git commit -m "feat(compiler): кодоген логічних TS-типів сутностей" --only -- packages/simetra/src/compiler
 ```
 
 ---
@@ -578,7 +595,7 @@ git commit -m "feat(compiler): кодоген логічних TS-типів с�
 
 ```bash
 git add packages/simetra/src/compiler
-git commit -m "feat(compiler): канонічний знімок і sha256-хеш моделі за RFC 8785"
+git commit -m "feat(compiler): канонічний знімок і sha256-хеш моделі за RFC 8785" --only -- packages/simetra/src/compiler
 ```
 
 ---
@@ -624,7 +641,7 @@ Run: `python3 scripts/check-doc-anchors.py && pnpm format:check && pnpm lint && 
 
 ```bash
 git add packages/simetra .agents docs/ROADMAP.md
-git commit -m "test(compiler): ратчет «поле без споживача» для полів метамоделі"
+git commit -m "test(compiler): ратчет «поле без споживача» для полів метамоделі" --only -- packages/simetra .agents docs/ROADMAP.md
 ```
 
 ---
