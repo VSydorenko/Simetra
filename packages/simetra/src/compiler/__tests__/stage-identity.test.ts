@@ -5,7 +5,9 @@ import {
   catalog,
   customTable,
   metaFiles,
+  organization,
   project,
+  scopedProject,
   uuid,
 } from "./helpers"
 
@@ -73,6 +75,20 @@ describe("stage 2: identity", () => {
         pointer: "/predefinedItems/0/id",
       }),
     ])
+  })
+
+  it("predefined item may be named like the scope kind", () => {
+    const result = compile(
+      metaFiles({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        [CONTRACT]: catalog("Contract", {
+          scope: "org",
+          predefinedItems: [{ id: uuid(5), name: "org" }],
+        }),
+      })
+    )
+    expect(result.diagnostics).toEqual([])
   })
 
   it("predefined item needs no physicalName", () => {

@@ -267,7 +267,7 @@ export function checkIdentity(
             diagnostic("identity.name-case", object.file, at, { name, style })
           )
         }
-        if (collides && name === scopeKind.name) {
+        if (collides && column && name === scopeKind.name) {
           diagnostics.push(
             diagnostic("scope.attribute-name-collision", object.file, at, {
               name,

@@ -296,6 +296,8 @@ function predefinedContracts(
     .flatMap((object): PredefinedContract[] => {
       const fields = KIND_REGISTRY[object.kind].namedElementFields ?? []
       const items = fields
+        // Приведення безпечне: контракти будуються лише на моделі без помилок,
+        // тож схема виду та стадія 2 гарантують масив з `id` і `name`.
         .flatMap(
           (field) =>
             (object.data as Record<string, unknown>)[field] as {
