@@ -35,16 +35,16 @@ export const informationRegisterKind: KindDefinition = {
   columnFields: ["dimensions", "resources", "attributes"],
   valueElements: false,
   standardColumns,
-  // Незалежний регістр пишуть і оновлюють за ключем запису (PostgREST
-  // робить upsert лише за PK); підлеглий переписує рухи за реєстратором, а
-  // ключ запису тримає UNIQUE.
+  // Незалежний регістр пишуть командою T3, тож PK для PostgREST не потрібен,
+  // а PK не допускає `NULL` у вимірі: ключ запису тримає UNIQUE NULLS NOT
+  // DISTINCT. Підлеглий переписує рухи за реєстратором (PK) і так само тримає
+  // ключ запису.
   registerKeys(obj) {
     const subordinate =
       (obj as InformationRegister).writeMode === "RecorderSubordinate"
     return {
-      movementsPrimaryKey: subordinate ? "recorder" : "dimensions",
-      dimensionsUnique: subordinate,
-      dimensionsNotNull: true,
+      movementsPrimaryKey: subordinate ? "recorder" : "none",
+      recordKeyUnique: true,
       movementIndexes: false,
       totals: false,
       additiveResources: false,

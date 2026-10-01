@@ -978,7 +978,7 @@ function checkPosting(
       const fields = register.data as Record<RegisterFieldRole, Attribute[]>
       // Порядок оголошення — виміри, ресурси, реквізити: так і `missing`.
       const required = [
-        ...fields.dimensions,
+        ...fields.dimensions.filter((dimension) => dimension.required),
         ...fields.resources.filter(
           (resource) => keys.additiveResources || resource.required
         ),
@@ -1010,11 +1010,10 @@ function checkPosting(
         const expected = typeOfField(field)
         const actual = typeAt(expr, pointer)
         // Порожнє значення приймає лише колонка, що може бути порожньою: не
-        // вимір (виміри входять у ключі), не адитивний ресурс і не `required`.
+        // адитивний ресурс і не `required`; необов'язковий вимір може бути
+        // `NULL` (ключ запису зіставляє порожні значення).
         const nullable =
-          !(role === "dimensions" && keys.dimensionsNotNull) &&
-          !(role === "resources" && keys.additiveResources) &&
-          !field.required
+          !(role === "resources" && keys.additiveResources) && !field.required
         if (actual.kind === "null" ? !nullable : !accepts(expected, actual)) {
           mismatch(
             pointer,

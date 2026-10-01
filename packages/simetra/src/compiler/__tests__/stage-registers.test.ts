@@ -78,6 +78,7 @@ function stockFiles(register: Record<string, unknown> = {}) {
       dimensions: [
         attribute("warehouse", {
           physicalName: "warehouse_id",
+          required: true,
           ...ref("Catalog", "Warehouse"),
         }),
         attribute("item", {
@@ -140,7 +141,8 @@ describe("stage 3: register keys", () => {
       },
     ])
     expect(column(stock, "warehouse_id").notNull).toBe(true)
-    expect(column(stock, "item_id").notNull).toBe(true)
+    // Необов'язковий вимір може бути NULL: ключ запису зіставляє порожні.
+    expect(column(stock, "item_id").notNull).toBe(false)
   })
 
   it("balance register has totals", () => {
@@ -241,15 +243,24 @@ describe("stage 3: register keys", () => {
     ])
   })
 
+  it("dimensions are nullable unless required", () => {
+    const stock = tableOf(physicalOf(stockFiles()), "stock")
+    expect(column(stock, "warehouse_id").notNull).toBe(true)
+    expect(column(stock, "item_id").notNull).toBe(false)
+    const targets = stock.foreignKeys.map((fk) => fk.columns)
+    expect(targets).toContainEqual(["org_id", "warehouse_id"])
+    expect(targets).toContainEqual(["org_id", "item_id"])
+  })
+
   it("independent information register key", () => {
     const rates = tableOf(physicalOf(ratesFiles()), "rates")
-    expect(rates.primaryKey).toEqual({
-      name: "rates_pkey",
-      columns: ["org_id", "currency_id", "period"],
-    })
+    expect(rates.primaryKey).toBeUndefined()
     expect(column(rates, "period").notNull).toBe(true)
-    expect(column(rates, "currency_id").notNull).toBe(true)
-    expect(rates.uniques).toEqual([])
+    expect(rates.uniques).toContainEqual({
+      name: "rates_org_id_currency_id_period_key",
+      columns: ["org_id", "currency_id", "period"],
+      nullsNotDistinct: true,
+    })
     // Ключ запису служить і зрізу за ключем; оборотів у регістра відомостей
     // немає, тож і індексів рухів немає (FK-індекси покриває префікс PK).
     expect(indexesOf(rates)).toEqual([])
@@ -262,7 +273,11 @@ describe("stage 3: register keys", () => {
       "rates"
     )
     expect(flat.columns.map((c) => c.name)).not.toContain("period")
-    expect(flat.primaryKey?.columns).toEqual(["org_id", "currency_id"])
+    expect(flat.primaryKey).toBeUndefined()
+    expect(flat.uniques.map((u) => u.columns)).toContainEqual([
+      "org_id",
+      "currency_id",
+    ])
     expect(indexesOf(flat)).toEqual([])
   })
 
@@ -284,7 +299,7 @@ describe("stage 3: register keys", () => {
       {
         name: "rates_org_id_currency_id_period_key",
         columns: ["org_id", "currency_id", "period"],
-        nullsNotDistinct: false,
+        nullsNotDistinct: true,
       },
     ])
     expect(indexesOf(rates)).toEqual([])

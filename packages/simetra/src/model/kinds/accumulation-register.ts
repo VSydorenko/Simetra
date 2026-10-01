@@ -47,8 +47,7 @@ export const accumulationRegisterKind: KindDefinition = {
   // тримає лише регістр залишків.
   registerKeys: (obj) => ({
     movementsPrimaryKey: "recorder",
-    dimensionsUnique: false,
-    dimensionsNotNull: true,
+    recordKeyUnique: false,
     movementIndexes: true,
     totals: (obj as AccumulationRegister).registerType === "Balance",
     additiveResources: true,

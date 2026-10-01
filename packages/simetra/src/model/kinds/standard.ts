@@ -103,23 +103,22 @@ export type VirtualTableKind =
 export interface RegisterKeySpec {
   /**
    * PK таблиці рухів: `recorder` — `(recorder_type, recorder_id, line_number)`,
-   * бо оболонка переписує рухи за реєстратором; `dimensions` —
-   * `(носій скоупу, виміри…, period)` без відсутніх частин.
+   * бо оболонка переписує рухи за реєстратором; `none` — PK немає: ключ запису
+   * допускає `NULL` у вимірі, а PK його не допускає.
    */
-  movementsPrimaryKey: "recorder" | "dimensions"
+  movementsPrimaryKey: "recorder" | "none"
   /**
-   * `UNIQUE (носій скоупу, виміри…, period)` поруч із PK реєстратора. Той
-   * самий ключ запису служить і зрізу останніх/перших за ключем.
+   * `UNIQUE NULLS NOT DISTINCT (носій скоупу, виміри…, period)` — ключ запису:
+   * необов'язковий вимір може бути `NULL`, і два порожні значення — той самий
+   * ключ. Він же служить зрізу останніх/перших за ключем.
    */
-  dimensionsUnique: boolean
+  recordKeyUnique: boolean
   /**
    * Індекси рухів `(носій, виміри…, period)` і `(носій, period)` — для
    * залишків за ключем і оборотів за період; регістру відомостей їх дає ключ
    * запису, а оборотів у нього немає.
    */
   movementIndexes: boolean
-  /** «Порожній» вимір — порожнє значення, а не NULL: виміри входять у ключі. */
-  dimensionsNotNull: true
   /** Таблиця поточних підсумків `<регістр>_totals`. */
   totals: boolean
   /**

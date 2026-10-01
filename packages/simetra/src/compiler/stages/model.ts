@@ -268,8 +268,9 @@ class SnapshotBuilder {
           `/${field}/${index}`,
           scope
         )
+        // Вимір `NOT NULL` лише за `required` (attributeField): порожнє
+        // значення ключа — це `NULL`, а ключ запису його зіставляє.
         if (field === "dimensions" && registerKeys !== undefined) {
-          built.notNull = registerKeys.dimensionsNotNull
           dimensionFields.push(built)
         }
         // Адитивний ресурс сумується в залишки й обороти: порожнє значення
@@ -359,8 +360,8 @@ class SnapshotBuilder {
   }
 
   /**
-   * Ключі й індекси таблиці рухів (спека §7): PK реєстратора або ключа
-   * запису, UNIQUE ключа запису поруч із реєстратором і, де їх вимагає вид,
+   * Ключі й індекси таблиці рухів (спека §7): PK реєстратора (за його
+   * наявності), UNIQUE NULLS NOT DISTINCT ключа запису і, де їх вимагає вид,
    * індекси рухів `(носій, виміри…, period)` та `(носій, period)`. Покриті префіксом ключів
    * індекси відкидає materializeIndexes.
    */
@@ -379,11 +380,9 @@ class SnapshotBuilder {
     const recordKey = [...carrier, ...dimensions, ...period]
     if (keys.movementsPrimaryKey === "recorder") {
       if (recorder.length > 0) table.primaryKey = { columns: recorder }
-      if (keys.dimensionsUnique && !degenerate) {
-        table.uniques.push({ columns: recordKey, nullsNotDistinct: false })
-      }
-    } else if (!degenerate) {
-      table.primaryKey = { columns: recordKey }
+    }
+    if (keys.recordKeyUnique && !degenerate) {
+      table.uniques.push({ columns: recordKey, nullsNotDistinct: true })
     }
     if (keys.movementIndexes && period.length > 0) {
       table.derivedIndexes.push([...carrier, ...dimensions, ...period])
@@ -935,7 +934,7 @@ export function registerSingletonOf(
       .some((column) => column.logicalName === PERIOD)
   if (!degenerate) return undefined
   return singletonColumn(
-    keys.movementsPrimaryKey === "dimensions" ? "primaryKey" : "unique"
+    keys.movementsPrimaryKey === "none" ? "primaryKey" : "unique"
   )
 }
 

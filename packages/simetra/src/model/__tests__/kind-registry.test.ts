@@ -275,8 +275,7 @@ describe("standard columns", () => {
     const keys = KIND_REGISTRY.AccumulationRegister.registerKeys!
     expect(keys(parse({}))).toEqual({
       movementsPrimaryKey: "recorder",
-      dimensionsUnique: false,
-      dimensionsNotNull: true,
+      recordKeyUnique: false,
       movementIndexes: true,
       totals: true,
       additiveResources: true,
@@ -296,9 +295,8 @@ describe("standard columns", () => {
         })
       )
     expect(info("Independent")).toEqual({
-      movementsPrimaryKey: "dimensions",
-      dimensionsUnique: false,
-      dimensionsNotNull: true,
+      movementsPrimaryKey: "none",
+      recordKeyUnique: true,
       movementIndexes: false,
       totals: false,
       additiveResources: false,
@@ -306,8 +304,7 @@ describe("standard columns", () => {
     })
     expect(info("RecorderSubordinate")).toEqual({
       movementsPrimaryKey: "recorder",
-      dimensionsUnique: true,
-      dimensionsNotNull: true,
+      recordKeyUnique: true,
       movementIndexes: false,
       totals: false,
       additiveResources: false,

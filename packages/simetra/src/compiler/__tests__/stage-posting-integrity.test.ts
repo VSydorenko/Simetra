@@ -201,10 +201,60 @@ describe("stage 4: movement constructor semantics", () => {
     expect(result.diagnostics).toEqual([])
   })
 
-  it("null into a dimension", () => {
-    const result = build({ fields: { item: "null", qty: "row.qty" } })
+  /** `warehouse` — обов'язковий вимір, `item` (з фікстури) — необов'язковий. */
+  const withWarehouse = ({ stock }: Pick<Fixture, "stock">) => {
+    stock.dimensions.push(
+      attribute("warehouse", { ...ref("Warehouse"), required: true })
+    )
+  }
+  const warehouseFiles = ({ files }: Pick<Fixture, "files">) => {
+    files["catalogs/Warehouse/Warehouse.meta.json"] = catalog("Warehouse")
+  }
+  const withRequired = (fixture: Fixture) => {
+    withWarehouse(fixture)
+    warehouseFiles(fixture)
+  }
+
+  it("null into optional dimension", () => {
+    const result = build(
+      { fields: { warehouse: "null", item: "null", qty: "1" } },
+      (f) => {
+        withRequired(f)
+      }
+    )
     expect(codes(result)).toEqual([
-      ["posting.type-mismatch", SALE_FILE, "/posting/movements/0/fields/item"],
+      [
+        "posting.type-mismatch",
+        SALE_FILE,
+        "/posting/movements/0/fields/warehouse",
+      ],
+    ])
+    const ok = build(
+      { fields: { warehouse: "doc.warehouse", item: "null", qty: "1" } },
+      (f) => {
+        withRequired(f)
+        f.sale.attributes.push(attribute("warehouse", ref("Warehouse")))
+      }
+    )
+    expect(ok.diagnostics).toEqual([])
+  })
+
+  it("optional dimension may be omitted", () => {
+    const fixture = (f: Fixture) => {
+      withRequired(f)
+      f.sale.attributes.push(attribute("warehouse", ref("Warehouse")))
+    }
+    expect(
+      build({ fields: { warehouse: "doc.warehouse", qty: "1" } }, fixture)
+        .diagnostics
+    ).toEqual([])
+    expect(
+      build({ fields: { item: "null", qty: "1" } }, fixture).diagnostics
+    ).toEqual([
+      expect.objectContaining({
+        code: "posting.fields-incomplete",
+        params: expect.objectContaining({ missing: "warehouse" }),
+      }),
     ])
   })
 
@@ -266,7 +316,9 @@ describe("stage 4: movement constructor semantics", () => {
   })
 
   it("fields incomplete lists missing", () => {
-    const result = build({ fields: { qty: "row.qty" } })
+    const result = build({ fields: { qty: "row.qty" } }, ({ stock }) => {
+      stock.dimensions[0]!.required = true
+    })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "posting.fields-incomplete",
@@ -539,6 +591,7 @@ describe("stage 4: movement constructor, fix round 1", () => {
 
   it("fields incomplete includes required attributes in declaration order", () => {
     const result = build({ fields: {} }, ({ stock }) => {
+      stock.dimensions[0]!.required = true
       stock.attributes.push(
         attribute("note", { type: "String", length: 50, required: true }),
         attribute("memo", { type: "String", length: 50 })

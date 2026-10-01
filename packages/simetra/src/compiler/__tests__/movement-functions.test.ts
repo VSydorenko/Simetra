@@ -367,6 +367,12 @@ describe("movement query functions", () => {
     expect(unit!.sql).toContain("r.note IS NOT DISTINCT FROM NULL AS flag")
   })
 
+  it("omitted optional dimension is typed null", () => {
+    const entries = sales({ fields: { qty: "row.qty" } })
+    const [unit] = units(entries)
+    expect(unit!.sql).toContain("NULL::uuid AS item_id")
+  })
+
   it("top-level null field gives a typed NULL", () => {
     const [unit] = units(
       sales({ fields: { item: "row.item", qty: "row.qty", note: "null" } })
