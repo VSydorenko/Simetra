@@ -149,12 +149,48 @@ describe("predefined catalog items", () => {
       keys: [{ column: "org_id" }, { column: "predefined_name" }],
       where: "predefined_name IS NOT NULL",
     })
-    // Засів П3 бере арбітр конфлікту з контракту: він має збігатися з індексом.
-    const [contract] = result.model!.contracts.predefined
-    expect(contract).toMatchObject({
-      scopeColumn: "org_id",
-      column: "predefined_name",
-    })
+  })
+
+  it("contract key columns equal the partial unique index key", async () => {
+    // Засів П3 бере арбітр конфлікту з контракту: він має збігатися з індексом
+    // і в скоупленому, і в глобальному довіднику.
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        [WAREHOUSE]: warehouse(
+          [{ id: uuid(911), name: "Main", physicalName: "main" }],
+          { scope: "org" }
+        ),
+        "catalogs/Store/Store.meta.json": catalog("Store", {
+          scope: "none",
+          predefinedItems: [
+            { id: uuid(913), name: "Central", physicalName: "central" },
+          ],
+        }),
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    const model = result.model!
+    const keyOf = (name: string) =>
+      model.physical.tables
+        .find((t) => t.name === name)!
+        .indexes.find((i) => i.where !== undefined)!
+        .keys.map((key) => ("column" in key ? key.column : key.expression))
+    const contractKeyOf = (name: string) => {
+      const table = model.physical.tables.find((t) => t.name === name)!
+      const contract = model.contracts.predefined.find(
+        (c) => c.objectId === table.origin.objectId
+      )!
+      return [
+        ...(contract.scopeColumn === undefined ? [] : [contract.scopeColumn]),
+        contract.column,
+      ]
+    }
+    expect(contractKeyOf("warehouse")).toEqual(keyOf("warehouse"))
+    expect(keyOf("warehouse")).toEqual(["org_id", "predefined_name"])
+    expect(contractKeyOf("store")).toEqual(keyOf("store"))
+    expect(keyOf("store")).toEqual(["predefined_name"])
   })
 
   it("lookup function name collides with a table → physical.function-duplicate", async () => {

@@ -835,6 +835,68 @@ describe("emitEntityTypes", () => {
     expect(names(namespaceOf(more, "Catalogs"))).toEqual(["Another", "Item"])
   })
 
+  it("predefined items get a union in the Predefined namespace beside a tabular section named predefined", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        title: { en: "Currency" },
+        predefinedItems: [
+          { id: uuid(2), name: "Uah", physicalName: "uah" },
+          {
+            id: uuid(3),
+            name: "Usd",
+            physicalName: "usd",
+            description: { en: "US dollar" },
+          },
+        ],
+        tabularSections: [
+          {
+            id: uuid(4),
+            name: "predefined",
+            physicalName: "currency_presets",
+            attributes: [attribute("note")],
+          },
+        ],
+      }),
+      "catalogs/Plain/Plain.meta.json": catalog("Plain"),
+    })
+    expect(namespaceOf(code, "Predefined")).toMatchInlineSnapshot(`
+      "export declare namespace Predefined {
+        /**
+         * Predefined items of {@link Catalogs.Currency}.
+         *
+         * Items:
+         * - \`Uah\`
+         * - \`Usd\`: US dollar
+         */
+        export type Currency = "Uah" | "Usd"
+      }"
+    `)
+    expect(block(code, "Catalogs.Currency").split("\n").slice(0, 6).join("\n"))
+      .toMatchInlineSnapshot(`
+        "/**
+         * Currency
+         *
+         * Predefined items: {@link Predefined.Currency}.
+         */
+        export interface Currency {"
+      `)
+    expect(block(code, "Catalogs.Currency.Predefined")).toContain(
+      "export interface Predefined {"
+    )
+    expect(namespaceOf(code, "Predefined")).not.toContain("Plain")
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs, Predefined } from "./entities"',
+          'export const item: Predefined.Currency = "Usd"',
+          "export type Row = Catalogs.Currency.Predefined",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
   it("constant exposes only its value", async () => {
     const code = await emit({
       "project.meta.json": project(),

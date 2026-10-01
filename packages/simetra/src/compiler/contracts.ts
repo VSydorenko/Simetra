@@ -457,7 +457,7 @@ export function buildContracts(
   return {
     posting,
     registers,
-    predefined: predefinedContracts(objects, physical),
+    predefined: predefinedContracts(objects, physical, style),
     numbering: numberingContracts(objects, physical, style),
   }
 }
@@ -579,24 +579,48 @@ function numberingContracts(
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
 
+/** Стандартний реквізит мітки предвизначеного (спека П2 §5, М18). */
+const PREDEFINED_NAME = "predefinedName"
+
 /**
  * Лише об'єкти з предвизначеними елементами. Колонку мітки й носій скоупу
  * беремо з ключа часткового унікального індексу знімка: засів П3 ставить його
- * арбітром `ON CONFLICT`, тож контракт і індекс не можуть розійтися.
+ * арбітром `ON CONFLICT`, тож контракт і індекс не можуть розійтися. Індекс
+ * шукаємо за колонкою мітки й предикатом її стандартного реквізиту, а не як
+ * перший частковий: інший частковий індекс не підміниться.
  */
 function predefinedContracts(
   objects: readonly ParsedObject[],
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): PredefinedContract[] {
   return objects
     .flatMap((object): PredefinedContract[] => {
       const items = predefinedItemsOf(object)
       const table = mainTableOf(physical, object.id ?? "")
       if (items.length === 0 || table === undefined) return []
+      const def = must(
+        KIND_REGISTRY[object.kind]
+          .standardColumns(object.data)
+          .find((c) => c.logicalName === PREDEFINED_NAME)
+      )
+      const standard = standardLogicalName(def, style)
+      const column = must(
+        table.columns.find((c) => c.origin.standard === standard)
+      ).name
       const keys = must(
-        table.indexes.find((index) => index.unique && index.where !== undefined)
+        table.indexes.find((index) => {
+          const last = index.keys.at(-1)
+          return (
+            index.unique &&
+            index.where === def.partialUnique &&
+            last !== undefined &&
+            "column" in last &&
+            last.column === column
+          )
+        })
       ).keys.map((key) => must("column" in key ? key.column : undefined))
-      const column = must(keys.at(-1))
+      // Ключ — щонайбільше носій скоупу й мітка (`uniqueWithin`, стадія 3).
       const scopeColumn = keys.length > 1 ? keys[0] : undefined
       return [
         {

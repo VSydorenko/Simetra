@@ -324,6 +324,63 @@ export function emitEntityTypes(model: CompiledModel): string {
     ].join("\n")
   }
 
+  /**
+   * Предвизначені елементи — окремий простір імен верхнього рівня
+   * `Predefined.<Об'єкт>`, як `Enumerations`: у просторі імен об'єкта його ТЧ
+   * (`Catalogs.Item.Predefined` для ТЧ `predefined`) зіткнулися б з типом.
+   * Лише union логічних імен: мітки — фізика (спека §8.5), мапу «ім'я ↔
+   * мітка» дають адаптери джерел (П4).
+   */
+  const predefined: { name: string; text: string }[] = []
+  const emitPredefined = (object: CompiledModel["objects"][number]) => {
+    const def = KIND_REGISTRY[object.kind]
+    const items = (def.namedElementFields ?? []).flatMap(
+      (field) =>
+        ((object.data as Record<string, unknown>)[field] ?? []) as {
+          id?: string
+          name: string
+        }[]
+    )
+    if (items.length === 0) return undefined
+    const descriptions = new Map(
+      (
+        model.presentation.objects.find((p) => p.objectId === object.id)
+          ?.predefined ?? []
+      ).map((item) => [item.id, pick(item.description)?.replaceAll("\n", " ")])
+    )
+    const described = items.map(({ id, name }) => ({
+      name,
+      description: descriptions.get(id ?? ""),
+    }))
+    // Перелік — лише коли хоч один елемент має опис, як у перерахувань.
+    const list = described.some(({ description }) => description !== undefined)
+      ? [
+          "Items:",
+          ...described.map(({ name, description }) =>
+            description === undefined
+              ? `- \`${name}\``
+              : `- \`${name}\`: ${description}`
+          ),
+        ]
+      : []
+    const target = `${pascal(def.dir)}.${object.name}`
+    predefined.push({
+      name: object.name,
+      text: [
+        ...doc(
+          STEP,
+          { en: `Predefined items of {@link ${target}}.` },
+          undefined,
+          list
+        ),
+        `${STEP}export type ${object.name} = ${described
+          .map(({ name }) => JSON.stringify(name))
+          .join(" | ")}`,
+      ].join("\n"),
+    })
+    return `Predefined items: {@link Predefined.${object.name}}.`
+  }
+
   const namespaces: string[] = []
   for (const def of Object.values(KIND_REGISTRY)) {
     if (declaresType(def)) {
@@ -415,9 +472,15 @@ export function emitEntityTypes(model: CompiledModel): string {
           `${STEP.repeat(2)}${fieldName(section.name)}: ${alias}[]`
         )
       }
+      const predefinedLink = emitPredefined(object)
       const parts = [
         [
-          ...doc(STEP, data.title, data.description),
+          ...doc(
+            STEP,
+            data.title,
+            data.description,
+            predefinedLink === undefined ? [] : [predefinedLink]
+          ),
           `${STEP}export interface ${object.name} {`,
           ...body,
           `${STEP}}`,
@@ -476,6 +539,16 @@ export function emitEntityTypes(model: CompiledModel): string {
       [
         `export declare namespace ${pascal(def.dir)} {`,
         items.map((item) => item.text).join("\n\n"),
+        "}",
+      ].join("\n")
+    )
+  }
+  if (predefined.length > 0) {
+    predefined.sort((a, b) => compareStrings(a.name, b.name))
+    namespaces.push(
+      [
+        "export declare namespace Predefined {",
+        predefined.map((item) => item.text).join("\n\n"),
         "}",
       ].join("\n")
     )
