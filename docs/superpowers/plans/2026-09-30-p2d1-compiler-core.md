@@ -73,7 +73,8 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
   порядок вставки в мапу файлів нічого не змінює.
 - Тексти діагностики — en обов'язково, uk — поруч у тому самому каталозі;
   коментарі — українською; описи `.meta` у схемах — англійською.
-- Без шимів: `sqlFiles`, `predefinedItems` — видаляються, не деприкуються.
+- Без шимів: `sqlFiles` — видаляється, не деприкується (`predefinedItems`
+  лишається — М18).
 - Коміти — Conventional Commits, опис українською, без трейлерів; видалення
   — `git rm` з явними шляхами.
 - Гейти після кожної задачі: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`;
@@ -491,7 +492,7 @@ git commit -m "feat(compiler): JSON Schema файлів метаданих з о
 
 ```bash
 git add packages/simetra/src
-git commit -m "feat(compiler): контракт нумерації й блок представлення; предвизначені елементи прибрано до П3"
+git commit -m "feat(compiler): блок представлення; звірка контрактів нумерації й предвизначених"
 ```
 
 ---
