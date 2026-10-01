@@ -59,8 +59,13 @@ export interface SqlUnit {
   module: string
   /** Текст оператора як є — для рендера. */
   sql: string
-  /** Дерево розбору без позицій — для хешу: форматування його не міняє. */
+  /**
+   * Дерево розбору без позицій — для залежностей і хешу: форматування його не
+   * міняє. У запиту рухів хеш бере `queryTree`: тут тіло обгортки — рядок.
+   */
   tree: unknown
+  /** Лише `movementQuery`: дерева операторів самого запиту без позицій. */
+  queryTree?: unknown
   /** Лише `movementQuery`. */
   registerId?: string
   documentId?: string
@@ -71,6 +76,7 @@ export interface SqlUnit {
 export interface MovementQueryUnit extends SqlUnit {
   class: "movementQuery"
   ownerObjectId: string
+  queryTree: unknown
   registerId: string
   documentId: string
   source: "query" | "constructor"

@@ -152,6 +152,10 @@ class Context {
     if (statement === undefined) {
       throw new Error(`movement wrapper ${name} does not parse`)
     }
+    // Для хешу — дерево самого запиту: у дереві обгортки він рядок
+    // `prosrc`, і пробіли чи коментар у блоці змінили б хеш.
+    const query = this.parse(text)
+    if (!query.ok) throw new Error(`movement query ${name} does not parse`)
     return {
       class: "movementQuery",
       identity: functionIdentity(documentTable.schema, name, ["uuid"]),
@@ -161,6 +165,7 @@ class Context {
       module: this.project.name,
       sql,
       tree: withoutLocations(statement.stmt),
+      queryTree: query.statements.map((s) => withoutLocations(s.stmt)),
       documentId: document.id ?? "",
       registerId,
       source,

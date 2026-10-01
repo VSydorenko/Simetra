@@ -1,10 +1,13 @@
 import {
   METADATA_KINDS,
   parseExpression,
+  type Expr,
   type MetadataKind,
+  type ReferenceRole,
 } from "simetra/model"
 import type { CompiledModel } from "./compile"
 import { compareStrings, toPointer } from "./diagnostics"
+import { isMovementQuery } from "./sql/units"
 import type { ResolvedReference } from "./stages/identity"
 
 /**
@@ -77,31 +80,44 @@ function serializeObject(value: Record<string, unknown>): string {
 
 const METADATA_KIND_SET: ReadonlySet<string> = new Set(METADATA_KINDS)
 
+/** Індекс посилань одного файлу: pointer → посилання з нього. */
+type FileReferences = ReadonlyMap<string, readonly ResolvedReference[]>
+
 /**
  * Знімок моделі для хешу (спека П2 §8.3): усе, що визначає БД і контракти
  * наступних шарів, і нічого, що залежить від розкладки файлів чи
- * форматування. Поза знімком: шляхи файлів (`file`, `moduleFiles`),
+ * форматування. Поза знімком: шляхи файлів (`file`, `moduleFiles`, `$schema`),
  * діагностики, сирий текст і рядки SQL-одиниць (дерево вже без позицій),
- * індекс посилань (його зміст уже в `data` як id). Імена посилань у `data`
- * замінено на id — ціль визначає її id, а ім'я цілі й так у знімку з її
- * власним об'єктом.
+ * індекс посилань (його зміст уже в `data` як id). Посилання — і MetadataRef,
+ * і імена у виразах конструктора — замінено на id: ціль визначає її id, а ім'я
+ * цілі й так у знімку з її власним об'єктом.
  */
 export function canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown {
-  const refsByFile = new Map<string, Map<string, ResolvedReference>>()
+  const refsByFile = new Map<string, Map<string, ResolvedReference[]>>()
   for (const reference of model.references) {
-    // Лише посилання на об'єкти метаданих — це і є MetadataRef у файлі;
-    // елементи (реквізит, ТЧ, поле виразу) вказують на рядок чи вираз.
-    if (!METADATA_KIND_SET.has(reference.to.kind)) continue
     let byPointer = refsByFile.get(reference.from.file)
     if (byPointer === undefined) {
       byPointer = new Map()
       refsByFile.set(reference.from.file, byPointer)
     }
-    byPointer.set(reference.from.pointer, reference)
+    const list = byPointer.get(reference.from.pointer) ?? []
+    list.push(reference)
+    byPointer.set(reference.from.pointer, list)
   }
+  const kindById = new Map(model.objects.map((o) => [o.id, o.kind]))
+  const titleById = new Map(
+    model.project.scopeKinds.map((kind) => [kind.id, kind.title])
+  )
+  // Види скоупу — лише резолвленою формою: у файлі проєкту корінь названо
+  // іменем, а `$schema` — шлях для редактора.
+  const project = Object.fromEntries(
+    Object.entries(model.project).filter(
+      ([key]) => key !== "$schema" && key !== "scopeKinds"
+    )
+  )
 
   return {
-    project: model.project,
+    project,
     objects: model.objects.map((object) => ({
       id: object.id,
       kind: object.kind,
@@ -112,17 +128,38 @@ export function canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown {
         : { scopeKindId: object.scopeKindId }),
       data: canonicalData(
         object.data,
-        refsByFile.get(object.file) ?? new Map(),
-        expressionPointers(object.data)
+        refsByFile.get(object.file) ?? new Map()
       ),
     })),
-    scopeKinds: model.scopeKinds,
+    scopeKinds: model.scopeKinds.map((kind) => {
+      const title = titleById.get(kind.id)
+      return {
+        id: kind.id,
+        name: kind.name,
+        physicalName: kind.physicalName,
+        ...(title === undefined ? {} : { title }),
+        root:
+          "objectId" in kind.root
+            ? {
+                kind: must(
+                  kindById.get(kind.root.objectId),
+                  kind.root.objectId
+                ),
+                id: kind.root.objectId,
+              }
+            : kind.root,
+        setFunction: kind.setFunction,
+        onRootDelete: kind.onRootDelete,
+      }
+    }),
     physical: model.physical,
     sqlUnits: model.sqlUnits.map((unit) => ({
       class: unit.class,
       identity: unit.identity,
       module: unit.module,
-      tree: unit.tree,
+      // Запит рухів — дерево самого запиту: обгортка тримає його рядком у
+      // долар-лапках, і форматування блоку змінило б хеш.
+      tree: isMovementQuery(unit) ? unit.queryTree : unit.tree,
     })),
     creationOrder: model.creationOrder,
     contracts: model.contracts,
@@ -146,90 +183,192 @@ export async function modelHash(
   ).join("")
 }
 
-/**
- * Pointer-и виразів конструктора рухів. Без перевірки виду: поле `posting`
- * читає так само стадія ідентичності; `Receipt`/`Expense` — літерал виду
- * руху, а не вираз (схема документа).
- */
-function expressionPointers(data: unknown): Set<string> {
-  const pointers = new Set<string>()
-  const movements = (
-    data as {
-      posting?: {
-        movements: {
-          condition?: string
-          movementType?: string
-          period?: string
-          fields: Record<string, string>
-        }[]
-      }
-    }
-  ).posting?.movements
-  movements?.forEach((movement, index) => {
-    const at = (...path: string[]) =>
-      pointers.add(toPointer(["posting", "movements", index, ...path]))
-    if (movement.condition !== undefined) at("condition")
-    if (
-      movement.movementType !== undefined &&
-      movement.movementType !== "Receipt" &&
-      movement.movementType !== "Expense"
-    ) {
-      at("movementType")
-    }
-    if (movement.period !== undefined) at("period")
-    for (const name of Object.keys(movement.fields)) at("fields", name)
-  })
-  return pointers
+interface MovementSource {
+  source: "document" | { tabularSection: string }
+  condition?: string
+  movementType?: string
+  period?: string
+  fields: Record<string, string>
 }
 
 /**
- * Копія `data`: MetadataRef → `{ kind, id }` за індексом посилань, вираз
- * конструктора → AST без позицій. Позиції — зміщення в рядку виразу, тож
- * пробіли у виразі змінили б хеш, хоча модель та сама.
+ * Копія `data`: MetadataRef → `{ kind, id }` за індексом посилань; рухи
+ * конструктора — з id замість імен (див. `canonicalMovement`). Без перевірки
+ * виду: поле `posting` так само читає стадія ідентичності.
  */
-function canonicalData(
-  data: unknown,
-  refs: ReadonlyMap<string, ResolvedReference>,
-  expressions: ReadonlySet<string>
-): unknown {
+function canonicalData(data: unknown, refs: FileReferences): unknown {
   const walk = (
     value: unknown,
     path: readonly (string | number)[]
   ): unknown => {
-    const pointer = toPointer(path)
-    if (typeof value === "string" && expressions.has(pointer)) {
-      const parsed = parseExpression(value)
-      // Модель існує лише без помилок, тож вираз уже розібрано стадією 1.
-      if (!parsed.ok) {
-        throw new Error(
-          `canonicalSnapshot: unparsable expression at ${pointer}`
-        )
-      }
-      return withoutPositions(parsed.expr)
-    }
     if (Array.isArray(value)) {
       return value.map((item, index) => walk(item, [...path, index]))
     }
     if (typeof value !== "object" || value === null) return value
-    const reference = refs.get(pointer)
-    if (reference !== undefined && "name" in value) {
+    const pointer = toPointer(path)
+    const reference = refs
+      .get(pointer)
+      ?.find((r) => METADATA_KIND_SET.has(r.to.kind))
+    if (reference !== undefined) {
       return { kind: reference.to.kind as MetadataKind, id: reference.to.id }
     }
+    const entries = Object.entries(value)
+    // Пропущене посилання тихо лишило б ім'я в хеші: пропуск у `references()`
+    // реєстру видів має падати тут, а не зсувати хеш при перейменуванні.
+    const kind = (value as { kind?: unknown }).kind
+    if (
+      entries.length === 2 &&
+      "name" in value &&
+      typeof kind === "string" &&
+      METADATA_KIND_SET.has(kind)
+    ) {
+      throw new Error(`canonicalSnapshot: unresolved reference at ${pointer}`)
+    }
     return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [
-        key,
-        walk(child, [...path, key]),
-      ])
+      entries
+        // `$schema` — шлях до JSON Schema для редактора, не модель.
+        .filter(([key]) => path.length > 0 || key !== "$schema")
+        .map(([key, child]) => [key, walk(child, [...path, key])])
     )
   }
-  return walk(data, [])
+  const result = walk(data, []) as Record<string, unknown>
+  const movements = (data as { posting?: { movements: MovementSource[] } })
+    .posting?.movements
+  if (movements === undefined) return result
+  const posting = result.posting as { movements: Record<string, unknown>[] }
+  return {
+    ...result,
+    posting: {
+      ...posting,
+      movements: movements.map((movement, index) =>
+        canonicalMovement(movement, posting.movements[index]!, index, refs)
+      ),
+    },
+  }
 }
 
-function withoutPositions(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => key !== "start" && key !== "end")
-      .map(([key, child]) => [key, withoutPositions(child)])
-  )
+/**
+ * Рух конструктора з id замість імен: ТЧ-джерело — `tabularSectionId`, ключі
+ * `fields` — id полів регістра, вирази — AST, де поле, ТЧ і агрегат несуть id
+ * з індексу посилань (стандартний реквізит — синтетичний
+ * `<власник>#<канонічне ім'я>`, тож стиль імен проєкту форму не міняє).
+ * Позиції відкинуто: це зміщення в рядку виразу, і пробіли змінили б хеш.
+ */
+function canonicalMovement(
+  movement: MovementSource,
+  walked: Record<string, unknown>,
+  index: number,
+  refs: FileReferences
+): Record<string, unknown> {
+  const at = (...path: (string | number)[]) =>
+    toPointer(["posting", "movements", index, ...path])
+  const target = (pointer: string, role: ReferenceRole, span?: Expr) =>
+    must(
+      refs
+        .get(pointer)
+        ?.find(
+          (r) =>
+            r.role === role &&
+            r.span?.start === span?.start &&
+            r.span?.end === span?.end
+        )?.to.id,
+      `${role} at ${pointer}`
+    )
+  const expression = (text: string, pointer: string) => {
+    const parsed = parseExpression(text)
+    // Модель існує лише без помилок, тож вираз уже розібрано стадією 1.
+    if (!parsed.ok) throw new Error(`unparsable expression at ${pointer}`)
+    return canonicalExpr(parsed.expr, (role, node) =>
+      target(pointer, role, node)
+    )
+  }
+  const { condition, movementType, period } = movement
+  return {
+    ...walked,
+    source:
+      movement.source === "document"
+        ? "document"
+        : {
+            tabularSectionId: target(
+              at("source", "tabularSection"),
+              "posting.tabularSection"
+            ),
+          },
+    ...(condition === undefined
+      ? {}
+      : { condition: expression(condition, at("condition")) }),
+    ...(movementType === undefined
+      ? {}
+      : {
+          movementType:
+            // `Receipt`/`Expense` — літерал виду руху, а не вираз (схема документа).
+            movementType === "Receipt" || movementType === "Expense"
+              ? movementType
+              : expression(movementType, at("movementType")),
+        }),
+    ...(period === undefined
+      ? {}
+      : { period: expression(period, at("period")) }),
+    fields: Object.fromEntries(
+      Object.entries(movement.fields).map(([name, text]) => {
+        const pointer = at("fields", name)
+        return [
+          target(pointer, "posting.registerField"),
+          expression(text, pointer),
+        ]
+      })
+    ),
+  }
+}
+
+type Resolve = (role: ReferenceRole, node: Expr) => string
+
+function canonicalExpr(expr: Expr, resolve: Resolve): unknown {
+  switch (expr.type) {
+    case "field":
+      return {
+        type: "field",
+        source: expr.base,
+        elementId: resolve(
+          expr.base === "row" ? "posting.rowField" : "posting.docField",
+          expr
+        ),
+      }
+    case "sum":
+      return {
+        type: "sum",
+        tabularSectionId: resolve("posting.tabularSection", expr),
+        elementId: resolve("posting.rowField", expr),
+      }
+    case "count":
+      return {
+        type: "count",
+        tabularSectionId: resolve("posting.tabularSection", expr),
+      }
+    case "unary":
+      return {
+        type: "unary",
+        op: expr.op,
+        operand: canonicalExpr(expr.operand, resolve),
+      }
+    case "binary":
+      return {
+        type: "binary",
+        op: expr.op,
+        left: canonicalExpr(expr.left, resolve),
+        right: canonicalExpr(expr.right, resolve),
+      }
+    default:
+      // Літерали: усе, крім позицій.
+      return Object.fromEntries(
+        Object.entries(expr).filter(([key]) => key !== "start" && key !== "end")
+      )
+  }
+}
+
+function must<T>(value: T | undefined, what: string): T {
+  if (value === undefined) {
+    throw new Error(`canonicalSnapshot: unresolved ${what}`)
+  }
+  return value
 }

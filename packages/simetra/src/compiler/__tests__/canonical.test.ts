@@ -9,9 +9,13 @@ import {
   SALE_FILE,
   STOCK_FILE,
   attribute,
+  catalog,
   metaFiles,
+  organization,
   project,
   salesDocument,
+  scopedProject,
+  uuid,
 } from "./helpers"
 
 const MISC = "sql/public/misc.sql"
@@ -67,6 +71,26 @@ function fixture(): Record<string, unknown> {
     }),
   ]
   return entries
+}
+
+interface SaleFile {
+  id: string
+  attributes: { id: string; name: string }[]
+  tabularSections: { id: string; attributes: { id: string; name: string }[] }[]
+  posting: { movements: Record<string, unknown>[] }
+}
+
+interface StockFile {
+  dimensions: { id: string; name: string }[]
+  resources: { id: string; name: string }[]
+}
+
+type Fragment = { name: string; data: { posting: unknown } }
+
+/** Канонічний текст елемента `objects` знімка з цим іменем. */
+function fragment(model: CompiledModel, name: string): Fragment {
+  const { objects } = canonicalSnapshot(model) as { objects: Fragment[] }
+  return objects.find((o) => o.name === name)!
 }
 
 function clone<T>(value: T): T {
@@ -284,14 +308,24 @@ describe("canonical snapshot and hash", () => {
       id: stockId,
     })
     expect(movement!.movementType).toBe("Expense")
+    const sale0 = entries[SALE_FILE] as SaleFile
+    const [goods] = sale0.tabularSections
+    const stock = entries[STOCK_FILE] as StockFile
+    const row = (name: string) => ({
+      type: "field",
+      source: "row",
+      elementId: goods!.attributes.find((a) => a.name === name)!.id,
+    })
+    expect(movement!.source).toEqual({ tabularSectionId: goods!.id })
+    // Ключі `fields` — id полів регістра, а не їхні імена.
     expect(movement!.fields).toEqual({
-      item: { type: "field", base: "row", name: "item" },
-      qty: { type: "field", base: "row", name: "qty" },
+      [stock.dimensions[0]!.id]: row("item"),
+      [stock.resources[0]!.id]: row("qty"),
     })
     expect(movement!.condition).toEqual({
       type: "binary",
       op: ">",
-      left: { type: "field", base: "row", name: "qty" },
+      left: row("qty"),
       right: { type: "number", value: "0" },
     })
   })
@@ -381,5 +415,227 @@ describe("canonical snapshot and hash", () => {
       canonicalize(canonicalSnapshot(a))
     )
     expect(b.hash).toBe(a.hash)
+  })
+})
+
+describe("references in the snapshot", () => {
+  it("renaming a register field keeps the referencing document fragment", async () => {
+    // Поле регістра обрано тому, що його ім'я є в документі лише як ключ
+    // `fields` руху: реквізит ТЧ документа носить ім'я ще й у власному
+    // `data` документа, тож його фрагмент змінився б за самим іменем.
+    const entries = fixture()
+    const renamed = clone(entries)
+    const stock = renamed[STOCK_FILE] as StockFile
+    stock.resources[0]!.name = "quantity"
+    const sale = renamed[SALE_FILE] as SaleFile
+    const [movement] = sale.posting.movements as {
+      fields: Record<string, string>
+    }[]
+    movement!.fields = { item: "row.item", quantity: "row.qty" }
+
+    const before = await compileModel(metaFiles(entries))
+    const after = await compileModel(metaFiles(renamed))
+    expect(after.hash).not.toBe(before.hash)
+    expect(canonicalize(fragment(after, "Sale"))).toBe(
+      canonicalize(fragment(before, "Sale"))
+    )
+  })
+
+  it("swapping attribute ids changes the referencing expression", async () => {
+    // Імена лишаються, вираз посилається на те саме ім'я — змінюється лише
+    // id цілі. З іменами в AST фрагмент `posting` був би тим самим.
+    const entries = fixture()
+    const swapped = clone(entries)
+    const goods = (swapped[SALE_FILE] as SaleFile).tabularSections[0]!
+    const qty = goods.attributes.find((a) => a.name === "qty")!
+    const amount = goods.attributes.find((a) => a.name === "amount")!
+    ;[qty.id, amount.id] = [amount.id, qty.id]
+
+    const before = fragment(await compileModel(metaFiles(entries)), "Sale").data
+    const after = fragment(await compileModel(metaFiles(swapped)), "Sale").data
+    expect(canonicalize(after.posting)).not.toBe(canonicalize(before.posting))
+  })
+
+  it("a standard attribute keeps its node form across naming styles", async () => {
+    const condition = async (attributeCase: string, text: string) => {
+      const entries: Record<string, unknown> = {
+        ...fixture(),
+        "project.meta.json": project({ naming: { attributeCase } }),
+      }
+      const sale = entries[SALE_FILE] as SaleFile
+      sale.posting.movements[0]!.condition = text
+      const model = await compileModel(metaFiles(entries))
+      const { data } = fragment(model, "Sale") as {
+        data: { posting: { movements: { condition: unknown }[] } }
+      }
+      return { id: sale.id, node: data.posting.movements[0]!.condition }
+    }
+    const camel = await condition("camelCase", "not doc.deletionMark")
+    const snake = await condition("snake_case", "not doc.deletion_mark")
+    const node = (id: string) => ({
+      type: "unary",
+      op: "not",
+      operand: {
+        type: "field",
+        source: "doc",
+        elementId: `${id}#deletionMark`,
+      },
+    })
+    expect(camel.node).toEqual(node(camel.id))
+    expect(snake.node).toEqual(node(snake.id))
+  })
+})
+
+describe("scope kinds in the snapshot", () => {
+  /** Проєкт з двома видами скоупу і двома довідниками, що можуть бути коренем `org`. */
+  function scoped(): Record<string, unknown> {
+    return {
+      "project.meta.json": scopedProject(),
+      "catalogs/Organization/Organization.meta.json": organization(),
+      "catalogs/Company/Company.meta.json": catalog("Company", {
+        scope: "org",
+      }),
+    }
+  }
+
+  type ScopeKindFile = {
+    id: string
+    name: string
+    physicalName: string
+    title?: unknown
+    root: {
+      object?: { kind: string; name: string }
+      external?: { table: string }
+    }
+    setFunction: { name: string }
+    onRootDelete?: string
+  }
+
+  async function hashWith(
+    entries: Record<string, unknown>,
+    change: (kinds: ScopeKindFile[], entries: Record<string, unknown>) => void
+  ): Promise<string> {
+    const changed = clone(entries)
+    const { scopeKinds } = changed["project.meta.json"] as {
+      scopeKinds: ScopeKindFile[]
+    }
+    change(scopeKinds, changed)
+    return hashOf(changed)
+  }
+
+  it("snapshot holds scope kinds only in resolved form", async () => {
+    const entries = scoped()
+    const model = await compileModel(metaFiles(entries))
+    const snapshot = canonicalSnapshot(model) as {
+      project: Record<string, unknown>
+      scopeKinds: Record<string, unknown>[]
+    }
+    expect(snapshot.project).not.toHaveProperty("scopeKinds")
+    // Решта полів проєкту — без посилань за іменем.
+    expect(Object.keys(snapshot.project).sort()).toEqual([
+      "defaultLocale",
+      "defaultSchema",
+      "name",
+      "naming",
+      "timezone",
+    ])
+    const organizationId = model.objects.find(
+      (o) => o.name === "Organization"
+    )!.id
+    const [org, user] = snapshot.scopeKinds
+    expect(org).toEqual({
+      id: model.scopeKinds[0]!.id,
+      name: "org",
+      physicalName: "org_id",
+      root: { kind: "Catalog", id: organizationId },
+      setFunction: { schema: "public", name: "org_ids" },
+      onRootDelete: "restrict",
+    })
+    expect(user!.root).toEqual({
+      external: { schema: "auth", table: "users", column: "id" },
+    })
+  })
+
+  it("changing each scope kind field changes the hash", async () => {
+    const entries = scoped()
+    const base = await hashOf(entries)
+    const variants: Record<
+      string,
+      (kinds: ScopeKindFile[], entries: Record<string, unknown>) => void
+    > = {
+      id: (kinds) => {
+        kinds[0]!.id = uuid(9001)
+      },
+      name: (kinds, all) => {
+        kinds[0]!.name = "tenant"
+        for (const file of [
+          "catalogs/Organization/Organization.meta.json",
+          "catalogs/Company/Company.meta.json",
+        ]) {
+          ;(all[file] as { scope: string }).scope = "tenant"
+        }
+      },
+      physicalName: (kinds) => {
+        kinds[0]!.physicalName = "tenant_id"
+      },
+      title: (kinds) => {
+        kinds[0]!.title = { uk: "Організація" }
+      },
+      "root object": (kinds) => {
+        kinds[0]!.root = { object: { kind: "Catalog", name: "Company" } }
+      },
+      "root external": (kinds) => {
+        kinds[1]!.root = {
+          external: { schema: "auth", table: "members", column: "id" },
+        } as ScopeKindFile["root"]
+      },
+      setFunction: (kinds) => {
+        kinds[0]!.setFunction = { name: "tenant_ids" }
+      },
+      onRootDelete: (kinds) => {
+        kinds[0]!.onRootDelete = "cascade"
+      },
+    }
+    for (const [field, change] of Object.entries(variants)) {
+      expect(await hashWith(entries, change), field).not.toBe(base)
+    }
+  })
+})
+
+describe("sql text in the hash", () => {
+  const SALE_SQL = "documents/Sale/Sale.sql"
+  const BLOCK =
+    "-- @movements Stock\nSELECT now(), 'Expense', null::uuid, 7 ORDER BY 1\n-- @end\n"
+
+  function withBlock(block: string): Record<string, unknown> {
+    return { ...blockEntries, [SALE_SQL]: block }
+  }
+
+  // Документ без конструктора: рухи в `Stock` дає блок запиту.
+  const blockEntries: Record<string, unknown> = {
+    "project.meta.json": project(),
+    ...salesDocument({}, { posting: undefined }),
+  }
+
+  it("whitespace and a comment inside a movements block keep the hash", async () => {
+    const base = await hashOf(withBlock(BLOCK))
+    const reformatted =
+      "-- @movements Stock\n  select now() ,\n    'Expense', -- вид руху\n    null::uuid,  7\n  order by 1\n-- @end\n"
+    expect(await hashOf(withBlock(reformatted))).toBe(base)
+  })
+
+  it("a constant change inside a movements block changes the hash", async () => {
+    const base = await hashOf(withBlock(BLOCK))
+    expect(await hashOf(withBlock(BLOCK.replace("7", "8")))).not.toBe(base)
+  })
+
+  it("whitespace inside a language sql function body changes the hash", async () => {
+    // Задокументоване обмеження: тіло функції — рядок `prosrc`, і компілятор
+    // його не нормалізує; переформатування тіла — нова модель.
+    const entries = fixture()
+    const base = await hashOf(entries)
+    const spaced = SQL.replace("SELECT 42", () => "SELECT  42")
+    expect(spaced).not.toBe(SQL)
+    expect(await hashOf({ ...entries, [MISC]: spaced })).not.toBe(base)
   })
 })
