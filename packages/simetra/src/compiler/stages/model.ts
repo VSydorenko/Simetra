@@ -844,14 +844,9 @@ class SnapshotBuilder {
     column: StandardColumnDef,
     object: ParsedObject
   ): ParsedObject[] {
-    const data = object.data as Element
-    const refs =
-      column.ref === "owners"
-        ? data.owners
-        : column.ref === "recorders"
-          ? data.recorderTypes
-          : []
-    return ((refs ?? []) as MetadataRef[]).map((ref) => this.lookup(ref))
+    return standardTargetRefs(column, object.data).map((ref) =>
+      this.lookup(ref)
+    )
   }
 
   private attributeField(
@@ -1158,6 +1153,24 @@ export function registerSingletonOf(
   return singletonColumn(
     keys.movementsPrimaryKey === "none" ? "primaryKey" : "unique"
   )
+}
+
+/**
+ * Цілі стандартного посилання (власники довідника, реєстратори регістра) за
+ * налаштуваннями виду. Спільний для стадії 3 і кодогену типів.
+ */
+export function standardTargetRefs(
+  column: StandardColumnDef,
+  data: unknown
+): MetadataRef[] {
+  const { owners, recorderTypes } = data as Element
+  const refs =
+    column.ref === "owners"
+      ? owners
+      : column.ref === "recorders"
+        ? recorderTypes
+        : []
+  return (refs ?? []) as MetadataRef[]
 }
 
 /**
