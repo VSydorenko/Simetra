@@ -1,3 +1,4 @@
+import type { PeriodUnit } from "../physical/period"
 import { documentSchema, type Document } from "../schemas/document"
 import {
   deletionMarkColumn,
@@ -20,7 +21,10 @@ const periodUnits = {
   Quarter: "quarter",
   Month: "month",
   Day: "day",
-} as const
+} as const satisfies Record<
+  Exclude<Document["numberPeriodicity"], "None">,
+  PeriodUnit
+>
 
 function numbering(obj: unknown): NumberingSpec {
   const document = obj as Document
@@ -47,7 +51,9 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       physicalName: "number",
       type: numberingType(document.numberType, document.numberLength),
       notNull: false,
-      // Окремого індексу немає: пошук за номером веде UNIQUE нумерації.
+      // Окремого індексу немає: UNIQUE нумерації веде пошук за номером у межах
+      // періоду (він починається з `number_period`). Глобального пошуку за
+      // одним номером індекс не обслуговує — так задумано.
       title: { uk: "Номер", en: "Number" },
     },
     {

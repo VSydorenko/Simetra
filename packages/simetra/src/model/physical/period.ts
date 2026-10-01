@@ -1,5 +1,8 @@
 import { quoteIdent } from "./pg-names"
 
+/** Одиниця усічення періоду; єдине оголошення, решта імпортує тип звідси. */
+export type PeriodUnit = "year" | "quarter" | "month" | "day"
+
 /**
  * Єдине джерело усічення моменту до дати в поясі проєкту (спека П2/C3):
  * `timestamptz::date` без `AT TIME ZONE` усікає за поясом сесії, тож межа
@@ -9,7 +12,7 @@ import { quoteIdent } from "./pg-names"
  */
 export function truncatedPeriodExpression(
   column: string,
-  unit: "year" | "quarter" | "month" | "day",
+  unit: PeriodUnit,
   timezone: string
 ): string {
   // Літерал екранується так само, як `sqlLiteral` стадії 3: лапка подвоюється.

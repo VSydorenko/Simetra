@@ -5,6 +5,7 @@ import {
   truncatedPeriodExpression,
   standardLogicalName,
   type Attribute,
+  type NumberingSpec,
   type AttributeCase,
   type PhysicalColumn,
   type PhysicalSnapshot,
@@ -107,10 +108,10 @@ export interface NumberingContract {
   column: string
   /** Фізичне ім'я генерованої колонки періоду. */
   periodColumn?: string
-  type: "String" | "Number"
+  type: NumberingSpec["type"]
   length: number
   autonumber: boolean
-  periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"
+  periodicity: NumberingSpec["periodicity"]
   /** Таблиця має власну скоуп-колонку. */
   scoped: boolean
   assignedAt: "firstWrite"
@@ -595,14 +596,19 @@ function registerContract(
   return {
     registerId: id,
     movements: { schema: table.schema, name: table.name },
-    ...(totals === undefined
+    // Вид каже, що таблиця є, а стадія 3 її не збудувала, — дефект компілятора,
+    // а не привід мовчки опустити поле контракту.
+    ...(!keys.totals
       ? {}
-      : { totals: { schema: totals.schema, name: totals.name } }),
-    ...(turnoversMonth === undefined || keys.turnoversMonth === undefined
+      : { totals: { schema: must(totals).schema, name: must(totals).name } }),
+    ...(keys.turnoversMonth === undefined
       ? {}
       : {
           turnoversMonth: {
-            table: { schema: turnoversMonth.schema, name: turnoversMonth.name },
+            table: {
+              schema: must(turnoversMonth).schema,
+              name: must(turnoversMonth).name,
+            },
             monthExpression: truncatedPeriodExpression(
               must(period[0]).name,
               "month",

@@ -278,7 +278,8 @@ describe("stage 3: register keys", () => {
       nullsNotDistinct: true,
     })
     // Ключ запису служить і зрізу за ключем; оборотів у регістра відомостей
-    // немає, тож і індексів рухів немає (FK-індекси покриває префікс PK).
+    // немає, тож і індексів рухів немає (FK-індекси покриває префікс ключа
+    // запису, UNIQUE).
     expect(indexesOf(rates)).toEqual([])
     expect(physicalOf(ratesFiles()).tables.map((t) => t.name)).not.toContain(
       "rates_totals"

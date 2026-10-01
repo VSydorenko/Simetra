@@ -3,6 +3,7 @@ import { z } from "zod"
 import {
   KIND_REGISTRY,
   kindByDir,
+  postsMovements,
   standardLogicalName,
   type StandardColumnDef,
 } from "../kinds/registry"
@@ -78,6 +79,32 @@ describe("KIND_REGISTRY", () => {
       "post",
       "unpost",
     ])
+  })
+})
+
+describe("posting kinds", () => {
+  // Контракт оболонки проведення будує `header` для кожного виду, що
+  // проводиться, а стадія 3 створює CHECK і шукає колонку `posted` за цим
+  // фактом: без пари вид дав би внутрішню помилку замість діагностики.
+  const posting = METADATA_KINDS.filter((kind) => postsMovements(kind))
+
+  it("every posting kind is requiredOnPost and has a posted column", () => {
+    expect(posting.length).toBeGreaterThan(0)
+    for (const kind of posting) {
+      const def = KIND_REGISTRY[kind]
+      expect(def.requiredOnPost, kind).toBe(true)
+      const obj = def.schema.parse({ kind, name: "Sample" })
+      expect(column(def.standardColumns(obj), "posted"), kind).toBeDefined()
+    }
+  })
+
+  it("every requiredOnPost kind has a posted column", () => {
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      if (def.requiredOnPost !== true) continue
+      const obj = def.schema.parse({ kind, name: "Sample" })
+      expect(column(def.standardColumns(obj), "posted"), kind).toBeDefined()
+    }
   })
 })
 

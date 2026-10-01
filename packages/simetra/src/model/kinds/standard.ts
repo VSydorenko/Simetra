@@ -1,6 +1,8 @@
 import type { z } from "zod"
+import type { PeriodUnit } from "../physical/period"
 import type { Attribute } from "../schemas/attribute"
 import type { FkAction } from "../schemas/custom-table"
+import type { Document } from "../schemas/document"
 import { toSnakeCase, type AttributeCase } from "../schemas/identity"
 import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
@@ -37,7 +39,7 @@ export interface StandardColumnDef {
    * `truncatedPeriodExpression`. Завжди `STORED`; з `default` несумісна.
    */
   generated?: {
-    truncate: { column: string; unit: "year" | "quarter" | "month" | "day" }
+    truncate: { column: string; unit: PeriodUnit }
   }
   /** Вираз CHECK колонки (без обгортки `CHECK (...)`). */
   check?: string
@@ -128,9 +130,11 @@ export interface RegisterKeySpec {
    */
   recordKeyUnique: boolean
   /**
-   * Індекси рухів `(носій, виміри…, period)` і `(носій, period)` — для
-   * залишків за ключем і оборотів за період; регістру відомостей їх дає ключ
-   * запису, а оборотів у нього немає.
+   * Індекси рухів `(носій, виміри…, period, recorder_type, recorder_id)` і
+   * `(носій, period)` — для залишків за ключем і оборотів за період; регістру
+   * відомостей їх дає ключ запису, а оборотів у нього немає. Індекс за
+   * вимірами закінчується реєстратором, бо вікно «строго до документа» в
+   * `balance` читає за впорядкованою трійкою (period, тип, id).
    */
   movementIndexes: boolean
   /** Таблиця поточних підсумків `<регістр>_totals`. */
@@ -159,10 +163,10 @@ export interface NumberingSpec {
   /** Канонічні логічні імена стандартних колонок. */
   column: "number" | "code"
   periodColumn?: "numberPeriod"
-  type: "String" | "Number"
+  type: Document["numberType"]
   length: number
   autonumber: boolean
-  periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"
+  periodicity: Document["numberPeriodicity"]
   /** UNIQUE (носій, період?, колонка) у фізичному знімку. */
   unique: boolean
 }

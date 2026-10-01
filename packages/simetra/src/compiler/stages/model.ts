@@ -1106,7 +1106,6 @@ class SnapshotBuilder {
 
 const NONE: Target = { form: "none" }
 
-/** Стандартні реквізити, що входять у ключі регістра (канонічні імена). */
 /** Мітка в імені CHECK обов'язковості при проведенні (`<таблиця>_<колонка>_required`). */
 const REQUIRED_LABEL = "required"
 
@@ -1123,6 +1122,7 @@ function requiredOnPostExpression(
   return `NOT ${quoteIdent(posted)} OR ${body}`
 }
 
+/** Стандартні реквізити, що входять у ключі регістра (канонічні імена). */
 const PERIOD = "period"
 const LINE_NUMBER = "lineNumber"
 
