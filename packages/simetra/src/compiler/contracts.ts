@@ -166,8 +166,10 @@ export interface DerivedFunction extends QualifiedName {
   /** Для тексту діагностики: що це за функція. */
   description: string
   /**
-   * Обгортка запиту рухів — сама SQL-одиниця, тож збіг із дослівною одиницею
-   * звітує `sql.unit-duplicate`, а не перевірка імен функцій контрактів.
+   * Обгортка запиту рухів — сама SQL-одиниця з відомою сигнатурою, тож збіг
+   * із дослівною одиницею звіряє перевірка просторів імен Postgres
+   * (`sql.unit-duplicate`, `sql.namespace-conflict`), а не перевірка імен
+   * функцій контрактів.
    */
   movementQuery?: true
 }

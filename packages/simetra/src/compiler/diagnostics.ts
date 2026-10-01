@@ -18,6 +18,7 @@ export const COMPILER_RULES = [
   "sql.parse",
   "sql.statement-not-allowed",
   "sql.unit-duplicate",
+  "sql.namespace-conflict",
   "sql.dependency-cycle",
   "identity.id-missing",
   "identity.id-duplicate",

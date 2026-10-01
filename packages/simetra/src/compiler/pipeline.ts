@@ -18,7 +18,7 @@ import { buildMovementFunctions } from "./movement-functions"
 import { creationOrder } from "./sql/dependencies"
 import { loadSqlParser } from "./sql/parse"
 import {
-  generatedDuplicates,
+  namespaceConflicts,
   readSqlUnits,
   type SqlSource,
   type SqlUnit,
@@ -148,15 +148,17 @@ export async function runStages(
     stage1.project,
     parse
   )
+  const module = projectModule
+  const sqlUnits = [
+    ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
+    ...wrappers,
+  ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
-  const collisions = generatedDuplicates(
-    sql.units,
-    new Map(
-      wrappers.map((w) => [
-        w.identity,
-        `the movement query of ${nameById.get(w.documentId)} into ${nameById.get(w.registerId)}`,
-      ])
-    )
+  const collisions = namespaceConflicts(
+    stage3.physical,
+    sqlUnits,
+    (unit) =>
+      `the movement query of ${nameById.get(unit.documentId ?? "")} into ${nameById.get(unit.registerId ?? "")}`
   )
   if (collisions.length > 0) {
     return {
@@ -164,11 +166,6 @@ export async function runStages(
       diagnostics: sortDiagnostics([...diagnostics, ...collisions]),
     }
   }
-  const module = projectModule
-  const sqlUnits = [
-    ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
-    ...wrappers,
-  ].sort((a, b) => compareStrings(a.identity, b.identity))
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const ordered = creationOrder(
     stage3.physical,

@@ -21,6 +21,11 @@ const FIX_PHYSICAL_NAMES = {
   uk: "Виконайте simetra fix, щоб призначити фізичні імена.",
 }
 
+/** Каталог Postgres простору імен `sql.namespace-conflict`. */
+function catalogOf(space: string | number | undefined): string {
+  return space === "proc" ? "pg_proc" : space === "rel" ? "pg_class" : "pg_type"
+}
+
 /**
  * Каталог текстів за кодом правила (спека П2 §8.4): англійські обов'язкові,
  * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
@@ -191,6 +196,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
       uk: "Функцію ідентифікують схема, ім'я й типи аргументів; тригер або політику — таблиця й ім'я; грант — об'єкт, отримувачі й привілеї.",
+    },
+  },
+  "sql.namespace-conflict": {
+    en: (p) =>
+      `${p.identity} at line ${p.line} takes ${p.key} in ${catalogOf(p.space)}, already taken by ${p.other}`,
+    uk: (p) =>
+      `${p.identity} у рядку ${p.line} займає ${p.key} у ${catalogOf(p.space)}, яке вже займає ${p.other}`,
+    hint: {
+      en: "Postgres keeps functions, procedures and aggregates in one catalog (pg_proc, by name and argument types); tables, views, materialized views, sequences and indexes in another (pg_class); enum types, domains and the row types of tables and views in a third (pg_type). Objects of different classes cannot share a name there: rename one of them or put it in another schema.",
+      uk: "Postgres тримає функції, процедури й агрегати в одному каталозі (pg_proc, за іменем і типами аргументів); таблиці, представлення, матеріалізовані представлення, послідовності й індекси — в іншому (pg_class); енам-типи, домени й типи рядків таблиць і представлень — у третьому (pg_type). Об'єкти різних класів не можуть ділити там ім'я: перейменуйте один із них або перенесіть в іншу схему.",
     },
   },
   "sql.dependency-cycle": {

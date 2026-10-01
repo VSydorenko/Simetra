@@ -8,6 +8,7 @@ import type {
   RoleSpec,
   TypeName,
 } from "libpg-query"
+import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { extractMovementBlocks } from "../movement-blocks"
 import type { ParsedStatement, SqlParser } from "./parse"
@@ -221,18 +222,170 @@ export function readSqlUnits(
   return { units, diagnostics }
 }
 
+/** Простір імен каталогу Postgres: `pg_proc`, `pg_class`, `pg_type`. */
+export type PgSpace = "proc" | "rel" | "type"
+
 /**
- * Дослівні одиниці, що збігаються з обгорткою запиту рухів: обгортку породжує
- * модель, тож помилкою названо одиницю файлу.
+ * Ім'я, яке об'єкт займає в просторі `space`: `schema` і `name` — для
+ * посилань (порядок створення), `key` — для конфліктів; у `pg_proc` ключ
+ * несе канонічні типи аргументів.
  */
-export function generatedDuplicates(
-  units: readonly VerbatimUnit[],
-  generated: ReadonlyMap<string, string>
-): Diagnostic[] {
-  return units.flatMap((unit) => {
-    const description = generated.get(unit.identity)
-    return description === undefined ? [] : [duplicate(unit, description)]
+export interface PgName {
+  space: PgSpace
+  schema: string
+  name: string
+  key: string
+}
+
+/** Об'єкт моделі чи SQL-одиниця, що створює імена в каталозі Postgres. */
+export type PgObject =
+  | {
+      type: "unit"
+      unit: Pick<SqlUnit, "class" | "identity" | "schema" | "name">
+    }
+  | { type: "table"; table: PhysicalTable }
+  | { type: "enumType"; schema: string; name: string }
+
+/**
+ * Імена об'єкта в просторах Postgres (спека П2 §8.3) — одне джерело для
+ * конфліктів і для посилань порядку створення. Таблиця й в'юха — ще й
+ * складений тип; індекси таблиці (разом з індексами первинного ключа й
+ * UNIQUE) ділять із нею `pg_class`. Решта класів одиниць імен у цих
+ * просторах не створює.
+ */
+export function pgNamespaceKeys(object: PgObject): PgName[] {
+  const at = (space: PgSpace, schema: string, name: string): PgName => ({
+    space,
+    schema,
+    name,
+    key: `${schema}.${name}`,
   })
+  if (object.type === "enumType") {
+    return [at("type", object.schema, object.name)]
+  }
+  if (object.type === "table") {
+    const { schema, name, indexes, primaryKey, uniques } = object.table
+    return [
+      at("rel", schema, name),
+      at("type", schema, name),
+      ...[
+        ...indexes.map((index) => index.name),
+        ...(primaryKey === undefined ? [] : [primaryKey.name]),
+        ...uniques.map((unique) => unique.name),
+      ].map((index) => at("rel", schema, index)),
+    ]
+  }
+  const { unit } = object
+  const { schema, name } = unit
+  if (FUNCTION_CLASSES.has(unit.class)) {
+    // Ключ — сигнатура з ідентичності: канонізація типів аргументів одна.
+    // Агрегат `(*)` у `pg_proc` — без аргументів.
+    const signature = unit.identity.slice(unit.identity.indexOf(":") + 1)
+    return [
+      {
+        space: "proc",
+        schema,
+        name,
+        key: signature.endsWith("(*)")
+          ? `${signature.slice(0, -3)}()`
+          : signature,
+      },
+    ]
+  }
+  if (unit.class === "view" || unit.class === "materializedView") {
+    return [at("rel", schema, name), at("type", schema, name)]
+  }
+  if (unit.class === "sequence") return [at("rel", schema, name)]
+  if (unit.class === "domain") return [at("type", schema, name)]
+  return []
+}
+
+/**
+ * Конфлікти імен у просторах Postgres (спека П2 §8.3) над таблицями й
+ * енам-типами моделі, обгортками рухів і дослівними одиницями. Тотожна
+ * ідентичність — `sql.unit-duplicate`, різні класи з одним ключем —
+ * `sql.namespace-conflict`. Першим вважається об'єкт моделі чи обгортка
+ * (їх породжує модель), далі одиниці за файлом і рядком; помилку отримує
+ * дослівна одиниця. Збіги лише між об'єктами моделі й обгортками звітує
+ * стадія 4. `describe` — опис згенерованої одиниці для `sql.unit-duplicate`.
+ */
+export function namespaceConflicts(
+  physical: Pick<PhysicalSnapshot, "tables" | "enumTypes">,
+  units: readonly SqlUnit[],
+  describe: (unit: SqlUnit) => string
+): Diagnostic[] {
+  interface Holder {
+    label: string
+    unit?: SqlUnit
+    names: PgName[]
+  }
+  const generated: Holder[] = [
+    ...physical.enumTypes.map((type) => ({
+      label: `enumType:${type.schema}.${type.name}`,
+      names: pgNamespaceKeys({ type: "enumType", ...type }),
+    })),
+    ...physical.tables.map((table) => ({
+      label: `table:${table.schema}.${table.name}`,
+      names: pgNamespaceKeys({ type: "table", table }),
+    })),
+    ...units
+      .filter((unit) => unit.file === undefined)
+      .map((unit) => ({
+        label: unit.identity,
+        unit,
+        names: pgNamespaceKeys({ type: "unit", unit }),
+      })),
+  ].sort((a, b) => compareStrings(a.label, b.label))
+  const verbatim: Holder[] = units
+    .filter((unit) => unit.file !== undefined)
+    .sort(
+      (a, b) =>
+        compareStrings(a.file!, b.file!) ||
+        (a.line ?? 0) - (b.line ?? 0) ||
+        compareStrings(a.identity, b.identity)
+    )
+    .map((unit) => ({
+      label: unit.identity,
+      unit,
+      names: pgNamespaceKeys({ type: "unit", unit }),
+    }))
+
+  const first = new Map<string, Holder>()
+  const diagnostics: Diagnostic[] = []
+  for (const holder of [...generated, ...verbatim]) {
+    const reported = new Set<Holder>()
+    for (const name of holder.names) {
+      const slot = `${name.space}\0${name.key}`
+      const earlier = first.get(slot)
+      if (earlier === undefined) {
+        first.set(slot, holder)
+        continue
+      }
+      const unit = holder.unit
+      if (unit?.file === undefined || earlier === holder) continue
+      if (reported.has(earlier)) continue
+      reported.add(earlier)
+      diagnostics.push(
+        earlier.unit?.identity === unit.identity
+          ? diagnostic("sql.unit-duplicate", unit.file, "", {
+              identity: unit.identity,
+              line: unit.line ?? 0,
+              first:
+                earlier.unit.file === undefined
+                  ? describe(earlier.unit)
+                  : `${earlier.unit.file}:${earlier.unit.line ?? 0}`,
+            })
+          : diagnostic("sql.namespace-conflict", unit.file, "", {
+              identity: unit.identity,
+              line: unit.line ?? 0,
+              space: name.space,
+              key: name.key,
+              other: earlier.label,
+            })
+      )
+    }
+  }
+  return diagnostics
 }
 
 function duplicate(unit: VerbatimUnit, first: string): Diagnostic {

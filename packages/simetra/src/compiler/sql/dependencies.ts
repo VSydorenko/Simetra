@@ -4,7 +4,10 @@ import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { SqlParser } from "./parse"
 import {
   FUNCTION_CLASSES,
+  pgNamespaceKeys,
   targetParts,
+  type PgName,
+  type PgSpace,
   type SqlUnit,
   type SqlUnitClass,
 } from "./units"
@@ -22,12 +25,9 @@ const TYPE_ORDER: Readonly<Record<CreationNode["type"], number>> = {
   unit: 2,
 }
 
-/** Простір імен, у якому шукається посилання. */
-type Space = "relation" | "function" | "type"
-
 /** Посилання з дерева розбору: ім'я як у тексті, кваліфіковане чи ні. */
 interface Reference {
-  space: Space
+  space: PgSpace
   names: readonly string[]
 }
 
@@ -67,18 +67,18 @@ const ALL_IN_SCHEMA: Readonly<Record<string, Category>> = {
  * Простір імен цілі гранту чи коментаря за типом об'єкта. Індекс — у
  * просторі відношень під міткою таблиці-власника.
  */
-const TARGET_SPACES: Readonly<Record<string, Space>> = {
-  OBJECT_TABLE: "relation",
-  OBJECT_VIEW: "relation",
-  OBJECT_MATVIEW: "relation",
-  OBJECT_SEQUENCE: "relation",
-  OBJECT_FOREIGN_TABLE: "relation",
-  OBJECT_INDEX: "relation",
-  OBJECT_COLUMN: "relation",
-  OBJECT_TRIGGER: "relation",
-  OBJECT_POLICY: "relation",
-  OBJECT_RULE: "relation",
-  OBJECT_TABCONSTRAINT: "relation",
+const TARGET_SPACES: Readonly<Record<string, PgSpace>> = {
+  OBJECT_TABLE: "rel",
+  OBJECT_VIEW: "rel",
+  OBJECT_MATVIEW: "rel",
+  OBJECT_SEQUENCE: "rel",
+  OBJECT_FOREIGN_TABLE: "rel",
+  OBJECT_INDEX: "rel",
+  OBJECT_COLUMN: "rel",
+  OBJECT_TRIGGER: "rel",
+  OBJECT_POLICY: "rel",
+  OBJECT_RULE: "rel",
+  OBJECT_TABCONSTRAINT: "rel",
   OBJECT_DOMAIN: "type",
   OBJECT_TYPE: "type",
   OBJECT_DOMCONSTRAINT: "type",
@@ -134,9 +134,9 @@ class Graph {
   private readonly nodes = new Map<string, GraphNode>()
   /** Залежний → залежності. */
   private readonly deps = new Map<string, Set<string>>()
-  private readonly index = new Map<Space, Map<string, string[]>>([
-    ["relation", new Map()],
-    ["function", new Map()],
+  private readonly index = new Map<PgSpace, Map<string, string[]>>([
+    ["rel", new Map()],
+    ["proc", new Map()],
     ["type", new Map()],
   ])
   private readonly categories = new Map<string, Category>()
@@ -148,25 +148,18 @@ class Graph {
   ) {
     for (const type of physical.enumTypes) {
       const label = this.add({ type: "enumType", ...pick(type) }, type.name)
-      this.register("type", type.schema, type.name, label)
+      this.registerAll(
+        pgNamespaceKeys({ type: "enumType", ...pick(type) }),
+        label
+      )
     }
     for (const table of physical.tables) {
       const label = this.add({ type: "table", ...pick(table) }, table.name)
-      this.register("relation", table.schema, table.name, label)
-      // Таблиця — ще й складений тип (`RETURNS SETOF <таблиця>`).
-      this.register("type", table.schema, table.name, label)
+      // Таблиця — ще й складений тип (`RETURNS SETOF <таблиця>`); її індекси
+      // ділять із нею простір відношень, тож ціль `COMMENT ON INDEX`
+      // створюється разом із таблицею.
+      this.registerAll(pgNamespaceKeys({ type: "table", table }), label)
       this.categories.set(label, "relation")
-      // Індекс і таблиця ділять простір імен відношень; ціль
-      // `COMMENT ON INDEX` створюється разом із таблицею.
-      // Первинний ключ і UNIQUE мають власні індекси з іменем обмеження.
-      const indexNames = [
-        ...table.indexes.map((index) => index.name),
-        ...(table.primaryKey === undefined ? [] : [table.primaryKey.name]),
-        ...table.uniques.map((unique) => unique.name),
-      ]
-      for (const name of indexNames) {
-        this.register("relation", table.schema, name, label)
-      }
     }
     for (const unit of units) this.addUnit(unit)
 
@@ -194,24 +187,30 @@ class Graph {
       unit.identity,
       unit
     )
-    const { schema, name } = unit
+    this.registerAll(pgNamespaceKeys({ type: "unit", unit }), label)
     if (FUNCTION_CLASSES.has(unit.class)) {
-      this.register("function", schema, name, label)
       this.categories.set(label, "function")
     } else if (unit.class === "view" || unit.class === "materializedView") {
-      this.register("relation", schema, name, label)
-      this.register("type", schema, name, label)
       this.categories.set(label, "relation")
     } else if (unit.class === "sequence") {
-      this.register("relation", schema, name, label)
       this.categories.set(label, "sequence")
-    } else if (unit.class === "domain") {
-      this.register("type", schema, name, label)
+    }
+  }
+
+  /** Імена об'єкта в просторах Postgres — одне джерело з перевіркою конфліктів. */
+  private registerAll(names: readonly PgName[], label: string): void {
+    for (const { space, schema, name } of names) {
+      this.register(space, schema, name, label)
     }
   }
 
   /** Під кваліфікованим ім'ям і під голим — для некваліфікованих посилань. */
-  private register(space: Space, schema: string, name: string, label: string) {
+  private register(
+    space: PgSpace,
+    schema: string,
+    name: string,
+    label: string
+  ) {
     const byName = this.index.get(space)!
     for (const key of [`${schema}.${name}`, name]) {
       const labels = byName.get(key) ?? []
@@ -348,7 +347,7 @@ class Graph {
       ctes.has(node.relname)
     if (typeof node.relname === "string" && !cte) {
       refs.push({
-        space: "relation",
+        space: "rel",
         names: [
           ...(typeof node.schemaname === "string" ? [node.schemaname] : []),
           node.relname,
@@ -360,17 +359,17 @@ class Graph {
       // `t.col%TYPE` — тип колонки відношення.
       refs.push(
         node.pct_type === true
-          ? { space: "relation", names: names.slice(0, -1) }
+          ? { space: "rel", names: names.slice(0, -1) }
           : { space: "type", names }
       )
     }
     if (Array.isArray(node.objname)) {
-      refs.push({ space: "function", names: strings(node.objname) })
+      refs.push({ space: "proc", names: strings(node.objname) })
     }
     const call = node.FuncCall as Record<string, unknown> | undefined
     if (call !== undefined) {
       const names = strings(call.funcname)
-      refs.push({ space: "function", names })
+      refs.push({ space: "proc", names })
       if (names.at(-1) === "nextval") {
         const sequence = this.sequenceArgument(call.args)
         if (sequence !== undefined) refs.push(sequence)
@@ -378,7 +377,7 @@ class Graph {
     }
     const trigger = node.CreateTrigStmt as Record<string, unknown> | undefined
     if (trigger !== undefined) {
-      refs.push({ space: "function", names: strings(trigger.funcname) })
+      refs.push({ space: "proc", names: strings(trigger.funcname) })
     }
     const define = node.DefineStmt as Record<string, unknown> | undefined
     if (define?.kind === "OBJECT_AGGREGATE") {
@@ -386,7 +385,7 @@ class Graph {
         if (!AGGREGATE_FUNCTIONS.has(String(element.defname))) continue
         const arg = element.arg as Record<string, Record<string, unknown>>
         if (arg?.TypeName !== undefined) {
-          refs.push({ space: "function", names: strings(arg.TypeName.names) })
+          refs.push({ space: "proc", names: strings(arg.TypeName.names) })
         }
       }
     }
@@ -398,7 +397,7 @@ class Graph {
       const arg = element.arg as Record<string, Record<string, unknown>>
       const names = strings(arg?.List?.items)
       if (names.length > 1) {
-        refs.push({ space: "relation", names: names.slice(0, -1) })
+        refs.push({ space: "rel", names: names.slice(0, -1) })
       }
     }
 
@@ -435,9 +434,7 @@ class Graph {
     if (literal?.sval === undefined) return undefined
     // Текст `regclass` — те саме ім'я, що в SQL: розбір дає регістр і лапки.
     const [type] = this.typeReferences(literal.sval)
-    return type === undefined
-      ? undefined
-      : { space: "relation", names: type.names }
+    return type === undefined ? undefined : { space: "rel", names: type.names }
   }
 
   // --- Сортування ----------------------------------------------------------
