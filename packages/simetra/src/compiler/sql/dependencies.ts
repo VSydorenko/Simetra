@@ -57,13 +57,22 @@ const ALL_IN_SCHEMA: Readonly<Record<string, Category>> = {
   OBJECT_ROUTINE: "function",
 }
 
-/** Об'єкти коментаря, що належать відношенню: перші дві частини імені — воно. */
+/** Об'єкти коментаря, що є відношенням або його членом. */
 const RELATION_COMMENTS: ReadonlySet<string> = new Set([
   "OBJECT_TABLE",
   "OBJECT_VIEW",
   "OBJECT_MATVIEW",
   "OBJECT_SEQUENCE",
   "OBJECT_FOREIGN_TABLE",
+  "OBJECT_COLUMN",
+  "OBJECT_TRIGGER",
+  "OBJECT_POLICY",
+  "OBJECT_RULE",
+  "OBJECT_TABCONSTRAINT",
+])
+
+/** Коментар члена відношення: остання частина імені — сам член. */
+const MEMBER_COMMENTS: ReadonlySet<string> = new Set([
   "OBJECT_COLUMN",
   "OBJECT_TRIGGER",
   "OBJECT_POLICY",
@@ -87,13 +96,15 @@ const UNIT_COMMENTS: Readonly<Record<string, SqlUnitClass>> = {
  *
  * Посилання на об'єкти поза моделлю (`auth.users`, вбудовані функції)
  * ігноруються; некваліфіковане ім'я Postgres резолвить за `search_path`,
- * тож воно дає ребро до кожного однойменного об'єкта моделі: зайве ребро
- * лише звужує порядок, а пропущене його ламає. Тіла plpgsql не аналізуються —
- * Postgres не перевіряє їх при створенні.
+ * якого компілятор не знає, тож воно дає ребро до кожного однойменного
+ * об'єкта моделі: пропущене ребро ламало б порядок. Ім'я CTE у своїй області
+ * видимості — не відношення моделі. Тіла plpgsql не аналізуються — Postgres
+ * не перевіряє їх при створенні.
  *
- * FK між таблицями — ребро, але цикл лише з FK законний: замикаючий FK рендер
- * додає після обох таблиць (FK, ціль якого в порядку не раніше таблиці).
- * Цикл, у якому є хоч одне інше ребро, — `sql.dependency-cycle`.
+ * Обмеження FK поза порядком створення (спека П2 §8.3): рендер виводить їх
+ * окремими `ALTER TABLE … ADD CONSTRAINT` після всіх таблиць, тож взаємні
+ * посилання таблиць циклом не є. Будь-який цикл решти ребер —
+ * `sql.dependency-cycle`.
  */
 export function creationOrder(
   physical: PhysicalSnapshot,
@@ -107,8 +118,8 @@ export function creationOrder(
 
 class Graph {
   private readonly nodes = new Map<string, GraphNode>()
-  /** Залежний → залежності; `true` — ребро FK. */
-  private readonly deps = new Map<string, Map<string, boolean>>()
+  /** Залежний → залежності. */
+  private readonly deps = new Map<string, Set<string>>()
   private readonly index = new Map<Space, Map<string, string[]>>([
     ["relation", new Map()],
     ["function", new Map()],
@@ -148,7 +159,7 @@ class Graph {
       key,
       ...(unit === undefined ? {} : { unit }),
     })
-    this.deps.set(label, new Map())
+    this.deps.set(label, new Set())
     return label
   }
 
@@ -191,11 +202,8 @@ class Graph {
     return this.index.get(ref.space)!.get(key) ?? []
   }
 
-  private edge(dependent: string, dependency: string, fk = false): void {
-    if (dependent === dependency) return
-    const deps = this.deps.get(dependent)!
-    // Ребро не-FK сильніше: його не можна відкласти.
-    deps.set(dependency, (deps.get(dependency) ?? true) && fk)
+  private edge(dependent: string, dependency: string): void {
+    if (dependent !== dependency) this.deps.get(dependent)!.add(dependency)
   }
 
   private edges(dependent: string, refs: readonly Reference[]): void {
@@ -228,15 +236,6 @@ class Graph {
     for (const expression of expressions) {
       this.edges(label, this.statementReferences(`SELECT (${expression})`))
     }
-    for (const fk of table.foreignKeys) {
-      const target = labelOf({
-        type: "table",
-        schema: fk.references.schema,
-        name: fk.references.table,
-      })
-      // Ціль поза моделлю (`auth.users`) створює не модель.
-      if (this.nodes.has(target)) this.edge(label, target, true)
-    }
   }
 
   /** Тип колонки у формі `format_type()`: імена дає той самий парсер. */
@@ -250,7 +249,7 @@ class Graph {
     if (!parsed.ok) return []
     const refs: Reference[] = []
     for (const statement of parsed.statements) {
-      this.collect(statement.stmt, refs)
+      this.collect(statement.stmt, refs, NO_CTES)
     }
     return refs
   }
@@ -262,7 +261,7 @@ class Graph {
     if (unit.class === "extension") return
     const label = unit.identity
     const refs: Reference[] = []
-    this.collect(unit.tree, refs)
+    this.collect(unit.tree, refs, NO_CTES)
     this.edges(label, refs)
 
     const tree = unit.tree as Record<string, Record<string, unknown>>
@@ -270,8 +269,14 @@ class Graph {
     if (comment !== undefined) {
       const objtype = String(comment.objtype)
       if (RELATION_COMMENTS.has(objtype)) {
-        const parts = unit.name.split(".")
-        this.edges(label, [{ space: "relation", names: parts.slice(0, 2) }])
+        // Частини імені — з дерева: ім'я в лапках може містити крапку.
+        // Без схеми ім'я некваліфіковане й резолвиться як решта таких.
+        const object = comment.object as Record<string, Record<string, unknown>>
+        const parts = strings(object?.List?.items)
+        const relation = MEMBER_COMMENTS.has(objtype)
+          ? parts.slice(0, -1)
+          : parts
+        this.edges(label, [{ space: "relation", names: relation }])
       }
       const cls = UNIT_COMMENTS[objtype]
       if (cls !== undefined) {
@@ -295,17 +300,30 @@ class Graph {
   /**
    * Посилання з дерева розбору. Форма вузла, а не шлях до нього: `RangeVar`
    * і `TypeName` бувають і обгорнутими вузлами, і прямими полями
-   * (`CreateTrigStmt.relation`, `TypeCast.typeName`).
+   * (`CreateTrigStmt.relation`, `TypeCast.typeName`). `ctes` — імена CTE в
+   * області видимості: некваліфіковане таке ім'я — CTE, а не відношення.
    */
-  private collect(value: unknown, refs: Reference[]): void {
+  private collect(
+    value: unknown,
+    refs: Reference[],
+    ctes: ReadonlySet<string>
+  ): void {
     if (Array.isArray(value)) {
-      for (const item of value) this.collect(item, refs)
+      for (const item of value) this.collect(item, refs, ctes)
       return
     }
     if (typeof value !== "object" || value === null) return
     const node = value as Record<string, unknown>
+    // Область CTE — увесь оператор з `WITH`, разом із тілами CTE (рекурсивне
+    // посилається на себе); вкладені оператори її успадковують.
+    const own = cteNames(node.withClause)
+    if (own.length > 0) ctes = new Set([...ctes, ...own])
 
-    if (typeof node.relname === "string") {
+    const cte =
+      typeof node.relname === "string" &&
+      node.schemaname === undefined &&
+      ctes.has(node.relname)
+    if (typeof node.relname === "string" && !cte) {
       refs.push({
         space: "relation",
         names: [
@@ -361,7 +379,7 @@ class Graph {
       }
     }
 
-    for (const child of Object.values(node)) this.collect(child, refs)
+    for (const child of Object.values(node)) this.collect(child, refs, ctes)
   }
 
   /**
@@ -414,7 +432,7 @@ class Graph {
     const pending = new Map<string, number>()
     for (const node of rest) {
       let count = 0
-      for (const dependency of this.deps.get(node.label)!.keys()) {
+      for (const dependency of this.deps.get(node.label)!) {
         if (emitted.has(dependency)) continue
         count++
         const list = dependents.get(dependency) ?? []
@@ -443,16 +461,8 @@ class Graph {
         if (!emitted.has(next.label)) emit(next)
         continue
       }
-      const remaining = rest.filter((n) => !emitted.has(n.label))
-      // Таблиця, що чекає лише FK: замикаючий FK додається після таблиць.
-      const deferred = remaining.find(
-        (n) => n.node.type === "table" && this.strongDeps(n, emitted) === 0
-      )
-      if (deferred !== undefined) {
-        emit(deferred)
-        continue
-      }
-      const cycle = this.findCycle(remaining[0]!, emitted)
+      const remaining = rest.find((n) => !emitted.has(n.label))!
+      const cycle = this.findCycle(remaining, emitted)
       diagnostics.push(cycleDiagnostic(cycle, fileOf))
       // Цикл названо; розриваємо його на першій одиниці, щоб знайти решту.
       emit(cycle[0]!)
@@ -460,18 +470,10 @@ class Graph {
     return { order, diagnostics }
   }
 
-  private strongDeps(node: GraphNode, emitted: ReadonlySet<string>): number {
-    let count = 0
-    for (const [dependency, fk] of this.deps.get(node.label)!) {
-      if (!fk && !emitted.has(dependency)) count++
-    }
-    return count
-  }
-
   /**
-   * Цикл серед невипущених вузлів за ребрами не-FK: у кожного з них є така
-   * залежність (інакше таблицю відклало б FK), тож хода назад замикається.
-   * Повертає вузли від першої одиниці циклу за порядком.
+   * Цикл серед невипущених вузлів: готових немає, тож у кожного з них є
+   * невипущена залежність, і хода назад замикається. Повертає вузли від
+   * першої одиниці циклу за порядком.
    */
   private findCycle(
     start: GraphNode,
@@ -483,11 +485,10 @@ class Graph {
     while (!seen.has(current.label)) {
       seen.set(current.label, path.length)
       path.push(current)
-      const next = [...this.deps.get(current.label)!]
-        .filter(([dependency, fk]) => !fk && !emitted.has(dependency))
-        .map(([dependency]) => this.nodes.get(dependency)!)
+      current = [...this.deps.get(current.label)!]
+        .filter((dependency) => !emitted.has(dependency))
+        .map((dependency) => this.nodes.get(dependency)!)
         .sort(compareNodes)[0]!
-      current = next
     }
     const cycle = path.slice(seen.get(current.label))
     const units = cycle.filter((n) => n.unit !== undefined).sort(compareNodes)
@@ -506,7 +507,11 @@ function cycleDiagnostic(
     "sql.dependency-cycle",
     first.unit === undefined ? "" : fileOf(first.unit),
     "",
-    { identity: first.label, cycle: labels.join(" -> ") }
+    {
+      identity: first.label,
+      cycle: labels.join(" -> "),
+      ...(first.unit?.line === undefined ? {} : { line: first.unit.line }),
+    }
   )
 }
 
@@ -537,6 +542,18 @@ function insertSorted(list: GraphNode[], node: GraphNode): void {
     else high = middle
   }
   list.splice(low, 0, node)
+}
+
+const NO_CTES: ReadonlySet<string> = new Set()
+
+function cteNames(withClause: unknown): string[] {
+  const ctes = (withClause as { ctes?: unknown } | undefined)?.ctes
+  if (!Array.isArray(ctes)) return []
+  return ctes.flatMap((n) => {
+    const name = (n as { CommonTableExpr?: { ctename?: string } })
+      .CommonTableExpr?.ctename
+    return name === undefined ? [] : [name]
+  })
 }
 
 function strings(nodes: unknown): string[] {

@@ -27,9 +27,12 @@ function codes(
   })
 }
 
+// Лічильник, а не ознака імені: кожна колонка отримує свій id.
+let nextColumnId = 9100
 function column(name: string, overrides: Record<string, unknown>) {
+  nextColumnId += 1
   return {
-    id: uuid(9100 + name.length),
+    id: uuid(nextColumnId),
     name,
     physicalName: name,
     type: "Text",
@@ -184,7 +187,8 @@ describe("creation order", () => {
     expect(cycles[0]).toMatchObject({
       file: MISC,
       pointer: "",
-      params: { identity: "function:public.f()" },
+      // Рядок одиниці у файлі: функція — другий оператор.
+      params: { identity: "function:public.f()", line: 2 },
     })
     expect(cycles[0]!.params!.cycle).toContain("function:public.f()")
     expect(cycles[0]!.params!.cycle).toContain("view:public.v")
@@ -201,20 +205,10 @@ describe("creation order", () => {
     expect(list).toEqual(["function:public.next_code()", "table:public.codes"])
   })
 
-  it("mutual foreign keys between tables are not a cycle", async () => {
-    // FK, що замикає цикл таблиць, рендер додає після обох таблиць.
-    const list = await order({
-      "catalogs/A/A.meta.json": catalog("A", {
-        attributes: [
-          {
-            id: uuid(9301),
-            name: "b",
-            physicalName: "b_id",
-            type: "Ref",
-            ref: { kind: "Catalog", name: "B" },
-          },
-        ],
-      }),
+  it("mutual foreign keys between tables give no edge and no cycle", async () => {
+    // FK поза порядком створення: рендер додає їх після всіх таблиць, тож
+    // порядок — чистий tie-break. `B` посилається на `A`, `A` — на `B`.
+    const entries = {
       "catalogs/B/B.meta.json": catalog("B", {
         attributes: [
           {
@@ -226,22 +220,37 @@ describe("creation order", () => {
           },
         ],
       }),
-    })
-    expect(list).toEqual(["table:public.a", "table:public.b"])
+      "catalogs/A/A.meta.json": catalog("A", {
+        attributes: [
+          {
+            id: uuid(9301),
+            name: "b",
+            physicalName: "b_id",
+            type: "Ref",
+            ref: { kind: "Catalog", name: "B" },
+          },
+        ],
+      }),
+    }
+    expect(await order(entries)).toEqual(["table:public.a", "table:public.b"])
   })
 
-  it("foreign key target table comes first; external targets are ignored", async () => {
+  it("self-referencing foreign key gives no edge and no cycle", async () => {
+    const list = await order({
+      "catalogs/Folder/Folder.meta.json": catalog("Folder", {
+        hierarchyType: "FoldersAndItems",
+      }),
+    })
+    expect(list).toEqual(["table:public.folder"])
+  })
+
+  it("foreign key does not order tables: tie-break alone decides", async () => {
+    // `aaa` посилається на `zzz`, але стоїть першим: FK додає рендер окремо.
     const list = await order({
       "custom-tables/Aaa/Aaa.meta.json": customTable("Aaa", {
         columns: [
           { id: uuid(9401), name: "id", physicalName: "id", type: "UUID" },
           { id: uuid(9402), name: "zzz", physicalName: "zzz", type: "UUID" },
-          {
-            id: uuid(9403),
-            name: "user",
-            physicalName: "user_id",
-            type: "UUID",
-          },
         ],
         foreignKeys: [
           {
@@ -251,19 +260,157 @@ describe("creation order", () => {
               columns: ["id"],
             },
           },
-          {
-            columns: ["user"],
-            references: {
-              external: { schema: "auth", table: "users", columns: ["id"] },
-            },
-          },
         ],
       }),
       "custom-tables/Zzz/Zzz.meta.json": customTable("Zzz", {
         primaryKey: { columns: ["id"] },
       }),
     })
-    expect(list).toEqual(["table:public.zzz", "table:public.aaa"])
+    expect(list).toEqual(["table:public.aaa", "table:public.zzz"])
+  })
+
+  it("a CTE named like a model relation is not a reference to it", async () => {
+    // Тіло `calc` читає власний CTE `balances`, а не в'юху `public.balances`.
+    const list = await order({
+      [MISC]:
+        "CREATE VIEW public.balances AS SELECT * FROM public.calc();\n" +
+        "CREATE FUNCTION public.calc() RETURNS TABLE (x int) LANGUAGE sql AS $$ " +
+        "WITH balances AS (SELECT 1 AS x) " +
+        "SELECT * FROM (WITH inner_cte AS (SELECT x FROM balances) SELECT x FROM inner_cte) s $$;",
+    })
+    expect(list).toEqual(["function:public.calc()", "view:public.balances"])
+  })
+
+  it("a CTE name does not hide a schema-qualified relation", async () => {
+    const result = await compileWith({
+      [MISC]:
+        "CREATE VIEW public.balances AS SELECT * FROM public.calc();\n" +
+        "CREATE FUNCTION public.calc() RETURNS TABLE (x int) LANGUAGE sql AS $$ " +
+        "WITH balances AS (SELECT 1 AS x) SELECT 1 FROM public.balances $$;",
+    })
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "sql.dependency-cycle",
+    ])
+  })
+
+  it("policy after its table and expression functions", async () => {
+    const list = await order({
+      [CODES]: codes([column("code", { default: "z.next_code()" })]),
+      [MISC]:
+        "CREATE POLICY p ON public.codes FOR SELECT USING (z.can_read());\n" +
+        `CREATE FUNCTION z.can_read() RETURNS boolean ${PLPGSQL};\n` +
+        `CREATE FUNCTION z.next_code() RETURNS text ${PLPGSQL};`,
+    })
+    expectBefore(list, [
+      ["table:public.codes", "policy:public.codes.p"],
+      ["function:z.can_read()", "policy:public.codes.p"],
+    ])
+  })
+
+  it("functions in CHECK, index predicate and index key go before the table", async () => {
+    // Таблиці передують одиницям у tie-break: таблиця після функції — лише
+    // через ребро.
+    const table = (name: string, extra: Record<string, unknown>) =>
+      customTable(name, {
+        columns: [column("id", { type: "UUID" })],
+        ...extra,
+      })
+    const list = await order({
+      "custom-tables/Checked/Checked.meta.json": table("Checked", {
+        checks: [{ name: "checked_ok", expression: "z.valid(id)" }],
+      }),
+      "custom-tables/Partial/Partial.meta.json": table("Partial", {
+        indexes: [
+          { name: "partial_idx", keys: [{ column: "id" }], where: "z.flag()" },
+        ],
+      }),
+      "custom-tables/Expr/Expr.meta.json": table("Expr", {
+        indexes: [{ name: "expr_idx", keys: [{ expression: "z.norm(id)" }] }],
+      }),
+      [MISC]:
+        `CREATE FUNCTION z.valid(uuid) RETURNS boolean ${PLPGSQL};\n` +
+        `CREATE FUNCTION z.flag() RETURNS boolean ${PLPGSQL};\n` +
+        `CREATE FUNCTION z.norm(uuid) RETURNS text ${PLPGSQL};`,
+    })
+    expectBefore(list, [
+      ["function:z.valid(uuid)", "table:public.checked"],
+      ["function:z.flag()", "table:public.partial"],
+      ["function:z.norm(uuid)", "table:public.expr"],
+    ])
+  })
+
+  it("function in a generated column expression goes before the table", async () => {
+    // Період номера — `date_trunc(...)` без схеми; одноіменна функція моделі
+    // (некваліфіковане ім'я збігається в будь-якій схемі) мусить бути раніше.
+    const list = await order({
+      "documents/Invoice/Invoice.meta.json": {
+        id: uuid(9700),
+        kind: "Document",
+        name: "Invoice",
+        physicalName: "invoice",
+        numberPeriodicity: "Year",
+      },
+      [MISC]: `CREATE FUNCTION z.date_trunc(text, timestamp) RETURNS timestamp ${PLPGSQL};`,
+    })
+    expectBefore(list, [
+      [
+        "function:z.date_trunc(text,pg_catalog.timestamp)",
+        "table:public.invoice",
+      ],
+    ])
+  })
+
+  it("OWNED BY, REPLICA IDENTITY, publication and function settings after their objects", async () => {
+    // `codes` чекає `z.next_code`; `b.reader` читає `codes`. Без ребер
+    // одиниці схем `""`, `b` і `public` стояли б раніше за свої об'єкти.
+    const list = await order({
+      [CODES]: codes([column("code", { default: "z.next_code()" })]),
+      [MISC]:
+        "CREATE SEQUENCE public.s1 OWNED BY public.codes.code;\n" +
+        "CREATE SEQUENCE public.s2;\n" +
+        "ALTER SEQUENCE public.s2 OWNED BY public.codes.code;\n" +
+        "ALTER TABLE public.codes REPLICA IDENTITY FULL;\n" +
+        "ALTER PUBLICATION pub ADD TABLE public.codes;\n" +
+        "ALTER FUNCTION b.reader() SET search_path = public;\n" +
+        "CREATE FUNCTION b.reader() RETURNS text LANGUAGE sql AS $$ select max(code) from public.codes $$;\n" +
+        `CREATE FUNCTION z.next_code() RETURNS text ${PLPGSQL};`,
+    })
+    expectBefore(list, [
+      ["table:public.codes", "sequence:public.s1"],
+      ["table:public.codes", "sequenceOwnedBy:public.s2"],
+      ["sequence:public.s2", "sequenceOwnedBy:public.s2"],
+      ["table:public.codes", "replicaIdentity:public.codes"],
+      ["table:public.codes", "publication:pub:add:public.codes"],
+      ["table:public.codes", "function:b.reader()"],
+      ["function:b.reader()", "functionSettings:b.reader()"],
+    ])
+  })
+
+  it("grants on all functions and sequences in a schema after them", async () => {
+    const list = await order({
+      [MISC]:
+        "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA z TO anon;\n" +
+        "GRANT USAGE ON ALL SEQUENCES IN SCHEMA z TO anon;\n" +
+        "CREATE SEQUENCE z.s;\n" +
+        `CREATE FUNCTION z.f() RETURNS text ${PLPGSQL};`,
+    })
+    const [functions, sequences] = [
+      list.find((n) => n.startsWith("grant:grant:allInSchema.function:")),
+      list.find((n) => n.startsWith("grant:grant:allInSchema.sequence:")),
+    ]
+    expectBefore(list, [
+      ["function:z.f()", functions!],
+      ["sequence:z.s", sequences!],
+    ])
+  })
+
+  it("comment target is read from the parse tree, quoted dots included", async () => {
+    const list = await order({
+      [MISC]:
+        "COMMENT ON COLUMN z.\"v.w\".x IS 'x';\n" +
+        'CREATE VIEW z."v.w" AS SELECT 1 AS x;',
+    })
+    expectBefore(list, [["view:z.v.w", "comment:column:z.v.w.x"]])
   })
 
   it("grants and comments after their objects", async () => {

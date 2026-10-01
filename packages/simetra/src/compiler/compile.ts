@@ -281,6 +281,7 @@ function verbatimUnit(
     schema: unit.schema,
     name: unit.name,
     file: unit.file,
+    line: unit.line,
     ...(unit.ownerFile === undefined
       ? {}
       : { ownerObjectId: ownerId(unit.ownerFile) }),

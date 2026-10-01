@@ -49,6 +49,11 @@ export interface SqlUnit {
   name: string
   /** Немає — згенерована одиниця (запит рухів). */
   file?: string
+  /**
+   * 1-базний рядок першого токена оператора у `file` — для діагностик;
+   * у згенерованої одиниці немає.
+   */
+  line?: number
   /** `.sql` об'єкта; для рухів — документ. */
   ownerObjectId?: string
   module: string
