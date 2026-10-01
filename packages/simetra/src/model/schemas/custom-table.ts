@@ -39,6 +39,25 @@ export const customTableColumnSchema = z
       description:
         "Identity generation mode; requires SmallInt, Integer or BigInt type.",
     }),
+    /**
+     * `GENERATED ALWAYS AS (…) STORED`; вираз — у нормалізованій формі
+     * Postgres (`pg_get_expr`). З `default` та `identity` несумісне — це
+     * перевіряє стадія 4 (`customTable.generated-conflict`).
+     */
+    generated: z
+      .strictObject({
+        expression: z.string().min(1).meta({
+          description: "SQL expression of the stored generated column.",
+        }),
+      })
+      .optional()
+      .meta({
+        description:
+          "Stored generated column; incompatible with default and identity.",
+      }),
+    collation: z.string().min(1).optional().meta({
+      description: "Collation of the column; absent means the type default.",
+    }),
     comment: z
       .string()
       .optional()
@@ -154,6 +173,14 @@ const columnList = z.array(elementNameSchema).min(1).meta({
   description: "Logical names of columns of this table.",
 })
 
+/** `DEFERRABLE` / `INITIALLY DEFERRED` обмеження — спільне для FK, PK і UNIQUE. */
+const deferrableSchema = z
+  .enum(["no", "deferrable", "initiallyDeferred"])
+  .default("no")
+  .meta({ description: "Whether the constraint check can be deferred." })
+
+export type Deferrable = z.infer<typeof deferrableSchema>
+
 export const fkActionSchema = z
   .enum(["noAction", "restrict", "cascade", "setNull", "setDefault"])
   .meta({ description: "Referential action of a foreign key." })
@@ -211,12 +238,30 @@ const foreignKeySchema = z
     onUpdate: fkActionSchema
       .default("noAction")
       .meta({ description: "Action on update of the referenced key." }),
-    deferrable: z
-      .enum(["no", "deferrable", "initiallyDeferred"])
-      .default("no")
-      .meta({ description: "Whether the constraint check can be deferred." }),
+    deferrable: deferrableSchema,
   })
   .meta({ description: "Foreign key of the table." })
+
+/**
+ * Параметри елемента ключа індексу — однакові для колонки й виразу. Відсутнє
+ * поле — значення Postgres за замовчуванням (`ASC`, розташування `NULL` за
+ * порядком, клас операторів і колляція типу); прийом пише лише те, що є в
+ * `pg_index`.
+ */
+const indexKeyOptions = {
+  order: z.enum(["asc", "desc"]).optional().meta({
+    description: "Sort order of the key; absent means ascending.",
+  }),
+  nulls: z.enum(["first", "last"]).optional().meta({
+    description: "NULLS FIRST or NULLS LAST; absent means the order default.",
+  }),
+  opclass: z.string().min(1).optional().meta({
+    description: "Operator class of the key; absent means the type default.",
+  }),
+  collation: z.string().min(1).optional().meta({
+    description: "Collation of the key; absent means the column default.",
+  }),
+}
 
 const indexSchema = z
   .strictObject({
@@ -235,12 +280,14 @@ const indexSchema = z
             column: elementNameSchema.meta({
               description: "Logical name of the indexed column.",
             }),
+            ...indexKeyOptions,
           }),
           z.strictObject({
             expression: z
               .string()
               .min(1)
               .meta({ description: "SQL expression of the index key." }),
+            ...indexKeyOptions,
           }),
         ])
       )
@@ -274,7 +321,11 @@ export const customTableSchema = z.strictObject({
     .min(1)
     .meta({ description: "Columns of the table." }),
   primaryKey: z
-    .strictObject({ name: constraintName, columns: columnList })
+    .strictObject({
+      name: constraintName,
+      columns: columnList,
+      deferrable: deferrableSchema,
+    })
     .optional()
     .meta({ description: "Primary key of the table." }),
   uniques: z
@@ -286,6 +337,7 @@ export const customTableSchema = z.strictObject({
           nullsNotDistinct: z.boolean().default(false).meta({
             description: "Whether NULLs are treated as equal.",
           }),
+          deferrable: deferrableSchema,
         })
         .meta({ description: "Unique constraint." })
     )

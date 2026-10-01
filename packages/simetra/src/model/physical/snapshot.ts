@@ -1,4 +1,8 @@
-import type { FkAction, RowLevelSecurity } from "../schemas/custom-table"
+import type {
+  Deferrable,
+  FkAction,
+  RowLevelSecurity,
+} from "../schemas/custom-table"
 
 /**
  * Контракт фізичного знімка (спека §8.3). Живе в T0, бо з нього будують
@@ -42,8 +46,17 @@ export interface PhysicalTable {
   rowLevelSecurity: RowLevelSecurity
   /** У порядку оголошення. */
   columns: PhysicalColumn[]
-  primaryKey?: { name: string; columns: string[] }
-  uniques: { name: string; columns: string[]; nullsNotDistinct: boolean }[]
+  primaryKey?: {
+    name: string
+    columns: string[]
+    deferrable?: DeferredConstraint
+  }
+  uniques: {
+    name: string
+    columns: string[]
+    nullsNotDistinct: boolean
+    deferrable?: DeferredConstraint
+  }[]
   checks: { name: string; expression: string }[]
   foreignKeys: {
     name: string
@@ -57,11 +70,29 @@ export interface PhysicalTable {
     name: string
     unique: boolean
     method: string
-    keys: ({ column: string } | { expression: string })[]
+    keys: PhysicalIndexKey[]
     include: string[]
     where?: string
     nullsNotDistinct: boolean
   }[]
+}
+
+/**
+ * `DEFERRABLE` первинного ключа чи UNIQUE. Відсутнє поле — `NOT DEFERRABLE`:
+ * значення «no» у знімку не пишеться, тож стан має одну форму, а таблиці
+ * видів 1С (їхні ключі не відкладаються) поля не мають зовсім.
+ */
+export type DeferredConstraint = Exclude<Deferrable, "no">
+
+/**
+ * Елемент ключа індексу. Параметри — лише явні: відсутні означають значення
+ * Postgres за замовчуванням, як у `pg_get_indexdef`.
+ */
+export type PhysicalIndexKey = ({ column: string } | { expression: string }) & {
+  order?: "asc" | "desc"
+  nulls?: "first" | "last"
+  opclass?: string
+  collation?: string
 }
 
 export interface PhysicalColumn {
@@ -76,6 +107,8 @@ export interface PhysicalColumn {
    * база, тож `default` у такої колонки немає.
    */
   generated?: { expression: string }
+  /** Колляція колонки; відсутня — колляція типу. */
+  collation?: string
   comment?: string
   /**
    * UUID реквізиту або логічне ім'я стандартного реквізиту; `scopeKindId` —

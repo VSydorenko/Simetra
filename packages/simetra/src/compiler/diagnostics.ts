@@ -78,6 +78,7 @@ export const COMPILER_RULES = [
   "physical.name-too-long",
   "physical.constraint-name-required",
   "customTable.foreign-key-arity",
+  "customTable.generated-conflict",
   "presentation.unknown-standard-attribute",
 ] as const
 

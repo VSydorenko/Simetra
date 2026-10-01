@@ -185,8 +185,8 @@ describe("customTableSchema", () => {
 
     const extra = customTableSchema.safeParse(
       table({
-        uniques: [{ columns: ["id"], deferrable: "no" }],
-        indexes: [{ keys: [{ column: "id", order: "desc" }] }],
+        uniques: [{ columns: ["id"], where: "id > 0" }],
+        indexes: [{ keys: [{ column: "id", unique: true }] }],
       })
     )
     expect(
@@ -196,8 +196,8 @@ describe("customTableSchema", () => {
         (i as { keys?: string[] }).keys,
       ])
     ).toEqual([
-      ["unrecognized_keys", "uniques/0", ["deferrable"]],
-      ["unrecognized_keys", "indexes/0/keys/0", ["order"]],
+      ["unrecognized_keys", "uniques/0", ["where"]],
+      ["unrecognized_keys", "indexes/0/keys/0", ["unique"]],
     ])
   })
 

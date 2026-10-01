@@ -374,6 +374,7 @@ export function kitchenSink(): Map<string, string> {
         type: "String",
         length: 40,
         default: "'n/a'",
+        collation: "C",
       },
       {
         id: id(),
@@ -382,6 +383,7 @@ export function kitchenSink(): Map<string, string> {
         type: "Numeric",
         precision: 12,
         scale: 2,
+        generated: { expression: "0" },
       },
       {
         id: id(),
@@ -425,9 +427,14 @@ export function kitchenSink(): Map<string, string> {
         type: "UUID",
       },
     ],
-    primaryKey: { name: "ledger_pk", columns: ["id"] },
+    primaryKey: { name: "ledger_pk", columns: ["id"], deferrable: "no" },
     uniques: [
-      { name: "ledger_note_key", columns: ["note"], nullsNotDistinct: true },
+      {
+        name: "ledger_note_key",
+        columns: ["note"],
+        nullsNotDistinct: true,
+        deferrable: "initiallyDeferred",
+      },
     ],
     checks: [{ name: "ledger_amount_check", expression: "amount >= 0" }],
     foreignKeys: [
@@ -458,7 +465,16 @@ export function kitchenSink(): Map<string, string> {
         name: "ledger_note_idx",
         unique: true,
         method: "btree",
-        keys: [{ column: "note" }, { expression: "lower(note)" }],
+        keys: [
+          {
+            column: "note",
+            order: "desc",
+            nulls: "last",
+            opclass: "text_pattern_ops",
+            collation: "C",
+          },
+          { expression: "lower(note)", order: "asc", nulls: "first" },
+        ],
         include: ["amount"],
         where: "amount > 0",
         nullsNotDistinct: true,

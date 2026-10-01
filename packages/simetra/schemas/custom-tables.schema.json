@@ -123,6 +123,26 @@
               "byDefault"
             ]
           },
+          "generated": {
+            "description": "Stored generated column; incompatible with default and identity.",
+            "type": "object",
+            "properties": {
+              "expression": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SQL expression of the stored generated column."
+              }
+            },
+            "required": [
+              "expression"
+            ],
+            "additionalProperties": false
+          },
+          "collation": {
+            "description": "Collation of the column; absent means the type default.",
+            "type": "string",
+            "minLength": 1
+          },
           "comment": {
             "description": "Comment on the column.",
             "type": "string"
@@ -288,6 +308,16 @@
             "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
           },
           "description": "Logical names of columns of this table."
+        },
+        "deferrable": {
+          "default": "no",
+          "description": "Whether the constraint check can be deferred.",
+          "type": "string",
+          "enum": [
+            "no",
+            "deferrable",
+            "initiallyDeferred"
+          ]
         }
       },
       "required": [
@@ -321,6 +351,16 @@
             "default": false,
             "description": "Whether NULLs are treated as equal.",
             "type": "boolean"
+          },
+          "deferrable": {
+            "default": "no",
+            "description": "Whether the constraint check can be deferred.",
+            "type": "string",
+            "enum": [
+              "no",
+              "deferrable",
+              "initiallyDeferred"
+            ]
           }
         },
         "required": [
@@ -550,6 +590,32 @@
                       "type": "string",
                       "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
                       "description": "Logical name of the indexed column."
+                    },
+                    "order": {
+                      "description": "Sort order of the key; absent means ascending.",
+                      "type": "string",
+                      "enum": [
+                        "asc",
+                        "desc"
+                      ]
+                    },
+                    "nulls": {
+                      "description": "NULLS FIRST or NULLS LAST; absent means the order default.",
+                      "type": "string",
+                      "enum": [
+                        "first",
+                        "last"
+                      ]
+                    },
+                    "opclass": {
+                      "description": "Operator class of the key; absent means the type default.",
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "collation": {
+                      "description": "Collation of the key; absent means the column default.",
+                      "type": "string",
+                      "minLength": 1
                     }
                   },
                   "required": [
@@ -564,6 +630,32 @@
                       "type": "string",
                       "minLength": 1,
                       "description": "SQL expression of the index key."
+                    },
+                    "order": {
+                      "description": "Sort order of the key; absent means ascending.",
+                      "type": "string",
+                      "enum": [
+                        "asc",
+                        "desc"
+                      ]
+                    },
+                    "nulls": {
+                      "description": "NULLS FIRST or NULLS LAST; absent means the order default.",
+                      "type": "string",
+                      "enum": [
+                        "first",
+                        "last"
+                      ]
+                    },
+                    "opclass": {
+                      "description": "Operator class of the key; absent means the type default.",
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "collation": {
+                      "description": "Collation of the key; absent means the column default.",
+                      "type": "string",
+                      "minLength": 1
                     }
                   },
                   "required": [

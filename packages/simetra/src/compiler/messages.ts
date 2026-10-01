@@ -766,6 +766,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Зовнішній ключ має локальних колонок: ${p.local}, а цільових: ${p.referenced}`,
   },
+  "customTable.generated-conflict": {
+    en: (p) => `Generated column cannot also have ${p.field}`,
+    uk: (p) => `Генерована колонка не може мати ще й ${p.field}`,
+    hint: {
+      en: "The value of a stored generated column comes from its expression.",
+      uk: "Значення збереженої генерованої колонки дає її вираз.",
+    },
+  },
   "presentation.unknown-standard-attribute": {
     en: (p) =>
       p.section === undefined

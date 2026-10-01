@@ -222,7 +222,7 @@ describe("custom table column references", () => {
     expect(after).toEqual(before)
     expect(before).toEqual(
       expect.objectContaining({
-        primaryKey: { columns: [COL_ID] },
+        primaryKey: { columns: [COL_ID], deferrable: "no" },
         foreignKeys: [
           expect.objectContaining({
             columns: [COL_REF],

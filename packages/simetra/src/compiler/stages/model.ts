@@ -23,6 +23,8 @@ import {
   type AttributeCase,
   type CustomTable,
   type CustomTableColumn,
+  type Deferrable,
+  type DeferredConstraint,
   type MetadataRef,
   type PhysicalColumn,
   type PhysicalEnumType,
@@ -152,8 +154,12 @@ interface PendingTable {
   rowLevelSecurity: PhysicalTable["rowLevelSecurity"]
   columns: PhysicalColumn[]
   identityColumns: string[]
-  primaryKey?: { name?: string; columns: string[] }
-  uniques: { name?: string; columns: string[]; nullsNotDistinct: boolean }[]
+  primaryKey?: Omit<NonNullable<PhysicalTable["primaryKey"]>, "name"> & {
+    name?: string
+  }
+  uniques: (Omit<PhysicalTable["uniques"][number], "name"> & {
+    name?: string
+  })[]
   /** `column` — єдина колонка виразу, що дає її ім'я в назві обмеження. */
   checks: {
     name?: string
@@ -1016,6 +1022,12 @@ class SnapshotBuilder {
         notNull: column.notNull,
         ...(column.default !== undefined ? { default: column.default } : {}),
         ...(column.identity !== undefined ? { identity: column.identity } : {}),
+        ...(column.generated !== undefined
+          ? { generated: { expression: column.generated.expression } }
+          : {}),
+        ...(column.collation !== undefined
+          ? { collation: column.collation }
+          : {}),
         ...(column.comment !== undefined ? { comment: column.comment } : {}),
         origin: { elementId: column.id ?? "" },
       })
@@ -1043,6 +1055,7 @@ class SnapshotBuilder {
       table.primaryKey = {
         ...explicit(data.primaryKey.name, "/primaryKey/name"),
         columns: map(data.primaryKey.columns, "/primaryKey/columns"),
+        ...deferred(data.primaryKey.deferrable),
       }
     }
     data.uniques.forEach((unique, i) => {
@@ -1050,6 +1063,7 @@ class SnapshotBuilder {
         ...explicit(unique.name, `/uniques/${i}/name`),
         columns: map(unique.columns, `/uniques/${i}/columns`),
         nullsNotDistinct: unique.nullsNotDistinct,
+        ...deferred(unique.deferrable),
       })
     })
     // Безіменний CHECK чи індекс з виразом Postgres назвав би за деревом
@@ -1094,11 +1108,17 @@ class SnapshotBuilder {
         ...explicit(index.name, `/indexes/${i}/name`),
         unique: index.unique,
         method: index.method,
-        keys: index.keys.map((key, k) =>
-          "column" in key
+        // Поля ключа — поіменно: передача ключа як є зарахувала б ратчету
+        // полів його параметри без споживача.
+        keys: index.keys.map((key, k) => ({
+          ...("column" in key
             ? { column: column(`/indexes/${i}/keys/${k}/column`) }
-            : key
-        ),
+            : { expression: key.expression }),
+          ...(key.order !== undefined ? { order: key.order } : {}),
+          ...(key.nulls !== undefined ? { nulls: key.nulls } : {}),
+          ...(key.opclass !== undefined ? { opclass: key.opclass } : {}),
+          ...(key.collation !== undefined ? { collation: key.collation } : {}),
+        })),
         include: map(index.include, `/indexes/${i}/include`),
         ...(index.where !== undefined ? { where: index.where } : {}),
         nullsNotDistinct: index.nullsNotDistinct,
@@ -1657,6 +1677,9 @@ function assignNames(pending: readonly PendingTable[]): {
               table.primaryKey.name ??
               choose(undefined, "pkey", names.both, true, true),
             columns: table.primaryKey.columns,
+            ...(table.primaryKey.deferrable !== undefined
+              ? { deferrable: table.primaryKey.deferrable }
+              : {}),
           }
     const uniques = table.uniques.map((unique) => ({
       name:
@@ -1664,6 +1687,9 @@ function assignNames(pending: readonly PendingTable[]): {
         choose(nameAddition(unique.columns), "key", names.both, true, true),
       columns: unique.columns,
       nullsNotDistinct: unique.nullsNotDistinct,
+      ...(unique.deferrable !== undefined
+        ? { deferrable: unique.deferrable }
+        : {}),
     }))
     const foreignKeys = table.foreignKeys.map((foreignKey) => ({
       ...foreignKey,
@@ -1706,6 +1732,11 @@ function assignNames(pending: readonly PendingTable[]): {
     return result
   })
   return { tables, requiredChecks }
+}
+
+/** `NOT DEFERRABLE` у знімку не пишеться (див. `DeferredConstraint`). */
+function deferred(deferrable: Deferrable): { deferrable?: DeferredConstraint } {
+  return deferrable === "no" ? {} : { deferrable }
 }
 
 function byName(a: { name: string }, b: { name: string }): number {

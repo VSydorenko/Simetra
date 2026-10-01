@@ -413,8 +413,9 @@ function polymorphicSets(
 }
 
 /**
- * Опис прийнятої таблиці: кількість колонок FK і явні імена там, де Postgres
- * назвав би обмеження за деревом виразу. Імена колонок резолвила стадія 2
+ * Опис прийнятої таблиці: генерована колонка без `DEFAULT` та identity,
+ * кількість колонок FK і явні імена там, де Postgres назвав би обмеження за
+ * деревом виразу. Імена колонок резолвила стадія 2
  * (`customTable.column-unknown`); сумісність типів і ключ цілі FK перевіряє
  * тінь, а не компілятор.
  */
@@ -426,6 +427,23 @@ function checkDeclaredTable(object: ParsedObject): Diagnostic[] {
       diagnostic("physical.constraint-name-required", object.file, pointer)
     )
 
+  // Значення генерованої колонки дає вираз: Postgres відкидає поруч із ним
+  // DEFAULT та identity, тож ловимо це тут, а не падінням DDL.
+  table.columns.forEach((column, i) => {
+    if (column.generated === undefined) return
+    for (const field of ["default", "identity"] as const) {
+      if (column[field] !== undefined) {
+        found.push(
+          diagnostic(
+            "customTable.generated-conflict",
+            object.file,
+            `/columns/${i}/generated`,
+            { field }
+          )
+        )
+      }
+    }
+  })
   // Ім'я безіменного CHECK Postgres бере з першої колонки дерева виразу.
   table.checks.forEach((check, i) => {
     if (check.name === undefined) nameRequired(`/checks/${i}`)
