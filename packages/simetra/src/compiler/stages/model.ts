@@ -727,7 +727,11 @@ class SnapshotBuilder {
       type: resolved.type,
       array: resolved.array,
       notNull: column.notNull,
-      ...(column.default !== undefined ? { default: column.default } : {}),
+      ...(column.default !== undefined
+        ? { default: column.default }
+        : column.defaultValue !== undefined
+          ? { default: sqlLiteral(column.defaultValue) }
+          : {}),
       ...(column.generated !== undefined
         ? {
             generated: truncatedPeriodExpression(

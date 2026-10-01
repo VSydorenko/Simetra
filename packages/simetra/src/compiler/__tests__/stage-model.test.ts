@@ -596,6 +596,34 @@ describe("stage 3: physical snapshot", () => {
     ])
   })
 
+  it("constant defaultValue becomes the DEFAULT of the value column", async () => {
+    const constantOf = (n: number, name: string, extra: object) => ({
+      [`constants/${name}/${name}.meta.json`]: {
+        id: uuid(n),
+        kind: "Constant",
+        name,
+        physicalName: name.toLowerCase(),
+        ...extra,
+      },
+    })
+    const physical = await compileWith({
+      ...constantOf(60, "Greeting", {
+        type: "String",
+        length: 20,
+        defaultValue: "it's",
+      }),
+      ...constantOf(61, "Limit", { type: "Integer", defaultValue: 3 }),
+      ...constantOf(62, "Enabled", { type: "Boolean", defaultValue: true }),
+      ...constantOf(63, "Plain", { type: "Integer" }),
+    })
+    const valueOf = (table: string) =>
+      tableOf(physical, table).columns.find((c) => c.name === "value")!
+    expect(valueOf("greeting").default).toBe("'it''s'")
+    expect(valueOf("limit").default).toBe("3")
+    expect(valueOf("enabled").default).toBe("true")
+    expect(valueOf("plain")).not.toHaveProperty("default")
+  })
+
   it("custom table with external fk and pg enum column", async () => {
     const physical = await compileWith({
       "pg-enums/OrderStatus/OrderStatus.meta.json": {

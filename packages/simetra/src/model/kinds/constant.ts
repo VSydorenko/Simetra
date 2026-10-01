@@ -33,6 +33,9 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       physicalName: "value",
       type: valueTypeOf(constant),
       notNull: false,
+      ...(constant.defaultValue !== undefined
+        ? { defaultValue: constant.defaultValue }
+        : {}),
       title: { uk: "Значення", en: "Value" },
     },
   ]

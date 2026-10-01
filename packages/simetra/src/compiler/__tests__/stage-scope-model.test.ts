@@ -397,6 +397,26 @@ describe("stage 3: scope", () => {
     ])
   })
 
+  it("scoped constant keeps defaultValue on the value column", async () => {
+    const physical = await compileScoped({
+      [CP]: counterparty(),
+      "constants/Greeting/Greeting.meta.json": {
+        id: uuid(904),
+        kind: "Constant",
+        name: "Greeting",
+        physicalName: "greeting",
+        scope: "org",
+        type: "String",
+        length: 20,
+        defaultValue: "it's",
+      },
+    })
+    const value = tableOf(physical, "greeting").columns.find(
+      (c) => c.name === "value"
+    )
+    expect(value?.default).toBe("'it''s'")
+  })
+
   it("scoped constant with crossScope is plain", async () => {
     const physical = await compileScoped({
       [CP]: counterparty(),
