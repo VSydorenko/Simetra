@@ -27,6 +27,14 @@ describe("project timezone", () => {
     }
   })
 
+  it("Europe/Kyiv is accepted and kept verbatim", async () => {
+    const result = await compileWith({
+      "project.meta.json": project({ timezone: "Europe/Kyiv" }),
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.model?.project.timezone).toBe("Europe/Kyiv")
+  })
+
   it("UTC and Europe/Kyiv are accepted", async () => {
     for (const timezone of [
       "UTC",

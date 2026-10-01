@@ -458,6 +458,9 @@ function namespacesOf(
       styled: false,
       reserved: [],
       elements: elementsAt(data, "values"),
+      // Мітка — значення в `CHECK (… IN (…))` і в даних: дві однакові
+      // зробили б значення нерозрізненними.
+      uniqueLabels: true,
     })
   }
   return namespaces

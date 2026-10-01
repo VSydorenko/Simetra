@@ -253,34 +253,24 @@ function readProject(
   return parsed.data
 }
 
-/** Канонічні IANA-пояси рушія (ECMAScript, не Node API). */
-let timeZones: ReadonlySet<string> | undefined
-
 /**
  * Пояс проєкту — ім'я IANA (спека П2 §3): хибне впало б лише на DDL у П3.
- * Перелік рушія канонічний — без псевдонімів (`Europe/Kyiv` в ICU досі
- * зводиться до `Europe/Kiev`) і без `UTC`, тож ім'я спершу канонізує
- * `Intl.DateTimeFormat`. Зсув на кшталт `+05:00` рушій приймає, але це не
- * ім'я поясу, і в канонічному переліку його немає; `Etc/GMT±N` — ім'я, хоч
- * перелік його й не містить.
+ * Перевіряє конструктор `Intl.DateTimeFormat` (RangeError на невідоме ім'я),
+ * а не перелік `Intl.supportedValuesOf`: у ньому немає `Europe/Kyiv`. Зсув на
+ * кшталт `+05:00` рушій приймає, але це не ім'я поясу. Написання автора в
+ * модель іде дослівно — канонізація ICU залежить від версії й дала б дрейф хеша.
  */
 function isKnownTimeZone(name: string): boolean {
-  let canonical: string
+  if (OFFSET.test(name)) return false
   try {
-    canonical = new Intl.DateTimeFormat("en", {
-      timeZone: name,
-    }).resolvedOptions().timeZone
+    new Intl.DateTimeFormat(undefined, { timeZone: name })
+    return true
   } catch {
     return false
   }
-  timeZones ??= new Set(Intl.supportedValuesOf("timeZone"))
-  return (
-    canonical === "UTC" || ETC_GMT.test(canonical) || timeZones.has(canonical)
-  )
 }
 
-/** `Etc/GMT±N` — пояси IANA, яких немає в переліку рушія, але Postgres їх знає. */
-const ETC_GMT = /^Etc\/GMT[+-]\d{1,2}$/
+const OFFSET = /^[+-]/
 
 function readObject(
   file: string,

@@ -222,20 +222,41 @@ describe("stage 2: identity", () => {
   })
 
   it("duplicate enumeration value", async () => {
-    const value = (name: string) => attribute(name, { type: undefined })
+    const value = (name: string, physicalName: string) =>
+      attribute(name, { type: undefined, physicalName })
     const result = await compileWith({
       "enumerations/Status/Status.meta.json": {
         id: uuid(50),
         kind: "Enumeration",
         name: "Status",
         physicalName: "status",
-        values: [value("Open"), value("Open")],
+        values: [value("Open", "open"), value("Open", "open_2")],
       },
     })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "identity.name-duplicate",
         pointer: "/values/1/name",
+      }),
+    ])
+  })
+
+  it("enumeration labels are unique", async () => {
+    const value = (name: string, physicalName: string) =>
+      attribute(name, { type: undefined, physicalName })
+    const result = await compileWith({
+      "enumerations/Status/Status.meta.json": {
+        id: uuid(50),
+        kind: "Enumeration",
+        name: "Status",
+        physicalName: "status",
+        values: [value("Open", "open"), value("Reopened", "open")],
+      },
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "identity.name-duplicate",
+        pointer: "/values/1/physicalName",
       }),
     ])
   })
