@@ -10,17 +10,32 @@ export const metadataIdSchema = z
   .refine((id) => id === id.toLowerCase(), {
     message: "UUID must be lowercase",
   })
+  .meta({
+    description:
+      "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it.",
+  })
 export type MetadataId = string
 
 /** Логічне ім'я об'єкта — PascalCase. */
-export const objectNameSchema = z.string().regex(/^[A-Z][A-Za-z0-9]*$/)
+export const objectNameSchema = z
+  .string()
+  .regex(/^[A-Z][A-Za-z0-9]*$/)
+  .meta({
+    description: "Logical object name in PascalCase.",
+  })
 
 /**
  * Логічне ім'я елемента (реквізиту тощо). Шаблон навмисно ширший за обидва
  * стилі: який саме стиль діє, залежить від налаштування застосунку, тож стиль
  * перевіряє окрема стадія (matchesAttributeCase), а не схема.
  */
-export const elementNameSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/)
+export const elementNameSchema = z
+  .string()
+  .regex(/^[A-Za-z][A-Za-z0-9_]*$/)
+  .meta({
+    description:
+      "Logical element name (attribute, section, column). The casing style is checked against the project naming setting.",
+  })
 
 /** Ліміт ідентифікатора PostgreSQL — 63 байти, а не символи. */
 const MAX_PHYSICAL_NAME_BYTES = 63
@@ -34,6 +49,10 @@ export const physicalNameSchema = z
       message: "Physical name must be at most 63 bytes in UTF-8",
     }
   )
+  .meta({
+    description:
+      "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8.",
+  })
 
 export const ATTRIBUTE_CASES = ["camelCase", "snake_case"] as const
 export type AttributeCase = (typeof ATTRIBUTE_CASES)[number]

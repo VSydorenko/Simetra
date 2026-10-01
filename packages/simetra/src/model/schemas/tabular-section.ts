@@ -9,13 +9,20 @@ import {
 import { standardAttributeOverridesSchema } from "./object-header"
 
 /** Таблична частина об'єкта. */
-export const tabularSectionSchema = z.object({
-  id: metadataIdSchema.optional(),
-  name: elementNameSchema,
-  physicalName: physicalNameSchema.optional(),
-  title: localizedStringSchema.optional(),
-  standardAttributeOverrides: standardAttributeOverridesSchema,
-  attributes: z.array(attributeSchema).default([]),
-})
+export const tabularSectionSchema = z
+  .object({
+    id: metadataIdSchema.optional(),
+    name: elementNameSchema,
+    physicalName: physicalNameSchema.optional(),
+    title: localizedStringSchema.optional().meta({
+      description: "Human-readable title of the tabular section.",
+    }),
+    standardAttributeOverrides: standardAttributeOverridesSchema,
+    attributes: z
+      .array(attributeSchema)
+      .default([])
+      .meta({ description: "Attributes of the section rows." }),
+  })
+  .meta({ description: "Tabular section: a list of rows owned by an object." })
 
 export type TabularSection = z.infer<typeof tabularSectionSchema>

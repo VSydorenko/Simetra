@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+      "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "description": "Logical object name in PascalCase."
+    },
+    "physicalName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+    },
+    "schema": {
+      "description": "PostgreSQL schema of the object; the project defaultSchema applies when absent.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Scope kind of the object, or none to keep it outside any scope. Required when the project declares scope kinds.",
+      "type": "string"
+    },
+    "title": {
+      "description": "Human-readable title of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      }
+    },
+    "description": {
+      "description": "Description of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      }
+    },
+    "kind": {
+      "type": "string",
+      "const": "Enumeration",
+      "description": "Metadata kind; always Enumeration."
+    },
+    "values": {
+      "default": [],
+      "description": "Enumeration values; array order is the value order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9]*$",
+            "description": "Logical name of the enumeration value."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the value.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "description": "One value of an enumeration."
+      }
+    }
+  },
+  "required": [
+    "name",
+    "kind"
+  ],
+  "$id": "enumerations.schema.json"
+}

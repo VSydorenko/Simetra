@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "Application name."
+    },
+    "title": {
+      "description": "Human-readable title of the application.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      }
+    },
+    "defaultLocale": {
+      "default": "uk",
+      "description": "Locale used when none is requested.",
+      "type": "string",
+      "enum": [
+        "uk",
+        "en"
+      ]
+    },
+    "defaultSchema": {
+      "default": "public",
+      "description": "PostgreSQL schema for objects that declare none.",
+      "type": "string"
+    },
+    "naming": {
+      "default": {
+        "attributeCase": "camelCase"
+      },
+      "description": "Naming rules of the application.",
+      "type": "object",
+      "properties": {
+        "attributeCase": {
+          "default": "camelCase",
+          "description": "Casing style of logical attribute names.",
+          "type": "string",
+          "enum": [
+            "camelCase",
+            "snake_case"
+          ]
+        }
+      }
+    },
+    "timezone": {
+      "default": "UTC",
+      "description": "IANA time zone in which the platform determines day, month, quarter and year.",
+      "type": "string",
+      "minLength": 1
+    },
+    "scopeKinds": {
+      "default": [],
+      "description": "Scope kinds of the application; leave empty for a single-tenant application.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the scope kind.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            }
+          },
+          "root": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "object": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "Catalog",
+                          "Document",
+                          "Enumeration",
+                          "InformationRegister",
+                          "AccumulationRegister",
+                          "Constant",
+                          "CustomTable",
+                          "PgEnum"
+                        ],
+                        "description": "Kind of the referenced metadata object."
+                      },
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Za-z0-9]*$",
+                        "description": "Logical name of the referenced object."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "description": "Metadata object that is the scope root."
+                  }
+                },
+                "required": [
+                  "object"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "external": {
+                    "type": "object",
+                    "properties": {
+                      "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "PostgreSQL schema of the external root table."
+                      },
+                      "table": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Physical name of the external root table."
+                      },
+                      "column": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Physical key column of the external root table."
+                      }
+                    },
+                    "required": [
+                      "schema",
+                      "table",
+                      "column"
+                    ],
+                    "description": "Root table outside the metadata."
+                  }
+                },
+                "required": [
+                  "external"
+                ]
+              }
+            ],
+            "description": "Root of the scope: a metadata object or an external table."
+          },
+          "setFunction": {
+            "type": "object",
+            "properties": {
+              "schema": {
+                "description": "PostgreSQL schema of the function; defaultSchema when absent.",
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Physical name of the function."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "description": "SQL function that returns the set of scope values visible to the current user."
+          },
+          "onRootDelete": {
+            "default": "restrict",
+            "description": "What happens to scoped rows when the scope root is deleted.",
+            "type": "string",
+            "enum": [
+              "restrict",
+              "cascade"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "root",
+          "setFunction"
+        ],
+        "description": "Scope kind of the application (tenant dimension)."
+      }
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "$id": "project.schema.json"
+}

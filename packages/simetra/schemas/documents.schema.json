@@ -1,0 +1,717 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+      "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "description": "Logical object name in PascalCase."
+    },
+    "physicalName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+    },
+    "schema": {
+      "description": "PostgreSQL schema of the object; the project defaultSchema applies when absent.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Scope kind of the object, or none to keep it outside any scope. Required when the project declares scope kinds.",
+      "type": "string"
+    },
+    "title": {
+      "description": "Human-readable title of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      }
+    },
+    "description": {
+      "description": "Description of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      }
+    },
+    "kind": {
+      "type": "string",
+      "const": "Document",
+      "description": "Metadata kind; always Document."
+    },
+    "numberLength": {
+      "default": 11,
+      "description": "Length of the document number.",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "numberType": {
+      "default": "String",
+      "description": "Value type of the document number.",
+      "type": "string",
+      "enum": [
+        "String",
+        "Number"
+      ]
+    },
+    "autonumber": {
+      "default": true,
+      "description": "Whether the number is generated automatically.",
+      "type": "boolean"
+    },
+    "numberPeriodicity": {
+      "default": "Year",
+      "description": "Period after which automatic numbering restarts.",
+      "type": "string",
+      "enum": [
+        "None",
+        "Year",
+        "Quarter",
+        "Month",
+        "Day"
+      ]
+    },
+    "posting": {
+      "description": "Posting declaration of the document.",
+      "type": "object",
+      "properties": {
+        "movements": {
+          "default": [],
+          "description": "Declared movements written when the document is posted.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "register": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "Catalog",
+                      "Document",
+                      "Enumeration",
+                      "InformationRegister",
+                      "AccumulationRegister",
+                      "Constant",
+                      "CustomTable",
+                      "PgEnum"
+                    ],
+                    "description": "Kind of the referenced metadata object."
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Za-z0-9]*$",
+                    "description": "Logical name of the referenced object."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "description": "Register that receives the movement."
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "document"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "tabularSection": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Name of the tabular section that produces the rows."
+                      }
+                    },
+                    "required": [
+                      "tabularSection"
+                    ]
+                  }
+                ],
+                "description": "Where movement rows come from: the document itself or one of its tabular sections."
+              },
+              "condition": {
+                "description": "Expression; the movement is written only when it is true.",
+                "type": "string",
+                "minLength": 1
+              },
+              "movementType": {
+                "description": "Receipt or Expense literal for a balance register, otherwise an expression.",
+                "type": "string",
+                "minLength": 1
+              },
+              "period": {
+                "description": "Expression for the movement period.",
+                "type": "string",
+                "minLength": 1
+              },
+              "fields": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "Register field name to expression; the register defines each field role."
+              }
+            },
+            "required": [
+              "register",
+              "source",
+              "fields"
+            ],
+            "description": "One movement of the document into a register."
+          }
+        }
+      }
+    },
+    "registerMovements": {
+      "default": [],
+      "description": "Registers the document writes movements into.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Catalog",
+              "Document",
+              "Enumeration",
+              "InformationRegister",
+              "AccumulationRegister",
+              "Constant",
+              "CustomTable",
+              "PgEnum"
+            ],
+            "description": "Kind of the referenced metadata object."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9]*$",
+            "description": "Logical name of the referenced object."
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+      }
+    },
+    "standardAttributeOverrides": {
+      "default": {},
+      "description": "Custom descriptions of derived standard attributes, keyed by standard attribute name.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "description": "Overridden description of the standard attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "attributes": {
+      "default": [],
+      "description": "Custom attributes of the document.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            }
+          },
+          "description": {
+            "description": "Description of the attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            }
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "UUID",
+              "String",
+              "Text",
+              "Integer",
+              "SmallInt",
+              "BigInt",
+              "Numeric",
+              "Boolean",
+              "Date",
+              "DateTime",
+              "Bytes",
+              "Json",
+              "Ref"
+            ],
+            "description": "Logical value type."
+          },
+          "length": {
+            "description": "Maximum length; required for String and allowed only there.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "precision": {
+            "description": "Total number of digits; allowed only for Numeric.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "scale": {
+            "description": "Digits after the decimal point; requires precision.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ref": {
+            "description": "Single reference target of a Ref value; mutually exclusive with allowedTypes.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ]
+          },
+          "allowedTypes": {
+            "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "Catalog",
+                    "Document",
+                    "Enumeration",
+                    "InformationRegister",
+                    "AccumulationRegister",
+                    "Constant",
+                    "CustomTable",
+                    "PgEnum"
+                  ],
+                  "description": "Kind of the referenced metadata object."
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "description": "Logical name of the referenced object."
+                }
+              },
+              "required": [
+                "kind",
+                "name"
+              ],
+              "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+            }
+          },
+          "array": {
+            "description": "Whether the value is an array of the type.",
+            "type": "boolean"
+          },
+          "crossScope": {
+            "description": "Marks a deliberately cross-scope Ref: the FK has no scope part in its key.",
+            "type": "boolean",
+            "const": true
+          },
+          "required": {
+            "default": false,
+            "description": "Whether a value is mandatory (NOT NULL).",
+            "type": "boolean"
+          },
+          "indexed": {
+            "default": false,
+            "description": "Whether the attribute is indexed.",
+            "type": "boolean"
+          },
+          "unique": {
+            "default": false,
+            "description": "Whether values must be unique.",
+            "type": "boolean"
+          },
+          "defaultValue": {
+            "description": "Default value of the attribute.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ]
+      }
+    },
+    "tabularSections": {
+      "default": [],
+      "description": "Tabular sections of the document.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the tabular section.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            }
+          },
+          "standardAttributeOverrides": {
+            "default": {},
+            "description": "Custom descriptions of derived standard attributes, keyed by standard attribute name.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "description": "Overridden description of the standard attribute.",
+                  "type": "object",
+                  "properties": {
+                    "uk": {
+                      "description": "Ukrainian text.",
+                      "type": "string"
+                    },
+                    "en": {
+                      "description": "English text.",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "attributes": {
+            "default": [],
+            "description": "Attributes of the section rows.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                  "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                  "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                },
+                "physicalName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+                },
+                "title": {
+                  "description": "Human-readable title of the attribute.",
+                  "type": "object",
+                  "properties": {
+                    "uk": {
+                      "description": "Ukrainian text.",
+                      "type": "string"
+                    },
+                    "en": {
+                      "description": "English text.",
+                      "type": "string"
+                    }
+                  }
+                },
+                "description": {
+                  "description": "Description of the attribute.",
+                  "type": "object",
+                  "properties": {
+                    "uk": {
+                      "description": "Ukrainian text.",
+                      "type": "string"
+                    },
+                    "en": {
+                      "description": "English text.",
+                      "type": "string"
+                    }
+                  }
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "UUID",
+                    "String",
+                    "Text",
+                    "Integer",
+                    "SmallInt",
+                    "BigInt",
+                    "Numeric",
+                    "Boolean",
+                    "Date",
+                    "DateTime",
+                    "Bytes",
+                    "Json",
+                    "Ref"
+                  ],
+                  "description": "Logical value type."
+                },
+                "length": {
+                  "description": "Maximum length; required for String and allowed only there.",
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "precision": {
+                  "description": "Total number of digits; allowed only for Numeric.",
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "scale": {
+                  "description": "Digits after the decimal point; requires precision.",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "ref": {
+                  "description": "Single reference target of a Ref value; mutually exclusive with allowedTypes.",
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "Catalog",
+                        "Document",
+                        "Enumeration",
+                        "InformationRegister",
+                        "AccumulationRegister",
+                        "Constant",
+                        "CustomTable",
+                        "PgEnum"
+                      ],
+                      "description": "Kind of the referenced metadata object."
+                    },
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Za-z0-9]*$",
+                      "description": "Logical name of the referenced object."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name"
+                  ]
+                },
+                "allowedTypes": {
+                  "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "Catalog",
+                          "Document",
+                          "Enumeration",
+                          "InformationRegister",
+                          "AccumulationRegister",
+                          "Constant",
+                          "CustomTable",
+                          "PgEnum"
+                        ],
+                        "description": "Kind of the referenced metadata object."
+                      },
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Za-z0-9]*$",
+                        "description": "Logical name of the referenced object."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+                  }
+                },
+                "array": {
+                  "description": "Whether the value is an array of the type.",
+                  "type": "boolean"
+                },
+                "crossScope": {
+                  "description": "Marks a deliberately cross-scope Ref: the FK has no scope part in its key.",
+                  "type": "boolean",
+                  "const": true
+                },
+                "required": {
+                  "default": false,
+                  "description": "Whether a value is mandatory (NOT NULL).",
+                  "type": "boolean"
+                },
+                "indexed": {
+                  "default": false,
+                  "description": "Whether the attribute is indexed.",
+                  "type": "boolean"
+                },
+                "unique": {
+                  "default": false,
+                  "description": "Whether values must be unique.",
+                  "type": "boolean"
+                },
+                "defaultValue": {
+                  "description": "Default value of the attribute.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "description": "Tabular section: a list of rows owned by an object."
+      }
+    }
+  },
+  "required": [
+    "name",
+    "kind"
+  ],
+  "$id": "documents.schema.json"
+}

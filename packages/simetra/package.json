@@ -33,6 +33,7 @@
     "./server": "./src/server/index.ts",
     "./data": "./src/data/index.ts",
     "./ui": "./src/ui/index.ts",
-    "./shell": "./src/shell/index.ts"
+    "./shell": "./src/shell/index.ts",
+    "./schemas/*": "./schemas/*"
   }
 }

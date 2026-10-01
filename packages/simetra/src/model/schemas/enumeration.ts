@@ -9,13 +9,19 @@ import { objectHeaderShape } from "./object-header"
 import type { SchemaRule } from "./rules"
 import { NO_SCOPE } from "./scope"
 
-export const enumValueSchema = z.object({
-  id: metadataIdSchema.optional(),
-  name: objectNameSchema,
-  /** Фізична мітка значення в БД. */
-  physicalName: physicalNameSchema.optional(),
-  title: localizedStringSchema.optional(),
-})
+export const enumValueSchema = z
+  .object({
+    id: metadataIdSchema.optional(),
+    name: objectNameSchema.meta({
+      description: "Logical name of the enumeration value.",
+    }),
+    /** Фізична мітка значення в БД. */
+    physicalName: physicalNameSchema.optional(),
+    title: localizedStringSchema.optional().meta({
+      description: "Human-readable title of the value.",
+    }),
+  })
+  .meta({ description: "One value of an enumeration." })
 
 export type EnumValue = z.infer<typeof enumValueSchema>
 
@@ -23,9 +29,13 @@ export type EnumValue = z.infer<typeof enumValueSchema>
 export const enumerationSchema = z
   .object({
     ...objectHeaderShape,
-    kind: z.literal("Enumeration"),
+    kind: z
+      .literal("Enumeration")
+      .meta({ description: "Metadata kind; always Enumeration." }),
 
-    values: z.array(enumValueSchema).default([]),
+    values: z.array(enumValueSchema).default([]).meta({
+      description: "Enumeration values; array order is the value order.",
+    }),
   })
   .superRefine((value, ctx) => {
     // Значення переліку не мають рядків даних, тож належати скоупу нічому;

@@ -12,34 +12,75 @@ import {
 /** Довідник. */
 export const catalogSchema = z.object({
   ...objectHeaderShape,
-  kind: z.literal("Catalog"),
+  kind: z
+    .literal("Catalog")
+    .meta({ description: "Metadata kind; always Catalog." }),
 
   // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
-  codeLength: z.number().int().nonnegative().default(9),
-  codeType: z.enum(["String", "Number"]).default("String"),
-  descriptionLength: z.number().int().nonnegative().default(150),
+  codeLength: z.number().int().nonnegative().default(9).meta({
+    description:
+      "Length of the code attribute; 0 means the catalog has no code.",
+  }),
+  codeType: z
+    .enum(["String", "Number"])
+    .default("String")
+    .meta({ description: "Value type of the code attribute." }),
+  descriptionLength: z.number().int().nonnegative().default(150).meta({
+    description:
+      "Length of the description attribute; 0 means the catalog has no description.",
+  }),
   hierarchyType: z
     .enum(["None", "FoldersAndItems", "ItemsOnly"])
-    .default("None"),
-  owners: z.array(metadataRefSchema).default([]),
-  autonumber: z.boolean().default(true),
-  codeUnique: z.boolean().default(true),
-  mainPresentation: z.enum(["Code", "Description"]).default("Description"),
+    .default("None")
+    .meta({
+      description:
+        "Hierarchy mode: none, folders and items, or items nested under items.",
+    }),
+  owners: z.array(metadataRefSchema).default([]).meta({
+    description: "Objects that own items of this catalog (subordination).",
+  }),
+  autonumber: z
+    .boolean()
+    .default(true)
+    .meta({ description: "Whether the code is generated automatically." }),
+  codeUnique: z
+    .boolean()
+    .default(true)
+    .meta({ description: "Whether the code must be unique." }),
+  mainPresentation: z
+    .enum(["Code", "Description"])
+    .default("Description")
+    .meta({
+      description:
+        "Which standard attribute represents an item in lists and references.",
+    }),
   predefinedItems: z
     .array(
       z.object({
         // Як у attributeSchema: обов'язковість id дає стадія 2.
         id: metadataIdSchema.optional(),
-        name: z.string(),
-        description: localizedStringSchema.optional(),
+        name: z.string().meta({ description: "Name of the predefined item." }),
+        description: localizedStringSchema.optional().meta({
+          description: "Description of the predefined item.",
+        }),
       })
     )
-    .default([]),
+    .default([])
+    .meta({
+      description:
+        "Items that exist in every deployment and are referenced by name.",
+    }),
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 
-  attributes: z.array(attributeSchema).default([]),
-  tabularSections: z.array(tabularSectionSchema).default([]),
+  attributes: z
+    .array(attributeSchema)
+    .default([])
+    .meta({ description: "Custom attributes of the catalog." }),
+  tabularSections: z
+    .array(tabularSectionSchema)
+    .default([])
+    .meta({ description: "Tabular sections of the catalog." }),
 })
 
 export type Catalog = z.infer<typeof catalogSchema>

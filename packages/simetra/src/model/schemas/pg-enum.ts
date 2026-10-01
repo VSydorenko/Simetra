@@ -9,8 +9,13 @@ export const pgEnumSchema = z
   .object({
     // Енам-тип живе в схемі, а не в скоупі: поля `scope` у нього немає.
     ...z.object(objectHeaderShape).omit({ scope: true }).shape,
-    kind: z.literal("PgEnum"),
-    values: z.array(z.string().min(1)).min(1),
+    kind: z
+      .literal("PgEnum")
+      .meta({ description: "Metadata kind; always PgEnum." }),
+    values: z.array(z.string().min(1)).min(1).meta({
+      description:
+        "Physical enum labels in database order; duplicates are not allowed.",
+    }),
   })
   .superRefine((value, ctx) => {
     const seen = new Set<string>()

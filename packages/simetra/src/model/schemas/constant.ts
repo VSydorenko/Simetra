@@ -6,9 +6,14 @@ import { refineValueType, valueTypeShape } from "./value-type"
 export const constantSchema = z
   .object({
     ...objectHeaderShape,
-    kind: z.literal("Constant"),
+    kind: z
+      .literal("Constant")
+      .meta({ description: "Metadata kind; always Constant." }),
     ...valueTypeShape,
-    defaultValue: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    defaultValue: z
+      .union([z.string(), z.number(), z.boolean()])
+      .optional()
+      .meta({ description: "Initial value of the constant." }),
   })
   .superRefine(refineValueType)
 

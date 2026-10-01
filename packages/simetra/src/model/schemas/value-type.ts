@@ -22,16 +22,34 @@ export type LogicalType = (typeof LOGICAL_TYPES)[number]
 
 /** Поля типу, спільні для реквізиту, константи й колонки. */
 export const valueTypeShape = {
-  type: z.enum(LOGICAL_TYPES),
-  length: z.number().int().positive().optional(),
-  precision: z.number().int().positive().optional(),
-  scale: z.number().int().nonnegative().optional(),
-  ref: metadataRefSchema.optional(),
+  type: z.enum(LOGICAL_TYPES).meta({ description: "Logical value type." }),
+  length: z.number().int().positive().optional().meta({
+    description: "Maximum length; required for String and allowed only there.",
+  }),
+  precision: z.number().int().positive().optional().meta({
+    description: "Total number of digits; allowed only for Numeric.",
+  }),
+  scale: z.number().int().nonnegative().optional().meta({
+    description: "Digits after the decimal point; requires precision.",
+  }),
+  ref: metadataRefSchema.optional().meta({
+    description:
+      "Single reference target of a Ref value; mutually exclusive with allowedTypes.",
+  }),
   // Порожня множина дала б пару колонок без CHECK на дискримінатор.
-  allowedTypes: z.array(metadataRefSchema).min(1).optional(),
-  array: z.boolean().optional(),
+  allowedTypes: z.array(metadataRefSchema).min(1).optional().meta({
+    description:
+      "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
+  }),
+  array: z
+    .boolean()
+    .optional()
+    .meta({ description: "Whether the value is an array of the type." }),
   /** Свідомо міжскоуповий Ref: FK без скоупної частини ключа. */
-  crossScope: z.literal(true).optional(),
+  crossScope: z.literal(true).optional().meta({
+    description:
+      "Marks a deliberately cross-scope Ref: the FK has no scope part in its key.",
+  }),
 }
 
 export type ValueType = z.infer<z.ZodObject<typeof valueTypeShape>>

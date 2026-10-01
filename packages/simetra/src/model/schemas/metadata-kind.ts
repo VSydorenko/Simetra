@@ -16,6 +16,8 @@ export const METADATA_KINDS = [
   "PgEnum",
 ] as const
 
-export const metadataKindSchema = z.enum(METADATA_KINDS)
+export const metadataKindSchema = z.enum(METADATA_KINDS).meta({
+  description: "Kind of the referenced metadata object.",
+})
 
 export type MetadataKind = z.infer<typeof metadataKindSchema>

@@ -16,13 +16,29 @@ export const attributeSchema = z
     id: metadataIdSchema.optional(),
     name: elementNameSchema,
     physicalName: physicalNameSchema.optional(),
-    title: localizedStringSchema.optional(),
-    description: localizedStringSchema.optional(),
+    title: localizedStringSchema.optional().meta({
+      description: "Human-readable title of the attribute.",
+    }),
+    description: localizedStringSchema.optional().meta({
+      description: "Description of the attribute.",
+    }),
     ...valueTypeShape,
-    required: z.boolean().default(false),
-    indexed: z.boolean().default(false),
-    unique: z.boolean().default(false),
-    defaultValue: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    required: z
+      .boolean()
+      .default(false)
+      .meta({ description: "Whether a value is mandatory (NOT NULL)." }),
+    indexed: z
+      .boolean()
+      .default(false)
+      .meta({ description: "Whether the attribute is indexed." }),
+    unique: z
+      .boolean()
+      .default(false)
+      .meta({ description: "Whether values must be unique." }),
+    defaultValue: z
+      .union([z.string(), z.number(), z.boolean()])
+      .optional()
+      .meta({ description: "Default value of the attribute." }),
   })
   .superRefine(refineValueType)
 

@@ -24,19 +24,43 @@ export const customTableColumnSchema = z
     id: objectHeaderShape.id,
     name: elementNameSchema,
     physicalName: physicalNameSchema.optional(),
-    title: localizedStringSchema.optional(),
-    notNull: z.boolean().default(false),
+    title: localizedStringSchema.optional().meta({
+      description: "Human-readable title of the column.",
+    }),
+    notNull: z
+      .boolean()
+      .default(false)
+      .meta({ description: "Whether the column is NOT NULL." }),
     /** SQL-вираз значення за замовчуванням. */
-    default: z.string().optional(),
-    identity: z.enum(["always", "byDefault"]).optional(),
-    comment: z.string().optional(),
+    default: z.string().optional().meta({
+      description: "SQL expression used as the column default.",
+    }),
+    identity: z.enum(["always", "byDefault"]).optional().meta({
+      description:
+        "Identity generation mode; requires SmallInt, Integer or BigInt type.",
+    }),
+    comment: z
+      .string()
+      .optional()
+      .meta({ description: "Comment on the column." }),
 
-    type: z.enum([...LOGICAL_TYPES, "PgEnum", "Raw"]),
+    type: z.enum([...LOGICAL_TYPES, "PgEnum", "Raw"]).meta({
+      description:
+        "Logical type, PgEnum for an accepted enum, or Raw for a raw PostgreSQL type.",
+    }),
     ...z.object(valueTypeShape).omit({ type: true }).shape,
     enum: z
-      .object({ kind: z.literal("PgEnum"), name: objectNameSchema })
-      .optional(),
-    pgType: z.string().min(1).optional(),
+      .object({
+        kind: z.literal("PgEnum").meta({ description: "Always PgEnum." }),
+        name: objectNameSchema.meta({
+          description: "Logical name of the PgEnum object.",
+        }),
+      })
+      .optional()
+      .meta({ description: "Enum type of a PgEnum column." }),
+    pgType: z.string().min(1).optional().meta({
+      description: "Raw PostgreSQL type of a Raw column.",
+    }),
   })
   .superRefine((column, ctx) => {
     const issue = (rule: SchemaRule, message: string, path: string[]) =>
@@ -134,59 +158,117 @@ export const customTableColumnSchema = z
 
 export type CustomTableColumn = z.infer<typeof customTableColumnSchema>
 
-const constraintName = z.string().min(1).optional()
-const columnList = z.array(elementNameSchema).min(1)
+const constraintName = z.string().min(1).optional().meta({
+  description:
+    "Constraint name; when absent the PostgreSQL default name is used.",
+})
+const columnList = z.array(elementNameSchema).min(1).meta({
+  description: "Logical names of columns of this table.",
+})
 
-export const fkActionSchema = z.enum([
-  "noAction",
-  "restrict",
-  "cascade",
-  "setNull",
-  "setDefault",
-])
+export const fkActionSchema = z
+  .enum(["noAction", "restrict", "cascade", "setNull", "setDefault"])
+  .meta({ description: "Referential action of a foreign key." })
 
 export type FkAction = z.infer<typeof fkActionSchema>
 
 /** `forced` — RLS діє і для власника таблиці (`FORCE ROW LEVEL SECURITY`). */
-export const rowLevelSecuritySchema = z.enum(["off", "enabled", "forced"])
+export const rowLevelSecuritySchema = z
+  .enum(["off", "enabled", "forced"])
+  .meta({
+    description:
+      "Row-level security of the table: off, enabled, or forced (applies to the table owner too).",
+  })
 
 export type RowLevelSecurity = z.infer<typeof rowLevelSecuritySchema>
 
-const foreignKeySchema = z.object({
-  name: constraintName,
-  columns: columnList,
-  references: z.union([
-    z.object({ object: metadataRefSchema, columns: columnList }),
-    z.object({
-      external: z.object({
-        schema: z.string().min(1),
-        table: z.string().min(1),
-        // Колонки зовнішньої таблиці — фізичні імена, не логічні.
-        columns: z.array(z.string().min(1)).min(1),
-      }),
-    }),
-  ]),
-  onDelete: fkActionSchema.default("noAction"),
-  onUpdate: fkActionSchema.default("noAction"),
-  deferrable: z.enum(["no", "deferrable", "initiallyDeferred"]).default("no"),
-})
-
-const indexSchema = z.object({
-  name: constraintName,
-  unique: z.boolean().default(false),
-  method: z.string().min(1).default("btree"),
-  keys: z
-    .array(
-      z.union([
-        z.object({ column: elementNameSchema }),
-        z.object({ expression: z.string().min(1) }),
+const foreignKeySchema = z
+  .object({
+    name: constraintName,
+    columns: columnList,
+    references: z
+      .union([
+        z.object({
+          object: metadataRefSchema.meta({
+            description: "Referenced metadata object.",
+          }),
+          columns: columnList.meta({
+            description: "Logical names of columns of the referenced object.",
+          }),
+        }),
+        z.object({
+          external: z
+            .object({
+              schema: z.string().min(1).meta({
+                description: "PostgreSQL schema of the external table.",
+              }),
+              table: z.string().min(1).meta({
+                description: "Physical name of the external table.",
+              }),
+              // Колонки зовнішньої таблиці — фізичні імена, не логічні.
+              columns: z.array(z.string().min(1)).min(1).meta({
+                description: "Physical column names of the external table.",
+              }),
+            })
+            .meta({ description: "Referenced table outside the metadata." }),
+        }),
       ])
-    )
-    .min(1),
-  include: z.array(elementNameSchema).default([]),
-  where: z.string().optional(),
-  nullsNotDistinct: z.boolean().default(false),
-})
+      .meta({
+        description:
+          "Referenced target: a metadata object or an external table.",
+      }),
+    onDelete: fkActionSchema
+      .default("noAction")
+      .meta({ description: "Action on delete of the referenced row." }),
+    onUpdate: fkActionSchema
+      .default("noAction")
+      .meta({ description: "Action on update of the referenced key." }),
+    deferrable: z
+      .enum(["no", "deferrable", "initiallyDeferred"])
+      .default("no")
+      .meta({ description: "Whether the constraint check can be deferred." }),
+  })
+  .meta({ description: "Foreign key of the table." })
+
+const indexSchema = z
+  .object({
+    name: constraintName,
+    unique: z
+      .boolean()
+      .default(false)
+      .meta({ description: "Whether the index is unique." }),
+    method: z.string().min(1).default("btree").meta({
+      description: "Index access method.",
+    }),
+    keys: z
+      .array(
+        z.union([
+          z.object({
+            column: elementNameSchema.meta({
+              description: "Logical name of the indexed column.",
+            }),
+          }),
+          z.object({
+            expression: z
+              .string()
+              .min(1)
+              .meta({ description: "SQL expression of the index key." }),
+          }),
+        ])
+      )
+      .min(1)
+      .meta({ description: "Index keys: columns or expressions." }),
+    include: z.array(elementNameSchema).default([]).meta({
+      description: "Logical names of non-key columns stored in the index.",
+    }),
+    where: z.string().optional().meta({
+      description: "SQL predicate of a partial index.",
+    }),
+    nullsNotDistinct: z.boolean().default(false).meta({
+      description: "Whether NULLs are treated as equal in a unique index.",
+    }),
+  })
+  .meta({ description: "Index of the table." })
 
 /**
  * Довільна таблиця з повним фізичним описом. Колонки в обмеженнях і індексах
@@ -195,33 +277,66 @@ const indexSchema = z.object({
  */
 export const customTableSchema = z.object({
   ...objectHeaderShape,
-  kind: z.literal("CustomTable"),
-  comment: z.string().optional(),
-  columns: z.array(customTableColumnSchema).min(1),
+  kind: z
+    .literal("CustomTable")
+    .meta({ description: "Metadata kind; always CustomTable." }),
+  comment: z.string().optional().meta({ description: "Comment on the table." }),
+  columns: z
+    .array(customTableColumnSchema)
+    .min(1)
+    .meta({ description: "Columns of the table." }),
   primaryKey: z
     .object({ name: constraintName, columns: columnList })
-    .optional(),
+    .optional()
+    .meta({ description: "Primary key of the table." }),
   uniques: z
     .array(
-      z.object({
-        name: constraintName,
-        columns: columnList,
-        nullsNotDistinct: z.boolean().default(false),
-      })
+      z
+        .object({
+          name: constraintName,
+          columns: columnList,
+          nullsNotDistinct: z.boolean().default(false).meta({
+            description: "Whether NULLs are treated as equal.",
+          }),
+        })
+        .meta({ description: "Unique constraint." })
     )
-    .default([]),
+    .default([])
+    .meta({ description: "Unique constraints of the table." }),
   checks: z
-    .array(z.object({ name: constraintName, expression: z.string().min(1) }))
-    .default([]),
-  foreignKeys: z.array(foreignKeySchema).default([]),
-  indexes: z.array(indexSchema).default([]),
+    .array(
+      z
+        .object({
+          name: constraintName,
+          expression: z
+            .string()
+            .min(1)
+            .meta({ description: "SQL boolean expression of the check." }),
+        })
+        .meta({ description: "Check constraint." })
+    )
+    .default([])
+    .meta({ description: "Check constraints of the table." }),
+  foreignKeys: z
+    .array(foreignKeySchema)
+    .default([])
+    .meta({ description: "Foreign keys of the table." }),
+  indexes: z
+    .array(indexSchema)
+    .default([])
+    .meta({ description: "Indexes of the table." }),
   /** Логічне ім'я власної колонки таблиці, що несе скоуп. */
-  scopeColumn: elementNameSchema.optional(),
+  scopeColumn: elementNameSchema.optional().meta({
+    description: "Logical name of the own column that carries the scope.",
+  }),
   /**
    * RLS таблиці — властивість метаданих, а не `ALTER TABLE` у `.sql`: стан
    * таблиці описує одне місце. Прийнята таблиця за замовчуванням без RLS.
    */
-  rowLevelSecurity: rowLevelSecuritySchema.default("off"),
+  rowLevelSecurity: rowLevelSecuritySchema.default("off").meta({
+    description:
+      "Row-level security of the table: off, enabled, or forced (applies to the table owner too).",
+  }),
 })
 
 export type CustomTable = z.infer<typeof customTableSchema>
