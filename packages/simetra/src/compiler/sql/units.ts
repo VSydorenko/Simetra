@@ -10,7 +10,7 @@ import type {
 } from "libpg-query"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { extractMovementBlocks } from "../movement-blocks"
-import type { SqlParser } from "./parse"
+import type { ParsedStatement, SqlParser } from "./parse"
 
 export type SqlUnitClass =
   | "function"
@@ -124,12 +124,18 @@ export const FUNCTION_CLASSES: ReadonlySet<SqlUnitClass> = new Set([
  */
 export function readSqlUnits(
   sources: readonly SqlSource[],
-  parse: SqlParser
+  parse: SqlParser,
+  enumTypes: readonly { schema: string; name: string }[]
 ): { units: VerbatimUnit[]; diagnostics: Diagnostic[] } {
   const units: VerbatimUnit[] = []
   const diagnostics: Diagnostic[] = []
   // Порядок файлів — за шляхом: «перша» з дублікатів не залежить від мапи.
   const ordered = [...sources].sort((a, b) => compareStrings(a.file, b.file))
+  const files: {
+    source: SqlSource
+    text: string
+    statements: ParsedStatement[]
+  }[] = []
   for (const source of ordered) {
     const text = extractMovementBlocks(source.text).masked
     const parsed = parse(text)
@@ -144,10 +150,26 @@ export function readSqlUnits(
       )
       continue
     }
-    for (const statement of parsed.statements) {
+    files.push({ source, text, statements: parsed.statements })
+  }
+  // Некваліфікований тип аргументу резолвиться в типи моделі, тож домени
+  // всіх файлів зібрано до ідентичностей.
+  const domains = files.flatMap(({ source, statements }) =>
+    statements.flatMap(({ stmt }) =>
+      "CreateDomainStmt" in stmt
+        ? [qualify(strings(stmt.CreateDomainStmt.domainname), source.schema)]
+        : []
+    )
+  )
+  const types = modelTypes([...enumTypes, ...domains])
+  for (const { source, text, statements } of files) {
+    for (const statement of statements) {
       const start = firstToken(text, statement.start, statement.end)
       const line = position(text, start).line
-      const classified = classify(statement.stmt, source.schema)
+      const classified = classify(statement.stmt, {
+        schema: source.schema,
+        types,
+      })
       if ("notAllowed" in classified) {
         diagnostics.push(
           diagnostic("sql.statement-not-allowed", source.file, "", {
@@ -222,13 +244,16 @@ export function withoutLocations(value: unknown): unknown {
   )
 }
 
-/** Ідентичність обгортки — той самий простір, що й у функцій користувача. */
+/**
+ * Ідентичність обгортки — той самий простір, що й у функцій користувача.
+ * Аргументи обгортки — типи каталогу, тож типи моделі їй не потрібні.
+ */
 export function functionIdentity(
   schema: string,
   name: string,
   argTypes: readonly (TypeName | undefined)[]
 ): string {
-  return `function:${signature(schema, name, argTypes)}`
+  return `function:${signature(name, argTypes, { schema, types: new Map() })}`
 }
 
 /** Типи вхідних аргументів `CREATE FUNCTION`/`PROCEDURE` — те, що входить в ідентичність. */
@@ -241,13 +266,39 @@ export function inputArgumentTypes(
     .map((p) => p.argType)
 }
 
-/** `schema.name(типи)` — типи аргументів у канонічній формі (спека П2 §8.3). */
+/**
+ * `schema.name(типи)` — типи аргументів у канонічній формі (спека П2 §8.3);
+ * `scope.schema` — схема функції й некваліфікованих імен.
+ */
 function signature(
-  schema: string,
   name: string,
-  argTypes: readonly (TypeName | undefined)[]
+  argTypes: readonly (TypeName | undefined)[],
+  scope: TypeScope
 ): string {
-  return `${schema}.${name}(${argTypes.map(typeName).join(",")})`
+  const types = argTypes.map((t) => typeName(t, scope)).join(",")
+  return `${scope.schema}.${name}(${types})`
+}
+
+/** Типи, які знає модель (енам-типи знімка, домени `.sql`): ім'я → схеми. */
+type ModelTypes = ReadonlyMap<string, readonly string[]>
+
+/** Де читається некваліфікований тип: схема одиниці й типи моделі. */
+interface TypeScope {
+  schema: string
+  types: ModelTypes
+}
+
+function modelTypes(
+  types: readonly { schema: string; name: string }[]
+): ModelTypes {
+  const schemas = new Map<string, string[]>()
+  for (const { schema, name } of types) {
+    const list = schemas.get(name) ?? []
+    if (!list.includes(schema)) list.push(schema)
+    schemas.set(name, list)
+  }
+  for (const list of schemas.values()) list.sort(compareStrings)
+  return schemas
 }
 
 type Classified =
@@ -270,7 +321,8 @@ const ROW_SECURITY: ReadonlySet<string> = new Set([
  * володіє. Таблиці, індекси, енам-типи — модель; `DROP` і DML — не бажаний
  * стан; RLS таблиці — поле таблиці в метаданих.
  */
-function classify(stmt: Node, schema: string): Classified {
+function classify(stmt: Node, scope: TypeScope): Classified {
+  const { schema } = scope
   const statement = Object.keys(stmt)[0] ?? "unknown"
   const unit = (
     cls: SqlUnitClass,
@@ -285,7 +337,10 @@ function classify(stmt: Node, schema: string): Classified {
     return unit(
       cls,
       fn,
-      signature(fn.schema, fn.name, inputArgumentTypes(node))
+      signature(fn.name, inputArgumentTypes(node), {
+        ...scope,
+        schema: fn.schema,
+      })
     )
   }
   if ("DefineStmt" in stmt && stmt.DefineStmt.kind === "OBJECT_AGGREGATE") {
@@ -296,11 +351,11 @@ function classify(stmt: Node, schema: string): Classified {
     const key =
       list !== undefined && "List" in list
         ? signature(
-            fn.schema,
             fn.name,
             (list.List.items ?? []).map((p) =>
               "FunctionParameter" in p ? p.FunctionParameter.argType : undefined
-            )
+            ),
+            { ...scope, schema: fn.schema }
           )
         : `${fn.schema}.${fn.name}(*)`
     return unit("aggregate", fn, key)
@@ -342,7 +397,7 @@ function classify(stmt: Node, schema: string): Classified {
     // `ALL … IN SCHEMA` перелічує схеми, а не об'єкти.
     const objects = sorted(
       (node.objects ?? []).map((o) =>
-        allInSchema ? nodeText(o, schema) : targetName(o, node.objtype, schema)
+        allInSchema ? nodeText(o) : targetName(o, node.objtype, scope)
       )
     ).join(",")
     return unit(
@@ -365,16 +420,14 @@ function classify(stmt: Node, schema: string): Classified {
           ? listItems(o.DefElem.arg)
           : []
       )
-    const role = sorted(option("roles").map((r) => nodeText(r, schema))).join(
-      ","
-    )
+    const role = sorted(option("roles").map((r) => nodeText(r))).join(",")
     const action = node.action ?? {}
     return unit(
       "defaultPrivileges",
       { schema: "", name: role },
       [
         role,
-        sorted(option("schemas").map((s) => nodeText(s, schema))).join(","),
+        sorted(option("schemas").map((s) => nodeText(s))).join(","),
         objectType(action.objtype),
         action.is_grant === true ? "grant" : "revoke",
         roles(action.grantees),
@@ -387,7 +440,7 @@ function classify(stmt: Node, schema: string): Classified {
     const name =
       node.object === undefined
         ? ""
-        : targetName(node.object, node.objtype, schema)
+        : targetName(node.object, node.objtype, scope)
     return unit(
       "comment",
       { schema: "", name },
@@ -476,7 +529,7 @@ function classify(stmt: Node, schema: string): Classified {
     return unit(
       "functionSettings",
       qualify(strings(fn.objname), schema),
-      functionObject(fn, schema)
+      functionObject(fn, scope)
     )
   }
   return { notAllowed: statement }
@@ -514,43 +567,152 @@ function relation(
 }
 
 /**
+ * Вбудовані типи Postgres 17 (`pg_catalog`), які пишуть без схеми. Лише за
+ * ними `_x` читається як масив `x[]`: ім'я `_item` користувача — просто ім'я
+ * (масив його типу Postgres перейменовує на `__item`, коли `_item` зайняте);
+ * і лише вони не резолвляться в однойменний тип моделі — `pg_catalog`
+ * неявно першим у `search_path`.
+ */
+const CATALOG_TYPES: ReadonlySet<string> = new Set([
+  "aclitem",
+  "bit",
+  "bool",
+  "box",
+  "bpchar",
+  "bytea",
+  "char",
+  "cid",
+  "cidr",
+  "circle",
+  "cstring",
+  "date",
+  "datemultirange",
+  "daterange",
+  "float4",
+  "float8",
+  "gtsvector",
+  "inet",
+  "int2",
+  "int2vector",
+  "int4",
+  "int4multirange",
+  "int4range",
+  "int8",
+  "int8multirange",
+  "int8range",
+  "interval",
+  "json",
+  "jsonb",
+  "jsonpath",
+  "line",
+  "lseg",
+  "macaddr",
+  "macaddr8",
+  "money",
+  "name",
+  "numeric",
+  "nummultirange",
+  "numrange",
+  "oid",
+  "oidvector",
+  "path",
+  "pg_lsn",
+  "pg_snapshot",
+  "point",
+  "polygon",
+  "record",
+  "refcursor",
+  "regclass",
+  "regcollation",
+  "regconfig",
+  "regdictionary",
+  "regnamespace",
+  "regoper",
+  "regoperator",
+  "regproc",
+  "regprocedure",
+  "regrole",
+  "regtype",
+  "text",
+  "tid",
+  "time",
+  "timestamp",
+  "timestamptz",
+  "timetz",
+  "tsmultirange",
+  "tsquery",
+  "tsrange",
+  "tstzmultirange",
+  "tstzrange",
+  "tsvector",
+  "txid_snapshot",
+  "uuid",
+  "varbit",
+  "varchar",
+  "xid",
+  "xid8",
+  "xml",
+])
+
+/**
  * Тип у канонічній формі Postgres (спека П2 §8.3): одне написання на один тип
  * `pg_type`, інакше один об'єкт `pg_proc` мав би дві ідентичності. Синоніми
  * зводить до внутрішніх імен сама граматика (`integer` → `pg_catalog.int4`,
  * `character varying` → `pg_catalog.varchar`), тож лишається прибрати
  * `pg_catalog.`, модифікатор типу (`varchar(10)` — той самий тип) і
- * кількість вимірів масиву; ім'я масиву `_int4` — те саме, що `int4[]`. Тип
- * з іншої схеми лишається кваліфікованим як є.
+ * кількість вимірів масиву; ім'я масиву каталогу `_int4` — те саме, що
+ * `int4[]`. Некваліфікований тип моделі бере її схему: єдину, а з кількох —
+ * схему одиниці; невідомий моделі (типи розширень) лишається як є. Тип з
+ * іншої схеми лишається кваліфікованим як є.
  */
-function typeName(type: TypeName | undefined): string {
+function typeName(type: TypeName | undefined, scope: TypeScope): string {
   if (type === undefined) return ""
   const names = strings(type.names)
-  if (names.length === 2 && names[0] === "pg_catalog") names.shift()
   if (type.pct_type === true) return `${names.join(".")}%type`
-  const last = names.at(-1) ?? ""
-  const arrayName = last.length > 1 && last.startsWith("_")
-  if (arrayName) names[names.length - 1] = last.slice(1)
-  const array = arrayName || (type.arrayBounds?.length ?? 0) > 0
-  return names.join(".") + (array ? "[]" : "")
+  const array = (type.arrayBounds?.length ?? 0) > 0 ? "[]" : ""
+  const [first, second] = names
+  if (names.length === 2 && first === "pg_catalog") {
+    return catalogType(second!, array)
+  }
+  if (names.length !== 1) return names.join(".") + array
+  const name = first!
+  if (
+    CATALOG_TYPES.has(name) ||
+    (name.startsWith("_") && CATALOG_TYPES.has(name.slice(1)))
+  ) {
+    return catalogType(name, array)
+  }
+  const schemas = scope.types.get(name) ?? []
+  if (schemas.length === 0) return name + array
+  const schema = schemas.length === 1 ? schemas[0]! : scope.schema
+  return `${schema}.${name}${array}`
 }
 
-function functionObject(fn: ObjectWithArgs, schema: string): string {
-  const { schema: s, name } = qualify(strings(fn.objname), schema)
-  if (fn.args_unspecified === true) return `${s}.${name}`
+/** Тип каталогу без схеми; `_x` — масив `x[]`. */
+function catalogType(name: string, array: string): string {
+  return name.length > 1 && name.startsWith("_")
+    ? `${name.slice(1)}[]`
+    : name + array
+}
+
+function functionObject(fn: ObjectWithArgs, scope: TypeScope): string {
+  const { schema, name } = qualify(strings(fn.objname), scope.schema)
+  if (fn.args_unspecified === true) return `${schema}.${name}`
   return signature(
-    s,
     name,
-    (fn.objargs ?? []).map((a) => ("TypeName" in a ? a.TypeName : undefined))
+    (fn.objargs ?? []).map((a) => ("TypeName" in a ? a.TypeName : undefined)),
+    { ...scope, schema }
   )
 }
 
-function nodeText(node: Node, schema: string): string {
+/**
+ * Ім'я вузла, що не є ціллю з `TARGET_PARTS`: схема, роль. Типи й функції
+ * сюди не доходять — їх розбирає `targetName`.
+ */
+function nodeText(node: Node): string {
   if ("String" in node) return node.String.sval ?? ""
   if ("RoleSpec" in node) return role(node.RoleSpec)
-  if ("TypeName" in node) return typeName(node.TypeName)
   if ("List" in node) return strings(node.List.items).join(".")
-  if ("ObjectWithArgs" in node)
-    return functionObject(node.ObjectWithArgs, schema)
   return ""
 }
 
@@ -590,18 +752,19 @@ export function targetParts(node: Node): string[] {
 function targetName(
   node: Node,
   objtype: string | undefined,
-  schema: string
+  scope: TypeScope
 ): string {
+  const { schema } = scope
   if ("RangeVar" in node) {
     const { schema: s, name } = relation(node.RangeVar, schema)
     return `${s}.${name}`
   }
   if ("ObjectWithArgs" in node)
-    return functionObject(node.ObjectWithArgs, schema)
+    return functionObject(node.ObjectWithArgs, scope)
   const parts =
     "List" in node || "TypeName" in node || "String" in node
       ? targetParts(node)
-      : [nodeText(node, schema)]
+      : [nodeText(node)]
   const expected = TARGET_PARTS[objtype ?? ""]
   return (
     expected !== undefined && parts.length === expected - 1

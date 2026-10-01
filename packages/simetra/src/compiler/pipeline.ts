@@ -48,7 +48,11 @@ export async function runStages(
   const sql =
     stage1.project === undefined
       ? { units: [], diagnostics: [] }
-      : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse)
+      : readSqlUnits(
+          sqlSources(stage1, stage1.project.defaultSchema),
+          parse,
+          enumTypes(stage1, stage1.project.defaultSchema)
+        )
   const early = [
     ...stage1.diagnostics,
     ...stage2.diagnostics,
@@ -236,6 +240,26 @@ function sqlSources(
       defaultSchema,
     ...(ownerFile === undefined ? {} : { ownerFile }),
   }))
+}
+
+/**
+ * Енам-типи знімка для резолву некваліфікованих типів аргументів: стадія 3
+ * ще не бігла, тож схема й ім'я — за тим самим правилом, що в неї.
+ */
+function enumTypes(
+  stage1: FilesStageResult,
+  defaultSchema: string
+): { schema: string; name: string }[] {
+  return stage1.objects.flatMap(({ kind, data }) => {
+    const { schema, physicalName } = data as {
+      schema?: string
+      physicalName?: string
+    }
+    return KIND_REGISTRY[kind].materializes === "enumType" &&
+      physicalName !== undefined
+      ? [{ schema: schema ?? defaultSchema, name: physicalName }]
+      : []
+  })
 }
 
 function verbatimUnit(

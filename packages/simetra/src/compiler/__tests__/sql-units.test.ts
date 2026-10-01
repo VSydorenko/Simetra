@@ -129,7 +129,7 @@ describe("sql units", () => {
     ["integer array", "pg_catalog._int4", "int4[]"],
     ["int[][]", "int4[3]", "int4[]"],
     ["varchar(10)[]", "_varchar", "varchar[]"],
-    ["other.item[]", "other._item", "other.item[]"],
+    ["_int4[]", "int[]", "int4[]"],
   ])("f(%s) and f(%s) are one function", async (first, second, canonical) => {
     const result = await compileSql(
       `CREATE FUNCTION f(a ${first}) RETURNS int LANGUAGE sql AS $$ select 1 $$;\n` +
@@ -160,6 +160,117 @@ describe("sql units", () => {
       "function:public.f(char)",
       "function:public.f(item)",
       "function:public.f(other.item)",
+    ])
+  })
+
+  it("_x is an array only for catalog types; a user type named _x is a name", async () => {
+    expect(
+      await identities(
+        [
+          "CREATE FUNCTION f(a public._item) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+          "CREATE FUNCTION f(a public.item[]) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+          "CREATE FUNCTION f(a _item) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+        ].join("\n")
+      )
+    ).toEqual([
+      "function:public.f(_item)",
+      "function:public.f(public._item)",
+      "function:public.f(public.item[])",
+    ])
+  })
+
+  it("%type argument keeps its column reference", async () => {
+    expect(
+      await identities(
+        "CREATE FUNCTION f(a t.c%type) RETURNS int LANGUAGE sql AS $$ select 1 $$;"
+      )
+    ).toEqual(["function:public.f(t.c%type)"])
+  })
+
+  it("unqualified domain type takes the schema of the domain: f(item) and f(public.item) are one function", async () => {
+    const result = await compileSql(
+      [
+        "CREATE DOMAIN item AS text;",
+        "CREATE FUNCTION f(a item) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+        "CREATE FUNCTION f(a public.item) RETURNS int LANGUAGE sql AS $$ select 2 $$;",
+      ].join("\n")
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: "function:public.f(public.item)",
+          line: 3,
+        }),
+      }),
+    ])
+  })
+
+  it("unqualified type known in one schema takes that schema, not the file's", async () => {
+    const result = await compileSql("", {
+      "sql/a/f.sql":
+        "CREATE FUNCTION f(a item) RETURNS int LANGUAGE sql AS $$ select 1 $$;\n" +
+        "GRANT EXECUTE ON FUNCTION f(item) TO anon;",
+      "sql/b/item.sql": "CREATE DOMAIN item AS text;",
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual(
+      expect.arrayContaining([
+        "function:a.f(b.item)",
+        "grant:grant:function:a.f(b.item):anon:execute",
+      ])
+    )
+  })
+
+  it("unqualified type known in several schemas takes the schema of the unit", async () => {
+    const result = await compileSql("", {
+      "sql/a/f.sql":
+        "CREATE DOMAIN item AS text;\n" +
+        "CREATE FUNCTION f(a item) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+      "sql/b/item.sql": "CREATE DOMAIN item AS text;",
+    })
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.sqlUnits.map((u) => u.identity)).toContain(
+      "function:a.f(a.item)"
+    )
+  })
+
+  it("unqualified type unknown to the model stays as written", async () => {
+    expect(
+      await identities(
+        "CREATE FUNCTION f(a citext, b vector) RETURNS int LANGUAGE sql AS $$ select 1 $$;"
+      )
+    ).toEqual(["function:public.f(citext,vector)"])
+  })
+
+  it("unqualified enum type of the model takes its schema", async () => {
+    const result = await compileSql(
+      "CREATE FUNCTION f(a mood) RETURNS int LANGUAGE sql AS $$ select 1 $$;\n" +
+        "CREATE FUNCTION f(a x.mood) RETURNS int LANGUAGE sql AS $$ select 2 $$;",
+      {
+        "pg-enums/Mood/Mood.meta.json": {
+          id: "00000000-0000-4000-8000-000000000077",
+          kind: "PgEnum",
+          name: "Mood",
+          physicalName: "mood",
+          schema: "x",
+          values: ["happy"],
+        },
+      }
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "sql.unit-duplicate",
+        params: expect.objectContaining({
+          identity: "function:public.f(x.mood)",
+        }),
+      }),
+    ])
+  })
+
+  it("type targets of comments keep their names: only signatures are canonical", async () => {
+    expect(await identities("COMMENT ON TYPE int IS 'x';")).toEqual([
+      "comment:type:pg_catalog.int4",
     ])
   })
 
