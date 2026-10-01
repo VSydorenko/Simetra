@@ -338,25 +338,40 @@ function zodDiagnostics(
   const ukIssues =
     schema.safeParse(value, { error: UK_LOCALE.localeError }).error?.issues ??
     []
-  return issues.map((issue, index) => {
+  return issues.flatMap((issue, index): Diagnostic[] => {
+    // Строгі схеми: кожен невідомий ключ — окрема діагностика з pointer на
+    // сам ключ, щоб редактор підсвітив одруківку, а не весь об'єкт.
+    if (issue.code === "unrecognized_keys") {
+      return issue.keys.map((key) =>
+        diagnostic("file.unknown-key", file, toPointer([...issue.path, key]), {
+          key,
+        })
+      )
+    }
     const pointer = toPointer(issue.path)
     const rule: unknown =
       issue.code === "custom" ? issue.params?.rule : undefined
     if (isSchemaRule(rule)) {
       const field = issue.path.at(-1)
       const offset = issue.code === "custom" ? issue.params?.offset : undefined
-      return diagnostic(rule, file, pointer, {
-        ...(field === undefined ? {} : { field: String(field) }),
-        // Помилка розбору виразу: текст парсера й зміщення в рядку виразу.
-        ...(typeof offset === "number"
-          ? { offset, detail: issue.message }
-          : {}),
-      })
+      return [
+        diagnostic(rule, file, pointer, {
+          ...(field === undefined ? {} : { field: String(field) }),
+          // Помилка розбору виразу: текст парсера й зміщення в рядку виразу.
+          ...(typeof offset === "number"
+            ? { offset, detail: issue.message }
+            : {}),
+        }),
+      ]
     }
+    // Індекс — вихідний індекс issue, а не діагностики: ключі вище
+    // розгортаються в кілька діагностик, а списки issue обох розборів рівні.
     const detailUk = ukIssues[index]?.message
-    return diagnostic("file.schema", file, pointer, {
-      detail: issue.message,
-      ...(detailUk === undefined ? {} : { detailUk }),
-    })
+    return [
+      diagnostic("file.schema", file, pointer, {
+        detail: issue.message,
+        ...(detailUk === undefined ? {} : { detailUk }),
+      }),
+    ]
   })
 }

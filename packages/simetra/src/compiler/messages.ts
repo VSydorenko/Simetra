@@ -74,14 +74,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Поле "${p.field}" не підходить до форми типу колонки (логічний тип, PgEnum або Raw)`,
   },
-  "customTable.cross-scope-not-allowed": {
-    en: () => "crossScope is not allowed on a custom table column",
-    uk: () => "crossScope не дозволений на колонці довільної таблиці",
-    hint: {
-      en: "Foreign keys of a custom table are explicit; remove crossScope.",
-      uk: "Зовнішні ключі довільної таблиці явні; приберіть crossScope.",
-    },
-  },
   "customTable.identity-type": {
     en: () => "identity requires SmallInt, Integer or BigInt type",
     uk: () => "identity вимагає тип SmallInt, Integer або BigInt",
@@ -211,6 +203,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     // Український текст Zod рахує stage 1 (`detailUk`); власні повідомлення
     // схем T0 англійські.
     uk: (p) => String(p.detailUk ?? p.detail),
+  },
+  "file.unknown-key": {
+    en: (p) => `Unknown key "${p.key}"`,
+    uk: (p) => `Невідомий ключ "${p.key}"`,
+    hint: {
+      en: "Check the spelling against the JSON Schema of the file, or remove the key.",
+      uk: "Звірте написання з JSON Schema файлу або приберіть ключ.",
+    },
   },
   "file.kind-mismatch": {
     en: (p) =>

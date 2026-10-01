@@ -54,4 +54,31 @@ describe("buildJsonSchemas", () => {
       expect(schema.required as string[], kind).toContain("kind")
     }
   })
+
+  it("file schemas are strict: every object forbids unknown keys", () => {
+    // Записи (перевизначення стандартних реквізитів, `fields` руху) мають
+    // довільні ключі, тож їхній `additionalProperties` — схема значення.
+    const open: string[] = []
+    const walk = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((item, i) => walk(item, `${path}/${i}`))
+        return
+      }
+      if (typeof node !== "object" || node === null) return
+      const object = node as JsonObject
+      if (object.type === "object" && object.additionalProperties !== false) {
+        if (object.properties !== undefined) open.push(path)
+      }
+      for (const [key, value] of Object.entries(object)) {
+        walk(value, `${path}/${key}`)
+      }
+    }
+    for (const [file, schema] of Object.entries(buildJsonSchemas())) {
+      const root = schema as JsonObject
+      expect(root.additionalProperties, file).toBe(false)
+      expect(root.properties as JsonObject, file).toHaveProperty(["$schema"])
+      walk(schema, file)
+    }
+    expect(open).toEqual([])
+  })
 })

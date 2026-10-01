@@ -48,7 +48,9 @@ export {
 } from "./information-register"
 export {
   accumulationRegisterSchema,
+  resourceSchema,
   type AccumulationRegister,
+  type AccumulationResource,
 } from "./accumulation-register"
 export { constantSchema, type Constant } from "./constant"
 export {

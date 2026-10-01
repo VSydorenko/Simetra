@@ -10,7 +10,7 @@ import {
 } from "./object-header"
 
 /** Довідник. */
-export const catalogSchema = z.object({
+export const catalogSchema = z.strictObject({
   ...objectHeaderShape,
   kind: z
     .literal("Catalog")
@@ -56,7 +56,7 @@ export const catalogSchema = z.object({
     }),
   predefinedItems: z
     .array(
-      z.object({
+      z.strictObject({
         // Як у attributeSchema: обов'язковість id дає стадія 2.
         id: metadataIdSchema.optional(),
         name: z.string().meta({ description: "Name of the predefined item." }),

@@ -10,6 +10,7 @@ export const COMPILER_RULES = [
   "file.orphan",
   "file.invalid-json",
   "file.schema",
+  "file.unknown-key",
   "file.kind-mismatch",
   "file.name-mismatch",
   "file.movements-block",

@@ -12,7 +12,7 @@ import { refineValueType, valueTypeShape } from "./value-type"
  * стиль написання імені перевіряють пізніші стадії — схема лише описує форму.
  */
 export const attributeSchema = z
-  .object({
+  .strictObject({
     id: metadataIdSchema.optional(),
     name: elementNameSchema,
     physicalName: physicalNameSchema.optional(),

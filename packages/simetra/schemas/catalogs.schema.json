@@ -42,7 +42,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "description": {
       "description": "Description of the object.",
@@ -56,7 +57,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "kind": {
       "type": "string",
@@ -127,6 +129,7 @@
           "kind",
           "name"
         ],
+        "additionalProperties": false,
         "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
       }
     },
@@ -178,12 +181,14 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
           "name"
-        ]
+        ],
+        "additionalProperties": false
       }
     },
     "standardAttributeOverrides": {
@@ -208,9 +213,11 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "attributes": {
@@ -248,7 +255,8 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "description": {
             "description": "Description of the attribute.",
@@ -262,7 +270,8 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "type": {
             "type": "string",
@@ -328,7 +337,8 @@
             "required": [
               "kind",
               "name"
-            ]
+            ],
+            "additionalProperties": false
           },
           "allowedTypes": {
             "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
@@ -361,6 +371,7 @@
                 "kind",
                 "name"
               ],
+              "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
           },
@@ -400,7 +411,8 @@
         "required": [
           "name",
           "type"
-        ]
+        ],
+        "additionalProperties": false
       }
     },
     "tabularSections": {
@@ -438,7 +450,8 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "standardAttributeOverrides": {
             "default": {},
@@ -462,9 +475,11 @@
                       "description": "English text.",
                       "type": "string"
                     }
-                  }
+                  },
+                  "additionalProperties": false
                 }
-              }
+              },
+              "additionalProperties": false
             }
           },
           "attributes": {
@@ -502,7 +517,8 @@
                       "description": "English text.",
                       "type": "string"
                     }
-                  }
+                  },
+                  "additionalProperties": false
                 },
                 "description": {
                   "description": "Description of the attribute.",
@@ -516,7 +532,8 @@
                       "description": "English text.",
                       "type": "string"
                     }
-                  }
+                  },
+                  "additionalProperties": false
                 },
                 "type": {
                   "type": "string",
@@ -582,7 +599,8 @@
                   "required": [
                     "kind",
                     "name"
-                  ]
+                  ],
+                  "additionalProperties": false
                 },
                 "allowedTypes": {
                   "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
@@ -615,6 +633,7 @@
                       "kind",
                       "name"
                     ],
+                    "additionalProperties": false,
                     "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
                   }
                 },
@@ -654,13 +673,15 @@
               "required": [
                 "name",
                 "type"
-              ]
+              ],
+              "additionalProperties": false
             }
           }
         },
         "required": [
           "name"
         ],
+        "additionalProperties": false,
         "description": "Tabular section: a list of rows owned by an object."
       }
     }
@@ -669,5 +690,6 @@
     "name",
     "kind"
   ],
+  "additionalProperties": false,
   "$id": "catalogs.schema.json"
 }

@@ -12,6 +12,9 @@ import {
  * при створенні, а не автор вручну.
  */
 export const objectHeaderShape = {
+  // Схеми файлів строгі: невідомий ключ — помилка `file.unknown-key`, а не
+  // мовчки відкинуте поле з одруківкою. Тож підказку редактора оголошено
+  // явно — лише тут, у корені файлу.
   $schema: z.string().optional().meta({
     description: "Editor hint: path to the JSON Schema of this file.",
   }),
@@ -45,7 +48,7 @@ export const objectHeaderShape = {
 export const standardAttributeOverridesSchema = z
   .record(
     z.string(),
-    z.object({
+    z.strictObject({
       description: localizedStringSchema.optional().meta({
         description: "Overridden description of the standard attribute.",
       }),

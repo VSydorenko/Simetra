@@ -5,7 +5,7 @@ import { z } from "zod"
  * BRD: {uk, en} — Ukrainian first, English second.
  */
 export const localizedStringSchema = z
-  .object({
+  .strictObject({
     uk: z.string().optional().meta({ description: "Ukrainian text." }),
     en: z.string().optional().meta({ description: "English text." }),
   })

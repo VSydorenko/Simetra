@@ -850,7 +850,7 @@ class SnapshotBuilder {
   }
 
   private attributeField(
-    attribute: Attribute,
+    attribute: ColumnElement,
     pointer: string,
     scope: TableScope | undefined,
     requiredOnPost = false
@@ -866,9 +866,9 @@ class SnapshotBuilder {
         ? { default: sqlLiteral(attribute.defaultValue) }
         : {}),
       primaryKey: false,
-      indexed: attribute.indexed,
-      unique: attribute.unique,
-      ...uniqueWithin(attribute.unique, scope),
+      indexed: attribute.indexed === true,
+      unique: attribute.unique === true,
+      ...uniqueWithin(attribute.unique === true, scope),
       ...indexWithin(scope),
       onDelete: "noAction",
       origin: { elementId: attribute.id ?? "" },
@@ -1189,6 +1189,15 @@ function indexWithin(scope: TableScope | undefined): { indexWithin?: string } {
  * значення одного тенанта заважало б іншому. Таблиця кореня — виняток, її
  * рядки і є значеннями скоупу, тож унікальність там глобальна.
  */
+/**
+ * Елемент з типом значення, що стає колонкою: реквізит, вимір чи ресурс.
+ * Ресурс регістра накопичення (`AccumulationResource`) не має `indexed`,
+ * `unique` і `defaultValue` — їхня відсутність означає «ні».
+ */
+type ColumnElement = ValueType &
+  Pick<Attribute, "id" | "name" | "physicalName" | "required"> &
+  Partial<Pick<Attribute, "indexed" | "unique" | "defaultValue">>
+
 function uniqueWithin(
   unique: boolean,
   scope: TableScope | undefined

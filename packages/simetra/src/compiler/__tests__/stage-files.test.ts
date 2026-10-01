@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile, type Diagnostic } from "simetra/compiler"
+import { compile, localize, type Diagnostic } from "simetra/compiler"
 import {
   attribute,
   catalog,
@@ -7,6 +7,10 @@ import {
   document,
   metaFiles,
   project,
+  salesDocument,
+  SALE_FILE,
+  scopedProject,
+  STOCK_FILE,
 } from "./helpers"
 
 function codes(diagnostics: Diagnostic[]): string[] {
@@ -311,5 +315,267 @@ describe("stage 1: files", () => {
         params: expect.objectContaining({ offset: 9 }),
       })
     )
+  })
+})
+
+describe("stage 1: strict schemas", () => {
+  /** Діагностики `file.unknown-key` як [файл, pointer, ключ]. */
+  function unknownKeys(diagnostics: Diagnostic[]) {
+    return diagnostics
+      .filter((d) => d.code === "file.unknown-key")
+      .map((d) => [d.file, d.pointer, d.params?.key])
+  }
+
+  it("unknown key at the object level", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          codeLenght: 5,
+        }),
+      })
+    )
+    expect(result.ok).toBe(false)
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "file.unknown-key",
+        severity: "error",
+        file: "catalogs/Contract/Contract.meta.json",
+        pointer: "/codeLenght",
+        params: { key: "codeLenght" },
+      }),
+    ])
+  })
+
+  it("unknown key in an attribute", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          attributes: [
+            attribute("note", { type: "String", length: 10, lenght: 10 }),
+          ],
+        }),
+      })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      [
+        "catalogs/Contract/Contract.meta.json",
+        "/attributes/0/lenght",
+        "lenght",
+      ],
+    ])
+  })
+
+  it("unknown key in a tabular section", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "documents/Order/Order.meta.json": document("Order", {
+          tabularSections: [
+            {
+              id: "00000000-0000-4000-8000-000000009001",
+              name: "goods",
+              physicalName: "goods",
+              rows: [],
+            },
+          ],
+        }),
+      })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      ["documents/Order/Order.meta.json", "/tabularSections/0/rows", "rows"],
+    ])
+  })
+
+  it("crossScope is an unknown key on a custom table column", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "custom-tables/AuditLog/AuditLog.meta.json": customTable("AuditLog", {
+          columns: [
+            {
+              id: "00000000-0000-4000-8000-000000009002",
+              name: "id",
+              physicalName: "id",
+              type: "UUID",
+              crossScope: true,
+            },
+          ],
+        }),
+      })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      [
+        "custom-tables/AuditLog/AuditLog.meta.json",
+        "/columns/0/crossScope",
+        "crossScope",
+      ],
+    ])
+  })
+
+  it("unknown key in a movement constructor entry", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        ...salesDocument({ perod: "doc.date" }),
+      })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      [SALE_FILE, "/posting/movements/0/perod", "perod"],
+    ])
+  })
+
+  it("unknown key in a scope kind of the project", async () => {
+    const scoped = scopedProject()
+    scoped.scopeKinds[0] = { ...scoped.scopeKinds[0], onDelete: "cascade" }
+    const result = await compile(metaFiles({ "project.meta.json": scoped }))
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      ["project.meta.json", "/scopeKinds/0/onDelete", "onDelete"],
+    ])
+  })
+
+  it("unknown key inside a union variant points into the variant", async () => {
+    const scoped = scopedProject()
+    scoped.scopeKinds[1] = {
+      ...scoped.scopeKinds[1],
+      root: {
+        external: { schema: "auth", table: "users", column: "id", key: "id" },
+      },
+    }
+    const result = await compile(metaFiles({ "project.meta.json": scoped }))
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      ["project.meta.json", "/scopeKinds/1/root/external/key", "key"],
+    ])
+  })
+
+  it("ref on an accumulation register resource is an unknown key", async () => {
+    const files = salesDocument()
+    const stock = files[STOCK_FILE] as { resources: Record<string, unknown>[] }
+    stock.resources[0] = {
+      ...stock.resources[0],
+      ref: { kind: "Catalog", name: "Item" },
+    }
+    const result = await compile(
+      metaFiles({ "project.meta.json": project(), ...files })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      [STOCK_FILE, "/resources/0/ref", "ref"],
+    ])
+  })
+
+  it("an accumulation register resource of a wrong type keeps register.resource-type", async () => {
+    const files = salesDocument()
+    const stock = files[STOCK_FILE] as { resources: Record<string, unknown>[] }
+    stock.resources[0] = { ...stock.resources[0], type: "Text" }
+    stock.resources[0] = Object.fromEntries(
+      Object.entries(stock.resources[0]!).filter(
+        ([key]) => key !== "precision" && key !== "scale"
+      )
+    )
+    const result = await compile(
+      metaFiles({ "project.meta.json": project(), ...files })
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.file === STOCK_FILE)
+        .map((d) => [d.code, d.pointer])
+    ).toEqual([["register.resource-type", "/resources/0/type"]])
+  })
+
+  it("one diagnostic per unknown key", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          zeta: 1,
+          alpha: 2,
+        }),
+      })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      ["catalogs/Contract/Contract.meta.json", "/alpha", "alpha"],
+      ["catalogs/Contract/Contract.meta.json", "/zeta", "zeta"],
+    ])
+  })
+
+  it("$schema is allowed at the top of object and project files", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project({
+          $schema: "../node_modules/simetra/schemas/project.schema.json",
+        }),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          $schema: "../../node_modules/simetra/schemas/catalogs.schema.json",
+        }),
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+  })
+
+  it("$schema is not allowed below the top of a file", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          attributes: [attribute("flag", { $schema: "x" })],
+        }),
+      })
+    )
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      [
+        "catalogs/Contract/Contract.meta.json",
+        "/attributes/0/$schema",
+        "$schema",
+      ],
+    ])
+  })
+
+  it("unknown keys do not shift the Ukrainian text of other schema issues", async () => {
+    // Issue з двома ключами (title) іде перед іншими issue схеми й дає дві
+    // діагностики: український текст має братися за індексом issue.
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          title: { uk: "Договір", a: 1, b: 2 },
+          codeLength: "nine",
+          codeType: "Hex",
+        }),
+      })
+    )
+    const uk = Object.fromEntries(
+      result.diagnostics
+        .filter((d) => d.code === "file.schema")
+        .map((d) => [d.pointer, localize(d, "uk").message])
+    )
+    expect(uk["/codeLength"]).toMatch(/очікується число/)
+    expect(uk["/codeType"]).toMatch(/"String"\|"Number"/)
+    expect(unknownKeys(result.diagnostics)).toEqual([
+      ["catalogs/Contract/Contract.meta.json", "/title/a", "a"],
+      ["catalogs/Contract/Contract.meta.json", "/title/b", "b"],
+    ])
+  })
+
+  it("the range of an unknown key covers the key itself", async () => {
+    const text = [
+      "{",
+      '  "kind": "Catalog",',
+      '  "name": "Contract",',
+      '  "lenght": 5',
+      "}",
+    ].join("\n")
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": text,
+      })
+    )
+    const d = result.diagnostics.find((x) => x.code === "file.unknown-key")
+    expect(d?.range).toEqual({
+      start: { line: 3, character: 2 },
+      end: { line: 3, character: 10 },
+    })
   })
 })

@@ -20,7 +20,7 @@ const IDENTITY_TYPES: readonly string[] = ["SmallInt", "Integer", "BigInt"]
  * конкретного поля, а не загальну помилку об'єднання.
  */
 export const customTableColumnSchema = z
-  .object({
+  .strictObject({
     id: objectHeaderShape.id,
     name: elementNameSchema,
     physicalName: physicalNameSchema.optional(),
@@ -48,9 +48,11 @@ export const customTableColumnSchema = z
       description:
         "Logical type, PgEnum for an accepted enum, or Raw for a raw PostgreSQL type.",
     }),
-    ...z.object(valueTypeShape).omit({ type: true }).shape,
+    // FK колонок явні (`foreignKeys`), тож міжскоуповому прапорцю тут нема що
+    // позначати: поля немає, і строга схема відкидає його як невідомий ключ.
+    ...z.object(valueTypeShape).omit({ type: true, crossScope: true }).shape,
     enum: z
-      .object({
+      .strictObject({
         kind: z.literal("PgEnum").meta({ description: "Always PgEnum." }),
         name: objectNameSchema.meta({
           description: "Logical name of the PgEnum object.",
@@ -73,17 +75,6 @@ export const customTableColumnSchema = z
       "ref",
       "allowedTypes",
     ] as const
-
-    // FK колонок `CustomTable` явні, тож міжскоуповий прапорець там безглуздий
-    // у будь-якій формі колонки; одна причина — один код, тому `refineValueType`
-    // прапорця не бачить.
-    if (column.crossScope !== undefined) {
-      issue(
-        "customTable.cross-scope-not-allowed",
-        "crossScope is not allowed on a custom table column",
-        ["crossScope"]
-      )
-    }
 
     if (column.type === "PgEnum") {
       if (column.enum === undefined) {
@@ -138,10 +129,7 @@ export const customTableColumnSchema = z
           ["pgType"]
         )
       }
-      refineValueType(
-        { ...column, type: column.type, crossScope: undefined },
-        ctx
-      )
+      refineValueType({ ...column, type: column.type }, ctx)
     }
 
     if (
@@ -183,12 +171,12 @@ export const rowLevelSecuritySchema = z
 export type RowLevelSecurity = z.infer<typeof rowLevelSecuritySchema>
 
 const foreignKeySchema = z
-  .object({
+  .strictObject({
     name: constraintName,
     columns: columnList,
     references: z
       .union([
-        z.object({
+        z.strictObject({
           object: metadataRefSchema.meta({
             description: "Referenced metadata object.",
           }),
@@ -196,9 +184,9 @@ const foreignKeySchema = z
             description: "Logical names of columns of the referenced object.",
           }),
         }),
-        z.object({
+        z.strictObject({
           external: z
-            .object({
+            .strictObject({
               schema: z.string().min(1).meta({
                 description: "PostgreSQL schema of the external table.",
               }),
@@ -231,7 +219,7 @@ const foreignKeySchema = z
   .meta({ description: "Foreign key of the table." })
 
 const indexSchema = z
-  .object({
+  .strictObject({
     name: constraintName,
     unique: z
       .boolean()
@@ -243,12 +231,12 @@ const indexSchema = z
     keys: z
       .array(
         z.union([
-          z.object({
+          z.strictObject({
             column: elementNameSchema.meta({
               description: "Logical name of the indexed column.",
             }),
           }),
-          z.object({
+          z.strictObject({
             expression: z
               .string()
               .min(1)
@@ -275,7 +263,7 @@ const indexSchema = z
  * — логічні імена; ім'я обмеження необов'язкове (відсутнє — ім'я за
  * алгоритмом Postgres), зворотний генератор записує імена явно.
  */
-export const customTableSchema = z.object({
+export const customTableSchema = z.strictObject({
   ...objectHeaderShape,
   kind: z
     .literal("CustomTable")
@@ -286,13 +274,13 @@ export const customTableSchema = z.object({
     .min(1)
     .meta({ description: "Columns of the table." }),
   primaryKey: z
-    .object({ name: constraintName, columns: columnList })
+    .strictObject({ name: constraintName, columns: columnList })
     .optional()
     .meta({ description: "Primary key of the table." }),
   uniques: z
     .array(
       z
-        .object({
+        .strictObject({
           name: constraintName,
           columns: columnList,
           nullsNotDistinct: z.boolean().default(false).meta({
@@ -306,7 +294,7 @@ export const customTableSchema = z.object({
   checks: z
     .array(
       z
-        .object({
+        .strictObject({
           name: constraintName,
           expression: z
             .string()

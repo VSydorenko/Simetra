@@ -131,7 +131,7 @@ describe("customTableSchema", () => {
     ).toEqual(["customTable.column-type"])
   })
 
-  it("crossScope on custom table column", () => {
+  it("crossScope is an unknown key on a custom table column", () => {
     const cases = [
       { name: "a", type: "Text", crossScope: true },
       {
@@ -151,17 +151,54 @@ describe("customTableSchema", () => {
     for (const column of cases) {
       const res = customTableSchema.safeParse(table({ columns: [column] }))
       expect(res.success).toBe(false)
-      if (!res.success) {
-        expect(
-          res.error.issues.map((i) => [
-            i.path.join("/"),
-            (i as { params?: { rule?: string } }).params?.rule,
-          ])
-        ).toEqual([
-          ["columns/0/crossScope", "customTable.cross-scope-not-allowed"],
+      expect(
+        res.error?.issues.map((i) => [
+          i.code,
+          i.path.join("/"),
+          (i as { keys?: string[] }).keys,
         ])
-      }
+      ).toEqual([["unrecognized_keys", "columns/0", ["crossScope"]]])
     }
+  })
+
+  it("union variants of constraints and indexes stay strict without rejecting each other", () => {
+    const valid = customTableSchema.safeParse(
+      table({
+        columns: [
+          { name: "id", type: "BigInt" },
+          { name: "ext", type: "UUID" },
+        ],
+        foreignKeys: [
+          {
+            columns: ["ext"],
+            references: {
+              external: { schema: "auth", table: "users", columns: ["id"] },
+            },
+          },
+        ],
+        indexes: [{ keys: [{ column: "id" }, { expression: "lower(x)" }] }],
+      })
+    )
+    expect(valid.success).toBe(true)
+    expect(valid.data?.foreignKeys[0]?.onDelete).toBe("noAction")
+    expect(valid.data?.indexes[0]?.method).toBe("btree")
+
+    const extra = customTableSchema.safeParse(
+      table({
+        uniques: [{ columns: ["id"], deferrable: "no" }],
+        indexes: [{ keys: [{ column: "id", order: "desc" }] }],
+      })
+    )
+    expect(
+      extra.error?.issues.map((i) => [
+        i.code,
+        i.path.join("/"),
+        (i as { keys?: string[] }).keys,
+      ])
+    ).toEqual([
+      ["unrecognized_keys", "uniques/0", ["deferrable"]],
+      ["unrecognized_keys", "indexes/0/keys/0", ["order"]],
+    ])
   })
 
   it("accepts Raw pgType", () => {

@@ -16,7 +16,7 @@ export const NO_SCOPE = "none"
  * таблиці немає.
  */
 export const scopeKindSchema = z
-  .object({
+  .strictObject({
     id: metadataIdSchema.optional(),
     name: elementNameSchema,
     physicalName: physicalNameSchema.optional(),
@@ -25,14 +25,14 @@ export const scopeKindSchema = z
     }),
     root: z
       .union([
-        z.object({
+        z.strictObject({
           object: metadataRefSchema.meta({
             description: "Metadata object that is the scope root.",
           }),
         }),
-        z.object({
+        z.strictObject({
           external: z
-            .object({
+            .strictObject({
               schema: z.string().min(1).meta({
                 description: "PostgreSQL schema of the external root table.",
               }),
@@ -52,7 +52,7 @@ export const scopeKindSchema = z
       }),
     // Схема функції за відсутності — `defaultSchema` проєкту; підставляє стадія 3.
     setFunction: z
-      .object({
+      .strictObject({
         schema: z.string().min(1).optional().meta({
           description:
             "PostgreSQL schema of the function; defaultSchema when absent.",

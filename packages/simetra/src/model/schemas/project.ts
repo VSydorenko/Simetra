@@ -6,7 +6,7 @@ import { NO_SCOPE, scopeKindSchema } from "./scope"
 
 /** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */
 export const projectSchema = z
-  .object({
+  .strictObject({
     $schema: z.string().optional().meta({
       description: "Editor hint: path to the JSON Schema of this file.",
     }),
@@ -22,7 +22,7 @@ export const projectSchema = z
       description: "PostgreSQL schema for objects that declare none.",
     }),
     naming: z
-      .object({
+      .strictObject({
         attributeCase: z.enum(ATTRIBUTE_CASES).default("camelCase").meta({
           description: "Casing style of logical attribute names.",
         }),

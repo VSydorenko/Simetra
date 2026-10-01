@@ -14,14 +14,14 @@ import {
  * реквізит) відома регістру, документу її дублювати не треба.
  */
 const movementDeclSchema = z
-  .object({
+  .strictObject({
     register: metadataRefSchema.meta({
       description: "Register that receives the movement.",
     }),
     source: z
       .union([
         z.literal("document"),
-        z.object({
+        z.strictObject({
           tabularSection: z.string().min(1).meta({
             description: "Name of the tabular section that produces the rows.",
           }),
@@ -78,7 +78,7 @@ const movementDeclSchema = z
 export type MovementDecl = z.infer<typeof movementDeclSchema>
 
 /** Документ. */
-export const documentSchema = z.object({
+export const documentSchema = z.strictObject({
   ...objectHeaderShape,
   kind: z
     .literal("Document")
@@ -105,7 +105,7 @@ export const documentSchema = z.object({
       description: "Period after which automatic numbering restarts.",
     }),
   posting: z
-    .object({
+    .strictObject({
       movements: z.array(movementDeclSchema).default([]).meta({
         description: "Declared movements written when the document is posted.",
       }),

@@ -38,7 +38,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "description": {
       "description": "Description of the object.",
@@ -52,7 +53,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "kind": {
       "type": "string",
@@ -74,5 +76,6 @@
     "kind",
     "values"
   ],
+  "additionalProperties": false,
   "$id": "pg-enums.schema.json"
 }

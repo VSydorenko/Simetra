@@ -4,7 +4,7 @@ import { refineValueType, valueTypeShape } from "./value-type"
 
 /** Константа — окремий об'єкт зі значенням довільного логічного типу. */
 export const constantSchema = z
-  .object({
+  .strictObject({
     ...objectHeaderShape,
     kind: z
       .literal("Constant")

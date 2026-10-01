@@ -6,7 +6,7 @@ import { objectHeaderShape } from "./object-header"
  * тому порядок значущий (порядок у PG-енамі), а дублікати заборонені.
  */
 export const pgEnumSchema = z
-  .object({
+  .strictObject({
     // Енам-тип живе в схемі, а не в скоупі: поля `scope` у нього немає.
     ...z.object(objectHeaderShape).omit({ scope: true }).shape,
     kind: z

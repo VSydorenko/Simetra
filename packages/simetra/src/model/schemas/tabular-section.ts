@@ -10,7 +10,7 @@ import { standardAttributeOverridesSchema } from "./object-header"
 
 /** Таблична частина об'єкта. */
 export const tabularSectionSchema = z
-  .object({
+  .strictObject({
     id: metadataIdSchema.optional(),
     name: elementNameSchema,
     physicalName: physicalNameSchema.optional(),

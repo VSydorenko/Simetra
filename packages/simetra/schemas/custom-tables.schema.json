@@ -42,7 +42,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "description": {
       "description": "Description of the object.",
@@ -56,7 +57,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "kind": {
       "type": "string",
@@ -101,7 +103,8 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "notNull": {
             "default": false,
@@ -190,7 +193,8 @@
             "required": [
               "kind",
               "name"
-            ]
+            ],
+            "additionalProperties": false
           },
           "allowedTypes": {
             "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
@@ -223,17 +227,13 @@
                 "kind",
                 "name"
               ],
+              "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
           },
           "array": {
             "description": "Whether the value is an array of the type.",
             "type": "boolean"
-          },
-          "crossScope": {
-            "description": "Marks a deliberately cross-scope Ref: the FK has no scope part in its key.",
-            "type": "boolean",
-            "const": true
           },
           "enum": {
             "description": "Enum type of a PgEnum column.",
@@ -253,7 +253,8 @@
             "required": [
               "kind",
               "name"
-            ]
+            ],
+            "additionalProperties": false
           },
           "pgType": {
             "description": "Raw PostgreSQL type of a Raw column.",
@@ -264,7 +265,8 @@
         "required": [
           "name",
           "type"
-        ]
+        ],
+        "additionalProperties": false
       },
       "description": "Columns of the table."
     },
@@ -290,7 +292,8 @@
       },
       "required": [
         "columns"
-      ]
+      ],
+      "additionalProperties": false
     },
     "uniques": {
       "default": [],
@@ -323,6 +326,7 @@
         "required": [
           "columns"
         ],
+        "additionalProperties": false,
         "description": "Unique constraint."
       }
     },
@@ -347,6 +351,7 @@
         "required": [
           "expression"
         ],
+        "additionalProperties": false,
         "description": "Check constraint."
       }
     },
@@ -404,6 +409,7 @@
                       "kind",
                       "name"
                     ],
+                    "additionalProperties": false,
                     "description": "Referenced metadata object."
                   },
                   "columns": {
@@ -420,7 +426,8 @@
                 "required": [
                   "object",
                   "columns"
-                ]
+                ],
+                "additionalProperties": false
               },
               {
                 "type": "object",
@@ -453,12 +460,14 @@
                       "table",
                       "columns"
                     ],
+                    "additionalProperties": false,
                     "description": "Referenced table outside the metadata."
                   }
                 },
                 "required": [
                   "external"
-                ]
+                ],
+                "additionalProperties": false
               }
             ],
             "description": "Referenced target: a metadata object or an external table."
@@ -502,6 +511,7 @@
           "columns",
           "references"
         ],
+        "additionalProperties": false,
         "description": "Foreign key of the table."
       }
     },
@@ -544,7 +554,8 @@
                   },
                   "required": [
                     "column"
-                  ]
+                  ],
+                  "additionalProperties": false
                 },
                 {
                   "type": "object",
@@ -557,7 +568,8 @@
                   },
                   "required": [
                     "expression"
-                  ]
+                  ],
+                  "additionalProperties": false
                 }
               ]
             },
@@ -586,6 +598,7 @@
         "required": [
           "keys"
         ],
+        "additionalProperties": false,
         "description": "Index of the table."
       }
     },
@@ -610,5 +623,6 @@
     "kind",
     "columns"
   ],
+  "additionalProperties": false,
   "$id": "custom-tables.schema.json"
 }

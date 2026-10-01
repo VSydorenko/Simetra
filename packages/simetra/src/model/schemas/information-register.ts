@@ -7,7 +7,7 @@ import {
 } from "./object-header"
 
 /** Регістр відомостей. */
-export const informationRegisterSchema = z.object({
+export const informationRegisterSchema = z.strictObject({
   ...objectHeaderShape,
   kind: z.literal("InformationRegister").meta({
     description: "Metadata kind; always InformationRegister.",

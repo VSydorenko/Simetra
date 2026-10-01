@@ -10,7 +10,7 @@ import type { SchemaRule } from "./rules"
 import { NO_SCOPE } from "./scope"
 
 export const enumValueSchema = z
-  .object({
+  .strictObject({
     id: metadataIdSchema.optional(),
     name: objectNameSchema.meta({
       description: "Logical name of the enumeration value.",
@@ -27,7 +27,7 @@ export type EnumValue = z.infer<typeof enumValueSchema>
 
 /** Перелік. Порядок значень — порядок масиву, окремого поля порядку немає. */
 export const enumerationSchema = z
-  .object({
+  .strictObject({
     ...objectHeaderShape,
     kind: z
       .literal("Enumeration")

@@ -22,7 +22,8 @@
           "description": "English text.",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "defaultLocale": {
       "default": "uk",
@@ -54,7 +55,8 @@
             "snake_case"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "timezone": {
       "default": "UTC",
@@ -97,7 +99,8 @@
                 "description": "English text.",
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           },
           "root": {
             "anyOf": [
@@ -131,12 +134,14 @@
                       "kind",
                       "name"
                     ],
+                    "additionalProperties": false,
                     "description": "Metadata object that is the scope root."
                   }
                 },
                 "required": [
                   "object"
-                ]
+                ],
+                "additionalProperties": false
               },
               {
                 "type": "object",
@@ -165,12 +170,14 @@
                       "table",
                       "column"
                     ],
+                    "additionalProperties": false,
                     "description": "Root table outside the metadata."
                   }
                 },
                 "required": [
                   "external"
-                ]
+                ],
+                "additionalProperties": false
               }
             ],
             "description": "Root of the scope: a metadata object or an external table."
@@ -192,6 +199,7 @@
             "required": [
               "name"
             ],
+            "additionalProperties": false,
             "description": "SQL function that returns the set of scope values visible to the current user."
           },
           "onRootDelete": {
@@ -209,6 +217,7 @@
           "root",
           "setFunction"
         ],
+        "additionalProperties": false,
         "description": "Scope kind of the application (tenant dimension)."
       }
     }
@@ -216,5 +225,6 @@
   "required": [
     "name"
   ],
+  "additionalProperties": false,
   "$id": "project.schema.json"
 }

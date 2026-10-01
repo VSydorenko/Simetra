@@ -69,7 +69,7 @@ export const accumulationRegisterKind: KindDefinition = {
         "register.recorder"
       ),
       ...fieldListReferences(register.dimensions, "/dimensions"),
-      ...fieldListReferences(register.resources, "/resources"),
+      // Ресурси — числа без посилань (схема ресурсу), тож їх не обходимо.
       ...fieldListReferences(register.attributes, "/attributes"),
     ]
   },

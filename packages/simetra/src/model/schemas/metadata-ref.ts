@@ -7,7 +7,7 @@ import { objectNameSchema } from "./identity"
  * факт реєстру видів і перевірка стадії 4, а не схеми.
  */
 export const metadataRefSchema = z
-  .object({
+  .strictObject({
     kind: metadataKindSchema,
     name: objectNameSchema.meta({
       description: "Logical name of the referenced object.",

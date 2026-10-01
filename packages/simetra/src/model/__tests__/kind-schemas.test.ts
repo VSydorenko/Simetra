@@ -252,6 +252,17 @@ describe("informationRegisterSchema", () => {
     expect(r.attributes).toEqual([])
   })
 
+  it("resources accept ref, unlike accumulation register resources", () => {
+    const r = informationRegisterSchema.parse({
+      kind: "InformationRegister",
+      name: "Prices",
+      resources: [
+        { name: "currency", type: "Ref", ref: { kind: "Catalog", name: "C" } },
+      ],
+    })
+    expect(r.resources[0]?.ref).toEqual({ kind: "Catalog", name: "C" })
+  })
+
   it("does not restrict resource types", () => {
     expect(() =>
       informationRegisterSchema.parse({
@@ -281,7 +292,7 @@ describe("accumulationRegisterSchema", () => {
     const r = accumulationRegisterSchema.safeParse({
       kind: "AccumulationRegister",
       name: "Stock",
-      resources: [{ name: "note", type: "String", length: 10 }],
+      resources: [{ name: "note", type: "Text" }],
     })
     expect(r.success).toBe(false)
     const issue = r.error?.issues.find(
@@ -291,6 +302,73 @@ describe("accumulationRegisterSchema", () => {
     )
     expect(issue).toBeDefined()
     expect(issue?.path).toEqual(["resources", 0, "type"])
+  })
+
+  it("resources have no length, ref, allowedTypes, crossScope or indexed", () => {
+    for (const extra of [
+      { length: 10 },
+      { ref: { kind: "Catalog", name: "Item" } },
+      { allowedTypes: [{ kind: "Catalog", name: "Item" }] },
+      { crossScope: true },
+      { indexed: true },
+    ]) {
+      const r = accumulationRegisterSchema.safeParse({
+        kind: "AccumulationRegister",
+        name: "Stock",
+        resources: [{ name: "qty", type: "Integer", ...extra }],
+      })
+      expect(r.success).toBe(false)
+      expect(
+        r.error?.issues.map((i) => [
+          i.code,
+          i.path,
+          (i as { keys?: string[] }).keys,
+        ])
+      ).toEqual([["unrecognized_keys", ["resources", 0], Object.keys(extra)]])
+    }
+  })
+
+  it("resources keep the element fields, required and precision/scale", () => {
+    const r = accumulationRegisterSchema.parse({
+      kind: "AccumulationRegister",
+      name: "Stock",
+      resources: [
+        {
+          id: ID,
+          name: "sum",
+          physicalName: "sum",
+          title: { uk: "Сума" },
+          description: { en: "Amount" },
+          type: "Numeric",
+          precision: 15,
+          scale: 2,
+        },
+      ],
+    })
+    expect(r.resources[0]).toEqual({
+      id: ID,
+      name: "sum",
+      physicalName: "sum",
+      title: { uk: "Сума" },
+      description: { en: "Amount" },
+      type: "Numeric",
+      precision: 15,
+      scale: 2,
+      required: false,
+    })
+  })
+
+  it("resource precision is still checked against the type", () => {
+    const r = accumulationRegisterSchema.safeParse({
+      kind: "AccumulationRegister",
+      name: "Stock",
+      resources: [{ name: "qty", type: "Integer", precision: 10 }],
+    })
+    expect(
+      r.error?.issues.map(
+        (i) => (i as { params?: { rule?: string } }).params?.rule
+      )
+    ).toEqual(["type.precision-not-allowed"])
   })
 
   it("allows non-numeric dimensions", () => {
@@ -430,14 +508,19 @@ describe("documentSchema — posting movements", () => {
     ).toBe(true)
   })
 
-  it("validations are gone", () => {
+  it("validations are gone: the key is unknown", () => {
     const result = parse({
       movements: [movement],
       validations: [{ type: "NonNegativeBalance" }],
     })
-    expect(result.success).toBe(true)
-    if (!result.success) return
-    expect(result.data.posting).not.toHaveProperty("validations")
+    expect(result.success).toBe(false)
+    expect(
+      result.error?.issues.map((i) => [
+        i.code,
+        i.path,
+        (i as { keys?: string[] }).keys,
+      ])
+    ).toEqual([["unrecognized_keys", ["posting"], ["validations"]]])
   })
 
   it("document without posting -> posting is undefined", () => {
@@ -456,5 +539,110 @@ describe("documentSchema — posting movements", () => {
 
   it("rejects posting: boolean", () => {
     expect(parse(true).success).toBe(false)
+  })
+})
+
+describe("strict metadata schemas", () => {
+  /** Шляхи й ключі issue `unrecognized_keys`. */
+  function unknown(result: {
+    error?: { issues: { code: string; path: PropertyKey[] }[] }
+  }) {
+    return (result.error?.issues ?? [])
+      .filter((i) => i.code === "unrecognized_keys")
+      .map((i) => [i.path.join("/"), (i as { keys?: string[] }).keys])
+  }
+
+  it("defaults still apply at every nesting level", () => {
+    const r = documentSchema.parse({
+      kind: "Document",
+      name: "Order",
+      posting: {},
+      tabularSections: [
+        { name: "goods", attributes: [{ name: "q", type: "Integer" }] },
+      ],
+    })
+    expect(r.numberLength).toBe(11)
+    expect(r.standardAttributeOverrides).toEqual({})
+    expect(r.posting?.movements).toEqual([])
+    expect(r.tabularSections[0]?.standardAttributeOverrides).toEqual({})
+    expect(r.tabularSections[0]?.attributes[0]).toMatchObject({
+      required: false,
+      indexed: false,
+      unique: false,
+    })
+    expect(projectSchema.parse({ name: "A" }).naming).toEqual({
+      attributeCase: "camelCase",
+    })
+  })
+
+  it("$schema is allowed at the top only", () => {
+    expect(
+      catalogSchema.safeParse({ $schema: "x", kind: "Catalog", name: "C" })
+        .success
+    ).toBe(true)
+    expect(projectSchema.safeParse({ $schema: "x", name: "A" }).success).toBe(
+      true
+    )
+    expect(
+      unknown(
+        catalogSchema.safeParse({
+          kind: "Catalog",
+          name: "C",
+          title: { uk: "Т", $schema: "x" },
+        })
+      )
+    ).toEqual([["title", ["$schema"]]])
+  })
+
+  it("records keep arbitrary keys, their values are strict", () => {
+    const ok = catalogSchema.safeParse({
+      kind: "Catalog",
+      name: "C",
+      standardAttributeOverrides: { anyName: { description: { en: "D" } } },
+    })
+    expect(ok.success).toBe(true)
+    expect(
+      unknown(
+        catalogSchema.safeParse({
+          kind: "Catalog",
+          name: "C",
+          standardAttributeOverrides: { code: { title: { en: "T" } } },
+        })
+      )
+    ).toEqual([["standardAttributeOverrides/code", ["title"]]])
+  })
+
+  it("unknown keys are reported at every nesting level", () => {
+    expect(
+      unknown(
+        catalogSchema.safeParse({
+          kind: "Catalog",
+          name: "C",
+          owners: [{ kind: "Catalog", name: "O", id: "x" }],
+          predefinedItems: [{ name: "Main", code: "1" }],
+        })
+      )
+    ).toEqual([
+      ["owners/0", ["id"]],
+      ["predefinedItems/0", ["code"]],
+    ])
+    expect(
+      unknown(
+        enumerationSchema.safeParse({
+          kind: "Enumeration",
+          name: "E",
+          values: [{ name: "A", order: 1 }],
+        })
+      )
+    ).toEqual([["values/0", ["order"]]])
+    expect(
+      unknown(
+        accumulationRegisterSchema.safeParse({
+          kind: "AccumulationRegister",
+          name: "R",
+          balanceControl: { resources: [], strict: true },
+        })
+      )
+    ).toEqual([["balanceControl", ["strict"]]])
   })
 })

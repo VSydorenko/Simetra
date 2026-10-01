@@ -1,14 +1,73 @@
 import { z } from "zod"
 import { attributeSchema } from "./attribute"
+import {
+  elementNameSchema,
+  metadataIdSchema,
+  physicalNameSchema,
+} from "./identity"
+import { localizedStringSchema } from "./localized-string"
 import { metadataRefSchema } from "./metadata-ref"
 import {
   objectHeaderShape,
   standardAttributeOverridesSchema,
 } from "./object-header"
+import type { SchemaRule } from "./rules"
+import { refineValueType, valueTypeShape } from "./value-type"
+
+const NUMERIC_TYPES: readonly string[] = ["Integer", "Numeric"]
+
+/**
+ * Ресурс регістра накопичення. Ресурси сумуються в залишки й обороти, тож
+ * форма вужча за реквізит: лише число з precision/scale — без length,
+ * посилань, crossScope чи ознак індексу; строга схема відкидає їх як
+ * невідомі ключі. `type` лишає повний перелік логічних типів, щоб хибний тип
+ * давав власне правило `register.resource-type`, а не загальну помилку
+ * переліку.
+ */
+export const resourceSchema = z
+  .strictObject({
+    id: metadataIdSchema.optional(),
+    name: elementNameSchema,
+    physicalName: physicalNameSchema.optional(),
+    title: localizedStringSchema.optional().meta({
+      description: "Human-readable title of the resource.",
+    }),
+    description: localizedStringSchema.optional().meta({
+      description: "Description of the resource.",
+    }),
+    type: valueTypeShape.type.meta({
+      description: "Logical value type; Integer or Numeric only.",
+    }),
+    precision: valueTypeShape.precision,
+    scale: valueTypeShape.scale,
+    required: z
+      .boolean()
+      .default(false)
+      .meta({ description: "Whether a value is mandatory (NOT NULL)." }),
+  })
+  .superRefine((resource, ctx) => {
+    // Нечисловий тип — одна причина й один код: перевірки параметрів типу
+    // (наприклад, length для String) тут лише дублювали б її.
+    if (!NUMERIC_TYPES.includes(resource.type)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "AccumulationRegister resources must be Integer or Numeric",
+        path: ["type"],
+        params: { rule: "register.resource-type" satisfies SchemaRule },
+      })
+      return
+    }
+    refineValueType(resource, ctx)
+  })
+  .meta({
+    description: "Resource of an accumulation register: a summed number.",
+  })
+
+export type AccumulationResource = z.infer<typeof resourceSchema>
 
 /** Регістр накопичення. */
 export const accumulationRegisterSchema = z
-  .object({
+  .strictObject({
     ...objectHeaderShape,
     kind: z.literal("AccumulationRegister").meta({
       description: "Metadata kind; always AccumulationRegister.",
@@ -25,7 +84,7 @@ export const accumulationRegisterSchema = z
      * імена ресурсів цього регістра, їхнє існування перевіряє стадія 2.
      */
     balanceControl: z
-      .object({
+      .strictObject({
         resources: z.array(z.string()).meta({
           description:
             "Logical names of resources whose balance is controlled.",
@@ -44,7 +103,7 @@ export const accumulationRegisterSchema = z
       .array(attributeSchema)
       .default([])
       .meta({ description: "Dimensions: the key fields of a record." }),
-    resources: z.array(attributeSchema).default([]).meta({
+    resources: z.array(resourceSchema).default([]).meta({
       description:
         "Resources: the summed value fields of a record; Integer or Numeric only.",
     }),
@@ -67,17 +126,6 @@ export const accumulationRegisterSchema = z
         params: { rule: "register.balance-control-type" },
       })
     }
-    // Ресурси регістра накопичення сумуються, тож вони лише числові.
-    register.resources.forEach((resource, index) => {
-      if (resource.type !== "Integer" && resource.type !== "Numeric") {
-        ctx.addIssue({
-          code: "custom",
-          message: "AccumulationRegister resources must be Integer or Numeric",
-          path: ["resources", index, "type"],
-          params: { rule: "register.resource-type" },
-        })
-      }
-    })
   })
 
 export type AccumulationRegister = z.infer<typeof accumulationRegisterSchema>

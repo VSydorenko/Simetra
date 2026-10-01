@@ -65,6 +65,16 @@ class FileText {
   private byPointer(d: Diagnostic): Range {
     const root = this.tree
     if (root === undefined || d.pointer === "") return fileStart()
+    // Невідомий ключ підсвічується сам, а не його значення: виправляти
+    // треба саме ім'я ключа.
+    const key =
+      d.code === "file.unknown-key" ? keyAt(root, d.pointer) : undefined
+    if (key !== undefined) {
+      return {
+        start: this.position(key.offset),
+        end: this.position(key.offset + key.length),
+      }
+    }
     const node = nearestNode(root, d.pointer)
     const offset = d.params?.offset
     if (
@@ -130,6 +140,20 @@ function nodeAt(root: Node, pointer: string): Node | undefined {
     if (node === undefined) return undefined
   }
   return node
+}
+
+/** Вузол імені властивості, на яку вказує pointer, якщо вона є. */
+function keyAt(root: Node, pointer: string): Node | undefined {
+  const path = segments(pointer)
+  const last = path.pop()
+  let node: Node | undefined = root
+  for (const segment of path) {
+    node = child(node, segment)
+    if (node === undefined) return undefined
+  }
+  if (node.type !== "object") return undefined
+  return node.children?.find((p) => p.children?.[0]?.value === last)
+    ?.children?.[0]
 }
 
 /** Ключ, якого немає, адресує найближчий наявний предок. */
