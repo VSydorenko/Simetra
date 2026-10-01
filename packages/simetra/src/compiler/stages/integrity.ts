@@ -183,6 +183,7 @@ export function checkIntegrity(
       }
     }
   }
+  diagnostics.push(...relationNameCollisions(model))
 
   for (const object of objects) {
     for (const { pointer, refs } of polymorphicSets(object.data)) {
@@ -1100,6 +1101,48 @@ function checkPosting(
     })
   }
   return found
+}
+
+/**
+ * Явні імена індексів, первинних ключів і UNIQUE займають `pg_class` схеми
+ * поряд із таблицями (спека §8.3): збіг з таблицею чи з іншим явним іменем
+ * інакше впав би на DDL («relation already exists»). Таблиці займають імена
+ * першими — `physicalName` після створення не змінюється, тож помилку
+ * отримує явне ім'я, далі — за файлом і порядком у файлі. Збіг двох таблиць
+ * звітує `physical.table-duplicate`; похідні імена зайнятих не беруть
+ * (`assignNames`).
+ */
+function relationNameCollisions(model: ModelStageResult): Diagnostic[] {
+  const tables = new Set(
+    model.physical.tables.map((t) => `${t.schema}.${t.name}`)
+  )
+  const taken = new Map<string, { file: string; other: string }>()
+  for (const source of model.sources) {
+    const key = `${source.schema}.${source.name}`
+    if (tables.has(key) && !taken.has(key)) {
+      taken.set(key, { file: source.file, other: "a table" })
+    }
+  }
+  const diagnostics: Diagnostic[] = []
+  for (const source of model.sources) {
+    for (const { name, pointer, relation } of source.explicitNames) {
+      if (!relation) continue
+      const key = `${source.schema}.${name}`
+      const first = taken.get(key)
+      if (first === undefined) {
+        taken.set(key, { file: source.file, other: "an index or key" })
+        continue
+      }
+      diagnostics.push(
+        diagnostic("physical.relation-duplicate", source.file, pointer, {
+          name: key,
+          other: first.other,
+          firstFile: first.file,
+        })
+      )
+    }
+  }
+  return diagnostics
 }
 
 /**

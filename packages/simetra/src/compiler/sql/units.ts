@@ -306,8 +306,12 @@ export function pgNamespaceKeys(object: PgObject): PgName[] {
  * ідентичність — `sql.unit-duplicate`, різні класи з одним ключем —
  * `sql.namespace-conflict`. Першим вважається об'єкт моделі чи обгортка
  * (їх породжує модель), далі одиниці за файлом і рядком; помилку отримує
- * дослівна одиниця. Збіги лише між об'єктами моделі й обгортками звітує
- * стадія 4. `describe` — опис згенерованої одиниці для `sql.unit-duplicate`.
+ * дослівна одиниця. Збіги лише між об'єктами моделі тут не звітуються: до
+ * цієї перевірки їх уже відсіяла стадія 4 (`physical.table-duplicate` для
+ * таблиць і енам-типів, `physical.relation-duplicate` для явних імен
+ * індексів і ключів, `physical.function-duplicate` для обгорток), а похідні
+ * імена обходять зайняті (`assignNames`). `describe` — опис згенерованої
+ * одиниці для `sql.unit-duplicate`.
  */
 export function namespaceConflicts(
   physical: Pick<PhysicalSnapshot, "tables" | "enumTypes">,

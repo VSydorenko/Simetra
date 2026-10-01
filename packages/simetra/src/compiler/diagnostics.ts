@@ -72,6 +72,7 @@ export const COMPILER_RULES = [
   "posting.period-not-allowed",
   "posting.type-mismatch",
   "physical.table-duplicate",
+  "physical.relation-duplicate",
   "physical.column-duplicate",
   "physical.discriminator-duplicate",
   "physical.function-duplicate",

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
-import { catalog, metaFiles, project, salesDocument, uuid } from "./helpers"
+import {
+  catalog,
+  customTable,
+  metaFiles,
+  project,
+  salesDocument,
+  uuid,
+} from "./helpers"
 
 const MISC = "sql/public/misc.sql"
 
@@ -238,6 +245,104 @@ describe("postgres namespaces", () => {
       "CREATE FUNCTION item() RETURNS int LANGUAGE sql AS $$ select 1 $$;",
       { "catalogs/Item/Item.meta.json": catalog("Item") }
     )
+    expect(result.diagnostics).toEqual([])
+  })
+})
+
+// Явні імена індексів, первинних ключів і UNIQUE `CustomTable` займають
+// `pg_class` схеми поряд із таблицями: збіг між об'єктами моделі — помилка
+// стадії 4, а не «relation already exists» на DDL. Похідні імена обходять
+// зайняті самі (`assignNames`).
+describe("model relation names in pg_class", () => {
+  const LOG = "custom-tables/Log/Log.meta.json"
+  const AUDIT = "custom-tables/Audit/Audit.meta.json"
+  const id = { id: uuid(940), name: "id", physicalName: "id", type: "UUID" }
+  const indexed = (name: string) => ({
+    indexes: [{ name, keys: [{ column: "id" }] }],
+  })
+
+  async function compileModel(entries: Record<string, unknown>) {
+    return compile(metaFiles({ "project.meta.json": project(), ...entries }))
+  }
+
+  function duplicate(
+    file: string,
+    pointer: string,
+    params: Record<string, unknown>
+  ) {
+    return expect.objectContaining({
+      code: "physical.relation-duplicate",
+      severity: "error",
+      file,
+      pointer,
+      params: expect.objectContaining(params),
+    })
+  }
+
+  it("two CustomTables with the same explicit index name", async () => {
+    const result = await compileModel({
+      [AUDIT]: customTable("Audit", indexed("shared_idx")),
+      [LOG]: customTable("Log", indexed("shared_idx")),
+    })
+    expect(result.diagnostics).toEqual([
+      duplicate(LOG, "/indexes/0/name", {
+        name: "public.shared_idx",
+        firstFile: AUDIT,
+      }),
+    ])
+  })
+
+  it("two indexes of one table with the same explicit name", async () => {
+    const result = await compileModel({
+      [LOG]: customTable("Log", {
+        indexes: [
+          { name: "log_idx", keys: [{ column: "id" }] },
+          { name: "log_idx", keys: [{ expression: "(id)::text" }] },
+        ],
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      duplicate(LOG, "/indexes/1/name", { name: "public.log_idx" }),
+    ])
+  })
+
+  it("explicit index name equal to a catalog table name", async () => {
+    const result = await compileModel({
+      "catalogs/Item/Item.meta.json": catalog("Item"),
+      [LOG]: customTable("Log", indexed("item")),
+    })
+    expect(result.diagnostics).toEqual([
+      duplicate(LOG, "/indexes/0/name", {
+        name: "public.item",
+        firstFile: "catalogs/Item/Item.meta.json",
+      }),
+    ])
+    expect(result.diagnostics[0]!.message).toContain("table")
+  })
+
+  it("explicit primary key and UNIQUE names take pg_class too", async () => {
+    const result = await compileModel({
+      [AUDIT]: customTable("Audit", {
+        columns: [{ ...id, notNull: true }],
+        primaryKey: { name: "audit_key", columns: ["id"] },
+      }),
+      [LOG]: customTable("Log", {
+        uniques: [{ name: "audit_key", columns: ["id"] }],
+        ...indexed("audit_key"),
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      duplicate(LOG, "/indexes/0/name", { name: "public.audit_key" }),
+      duplicate(LOG, "/uniques/0/name", { name: "public.audit_key" }),
+    ])
+  })
+
+  it("explicit index name equal to an enum type name is clean", async () => {
+    // Індекс — у `pg_class`, енам-тип — у `pg_type`.
+    const result = await compileModel({
+      "pg-enums/Status/Status.meta.json": PG_ENUM,
+      [LOG]: customTable("Log", indexed("status")),
+    })
     expect(result.diagnostics).toEqual([])
   })
 })

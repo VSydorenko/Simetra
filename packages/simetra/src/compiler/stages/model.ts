@@ -64,8 +64,11 @@ export interface PhysicalSource {
   pointer: string
   /** Колонки в порядку таблиці; `pointer` — у колонок з елементів файлу. */
   columns: { name: string; pointer?: string }[]
-  /** Явні імена обмежень та індексів. */
-  explicitNames: { name: string; pointer: string }[]
+  /**
+   * Явні імена обмежень та індексів; `relation` — ім'я займає `pg_class`
+   * (індекс, первинний ключ, UNIQUE), а не лише простір обмежень таблиці.
+   */
+  explicitNames: { name: string; pointer: string; relation: boolean }[]
 }
 
 export interface ModelStageResult {
@@ -1009,8 +1012,14 @@ class SnapshotBuilder {
       columns: [],
       explicitNames: [],
     }
-    const explicit = (name: string | undefined, pointer: string) => {
-      if (name !== undefined) source.explicitNames.push({ name, pointer })
+    const explicit = (
+      name: string | undefined,
+      pointer: string,
+      relation: boolean
+    ) => {
+      if (name !== undefined) {
+        source.explicitNames.push({ name, pointer, relation })
+      }
       return name !== undefined ? { name } : {}
     }
 
@@ -1053,14 +1062,14 @@ class SnapshotBuilder {
 
     if (data.primaryKey !== undefined) {
       table.primaryKey = {
-        ...explicit(data.primaryKey.name, "/primaryKey/name"),
+        ...explicit(data.primaryKey.name, "/primaryKey/name", true),
         columns: map(data.primaryKey.columns, "/primaryKey/columns"),
         ...deferred(data.primaryKey.deferrable),
       }
     }
     data.uniques.forEach((unique, i) => {
       table.uniques.push({
-        ...explicit(unique.name, `/uniques/${i}/name`),
+        ...explicit(unique.name, `/uniques/${i}/name`, true),
         columns: map(unique.columns, `/uniques/${i}/columns`),
         nullsNotDistinct: unique.nullsNotDistinct,
         ...deferred(unique.deferrable),
@@ -1070,7 +1079,7 @@ class SnapshotBuilder {
     // виразу, якого тут немає, тож стадія 4 вимагає для них явне ім'я.
     data.checks.forEach((check, i) => {
       table.checks.push({
-        ...explicit(check.name, `/checks/${i}/name`),
+        ...explicit(check.name, `/checks/${i}/name`, false),
         expression: check.expression,
       })
     })
@@ -1095,7 +1104,7 @@ class SnapshotBuilder {
         target = { schema, table, columns }
       }
       table.foreignKeys.push({
-        ...explicit(foreignKey.name, `${pointer}/name`),
+        ...explicit(foreignKey.name, `${pointer}/name`, false),
         columns: map(foreignKey.columns, `${pointer}/columns`),
         references: target,
         onDelete: foreignKey.onDelete,
@@ -1105,7 +1114,7 @@ class SnapshotBuilder {
     })
     data.indexes.forEach((index, i) => {
       table.indexes.push({
-        ...explicit(index.name, `/indexes/${i}/name`),
+        ...explicit(index.name, `/indexes/${i}/name`, true),
         unique: index.unique,
         method: index.method,
         // Поля ключа — поіменно: передача ключа як є зарахувала б ратчету

@@ -722,6 +722,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Фізичне ім'я ${p.name} уже використовує таблиця або енам-тип у ${p.firstFile}`,
   },
+  "physical.relation-duplicate": {
+    en: (p) =>
+      `Index or key name ${p.name} is already taken by ${p.other} in ${p.firstFile}`,
+    uk: (p) =>
+      `Ім'я індексу чи ключа ${p.name} уже займає ${p.other === "a table" ? "таблиця" : "індекс чи ключ"} у ${p.firstFile}`,
+    hint: {
+      en: "Tables, indexes and the indexes of primary keys and UNIQUE constraints share one Postgres namespace (pg_class) per schema; rename the index or key.",
+      uk: "Таблиці, індекси та індекси первинних ключів і обмежень UNIQUE ділять один простір імен Postgres (pg_class) у схемі; перейменуйте індекс чи ключ.",
+    },
+  },
   "physical.column-duplicate": {
     en: (p) => `Column ${p.name} is already declared in table ${p.table}`,
     uk: (p) => `Колонка ${p.name} уже оголошена в таблиці ${p.table}`,
