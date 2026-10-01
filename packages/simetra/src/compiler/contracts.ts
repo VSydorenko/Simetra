@@ -71,12 +71,34 @@ export interface VirtualTableContract {
     name: "p_at" | "p_from" | "p_to" | "p_recorder_type" | "p_recorder_id"
     type: string
   }[]
-  columns: { name: string; type: string }[]
+  columns: VirtualTableColumn[]
+}
+
+/** Міра ресурсу в обчислюваній колонці віртуальної таблиці. */
+export type ResourceMeasure =
+  "opening" | "receipt" | "expense" | "closing" | "net"
+
+export interface VirtualTableColumn {
+  name: string
+  type: string
+  /**
+   * Заповнене в обчислюваних колонок ресурсу: `balance` — `closing`,
+   * `balanceAndTurnovers` — `opening`/`receipt`/`expense`/`closing`,
+   * `turnovers` — `net`. Колонки носія скоупу, вимірів і зрізів
+   * `sliceLast`/`sliceFirst` джерела не мають: вони збігаються з власними
+   * колонками регістра, а `origin.elementId` відображає їх однозначно. П3
+   * читає відповідність звідси, а не за суфіксом імені.
+   */
+  source?: { resourceId: string; measure: ResourceMeasure }
 }
 
 export interface RegisterContract {
   registerId: string
   movements: QualifiedName
+  /**
+   * Окремої відповідності ресурсів тут немає: на ресурс одна колонка, її
+   * `origin.elementId` однозначний, тож П3 не шукає тут `resources`.
+   */
   totals?: QualifiedName
   turnoversMonth?: {
     table: QualifiedName
@@ -84,6 +106,15 @@ export interface RegisterContract {
     monthExpression: string
     /** Пара `<r>_receipt`/`<r>_expense` на ресурс замість `<r>`. */
     split: boolean
+    /**
+     * Ресурси в порядку файлу з фізичними колонками таблиці обертів: пара
+     * `receipt`/`expense` за `split: true`, одна `column` інакше. Беруться зі
+     * знімка за `origin.elementId`, а не добудовуються з імені (спека §8.3).
+     */
+    resources: (
+      | { resourceId: string; receipt: string; expense: string }
+      | { resourceId: string; column: string }
+    )[]
   }
   virtualTables: VirtualTableContract[]
   /** Перераховує й звіряє обидві похідні таблиці. */
@@ -176,6 +207,8 @@ const VIRTUAL_TABLES: Record<
     parameters: [{ name: "p_at", type: TIMESTAMP }],
   },
 }
+
+const MEASURES = ["opening", "receipt", "expense", "closing"] as const
 
 /** Основна таблиця об'єкта (не ТЧ і не підсумки). */
 export function mainTableOf(
@@ -565,22 +598,33 @@ function registerContract(
     ...resources,
     ...columnsOf(data.attributes),
   ].map(column)
-  const columnsFor: Record<VirtualTableKind, { name: string; type: string }[]> =
-    {
-      balance: [...carrier, ...dimensions, ...resources].map(column),
-      balanceAndTurnovers: [
-        ...[...carrier, ...dimensions].map(column),
-        ...resources.flatMap((r) =>
-          ["opening", "receipt", "expense", "closing"].map((label) => ({
-            name: makeObjectName(r.name, undefined, label),
-            type: r.type,
-          }))
-        ),
-      ],
-      turnovers: [...carrier, ...dimensions, ...resources].map(column),
-      sliceLast: slice,
-      sliceFirst: slice,
-    }
+  // Колонка ресурсу з джерелом: id елемента беремо з origin, а не з імені.
+  const measured = (r: PhysicalColumn, measure: ResourceMeasure) => ({
+    ...column(r),
+    source: { resourceId: must(r.origin.elementId), measure },
+  })
+  const columnsFor: Record<VirtualTableKind, VirtualTableColumn[]> = {
+    balance: [
+      ...[...carrier, ...dimensions].map(column),
+      ...resources.map((r) => measured(r, "closing")),
+    ],
+    balanceAndTurnovers: [
+      ...[...carrier, ...dimensions].map(column),
+      ...resources.flatMap((r) =>
+        MEASURES.map((measure) => ({
+          name: makeObjectName(r.name, undefined, measure),
+          type: r.type,
+          source: { resourceId: must(r.origin.elementId), measure },
+        }))
+      ),
+    ],
+    turnovers: [
+      ...[...carrier, ...dimensions].map(column),
+      ...resources.map((r) => measured(r, "net")),
+    ],
+    sliceLast: slice,
+    sliceFirst: slice,
+  }
 
   const totals = derivedTableOf(physical, id, "totals")
   const turnoversMonth = derivedTableOf(physical, id, "turnoversMonth")
@@ -615,6 +659,17 @@ function registerContract(
               timezone
             ),
             split: keys.turnoversMonth.split,
+            resources: data.resources.map((resource) => {
+              const resourceId = must(resource.id)
+              const names = columnsOfElement(must(turnoversMonth), resourceId)
+              return keys.turnoversMonth!.split
+                ? {
+                    resourceId,
+                    receipt: must(names[0]),
+                    expense: must(names[1]),
+                  }
+                : { resourceId, column: must(names[0]) }
+            }),
           },
         }),
     virtualTables: keys.virtualTables.map((kind) => ({

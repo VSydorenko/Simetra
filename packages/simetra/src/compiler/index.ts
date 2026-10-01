@@ -20,5 +20,7 @@ export type {
   PostingContract,
   QualifiedName,
   RegisterContract,
+  ResourceMeasure,
+  VirtualTableColumn,
   VirtualTableContract,
 } from "./contracts"

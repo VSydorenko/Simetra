@@ -572,6 +572,51 @@ describe("stage 3: register keys", () => {
   })
 })
 
+describe("derived table column collisions", () => {
+  function registerWith(patch: Record<string, unknown>) {
+    return metaFiles({
+      [PROJECT]: project(),
+      [STOCK]: {
+        id: STOCK_ID,
+        kind: "AccumulationRegister",
+        name: "Stock",
+        physicalName: "stock",
+        resources: [attribute("qty", { type: "Integer" })],
+        ...patch,
+      },
+    })
+  }
+
+  it("dimension named month collides in turnovers_month at the dimension", () => {
+    const files = registerWith({
+      dimensions: [attribute("period2", { physicalName: "month" })],
+    })
+    expect(
+      diagnosticsOf(files).filter(
+        ([code]) => code === "physical.column-duplicate"
+      )
+    ).toEqual([
+      ["physical.column-duplicate", STOCK, "/dimensions/0/physicalName"],
+    ])
+  })
+
+  it("split resource column collides at the element that came second", () => {
+    // Колонки `<reg>_turnovers_month`: виміри, month, потім пара ресурсу
+    // `qty_receipt`/`qty_expense` — другим приходить ресурс, не вимір.
+    const files = registerWith({
+      registerType: "Balance",
+      dimensions: [attribute("clash", { physicalName: "qty_receipt" })],
+    })
+    expect(
+      diagnosticsOf(files).filter(
+        ([code]) => code === "physical.column-duplicate"
+      )
+    ).toEqual([
+      ["physical.column-duplicate", STOCK, "/resources/0/physicalName"],
+    ])
+  })
+})
+
 describe("balance control", () => {
   it("balanceControl only for balance registers", () => {
     expect(

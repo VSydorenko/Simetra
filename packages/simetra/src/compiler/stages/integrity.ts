@@ -138,9 +138,13 @@ export function checkIntegrity(
       )
     }
 
-    const columns = new Set<string>()
+    // Колонка без власного pointer — платформна (напр. `month` похідної
+    // таблиці): автор не називав її, тож зіткнення виправляється в елементі,
+    // що першим зайняв ім'я, а не в `physicalName` усього об'єкта.
+    const columns = new Map<string, string | undefined>()
     for (const column of source.columns) {
-      const pointer = column.pointer ?? source.pointer
+      const first = columns.get(column.name)
+      const pointer = column.pointer ?? first ?? source.pointer
       if (columns.has(column.name)) {
         diagnostics.push(
           diagnostic("physical.column-duplicate", source.file, pointer, {
@@ -148,8 +152,9 @@ export function checkIntegrity(
             table: key,
           })
         )
+      } else {
+        columns.set(column.name, column.pointer)
       }
-      columns.add(column.name)
       if (byteLength(column.name) > MAX_IDENT_BYTES) {
         diagnostics.push(
           diagnostic("physical.name-too-long", source.file, pointer, {

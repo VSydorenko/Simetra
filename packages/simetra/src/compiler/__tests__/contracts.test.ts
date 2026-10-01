@@ -12,6 +12,7 @@ import {
   project,
   salesDocument,
   scopedProject,
+  uuid,
 } from "./helpers"
 
 function contracts(entries: Record<string, unknown>) {
@@ -267,7 +268,11 @@ describe("posting and register contracts", () => {
         ],
         columns: [
           { name: "item_id", type: "uuid" },
-          { name: "qty", type: "numeric(15,3)" },
+          {
+            name: "qty",
+            type: "numeric(15,3)",
+            source: { resourceId: expect.any(String), measure: "closing" },
+          },
         ],
       },
       {
@@ -276,10 +281,26 @@ describe("posting and register contracts", () => {
         parameters: [from, to],
         columns: [
           { name: "item_id", type: "uuid" },
-          { name: "qty_opening", type: "numeric(15,3)" },
-          { name: "qty_receipt", type: "numeric(15,3)" },
-          { name: "qty_expense", type: "numeric(15,3)" },
-          { name: "qty_closing", type: "numeric(15,3)" },
+          {
+            name: "qty_opening",
+            type: "numeric(15,3)",
+            source: { resourceId: expect.any(String), measure: "opening" },
+          },
+          {
+            name: "qty_receipt",
+            type: "numeric(15,3)",
+            source: { resourceId: expect.any(String), measure: "receipt" },
+          },
+          {
+            name: "qty_expense",
+            type: "numeric(15,3)",
+            source: { resourceId: expect.any(String), measure: "expense" },
+          },
+          {
+            name: "qty_closing",
+            type: "numeric(15,3)",
+            source: { resourceId: expect.any(String), measure: "closing" },
+          },
         ],
       },
     ])
@@ -308,7 +329,11 @@ describe("posting and register contracts", () => {
         parameters: [from, to],
         columns: [
           { name: "item_id", type: "uuid" },
-          { name: "qty", type: "numeric(15,3)" },
+          {
+            name: "qty",
+            type: "numeric(15,3)",
+            source: { resourceId: expect.any(String), measure: "net" },
+          },
         ],
       },
     ])
@@ -368,6 +393,13 @@ describe("posting and register contracts", () => {
       table: { schema: "public", name: "stock_turnovers_month" },
       monthExpression: expression,
       split: true,
+      resources: [
+        {
+          resourceId: expect.any(String),
+          receipt: "qty_receipt",
+          expense: "qty_expense",
+        },
+      ],
     })
     const turnover = contracts({
       ...turnoverStock(),
@@ -377,6 +409,94 @@ describe("posting and register contracts", () => {
       monthExpression: expression,
       split: false,
     })
+  })
+
+  it("resources map to their columns by id, not by name suffix", () => {
+    // Різні id й порядок `amount`, `qty` у файлі: відповідність береться з
+    // origin колонок, а не з імен (спека П2 §8.3).
+    const resourcesOf = (amountId: string, qtyId: string) => [
+      attribute("amount", {
+        id: amountId,
+        type: "Numeric",
+        precision: 15,
+        scale: 2,
+      }),
+      attribute("qty", {
+        id: qtyId,
+        type: "Numeric",
+        precision: 15,
+        scale: 3,
+      }),
+    ]
+    const [amountId, qtyId, salesAmountId, salesQtyId] = [
+      901, 902, 903, 904,
+    ].map(uuid) as [string, string, string, string]
+    const register = (id: string, name: string, extra: object) => ({
+      [`accumulation-registers/${name}/${name}.meta.json`]: {
+        id,
+        kind: "AccumulationRegister",
+        name,
+        physicalName: name.toLowerCase(),
+        ...extra,
+      },
+    })
+    const { registers } = contracts({
+      "project.meta.json": project(),
+      ...register(uuid(1), "Stock", {
+        resources: resourcesOf(amountId, qtyId),
+      }),
+      ...register(uuid(2), "Sales", {
+        registerType: "Turnover",
+        resources: resourcesOf(salesAmountId, salesQtyId),
+      }),
+    })
+    const stock = registers.find((r) => r.movements.name === "stock")!
+    const sales = registers.find((r) => r.movements.name === "sales")!
+
+    expect(stock.turnoversMonth!.resources).toEqual([
+      {
+        resourceId: amountId,
+        receipt: "amount_receipt",
+        expense: "amount_expense",
+      },
+      { resourceId: qtyId, receipt: "qty_receipt", expense: "qty_expense" },
+    ])
+    expect(sales.turnoversMonth!.resources).toEqual([
+      { resourceId: salesAmountId, column: "amount" },
+      { resourceId: salesQtyId, column: "qty" },
+    ])
+
+    const columns = (
+      contract: (typeof registers)[number],
+      kind: string
+    ): { name: string; source?: unknown }[] =>
+      contract.virtualTables.find((t) => t.kind === kind)!.columns
+    const sourced = (contract: (typeof registers)[number], kind: string) =>
+      columns(contract, kind).map(({ name, source }) => [name, source ?? null])
+
+    expect(sourced(stock, "balance")).toEqual([
+      ["amount", { resourceId: amountId, measure: "closing" }],
+      ["qty", { resourceId: qtyId, measure: "closing" }],
+    ])
+    expect(sourced(stock, "balanceAndTurnovers")).toEqual(
+      [
+        ["amount", amountId],
+        ["qty", qtyId],
+      ].flatMap(([name, resourceId]) =>
+        ["opening", "receipt", "expense", "closing"].map((measure) => [
+          `${name}_${measure}`,
+          { resourceId, measure },
+        ])
+      )
+    )
+    expect(sourced(sales, "turnovers")).toEqual([
+      ["amount", { resourceId: salesAmountId, measure: "net" }],
+      ["qty", { resourceId: salesQtyId, measure: "net" }],
+    ])
+    // Служебні колонки (виміри, носій скоупу) джерела не мають.
+    expect(columns(stock, "balance").every((c) => c.source !== undefined)).toBe(
+      true
+    )
   })
 
   it("turnover register maintains derived tables", () => {
