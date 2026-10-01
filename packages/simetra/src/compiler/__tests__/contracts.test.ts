@@ -5,6 +5,7 @@ import {
   STOCK_FILE,
   attribute,
   catalog,
+  document,
   metaFiles,
   organization,
   project,
@@ -16,6 +17,13 @@ function contracts(entries: Record<string, unknown>) {
   const result = compile(metaFiles(entries))
   expect(result.diagnostics).toEqual([])
   return result.model!.contracts
+}
+
+function scopedProject2(): Record<string, unknown> {
+  return {
+    "project.meta.json": scopedProject(),
+    "catalogs/Organization/Organization.meta.json": organization(),
+  }
 }
 
 function withStock(patch: Record<string, unknown>): Record<string, unknown> {
@@ -37,6 +45,54 @@ function turnoverStock(): Record<string, unknown> {
 const at = { name: "p_at", type: "timestamp with time zone" }
 const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
+
+describe("numbering contract", () => {
+  it("document numbering contract", () => {
+    const { numbering } = contracts({
+      ...scopedProject2(),
+      "documents/Invoice/Invoice.meta.json": document("Invoice", {
+        id: "00000000-0000-4000-8000-000000000d01",
+        scope: "org",
+      }),
+    })
+    expect(numbering).toContainEqual({
+      objectId: "00000000-0000-4000-8000-000000000d01",
+      column: "number",
+      periodColumn: "number_period",
+      type: "String",
+      length: 11,
+      autonumber: true,
+      periodicity: "Year",
+      scoped: true,
+      assignedAt: "firstWrite",
+    })
+  })
+
+  it("catalog code numbering contract", () => {
+    const { numbering } = contracts({
+      "project.meta.json": project(),
+      "catalogs/A/A.meta.json": catalog("A", {
+        id: "00000000-0000-4000-8000-000000000a01",
+      }),
+      "catalogs/B/B.meta.json": catalog("B", {
+        id: "00000000-0000-4000-8000-000000000b02",
+        codeLength: 0,
+      }),
+    })
+    expect(numbering).toEqual([
+      {
+        objectId: "00000000-0000-4000-8000-000000000a01",
+        column: "code",
+        type: "String",
+        length: 9,
+        autonumber: true,
+        periodicity: "None",
+        scoped: false,
+        assignedAt: "firstWrite",
+      },
+    ])
+  })
+})
 
 describe("predefined contract", () => {
   it("predefined contract lists items with ids", () => {

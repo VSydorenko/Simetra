@@ -66,6 +66,11 @@ export interface PhysicalColumn {
   notNull: boolean
   default?: string
   identity?: "always" | "byDefault"
+  /**
+   * Генерована колонка (`GENERATED ALWAYS AS (...) STORED`): значення дає
+   * база, тож `default` у такої колонки немає.
+   */
+  generated?: { expression: string }
   comment?: string
   /**
    * UUID реквізиту або логічне ім'я стандартного реквізиту; `scopeKindId` —

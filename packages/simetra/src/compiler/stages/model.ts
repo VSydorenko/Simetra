@@ -18,6 +18,7 @@ import {
   quoteIdent,
   singletonColumn,
   standardLogicalName,
+  truncatedPeriodExpression,
   type Attribute,
   type AttributeCase,
   type CustomTable,
@@ -91,6 +92,8 @@ interface Field {
   array: boolean
   notNull: boolean
   default?: string
+  /** Вираз генерованої колонки (`STORED`); з `default` несумісний. */
+  generated?: string
   check?: string
   primaryKey: boolean
   indexed: boolean
@@ -316,6 +319,27 @@ class SnapshotBuilder {
           registerKeys.turnoversMonth.split
         )
       }
+    }
+    const numbering = def.numbering?.(data)
+    if (numbering?.unique === true) {
+      // Номер унікальний у межах носія скоупу й періоду; колонки беремо з
+      // уже побудованих полів, бо їхні фізичні імена — факт реєстру.
+      const named = (logicalName: string | undefined) =>
+        logicalName === undefined
+          ? []
+          : (columnsOf.get(
+              [...standardFields].find(
+                ([column]) => column.logicalName === logicalName
+              )![1]
+            ) ?? [])
+      main.uniques.push({
+        columns: [
+          ...(scope?.own === true ? [scope.carrier!] : []),
+          ...named(numbering.periodColumn),
+          ...named(numbering.column),
+        ],
+        nullsNotDistinct: false,
+      })
     }
     // Ціль складених FK у межах скоупу (спека §6).
     if (scope?.own === true && key !== undefined) {
@@ -655,6 +679,15 @@ class SnapshotBuilder {
       array: resolved.array,
       notNull: column.notNull,
       ...(column.default !== undefined ? { default: column.default } : {}),
+      ...(column.generated !== undefined
+        ? {
+            generated: truncatedPeriodExpression(
+              column.generated.truncate.column,
+              column.generated.truncate.unit,
+              this.project.timezone
+            ),
+          }
+        : {}),
       ...(column.check !== undefined ? { check: column.check } : {}),
       primaryKey: column.primaryKey === true,
       // Індекс стандартного посилання — похідний індекс його FK на повний
@@ -1196,6 +1229,9 @@ function addField(table: PendingTable, field: Field): string[] {
             type: field.type,
             notNull: field.notNull,
             ...(field.default !== undefined ? { default: field.default } : {}),
+            ...(field.generated !== undefined
+              ? { generated: { expression: field.generated } }
+              : {}),
             origin: field.origin,
           },
         ]

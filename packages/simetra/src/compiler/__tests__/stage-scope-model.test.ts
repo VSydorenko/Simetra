@@ -663,6 +663,29 @@ function uniquesOf(table: PhysicalTable) {
 const uniqueText = (name: string, physicalName: string) =>
   attribute(name, { physicalName, type: "String", length: 20, unique: true })
 
+describe("stage 3: numbering uniqueness in scope", () => {
+  it("scoped document number is unique within scope and period", () => {
+    const physical = compileScoped({
+      "documents/Invoice/Invoice.meta.json": document("Invoice", {
+        scope: "org",
+      }),
+    })
+    expect(uniquesOf(tableOf(physical, "invoice"))).toContainEqual([
+      "org_id",
+      "number_period",
+      "number",
+    ])
+  })
+
+  it("scoped catalog code uniqueness unchanged", () => {
+    const physical = compileScoped({ [CP]: counterparty() })
+    expect(uniquesOf(tableOf(physical, "counterparty"))).toContainEqual([
+      "org_id",
+      "code",
+    ])
+  })
+})
+
 describe("stage 3: scope indexes", () => {
   it("scoped catalog with codeUnique has no separate code or scope index", () => {
     const physical = compileScoped({ [CP]: counterparty() })
@@ -679,7 +702,7 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("scoped document indexes number and date within the scope", () => {
+  it("scoped document indexes date within the scope; number is covered by UNIQUE", () => {
     const physical = compileScoped({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
         scope: "org",
@@ -687,7 +710,6 @@ describe("stage 3: scope indexes", () => {
     })
     expect(indexesOf(tableOf(physical, "invoice"))).toEqual([
       { name: "invoice_org_id_date_idx", keys: ["org_id", "date"] },
-      { name: "invoice_org_id_number_idx", keys: ["org_id", "number"] },
     ])
   })
 

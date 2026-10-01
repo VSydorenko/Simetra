@@ -120,8 +120,8 @@ describe("standard columns", () => {
       physicalName: "code",
       type: { type: "String", length: 5 },
       indexed: true,
-      unique: true,
     })
+    expect(column(full, "code")).not.toHaveProperty("unique")
     expect(column(full, "description")?.type).toEqual({
       type: "String",
       length: 40,
@@ -640,5 +640,76 @@ describe("references()", () => {
         role: "customTable.foreignKey",
       },
     ])
+  })
+})
+
+describe("numbering spec", () => {
+  it("numbering spec of document and catalog", () => {
+    const doc = documentSchema.parse({
+      kind: "Document",
+      name: "Invoice",
+      numberPeriodicity: "Quarter",
+      numberLength: 8,
+    })
+    expect(KIND_REGISTRY.Document.numbering?.(doc)).toEqual({
+      column: "number",
+      periodColumn: "numberPeriod",
+      type: "String",
+      length: 8,
+      autonumber: true,
+      periodicity: "Quarter",
+      unique: true,
+    })
+    const columns = KIND_REGISTRY.Document.standardColumns(doc)
+    const index = columns.findIndex((c) => c.logicalName === "date")
+    expect(columns[index + 1]).toEqual({
+      logicalName: "numberPeriod",
+      physicalName: "number_period",
+      type: { type: "Date" },
+      notNull: true,
+      generated: { truncate: { column: "date", unit: "quarter" } },
+      title: { uk: "Період номера", en: "Number period" },
+    })
+    expect(column(columns, "number")?.indexed).toBeUndefined()
+
+    const none = documentSchema.parse({
+      kind: "Document",
+      name: "Invoice",
+      numberPeriodicity: "None",
+    })
+    expect(KIND_REGISTRY.Document.numbering?.(none)).toMatchObject({
+      periodicity: "None",
+      unique: true,
+    })
+    expect(
+      column(KIND_REGISTRY.Document.standardColumns(none), "numberPeriod")
+    ).toBeUndefined()
+
+    const cat = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Item",
+      codeUnique: false,
+      codeType: "Number",
+    })
+    expect(KIND_REGISTRY.Catalog.numbering?.(cat)).toEqual({
+      column: "code",
+      type: "Number",
+      length: 9,
+      autonumber: true,
+      periodicity: "None",
+      unique: false,
+    })
+    expect(column(catalogColumns({ codeUnique: true }), "code")?.unique).toBe(
+      undefined
+    )
+  })
+
+  it("catalog without code has no numbering", () => {
+    const cat = catalogSchema.parse({
+      kind: "Catalog",
+      name: "Item",
+      codeLength: 0,
+    })
+    expect(KIND_REGISTRY.Catalog.numbering?.(cat)).toBeUndefined()
   })
 })

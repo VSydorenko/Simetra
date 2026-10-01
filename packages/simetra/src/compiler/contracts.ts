@@ -76,6 +76,25 @@ export interface PredefinedContract {
   items: { id: string; name: string }[]
 }
 
+/**
+ * Нумерація першим записом (спека П2, М21): номер призначає оболонка при
+ * першому записі; лічильники й генерацію — П3. Префікса поки немає.
+ */
+export interface NumberingContract {
+  objectId: string
+  /** Фізичне ім'я колонки номера чи коду. */
+  column: string
+  /** Фізичне ім'я генерованої колонки періоду. */
+  periodColumn?: string
+  type: "String" | "Number"
+  length: number
+  autonumber: boolean
+  periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"
+  /** Таблиця має власну скоуп-колонку. */
+  scoped: boolean
+  assignedAt: "firstWrite"
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -83,6 +102,8 @@ export interface Contracts {
   registers: RegisterContract[]
   /** За `objectId`. */
   predefined: PredefinedContract[]
+  /** За `objectId`. */
+  numbering: NumberingContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -317,7 +338,54 @@ export function buildContracts(
       }
     })
     .sort((a, b) => compareStrings(a.documentId, b.documentId))
-  return { posting, registers, predefined: predefinedContracts(objects) }
+  return {
+    posting,
+    registers,
+    predefined: predefinedContracts(objects),
+    numbering: numberingContracts(objects, physical, style),
+  }
+}
+
+function numberingContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  style: AttributeCase
+): NumberingContract[] {
+  return objects
+    .flatMap((object): NumberingContract[] => {
+      const spec = KIND_REGISTRY[object.kind].numbering?.(object.data)
+      const table = mainTableOf(physical, object.id ?? "")
+      if (spec === undefined || table === undefined) return []
+      const defs = KIND_REGISTRY[object.kind].standardColumns(object.data)
+      const columnOf = (logicalName: string) => {
+        const def = must(defs.find((c) => c.logicalName === logicalName))
+        const standard = standardLogicalName(def, style)
+        return must(table.columns.find((c) => c.origin.standard === standard))
+          .name
+      }
+      // Корінь скоупу несе значення в ключі: власної скоуп-колонки в нього
+      // немає, і ключ — стандартний, а не додана колонка.
+      const scoped = table.columns.some(
+        (c) =>
+          c.origin.scopeKindId !== undefined && c.origin.standard === undefined
+      )
+      return [
+        {
+          objectId: object.id ?? "",
+          column: columnOf(spec.column),
+          ...(spec.periodColumn !== undefined
+            ? { periodColumn: columnOf(spec.periodColumn) }
+            : {}),
+          type: spec.type,
+          length: spec.length,
+          autonumber: spec.autonumber,
+          periodicity: spec.periodicity,
+          scoped,
+          assignedAt: "firstWrite",
+        },
+      ]
+    })
+    .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
 
 /** Лише об'єкти з іменованими елементами; вид визначає реєстр, а не його назва. */

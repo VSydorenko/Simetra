@@ -10,6 +10,7 @@ import {
   tabularRowColumns,
   versionColumn,
   type KindDefinition,
+  type NumberingSpec,
   type StandardColumnDef,
 } from "./standard"
 
@@ -26,7 +27,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       type: numberingType(catalog.codeType, catalog.codeLength),
       notNull: false,
       indexed: true,
-      ...(catalog.codeUnique ? { unique: true as const } : {}),
+      // Унікальність коду дає NumberingSpec, тож власного `unique` немає.
       title: { uk: "Код", en: "Code" },
     })
   }
@@ -95,6 +96,19 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   return columns
 }
 
+function numbering(obj: unknown): NumberingSpec | undefined {
+  const catalog = obj as Catalog
+  if (catalog.codeLength === 0) return undefined
+  return {
+    column: "code",
+    type: catalog.codeType,
+    length: catalog.codeLength,
+    autonumber: catalog.autonumber,
+    periodicity: "None",
+    unique: catalog.codeUnique,
+  }
+}
+
 export const catalogKind: KindDefinition = {
   kind: "Catalog",
   dir: "catalogs",
@@ -111,6 +125,7 @@ export const catalogKind: KindDefinition = {
   namedElementFields: ["predefinedItems"],
   ownerKinds: ["Catalog"],
   standardColumns,
+  numbering,
   tabularSectionColumns: () => tabularRowColumns(false),
   references(obj) {
     const catalog = obj as Catalog

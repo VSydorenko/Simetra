@@ -15,6 +15,7 @@ export {
   standardLogicalName,
   type FoundReference,
   type KindDefinition,
+  type NumberingSpec,
   type ReferenceRole,
   type RegisterKeySpec,
   type StandardColumnDef,

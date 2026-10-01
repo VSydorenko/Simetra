@@ -843,4 +843,115 @@ describe("stage 3: physical snapshot", () => {
     expect(forward.ok).toBe(true)
     expect(JSON.stringify(backward)).toBe(JSON.stringify(forward))
   })
+
+  it("document number period is generated", () => {
+    const table = tableOf(
+      compileWith({
+        "documents/Invoice/Invoice.meta.json": document("Invoice"),
+      }),
+      "invoice"
+    )
+    const names = table.columns.map((c) => c.name)
+    expect(names[names.indexOf("date") + 1]).toBe("number_period")
+    const column = table.columns.find((c) => c.name === "number_period")
+    expect(column).toEqual({
+      name: "number_period",
+      type: "date",
+      notNull: true,
+      generated: {
+        expression: "date_trunc('year', (date AT TIME ZONE 'UTC'))::date",
+      },
+      origin: { standard: "numberPeriod" },
+    })
+    expect(column).not.toHaveProperty("default")
+    expect(table.uniques).toEqual([
+      {
+        name: "invoice_number_period_number_key",
+        columns: ["number_period", "number"],
+        nullsNotDistinct: false,
+      },
+    ])
+    expect(
+      searchIndexes(table).filter((i) =>
+        i.keys.some((k) => "column" in k && k.column === "number")
+      )
+    ).toEqual([])
+  })
+
+  it("quarter periodicity", () => {
+    const entries = {
+      "documents/Invoice/Invoice.meta.json": document("Invoice", {
+        numberPeriodicity: "Quarter",
+      }),
+    }
+    const column = (zone?: string) =>
+      tableOf(
+        compileWith({
+          ...entries,
+          ...(zone === undefined
+            ? {}
+            : { "project.meta.json": project({ timezone: zone }) }),
+        }),
+        "invoice"
+      ).columns.find((c) => c.name === "number_period")?.generated?.expression
+    expect(column()).toBe(
+      "date_trunc('quarter', (date AT TIME ZONE 'UTC'))::date"
+    )
+    expect(column("Europe/Kyiv")).toBe(
+      "date_trunc('quarter', (date AT TIME ZONE 'Europe/Kyiv'))::date"
+    )
+  })
+
+  it("document without number periodicity", () => {
+    const table = tableOf(
+      compileWith({
+        "documents/Invoice/Invoice.meta.json": document("Invoice", {
+          numberPeriodicity: "None",
+        }),
+      }),
+      "invoice"
+    )
+    expect(table.columns.map((c) => c.name)).not.toContain("number_period")
+    expect(table.uniques.map((u) => u.columns)).toEqual([["number"]])
+  })
+
+  it("catalog code uniqueness unchanged", () => {
+    const unique = tableOf(
+      compileWith({
+        "catalogs/Item/Item.meta.json": catalog("Item", { codeUnique: true }),
+      }),
+      "item"
+    )
+    expect(unique.uniques.map((u) => u.columns)).toEqual([["code"]])
+    expect(searchIndexes(unique)).toEqual([])
+    const loose = tableOf(
+      compileWith({
+        "catalogs/Item/Item.meta.json": catalog("Item", { codeUnique: false }),
+      }),
+      "item"
+    )
+    expect(loose.uniques).toEqual([])
+    expect(searchIndexes(loose).map((i) => i.keys)).toEqual([
+      [{ column: "code" }],
+    ])
+  })
+
+  it("user attribute named number_period", () => {
+    const result = compile(
+      metaFiles({
+        "project.meta.json": project({
+          naming: { attributeCase: "snake_case" },
+        }),
+        "documents/Invoice/Invoice.meta.json": document("Invoice", {
+          attributes: [attribute("number_period", { type: "Integer" })],
+        }),
+      })
+    )
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "identity.name-reserved"
+    )
+    expect(result.diagnostics.map((d) => d.code)).not.toContain(
+      "physical.duplicate-column"
+    )
+  })
 })

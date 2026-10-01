@@ -31,6 +31,14 @@ export interface StandardColumnDef {
   notNull: boolean
   /** SQL-вираз значення за замовчуванням. */
   default?: string
+  /**
+   * Колонка, що її значення — усічення іншої колонки до дати. Структурно,
+   * бо пояс проєкту реєстр не знає: вираз будує стадія 3 через
+   * `truncatedPeriodExpression`. Завжди `STORED`; з `default` несумісна.
+   */
+  generated?: {
+    truncate: { column: string; unit: "year" | "quarter" | "month" | "day" }
+  }
   /** Вираз CHECK колонки (без обгортки `CHECK (...)`). */
   check?: string
   primaryKey?: true
@@ -143,6 +151,22 @@ export interface RegisterKeySpec {
   virtualTables: readonly VirtualTableKind[]
 }
 
+/**
+ * Нумерація першим записом (спека П2, М21): факт виду про номер документа чи
+ * код довідника. Лічильники генерує П3, тут — лише фізика й контракт.
+ */
+export interface NumberingSpec {
+  /** Канонічні логічні імена стандартних колонок. */
+  column: "number" | "code"
+  periodColumn?: "numberPeriod"
+  type: "String" | "Number"
+  length: number
+  autonumber: boolean
+  periodicity: "None" | "Year" | "Quarter" | "Month" | "Day"
+  /** UNIQUE (носій, період?, колонка) у фізичному знімку. */
+  unique: boolean
+}
+
 export interface KindDefinition {
   kind: MetadataKind
   /** Тека виду в `metadata/` (спека §3). */
@@ -196,6 +220,8 @@ export interface KindDefinition {
   references(obj: unknown): FoundReference[]
   /** Ключі таблиць регістра; є лише у видів-регістрів. */
   registerKeys?(obj: unknown): RegisterKeySpec
+  /** Нумерація; `undefined` — об'єкт номера чи коду не має. */
+  numbering?(obj: unknown): NumberingSpec | undefined
 }
 
 /**
