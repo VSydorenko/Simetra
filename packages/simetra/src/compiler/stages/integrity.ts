@@ -3,6 +3,7 @@ import {
   postsMovements,
   isSqlReservedWord,
   parseExpression,
+  walkExpr,
   type Attribute,
   type AttributeCase,
   type CustomTable,
@@ -662,18 +663,6 @@ const UNKNOWN: InferredType = { kind: "unknown" }
 /** Поля регістра за роллю — у порядку `columnFields` реєстру видів. */
 type RegisterFieldRole = "dimensions" | "resources" | "attributes"
 
-/** Усі вузли виразу, у порядку появи. */
-function nodesOf(expr: Expr): Expr[] {
-  switch (expr.type) {
-    case "unary":
-      return [expr, ...nodesOf(expr.operand)]
-    case "binary":
-      return [expr, ...nodesOf(expr.left), ...nodesOf(expr.right)]
-    default:
-      return [expr]
-  }
-}
-
 /**
  * Семантика рухів конструктора (спека П2 §7, §8.2): регістр оголошено й
  * документ — його реєстратор, `fields` повні, `row.` і агрегати — за
@@ -849,19 +838,19 @@ function checkPosting(
         const parsed = parseExpression(text)
         if (!parsed.ok) return undefined
         let valid = true
-        for (const node of nodesOf(parsed.expr)) {
+        walkExpr(parsed.expr, (node) => {
           const code =
             fromDocument && node.type === "field" && node.base === "row"
               ? "posting.row-in-document-source"
               : !fromDocument && (node.type === "sum" || node.type === "count")
                 ? "posting.aggregate-in-section-source"
                 : undefined
-          if (code === undefined) continue
+          if (code === undefined) return
           valid = false
           found.push(
             diagnostic(code, object.file, pointer, { offset: node.start })
           )
-        }
+        })
         return valid ? parsed.expr : undefined
       }
       const typeAt = (expr: Expr, pointer: string): InferredType => {

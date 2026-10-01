@@ -124,6 +124,20 @@ describe("stage 5: movement sources", () => {
     )
   })
 
+  it("indented marker is a warning", () => {
+    const result = build({
+      withConstructor: false,
+      sql: `${BLOCK}  -- @movements Stock\nSELECT 2\n\t-- @end\n`,
+    })
+    expect(result.ok).toBe(true)
+    expect(
+      result.diagnostics.map((d) => [d.code, d.severity, d.params?.line])
+    ).toEqual([
+      ["file.movements-marker-indented", "warning", 4],
+      ["file.movements-marker-indented", "warning", 6],
+    ])
+  })
+
   it("CRLF line endings are accepted", () => {
     const result = build({
       withConstructor: false,

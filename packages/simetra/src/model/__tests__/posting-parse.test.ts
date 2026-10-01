@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseExpression, type Expr } from "../posting"
+import { parseExpression, walkExpr, type Expr } from "../posting"
 
 function ok(text: string): Expr {
   const result = parseExpression(text)
@@ -143,5 +143,22 @@ describe("parseExpression", () => {
       name: "date",
     })
     expect(ok("Row.Qty")).toMatchObject({ base: "row", name: "Qty" })
+  })
+})
+
+describe("walkExpr", () => {
+  it("visits every node in order of appearance", () => {
+    const seen: string[] = []
+    walkExpr(ok("-row.qty * 2 + sum(goods.amount)"), (node) =>
+      seen.push(node.type)
+    )
+    expect(seen).toEqual([
+      "binary",
+      "binary",
+      "unary",
+      "field",
+      "number",
+      "sum",
+    ])
   })
 })

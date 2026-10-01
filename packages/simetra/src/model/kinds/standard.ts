@@ -336,9 +336,13 @@ export function serviceDateColumns(): StandardColumnDef[] {
   ]
 }
 
-/** Номер чи код: рядок заданої довжини або ціле число. */
+/**
+ * Номер чи код: рядок заданої довжини або ціле число. Тип виду береться зі
+ * схеми документа (у довідника `codeType` той самий), щоб значення не
+ * дублювалися літералом.
+ */
 export function numberingType(
-  kind: "String" | "Number",
+  kind: Document["numberType"],
   length: number
 ): ValueType {
   return kind === "String" ? { type: "String", length } : { type: "Integer" }

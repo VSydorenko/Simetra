@@ -161,4 +161,69 @@ describe("stage 2: movement constructor references", () => {
       "posting.parse",
     ])
   })
+
+  it("sum and count references carry spans", () => {
+    const { result, sale } = build({
+      source: "document",
+      fields: { qty: "sum(goods.qty) + count(goods)" },
+    })
+    const goods = sale.tabularSections[0]!
+    const refs = result.model!.references.filter(
+      (r) =>
+        r.from.pointer === "/posting/movements/0/fields/qty" &&
+        r.role !== "posting.registerField"
+    )
+    expect(refs.map((r) => [r.role, r.to, r.span])).toEqual([
+      [
+        "posting.tabularSection",
+        { kind: "Element", id: goods.id },
+        { start: 0, end: 14 },
+      ],
+      [
+        "posting.rowField",
+        { kind: "Element", id: goods.attributes[1]!.id },
+        { start: 0, end: 14 },
+      ],
+      [
+        "posting.tabularSection",
+        { kind: "Element", id: goods.id },
+        { start: 17, end: 29 },
+      ],
+    ])
+  })
+
+  it("condition references are indexed", () => {
+    const { result, sale } = build({
+      condition: "row.qty > 0 and doc.number = 'A'",
+    })
+    const refs = result.model!.references.filter(
+      (r) => r.from.pointer === "/posting/movements/0/condition"
+    )
+    expect(refs.map((r) => [r.role, r.to, r.span])).toEqual([
+      [
+        "posting.rowField",
+        { kind: "Element", id: sale.tabularSections[0]!.attributes[1]!.id },
+        { start: 0, end: 7 },
+      ],
+      [
+        "posting.docField",
+        { kind: "Element", id: `${sale.id}#number` },
+        { start: 16, end: 26 },
+      ],
+    ])
+  })
+
+  it("movementType expression references are indexed", () => {
+    const { result, sale } = build({ movementType: "doc.number" })
+    const refs = result.model!.references.filter(
+      (r) => r.from.pointer === "/posting/movements/0/movementType"
+    )
+    expect(refs.map((r) => [r.role, r.to, r.span])).toEqual([
+      [
+        "posting.docField",
+        { kind: "Element", id: `${sale.id}#number` },
+        { start: 0, end: 10 },
+      ],
+    ])
+  })
 })

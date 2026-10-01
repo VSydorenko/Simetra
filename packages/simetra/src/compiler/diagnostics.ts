@@ -13,6 +13,7 @@ export const COMPILER_RULES = [
   "file.kind-mismatch",
   "file.name-mismatch",
   "file.movements-block",
+  "file.movements-marker-indented",
   "identity.id-missing",
   "identity.id-duplicate",
   "identity.physical-name-missing",
@@ -22,6 +23,7 @@ export const COMPILER_RULES = [
   "reference.unresolved",
   "reference.ambiguous",
   "register.balance-control-resource",
+  "register.balance-control-duplicate",
   "posting.field-unknown",
   "posting.register-field-unknown",
   "posting.tabular-section-unknown",
@@ -100,11 +102,13 @@ export interface Diagnostic {
  * Правила-попередження: прогін лишається успішним. Зарезервоване слово в
  * `physicalName` не ламає SQL, бо рендер квотує імена, а прийняте ім'я
  * лишається як є (спека П2 §3). Зайвий `crossScope` теж не ламає FK — він
- * лише вводить в оману читача.
+ * лише вводить в оману читача. Маркер з відступом не відкриває блок, тож
+ * запит мовчки не потрапив би в рухи — але файл від цього не ламається.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
   "scope.cross-scope-redundant",
+  "file.movements-marker-indented",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

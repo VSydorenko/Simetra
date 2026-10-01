@@ -641,6 +641,20 @@ describe("balance control", () => {
     ])
   })
 
+  it("duplicate balance control resource", () => {
+    expect(
+      diagnosticsOf(
+        stockFiles({ balanceControl: { resources: ["qty", "qty"] } })
+      )
+    ).toEqual([
+      [
+        "register.balance-control-duplicate",
+        STOCK,
+        "/balanceControl/resources/1",
+      ],
+    ])
+  })
+
   it("balanceControl over a known resource is in the reference index", () => {
     const qty = attribute("qty", { type: "Integer" })
     const result = compile(

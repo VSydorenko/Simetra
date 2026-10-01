@@ -3,6 +3,7 @@ import {
   NO_SCOPE,
   matchesAttributeCase,
   parseExpression,
+  walkExpr,
   standardLogicalName,
   type AttributeCase,
   type Expr,
@@ -479,8 +480,20 @@ function checkBalanceControl(
     resources?: Element[]
   }
   if (balanceControl === undefined) return
+  const seen = new Set<string>()
   balanceControl.resources.forEach((name, index) => {
     const pointer = `/balanceControl/resources/${index}`
+    // Повтор не пише друге посилання: індекс має одну дугу на ресурс, а
+    // скаржимося на повтор, не на першу появу.
+    if (seen.has(name)) {
+      diagnostics.push(
+        diagnostic("register.balance-control-duplicate", object.file, pointer, {
+          name,
+        })
+      )
+      return
+    }
+    seen.add(name)
     const resource = (resources ?? []).find((r) => r.name === name)
     if (resource === undefined) {
       diagnostics.push(
@@ -525,22 +538,6 @@ function nameTable(
       table.set(String(element.name), element.id)
   }
   return table
-}
-
-/** Вузли виразу, що посилаються на імена, у порядку появи. */
-function namedNodes(expr: Expr): Expr[] {
-  switch (expr.type) {
-    case "field":
-    case "sum":
-    case "count":
-      return [expr]
-    case "unary":
-      return namedNodes(expr.operand)
-    case "binary":
-      return [...namedNodes(expr.left), ...namedNodes(expr.right)]
-    default:
-      return []
-  }
 }
 
 /**
@@ -756,7 +753,7 @@ function resolveMovements(
       const parsed = parseExpression(text)
       if (!parsed.ok) return
       const pointer = toPointer([...base.split("/").slice(1), ...path])
-      for (const node of namedNodes(parsed.expr)) {
+      walkExpr(parsed.expr, (node) => {
         if (node.type === "field") {
           const inRow = node.base === "row"
           resolveField(
@@ -787,7 +784,7 @@ function resolveMovements(
                 }
               )
             )
-            continue
+            return
           }
           if (typeof section.id === "string") {
             references.push({
@@ -808,7 +805,7 @@ function resolveMovements(
             )
           }
         }
-      }
+      })
     }
 
     resolveExpression(movement.condition, ["condition"])

@@ -85,6 +85,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         : `Invalid movement query block at line ${p.line}: ${p.detail}`,
     hint: "Movement queries live in <Document>.sql between '-- @movements <Register>' and '-- @end'.",
   },
+  "file.movements-marker-indented": {
+    message: (p) =>
+      `Marker at line ${p.line} is indented and is not recognized as a movement query marker`,
+    hint: "Markers '-- @movements' and '-- @end' must start at the beginning of the line; an indented one is treated as a plain comment.",
+  },
   "file.orphan": {
     message: (p) => `No ${p.expected} next to this file`,
   },
@@ -133,6 +138,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "register.balance-control-resource": {
     message: (p) => `Register has no resource "${p.name}"`,
     hint: "balanceControl lists logical names of the register's resources.",
+  },
+  "register.balance-control-duplicate": {
+    message: (p) => `Resource "${p.name}" is already listed in balanceControl`,
+    hint: "List each resource once.",
   },
   "posting.field-unknown": {
     message: (p) => `${p.scope} has no field "${p.name}"`,

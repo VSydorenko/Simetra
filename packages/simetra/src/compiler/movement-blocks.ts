@@ -76,3 +76,16 @@ export function extractMovementBlocks(text: string): {
   }
   return { blocks, errors }
 }
+
+/**
+ * 1-базні рядки маркерів з відступом: `extractMovementBlocks` їх не розпізнає
+ * (маркер — увесь рядок), тож блок мовчки не потрапив би в рухи, а автор
+ * вирішив би, що запит діє.
+ */
+export function indentedMarkerLines(text: string): number[] {
+  const lines: number[] = []
+  text.split(/\r?\n/).forEach((raw, index) => {
+    if (/^\s+-- @(movements|end)\b/.test(raw)) lines.push(index + 1)
+  })
+  return lines
+}

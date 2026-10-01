@@ -15,7 +15,7 @@ import {
   toPointer,
   type Diagnostic,
 } from "../diagnostics"
-import { extractMovementBlocks } from "../movement-blocks"
+import { extractMovementBlocks, indentedMarkerLines } from "../movement-blocks"
 
 export const PROJECT_FILE = "project.meta.json"
 
@@ -184,6 +184,15 @@ function readMovementBlocks(
     )
   for (const error of errors) report(error.message, error.line)
   const postable = owner !== undefined && postsMovements(owner.kind)
+  // Попередження лише для документа: в інших файлах маркерів не чекають, і
+  // відступ там — звичайний коментар.
+  if (postable) {
+    for (const line of indentedMarkerLines(text)) {
+      diagnostics.push(
+        diagnostic("file.movements-marker-indented", file, "", { line })
+      )
+    }
+  }
   if (!postable) {
     for (const block of blocks) {
       report(

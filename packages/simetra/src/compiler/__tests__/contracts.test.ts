@@ -358,7 +358,8 @@ describe("posting and register contracts", () => {
       "sliceLast",
       "sliceFirst",
     ])
-    expect(periodic.virtualTables[0]).toMatchObject({
+    expect(periodic.virtualTables[0]).toEqual({
+      kind: "sliceLast",
       function: { schema: "public", name: "price_slice_last" },
       parameters: [at],
       columns: [
@@ -405,9 +406,11 @@ describe("posting and register contracts", () => {
       ...turnoverStock(),
       "project.meta.json": project({ timezone: "Europe/Kyiv" }),
     }).registers[0]!
-    expect(turnover.turnoversMonth).toMatchObject({
+    expect(turnover.turnoversMonth).toEqual({
+      table: { schema: "public", name: "stock_turnovers_month" },
       monthExpression: expression,
       split: false,
+      resources: [{ resourceId: expect.any(String), column: "qty" }],
     })
   })
 
@@ -493,16 +496,17 @@ describe("posting and register contracts", () => {
       ["amount", { resourceId: salesAmountId, measure: "net" }],
       ["qty", { resourceId: salesQtyId, measure: "net" }],
     ])
-    // Служебні колонки (виміри, носій скоупу) джерела не мають.
-    expect(columns(stock, "balance").every((c) => c.source !== undefined)).toBe(
-      true
-    )
   })
 
   it("turnover register maintains derived tables", () => {
     const register = contracts(turnoverStock()).registers[0]!
     expect(register).not.toHaveProperty("totals")
-    expect(register.turnoversMonth).toMatchObject({ split: false })
+    expect(register.turnoversMonth).toEqual({
+      table: { schema: "public", name: "stock_turnovers_month" },
+      monthExpression: expect.any(String),
+      split: false,
+      resources: [{ resourceId: expect.any(String), column: "qty" }],
+    })
     expect(register.totalsMaintenance).toEqual({
       recalculate: { schema: "public", name: "stock_totals_recalculate" },
       verify: { schema: "public", name: "stock_totals_verify" },
