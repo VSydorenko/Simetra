@@ -87,7 +87,7 @@ function canonicalOverrides(
   const canonical = standardOverrideNames(columns, style)
   const result: PresentationBlock["standardAttributes"] = {}
   for (const [name, override] of Object.entries(overrides ?? {})) {
-    result[canonical.get(name) ?? name] = {
+    result[canonical.get(name)!] = {
       ...(override.title === undefined ? {} : { title: override.title }),
       ...(override.description === undefined
         ? {}

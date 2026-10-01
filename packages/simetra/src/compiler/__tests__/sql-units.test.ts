@@ -268,10 +268,44 @@ describe("sql units", () => {
     ])
   })
 
-  it("type targets of comments keep their names: only signatures are canonical", async () => {
-    expect(await identities("COMMENT ON TYPE int IS 'x';")).toEqual([
-      "comment:type:pg_catalog.int4",
+  it("built-in type targets are canonical like signature arguments", async () => {
+    // Вбудований тип — завжди `pg_catalog`, тож `int`, `int4` і
+    // `pg_catalog.int4` — одна ціль; файлова схема йому не належить.
+    for (const sql of [
+      "COMMENT ON TYPE int IS 'x';",
+      "COMMENT ON TYPE int4 IS 'x';",
+      "COMMENT ON TYPE pg_catalog.int4 IS 'x';",
+    ]) {
+      expect(await identities(sql), sql).toEqual(["comment:type:int4"])
+    }
+    expect(await identities("GRANT USAGE ON TYPE int4 TO anon;")).toEqual([
+      "grant:grant:type:int4:anon:usage",
     ])
+  })
+
+  it("user type targets follow the signature rule: model-known are qualified", async () => {
+    expect(
+      await identities(
+        "CREATE DOMAIN d AS text;\n" +
+          "COMMENT ON TYPE d IS 'x';\n" +
+          "COMMENT ON DOMAIN other.d IS 'x';\n" +
+          "COMMENT ON TYPE ext_t IS 'x';"
+      )
+    ).toEqual([
+      "comment:domain:other.d",
+      "comment:type:ext_t",
+      "comment:type:public.d",
+      "domain:public.d",
+    ])
+  })
+
+  it("comment on a cast keeps the boundary between its two types", async () => {
+    expect(
+      await identities(
+        "COMMENT ON CAST (a.b AS c) IS 'x';\n" +
+          "COMMENT ON CAST (a AS b.c) IS 'x';"
+      )
+    ).toHaveLength(2)
   })
 
   it("aggregate, function settings, grant and comment name a signature canonically", async () => {

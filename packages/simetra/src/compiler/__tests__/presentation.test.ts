@@ -106,11 +106,17 @@ describe("presentation block", () => {
   })
 
   it("deterministic order", async () => {
+    // Порядок шляхів (Alpha, Zeta) протилежний порядку id (Zeta менший):
+    // без сортування за id блоки йшли б за шляхом.
     const entries = {
       "project.meta.json": project(),
-      "catalogs/B/B.meta.json": catalog("B", { id: B }),
-      "catalogs/A/A.meta.json": catalog("A", {
+      "catalogs/Alpha/Alpha.meta.json": catalog("Alpha", {
+        id: B,
+        mainPresentation: "Code",
+      }),
+      "catalogs/Zeta/Zeta.meta.json": catalog("Zeta", {
         id: A,
+        mainPresentation: "Code",
         predefinedItems: [
           { id: E2, name: "x", description: { uk: "Б" } },
           { id: E1, name: "y", description: { uk: "А" } },

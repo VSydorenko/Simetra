@@ -1111,15 +1111,35 @@ class SnapshotBuilder {
   }
 
   private schemaOf(object: ParsedObject): string {
-    return (
-      ((object.data as Element).schema as string | undefined) ??
-      this.project.defaultSchema
-    )
+    return objectSchema(object, this.project.defaultSchema)
   }
 
   private declare(file: string, pointer: string, name: string): void {
     this.declaredNames.push({ file, pointer, name })
   }
+}
+
+/** Схема об'єкта: власна чи схема проєкту. */
+function objectSchema(object: ParsedObject, defaultSchema: string): string {
+  return (
+    ((object.data as Element).schema as string | undefined) ?? defaultSchema
+  )
+}
+
+/**
+ * Енам-тип, який матеріалізує об'єкт, за правилом стадії 3 (схема, `physicalName`);
+ * `undefined` — вид не дає енам-типу. Єдине місце правила: ним користується й
+ * розбір `.sql` до стадії 3.
+ */
+export function enumTypeOf(
+  object: ParsedObject,
+  defaultSchema: string
+): { schema: string; name: string } | undefined {
+  const { physicalName } = object.data as { physicalName?: string }
+  return KIND_REGISTRY[object.kind].materializes === "enumType" &&
+    physicalName !== undefined
+    ? { schema: objectSchema(object, defaultSchema), name: physicalName }
+    : undefined
 }
 
 const NONE: Target = { form: "none" }
@@ -1472,7 +1492,6 @@ function startsWith(key: readonly string[], prefix: readonly string[]) {
   return prefix.length <= key.length && prefix.every((c, i) => key[i] === c)
 }
 
-/** Значення за замовчуванням реквізиту як SQL-літерал. */
 /**
  * `DEFAULT` з типового значення метаданих — один шлях для реквізиту й
  * константи (спека §5). Для перерахування значення — логічне ім'я, а в
@@ -1491,6 +1510,7 @@ function defaultOf(
   return { default: sqlLiteral(label ?? value) }
 }
 
+/** Значення за замовчуванням реквізиту як SQL-літерал. */
 function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === "string") return `'${value.replaceAll("'", "''")}'`
   return String(value)

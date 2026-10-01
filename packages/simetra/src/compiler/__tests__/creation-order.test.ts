@@ -496,6 +496,25 @@ describe("creation order", () => {
     ])
   })
 
+  it("comment on a constraint-backed index goes after the table", async () => {
+    // Індекс первинного ключа й UNIQUE — не в `indexes` знімка, але теж у
+    // просторі імен відношень: без ребра коментар ішов би раніше за таблицю.
+    const list = await order({
+      [CODES]: codes([column("code", { default: "z.next_code()" })], {
+        primaryKey: { name: "codes_pkey", columns: ["id"] },
+        uniques: [{ name: "codes_code_key", columns: ["code"] }],
+      }),
+      [MISC]:
+        "COMMENT ON INDEX codes_pkey IS 'x';\n" +
+        "COMMENT ON INDEX codes_code_key IS 'x';\n" +
+        `CREATE FUNCTION z.next_code() RETURNS text ${PLPGSQL};`,
+    })
+    expectBefore(list, [
+      ["table:public.codes", "comment:index:public.codes_pkey"],
+      ["table:public.codes", "comment:index:public.codes_code_key"],
+    ])
+  })
+
   it("comment on a domain constraint goes after the domain", async () => {
     const list = await order({
       "sql/a/x.sql":

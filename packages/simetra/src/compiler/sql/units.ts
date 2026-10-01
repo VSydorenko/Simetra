@@ -62,7 +62,8 @@ export interface SqlUnit {
   sql: string
   /**
    * Дерево розбору без позицій — для залежностей і хешу: форматування його не
-   * міняє. У запиту рухів хеш бере `queryTree`: тут тіло обгортки — рядок.
+   * міняє, межу хешу див. `withoutLocations`. У запиту рухів хеш бере
+   * `queryTree`: тут тіло обгортки — рядок.
    */
   tree: unknown
   /** Лише `movementQuery`: дерева операторів самого запиту без позицій. */
@@ -233,7 +234,11 @@ function duplicate(unit: VerbatimUnit, first: string): Diagnostic {
 
 const LOCATION_KEYS = new Set(["location", "stmt_location", "stmt_len"])
 
-/** Дерево без позицій: однаковий зміст з іншим форматуванням дає те саме дерево. */
+/**
+ * Дерево без позицій: однаковий зміст з іншим форматуванням дає те саме
+ * дерево. Межа хешу: відкидає лише позиції; вміст рядкових літералів,
+ * зокрема тіло `$$…$$`, лишається дослівно — спека §8.3.
+ */
 export function withoutLocations(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutLocations)
   if (typeof value !== "object" || value === null) return value
@@ -742,13 +747,27 @@ const TARGET_PARTS: Readonly<Record<string, number>> = {
  * список із `TypeName` домену та іменем обмеження: `TypeName` розгорнуто.
  */
 export function targetParts(node: Node): string[] {
-  if ("List" in node) return (node.List.items ?? []).flatMap(targetParts)
+  if ("List" in node) {
+    const items = node.List.items ?? []
+    // Ціль з кількома типами (`CAST (a.b AS c)`): межа між типами — частина
+    // ідентичності, інакше `(a.b AS c)` і `(a AS b.c)` злилися б.
+    if (items.filter((item) => "TypeName" in item).length > 1) {
+      return items.map(
+        (item) =>
+          `(${"TypeName" in item ? strings(item.TypeName.names).join(".") : targetParts(item).join(".")})`
+      )
+    }
+    return items.flatMap(targetParts)
+  }
   if ("TypeName" in node) return strings(node.TypeName.names)
   if ("String" in node) return [node.String.sval ?? ""]
   return []
 }
 
-/** Ціль гранту чи коментаря: відношення, функції й імена з `TARGET_PARTS` кваліфіковано. */
+/**
+ * Ціль гранту чи коментаря: відношення й функції кваліфіковано, типи — за
+ * правилом типів аргументів, решту імен — за `TARGET_PARTS`.
+ */
 function targetName(
   node: Node,
   objtype: string | undefined,
@@ -761,6 +780,14 @@ function targetName(
   }
   if ("ObjectWithArgs" in node)
     return functionObject(node.ObjectWithArgs, scope)
+  // Тип — за тим самим правилом, що й типи аргументів: вбудований —
+  // `pg_catalog`, відомий моделі — зі схемою, інший лишається як є.
+  if (objtype === "OBJECT_TYPE" || objtype === "OBJECT_DOMAIN") {
+    if ("TypeName" in node) return typeName(node.TypeName, scope)
+    if ("List" in node) {
+      return typeName({ names: node.List.items }, scope)
+    }
+  }
   const parts =
     "List" in node || "TypeName" in node || "String" in node
       ? targetParts(node)

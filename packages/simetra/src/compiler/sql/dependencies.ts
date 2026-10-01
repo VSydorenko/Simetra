@@ -158,8 +158,14 @@ class Graph {
       this.categories.set(label, "relation")
       // Індекс і таблиця ділять простір імен відношень; ціль
       // `COMMENT ON INDEX` створюється разом із таблицею.
-      for (const index of table.indexes) {
-        this.register("relation", table.schema, index.name, label)
+      // Первинний ключ і UNIQUE мають власні індекси з іменем обмеження.
+      const indexNames = [
+        ...table.indexes.map((index) => index.name),
+        ...(table.primaryKey === undefined ? [] : [table.primaryKey.name]),
+        ...table.uniques.map((unique) => unique.name),
+      ]
+      for (const name of indexNames) {
+        this.register("relation", table.schema, name, label)
       }
     }
     for (const unit of units) this.addUnit(unit)
@@ -584,6 +590,9 @@ function targetReferences(objtype: string, nodes: unknown): Reference[] {
   if (space === undefined || !Array.isArray(nodes)) return []
   return nodes.flatMap((node) => {
     if (typeof node !== "object" || node === null) return []
+    // Ціль-таблиця чи послідовність — `RangeVar`: `targetParts` дає `[]`, тож
+    // посилання порожнє й нічого не резолвить; ребро до неї дає загальний
+    // `collect`, який знаходить `RangeVar` в обході дерева.
     const parts = targetParts(node as Node)
     return [
       {

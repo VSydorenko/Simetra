@@ -13,7 +13,7 @@ import { readFiles, type FilesStageResult } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
-import { buildModel } from "./stages/model"
+import { buildModel, enumTypeOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { creationOrder } from "./sql/dependencies"
 import { loadSqlParser } from "./sql/parse"
@@ -244,21 +244,15 @@ function sqlSources(
 
 /**
  * Енам-типи знімка для резолву некваліфікованих типів аргументів: стадія 3
- * ще не бігла, тож схема й ім'я — за тим самим правилом, що в неї.
+ * ще не бігла, тож схема й ім'я — тим самим правилом, що в неї.
  */
 function enumTypes(
   stage1: FilesStageResult,
   defaultSchema: string
 ): { schema: string; name: string }[] {
-  return stage1.objects.flatMap(({ kind, data }) => {
-    const { schema, physicalName } = data as {
-      schema?: string
-      physicalName?: string
-    }
-    return KIND_REGISTRY[kind].materializes === "enumType" &&
-      physicalName !== undefined
-      ? [{ schema: schema ?? defaultSchema, name: physicalName }]
-      : []
+  return stage1.objects.flatMap((object) => {
+    const type = enumTypeOf(object, defaultSchema)
+    return type === undefined ? [] : [type]
   })
 }
 

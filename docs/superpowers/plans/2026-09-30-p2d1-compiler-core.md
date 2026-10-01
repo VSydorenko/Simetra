@@ -68,8 +68,11 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
    мемоізовано всередині. Синхронного фасаду немає.
 2. **Канонічна форма SQL-одиниці для хешу** — дерево розбору без полів
    `location`, `stmt_location`, `stmt_len`; відбиток libpg-query не
-   годиться (ігнорує значення констант). Сирий текст — у знімку для рендера,
-   поза хешем.
+   годиться (ігнорує значення констант). Відкидаються лише позиції: вміст
+   рядкових літералів, зокрема тіло `$$…$$`, лишається дослівно (спека §8.3).
+   Сирий текст — у знімку для рендера, поза хешем. Виняток — `movementQuery`:
+   тіло обгортки — рядок у долар-лапках, тож хеш бере `queryTree` (дерева
+   операторів самого запиту без позицій), а не `tree` обгортки.
 3. **RFC 8785** — власна реалізація (≈30 рядків): ключі — сортування за
    UTF-16 code units, примітиви — `JSON.stringify` (це саме ES
    Number::toString, якого вимагає RFC); тест на числа з JCS.
@@ -131,8 +134,10 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
    послідовності, домени, тригер на `auth.users`, політики на
    `storage.objects` — компілюється без `sql.statement-not-allowed`. Тест —
    задача 1.
-2. **Зміна лише форматування `.sql`** (пробіли, регістр ключових слів) не
-   змінює хеш, а зміна константи в тілі sql-функції — змінює. Тест — задача 9.
+2. **Зміна лише форматування `.sql`** (пробіли, регістр ключових слів поза
+   рядковими літералами) не змінює хеш, а зміна константи в тілі sql-функції —
+   змінює. Межа хешу: відкидаються лише позиції, вміст рядкових літералів
+   (зокрема тіла `$$…$$`) дослівний — спека §8.3. Тест — задача 9.
 3. **`DEFAULT` колонки `CustomTable`, що викликає функцію з одиниці** —
    функція в порядку створення раніше за таблицю; цикл «в'юха ↔ функція» —
    діагностика, а не безкінечний цикл. Тест — задача 2.
@@ -200,10 +205,12 @@ git commit -m "fix(compiler): хвости C2 і C3 — спільний обх�
     identity: string          // канонічний ключ, напр. "function:public.f(uuid,text)", "trigger:public.orders.trg_x"
     schema: string; name: string
     file?: string             // немає — згенерована одиниця (запит рухів)
+    line?: number             // 1-базний рядок першого токена оператора у file; у згенерованої немає
     ownerObjectId?: string    // `.sql` об'єкта; для рухів — документ
     module: string
     sql: string               // текст оператора як є (для рендера)
     tree: unknown             // дерево розбору без location/stmt_location/stmt_len (для хешу)
+    queryTree?: unknown       // лише movementQuery: дерева операторів запиту без позицій (хеш бере його)
     registerId?: string; documentId?: string; source?: "query" | "constructor"   // лише movementQuery
   }
   ```
@@ -235,7 +242,8 @@ git commit -m "fix(compiler): хвости C2 і C3 — спільний обх�
   перерахунок) проти таблиць і одиниць.
   Правила: `sql.parse` (помилка розбору; `params.line`, `params.column` з
   `cursorPosition`), `sql.statement-not-allowed` (`params.statement` — тип
-  вузла, напр. `CreateStmt`), `sql.unit-duplicate` (друга одиниця з тією
+  вузла, напр. `CreateStmt`; `params.line`; `params.detail?`; `params.feature?` —
+  `rowLevelSecurity` чи `publication`, від якого залежить підказка), `sql.unit-duplicate` (друга одиниця з тією
   самою `identity`, `params.line`).
   Дозволені вузли верхнього рівня: `CreateFunctionStmt` (функція чи
   процедура), `DefineStmt` з `kind: OBJECT_AGGREGATE`, `CreateTrigStmt`,
@@ -527,20 +535,27 @@ git commit -m "feat(compiler): JSON Schema файлів метаданих з о
 - Test: `packages/simetra/src/compiler/__tests__/presentation.test.ts`
 
 **Interfaces:**
-- Consumes: `contracts.predefined` (id предвизначених) — щоб описи мали той
-  самий ключ, що й контракт засіву.
+- Consumes: розібрані дані об'єктів і реєстр видів (`standardColumns`,
+  `tabularSectionColumns`, `namedElementFields`, `valueElements`);
+  `project.defaultLocale`. `contracts.predefined` не читається: `id`
+  предвизначеного той самий, що в контракті засіву, бо береться з елемента.
 - Produces:
   - ```ts
     interface PresentationBlock {
       objectId: string
       mainPresentation?: "Code" | "Description"           // лише довідник
       standardAttributes: Record<string, { title?: LocalizedString; description?: LocalizedString }>
+      sections?: { sectionId: string; standardAttributes: Record<string, { title?: LocalizedString; description?: LocalizedString }> }[]   // лише ТЧ з перекриттями
       predefined?: { id: string; description: LocalizedString }[]   // лише елементи з description
+      values?: { id: string; title: LocalizedString }[]             // лише значення виду з title
     }
-    CompiledModel.presentation: PresentationBlock[]     // за objectId; об'єкт без жодного з полів у блоці відсутній
+    interface Presentation { defaultLocale: string; objects: PresentationBlock[] }
+    CompiledModel.presentation: Presentation            // objects — за objectId; об'єкт без жодного з полів у блоці відсутній
     ```
-    Ключі `standardAttributes` — канонічні camelCase-імена стандартних
-    реквізитів з `standardAttributeOverrides`; `predefined` — у порядку файлу.
+    Ключі `standardAttributes` (і в `sections`) — канонічні camelCase-імена
+    стандартних реквізитів з `standardAttributeOverrides`; `sections`,
+    `predefined` і `values` — у порядку файлу. `defaultLocale` — мова
+    проєкту: читачі обирають текст з повного `LocalizedString`.
     Читачі — `explain` (D2) і хости (П4).
 
 - [x] **Step 1: Тести** — `presentation block carries overrides and main
@@ -616,7 +631,7 @@ git commit -m "feat(compiler): блок представлення — mainPrese
 
 - [x] **Step 1: Тести** (`toMatchInlineSnapshot` для фрагментів):
   `catalog interface with standard attributes and jsdoc`; `numeric and bigint
-  are strings`; `enumeration reference is a union of logical names`;
+  are strings`; `enumeration reference resolves to a named type`;
   `tabular section interface and array field`; `snake_case project uses
   snake_case fields`; `scoped object has scope field`; `deterministic`.
 - [x] **Step 2: Червоні** — `pnpm --filter simetra test codegen` → FAIL.
@@ -642,8 +657,8 @@ git commit -m "feat(compiler): кодоген логічних TS-типів с�
 - Produces:
   - `canonicalize(value: unknown): string` — RFC 8785 («Рішення плану» п. 3);
     кидає на `NaN`, `Infinity`, `undefined` у масиві й самотніх сурогатах.
-  - `canonicalSnapshot(model: CompiledModel): unknown` — `{ project, objects: [{ id, kind, name, module, scopeKindId?, data }] (у data кожен MetadataRef за індексом посилань → { kind, id }; вирази конструктора — AST без позицій), scopeKinds, physical, sqlUnits: [{ class, identity, module, tree }], creationOrder, contracts, actions, presentation, modules }`
-    — без шляхів файлів, діагностики, сирого SQL.
+  - `canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown` — `{ project (без $schema і scopeKinds), objects: [{ id, kind, name, module, scopeKindId?, data }] (у data кожен MetadataRef за індексом посилань → { kind, id }; вирази конструктора — AST без позицій), scopeKinds (резолвлена форма: корінь — { kind, id } за id об'єкта), physical, sqlUnits: [{ class, identity, module, tree }] (tree — queryTree для movementQuery), creationOrder, contracts, actions, presentation, modules }`
+    — без шляхів файлів, діагностики, сирого SQL. Межа хешу SQL — «Рішення плану» п. 2.
   - `CompiledModel.hash: string` — hex sha256 від `canonicalize(canonicalSnapshot(model))`
     через `crypto.subtle.digest("SHA-256", …)`.
 
