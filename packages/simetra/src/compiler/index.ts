@@ -28,3 +28,4 @@ export type {
   VirtualTableContract,
 } from "./contracts"
 export type { PresentationBlock } from "./presentation"
+export { emitEntityTypes } from "./codegen"
