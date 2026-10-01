@@ -152,6 +152,35 @@ describe("creation order", () => {
     ])
   })
 
+  it("domain column alone orders the domain first", async () => {
+    // Без ребра таблиця йшла б першою: таблиці передують одиницям у tie-break.
+    const list = await order({
+      [CODES]: codes([column("code", { type: "Raw", pgType: "z.code" })]),
+      [MISC]: "CREATE DOMAIN z.code AS text;",
+    })
+    expect(list).toEqual(["domain:z.code", "table:public.codes"])
+  })
+
+  it("composite type column", async () => {
+    // Складений тип моделі — тип рядка таблиці: колонка такого типу ставить
+    // таблицю-тип першою, хоч tie-break за іменем поставив би її другою.
+    const list = await order({
+      [CODES]: codes([column("pair", { type: "Raw", pgType: "public.zzz" })]),
+      "custom-tables/Zzz/Zzz.meta.json": customTable("Zzz", {
+        physicalName: "zzz",
+      }),
+    })
+    expect(list).toEqual(["table:public.zzz", "table:public.codes"])
+    // Окремий складений тип `.sql` не описує: це не клас SQL-одиниць (§8.3).
+    const result = await compileWith({
+      [CODES]: codes([column("pair", { type: "Raw", pgType: "z.pair" })]),
+      [MISC]: "CREATE TYPE z.pair AS (a int, b int);",
+    })
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "sql.statement-not-allowed",
+    ])
+  })
+
   it("table default reading its own table through a sql function is a cycle", async () => {
     const result = await compileWith({
       [CODES]: codes([column("code", { default: "public.next_code()" })]),
@@ -293,6 +322,43 @@ describe("creation order", () => {
     expect(result.diagnostics.map((d) => d.code)).toEqual([
       "sql.dependency-cycle",
     ])
+  })
+
+  it("cte shadowing keeps the edge to the real table", async () => {
+    const calc = (body: string) => ({
+      [MISC]:
+        "CREATE VIEW public.balances AS SELECT * FROM public.calc();\n" +
+        `CREATE FUNCTION public.calc() RETURNS TABLE (x int) LANGUAGE sql AS $$ ${body} $$;`,
+    })
+    const cycle = async (body: string) =>
+      (await compileWith(calc(body))).diagnostics.map((d) => d.code)
+    // Нерекурсивний CTE не бачить себе: `balances` у власному тілі — в'юха.
+    expect(
+      await cycle(
+        "WITH balances AS (SELECT x FROM balances) SELECT x FROM balances"
+      )
+    ).toEqual(["sql.dependency-cycle"])
+    // Попередній CTE не бачить наступного.
+    expect(
+      await cycle(
+        "WITH a AS (SELECT x FROM balances), balances AS (SELECT 1 AS x) SELECT x FROM a"
+      )
+    ).toEqual(["sql.dependency-cycle"])
+    // Рекурсивний бачить себе, наступний — попередній.
+    expect(
+      await order(
+        calc(
+          "WITH RECURSIVE balances AS (SELECT 1 AS x UNION ALL SELECT x FROM balances WHERE false) SELECT x FROM balances"
+        )
+      )
+    ).toEqual(["function:public.calc()", "view:public.balances"])
+    expect(
+      await order(
+        calc(
+          "WITH balances AS (SELECT 1 AS x), b AS (SELECT x FROM balances) SELECT x FROM b"
+        )
+      )
+    ).toEqual(["function:public.calc()", "view:public.balances"])
   })
 
   it("policy after its table and expression functions", async () => {

@@ -21,6 +21,7 @@ export const SCHEMA_RULES = [
   "type.cross-scope-not-allowed",
   "type.default-not-allowed",
   "type.default-mismatch",
+  "type.default-invalid",
   "posting.parse",
 ] as const
 

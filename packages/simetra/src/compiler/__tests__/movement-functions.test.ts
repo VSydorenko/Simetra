@@ -229,9 +229,6 @@ describe("movement query functions", () => {
     expect(await withPrices({}, "doc.shippedAt")).toContain(
       "date_trunc('month', d.shipped_at, 'UTC') AS period"
     )
-    expect(await withPrices({ timezone: "Odd'Zone" })).toContain(
-      "date_trunc('month', d.date, 'Odd''Zone')"
-    )
     const kyiv = await withPrices({ timezone: "Europe/Kyiv" })
     expect(kyiv).toContain("date_trunc('month', d.date, 'Europe/Kyiv')")
     expect(await withPrices({})).toContain("date_trunc('month', d.date, 'UTC')")

@@ -76,7 +76,11 @@ function fixture(): Record<string, unknown> {
 interface SaleFile {
   id: string
   attributes: { id: string; name: string }[]
-  tabularSections: { id: string; attributes: { id: string; name: string }[] }[]
+  tabularSections: {
+    id: string
+    name: string
+    attributes: { id: string; name: string }[]
+  }[]
   posting: { movements: Record<string, unknown>[] }
 }
 
@@ -458,6 +462,46 @@ describe("references in the snapshot", () => {
     const before = fragment(await compileModel(metaFiles(entries)), "Sale").data
     const after = fragment(await compileModel(metaFiles(swapped)), "Sale").data
     expect(canonicalize(after.posting)).not.toBe(canonicalize(before.posting))
+  })
+
+  it("aggregates in constructor are canonical by id", async () => {
+    /** Рухи з шапки документа з агрегатами над ТЧ, названою `section`. */
+    const aggregate = (entries: Record<string, unknown>, section: string) => {
+      const sale = entries[SALE_FILE] as SaleFile
+      sale.tabularSections[0]!.name = section
+      sale.posting.movements[0] = {
+        ...sale.posting.movements[0],
+        source: "document",
+        condition: `count(${section}) > 0`,
+        fields: { item: "doc.customer", qty: `sum(${section}.qty)` },
+      }
+      return entries
+    }
+    const entries = aggregate(fixture(), "goods")
+    const sale = entries[SALE_FILE] as SaleFile
+    const goods = sale.tabularSections[0]!
+    const qtyId = goods.attributes.find((a) => a.name === "qty")!.id
+    const stock = entries[STOCK_FILE] as StockFile
+    const before = fragment(await compileModel(metaFiles(entries)), "Sale")
+    const [movement] = (
+      before.data.posting as { movements: Record<string, unknown>[] }
+    ).movements
+    expect(movement!.condition).toEqual({
+      type: "binary",
+      op: ">",
+      left: { type: "count", tabularSectionId: goods.id },
+      right: { type: "number", value: "0" },
+    })
+    expect(
+      (movement!.fields as Record<string, unknown>)[stock.resources[0]!.id]
+    ).toEqual({ type: "sum", tabularSectionId: goods.id, elementId: qtyId })
+
+    // Та сама модель з перейменованою ТЧ: ті самі id, інші імена.
+    const renamed = aggregate(clone(entries), "lines")
+    const after = fragment(await compileModel(metaFiles(renamed)), "Sale")
+    expect(canonicalize(after.data.posting)).toBe(
+      canonicalize(before.data.posting)
+    )
   })
 
   it("a standard attribute keeps its node form across naming styles", async () => {

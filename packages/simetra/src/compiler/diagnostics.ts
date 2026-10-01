@@ -6,6 +6,7 @@ export type Severity = "error" | "warning"
 /** Коди правил самого компілятора; коди перевірок схем T0 — `SCHEMA_RULES`. */
 export const COMPILER_RULES = [
   "project.missing",
+  "project.timezone-unknown",
   "file.unknown-path",
   "file.orphan",
   "file.invalid-json",

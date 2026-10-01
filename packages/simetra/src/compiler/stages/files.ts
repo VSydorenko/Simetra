@@ -243,7 +243,37 @@ function readProject(
     diagnostics.push(...zodDiagnostics(PROJECT_FILE, projectSchema, json.value))
     return undefined
   }
+  if (!isKnownTimeZone(parsed.data.timezone)) {
+    diagnostics.push(
+      diagnostic("project.timezone-unknown", PROJECT_FILE, "/timezone", {
+        timezone: parsed.data.timezone,
+      })
+    )
+  }
   return parsed.data
+}
+
+/** Канонічні IANA-пояси рушія (ECMAScript, не Node API). */
+let timeZones: ReadonlySet<string> | undefined
+
+/**
+ * Пояс проєкту — ім'я IANA (спека П2 §3): хибне впало б лише на DDL у П3.
+ * Перелік рушія канонічний — без псевдонімів (`Europe/Kyiv` в ICU досі
+ * зводиться до `Europe/Kiev`) і без `UTC`, тож ім'я спершу канонізує
+ * `Intl.DateTimeFormat`. Зсув на кшталт `+05:00` рушій приймає, але це не
+ * ім'я поясу, і в канонічному переліку його немає.
+ */
+function isKnownTimeZone(name: string): boolean {
+  let canonical: string
+  try {
+    canonical = new Intl.DateTimeFormat("en", {
+      timeZone: name,
+    }).resolvedOptions().timeZone
+  } catch {
+    return false
+  }
+  timeZones ??= new Set(Intl.supportedValuesOf("timeZone"))
+  return canonical === "UTC" || timeZones.has(canonical)
 }
 
 function readObject(

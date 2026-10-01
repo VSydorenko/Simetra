@@ -264,6 +264,27 @@ describe("stage 5: movement query blocks", () => {
     ])
   })
 
+  it("data-modifying CTE and FOR UPDATE in movement block are rejected", async () => {
+    // Верхній оператор — SELECT, але CTE з DML змінив би дані під час
+    // читання рухів, а FOR UPDATE/FOR SHARE брав би блокування рядків.
+    for (const query of [
+      "WITH d AS (DELETE FROM stock RETURNING 1 AS x) SELECT x FROM d ORDER BY 1",
+      "WITH i AS (INSERT INTO stock DEFAULT VALUES RETURNING 1 AS x) SELECT x FROM i ORDER BY 1",
+      "WITH u AS (UPDATE stock SET qty = 0 RETURNING 1 AS x) SELECT x FROM u ORDER BY 1",
+      "SELECT 1 AS x FROM stock ORDER BY 1 FOR UPDATE",
+      "SELECT x FROM (SELECT 1 AS x FROM stock FOR SHARE) s ORDER BY 1",
+    ]) {
+      const result = await run(query)
+      expect(codes(result), query).toEqual([
+        ["posting.query-not-select", SALE_SQL, ""],
+      ])
+      expect(result.diagnostics[0]!.params, query).toEqual({
+        line: 1,
+        detail: expect.any(String),
+      })
+    }
+  })
+
   it("WITH and UNION ALL are selects", async () => {
     const result = await run(
       "WITH a AS (SELECT 1 AS x) SELECT x FROM a UNION ALL SELECT 2 ORDER BY 1"

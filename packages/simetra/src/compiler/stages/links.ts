@@ -27,9 +27,11 @@ export function checkLinks(
 
 /**
  * Блок рухів — рівно один `SelectStmt` (`WITH … SELECT` і `UNION ALL` теж
- * він): тіло обгортки — `LANGUAGE sql`, і довільний оператор там виконувався б
- * під час читання рухів. Без `ORDER BY` порядок рядків недетермінований, тому
- * лише попередження: запит лишається чинним.
+ * він), що лише читає: тіло обгортки — `LANGUAGE sql`, і довільний оператор
+ * там виконувався б під час читання рухів. Тому й усередині `SELECT` заборонені
+ * CTE, що змінюють дані, `SELECT … INTO` і блокування рядків (`FOR UPDATE`,
+ * `FOR SHARE`). Без `ORDER BY` порядок рядків недетермінований, тому лише
+ * попередження: запит лишається чинним.
  */
 function checkMovementQueries(
   objects: readonly ParsedObject[],
@@ -44,7 +46,15 @@ function checkMovementQueries(
           ? (parsed.statements[0]!.stmt as Record<string, unknown>)
           : undefined
       const stmt = select?.SelectStmt as { sortClause?: unknown[] } | undefined
-      if (stmt === undefined) {
+      const effect = stmt === undefined ? undefined : sideEffectOf(stmt)
+      if (effect !== undefined) {
+        found.push(
+          diagnostic("posting.query-not-select", block.file, "", {
+            line: block.line,
+            detail: effect,
+          })
+        )
+      } else if (stmt === undefined) {
         found.push(
           diagnostic("posting.query-not-select", block.file, "", {
             line: block.line,
@@ -65,6 +75,42 @@ function checkMovementQueries(
     }
   }
   return found
+}
+
+/** Вузли дерева, якими `SELECT` змінює дані. */
+const WRITING_STATEMENTS: Readonly<Record<string, string>> = {
+  InsertStmt: "INSERT",
+  UpdateStmt: "UPDATE",
+  DeleteStmt: "DELETE",
+  MergeStmt: "MERGE",
+}
+
+/**
+ * Перший побічний ефект у дереві `SELECT`, якщо він є: оператор, що змінює
+ * дані (у `WITH` будь-якого рівня), `SELECT … INTO` чи блокування рядків у
+ * будь-якому підзапиті.
+ */
+function sideEffectOf(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = sideEffectOf(item)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (typeof value !== "object" || value === null) return undefined
+  const node = value as Record<string, unknown>
+  for (const [key, child] of Object.entries(node)) {
+    const writing = WRITING_STATEMENTS[key]
+    if (writing !== undefined) return `${writing} is not allowed`
+    if (key === "intoClause") return "SELECT INTO is not allowed"
+    if (key === "lockingClause" && Array.isArray(child) && child.length > 0) {
+      return "FOR UPDATE and FOR SHARE are not allowed"
+    }
+    const found = sideEffectOf(child)
+    if (found !== undefined) return found
+  }
+  return undefined
 }
 
 /** 0-базний рядок усередині тексту за індексом UTF-16. */

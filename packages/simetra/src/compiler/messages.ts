@@ -113,8 +113,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: () => "defaultValue does not match the logical type",
     uk: () => "defaultValue не відповідає логічному типу",
     hint: {
-      en: "Boolean takes a boolean; SmallInt, Integer and BigInt take an integer in range; Numeric takes a number or a decimal string; UUID takes a UUID string; String, Text, Date, DateTime and a Ref to an enumeration take a string.",
-      uk: "Boolean приймає булеве значення; SmallInt, Integer і BigInt — ціле в межах типу; Numeric — число або рядок десяткового дробу; UUID — рядок UUID; String, Text, Date, DateTime і Ref на перерахування — рядок.",
+      en: "Boolean takes a boolean; SmallInt and Integer take a number; BigInt and Numeric take a number or a string; UUID, String, Text, Date, DateTime and a Ref to an enumeration take a string.",
+      uk: "Boolean приймає булеве значення; SmallInt і Integer — число; BigInt і Numeric — число або рядок; UUID, String, Text, Date, DateTime і Ref на перерахування — рядок.",
+    },
+  },
+  "type.default-invalid": {
+    en: () => "defaultValue is outside the type",
+    uk: () => "defaultValue виходить за межі типу",
+    hint: {
+      en: "SmallInt and Integer take an integer in range; BigInt takes a safe integer or an int8 integer string; Numeric fits precision and scale, a string being a plain decimal; String fits length; Date is YYYY-MM-DD; DateTime is ISO 8601 with a zone; UUID is a UUID string.",
+      uk: "SmallInt і Integer — ціле в межах типу; BigInt — точне ціле число або рядок цілого в межах int8; Numeric — у межах precision і scale, рядок — простий десятковий дріб; String — не довший за length; Date — YYYY-MM-DD; DateTime — ISO 8601 з поясом; UUID — рядок UUID.",
     },
   },
 
@@ -125,6 +133,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Create project.meta.json at the root of metadata/.",
       uk: "Створіть project.meta.json у корені metadata/.",
+    },
+  },
+  "project.timezone-unknown": {
+    en: (p) => `Unknown time zone "${p.timezone}"`,
+    uk: (p) => `Невідомий часовий пояс "${p.timezone}"`,
+    hint: {
+      en: "Use an IANA time zone name such as UTC or Europe/Kyiv.",
+      uk: "Вкажіть ім'я поясу IANA, наприклад UTC чи Europe/Kyiv.",
     },
   },
   "file.unknown-path": {
@@ -616,8 +632,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Блок запиту рухів у рядку ${p.line} має бути рівно одним оператором SELECT${p.detail === undefined ? "" : `: ${p.detail}`}`,
     hint: {
-      en: "WITH ... SELECT and SELECT ... UNION ALL ... are allowed; other statements and several statements are not.",
-      uk: "WITH ... SELECT і SELECT ... UNION ALL ... дозволені; інші оператори й кілька операторів — ні.",
+      en: "WITH ... SELECT and SELECT ... UNION ALL ... are allowed; other statements, several statements, data-modifying WITH, SELECT INTO and FOR UPDATE/FOR SHARE are not.",
+      uk: "WITH ... SELECT і SELECT ... UNION ALL ... дозволені; інші оператори, кілька операторів, WITH зі зміною даних, SELECT INTO і FOR UPDATE/FOR SHARE — ні.",
     },
   },
   "posting.query-order-missing": {

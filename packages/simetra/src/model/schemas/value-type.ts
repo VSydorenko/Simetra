@@ -57,45 +57,147 @@ export type ValueType = z.infer<z.ZodObject<typeof valueTypeShape>>
 /** Скаляр типового значення реквізиту й константи (спека П2 §5). */
 type DefaultValue = string | number | boolean
 
-/** Межі цілих типів Postgres; `BigInt` — у межах точного числа JSON. */
+/** Межі цілих типів Postgres; `BigInt`-число — у межах точного числа JSON. */
 const INTEGER_RANGES: Partial<Record<LogicalType, [number, number]>> = {
   SmallInt: [-(2 ** 15), 2 ** 15 - 1],
   Integer: [-(2 ** 31), 2 ** 31 - 1],
   BigInt: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
 }
 
+/** Межі `int8`: за межею точного числа JSON `BigInt` береться рядком. */
+const INT8_RANGE: [bigint, bigint] = [-(2n ** 63n), 2n ** 63n - 1n]
+
 const DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/
+const INTEGER_TEXT = /^[+-]?\d+$/
 const UUID_TEXT =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/
+/** ISO 8601 з поясом: момент без поясу Postgres прочитав би в поясі сесії. */
+const DATE_TIME_TEXT =
+  /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):?(\d{2}))$/
 
 /**
- * Чи скаляр сумісний з логічним типом (спека П2 §5): інакше знімок містив би
- * `DEFAULT`, який Postgres відхилить. Одиночний `Ref` бере логічне ім'я
- * значення перерахування — його існування перевіряє стадія 4.
+ * JSON-форма скаляра для типу (спека П2 §5): булеве, число чи рядок. Чи
+ * значення в межах типу — окреме питання (`isWithinType`).
  */
 function fitsType(type: LogicalType, value: DefaultValue): boolean {
-  const range = INTEGER_RANGES[type]
-  if (range !== undefined) {
-    return (
-      typeof value === "number" &&
-      Number.isInteger(value) &&
-      value >= range[0] &&
-      value <= range[1]
-    )
-  }
   switch (type) {
     case "Boolean":
       return typeof value === "boolean"
+    case "SmallInt":
+    case "Integer":
+      return typeof value === "number"
+    case "BigInt":
     case "Numeric":
-      return (
-        typeof value === "number" ||
-        (typeof value === "string" && DECIMAL.test(value))
-      )
-    case "UUID":
-      return typeof value === "string" && UUID_TEXT.test(value)
+      return typeof value === "number" || typeof value === "string"
     default:
       return typeof value === "string"
   }
+}
+
+/**
+ * Чи значення правильної форми лежить у множині значень типу: інакше знімок
+ * містив би `DEFAULT`, який Postgres відхилить або мовчки округлить.
+ * Одиночний `Ref` бере логічне ім'я значення перерахування — його існування
+ * перевіряє стадія 4.
+ */
+function isWithinType(value: ValueType, raw: DefaultValue): boolean {
+  if (typeof raw === "number" && INTEGER_RANGES[value.type] !== undefined) {
+    const [min, max] = INTEGER_RANGES[value.type]!
+    return Number.isInteger(raw) && raw >= min && raw <= max
+  }
+  const text = String(raw)
+  switch (value.type) {
+    case "BigInt":
+      return (
+        INTEGER_TEXT.test(text) &&
+        BigInt(text) >= INT8_RANGE[0] &&
+        BigInt(text) <= INT8_RANGE[1]
+      )
+    case "Numeric":
+      // Рядок — лише десятковий дріб; експоненту дає тільки запис числа JSON.
+      return (
+        (typeof raw === "number" || DECIMAL.test(text)) &&
+        fitsNumeric(text, value.precision, value.scale)
+      )
+    case "UUID":
+      return UUID_TEXT.test(text)
+    case "String":
+      // varchar(n) рахує символи, а не кодові одиниці UTF-16.
+      return value.length === undefined || [...text].length <= value.length
+    case "Date":
+      return isDate(text)
+    case "DateTime":
+      return isDateTime(text)
+    default:
+      return true
+  }
+}
+
+/**
+ * `numeric(p, s)`: цілих цифр не більше `p - s`, дробових — не більше `s`
+ * (зайві дробові Postgres мовчки округлив би). Число JSON читається через
+ * десятковий запис, зокрема експоненційний.
+ */
+function fitsNumeric(
+  text: string,
+  precision: number | undefined,
+  scale: number | undefined
+): boolean {
+  const exponent = /^([^eE]*)[eE]([+-]?\d+)$/.exec(text)
+  const mantissa = exponent?.[1] ?? text
+  if (!DECIMAL.test(mantissa)) return false
+  if (precision === undefined) return true
+  const [whole = "", fraction = ""] = mantissa.replace(/^[+-]/, "").split(".")
+  const digits = whole + fraction
+  // Позиція десяткової коми в рядку цифр після зсуву на експоненту.
+  const point = whole.length + Number(exponent?.[2] ?? 0)
+  const significant = digits.replace(/^0+/, "")
+  const leading = digits.length - significant.length
+  const trimmed = significant.replace(/0+$/, "")
+  if (trimmed === "") return true
+  const integerDigits = Math.max(0, point - leading)
+  const fractionDigits = Math.max(0, leading + trimmed.length - point)
+  const allowedScale = scale ?? 0
+  return (
+    integerDigits <= precision - allowedScale && fractionDigits <= allowedScale
+  )
+}
+
+/** Календарний день `YYYY-MM-DD`: `2026-02-30` Postgres відхилить. */
+function isDate(text: string): boolean {
+  const match = DATE_TEXT.exec(text)
+  if (match === null) return false
+  const [year, month, day] = [match[1], match[2], match[3]].map(Number) as [
+    number,
+    number,
+    number,
+  ]
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
+function isDateTime(text: string): boolean {
+  const match = DATE_TIME_TEXT.exec(text)
+  if (match === null || !isDate(match[1]!)) return false
+  const [hours, minutes, seconds, zoneHours, zoneMinutes] = [
+    match[2],
+    match[3],
+    match[4] ?? "0",
+    match[5] ?? "0",
+    match[6] ?? "0",
+  ].map(Number) as [number, number, number, number, number]
+  return (
+    hours < 24 &&
+    minutes < 60 &&
+    seconds < 60 &&
+    zoneHours < 24 &&
+    zoneMinutes < 60
+  )
 }
 
 /**
@@ -183,5 +285,9 @@ export function refineValueType(
       "defaultValue does not match the logical type",
       ["defaultValue"]
     )
+  } else if (!isWithinType(value, defaultValue)) {
+    issue("type.default-invalid", "defaultValue is outside the type", [
+      "defaultValue",
+    ])
   }
 }

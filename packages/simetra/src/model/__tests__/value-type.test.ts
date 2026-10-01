@@ -99,6 +99,7 @@ function defaultRules(input: Record<string, unknown>): [string, string][] {
 }
 
 const MISMATCH: [string, string][] = [["type.default-mismatch", "defaultValue"]]
+const INVALID: [string, string][] = [["type.default-invalid", "defaultValue"]]
 const NOT_ALLOWED: [string, string][] = [
   ["type.default-not-allowed", "defaultValue"],
 ]
@@ -114,21 +115,21 @@ describe("default value (spec §5)", () => {
   it("integer types take an integer within their range", () => {
     expect(defaultRules({ type: "Integer", defaultValue: 3 })).toEqual([])
     expect(defaultRules({ type: "Integer", defaultValue: 1.5 })).toEqual(
-      MISMATCH
+      INVALID
     )
     expect(defaultRules({ type: "Integer", defaultValue: "3" })).toEqual(
       MISMATCH
     )
     expect(defaultRules({ type: "Integer", defaultValue: 2 ** 31 })).toEqual(
-      MISMATCH
+      INVALID
     )
     expect(defaultRules({ type: "SmallInt", defaultValue: 32767 })).toEqual([])
     expect(defaultRules({ type: "SmallInt", defaultValue: 32768 })).toEqual(
-      MISMATCH
+      INVALID
     )
     expect(defaultRules({ type: "BigInt", defaultValue: 2 ** 40 })).toEqual([])
     expect(defaultRules({ type: "BigInt", defaultValue: 2 ** 60 })).toEqual(
-      MISMATCH
+      INVALID
     )
   })
 
@@ -138,7 +139,7 @@ describe("default value (spec §5)", () => {
       []
     )
     expect(defaultRules({ type: "Numeric", defaultValue: "1e3" })).toEqual(
-      MISMATCH
+      INVALID
     )
     expect(defaultRules({ type: "Numeric", defaultValue: true })).toEqual(
       MISMATCH
@@ -147,7 +148,12 @@ describe("default value (spec §5)", () => {
 
   it("string and temporal types take a string", () => {
     for (const type of ["Text", "Date", "DateTime"]) {
-      expect(defaultRules({ type, defaultValue: "x" }), type).toEqual([])
+      const value = {
+        Text: "x",
+        Date: "2026-10-01",
+        DateTime: "2026-10-01T00:00:00Z",
+      }[type]
+      expect(defaultRules({ type, defaultValue: value }), type).toEqual([])
       expect(defaultRules({ type, defaultValue: 1 }), type).toEqual(MISMATCH)
     }
     expect(
@@ -166,7 +172,7 @@ describe("default value (spec §5)", () => {
       })
     ).toEqual([])
     expect(defaultRules({ type: "UUID", defaultValue: "not-a-uuid" })).toEqual(
-      MISMATCH
+      INVALID
     )
   })
 

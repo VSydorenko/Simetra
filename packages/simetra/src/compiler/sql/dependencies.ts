@@ -112,7 +112,7 @@ const UNIT_COMMENTS: Readonly<Record<string, SqlUnitClass>> = {
  * ігноруються; некваліфіковане ім'я Postgres резолвить за `search_path`,
  * якого компілятор не знає, тож воно дає ребро до кожного однойменного
  * об'єкта моделі: пропущене ребро ламало б порядок. Ім'я CTE у своїй області
- * видимості — не відношення моделі. Тіла plpgsql не аналізуються — Postgres
+ * видимості (після визначення, у рекурсивному — і в тілі) — не відношення моделі. Тіла plpgsql не аналізуються — Postgres
  * не перевіряє їх при створенні.
  *
  * Обмеження FK поза порядком створення (спека П2 §8.3): рендер виводить їх
@@ -336,10 +336,22 @@ class Graph {
       return
     }
     const node = value as Record<string, unknown>
-    // Область CTE — увесь оператор з `WITH`, разом із тілами CTE (рекурсивне
-    // посилається на себе); вкладені оператори її успадковують.
+    // Область CTE (як у Postgres): тіло CTE бачить лише попередні CTE свого
+    // `WITH`, а `WITH RECURSIVE` — усі, зокрема себе; решта оператора бачить
+    // усі. Ім'я поза областю — справжнє відношення, і ребро до нього потрібне.
     const own = cteNames(node.withClause)
-    if (own.length > 0) ctes = new Set([...ctes, ...own])
+    if (own.length > 0) {
+      const withClause = node.withClause as {
+        ctes: unknown[]
+        recursive?: boolean
+      }
+      withClause.ctes.forEach((cte, index) => {
+        const visible =
+          withClause.recursive === true ? own : own.slice(0, index)
+        this.collect(cte, refs, new Set([...ctes, ...visible]), created)
+      })
+      ctes = new Set([...ctes, ...own])
+    }
 
     const cte =
       typeof node.relname === "string" &&
@@ -401,7 +413,8 @@ class Graph {
       }
     }
 
-    for (const child of Object.values(node)) {
+    for (const [key, child] of Object.entries(node)) {
+      if (key === "withClause" && own.length > 0) continue
       this.collect(child, refs, ctes, created)
     }
   }

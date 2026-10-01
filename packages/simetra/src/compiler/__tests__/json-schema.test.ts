@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { KIND_REGISTRY } from "simetra/model"
@@ -37,6 +37,12 @@ describe("buildJsonSchemas", () => {
       }
       expect(readFileSync(path, "utf8"), file).toBe(text)
     }
+  })
+
+  it("orphan json schema file fails the drift test", () => {
+    // Схема, якої генератор більше не дає, лишилася б у пакеті мовчки.
+    const files = readdirSync(SCHEMAS_DIR).filter((f) => f.endsWith(".json"))
+    expect(files.sort()).toEqual(Object.keys(buildJsonSchemas()).sort())
   })
 
   it("descriptions are present", () => {

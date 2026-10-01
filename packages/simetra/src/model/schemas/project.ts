@@ -31,8 +31,8 @@ export const projectSchema = z
       .meta({ description: "Naming rules of the application." }),
     /**
      * IANA-пояс, у якому платформа визначає день, місяць, квартал і рік
-     * моменту (спека П2 §3). Існування імені T0 перевірити не може — таблиці
-     * поясів немає без Node API; хибний пояс відкине тінь при розгортанні.
+     * моменту (спека П2 §3). Існування імені перевіряє компілятор
+     * (`project.timezone-unknown`) за переліком поясів рушія.
      */
     timezone: z.string().min(1).default("UTC").meta({
       description:
