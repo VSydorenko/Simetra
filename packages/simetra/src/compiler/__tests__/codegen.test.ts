@@ -39,21 +39,36 @@ function namespaceOf(code: string, name: string): string {
  * відступу простору імен — так знімки читаються як звичайний код.
  */
 function block(code: string, path: string): string {
-  const [namespace, name] = path.split(".") as [string, string]
+  const [namespace, name, section] = path.split(".") as [
+    string,
+    string,
+    string | undefined,
+  ]
   // Без рядків `export declare namespace … {` і `}`: інакше шапка склеїться
   // з першим інтерфейсом.
-  const found = namespaceOf(code, namespace)
-    .split("\n")
-    .slice(1, -1)
+  const body = namespaceOf(code, namespace).split("\n").slice(1, -1)
+  const dedent = (lines: string[], width: number) =>
+    lines
+      .map((line) => line.slice(width))
+      .join("\n")
+      .trim()
+  if (section !== undefined) {
+    // ТЧ — вкладений простір імен: інтерфейс на глибині 4 пробіли.
+    const start = body.findIndex(
+      (line) => line === `    export interface ${section} {`
+    )
+    expect(start, `interface ${path}`).toBeGreaterThanOrEqual(0)
+    let from = start
+    while (from > 0 && /^ {4}(\/\*\*| \*)/.test(body[from - 1]!)) from -= 1
+    const end = body.indexOf("    }", start)
+    return dedent(body.slice(from, end + 1), 4)
+  }
+  const found = body
     .join("\n")
     .split("\n\n")
-    .find((b) => b.includes(`export interface ${name} {`))
+    .find((b) => b.includes(`  export interface ${name} {`))
   expect(found, `interface ${path}`).toBeDefined()
-  return found!
-    .split("\n")
-    .map((line) => line.replace(/^ {2}/, ""))
-    .join("\n")
-    .trim()
+  return dedent(found!.split("\n"), 2)
 }
 
 /** Споживач без прив'язки до видів: у фікстурі може не бути довідників. */
@@ -194,7 +209,7 @@ describe("emitEntityTypes", () => {
         price: string | null
         big: string
         count: number
-        payload: Json | null
+        payload: Json_ | null
       }"
     `)
     expect(diagnosticsOf(code)).toEqual([])
@@ -288,11 +303,11 @@ describe("emitEntityTypes", () => {
         createdAt: string
         /** Updated at */
         updatedAt: string
-        goods: SaleGoods[]
+        goods: Documents_Sale_Goods[]
       }"
     `)
-    expect(block(code, "Documents.SaleGoods")).toMatchInlineSnapshot(`
-      "export interface SaleGoods {
+    expect(block(code, "Documents.Sale.Goods")).toMatchInlineSnapshot(`
+      "export interface Goods {
         /** Reference */
         ref: string
         /** Owning object */
@@ -377,7 +392,7 @@ describe("emitEntityTypes", () => {
         ],
       }),
     })
-    expect(block(code, "Catalogs.ItemRows")).toContain(
+    expect(block(code, "Catalogs.Item.Rows")).toContain(
       "   * Line number\n   *\n   * Starts at one"
     )
     expect(diagnosticsOf(code)).toEqual([])
@@ -630,6 +645,134 @@ describe("emitEntityTypes", () => {
       filePath: join(PACKAGE_ROOT, "src", "entities.d.ts"),
     })
     expect(result!.messages).toEqual([])
+  })
+
+  it("an object named Json does not shadow the shared Json", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "catalogs/Json/Json.meta.json": catalog("Json"),
+      "catalogs/Doc/Doc.meta.json": catalog("Doc", {
+        attributes: [attribute("payload", { type: "Json" })],
+      }),
+    })
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs } from "./entities"',
+          // Число — валідний Json, але не довідник `Json`.
+          "export const ok: Catalogs.Doc['payload'] = 42",
+          "// @ts-expect-error undefined is not Json",
+          "export const bad: Catalogs.Doc['payload'] = undefined",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  it("an object named like its own namespace does not shadow section references", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "catalogs/Catalogs/Catalogs.meta.json": catalog("Catalogs", {
+        tabularSections: [
+          {
+            id: uuid(810),
+            name: "rows",
+            physicalName: "rows",
+            attributes: [attribute("qty", { type: "Integer" })],
+          },
+        ],
+      }),
+      "documents/Sale/Sale.meta.json": document("Sale"),
+    })
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs } from "./entities"',
+          "type Row = Catalogs.Catalogs['rows'][number]",
+          "export const ok: Row = { ref: 'a', parent: 'b', lineNumber: 1, qty: 1 }",
+          "// @ts-expect-error a row has no code field",
+          "export const bad: Row = { code: 'x' }",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  it("a section and a same-named flat object stay distinct types", async () => {
+    const entries = salesDocument()
+    const code = await emit({
+      "project.meta.json": project(),
+      ...entries,
+      "documents/SaleGoods/SaleGoods.meta.json": document("SaleGoods"),
+    })
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Documents } from "./entities"',
+          "export const a: keyof Documents.Sale.Goods = 'parent'",
+          "// @ts-expect-error a document has no parent",
+          "export const b: keyof Documents.SaleGoods = 'parent'",
+          "export const c: keyof Documents.SaleGoods = 'posted'",
+          "// @ts-expect-error a section row has no posted",
+          "export const d: keyof Documents.Sale.Goods = 'posted'",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  it("snake_case section name becomes PascalCase", async () => {
+    const code = await emit({
+      "project.meta.json": project({ naming: { attributeCase: "snake_case" } }),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        tabularSections: [
+          {
+            id: uuid(820),
+            name: "price_list",
+            physicalName: "price_list",
+          },
+        ],
+      }),
+    })
+    expect(block(code, "Catalogs.Item.PriceList")).toContain(
+      "export interface PriceList {"
+    )
+    expect(block(code, "Catalogs.Item")).toContain(
+      "price_list: Catalogs_Item_PriceList[]"
+    )
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs } from "./entities"',
+          "export const ok: Catalogs.Item.PriceList[] = []",
+          "// @ts-expect-error not a number",
+          "export const bad: Catalogs.Item['price_list'] = 1",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  it("aliases are module-private and wrong shapes are rejected", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      ...salesDocument(),
+    })
+    expect(code).toContain("type Documents_Sale_Goods = Documents.Sale.Goods")
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs, Documents } from "./entities"',
+          "// @ts-expect-error aliases are not exported",
+          'import type { Documents_Sale_Goods } from "./entities"',
+          "// @ts-expect-error an empty object is not an item",
+          "export const bad: Catalogs.Item = {}",
+          "// @ts-expect-error goods is an array of rows",
+          "export const worse: Documents.Sale['goods'] = 1",
+        ].join("\n")
+      )
+    ).toEqual([])
   })
 
   it("deterministic", async () => {
