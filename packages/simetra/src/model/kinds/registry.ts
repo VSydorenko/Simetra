@@ -13,6 +13,7 @@ export {
   monthColumn,
   singletonColumn,
   standardLogicalName,
+  type FoundElementReference,
   type FoundReference,
   type KindDefinition,
   type NumberingSpec,

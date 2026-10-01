@@ -50,7 +50,7 @@ export async function runStages(
   const stage3 =
     stage1.project === undefined || hasErrors(upstream)
       ? undefined
-      : buildModel(stage1.objects, stage1.project)
+      : buildModel(stage1.objects, stage1.project, stage2.references)
   // Некваліфіковані імена `.sql` беруть схему проєкту, тож без валідного
   // проєкту одиниць немає: його помилку вже названо.
   const sql =

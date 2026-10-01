@@ -88,6 +88,15 @@ function serializeObject(value: Record<string, unknown>): string {
 
 const METADATA_KIND_SET: ReadonlySet<string> = new Set(METADATA_KINDS)
 
+/**
+ * Ролі, де рядок файлу — логічне ім'я колонки, а в знімку стає id елемента:
+ * перейменування реквізиту цілі FK не має зсувати фрагмент прийнятої таблиці.
+ */
+const COLUMN_NAME_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "customTable.column",
+  "customTable.foreignKeyTarget",
+])
+
 /** Індекс посилань одного файлу: pointer → посилання з нього. */
 type FileReferences = ReadonlyMap<string, readonly ResolvedReference[]>
 
@@ -201,7 +210,8 @@ interface MovementSource {
 }
 
 /**
- * Копія `data`: MetadataRef → `{ kind, id }` за індексом посилань; рухи
+ * Копія `data`: MetadataRef → `{ kind, id }` за індексом посилань, ім'я
+ * колонки в ключах, індексах і FK прийнятої таблиці — id елемента; рухи
  * конструктора — з id замість імен (див. `canonicalMovement`). Без перевірки
  * виду: поле `posting` так само читає стадія ідентичності.
  */
@@ -212,6 +222,12 @@ function canonicalData(data: unknown, refs: FileReferences): unknown {
   ): unknown => {
     if (Array.isArray(value)) {
       return value.map((item, index) => walk(item, [...path, index]))
+    }
+    if (typeof value === "string") {
+      const column = refs
+        .get(toPointer(path))
+        ?.find((r) => COLUMN_NAME_ROLES.has(r.role))
+      return column === undefined ? value : column.to.id
     }
     if (typeof value !== "object" || value === null) return value
     const pointer = toPointer(path)

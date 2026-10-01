@@ -27,6 +27,7 @@ export const COMPILER_RULES = [
   "identity.name-reserved",
   "reference.unresolved",
   "reference.ambiguous",
+  "customTable.column-unknown",
   "register.balance-control-resource",
   "register.balance-control-duplicate",
   "posting.field-unknown",
@@ -75,7 +76,6 @@ export const COMPILER_RULES = [
   "physical.reserved-word",
   "physical.name-too-long",
   "physical.constraint-name-required",
-  "customTable.column-unknown",
   "customTable.foreign-key-arity",
   "presentation.unknown-standard-attribute",
 ] as const

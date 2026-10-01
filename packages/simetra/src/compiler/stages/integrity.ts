@@ -38,12 +38,15 @@ import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { FUNCTION_CLASSES, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
-import { registerTargetError, type ResolvedReference } from "./identity"
+import {
+  registerTargetError,
+  standardElementId,
+  type ResolvedReference,
+} from "./identity"
 import {
   isDeclaredTable,
   isUuidColumn,
   keyColumnOf,
-  logicalColumnsOf,
   type ModelStageResult,
 } from "./model"
 
@@ -207,7 +210,7 @@ export function checkIntegrity(
 
   for (const object of objects) {
     if (isDeclaredTable(object)) {
-      diagnostics.push(...checkDeclaredTable(object, byKey, style))
+      diagnostics.push(...checkDeclaredTable(object))
     }
   }
 
@@ -410,107 +413,48 @@ function polymorphicSets(
 }
 
 /**
- * Опис прийнятої таблиці посилається на колонки логічними іменами; невідоме
- * ім'я — помилка, а не тиха підміна фізичним. Сумісність типів і ключ цілі FK
- * перевіряє тінь, а не компілятор.
+ * Опис прийнятої таблиці: кількість колонок FK і явні імена там, де Postgres
+ * назвав би обмеження за деревом виразу. Імена колонок резолвила стадія 2
+ * (`customTable.column-unknown`); сумісність типів і ключ цілі FK перевіряє
+ * тінь, а не компілятор.
  */
-function checkDeclaredTable(
-  object: ParsedObject,
-  byKey: ReadonlyMap<string, ParsedObject>,
-  style: AttributeCase
-): Diagnostic[] {
+function checkDeclaredTable(object: ParsedObject): Diagnostic[] {
   const table = object.data as CustomTable
   const found: Diagnostic[] = []
-  const own = logicalColumnsOf(object, style)
-  const columnsExist = (
-    names: readonly string[],
-    pointer: string,
-    columns = own,
-    owner = object.name
-  ) => {
-    names.forEach((name, index) => {
-      if (!columns.has(name)) {
-        found.push(
-          diagnostic(
-            "customTable.column-unknown",
-            object.file,
-            `${pointer}/${index}`,
-            { column: name, table: owner }
-          )
-        )
-      }
-    })
-  }
   const nameRequired = (pointer: string) =>
     found.push(
       diagnostic("physical.constraint-name-required", object.file, pointer)
     )
 
-  if (table.primaryKey !== undefined) {
-    columnsExist(table.primaryKey.columns, "/primaryKey/columns")
-  }
-  table.uniques.forEach((unique, i) => {
-    columnsExist(unique.columns, `/uniques/${i}/columns`)
-  })
   // Ім'я безіменного CHECK Postgres бере з першої колонки дерева виразу.
   table.checks.forEach((check, i) => {
     if (check.name === undefined) nameRequired(`/checks/${i}`)
   })
   table.foreignKeys.forEach((foreignKey, i) => {
-    const pointer = `/foreignKeys/${i}`
-    columnsExist(foreignKey.columns, `${pointer}/columns`)
     const { references } = foreignKey
-    let referenced: readonly string[]
-    if ("object" in references) {
-      referenced = references.columns
-      const target = byKey.get(
-        objectKey(references.object.kind, references.object.name)
-      )
-      // Ціль без таблиці вже звітує reference.not-referenceable.
-      if (
-        target !== undefined &&
-        KIND_REGISTRY[target.kind].materializes === "table"
-      ) {
-        columnsExist(
-          references.columns,
-          `${pointer}/references/columns`,
-          logicalColumnsOf(target, style),
-          target.name
-        )
-      }
-    } else {
-      referenced = references.external.columns
-    }
+    const referenced =
+      "object" in references ? references.columns : references.external.columns
     if (referenced.length !== foreignKey.columns.length) {
       found.push(
-        diagnostic("customTable.foreign-key-arity", object.file, pointer, {
-          local: foreignKey.columns.length,
-          referenced: referenced.length,
-        })
+        diagnostic(
+          "customTable.foreign-key-arity",
+          object.file,
+          `/foreignKeys/${i}`,
+          {
+            local: foreignKey.columns.length,
+            referenced: referenced.length,
+          }
+        )
       )
     }
   })
   table.indexes.forEach((index, i) => {
-    const pointer = `/indexes/${i}`
-    index.keys.forEach((key, k) => {
-      if ("column" in key && !own.has(key.column)) {
-        found.push(
-          diagnostic(
-            "customTable.column-unknown",
-            object.file,
-            `${pointer}/keys/${k}`,
-            { column: key.column, table: object.name }
-          )
-        )
-      }
-    })
-    columnsExist(index.include, `${pointer}/include`)
     // Колонку-вираз Postgres називає за деревом виразу (FigureIndexColname).
     if (
       index.name === undefined &&
       index.keys.some((key) => "expression" in key)
     ) {
-      nameRequired(pointer)
+      nameRequired(`/indexes/${i}`)
     }
   })
   return found
@@ -884,7 +828,7 @@ function checkPosting(
     }
     for (const column of def.standardColumns(data)) {
       elementTypes.set(
-        `${ownerId}#${column.logicalName}`,
+        standardElementId(ownerId, column),
         standardType(column, ownerId)
       )
     }
@@ -902,7 +846,7 @@ function checkPosting(
       // Рядок ТЧ — не об'єкт метаданих, тож на нього самого `Ref` не веде.
       for (const column of rowColumns) {
         elementTypes.set(
-          `${section.id}#${column.logicalName}`,
+          standardElementId(section.id, column),
           standardType(column, undefined)
         )
       }

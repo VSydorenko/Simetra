@@ -29,6 +29,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
+  type ReferenceRole,
   type RegisterKeySpec,
   type ScopeKind,
   type StandardColumnDef,
@@ -37,6 +38,7 @@ import {
 } from "simetra/model"
 import { compareStrings } from "../diagnostics"
 import { objectKey, type ParsedObject } from "./files"
+import { standardElementId, type ResolvedReference } from "./identity"
 
 type ForeignKey = PhysicalTable["foreignKeys"][number]
 type FkAction = ForeignKey["onDelete"]
@@ -177,13 +179,16 @@ interface PendingTable {
  * тими, що дала б сама БД; ім'я над виразом (безіменні CHECK та індекси з
  * виразом у `CustomTable`) Postgres бере з дерева виразу, тож для них стадія 4
  * вимагає явне ім'я.
- * Вхід — без помилок стадій 1–2: id, physicalName і цілі посилань є.
+ * Вхід — без помилок стадій 1–2: id, physicalName і цілі посилань є, а
+ * колонки, названі в описі прийнятої таблиці, вже резолвлені в індексі
+ * посилань стадії 2.
  */
 export function buildModel(
   objects: readonly ParsedObject[],
-  project: Project
+  project: Project,
+  references: readonly ResolvedReference[]
 ): ModelStageResult {
-  const builder = new SnapshotBuilder(objects, project)
+  const builder = new SnapshotBuilder(objects, project, references)
   for (const object of objects) builder.add(object)
   return builder.finish()
 }
@@ -198,10 +203,15 @@ class SnapshotBuilder {
   private readonly scopeKinds: Map<string, ScopeKind>
   /** Об'єкт-корінь → вид, чиїм коренем він є. */
   private readonly rootKinds: Map<string, ScopeKind>
+  /** `файл\0pointer` → id колонки, яку там названо (індекс стадії 2). */
+  private readonly columnRefs: Map<string, string>
+  /** id колонки (зокрема синтетичний стандартної) → її фізичне ім'я. */
+  private readonly columnNames: Map<string, string>
 
   constructor(
     objects: readonly ParsedObject[],
-    private readonly project: Project
+    private readonly project: Project,
+    references: readonly ResolvedReference[]
   ) {
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
     this.style = project.naming.attributeCase
@@ -213,6 +223,12 @@ class SnapshotBuilder {
           : []
       )
     )
+    this.columnRefs = new Map(
+      references
+        .filter((r) => COLUMN_ROLES.has(r.role))
+        .map((r) => [`${r.from.file}\0${r.from.pointer}`, r.to.id])
+    )
+    this.columnNames = new Map(objects.flatMap(physicalColumnsById))
   }
 
   add(object: ParsedObject): void {
@@ -1008,21 +1024,28 @@ class SnapshotBuilder {
       this.declare(object.file, `/columns/${index}/physicalName`, name)
     })
 
-    const own = declaredColumnMap(data)
-    // Невідоме ім'я колонки звітує стадія 4; тут воно лише не ламає побудову.
-    const map = (names: readonly string[], columns = own) =>
-      names.map((n) => columns.get(n) ?? n)
+    // Імена колонок резолвила стадія 2; тут — лише фізичне ім'я за id.
+    const column = (pointer: string) => {
+      const id = this.columnRefs.get(`${object.file}\0${pointer}`)
+      const name = id === undefined ? undefined : this.columnNames.get(id)
+      if (name === undefined) {
+        throw new Error(`buildModel: unresolved column at ${pointer}`)
+      }
+      return name
+    }
+    const map = (names: readonly string[], base: string) =>
+      names.map((_, index) => column(`${base}/${index}`))
 
     if (data.primaryKey !== undefined) {
       table.primaryKey = {
         ...explicit(data.primaryKey.name, "/primaryKey/name"),
-        columns: map(data.primaryKey.columns),
+        columns: map(data.primaryKey.columns, "/primaryKey/columns"),
       }
     }
     data.uniques.forEach((unique, i) => {
       table.uniques.push({
         ...explicit(unique.name, `/uniques/${i}/name`),
-        columns: map(unique.columns),
+        columns: map(unique.columns, `/uniques/${i}/columns`),
         nullsNotDistinct: unique.nullsNotDistinct,
       })
     })
@@ -1035,17 +1058,18 @@ class SnapshotBuilder {
       })
     })
     data.foreignKeys.forEach((foreignKey, i) => {
+      const pointer = `/foreignKeys/${i}`
       const { references } = foreignKey
       let target: ForeignKey["references"]
       if ("object" in references) {
         const object = this.lookup(references.object)
+        // Ціль без таблиці звітує стадія 4 (`reference.not-referenceable`);
+        // колонок у неї немає, тож і FK будувати нема на що.
+        if (KIND_REGISTRY[object.kind].materializes !== "table") return
         target = {
           schema: this.schemaOf(object),
           table: physicalNameOf(object),
-          columns: map(
-            references.columns,
-            logicalColumnsOf(object, this.style)
-          ),
+          columns: map(references.columns, `${pointer}/references/columns`),
         }
       } else {
         // Поля цілі — поіменно: spread зарахував би ратчету полів кожен ключ
@@ -1054,8 +1078,8 @@ class SnapshotBuilder {
         target = { schema, table, columns }
       }
       table.foreignKeys.push({
-        ...explicit(foreignKey.name, `/foreignKeys/${i}/name`),
-        columns: map(foreignKey.columns),
+        ...explicit(foreignKey.name, `${pointer}/name`),
+        columns: map(foreignKey.columns, `${pointer}/columns`),
         references: target,
         onDelete: foreignKey.onDelete,
         onUpdate: foreignKey.onUpdate,
@@ -1067,10 +1091,12 @@ class SnapshotBuilder {
         ...explicit(index.name, `/indexes/${i}/name`),
         unique: index.unique,
         method: index.method,
-        keys: index.keys.map((key) =>
-          "column" in key ? { column: own.get(key.column) ?? key.column } : key
+        keys: index.keys.map((key, k) =>
+          "column" in key
+            ? { column: column(`/indexes/${i}/keys/${k}/column`) }
+            : key
         ),
-        include: map(index.include),
+        include: map(index.include, `/indexes/${i}/include`),
         ...(index.where !== undefined ? { where: index.where } : {}),
         nullsNotDistinct: index.nullsNotDistinct,
       })
@@ -1278,36 +1304,36 @@ export function isDeclaredTable(object: ParsedObject): boolean {
   return def.declared && def.materializes === "table"
 }
 
+/** Ролі індексу посилань, що називають колонку прийнятої таблиці чи цілі її FK. */
+const COLUMN_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "customTable.column",
+  "customTable.foreignKeyTarget",
+])
+
 /**
- * Логічне ім'я колонки → фізичне для таблиці об'єкта: у прийнятої таблиці —
- * її колонки, у виду — стандартні колонки з реєстру (крім поліморфних пар,
- * що не мають однієї колонки) і реквізити.
+ * id колонки → фізичне ім'я для таблиці об'єкта: елементи колонкових полів і
+ * стандартні колонки виду під синтетичним id `<objectId>#<канонічне ім'я>`,
+ * як їх резолвить стадія 2 (крім поліморфних пар, що не мають однієї колонки).
  */
-export function logicalColumnsOf(
-  object: ParsedObject,
-  style: AttributeCase
-): Map<string, string> {
+function physicalColumnsById(object: ParsedObject): [string, string][] {
   const def = KIND_REGISTRY[object.kind]
+  if (def.materializes !== "table") return []
   const data = object.data as Element
-  if (isDeclaredTable(object)) {
-    return declaredColumnMap(data as unknown as CustomTable)
-  }
-  const map = new Map<string, string>()
+  const found: [string, string][] = []
   for (const column of def.standardColumns(data)) {
     if (column.polymorphic === undefined) {
-      map.set(standardLogicalName(column, style), column.physicalName)
+      found.push([
+        standardElementId(object.id ?? "", column),
+        column.physicalName,
+      ])
     }
   }
   for (const field of def.columnFields) {
-    for (const attribute of data[field] as Attribute[]) {
-      map.set(attribute.name, attribute.physicalName!)
+    for (const element of data[field] as Attribute[]) {
+      found.push([element.id ?? "", element.physicalName!])
     }
   }
-  return map
-}
-
-function declaredColumnMap(data: CustomTable): Map<string, string> {
-  return new Map(data.columns.map((c) => [c.name, c.physicalName!]))
+  return found
 }
 
 /**

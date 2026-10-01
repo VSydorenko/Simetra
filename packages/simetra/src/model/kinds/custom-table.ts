@@ -3,6 +3,7 @@ import {
   ATTRIBUTE_ROLES,
   valueTypeReferences,
   keyOrderOf,
+  type FoundElementReference,
   type FoundReference,
   type KindDefinition,
 } from "./standard"
@@ -36,6 +37,66 @@ function references(obj: unknown): FoundReference[] {
 }
 
 /**
+ * Кожне місце, де опис таблиці називає колонку логічним іменем. Ключі
+ * індексу — за pointer на `column`: ключ-вираз колонки не називає, а pointer
+ * поля лишає місце сусіднім властивостям ключа.
+ */
+function elementReferences(obj: unknown): FoundElementReference[] {
+  const table = obj as CustomTable
+  const found: FoundElementReference[] = []
+  const own = (names: readonly string[], base: string) => {
+    names.forEach((name, index) => {
+      found.push({
+        pointer: `${base}/${index}`,
+        name,
+        role: "customTable.column",
+      })
+    })
+  }
+  if (table.scopeColumn !== undefined) {
+    found.push({
+      pointer: "/scopeColumn",
+      name: table.scopeColumn,
+      role: "customTable.scopeColumn",
+    })
+  }
+  if (table.primaryKey !== undefined) {
+    own(table.primaryKey.columns, "/primaryKey/columns")
+  }
+  table.uniques.forEach((unique, i) => {
+    own(unique.columns, `/uniques/${i}/columns`)
+  })
+  table.foreignKeys.forEach((foreignKey, i) => {
+    const base = `/foreignKeys/${i}`
+    own(foreignKey.columns, `${base}/columns`)
+    const { references } = foreignKey
+    if ("object" in references) {
+      references.columns.forEach((name, index) => {
+        found.push({
+          pointer: `${base}/references/columns/${index}`,
+          name,
+          owner: references.object,
+          role: "customTable.foreignKeyTarget",
+        })
+      })
+    }
+  })
+  table.indexes.forEach((index, i) => {
+    index.keys.forEach((key, k) => {
+      if ("column" in key) {
+        found.push({
+          pointer: `/indexes/${i}/keys/${k}/column`,
+          name: key.column,
+          role: "customTable.column",
+        })
+      }
+    })
+    own(index.include, `/indexes/${i}/include`)
+  })
+  return found
+}
+
+/**
  * Прийнята таблиця описана повністю фізично: нічого похідного, тож
  * стандартних колонок немає (спека §4).
  */
@@ -55,4 +116,5 @@ export const customTableKind: KindDefinition = {
   valueElements: false,
   standardColumns: () => [],
   references,
+  elementReferences,
 }

@@ -103,6 +103,8 @@ export type ReferenceRole =
   | "posting.tabularSection"
   | "posting.movementsBlock"
   | "customTable.foreignKey"
+  | "customTable.foreignKeyTarget"
+  | "customTable.column"
   | "customTable.pgEnum"
   | "customTable.scopeColumn"
   | "object.scope"
@@ -112,6 +114,21 @@ export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */
   pointer: string
   ref: MetadataRef
+  role: ReferenceRole
+}
+
+/**
+ * Посилання на колонку за логічним іменем. Ціль — колонка самого об'єкта
+ * або, з `owner`, колонка іншого об'єкта (стандартний реквізит виду теж).
+ * Стадія 2 резолвить ім'я в id елемента, тож перейменування колонки чи
+ * реквізиту цілі бачить індекс посилань, а не друге прочитання імені.
+ */
+export interface FoundElementReference {
+  /** JSON Pointer (RFC 6901) на рядок з іменем. */
+  pointer: string
+  name: string
+  /** Об'єкт, чию колонку названо; немає — власна колонка. */
+  owner?: MetadataRef
   role: ReferenceRole
 }
 
@@ -241,6 +258,11 @@ export interface KindDefinition {
    */
   tabularSectionColumns?(obj: unknown): StandardColumnDef[]
   references(obj: unknown): FoundReference[]
+  /**
+   * Посилання на колонки за логічним іменем. Є лише у виду, що описує фізику
+   * сам (ключі, індекси й FK прийнятої таблиці називають колонки).
+   */
+  elementReferences?(obj: unknown): FoundElementReference[]
   /** Ключі таблиць регістра; є лише у видів-регістрів. */
   registerKeys?(obj: unknown): RegisterKeySpec
   /** Нумерація; `undefined` — об'єкт номера чи коду не має. */

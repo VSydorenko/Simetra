@@ -605,7 +605,12 @@ describe("stage 4: integrity", () => {
           "/foreignKeys/0/columns/0",
         ],
         ["customTable.column-unknown", "error", LOG, "/indexes/0/include/0"],
-        ["customTable.column-unknown", "error", LOG, "/indexes/0/keys/1"],
+        [
+          "customTable.column-unknown",
+          "error",
+          LOG,
+          "/indexes/0/keys/1/column",
+        ],
         ["customTable.column-unknown", "error", LOG, "/primaryKey/columns/0"],
         ["customTable.column-unknown", "error", LOG, "/uniques/0/columns/1"],
       ])

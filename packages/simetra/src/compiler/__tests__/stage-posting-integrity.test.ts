@@ -960,7 +960,11 @@ describe("stage 4: robustness", () => {
       "posting.field-unknown",
       "posting.register-field-unknown",
     ])
-    const stage3 = buildModel(stage1.objects, stage1.project!)
+    const stage3 = buildModel(
+      stage1.objects,
+      stage1.project!,
+      stage2.references
+    )
     const stage4 = checkIntegrity(
       stage1.objects,
       stage2.references,
@@ -994,7 +998,7 @@ describe("stage 4: robustness", () => {
     const stage4 = checkIntegrity(
       stage1.objects,
       stage2.references,
-      buildModel(stage1.objects, stage1.project!),
+      buildModel(stage1.objects, stage1.project!, stage2.references),
       "camelCase",
       [],
       []

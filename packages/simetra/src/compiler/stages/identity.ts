@@ -340,7 +340,13 @@ export function checkIdentity(
         role: "object.scope",
       })
     }
-    checkScopeColumn(object, references, diagnostics)
+    resolveElementReferences(
+      object,
+      objectsByName,
+      style,
+      references,
+      diagnostics
+    )
     checkBalanceControl(object, references, diagnostics)
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
@@ -434,35 +440,93 @@ function namespacesOf(
 }
 
 /**
- * `scopeColumn` прийнятої таблиці називає її власну колонку за логічним
- * іменем; існування колонки — справа цієї стадії, бо імена резолвляться тут.
+ * Колонки, які опис об'єкта називає логічним іменем (ключі, індекси й FK
+ * прийнятої таблиці, `scopeColumn`), резолвляться тут в id елемента: стадії
+ * 3–4 читають індекс, а не ім'я вдруге, а перейменування колонки чи реквізиту
+ * цілі бачить каскад. Колонку чужого об'єкта шукаємо лише в таблиці: ціль без
+ * таблиці звітує стадія 4 (`reference.not-referenceable`), а невідома ціль —
+ * `reference.unresolved`.
  */
-function checkScopeColumn(
+function resolveElementReferences(
   object: ParsedObject,
+  objectsByName: ReadonlyMap<string, ParsedObject>,
+  style: AttributeCase | undefined,
   references: ResolvedReference[],
   diagnostics: Diagnostic[]
 ) {
-  const { scopeColumn, columns } = object.data as {
-    scopeColumn?: string
-    columns?: Element[]
+  const found = KIND_REGISTRY[object.kind].elementReferences?.(object.data)
+  if (found === undefined) return
+  const tables = new Map<
+    ParsedObject,
+    Map<string, string | undefined> | undefined
+  >()
+  const tableOf = (target: ParsedObject) => {
+    if (!tables.has(target)) tables.set(target, columnTable(target, style))
+    return tables.get(target)
   }
-  if (scopeColumn === undefined) return
-  const column = (columns ?? []).find((c) => c.name === scopeColumn)
-  if (column === undefined) {
-    diagnostics.push(
-      diagnostic("customTable.column-unknown", object.file, "/scopeColumn", {
-        column: scopeColumn,
-        table: object.name,
-      })
-    )
-    return
+  for (const { pointer, name, owner, role } of found) {
+    const target =
+      owner === undefined
+        ? object
+        : objectsByName.get(objectKey(owner.kind, owner.name))
+    if (
+      target === undefined ||
+      KIND_REGISTRY[target.kind].materializes !== "table"
+    ) {
+      continue
+    }
+    const table = tableOf(target)
+    if (table === undefined) continue
+    if (!table.has(name)) {
+      diagnostics.push(
+        diagnostic("customTable.column-unknown", object.file, pointer, {
+          column: name,
+          table: target.name,
+        })
+      )
+      continue
+    }
+    const id = table.get(name)
+    if (id === undefined || object.id === undefined) continue
+    references.push({
+      from: { file: object.file, pointer, objectId: object.id },
+      to: { kind: "Element", id },
+      role,
+    })
   }
-  if (typeof column.id !== "string" || object.id === undefined) return
-  references.push({
-    from: { file: object.file, pointer: "/scopeColumn", objectId: object.id },
-    to: { kind: "Element", id: column.id },
-    role: "customTable.scopeColumn",
-  })
+}
+
+/**
+ * Колонки таблиці об'єкта за логічним іменем → id елемента: стандартні
+ * колонки виду (синтетичний id, як у виразах конструктора) і елементи
+ * колонкових полів. Поліморфна пара однієї колонки не має, тож її назвати не
+ * можна. Елемент без id лишається в таблиці (`undefined`): відсутній id уже
+ * звітовано, і ім'я не має ставати ще й невідомою колонкою. Без стилю проєкту
+ * логічні імена стандартних колонок невідомі — таблиці немає, а про проєкт
+ * звітує стадія 1.
+ */
+function columnTable(
+  object: ParsedObject,
+  style: AttributeCase | undefined
+): Map<string, string | undefined> | undefined {
+  const def = KIND_REGISTRY[object.kind]
+  const data = object.data as Element
+  const standard = def
+    .standardColumns(data)
+    .filter((column) => column.polymorphic === undefined)
+  if (style === undefined && standard.length > 0) return undefined
+  const table = new Map<string, string | undefined>(
+    style === undefined ? [] : nameTable(object.id ?? "", [], standard, style)
+  )
+  for (const field of def.columnFields) {
+    for (const element of (data[field] as Element[] | undefined) ?? []) {
+      table.set(
+        String(element.name),
+        typeof element.id === "string" ? element.id : undefined
+      )
+    }
+  }
+  return table
 }
 
 /**
@@ -516,6 +580,18 @@ function checkBalanceControl(
 type NameTable = Map<string, string>
 
 /**
+ * Синтетичний id стандартного реквізиту: власник + канонічне ім'я, тож зміна
+ * стилю проєкту id не міняє. Стандартний реквізит не має власного UUID, а
+ * індекс посилань мусить називати його так само, як елемент.
+ */
+export function standardElementId(
+  ownerId: string,
+  column: StandardColumnDef
+): string {
+  return `${ownerId}#${column.logicalName}`
+}
+
+/**
  * Імена, доступні у виразі: власні елементи (за їх UUID) і стандартні
  * реквізити (за логічним іменем у стилі проєкту; синтетичний id — канонічне
  * ім'я, щоб зміна стилю не міняла id).
@@ -530,7 +606,7 @@ function nameTable(
   for (const column of standard) {
     table.set(
       standardLogicalName(column, style),
-      `${ownerId}#${column.logicalName}`
+      standardElementId(ownerId, column)
     )
   }
   for (const element of elements) {

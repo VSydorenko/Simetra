@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { PhysicalSnapshot, PhysicalTable, Project } from "simetra/model"
 import { readFiles } from "../stages/files"
+import { checkIdentity } from "../stages/identity"
 import { buildModel } from "../stages/model"
 import {
   attribute,
@@ -63,7 +64,16 @@ async function compileScoped(
 function buildScoped(entries: Record<string, unknown>): PhysicalSnapshot {
   const stage1 = readFiles(files(entries))
   expect(stage1.diagnostics).toEqual([])
-  return buildModel(stage1.objects, stage1.project as Project).physical
+  const stage2 = checkIdentity(
+    stage1.objects,
+    stage1.brokenNames,
+    stage1.project
+  )
+  return buildModel(
+    stage1.objects,
+    stage1.project as Project,
+    stage2.references
+  ).physical
 }
 
 function tableOf(physical: PhysicalSnapshot, name: string): PhysicalTable {
