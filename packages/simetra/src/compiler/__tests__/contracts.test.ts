@@ -5,6 +5,7 @@ import {
   STOCK_FILE,
   attribute,
   catalog,
+  customTable,
   document,
   metaFiles,
   organization,
@@ -187,6 +188,37 @@ describe("posting and register contracts", () => {
         columns: [{ attributeId: goods.attributes[1]!.id, columns: ["qty"] }],
       },
     ])
+  })
+
+  it("required check name comes from the name assignment", () => {
+    const entries = withStock({})
+    const sale = entries[SALE_FILE] as { attributes?: unknown[] }
+    const customer = attribute("customer", {
+      physicalName: "customer_id",
+      type: "Ref",
+      ref: { kind: "Catalog", name: "Item" },
+      required: true,
+    })
+    sale.attributes = [customer]
+    // Явне ім'я в схемі займає стандартне `sale_customer_id_required`, тож
+    // призначення дає суфікс; контракт мусить повернути саме призначене ім'я.
+    entries["custom-tables/Taken/Taken.meta.json"] = customTable("Taken", {
+      checks: [{ name: "sale_customer_id_required", expression: "true" }],
+    })
+    const result = compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const [posting] = result.model!.contracts.posting
+    expect(posting!.requiredOnPost.header).toEqual([
+      {
+        attributeId: customer.id,
+        columns: ["customer_id"],
+        check: "sale_customer_id_required1",
+      },
+    ])
+    const table = result.model!.physical.tables.find((t) => t.name === "sale")!
+    expect(table.checks.map((c) => c.name)).toContain(
+      "sale_customer_id_required1"
+    )
   })
 
   it("immutability covers header and sections", () => {

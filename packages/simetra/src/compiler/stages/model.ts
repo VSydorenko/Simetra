@@ -67,6 +67,16 @@ export interface ModelStageResult {
   sources: PhysicalSource[]
   /** Оголошені у файлах `physicalName` — для перевірки зарезервованих слів. */
   declaredNames: { file: string; pointer: string; name: string }[]
+  /**
+   * CHECK обов'язковості реквізитів шапки документа з ФАКТИЧНО призначеними
+   * іменами — контракт проведення бере їх звідси, а не перераховує вираз.
+   */
+  requiredChecks: {
+    objectId: string
+    attributeId: string
+    table: { schema: string; name: string }
+    check: string
+  }[]
 }
 
 /**
@@ -144,6 +154,8 @@ interface PendingTable {
     column?: string
     /** Мітка в імені обмеження; без неї — `check`. */
     label?: string
+    /** Реквізит, чию обов'язковість виражає CHECK; для `requiredChecks`. */
+    elementId?: string
     expression: string
   }[]
   foreignKeys: (Omit<ForeignKey, "name"> & { name?: string })[]
@@ -314,6 +326,7 @@ class SnapshotBuilder {
         main.checks.push({
           label: REQUIRED_LABEL,
           column: columns[0]!,
+          elementId: field.origin.elementId,
           expression: requiredOnPostExpression(posted, columns),
         })
       }
@@ -507,7 +520,6 @@ class SnapshotBuilder {
     const columnsOf = this.addTable(table, fields, object.file, "/physicalName")
     this.addDerivedKey(
       table,
-      dimensions.length > 0,
       scope,
       dimensionFields.flatMap((field) => columnsOf.get(field) ?? [])
     )
@@ -552,7 +564,7 @@ class SnapshotBuilder {
     })
     fields.push(...dimensionFields, month, ...resourceFields)
     const columnsOf = this.addTable(table, fields, object.file, "/physicalName")
-    this.addDerivedKey(table, dimensions.length > 0, scope, [
+    this.addDerivedKey(table, scope, [
       ...dimensionFields.flatMap((field) => columnsOf.get(field) ?? []),
       ...(columnsOf.get(month) ?? []),
     ])
@@ -585,14 +597,13 @@ class SnapshotBuilder {
   }
 
   /**
-   * Ключ похідної таблиці: `UNIQUE` носія скоупу й `keyColumns`; з вимірами —
+   * Ключ похідної таблиці: `UNIQUE` носія скоупу й `keyColumns`, завжди
    * `NULLS NOT DISTINCT` (вимір може бути `NULL`, PK його не допускає). Без
    * ключових колонок (підсумки без вимірів) ключ уже дає одинак чи
    * скоуп-колонка (`withScope`), тож тут нічого додавати.
    */
   private addDerivedKey(
     table: PendingTable,
-    hasDimensions: boolean,
     scope: TableScope | undefined,
     keyColumns: string[]
   ): void {
@@ -602,7 +613,7 @@ class SnapshotBuilder {
         ...(scope?.carrier !== undefined ? [scope.carrier] : []),
         ...keyColumns,
       ],
-      nullsNotDistinct: hasDimensions,
+      nullsNotDistinct: true,
     })
   }
 
@@ -614,7 +625,7 @@ class SnapshotBuilder {
     // виводить кожне ім'я явно зі знімка.
     for (const table of this.tables) materializeIndexes(table)
     const pending = [...this.tables].sort(bySchemaAndName)
-    const tables = assignNames(pending)
+    const { tables, requiredChecks } = assignNames(pending)
     return {
       physical: {
         tables,
@@ -622,6 +633,7 @@ class SnapshotBuilder {
       },
       sources: this.sources,
       declaredNames: this.declaredNames,
+      requiredChecks,
     }
   }
 
@@ -1095,14 +1107,14 @@ class SnapshotBuilder {
 const NONE: Target = { form: "none" }
 
 /** Стандартні реквізити, що входять у ключі регістра (канонічні імена). */
-/** Мітка CHECK обов'язковості при проведенні; за нею контракт знаходить CHECK. */
+/** Мітка в імені CHECK обов'язковості при проведенні (`<таблиця>_<колонка>_required`). */
 const REQUIRED_LABEL = "required"
 
 /**
  * Вираз CHECK шапки: обов'язковість діє лише у проведеного документа. Пара
  * «тип + id» заповнена обома колонками, інакше посилання напівпорожнє.
  */
-export function requiredOnPostExpression(
+function requiredOnPostExpression(
   posted: string,
   columns: readonly string[]
 ): string {
@@ -1430,7 +1442,11 @@ interface SchemaNames {
   both: Set<string>
 }
 
-function assignNames(pending: readonly PendingTable[]): PhysicalTable[] {
+function assignNames(pending: readonly PendingTable[]): {
+  tables: PhysicalTable[]
+  requiredChecks: ModelStageResult["requiredChecks"]
+} {
+  const requiredChecks: ModelStageResult["requiredChecks"] = []
   const namespaces = new Map<string, SchemaNames>()
   const namesOf = (schema: string): SchemaNames => {
     let names = namespaces.get(schema)
@@ -1469,7 +1485,7 @@ function assignNames(pending: readonly PendingTable[]): PhysicalTable[] {
     }
   }
 
-  return pending.map((table) => {
+  const tables = pending.map((table) => {
     const names = namesOf(table.schema)
     const choose = (
       name2: string | undefined,
@@ -1488,12 +1504,22 @@ function assignNames(pending: readonly PendingTable[]): PhysicalTable[] {
     for (const column of table.identityColumns) {
       choose(column, "seq", names.relations, true, false)
     }
-    const checks = table.checks.map(({ name, column, label, expression }) => ({
-      name:
-        name ??
-        choose(column, label ?? "check", names.constraints, false, true),
-      expression,
-    }))
+    const checks = table.checks.map(
+      ({ name, column, label, elementId, expression }) => {
+        const assigned =
+          name ??
+          choose(column, label ?? "check", names.constraints, false, true)
+        if (elementId !== undefined) {
+          requiredChecks.push({
+            objectId: table.origin.objectId ?? "",
+            attributeId: elementId,
+            table: { schema: table.schema, name: table.name },
+            check: assigned,
+          })
+        }
+        return { name: assigned, expression }
+      }
+    )
     const primaryKey =
       table.primaryKey === undefined
         ? undefined
@@ -1549,6 +1575,7 @@ function assignNames(pending: readonly PendingTable[]): PhysicalTable[] {
     }
     return result
   })
+  return { tables, requiredChecks }
 }
 
 function byName(a: { name: string }, b: { name: string }): number {

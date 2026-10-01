@@ -476,7 +476,9 @@ describe("stage 3: register keys", () => {
       })
     )
     const month = tableOf(physical, "stock_turnovers_month")
-    expect(month.uniques.map((u) => u.columns)).toEqual([["org_id", "month"]])
+    expect(month.uniques.map((u) => [u.columns, u.nullsNotDistinct])).toEqual([
+      [["org_id", "month"], true],
+    ])
     expect(month.primaryKey).toBeUndefined()
     const totals = tableOf(physical, "stock_totals")
     expect(totals.primaryKey?.columns).toEqual(["org_id"])
@@ -499,7 +501,7 @@ describe("stage 3: register keys", () => {
     )
     const month = tableOf(physical, "stock_turnovers_month")
     expect(month.uniques.map((u) => [u.columns, u.nullsNotDistinct])).toEqual([
-      [["month"], false],
+      [["month"], true],
     ])
     expect(tableOf(physical, "stock_totals").primaryKey?.columns).toEqual([
       "singleton",

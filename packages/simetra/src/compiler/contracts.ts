@@ -13,7 +13,7 @@ import {
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
-import { requiredOnPostExpression } from "./stages/model"
+import type { ModelStageResult } from "./stages/model"
 import type { SqlUnit } from "./movement-functions"
 import type { ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
@@ -332,7 +332,8 @@ export function buildContracts(
   physical: PhysicalSnapshot,
   style: AttributeCase,
   sqlUnits: readonly SqlUnit[],
-  timezone: string
+  timezone: string,
+  requiredChecks: ModelStageResult["requiredChecks"]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -357,7 +358,7 @@ export function buildContracts(
       return {
         documentId: document.id ?? "",
         ...postingFunctions(table),
-        requiredOnPost: requiredOnPost(document, table, physical, style),
+        requiredOnPost: requiredOnPost(document, physical, requiredChecks),
         immutability: immutability(document, table, physical),
         movements,
         balanceControl: movements.flatMap(({ registerId }) => {
@@ -383,32 +384,27 @@ function columnsOfElement(table: PhysicalTable, id: string | undefined) {
 
 function requiredOnPost(
   document: ParsedObject,
-  table: PhysicalTable,
   physical: PhysicalSnapshot,
-  style: AttributeCase
+  requiredChecks: ModelStageResult["requiredChecks"]
 ): PostingContract["requiredOnPost"] {
   const data = document.data as {
     attributes: Attribute[]
     tabularSections: { id?: string; attributes: Attribute[] }[]
   }
-  const defs = KIND_REGISTRY[document.kind].standardColumns(document.data)
-  const postedDef = must(defs.find((c) => c.logicalName === "posted"))
-  const posted = must(
-    table.columns.find(
-      (c) => c.origin.standard === standardLogicalName(postedDef, style)
-    )
-  ).name
+  const table = must(mainTableOf(physical, document.id ?? ""))
   const header = data.attributes
     .filter((attribute) => attribute.required)
-    .map((attribute) => {
-      const columns = columnsOfElement(table, attribute.id)
-      const expression = requiredOnPostExpression(posted, columns)
-      return {
-        attributeId: attribute.id ?? "",
-        columns,
-        check: must(table.checks.find((c) => c.expression === expression)).name,
-      }
-    })
+    .map((attribute) => ({
+      attributeId: attribute.id ?? "",
+      columns: columnsOfElement(table, attribute.id),
+      // Ім'я призначила стадія 3 (з урахуванням колізій), контракт його не
+      // перераховує.
+      check: must(
+        requiredChecks.find(
+          (c) => c.objectId === document.id && c.attributeId === attribute.id
+        )
+      ).check,
+    }))
   const sections = data.tabularSections.flatMap((section) => {
     const sectionTable = must(
       physical.tables.find((t) => t.origin.tabularSectionId === section.id)
