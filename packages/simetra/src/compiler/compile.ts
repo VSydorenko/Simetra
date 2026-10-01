@@ -7,6 +7,7 @@ import {
 } from "simetra/model"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { withRanges } from "./locate"
+import { modelHash } from "./canonical"
 import { buildContracts, type Contracts } from "./contracts"
 import { buildPresentation, type PresentationBlock } from "./presentation"
 import { readFiles } from "./stages/files"
@@ -74,6 +75,8 @@ export interface CompiledModel {
   contracts: Contracts
   /** За `objectId`; лише об'єкти з полями подання. */
   presentation: PresentationBlock[]
+  /** Hex sha256 канонічного знімка (RFC 8785); його звіряє П3. */
+  hash: string
 }
 
 export interface CompileResult {
@@ -246,44 +249,41 @@ async function runStages(
       diagnostics: sortDiagnostics([...diagnostics, ...ordered.diagnostics]),
     }
   }
-  return {
-    ok,
-    diagnostics,
-    model: {
-      project: stage1.project,
-      objects,
-      modules: [{ name: stage1.project.name }],
-      actions: objects
-        .map((o) => ({
-          objectId: o.id,
-          actions: KIND_REGISTRY[o.kind].actions,
-        }))
-        .sort((a, b) => compareStrings(a.objectId, b.objectId)),
-      scopeKinds,
-      references: stage2.references,
-      moduleFiles: stage1.moduleFiles
-        .map(({ file, ownerFile }) => ({
-          file,
-          ownerObjectId: ownerId(ownerFile),
-        }))
-        .sort((a, b) => compareStrings(a.file, b.file)),
-      physical: stage3.physical,
+  const model: Omit<CompiledModel, "hash"> = {
+    project: stage1.project,
+    objects,
+    modules: [{ name: stage1.project.name }],
+    actions: objects
+      .map((o) => ({
+        objectId: o.id,
+        actions: KIND_REGISTRY[o.kind].actions,
+      }))
+      .sort((a, b) => compareStrings(a.objectId, b.objectId)),
+    scopeKinds,
+    references: stage2.references,
+    moduleFiles: stage1.moduleFiles
+      .map(({ file, ownerFile }) => ({
+        file,
+        ownerObjectId: ownerId(ownerFile),
+      }))
+      .sort((a, b) => compareStrings(a.file, b.file)),
+    physical: stage3.physical,
+    sqlUnits,
+    creationOrder: ordered.order,
+    contracts: buildContracts(
+      stage1.objects,
+      stage3.physical,
+      stage1.project.naming.attributeCase,
       sqlUnits,
-      creationOrder: ordered.order,
-      contracts: buildContracts(
-        stage1.objects,
-        stage3.physical,
-        stage1.project.naming.attributeCase,
-        sqlUnits,
-        stage1.project.timezone,
-        stage3.requiredChecks
-      ),
-      presentation: buildPresentation(
-        stage1.objects,
-        stage1.project.naming.attributeCase
-      ),
-    },
+      stage1.project.timezone,
+      stage3.requiredChecks
+    ),
+    presentation: buildPresentation(
+      stage1.objects,
+      stage1.project.naming.attributeCase
+    ),
   }
+  return { ok, diagnostics, model: { ...model, hash: await modelHash(model) } }
 }
 
 /**

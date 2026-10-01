@@ -29,3 +29,4 @@ export type {
 } from "./contracts"
 export type { PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
+export { canonicalSnapshot, canonicalize } from "./canonical"
