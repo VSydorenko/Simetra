@@ -86,7 +86,8 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       physicalName: "predefined_name",
       type: { type: "Text" },
       notNull: false,
-      // Ім'я предвизначеного елемента унікальне, а звичайні елементи його не мають.
+      // Фізична мітка предвизначеного елемента (`predefinedItems[].physicalName`)
+      // унікальна в межах скоупу, а звичайні елементи її не мають.
       partialUnique: "predefined_name IS NOT NULL",
       title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
     },

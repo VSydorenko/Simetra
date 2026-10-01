@@ -37,7 +37,9 @@ describe("stage 2: identity", () => {
 
   it("predefined item without id", async () => {
     const result = await compileWith({
-      [CONTRACT]: catalog("Contract", { predefinedItems: [{ name: "main" }] }),
+      [CONTRACT]: catalog("Contract", {
+        predefinedItems: [{ name: "Main", physicalName: "main" }],
+      }),
     })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
@@ -51,8 +53,8 @@ describe("stage 2: identity", () => {
     const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         predefinedItems: [
-          { id: uuid(5), name: "main" },
-          { id: uuid(6), name: "main" },
+          { id: uuid(5), name: "Main", physicalName: "main" },
+          { id: uuid(6), name: "Main", physicalName: "main_2" },
         ],
       }),
     })
@@ -68,7 +70,7 @@ describe("stage 2: identity", () => {
     const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
         attributes: [attribute("note", { id: uuid(5) })],
-        predefinedItems: [{ id: uuid(5), name: "main" }],
+        predefinedItems: [{ id: uuid(5), name: "Main", physicalName: "main" }],
       }),
     })
     expect(result.diagnostics).toEqual([
@@ -79,44 +81,38 @@ describe("stage 2: identity", () => {
     ])
   })
 
-  it("predefined item may be named like the scope kind", async () => {
+  it("predefined label may equal the scope kind name", async () => {
     const result = await compile(
       metaFiles({
         "project.meta.json": scopedProject(),
         "catalogs/Organization/Organization.meta.json": organization(),
         [CONTRACT]: catalog("Contract", {
           scope: "org",
-          predefinedItems: [{ id: uuid(5), name: "org" }],
+          predefinedItems: [{ id: uuid(5), name: "Org", physicalName: "org" }],
         }),
       })
     )
     expect(result.diagnostics).toEqual([])
   })
 
-  it("predefined item needs no physicalName", async () => {
-    const result = await compileWith({
-      [CONTRACT]: catalog("Contract", {
-        predefinedItems: [{ id: uuid(5), name: "main" }],
-      }),
-    })
-    expect(result.diagnostics).toEqual([])
-  })
-
-  it("predefined name follows project case", async () => {
+  it("predefined name is PascalCase regardless of project case", async () => {
     const result = await compile(
       metaFiles({
         "project.meta.json": project({
           naming: { attributeCase: "snake_case" },
         }),
         [CONTRACT]: catalog("Contract", {
-          predefinedItems: [{ id: uuid(5), name: "MainWarehouse" }],
+          predefinedItems: [
+            { id: uuid(5), name: "MainWarehouse", physicalName: "main" },
+            { id: uuid(6), name: "spare_warehouse", physicalName: "spare" },
+          ],
         }),
       })
     )
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
-        code: "identity.name-case",
-        pointer: "/predefinedItems/0/name",
+        code: "file.schema",
+        pointer: "/predefinedItems/1/name",
       }),
     ])
   })

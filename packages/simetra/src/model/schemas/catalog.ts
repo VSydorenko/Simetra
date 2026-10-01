@@ -2,7 +2,11 @@ import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
-import { metadataIdSchema } from "./identity"
+import {
+  metadataIdSchema,
+  objectNameSchema,
+  physicalNameSchema,
+} from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import {
   objectHeaderShape,
@@ -57,9 +61,17 @@ export const catalogSchema = z.strictObject({
   predefinedItems: z
     .array(
       z.strictObject({
-        // Як у attributeSchema: обов'язковість id дає стадія 2.
+        // Як у attributeSchema: обов'язковість id і physicalName дає стадія 2.
         id: metadataIdSchema.optional(),
-        name: z.string().meta({ description: "Name of the predefined item." }),
+        name: objectNameSchema.meta({
+          description: "Logical name of the predefined item.",
+        }),
+        // Мітка — значення `predefined_name` рядка; як мітка значення
+        // перерахування, призначається раз і не змінюється при перейменуванні.
+        physicalName: physicalNameSchema.optional().meta({
+          description:
+            "Physical label of the item stored in predefined_name. Assigned once at creation and never changed, so a rename keeps it.",
+        }),
         description: localizedStringSchema.optional().meta({
           description: "Description of the predefined item.",
         }),

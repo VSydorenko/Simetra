@@ -730,8 +730,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція ${p.name} (${p.description}) збігається з ${p.other} у схемі ${p.schema}`,
     hint: {
-      en: "Function names are derived from physical names of documents and registers by the Postgres naming algorithm; change a physicalName so the names differ.",
-      uk: "Імена функцій виводяться з фізичних імен документів і регістрів за алгоритмом іменування Postgres; змініть physicalName, щоб імена відрізнялися.",
+      en: "Function names are derived from physical names of catalogs, documents and registers by the Postgres naming algorithm; change a physicalName so the names differ.",
+      uk: "Імена функцій виводяться з фізичних імен довідників, документів і регістрів за алгоритмом іменування Postgres; змініть physicalName, щоб імена відрізнялися.",
     },
   },
   "physical.reserved-word": {

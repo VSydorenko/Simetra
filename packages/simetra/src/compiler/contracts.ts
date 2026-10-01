@@ -122,11 +122,21 @@ export interface RegisterContract {
   balanceControl?: { resources: string[] }
 }
 
-/** Предвизначені елементи довідника: засів за `id` — П3. */
+/**
+ * Предвизначені елементи довідника (спека П2 §5, М18): рядок має власний `id`
+ * у кожній базі й скоупі, тож засів П3 і пошук ідуть за міткою, а не за `id`
+ * елемента в метаданих.
+ */
 export interface PredefinedContract {
   objectId: string
-  /** У порядку файлу. */
-  items: { id: string; name: string }[]
+  /** Колонка мітки; разом зі `scopeColumn` — ключ часткового унікального індексу. */
+  column: string
+  /** Носій скоупу — перша колонка ключа засіву; у глобального довідника немає. */
+  scopeColumn?: string
+  /** `<catalog>_predefined([p_scope uuid,] p_label text) RETURNS uuid`. */
+  lookupFunction: QualifiedName
+  /** У порядку файлу; `label` — фізична мітка, значення колонки `column`. */
+  items: { id: string; name: string; label: string }[]
 }
 
 /**
@@ -284,6 +294,30 @@ function totalsFunctions(table: PhysicalTable): {
   }
 }
 
+/** Функція пошуку предвизначеного за міткою; одне джерело, як вище. */
+function predefinedLookup(table: PhysicalTable): QualifiedName {
+  return derived(table, "predefined")
+}
+
+/**
+ * Предвизначені елементи об'єкта за полями реєстру (`namedElementFields`), а
+ * не за назвою виду. Приведення безпечне: контракти й похідні функції
+ * будуються на моделі, що пройшла схему виду й стадію 2, тож масив є, а
+ * `id` і `physicalName` присутні.
+ */
+function predefinedItemsOf(
+  object: ParsedObject
+): { id: string; name: string; physicalName: string }[] {
+  return (KIND_REGISTRY[object.kind].namedElementFields ?? []).flatMap(
+    (field) =>
+      (object.data as Record<string, unknown>)[field] as {
+        id: string
+        name: string
+        physicalName: string
+      }[]
+  )
+}
+
 /** Функція віртуальної таблиці регістра; одне джерело, як вище. */
 function virtualTableFunction(
   table: PhysicalTable,
@@ -320,6 +354,13 @@ export function derivedFunctions(
   for (const object of objects) {
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue
+    if (predefinedItemsOf(object).length > 0) {
+      add(
+        object,
+        predefinedLookup(table),
+        `predefined lookup of ${object.name}`
+      )
+    }
     if (postsMovements(object.kind)) {
       const { save, post, unpost } = postingFunctions(table)
       add(object, save, `save of ${object.name}`)
@@ -416,7 +457,7 @@ export function buildContracts(
   return {
     posting,
     registers,
-    predefined: predefinedContracts(objects),
+    predefined: predefinedContracts(objects, physical),
     numbering: numberingContracts(objects, physical, style),
   }
 }
@@ -538,25 +579,38 @@ function numberingContracts(
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
 
-/** Лише об'єкти з іменованими елементами; вид визначає реєстр, а не його назва. */
+/**
+ * Лише об'єкти з предвизначеними елементами. Колонку мітки й носій скоупу
+ * беремо з ключа часткового унікального індексу знімка: засів П3 ставить його
+ * арбітром `ON CONFLICT`, тож контракт і індекс не можуть розійтися.
+ */
 function predefinedContracts(
-  objects: readonly ParsedObject[]
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot
 ): PredefinedContract[] {
   return objects
     .flatMap((object): PredefinedContract[] => {
-      const fields = KIND_REGISTRY[object.kind].namedElementFields ?? []
-      const items = fields
-        // Приведення безпечне: контракти будуються лише на моделі без помилок,
-        // тож схема виду та стадія 2 гарантують масив з `id` і `name`.
-        .flatMap(
-          (field) =>
-            (object.data as Record<string, unknown>)[field] as {
-              id: string
-              name: string
-            }[]
-        )
-        .map(({ id, name }) => ({ id, name }))
-      return items.length === 0 ? [] : [{ objectId: object.id ?? "", items }]
+      const items = predefinedItemsOf(object)
+      const table = mainTableOf(physical, object.id ?? "")
+      if (items.length === 0 || table === undefined) return []
+      const keys = must(
+        table.indexes.find((index) => index.unique && index.where !== undefined)
+      ).keys.map((key) => must("column" in key ? key.column : undefined))
+      const column = must(keys.at(-1))
+      const scopeColumn = keys.length > 1 ? keys[0] : undefined
+      return [
+        {
+          objectId: object.id ?? "",
+          column,
+          ...(scopeColumn !== undefined ? { scopeColumn } : {}),
+          lookupFunction: predefinedLookup(table),
+          items: items.map(({ id, name, physicalName }) => ({
+            id,
+            name,
+            label: physicalName,
+          })),
+        },
+      ]
     })
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }

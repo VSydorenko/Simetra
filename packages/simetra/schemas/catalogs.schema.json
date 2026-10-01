@@ -167,7 +167,13 @@
           },
           "name": {
             "type": "string",
-            "description": "Name of the predefined item."
+            "pattern": "^[A-Z][A-Za-z0-9]*$",
+            "description": "Logical name of the predefined item."
+          },
+          "physicalName": {
+            "description": "Physical label of the item stored in predefined_name. Assigned once at creation and never changed, so a rename keeps it.",
+            "type": "string",
+            "minLength": 1
           },
           "description": {
             "description": "Description of the predefined item.",

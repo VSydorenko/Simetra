@@ -149,7 +149,12 @@ export function kitchenSink(): Map<string, string> {
     codeUnique: false,
     mainPresentation: "Code",
     predefinedItems: [
-      { id: id(), name: "service", description: text("service") },
+      {
+        id: id(),
+        name: "Service",
+        physicalName: "service",
+        description: text("service"),
+      },
     ],
     standardAttributeOverrides: overrides("code"),
     attributes: attributes("item"),

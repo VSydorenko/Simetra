@@ -63,6 +63,12 @@ interface Namespace {
   styled: boolean
   reserved: StandardColumnDef[]
   elements: NamedElement[]
+  /**
+   * Мітки (`physicalName`) унікальні в межах простору: так у предвизначених
+   * елементів, бо мітку несе один рядок на скоуп. Колонкам унікальність
+   * фізичних імен перевіряє стадія 4 у межах таблиці.
+   */
+  uniqueLabels?: true
 }
 
 interface NamedElement {
@@ -70,8 +76,6 @@ interface NamedElement {
   element: Element
   /** Стає колонкою таблиці, тож не може зайняти ім'я стандартної колонки. */
   column: boolean
-  /** Має фізичне ім'я; предвизначений елемент має лише `id`. */
-  physical: boolean
 }
 
 /**
@@ -91,12 +95,7 @@ export function checkIdentity(
   const idOwners = new Map<string, string>()
   const objectsByName = new Map<string, ParsedObject>()
 
-  const checkIdentified = (
-    file: string,
-    pointer: string,
-    element: Element,
-    physical = true
-  ) => {
+  const checkIdentified = (file: string, pointer: string, element: Element) => {
     const id = element.id
     if (typeof id !== "string") {
       diagnostics.push(diagnostic("identity.id-missing", file, `${pointer}/id`))
@@ -113,7 +112,7 @@ export function checkIdentity(
         )
       }
     }
-    if (physical && element.physicalName === undefined) {
+    if (element.physicalName === undefined) {
       diagnostics.push(
         diagnostic(
           "identity.physical-name-missing",
@@ -239,6 +238,7 @@ export function checkIdentity(
     let standardCollision = false
     for (const namespace of namespacesOf(object, style)) {
       const seen = new Set<string>()
+      const labels = new Set<string>()
       const reserved = new Set(
         style === undefined
           ? []
@@ -255,8 +255,8 @@ export function checkIdentity(
           })
         )
       }
-      for (const { pointer, element, column, physical } of namespace.elements) {
-        checkIdentified(object.file, pointer, element, physical)
+      for (const { pointer, element, column } of namespace.elements) {
+        checkIdentified(object.file, pointer, element)
         const name = String(element.name)
         const at = `${pointer}/name`
         if (seen.has(name)) {
@@ -268,6 +268,20 @@ export function checkIdentity(
           )
         }
         seen.add(name)
+        const label = element.physicalName
+        if (namespace.uniqueLabels && typeof label === "string") {
+          if (labels.has(label)) {
+            diagnostics.push(
+              diagnostic(
+                "identity.name-duplicate",
+                object.file,
+                `${pointer}/physicalName`,
+                { name: label, scope: `${namespace.scope} labels` }
+              )
+            )
+          }
+          labels.add(label)
+        }
         if (
           namespace.styled &&
           style !== undefined &&
@@ -378,7 +392,6 @@ function elementsAt(data: Element, field: string, base = ""): NamedElement[] {
     pointer: `${base}/${field}/${index}`,
     element,
     column: true,
-    physical: true,
   }))
 }
 
@@ -421,18 +434,20 @@ function namespacesOf(
     })
   }
 
-  // Іменовані елементи без колонок і фізичних імен (предвизначені елементи
-  // довідника): ім'я стилізоване, `id` глобальний, `physicalName` не потрібен.
+  // Іменовані елементи без колонок (предвизначені елементи довідника): ім'я —
+  // PascalCase за схемою, як у значення перерахування, тож стиль до нього не
+  // застосовний; `id` глобальний, мітка `physicalName` обов'язкова й
+  // унікальна в межах довідника — вона ключ засіву й пошуку (спека П2 §5).
   for (const field of def.namedElementFields ?? []) {
     namespaces.push({
       scope: `${object.kind} ${object.name} predefined items`,
-      styled: true,
+      styled: false,
       reserved: [],
       elements: elementsAt(data, field).map((named) => ({
         ...named,
         column: false,
-        physical: false,
       })),
+      uniqueLabels: true,
     })
   }
 

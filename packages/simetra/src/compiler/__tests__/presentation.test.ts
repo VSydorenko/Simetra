@@ -78,9 +78,19 @@ describe("presentation block", () => {
       "catalogs/A/A.meta.json": catalog("A", {
         id: A,
         predefinedItems: [
-          { id: E1, name: "first", description: { uk: "Перший" } },
-          { id: E2, name: "plain" },
-          { id: E3, name: "third", description: { en: "Third" } },
+          {
+            id: E1,
+            name: "First",
+            physicalName: "first",
+            description: { uk: "Перший" },
+          },
+          { id: E2, name: "Plain", physicalName: "plain" },
+          {
+            id: E3,
+            name: "Third",
+            physicalName: "third",
+            description: { en: "Third" },
+          },
         ],
       }),
     })
@@ -118,8 +128,8 @@ describe("presentation block", () => {
         id: A,
         mainPresentation: "Code",
         predefinedItems: [
-          { id: E2, name: "x", description: { uk: "Б" } },
-          { id: E1, name: "y", description: { uk: "А" } },
+          { id: E2, name: "X", physicalName: "x", description: { uk: "Б" } },
+          { id: E1, name: "Y", physicalName: "y", description: { uk: "А" } },
         ],
       }),
     }

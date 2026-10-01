@@ -97,20 +97,32 @@ describe("numbering contract", () => {
 })
 
 describe("predefined contract", () => {
-  it("predefined contract lists items with ids", async () => {
+  it("predefined contract lists items with labels in file order", async () => {
     const { predefined } = await contracts({
       "project.meta.json": project(),
       "catalogs/B/B.meta.json": catalog("B", {
         id: "00000000-0000-4000-8000-000000000b02",
         predefinedItems: [
-          { id: "00000000-0000-4000-8000-0000000000e2", name: "second" },
-          { id: "00000000-0000-4000-8000-0000000000e1", name: "first" },
+          {
+            id: "00000000-0000-4000-8000-0000000000e2",
+            name: "Second",
+            physicalName: "second",
+          },
+          {
+            id: "00000000-0000-4000-8000-0000000000e1",
+            name: "First",
+            physicalName: "first",
+          },
         ],
       }),
       "catalogs/A/A.meta.json": catalog("A", {
         id: "00000000-0000-4000-8000-000000000a01",
         predefinedItems: [
-          { id: "00000000-0000-4000-8000-0000000000e3", name: "only" },
+          {
+            id: "00000000-0000-4000-8000-0000000000e3",
+            name: "Only",
+            physicalName: "only",
+          },
         ],
       }),
       "catalogs/C/C.meta.json": catalog("C"),
@@ -118,13 +130,31 @@ describe("predefined contract", () => {
     expect(predefined).toEqual([
       {
         objectId: "00000000-0000-4000-8000-000000000a01",
-        items: [{ id: "00000000-0000-4000-8000-0000000000e3", name: "only" }],
+        column: "predefined_name",
+        lookupFunction: { schema: "public", name: "a_predefined" },
+        items: [
+          {
+            id: "00000000-0000-4000-8000-0000000000e3",
+            name: "Only",
+            label: "only",
+          },
+        ],
       },
       {
         objectId: "00000000-0000-4000-8000-000000000b02",
+        column: "predefined_name",
+        lookupFunction: { schema: "public", name: "b_predefined" },
         items: [
-          { id: "00000000-0000-4000-8000-0000000000e2", name: "second" },
-          { id: "00000000-0000-4000-8000-0000000000e1", name: "first" },
+          {
+            id: "00000000-0000-4000-8000-0000000000e2",
+            name: "Second",
+            label: "second",
+          },
+          {
+            id: "00000000-0000-4000-8000-0000000000e1",
+            name: "First",
+            label: "first",
+          },
         ],
       },
     ])
