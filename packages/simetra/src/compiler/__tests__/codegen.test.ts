@@ -301,6 +301,28 @@ describe("emitEntityTypes", () => {
     expect(diagnosticsOf(code)).toEqual([])
   })
 
+  it("section standard overrides feed the section interface jsdoc", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        tabularSections: [
+          {
+            id: uuid(801),
+            name: "rows",
+            physicalName: "rows",
+            standardAttributeOverrides: {
+              lineNumber: { description: { en: "Starts at one" } },
+            },
+          },
+        ],
+      }),
+    })
+    expect(block(code, "ItemRows")).toContain(
+      "   * Line number\n   *\n   * Starts at one"
+    )
+    expect(diagnosticsOf(code)).toEqual([])
+  })
+
   it("snake_case project uses snake_case fields", async () => {
     const code = await emit({
       "project.meta.json": project({ naming: { attributeCase: "snake_case" } }),

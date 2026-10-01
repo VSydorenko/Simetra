@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { catalog, document, metaFiles, project } from "./helpers"
+import { catalog, document, metaFiles, project, uuid } from "./helpers"
 
 const A = "00000000-0000-4000-8000-000000000a01"
 const B = "00000000-0000-4000-8000-000000000b02"
@@ -33,6 +33,41 @@ describe("presentation block", () => {
         standardAttributes: {
           deletionMark: { description: { uk: "Позначка", en: "Mark" } },
         },
+      },
+    ])
+  })
+
+  it("section overrides appear only for sections that have them", async () => {
+    const S1 = uuid(701)
+    const S2 = uuid(702)
+    const { presentation } = await compiled({
+      "project.meta.json": project(),
+      "catalogs/A/A.meta.json": catalog("A", {
+        id: A,
+        tabularSections: [
+          {
+            id: S1,
+            name: "rows",
+            physicalName: "rows",
+            standardAttributeOverrides: {
+              lineNumber: { description: { en: "No." } },
+            },
+          },
+          { id: S2, name: "plain", physicalName: "plain" },
+        ],
+      }),
+    })
+    expect(presentation).toEqual([
+      {
+        objectId: A,
+        mainPresentation: "Description",
+        standardAttributes: {},
+        sections: [
+          {
+            sectionId: S1,
+            standardAttributes: { lineNumber: { description: { en: "No." } } },
+          },
+        ],
       },
     ])
   })

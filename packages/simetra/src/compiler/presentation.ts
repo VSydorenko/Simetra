@@ -3,6 +3,7 @@ import {
   standardLogicalName,
   type AttributeCase,
   type LocalizedString,
+  type StandardColumnDef,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
 import type { ParsedObject } from "./stages/files"
@@ -16,6 +17,17 @@ export interface PresentationBlock {
     string,
     { title?: LocalizedString; description?: LocalizedString }
   >
+  /**
+   * Лише ТЧ з перевизначеннями; у порядку файлу. Ключі — канонічні імена
+   * стандартних реквізитів рядка ТЧ.
+   */
+  sections?: {
+    sectionId: string
+    standardAttributes: Record<
+      string,
+      { title?: LocalizedString; description?: LocalizedString }
+    >
+  }[]
   /** Лише елементи з `description`; у порядку файлу, `id` — як у контракті. */
   predefined?: { id: string; description: LocalizedString }[]
 }
@@ -26,6 +38,38 @@ interface PresentationFields {
     string,
     { title?: LocalizedString; description?: LocalizedString }
   >
+  tabularSections?: {
+    id?: string
+    standardAttributeOverrides?: PresentationFields["standardAttributeOverrides"]
+  }[]
+}
+
+type Overrides = NonNullable<PresentationFields["standardAttributeOverrides"]>
+
+/** Перевизначення під канонічними іменами колонок; невідоме ім'я лишається як є. */
+function canonicalOverrides(
+  overrides: Overrides | undefined,
+  columns: readonly StandardColumnDef[],
+  style: AttributeCase
+): PresentationBlock["standardAttributes"] {
+  // Файл може назвати реквізит у стилі проєкту (`deletion_mark`), а
+  // читачам потрібне одне канонічне ім'я.
+  const canonical = new Map(
+    columns.flatMap((column) => [
+      [column.logicalName, column.logicalName],
+      [standardLogicalName(column, style), column.logicalName],
+    ])
+  )
+  const result: PresentationBlock["standardAttributes"] = {}
+  for (const [name, override] of Object.entries(overrides ?? {})) {
+    result[canonical.get(name) ?? name] = {
+      ...(override.title === undefined ? {} : { title: override.title }),
+      ...(override.description === undefined
+        ? {}
+        : { description: override.description }),
+    }
+  }
+  return result
 }
 
 /**
@@ -42,25 +86,27 @@ export function buildPresentation(
     .flatMap((object): PresentationBlock[] => {
       const data = object.data as PresentationFields
       const def = KIND_REGISTRY[object.kind]
-      // Файл може назвати реквізит у стилі проєкту (`deletion_mark`), а
-      // читачам потрібне одне канонічне ім'я.
-      const canonical = new Map(
-        def.standardColumns(object.data).flatMap((column) => [
-          [column.logicalName, column.logicalName],
-          [standardLogicalName(column, style), column.logicalName],
-        ])
+      const standardAttributes = canonicalOverrides(
+        data.standardAttributeOverrides,
+        def.standardColumns(object.data),
+        style
       )
-      const standardAttributes: PresentationBlock["standardAttributes"] = {}
-      for (const [name, override] of Object.entries(
-        data.standardAttributeOverrides ?? {}
-      )) {
-        standardAttributes[canonical.get(name) ?? name] = {
-          ...(override.title === undefined ? {} : { title: override.title }),
-          ...(override.description === undefined
-            ? {}
-            : { description: override.description }),
-        }
-      }
+      // Наявність ТЧ у виду — факт реєстру (`tabularSectionColumns`).
+      const rowColumns = def.tabularSectionColumns?.(object.data) ?? []
+      const sections = (
+        def.tabularSectionColumns === undefined
+          ? []
+          : (data.tabularSections ?? [])
+      ).flatMap((section) => {
+        const overrides = canonicalOverrides(
+          section.standardAttributeOverrides,
+          rowColumns,
+          style
+        )
+        return Object.keys(overrides).length === 0
+          ? []
+          : [{ sectionId: section.id ?? "", standardAttributes: overrides }]
+      })
 
       const predefined = (def.namedElementFields ?? [])
         .flatMap(
@@ -78,6 +124,7 @@ export function buildPresentation(
       if (
         data.mainPresentation === undefined &&
         !hasStandard &&
+        sections.length === 0 &&
         predefined.length === 0
       ) {
         return []
@@ -89,6 +136,7 @@ export function buildPresentation(
             ? {}
             : { mainPresentation: data.mainPresentation }),
           standardAttributes,
+          ...(sections.length === 0 ? {} : { sections }),
           ...(predefined.length === 0 ? {} : { predefined }),
         },
       ]

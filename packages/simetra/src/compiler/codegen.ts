@@ -309,7 +309,18 @@ export function emitEntityTypes(model: CompiledModel): string {
         [
           ...doc("", section.title, undefined),
           `export interface ${name} {`,
-          ...emitFields(table, sectionStandard, elements, targetsOf, new Map()),
+          ...emitFields(
+            table,
+            sectionStandard,
+            elements,
+            targetsOf,
+            new Map(
+              Object.entries(
+                block?.sections?.find((p) => p.sectionId === section.id)
+                  ?.standardAttributes ?? {}
+              )
+            )
+          ),
           "}",
         ].join("\n")
       )
