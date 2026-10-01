@@ -13,6 +13,35 @@ import { LOGICAL_TYPES, refineValueType, valueTypeShape } from "./value-type"
 const IDENTITY_TYPES: readonly string[] = ["SmallInt", "Integer", "BigInt"]
 
 /**
+ * Ім'я об'єкта каталогу Postgres (колляції, класу операторів) частинами, а
+ * не рядком `schema.name`: крапка буває в самому імені (`en_US.utf8`), тож
+ * рядок не відрізнив би його від колляції `utf8` схеми `en_US`. Метадані
+ * лапок SQL не несуть — рендер бере кожну частину в лапки сам, а прийом
+ * заповнює їх з каталогу. Схема `pg_catalog` не пишеться: один об'єкт — одна
+ * форма знімка.
+ */
+export const pgQualifiedNameSchema = z
+  .strictObject({
+    schema: z
+      .string()
+      .min(1)
+      .refine((schema) => schema !== "pg_catalog", {
+        message: "Omit schema for objects in pg_catalog",
+      })
+      .optional()
+      .meta({
+        description:
+          "Schema of the object, unquoted; omitted for objects in pg_catalog.",
+      }),
+    name: z.string().min(1).meta({
+      description: "Name of the object, unquoted, as Postgres reports it.",
+    }),
+  })
+  .meta({ description: "Postgres catalog object name split into parts." })
+
+export type PgQualifiedName = z.infer<typeof pgQualifiedNameSchema>
+
+/**
  * Колонка описується рівно однією з трьох форм типу: логічний тип, посилання
  * на `PgEnum` або сирий PG-тип (`Raw` — єдине місце, де допустимий сирий тип).
  * Форму розрізняє `type`; поля всіх форм оголошені разом, щоб невалідна
@@ -55,9 +84,9 @@ export const customTableColumnSchema = z
         description:
           "Stored generated column; incompatible with default and identity.",
       }),
-    collation: z.string().min(1).optional().meta({
+    collation: pgQualifiedNameSchema.optional().meta({
       description:
-        "Collation of the column; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
+        "Collation of the column (pg_collation); absent means the type default.",
     }),
     comment: z
       .string()
@@ -256,13 +285,13 @@ const indexKeyOptions = {
   nulls: z.enum(["first", "last"]).optional().meta({
     description: "NULLS FIRST or NULLS LAST; absent means the order default.",
   }),
-  opclass: z.string().min(1).optional().meta({
+  opclass: pgQualifiedNameSchema.optional().meta({
     description:
-      "Operator class of the key; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_opclass, schema-qualified (schema.name) only when not in pg_catalog.",
+      "Operator class of the key (pg_opclass); absent means the type default.",
   }),
-  collation: z.string().min(1).optional().meta({
+  collation: pgQualifiedNameSchema.optional().meta({
     description:
-      "Collation of the key; absent means the column default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
+      "Collation of the key (pg_collation); absent means the column default.",
   }),
 }
 

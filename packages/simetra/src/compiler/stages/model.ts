@@ -26,6 +26,7 @@ import {
   type Deferrable,
   type DeferredConstraint,
   type MetadataRef,
+  type PgQualifiedName,
   type PhysicalColumn,
   type PhysicalEnumType,
   type PhysicalSnapshot,
@@ -1038,7 +1039,7 @@ class SnapshotBuilder {
           ? { generated: { expression: column.generated.expression } }
           : {}),
         ...(column.collation !== undefined
-          ? { collation: column.collation }
+          ? { collation: qualified(column.collation) }
           : {}),
         ...(column.comment !== undefined ? { comment: column.comment } : {}),
         origin: { elementId: column.id ?? "" },
@@ -1139,8 +1140,12 @@ class SnapshotBuilder {
           key.nulls !== (key.order === "desc" ? "first" : "last")
             ? { nulls: key.nulls }
             : {}),
-          ...(key.opclass !== undefined ? { opclass: key.opclass } : {}),
-          ...(key.collation !== undefined ? { collation: key.collation } : {}),
+          ...(key.opclass !== undefined
+            ? { opclass: qualified(key.opclass) }
+            : {}),
+          ...(key.collation !== undefined
+            ? { collation: qualified(key.collation) }
+            : {}),
         })),
         include: map(index.include, `/indexes/${i}/include`),
         ...(index.where !== undefined ? { where: index.where } : {}),
@@ -1590,6 +1595,14 @@ function defaultOf(
 function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === "string") return `'${value.replaceAll("'", "''")}'`
   return String(value)
+}
+
+/**
+ * Ім'я об'єкта каталогу — поіменно за частинами: передача як є зарахувала б
+ * ратчету полів частини без споживача.
+ */
+function qualified({ schema, name }: PgQualifiedName): PgQualifiedName {
+  return schema === undefined ? { name } : { schema, name }
 }
 
 function bySchemaAndName(

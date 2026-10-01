@@ -59,6 +59,7 @@ export {
   type CustomTable,
   type CustomTableColumn,
   type Deferrable,
+  type PgQualifiedName,
   type RowLevelSecurity,
 } from "./custom-table"
 export { NO_SCOPE, scopeKindSchema, type ScopeKind } from "./scope"

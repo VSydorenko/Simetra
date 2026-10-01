@@ -139,9 +139,24 @@
             "additionalProperties": false
           },
           "collation": {
-            "description": "Collation of the column; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
-            "type": "string",
-            "minLength": 1
+            "description": "Collation of the column (pg_collation); absent means the type default.",
+            "type": "object",
+            "properties": {
+              "schema": {
+                "description": "Schema of the object, unquoted; omitted for objects in pg_catalog.",
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Name of the object, unquoted, as Postgres reports it."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
           },
           "comment": {
             "description": "Comment on the column.",
@@ -608,14 +623,44 @@
                       ]
                     },
                     "opclass": {
-                      "description": "Operator class of the key; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_opclass, schema-qualified (schema.name) only when not in pg_catalog.",
-                      "type": "string",
-                      "minLength": 1
+                      "description": "Operator class of the key (pg_opclass); absent means the type default.",
+                      "type": "object",
+                      "properties": {
+                        "schema": {
+                          "description": "Schema of the object, unquoted; omitted for objects in pg_catalog.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Name of the object, unquoted, as Postgres reports it."
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false
                     },
                     "collation": {
-                      "description": "Collation of the key; absent means the column default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
-                      "type": "string",
-                      "minLength": 1
+                      "description": "Collation of the key (pg_collation); absent means the column default.",
+                      "type": "object",
+                      "properties": {
+                        "schema": {
+                          "description": "Schema of the object, unquoted; omitted for objects in pg_catalog.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Name of the object, unquoted, as Postgres reports it."
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -648,14 +693,44 @@
                       ]
                     },
                     "opclass": {
-                      "description": "Operator class of the key; absent means the type default. Canonical spelling: the unquoted name as Postgres reports it in pg_opclass, schema-qualified (schema.name) only when not in pg_catalog.",
-                      "type": "string",
-                      "minLength": 1
+                      "description": "Operator class of the key (pg_opclass); absent means the type default.",
+                      "type": "object",
+                      "properties": {
+                        "schema": {
+                          "description": "Schema of the object, unquoted; omitted for objects in pg_catalog.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Name of the object, unquoted, as Postgres reports it."
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false
                     },
                     "collation": {
-                      "description": "Collation of the key; absent means the column default. Canonical spelling: the unquoted name as Postgres reports it in pg_collation, schema-qualified (schema.name) only when not in pg_catalog.",
-                      "type": "string",
-                      "minLength": 1
+                      "description": "Collation of the key (pg_collation); absent means the column default.",
+                      "type": "object",
+                      "properties": {
+                        "schema": {
+                          "description": "Schema of the object, unquoted; omitted for objects in pg_catalog.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Name of the object, unquoted, as Postgres reports it."
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [

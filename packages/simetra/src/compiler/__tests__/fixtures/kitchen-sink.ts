@@ -374,7 +374,9 @@ export function kitchenSink(): Map<string, string> {
         type: "String",
         length: 40,
         default: "'n/a'",
-        collation: "C",
+        // Колляція поза `pg_catalog` — зі схемою: так фікстура торкається обох
+        // частин імені каталогу.
+        collation: { schema: "public", name: "case_insensitive" },
       },
       {
         id: id(),
@@ -470,8 +472,8 @@ export function kitchenSink(): Map<string, string> {
             column: "note",
             order: "desc",
             nulls: "last",
-            opclass: "text_pattern_ops",
-            collation: "C",
+            opclass: { schema: "public", name: "note_ops" },
+            collation: { schema: "public", name: "case_insensitive" },
           },
           { expression: "lower(note)", order: "asc", nulls: "first" },
         ],

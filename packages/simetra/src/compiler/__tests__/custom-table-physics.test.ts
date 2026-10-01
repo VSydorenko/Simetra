@@ -100,8 +100,8 @@ describe("CustomTable physics round-trip", () => {
               column: "code",
               order: "desc",
               nulls: "last",
-              opclass: "text_pattern_ops",
-              collation: "C",
+              opclass: { name: "text_pattern_ops" },
+              collation: { name: "C" },
             },
             { expression: "lower(code)", order: "asc", nulls: "first" },
             { column: "qty" },
@@ -119,8 +119,8 @@ describe("CustomTable physics round-trip", () => {
             column: "code",
             order: "desc",
             nulls: "last",
-            opclass: "text_pattern_ops",
-            collation: "C",
+            opclass: { name: "text_pattern_ops" },
+            collation: { name: "C" },
           },
           // `ASC` — значення за замовчуванням, у знімку його немає.
           { expression: "lower(code)", nulls: "first" },
@@ -190,7 +190,7 @@ describe("CustomTable physics round-trip", () => {
           name: "title",
           physicalName: "title",
           type: "Text",
-          collation: "und-x-icu",
+          collation: { name: "und-x-icu" },
         },
       ],
     })
@@ -198,9 +198,75 @@ describe("CustomTable physics round-trip", () => {
       name: "title",
       type: "text",
       notNull: false,
-      collation: "und-x-icu",
+      collation: { name: "und-x-icu" },
       origin: { elementId: uuid(5) },
     })
+  })
+
+  it("collation and opclass carry schema and name as separate parts", async () => {
+    // Крапка — частина імені колляції `en_US.utf8` з `pg_catalog`, а не
+    // межа схеми: структурна форма розводить два різні об'єкти, які рядок
+    // `en_US.utf8` злив би в одне написання.
+    const titled = (collation: Record<string, string>) =>
+      logTable({
+        columns: [
+          ...columns,
+          {
+            id: uuid(5),
+            name: "title",
+            physicalName: "title",
+            type: "Text",
+            collation,
+          },
+        ],
+        indexes: [
+          {
+            name: "log_title_idx",
+            keys: [
+              {
+                column: "title",
+                collation,
+                opclass: { schema: "ext", name: "text_ops" },
+              },
+            ],
+          },
+        ],
+      })
+    const catalogCollation = await titled({ name: "en_US.utf8" })
+    const schemaCollation = await titled({ schema: "en_US", name: "utf8" })
+    const title = (table: PhysicalTable) =>
+      table.columns.find((c) => c.name === "title")!
+    expect(title(catalogCollation).collation).toEqual({ name: "en_US.utf8" })
+    expect(title(schemaCollation).collation).toEqual({
+      schema: "en_US",
+      name: "utf8",
+    })
+    expect(schemaCollation.indexes[0]!.keys[0]).toEqual({
+      column: "title",
+      opclass: { schema: "ext", name: "text_ops" },
+      collation: { schema: "en_US", name: "utf8" },
+    })
+    expect(JSON.stringify(catalogCollation)).not.toEqual(
+      JSON.stringify(schemaCollation)
+    )
+  })
+
+  it("collation and opclass reject the string form and pg_catalog schema", async () => {
+    for (const collation of ["C", { schema: "pg_catalog", name: "C" }]) {
+      const result = await compileLog({
+        columns: [
+          ...columns,
+          {
+            id: uuid(5),
+            name: "title",
+            physicalName: "title",
+            type: "Text",
+            collation,
+          },
+        ],
+      })
+      expect(result.ok, JSON.stringify(collation)).toBe(false)
+    }
   })
 
   it("1C kinds snapshot unchanged", async () => {

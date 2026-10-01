@@ -1,6 +1,7 @@
 import type {
   Deferrable,
   FkAction,
+  PgQualifiedName,
   RowLevelSecurity,
 } from "../schemas/custom-table"
 
@@ -95,8 +96,8 @@ export type DeferredConstraint = Exclude<Deferrable, "no">
 export type PhysicalIndexKey = ({ column: string } | { expression: string }) & {
   order?: "asc" | "desc"
   nulls?: "first" | "last"
-  opclass?: string
-  collation?: string
+  opclass?: PgQualifiedName
+  collation?: PgQualifiedName
 }
 
 export interface PhysicalColumn {
@@ -117,7 +118,7 @@ export interface PhysicalColumn {
    */
   generated?: { expression: string }
   /** Колляція колонки; відсутня — колляція типу. */
-  collation?: string
+  collation?: PgQualifiedName
   comment?: string
   /**
    * UUID реквізиту або логічне ім'я стандартного реквізиту; `scopeKindId` —
