@@ -66,6 +66,12 @@ describe("default value checks", () => {
     // Роки 0–99 — звичайні роки, а не 1900+ (пастка `Date.UTC`).
     expect(await check({ type: "Date" }, "0050-01-01")).toEqual([])
     expect(await check({ type: "Date" }, "0050-02-30")).toEqual(INVALID)
+    // Року 0 у Postgres немає: за 0001-01-01 іде 0001-12-31 BC.
+    expect(await check({ type: "Date" }, "0001-01-01")).toEqual([])
+    expect(await check({ type: "Date" }, "0000-01-01")).toEqual(INVALID)
+    expect(await check({ type: "DateTime" }, "0000-12-31T00:00:00Z")).toEqual(
+      INVALID
+    )
   })
 
   it("DateTime takes ISO 8601 with a zone", async () => {

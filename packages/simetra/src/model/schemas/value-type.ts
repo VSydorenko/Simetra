@@ -176,6 +176,9 @@ function isDate(text: string): boolean {
     number,
     number,
   ]
+  // Року 0 у Postgres немає (перед 0001 іде 1 BC), а запис з BC сюди не
+  // проходить, тож рік 0000 — помилка, а не день до нашої ери.
+  if (year < 1) return false
   // `setUTCFullYear`, а не `Date.UTC`: той читає роки 0–99 як 1900+.
   const date = new Date(0)
   date.setUTCFullYear(year, month - 1, day)
