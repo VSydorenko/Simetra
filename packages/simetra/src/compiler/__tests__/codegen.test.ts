@@ -215,7 +215,7 @@ describe("emitEntityTypes", () => {
     expect(diagnosticsOf(code)).toEqual([])
   })
 
-  it("enumeration reference is a union of logical names", async () => {
+  it("enumeration reference resolves to a named type", async () => {
     const code = await emit({
       "project.meta.json": project(),
       "enumerations/Status/Status.meta.json": {
@@ -252,6 +252,12 @@ describe("emitEntityTypes", () => {
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
     expect(code).not.toContain("interface Status")
+    expect(namespaceOf(code, "Enumerations")).toMatchInlineSnapshot(`
+      "export declare namespace Enumerations {
+        export type Status = "Draft" | "Done"
+      }"
+    `)
+    expect(code).toContain("type Enumerations_Status = Enumerations.Status")
     expect(block(code, "Catalogs.Task")).toMatchInlineSnapshot(`
       "export interface Task {
         /** Reference */
@@ -270,11 +276,258 @@ describe("emitEntityTypes", () => {
         createdAt: string
         /** Updated at */
         updatedAt: string
-        status: "Draft" | "Done"
-        history: ("Draft" | "Done")[] | null
+        status: Enumerations_Status
+        history: Enumerations_Status[] | null
         related: { type: "Catalog.Task" | "Catalog.Item"; id: string } | null
       }"
     `)
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs, Enumerations } from "./entities"',
+          'export const ok: Catalogs.Task["status"] = "Draft"',
+          "export const same: Enumerations.Status = 'Done'",
+          "// @ts-expect-error not a value of the enumeration",
+          'export const bad: Catalogs.Task["status"] = "Other"',
+          "// @ts-expect-error history is an array of values",
+          'export const worse: Catalogs.Task["history"] = "Draft"',
+        ].join("\n")
+      )
+    ).toEqual([])
+    expect(diagnosticsOf(code)).toEqual([])
+  })
+
+  it("enumeration type documents itself and its values", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "enumerations/Status/Status.meta.json": {
+        id: uuid(1),
+        kind: "Enumeration",
+        name: "Status",
+        physicalName: "status",
+        title: { uk: "Статус", en: "Status" },
+        description: { en: "Lifecycle of a task" },
+        values: [
+          {
+            id: uuid(2),
+            name: "Draft",
+            physicalName: "draft",
+            title: { uk: "Чернетка", en: "Draft copy" },
+          },
+          { id: uuid(3), name: "Done", physicalName: "done" },
+          {
+            id: uuid(4),
+            name: "Dropped",
+            physicalName: "dropped",
+            title: { uk: "Скасовано" },
+          },
+        ],
+      },
+      "enumerations/Empty/Empty.meta.json": {
+        id: uuid(5),
+        kind: "Enumeration",
+        name: "Empty",
+        physicalName: "empty",
+      },
+    })
+    expect(namespaceOf(code, "Enumerations")).toMatchInlineSnapshot(`
+      "export declare namespace Enumerations {
+        export type Empty = never
+
+        /**
+         * Status
+         *
+         * Lifecycle of a task
+         *
+         * Values:
+         * - \`Draft\`: Draft copy
+         * - \`Done\`
+         * - \`Dropped\`: Скасовано
+         */
+        export type Status = "Draft" | "Done" | "Dropped"
+      }"
+    `)
+    expect(diagnosticsOf(code)).toEqual([])
+  })
+
+  it("enumerations sit after documents and pg enums last", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "enumerations/Status/Status.meta.json": {
+        id: uuid(1),
+        kind: "Enumeration",
+        name: "Status",
+        physicalName: "status",
+      },
+      "pg-enums/Mood/Mood.meta.json": {
+        id: uuid(2),
+        kind: "PgEnum",
+        name: "Mood",
+        physicalName: "mood",
+        values: ["happy"],
+      },
+      "catalogs/Item/Item.meta.json": catalog("Item"),
+      "documents/Sale/Sale.meta.json": document("Sale"),
+      "custom-tables/Log/Log.meta.json": customTable("Log", {
+        scope: "none",
+        columns: [
+          {
+            id: uuid(10),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
+        ],
+      }),
+    })
+    const order = [...code.matchAll(/export declare namespace (\w+)/g)].map(
+      (m) => m[1]
+    )
+    expect(order).toEqual([
+      "Catalogs",
+      "Documents",
+      "Enumerations",
+      "CustomTables",
+      "PgEnums",
+    ])
+  })
+
+  it("enumeration named like a namespace or Json does not break resolution", async () => {
+    const enumeration = (id: number, name: string) => ({
+      id: uuid(id),
+      kind: "Enumeration",
+      name,
+      physicalName: name.toLowerCase(),
+      values: [{ id: uuid(id + 100), name: "On", physicalName: "on" }],
+    })
+    const code = await emit({
+      "project.meta.json": project(),
+      "enumerations/Json/Json.meta.json": enumeration(1, "Json"),
+      "enumerations/Enumerations/Enumerations.meta.json": enumeration(
+        2,
+        "Enumerations"
+      ),
+      "enumerations/Catalogs/Catalogs.meta.json": enumeration(3, "Catalogs"),
+      "catalogs/Doc/Doc.meta.json": catalog("Doc", {
+        attributes: [
+          attribute("payload", { type: "Json" }),
+          attribute("a", {
+            type: "Ref",
+            ref: { kind: "Enumeration", name: "Json" },
+          }),
+          attribute("b", {
+            type: "Ref",
+            ref: { kind: "Enumeration", name: "Enumerations" },
+          }),
+          attribute("c", {
+            type: "Ref",
+            ref: { kind: "Enumeration", name: "Catalogs" },
+          }),
+        ],
+      }),
+    })
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs } from "./entities"',
+          "export const ok: Catalogs.Doc['payload'] = 42",
+          "// @ts-expect-error undefined is not Json",
+          "export const bad: Catalogs.Doc['payload'] = undefined",
+          "export const a: Catalogs.Doc['a'] = 'On'",
+          "// @ts-expect-error a number is not an enumeration value",
+          "export const a2: Catalogs.Doc['a'] = 42",
+          "export const b: Catalogs.Doc['b'] = 'On'",
+          "// @ts-expect-error an object is not an enumeration value",
+          "export const b2: Catalogs.Doc['b'] = {}",
+          "export const c: Catalogs.Doc['c'] = 'On'",
+          "// @ts-expect-error a number is not an enumeration value",
+          "export const c2: Catalogs.Doc['c'] = 1",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  it("pg enum named like a namespace or Json does not break resolution", async () => {
+    const pgEnum = (id: number, name: string) => ({
+      id: uuid(id),
+      kind: "PgEnum",
+      name,
+      physicalName: name.toLowerCase(),
+      values: ["on"],
+    })
+    const column = (id: number, name: string) => ({
+      id: uuid(id),
+      name,
+      physicalName: name,
+      type: "PgEnum",
+      enum: { kind: "PgEnum", name: name === "a" ? "Json" : "PgEnums" },
+    })
+    const code = await emit({
+      "project.meta.json": project(),
+      "pg-enums/Json/Json.meta.json": pgEnum(1, "Json"),
+      "pg-enums/PgEnums/PgEnums.meta.json": pgEnum(2, "PgEnums"),
+      "custom-tables/Log/Log.meta.json": customTable("Log", {
+        scope: "none",
+        columns: [
+          column(10, "a"),
+          column(11, "b"),
+          {
+            id: uuid(12),
+            name: "payload",
+            physicalName: "payload",
+            type: "Json",
+          },
+        ],
+      }),
+    })
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { CustomTables } from "./entities"',
+          'export const a: CustomTables.Log["a"] = "on"',
+          "// @ts-expect-error a number is not a label",
+          'export const a2: CustomTables.Log["a"] = 1',
+          'export const b: CustomTables.Log["b"] = "on"',
+          "// @ts-expect-error a number is not a label",
+          'export const b2: CustomTables.Log["b"] = 1',
+          'export const p: CustomTables.Log["payload"] = 42',
+          "// @ts-expect-error undefined is not Json",
+          'export const p2: CustomTables.Log["payload"] = undefined',
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  it("scope field and file header carry titles as jsdoc", async () => {
+    const entries = {
+      ...scopedProject(),
+      title: { uk: "Тестовий застосунок", en: "Test app" },
+    }
+    entries.scopeKinds[0]!.title = { uk: "Організація", en: "Organization" }
+    const code = await emit({
+      "project.meta.json": entries,
+      "catalogs/Organization/Organization.meta.json": organization(),
+      "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
+    })
+    expect(code.split("\n").slice(0, 10).join("\n")).toMatchInlineSnapshot(`
+      "// Generated by simetra — do not edit
+
+      /**
+       * Test app
+       *
+       * @packageDocumentation
+       */
+
+      /** Any JSON value. */
+      export type Json = string | number | boolean | null | Json[] | { [key: string]: Json }"
+    `)
+    expect(block(code, "Catalogs.Item")).toContain(
+      "  /**\n   * Organization\n   *\n   * Value of the `org` scope kind.\n   */\n  org: string"
+    )
     expect(diagnosticsOf(code)).toEqual([])
   })
 
@@ -502,11 +755,34 @@ describe("emitEntityTypes", () => {
     expect(block(code, "CustomTables.Log")).toMatchInlineSnapshot(`
       "export interface Log {
         id: string
-        mood: "happy" | "sad" | null
+        mood: PgEnums_Mood | null
         blob: unknown
       }"
     `)
     expect(code).not.toContain("interface Mood")
+    expect(namespaceOf(code, "PgEnums")).toMatchInlineSnapshot(`
+      "export declare namespace PgEnums {
+        /**
+         * Values:
+         * - \`happy\`
+         * - \`sad\`
+         */
+        export type Mood = "happy" | "sad"
+      }"
+    `)
+    expect(code).toContain("type PgEnums_Mood = PgEnums.Mood")
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { CustomTables, PgEnums } from "./entities"',
+          'export const ok: CustomTables.Log["mood"] = "happy"',
+          "export const same: PgEnums.Mood = 'sad'",
+          "// @ts-expect-error not a label of the enum",
+          'export const bad: CustomTables.Log["mood"] = "angry"',
+        ].join("\n")
+      )
+    ).toEqual([])
     expect(diagnosticsOf(code)).toEqual([])
   })
 
