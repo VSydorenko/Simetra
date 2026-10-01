@@ -55,6 +55,13 @@ describe("KIND_REGISTRY", () => {
     }
   })
 
+  it("requiredOnPost belongs to the document only", () => {
+    const flagged = METADATA_KINDS.filter(
+      (k) => KIND_REGISTRY[k].requiredOnPost === true
+    )
+    expect(flagged).toEqual(["Document"])
+  })
+
   it("materialization and write pattern follow the kind", () => {
     expect(KIND_REGISTRY.Catalog.writePattern).toBe("optimistic")
     expect(KIND_REGISTRY.Document.writePattern).toBe("server")

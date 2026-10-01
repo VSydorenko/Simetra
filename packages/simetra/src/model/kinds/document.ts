@@ -121,6 +121,7 @@ export const documentKind: KindDefinition = {
   materializes: "table",
   scope: "required",
   declared: false,
+  requiredOnPost: true,
   columnFields: ["attributes"],
   valueElements: false,
   standardColumns,

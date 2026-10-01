@@ -139,7 +139,13 @@ interface PendingTable {
   primaryKey?: { name?: string; columns: string[] }
   uniques: { name?: string; columns: string[]; nullsNotDistinct: boolean }[]
   /** `column` — єдина колонка виразу, що дає її ім'я в назві обмеження. */
-  checks: { name?: string; column?: string; expression: string }[]
+  checks: {
+    name?: string
+    column?: string
+    /** Мітка в імені обмеження; без неї — `check`. */
+    label?: string
+    expression: string
+  }[]
   foreignKeys: (Omit<ForeignKey, "name"> & { name?: string })[]
   indexes: (Omit<Index, "name"> & { name?: string })[]
   /**
@@ -264,6 +270,7 @@ class SnapshotBuilder {
       }
     )
     const dimensionFields: Field[] = []
+    const requiredHeader: Field[] = []
     // Колонкові поля й їхній порядок дає реєстр: у регістра — виміри,
     // ресурси, реквізити, у решти видів — лише реквізити.
     for (const field of def.columnFields) {
@@ -272,8 +279,12 @@ class SnapshotBuilder {
         const built = this.attributeField(
           attribute,
           `/${field}/${index}`,
-          scope
+          scope,
+          def.requiredOnPost === true
         )
+        if (def.requiredOnPost === true && attribute.required) {
+          requiredHeader.push(built)
+        }
         // Вимір `NOT NULL` лише за `required` (attributeField): порожнє
         // значення ключа — це `NULL`, а ключ запису його зіставляє.
         if (field === "dimensions" && registerKeys !== undefined) {
@@ -294,6 +305,19 @@ class SnapshotBuilder {
       })
     }
     const columnsOf = this.addTable(main, fields, object.file, "/physicalName")
+    if (requiredHeader.length > 0) {
+      const posted = [...standardFields].find(
+        ([column]) => column.logicalName === "posted"
+      )![1].name
+      for (const field of requiredHeader) {
+        const columns = columnsOf.get(field)!
+        main.checks.push({
+          label: REQUIRED_LABEL,
+          column: columns[0]!,
+          expression: requiredOnPostExpression(posted, columns),
+        })
+      }
+    }
     if (registerKeys !== undefined) {
       const columns = (field: Field | undefined) =>
         field === undefined ? [] : (columnsOf.get(field) ?? [])
@@ -377,7 +401,12 @@ class SnapshotBuilder {
       )
       section.attributes.forEach((attribute, i) => {
         sectionFields.push(
-          this.attributeField(attribute, `${pointer}/attributes/${i}`, rowScope)
+          this.attributeField(
+            attribute,
+            `${pointer}/attributes/${i}`,
+            rowScope,
+            def.requiredOnPost === true
+          )
         )
         this.declare(
           object.file,
@@ -808,13 +837,16 @@ class SnapshotBuilder {
   private attributeField(
     attribute: Attribute,
     pointer: string,
-    scope: TableScope | undefined
+    scope: TableScope | undefined,
+    requiredOnPost = false
   ): Field {
     const resolved = this.resolveValue(attribute, scope)
     return {
       name: attribute.physicalName!,
       ...resolved,
-      notNull: attribute.required,
+      // Вид з обов'язковістю при проведенні тримає її не в схемі, а в CHECK
+      // шапки й контракті: чернетка може бути неповною.
+      notNull: attribute.required && !requiredOnPost,
       ...(attribute.defaultValue !== undefined
         ? { default: sqlLiteral(attribute.defaultValue) }
         : {}),
@@ -1063,6 +1095,22 @@ class SnapshotBuilder {
 const NONE: Target = { form: "none" }
 
 /** Стандартні реквізити, що входять у ключі регістра (канонічні імена). */
+/** Мітка CHECK обов'язковості при проведенні; за нею контракт знаходить CHECK. */
+const REQUIRED_LABEL = "required"
+
+/**
+ * Вираз CHECK шапки: обов'язковість діє лише у проведеного документа. Пара
+ * «тип + id» заповнена обома колонками, інакше посилання напівпорожнє.
+ */
+export function requiredOnPostExpression(
+  posted: string,
+  columns: readonly string[]
+): string {
+  const filled = columns.map((c) => `${quoteIdent(c)} IS NOT NULL`)
+  const body = filled.length > 1 ? `(${filled.join(" AND ")})` : filled[0]!
+  return `NOT ${quoteIdent(posted)} OR ${body}`
+}
+
 const PERIOD = "period"
 const LINE_NUMBER = "lineNumber"
 
@@ -1440,8 +1488,10 @@ function assignNames(pending: readonly PendingTable[]): PhysicalTable[] {
     for (const column of table.identityColumns) {
       choose(column, "seq", names.relations, true, false)
     }
-    const checks = table.checks.map(({ name, column, expression }) => ({
-      name: name ?? choose(column, "check", names.constraints, false, true),
+    const checks = table.checks.map(({ name, column, label, expression }) => ({
+      name:
+        name ??
+        choose(column, label ?? "check", names.constraints, false, true),
       expression,
     }))
     const primaryKey =

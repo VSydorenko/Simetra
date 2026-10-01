@@ -13,6 +13,7 @@ import {
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
+import { requiredOnPostExpression } from "./stages/model"
 import type { SqlUnit } from "./movement-functions"
 import type { ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
@@ -24,8 +25,28 @@ export interface QualifiedName {
 
 export interface PostingContract {
   documentId: string
+  /** `<doc>_save(p_document jsonb, p_expected_version bigint)`. */
+  save: QualifiedName
+  /** `<doc>_post(p_id uuid)`. */
   post: QualifiedName
+  /** `<doc>_unpost(p_id uuid)`. */
   unpost: QualifiedName
+  /**
+   * Обов'язкові при проведенні реквізити: шапку стереже CHECK таблиці, рядки
+   * ТЧ — лише оболонка (CHECK рядка не знає, чи проведена шапка). Порядок —
+   * як реквізити у файлі; ТЧ без обов'язкових реквізитів тут немає.
+   */
+  requiredOnPost: {
+    /** `check` — ім'я CHECK із `PhysicalTable.checks` шапки. */
+    header: { attributeId: string; columns: string[]; check: string }[]
+    sections: {
+      sectionId: string
+      table: QualifiedName
+      columns: { attributeId: string; columns: string[] }[]
+    }[]
+  }
+  /** Тригер незмінності проведеного: одне ім'я на шапку й кожну ТЧ. */
+  immutability: { trigger: string; tables: QualifiedName[] }
   /** За `registerId`. */
   movements: {
     registerId: string
@@ -196,10 +217,15 @@ function derived(table: PhysicalTable, label: string): QualifiedName {
  * перевірки колізій стадії 4: розбіжність пропустила б колізію до `CREATE` П3.
  */
 function postingFunctions(table: PhysicalTable): {
+  save: QualifiedName
   post: QualifiedName
   unpost: QualifiedName
 } {
-  return { post: derived(table, "post"), unpost: derived(table, "unpost") }
+  return {
+    save: derived(table, "save"),
+    post: derived(table, "post"),
+    unpost: derived(table, "unpost"),
+  }
 }
 
 /** Функції перерахунку й звірки підсумків регістра; одне джерело, як вище. */
@@ -250,7 +276,8 @@ export function derivedFunctions(
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue
     if (postsMovements(object.kind)) {
-      const { post, unpost } = postingFunctions(table)
+      const { save, post, unpost } = postingFunctions(table)
+      add(object, save, `save of ${object.name}`)
       add(object, post, `post of ${object.name}`)
       add(object, unpost, `unpost of ${object.name}`)
     }
@@ -330,6 +357,8 @@ export function buildContracts(
       return {
         documentId: document.id ?? "",
         ...postingFunctions(table),
+        requiredOnPost: requiredOnPost(document, table, physical, style),
+        immutability: immutability(document, table, physical),
         movements,
         balanceControl: movements.flatMap(({ registerId }) => {
           const resources = controlById.get(registerId)
@@ -343,6 +372,86 @@ export function buildContracts(
     registers,
     predefined: predefinedContracts(objects),
     numbering: numberingContracts(objects, physical, style),
+  }
+}
+
+function columnsOfElement(table: PhysicalTable, id: string | undefined) {
+  return table.columns
+    .filter((c) => c.origin.elementId === id)
+    .map((c) => c.name)
+}
+
+function requiredOnPost(
+  document: ParsedObject,
+  table: PhysicalTable,
+  physical: PhysicalSnapshot,
+  style: AttributeCase
+): PostingContract["requiredOnPost"] {
+  const data = document.data as {
+    attributes: Attribute[]
+    tabularSections: { id?: string; attributes: Attribute[] }[]
+  }
+  const defs = KIND_REGISTRY[document.kind].standardColumns(document.data)
+  const postedDef = must(defs.find((c) => c.logicalName === "posted"))
+  const posted = must(
+    table.columns.find(
+      (c) => c.origin.standard === standardLogicalName(postedDef, style)
+    )
+  ).name
+  const header = data.attributes
+    .filter((attribute) => attribute.required)
+    .map((attribute) => {
+      const columns = columnsOfElement(table, attribute.id)
+      const expression = requiredOnPostExpression(posted, columns)
+      return {
+        attributeId: attribute.id ?? "",
+        columns,
+        check: must(table.checks.find((c) => c.expression === expression)).name,
+      }
+    })
+  const sections = data.tabularSections.flatMap((section) => {
+    const sectionTable = must(
+      physical.tables.find((t) => t.origin.tabularSectionId === section.id)
+    )
+    const columns = section.attributes
+      .filter((attribute) => attribute.required)
+      .map((attribute) => ({
+        attributeId: attribute.id ?? "",
+        columns: columnsOfElement(sectionTable, attribute.id),
+      }))
+    return columns.length === 0
+      ? []
+      : [
+          {
+            sectionId: section.id ?? "",
+            table: { schema: sectionTable.schema, name: sectionTable.name },
+            columns,
+          },
+        ]
+  })
+  return { header, sections }
+}
+
+/**
+ * Один тригер на шапку й усі ТЧ: імена тригерів живуть у просторі своєї
+ * таблиці, тож однакове ім'я не колізує, а П3 створює їх одним циклом.
+ */
+function immutability(
+  document: ParsedObject,
+  table: PhysicalTable,
+  physical: PhysicalSnapshot
+): PostingContract["immutability"] {
+  const sections = (
+    document.data as { tabularSections: { id?: string }[] }
+  ).tabularSections.map((section) =>
+    must(physical.tables.find((t) => t.origin.tabularSectionId === section.id))
+  )
+  return {
+    trigger: makeObjectName(table.name, undefined, "immutable"),
+    tables: [table, ...sections].map((t) => ({
+      schema: t.schema,
+      name: t.name,
+    })),
   }
 }
 

@@ -152,6 +152,65 @@ describe("posting and register contracts", () => {
     )
   })
 
+  it("posting contract names save", () => {
+    const { posting } = contracts(withStock({}))
+    expect(posting[0]!.save).toEqual({ schema: "public", name: "sale_save" })
+  })
+
+  it("required on post lists header and rows", () => {
+    const entries = withStock({})
+    const sale = entries[SALE_FILE] as {
+      attributes?: unknown[]
+      tabularSections: { attributes: Record<string, unknown>[]; id: string }[]
+    }
+    const customer = attribute("customer", {
+      physicalName: "customer_id",
+      type: "Ref",
+      ref: { kind: "Catalog", name: "Item" },
+      required: true,
+    })
+    sale.attributes = [customer]
+    sale.tabularSections[0]!.attributes[1]!.required = true
+    const result = compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const [posting] = result.model!.contracts.posting
+    const table = result.model!.physical.tables.find((t) => t.name === "sale")!
+    const check = table.checks.find((c) => c.name.endsWith("_required"))!
+    expect(posting!.requiredOnPost.header).toEqual([
+      { attributeId: customer.id, columns: ["customer_id"], check: check.name },
+    ])
+    const goods = sale.tabularSections[0]!
+    expect(posting!.requiredOnPost.sections).toEqual([
+      {
+        sectionId: goods.id,
+        table: { schema: "public", name: "goods" },
+        columns: [{ attributeId: goods.attributes[1]!.id, columns: ["qty"] }],
+      },
+    ])
+  })
+
+  it("immutability covers header and sections", () => {
+    const { posting } = contracts(withStock({}))
+    expect(posting[0]!.immutability).toEqual({
+      trigger: "sale_immutable",
+      tables: [
+        { schema: "public", name: "sale" },
+        { schema: "public", name: "goods" },
+      ],
+    })
+  })
+
+  it("save name collision", () => {
+    const entries = withStock({})
+    entries["catalogs/Clash/Clash.meta.json"] = catalog("Clash", {
+      physicalName: "sale_save",
+    })
+    const found = compile(metaFiles(entries)).diagnostics.filter(
+      (d) => d.code === "physical.function-duplicate"
+    )
+    expect(found).toHaveLength(1)
+  })
+
   it("balance register contract", () => {
     const { registers } = contracts(withStock({}))
     expect(registers).toHaveLength(1)

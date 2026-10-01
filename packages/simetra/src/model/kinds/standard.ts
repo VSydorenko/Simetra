@@ -210,6 +210,13 @@ export interface KindDefinition {
    * видів із підпорядкуванням власнику: як у 1С, власник довідника — довідник.
    */
   ownerKinds?: readonly MetadataKind[]
+  /**
+   * Обов'язковість реквізитів перевіряється при проведенні, а не при записі:
+   * чернетка документа може бути неповною. Для виду `required` не дає
+   * `NOT NULL` — шапка отримує CHECK `NOT posted OR …`, рядки ТЧ лише
+   * контракт оболонки.
+   */
+  requiredOnPost?: true
   /** Стандартні колонки основної таблиці для розібраного файлу виду. */
   standardColumns(obj: unknown): StandardColumnDef[]
   /**

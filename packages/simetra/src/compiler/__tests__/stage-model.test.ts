@@ -238,6 +238,108 @@ describe("stage 3: physical snapshot", () => {
     expect(searchIndexes(item).map((i) => i.name)).toEqual(["item_rank_idx"])
   })
 
+  it("required document attribute is checked on posting", () => {
+    const physical = compileWith({
+      "catalogs/Customer/Customer.meta.json": catalog("Customer"),
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        attributes: [
+          attribute("customer", {
+            physicalName: "customer_id",
+            type: "Ref",
+            ref: { kind: "Catalog", name: "Customer" },
+            required: true,
+          }),
+        ],
+      }),
+    })
+    const sale = tableOf(physical, "sale")
+    expect(sale.columns.find((c) => c.name === "customer_id")).toMatchObject({
+      notNull: false,
+    })
+    expect(sale.checks).toContainEqual({
+      name: "sale_customer_id_required",
+      expression: "NOT posted OR customer_id IS NOT NULL",
+    })
+  })
+
+  it("required polymorphic header attribute", () => {
+    const physical = compileWith({
+      "catalogs/Contract/Contract.meta.json": catalog("Contract"),
+      "catalogs/Counterparty/Counterparty.meta.json": catalog("Counterparty"),
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        attributes: [
+          attribute("subject", {
+            type: "Ref",
+            required: true,
+            allowedTypes: [
+              { kind: "Catalog", name: "Contract" },
+              { kind: "Catalog", name: "Counterparty" },
+            ],
+          }),
+        ],
+      }),
+    })
+    const sale = tableOf(physical, "sale")
+    expect(sale.columns.filter((c) => c.name.startsWith("subject_"))).toEqual([
+      expect.objectContaining({ name: "subject_type", notNull: false }),
+      expect.objectContaining({ name: "subject_id", notNull: false }),
+    ])
+    expect(sale.checks).toContainEqual({
+      name: "sale_subject_type_required",
+      expression:
+        "NOT posted OR (subject_type IS NOT NULL AND subject_id IS NOT NULL)",
+    })
+  })
+
+  it("required tabular row attribute", () => {
+    const physical = compileWith({
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        tabularSections: [
+          {
+            id: uuid(11),
+            name: "goods",
+            physicalName: "sale_goods",
+            attributes: [attribute("qty", { type: "Integer", required: true })],
+          },
+        ],
+      }),
+    })
+    const goods = tableOf(physical, "sale_goods")
+    expect(goods.columns.find((c) => c.name === "qty")).toMatchObject({
+      notNull: false,
+    })
+    expect(goods.checks.filter((c) => c.name.includes("required"))).toEqual([])
+    expect(goods.checks).toEqual([])
+  })
+
+  it("required catalog attribute stays not null", () => {
+    const physical = compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [attribute("note", { type: "Integer", required: true })],
+      }),
+      "information-registers/Rate/Rate.meta.json": {
+        id: uuid(30),
+        kind: "InformationRegister",
+        name: "Rate",
+        physicalName: "rate",
+        periodicity: "Day",
+        resources: [attribute("value", { type: "Integer", required: true })],
+      },
+    })
+    for (const [table, column] of [
+      ["item", "note"],
+      ["rate", "value"],
+    ] as const) {
+      const found = tableOf(physical, table)
+      expect(found.columns.find((c) => c.name === column)).toMatchObject({
+        notNull: true,
+      })
+      expect(found.checks.filter((c) => c.name.includes("required"))).toEqual(
+        []
+      )
+    }
+  })
+
   it("document tabular section", () => {
     const physical = compileWith({
       "documents/Invoice/Invoice.meta.json": document("Invoice", {
