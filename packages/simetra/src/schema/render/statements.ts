@@ -130,7 +130,7 @@ export function renderIndexes(table: PhysicalTable): RenderedStatement[] {
     const sql = [
       `CREATE${index.unique ? " UNIQUE" : ""} INDEX ${quoteIdent(index.name)}`,
       `ON ${qualified(table.schema, table.name)}`,
-      `USING ${index.method}`,
+      `USING ${quoteIdent(index.method)}`,
       `(${index.keys.map(renderIndexKey).join(", ")})`,
       index.include.length > 0 && `INCLUDE (${identList(index.include)})`,
       index.nullsNotDistinct && "NULLS NOT DISTINCT",

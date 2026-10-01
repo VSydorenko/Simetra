@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile, type CompiledModel, type SqlUnit } from "simetra/compiler"
+import { compile, type SqlUnit } from "simetra/compiler"
 import type { PhysicalTable } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
@@ -7,6 +7,7 @@ import {
   catalog,
   metaFiles,
   project,
+  salesDocument,
 } from "../../compiler/__tests__/helpers"
 
 const MISC = "sql/app/misc.sql"
@@ -127,47 +128,67 @@ describe("renderDesiredState", () => {
     ])
   })
 
-  it("movement wrapper after its tables", () => {
-    const table = (name: string): PhysicalTable => ({
-      schema: "app",
-      name,
-      origin: { objectId: "x" },
-      rowLevelSecurity: "off",
-      columns: [{ name: "id", type: "uuid", notNull: true, origin: {} }],
-      uniques: [],
-      checks: [],
-      foreignKeys: [],
-      indexes: [],
-    })
-    const wrapper = {
-      class: "movementQuery",
-      identity: "movementQuery:app.sale_stock",
-      schema: "app",
-      name: "sale_stock",
-      module: "m",
-      sql: "CREATE FUNCTION app.sale_stock() RETURNS SETOF app.stock LANGUAGE sql AS $$ SELECT * FROM app.stock $$",
-    } as SqlUnit
-    const model: Pick<
-      CompiledModel,
-      "physical" | "sqlUnits" | "creationOrder"
-    > = {
-      physical: { tables: [table("sale"), table("stock")], enumTypes: [] },
-      sqlUnits: [wrapper],
-      creationOrder: [
-        { type: "table", schema: "app", name: "sale" },
-        { type: "table", schema: "app", name: "stock" },
-        { type: "unit", identity: wrapper.identity },
-      ],
-    }
+  it("movement wrapper after its tables", async () => {
+    const result = await compile(
+      metaFiles({ "project.meta.json": project(), ...salesDocument() })
+    )
+    expect(result.diagnostics).toEqual([])
+    const model = result.model!
+    const wrapper = model.sqlUnits.find((u) => u.class === "movementQuery")!
+    expect(wrapper).toBeDefined()
     const state = renderDesiredState(model)
-    expect(labels(state)).toEqual([
-      "schema app",
-      "table app.sale",
-      "table app.stock",
-      "unit movementQuery:app.sale_stock",
-    ])
-    // Дослівна одиниця без `;` отримує її, щоб скрипт лишався виконуваним.
-    expect(state.statements.at(-1)!.sql.endsWith("$$;")).toBe(true)
+    const wrapperIndex = state.statements.findIndex(
+      (s) => s.kind === "unit" && s.object === wrapper.identity
+    )
+    const tableIndexes = state.statements
+      .map((s, i) => (s.kind === "table" ? i : -1))
+      .filter((i) => i >= 0)
+    expect(wrapperIndex).toBeGreaterThan(-1)
+    // Обгортка читає таблиці регістра й документа: усі вони вже створені.
+    for (const name of ["sale", "stock"]) {
+      const at = state.statements.findIndex(
+        (s) => s.kind === "table" && s.object.endsWith(`.${name}`)
+      )
+      expect(at).toBeGreaterThan(-1)
+      expect(at).toBeLessThan(wrapperIndex)
+    }
+    expect(tableIndexes.length).toBeGreaterThan(1)
+  })
+
+  it("a unit ending with a line comment still terminates", () => {
+    const unit = (name: string, sql: string) =>
+      ({
+        class: "function",
+        identity: `function:app.${name}()`,
+        schema: "app",
+        name,
+        module: "m",
+        sql,
+      }) as SqlUnit
+    const units = [
+      unit("a", "select 1 -- note"),
+      unit("b", "select 2 -- done;"),
+      unit("c", "select 3"),
+      unit("d", "select 4;"),
+    ]
+    const state = renderDesiredState({
+      physical: { tables: [], enumTypes: [] },
+      sqlUnits: units,
+      creationOrder: units.map((u) => ({ type: "unit", identity: u.identity })),
+    })
+    expect(state.sql).toMatchInlineSnapshot(`
+      "CREATE SCHEMA IF NOT EXISTS app;
+
+      select 1 -- note
+      ;
+
+      select 2 -- done;
+      ;
+
+      select 3;
+
+      select 4;"
+    `)
   })
 
   it("map insertion order does not change the sql", async () => {

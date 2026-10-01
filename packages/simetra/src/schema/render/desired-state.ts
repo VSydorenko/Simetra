@@ -28,6 +28,20 @@ const UNMANAGED_SCHEMAS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * Оператор одиниці дослівний і може закінчуватися рядковим коментарем
+ * (`select 1 -- note`): `;` у кінці того ж рядка потрапила б у коментар і
+ * злила б оператор із наступним. Тому, коли в останньому рядку є `--`
+ * (навіть усередині літерала — зайвий перенос нешкідливий) чи `;` немає,
+ * термінатор іде з нового рядка; порожній оператор `;` Postgres приймає.
+ */
+function terminate(sql: string): string {
+  const text = sql.trimEnd()
+  const lastLine = text.slice(text.lastIndexOf("\n") + 1)
+  if (lastLine.includes("--")) return `${text}\n;`
+  return text.endsWith(";") ? text : `${text};`
+}
+
+/**
  * Renders the complete desired state of a compiled model: schemas first, then
  * enum types, tables and SQL units in `creationOrder`, and every foreign key
  * last, so a reference to a table created later (or to a provider table)
@@ -88,13 +102,10 @@ export function renderDesiredState(
       const unit = units.get(node.identity)
       if (!unit)
         throw new Error(`creationOrder names unknown unit ${node.identity}`)
-      // Оператор одиниці дослівний, але скрипт склеюється з `;`: додаємо
-      // її, якщо парсер відрізав текст до крапки з комою.
-      const text = unit.sql.trimEnd()
       statements.push({
         kind: "unit",
         object: unit.identity,
-        sql: text.endsWith(";") ? text : `${text};`,
+        sql: terminate(unit.sql),
       })
     }
   }
