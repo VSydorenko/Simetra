@@ -181,16 +181,23 @@ describe("CustomTable physics round-trip", () => {
     ])
   })
 
-  it("primary key and identity columns are not null as Postgres makes them", async () => {
+  it("notNull reaches the snapshot verbatim, nothing derived", async () => {
     const table = await logTable({
       columns: [
-        { id: uuid(1), name: "id", physicalName: "id", type: "UUID" },
+        {
+          id: uuid(1),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
         {
           id: uuid(2),
           name: "seq",
           physicalName: "seq",
           type: "BigInt",
           identity: "byDefault",
+          notNull: true,
         },
         { id: uuid(3), name: "code", physicalName: "code", type: "Text" },
       ],

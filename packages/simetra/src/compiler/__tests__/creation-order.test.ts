@@ -22,7 +22,13 @@ function codes(
 ) {
   return customTable("Codes", {
     columns: [
-      { id: uuid(9001), name: "id", physicalName: "id", type: "UUID" },
+      {
+        id: uuid(9001),
+        name: "id",
+        physicalName: "id",
+        type: "UUID",
+        notNull: true,
+      },
       ...columns,
     ],
     ...overrides,
@@ -280,7 +286,13 @@ describe("creation order", () => {
     const list = await order({
       "custom-tables/Aaa/Aaa.meta.json": customTable("Aaa", {
         columns: [
-          { id: uuid(9401), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(9401),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
           { id: uuid(9402), name: "zzz", physicalName: "zzz", type: "UUID" },
         ],
         foreignKeys: [

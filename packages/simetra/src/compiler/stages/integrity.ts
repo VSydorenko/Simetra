@@ -502,6 +502,27 @@ function checkDeclaredTable(
       diagnostic("physical.constraint-name-required", object.file, pointer)
     )
 
+  // Файл описує фізику дослівно (спека §4): колонку ключа чи identity Postgres
+  // робить NOT NULL сам, тож без явного `notNull` знімок розійшовся б із
+  // каталогом. Не виводимо — вимагаємо від автора.
+  const keyColumns = new Set(table.primaryKey?.columns ?? [])
+  table.columns.forEach((column, i) => {
+    if (column.notNull) return
+    const role = keyColumns.has(column.name)
+      ? "primary key"
+      : column.identity !== undefined
+        ? "identity"
+        : undefined
+    if (role === undefined) return
+    found.push(
+      diagnostic(
+        "customTable.key-column-nullable",
+        object.file,
+        `/columns/${i}`,
+        { column: column.name, role }
+      )
+    )
+  })
   // Значення генерованої колонки дає вираз: Postgres відкидає поруч із ним
   // DEFAULT та identity, тож ловимо це тут, а не падінням DDL.
   table.columns.forEach((column, i) => {

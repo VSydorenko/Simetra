@@ -807,6 +807,7 @@ describe("stage 3: physical snapshot", () => {
             name: "key",
             physicalName: "account_key",
             type: "UUID",
+            notNull: true,
           },
         ],
         primaryKey: { columns: ["key"] },
@@ -867,7 +868,13 @@ describe("stage 3: physical snapshot", () => {
     const physical = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
-          { id: uuid(80), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(80),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
           { id: uuid(81), name: "code", physicalName: "code", type: "Text" },
         ],
         primaryKey: { name: "log_pk", columns: ["id"] },

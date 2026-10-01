@@ -279,9 +279,13 @@ function customTables(): Map<string, string> {
     "custom-tables/Audit/Audit.meta.json": customTable("Audit", {
       scope: "none",
       columns: [
-        column(101, "tenantId", "tenant_id", { type: "UUID" }),
-        // Ні ключ, ні identity не пишуть `notNull`: Postgres робить їх NOT NULL сам.
-        column(102, "seq", "seq", { type: "BigInt", identity: "always" }),
+        // Колонки ключа й identity пишуть `notNull` явно: файл — дослівна фізика.
+        column(101, "tenantId", "tenant_id", { type: "UUID", notNull: true }),
+        column(102, "seq", "seq", {
+          type: "BigInt",
+          identity: "always",
+          notNull: true,
+        }),
         column(103, "userId", "user_id", { type: "UUID" }),
         column(104, "email", "email", { type: "Text" }),
         column(105, "amount", "amount", {
@@ -387,7 +391,13 @@ function enumerations(): Map<string, string> {
     "custom-tables/Diary/Diary.meta.json": customTable("Diary", {
       scope: "none",
       columns: [
-        { id: uuid(125), name: "id", physicalName: "id", type: "UUID" },
+        {
+          id: uuid(125),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
         {
           id: uuid(126),
           name: "mood",

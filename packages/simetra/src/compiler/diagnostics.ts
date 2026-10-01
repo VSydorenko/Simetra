@@ -83,6 +83,7 @@ export const COMPILER_RULES = [
   "customTable.foreign-key-arity",
   "customTable.foreign-key-deferrable-target",
   "customTable.generated-conflict",
+  "customTable.key-column-nullable",
   "presentation.unknown-standard-attribute",
 ] as const
 

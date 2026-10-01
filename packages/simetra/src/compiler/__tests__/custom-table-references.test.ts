@@ -30,7 +30,7 @@ const CURRENCY_ID = uuid(5)
 const SKU_ID = uuid(6)
 
 const columns = [
-  { id: COL_ID, name: "id", physicalName: "id", type: "UUID" },
+  { id: COL_ID, name: "id", physicalName: "id", type: "UUID", notNull: true },
   {
     id: COL_CODE,
     name: "code",
@@ -308,7 +308,13 @@ describe("custom table column references", () => {
 
 describe("stage 2: custom table column names", () => {
   const columns = [
-    { id: uuid(740), name: "id", physicalName: "id", type: "UUID" },
+    {
+      id: uuid(740),
+      name: "id",
+      physicalName: "id",
+      type: "UUID",
+      notNull: true,
+    },
     { id: uuid(741), name: "email", physicalName: "email", type: "Text" },
   ]
   const compileWith = async (entries: Record<string, unknown>) =>

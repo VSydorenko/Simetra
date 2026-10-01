@@ -820,6 +820,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Значення збереженої генерованої колонки дає її вираз.",
     },
   },
+  "customTable.key-column-nullable": {
+    en: (p) =>
+      `${p.role === "identity" ? "Identity" : "Primary key"} column "${p.column}" must declare notNull: true`,
+    uk: (p) =>
+      `Колонка ${p.role === "identity" ? "identity" : "первинного ключа"} "${p.column}" мусить мати notNull: true`,
+    hint: {
+      en: "Set notNull: true (Postgres makes primary key and identity columns NOT NULL).",
+      uk: "Задайте notNull: true (Postgres робить колонки первинного ключа й identity NOT NULL).",
+    },
+  },
   "presentation.unknown-standard-attribute": {
     en: (p) =>
       p.section === undefined

@@ -133,7 +133,13 @@ describe("stage 4: integrity", () => {
     const result = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
-          { id: uuid(720), name: "id", physicalName: "id", type: "BigInt" },
+          {
+            id: uuid(720),
+            name: "id",
+            physicalName: "id",
+            type: "BigInt",
+            notNull: true,
+          },
         ],
         primaryKey: { columns: ["id"] },
       }),
@@ -161,7 +167,13 @@ describe("stage 4: integrity", () => {
     ) =>
       customTable(name, {
         columns: [
-          { id: uuid(n), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(n),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
         ],
         ...overrides,
       })
@@ -217,7 +229,13 @@ describe("stage 4: integrity", () => {
       "documents/Invoice/Invoice.meta.json": document("Invoice"),
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
-          { id: uuid(732), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(732),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
         ],
         primaryKey: { columns: ["id"] },
       }),
@@ -323,7 +341,13 @@ describe("stage 4: integrity", () => {
     const result = await compileWith({
       "custom-tables/Log/Log.meta.json": customTable("Log", {
         columns: [
-          { id: uuid(734), name: "id", physicalName: "id", type: "BigInt" },
+          {
+            id: uuid(734),
+            name: "id",
+            physicalName: "id",
+            type: "BigInt",
+            notNull: true,
+          },
         ],
         primaryKey: { columns: ["id"] },
       }),
@@ -571,7 +595,13 @@ describe("stage 4: integrity", () => {
   describe("custom table constraints", () => {
     const LOG = "custom-tables/Log/Log.meta.json"
     const columns = [
-      { id: uuid(740), name: "id", physicalName: "id", type: "UUID" },
+      {
+        id: uuid(740),
+        name: "id",
+        physicalName: "id",
+        type: "UUID",
+        notNull: true,
+      },
       { id: uuid(741), name: "email", physicalName: "email", type: "Text" },
     ]
     const log = async (overrides: Record<string, unknown>) =>
@@ -682,7 +712,13 @@ describe("stage 4: integrity", () => {
       const result = await compileWith({
         "custom-tables/Other/Other.meta.json": customTable("Other", {
           columns: [
-            { id: uuid(743), name: "id", physicalName: "id", type: "UUID" },
+            {
+              id: uuid(743),
+              name: "id",
+              physicalName: "id",
+              type: "UUID",
+              notNull: true,
+            },
             { id: uuid(744), name: "code", physicalName: "code", type: "UUID" },
             { id: uuid(745), name: "tag", physicalName: "tag", type: "UUID" },
           ],
@@ -729,6 +765,120 @@ describe("stage 4: integrity", () => {
           "/foreignKeys/2/references/columns",
         ],
       ])
+    })
+
+    it("primary key column without notNull", async () => {
+      const result = await log({
+        columns: [
+          { id: uuid(746), name: "id", physicalName: "id", type: "UUID" },
+          { id: uuid(747), name: "email", physicalName: "email", type: "Text" },
+        ],
+        primaryKey: { columns: ["id"] },
+      })
+      expect(codes(result)).toEqual([
+        ["customTable.key-column-nullable", "error", LOG, "/columns/0"],
+      ])
+      expect(result.diagnostics[0]!.hint).toContain("Set notNull: true")
+    })
+
+    it("every column of a composite primary key needs notNull", async () => {
+      const result = await log({
+        columns: [
+          { id: uuid(746), name: "id", physicalName: "id", type: "UUID" },
+          { id: uuid(747), name: "email", physicalName: "email", type: "Text" },
+          {
+            id: uuid(748),
+            name: "note",
+            physicalName: "note",
+            type: "Text",
+            notNull: true,
+          },
+        ],
+        primaryKey: { columns: ["email", "note", "id"] },
+      })
+      expect(codes(result)).toEqual([
+        ["customTable.key-column-nullable", "error", LOG, "/columns/0"],
+        ["customTable.key-column-nullable", "error", LOG, "/columns/1"],
+      ])
+    })
+
+    it("identity column without notNull", async () => {
+      const result = await log({
+        columns: [
+          ...columns,
+          {
+            id: uuid(749),
+            name: "seq",
+            physicalName: "seq",
+            type: "BigInt",
+            identity: "byDefault",
+          },
+          {
+            id: uuid(750),
+            name: "seqOk",
+            physicalName: "seq_ok",
+            type: "BigInt",
+            identity: "always",
+            notNull: true,
+          },
+        ],
+        primaryKey: { columns: ["id"] },
+      })
+      expect(codes(result)).toEqual([
+        ["customTable.key-column-nullable", "error", LOG, "/columns/2"],
+      ])
+      expect(result.diagnostics[0]!.params).toEqual({
+        column: "seq",
+        role: "identity",
+      })
+    })
+
+    it("fk to a composite deferrable key saved by a twin in another order", async () => {
+      const keyColumn = (n: number, name: string) => ({
+        id: uuid(n),
+        name,
+        physicalName: name,
+        type: "UUID",
+        notNull: true,
+      })
+      const result = await compileWith({
+        "custom-tables/Other/Other.meta.json": customTable("Other", {
+          columns: [
+            keyColumn(751, "a"),
+            keyColumn(752, "b"),
+            keyColumn(753, "c"),
+          ],
+          primaryKey: { columns: ["a", "b"], deferrable: "deferrable" },
+          uniques: [
+            { name: "other_b_a_key", columns: ["b", "a"] },
+            { name: "other_c_key", columns: ["c"], deferrable: "deferrable" },
+          ],
+          // Звичайний унікальний індекс без умови — теж законна ціль FK.
+          indexes: [
+            { name: "other_c_idx", unique: true, keys: [{ column: "c" }] },
+          ],
+        }),
+        [LOG]: customTable("Log", {
+          columns: [keyColumn(754, "x"), keyColumn(755, "y")],
+          foreignKeys: [
+            {
+              columns: ["x", "y"],
+              references: {
+                object: { kind: "CustomTable", name: "Other" },
+                columns: ["a", "b"],
+              },
+            },
+            {
+              columns: ["x"],
+              references: {
+                object: { kind: "CustomTable", name: "Other" },
+                columns: ["c"],
+              },
+            },
+          ],
+        }),
+      })
+      expect(codes(result)).toEqual([])
     })
 
     it("fk to a deferrable key of an external table is not checked", async () => {

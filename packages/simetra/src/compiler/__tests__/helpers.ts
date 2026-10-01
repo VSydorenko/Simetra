@@ -108,7 +108,15 @@ export function customTable(
   overrides: Record<string, unknown> = {}
 ) {
   return object("CustomTable", name, {
-    columns: [{ id: freshId(), name: "id", physicalName: "id", type: "UUID" }],
+    columns: [
+      {
+        id: freshId(),
+        name: "id",
+        physicalName: "id",
+        type: "UUID",
+        notNull: true,
+      },
+    ],
     ...overrides,
   })
 }

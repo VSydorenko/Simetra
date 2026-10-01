@@ -160,6 +160,7 @@ describe("postgres namespaces", () => {
           physicalName: "n",
           type: "BigInt",
           identity: "always",
+          notNull: true,
         },
       ],
     })
@@ -289,7 +290,13 @@ describe("postgres namespaces", () => {
 describe("model relation names in pg_class", () => {
   const LOG = "custom-tables/Log/Log.meta.json"
   const AUDIT = "custom-tables/Audit/Audit.meta.json"
-  const id = { id: uuid(940), name: "id", physicalName: "id", type: "UUID" }
+  const id = {
+    id: uuid(940),
+    name: "id",
+    physicalName: "id",
+    type: "UUID",
+    notNull: true,
+  }
   const indexed = (name: string) => ({
     indexes: [{ name, keys: [{ column: "id" }] }],
   })

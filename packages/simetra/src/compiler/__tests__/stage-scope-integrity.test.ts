@@ -171,7 +171,13 @@ describe("стадія 4: скоуп", () => {
         scopeColumn: "owner",
         primaryKey: { columns: ["id"] },
         columns: [
-          { id: uuid(970), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(970),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
           { id: uuid(971), name: "owner", physicalName: "owner", type: "UUID" },
         ],
       }),
@@ -217,7 +223,13 @@ describe("стадія 4: скоуп", () => {
         scopeColumn: "owner",
         primaryKey: { columns: ["id"] },
         columns: [
-          { id: uuid(970), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(970),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
           { id: uuid(971), name: "owner", physicalName: "owner", type: "UUID" },
         ],
       }),
@@ -457,12 +469,19 @@ describe("стадія 4: скоуп", () => {
           scope: "none",
           primaryKey: { columns: ["id", "other"] },
           columns: [
-            { id: uuid(980), name: "id", physicalName: "id", type: "UUID" },
+            {
+              id: uuid(980),
+              name: "id",
+              physicalName: "id",
+              type: "UUID",
+              notNull: true,
+            },
             {
               id: uuid(981),
               name: "other",
               physicalName: "other",
               type: "UUID",
+              notNull: true,
             },
           ],
         }),
@@ -512,7 +531,13 @@ describe("стадія 4: скоуп", () => {
         scope: "user",
         scopeColumn: "owner",
         columns: [
-          { id: uuid(970), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(970),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
           {
             id: uuid(971),
             name: "owner",
@@ -560,7 +585,13 @@ describe("стадія 4: скоуп", () => {
         scope: "user",
         scopeColumn: "owner",
         columns: [
-          { id: uuid(970), name: "id", physicalName: "id", type: "UUID" },
+          {
+            id: uuid(970),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
           { id: uuid(971), name: "owner", physicalName: "owner", type: "UUID" },
         ],
       }),
