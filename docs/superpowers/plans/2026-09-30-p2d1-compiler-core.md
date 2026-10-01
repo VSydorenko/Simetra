@@ -26,9 +26,10 @@ T1 над скомпільованою моделлю; T0 отримує лиш�
 модулі), §11 крок 7; [платформна спека](../specs/2026-09-24-simetra-platform-design.md)
 §6.3, §6.9.
 
-**Серія планів П2:** A, B, C1, C2 (виконано) → C3 (уточнення фізики за
+**Серія планів П2:** A, B, C1, C2, [C3](2026-10-01-p2c3-physics-refinement.md)
+(уточнення фізики за
 [спекою «Платформа в Postgres»](../specs/2026-10-01-platform-in-postgres-design.md),
-М17–М23; **виконується перед D1**) → **D1** (цей) → D2 (`@simetra/cli`
+М17–М23; виконано, `222ba48..54cd3fc`) → **D1** (цей) → D2 (`@simetra/cli`
 compile/explain/fix з `--format json`, MCP-сервер з операціями й каскадом
 перейменування, pre-commit і CI, скіл CLI) → E.
 
@@ -37,6 +38,14 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 > і стандартна колонка `predefined_name` **лишаються** (читач —
 > `contracts.predefined`); контракт нумерації описує момент «перший запис»;
 > контракт оболонки містить `save`/`post`/`unpost`. Усе інше в плані чинне.
+>
+> **Вхід D1 — форма контрактів після C3** (`contracts.numbering` з
+> `assignedAt`, `contracts.predefined`, `posting.save`/`requiredOnPost`/
+> `immutability`, `registers[].turnoversMonth.resources`,
+> `virtualTables[].columns[].source`): задачі 7 (блок представлення, звірка
+> контрактів) і 9 (канонічний знімок і хеш) спираються на неї, а не на форми,
+> записані в цьому плані до C3; де план і код розходяться — правда в коді C3
+> і спеці (`754f54b`, `ec70277`). Хвости C3 — у задачі 0.
 
 ## Рішення плану (узгоджено з архітектором спеки; модельні — у спеці)
 
@@ -99,12 +108,13 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 
 ---
 
-### Task 0: Хвости C2 (тріаж фінального рев'ю C2)
+### Task 0: Хвости C2 і C3 (тріаж фінальних рев'ю)
 
 **Files:**
 - Modify: `packages/simetra/src/compiler/stages/identity.ts`, `stages/integrity.ts`, `compiler/movement-blocks.ts`, `compiler/diagnostics.ts`, `compiler/messages.ts`
 - Create: `packages/simetra/src/model/posting/walk.ts` (спільний обхід AST)
-- Test: `packages/simetra/src/compiler/__tests__/stage-posting-identity.test.ts`, `stage-links.test.ts` (попередження маркера — на рівні `compile`), `stage-registers.test.ts`, `packages/simetra/src/model/__tests__/posting-parse.test.ts`
+- Modify (хвости C3): `packages/simetra/src/compiler/contracts.ts` (JSDoc `buildContracts` і `totalsFunctions` — predefined, numbering, turnovers_month), `packages/simetra/src/model/kinds/standard.ts` (тип параметра нумерації — `z.infer` поля `numberType`/`codeType` схем, не дубль літералом `"String" | "Number"`)
+- Test: `packages/simetra/src/compiler/__tests__/stage-posting-identity.test.ts`, `stage-links.test.ts` (попередження маркера — на рівні `compile`), `stage-registers.test.ts`, `packages/simetra/src/model/__tests__/posting-parse.test.ts`, `contracts.test.ts` (два нестрогі твердження, які виконавець C3 відклав, — знайти за правилом «`toContain` на фрагмент чи `toBeDefined` замість точного очікування» і замінити точними очікуваннями)
 
 **Interfaces:**
 - Produces:
@@ -127,7 +137,7 @@ compile/explain/fix з `--format json`, MCP-сервер з операціями
 
 ```bash
 git add packages/simetra/src
-git commit -m "fix(compiler): хвости C2 — спільний обхід AST, повтори balanceControl, маркер з відступом, тести посилань у виразах"
+git commit -m "fix(compiler): хвости C2 і C3 — спільний обхід AST, повтори balanceControl, маркер з відступом, JSDoc контрактів, тип нумерації зі схеми, строгі твердження контрактів"
 ```
 
 ---
