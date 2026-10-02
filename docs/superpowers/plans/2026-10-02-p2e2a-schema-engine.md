@@ -196,10 +196,10 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 Контекст: під паралельним навантаженням turbo двічі разово впали таймаут
 `codegen.test.ts` і один неназваний тест повного прогону; рерани зелені.
 
-- [ ] **Step 1:** `pnpm test` з кореня п'ять разів поспіль; профіль —
+- [x] **Step 1:** `pnpm test` з кореня п'ять разів поспіль; профіль —
   `pnpm --filter simetra exec vitest run --project unit --reporter=json
   --outputFile=<tmp>/times.json`, десять найповільніших тестів із часом.
-- [ ] **Step 2:** якщо збій відтворився — виправити причину в тесті
+- [x] **Step 2:** якщо збій відтворився — виправити причину в тесті
   (спільна компіляція фікстур у `beforeAll`, без зміни глобального
   таймауту), п'ять зелених прогонів, коміт
   `test(compiler): стабільні тести під навантаженням`. Якщо не відтворився —
@@ -217,7 +217,7 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 `provisionCoLocatedShadow`, прибрати всі) і записати відповіді з доказом
 (фрагмент виклику й виходу):
 
-- [ ] **Step 1: Засів тіні.** Чи є **публічний** експорт, що засіває
+- [x] **Step 1: Засів тіні.** Чи є **публічний** експорт, що засіває
   co-located тінь базовим станом провайдера з бази-цілі
   (`deriveAssumedSchemaSeed` чи інший), або засів доступний лише всередині
   `planSchemaFiles`. Доказ: у засіяній тіні розгортається FK на
@@ -225,21 +225,21 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   засобу немає — стоп і повідомлення архітектору** з варіантами (засів через
   `planSchemaFiles` як єдиний вхід тіні, власний засів із моделі каталогу
   бази-цілі, інше).
-- [ ] **Step 2: Межа §6.9.** Політика (`extends: [supabasePolicy]` +
+- [x] **Step 2: Межа §6.9.** Політика (`extends: [supabasePolicy]` +
   фільтр), за якої в межі: усі об'єкти керованих схем (зокрема `public` як
   керованої), політика на `storage.objects`, тригер на `auth.users`,
   членство таблиці в publication, розширення, гранти, типові привілеї; поза
   межею — внутрішні об'єкти провайдера й некеровані схеми. Записати форму
   фільтра і як визначається «об'єкт застосунку в чужій схемі».
-- [ ] **Step 3: Таблиця властивостей.** Для кожного класу фактів, який
+- [x] **Step 3: Таблиця властивостей.** Для кожного класу фактів, який
   зустрічається в межі, — кожна властивість payload → поле моделі каталогу /
   SQL-одиниця / «не виражається»; для класів-одиниць — звідки береться текст
   (`def` факту чи дія плану з `produces`) і чи одна дія на факт.
-- [ ] **Step 4: Перепис.** Запит до `pg_catalog`, що рахує об'єкти за
+- [x] **Step 4: Перепис.** Запит до `pg_catalog`, що рахує об'єкти за
   класами в межі (зокрема cast, operator, opclass, statistics, text search,
   незаповнені матеріалізовані подання), і відповідність його класів
   класам фактів двигуна.
-- [ ] **Step 5: Commit** `docs(research): спайк pg-delta під контракт порту SchemaEngine`
+- [x] **Step 5: Commit** `docs(research): спайк pg-delta під контракт порту SchemaEngine`
 
 ---
 
@@ -265,12 +265,12 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   `diffCatalogModels` — структурно: таблиці й енам-типи за `schema.name`,
   колонки **в порядку** (ті самі колонки в іншому порядку — `kind: "order"`),
   ключі, обмеження й індекси за іменем, одиниці за `identity` і текстом.
-- [ ] **Step 1: Тести** — `catalog from snapshot drops origin`; `identical
+- [x] **Step 1: Тести** — `catalog from snapshot drops origin`; `identical
   models have no differences`; `reordered columns are an order difference`;
   `missing and extra index`; `changed check expression`; `units compared by
   identity and text`.
-- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
-- [ ] **Step 5: Commit** `feat(model): модель каталогу порту SchemaEngine і її порівняння`
+- [x] **Step 2–4:** червоні → реалізація → зелені, гейти.
+- [x] **Step 5: Commit** `feat(model): модель каталогу порту SchemaEngine і її порівняння`
 
 ---
 
@@ -314,14 +314,14 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   `withDesiredShadow` прибирає тінь у `finally`; тести, яким потрібна тінь
   із довільними об'єктами, передають їх як `desiredSql`. Мапінг моделі в цій задачі — лише таблиці з колонками
   (решта — задача 4).
-- [ ] **Step 1: Тести** — `stack database with no managed schemas extracts
+- [x] **Step 1: Тести** — `stack database with no managed schemas extracts
   an empty model`; `managed schema is kept`; `self plan is empty`;
   `scope follows 6.9` (тінь: таблиця в `public` як керованій схемі, політика
   на `storage.objects`, тригер на `auth.users`; plan «порожня тінь → ця
   тінь» має дії для кожного з трьох; `shadow plan equals port plan` і жодної з `produces` у внутрішніх
   об'єктах провайдера чи некерованій схемі).
-- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
-- [ ] **Step 5: Commit** `feat(schema): порт SchemaEngine і адаптер pg-delta — extract, структурований plan, тінь`
+- [x] **Step 2–4:** червоні → реалізація → зелені, гейти.
+- [x] **Step 5: Commit** `feat(schema): порт SchemaEngine і адаптер pg-delta — extract, структурований plan, тінь`
 
 ---
 
@@ -352,12 +352,12 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   `{ generation, sequence }`. Одиниці — рішення плану 6. Кожен рядок таблиці
   властивостей задачі 1 має гілку: поле, одиниця або
   `engine.unrepresentable`.
-- [ ] **Step 1: Тести юніт** (тексти дефініцій дослівно з розвідки):
+- [x] **Step 1: Тести юніт** (тексти дефініцій дослівно з розвідки):
   `primary key`; `unique nulls not distinct deferrable initially deferred`;
   `check strips wrapper`; `foreign key with cascade and external target`;
   `exclude is unrepresentable`; `partial expression index with opclass desc
   nulls last include`; `default ordering is omitted`.
-- [ ] **Step 2: Тести з базою** — для кожної фікстури E1 (побудовники з
+- [x] **Step 2: Тести з базою** — для кожної фікстури E1 (побудовники з
   `deploy.db.test.ts` винести в спільний модуль фікстур) і синтетичного
   домену: рендер у тіні → extract → `diffCatalogModels` проти
   `catalogFromSnapshot(model.physical)` дає відмінності лише за явно
@@ -367,8 +367,8 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   у тесті з причинами). Негативні (Review Focus 4): `UNLOGGED`-таблиця,
   `NOT VALID`-FK → `engine.unrepresentable` з ім'ям об'єкта;
   `REPLICA IDENTITY FULL` → одиниця `replicaIdentity`.
-- [ ] **Step 3–5:** червоні → реалізація → зелені, гейти.
-- [ ] **Step 6: Commit** `feat(schema): extract мапить факти pg-delta у модель каталогу — поле, одиниця або гучна помилка`
+- [x] **Step 3–5:** червоні → реалізація → зелені, гейти.
+- [x] **Step 6: Commit** `feat(schema): extract мапить факти pg-delta у модель каталогу — поле, одиниця або гучна помилка`
 
 ---
 
@@ -386,15 +386,15 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   `engine.unmodeled-class` (error: клас поза `COVERED_CLASSES` з
   ненульовим лічильником у межі), `engine.matview-unpopulated` (error: модель
   не виражає стан заповнення). `dangling_edge` двигуна до порту не доходить.
-- [ ] **Step 1: Тести** — `unmodeled classes are counted` (cast,
+- [x] **Step 1: Тести** — `unmodeled classes are counted` (cast,
   statistics, text search config у тіні → діагностика за класом із
   лічильником); `unpopulated materialized view is diagnosed` (два extract-и й
   план однакові, лічильник перепису — ні); `generated column noise is
   filtered`; `covered classes match the pinned engine` (контрактний тест:
   кожен клас фактів двигуна, що трапляється в корпусі, — у
   `COVERED_CLASSES` або в переписі).
-- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
-- [ ] **Step 5: Commit** `feat(schema): перепис класів у межі керування й діагностика тихих втрат двигуна`
+- [x] **Step 2–4:** червоні → реалізація → зелені, гейти.
+- [x] **Step 5: Commit** `feat(schema): перепис класів у межі керування й діагностика тихих втрат двигуна`
 
 ---
 
@@ -419,12 +419,12 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   error (перепис, `unrepresentable`). `engineScope` — схеми застосунку з
   моделі (`defaultSchema`, схеми таблиць, енам-типів і одиниць) з
   урахуванням рішення плану 3.
-- [ ] **Step 1: Тести** — `no shadow is left behind` (успіх і помилка);
+- [x] **Step 1: Тести** — `no shadow is left behind` (успіх і помилка);
   `broken desired sql is shadow-failed`; `plan stays inside the scope`
   (Review Focus 2 за `produces`/`destroys`); `foreign key to auth.users
   deploys in the shadow`.
-- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
-- [ ] **Step 5: Commit** `feat(schema): порівняння бази з бажаним станом через тінь`
+- [x] **Step 2–4:** червоні → реалізація → зелені, гейти.
+- [x] **Step 5: Commit** `feat(schema): порівняння бази з бажаним станом через тінь`
 
 ---
 
@@ -434,23 +434,23 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 - Create: `packages/simetra/src/schema/__tests__/engine-desired-corpus.db.test.ts`
 - Modify: спека П2 §9 і §10.4, `docs/ROADMAP.md`
 
-- [ ] **Step 1: Тести** — для кожної фікстури E1 і синтетичного домену:
+- [x] **Step 1: Тести** — для кожної фікстури E1 і синтетичного домену:
   ціль — тінь із розгорнутим рендером (вкладений `withDesiredShadow`), `compareWithDesired` з тим самим
   рендером → `empty`. Мутаційні (кожна мутація цілі → не `empty` і
   відмінність або дія називає об'єкт): зайвий індекс; відсутня колонка;
   переставлені колонки (Review Focus 3: `plan.empty`, але `differences`
   `order`); змінене тіло функції; змінений вираз CHECK; змінений предикат
   часткового індексу.
-- [ ] **Step 2:** `pnpm --filter simetra test:db` — зелено; час db-проєкту
+- [x] **Step 2:** `pnpm --filter simetra test:db` — зелено; час db-проєкту
   в звіті (якщо понад 2× від E1 — групувати фікстури в одну тінь).
-- [ ] **Step 3: Канон** — спека §9: звірка й round-trip вимагають, крім
+- [x] **Step 3: Канон** — спека §9: звірка й round-trip вимагають, крім
   порожнього плану двигуна, рівності моделей каталогу з порядком колонок і
   чистого перепису класів; §10.4: тінь — co-located база двигуна з базовим
   станом провайдера (транзакція з відкатом лишається для тестів E1); ROADMAP:
   план E2a в рядку П2, «Зараз» — E2a виконано, далі E2b;
   `python3 scripts/check-doc-anchors.py`.
-- [ ] **Step 4:** повні кореневі гейти й `pnpm test:db`.
-- [ ] **Step 5: Commit** `test(schema): звірка розгорнутого бажаного стану через порт на корпусі фікстур`
+- [x] **Step 4:** повні кореневі гейти й `pnpm test:db`.
+- [x] **Step 5: Commit** `test(schema): звірка розгорнутого бажаного стану через порт на корпусі фікстур`
 
 ---
 
