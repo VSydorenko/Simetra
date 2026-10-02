@@ -221,3 +221,43 @@ describe("a mutated target is never silently empty", () => {
     expect(planTargets(result).join("\n")).toContain("audit_email_lower_idx")
   })
 })
+
+describe("materialized view population is compared between the database and the shadow", () => {
+  const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+  const view = (populate: "WITH DATA" | "WITH NO DATA") => `
+    CREATE SCHEMA app;
+    CREATE TABLE app.doc (id int PRIMARY KEY);
+    CREATE MATERIALIZED VIEW app.totals AS SELECT count(*) AS n FROM app.doc ${populate};
+  `
+
+  it("equally unpopulated on both sides is empty", async () => {
+    const result = await reconcile(
+      view("WITH NO DATA"),
+      view("WITH NO DATA"),
+      scope
+    )
+    expect(result.target.unpopulated).toEqual(["materializedView:app.totals"])
+    expect(result.differences).toEqual([])
+    expect(result.empty).toBe(true)
+  })
+
+  it("a different population state is a difference of the view", async () => {
+    const result = await reconcile(
+      view("WITH NO DATA"),
+      view("WITH DATA"),
+      scope
+    )
+    // Двигун стану заповнення не бачить: без порівняння звірка була б тихо
+    // порожньою
+    expect(result.plan.empty).toBe(true)
+    expect(result.differences).toEqual([
+      {
+        path: "units.materializedView:app.totals",
+        kind: "changed",
+        detail:
+          "materialized view is not populated in the database, populated in the desired state",
+      },
+    ])
+    expect(result.empty).toBe(false)
+  })
+})

@@ -1,4 +1,4 @@
-import { encodeId, type FactKind } from "@supabase/pg-delta"
+import type { FactKind } from "@supabase/pg-delta"
 import type pg from "pg"
 import { localize } from "simetra/compiler"
 import type { EngineDiagnostic, EngineScope } from "./port"
@@ -93,31 +93,23 @@ const CENSUS_FACTS = {
   subscription: { kind: "subscription" },
 } as const satisfies Record<string, CensusFact>
 
-/**
- * Стан заповнення матеріалізованого подання: факт двигуна його не несе, а дія
- * створення не містить `WITH NO DATA` — доведена прогалина двигуна (план E2a,
- * рішення 7), тож окремий клас перепису з власною діагностикою.
- */
-const UNPOPULATED = "materializedView.unpopulated"
-
-type TableClass = keyof typeof CENSUS_FACTS
-export type CensusClass = TableClass | typeof UNPOPULATED
+export type CensusClass = keyof typeof CENSUS_FACTS
 
 export interface CensusCount {
   class: CensusClass
   count: number
 }
 
-function entryOf(censusClass: CensusClass): CensusFact | undefined {
-  return censusClass === UNPOPULATED ? undefined : CENSUS_FACTS[censusClass]
+function entryOf(censusClass: CensusClass): CensusFact {
+  return CENSUS_FACTS[censusClass]
 }
 
 /** Вид факту двигуна для класу перепису; `null` — двигун класу не бачить. */
 export function factKindOf(censusClass: CensusClass): FactKind | null {
-  return entryOf(censusClass)?.kind ?? null
+  return entryOf(censusClass).kind
 }
 
-const TABLE_CLASSES = Object.keys(CENSUS_FACTS) as TableClass[]
+const TABLE_CLASSES = Object.keys(CENSUS_FACTS) as CensusClass[]
 
 /**
  * Класи перепису, об'єкти яких доходять до мапера фактами двигуна: їх
@@ -129,12 +121,9 @@ export const COVERED_CLASSES: readonly CensusClass[] = TABLE_CLASSES.filter(
 )
 
 /** Покриті класи, лічильник яких звіряється з фактами двигуна. */
-const COMPARED_CLASSES: readonly TableClass[] = COVERED_CLASSES.flatMap((c) => {
-  const entry = entryOf(c)
-  return entry !== undefined && !("uncompared" in entry)
-    ? [c as TableClass]
-    : []
-})
+const COMPARED_CLASSES: readonly CensusClass[] = COVERED_CLASSES.filter(
+  (c) => !("uncompared" in entryOf(c))
+)
 
 /**
  * Клас перепису, яким звіряється факт двигуна; `undefined` — факт не
@@ -242,7 +231,6 @@ with managed as (
      or (c.relkind in ('i', 'I') and not exists (
            select 1 from pg_constraint k join pg_index i on i.indexrelid = c.oid
            where k.conindid = c.oid and k.contype in ('p', 'u', 'x') and k.conrelid = i.indrelid))
-  union all select '${UNPOPULATED}' from rel where relkind = 'm' and not relispopulated
   union all select case t.typtype when 'e' then 'type.enum' when 'd' then 'domain'
                                   when 'r' then 'type.range' when 'b' then 'type.base'
                                   when 'p' then 'type.shell'
@@ -332,8 +320,10 @@ export async function readCensus(
 }
 
 /**
- * Незаповнені матеріалізовані подання керованих схем у формі ідентичності
- * двигуна: перепис їх лише рахує, а діагностика має назвати кожне.
+ * Незаповнені матеріалізовані подання керованих схем — ідентичності їхніх
+ * одиниць моделі. Стан заповнення двигун не читає, а дія створення не несе
+ * `WITH NO DATA` — доведена прогалина двигуна (план E2a, рішення 7), тож
+ * вузький запит до каталогу; порівнюється він між базою й тінню.
  */
 export async function readUnpopulatedViews(
   pool: Queryable,
@@ -349,25 +339,18 @@ export async function readUnpopulatedViews(
       order by 1, 2`,
     [scope.schemas]
   )
-  return rows.map((r) =>
-    encodeId({ kind: "materializedView", schema: r.schema, name: r.name })
-  )
+  return rows.map((r) => `materializedView:${r.schema}.${r.name}`)
 }
 
 function diagnostic(
-  code:
-    | "engine.unmodeled-class"
-    | "engine.matview-unpopulated"
-    | "engine.census-mismatch",
+  code: "engine.unmodeled-class" | "engine.census-mismatch",
   severity: EngineDiagnostic["severity"],
-  params: Record<string, string | number>,
-  object?: string
+  params: Record<string, string | number>
 ): EngineDiagnostic {
   return {
     code,
     severity,
     message: localize({ code, params }, "en").message,
-    ...(object === undefined ? {} : { object }),
   }
 }
 
@@ -376,28 +359,26 @@ export function unmodeledClasses(
   census: readonly CensusCount[]
 ): Set<CensusClass> {
   return new Set(
-    census.map((c) => c.class).filter((c) => entryOf(c)?.kind === null)
+    census.map((c) => c.class).filter((c) => entryOf(c).kind === null)
   )
 }
 
 /**
  * Діагностики перепису: клас без факту двигуна з об'єктами в межі — тиха
  * втрата; розбіжність лічильника покритого класу з фактами — пропуск окремих
- * об'єктів; незаповнене подання — стан, якого модель не виражає. Усі — error,
+ * об'єктів. Усі — error,
  * інакше звірка назвала б базу рівною бажаному стану; виняток — глобальні
  * класи без схеми (див. `CENSUS_FACTS`).
  */
 export function censusDiagnostics(
   census: readonly CensusCount[],
-  facts: ReadonlyMap<CensusClass, number>,
-  unpopulated: readonly string[]
+  facts: ReadonlyMap<CensusClass, number>
 ): EngineDiagnostic[] {
   const unmodeled = unmodeledClasses(census)
   const out = census
     .filter((c) => unmodeled.has(c.class))
     .map((c) => {
-      const entry = entryOf(c.class)
-      const global = entry !== undefined && "global" in entry
+      const global = "global" in entryOf(c.class)
       return diagnostic(
         "engine.unmodeled-class",
         global ? "warning" : "error",
@@ -405,7 +386,5 @@ export function censusDiagnostics(
       )
     })
   out.push(...reconcileCensus(census, facts))
-  for (const view of unpopulated)
-    out.push(diagnostic("engine.matview-unpopulated", "error", { view }, view))
   return out
 }

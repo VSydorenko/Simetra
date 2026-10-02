@@ -44,10 +44,43 @@ function dedupe(diagnostics: EngineDiagnostic[]): EngineDiagnostic[] {
 }
 
 /**
+ * Стан заповнення матеріалізованого подання — відмінність бази від бажаного
+ * стану, коли подання є з обох боків: двигун і модель каталогу його не
+ * бачать, тож без цього порівняння незаповнене подання проходило б мовчки.
+ * Подання лише з одного боку вже дає відмінність одиниці.
+ */
+function populationDifferences(
+  target: Extracted,
+  desired: Extracted
+): CatalogDifference[] {
+  const both = new Set(
+    target.model.units
+      .filter((u) => u.class === "materializedView")
+      .map((u) => u.identity)
+      .filter((identity) =>
+        desired.model.units.some((u) => u.identity === identity)
+      )
+  )
+  const inTarget = new Set(target.unpopulated)
+  const inDesired = new Set(desired.unpopulated)
+  const populated = (unpopulated: ReadonlySet<string>, identity: string) =>
+    unpopulated.has(identity) ? "not populated" : "populated"
+  return [...both]
+    .filter((identity) => inTarget.has(identity) !== inDesired.has(identity))
+    .sort()
+    .map((identity): CatalogDifference => ({
+      path: `units.${identity}`,
+      kind: "changed",
+      detail: `materialized view is ${populated(inTarget, identity)} in the database, ${populated(inDesired, identity)} in the desired state`,
+    }))
+}
+
+/**
  * Порівнює живу базу з бажаним станом через тінь двигуна: і ціль, і тінь
  * читаються тим самим extract у тій самій межі, тож різницю моделей і план
  * «ціль → тінь» видно разом. Порожнім порівняння вважається, лише коли план
- * порожній, моделі збігаються і перепис не дав жодної помилки — інакше
+ * порожній, моделі й стан заповнення подань збігаються і перепис не дав
+ * жодної помилки — інакше
  * «порожньо» приховало б втрати двигуна.
  */
 export async function compareWithDesired(
@@ -71,7 +104,10 @@ export async function compareWithDesired(
   if (outcome.status === "shadow-failed") return outcome
 
   const { plan, target: extractedTarget, desired } = outcome.value
-  const differences = diffCatalogModels(extractedTarget.model, desired.model)
+  const differences = [
+    ...diffCatalogModels(extractedTarget.model, desired.model),
+    ...populationDifferences(extractedTarget, desired),
+  ]
   const diagnostics = dedupe([
     ...outcome.diagnostics,
     ...extractedTarget.diagnostics,

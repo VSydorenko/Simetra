@@ -257,12 +257,9 @@ async function extractFrom(
     diagnostics: [
       ...toEngineDiagnostics(result.diagnostics, unmodeledClasses(census)),
       ...issues.map(unrepresentableDiagnostic),
-      ...censusDiagnostics(
-        census,
-        factCensus(view),
-        await readUnpopulatedViews(pool, scope)
-      ),
+      ...censusDiagnostics(census, factCensus(view)),
     ],
+    unpopulated: await readUnpopulatedViews(pool, scope),
   }
 }
 

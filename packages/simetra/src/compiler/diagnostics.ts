@@ -97,7 +97,6 @@ export const COMPILER_RULES = [
   "engine.desired-rejected",
   "engine.unrepresentable",
   "engine.unmodeled-class",
-  "engine.matview-unpopulated",
   "engine.census-mismatch",
 ] as const
 

@@ -70,26 +70,12 @@ describe("census reconciliation with engine facts", () => {
           { class: "language", count: 1 },
           { class: "accessMethod", count: 2 },
         ],
-        new Map(),
-        []
+        new Map()
       ).map((d) => [d.code, d.severity])
     ).toEqual([
       ["engine.unmodeled-class", "error"],
       ["engine.unmodeled-class", "warning"],
       ["engine.unmodeled-class", "warning"],
     ])
-  })
-
-  it("each unpopulated materialized view is named", () => {
-    expect(
-      censusDiagnostics(
-        [
-          { class: "materializedView", count: 1 },
-          { class: "materializedView.unpopulated", count: 1 },
-        ],
-        new Map<CensusClass, number>([["materializedView", 1]]),
-        ["materializedView:app.totals"]
-      ).map((d) => [d.code, d.object])
-    ).toEqual([["engine.matview-unpopulated", "materializedView:app.totals"]])
   })
 })

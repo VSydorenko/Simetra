@@ -43,6 +43,12 @@ export interface Extracted {
   model: CatalogModel
   catalog: EngineCatalog
   diagnostics: EngineDiagnostic[]
+  /**
+   * Ідентичності одиниць незаповнених матеріалізованих подань. Стан
+   * заповнення — не форма об'єкта, тож модель каталогу його не несе, а двигун
+   * не бачить; звірка порівнює його між базою й тінню.
+   */
+  unpopulated: string[]
 }
 
 /**

@@ -26,8 +26,8 @@ import { FIXTURES } from "./fixtures/e1-fixtures"
 
 /**
  * Перепис класів у межі керування (план E2a, рішення 8): клас, якого двигун
- * не бачить, і незаповнене матеріалізоване подання дають помилку, а не тихе
- * «порожньо» (Review Focus 5).
+ * не бачить, дає помилку, а не тихе «порожньо» (Review Focus 5); стан
+ * заповнення подання extract віддає для звірки з тінню.
  */
 
 const engine = createPgDeltaEngine()
@@ -191,7 +191,7 @@ describe("class census inside the managed boundary", () => {
     ).toEqual([])
   })
 
-  it("unpopulated materialized view is diagnosed", async () => {
+  it("unpopulated materialized view is reported, not diagnosed", async () => {
     const view = (populate: "with data" | "with no data") => `
       create schema app;
       create table app.doc (id int primary key);
@@ -206,7 +206,6 @@ describe("class census inside the managed boundary", () => {
         const extracted = await engine.extract(shadow, scope)
         return {
           extracted,
-          census: await withPool(shadow, (pool) => readCensus(pool, scope)),
           // Обидва каталоги — під одну межу, тож двигун планує між тінями
           plan: engine.plan(
             unpopulated.extracted.catalog,
@@ -219,26 +218,14 @@ describe("class census inside the managed boundary", () => {
     // Модель і план двигуна стану заповнення не бачать
     expect(populated.extracted.model).toEqual(unpopulated.extracted.model)
     expect(populated.plan.empty).toBe(true)
-    // Перепис бачить
-    expect(unpopulated.census).toContainEqual({
-      class: "materializedView.unpopulated",
-      count: 1,
-    })
-    expect(populated.census.map((c) => c.class)).not.toContain(
-      "materializedView.unpopulated"
-    )
-    expect(
-      errorsOf(unpopulated.extracted, "engine.matview-unpopulated")
-    ).toEqual([
-      {
-        severity: "error",
-        object: "materializedView:app.doc_totals",
-        message: expect.stringContaining("materializedView:app.doc_totals"),
-      },
+    // Вузький запит бачить; порівнює його звірка, а не перепис
+    expect(unpopulated.extracted.unpopulated).toEqual([
+      "materializedView:app.doc_totals",
     ])
-    expect(errorsOf(populated.extracted, "engine.matview-unpopulated")).toEqual(
-      []
-    )
+    expect(populated.extracted.unpopulated).toEqual([])
+    expect(
+      unpopulated.extracted.diagnostics.filter((d) => d.severity === "error")
+    ).toEqual([])
   })
 
   it("shell type is counted as its own class", async () => {
@@ -288,9 +275,7 @@ describe("class census inside the managed boundary", () => {
     // перепис зайвих класів не додає
     expect(
       extracted.diagnostics.filter((d) =>
-        ["engine.unmodeled-class", "engine.matview-unpopulated"].includes(
-          d.code
-        )
+        ["engine.unmodeled-class", "engine.census-mismatch"].includes(d.code)
       )
     ).toEqual([])
   })
