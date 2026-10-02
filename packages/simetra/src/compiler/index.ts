@@ -31,3 +31,4 @@ export type {
 export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
 export { canonicalSnapshot, canonicalize } from "./canonical"
+export type { FileChange, OperationResult } from "./operations/types"
