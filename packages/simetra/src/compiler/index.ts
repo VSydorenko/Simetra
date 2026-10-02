@@ -8,7 +8,13 @@ export {
   type RuleCode,
   type Severity,
 } from "./diagnostics"
-export { MESSAGES, localize, type Locale, type MessageEntry } from "./messages"
+export {
+  MESSAGES,
+  localize,
+  type Locale,
+  type MessageEntry,
+  type OutOfScopeReason,
+} from "./messages"
 export {
   compile,
   type CompileResult,

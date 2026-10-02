@@ -68,7 +68,7 @@ describe("unitTarget", () => {
     ).toEqual({ schema: "reports", object: "t", kind: "table" })
   })
 
-  it("a comment targets the table of a column, policy or trigger", () => {
+  it("a comment on a column, policy or trigger targets its table and keeps the member kind", () => {
     expect(target("comment", "COMMENT ON TABLE auth.users IS 'x'")).toEqual({
       schema: "auth",
       object: "users",
@@ -76,10 +76,13 @@ describe("unitTarget", () => {
     })
     expect(
       target("comment", "COMMENT ON COLUMN auth.users.email IS 'x'")
-    ).toEqual({ schema: "auth", object: "users", kind: "other" })
+    ).toEqual({ schema: "auth", object: "users", kind: "column" })
     expect(
       target("comment", "COMMENT ON POLICY p ON storage.objects IS 'x'")
-    ).toEqual({ schema: "storage", object: "objects", kind: "other" })
+    ).toEqual({ schema: "storage", object: "objects", kind: "policy" })
+    expect(
+      target("comment", "COMMENT ON TRIGGER t ON auth.users IS 'x'")
+    ).toEqual({ schema: "auth", object: "users", kind: "trigger" })
     expect(target("comment", "COMMENT ON SCHEMA reports IS 'x'")).toEqual({
       schema: "reports",
       object: "reports",

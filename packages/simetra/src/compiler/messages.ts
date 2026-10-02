@@ -996,9 +996,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "engine.out-of-scope": {
     en: (p) =>
-      `${p.object} lies outside the boundary the schema engine compares, so a comparison would never see it: ${OUT_OF_SCOPE_REASONS[String(p.reason)]?.en(p) ?? p.reason}`,
+      `${p.object} lies outside the boundary the schema engine compares, so a comparison would never see it: ${outOfScopeReason(p)?.en(p) ?? p.reason}`,
     uk: (p) =>
-      `${p.object} лежить поза межею, яку порівнює рушій схеми, тож звірка ніколи його не побачить: ${OUT_OF_SCOPE_REASONS[String(p.reason)]?.uk(p) ?? p.reason}`,
+      `${p.object} лежить поза межею, яку порівнює рушій схеми, тож звірка ніколи його не побачить: ${outOfScopeReason(p)?.uk(p) ?? p.reason}`,
     hint: {
       en: "In a provider schema the application owns only policies and triggers on the provider's surface tables, with trigger functions outside provider schemas; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
       uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
@@ -1006,8 +1006,21 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
 }
 
-/** Причини `engine.out-of-scope`: параметр `reason` — ключ, текст — тут. */
-const OUT_OF_SCOPE_REASONS: Readonly<Record<string, Record<Locale, Text>>> = {
+/** Причини `engine.out-of-scope`: параметр `reason` межі моделі (T2). */
+export type OutOfScopeReason =
+  | "provider-schema"
+  | "provider-surface"
+  | "provider-trigger-function"
+  | "global-default-privileges"
+  | "provider-extension"
+
+/**
+ * Тексти причин: тип за `OutOfScopeReason` робить каталог вичерпним — причина
+ * без тексту не пройде typecheck.
+ */
+const OUT_OF_SCOPE_REASONS: Readonly<
+  Record<OutOfScopeReason, Record<Locale, Text>>
+> = {
   "provider-schema": {
     en: (p) => `schema ${p.schema} belongs to the provider`,
     uk: (p) => `схема ${p.schema} належить провайдерові`,
@@ -1034,6 +1047,16 @@ const OUT_OF_SCOPE_REASONS: Readonly<Record<string, Record<Locale, Text>>> = {
     en: () => "the provider installs this extension itself",
     uk: () => "це розширення ставить сам провайдер",
   },
+}
+
+/** Параметр приходить як `unknown`: невідома причина — без тексту, не виняток. */
+function outOfScopeReason(
+  p: DiagnosticParams
+): Record<Locale, Text> | undefined {
+  const reason = String(p.reason)
+  return Object.hasOwn(OUT_OF_SCOPE_REASONS, reason)
+    ? OUT_OF_SCOPE_REASONS[reason as OutOfScopeReason]
+    : undefined
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */

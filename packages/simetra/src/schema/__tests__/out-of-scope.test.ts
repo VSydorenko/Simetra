@@ -60,6 +60,20 @@ describe("the boundary takes the target of a unit", () => {
     expect(scope.schemas).toEqual(["app"])
   })
 
+  it("comment on a policy on storage.objects gives no diagnostic", async () => {
+    // Правило двигуна `supabase.user-policy-surface-comment`: коментар на
+    // політиці застосунку на таблиці поверхні — у межі
+    expect(
+      await outOfScope(
+        [
+          "CREATE POLICY app_read ON storage.objects FOR SELECT TO authenticated USING (true);",
+          "COMMENT ON POLICY app_read ON storage.objects IS 'Read own files';",
+          "",
+        ].join("\n")
+      )
+    ).toEqual([])
+  })
+
   it("ADP IN SCHEMA app gives no diagnostic", async () => {
     expect(
       await outOfScope(
@@ -83,6 +97,14 @@ describe("engine.out-of-scope", () => {
       await outOfScope("COMMENT ON TABLE auth.users IS 'Users';\n")
     ).toEqual([
       `comment:table:auth.users ${OUTSIDE}: schema auth belongs to the provider`,
+    ])
+  })
+
+  it("comment on a column of a provider table is out of scope", async () => {
+    expect(
+      await outOfScope("COMMENT ON COLUMN storage.objects.name IS 'Name';\n")
+    ).toEqual([
+      `comment:column:storage.objects.name ${OUTSIDE}: schema storage belongs to the provider`,
     ])
   })
 

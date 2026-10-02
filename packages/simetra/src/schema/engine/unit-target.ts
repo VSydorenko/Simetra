@@ -4,15 +4,31 @@ import type { CatalogUnit } from "simetra/model"
 /**
  * Ціль одиниці — об'єкт, на який діє оператор без власного об'єкта в схемі
  * (грант, коментар, типові привілеї, членство в publication) чи з об'єктом,
- * що висить на чужій таблиці (політика, тригер). `schema` — схема цілі;
- * порожня — ціль без схеми (база, роль, publication) або некваліфіковане ім'я
- * в одиниці без власної схеми. `object` — об'єкт верхнього рівня схеми:
- * таблиця колонки, політики чи тригера, функція, сама схема.
+ * що висить на чужій таблиці (політика, тригер).
+ *
+ * `schema` — схема цілі. Порожня означає одне з двох: ціль без схеми (база,
+ * роль, розширення, publication) або некваліфіковане ім'я в одиниці без
+ * власної схеми (грант, коментар). Некваліфіковане ім'я Postgres резолвить за
+ * `search_path` рендера, тобто в `defaultSchema` проєкту: читач, якому
+ * потрібна схема такої цілі (межа, зворотний генератор), підставляє
+ * `defaultSchema`, а не вважає ціль безсхемною.
+ *
+ * `object` — об'єкт верхнього рівня схеми: функція, сама схема, а для
+ * колонки, політики чи тригера (`kind` `column`/`policy`/`trigger`) — їхня
+ * таблиця: поверхня провайдера й розкладка файлів читають саме таблицю.
  */
 export interface UnitTarget {
   schema: string
   object?: string
-  kind?: "table" | "schema" | "function" | "publication" | "other"
+  kind?:
+    | "table"
+    | "column"
+    | "policy"
+    | "trigger"
+    | "schema"
+    | "function"
+    | "publication"
+    | "other"
 }
 
 type TargetUnit = Pick<CatalogUnit, "class" | "schema" | "sql">
@@ -39,6 +55,18 @@ export function unitTarget(
 export function unitTargets(unit: TargetUnit, parse: SqlParser): UnitTarget[] {
   if (!TARGETED.has(unit.class)) return []
   return statements(unit, parse).flatMap((stmt) => targetsOf(stmt, unit.schema))
+}
+
+/**
+ * Цілі одиниці, а для одиниці без цілі — її власна схема: де одиниця лежить
+ * для межі керування й для діагностики межі, одним правилом.
+ */
+export function unitPlacement(
+  unit: TargetUnit,
+  parse: SqlParser
+): UnitTarget[] {
+  const targets = unitTargets(unit, parse)
+  return targets.length > 0 ? targets : [{ schema: unit.schema }]
 }
 
 /**
@@ -83,13 +111,17 @@ const FUNCTION_TYPES: ReadonlySet<string> = new Set([
   "OBJECT_AGGREGATE",
 ])
 
-/** Цілі, що висять на таблиці: ім'я — `[схема,] таблиця, ім'я`. */
-const TABLE_MEMBERS: ReadonlySet<string> = new Set([
-  "OBJECT_COLUMN",
-  "OBJECT_TRIGGER",
-  "OBJECT_POLICY",
-  "OBJECT_RULE",
-  "OBJECT_TABCONSTRAINT",
+/**
+ * Цілі, що висять на таблиці: ім'я — `[схема,] таблиця, ім'я`. Вид члена
+ * зберігається: коментар на політиці поверхні провайдера двигун пускає в
+ * межу, а коментар на колонці чи тригері тієї ж таблиці — ні.
+ */
+const TABLE_MEMBERS: ReadonlyMap<string, UnitTarget["kind"]> = new Map([
+  ["OBJECT_COLUMN", "column"],
+  ["OBJECT_TRIGGER", "trigger"],
+  ["OBJECT_POLICY", "policy"],
+  ["OBJECT_RULE", "other"],
+  ["OBJECT_TABCONSTRAINT", "other"],
 ])
 
 function targetsOf(stmt: Node, schema: string): UnitTarget[] {
@@ -162,9 +194,10 @@ function objectTarget(
     type === "OBJECT_OPCLASS" || type === "OBJECT_OPFAMILY"
       ? parts.slice(1)
       : parts
-  if (TABLE_MEMBERS.has(type)) {
+  const member = TABLE_MEMBERS.get(type)
+  if (member !== undefined) {
     const { schema: s, name } = qualify(named.slice(0, -1), schema)
-    return { schema: s, object: name, kind: "other" }
+    return { schema: s, object: name, kind: member }
   }
   const { schema: s, name } = qualify(
     type === "OBJECT_DOMCONSTRAINT" ? named.slice(0, -1) : named,

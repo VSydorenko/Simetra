@@ -66,6 +66,30 @@ function policySurface(policy: Policy): Set<string> {
   )
 }
 
+/**
+ * Схеми поверхні тригерів — правило включення тригерів пресету (Rule 3):
+ * його схеми мінус схеми з виключенням таблиць (`not all [schema, idField]`,
+ * черги `pgmq`), якого позитивний glob поверхні не виражає.
+ */
+function triggerSurfaceSchemas(policy: Policy): Set<string> {
+  const rule = flattenPolicy(policy).filter.find(
+    (r) =>
+      r.action === "include" &&
+      "all" in r.match &&
+      r.match.all.some((m) => "kind" in m && list(m.kind).includes("trigger"))
+  )
+  if (rule === undefined || !("all" in rule.match)) return new Set()
+  const schemas = rule.match.all.flatMap((m) =>
+    "schema" in m ? list(m.schema) : []
+  )
+  const carved = rule.match.all.flatMap((m) =>
+    "not" in m && "all" in m.not
+      ? m.not.all.flatMap((n) => ("schema" in n ? list(n.schema) : []))
+      : []
+  )
+  return new Set(schemas.filter((schema) => !carved.includes(schema)))
+}
+
 /** Ролі провайдера — правило «власник — системна роль». */
 function ownerRoles(policy: Policy): Set<string> {
   return new Set(
@@ -103,6 +127,17 @@ describe("provider preset matches the pinned engine", () => {
     ).map((s) => `${s.schema}.${s.table}`)
     expect(new Set(policies)).toEqual(policySurface(supabasePolicy))
     expect(policies.length).toBeGreaterThan(0)
+  })
+
+  it("trigger surface matches the engine preset", () => {
+    const triggers = SUPABASE_SURFACES.filter((s) =>
+      s.classes.includes("trigger")
+    )
+    for (const surface of triggers) expect(surface.table).toBe("*")
+    expect(new Set(triggers.map((s) => s.schema))).toEqual(
+      triggerSurfaceSchemas(supabasePolicy)
+    )
+    expect(triggers.length).toBeGreaterThan(0)
   })
 
   it("extension list is not empty", () => {

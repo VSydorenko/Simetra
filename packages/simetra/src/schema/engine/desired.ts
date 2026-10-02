@@ -2,6 +2,7 @@ import {
   loadSqlParser,
   localize,
   type CompiledModel,
+  type OutOfScopeReason,
   type SqlParser,
 } from "simetra/compiler"
 import { diffCatalogModels, type CatalogDifference } from "simetra/model"
@@ -12,6 +13,7 @@ import {
 } from "./provider/supabase"
 import {
   triggerFunctionSchema,
+  unitPlacement,
   unitTargets,
   type UnitTarget,
 } from "./unit-target"
@@ -179,13 +181,6 @@ function onSurface(cls: "policy" | "trigger", target: UnitTarget): boolean {
   )
 }
 
-type OutOfScopeReason =
-  | "provider-schema"
-  | "provider-surface"
-  | "provider-trigger-function"
-  | "global-default-privileges"
-  | "provider-extension"
-
 function outOfScope(
   object: string,
   reason: OutOfScopeReason,
@@ -255,9 +250,19 @@ function outOfScopeDiagnostics(
         )
       continue
     }
-    const schemas =
-      targets.length > 0 ? targets.map((t) => t.schema) : [unit.schema]
-    for (const schema of new Set(schemas.filter((s) => provider.has(s))))
+    // Коментар на політиці поверхні — у межі (правило двигуна
+    // `supabase.user-policy-surface-comment`); на колонці, тригері чи самій
+    // таблиці провайдера — ні
+    const outside = unitPlacement(unit, parse).filter(
+      (t) =>
+        provider.has(t.schema) &&
+        !(
+          unit.class === "comment" &&
+          t.kind === "policy" &&
+          onSurface("policy", t)
+        )
+    )
+    for (const schema of new Set(outside.map((t) => t.schema)))
       out.push(outOfScope(unit.identity, "provider-schema", { schema }))
   }
   return out
@@ -285,10 +290,9 @@ export async function engineScope(
     model.project.defaultSchema,
     ...model.physical.tables.map((table) => table.schema),
     ...model.physical.enumTypes.map((type) => type.schema),
-    ...model.sqlUnits.flatMap((unit) => {
-      const targets = unitTargets(unit, parse)
-      return targets.length > 0 ? targets.map((t) => t.schema) : [unit.schema]
-    }),
+    ...model.sqlUnits.flatMap((unit) =>
+      unitPlacement(unit, parse).map((t) => t.schema)
+    ),
   ])
   return {
     scope: {
