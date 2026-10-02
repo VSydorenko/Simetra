@@ -26,6 +26,7 @@
     "@simetra/designer": "workspace:*",
     "husky": "9.1.7",
     "@typescript/native": "npm:typescript@^7.0.2",
+    "simetra": "workspace:*",
     "prettier": "^3.9.9",
     "supabase": "2.118.0",
     "syncpack": "^15.3.3",

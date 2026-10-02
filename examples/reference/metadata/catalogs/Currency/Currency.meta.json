@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../../../packages/simetra/schemas/catalogs.schema.json",
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
   "id": "3f8209b2-fe1c-447b-9b8b-647519d7d717",
   "kind": "Catalog",
   "name": "Currency",

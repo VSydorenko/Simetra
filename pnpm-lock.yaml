@@ -20,6 +20,9 @@ importers:
       prettier:
         specifier: ^3.9.9
         version: 3.9.9
+      simetra:
+        specifier: workspace:*
+        version: link:packages/simetra
       supabase:
         specifier: 2.118.0
         version: 2.118.0

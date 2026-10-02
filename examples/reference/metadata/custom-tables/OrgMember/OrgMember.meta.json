@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../../../packages/simetra/schemas/custom-tables.schema.json",
+  "$schema": "../../../../../node_modules/simetra/schemas/custom-tables.schema.json",
   "id": "5956a971-53f7-4564-b745-aa505fbdf71d",
   "kind": "CustomTable",
   "name": "OrgMember",

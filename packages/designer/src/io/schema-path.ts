@@ -1,25 +1,22 @@
-import { dirname, join, posix, relative, sep } from "node:path"
-import { fileURLToPath } from "node:url"
+import { dirname, join, posix, relative, resolve, sep } from "node:path"
 import type { SchemaPathResolver } from "simetra/compiler"
-
-/**
- * Тека JSON Schema встановленого пакета `simetra`: `$schema` вказує на
- * справжній файл тієї ж версії, що й компілятор (спека П2 §8.5).
- */
-function schemasDir(): string {
-  return dirname(
-    fileURLToPath(import.meta.resolve("simetra/schemas/project.schema.json"))
-  )
-}
+import { installedPackageDir } from "./package-path"
 
 /**
  * Резолвер `$schema` для теки метаданих: відносний POSIX-шлях від теки файлу
- * до файлу схеми, тож значення не залежить від ОС і переживає перенос репо.
+ * до `node_modules/simetra/schemas/…` проєкту. Саме встановлений пакет, а не
+ * той, з якого запущено інструмент: `$schema` вказує на схеми тієї версії,
+ * з якою проєкт збирається (спека П2 §8.5). Пакет шукається ліниво — лише
+ * коли компілятор справді записує `$schema`, тож читальні виклики працюють і
+ * в теці без встановленого пакета.
  */
 export function schemaPathResolver(metadataDir: string): SchemaPathResolver {
-  const schemas = schemasDir()
-  return (file, schemaFile) =>
-    relative(dirname(join(metadataDir, file)), join(schemas, schemaFile))
+  const root = resolve(metadataDir)
+  let schemas: string | undefined
+  return (file, schemaFile) => {
+    schemas ??= join(installedPackageDir(root, "simetra"), "schemas")
+    return relative(dirname(join(root, file)), join(schemas, schemaFile))
       .split(sep)
       .join(posix.sep)
+  }
 }

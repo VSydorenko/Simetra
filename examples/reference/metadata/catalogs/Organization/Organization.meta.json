@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../../../packages/simetra/schemas/catalogs.schema.json",
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
   "id": "0f8552b0-d97a-4ad2-9975-0731ca4a7c18",
   "kind": "Catalog",
   "name": "Organization",

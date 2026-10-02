@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../../../packages/simetra/schemas/accumulation-registers.schema.json",
+  "$schema": "../../../../../node_modules/simetra/schemas/accumulation-registers.schema.json",
   "id": "8fe07eac-b0d6-4b26-9464-bd0106b1503a",
   "kind": "AccumulationRegister",
   "name": "IncomeExpenses",

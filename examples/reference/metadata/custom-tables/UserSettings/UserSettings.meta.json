@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../../../packages/simetra/schemas/custom-tables.schema.json",
+  "$schema": "../../../../../node_modules/simetra/schemas/custom-tables.schema.json",
   "id": "7e0a5d53-4c02-4990-89ac-c6690bef2dd5",
   "kind": "CustomTable",
   "name": "UserSettings",
