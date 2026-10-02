@@ -5,6 +5,9 @@ coverage/
 pnpm-lock.yaml
 .pnpm-store/
 **/*.md
-# Фікстури канонічної серіалізації: тести порівнюють їх побайтно з виводом
-# JSON.stringify, тож Prettier не повинен їх переформатовувати
-packages/core/src/__tests__/fixtures/
+# Заморожений референс прототипу (М8): не переформатовується й не змінюється
+legacy/
+# Згенеровані JSON Schema: генератор пише канонічний JSON, вручну не форматуються
+packages/simetra/schemas/
+# Канонічну форму файлів метаданих дає форматер T0 (formatMetaFile), а не Prettier
+examples/**/metadata/**

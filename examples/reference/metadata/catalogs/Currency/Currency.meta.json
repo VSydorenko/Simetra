@@ -1,0 +1,42 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "3f8209b2-fe1c-447b-9b8b-647519d7d717",
+  "kind": "Catalog",
+  "name": "Currency",
+  "physicalName": "currency",
+  "scope": "none",
+  "title": {
+    "uk": "Валюти"
+  },
+  "codeLength": 3,
+  "predefinedItems": [
+    {
+      "id": "4f2b91e6-5858-4fa5-b6f1-82c246035fcf",
+      "name": "Uah",
+      "physicalName": "uah",
+      "description": {
+        "uk": "Гривня"
+      }
+    },
+    {
+      "id": "3cbfaf54-1a5d-4fd1-8a23-b41055ebfdeb",
+      "name": "Usd",
+      "physicalName": "usd",
+      "description": {
+        "uk": "Долар США"
+      }
+    }
+  ],
+  "attributes": [
+    {
+      "id": "6f28d13f-6f6d-455d-a441-efb972e84442",
+      "name": "symbol",
+      "physicalName": "symbol",
+      "title": {
+        "uk": "Символ"
+      },
+      "type": "String",
+      "length": 5
+    }
+  ]
+}

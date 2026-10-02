@@ -1,0 +1,42 @@
+{
+  "name": "simetra",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint",
+    "format": "prettier --write \"**/*.{ts,tsx}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:db": "vitest run --project db"
+  },
+  "dependencies": {
+    "jsonc-parser": "3.3.1",
+    "libpg-query": "17.7.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.6",
+    "@types/pg": "^8.23.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "eslint": "^10.11.0",
+    "pg": "8.23.1",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  },
+  "exports": {
+    "./model": "./src/model/index.ts",
+    "./compiler": "./src/compiler/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./server": "./src/server/index.ts",
+    "./data": "./src/data/index.ts",
+    "./ui": "./src/ui/index.ts",
+    "./shell": "./src/shell/index.ts",
+    "./schemas/*": "./schemas/*"
+  }
+}
