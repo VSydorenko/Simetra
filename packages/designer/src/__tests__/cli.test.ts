@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { catalogSubCommands, runTool, toolCommand } from "../cli/command"
+import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { TOOLS, toolByName } from "../tools/catalog"
+import { TOOL_NAMES } from "../tools/types"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 useTmpProjects()
@@ -26,8 +27,10 @@ async function withScratch(): Promise<string> {
 
 describe("cli adapter", () => {
   it("has a subcommand for every catalog tool", () => {
-    for (const t of TOOLS)
-      expect(Object.keys(catalogSubCommands())).toContain(t.name)
+    expect(TOOLS.map((t) => t.name)).toEqual([...TOOL_NAMES])
+    for (const name of TOOL_NAMES) {
+      expect(commandByName(name).meta).toMatchObject({ name })
+    }
   })
 
   it("maps explain args onto the catalog input", async () => {
@@ -69,7 +72,7 @@ describe("cli adapter", () => {
       _: ['{"target":{"kind":"Nope","name":"X"},"newName":"Y"}', dir],
     })
     expect(r.exitCode).toBe(2)
-    expect(r.stderr).toContain("target:")
+    expect(r.stderr).toContain("target.kind")
   })
 
   it("malformed JSON exits 2", async () => {
@@ -136,7 +139,8 @@ describe("cli adapter", () => {
       yes: true,
     })
     expect(r.exitCode).toBe(1)
-    expect(r.stdout).toContain("error")
+    expect(r.stdout).toContain("operation.delete-referenced")
+    expect(r.stdout).toContain("catalogs/Contract/Contract.meta.json")
     expect(await snapshotOf(dir)).toEqual(before)
   })
 
@@ -153,5 +157,13 @@ describe("cli adapter", () => {
     expect(r.exitCode).toBe(2)
     expect(r.stderr).toContain("--out")
     expect(existsSync(join(dir, "no"))).toBe(false)
+  })
+
+  it("--out pointing at a file exits 2", async () => {
+    const dir = await project()
+    const out = join(dir, "catalogs/Currency/Currency.meta.json")
+    const r = await runTool(tool("compile"), { _: [dir], out })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("not a directory")
   })
 })

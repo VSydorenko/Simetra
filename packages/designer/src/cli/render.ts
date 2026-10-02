@@ -1,4 +1,6 @@
-import type { Explanation } from "simetra/compiler"
+import type { Explanation, Locale } from "simetra/compiler"
+import { formatDiagnostics } from "../io/report"
+import type { Tool, ToolResult } from "../tools/catalog"
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
 export function renderExplanation(e: Explanation): string {
@@ -40,4 +42,58 @@ export function renderExplanation(e: Explanation): string {
     }
   }
   return `${lines.join("\n")}\n`
+}
+
+/** Кінцевий результат одного виклику в тексті/JSON для терміналу. */
+export function renderResult(
+  tool: Tool,
+  r: ToolResult,
+  o: { dir: string; locale: Locale; format: "text" | "json" }
+): { stdout: string; json?: unknown[] } {
+  const report = formatDiagnostics(r.diagnostics, o)
+  if (tool.name === "compile") {
+    return o.format === "json"
+      ? { stdout: "", json: JSON.parse(report) as unknown[] }
+      : { stdout: report }
+  }
+  if (tool.name === "explain" && r.ok && r.data !== undefined) {
+    const explanation = r.data as Explanation
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify(explanation, null, 2)
+          : renderExplanation(explanation).trimEnd(),
+    }
+  }
+  if (tool.effect === "read") return { stdout: report }
+  const changed = r.changes.map((c) => c.path)
+  if (o.format === "json") {
+    return {
+      stdout: JSON.stringify(
+        {
+          ok: r.ok,
+          written: r.written,
+          changed,
+          diagnostics: JSON.parse(report) as unknown,
+        },
+        null,
+        2
+      ),
+    }
+  }
+  const verb = (deleted: boolean): string =>
+    r.written
+      ? deleted
+        ? "deleted"
+        : "written"
+      : deleted
+        ? "would delete"
+        : "would write"
+  return {
+    stdout: [
+      ...r.changes.map((c) => `${verb(c.deleted)} ${o.dir}/${c.path}`),
+      ...(r.ok ? [] : ["nothing written: the result has errors"]),
+      report,
+    ].join("\n"),
+  }
 }

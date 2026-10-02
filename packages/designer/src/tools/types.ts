@@ -1,8 +1,17 @@
 import type { Diagnostic, FileChange } from "simetra/compiler"
 import type { z } from "zod"
 
-export type ToolName =
-  "compile" | "explain" | "fix" | "create" | "add" | "rename" | "delete"
+/** Імена окремо від записів каталогу: `main.ts` реєструє лінощі підкоманди, не тягнучи компілятор. */
+export const TOOL_NAMES = [
+  "compile",
+  "explain",
+  "fix",
+  "create",
+  "add",
+  "rename",
+  "delete",
+] as const
+export type ToolName = (typeof TOOL_NAMES)[number]
 
 /** `files` — інструмент змінює файли теки; лише його вмикає `--allow-write`. */
 export type Effect = "read" | "files"

@@ -1,15 +1,14 @@
 import { stat } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { defineCommand, type ArgsDef, type CommandDef } from "citty"
-import type { CompiledModel, Explanation, Locale } from "simetra/compiler"
+import type { CompiledModel, Locale } from "simetra/compiler"
 import { writeChanges } from "../io/metadata-dir"
-import { formatDiagnostics } from "../io/report"
 import { UsageError } from "../io/usage-error"
 import { compileArtifacts } from "../tools/artifacts"
-import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
+import { toolByName, type Tool } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
 import { cliInput, takesJsonInput, type CliArgs } from "./input"
-import { renderExplanation } from "./render"
+import { renderResult } from "./render"
 
 export type { CliArgs } from "./input"
 
@@ -37,60 +36,6 @@ function isLocale(v: string): v is Locale {
 
 function isFormat(v: string): v is "text" | "json" {
   return v === "text" || v === "json"
-}
-
-/** Кінцевий результат одного виклику в тексті/JSON для терміналу. */
-function renderOne(
-  tool: Tool,
-  r: ToolResult,
-  o: { dir: string; locale: Locale; format: "text" | "json" }
-): { stdout: string; json?: unknown[] } {
-  const report = formatDiagnostics(r.diagnostics, o)
-  if (tool.name === "compile") {
-    return o.format === "json"
-      ? { stdout: "", json: JSON.parse(report) as unknown[] }
-      : { stdout: report }
-  }
-  if (tool.name === "explain" && r.ok && r.data !== undefined) {
-    const explanation = r.data as Explanation
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify(explanation, null, 2)
-          : renderExplanation(explanation).trimEnd(),
-    }
-  }
-  if (tool.effect === "read") return { stdout: report }
-  const changed = r.changes.map((c) => c.path)
-  if (o.format === "json") {
-    return {
-      stdout: JSON.stringify(
-        {
-          ok: r.ok,
-          written: r.written,
-          changed,
-          diagnostics: JSON.parse(report) as unknown,
-        },
-        null,
-        2
-      ),
-    }
-  }
-  const verb = (deleted: boolean): string =>
-    r.written
-      ? deleted
-        ? "deleted"
-        : "written"
-      : deleted
-        ? "would delete"
-        : "would write"
-  return {
-    stdout: [
-      ...r.changes.map((c) => `${verb(c.deleted)} ${o.dir}/${c.path}`),
-      ...(r.ok ? [] : ["nothing written: the result has errors"]),
-      report,
-    ].join("\n"),
-  }
 }
 
 /**
@@ -132,6 +77,10 @@ export async function runTool(
       if (!isDir) {
         throw new UsageError(`--out parent directory not found: ${parent}`)
       }
+      const existing = await stat(resolve(out)).catch(() => undefined)
+      if (existing !== undefined && !existing.isDirectory()) {
+        throw new UsageError(`--out is not a directory: ${out}`)
+      }
     }
 
     const blocks: string[] = []
@@ -146,7 +95,7 @@ export async function runTool(
       })
       if (result.refusal !== undefined) return fail(result.refusal.message)
       failed ||= !result.ok
-      const rendered = renderOne(tool, result, { dir, locale, format })
+      const rendered = renderResult(tool, result, { dir, locale, format })
       if (rendered.json !== undefined) allJson.push(...rendered.json)
       else blocks.push(rendered.stdout)
 
@@ -242,6 +191,22 @@ function argsFor(tool: Tool): ArgsDef {
   return args
 }
 
+const str = (v: unknown): string | undefined =>
+  typeof v === "string" ? v : undefined
+
+/** Типізований перелік полів: citty для динамічних `args` типів не дає. */
+function toCliArgs(args: { _: string[] } & Record<string, unknown>): CliArgs {
+  return {
+    _: args._,
+    input: str(args.input),
+    out: str(args.out),
+    format: str(args.format),
+    locale: str(args.locale),
+    "dry-run": args["dry-run"] === true,
+    yes: args.yes === true,
+  }
+}
+
 /** Підкоманда з запису каталогу: опис, прапорці й дозволи беруться з нього. */
 export function toolCommand(tool: Tool): CommandDef<ArgsDef> {
   return defineCommand({
@@ -249,7 +214,7 @@ export function toolCommand(tool: Tool): CommandDef<ArgsDef> {
     args: argsFor(tool),
     async run({ args }) {
       // citty віддає в `args._` усі позиційні, а не лише названі.
-      const result = await runTool(tool, args as unknown as CliArgs)
+      const result = await runTool(tool, toCliArgs(args))
       process.stdout.write(result.stdout)
       process.stderr.write(result.stderr)
       process.exitCode = result.exitCode
@@ -257,6 +222,9 @@ export function toolCommand(tool: Tool): CommandDef<ArgsDef> {
   })
 }
 
-export function catalogSubCommands(): Record<string, CommandDef<ArgsDef>> {
-  return Object.fromEntries(TOOLS.map((t) => [t.name, toolCommand(t)]))
+/** Для лінивої реєстрації в `main.ts`: команда будується лише на виклик. */
+export function commandByName(name: string): CommandDef<ArgsDef> {
+  const tool = toolByName(name)
+  if (tool === undefined) throw new Error(`unknown tool: ${name}`)
+  return toolCommand(tool)
 }

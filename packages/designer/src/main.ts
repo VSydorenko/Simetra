@@ -1,5 +1,5 @@
 import { defineCommand, runCommand, runMain, showUsage } from "citty"
-import { catalogSubCommands } from "./cli/command"
+import { TOOL_NAMES } from "./tools/types"
 
 const main = defineCommand({
   meta: {
@@ -7,8 +7,13 @@ const main = defineCommand({
     description: "Simetra metadata tooling",
   },
   subCommands: {
-    ...catalogSubCommands(),
-    // Ліниво: сервер MCP тягне SDK, який потрібен лише цій підкоманді.
+    // Ліниво: `--help` не повинен вантажити компілятор і SDK MCP.
+    ...Object.fromEntries(
+      TOOL_NAMES.map((name) => [
+        name,
+        () => import("./cli/command").then((m) => m.commandByName(name)),
+      ])
+    ),
     mcp: () => import("./commands/mcp").then((m) => m.default),
   },
 })
