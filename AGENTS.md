@@ -65,7 +65,9 @@ deviate from a spec, stop and report the deviation — never decide it silently.
 **Target** (platform spec §3): one flagship package `simetra` with tier folders
 under lint zones — T0 `model`, T1 `compiler`, T2 `schema`, T3 `server`,
 T4 `data`, T5 `ui`, T6 `shell`. **Imports go only downward.** A separate package
-exists only for a unit with its own life cycle (CLI, studio, app template);
+exists only for a unit with its own life cycle (the developer toolset `@simetra/designer`,
+the app template); the toolset's modes — command line, MCP, studio — are not
+separate packages;
 versions are lockstep. Both this tier order and the framework boundary below are
 enforced by `packages/simetra/eslint.tier-zones.js` with the negative test
 `packages/simetra/test/tier-boundary.test.ts`; changing the tier table is an
@@ -92,7 +94,7 @@ Platform agents never load a consumer skill.
 **Current code is a prototype.** The prototype metamodel lives in T0
 (`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest
 of the prototype (CLI, generators, UI, web configurator) is frozen in
-`legacy/`: read it, but do not build, test, import or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
+`legacy/` (the live developer tools are `@simetra/designer`, not `legacy/cli`): read it, but do not build, test, import or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
 is deleted) of the parts it names — read it there, do not restate it. A package
 §14 does not name has an **open** fate: treat it as neither slated for deletion
 nor adopted, and ask the owner before investing in it or removing it.
