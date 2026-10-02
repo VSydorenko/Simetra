@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 
 /** Тека `metadata/` референсного домену (спека П2 §10.1). */
 export const REFERENCE_METADATA = fileURLToPath(
-  new URL("../../../../../examples/reference/metadata", import.meta.url)
+  new URL("../../../../../../examples/reference/metadata", import.meta.url)
 )
 
 /**

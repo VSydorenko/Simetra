@@ -90,8 +90,11 @@ export interface StandardColumnDef {
 export type ReferenceRole =
   | "attribute.ref"
   | "attribute.allowedType"
+  /** `defaultValue` одиночного `Ref` на перерахування — ім'я значення. */
+  | "attribute.enumDefault"
   | "constant.ref"
   | "constant.allowedType"
+  | "constant.enumDefault"
   | "catalog.owner"
   | "register.recorder"
   | "register.balanceControl"

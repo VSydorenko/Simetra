@@ -322,7 +322,7 @@ class Context {
           document.file,
           pointer,
           inRow ? "posting.rowField" : "posting.docField",
-          node.start
+          node.fieldSpan.start
         )
         const table = inRow ? rowTable! : documentTable
         const alias = inRow ? "r" : "d"
@@ -335,7 +335,7 @@ class Context {
         document.file,
         pointer,
         "posting.tabularSection",
-        node.start
+        node.sectionSpan.start
       )
       const table = this.table(documentId, section)
       const from = `FROM ${qualified(table)} t WHERE t.${key(table, rowDefs, "parent")} = ${documentKey}`
@@ -344,7 +344,7 @@ class Context {
         document.file,
         pointer,
         "posting.rowField",
-        node.start
+        node.fieldSpan.start
       )
       const [column] = this.elementColumns(table, rowDefs, field)
       return [`(SELECT COALESCE(sum(t.${ref(column!)}), 0) ${from})`]
@@ -448,7 +448,7 @@ class Context {
       document.file,
       pointer,
       expr.base === "row" ? "posting.rowField" : "posting.docField",
-      expr.start
+      expr.fieldSpan.start
     )
     const hash = id.indexOf("#")
     // Стандартні посилання з однією ціллю — ключ документа й власник рядка.

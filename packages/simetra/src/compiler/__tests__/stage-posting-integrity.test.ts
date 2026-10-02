@@ -1039,7 +1039,13 @@ describe("expression types", () => {
   })
 
   it("unknown operand keeps the result unknown", () => {
-    const field: Expr = { type: "field", base: "row", name: "x", ...at }
+    const field: Expr = {
+      type: "field",
+      base: "row",
+      name: "x",
+      fieldSpan: at,
+      ...at,
+    }
     expect(
       inferType(
         { type: "binary", op: "*", left: field, right: num("2"), ...at },
@@ -1049,7 +1055,12 @@ describe("expression types", () => {
   })
 
   it("count is integer, comparison is boolean", () => {
-    expect(inferType({ type: "count", section: "goods", ...at }, ctx)).toEqual({
+    expect(
+      inferType(
+        { type: "count", section: "goods", sectionSpan: at, ...at },
+        ctx
+      )
+    ).toEqual({
       kind: "numeric",
       integer: true,
     })

@@ -12,12 +12,14 @@ import {
   type Project,
   type ReferenceRole,
   type ScopeKind,
+  type Span,
   type StandardColumnDef,
 } from "simetra/model"
 import {
   compareStrings,
   diagnostic,
   toPointer,
+  valueAt,
   type Diagnostic,
 } from "../diagnostics"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
@@ -30,7 +32,10 @@ export interface ResolvedReference {
    */
   to: { kind: MetadataKind | "ScopeKind" | "Element"; id: string }
   role: ReferenceRole
-  /** Вузол виразу всередині поля, на яке вказує pointer: пів-інтервал [start, end). */
+  /**
+   * Токен імені у виразі поля, на яке вказує pointer: пів-інтервал
+   * [start, end) рівно навколо імені, тож каскад заміняє лише його.
+   */
   span?: { start: number; end: number }
   /** 1-базний рядок маркера в `.sql`: pointer на весь файл місця не вказує. */
   line?: number
@@ -317,7 +322,7 @@ export function checkIdentity(
     fromId: string | undefined,
     found: { pointer: string; ref: { kind: string; name: string } },
     role: ReferenceRole
-  ) => {
+  ): ParsedObject | undefined => {
     const key = objectKey(found.ref.kind, found.ref.name)
     const target = objectsByName.get(key)
     if (target === undefined) {
@@ -338,6 +343,7 @@ export function checkIdentity(
       to: { kind: target.kind, id: target.id },
       role,
     })
+    return target
   }
   scopeKinds.forEach((kind, index) => {
     if (!("object" in kind.root)) return
@@ -353,7 +359,16 @@ export function checkIdentity(
   })
   for (const object of objects) {
     for (const found of KIND_REGISTRY[object.kind].references(object.data)) {
-      resolveObjectRef(object.file, object.id, found, found.role)
+      const target = resolveObjectRef(object.file, object.id, found, found.role)
+      if (target !== undefined) {
+        resolveEnumDefault(
+          object,
+          found.pointer,
+          found.role,
+          target,
+          references
+        )
+      }
     }
     const scopeKind = scopeOf.get(object)
     if (scopeKind?.id !== undefined && object.id !== undefined) {
@@ -384,6 +399,42 @@ export function checkIdentity(
   )
 
   return { references, diagnostics }
+}
+
+/** Роль типового значення за роллю одиночного `Ref`, що його несе. */
+const ENUM_DEFAULT_ROLES: Partial<Record<ReferenceRole, ReferenceRole>> = {
+  "attribute.ref": "attribute.enumDefault",
+  "constant.ref": "constant.enumDefault",
+}
+
+/**
+ * `defaultValue` одиночного `Ref` на перерахування — логічне ім'я значення
+ * (спека §5), тобто посилання за іменем: воно йде в індекс, щоб каскад
+ * перейменування значення його бачив, а стадія 4 не звіряла ім'я вдруге.
+ * Невідоме значення тут не звітується: відсутність запису діагностує стадія 4
+ * (`reference.default-unknown-value`) поряд з іншими правилами типового значення.
+ */
+function resolveEnumDefault(
+  object: ParsedObject,
+  refPointer: string,
+  refRole: ReferenceRole,
+  target: ParsedObject,
+  references: ResolvedReference[]
+) {
+  const role = ENUM_DEFAULT_ROLES[refRole]
+  if (role === undefined || !KIND_REGISTRY[target.kind].valueElements) return
+  if (object.id === undefined) return
+  const pointer = `${refPointer.replace(/\/ref$/, "")}/defaultValue`
+  const value = valueAt(object.data, pointer)
+  if (typeof value !== "string") return
+  const { values } = target.data as { values: Element[] }
+  const found = values.find((v) => v.name === value)
+  if (typeof found?.id !== "string") return
+  references.push({
+    from: { file: object.file, pointer, objectId: object.id },
+    to: { kind: "Element", id: found.id },
+    role,
+  })
 }
 
 /** Поле — з реєстру видів, тож схема виду гарантує масив (з типовим `[]`). */
@@ -827,6 +878,7 @@ function resolveMovements(
       name: string,
       pointer: string,
       node: Expr,
+      token: Span,
       role: "posting.docField" | "posting.rowField"
     ) => {
       // Без таблиці (документ-джерело з `row.`, ТЧ без id) звітувати нічого:
@@ -847,7 +899,7 @@ function resolveMovements(
         from: from(pointer),
         to: toElement(id),
         role,
-        span: { start: node.start, end: node.end },
+        span: { start: token.start, end: token.end },
       })
     }
 
@@ -871,6 +923,7 @@ function resolveMovements(
             node.name,
             pointer,
             node,
+            node.fieldSpan,
             inRow ? "posting.rowField" : "posting.docField"
           )
         } else if (node.type === "sum" || node.type === "count") {
@@ -894,7 +947,10 @@ function resolveMovements(
               from: from(pointer),
               to: toElement(section.id),
               role: "posting.tabularSection",
-              span: { start: node.start, end: node.end },
+              span: {
+                start: node.sectionSpan.start,
+                end: node.sectionSpan.end,
+              },
             })
           }
           if (node.type === "sum") {
@@ -904,6 +960,7 @@ function resolveMovements(
               node.field,
               pointer,
               node,
+              node.fieldSpan,
               "posting.rowField"
             )
           }

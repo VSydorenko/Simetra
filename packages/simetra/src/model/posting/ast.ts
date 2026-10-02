@@ -3,6 +3,16 @@
  * зміщення в рядку виразу, щоб діагностики вказували на точне місце.
  * Це не схема метаданих, тож тип написано вручну.
  */
+
+/**
+ * Межі токена імені всередині вузла: каскад перейменування заміняє рівно їх,
+ * а межі вузла (`doc.x`, `sum(s.f)`) захопили б і синтаксис навколо.
+ */
+export interface Span {
+  start: number
+  end: number
+}
+
 export type BinaryOp =
   "+" | "-" | "*" | "/" | "=" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or"
 
@@ -11,6 +21,7 @@ export type Expr =
       type: "field"
       base: "doc" | "row"
       name: string
+      fieldSpan: Span
       start: number
       end: number
     }
@@ -18,10 +29,18 @@ export type Expr =
       type: "sum"
       section: string
       field: string
+      sectionSpan: Span
+      fieldSpan: Span
       start: number
       end: number
     }
-  | { type: "count"; section: string; start: number; end: number }
+  | {
+      type: "count"
+      section: string
+      sectionSpan: Span
+      start: number
+      end: number
+    }
   | { type: "number"; value: string; start: number; end: number }
   | { type: "string"; value: string; start: number; end: number }
   | { type: "boolean"; value: boolean; start: number; end: number }

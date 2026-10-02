@@ -5,7 +5,7 @@ import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
 import { withRollback } from "../../../test/db/connection"
-import { readReferenceDomain } from "./reference-domain"
+import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 
 /**
  * Референсний домен на справжньому Postgres 17 (спека П2 §10.1, §10.4): він

@@ -224,6 +224,8 @@ class SnapshotBuilder {
   private readonly columnRefs: Map<string, string>
   /** id колонки (зокрема синтетичний стандартної) → її фізичне ім'я. */
   private readonly columnNames: Map<string, string>
+  /** id прийнятої таблиці → id її скоуп-колонки (індекс стадії 2). */
+  private readonly scopeColumns: Map<string, string>
 
   constructor(
     objects: readonly ParsedObject[],
@@ -246,6 +248,11 @@ class SnapshotBuilder {
         .map((r) => [`${r.from.file}\0${r.from.pointer}`, r.to.id])
     )
     this.columnNames = new Map(objects.flatMap(physicalColumnsById))
+    this.scopeColumns = new Map(
+      references
+        .filter((r) => r.role === "customTable.scopeColumn")
+        .map((r) => [r.from.objectId, r.to.id])
+    )
   }
 
   add(object: ParsedObject): void {
@@ -1028,6 +1035,11 @@ class SnapshotBuilder {
       return name !== undefined ? { name } : {}
     }
 
+    // Скоуп-колонку прийнятої таблиці названо в описі, а не додано
+    // платформою: вона лишається елементом і лише несе вид скоупу, щоб
+    // читачі знімка (контракти, explain) бачили носія без імені колонки.
+    const scopeKindId = this.scopeKindOf(object)?.id
+    const scopeColumnId = this.scopeColumns.get(object.id ?? "")
     data.columns.forEach((column, index) => {
       const name = column.physicalName!
       table.columns.push({
@@ -1042,7 +1054,10 @@ class SnapshotBuilder {
           ? { collation: qualified(column.collation) }
           : {}),
         ...(column.comment !== undefined ? { comment: column.comment } : {}),
-        origin: { elementId: column.id ?? "" },
+        origin:
+          scopeKindId !== undefined && column.id === scopeColumnId
+            ? { elementId: column.id ?? "", scopeKindId }
+            : { elementId: column.id ?? "" },
       })
       if (column.identity !== undefined) {
         table.identityColumns.push({

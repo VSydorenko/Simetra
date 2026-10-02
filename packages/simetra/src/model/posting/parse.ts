@@ -1,4 +1,4 @@
-import type { BinaryOp, Expr, ParseResult } from "./ast"
+import type { BinaryOp, Expr, ParseResult, Span } from "./ast"
 
 type TokenKind = "ident" | "number" | "string" | "op" | "eof"
 
@@ -291,18 +291,32 @@ class Parser {
     if (word === "sum") {
       this.advance()
       this.expectOp("(")
-      const section = this.expectIdent("a tabular section name").text
+      const section = this.expectIdent("a tabular section name")
       this.expectOp(".")
-      const field = this.expectIdent("a field name").text
+      const field = this.expectIdent("a field name")
       const close = this.expectOp(")")
-      return { type: "sum", section, field, start: token.start, end: close.end }
+      return {
+        type: "sum",
+        section: section.text,
+        field: field.text,
+        sectionSpan: spanOf(section),
+        fieldSpan: spanOf(field),
+        start: token.start,
+        end: close.end,
+      }
     }
     if (word === "count") {
       this.advance()
       this.expectOp("(")
-      const section = this.expectIdent("a tabular section name").text
+      const section = this.expectIdent("a tabular section name")
       const close = this.expectOp(")")
-      return { type: "count", section, start: token.start, end: close.end }
+      return {
+        type: "count",
+        section: section.text,
+        sectionSpan: spanOf(section),
+        start: token.start,
+        end: close.end,
+      }
     }
     // doc/row — ключові слова, тож регістр не важить; імена реквізитів і ТЧ чутливі.
     if (word === "doc" || word === "row") {
@@ -313,6 +327,7 @@ class Parser {
         type: "field",
         base: word,
         name: name.text,
+        fieldSpan: spanOf(name),
         start: token.start,
         end: name.end,
       }
@@ -322,6 +337,10 @@ class Parser {
       token.start
     )
   }
+}
+
+function spanOf(token: Token): Span {
+  return { start: token.start, end: token.end }
 }
 
 /** Розбирає вираз конструктора рухів; помилка несе зміщення в `text`. */

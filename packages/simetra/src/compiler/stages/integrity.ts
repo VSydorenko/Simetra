@@ -20,6 +20,7 @@ import {
   compareStrings,
   diagnostic,
   toPointer,
+  valueAt,
   type CompilerRule,
   type Diagnostic,
 } from "../diagnostics"
@@ -86,6 +87,12 @@ const REGISTER_TARGET_ROLES: ReadonlySet<ReferenceRole> =
 const DEFAULT_VALUE_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "attribute.ref",
   "constant.ref",
+])
+
+/** Ролі резолвленого типового значення-перерахування (стадія 2). */
+const ENUM_DEFAULT_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "attribute.enumDefault",
+  "constant.enumDefault",
 ])
 
 /** Поліморфні множини: їхні цілі розрізняє `physicalName` (спека §5). */
@@ -355,6 +362,13 @@ function checkDefaultValues(
   byId: ReadonlyMap<string, ParsedObject>
 ): Diagnostic[] {
   const found: Diagnostic[] = []
+  // Значення перерахування резолвила стадія 2: заданий default без запису
+  // індексу не назвав наявного значення, і другого прочитання імен немає.
+  const enumDefaults = new Set(
+    references
+      .filter((r) => ENUM_DEFAULT_ROLES.has(r.role))
+      .map((r) => `${r.from.file}\0${r.from.pointer}`)
+  )
   for (const reference of references) {
     if (!DEFAULT_VALUE_ROLES.has(reference.role)) continue
     const source = byId.get(reference.from.objectId)
@@ -377,9 +391,7 @@ function checkDefaultValues(
         )
       )
     } else if (def.valueElements) {
-      const values = ((target.data as { values?: { name: string }[] }).values ??
-        []) as { name: string }[]
-      if (!values.some((v) => v.name === value)) {
+      if (!enumDefaults.has(`${reference.from.file}\0${pointer}`)) {
         found.push(
           diagnostic(
             "reference.default-unknown-value",
@@ -621,17 +633,24 @@ function checkScope(
   byKey: ReadonlyMap<string, ParsedObject>
 ): Diagnostic[] {
   const found: Diagnostic[] = []
+  // Скоуп-колонку резолвила стадія 2: id з індексу, а не другий пошук за
+  // іменем, тож перейменування колонки має одну точку правди. Невідома
+  // колонка запису не має — її вже звітувала стадія 2.
+  const scopeColumnOf = new Map(
+    references
+      .filter((r) => r.role === "customTable.scopeColumn")
+      .map((r) => [r.from.objectId, r.to.id])
+  )
   // `scopeColumn` без скоупу — хибна ознака й в однотенантному проєкті, тож це
   // єдина перевірка, що не залежить від видів скоупу.
   for (const object of objects) {
     if (!isDeclaredTable(object)) continue
-    const { scope, scopeColumn, columns } = object.data as CustomTable
+    const { scope, scopeColumn } = object.data as CustomTable
     const unscoped = scope === undefined || scope === NO_SCOPE
-    // Невідому колонку вже звітувала стадія 2.
     if (
       unscoped &&
       scopeColumn !== undefined &&
-      columns.some((c) => c.name === scopeColumn)
+      scopeColumnOf.has(object.id ?? "")
     ) {
       found.push(
         diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
@@ -720,9 +739,10 @@ function checkScope(
       found.push(diagnostic("scope.custom-table-column", object.file, ""))
       continue
     }
-    const column = table.columns.find((c) => c.name === table.scopeColumn)
+    const columnId = scopeColumnOf.get(object.id ?? "")
+    const column = table.columns.find((c) => c.id === columnId)
     // Невідому колонку вже звітувала стадія 2.
-    if (column === undefined) continue
+    if (columnId === undefined || column === undefined) continue
     const isUuid = isUuidColumn(column)
     if (!isUuid) {
       found.push(
@@ -844,16 +864,6 @@ function checkScope(
   return found
 }
 
-/** Значення за JSON Pointer; `""` — сам корінь. */
-function valueAt(data: unknown, pointer: string): unknown {
-  let current = data
-  for (const segment of pointer.split("/").slice(1)) {
-    if (typeof current !== "object" || current === null) return undefined
-    current = (current as Record<string, unknown>)[segment]
-  }
-  return current
-}
-
 const UNKNOWN: InferredType = { kind: "unknown" }
 
 /** Поля регістра за роллю — у порядку `columnFields` реєстру видів. */
@@ -872,8 +882,8 @@ function checkPosting(
   byKey: ReadonlyMap<string, ParsedObject>
 ): Diagnostic[] {
   const found: Diagnostic[] = []
-  // Резолвлене ім'я виразу — за полем і початком вузла: так стадія 2 уже
-  // зв'язала вузол AST з елементом, і повторно резолвити імена не треба.
+  // Резолвлене ім'я виразу — за полем і початком токена імені: так стадія 2
+  // уже зв'язала вузол AST з елементом, і повторно резолвити імена не треба.
   const resolved = new Map<string, string>()
   const spanKey = (file: string, pointer: string, start: number) =>
     `${file}\0${pointer}\0${start}`
@@ -1052,7 +1062,9 @@ function checkPosting(
       const typeAt = (expr: Expr, pointer: string): InferredType => {
         const ctx: PostingContext = {
           typeOf: (node) => {
-            const id = resolved.get(spanKey(object.file, pointer, node.start))
+            const id = resolved.get(
+              spanKey(object.file, pointer, node.fieldSpan.start)
+            )
             return id === undefined
               ? UNKNOWN
               : (elementTypes.get(id) ?? UNKNOWN)

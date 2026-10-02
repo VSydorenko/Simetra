@@ -175,6 +175,16 @@ export function toPointer(path: readonly PropertyKey[]): string {
     .join("")
 }
 
+/** Значення за JSON Pointer; `""` — сам корінь. */
+export function valueAt(data: unknown, pointer: string): unknown {
+  let current = data
+  for (const segment of pointer.split("/").slice(1)) {
+    if (typeof current !== "object" || current === null) return undefined
+    current = (current as Record<string, unknown>)[segment]
+  }
+  return current
+}
+
 /** Порівняння за кодовими одиницями, а не за локаллю: порядок не залежить від середовища. */
 export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0

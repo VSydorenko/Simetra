@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { formatMetaFile, formatProjectFile, KIND_REGISTRY } from "simetra/model"
-import { readReferenceDomain } from "./reference-domain"
+import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 
 /**
  * Синтетичний референсний домен (спека П2 §10.1) — публічний зразок

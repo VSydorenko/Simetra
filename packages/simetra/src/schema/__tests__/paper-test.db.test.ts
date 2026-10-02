@@ -9,7 +9,7 @@ import {
   scopeReplacementViolations,
   type CatalogDiff,
 } from "../../../test/db/diff"
-import { readReferenceDomain } from "./reference-domain"
+import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 
 /**
  * Паперовий тест (спека П2 §10.2, М4): рукописна «прийнята» форма документа

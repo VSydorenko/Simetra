@@ -34,6 +34,21 @@ describe("parseExpression", () => {
     })
   })
 
+  it("name tokens carry their own spans", () => {
+    const text = "doc . counterparty + sum( goods.amount ) + count(goods)"
+    const slice = (span: { start: number; end: number }) =>
+      text.slice(span.start, span.end)
+    const names: string[] = []
+    walkExpr(ok(text), (node) => {
+      if (node.type === "field") names.push(slice(node.fieldSpan))
+      if (node.type === "sum") {
+        names.push(slice(node.sectionSpan), slice(node.fieldSpan))
+      }
+      if (node.type === "count") names.push(slice(node.sectionSpan))
+    })
+    expect(names).toEqual(["counterparty", "goods", "amount", "goods"])
+  })
+
   it("rejects expression in sum", () => {
     const result = parseExpression("sum(goods.qty * 2)")
     expect(result).toMatchObject({ ok: false, offset: 14 })

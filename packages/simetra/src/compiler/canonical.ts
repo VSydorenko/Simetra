@@ -4,6 +4,7 @@ import {
   type Expr,
   type MetadataKind,
   type ReferenceRole,
+  type Span,
 } from "simetra/model"
 import type { CompiledModel } from "./compile"
 import { compareStrings, toPointer } from "./diagnostics"
@@ -278,7 +279,7 @@ function canonicalMovement(
 ): Record<string, unknown> {
   const at = (...path: (string | number)[]) =>
     toPointer(["posting", "movements", index, ...path])
-  const target = (pointer: string, role: ReferenceRole, span?: Expr) =>
+  const target = (pointer: string, role: ReferenceRole, span?: Span) =>
     must(
       refs
         .get(pointer)
@@ -294,8 +295,8 @@ function canonicalMovement(
     const parsed = parseExpression(text)
     // Модель існує лише без помилок, тож вираз уже розібрано стадією 1.
     if (!parsed.ok) throw new Error(`unparsable expression at ${pointer}`)
-    return canonicalExpr(parsed.expr, (role, node) =>
-      target(pointer, role, node)
+    return canonicalExpr(parsed.expr, (role, token) =>
+      target(pointer, role, token)
     )
   }
   const { condition, movementType, period } = movement
@@ -337,7 +338,8 @@ function canonicalMovement(
   }
 }
 
-type Resolve = (role: ReferenceRole, node: Expr) => string
+/** Запис індексу — за роллю й токеном імені, як його поклала стадія 2. */
+type Resolve = (role: ReferenceRole, token: Span) => string
 
 function canonicalExpr(expr: Expr, resolve: Resolve): unknown {
   switch (expr.type) {
@@ -347,19 +349,19 @@ function canonicalExpr(expr: Expr, resolve: Resolve): unknown {
         source: expr.base,
         elementId: resolve(
           expr.base === "row" ? "posting.rowField" : "posting.docField",
-          expr
+          expr.fieldSpan
         ),
       }
     case "sum":
       return {
         type: "sum",
-        tabularSectionId: resolve("posting.tabularSection", expr),
-        elementId: resolve("posting.rowField", expr),
+        tabularSectionId: resolve("posting.tabularSection", expr.sectionSpan),
+        elementId: resolve("posting.rowField", expr.fieldSpan),
       }
     case "count":
       return {
         type: "count",
-        tabularSectionId: resolve("posting.tabularSection", expr),
+        tabularSectionId: resolve("posting.tabularSection", expr.sectionSpan),
       }
     case "unary":
       return {

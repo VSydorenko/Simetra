@@ -402,3 +402,81 @@ describe("stage 2: identity", () => {
     ])
   })
 })
+
+describe("stage 2: enumeration defaults", () => {
+  const STATUS = "enumerations/Status/Status.meta.json"
+  const RATE = "constants/Rate/Rate.meta.json"
+  const status = {
+    id: uuid(760),
+    kind: "Enumeration",
+    name: "Status",
+    physicalName: "status",
+    values: [
+      { id: uuid(761), name: "Open", physicalName: "open" },
+      { id: uuid(762), name: "Closed", physicalName: "closed" },
+    ],
+  }
+  const statusRef = {
+    type: "Ref",
+    ref: { kind: "Enumeration", name: "Status" },
+  }
+
+  it("enumeration default is a reference", async () => {
+    const result = await compileWith({
+      [STATUS]: status,
+      [CONTRACT]: catalog("Contract", {
+        id: uuid(763),
+        attributes: [
+          attribute("state", { ...statusRef, defaultValue: "Closed" }),
+        ],
+      }),
+      [RATE]: {
+        id: uuid(764),
+        kind: "Constant",
+        name: "Rate",
+        physicalName: "rate",
+        ...statusRef,
+        defaultValue: "Open",
+      },
+    })
+    expect(result.diagnostics).toEqual([])
+    const defaults = result.model!.references.filter((r) =>
+      r.role.endsWith(".enumDefault")
+    )
+    expect(defaults).toEqual([
+      {
+        from: {
+          file: CONTRACT,
+          pointer: "/attributes/0/defaultValue",
+          objectId: uuid(763),
+        },
+        to: { kind: "Element", id: uuid(762) },
+        role: "attribute.enumDefault",
+      },
+      {
+        from: { file: RATE, pointer: "/defaultValue", objectId: uuid(764) },
+        to: { kind: "Element", id: uuid(761) },
+        role: "constant.enumDefault",
+      },
+    ])
+  })
+
+  it("unknown enumeration default is still reported", async () => {
+    const result = await compileWith({
+      [STATUS]: status,
+      [CONTRACT]: catalog("Contract", {
+        attributes: [
+          attribute("state", { ...statusRef, defaultValue: "Archived" }),
+        ],
+      }),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "reference.default-unknown-value",
+        file: CONTRACT,
+        pointer: "/attributes/0/defaultValue",
+        params: expect.objectContaining({ value: "Archived" }),
+      }),
+    ])
+  })
+})

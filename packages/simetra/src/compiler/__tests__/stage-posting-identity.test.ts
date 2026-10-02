@@ -85,7 +85,7 @@ describe("stage 2: movement constructor references", () => {
       (r) => r.role === "posting.docField"
     )
     expect(found?.to).toEqual({ kind: "Element", id: `${sale.id}#date` })
-    expect(found?.span).toEqual({ start: 0, end: 8 })
+    expect(found?.span).toEqual({ start: 4, end: 8 })
   })
 
   it("standard names follow project style", async () => {
@@ -177,17 +177,17 @@ describe("stage 2: movement constructor references", () => {
       [
         "posting.tabularSection",
         { kind: "Element", id: goods.id },
-        { start: 0, end: 14 },
+        { start: 4, end: 9 },
       ],
       [
         "posting.rowField",
         { kind: "Element", id: goods.attributes[1]!.id },
-        { start: 0, end: 14 },
+        { start: 10, end: 13 },
       ],
       [
         "posting.tabularSection",
         { kind: "Element", id: goods.id },
-        { start: 17, end: 29 },
+        { start: 23, end: 28 },
       ],
     ])
   })
@@ -203,12 +203,12 @@ describe("stage 2: movement constructor references", () => {
       [
         "posting.rowField",
         { kind: "Element", id: sale.tabularSections[0]!.attributes[1]!.id },
-        { start: 0, end: 7 },
+        { start: 4, end: 7 },
       ],
       [
         "posting.docField",
         { kind: "Element", id: `${sale.id}#number` },
-        { start: 16, end: 26 },
+        { start: 20, end: 26 },
       ],
     ])
   })
@@ -222,8 +222,48 @@ describe("stage 2: movement constructor references", () => {
       [
         "posting.docField",
         { kind: "Element", id: `${sale.id}#number` },
-        { start: 0, end: 10 },
+        { start: 4, end: 10 },
       ],
+    ])
+  })
+
+  it("span is the name token", async () => {
+    // Каскад перейменування заміняє рівно `span`, тож він мусить охоплювати
+    // лише ім'я, а не весь вузол (`doc.`, `sum(` лишаються недоторканими).
+    const tokens = async (movement: Record<string, unknown>, text: string) => {
+      const { result, sale } = await build(movement)
+      expect(result.diagnostics).toEqual([])
+      const refs = result.model!.references.filter(
+        (r) => r.from.pointer === "/posting/movements/0/condition"
+      )
+      return {
+        sale,
+        found: refs.map((r) => [
+          r.role,
+          r.to.id,
+          text.slice(r.span!.start, r.span!.end),
+        ]),
+      }
+    }
+    const inRow = "doc . number = 'A' and row.qty > 0"
+    const row = await tokens({ condition: inRow }, inRow)
+    expect(row.found).toEqual([
+      ["posting.docField", `${row.sale.id}#number`, "number"],
+      [
+        "posting.rowField",
+        row.sale.tabularSections[0]!.attributes[1]!.id,
+        "qty",
+      ],
+    ])
+    const aggregate = "sum( goods . amount ) > 0"
+    const sum = await tokens(
+      { source: "document", condition: aggregate, fields: { qty: "1" } },
+      aggregate
+    )
+    const goods = sum.sale.tabularSections[0]!
+    expect(sum.found).toEqual([
+      ["posting.tabularSection", goods.id, "goods"],
+      ["posting.rowField", goods.attributes[2]!.id, "amount"],
     ])
   })
 })

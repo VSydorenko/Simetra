@@ -714,3 +714,80 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 })
+
+/**
+ * Скоуп-колонка стоїть не першою, а її ім'я — префікс сусідньої колонки:
+ * пошук за іменем «першої схожої» тут схибив би, а індекс посилань — ні.
+ */
+function prefixedScopeTable(
+  scope: string | undefined,
+  types: { org: string; orgName: string } = { org: "UUID", orgName: "String" }
+) {
+  const column = (
+    n: number,
+    name: string,
+    physicalName: string,
+    type: string
+  ) => ({
+    id: uuid(n),
+    name,
+    physicalName,
+    type,
+    ...(type === "String" ? { length: 20 } : {}),
+    notNull: true,
+  })
+  return customTable("UserSettings", {
+    ...(scope === undefined ? {} : { scope }),
+    scopeColumn: "org",
+    columns: [
+      column(980, "id", "id", "UUID"),
+      column(981, "orgName", "org_name", types.orgName),
+      column(982, "org", "org_id", types.org),
+    ],
+    primaryKey: { columns: ["id"] },
+  })
+}
+
+describe("scope column is taken from the reference index", () => {
+  it("stage 4 checks the indexed column", async () => {
+    const valid = await compileScoped({ [SETTINGS]: prefixedScopeTable("org") })
+    expect(scopeDiagnostics(valid)).toEqual([])
+    const swapped = await compileScoped({
+      [SETTINGS]: prefixedScopeTable("org", { org: "String", orgName: "UUID" }),
+    })
+    expect(scopeDiagnostics(swapped)).toEqual([
+      ["scope.custom-table-column", "error", SETTINGS, "/scopeColumn"],
+    ])
+  })
+
+  it("unscoped table reports the indexed column", async () => {
+    const result = await compileScoped({
+      [SETTINGS]: prefixedScopeTable("none"),
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "scope.custom-table-column",
+        pointer: "/scopeColumn",
+        params: expect.objectContaining({ column: "org", unscoped: 1 }),
+      }),
+    ])
+  })
+
+  it("snapshot marks the indexed column", async () => {
+    const projectFile = scopedProject()
+    const orgKindId = projectFile.scopeKinds[0]!.id
+    const result = await compileScoped(
+      { [SETTINGS]: prefixedScopeTable("org") },
+      projectFile
+    )
+    expect(result.diagnostics).toEqual([])
+    const table = result.model!.physical.tables.find(
+      (t) => t.name === "user_settings"
+    )!
+    expect(table.columns.map((c) => [c.name, c.origin])).toEqual([
+      ["id", { elementId: uuid(980) }],
+      ["org_name", { elementId: uuid(981) }],
+      ["org_id", { elementId: uuid(982), scopeKindId: orgKindId }],
+    ])
+  })
+})
