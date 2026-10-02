@@ -18,9 +18,12 @@
     "format:check": "prettier --check .",
     "deps:check": "syncpack lint",
     "deps:fix": "syncpack fix",
-    "deps:update": "pnpm update -r && syncpack fix"
+    "deps:update": "pnpm update -r && syncpack fix",
+    "metadata:check": "node scripts/check-metadata.mjs",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "husky": "9.1.7",
     "@typescript/native": "npm:typescript@^7.0.2",
     "prettier": "^3.9.9",
     "supabase": "2.118.0",

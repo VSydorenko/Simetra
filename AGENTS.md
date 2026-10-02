@@ -154,6 +154,7 @@ pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # before a PR
 pnpm format:fix                           # fixes what format:check reports
 
 python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
+pnpm metadata:check                       # simetra compile over every metadata dir; pre-commit runs it with --staged
 
 pnpm db:start                             # local Supabase stack (needs Docker)
 pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) against the local stack
@@ -165,8 +166,8 @@ pnpm db:stop
   proves nothing.
 - The local stack is started only through `pnpm db:*` (pinned CLI version),
   never through a global `supabase`.
-- CI (`.github/workflows/ci.yml`) runs the same four gates plus a `db` job
-  that starts the stack and runs `pnpm test:db`. It does not run
+- CI (`.github/workflows/ci.yml`) runs the same four gates plus
+  `pnpm metadata:check` and a `db` job that starts the stack and runs `pnpm test:db`. It does not run
   the anchor check — run it yourself whenever you edit docs or skills, or
   rename or move a file.
 - Versions live in `.node-version` and `package.json`, not here.
@@ -270,4 +271,6 @@ skills:
   load: ".agents/skills/codebase-research/SKILL.md"
 - task: "review landed work before merge: choosing lenses, severity x confidence scale, adversarial verification of findings"
   load: ".agents/skills/code-review/SKILL.md"
+- task: "validate, inspect, repair or edit metadata with the simetra CLI or MCP server; read compiler diagnostics; a failing metadata check in pre-commit or CI"
+  load: ".agents/skills/simetra-cli/SKILL.md"
 <!-- intent-skills:end -->
