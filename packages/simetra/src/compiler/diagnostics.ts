@@ -86,6 +86,10 @@ export const COMPILER_RULES = [
   "customTable.key-column-nullable",
   "presentation.unknown-standard-attribute",
   "operation.physical-name-too-long",
+  "operation.input-invalid",
+  "operation.target-not-found",
+  "operation.object-exists",
+  "operation.collection-unknown",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

@@ -32,12 +32,24 @@ export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
 export { canonicalSnapshot, canonicalize } from "./canonical"
 export {
+  addElement,
+  addElementInput,
   applyChanges,
+  containerTarget,
+  createObject,
+  createObjectInput,
+  elementTarget,
   fixFiles,
+  resolveTarget,
+  type AddElementInput,
   type CompletionOptions,
+  type ContainerTarget,
+  type CreateObjectInput,
+  type ElementTarget,
   type FileChange,
   type IdSource,
   type OperationResult,
+  type ResolvedTarget,
   type SchemaPathResolver,
 } from "./operations"
 export { explainObject, type Explanation } from "./explain"

@@ -438,10 +438,15 @@ class NameAssigner {
  * форма й порядок ключів. Наявні id і фізичні імена не змінюються ніколи.
  * Спільне для `fix` і операцій, що створюють елементи: новий елемент
  * отримує ідентичність тим самим шляхом, що й елемент, доданий руками.
+ *
+ * `only` — файли, які доповнення має право змінити (операція над однією
+ * ціллю не переформатовує сторонніх файлів). Зайняті імена й надалі
+ * рахуються над усіма файлами: інакше нове ім'я зіткнулося б зі старим.
  */
 export function completeFiles(
   files: ReadonlyMap<string, string>,
-  o: CompletionOptions
+  o: CompletionOptions,
+  only?: ReadonlySet<string>
 ): CompletionResult {
   const objects = readObjectFiles(files)
   const project = files.has(PROJECT_FILE)
@@ -468,16 +473,45 @@ export function completeFiles(
   const names = new NameAssigner(objects, project, defaultSchema)
   names.run()
 
+  // Доповнення поза `only` відкидається на записі: на чистому вході там і
+  // так нічого доповнювати, а звіт про них не стосується операції.
+  const writable = (path: string) => only === undefined || only.has(path)
   const result = new Map(files)
-  if (project !== undefined) {
+  if (project !== undefined && writable(PROJECT_FILE)) {
     project.$schema = o.schemaPath(PROJECT_FILE, PROJECT_SCHEMA_FILE)
     result.set(PROJECT_FILE, formatProjectFile(project))
   }
-  for (const file of objects) {
+  for (const file of objects.filter((f) => writable(f.path))) {
     file.raw.$schema = o.schemaPath(file.path, `${file.def.dir}.schema.json`)
     result.set(file.path, formatMetaFile(file.raw))
   }
-  return { files: result, diagnostics: names.diagnostics }
+  return {
+    files: result,
+    diagnostics: names.diagnostics.filter((d) => writable(d.file)),
+  }
+}
+
+/**
+ * Хвіст кожної операції, що пише файли: доповнення, компіляція результату й
+ * перелік змін відносно входу. `ok` — результат без помилок; лише тоді
+ * обгортка пише `changes`.
+ */
+export async function completeAndCompile(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+  o: CompletionOptions,
+  only?: ReadonlySet<string>
+): Promise<OperationResult> {
+  const completed = completeFiles(after, o, only)
+  const compiled = await compile(completed.files)
+  return {
+    ok: compiled.ok,
+    changes: changesBetween(before, completed.files),
+    diagnostics: sortDiagnostics([
+      ...compiled.diagnostics,
+      ...withRanges(completed.diagnostics, completed.files),
+    ]),
+  }
 }
 
 /**
@@ -489,14 +523,5 @@ export async function fixFiles(
   files: ReadonlyMap<string, string>,
   o: CompletionOptions
 ): Promise<OperationResult> {
-  const completed = completeFiles(files, o)
-  const compiled = await compile(completed.files)
-  return {
-    ok: compiled.ok,
-    changes: changesBetween(files, completed.files),
-    diagnostics: sortDiagnostics([
-      ...compiled.diagnostics,
-      ...withRanges(completed.diagnostics, completed.files),
-    ]),
-  }
+  return completeAndCompile(files, files, o)
 }

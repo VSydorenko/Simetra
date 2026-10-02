@@ -24,7 +24,7 @@ interface SchemaDef {
 const defOf = (schema: z.ZodType): SchemaDef => schema.def as SchemaDef
 
 /** Знімає обгортки, що не змінюють форму об'єкта (optional, default, pipe…). */
-function unwrap(schema: z.ZodType): z.ZodType {
+export function unwrap(schema: z.ZodType): z.ZodType {
   let current = schema
   for (;;) {
     const def = defOf(current)

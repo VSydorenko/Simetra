@@ -860,6 +860,43 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Задайте коротше physicalName самі; воно призначається раз і більше не змінюється.",
     },
   },
+  "operation.input-invalid": {
+    en: () =>
+      "The operation needs metadata that compiles without errors; nothing was changed",
+    uk: () =>
+      "Операція потребує метаданих, що компілюються без помилок; нічого не змінено",
+    hint: {
+      en: "Fix the errors reported with this diagnostic (simetra fix handles missing ids and physical names), then repeat the operation.",
+      uk: "Виправте помилки, наведені поряд із цією діагностикою (відсутні id і фізичні імена лагодить simetra fix), і повторіть операцію.",
+    },
+  },
+  "operation.target-not-found": {
+    en: (p) => `Target ${p.target} not found: no element named "${p.name}"`,
+    uk: (p) =>
+      `Ціль ${p.target} не знайдено: немає елемента з іменем "${p.name}"`,
+    hint: {
+      en: "Address the target as kind and object name plus a chain of logical element names from the object; Project is only a search root for scope kinds.",
+      uk: "Адресуйте ціль видом і іменем об'єкта плюс ланцюжком логічних імен елементів від об'єкта; Project — лише корінь пошуку видів скоупу.",
+    },
+  },
+  "operation.object-exists": {
+    en: (p) => `${p.kind} ${p.name} already exists`,
+    uk: (p) => `${p.kind} ${p.name} уже існує`,
+    hint: {
+      en: "Choose another name or change the existing object.",
+      uk: "Оберіть інше ім'я або змініть наявний об'єкт.",
+    },
+  },
+  "operation.collection-unknown": {
+    en: (p) =>
+      `${p.target} has no collection of named elements "${p.collection}"; available: ${p.collections}`,
+    uk: (p) =>
+      `${p.target} не має колекції іменованих елементів "${p.collection}"; доступні: ${p.collections}`,
+    hint: {
+      en: "A collection is the key of an array of named elements in the schema of the target.",
+      uk: "Колекція — ключ масиву іменованих елементів у схемі цілі.",
+    },
+  },
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */
