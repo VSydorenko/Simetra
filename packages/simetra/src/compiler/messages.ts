@@ -919,6 +919,19 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть або перенаправте кожне зазначене посилання й повторіть видалення.",
     },
   },
+  "engine.reported": {
+    en: (p) => `Schema engine reported ${p.engineCode}: ${p.detail}`,
+    uk: (p) => `Рушій схеми повідомив ${p.engineCode}: ${p.detail}`,
+  },
+  "engine.shadow-load-failed": {
+    en: (p) =>
+      `Desired state did not load into the shadow database: ${p.detail}`,
+    uk: (p) => `Бажаний стан не завантажився в тіньову базу: ${p.detail}`,
+    hint: {
+      en: "Fix the SQL statement named in the message; the shadow is a fresh database seeded with the provider's base state.",
+      uk: "Виправте SQL-оператор, названий у повідомленні; тінь — свіжа база, засіяна базовим станом провайдера.",
+    },
+  },
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */

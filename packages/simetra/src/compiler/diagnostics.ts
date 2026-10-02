@@ -91,6 +91,8 @@ export const COMPILER_RULES = [
   "operation.object-exists",
   "operation.collection-unknown",
   "operation.delete-referenced",
+  "engine.reported",
+  "engine.shadow-load-failed",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]
