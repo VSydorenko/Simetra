@@ -21,6 +21,8 @@ export {
   ATTRIBUTE_CASES,
   matchesAttributeCase,
   toSnakeCase,
+  logicalObjectName,
+  logicalElementName,
   type MetadataId,
   type AttributeCase,
 } from "./identity"

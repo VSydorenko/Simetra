@@ -79,3 +79,32 @@ export function toSnakeCase(name: string): string {
     .replace(/([a-z\d])([A-Z])/g, "$1_$2")
     .toLowerCase()
 }
+
+function capitalize(segment: string): string {
+  return segment.charAt(0).toUpperCase() + segment.slice(1)
+}
+
+/**
+ * Inverse of `toSnakeCase` for object names: `service_accrual` becomes
+ * `ServiceAccrual`. Collisions between distinct physical names are not
+ * resolved here — the caller sees the whole set and does that.
+ */
+export function logicalObjectName(physical: string): string {
+  // Порожні сегменти (`a__b`, `_a`) відкидаються: інакше ім'я мало б
+  // нерозрізнювані «дірки»; колізію, яка звідси виникає, розв'язує виклик над
+  // усією множиною імен.
+  return physical.split("_").filter(Boolean).map(capitalize).join("")
+}
+
+/**
+ * Logical name of an element (attribute, section, column) from its physical
+ * name, in the project's `naming.attributeCase` style.
+ */
+export function logicalElementName(
+  physical: string,
+  style: AttributeCase
+): string {
+  if (style === "snake_case") return physical
+  const [head = "", ...rest] = physical.split("_").filter(Boolean)
+  return head + rest.map(capitalize).join("")
+}
