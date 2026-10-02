@@ -789,5 +789,9 @@ describe("scope column is taken from the reference index", () => {
       ["org_name", { elementId: uuid(981) }],
       ["org_id", { elementId: uuid(982), scopeKindId: orgKindId }],
     ])
+    // Названа скоуп-колонка лишається елементом опису: id елемента не губиться.
+    const scopeColumn = table.columns.find((c) => c.name === "org_id")!
+    expect(scopeColumn.origin.elementId).toBe(uuid(982))
+    expect(scopeColumn.origin.scopeKindId).toBe(orgKindId)
   })
 })

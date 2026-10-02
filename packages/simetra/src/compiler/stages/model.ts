@@ -38,7 +38,7 @@ import {
   type TabularSection,
   type ValueType,
 } from "simetra/model"
-import { compareStrings } from "../diagnostics"
+import { compareStrings, valueAt } from "../diagnostics"
 import { objectKey, type ParsedObject } from "./files"
 import {
   COLUMN_NAME_ROLES,
@@ -102,7 +102,7 @@ type Target =
       column: string
       scope?: { from: string; to: string }
     }
-  | { form: "label"; labels: string[]; labelOf: ReadonlyMap<string, string> }
+  | { form: "label"; labels: string[] }
   | { form: "pair"; discriminators: string[] }
   | { form: "none" }
 
@@ -226,6 +226,12 @@ class SnapshotBuilder {
   private readonly columnNames: Map<string, string>
   /** id прийнятої таблиці → id її скоуп-колонки (індекс стадії 2). */
   private readonly scopeColumns: Map<string, string>
+  /**
+   * id елемента з типовим значенням-перерахуванням (реквізит, вимір, ресурс;
+   * у константи — сам об'єкт) → мітка значення. Ім'я значення резолвила
+   * стадія 2; тут — лише id → мітка, без другого читання імені.
+   */
+  private readonly enumDefaultLabels: Map<string, string>
 
   constructor(
     objects: readonly ParsedObject[],
@@ -253,6 +259,7 @@ class SnapshotBuilder {
         .filter((r) => r.role === "customTable.scopeColumn")
         .map((r) => [r.from.objectId, r.to.id])
     )
+    this.enumDefaultLabels = enumDefaultLabels(objects, references)
   }
 
   add(object: ParsedObject): void {
@@ -769,7 +776,13 @@ class SnapshotBuilder {
       notNull: column.notNull,
       ...(column.default !== undefined
         ? { default: column.default }
-        : defaultOf(column.defaultValue, target)),
+        : // Типове значення стандартної колонки дає сам об'єкт (константа),
+          // тож запис індексу — на елементі-об'єкті.
+          defaultOf(
+            column.defaultValue,
+            target,
+            this.enumDefaultLabels.get(object.id ?? "")
+          )),
       ...(column.generated !== undefined
         ? {
             generated: truncatedPeriodExpression(
@@ -904,7 +917,11 @@ class SnapshotBuilder {
       // Вид з обов'язковістю при проведенні тримає її не в схемі, а в CHECK
       // шапки й контракті: чернетка може бути неповною.
       notNull: attribute.required === true && !requiredOnPost,
-      ...defaultOf(attribute.defaultValue, resolved.target),
+      ...defaultOf(
+        attribute.defaultValue,
+        resolved.target,
+        this.enumDefaultLabels.get(attribute.id ?? "")
+      ),
       primaryKey: false,
       indexed: attribute.indexed === true,
       unique: attribute.unique === true,
@@ -958,7 +975,6 @@ class SnapshotBuilder {
         target: {
           form: "label",
           labels: values.map((v) => v.physicalName ?? ""),
-          labelOf: new Map(values.map((v) => [v.name, v.physicalName ?? ""])),
         },
       }
     }
@@ -1591,19 +1607,56 @@ function startsWith(key: readonly string[], prefix: readonly string[]) {
 /**
  * `DEFAULT` з типового значення метаданих — один шлях для реквізиту й
  * константи (спека §5). Для перерахування значення — логічне ім'я, а в
- * колонці лежить мітка, тож ім'я перекладається тим самим переліком, що й
- * `CHECK`; невідоме ім'я звітує стадія 4.
+ * колонці лежить мітка: її дає `label`, знайдена за id значення з індексу
+ * посилань; невідоме ім'я запису не має й звітує стадія 4.
  */
 function defaultOf(
   value: string | number | boolean | undefined,
-  target: Target
+  target: Target,
+  label: string | undefined
 ): { default?: string } {
   if (value === undefined) return {}
-  const label =
-    target.form === "label" && typeof value === "string"
-      ? target.labelOf.get(value)
-      : undefined
-  return { default: sqlLiteral(label ?? value) }
+  return {
+    default: sqlLiteral(
+      target.form === "label" && label !== undefined ? label : value
+    ),
+  }
+}
+
+/**
+ * Мітки типових значень-перерахувань за id елемента, що несе `defaultValue`:
+ * запис індексу вказує на `<елемент>/defaultValue`, а мітку дає значення за
+ * своїм id. Перерахування розпізнає реєстр видів (`valueElements`).
+ */
+function enumDefaultLabels(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[]
+): Map<string, string> {
+  const byId = new Map(objects.map((o) => [o.id ?? "", o]))
+  const labelById = new Map<string, string>()
+  for (const object of objects) {
+    if (!KIND_REGISTRY[object.kind].valueElements) continue
+    const { values } = object.data as {
+      values: { id?: string; physicalName?: string }[]
+    }
+    for (const value of values) {
+      labelById.set(value.id ?? "", value.physicalName ?? "")
+    }
+  }
+  const labels = new Map<string, string>()
+  for (const { role, from, to } of references) {
+    if (role !== "attribute.enumDefault" && role !== "constant.enumDefault")
+      continue
+    const element = valueAt(
+      byId.get(from.objectId)?.data,
+      from.pointer.replace(/\/defaultValue$/, "")
+    ) as { id?: string } | undefined
+    const label = labelById.get(to.id)
+    if (element?.id !== undefined && label !== undefined) {
+      labels.set(element.id, label)
+    }
+  }
+  return labels
 }
 
 /** Значення за замовчуванням реквізиту як SQL-літерал. */

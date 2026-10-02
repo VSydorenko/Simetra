@@ -123,7 +123,9 @@ export interface PhysicalColumn {
   /**
    * UUID реквізиту або логічне ім'я стандартного реквізиту; `scopeKindId` —
    * у кожної колонки, що несе значення скоупу: доданої скоуп-колонки, ключа
-   * кореня й `parent_id` рядка ТЧ кореня.
+   * кореня, `parent_id` рядка ТЧ кореня й названої в описі скоуп-колонки
+   * `CustomTable` (`scopeColumn`). Остання лишається елементом опису, тож
+   * несе `elementId` разом зі `scopeKindId`.
    */
   origin: { elementId?: string; standard?: string; scopeKindId?: string }
 }
