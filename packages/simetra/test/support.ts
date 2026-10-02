@@ -9,3 +9,4 @@ export {
 export * from "../src/compiler/__tests__/helpers"
 export * from "../src/schema/__tests__/fixtures/e1-fixtures"
 export * from "./db/connection"
+export { readCatalog, type CatalogShape, type CatalogTable } from "./db/catalog"
