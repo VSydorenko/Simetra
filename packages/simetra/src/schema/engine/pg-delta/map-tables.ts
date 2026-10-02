@@ -40,6 +40,17 @@ const KNOWN_KEYS: Readonly<Record<string, readonly string[]>> = {
   constraint: ["def", "type", "validated"],
   index: ["def", "valid", "attachedTo"],
   type: ["variant", "values"],
+  acl: ["privileges", "grantable"],
+  sequence: [
+    "dataType",
+    "start",
+    "increment",
+    "minValue",
+    "maxValue",
+    "cache",
+    "cycle",
+    "ownedBy",
+  ],
 }
 
 /**
@@ -269,6 +280,14 @@ export function mapTable(
     .sort((a, b) => Number(a.payload._position) - Number(b.payload._position))
     .map((c) => mapColumn(view, c, table, issues))
   const p = fact.payload
+  // FORCE без ENABLE у знімку не виражається: `off` мовчки загубив би FORCE
+  if (p.rowSecurity !== true && p.forceRowSecurity === true)
+    issues.push({
+      object: fact.id,
+      property: "forceRowSecurity",
+      detail:
+        "FORCE ROW LEVEL SECURITY without ENABLE has no field in the catalog model",
+    })
   const result: CatalogTable = {
     schema: table.schema,
     name: table.name,

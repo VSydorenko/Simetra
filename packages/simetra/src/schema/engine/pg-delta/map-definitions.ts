@@ -330,7 +330,8 @@ export function parseIndexDefinition(
     return unrepresentable("index has storage parameters")
   if (index.tableSpace !== undefined)
     return unrepresentable("index has a tablespace")
-  if (index.relation?.inh === false)
+  // libpg-query не пише `inh`, коли воно false, тож `ON ONLY` — це відсутнє поле
+  if (index.relation?.inh !== true)
     return unrepresentable("index is defined on ONLY the parent table")
   const elems = (index.indexParams ?? []).map((p) =>
     "IndexElem" in p ? p.IndexElem : undefined

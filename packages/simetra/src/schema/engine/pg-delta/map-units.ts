@@ -9,7 +9,7 @@ import {
 } from "@supabase/pg-delta"
 import { readSqlUnits, type SqlParser } from "simetra/compiler"
 import { quoteIdent, type CatalogUnit } from "simetra/model"
-import type { MappingIssue } from "./map-tables"
+import { unknownKeys, type MappingIssue } from "./map-tables"
 
 /**
  * SQL-одиниці з фактів класів, які модель тримає дослівно (план E2a,
@@ -117,19 +117,112 @@ const PUBLIC_DEFAULT: Partial<Record<StableId["kind"], string>> = {
   aggregate: "EXECUTE",
 }
 
+/** Вид об'єкта в `pg_default_acl` (`defaclobjtype`) за видом факту. */
+const ADP_OBJTYPE: Partial<Record<StableId["kind"], string>> = {
+  table: "r",
+  view: "r",
+  materializedView: "r",
+  foreignTable: "r",
+  sequence: "S",
+  function: "f",
+  procedure: "f",
+  aggregate: "f",
+  type: "T",
+  domain: "T",
+}
+
+interface PrivilegeSet {
+  privileges: string[]
+  grantable: string[]
+}
+
+interface DefaultEntry extends PrivilegeSet {
+  schema: string
+  objtype: string
+  grantee: string
+}
+
+/**
+ * Що об'єкт отримує при створенні без жодного `GRANT`: права власника,
+ * `PUBLIC` за видом і типові привілеї (ADP) його схеми для ролі-власника.
+ * Грант, що дорівнює цьому, неявний і одиницею не є (рішення архітектора E2a,
+ * задача 4); відмінний — явна одиниця. Правило однакове для обох сторін
+ * звірки, бо обидві — extract.
+ */
+export interface AclDefaults {
+  /** Роль, що створює об'єкти без явного власника (ребро `owner` прибрано). */
+  owner: string
+  entries: readonly DefaultEntry[]
+}
+
+export function aclDefaultsOf(view: FactBase, owner: string): AclDefaults {
+  const entries: DefaultEntry[] = []
+  for (const fact of view.facts()) {
+    const id = fact.id
+    if (id.kind !== "defaultPrivilege" || view.isReferenceOnly(id)) continue
+    // Глобальні типові привілеї межа керування відсікає (політика §6.9), тож
+    // тут лише ADP схем ролі-власника
+    if (id.role !== owner || id.schema === null) continue
+    entries.push({
+      schema: id.schema,
+      objtype: id.objtype,
+      grantee: id.grantee,
+      privileges: strings(fact.payload.privileges),
+      grantable: strings(fact.payload.grantable),
+    })
+  }
+  return { owner, entries }
+}
+
+/** ADP схеми, що стосуються об'єкта; порожньо — об'єкт поза ADP. */
+function defaultsFor(target: StableId, defaults: AclDefaults): DefaultEntry[] {
+  const objtype = ADP_OBJTYPE[target.kind]
+  if (objtype === undefined || !("schema" in target)) return []
+  return defaults.entries.filter(
+    (e) => e.schema === target.schema && e.objtype === objtype
+  )
+}
+
+/** Права, які пара (об'єкт, отримувач) має без жодного `GRANT`. */
+function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
+  const id = fact.id as Extract<StableId, { kind: "acl" }>
+  const ownerDefault = fact.payload._ownerDefault
+  if (Array.isArray(ownerDefault))
+    return { privileges: strings(ownerDefault), grantable: [] }
+  if (id.column !== undefined) return { privileges: [], grantable: [] }
+  const adp = defaultsFor(id.target, defaults).find(
+    (e) => e.grantee === id.grantee
+  )
+  if (adp !== undefined) return adp
+  const publicDefault =
+    id.grantee === "PUBLIC" ? PUBLIC_DEFAULT[id.target.kind] : undefined
+  return {
+    privileges: publicDefault === undefined ? [] : [publicDefault],
+    grantable: [],
+  }
+}
+
 const grantee = (role: string) =>
   role === "PUBLIC" ? "PUBLIC" : quoteIdent(role)
 
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.map(String) : []
 
+const sameSet = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((x) => b.includes(x))
+
 /**
- * Оператор ACL-пари з payload: дія двигуна для неї цілі не має. Типові права
- * свіжого об'єкта — власника (`_ownerDefault`) і `PUBLIC` — не одиниця й не
- * відмінність (рішення за спайком, 8); явне відкликання такого права —
- * одиниця `REVOKE`. Порожній рядок — пари немає.
+ * Оператор ACL-пари з payload: дія двигуна для неї цілі не має. Пара, рівна
+ * правам свіжого об'єкта (власник, `PUBLIC`, ADP схеми), — не одиниця
+ * (рішення за спайком, 8, і рішення архітектора про ADP); відкликане з них —
+ * `REVOKE`; решта — `GRANT` усіх прав пари. Порожній рядок — одиниці немає.
  */
-function aclStatement(fact: Fact, issues: MappingIssue[]): string {
+function aclStatement(
+  fact: Fact,
+  defaults: AclDefaults,
+  issues: MappingIssue[]
+): string {
+  unknownKeys(fact, issues)
   const id = fact.id as Extract<StableId, { kind: "acl" }>
   const target = grantTarget(id.target)
   if (target === undefined) {
@@ -142,42 +235,19 @@ function aclStatement(fact: Fact, issues: MappingIssue[]): string {
   }
   const privileges = strings(fact.payload.privileges)
   const grantable = strings(fact.payload.grantable)
-  const ownerDefault = fact.payload._ownerDefault
+  const expected = expectedPrivileges(fact, defaults)
+  if (
+    sameSet(privileges, expected.privileges) &&
+    sameSet(grantable, expected.grantable)
+  )
+    return ""
   const column = id.column === undefined ? "" : ` (${quoteIdent(id.column)})`
   const list = (privs: readonly string[]) =>
     privs.map((p) => `${p}${column}`).join(", ")
-  const revoke = (privs: readonly string[]) =>
-    `REVOKE ${list(privs)} ON ${target} FROM ${grantee(id.grantee)}`
-  if (Array.isArray(ownerDefault)) {
-    const defaults = strings(ownerDefault)
-    const missing = defaults.filter((p) => !privileges.includes(p))
-    if (missing.length === 0 && privileges.length === defaults.length) return ""
-    if (missing.length === 0 || privileges.some((p) => !defaults.includes(p))) {
-      issues.push({
-        object: id,
-        property: "privileges",
-        detail: `owner privileges ${privileges.join(",")} differ from the owner default other than by a revoke`,
-      })
-      return ""
-    }
-    return revoke(missing)
-  }
-  const publicDefault =
-    id.grantee === "PUBLIC" && id.column === undefined
-      ? PUBLIC_DEFAULT[id.target.kind]
-      : undefined
-  if (publicDefault !== undefined) {
-    if (privileges.length === 1 && privileges[0] === publicDefault) return ""
-    if (privileges.length === 0) return revoke([publicDefault])
-  }
-  if (privileges.length === 0) {
-    issues.push({
-      object: id,
-      property: "privileges",
-      detail: "a grantee without privileges is not a grant",
-    })
-    return ""
-  }
+  const extra = privileges.filter((p) => !expected.privileges.includes(p))
+  const missing = expected.privileges.filter((p) => !privileges.includes(p))
+  if (extra.length === 0 && missing.length > 0)
+    return `REVOKE ${list(missing)} ON ${target} FROM ${grantee(id.grantee)}`
   // Ідентичність гранту опцію не несе, а частковий `WITH GRANT OPTION` — це
   // два оператори на одну пару
   if (grantable.length > 0 && grantable.length !== privileges.length) {
@@ -189,6 +259,31 @@ function aclStatement(fact: Fact, issues: MappingIssue[]): string {
     return ""
   }
   return `GRANT ${list(privileges)} ON ${target} TO ${grantee(id.grantee)}${grantable.length > 0 ? " WITH GRANT OPTION" : ""}`
+}
+
+/**
+ * ADP схеми дає права отримувачу на кожен новий об'єкт; якщо в об'єкта такого
+ * отримувача немає зовсім (об'єкт старший за ADP або права відкликано), ACL-
+ * факту теж немає — тож відкликання видно лише з боку ADP.
+ */
+export function revokedDefaultStatements(
+  view: FactBase,
+  fact: Fact,
+  defaults: AclDefaults
+): string[] {
+  const target = grantTarget(fact.id)
+  if (target === undefined) return []
+  return defaultsFor(fact.id, defaults)
+    .filter(
+      (e) =>
+        e.privileges.length > 0 &&
+        view.get({ kind: "acl", target: fact.id, grantee: e.grantee }) ===
+          undefined
+    )
+    .map(
+      (e) =>
+        `REVOKE ${e.privileges.join(", ")} ON ${target} FROM ${grantee(e.grantee)}`
+    )
 }
 
 const REPLICA_IDENTITY: Readonly<Record<string, string>> = {
@@ -269,6 +364,7 @@ export function unitStatements(
   view: FactBase,
   fact: Fact,
   produced: ProducedBy,
+  defaults: AclDefaults,
   issues: MappingIssue[]
 ): string[] {
   switch (fact.id.kind) {
@@ -286,8 +382,11 @@ export function unitStatements(
         })
       return [String(fact.payload.def)]
     case "acl":
-      return [aclStatement(fact, issues)]
+      return [aclStatement(fact, defaults, issues)]
     case "sequence": {
+      // Текст послідовності — з дії двигуна, а `OWNED BY` — окрема дія без
+      // цілі, тож її форму звіряємо з payload тут
+      unknownKeys(fact, issues)
       const statements = [actionStatement(view, fact, produced, issues)]
       const owner = fact.payload.ownedBy as {
         schema: string
@@ -295,7 +394,17 @@ export function unitStatements(
         column: string
       } | null
       const id = fact.id as { schema: string; name: string }
-      if (owner !== null && owner !== undefined)
+      if (
+        owner !== null &&
+        owner !== undefined &&
+        !sameSet(Object.keys(owner), ["schema", "table", "column"])
+      )
+        issues.push({
+          object: fact.id,
+          property: "ownedBy",
+          detail: `owned-by ${JSON.stringify(owner)} has an unknown form`,
+        })
+      else if (owner !== null && owner !== undefined)
         statements.push(
           `ALTER SEQUENCE ${qualified(id.schema, id.name)} OWNED BY ${qualified(owner.schema, owner.table)}.${quoteIdent(owner.column)}`
         )

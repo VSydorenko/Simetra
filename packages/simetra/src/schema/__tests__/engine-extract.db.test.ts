@@ -13,6 +13,7 @@ import {
   type Extracted,
 } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "../engine/pg-delta/policy"
+import { ALL_PRIVILEGES } from "../engine/privileges"
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
@@ -62,59 +63,44 @@ const EXPRESSION_PATHS: readonly [string, string][] = [
     "checks.*.expression",
     "pg_get_constraintdef prints the check from its parse tree (`(amount >= (0)::numeric)`)",
   ],
-  [
-    "indexes.*.where",
-    "pg_get_indexdef prints the predicate from its parse tree",
-  ],
-  [
-    "indexes.*.keys.*.expression",
-    "pg_get_indexdef prints key expressions from their parse tree",
-  ],
 ]
 
 const EXPRESSION = "<expression>"
 
-/** Таблиця з текстами виразів, заміненими на маркер; порожній вираз лишається як є. */
-function withoutExpressionTexts(table: CatalogTable): CatalogTable {
-  const mark = (value: string) => (value.trim() === "" ? value : EXPRESSION)
-  return {
-    ...table,
-    columns: table.columns.map((c) => ({
-      ...c,
-      ...(c.default === undefined ? {} : { default: mark(c.default) }),
-      ...(c.generated === undefined
-        ? {}
-        : { generated: { expression: mark(c.generated.expression) } }),
-    })),
-    checks: table.checks.map((c) => ({
-      ...c,
-      expression: mark(c.expression),
-    })),
-    indexes: table.indexes.map((index) => ({
-      ...index,
-      ...(index.where === undefined ? {} : { where: mark(index.where) }),
-      keys: index.keys.map((key) =>
-        "expression" in key ? { ...key, expression: mark(key.expression) } : key
-      ),
-    })),
+/**
+ * Значення з текстом за шляхом (`*` — кожен елемент масиву), заміненим на
+ * маркер; знайдені тексти — у `found`. Порожній текст лишається як є.
+ */
+function masked(
+  value: unknown,
+  path: readonly string[],
+  found: string[]
+): unknown {
+  const [head, ...rest] = path
+  if (head === undefined) {
+    if (typeof value !== "string") return value
+    found.push(value)
+    return value.trim() === "" ? value : EXPRESSION
   }
+  if (head === "*")
+    return Array.isArray(value)
+      ? value.map((v) => masked(v, rest, found))
+      : value
+  if (value === null || typeof value !== "object" || !(head in value))
+    return value
+  const record = value as Record<string, unknown>
+  return { ...record, [head]: masked(record[head], rest, found) }
 }
 
-/** Тексти виразів таблиці — щоб довести, що жоден не порожній. */
-function expressionTexts(table: CatalogTable): string[] {
-  return [
-    ...table.columns.flatMap((c) => [
-      ...(c.default === undefined ? [] : [c.default]),
-      ...(c.generated === undefined ? [] : [c.generated.expression]),
-    ]),
-    ...table.checks.map((c) => c.expression),
-    ...table.indexes.flatMap((index) => [
-      ...(index.where === undefined ? [] : [index.where]),
-      ...index.keys.flatMap((key) =>
-        "expression" in key ? [key.expression] : []
-      ),
-    ]),
-  ]
+/** Таблиця з текстами виразів за `EXPRESSION_PATHS`, заміненими на маркер. */
+function withoutExpressionTexts(
+  table: CatalogTable,
+  found: string[] = []
+): CatalogTable {
+  let out: unknown = table
+  for (const [path] of EXPRESSION_PATHS)
+    out = masked(out, path.split("."), found)
+  return out as CatalogTable
 }
 
 async function compiled(files: Map<string, string>): Promise<CompiledModel> {
@@ -185,7 +171,7 @@ const HELD_DIFFERENTLY: readonly [string, string][] = [
   ],
   [
     "grant",
-    "the catalog holds one ACL entry per (object, grantee), merging every statement's privileges for the pair",
+    "the catalog holds one ACL entry per (object, grantee), merging every statement's privileges for the pair, and ALL as the full privilege list of the class",
   ],
   [
     "defaultPrivileges",
@@ -196,6 +182,14 @@ const HELD_DIFFERENTLY: readonly [string, string][] = [
     "pg_publication_rel holds one row per (publication, table); SET leaves the same rows as ADD",
   ],
 ]
+
+/** Привілеї оператора; `all` — повний перелік класу об'єкта (рішення B). */
+function expandAll(type: string, privileges: string): string[] {
+  if (privileges !== "all") return splitList(privileges)
+  const all = ALL_PRIVILEGES[type]
+  if (all === undefined) throw new Error(`no privilege list for ${type}`)
+  return [...all]
+}
 
 /**
  * Ідентичності одиниць компілятора у формі бази: оператор розгорнуто в пари
@@ -230,7 +224,7 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
           for (const role of roles!.split(","))
             pair(
               `grant:grant:${type}:${object}:${role}`,
-              splitList(privileges!)
+              expandAll(type!, privileges!)
             )
         break
       }
@@ -241,7 +235,7 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
             for (const grantee of grantees!.split(","))
               pair(
                 `defaultPrivileges:${role}:${schema}:${type}:${verb}:${grantee}`,
-                splitList(privileges!)
+                expandAll(type!, privileges!)
               )
         break
       }
@@ -277,10 +271,11 @@ async function expectExtractMatchesModel(files: Map<string, string>) {
   )
   const expected = catalogFromSnapshot(model.physical)
   const actual = extracted.model
-  for (const table of actual.tables)
-    for (const text of expressionTexts(table)) expect(text.trim()).not.toBe("")
+  const texts: string[] = []
+  for (const table of actual.tables) withoutExpressionTexts(table, texts)
+  for (const text of texts) expect(text.trim()).not.toBe("")
   const tablesOnly = (m: Pick<CatalogModel, "tables" | "enumTypes">) => ({
-    tables: m.tables.map(withoutExpressionTexts),
+    tables: m.tables.map((t) => withoutExpressionTexts(t)),
     enumTypes: m.enumTypes,
     units: [],
   })
@@ -339,6 +334,10 @@ function unitClasses(): Map<string, string> {
       "GRANT USAGE ON SCHEMA app TO authenticated, anon;",
       "GRANT SELECT, INSERT ON app.note, app.note_view TO authenticated, anon;",
       "GRANT UPDATE ON app.note TO authenticated;",
+      "GRANT ALL ON app.note_view TO service_role;",
+      // Коментар control-файлу розширення ставить сам CREATE EXTENSION: він
+      // неявний, тож одиниці коментаря немає
+      "CREATE EXTENSION citext WITH SCHEMA extensions;",
       "GRANT EXECUTE ON FUNCTION app.note_count(int, uuid) TO authenticated;",
       "ALTER PUBLICATION supabase_realtime ADD TABLE app.note;",
       "ALTER TABLE app.note REPLICA IDENTITY FULL;",
@@ -417,6 +416,84 @@ describe("properties without a model field are loud", () => {
     ).toContain("persistence")
     const child = extracted.model.tables.find((t) => t.name === "child")
     expect(child?.foreignKeys).toEqual([])
+  })
+
+  it("not valid domain constraint is unrepresentable", async () => {
+    const extracted = await extractDesired(
+      `
+      create schema app;
+      create domain app.d as int;
+      alter domain app.d add constraint d_positive check (value > 0) not valid;
+      `,
+      scope
+    )
+    expect(
+      extracted.diagnostics
+        .filter((d) => d.code === "engine.unrepresentable")
+        .map((d) => d.object)
+    ).toEqual(["constraint:app.d.d_positive"])
+  })
+
+  it("force row level security without enable is unrepresentable", async () => {
+    const extracted = await extractDesired(
+      `
+      create schema app;
+      create table app.doc (id int primary key);
+      alter table app.doc force row level security;
+      `,
+      scope
+    )
+    const found = extracted.diagnostics.filter(
+      (d) => d.code === "engine.unrepresentable"
+    )
+    expect(found.map((d) => d.object)).toEqual(["table:app.doc"])
+    expect(found[0]?.message).toContain("forceRowSecurity")
+  })
+
+  it("a grant equal to the schema default privileges is implicit", async () => {
+    const extracted = await extractDesired(
+      `
+      create schema app;
+      create table app.older (id int);
+      alter default privileges for role postgres in schema app
+        grant select on tables to anon;
+      create table app.fresh (id int);
+      create table app.extra (id int);
+      grant insert on app.extra to anon;
+      `,
+      scope
+    )
+    expect(extracted.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    // `fresh` має рівно права ADP — неявні; `older` створено до ADP, тож
+    // прав ADP у нього немає — явне відкликання; `extra` має більше — грант
+    expect(extracted.model.units.map((u) => u.identity)).toEqual([
+      "defaultPrivileges:postgres:app:table:grant:anon:select",
+      "grant:grant:table:app.extra:anon:insert,select",
+      "grant:revoke:table:app.older:anon:select",
+    ])
+  })
+
+  it("extension comment is implicit unless it differs from the control file", async () => {
+    const plain = await extractDesired(
+      "create extension citext with schema extensions;",
+      scope
+    )
+    expect(plain.model.units.map((u) => u.identity)).toEqual([
+      "extension:citext",
+    ])
+    const commented = await extractDesired(
+      `
+      create extension citext with schema extensions;
+      comment on extension citext is 'case-insensitive text for app';
+      `,
+      scope
+    )
+    expect(commented.model.units.map((u) => u.identity)).toEqual([
+      "comment:extension:citext",
+      "extension:citext",
+    ])
   })
 
   it("replica identity full is a unit", async () => {

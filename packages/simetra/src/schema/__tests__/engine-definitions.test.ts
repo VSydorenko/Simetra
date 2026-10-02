@@ -191,5 +191,11 @@ describe("parseIndexDefinition", () => {
         "CREATE INDEX i ON app.t USING btree (id) WITH (fillfactor='50')"
       )
     ).toMatchObject({ type: "unrepresentable" })
+    expect(
+      parseIndexDefinition(
+        parse,
+        "CREATE INDEX i ON ONLY app.t USING btree (id)"
+      )
+    ).toMatchObject({ type: "unrepresentable" })
   })
 })
