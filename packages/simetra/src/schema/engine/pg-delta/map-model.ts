@@ -96,7 +96,7 @@ export function mapModel(
   }
   const statements = (fact: Fact) => [
     ...unitStatements(view, fact, produced, defaults, issues),
-    ...revokedDefaultStatements(view, fact, defaults),
+    ...revokedDefaultStatements(view, fact.id, defaults),
   ]
   for (const fact of view.facts()) {
     const id = fact.id
@@ -113,12 +113,13 @@ export function mapModel(
     if (id.kind === "table") {
       tables.push(mapTable(view, fact, parse, issues))
       unit(fact, statements(fact))
+      identitySequenceRevokes(fact)
     } else if (TABLE_PARTS.has(id.kind)) {
       tablePart(fact)
     } else if (id.kind === "type") {
       const enumType = mapEnumType(fact, issues)
       if (enumType !== undefined) enumTypes.push(enumType)
-      unit(fact, revokedDefaultStatements(view, fact, defaults))
+      unit(fact, revokedDefaultStatements(view, fact.id, defaults))
     } else if (id.kind === "typeAttribute" || id.kind === "schema") {
       // Атрибут складеного типу вже названо діагностикою самого типу; схема
       // в моделі неявна — її створює рендер зі схем об'єктів
@@ -140,6 +141,33 @@ export function mapModel(
   )
   units.sort((a, b) => compare(a.identity, b.identity))
   return { model: { tables, enumTypes, units }, issues }
+
+  /**
+   * Послідовність identity-колонки двигун окремим фактом не тримає: її ACL —
+   * сателіти колонки, тож відкликане ADP на ній шукаємо за колонками.
+   */
+  function identitySequenceRevokes(table: Fact): void {
+    for (const column of view.childrenOf(table.id)) {
+      const identity = column.payload.identity as {
+        sequence?: { schema: string; name: string } | null
+      } | null
+      const sequence = identity?.sequence
+      if (
+        column.id.kind !== "column" ||
+        sequence === null ||
+        sequence === undefined
+      )
+        continue
+      unit(
+        column,
+        revokedDefaultStatements(
+          view,
+          { kind: "sequence", schema: sequence.schema, name: sequence.name },
+          defaults
+        )
+      )
+    }
+  }
 
   /**
    * Частина таблиці моделі мапиться разом із таблицею; обмеження домену —

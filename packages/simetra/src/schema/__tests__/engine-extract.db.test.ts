@@ -477,6 +477,56 @@ describe("properties without a model field are loud", () => {
     ])
   })
 
+  it("default privileges missing on an identity sequence are a revoke", async () => {
+    const older = await extractDesired(
+      `
+      create schema app;
+      create table app.counter (id bigint generated always as identity primary key);
+      alter default privileges for role postgres in schema app
+        grant select on sequences to anon;
+      `,
+      scope
+    )
+    expect(older.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(older.model.units.map((u) => u.identity)).toEqual([
+      "defaultPrivileges:postgres:app:sequence:grant:anon:select",
+      "grant:revoke:sequence:app.counter_id_seq:anon:select",
+    ])
+    // Контроль: ADP раніше за таблицю — права послідовності неявні
+    const fresh = await extractDesired(
+      `
+      create schema app;
+      alter default privileges for role postgres in schema app
+        grant select on sequences to anon;
+      create table app.counter (id bigint generated always as identity primary key);
+      `,
+      scope
+    )
+    expect(fresh.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(fresh.model.units.map((u) => u.identity)).toEqual([
+      "defaultPrivileges:postgres:app:sequence:grant:anon:select",
+    ])
+  })
+
+  it("a revoke that also drops a default grant option is unrepresentable", async () => {
+    const extracted = await extractDesired(
+      `
+      create schema app;
+      alter default privileges for role postgres in schema app
+        grant select, insert on tables to anon with grant option;
+      create table app.doc (id int);
+      revoke insert on app.doc from anon cascade;
+      revoke grant option for select on app.doc from anon cascade;
+      `,
+      scope
+    )
+    const found = extracted.diagnostics.filter(
+      (d) => d.code === "engine.unrepresentable"
+    )
+    expect(found.map((d) => d.object)).toEqual(["acl:(table:app.doc).anon"])
+    expect(found[0]?.message).toContain("grantable")
+  })
+
   it("extension comment is implicit unless it differs from the control file", async () => {
     const plain = await extractDesired(
       "create extension citext with schema extensions;",

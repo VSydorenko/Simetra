@@ -246,8 +246,22 @@ function aclStatement(
     privs.map((p) => `${p}${column}`).join(", ")
   const extra = privileges.filter((p) => !expected.privileges.includes(p))
   const missing = expected.privileges.filter((p) => !privileges.includes(p))
-  if (extra.length === 0 && missing.length > 0)
+  if (extra.length === 0 && missing.length > 0) {
+    // `REVOKE` прибирає привілеї разом з опцією; розбіжність опції на тих, що
+    // лишилися, — другий оператор на пару, тож гучно, а не тихо
+    const keptGrantable = expected.grantable.filter((p) =>
+      privileges.includes(p)
+    )
+    if (!sameSet(grantable, keptGrantable)) {
+      issues.push({
+        object: id,
+        property: "grantable",
+        detail: `grant option on ${grantable.join(",") || "nothing"} differs from the default ${keptGrantable.join(",") || "nothing"} besides revoked ${missing.join(",")}`,
+      })
+      return ""
+    }
     return `REVOKE ${list(missing)} ON ${target} FROM ${grantee(id.grantee)}`
+  }
   // Ідентичність гранту опцію не несе, а частковий `WITH GRANT OPTION` — це
   // два оператори на одну пару
   if (grantable.length > 0 && grantable.length !== privileges.length) {
@@ -264,20 +278,21 @@ function aclStatement(
 /**
  * ADP схеми дає права отримувачу на кожен новий об'єкт; якщо в об'єкта такого
  * отримувача немає зовсім (об'єкт старший за ADP або права відкликано), ACL-
- * факту теж немає — тож відкликання видно лише з боку ADP.
+ * факту теж немає — тож відкликання видно лише з боку ADP. `object` — і факт,
+ * і послідовність identity-колонки, яка окремим фактом не є.
  */
 export function revokedDefaultStatements(
   view: FactBase,
-  fact: Fact,
+  object: StableId,
   defaults: AclDefaults
 ): string[] {
-  const target = grantTarget(fact.id)
+  const target = grantTarget(object)
   if (target === undefined) return []
-  return defaultsFor(fact.id, defaults)
+  return defaultsFor(object, defaults)
     .filter(
       (e) =>
         e.privileges.length > 0 &&
-        view.get({ kind: "acl", target: fact.id, grantee: e.grantee }) ===
+        view.get({ kind: "acl", target: object, grantee: e.grantee }) ===
           undefined
     )
     .map(
