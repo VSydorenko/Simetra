@@ -225,6 +225,43 @@ describe("simetra mcp", () => {
     expect(await readFile(join(dir, CURRENCY), "utf8")).toContain("note")
   })
 
+  it("concurrent mutations both land and the result compiles", async () => {
+    // Клієнти-агенти шлють паралельні виклики; без серіалізації друга
+    // мутація читала б диск до запису першої й мовчки її затирала.
+    const dir = await copyDomain()
+    const client = await connect(dir, true)
+    const add = (name: string) =>
+      call(client, "add_element", {
+        target: { kind: "Catalog", name: "Counterparty" },
+        collection: "attributes",
+        element: { name, type: "Boolean" },
+      })
+    const results = await Promise.all([add("flagOne"), add("flagTwo")])
+    expect(results.map((r) => r.out.diagnostics)).toEqual([[], []])
+    const text = await readFile(
+      join(dir, "catalogs/Counterparty/Counterparty.meta.json"),
+      "utf8"
+    )
+    expect(text).toContain('"flagOne"')
+    expect(text).toContain('"flagTwo"')
+    const compiled = await call(client, "compile", {})
+    expect(compiled.out.ok).toBe(true)
+  })
+
+  it("writeChanges refuses an escaping path before touching the disk", async () => {
+    const dir = await copyDomain()
+    const before = await snapshotOf(dir)
+    await expect(
+      writeChanges(dir, [
+        { path: CURRENCY, content: null },
+        { path: "catalogs/New/New.meta.json", content: "{}" },
+        { path: "../x.meta.json", content: "{}" },
+      ])
+    ).rejects.toThrow("Path escapes the target directory")
+    expect(await snapshotOf(dir)).toEqual(before)
+    expect(existsSync(join(dir, "../x.meta.json"))).toBe(false)
+  })
+
   it("writeChanges deletes before writing", async () => {
     // На регістронезалежній ФС старий і новий шлях case-only перейменування —
     // один файл; запис мусить іти після видалення.

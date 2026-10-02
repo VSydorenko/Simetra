@@ -41,16 +41,23 @@ export async function writeChanges(
   changes: readonly FileChange[]
 ): Promise<void> {
   const root = resolve(dir)
+  // Шлях зміни не повинен виходити за межі теки метаданих. Перевірка — до
+  // першої дії з диском: шлях, що втікає, наприкінці набору інакше лишив би
+  // вже виконані видалення й записи.
+  const targets = new Map<FileChange, string>()
+  for (const change of changes) {
+    const target = resolve(root, change.path)
+    if (!target.startsWith(root + sep)) {
+      throw new Error(`Path escapes the target directory: ${change.path}`)
+    }
+    targets.set(change, target)
+  }
   const ordered = [
     ...changes.filter((c) => c.content === null),
     ...changes.filter((c) => c.content !== null),
   ]
   for (const change of ordered) {
-    const target = resolve(root, change.path)
-    // Шлях зміни не повинен виходити за межі теки метаданих.
-    if (!target.startsWith(root + sep)) {
-      throw new Error(`Path escapes the target directory: ${change.path}`)
-    }
+    const target = targets.get(change)!
     if (change.content === null) {
       await rm(target, { force: true })
       await pruneEmptyDirs(dirname(target), root)

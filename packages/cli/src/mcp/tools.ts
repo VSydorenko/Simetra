@@ -100,6 +100,25 @@ async function mutate(
   }
 }
 
+/**
+ * Черга викликів одного сервера (а сервер обслуговує одну теку). SDK
+ * диспетчеризує запити паралельно, тож без черги дві мутації читали б той
+ * самий стан і друга мовчки затирала б першу, а записана комбінація двох
+ * результатів не проходила б компіляцію. Читальні інструменти стоять у тій
+ * самій черзі: `writeChanges` пише файли по одному, і компіляція посеред
+ * запису побачила б напівзаписане дерево. Ціна — послідовні компіляції;
+ * вони короткі, а коректність відповіді важливіша за паралелізм.
+ */
+function createQueue(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve()
+  return (task) => {
+    const run = tail.then(task)
+    // Наступне завдання чекає завершення попереднього, а не його успіху.
+    tail = run.catch(() => undefined)
+    return run
+  }
+}
+
 const dryRun = z.boolean().optional().meta({
   description: "Report the changes without writing them.",
 })
@@ -110,6 +129,7 @@ const completion = (o: McpToolOptions) => ({
 })
 
 export function registerTools(server: McpServer, o: McpToolOptions): void {
+  const queued = createQueue()
   server.registerTool(
     "compile",
     {
@@ -118,23 +138,24 @@ export function registerTools(server: McpServer, o: McpToolOptions): void {
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
     },
-    async () => {
-      try {
-        const result = await compile(await readMetadataDir(o.dir))
-        return respond(
-          o,
-          {
-            ok: result.ok,
-            changes: [],
-            diagnostics: result.diagnostics,
-          },
-          [result.ok ? "compiled without errors" : "compilation has errors"],
-          false
-        )
-      } catch (error) {
-        return failure(error instanceof Error ? error.message : String(error))
-      }
-    }
+    () =>
+      queued(async () => {
+        try {
+          const result = await compile(await readMetadataDir(o.dir))
+          return respond(
+            o,
+            {
+              ok: result.ok,
+              changes: [],
+              diagnostics: result.diagnostics,
+            },
+            [result.ok ? "compiled without errors" : "compilation has errors"],
+            false
+          )
+        } catch (error) {
+          return failure(error instanceof Error ? error.message : String(error))
+        }
+      })
   )
 
   server.registerTool(
@@ -148,31 +169,32 @@ export function registerTools(server: McpServer, o: McpToolOptions): void {
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ kind, name }) => {
-      try {
-        const result = await compile(await readMetadataDir(o.dir))
-        if (result.model === undefined) {
-          return respond(
-            o,
-            { ok: false, changes: [], diagnostics: result.diagnostics },
-            ["cannot explain: the metadata has errors"],
-            true
-          )
+    ({ kind, name }) =>
+      queued(async () => {
+        try {
+          const result = await compile(await readMetadataDir(o.dir))
+          if (result.model === undefined) {
+            return respond(
+              o,
+              { ok: false, changes: [], diagnostics: result.diagnostics },
+              ["cannot explain: the metadata has errors"],
+              true
+            )
+          }
+          const explanation = explainObject(result.model, { kind, name })
+          if (explanation === undefined) {
+            return failure(`Object not found: ${kind} ${name}`)
+          }
+          return {
+            structuredContent: { ...explanation },
+            content: [
+              { type: "text", text: JSON.stringify(explanation, null, 2) },
+            ],
+          }
+        } catch (error) {
+          return failure(error instanceof Error ? error.message : String(error))
         }
-        const explanation = explainObject(result.model, { kind, name })
-        if (explanation === undefined) {
-          return failure(`Object not found: ${kind} ${name}`)
-        }
-        return {
-          structuredContent: { ...explanation },
-          content: [
-            { type: "text", text: JSON.stringify(explanation, null, 2) },
-          ],
-        }
-      } catch (error) {
-        return failure(error instanceof Error ? error.message : String(error))
-      }
-    }
+      })
   )
 
   // Інструменти мутацій не існують у read-only режимі: клієнт їх не бачить.
@@ -187,7 +209,9 @@ export function registerTools(server: McpServer, o: McpToolOptions): void {
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     ({ dryRun: dry, ...input }) =>
-      mutate(o, dry, (files) => createObject(files, input, completion(o)))
+      queued(() =>
+        mutate(o, dry, (files) => createObject(files, input, completion(o)))
+      )
   )
 
   server.registerTool(
@@ -199,7 +223,9 @@ export function registerTools(server: McpServer, o: McpToolOptions): void {
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     ({ dryRun: dry, ...input }) =>
-      mutate(o, dry, (files) => addElement(files, input, completion(o)))
+      queued(() =>
+        mutate(o, dry, (files) => addElement(files, input, completion(o)))
+      )
   )
 
   server.registerTool(
@@ -211,7 +237,7 @@ export function registerTools(server: McpServer, o: McpToolOptions): void {
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     ({ dryRun: dry, ...input }) =>
-      mutate(o, dry, (files) => renameElement(files, input))
+      queued(() => mutate(o, dry, (files) => renameElement(files, input)))
   )
 
   server.registerTool(
@@ -228,7 +254,9 @@ export function registerTools(server: McpServer, o: McpToolOptions): void {
           "Refused: delete requires confirm: true. Nothing changed."
         )
       }
-      return mutate(o, dry, (files) => deleteElement(files, input))
+      return queued(() =>
+        mutate(o, dry, (files) => deleteElement(files, input))
+      )
     }
   )
 }
