@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import {
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -10,7 +11,7 @@ import {
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { runTool } from "../cli/command"
 import { findMetadataDirs, stageMetadataDirs } from "../cli/metadata-dirs"
 import { toolByName } from "../tools/catalog"
@@ -78,6 +79,40 @@ describe("compile --all / --staged", () => {
       "apps/a/metadata",
       "metadata",
     ])
+  })
+
+  it("--all falls back to the FS walk when git is missing; --staged exits 2", async () => {
+    const { root } = await gitProject()
+    // Порожній PATH: `spawn("git")` дає ENOENT, як на машині без git.
+    vi.stubEnv("PATH", "")
+    try {
+      expect(await findMetadataDirs(root)).toEqual(["metadata"])
+      const all = await runAll(root)
+      expect(all.exitCode).toBe(0)
+      const staged = await runAll(root, { staged: true })
+      expect(staged.exitCode).toBe(2)
+      expect(staged.stderr).toContain("git is not installed")
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it("several dirs: each summary block names its directory", async () => {
+    const p = await tmpProject()
+    roots.push(p.root)
+    const root = p.root
+    await cp(p.dir, join(root, "other/metadata"), { recursive: true })
+    const r = await runAll(root)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("other/metadata:\n")
+    expect(r.stdout).toContain("metadata:\n")
+    const json = await runTool(
+      compile,
+      { _: [], all: true, format: "json" },
+      noStdin,
+      root
+    )
+    expect(JSON.parse(json.stdout)).toEqual([])
   })
 
   it("--all with explicit dirs exits 2", async () => {

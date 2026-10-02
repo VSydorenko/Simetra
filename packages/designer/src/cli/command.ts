@@ -136,7 +136,14 @@ export async function runTool(
           format,
         })
         if (rendered.json !== undefined) allJson.push(...rendered.json)
-        else blocks.push(rendered.stdout)
+        // Без назви теки чистий прохід кількох тек не віднести до жодної.
+        else {
+          blocks.push(
+            dirs.length > 1
+              ? `${shown[i] ?? dir}:\n${rendered.stdout}`
+              : rendered.stdout
+          )
+        }
 
         // Артефакти — лише з `--out` і лише з моделі без помилок.
         const model = (result.data as { model?: CompiledModel } | undefined)

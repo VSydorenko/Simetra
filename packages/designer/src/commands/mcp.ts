@@ -1,5 +1,6 @@
 import { defineCommand } from "citty"
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
+import { DEFAULT_DIR, trimSlash } from "../io/default-dir"
 import { createMcpServer } from "../mcp/server"
 
 export default defineCommand({
@@ -20,7 +21,7 @@ export default defineCommand({
     },
   },
   async run({ args }) {
-    const dir = (args.dir ?? "./metadata").replace(/(?<=.)[\\/]+$/, "")
+    const dir = trimSlash(args.dir ?? DEFAULT_DIR)
     // Stdout — канал протоколу, тож нічого зайвого в нього не друкуємо.
     await createMcpServer({
       dir,

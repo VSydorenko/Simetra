@@ -70,7 +70,13 @@ async function walk(cwd: string, rel = ""): Promise<string[]> {
  * Git — обхід файлової системи.
  */
 export async function findMetadataDirs(cwd: string): Promise<string[]> {
-  if (!(await isGitRepo(cwd))) return walk(cwd)
+  // Без бінарника git `--all` (без `--staged`) працює як поза репозиторієм:
+  // перевірці метаданих Git не потрібен, потрібен лише `--staged`.
+  const inGit = await isGitRepo(cwd).catch((error: unknown) => {
+    if (error instanceof UsageError) return false
+    throw error
+  })
+  if (!inGit) return walk(cwd)
   const r = await git(cwd, [
     "ls-files",
     "-z",

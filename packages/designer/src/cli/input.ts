@@ -1,4 +1,5 @@
 import { METADATA_KINDS } from "simetra/model"
+import { DEFAULT_DIR, trimSlash } from "../io/default-dir"
 import { UsageError } from "../io/usage-error"
 import type { Tool } from "../tools/catalog"
 
@@ -15,8 +16,6 @@ export interface CliArgs {
   staged?: boolean
 }
 
-export const DEFAULT_DIR = "./metadata"
-
 /**
  * Читальні інструменти й `fix` мають зручні позиційні форми — це лише вигляд
  * над тим самим входом каталогу. Усі інші беруть вхід каталогу як JSON.
@@ -26,9 +25,6 @@ const ERGONOMIC = new Set<string>(["compile", "explain", "fix"])
 export function takesJsonInput(tool: Tool): boolean {
   return !ERGONOMIC.has(tool.name)
 }
-
-// Кінцевий слеш дав би в тексті `dir//file`.
-const trimSlash = (d: string): string => d.replace(/(?<=.)[\\/]+$/, "")
 
 /**
  * Переводить argv у вхід каталогу й список тек. Тут лише форма введення:
