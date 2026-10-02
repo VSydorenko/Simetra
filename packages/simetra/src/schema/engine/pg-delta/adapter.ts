@@ -27,14 +27,17 @@ import type {
   ShadowOutcome,
 } from "../port"
 import {
-  censusClassOfFact,
-  censusClassOfUnmodeledKind,
   censusDiagnostics,
   readCensus,
   readUnpopulatedViews,
   unmodeledClasses,
   type CensusClass,
 } from "../census"
+import {
+  CENSUS_COVERAGE,
+  censusClassOfFact,
+  censusClassOfUnmodeledKind,
+} from "./census-facts"
 import { readExtensionComments } from "../extension-comments"
 import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
@@ -255,9 +258,12 @@ async function extractFrom(
       scopeKeyOf(scope)
     ),
     diagnostics: [
-      ...toEngineDiagnostics(result.diagnostics, unmodeledClasses(census)),
+      ...toEngineDiagnostics(
+        result.diagnostics,
+        unmodeledClasses(census, CENSUS_COVERAGE)
+      ),
       ...issues.map(unrepresentableDiagnostic),
-      ...censusDiagnostics(census, factCensus(view)),
+      ...censusDiagnostics(census, factCensus(view), CENSUS_COVERAGE),
     ],
     unpopulated: await readUnpopulatedViews(pool, scope),
   }

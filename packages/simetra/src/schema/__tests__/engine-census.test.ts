@@ -4,6 +4,7 @@ import {
   reconcileCensus,
   type CensusClass,
 } from "../engine/census"
+import { CENSUS_COVERAGE } from "../engine/pg-delta/census-facts"
 
 /**
  * Звірка лічильників перепису з фактами двигуна (план E2a, рішення 8):
@@ -21,7 +22,8 @@ describe("census reconciliation with engine facts", () => {
           { class: "table", count: 2 },
           { class: "type.enum", count: 1 },
         ],
-        facts
+        facts,
+        CENSUS_COVERAGE
       )
     ).toEqual([])
   })
@@ -29,7 +31,8 @@ describe("census reconciliation with engine facts", () => {
   it("a class the engine extracted fewer of is a mismatch", () => {
     const [found, ...rest] = reconcileCensus(
       [{ class: "policy", count: 3 }],
-      new Map<CensusClass, number>([["policy", 2]])
+      new Map<CensusClass, number>([["policy", 2]]),
+      CENSUS_COVERAGE
     )
     expect(rest).toEqual([])
     expect(found).toMatchObject({
@@ -43,9 +46,11 @@ describe("census reconciliation with engine facts", () => {
 
   it("a class missing on one side counts as zero", () => {
     expect(
-      reconcileCensus([], new Map<CensusClass, number>([["view", 1]])).map(
-        (d) => d.code
-      )
+      reconcileCensus(
+        [],
+        new Map<CensusClass, number>([["view", 1]]),
+        CENSUS_COVERAGE
+      ).map((d) => d.code)
     ).toEqual(["engine.census-mismatch"])
   })
 
@@ -57,7 +62,8 @@ describe("census reconciliation with engine facts", () => {
           { class: "constraint.trigger", count: 1 },
           { class: "cast", count: 1 },
         ],
-        new Map()
+        new Map(),
+        CENSUS_COVERAGE
       )
     ).toEqual([])
   })
@@ -70,7 +76,8 @@ describe("census reconciliation with engine facts", () => {
           { class: "language", count: 1 },
           { class: "accessMethod", count: 2 },
         ],
-        new Map()
+        new Map(),
+        CENSUS_COVERAGE
       ).map((d) => [d.code, d.severity])
     ).toEqual([
       ["engine.unmodeled-class", "error"],

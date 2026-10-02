@@ -1,144 +1,86 @@
-import type { FactKind } from "@supabase/pg-delta"
 import type pg from "pg"
 import { localize } from "simetra/compiler"
 import type { EngineDiagnostic, EngineScope } from "./port"
 import {
-  PROVIDER_SCHEMAS,
-  SUPABASE_PROVIDER_EVENT_TRIGGERS,
-  SUPABASE_PROVIDER_EXTENSIONS,
-} from "./pg-delta/policy"
+  SUPABASE_EVENT_TRIGGERS,
+  SUPABASE_EXTENSIONS,
+  SUPABASE_SCHEMAS,
+} from "./provider/supabase"
 
 /**
- * Що двигун робить з об'єктами класу перепису (спайк E2a, крок 4,
- * «Відповідність класів перепису фактам двигуна»):
- * - `kind` — вид факту закріпленого двигуна; `match` — поле payload, що
- *   відрізняє клас, коли кілька класів ділять вид. Об'єкт класу з фактом
- *   мапер не губить: кожен факт стає полем моделі, SQL-одиницею або
- *   `engine.unrepresentable` з ім'ям об'єкта (`mapModel`, гілка «інакше»).
- *   Лічильник перепису звіряється з кількістю фактів класу — так ловиться
- *   пропуск окремих об'єктів покритого класу.
- * - `uncompared` — факт є, але лічильники принципово не порівнювані (причина).
- * - `kind: null` — факту немає: двигун класу не бачить зовсім, це тиха втрата.
- *   `global` — клас без схеми: межа не каже, чий об'єкт (застосунку чи
- *   провайдера), тож лише попередження, доки пресет провайдера не перелічить
- *   свої об'єкти класу.
- * Тип `FactKind` прив'язує таблицю до видів закріпленої версії: вид, якого
- * двигун не має, — помилка компіляції, а не тиха розбіжність.
+ * Класи перепису — значення `class` рядків запиту до каталогу. Що двигун
+ * робить з об'єктами кожного класу, знає адаптер (`EngineCoverage`), а не
+ * перепис.
  */
-type CensusFact =
-  | { kind: FactKind; match?: { field: string; value: string } }
-  | { kind: FactKind; uncompared: string }
-  | { kind: null; global?: true }
-
-const CENSUS_FACTS = {
-  table: { kind: "table" },
-  view: { kind: "view" },
-  materializedView: { kind: "materializedView" },
-  sequence: { kind: "sequence" },
-  foreignTable: { kind: "foreignTable" },
-  index: { kind: "index" },
-  "type.enum": { kind: "type", match: { field: "variant", value: "enum" } },
-  "type.composite": {
-    kind: "type",
-    match: { field: "variant", value: "composite" },
-  },
-  "type.range": { kind: "type", match: { field: "variant", value: "range" } },
-  "type.base": { kind: null },
-  // `CREATE TYPE name` без тіла: заготовка під майбутній тип
-  "type.shell": { kind: null },
-  domain: { kind: "domain" },
-  function: { kind: "function" },
-  procedure: { kind: "procedure" },
-  aggregate: { kind: "aggregate" },
-  "constraint.exclusion": {
-    kind: "constraint",
-    match: { field: "type", value: "x" },
-  },
-  // Обмеження-тригер двигун тримає фактом `trigger` (рядок pg_trigger), а не
-  // `constraint`; той самий рядок перепис уже рахує класом `trigger`
-  "constraint.trigger": {
-    kind: "trigger",
-    uncompared: "the same pg_trigger row is counted and compared as trigger",
-  },
-  trigger: { kind: "trigger" },
-  policy: { kind: "policy" },
-  rule: { kind: "rule" },
-  collation: { kind: "collation" },
-  conversion: { kind: null },
-  operator: { kind: null },
-  operatorClass: { kind: null },
-  operatorFamily: { kind: null },
-  cast: { kind: null },
-  textSearchConfiguration: { kind: null },
-  textSearchDictionary: { kind: null },
-  textSearchParser: { kind: null },
-  textSearchTemplate: { kind: null },
-  statistics: { kind: null },
-  transform: { kind: null },
-  publicationRel: { kind: "publicationRel" },
-  publicationSchema: { kind: "publicationSchema" },
-  defaultPrivilege: {
-    kind: "defaultPrivilege",
-    uncompared:
-      "pg_default_acl holds one row per (role, schema, object type) for every grantee, the engine one fact per grantee",
-  },
-  extension: { kind: "extension" },
-  // Факт `language` двигун має лише як ціль грантів; процедурну мову він
-  // не витягує, а повідомляє `unmodeled_kind`
-  language: { kind: null, global: true },
-  accessMethod: { kind: null, global: true },
-  eventTrigger: { kind: "eventTrigger" },
-  foreignDataWrapper: { kind: "fdw" },
-  server: { kind: "server" },
-  subscription: { kind: "subscription" },
-} as const satisfies Record<string, CensusFact>
-
-export type CensusClass = keyof typeof CENSUS_FACTS
+export type CensusClass =
+  | "table"
+  | "view"
+  | "materializedView"
+  | "sequence"
+  | "foreignTable"
+  | "index"
+  | "type.enum"
+  | "type.composite"
+  | "type.range"
+  | "type.base"
+  | "type.shell"
+  | "domain"
+  | "function"
+  | "procedure"
+  | "aggregate"
+  | "constraint.exclusion"
+  | "constraint.trigger"
+  | "trigger"
+  | "policy"
+  | "rule"
+  | "collation"
+  | "conversion"
+  | "operator"
+  | "operatorClass"
+  | "operatorFamily"
+  | "cast"
+  | "textSearchConfiguration"
+  | "textSearchDictionary"
+  | "textSearchParser"
+  | "textSearchTemplate"
+  | "statistics"
+  | "transform"
+  | "publicationRel"
+  | "publicationSchema"
+  | "defaultPrivilege"
+  | "extension"
+  | "language"
+  | "accessMethod"
+  | "eventTrigger"
+  | "foreignDataWrapper"
+  | "server"
+  | "subscription"
 
 export interface CensusCount {
   class: CensusClass
   count: number
 }
 
-function entryOf(censusClass: CensusClass): CensusFact {
-  return CENSUS_FACTS[censusClass]
-}
-
-/** Вид факту двигуна для класу перепису; `null` — двигун класу не бачить. */
-export function factKindOf(censusClass: CensusClass): FactKind | null {
-  return entryOf(censusClass).kind
-}
-
-const TABLE_CLASSES = Object.keys(CENSUS_FACTS) as CensusClass[]
-
 /**
- * Класи перепису, об'єкти яких доходять до мапера фактами двигуна: їх
- * покриває модель (поле, одиниця або гучне `engine.unrepresentable`).
- * Похідне від `CENSUS_FACTS`, а не другий перелік.
+ * Що двигун робить з об'єктами класу: `compared` — факт є, лічильник
+ * звіряється з фактами extract; `uncompared` — факт є, але лічильники не
+ * порівнювані; `unmodeled` — факту немає, тиха втрата; `unmodeledGlobal` —
+ * факту немає, а клас без схеми: межа не каже, чий об'єкт, тож лише
+ * попередження.
  */
-export const COVERED_CLASSES: readonly CensusClass[] = TABLE_CLASSES.filter(
-  (c) => CENSUS_FACTS[c].kind !== null
-)
+export type ClassCoverage =
+  "compared" | "uncompared" | "unmodeled" | "unmodeledGlobal"
 
-/** Покриті класи, лічильник яких звіряється з фактами двигуна. */
-const COMPARED_CLASSES: readonly CensusClass[] = COVERED_CLASSES.filter(
-  (c) => !("uncompared" in entryOf(c))
-)
+/** Покриття кожного класу перепису двигуном; дає адаптер двигуна. */
+export type EngineCoverage = Readonly<Record<CensusClass, ClassCoverage>>
 
-/**
- * Клас перепису, яким звіряється факт двигуна; `undefined` — факт не
- * рахується окремим класом (частина, сателіт, непорівнюваний клас).
- */
-export function censusClassOfFact(fact: {
-  id: { kind: string }
-  payload: Record<string, unknown>
-}): CensusClass | undefined {
-  return COMPARED_CLASSES.find((c) => {
-    const entry: CensusFact = CENSUS_FACTS[c]
-    if (entry.kind !== fact.id.kind) return false
-    const match = "match" in entry ? entry.match : undefined
-    return match === undefined || fact.payload[match.field] === match.value
-  })
+function classesCovered(
+  coverage: EngineCoverage,
+  ...kinds: ClassCoverage[]
+): CensusClass[] {
+  return (Object.keys(coverage) as CensusClass[]).filter((c) =>
+    kinds.includes(coverage[c])
+  )
 }
 
 /**
@@ -148,10 +90,11 @@ export function censusClassOfFact(fact: {
  */
 export function reconcileCensus(
   census: readonly CensusCount[],
-  facts: ReadonlyMap<CensusClass, number>
+  facts: ReadonlyMap<CensusClass, number>,
+  coverage: EngineCoverage
 ): EngineDiagnostic[] {
   const counted = new Map(census.map((c) => [c.class, c.count]))
-  return COMPARED_CLASSES.flatMap((c) => {
+  return classesCovered(coverage, "compared").flatMap((c) => {
     const inCensus = counted.get(c) ?? 0
     const inEngine = facts.get(c) ?? 0
     return inCensus === inEngine
@@ -164,31 +107,6 @@ export function reconcileCensus(
           }),
         ]
   })
-}
-
-/**
- * `unmodeled_kind` двигуна за міткою `context.kind` → клас перепису. Перепис
- * рахує ці класи в межі керування, тож про клас, який він уже назвав
- * помилкою, сигнал двигуна (бо той — без межі, на всю базу) не повторюється.
- */
-const UNMODELED_KIND_CLASS: Readonly<Record<string, CensusClass>> = {
-  cast: "cast",
-  operator: "operator",
-  "operator class": "operatorClass",
-  "operator family": "operatorFamily",
-  "text search configuration": "textSearchConfiguration",
-  "text search dictionary": "textSearchDictionary",
-  "text search parser": "textSearchParser",
-  "text search template": "textSearchTemplate",
-  "statistics object": "statistics",
-  language: "language",
-  transform: "transform",
-}
-
-export function censusClassOfUnmodeledKind(
-  kind: string
-): CensusClass | undefined {
-  return UNMODELED_KIND_CLASS[kind]
 }
 
 /**
@@ -312,9 +230,9 @@ export async function readCensus(
 ): Promise<CensusCount[]> {
   const { rows } = await pool.query<CensusCount>(CENSUS_SQL, [
     scope.schemas,
-    PROVIDER_SCHEMAS,
-    SUPABASE_PROVIDER_EXTENSIONS,
-    SUPABASE_PROVIDER_EVENT_TRIGGERS,
+    SUPABASE_SCHEMAS,
+    SUPABASE_EXTENSIONS,
+    SUPABASE_EVENT_TRIGGERS,
   ])
   return rows
 }
@@ -356,11 +274,13 @@ function diagnostic(
 
 /** Класи з об'єктами в межі, яких двигун не бачить: кожен — тиха втрата. */
 export function unmodeledClasses(
-  census: readonly CensusCount[]
+  census: readonly CensusCount[],
+  coverage: EngineCoverage
 ): Set<CensusClass> {
-  return new Set(
-    census.map((c) => c.class).filter((c) => entryOf(c).kind === null)
+  const unmodeled = new Set(
+    classesCovered(coverage, "unmodeled", "unmodeledGlobal")
   )
+  return new Set(census.map((c) => c.class).filter((c) => unmodeled.has(c)))
 }
 
 /**
@@ -368,23 +288,24 @@ export function unmodeledClasses(
  * втрата; розбіжність лічильника покритого класу з фактами — пропуск окремих
  * об'єктів. Усі — error,
  * інакше звірка назвала б базу рівною бажаному стану; виняток — глобальні
- * класи без схеми (див. `CENSUS_FACTS`).
+ * класи без схеми (`unmodeledGlobal`).
  */
 export function censusDiagnostics(
   census: readonly CensusCount[],
-  facts: ReadonlyMap<CensusClass, number>
+  facts: ReadonlyMap<CensusClass, number>,
+  coverage: EngineCoverage
 ): EngineDiagnostic[] {
-  const unmodeled = unmodeledClasses(census)
+  const unmodeled = unmodeledClasses(census, coverage)
   const out = census
     .filter((c) => unmodeled.has(c.class))
     .map((c) => {
-      const global = "global" in entryOf(c.class)
+      const global = coverage[c.class] === "unmodeledGlobal"
       return diagnostic(
         "engine.unmodeled-class",
         global ? "warning" : "error",
         { class: c.class, count: c.count }
       )
     })
-  out.push(...reconcileCensus(census, facts))
+  out.push(...reconcileCensus(census, facts, coverage))
   return out
 }

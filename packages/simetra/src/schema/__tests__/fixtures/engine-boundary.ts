@@ -1,6 +1,6 @@
 import { parseId, type StableId } from "@supabase/pg-delta"
 import type { EngineAction, EngineScope } from "simetra/schema"
-import { PROVIDER_SCHEMAS } from "../../engine/pg-delta/policy"
+import { SUPABASE_SCHEMAS } from "../../engine/provider/supabase"
 
 /** Схема ідентичності: власна або цілі сателіта; без схеми — `undefined`. */
 function schemaOf(id: StableId): string | undefined {
@@ -30,7 +30,7 @@ export function boundaryViolations(
   scope: EngineScope
 ): string[] {
   const managed = new Set(scope.schemas)
-  const provider = new Set(PROVIDER_SCHEMAS)
+  const provider = new Set(SUPABASE_SCHEMAS)
   const out: string[] = []
   for (const action of actions) {
     const own = [...action.produces, ...action.destroys]

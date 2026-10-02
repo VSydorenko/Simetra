@@ -1,6 +1,6 @@
 import type { CompiledModel } from "simetra/compiler"
 import { diffCatalogModels, type CatalogDifference } from "simetra/model"
-import { PROVIDER_SCHEMAS } from "./pg-delta/policy"
+import { SUPABASE_SCHEMAS } from "./provider/supabase"
 import type {
   DbConnection,
   EngineDiagnostic,
@@ -138,7 +138,7 @@ export async function compareWithDesired(
 export function engineScope(
   model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">
 ): EngineScope {
-  const provider = new Set(PROVIDER_SCHEMAS)
+  const provider = new Set(SUPABASE_SCHEMAS)
   const schemas = new Set([
     model.project.defaultSchema,
     ...model.physical.tables.map((table) => table.schema),

@@ -10,13 +10,10 @@ import {
   type EngineScope,
   type Extracted,
 } from "simetra/schema"
-import {
-  COVERED_CLASSES,
-  factKindOf,
-  readCensus,
-  type CensusCount,
-} from "../engine/census"
-import { PROVIDER_SCHEMAS, scopeProfile } from "../engine/pg-delta/policy"
+import { readCensus, type CensusCount } from "../engine/census"
+import { COVERED_CLASSES, factKindOf } from "../engine/pg-delta/census-facts"
+import { scopeProfile } from "../engine/pg-delta/policy"
+import { SUPABASE_SCHEMAS } from "../engine/provider/supabase"
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
@@ -306,7 +303,7 @@ async function fixtureCase(
   const result = await compile(files)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   const model = result.model!
-  const provider = new Set(PROVIDER_SCHEMAS)
+  const provider = new Set(SUPABASE_SCHEMAS)
   const schemas = [
     ...new Set([
       ...model.physical.tables.map((t) => t.schema),

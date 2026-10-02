@@ -1,5 +1,4 @@
 import {
-  flattenPolicy,
   supabasePolicy,
   supabaseProfile,
   validatePolicy,
@@ -7,35 +6,7 @@ import {
   type Policy,
 } from "@supabase/pg-delta"
 import type { EngineScope } from "../port"
-
-/**
- * Розширення базового стану Supabase: їх ставить провайдер, а не застосунок,
- * тож межа їх не створює й не видаляє. Перелік — дані пресета провайдера
- * (§6.9: «перелік для конкретного провайдера — пресет»); пакет двигуна
- * публічно його не експортує.
- */
-export const SUPABASE_PROVIDER_EXTENSIONS: readonly string[] = [
-  "plpgsql",
-  "pgcrypto",
-  "uuid-ossp",
-  "pg_stat_statements",
-  "supabase_vault",
-  "pg_graphql",
-]
-
-/**
- * Тригери подій базового стану Supabase (LIKE-шаблони): їх ставить провайдер,
- * тож перепис класів їх не рахує.
- */
-export const SUPABASE_PROVIDER_EVENT_TRIGGERS: readonly string[] = [
-  "issue_%",
-  "pgrst_%",
-  "graphql_watch_%",
-]
-
-/** Схеми, які пресет провайдера вважає своїми (засів тіні, reference-only). */
-export const PROVIDER_SCHEMAS: readonly string[] =
-  flattenPolicy(supabasePolicy).assumedSchemas
+import { SUPABASE_EXTENSIONS, SUPABASE_SCHEMAS } from "../provider/supabase"
 
 /**
  * Політика межі §6.9 поверх `supabasePolicy`. Фільтр двигуна — «перше збігле
@@ -50,17 +21,14 @@ export const PROVIDER_SCHEMAS: readonly string[] =
  * свідомо не входить.
  */
 export function scopePolicy(scope: EngineScope): Policy {
-  const inside = [...scope.schemas, ...PROVIDER_SCHEMAS]
+  const inside = [...scope.schemas, ...SUPABASE_SCHEMAS]
   const policy: Policy = {
     id: "simetra-scope",
     extends: [supabasePolicy],
     filter: [
       {
         match: {
-          all: [
-            { kind: "extension" },
-            { name: [...SUPABASE_PROVIDER_EXTENSIONS] },
-          ],
+          all: [{ kind: "extension" }, { name: [...SUPABASE_EXTENSIONS] }],
         },
         action: "exclude",
       },

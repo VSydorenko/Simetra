@@ -19,7 +19,7 @@ export interface DesiredState {
 
 // `public` існує завжди, схеми провайдера створює він сам: наш `CREATE SCHEMA`
 // для них або зайвий, або вимагав би прав, яких у застосунку немає.
-const UNMANAGED_SCHEMAS: ReadonlySet<string> = new Set([
+export const UNMANAGED_SCHEMAS: ReadonlySet<string> = new Set([
   "public",
   "auth",
   "storage",
