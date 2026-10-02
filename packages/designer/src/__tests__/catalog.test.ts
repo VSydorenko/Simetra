@@ -58,9 +58,13 @@ async function snapshotOf(dir: string): Promise<Record<string, string>> {
 describe("tool catalog", () => {
   it("names every tool once", () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual([
+      "add",
       "compile",
+      "create",
+      "delete",
       "explain",
       "fix",
+      "rename",
     ])
   })
 

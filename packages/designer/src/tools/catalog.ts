@@ -1,3 +1,4 @@
+import { addTool, createTool, deleteTool, renameTool } from "./mutations"
 import { compileTool, explainTool, fixTool } from "./read"
 import type { Tool } from "./types"
 
@@ -12,7 +13,15 @@ export type {
 } from "./types"
 
 /** Єдиний каталог інструментів: CLI, MCP і студія — лише його адаптери. */
-export const TOOLS: readonly Tool[] = [compileTool, explainTool, fixTool]
+export const TOOLS: readonly Tool[] = [
+  compileTool,
+  explainTool,
+  fixTool,
+  createTool,
+  addTool,
+  renameTool,
+  deleteTool,
+]
 
 export function toolByName(name: string): Tool | undefined {
   return TOOLS.find((t) => t.name === name)
