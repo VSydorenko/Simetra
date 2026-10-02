@@ -51,6 +51,16 @@ type FkAction = ForeignKey["onDelete"]
 type Index = PhysicalTable["indexes"][number]
 type Element = Record<string, unknown>
 
+/**
+ * Мітки похідних таблиць регістра (`<регістр>_totals`,
+ * `<регістр>_turnovers_month`). Одне джерело для стадії 3 і для `fix`, що
+ * тримає ці імена зайнятими й рахує з ними ліміт довжини імені регістра.
+ */
+export const DERIVED_TABLE_LABELS = {
+  totals: "totals",
+  turnoversMonth: "turnovers_month",
+} as const
+
 /** NAMEDATALEN Postgres: межа, після якої доповнення з імен колонок не росте. */
 const NAMEDATALEN = 64
 
@@ -554,7 +564,7 @@ class SnapshotBuilder {
   ): void {
     const table = this.pendingTable(
       schema,
-      makeObjectName(register, undefined, "totals"),
+      makeObjectName(register, undefined, DERIVED_TABLE_LABELS.totals),
       { ...origin, part: "totals" },
       object
     )
@@ -594,7 +604,7 @@ class SnapshotBuilder {
   ): void {
     const table = this.pendingTable(
       schema,
-      makeObjectName(register, undefined, "turnovers_month"),
+      makeObjectName(register, undefined, DERIVED_TABLE_LABELS.turnoversMonth),
       { ...origin, part: "turnoversMonth" },
       object
     )

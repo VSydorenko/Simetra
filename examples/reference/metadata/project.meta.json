@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../packages/simetra/schemas/project.schema.json",
   "name": "Reference",
   "title": {
     "uk": "Референсний застосунок"

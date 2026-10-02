@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../../../packages/simetra/schemas/constants.schema.json",
   "id": "720b1089-9c6f-4a5a-9337-12f5adbf8ac8",
   "kind": "Constant",
   "name": "DefaultCurrency",

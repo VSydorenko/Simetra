@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../../../packages/simetra/schemas/catalogs.schema.json",
   "id": "11099343-16fb-4d45-a2c5-788192650589",
   "kind": "Catalog",
   "name": "Counterparty",

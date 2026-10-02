@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../../../packages/simetra/schemas/information-registers.schema.json",
   "id": "d985e5f0-ff4a-40af-b8e8-c698a7c075d6",
   "kind": "InformationRegister",
   "name": "Rates",

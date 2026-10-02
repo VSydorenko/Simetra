@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../../../packages/simetra/schemas/documents.schema.json",
   "id": "01702ecb-fac0-40bc-9782-303bb4c1a580",
   "kind": "Document",
   "name": "ServiceAccrual",

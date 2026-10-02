@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../../../packages/simetra/schemas/accumulation-registers.schema.json",
   "id": "d790a0f8-585f-4a6b-9236-27da5695543f",
   "kind": "AccumulationRegister",
   "name": "PerformerSettlements",

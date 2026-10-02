@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../../../packages/simetra/schemas/enumerations.schema.json",
   "id": "dcde3ce2-23c1-49f1-994e-d37ed08a3195",
   "kind": "Enumeration",
   "name": "AccrualKind",

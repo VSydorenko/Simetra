@@ -85,6 +85,7 @@ export const COMPILER_RULES = [
   "customTable.generated-conflict",
   "customTable.key-column-nullable",
   "presentation.unknown-standard-attribute",
+  "operation.physical-name-too-long",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]
@@ -130,13 +131,15 @@ export interface Diagnostic {
  * лише вводить в оману читача. Маркер з відступом не відкриває блок, тож
  * запит мовчки не потрапив би в рухи — але файл від цього не ламається.
  * Запит рухів без ORDER BY дає рухи в недетермінованому порядку, але лишається
- * чинним.
+ * чинним. Ім'я, яке `fix` не призначив через ліміт довжини, — пояснення до
+ * помилки `identity.physical-name-missing`, а не друга помилка.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
   "scope.cross-scope-redundant",
   "file.movements-marker-indented",
   "posting.query-order-missing",
+  "operation.physical-name-too-long",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

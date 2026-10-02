@@ -263,6 +263,13 @@ function derived(table: PhysicalTable, label: string): QualifiedName {
   }
 }
 
+const POSTING_LABELS = { save: "save", post: "post", unpost: "unpost" } as const
+const TOTALS_LABELS = {
+  recalculate: "totals_recalculate",
+  verify: "totals_verify",
+} as const
+const PREDEFINED_LABEL = "predefined"
+
 /**
  * Функції оболонки проведення документа. Одне джерело імен для контракту й
  * перевірки колізій стадії 4: розбіжність пропустила б колізію до `CREATE` П3.
@@ -273,9 +280,9 @@ function postingFunctions(table: PhysicalTable): {
   unpost: QualifiedName
 } {
   return {
-    save: derived(table, "save"),
-    post: derived(table, "post"),
-    unpost: derived(table, "unpost"),
+    save: derived(table, POSTING_LABELS.save),
+    post: derived(table, POSTING_LABELS.post),
+    unpost: derived(table, POSTING_LABELS.unpost),
   }
 }
 
@@ -289,14 +296,14 @@ function totalsFunctions(table: PhysicalTable): {
   verify: QualifiedName
 } {
   return {
-    recalculate: derived(table, "totals_recalculate"),
-    verify: derived(table, "totals_verify"),
+    recalculate: derived(table, TOTALS_LABELS.recalculate),
+    verify: derived(table, TOTALS_LABELS.verify),
   }
 }
 
 /** Функція пошуку предвизначеного за міткою; одне джерело, як вище. */
 function predefinedLookup(table: PhysicalTable): QualifiedName {
-  return derived(table, "predefined")
+  return derived(table, PREDEFINED_LABEL)
 }
 
 /**
@@ -306,7 +313,7 @@ function predefinedLookup(table: PhysicalTable): QualifiedName {
  * `id` і `physicalName` присутні.
  */
 function predefinedItemsOf(
-  object: ParsedObject
+  object: Pick<ParsedObject, "kind" | "data">
 ): { id: string; name: string; physicalName: string }[] {
   return (KIND_REGISTRY[object.kind].namedElementFields ?? []).flatMap(
     (field) =>
@@ -328,6 +335,44 @@ function virtualTableFunction(
 
 function isRegister(object: ParsedObject): boolean {
   return KIND_REGISTRY[object.kind].registerKeys !== undefined
+}
+
+/**
+ * Мітки похідних функцій об'єкта (ім'я — `makeObjectName` від його таблиці й
+ * мітки) за фактами реєстру видів. Одне джерело для перевірки колізій
+ * стадії 4 і для `fix`, який не призначає новій таблиці ім'я, вже зайняте
+ * функцією: розійдись вони, `fix` дав би ім'я, яке стадія 4 відхилить.
+ * `object.data` — вихід схеми виду (масиви з типовими значеннями).
+ */
+export function derivedFunctionLabels(
+  object: Pick<ParsedObject, "kind" | "data">
+): { label: string; description: string }[] {
+  const labels: { label: string; description: string }[] = []
+  if (predefinedItemsOf(object).length > 0) {
+    labels.push({ label: PREDEFINED_LABEL, description: "predefined lookup" })
+  }
+  if (postsMovements(object.kind)) {
+    labels.push(
+      { label: POSTING_LABELS.save, description: "save" },
+      { label: POSTING_LABELS.post, description: "post" },
+      { label: POSTING_LABELS.unpost, description: "unpost" }
+    )
+  }
+  const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
+  if (keys === undefined) return labels
+  for (const kind of keys.virtualTables) {
+    labels.push({
+      label: VIRTUAL_TABLES[kind].label,
+      description: `${kind} virtual table`,
+    })
+  }
+  if (maintainsDerivedTables(keys)) {
+    labels.push(
+      { label: TOTALS_LABELS.recalculate, description: "totals recalculation" },
+      { label: TOTALS_LABELS.verify, description: "totals verification" }
+    )
+  }
+  return labels
 }
 
 /**
@@ -354,32 +399,8 @@ export function derivedFunctions(
   for (const object of objects) {
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue
-    if (predefinedItemsOf(object).length > 0) {
-      add(
-        object,
-        predefinedLookup(table),
-        `predefined lookup of ${object.name}`
-      )
-    }
-    if (postsMovements(object.kind)) {
-      const { save, post, unpost } = postingFunctions(table)
-      add(object, save, `save of ${object.name}`)
-      add(object, post, `post of ${object.name}`)
-      add(object, unpost, `unpost of ${object.name}`)
-    }
-    const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
-    if (keys === undefined) continue
-    for (const kind of keys.virtualTables) {
-      add(
-        object,
-        virtualTableFunction(table, kind),
-        `${kind} virtual table of ${object.name}`
-      )
-    }
-    if (maintainsDerivedTables(keys)) {
-      const { recalculate, verify } = totalsFunctions(table)
-      add(object, recalculate, `totals recalculation of ${object.name}`)
-      add(object, verify, `totals verification of ${object.name}`)
+    for (const { label, description } of derivedFunctionLabels(object)) {
+      add(object, derived(table, label), `${description} of ${object.name}`)
     }
   }
 

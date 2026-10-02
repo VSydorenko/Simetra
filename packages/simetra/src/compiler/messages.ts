@@ -850,6 +850,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Фізичне ім'я ${p.name} довше за 63 байти й було б усічене Postgres`,
   },
+  "operation.physical-name-too-long": {
+    en: (p) =>
+      `simetra fix did not assign physical name ${p.name}: the derived name ${p.longest} would exceed 63 bytes`,
+    uk: (p) =>
+      `simetra fix не призначив фізичне ім'я ${p.name}: похідне ім'я ${p.longest} перевищило б 63 байти`,
+    hint: {
+      en: "Set a shorter physicalName yourself; it is assigned once and never changes.",
+      uk: "Задайте коротше physicalName самі; воно призначається раз і більше не змінюється.",
+    },
+  },
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */
