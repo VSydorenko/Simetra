@@ -1,15 +1,17 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
-import { runExplain } from "../commands/explain"
+import { describe, expect, it } from "vitest"
+import { runTool, type CliArgs } from "../cli/command"
+import { toolByName } from "../tools/catalog"
+import { project, useTmpProjects } from "./helpers/catalog"
 
 const REFERENCE = resolve(__dirname, "../../../../examples/reference/metadata")
-const temps: string[] = []
 
-afterEach(async () => {
-  await Promise.all(temps.splice(0).map((d) => rm(d, { recursive: true })))
-})
+useTmpProjects()
+
+type ExplainArgs = Omit<CliArgs, "_"> & { target: string; dir: string }
+const runExplain = ({ target, dir, ...rest }: ExplainArgs) =>
+  runTool(toolByName("explain")!, { _: [target, dir], ...rest })
 
 describe("simetra explain", () => {
   it("--format json parses", async () => {
@@ -73,12 +75,7 @@ describe("simetra explain", () => {
   })
 
   it("broken compile prints diagnostics and exits 1", async () => {
-    const dir = join(
-      await mkdtemp(join(tmpdir(), "simetra-designer-")),
-      "metadata"
-    )
-    temps.push(join(dir, ".."))
-    await cp(REFERENCE, dir, { recursive: true })
+    const dir = await project()
     const file = join(dir, "catalogs/Currency/Currency.meta.json")
     const json = JSON.parse(await readFile(file, "utf8")) as Record<
       string,

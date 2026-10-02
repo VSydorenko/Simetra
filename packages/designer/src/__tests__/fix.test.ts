@@ -1,25 +1,25 @@
 import { existsSync } from "node:fs"
-import { cp, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
-import { runFix } from "../commands/fix"
-import { runCompile } from "../commands/compile"
+import { describe, expect, it } from "vitest"
+import { runTool, type CliArgs } from "../cli/command"
+import { toolByName } from "../tools/catalog"
+import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const REFERENCE = resolve(__dirname, "../../../../examples/reference/metadata")
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
-const temps: string[] = []
 
-afterEach(async () => {
-  await Promise.all(temps.splice(0).map((d) => rm(d, { recursive: true })))
-})
+useTmpProjects()
+
+type FixArgs = Omit<CliArgs, "_" | "dry-run"> & { dir: string; dryRun: boolean }
+const runFix = ({ dir, dryRun, ...rest }: FixArgs) =>
+  runTool(toolByName("fix")!, { _: [dir], "dry-run": dryRun, ...rest })
+const runCompile = ({ dirs }: { dirs: string[] }) =>
+  runTool(toolByName("compile")!, { _: dirs })
 
 /** Копія домену, у якої з довідника валют знято `id` і `$schema`. */
 async function copyWithoutId(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "simetra-fix-"))
-  temps.push(root)
-  const dir = join(root, "metadata")
-  await cp(REFERENCE, dir, { recursive: true })
+  const dir = await project()
   const file = join(dir, CURRENCY)
   const json = JSON.parse(await readFile(file, "utf8")) as Record<
     string,
@@ -31,24 +31,13 @@ async function copyWithoutId(): Promise<string> {
   return dir
 }
 
-async function snapshotOf(dir: string): Promise<Record<string, string>> {
-  const entries = await readdir(dir, { recursive: true, withFileTypes: true })
-  const result: Record<string, string> = {}
-  for (const e of entries) {
-    if (!e.isFile()) continue
-    const full = join(e.parentPath, e.name)
-    result[full] = await readFile(full, "utf8")
-  }
-  return result
-}
-
 describe("simetra fix", () => {
   it("--dry-run writes nothing", async () => {
     const dir = await copyWithoutId()
     const before = await snapshotOf(dir)
     const r = await runFix({ dir, dryRun: true, format: "text" })
     expect(r.exitCode).toBe(0)
-    expect(r.stdout).toContain(`would fix ${dir}/${CURRENCY}`)
+    expect(r.stdout).toContain(`would write ${dir}/${CURRENCY}`)
     expect(await snapshotOf(dir)).toEqual(before)
   })
 
@@ -56,7 +45,7 @@ describe("simetra fix", () => {
     const dir = await copyWithoutId()
     const r = await runFix({ dir, dryRun: false, format: "text" })
     expect(r.exitCode).toBe(0)
-    expect(r.stdout).toContain(`fixed ${dir}/${CURRENCY}`)
+    expect(r.stdout).toContain(`written ${dir}/${CURRENCY}`)
     const json = JSON.parse(await readFile(join(dir, CURRENCY), "utf8")) as {
       id: string
       $schema: string
@@ -67,11 +56,7 @@ describe("simetra fix", () => {
       existsSync(resolve(dirname(join(dir, CURRENCY)), json.$schema))
     ).toBe(true)
     expect(json.$schema.endsWith("/catalogs.schema.json")).toBe(true)
-    const compiled = await runCompile({
-      dirs: [dir],
-      locale: "en",
-      format: "text",
-    })
+    const compiled = await runCompile({ dirs: [dir] })
     expect(compiled.exitCode).toBe(0)
     // Другий прогін нічого не змінює.
     const again = await runFix({ dir, dryRun: false, format: "json" })
