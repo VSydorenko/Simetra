@@ -98,6 +98,7 @@ export const COMPILER_RULES = [
   "engine.unrepresentable",
   "engine.unmodeled-class",
   "engine.matview-unpopulated",
+  "engine.census-mismatch",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

@@ -20,6 +20,7 @@ import { PROVIDER_SCHEMAS, scopeProfile } from "../engine/pg-delta/policy"
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
+  testSuperuserUrl,
 } from "../../../test/db/connection"
 import { FIXTURES } from "./fixtures/e1-fixtures"
 
@@ -119,6 +120,10 @@ create table app.doc (
   constraint doc_no_overlap exclude using gist (during with &&)
 );
 create index doc_a on app.doc (a);
+-- Унікальний індекс без обмеження під FK: conindid FK вказує на нього
+create table app.ref (code int not null);
+create unique index ref_code on app.ref (code);
+create table app.ref_child (code int references app.ref (code));
 create sequence app.counter;
 create view app.doc_view as select id, a from app.doc;
 create materialized view app.doc_totals as select count(*) as n from app.doc;
@@ -236,6 +241,27 @@ describe("class census inside the managed boundary", () => {
     )
   })
 
+  it("shell type is counted as its own class", async () => {
+    // Shell-тип створює лише суперкористувач: тінь під роллю застосунку його не
+    // завантажить, тож перепис перевіряється в транзакції стеку з відкатом
+    const client = new pg.Client({ connectionString: testSuperuserUrl() })
+    await client.connect()
+    try {
+      await client.query("begin")
+      await client.query("create schema census_shell")
+      await client.query("create type census_shell.later")
+      expect(
+        await readCensus(client, {
+          schemas: ["census_shell"],
+          provider: "supabase",
+        })
+      ).toEqual([{ class: "type.shell", count: 1 }])
+    } finally {
+      await client.query("rollback").catch(() => undefined)
+      await client.end()
+    }
+  })
+
   it("generated column noise is filtered", async () => {
     // Послідовність identity, масив енам-типу, рядковий тип таблиці, індекси
     // обмежень, конструктори й cast до мультидіапазону діапазонного типу
@@ -306,13 +332,18 @@ async function fixtureCase(
   return [renderDesiredState(model).sql, { schemas, provider: "supabase" }]
 }
 
-/** Керовані факти виду двигуна в тіні й перепис тієї ж тіні. */
+/** Керовані факти виду двигуна в тіні, перепис і extract порту тієї ж тіні. */
 async function engineKindsAndCensus(
   desiredSql: string,
   shadowScope: EngineScope
-): Promise<{ kinds: Set<string>; census: CensusCount[] }> {
-  return inShadow(desiredSql, shadowScope, (shadow) =>
-    withPool(shadow, async (pool) => {
+): Promise<{
+  kinds: Set<string>
+  census: CensusCount[]
+  extracted: Extracted
+}> {
+  return inShadow(desiredSql, shadowScope, async (shadow) => ({
+    extracted: await engine.extract(shadow, shadowScope),
+    ...(await withPool(shadow, async (pool) => {
       const profile = await resolveProfile(pool, scopeProfile(shadowScope))
       const { factBase } = await profile.extract(pool)
       const options = profile.planOptions
@@ -329,8 +360,8 @@ async function engineKindsAndCensus(
           .map((f) => f.id.kind)
       )
       return { kinds, census: await readCensus(pool, shadowScope) }
-    })
-  )
+    })),
+  }))
 }
 
 describe("covered classes match the pinned engine", () => {
@@ -351,7 +382,7 @@ describe("covered classes match the pinned engine", () => {
   for (const [name, load] of corpus) {
     it(name, async () => {
       const [desiredSql, shadowScope] = await load()
-      const { kinds, census } = await engineKindsAndCensus(
+      const { kinds, census, extracted } = await engineKindsAndCensus(
         desiredSql,
         shadowScope
       )
@@ -362,17 +393,31 @@ describe("covered classes match the pinned engine", () => {
           coveredKinds.has(kind as never) || satellites.has(kind),
           `engine fact kind ${kind} is neither a covered census class nor a part of one`
         ).toBe(true)
-      // Покритий клас, що трапився в переписі, двигун справді дає фактом
+      // Покритий клас, що трапився в переписі, має принаймні вид факту в
+      // двигуні; точну кількість за класом звіряє сам extract
+      // (`engine.census-mismatch`), зокрема для класів, що ділять вид
       for (const { class: censusClass } of census)
         if (covered.has(censusClass))
           expect(
             kinds.has(factKindOf(censusClass)!),
             `census class ${censusClass} is covered, but the engine has no ${factKindOf(censusClass)} fact`
           ).toBe(true)
+      expect(
+        extracted.diagnostics.filter((d) => d.code === "engine.census-mismatch")
+      ).toEqual([])
+      if (desiredSql === BROAD_SQL)
+        // Класи, що ділять вид факту з модельованими, мапер називає поіменно
+        expect(
+          extracted.diagnostics
+            .filter((d) => d.code === "engine.unrepresentable")
+            .map((d) => d.object)
+        ).toEqual(
+          expect.arrayContaining([
+            "constraint:app.doc.doc_no_overlap",
+            "type:app.pair",
+            "type:app.span",
+          ])
+        )
     })
   }
-
-  it("the satellite kinds carry their reasons", () => {
-    for (const [, reason] of SATELLITE_KINDS) expect(reason).not.toBe("")
-  })
 })

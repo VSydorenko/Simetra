@@ -9,60 +9,89 @@ import {
 } from "./pg-delta/policy"
 
 /**
- * Клас перепису → вид факту закріпленого двигуна, яким він приходить у вид
- * межі, або `null`, якщо факту двигун не дає (спайк E2a, крок 4,
- * «Відповідність класів перепису фактам двигуна»). Об'єкт класу з фактом
- * мапер не губить: кожен факт стає полем моделі, SQL-одиницею або
- * `engine.unrepresentable` з ім'ям об'єкта (`mapModel`, гілка «інакше»). Клас
- * без факту двигун не бачить зовсім — саме ці тихі втрати й ловить перепис.
+ * Що двигун робить з об'єктами класу перепису (спайк E2a, крок 4,
+ * «Відповідність класів перепису фактам двигуна»):
+ * - `kind` — вид факту закріпленого двигуна; `match` — поле payload, що
+ *   відрізняє клас, коли кілька класів ділять вид. Об'єкт класу з фактом
+ *   мапер не губить: кожен факт стає полем моделі, SQL-одиницею або
+ *   `engine.unrepresentable` з ім'ям об'єкта (`mapModel`, гілка «інакше»).
+ *   Лічильник перепису звіряється з кількістю фактів класу — так ловиться
+ *   пропуск окремих об'єктів покритого класу.
+ * - `uncompared` — факт є, але лічильники принципово не порівнювані (причина).
+ * - `kind: null` — факту немає: двигун класу не бачить зовсім, це тиха втрата.
+ *   `global` — клас без схеми: межа не каже, чий об'єкт (застосунку чи
+ *   провайдера), тож лише попередження, доки пресет провайдера не перелічить
+ *   свої об'єкти класу.
  * Тип `FactKind` прив'язує таблицю до видів закріпленої версії: вид, якого
  * двигун не має, — помилка компіляції, а не тиха розбіжність.
  */
+type CensusFact =
+  | { kind: FactKind; match?: { field: string; value: string } }
+  | { kind: FactKind; uncompared: string }
+  | { kind: null; global?: true }
+
 const CENSUS_FACTS = {
-  table: "table",
-  view: "view",
-  materializedView: "materializedView",
-  sequence: "sequence",
-  foreignTable: "foreignTable",
-  index: "index",
-  "type.enum": "type",
-  "type.composite": "type",
-  "type.range": "type",
-  "type.base": null,
-  domain: "domain",
-  function: "function",
-  procedure: "procedure",
-  aggregate: "aggregate",
-  "constraint.exclusion": "constraint",
-  "constraint.trigger": "constraint",
-  trigger: "trigger",
-  policy: "policy",
-  rule: "rule",
-  collation: "collation",
-  conversion: null,
-  operator: null,
-  operatorClass: null,
-  operatorFamily: null,
-  cast: null,
-  textSearchConfiguration: null,
-  textSearchDictionary: null,
-  textSearchParser: null,
-  textSearchTemplate: null,
-  statistics: null,
-  transform: null,
-  publicationRel: "publicationRel",
-  publicationSchema: "publicationSchema",
-  defaultPrivilege: "defaultPrivilege",
-  extension: "extension",
+  table: { kind: "table" },
+  view: { kind: "view" },
+  materializedView: { kind: "materializedView" },
+  sequence: { kind: "sequence" },
+  foreignTable: { kind: "foreignTable" },
+  index: { kind: "index" },
+  "type.enum": { kind: "type", match: { field: "variant", value: "enum" } },
+  "type.composite": {
+    kind: "type",
+    match: { field: "variant", value: "composite" },
+  },
+  "type.range": { kind: "type", match: { field: "variant", value: "range" } },
+  "type.base": { kind: null },
+  // `CREATE TYPE name` без тіла: заготовка під майбутній тип
+  "type.shell": { kind: null },
+  domain: { kind: "domain" },
+  function: { kind: "function" },
+  procedure: { kind: "procedure" },
+  aggregate: { kind: "aggregate" },
+  "constraint.exclusion": {
+    kind: "constraint",
+    match: { field: "type", value: "x" },
+  },
+  // Обмеження-тригер двигун тримає фактом `trigger` (рядок pg_trigger), а не
+  // `constraint`; той самий рядок перепис уже рахує класом `trigger`
+  "constraint.trigger": {
+    kind: "trigger",
+    uncompared: "the same pg_trigger row is counted and compared as trigger",
+  },
+  trigger: { kind: "trigger" },
+  policy: { kind: "policy" },
+  rule: { kind: "rule" },
+  collation: { kind: "collation" },
+  conversion: { kind: null },
+  operator: { kind: null },
+  operatorClass: { kind: null },
+  operatorFamily: { kind: null },
+  cast: { kind: null },
+  textSearchConfiguration: { kind: null },
+  textSearchDictionary: { kind: null },
+  textSearchParser: { kind: null },
+  textSearchTemplate: { kind: null },
+  statistics: { kind: null },
+  transform: { kind: null },
+  publicationRel: { kind: "publicationRel" },
+  publicationSchema: { kind: "publicationSchema" },
+  defaultPrivilege: {
+    kind: "defaultPrivilege",
+    uncompared:
+      "pg_default_acl holds one row per (role, schema, object type) for every grantee, the engine one fact per grantee",
+  },
+  extension: { kind: "extension" },
   // Факт `language` двигун має лише як ціль грантів; процедурну мову він
   // не витягує, а повідомляє `unmodeled_kind`
-  language: null,
-  accessMethod: null,
-  eventTrigger: "eventTrigger",
-  foreignDataWrapper: "fdw",
-  server: "server",
-  subscription: "subscription",
-} as const satisfies Record<string, FactKind | null>
+  language: { kind: null, global: true },
+  accessMethod: { kind: null, global: true },
+  eventTrigger: { kind: "eventTrigger" },
+  foreignDataWrapper: { kind: "fdw" },
+  server: { kind: "server" },
+  subscription: { kind: "subscription" },
+} as const satisfies Record<string, CensusFact>
 
 /**
  * Стан заповнення матеріалізованого подання: факт двигуна його не несе, а дія
@@ -71,27 +100,82 @@ const CENSUS_FACTS = {
  */
 const UNPOPULATED = "materializedView.unpopulated"
 
-export type CensusClass = keyof typeof CENSUS_FACTS | typeof UNPOPULATED
+type TableClass = keyof typeof CENSUS_FACTS
+export type CensusClass = TableClass | typeof UNPOPULATED
 
 export interface CensusCount {
   class: CensusClass
   count: number
 }
 
+function entryOf(censusClass: CensusClass): CensusFact | undefined {
+  return censusClass === UNPOPULATED ? undefined : CENSUS_FACTS[censusClass]
+}
+
 /** Вид факту двигуна для класу перепису; `null` — двигун класу не бачить. */
 export function factKindOf(censusClass: CensusClass): FactKind | null {
-  return censusClass === UNPOPULATED ? null : CENSUS_FACTS[censusClass]
+  return entryOf(censusClass)?.kind ?? null
 }
+
+const TABLE_CLASSES = Object.keys(CENSUS_FACTS) as TableClass[]
 
 /**
  * Класи перепису, об'єкти яких доходять до мапера фактами двигуна: їх
- * покриває модель (поле, одиниця або гучне `engine.unrepresentable`), тож
- * перепис про них лише інформує. Похідне від `CENSUS_FACTS`, а не другий
- * перелік.
+ * покриває модель (поле, одиниця або гучне `engine.unrepresentable`).
+ * Похідне від `CENSUS_FACTS`, а не другий перелік.
  */
-export const COVERED_CLASSES: readonly CensusClass[] = (
-  Object.keys(CENSUS_FACTS) as (keyof typeof CENSUS_FACTS)[]
-).filter((c) => CENSUS_FACTS[c] !== null)
+export const COVERED_CLASSES: readonly CensusClass[] = TABLE_CLASSES.filter(
+  (c) => CENSUS_FACTS[c].kind !== null
+)
+
+/** Покриті класи, лічильник яких звіряється з фактами двигуна. */
+const COMPARED_CLASSES: readonly TableClass[] = COVERED_CLASSES.flatMap((c) => {
+  const entry = entryOf(c)
+  return entry !== undefined && !("uncompared" in entry)
+    ? [c as TableClass]
+    : []
+})
+
+/**
+ * Клас перепису, яким звіряється факт двигуна; `undefined` — факт не
+ * рахується окремим класом (частина, сателіт, непорівнюваний клас).
+ */
+export function censusClassOfFact(fact: {
+  id: { kind: string }
+  payload: Record<string, unknown>
+}): CensusClass | undefined {
+  return COMPARED_CLASSES.find((c) => {
+    const entry: CensusFact = CENSUS_FACTS[c]
+    if (entry.kind !== fact.id.kind) return false
+    const match = "match" in entry ? entry.match : undefined
+    return match === undefined || fact.payload[match.field] === match.value
+  })
+}
+
+/**
+ * Звірка перепису з фактами двигуна тієї ж бази за кожним порівнюваним
+ * класом: відсутній клас — нуль. Розбіжність — пропущені двигуном (або
+ * зайві) об'єкти покритого класу, яких модель тихо не мала б.
+ */
+export function reconcileCensus(
+  census: readonly CensusCount[],
+  facts: ReadonlyMap<CensusClass, number>
+): EngineDiagnostic[] {
+  const counted = new Map(census.map((c) => [c.class, c.count]))
+  return COMPARED_CLASSES.flatMap((c) => {
+    const inCensus = counted.get(c) ?? 0
+    const inEngine = facts.get(c) ?? 0
+    return inCensus === inEngine
+      ? []
+      : [
+          diagnostic("engine.census-mismatch", "error", {
+            class: c,
+            census: inCensus,
+            engine: inEngine,
+          }),
+        ]
+  })
+}
 
 /**
  * `unmodeled_kind` двигуна за міткою `context.kind` → клас перепису. Перепис
@@ -153,13 +237,18 @@ with managed as (
   where c.relkind in ('r', 'p', 'v', 'm', 'f')
      or (c.relkind = 'S' and not exists (select 1 from pg_depend d where d.classid = 'pg_class'::regclass
                                            and d.objid = c.oid and d.deptype = 'i'))
-     or (c.relkind in ('i', 'I') and not exists (select 1 from pg_constraint k where k.conindid = c.oid))
+     -- conindid FK теж заповнений (індекс, на який він посилається), тож
+     -- індекс обмеження — лише PK/UNIQUE/EXCLUDE своєї ж таблиці
+     or (c.relkind in ('i', 'I') and not exists (
+           select 1 from pg_constraint k join pg_index i on i.indexrelid = c.oid
+           where k.conindid = c.oid and k.contype in ('p', 'u', 'x') and k.conrelid = i.indrelid))
   union all select '${UNPOPULATED}' from rel where relkind = 'm' and not relispopulated
   union all select case t.typtype when 'e' then 'type.enum' when 'd' then 'domain'
                                   when 'r' then 'type.range' when 'b' then 'type.base'
+                                  when 'p' then 'type.shell'
                                   else 'type.composite' end
   from typ t
-  where t.typtype in ('e', 'd', 'r')
+  where t.typtype in ('e', 'd', 'r', 'p')
      or (t.typtype = 'b' and not exists (select 1 from pg_type a where a.typarray = t.oid))
      or (t.typtype = 'c' and (select relkind from pg_class where oid = t.typrelid) = 'c')
   union all select case p.prokind when 'p' then 'procedure' when 'a' then 'aggregate' else 'function' end
@@ -169,10 +258,11 @@ with managed as (
     and not exists (select 1 from internal where classid = 'pg_proc'::regclass and objid = p.oid)
   union all select case k.contype when 'x' then 'constraint.exclusion' when 't' then 'constraint.trigger' end
   from pg_constraint k join rel c on c.oid = k.conrelid
-  where k.contype in ('x', 't')
+  where k.contype in ('x', 't') and k.conislocal
   union all select 'trigger'
   from pg_trigger g join pg_class c on c.oid = g.tgrelid join pg_proc f on f.oid = g.tgfoid
-  where not g.tgisinternal
+  -- тригер-клон секції (tgparentid) — частина тригера батьківської таблиці
+  where not g.tgisinternal and g.tgparentid = 0
     and (c.relnamespace in (select oid from managed)
          or (c.relnamespace in (select oid from provider) and f.pronamespace not in (select oid from provider)))
   union all select 'policy'
@@ -199,8 +289,11 @@ with managed as (
   union all select 'textSearchDictionary' from pg_ts_dict x where x.dictnamespace in (select oid from managed)
     and not exists (select 1 from ext where classid = 'pg_ts_dict'::regclass and objid = x.oid)
   union all select 'textSearchParser' from pg_ts_parser x where x.prsnamespace in (select oid from managed)
+    and not exists (select 1 from ext where classid = 'pg_ts_parser'::regclass and objid = x.oid)
   union all select 'textSearchTemplate' from pg_ts_template x where x.tmplnamespace in (select oid from managed)
+    and not exists (select 1 from ext where classid = 'pg_ts_template'::regclass and objid = x.oid)
   union all select 'statistics' from pg_statistic_ext x where x.stxnamespace in (select oid from managed)
+    and not exists (select 1 from ext where classid = 'pg_statistic_ext'::regclass and objid = x.oid)
   union all select 'transform' from pg_transform x where x.trftype in (select oid from typ)
   union all select 'publicationRel' from pg_publication_rel x join rel c on c.oid = x.prrelid
   union all select 'publicationSchema' from pg_publication_namespace x where x.pnnspid in (select oid from managed)
@@ -221,9 +314,12 @@ with managed as (
 select class, count(*)::int as count from objects group by class order by class
 `
 
+/** Пул адаптера або клієнт тесту в транзакції — запитам перепису байдуже. */
+type Queryable = Pick<pg.ClientBase, "query">
+
 /** Лічильники класів у межі керування; класи з нулем об'єктів відсутні. */
 export async function readCensus(
-  pool: pg.Pool,
+  pool: Queryable,
   scope: EngineScope
 ): Promise<CensusCount[]> {
   const { rows } = await pool.query<CensusCount>(CENSUS_SQL, [
@@ -239,14 +335,16 @@ export async function readCensus(
  * Незаповнені матеріалізовані подання керованих схем у формі ідентичності
  * двигуна: перепис їх лише рахує, а діагностика має назвати кожне.
  */
-async function unpopulatedViews(
-  pool: pg.Pool,
+export async function readUnpopulatedViews(
+  pool: Queryable,
   scope: EngineScope
 ): Promise<string[]> {
   const { rows } = await pool.query<{ schema: string; name: string }>(
     `select n.nspname as schema, c.relname as name
        from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind = 'm' and not c.relispopulated
+        and not exists (select 1 from pg_depend d where d.classid = 'pg_class'::regclass
+                          and d.objid = c.oid and d.deptype = 'e')
         and n.nspname = any($1::text[])
       order by 1, 2`,
     [scope.schemas]
@@ -257,13 +355,17 @@ async function unpopulatedViews(
 }
 
 function diagnostic(
-  code: "engine.unmodeled-class" | "engine.matview-unpopulated",
+  code:
+    | "engine.unmodeled-class"
+    | "engine.matview-unpopulated"
+    | "engine.census-mismatch",
+  severity: EngineDiagnostic["severity"],
   params: Record<string, string | number>,
   object?: string
 ): EngineDiagnostic {
   return {
     code,
-    severity: "error",
+    severity,
     message: localize({ code, params }, "en").message,
     ...(object === undefined ? {} : { object }),
   }
@@ -273,35 +375,37 @@ function diagnostic(
 export function unmodeledClasses(
   census: readonly CensusCount[]
 ): Set<CensusClass> {
-  const covered = new Set<CensusClass>(COVERED_CLASSES)
   return new Set(
-    census
-      .map((c) => c.class)
-      .filter((c) => c !== UNPOPULATED && !covered.has(c))
+    census.map((c) => c.class).filter((c) => entryOf(c)?.kind === null)
   )
 }
 
 /**
- * Діагностики перепису: клас поза `COVERED_CLASSES` з об'єктами в межі — тиха
- * втрата двигуна; незаповнене подання — стан, якого модель не виражає. Обидві
- * — error: інакше звірка назвала б базу рівною бажаному стану.
+ * Діагностики перепису: клас без факту двигуна з об'єктами в межі — тиха
+ * втрата; розбіжність лічильника покритого класу з фактами — пропуск окремих
+ * об'єктів; незаповнене подання — стан, якого модель не виражає. Усі — error,
+ * інакше звірка назвала б базу рівною бажаному стану; виняток — глобальні
+ * класи без схеми (див. `CENSUS_FACTS`).
  */
-export async function censusDiagnostics(
-  pool: pg.Pool,
-  scope: EngineScope,
-  census: readonly CensusCount[]
-): Promise<EngineDiagnostic[]> {
+export function censusDiagnostics(
+  census: readonly CensusCount[],
+  facts: ReadonlyMap<CensusClass, number>,
+  unpopulated: readonly string[]
+): EngineDiagnostic[] {
   const unmodeled = unmodeledClasses(census)
   const out = census
     .filter((c) => unmodeled.has(c.class))
-    .map((c) =>
-      diagnostic("engine.unmodeled-class", {
-        class: c.class,
-        count: c.count,
-      })
-    )
-  if (census.some((c) => c.class === UNPOPULATED))
-    for (const view of await unpopulatedViews(pool, scope))
-      out.push(diagnostic("engine.matview-unpopulated", { view }, view))
+    .map((c) => {
+      const entry = entryOf(c.class)
+      const global = entry !== undefined && "global" in entry
+      return diagnostic(
+        "engine.unmodeled-class",
+        global ? "warning" : "error",
+        { class: c.class, count: c.count }
+      )
+    })
+  out.push(...reconcileCensus(census, facts))
+  for (const view of unpopulated)
+    out.push(diagnostic("engine.matview-unpopulated", "error", { view }, view))
   return out
 }

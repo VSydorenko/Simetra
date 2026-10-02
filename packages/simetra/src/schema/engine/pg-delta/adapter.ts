@@ -27,9 +27,11 @@ import type {
   ShadowOutcome,
 } from "../port"
 import {
+  censusClassOfFact,
   censusClassOfUnmodeledKind,
   censusDiagnostics,
   readCensus,
+  readUnpopulatedViews,
   unmodeledClasses,
   type CensusClass,
 } from "../census"
@@ -134,6 +136,18 @@ function countedByCensus(
   if (typeof kind !== "string") return false
   const censusClass = censusClassOfUnmodeledKind(kind)
   return censusClass !== undefined && counted.has(censusClass)
+}
+
+/** Керовані факти виду за класами перепису — друга сторона звірки лічильників. */
+function factCensus(view: FactBase): Map<CensusClass, number> {
+  const out = new Map<CensusClass, number>()
+  for (const fact of view.facts()) {
+    if (view.isReferenceOnly(fact.id)) continue
+    const censusClass = censusClassOfFact(fact)
+    if (censusClass !== undefined)
+      out.set(censusClass, (out.get(censusClass) ?? 0) + 1)
+  }
+  return out
 }
 
 /**
@@ -243,7 +257,11 @@ async function extractFrom(
     diagnostics: [
       ...toEngineDiagnostics(result.diagnostics, unmodeledClasses(census)),
       ...issues.map(unrepresentableDiagnostic),
-      ...(await censusDiagnostics(pool, scope, census)),
+      ...censusDiagnostics(
+        census,
+        factCensus(view),
+        await readUnpopulatedViews(pool, scope)
+      ),
     ],
   }
 }

@@ -8,6 +8,17 @@ export function testDatabaseUrl(): string {
 }
 
 /**
+ * Суперкористувач стеку — лише для об'єктів, яких роль застосунку не створить
+ * (shell-тип). Локальний стек Supabase має його як `supabase_admin`.
+ */
+export function testSuperuserUrl(): string {
+  return (
+    process.env.SIMETRA_TEST_SUPERUSER_URL ??
+    "postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres"
+  )
+}
+
+/**
  * Кількість scratch-баз двигуна (`pgdelta_shadow_%`) на стеку. Тінь-сирота
  * лишається, якщо процес убито до `finally` (план E2a, рішення за спайком, 1),
  * тож тести порівнюють лічильник до й після, а не покладаються на ім'я.

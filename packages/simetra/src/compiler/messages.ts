@@ -974,6 +974,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Рушій схеми не моделює цей клас, тож ні звірка, ні план ніколи не згадали б ці об'єкти; приберіть їх із керованих схем або тримайте поза межею керування.",
     },
   },
+  "engine.census-mismatch": {
+    en: (p) =>
+      `Class ${p.class} has ${p.census} object(s) in the managed boundary, but the schema engine extracted ${p.engine}`,
+    uk: (p) =>
+      `Клас ${p.class} має ${p.census} об'єкт(ів) у межі керування, а рушій схеми витягнув ${p.engine}`,
+    hint: {
+      en: "The engine skipped or added objects of a class it models, so the catalog model would silently differ from the database; find the objects the engine policy or extraction treats differently.",
+      uk: "Рушій пропустив або додав об'єкти класу, який він моделює, тож модель каталогу тихо розійшлася б із базою; знайдіть об'єкти, які політика чи екстракт рушія обробляє інакше.",
+    },
+  },
   "engine.matview-unpopulated": {
     en: (p) =>
       `${p.view}: materialized view is not populated, and the catalog model does not express whether a view is populated`,
