@@ -1,5 +1,7 @@
 export {
   COMPILER_RULES,
+  diagnostic,
+  sortDiagnostics,
   type CompilerRule,
   type Diagnostic,
   type DiagnosticParams,
@@ -51,6 +53,8 @@ export {
   addElement,
   addElementInput,
   applyChanges,
+  changesBetween,
+  completeFiles,
   containerTarget,
   createObject,
   createObjectInput,

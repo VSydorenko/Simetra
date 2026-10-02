@@ -1,6 +1,7 @@
 export type { FileChange, OperationResult } from "./types"
-export { applyChanges } from "./changes"
+export { applyChanges, changesBetween } from "./changes"
 export {
+  completeFiles,
   fixFiles,
   type CompletionOptions,
   type IdSource,

@@ -1004,6 +1004,45 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
   },
+  "introspect.unrepresentable": {
+    en: (p) =>
+      `${p.object}: ${p.property} cannot be represented in metadata files: ${p.detail}`,
+    uk: (p) =>
+      `${p.object}: ${p.property} не виражається у файлах метаданих: ${p.detail}`,
+    hint: {
+      en: "Reverse generation writes nothing while any object is unrepresentable; bring the object to a form CustomTable, PgEnum or a verbatim SQL unit can declare, or extend the model first.",
+      uk: "Зворотна генерація нічого не пише, поки хоч один об'єкт невиражений; приведіть об'єкт до форми, яку оголошує CustomTable, PgEnum чи дослівна SQL-одиниця, або спершу розширте модель.",
+    },
+  },
+  "introspect.identity-conflict": {
+    en: (p) =>
+      `${p.key} is described by more than one element of the metadata folder; the other one is at ${p.other}`,
+    uk: (p) =>
+      `${p.key} описано кількома елементами теки метаданих; інший — у ${p.other}`,
+    hint: {
+      en: "Identity is kept by schema and physical name, so each database object must have one description; remove the duplicate before introspecting again.",
+      uk: "Ідентичність зберігається за схемою й фізичним іменем, тож кожен об'єкт бази мусить мати один опис; приберіть дублікат і повторіть інтроспекцію.",
+    },
+  },
+  "introspect.project-mismatch": {
+    en: (p) =>
+      `project.meta.json declares ${p.field} ${p.project}, but introspection was asked for ${p.requested}`,
+    uk: (p) =>
+      `project.meta.json оголошує ${p.field} ${p.project}, а інтроспекцію запущено для ${p.requested}`,
+    hint: {
+      en: "An existing project file is never rewritten; introspect with the values it declares, or change the project file first.",
+      uk: "Наявний файл проєкту не переписується; запустіть інтроспекцію з його значеннями або спершу змініть файл проєкту.",
+    },
+  },
+  "introspect.path-collision": {
+    en: (p) =>
+      `${p.first} and ${p.second} would be written to the same file ${p.path}`,
+    uk: (p) => `${p.first} і ${p.second} потрапили б в один файл ${p.path}`,
+    hint: {
+      en: "File names are derived from unit identities; rename one of the database objects so their file names differ.",
+      uk: "Імена файлів виводяться з ідентичностей одиниць; перейменуйте один з об'єктів бази, щоб імена файлів різнилися.",
+    },
+  },
 }
 
 /** Причини `engine.out-of-scope`: параметр `reason` межі моделі (T2). */

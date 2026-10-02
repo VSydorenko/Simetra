@@ -34,7 +34,7 @@ export const UNMANAGED_SCHEMAS: ReadonlySet<string> = new Set([
  * (навіть усередині літерала — зайвий перенос нешкідливий) чи `;` немає,
  * термінатор іде з нового рядка; порожній оператор `;` Postgres приймає.
  */
-function terminate(sql: string): string {
+export function terminate(sql: string): string {
   const text = sql.trimEnd()
   const lastLine = text.slice(text.lastIndexOf("\n") + 1)
   if (lastLine.includes("--")) return `${text}\n;`

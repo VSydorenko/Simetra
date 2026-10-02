@@ -100,6 +100,10 @@ export const COMPILER_RULES = [
   "engine.census-mismatch",
   "engine.unmodeled-property",
   "engine.out-of-scope",
+  "introspect.unrepresentable",
+  "introspect.identity-conflict",
+  "introspect.project-mismatch",
+  "introspect.path-collision",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]
