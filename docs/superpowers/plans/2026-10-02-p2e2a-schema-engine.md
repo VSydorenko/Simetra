@@ -129,6 +129,29 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 8. **ACL власника, що дорівнює типовому** (`_ownerDefault`), — не одиниця
    й не відмінність; явне відкликання прав власника — одиниця.
 
+## Уточнення під час виконання
+
+Контракт, який фактично реалізовано (рішення архітектора в ході E2a):
+
+- `EngineAction.transactionality: "transactional" | "nonTransactional" |
+  "commitBoundaryAfter"` замість булевого поля — межу коміту (`ALTER TYPE …
+  ADD VALUE`) потребує потік П3.
+- Гілка `loaded` результату `withDesiredShadow` несе `diagnostics`
+  (завантаження, ціль, дрейф двигуна); кожна діагностика порту має власний
+  код `engine.*` (`engine.unmodeled-drift` — error, невідомий код двигуна —
+  `engine.diagnostic` warning), а код двигуна — лише довідкове `engineCode`.
+- `COVERED_CLASSES` — класи, для яких двигун дає факт (єдине джерело —
+  таблиця перепису, типізована `FactKind` закріпленої версії); клас із
+  фактом, але без форми в моделі, мапер віддає поіменно як
+  `engine.unrepresentable`. Лічильники покритих класів звіряються з фактами
+  extract — розбіжність `engine.census-mismatch`.
+- Неявні значення моделі каталогу: гранти, що дорівнюють типовим привілеям
+  схеми, коментар розширення з control-файлу, типовий ACL власника.
+- Компілятор: типові привілеї схеми передують її об'єктам у порядку
+  створення (виправлення T1, спека §8.3).
+- `parseIndexDefinition` повертає індекс або `unrepresentable` (`WITH`,
+  tablespace, `ON ONLY`); FORCE RLS без ENABLE — `unrepresentable`.
+
 ## Global Constraints
 
 - Ярус: порт, адаптер, тінь і перепис — `packages/simetra/src/schema/engine/`;
