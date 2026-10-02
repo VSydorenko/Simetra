@@ -23,6 +23,7 @@
 | `analogues/` | `postgres-ledgers-2026-10.md` | Регістри й облікові журнали нативно в Postgres: `pg_accumulator`, `pgledger`, Modern Treasury — що брати за форму, що відкинути, ліцензії | 2026-10 |
 | `schema-engine/` | `introspection-and-ddl.md` | Читання схеми PostgreSQL, diff станів, генерація DDL | 2026-03 |
 | `schema-engine/` | `postgrest.md` | Чи годиться PostgREST як перший шар доступу до даних | 2026-04 |
+| `schema-engine/` | `pg-delta-e2a-spike-2026-10.md` | Чи тримає pg-delta 1.0.0-alpha.56 контракт порту `SchemaEngine`: засів тіні, межа §6.9, таблиця властивостей, перепис класів | 2026-10 |
 | `metadata-format/` | `metadata-formats.md` | У якому форматі зберігати метамодель | 2026-03 |
 | `configurator/` | `configurator-ux.md` | UX-патерни й бібліотеки редактора метаданих | 2026-03 |
 | `legal/` | `licensing.md` | Що можна копіювати, яка ліцензія, терміни 1С | 2026-03 |
