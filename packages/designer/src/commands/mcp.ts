@@ -25,6 +25,7 @@ export default defineCommand({
     await createMcpServer({
       dir,
       allowWrite: args["allow-write"],
+      launchArgs: process.argv.slice(2),
     }).connect(new StdioServerTransport())
   },
 })

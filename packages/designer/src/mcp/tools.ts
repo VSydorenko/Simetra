@@ -1,262 +1,121 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server"
-import {
-  addElement,
-  addElementInput,
-  compile,
-  createObject,
-  createObjectInput,
-  deleteElement,
-  deleteInput,
-  explainObject,
-  renameElement,
-  renameInput,
-  type Diagnostic,
-  type OperationResult,
-} from "simetra/compiler"
-import { metadataKindSchema, objectNameSchema } from "simetra/model"
 import { z } from "zod"
-import { readMetadataDir, writeChanges } from "../io/metadata-dir"
 import { formatDiagnostics } from "../io/report"
-import { schemaPathResolver } from "../io/schema-path"
+import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
+import { invoke } from "../tools/invoke"
+import { ALLOW_WRITE_FLAG } from "../tools/write-access"
 
 export interface McpToolOptions {
   dir: string
   allowWrite: boolean
 }
 
-interface ToolOutput {
-  ok: boolean
-  changes: { path: string; deleted: boolean }[]
-  diagnostics: Diagnostic[]
-}
-
-/** Один вигляд відповіді для всіх інструментів: структура плюс текст. */
-function respond(
-  o: McpToolOptions,
-  out: ToolOutput,
-  lines: string[],
-  isError: boolean
-): CallToolResult {
-  const report = formatDiagnostics(out.diagnostics, {
-    dir: o.dir,
-    locale: "en",
-    format: "text",
-  })
-  return {
-    isError,
-    structuredContent: { ...out },
-    content: [{ type: "text", text: [...lines, report].join("\n") }],
-  }
-}
-
-function failure(message: string): CallToolResult {
-  return {
-    isError: true,
-    structuredContent: { ok: false, changes: [], diagnostics: [] },
-    content: [{ type: "text", text: message }],
-  }
-}
-
-/**
- * Мутація: тека читається заново на кожен виклик (стан — диск, не пам'ять
- * сервера), у T1 іде лише валідований вхід операції, а запис — лише при `ok`
- * і без `dryRun` (відмова й dry-run не пишуть нічого).
- */
-async function mutate(
-  o: McpToolOptions,
-  dryRun: boolean | undefined,
-  run: (files: Map<string, string>) => Promise<OperationResult>
-): Promise<CallToolResult> {
-  try {
-    const result = await run(await readMetadataDir(o.dir))
-    const write = result.ok && dryRun !== true
-    if (write) await writeChanges(o.dir, result.changes)
-    const changes = result.changes.map((c) => ({
-      path: c.path,
-      deleted: c.content === null,
-    }))
-    const verb = (deleted: boolean) =>
-      write
-        ? deleted
-          ? "deleted"
-          : "written"
-        : deleted
-          ? "would delete"
-          : "would write"
-    const lines = result.ok
-      ? [
-          ...changes.map((c) => `${verb(c.deleted)} ${c.path}`),
-          ...(dryRun === true ? ["dry run: nothing written"] : []),
-        ]
-      : ["nothing written: the operation was refused or the result has errors"]
-    return respond(
-      o,
-      { ok: result.ok, changes, diagnostics: result.diagnostics },
-      lines,
-      !result.ok
-    )
-  } catch (error) {
-    return failure(error instanceof Error ? error.message : String(error))
-  }
-}
-
-/**
- * Черга викликів одного сервера (а сервер обслуговує одну теку). SDK
- * диспетчеризує запити паралельно, тож без черги дві мутації читали б той
- * самий стан і друга мовчки затирала б першу, а записана комбінація двох
- * результатів не проходила б компіляцію. Читальні інструменти стоять у тій
- * самій черзі: `writeChanges` пише файли по одному, і компіляція посеред
- * запису побачила б напівзаписане дерево. Ціна — послідовні компіляції;
- * вони короткі, а коректність відповіді важливіша за паралелізм.
- */
-function createQueue(): <T>(task: () => Promise<T>) => Promise<T> {
-  let tail: Promise<unknown> = Promise.resolve()
-  return (task) => {
-    const run = tail.then(task)
-    // Наступне завдання чекає завершення попереднього, а не його успіху.
-    tail = run.catch(() => undefined)
-    return run
-  }
-}
-
 const dryRun = z.boolean().optional().meta({
   description: "Report the changes without writing them.",
 })
 
-const completion = (o: McpToolOptions) => ({
-  schemaPath: schemaPathResolver(o.dir),
-  newId: () => crypto.randomUUID(),
+// Необов'язкове: перегляд руйнівної зміни (`dryRun`) не потребує підтвердження.
+const confirm = z.boolean().optional().meta({
+  description: "Must be true to actually perform a destructive change.",
 })
 
-export function registerTools(server: McpServer, o: McpToolOptions): void {
-  const queued = createQueue()
-  server.registerTool(
-    "compile",
-    {
-      description:
-        "Compile the metadata directory and return diagnostics. Reads the disk on every call; writes nothing.",
-      inputSchema: z.object({}),
-      annotations: { readOnlyHint: true },
-    },
-    () =>
-      queued(async () => {
-        try {
-          const result = await compile(await readMetadataDir(o.dir))
-          return respond(
-            o,
-            {
-              ok: result.ok,
-              changes: [],
-              diagnostics: result.diagnostics,
-            },
-            [result.ok ? "compiled without errors" : "compilation has errors"],
-            false
-          )
-        } catch (error) {
-          return failure(error instanceof Error ? error.message : String(error))
-        }
-      })
-  )
+/**
+ * Схема входу MCP = вхід каталогу плюс транспортні поля. Дозвіл, підтвердження
+ * й запис вирішує `invoke`, тож тут лише перелік полів, які він отримує.
+ */
+export function mcpInputSchema(tool: Tool): z.ZodType {
+  if (tool.effect === "read") return tool.input
+  if (!(tool.input instanceof z.ZodObject)) {
+    throw new Error(`tool ${tool.name} needs an object input to take dryRun`)
+  }
+  const base = tool.input.extend({ dryRun })
+  return tool.destructive ? base.extend({ confirm }) : base
+}
 
-  server.registerTool(
-    "explain",
-    {
-      description:
-        "Explain one object: its tables, columns, keys and movement queries. Needs a metadata directory that compiles without errors.",
-      inputSchema: z.object({
-        kind: metadataKindSchema,
-        name: objectNameSchema,
-      }),
-      annotations: { readOnlyHint: true },
-    },
-    ({ kind, name }) =>
-      queued(async () => {
-        try {
-          const result = await compile(await readMetadataDir(o.dir))
-          if (result.model === undefined) {
-            return respond(
-              o,
-              { ok: false, changes: [], diagnostics: result.diagnostics },
-              ["cannot explain: the metadata has errors"],
-              true
-            )
-          }
-          const explanation = explainObject(result.model, { kind, name })
-          if (explanation === undefined) {
-            return failure(`Object not found: ${kind} ${name}`)
-          }
-          return {
-            structuredContent: { ...explanation },
-            content: [
-              { type: "text", text: JSON.stringify(explanation, null, 2) },
-            ],
-          }
-        } catch (error) {
-          return failure(error instanceof Error ? error.message : String(error))
-        }
-      })
-  )
+function describe(tool: Tool): string {
+  // Однаковий у будь-якому режимі, щоб `tools/list` не залежав від прапорця.
+  return tool.effect === "read"
+    ? tool.description
+    : `${tool.description} Requires the server to run with ${ALLOW_WRITE_FLAG}.`
+}
 
-  // Інструменти мутацій не існують у read-only режимі: клієнт їх не бачить.
-  if (!o.allowWrite) return
+function lineFor(
+  c: { path: string; deleted: boolean },
+  written: boolean
+): string {
+  if (written) return `${c.deleted ? "deleted" : "written"} ${c.path}`
+  return `${c.deleted ? "would delete" : "would write"} ${c.path}`
+}
 
-  server.registerTool(
-    "create_object",
-    {
-      description:
-        "Create a metadata object; ids and physical names are assigned. Writes only when the result compiles without errors.",
-      inputSchema: createObjectInput.extend({ dryRun }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    ({ dryRun: dry, ...input }) =>
-      queued(() =>
-        mutate(o, dry, (files) => createObject(files, input, completion(o)))
-      )
-  )
-
-  server.registerTool(
-    "add_element",
-    {
-      description:
-        "Add a named element (attribute, tabular section, value, scope kind, ...) to a collection of an object or of the project root. Writes only when the result compiles without errors.",
-      inputSchema: addElementInput.extend({ dryRun }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    ({ dryRun: dry, ...input }) =>
-      queued(() =>
-        mutate(o, dry, (files) => addElement(files, input, completion(o)))
-      )
-  )
-
-  server.registerTool(
-    "rename",
-    {
-      description:
-        "Rename an object or a nested element; references are rewritten, ids and physical names never change. Writes only when the result compiles without errors.",
-      inputSchema: renameInput.extend({ dryRun }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    ({ dryRun: dry, ...input }) =>
-      queued(() => mutate(o, dry, (files) => renameElement(files, input)))
-  )
-
-  server.registerTool(
-    "delete",
-    {
-      description:
-        "Delete an object or a nested element. Refused while anything references it. Requires confirm: true.",
-      inputSchema: deleteInput.extend({ dryRun, confirm: z.boolean() }),
-      annotations: { readOnlyHint: false, destructiveHint: true },
-    },
-    ({ dryRun: dry, confirm, ...input }) => {
-      if (confirm !== true) {
-        return failure(
-          "Refused: delete requires confirm: true. Nothing changed."
-        )
-      }
-      return queued(() =>
-        mutate(o, dry, (files) => deleteElement(files, input))
-      )
+function toResponse(
+  tool: Tool,
+  result: ToolResult,
+  o: McpToolOptions,
+  dry: boolean
+): CallToolResult {
+  const { ok, written, changes, diagnostics, refusal } = result
+  if (refusal !== undefined) {
+    return {
+      isError: true,
+      structuredContent: { ok, written, changes, diagnostics },
+      content: [{ type: "text", text: refusal.message }],
     }
-  )
+  }
+  // `explain` віддає саме пояснення; решта — єдину обгортку результату.
+  if (tool.name === "explain" && ok && result.data !== undefined) {
+    return {
+      structuredContent: { ...(result.data as Record<string, unknown>) },
+      content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
+    }
+  }
+  const report = formatDiagnostics(diagnostics, {
+    dir: o.dir,
+    locale: "en",
+    format: "text",
+  })
+  const lines = ok
+    ? [
+        ...changes.map((c) => lineFor(c, written)),
+        ...(dry && tool.effect === "files" ? ["dry run: nothing written"] : []),
+        ...(tool.effect === "read" ? [`${tool.name}: no errors`] : []),
+      ]
+    : tool.effect === "files"
+      ? ["nothing written: the operation was refused or the result has errors"]
+      : [`${tool.name}: the metadata has errors`]
+  return {
+    isError: !ok,
+    structuredContent: { ok, written, changes, diagnostics },
+    content: [{ type: "text", text: [...lines, report].join("\n") }],
+  }
+}
+
+/** Реєструє весь каталог: транспорт лише переказує `confirm`/`dryRun` у `invoke`. */
+export function registerCatalog(server: McpServer, o: McpToolOptions): void {
+  for (const tool of TOOLS) {
+    server.registerTool(
+      tool.name,
+      {
+        description: describe(tool),
+        inputSchema: mcpInputSchema(tool),
+        annotations: {
+          readOnlyHint: tool.effect === "read",
+          destructiveHint: tool.destructive,
+        },
+      },
+      async (args: unknown) => {
+        const {
+          dryRun: dry,
+          confirm: confirmed,
+          ...input
+        } = (args ?? {}) as Record<string, unknown>
+        const result = await invoke(tool, input, {
+          dir: o.dir,
+          allowWrite: o.allowWrite,
+          dryRun: dry === true,
+          confirmed: confirmed === true,
+        })
+        return toResponse(tool, result, o, dry === true)
+      }
+    )
+  }
 }
