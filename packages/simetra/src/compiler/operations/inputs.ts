@@ -30,7 +30,9 @@ const objectTarget = z.strictObject({
  * елемент. `Project` — лише корінь пошуку (видів скоупу), тож без `element`
  * ціллю він бути не може: корінь не перейменовують і не видаляють.
  */
-export const elementTarget = z.union([
+// Дискримінатор `kind`, а не `z.union`: так CLI і MCP отримують Zod-шлях аж до
+// поля (`target.kind`), а не безликий `target`.
+export const elementTarget = z.discriminatedUnion("kind", [
   objectTarget,
   z.strictObject({
     kind: z.literal(PROJECT),
@@ -44,7 +46,7 @@ export type ElementTarget = z.infer<typeof elementTarget>
  * корінь проєкту (рішення архітектора R12 — новий вид скоупу додається в
  * колекцію кореня, якого `ElementTarget` навмисно не адресує).
  */
-export const containerTarget = z.union([
+export const containerTarget = z.discriminatedUnion("kind", [
   objectTarget,
   z.strictObject({ kind: z.literal(PROJECT) }),
 ])
