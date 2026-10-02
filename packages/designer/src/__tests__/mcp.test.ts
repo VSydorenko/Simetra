@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import { afterEach, describe, expect, it } from "vitest"
 import { writeChanges } from "../io/metadata-dir"
+import { UsageError } from "../io/usage-error"
 import { createMcpServer } from "../mcp/server"
 
 const REFERENCE = resolve(__dirname, "../../../../examples/reference/metadata")
@@ -267,7 +268,7 @@ describe("simetra mcp", () => {
         { path: "catalogs/New/New.meta.json", content: "{}" },
         { path: "../x.meta.json", content: "{}" },
       ])
-    ).rejects.toThrow("Path escapes the target directory")
+    ).rejects.toThrow(UsageError)
     expect(await snapshotOf(dir)).toEqual(before)
     expect(existsSync(join(dir, "../x.meta.json"))).toBe(false)
   })

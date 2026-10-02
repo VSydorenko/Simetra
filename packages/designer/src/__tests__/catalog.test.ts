@@ -1,29 +1,19 @@
-import { readdir, readFile, writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { compile } from "simetra/compiler"
-import { afterEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { readMetadataDir } from "../io/metadata-dir"
 import { compileArtifacts } from "../tools/artifacts"
 import { TOOLS, toolByName } from "../tools/catalog"
 import { invoke, permits } from "../tools/invoke"
 import { queueFor } from "../tools/queue"
 import { ALLOW_WRITE_FLAG, writeAccessHint } from "../tools/write-access"
-import { tmpProject } from "./helpers/tmp-project"
+import { opts, project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
-const disposers: (() => Promise<void>)[] = []
+useTmpProjects()
 
-afterEach(async () => {
-  await Promise.all(disposers.splice(0).map((d) => d()))
-})
-
-async function project(): Promise<string> {
-  const p = await tmpProject()
-  disposers.push(p.dispose)
-  return p.dir
-}
-
-/** Копія, у якій з довідника валют знято `id` і `$schema`: `fix` має що робити. */
+/** Копія, у якій з довідника валют знято `id`, `$schema` і `physicalName` реквізиту: `fix` має що робити. */
 async function brokenProject(): Promise<string> {
   const dir = await project()
   const file = join(dir, CURRENCY)
@@ -33,26 +23,10 @@ async function brokenProject(): Promise<string> {
   >
   delete json.id
   delete json.$schema
+  // Реквізит без `physicalName`: `fix` має його відновити.
+  delete (json.attributes as Record<string, unknown>[])[0]!.physicalName
   await writeFile(file, JSON.stringify(json, null, 2))
   return dir
-}
-
-const opts = (dir: string) => ({
-  dir,
-  allowWrite: true,
-  dryRun: false,
-  confirmed: false,
-})
-
-async function snapshotOf(dir: string): Promise<Record<string, string>> {
-  const entries = await readdir(dir, { recursive: true, withFileTypes: true })
-  const result: Record<string, string> = {}
-  for (const e of entries) {
-    if (!e.isFile()) continue
-    const full = join(e.parentPath, e.name)
-    result[full] = await readFile(full, "utf8")
-  }
-  return result
 }
 
 describe("tool catalog", () => {
@@ -72,7 +46,7 @@ describe("tool catalog", () => {
     const dir = await project()
     const r = await invoke(toolByName("compile")!, {}, opts(dir))
     expect(r.ok).toBe(true)
-    expect(r.data).toHaveProperty("model")
+    expect((r.data as { model?: unknown }).model).toBeDefined()
   })
 
   it("rejects unknown input fields with the zod path", async () => {
@@ -167,6 +141,10 @@ describe("tool catalog", () => {
       id?: string
     }
     expect(json.id).toBeTypeOf("string")
+    const after = JSON.parse(await readFile(join(dir, CURRENCY), "utf8")) as {
+      attributes: { physicalName?: string }[]
+    }
+    expect(after.attributes[0]!.physicalName).toBeTypeOf("string")
   })
 
   it("permits read always and files only with allowWrite", () => {
@@ -186,6 +164,53 @@ describe("tool catalog", () => {
       "entities.d.ts",
     ])
     expect(changes.every((c) => typeof c.content === "string")).toBe(true)
+  })
+})
+
+describe("invoke refusals", () => {
+  it("destructive dry-run without confirmation previews and writes nothing", async () => {
+    const dir = await project()
+    await invoke(
+      toolByName("create")!,
+      { kind: "Catalog", name: "Scratch", data: { scope: "none" } },
+      opts(dir)
+    )
+    const before = await snapshotOf(dir)
+    const r = await invoke(
+      toolByName("delete")!,
+      { target: { kind: "Catalog", name: "Scratch" } },
+      { ...opts(dir), dryRun: true }
+    )
+    expect(r.ok).toBe(true)
+    expect(r.written).toBe(false)
+    expect(r.changes.length).toBeGreaterThan(0)
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("a nonexistent directory is a refusal with the message", async () => {
+    const dir = join(await project(), "missing")
+    const r = await invoke(toolByName("compile")!, {}, opts(dir))
+    expect(r.refusal).toEqual({
+      reason: "refused",
+      message: `metadata directory not found: ${dir}`,
+    })
+  })
+
+  it("an empty zod path gives no leading colon", async () => {
+    const dir = await project()
+    const r = await invoke(toolByName("compile")!, "oops", opts(dir))
+    expect(r.refusal?.reason).toBe("invalid-input")
+    expect(r.refusal?.message.startsWith(":")).toBe(false)
+  })
+
+  it("written is false when there is nothing to change", async () => {
+    const dir = await project()
+    // Перший `fix` приводить еталон до канону; другому нічого змінювати.
+    await invoke(toolByName("fix")!, {}, opts(dir))
+    const r = await invoke(toolByName("fix")!, {}, opts(dir))
+    expect(r.ok).toBe(true)
+    expect(r.changes).toEqual([])
+    expect(r.written).toBe(false)
   })
 })
 

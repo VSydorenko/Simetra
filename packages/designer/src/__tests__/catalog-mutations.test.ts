@@ -1,44 +1,19 @@
 import { existsSync } from "node:fs"
-import { readdir, readFile, writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
-import { TOOLS, toolByName } from "../tools/catalog"
-import { invoke } from "../tools/invoke"
-import { tmpProject } from "./helpers/tmp-project"
+import { describe, expect, it } from "vitest"
+import { toolByName } from "../tools/catalog"
+import {
+  opts,
+  project,
+  run,
+  snapshotOf,
+  useTmpProjects,
+} from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
-const disposers: (() => Promise<void>)[] = []
 
-afterEach(async () => {
-  await Promise.all(disposers.splice(0).map((d) => d()))
-})
-
-async function project(): Promise<string> {
-  const p = await tmpProject()
-  disposers.push(p.dispose)
-  return p.dir
-}
-
-const opts = (dir: string) => ({
-  dir,
-  allowWrite: true,
-  dryRun: false,
-  confirmed: false,
-})
-
-const run = (name: string, dir: string, input: unknown, o = opts(dir)) =>
-  invoke(toolByName(name)!, input, o)
-
-async function snapshotOf(dir: string): Promise<Record<string, string>> {
-  const entries = await readdir(dir, { recursive: true, withFileTypes: true })
-  const result: Record<string, string> = {}
-  for (const e of entries) {
-    if (!e.isFile()) continue
-    const full = join(e.parentPath, e.name)
-    result[full] = await readFile(full, "utf8")
-  }
-  return result
-}
+useTmpProjects()
 
 const rename = {
   target: { kind: "Catalog", name: "Currency" },
@@ -46,18 +21,6 @@ const rename = {
 }
 
 describe("mutation tools", () => {
-  it("names every tool once", () => {
-    expect(TOOLS.map((t) => t.name).sort()).toEqual([
-      "add",
-      "compile",
-      "create",
-      "delete",
-      "explain",
-      "fix",
-      "rename",
-    ])
-  })
-
   it("only delete is destructive; every mutation writes files", () => {
     for (const name of ["create", "add", "rename", "delete"]) {
       const t = toolByName(name)!

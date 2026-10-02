@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import type { FileChange } from "simetra/compiler"
+import { UsageError } from "./usage-error"
 
 /** Файли, які читає компілятор; усе інше в теці його не стосується. */
 const METADATA_SUFFIXES = [".meta.json", ".sql", ".module.ts"]
@@ -12,9 +13,17 @@ const METADATA_SUFFIXES = [".meta.json", ".sql", ".module.ts"]
 export async function readMetadataDir(
   dir: string
 ): Promise<Map<string, string>> {
-  if (!(await stat(dir)).isDirectory()) {
-    throw new Error(`Not a directory: ${dir}`)
+  let isDirectory: boolean
+  try {
+    isDirectory = (await stat(dir)).isDirectory()
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new UsageError(`metadata directory not found: ${dir}`)
+    }
+    throw error
   }
+  if (!isDirectory) throw new UsageError(`Not a directory: ${dir}`)
   const entries = await readdir(dir, { recursive: true, withFileTypes: true })
   const files = new Map<string, string>()
   for (const entry of entries) {
@@ -48,7 +57,7 @@ export async function writeChanges(
   for (const change of changes) {
     const target = resolve(root, change.path)
     if (!target.startsWith(root + sep)) {
-      throw new Error(`Path escapes the target directory: ${change.path}`)
+      throw new UsageError(`Path escapes the target directory: ${change.path}`)
     }
     targets.set(change, target)
   }
