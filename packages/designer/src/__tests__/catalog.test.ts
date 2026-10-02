@@ -251,13 +251,18 @@ describe("queueFor", () => {
 describe("writeAccessHint", () => {
   it("shows the general form without launch args", () => {
     expect(writeAccessHint()).toContain(
-      `"args": ["simetra","mcp","${ALLOW_WRITE_FLAG}"]`
+      `ending in ["simetra","mcp"] become ["simetra","mcp","${ALLOW_WRITE_FLAG}"]`
     )
   })
 
-  it("echoes the real launch args", () => {
-    expect(writeAccessHint(["mcp", "./metadata"])).toContain(
-      `"args": ["mcp","./metadata","${ALLOW_WRITE_FLAG}"]`
+  it("echoes the real launch args as the tail of the client's args", () => {
+    const hint = writeAccessHint(["mcp", "./metadata"])
+    expect(hint).toContain(`append ${ALLOW_WRITE_FLAG} to the end of`)
+    expect(hint).toContain(
+      `ending in ["mcp","./metadata"] become ["mcp","./metadata","${ALLOW_WRITE_FLAG}"]`
     )
+    // Лаунчер клієнта (`pnpm exec simetra …`, `npx …`) додає свої аргументи
+    // попереду, тож підказка не видає хвіст за повний конфіг.
+    expect(hint).not.toContain(`"args": [`)
   })
 })

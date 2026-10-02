@@ -85,9 +85,9 @@ and is passed into the T2 port from outside. It is held by
 `packages/simetra/eslint.tier-zones.js` and its negative test
 `packages/simetra/test/tier-boundary.test.ts`.
 
-**Consumer skills** live in `packages/<package>/skills/` and ship with the
-package; they never live in `.agents/skills`, which holds only skills for
-developing the platform itself. Platform agents never load a consumer skill.
+**Consumer skills** ship inside their package and never live in
+`.agents/skills`, which holds only skills for developing the platform itself.
+Platform agents never load a consumer skill.
 
 **Current code is a prototype.** The prototype metamodel lives in T0
 (`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest
