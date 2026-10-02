@@ -1002,6 +1002,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Рушій пропустив або додав об'єкти класу, який він моделює, тож модель каталогу тихо розійшлася б із базою; знайдіть об'єкти, які політика чи екстракт рушія обробляє інакше.",
     },
   },
+  "engine.unmodeled-property": {
+    en: (p) =>
+      `${p.count} object(s) in the managed boundary have a non-default ${p.property}, which the schema engine does not read, so the catalog model cannot see it`,
+    uk: (p) =>
+      `${p.count} об'єкт(ів) у межі керування мають нетипове значення властивості ${p.property}, якої рушій схеми не читає, тож модель каталогу її не бачить`,
+    hint: {
+      en: "The catalog model does not express physical storage parameters (storage, compression, statistics target, column options, access method, CLUSTER); reset them to the default or keep the object outside the managed boundary.",
+      uk: "Модель каталогу не виражає фізичних параметрів зберігання (storage, compression, statistics target, опції колонки, метод доступу, CLUSTER); поверніть типові значення або тримайте об'єкт поза межею керування.",
+    },
+  },
   "engine.out-of-scope": {
     en: (p) =>
       `${p.object} lies outside the boundary the schema engine compares, so a comparison would never see it: ${OUT_OF_SCOPE_REASONS[String(p.reason)]?.en(p) ?? p.reason}`,

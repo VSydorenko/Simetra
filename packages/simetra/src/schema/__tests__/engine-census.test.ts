@@ -77,12 +77,27 @@ describe("census reconciliation with engine facts", () => {
           { class: "accessMethod", count: 2 },
         ],
         new Map(),
-        CENSUS_COVERAGE
+        CENSUS_COVERAGE,
+        []
       ).map((d) => [d.code, d.severity])
     ).toEqual([
       ["engine.unmodeled-class", "error"],
       ["engine.unmodeled-class", "warning"],
       ["engine.unmodeled-class", "warning"],
     ])
+  })
+
+  it("a non-default physical property is an error naming it", () => {
+    const [found, ...rest] = censusDiagnostics([], new Map(), CENSUS_COVERAGE, [
+      { property: "column storage", count: 2 },
+    ])
+    expect(rest).toEqual([])
+    expect(found).toMatchObject({
+      code: "engine.unmodeled-property",
+      severity: "error",
+    })
+    expect(found?.message).toMatch(
+      /^2 object\(s\) .* non-default column storage/
+    )
   })
 })

@@ -237,6 +237,56 @@ export async function readCensus(
   return rows
 }
 
+/** Фізична властивість зберігання й лічильник об'єктів із нетиповим значенням. */
+export interface PropertyCount {
+  property: string
+  count: number
+}
+
+/**
+ * Рядок перепису для фізичних властивостей, яких двигун не читає (той самий
+ * вузький запит до каталогу, план E2a, рішення 8): нетипове значення бачить
+ * лише каталог, тож без лічильника звірка тихо назвала б базу рівною
+ * бажаному стану. Типові значення — ті, що Postgres ставить сам: `attstorage`
+ * типу колонки, порожній `attcompression`, `attstattarget` NULL (до PG17 —
+ * `-1`), без `attoptions`, метод доступу heap, без `CLUSTER ON`. `$1` —
+ * керовані схеми.
+ */
+const UNMODELED_PROPERTIES_SQL = `
+with rel as (
+  select c.* from pg_class c
+  where c.relnamespace in (select oid from pg_namespace where nspname = any($1::text[]))
+    and not exists (select 1 from pg_depend d where d.classid = 'pg_class'::regclass
+                      and d.objid = c.oid and d.deptype = 'e')
+), col as (
+  select a.*, t.typstorage
+  from pg_attribute a join rel c on c.oid = a.attrelid join pg_type t on t.oid = a.atttypid
+  where c.relkind in ('r', 'p', 'm', 'f') and a.attnum > 0 and not a.attisdropped
+), objects(property) as (
+  select 'column storage' from col where attstorage <> typstorage
+  union all select 'column compression' from col where attcompression <> ''
+  union all select 'column statistics target' from col where coalesce(attstattarget, -1) <> -1
+  union all select 'column options' from col where attoptions is not null
+  union all select 'table access method' from rel
+  where relkind in ('r', 'p', 'm') and relam <> 0
+    and relam <> (select oid from pg_am where amname = 'heap')
+  union all select 'clustered index' from pg_index i join rel c on c.oid = i.indrelid
+  where i.indisclustered
+)
+select property, count(*)::int as count from objects group by property order by property
+`
+
+/** Лічильники нетипових фізичних властивостей у межі; нульові відсутні. */
+export async function readUnmodeledProperties(
+  pool: Queryable,
+  scope: EngineScope
+): Promise<PropertyCount[]> {
+  const { rows } = await pool.query<PropertyCount>(UNMODELED_PROPERTIES_SQL, [
+    scope.schemas,
+  ])
+  return rows
+}
+
 /**
  * Незаповнені матеріалізовані подання керованих схем — ідентичності їхніх
  * одиниць моделі. Стан заповнення двигун не читає, а дія створення не несе
@@ -261,7 +311,10 @@ export async function readUnpopulatedViews(
 }
 
 function diagnostic(
-  code: "engine.unmodeled-class" | "engine.census-mismatch",
+  code:
+    | "engine.unmodeled-class"
+    | "engine.census-mismatch"
+    | "engine.unmodeled-property",
   severity: EngineDiagnostic["severity"],
   params: Record<string, string | number>
 ): EngineDiagnostic {
@@ -286,14 +339,15 @@ export function unmodeledClasses(
 /**
  * Діагностики перепису: клас без факту двигуна з об'єктами в межі — тиха
  * втрата; розбіжність лічильника покритого класу з фактами — пропуск окремих
- * об'єктів. Усі — error,
+ * об'єктів; нетипова фізична властивість — стан, якого двигун не читає. Усі — error,
  * інакше звірка назвала б базу рівною бажаному стану; виняток — глобальні
  * класи без схеми (`unmodeledGlobal`).
  */
 export function censusDiagnostics(
   census: readonly CensusCount[],
   facts: ReadonlyMap<CensusClass, number>,
-  coverage: EngineCoverage
+  coverage: EngineCoverage,
+  properties: readonly PropertyCount[]
 ): EngineDiagnostic[] {
   const unmodeled = unmodeledClasses(census, coverage)
   const out = census
@@ -307,5 +361,12 @@ export function censusDiagnostics(
       )
     })
   out.push(...reconcileCensus(census, facts, coverage))
+  for (const p of properties)
+    out.push(
+      diagnostic("engine.unmodeled-property", "error", {
+        property: p.property,
+        count: p.count,
+      })
+    )
   return out
 }

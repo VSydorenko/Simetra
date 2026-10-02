@@ -29,6 +29,7 @@ import type {
 import {
   censusDiagnostics,
   readCensus,
+  readUnmodeledProperties,
   readUnpopulatedViews,
   unmodeledClasses,
   type CensusClass,
@@ -263,7 +264,12 @@ async function extractFrom(
         unmodeledClasses(census, CENSUS_COVERAGE)
       ),
       ...issues.map(unrepresentableDiagnostic),
-      ...censusDiagnostics(census, factCensus(view), CENSUS_COVERAGE),
+      ...censusDiagnostics(
+        census,
+        factCensus(view),
+        CENSUS_COVERAGE,
+        await readUnmodeledProperties(pool, scope)
+      ),
     ],
     unpopulated: await readUnpopulatedViews(pool, scope),
   }

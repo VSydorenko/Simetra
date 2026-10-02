@@ -225,6 +225,43 @@ describe("class census inside the managed boundary", () => {
     ).toEqual([])
   })
 
+  it("non-default physical properties are counted and diagnosed", async () => {
+    const { extracted } = await extractWithCensus(`
+      create schema app;
+      create table app.doc (
+        id int primary key,
+        body text,
+        note text,
+        a int,
+        b int
+      );
+      alter table app.doc alter column body set storage external;
+      alter table app.doc alter column note set compression lz4;
+      alter table app.doc alter column a set statistics 500;
+      alter table app.doc alter column b set (n_distinct = 100);
+      create index doc_a on app.doc (a);
+      alter table app.doc cluster on doc_a;
+    `)
+    expect(
+      extracted.diagnostics
+        .filter((d) => d.code === "engine.unmodeled-property")
+        .map((d) => [d.severity, d.message])
+    ).toEqual(
+      [
+        "clustered index",
+        "column compression",
+        "column options",
+        "column statistics target",
+        "column storage",
+      ].map((property) => [
+        "error",
+        expect.stringMatching(
+          new RegExp(`^1 object\\(s\\) .* non-default ${property},`)
+        ),
+      ])
+    )
+  })
+
   it("shell type is counted as its own class", async () => {
     // Shell-тип створює лише суперкористувач: тінь під роллю застосунку його не
     // завантажить, тож перепис перевіряється в транзакції стеку з відкатом
@@ -385,7 +422,11 @@ describe("covered classes match the pinned engine", () => {
             `census class ${censusClass} is covered, but the engine has no ${factKindOf(censusClass)} fact`
           ).toBe(true)
       expect(
-        extracted.diagnostics.filter((d) => d.code === "engine.census-mismatch")
+        extracted.diagnostics.filter((d) =>
+          ["engine.census-mismatch", "engine.unmodeled-property"].includes(
+            d.code
+          )
+        )
       ).toEqual([])
       if (desiredSql === BROAD_SQL)
         // Класи, що ділять вид факту з модельованими, мапер називає поіменно
