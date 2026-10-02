@@ -72,12 +72,13 @@ Inside this repository, until the package is published:
 ```bash
 node packages/designer/bin/simetra.mjs compile examples/reference/metadata
 node packages/designer/bin/simetra.mjs explain Document.ServiceAccrual examples/reference/metadata
-node packages/designer/bin/simetra.mjs mcp examples/reference/metadata    # MCP over stdio, read-only
+node packages/designer/bin/simetra.mjs mcp examples/reference/metadata    # MCP over stdio
 ```
 
-The MCP server is read-only by default: every tool is listed, and a write tool
-answers with how to enable writes (append `--allow-write` to the server's
-arguments). It never touches a database. In a consumer project the package will
+The MCP server writes metadata files by default, under the same rules as the
+CLI (only a result that compiles, only inside the directory). With
+`--read-only` every tool is still listed, and a write tool answers with how to
+enable writes (remove `--read-only` from the server's arguments). In a consumer project the package will
 be installed as a dev dependency, and `simetra init` will link its agent skills
 and write a read-only MCP configuration — that arrives with package delivery
 (see the roadmap). How it works: [docs/architecture/designer.md](docs/architecture/designer.md).

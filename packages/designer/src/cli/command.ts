@@ -124,7 +124,7 @@ export async function runTool(
       for (const [i, dir] of dirs.entries()) {
         const result = await invoke(tool, input, {
           dir,
-          allowWrite: true,
+          readOnly: false,
           dryRun: argv["dry-run"] === true,
           confirmed: argv.yes === true,
         })
@@ -222,7 +222,7 @@ function argsFor(tool: Tool): ArgsDef {
       required: false,
     }
   }
-  if (tool.effect === "files") {
+  if (tool.files === "write") {
     args["dry-run"] = {
       type: "boolean",
       default: false,

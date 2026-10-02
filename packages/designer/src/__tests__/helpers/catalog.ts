@@ -23,7 +23,7 @@ export async function project(): Promise<string> {
 
 export const opts = (dir: string): InvokeOptions => ({
   dir,
-  allowWrite: true,
+  readOnly: false,
   dryRun: false,
   confirmed: false,
 })

@@ -14,10 +14,10 @@ export default defineCommand({
       description: "Metadata directory (default: ./metadata)",
       required: false,
     },
-    "allow-write": {
+    "read-only": {
       type: "boolean",
       default: false,
-      description: "Also expose the tools that change files",
+      description: "Refuse the tools that change files",
     },
   },
   async run({ args }) {
@@ -25,7 +25,7 @@ export default defineCommand({
     // Stdout — канал протоколу, тож нічого зайвого в нього не друкуємо.
     await createMcpServer({
       dir,
-      allowWrite: args["allow-write"],
+      readOnly: args["read-only"],
       launchArgs: process.argv.slice(2),
     }).connect(new StdioServerTransport())
   },

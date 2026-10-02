@@ -3,11 +3,15 @@ import { compileTool, explainTool, fixTool } from "./read"
 import type { Tool } from "./types"
 
 export type {
-  Effect,
+  DatabaseAccess,
+  DatabaseContext,
+  DatabaseResource,
+  FilesAccess,
   InvokeOptions,
   RefusalReason,
   RunOutcome,
   Tool,
+  ToolContext,
   ToolName,
   ToolResult,
 } from "./types"

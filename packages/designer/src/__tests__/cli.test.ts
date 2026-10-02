@@ -61,9 +61,20 @@ describe("cli adapter", () => {
   it("--dry-run exists only on write tools and --yes only on destructive ones", () => {
     for (const t of TOOLS) {
       const args = toolCommand(t).args ?? {}
-      expect("dry-run" in args).toBe(t.effect === "files")
+      expect("dry-run" in args).toBe(t.files === "write")
       expect("yes" in args).toBe(t.destructive)
     }
+  })
+
+  it("writes are on by default and delete still needs --yes", async () => {
+    const dir = await withScratch()
+    const file = join(dir, "catalogs/Scratch/Scratch.meta.json")
+    expect(existsSync(file)).toBe(true)
+    const unconfirmed = await runTool(tool("delete"), {
+      _: [JSON.stringify(scratchTarget), dir],
+    })
+    expect(unconfirmed.exitCode).toBe(2)
+    expect(existsSync(file)).toBe(true)
   })
 
   it("invalid input exits 2 with the zod path", async () => {

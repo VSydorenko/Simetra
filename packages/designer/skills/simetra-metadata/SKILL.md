@@ -1,6 +1,6 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, or expose them to an agent with `simetra mcp --allow-write`. Also use when a pre-commit or CI metadata check fails.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, or expose them to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails.
 ---
 
 # Simetra metadata — compile, explain, fix, create, add, rename, delete
@@ -121,14 +121,15 @@ offending field (for example `target.kind`); nothing is written.
 
 ```sh
 pnpm exec simetra mcp
-pnpm exec simetra mcp --allow-write
+pnpm exec simetra mcp --read-only
 ```
 
-- Without `--allow-write` the server is read-only: every tool is listed, but a
-  write tool is refused with a hint to restart the server with `--allow-write`.
-  Ask the owner before restarting it in write mode.
-- With `--allow-write` the write tools change files in the served directory,
-  under the same rules as the CLI.
+- By default the write tools change files in the served directory, under the
+  same rules as the CLI: the metadata is in git, and nothing is written unless
+  the result compiles.
+- With `--read-only` every tool is still listed, but a write tool is refused
+  with a hint to remove `--read-only` from the server's args. Ask the owner
+  before restarting the server without it.
 - The server reads the disk on every call, so edits made by hand between calls
   are seen.
 

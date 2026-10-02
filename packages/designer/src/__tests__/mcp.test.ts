@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { createMcpServer } from "../mcp/server"
-import { ALLOW_WRITE_FLAG, writeAccessHint } from "../tools/write-access"
+import { READ_ONLY_FLAG, readOnlyHint } from "../tools/hints"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
@@ -23,10 +23,10 @@ afterEach(async () => {
 
 async function connect(
   dir: string,
-  allowWrite: boolean,
+  readOnly: boolean,
   launchArgs?: string[]
 ): Promise<Client> {
-  const server = createMcpServer({ dir, allowWrite, launchArgs })
+  const server = createMcpServer({ dir, readOnly, launchArgs })
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: "test", version: "0.0.0" })
   clients.push(client)
@@ -64,7 +64,7 @@ const rename = {
 
 describe("simetra mcp", () => {
   it("lists every catalog tool in read-only mode", async () => {
-    const client = await connect(await project(), false)
+    const client = await connect(await project(), true)
     expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([
       "add",
       "compile",
@@ -76,81 +76,93 @@ describe("simetra mcp", () => {
     ])
   })
 
-  it("write tool in read-only mode changes nothing and explains how to enable writes", async () => {
+  it("--read-only refuses a write, changes nothing and names the flag", async () => {
     const dir = await project()
     const before = await snapshotOf(dir)
-    const client = await connect(dir, false)
+    const client = await connect(dir, true)
     const r = await call(client, "rename", rename)
     expect(r.isError).toBe(true)
-    expect(r.text).toContain(writeAccessHint())
+    expect(r.text).toContain(readOnlyHint())
+    expect(r.text).toContain(READ_ONLY_FLAG)
     expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("writes are on by default", async () => {
+    const dir = await project()
+    const r = await call(await connect(dir, false), "rename", rename)
+    expect(r.out.written).toBe(true)
+    const args = (await import("../commands/mcp")).default.args ?? {}
+    expect(args).not.toHaveProperty("allow-write")
+    expect(args).toHaveProperty(
+      READ_ONLY_FLAG.replace(/^--/, ""),
+      expect.objectContaining({ default: false })
+    )
   })
 
   it("a dry run of a write tool in read-only mode is still refused", async () => {
     const dir = await project()
     const before = await snapshotOf(dir)
-    const client = await connect(dir, false)
+    const client = await connect(dir, true)
     const r = await call(client, "rename", { ...rename, dryRun: true })
     expect(r.isError).toBe(true)
-    expect(r.text).toContain(writeAccessHint())
+    expect(r.text).toContain(readOnlyHint())
     expect(await snapshotOf(dir)).toEqual(before)
   })
 
   it("server instructions carry the same hint", async () => {
-    const client = await connect(await project(), false)
-    expect(client.getInstructions()).toContain(writeAccessHint())
+    const client = await connect(await project(), true)
+    expect(client.getInstructions()).toContain(readOnlyHint())
   })
 
   it("the hint is built from the real launch arguments", async () => {
-    const client = await connect(await project(), false, ["mcp", "metadata"])
-    expect(client.getInstructions()).toContain(
-      writeAccessHint(["mcp", "metadata"])
-    )
+    const launchArgs = ["mcp", "metadata", READ_ONLY_FLAG]
+    const client = await connect(await project(), true, launchArgs)
+    expect(client.getInstructions()).toContain(readOnlyHint(launchArgs))
   })
 
   it("refusal and instructions carry the same hint built from launch arguments", async () => {
     const dir = await project()
-    const launchArgs = ["mcp", dir]
-    const client = await connect(dir, false, launchArgs)
+    const launchArgs = ["mcp", dir, READ_ONLY_FLAG]
+    const client = await connect(dir, true, launchArgs)
     const r = await call(client, "rename", rename)
     expect(r.isError).toBe(true)
-    expect(r.text).toBe(writeAccessHint(launchArgs))
+    expect(r.text).toBe(readOnlyHint(launchArgs))
     expect(r.text).toContain(dir)
     expect(client.getInstructions()).toContain(r.text)
   })
 
-  it("tools/list is the same with and without --allow-write", async () => {
+  it("tools/list does not change with --read-only", async () => {
     const dir = await project()
-    const readOnly = (await (await connect(dir, false)).listTools()).tools
-    const writable = (await (await connect(dir, true)).listTools()).tools
+    const readOnly = (await (await connect(dir, true)).listTools()).tools
+    const writable = (await (await connect(dir, false)).listTools()).tools
     expect(JSON.stringify(readOnly)).toEqual(JSON.stringify(writable))
   })
 
-  it("the hint names the real mcp flag", async () => {
-    const args = (await import("../commands/mcp")).default.args
-    expect(Object.keys(args ?? {})).toContain(
-      ALLOW_WRITE_FLAG.replace(/^--/, "")
+  it("no description mentions --allow-write", async () => {
+    const client = await connect(await project(), false)
+    expect(JSON.stringify((await client.listTools()).tools)).not.toContain(
+      "--allow-write"
     )
+    expect(client.getInstructions()).not.toContain("--allow-write")
   })
 
   it("annotations come from the catalog", async () => {
-    const { tools } = await (await connect(await project(), false)).listTools()
+    const { tools } = await (await connect(await project(), true)).listTools()
     const by = (n: string) => tools.find((t) => t.name === n)
     expect(by("compile")?.annotations?.readOnlyHint).toBe(true)
     expect(by("rename")?.annotations?.readOnlyHint).toBe(false)
     expect(by("delete")?.annotations?.destructiveHint).toBe(true)
-    expect(by("rename")?.description).toContain(ALLOW_WRITE_FLAG)
   })
 
   it("fix is a write tool with dryRun", async () => {
-    const { tools } = await (await connect(await project(), true)).listTools()
+    const { tools } = await (await connect(await project(), false)).listTools()
     const fix = tools.find((t) => t.name === "fix")
     expect(fix?.inputSchema.properties).toHaveProperty("dryRun")
     expect(fix?.annotations?.readOnlyHint).toBe(false)
   })
 
   it("keeps tools/list within the size budget", async () => {
-    const client = await connect(await project(), false)
+    const client = await connect(await project(), true)
     const size = JSON.stringify((await client.listTools()).tools).length
     expect(
       size,
@@ -160,7 +172,7 @@ describe("simetra mcp", () => {
 
   it("compile tool returns diagnostics", async () => {
     const dir = await project()
-    const client = await connect(dir, false)
+    const client = await connect(dir, true)
     const clean = await call(client, "compile", {})
     expect(clean.isError).toBe(false)
     expect(clean.out.ok).toBe(true)
@@ -172,7 +184,7 @@ describe("simetra mcp", () => {
   })
 
   it("explain tool describes an object", async () => {
-    const client = await connect(await project(), false)
+    const client = await connect(await project(), true)
     const r = await client.callTool({
       name: "explain",
       arguments: { kind: "Catalog", name: "Currency" },
@@ -188,7 +200,7 @@ describe("simetra mcp", () => {
 
   it("rename writes on ok", async () => {
     const dir = await project()
-    const client = await connect(dir, true)
+    const client = await connect(dir, false)
     const r = await call(client, "rename", rename)
     expect(r.isError).toBe(false)
     expect(r.out.ok).toBe(true)
@@ -202,7 +214,7 @@ describe("simetra mcp", () => {
   it("dry run writes nothing", async () => {
     const dir = await project()
     const before = await snapshotOf(dir)
-    const client = await connect(dir, true)
+    const client = await connect(dir, false)
     const r = await call(client, "rename", { ...rename, dryRun: true })
     expect(r.isError).toBe(false)
     expect(r.out.ok).toBe(true)
@@ -216,7 +228,7 @@ describe("simetra mcp", () => {
     const dir = await project()
     await writeFile(join(dir, CURRENCY), "{ not json")
     const before = await snapshotOf(dir)
-    const client = await connect(dir, true)
+    const client = await connect(dir, false)
     const r = await call(client, "rename", {
       target: { kind: "Catalog", name: "Counterparty" },
       newName: "Partner",
@@ -236,7 +248,7 @@ describe("simetra mcp", () => {
   it("rejects unknown tool fields", async () => {
     const dir = await project()
     const before = await snapshotOf(dir)
-    const client = await connect(dir, true)
+    const client = await connect(dir, false)
     const r = await client.callTool({
       name: "rename",
       arguments: { ...rename, bogus: 1 },
@@ -248,7 +260,7 @@ describe("simetra mcp", () => {
   describe("delete", () => {
     async function withScratch() {
       const dir = await project()
-      const client = await connect(dir, true)
+      const client = await connect(dir, false)
       const created = await call(client, "create", {
         kind: "Catalog",
         name: "Scratch",
@@ -294,7 +306,7 @@ describe("simetra mcp", () => {
     it("refuses a referenced object", async () => {
       const dir = await project()
       const before = await snapshotOf(dir)
-      const client = await connect(dir, true)
+      const client = await connect(dir, false)
       const r = await call(client, "delete", {
         target: { kind: "Catalog", name: "Currency" },
         confirm: true,
@@ -308,7 +320,7 @@ describe("simetra mcp", () => {
 
   it("add adds an attribute", async () => {
     const dir = await project()
-    const client = await connect(dir, true)
+    const client = await connect(dir, false)
     const r = await call(client, "add", {
       target: { kind: "Catalog", name: "Currency" },
       collection: "attributes",
@@ -322,7 +334,7 @@ describe("simetra mcp", () => {
     // Клієнти-агенти шлють паралельні виклики; без серіалізації друга
     // мутація читала б диск до запису першої й мовчки її затирала.
     const dir = await project()
-    const client = await connect(dir, true)
+    const client = await connect(dir, false)
     const add = (name: string) =>
       call(client, "add", {
         target: { kind: "Catalog", name: "Counterparty" },

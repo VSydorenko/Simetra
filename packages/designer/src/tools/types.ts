@@ -1,4 +1,5 @@
 import type { Diagnostic, FileChange } from "simetra/compiler"
+import type { DbConnection } from "simetra/schema"
 import type { z } from "zod"
 
 /** Імена окремо від записів каталогу: `main.ts` реєструє лінощі підкоманди, не тягнучи компілятор. */
@@ -13,8 +14,40 @@ export const TOOL_NAMES = [
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
-/** `files` — інструмент змінює файли теки; лише його вмикає `--allow-write`. */
-export type Effect = "read" | "files"
+/**
+ * Дві осі замість одного ефекту: запис файлів (у git, лише після чистої
+ * компіляції) і дія над базою (поза git) відрізняються незворотністю, тож
+ * дозвіл і тертя для них різні. Масиви — для тестів повного добутку осей.
+ */
+export const FILES_ACCESS = ["read", "write"] as const
+export type FilesAccess = (typeof FILES_ACCESS)[number]
+export const DATABASE_ACCESS = ["none", "read", "write"] as const
+export type DatabaseAccess = (typeof DATABASE_ACCESS)[number]
+
+/** Відкрите підключення одного виклику: ціль і, за потреби, база для тіні. */
+export interface DatabaseContext {
+  target: DbConnection
+  shadowBase?: DbConnection
+  /** `host:port/db` без користувача й пароля — єдине, що можна показати. */
+  describe: string
+}
+
+/**
+ * Підключення — ресурс запуску, а не вхід інструмента: агент не може
+ * спрямувати виклик на іншу базу. Лінивий — `connect` лише на виклик, тож
+ * запуск без бази й інструменти без бази пулів не відкривають.
+ */
+export interface DatabaseResource {
+  /** `host:port/db` без користувача й пароля. */
+  describe: string
+  connect(): Promise<DatabaseContext>
+}
+
+/** Ресурс бази отримує лише інструмент, що оголосив вісь `database`. */
+export interface ToolContext {
+  dir: string
+  database?: DatabaseResource
+}
 
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
 export interface RunOutcome<D> {
@@ -30,13 +63,14 @@ export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
   /** Англійською: MCP і `--help` беруть опис звідси. */
   description: string
   input: I
-  effect: Effect
+  files: FilesAccess
+  database: DatabaseAccess
   destructive: boolean
-  run(ctx: { dir: string }, input: z.infer<I>): Promise<RunOutcome<D>>
+  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D>>
 }
 
 export type RefusalReason =
-  "invalid-input" | "write-disabled" | "unconfirmed" | "refused"
+  "invalid-input" | "read-only" | "no-database" | "unconfirmed" | "refused"
 
 export interface ToolResult<D = unknown> {
   ok: boolean
@@ -49,10 +83,11 @@ export interface ToolResult<D = unknown> {
 
 export interface InvokeOptions {
   dir: string
-  allowWrite: boolean
+  readOnly: boolean
   dryRun: boolean
   confirmed: boolean
-  /** Argv запуску сервера: з нього будується підказка про `--allow-write`. */
+  database?: DatabaseResource
+  /** Argv запуску сервера: з нього будується підказка про `--read-only`. */
   launchArgs?: readonly string[]
 }
 

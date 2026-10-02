@@ -16,7 +16,8 @@ export const compileTool = defineTool({
   description:
     "Compile the metadata directory and return diagnostics. Reads the disk on every call; writes nothing.",
   input: z.strictObject({}),
-  effect: "read",
+  files: "read",
+  database: "none",
   destructive: false,
   async run({ dir }) {
     const result = await compile(await readMetadataDir(dir))
@@ -34,7 +35,8 @@ export const explainTool = defineTool({
   description:
     "Explain one object: its tables, columns, keys and movement queries. Needs a metadata directory that compiles without errors.",
   input: z.strictObject({ kind: metadataKindSchema, name: objectNameSchema }),
-  effect: "read",
+  files: "read",
+  database: "none",
   destructive: false,
   async run({ dir }, { kind, name }) {
     const result = await compile(await readMetadataDir(dir))
@@ -68,7 +70,8 @@ export const fixTool = defineTool({
   description:
     "Assign missing ids and physical names, set $schema and canonical form. Writes only when the result compiles without errors.",
   input: z.strictObject({}),
-  effect: "files",
+  files: "write",
+  database: "none",
   destructive: false,
   async run({ dir }) {
     const result = await fixFiles(await readMetadataDir(dir), {

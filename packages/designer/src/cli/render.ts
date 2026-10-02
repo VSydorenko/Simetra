@@ -65,7 +65,7 @@ export function renderResult(
           : renderExplanation(explanation).trimEnd(),
     }
   }
-  if (tool.effect === "read") return { stdout: report }
+  if (tool.files === "read") return { stdout: report }
   const changed = r.changes.map((c) => c.path)
   if (o.format === "json") {
     return {

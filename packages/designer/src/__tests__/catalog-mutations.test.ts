@@ -24,7 +24,8 @@ describe("mutation tools", () => {
   it("only delete is destructive; every mutation writes files", () => {
     for (const name of ["create", "add", "rename", "delete"]) {
       const t = toolByName(name)!
-      expect(t.effect).toBe("files")
+      expect(t.files).toBe("write")
+      expect(t.database).toBe("none")
       expect(t.destructive).toBe(name === "delete")
     }
     expect(toolByName("delete")!.description).not.toContain("confirm")

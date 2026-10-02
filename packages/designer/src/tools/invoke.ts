@@ -2,24 +2,46 @@ import type { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { queueFor } from "./queue"
+import { DEFAULT_DATABASE_URL_ENV, noDatabaseHint, readOnlyHint } from "./hints"
 import type {
-  Effect,
+  DatabaseAccess,
+  FilesAccess,
   InvokeOptions,
   RefusalReason,
   Tool,
   ToolResult,
 } from "./types"
-import { writeAccessHint } from "./write-access"
 
-/** Вичерпний switch: новий `Effect` не компілюється, доки не вирішено дозвіл. */
-export function permits(tool: Tool, o: { allowWrite: boolean }): boolean {
-  const effect: Effect = tool.effect
-  switch (effect) {
+/**
+ * Вичерпні switch по обох осях: нове значення осі не компілюється, доки не
+ * вирішено його дозвіл. `--read-only` вимикає будь-який запис; власне тертя
+ * запису в базу (підтвердження з показаним планом) — ознака `destructive`.
+ */
+export function permits(tool: Tool, o: { readOnly: boolean }): boolean {
+  const files: FilesAccess = tool.files
+  const database: DatabaseAccess = tool.database
+  let filesOk: boolean
+  switch (files) {
     case "read":
-      return true
-    case "files":
-      return o.allowWrite
+      filesOk = true
+      break
+    case "write":
+      filesOk = !o.readOnly
+      break
   }
+  let databaseOk: boolean
+  switch (database) {
+    case "none":
+    case "read":
+      // Читання бази без дозволу: захисти — read-only сесія цілі й рядок
+      // підключення лише із середовища запуску.
+      databaseOk = true
+      break
+    case "write":
+      databaseOk = !o.readOnly
+      break
+  }
+  return filesOk && databaseOk
 }
 
 function refused<D>(reason: RefusalReason, message: string): ToolResult<D> {
@@ -51,8 +73,9 @@ export async function invoke<D>(
       .join("; ")
     return refused("invalid-input", message)
   }
-  if (!permits(tool, o))
-    return refused("write-disabled", writeAccessHint(o.launchArgs))
+  if (!permits(tool, o)) return refused("read-only", readOnlyHint(o.launchArgs))
+  if (tool.database !== "none" && o.database === undefined)
+    return refused("no-database", noDatabaseHint(DEFAULT_DATABASE_URL_ENV))
   // Dry-run нічого не пише, тож підтвердження там нічого не захищає, а агентові
   // перегляд потрібен саме до `confirm`.
   if (tool.destructive && !o.dryRun && !o.confirmed) {
@@ -63,10 +86,16 @@ export async function invoke<D>(
   }
   return queueFor(o.dir)(async () => {
     try {
-      const outcome = await tool.run({ dir: o.dir }, parsed.data)
+      // Інструмент без осі бази ресурсу не бачить, тож і не відкриє пулу.
+      const outcome = await tool.run(
+        tool.database === "none"
+          ? { dir: o.dir }
+          : { dir: o.dir, database: o.database },
+        parsed.data
+      )
       const write =
         outcome.ok &&
-        tool.effect === "files" &&
+        tool.files === "write" &&
         !o.dryRun &&
         outcome.changes.length > 0
       if (write) await writeChanges(o.dir, outcome.changes)

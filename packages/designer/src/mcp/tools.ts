@@ -3,11 +3,13 @@ import { z } from "zod"
 import { formatDiagnostics } from "../io/report"
 import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
-import { ALLOW_WRITE_FLAG } from "../tools/write-access"
+import type { DatabaseResource } from "../tools/types"
 
 export interface McpToolOptions {
   dir: string
-  allowWrite: boolean
+  readOnly: boolean
+  /** Ресурс запуску; без нього інструменти бази відмовляють із підказкою. */
+  database?: DatabaseResource
   /** Справжній argv запуску: потрапляє в підказку відмови запису. */
   launchArgs?: readonly string[]
 }
@@ -26,19 +28,12 @@ const confirm = z.boolean().optional().meta({
  * й запис вирішує `invoke`, тож тут лише перелік полів, які він отримує.
  */
 export function mcpInputSchema(tool: Tool): z.ZodType {
-  if (tool.effect === "read") return tool.input
+  if (tool.files === "read") return tool.input
   if (!(tool.input instanceof z.ZodObject)) {
     throw new Error(`tool ${tool.name} needs an object input to take dryRun`)
   }
   const base = tool.input.extend({ dryRun })
   return tool.destructive ? base.extend({ confirm }) : base
-}
-
-function describe(tool: Tool): string {
-  // Однаковий у будь-якому режимі, щоб `tools/list` не залежав від прапорця.
-  return tool.effect === "read"
-    ? tool.description
-    : `${tool.description} Requires the server to run with ${ALLOW_WRITE_FLAG}.`
 }
 
 function lineFor(
@@ -78,10 +73,10 @@ function toResponse(
   const lines = ok
     ? [
         ...changes.map((c) => lineFor(c, written)),
-        ...(dry && tool.effect === "files" ? ["dry run: nothing written"] : []),
-        ...(tool.effect === "read" ? [`${tool.name}: no errors`] : []),
+        ...(dry && tool.files === "write" ? ["dry run: nothing written"] : []),
+        ...(tool.files === "read" ? [`${tool.name}: no errors`] : []),
       ]
-    : tool.effect === "files"
+    : tool.files === "write"
       ? ["nothing written: the operation was refused or the result has errors"]
       : [`${tool.name}: the metadata has errors`]
   return {
@@ -97,10 +92,11 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
     server.registerTool(
       tool.name,
       {
-        description: describe(tool),
+        // Опис не залежить від режиму, щоб `tools/list` не залежав від прапорця.
+        description: tool.description,
         inputSchema: mcpInputSchema(tool),
         annotations: {
-          readOnlyHint: tool.effect === "read",
+          readOnlyHint: tool.files === "read" && tool.database !== "write",
           destructiveHint: tool.destructive,
         },
       },
@@ -112,9 +108,10 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
         } = (args ?? {}) as Record<string, unknown>
         const result = await invoke(tool, input, {
           dir: o.dir,
-          allowWrite: o.allowWrite,
+          readOnly: o.readOnly,
           dryRun: dry === true,
           confirmed: confirmed === true,
+          database: o.database,
           launchArgs: o.launchArgs,
         })
         return toResponse(tool, result, o, dry === true)

@@ -1,13 +1,26 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { compile } from "simetra/compiler"
+import { z } from "zod"
 import { describe, expect, it } from "vitest"
 import { readMetadataDir } from "../io/metadata-dir"
 import { compileArtifacts } from "../tools/artifacts"
 import { TOOLS, toolByName } from "../tools/catalog"
 import { invoke, permits } from "../tools/invoke"
 import { queueFor } from "../tools/queue"
-import { ALLOW_WRITE_FLAG, writeAccessHint } from "../tools/write-access"
+import {
+  DEFAULT_DATABASE_URL_ENV,
+  noDatabaseHint,
+  READ_ONLY_FLAG,
+  readOnlyHint,
+} from "../tools/hints"
+import {
+  DATABASE_ACCESS,
+  defineTool,
+  FILES_ACCESS,
+  type DatabaseResource,
+  type Tool,
+} from "../tools/types"
 import { opts, project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
@@ -96,7 +109,7 @@ describe("tool catalog", () => {
     expect(r.diagnostics.length).toBeGreaterThan(0)
   })
 
-  it("fix without allowWrite writes nothing and explains how to enable writes", async () => {
+  it("--read-only refuses a write, writes nothing and names the flag", async () => {
     const dir = await brokenProject()
     const before = await readMetadataDir(dir)
     const r = await invoke(
@@ -104,14 +117,19 @@ describe("tool catalog", () => {
       {},
       {
         ...opts(dir),
-        allowWrite: false,
+        readOnly: true,
       }
     )
-    expect(r.refusal).toEqual({
-      reason: "write-disabled",
-      message: writeAccessHint(),
-    })
+    expect(r.refusal).toEqual({ reason: "read-only", message: readOnlyHint() })
+    expect(r.refusal?.message).toContain(READ_ONLY_FLAG)
     expect(await readMetadataDir(dir)).toEqual(before)
+  })
+
+  it("writes are on by default", async () => {
+    const dir = await brokenProject()
+    const r = await invoke(toolByName("fix")!, {}, opts(dir))
+    expect(r.refusal).toBeUndefined()
+    expect(r.written).toBe(true)
   })
 
   it("fix dryRun reports changes and writes nothing", async () => {
@@ -147,10 +165,19 @@ describe("tool catalog", () => {
     expect(after.attributes[0]!.physicalName).toBeTypeOf("string")
   })
 
-  it("permits read always and files only with allowWrite", () => {
+  it("every (files, database) pair has a permit rule", () => {
+    // Повний добуток осей, а не лише пари з TOOLS: правило для нової пари
+    // мусить існувати до того, як з'явиться інструмент із нею.
+    for (const files of FILES_ACCESS) {
+      for (const database of DATABASE_ACCESS) {
+        const t = { ...toolByName("compile")!, files, database }
+        const writes = files === "write" || database === "write"
+        expect(permits(t, { readOnly: false })).toBe(true)
+        expect(permits(t, { readOnly: true })).toBe(!writes)
+      }
+    }
     for (const t of TOOLS) {
-      expect(permits(t, { allowWrite: false })).toBe(t.effect === "read")
-      expect(permits(t, { allowWrite: true })).toBe(true)
+      expect(permits(t, { readOnly: true })).toBe(t.files === "read")
     }
   })
 
@@ -168,6 +195,23 @@ describe("tool catalog", () => {
 })
 
 describe("invoke refusals", () => {
+  it("delete still needs confirm when writes are on", async () => {
+    const dir = await project()
+    await invoke(
+      toolByName("create")!,
+      { kind: "Catalog", name: "Scratch", data: { scope: "none" } },
+      opts(dir)
+    )
+    const before = await snapshotOf(dir)
+    const r = await invoke(
+      toolByName("delete")!,
+      { target: { kind: "Catalog", name: "Scratch" } },
+      opts(dir)
+    )
+    expect(r.refusal?.reason).toBe("unconfirmed")
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
   it("destructive dry-run without confirmation previews and writes nothing", async () => {
     const dir = await project()
     await invoke(
@@ -248,21 +292,83 @@ describe("queueFor", () => {
   })
 })
 
-describe("writeAccessHint", () => {
+describe("readOnlyHint", () => {
   it("shows the general form without launch args", () => {
-    expect(writeAccessHint()).toContain(
-      `ending in ["simetra","mcp"] become ["simetra","mcp","${ALLOW_WRITE_FLAG}"]`
+    expect(readOnlyHint()).toContain(
+      `ending in ["simetra","mcp","${READ_ONLY_FLAG}"] become ["simetra","mcp"]`
     )
   })
 
   it("echoes the real launch args as the tail of the client's args", () => {
-    const hint = writeAccessHint(["mcp", "./metadata"])
-    expect(hint).toContain(`append ${ALLOW_WRITE_FLAG} to the end of`)
+    const hint = readOnlyHint(["mcp", "./metadata", READ_ONLY_FLAG])
+    expect(hint).toContain(`remove ${READ_ONLY_FLAG} from`)
     expect(hint).toContain(
-      `ending in ["mcp","./metadata"] become ["mcp","./metadata","${ALLOW_WRITE_FLAG}"]`
+      `ending in ["mcp","./metadata","${READ_ONLY_FLAG}"] become ["mcp","./metadata"]`
     )
     // Лаунчер клієнта (`pnpm exec simetra …`, `npx …`) додає свої аргументи
     // попереду, тож підказка не видає хвіст за повний конфіг.
     expect(hint).not.toContain(`"args": [`)
+  })
+})
+
+/** Інструмент бази ще не існує: заглушка перевіряє відмову `invoke` без нього. */
+const dbStub = defineTool({
+  name: "compile",
+  description: "Database stub.",
+  input: z.strictObject({}),
+  files: "read",
+  database: "read",
+  destructive: false,
+  async run(ctx) {
+    await ctx.database!.connect()
+    return { ok: true, changes: [], diagnostics: [] }
+  },
+}) as Tool
+
+describe("database as a launch resource", () => {
+  it("a database tool without a connection is refused with the env hint", async () => {
+    const dir = await project()
+    const r = await invoke(dbStub, {}, opts(dir))
+    expect(r.refusal).toEqual({
+      reason: "no-database",
+      message: noDatabaseHint(DEFAULT_DATABASE_URL_ENV),
+    })
+    expect(r.refusal?.message).toContain("SIMETRA_DATABASE_URL")
+  })
+
+  it("passes the resource only to a tool that uses the database", async () => {
+    const dir = await project()
+    let connects = 0
+    const database: DatabaseResource = {
+      describe: "localhost:5432/app",
+      connect: () => {
+        connects++
+        return Promise.reject(new Error("not in a unit test"))
+      },
+    }
+    let seen: unknown = "unset"
+    const noDb = defineTool({
+      ...dbStub,
+      database: "none",
+      async run(ctx) {
+        seen = ctx.database
+        return { ok: true, changes: [], diagnostics: [] }
+      },
+    }) as Tool
+    await invoke(noDb, {}, { ...opts(dir), database })
+    expect(seen).toBeUndefined()
+    expect(connects).toBe(0)
+    await expect(
+      invoke(dbStub, {}, { ...opts(dir), database })
+    ).rejects.toThrow("not in a unit test")
+    expect(connects).toBe(1)
+  })
+})
+
+describe("noDatabaseHint", () => {
+  it("names the environment variable and nothing else", () => {
+    const hint = noDatabaseHint("MY_DB_URL")
+    expect(hint).toContain("MY_DB_URL")
+    expect(hint).not.toContain(DEFAULT_DATABASE_URL_ENV)
   })
 })
