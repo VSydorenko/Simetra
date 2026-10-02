@@ -24,7 +24,10 @@ import sys
 #
 # Поза корпусом навмисно:
 #   CLAUDE.md                 — і так у контексті кожної Claude-сесії;
-#   docs/superpowers/plans/** — плани виконання, не канон.
+#   docs/superpowers/plans/** — плани виконання, не канон;
+#   packages/*/skills/**      — скіли споживачів, що їдуть у пакеті: агенти
+#                               платформи їх не використовують, тож пошук
+#                               по темі не має їх підсовувати.
 # AGENTS.md — у корпусі: його читають не всі харнеси, а в ньому живуть
 # правила, які тема може зачепити.
 INCLUDE_GLOBS = [
@@ -36,9 +39,6 @@ INCLUDE_GLOBS = [
     ".agents/skills/*/SKILL.md",
     ".agents/skills/*/references/**/*.md",
     "packages/*/README.md",
-    # Скіли для споживачів їдуть у пакеті (платформна спека, «Доставка»).
-    "packages/*/skills/*/SKILL.md",
-    "packages/*/skills/*/references/**/*.md",
 ]
 
 WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
@@ -168,8 +168,8 @@ def bm25(
 def skill_owner(rel: pathlib.Path) -> pathlib.Path | None:
     """Для `<...>/skills/<name>/references/<x>.md` — шлях до SKILL.md скіла.
 
-    Загальне правило, а не лише `.agents/skills`: скіли для споживачів лежать
-    у `packages/<pkg>/skills/`, і групуватись мають так само.
+    Правило загальне (шлях з відрізком `skills/<name>/references`), а не
+    прив'язане до однієї теки скілів.
     """
     p = rel.parts
     for i in range(2, len(p)):

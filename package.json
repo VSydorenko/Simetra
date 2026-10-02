@@ -19,11 +19,10 @@
     "deps:check": "syncpack lint",
     "deps:fix": "syncpack fix",
     "deps:update": "pnpm update -r && syncpack fix",
-    "metadata:check": "simetra compile --all",
+    "metadata:check": "node packages/designer/bin/simetra.mjs compile --all",
     "prepare": "husky"
   },
   "devDependencies": {
-    "@simetra/designer": "workspace:*",
     "husky": "9.1.7",
     "@typescript/native": "npm:typescript@^7.0.2",
     "simetra": "workspace:*",
