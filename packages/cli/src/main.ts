@@ -8,6 +8,7 @@ const main = defineCommand({
   subCommands: {
     // Ліниві підкоманди повертають саму команду, а не простір імен модуля.
     compile: () => import("./commands/compile").then((m) => m.default),
+    explain: () => import("./commands/explain").then((m) => m.default),
   },
 })
 
