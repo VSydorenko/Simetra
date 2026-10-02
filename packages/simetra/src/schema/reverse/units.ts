@@ -13,6 +13,11 @@ export interface UnitsContext {
   defaultSchema: string
   /** `<Ім'я>.sql` згенерованої таблиці за `schema.name`. */
   sidecars: ReadonlyMap<string, string>
+  /**
+   * Ідентичності одиниць, які вже описують збережені файли: їх не пишемо, але
+   * рахуємо серед викликів тригерних функцій.
+   */
+  described: ReadonlySet<string>
 }
 
 export interface UnitFiles {
@@ -78,6 +83,25 @@ function triggerFunction(
   const names = strings(stmt.CreateTrigStmt.funcname)
   const name = names.at(-1) ?? ""
   return qualified(names.length > 1 ? names.at(-2)! : ctx.defaultSchema, name)
+}
+
+/**
+ * Грант чи коментар на функцію без аргументів: лише він належить тригерній
+ * функції таблиці, а не її перевантаженню з тим самим ім'ям.
+ */
+function withoutArguments(unit: CatalogUnit, ctx: UnitsContext): boolean {
+  const stmt = statement(unit, ctx.parse)
+  const target =
+    stmt === undefined
+      ? undefined
+      : "GrantStmt" in stmt
+        ? stmt.GrantStmt.objects?.[0]
+        : "CommentStmt" in stmt
+          ? stmt.CommentStmt.object
+          : undefined
+  if (target === undefined || !("ObjectWithArgs" in target)) return false
+  const fn = target.ObjectWithArgs
+  return fn.args_unspecified !== true && (fn.objargs ?? []).length === 0
 }
 
 /** Таблиця `OWNED BY` послідовності; `NONE` власника не має. */
@@ -208,7 +232,7 @@ export function layoutUnits(
       return own
     if (unit.class === "grant" || unit.class === "comment") {
       const target = unitTarget(unit, ctx.parse)
-      if (target?.kind === "function") {
+      if (target?.kind === "function" && withoutArguments(unit, ctx)) {
         const sidecar = ownFunctions.get(
           qualified(target.schema || ctx.defaultSchema, target.object ?? "")
         )
@@ -223,6 +247,7 @@ export function layoutUnits(
 
   const grouped = new Map<string, CatalogUnit[]>()
   for (const unit of units) {
+    if (ctx.described.has(unit.identity)) continue
     const path = pathOf(unit)
     grouped.set(path, [...(grouped.get(path) ?? []), unit])
   }

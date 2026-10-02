@@ -92,8 +92,14 @@ export function readExisting(
     )
       continue
     const raw = parseJson(files.get(path))
-    const physical = raw === undefined ? undefined : physicalOf(raw)
-    if (raw?.kind !== kind || physical === undefined) continue
+    if (raw?.kind !== kind) continue
+    const physical = physicalOf(raw)
+    // Без фізичного імені ключа немає: новий опис мовчки замінив би id
+    // наявного, тож спершу ім'я має дати автор чи `simetra fix`.
+    if (physical === undefined) {
+      diagnostics.push(diagnostic("identity.physical-name-missing", path, ""))
+      continue
+    }
     const schema = typeof raw.schema === "string" ? raw.schema : defaultSchema
     const key = objectKey(kind, schema, physical)
     const earlier = objects.get(key)
@@ -109,8 +115,18 @@ export function readExisting(
     const columns = new Map<string, Json>()
     const list = Array.isArray(raw.columns) ? (raw.columns as unknown[]) : []
     list.forEach((column, index) => {
-      const name = isRecord(column) ? physicalOf(column) : undefined
-      if (name === undefined) return
+      if (!isRecord(column)) return
+      const name = physicalOf(column)
+      if (name === undefined) {
+        diagnostics.push(
+          diagnostic(
+            "identity.physical-name-missing",
+            path,
+            `/columns/${index}`
+          )
+        )
+        return
+      }
       if (columns.has(name))
         diagnostics.push(
           diagnostic(

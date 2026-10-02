@@ -11,15 +11,22 @@ import type { ExistingObject } from "./identity"
 
 type Json = Record<string, unknown>
 
-/** Логічні імена згенерованої таблиці: об'єкт і колонки за фізичним іменем. */
+/**
+ * Таблиця, на яку можна послатися `MetadataRef`: вид і логічне ім'я об'єкта,
+ * логічні імена колонок за фізичним іменем.
+ */
 export interface TableNames {
+  kind: string
   object: string
   columns: ReadonlyMap<string, string>
 }
 
 export interface TablesContext {
   defaultSchema: string
-  /** Згенеровані таблиці за `schema.name`; решта цілей FK — зовнішні. */
+  /**
+   * Таблиці моделі за `schema.name`: згенеровані й основні таблиці збережених
+   * об'єктів видів 1С. Ціль FK поза ними — зовнішня таблиця.
+   */
   tables: ReadonlyMap<string, TableNames>
   /** Згенеровані енам-типи: `schema.name` → логічне ім'я. */
   enums: ReadonlyMap<string, string>
@@ -27,30 +34,36 @@ export interface TablesContext {
 
 const qualified = (schema: string, name: string) => `${schema}.${name}`
 
-// Поля, які генератор уміє виразити. Поле поза ними (нова властивість моделі
-// каталогу, EXCLUDE) — гучна помилка: інакше файл мовчки його загубив би.
-const TABLE_FIELDS: ReadonlySet<string> = new Set([
-  "schema",
-  "name",
-  "comment",
-  "rowLevelSecurity",
-  "columns",
-  "primaryKey",
-  "uniques",
-  "checks",
-  "foreignKeys",
-  "indexes",
-])
-const COLUMN_FIELDS: ReadonlySet<string> = new Set([
-  "name",
-  "type",
-  "notNull",
-  "default",
-  "identity",
-  "generated",
-  "collation",
-  "comment",
-])
+// Поля, які генератор уміє виразити, — за типом моделі каталогу: нове поле
+// моделі не пройде typecheck, доки генератор його не виразить. Поле поза
+// типом (форма, якої модель ще не має) — гучна помилка, а не мовчки
+// загублена властивість.
+const TABLE_FIELDS: ReadonlySet<string> = new Set(
+  Object.keys({
+    schema: true,
+    name: true,
+    comment: true,
+    rowLevelSecurity: true,
+    columns: true,
+    primaryKey: true,
+    uniques: true,
+    checks: true,
+    foreignKeys: true,
+    indexes: true,
+  } satisfies Record<keyof CatalogTable, true>)
+)
+const COLUMN_FIELDS: ReadonlySet<string> = new Set(
+  Object.keys({
+    name: true,
+    type: true,
+    notNull: true,
+    default: true,
+    identity: true,
+    generated: true,
+    collation: true,
+    comment: true,
+  } satisfies Record<keyof CatalogColumn, true>)
+)
 
 /**
  * Невиражене таблицею (план E2b, рішення 8): поле поза формою `CustomTable`
@@ -209,7 +222,7 @@ function foreignKey(
       target === undefined
         ? { external: { schema, table, columns } }
         : {
-            object: { kind: "CustomTable", name: target.object },
+            object: { kind: target.kind, name: target.object },
             columns: logical(target, columns),
           },
     ...(fk.onDelete !== "noAction" ? { onDelete: fk.onDelete } : {}),

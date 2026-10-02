@@ -114,6 +114,22 @@ function withoutId(column: Json): Json {
 const errors = (result: ReverseResult) =>
   result.diagnostics.filter((d) => d.severity === "error")
 
+const SNAKE_PROJECT = project({
+  defaultSchema: "app",
+  naming: { attributeCase: "snake_case" },
+})
+
+/** Тека з довідником `Currency` — файлом виду 1С, який генератор не чіпає. */
+function keptCatalog(sql?: string): Map<string, string> {
+  return metaFiles({
+    "project.meta.json": SNAKE_PROJECT,
+    "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+      schema: "app",
+    }),
+    ...(sql === undefined ? {} : { "catalogs/Currency/Currency.sql": sql }),
+  })
+}
+
 const TOUCH = [
   "CREATE FUNCTION app.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
   "CREATE TRIGGER note_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.touch();",
@@ -560,11 +576,7 @@ describe("reverseGenerate", () => {
   })
 
   it("stale generated file is deleted, a 1C kind file is kept", async () => {
-    const currency = catalog("Currency", { schema: "app" })
-    const kept = metaFiles({
-      "project.meta.json": project({ defaultSchema: "app" }),
-      "catalogs/Currency/Currency.meta.json": currency,
-    })
+    const kept = keptCatalog()
     const compiled = await compile(kept)
     expect(compiled.diagnostics).toEqual([])
     const first = await reverseGenerate(
@@ -603,7 +615,8 @@ describe("reverseGenerate", () => {
   })
 
   it("existing project file is not rewritten", async () => {
-    const text = '{"name":"Mine","defaultSchema":"app","title":{"uk":"Моє"}}'
+    const text =
+      '{"name":"Mine","defaultSchema":"app","naming":{"attributeCase":"snake_case"},"title":{"uk":"Моє"}}'
     const existing = new Map([["project.meta.json", text]])
     const result = await reverseGenerate(
       model({ tables: [table("app", "note")] }),
@@ -619,10 +632,19 @@ describe("reverseGenerate", () => {
       model({ tables: [table("public", "note")] }),
       options(existing, { defaultSchema: "public" })
     )
-    expect(errors(mismatch).map((d) => [d.code, d.file])).toEqual([
-      ["introspect.project-mismatch", "project.meta.json"],
+    expect(errors(mismatch).map((d) => [d.code, d.pointer])).toEqual([
+      ["introspect.project-mismatch", "/defaultSchema"],
     ])
     expect(mismatch.changes).toEqual([])
+
+    // Стиль імен файлу проєкту теж діє мовчки лише тоді, коли збігається
+    const style = await reverseGenerate(
+      model({ tables: [table("app", "note")] }),
+      options(existing, { attributeCase: "camelCase" })
+    )
+    expect(errors(style).map((d) => [d.code, d.pointer])).toEqual([
+      ["introspect.project-mismatch", "/naming/attributeCase"],
+    ])
   })
 
   it("default opclass, collation and deferrable are omitted", async () => {
@@ -719,9 +741,9 @@ describe("reverseGenerate", () => {
     expect((data.foreignKeys as Json[])[0]).not.toHaveProperty("deferrable")
   })
 
-  it("exclude constraint and a table without columns are unrepresentable", async () => {
-    // EXCLUDE поля в моделі каталогу не має: форма, якої генератор не знає,
-    // — гучна помилка, а не мовчки пропущене поле
+  it("an unknown catalog field and a table without columns are unrepresentable", async () => {
+    // Поле поза типом моделі каталогу (тут — уявна форма EXCLUDE; сам EXCLUDE
+    // звітує extract) — гучна помилка, а не мовчки пропущене поле
     const withExclude = {
       ...table("app", "booking"),
       exclusions: [
@@ -772,6 +794,145 @@ describe("reverseGenerate", () => {
       errors(result).map((d) => [d.code, d.params?.object, d.params?.property])
     ).toEqual([
       ["introspect.unrepresentable", "app.note.n", "identity.sequence"],
+    ])
+    expect(result.changes).toEqual([])
+  })
+
+  it("fk to a kept 1C object uses an object ref", async () => {
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const result = await reverseGenerate(
+      model({
+        tables: [
+          ...catalogFromSnapshot(compiled.model!.physical).tables,
+          table("app", "price", {
+            columns: [
+              idColumn,
+              { name: "currency_id", type: "uuid", notNull: true },
+            ],
+            foreignKeys: [
+              {
+                name: "price_currency_id_fkey",
+                columns: ["currency_id"],
+                references: {
+                  schema: "app",
+                  table: "currency",
+                  columns: ["id"],
+                },
+                onDelete: "noAction",
+                onUpdate: "noAction",
+                deferrable: "no",
+              },
+            ],
+          }),
+        ],
+      }),
+      options(kept)
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(
+      json(result, "custom-tables/Price/Price.meta.json").foreignKeys
+    ).toEqual([
+      {
+        name: "price_currency_id_fkey",
+        columns: ["currency_id"],
+        references: {
+          object: { kind: "Catalog", name: "Currency" },
+          columns: ["ref"],
+        },
+      },
+    ])
+    const recompiled = await compile(result.files)
+    expect(recompiled.diagnostics).toEqual([])
+    expect(
+      recompiled.model!.references.some(
+        (r) => r.role === "customTable.foreignKey"
+      )
+    ).toBe(true)
+  })
+
+  it("a trigger function also called from a kept file is shared", async () => {
+    const kept = keptCatalog(
+      "CREATE TRIGGER currency_touch BEFORE UPDATE ON app.currency FOR EACH ROW EXECUTE FUNCTION app.touch();\n"
+    )
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const result = await reverseGenerate(
+      model({
+        tables: [
+          ...catalogFromSnapshot(compiled.model!.physical).tables,
+          table("app", "note"),
+        ],
+        units: units(
+          `${TOUCH}\nCREATE TRIGGER currency_touch BEFORE UPDATE ON app.currency FOR EACH ROW EXECUTE FUNCTION app.touch();`
+        ),
+      }),
+      options(kept)
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(result.files.get("sql/app/touch.sql")).toContain(
+      "CREATE FUNCTION app.touch()"
+    )
+    expect(result.files.get("custom-tables/Note/Note.sql")).not.toContain(
+      "CREATE FUNCTION"
+    )
+    expect(
+      [...result.files.values()].filter((t) => t.includes("currency_touch"))
+    ).toEqual([kept.get("catalogs/Currency/Currency.sql")])
+  })
+
+  it("settings and grants of an own trigger function follow it, an overload does not", async () => {
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units(
+          [
+            TOUCH,
+            "ALTER FUNCTION app.touch() SET search_path = '';",
+            "GRANT EXECUTE ON FUNCTION app.touch() TO anon;",
+            "CREATE FUNCTION app.touch(n integer) RETURNS integer LANGUAGE sql AS $$ SELECT n $$;",
+            "GRANT EXECUTE ON FUNCTION app.touch(integer) TO anon;",
+          ].join("\n")
+        ),
+      }),
+      options()
+    )
+    expect(result.diagnostics).toEqual([])
+    const sidecar = result.files.get("custom-tables/Note/Note.sql")!
+    expect(sidecar).toContain("ALTER FUNCTION app.touch() SET")
+    expect(sidecar).toContain("GRANT EXECUTE ON FUNCTION app.touch() TO anon")
+    expect(sidecar).not.toContain("touch(integer)")
+    expect(sidecar.indexOf("CREATE FUNCTION")).toBeLessThan(
+      sidecar.indexOf("ALTER FUNCTION")
+    )
+    const shared = [...result.files]
+      .filter(([p]) => p.startsWith("sql/app/"))
+      .map(([, t]) => t)
+    expect(shared.some((t) => t.includes("app.touch(integer) TO anon"))).toBe(
+      true
+    )
+    expect(shared.some((t) => t.includes("app.touch(n integer)"))).toBe(true)
+  })
+
+  it("an existing generated file without a physical name is reported", async () => {
+    const existing = new Map([
+      [
+        "custom-tables/Note/Note.meta.json",
+        JSON.stringify({
+          id: uuid(7),
+          kind: "CustomTable",
+          name: "Note",
+          columns: [{ id: uuid(8), name: "id", type: "UUID" }],
+        }),
+      ],
+    ])
+    const result = await reverseGenerate(
+      model({ tables: [table("app", "note")] }),
+      options(existing)
+    )
+    expect(errors(result).map((d) => [d.code, d.file])).toEqual([
+      ["identity.physical-name-missing", "custom-tables/Note/Note.meta.json"],
     ])
     expect(result.changes).toEqual([])
   })
