@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { ESLint } from "eslint"
 import ts from "typescript"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 import { compile, emitEntityTypes } from "simetra/compiler"
 import {
   attribute,
@@ -84,6 +84,9 @@ const CATALOG_CONSUMER = [
   "export type X = UseModule<Catalogs.Item>",
 ].join("\n")
 
+/** Розібрані файли реального lib, спільні для всіх перевірок типів файлу. */
+const LIB_SOURCES = new Map<string, ts.SourceFile>()
+
 /**
  * Перевірка типів згенерованого `.d.ts` разом із тестовим споживачем у
  * пам'яті: суворі прапорці споживача (isolatedModules, verbatimModuleSyntax),
@@ -106,10 +109,18 @@ function diagnosticsOf(code: string, consumer = ANY_CONSUMER): string[] {
   }
   const host = ts.createCompilerHost(options)
   const { getSourceFile, fileExists, readFile } = host
-  host.getSourceFile = (name, languageVersion, ...rest) =>
-    files.has(name)
-      ? ts.createSourceFile(name, files.get(name)!, languageVersion)
-      : getSourceFile.call(host, name, languageVersion, ...rest)
+  host.getSourceFile = (name, languageVersion, ...rest) => {
+    if (files.has(name))
+      return ts.createSourceFile(name, files.get(name)!, languageVersion)
+    // Розбір реального lib — секунди; без кешу кожен виклик платить його
+    // наново, а перший тест упирається в таймаут під навантаженням.
+    let source = LIB_SOURCES.get(name)
+    if (!source) {
+      source = getSourceFile.call(host, name, languageVersion, ...rest)
+      if (source) LIB_SOURCES.set(name, source)
+    }
+    return source
+  }
   host.fileExists = (name) => files.has(name) || fileExists.call(host, name)
   // Без цього розв'язання модуля не бачить віртуальної теки.
   host.directoryExists = () => true
@@ -121,6 +132,11 @@ function diagnosticsOf(code: string, consumer = ANY_CONSUMER): string[] {
 }
 
 describe("emitEntityTypes", () => {
+  // Холодний розбір lib — у хуку з власним таймаутом, а не в першому тесті.
+  beforeAll(() => {
+    diagnosticsOf("export {}")
+  })
+
   it("catalog interface with standard attributes and jsdoc", async () => {
     const code = await emit({
       "project.meta.json": project(),
