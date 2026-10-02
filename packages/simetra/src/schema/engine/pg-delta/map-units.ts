@@ -215,7 +215,8 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
  * Оператор ACL-пари з payload: дія двигуна для неї цілі не має. Пара, рівна
  * правам свіжого об'єкта (власник, `PUBLIC`, ADP схеми), — не одиниця
  * (рішення за спайком, 8, і рішення архітектора про ADP); відкликане з них —
- * `REVOKE`; решта — `GRANT` усіх прав пари. Порожній рядок — одиниці немає.
+ * `REVOKE`; решта — `GRANT` усіх прав пари. Розбіжність опції, якої один
+ * оператор не виражає, — `engine.unrepresentable`. Порожній рядок — одиниці немає.
  */
 function aclStatement(
   fact: Fact,
@@ -261,6 +262,19 @@ function aclStatement(
       return ""
     }
     return `REVOKE ${list(missing)} ON ${target} FROM ${grantee(id.grantee)}`
+  }
+  // `GRANT` опцію не відкликає: опція, вужча за типову на наявних правах,
+  // потребує `REVOKE GRANT OPTION FOR` — другого оператора на пару
+  const narrowed = expected.grantable.filter(
+    (p) => privileges.includes(p) && !grantable.includes(p)
+  )
+  if (narrowed.length > 0) {
+    issues.push({
+      object: id,
+      property: "grantable",
+      detail: `grant option on ${narrowed.join(",")} is revoked from the default, which GRANT cannot express`,
+    })
+    return ""
   }
   // Ідентичність гранту опцію не несе, а частковий `WITH GRANT OPTION` — це
   // два оператори на одну пару

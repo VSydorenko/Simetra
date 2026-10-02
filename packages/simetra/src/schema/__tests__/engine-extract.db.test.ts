@@ -144,29 +144,6 @@ function splitList(text: string): string[] {
   return parts
 }
 
-/**
- * Класи одиниць, які база тримає інакше, ніж оператор компілятора: їхні
- * ідентичності зводяться до форми бази.
- */
-const HELD_DIFFERENTLY: readonly [string, string][] = [
-  [
-    "functionSettings",
-    "ALTER FUNCTION … SET is stored in pg_proc.proconfig and printed inside the function definition, so it is the function's unit",
-  ],
-  [
-    "grant",
-    "the catalog holds one ACL entry per (object, grantee), merging every statement's privileges for the pair, and ALL as the full privilege list of the class",
-  ],
-  [
-    "defaultPrivileges",
-    "pg_default_acl holds one entry per (role, schema, object type, grantee)",
-  ],
-  [
-    "publication",
-    "pg_publication_rel holds one row per (publication, table); SET leaves the same rows as ADD",
-  ],
-]
-
 /** Привілеї оператора; `all` — повний перелік класу об'єкта (рішення B). */
 function expandAll(type: string, privileges: string): string[] {
   if (privileges !== "all") return splitList(privileges)
@@ -178,6 +155,7 @@ function expandAll(type: string, privileges: string): string[] {
 /**
  * Ідентичності одиниць компілятора у формі бази: оператор розгорнуто в пари
  * факту (рішення за спайком, 5), налаштування функції — у її ідентичність.
+ * Класи, які база тримає інакше, ніж оператор компілятора, — гілки нижче.
  */
 function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
   const own = new Set(units.map((u) => u.identity))
@@ -191,6 +169,8 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
   for (const unit of units) {
     const parts = unit.identity.split(":")
     switch (unit.class) {
+      // `ALTER FUNCTION … SET` живе в pg_proc.proconfig і друкується в
+      // дефініції функції, тож це одиниця функції
       case "functionSettings": {
         const signature = parts.slice(1).join(":")
         out.add(
@@ -200,6 +180,8 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
         )
         break
       }
+      // Каталог тримає один ACL-запис на (об'єкт, отримувач), зливаючи права
+      // всіх операторів пари, а ALL — повним переліком прав класу
       case "grant": {
         const [, verb, type, objects, roles, privileges] = parts
         if (verb !== "grant" || type!.startsWith("allInSchema."))
@@ -212,6 +194,7 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
             )
         break
       }
+      // pg_default_acl — запис на (роль, схема, тип об'єкта, отримувач)
       case "defaultPrivileges": {
         const [, roles, schemas, type, verb, grantees, privileges] = parts
         for (const role of roles!.split(","))
@@ -223,6 +206,8 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
               )
         break
       }
+      // pg_publication_rel — рядок на (publication, таблиця); SET лишає ті
+      // самі рядки, що й ADD
       case "publication": {
         const [, name, action, tables] = parts
         if (action === "drop")
@@ -364,11 +349,6 @@ describe("extract maps pg-delta facts into the catalog model", () => {
   it("every unit class maps to the compiler identity", async () => {
     await expectExtractMatchesModel(unitClasses())
   })
-
-  it("the lists of tolerated differences carry their reasons", () => {
-    for (const [, reason] of [...EXPRESSION_PATHS, ...HELD_DIFFERENTLY])
-      expect(reason).not.toBe("")
-  })
 })
 
 describe("properties without a model field are loud", () => {
@@ -509,6 +489,29 @@ describe("properties without a model field are loud", () => {
     )
     expect(found.map((d) => d.object)).toEqual(["acl:(table:app.doc).anon"])
     expect(found[0]?.message).toContain("grantable")
+  })
+
+  it("a grant option narrower than the default privileges is unrepresentable", async () => {
+    const extracted = await extractDesired(
+      `
+      create schema app;
+      alter default privileges for role postgres in schema app
+        grant select on tables to anon with grant option;
+      create table app.doc (id int);
+      revoke grant option for select on app.doc from anon cascade;
+      `,
+      scope
+    )
+    // Права рівні типовим, а опцію відкликано: GRANT без опції її не прибрав
+    // би, тож одиниця була б хибною
+    const found = extracted.diagnostics.filter(
+      (d) => d.code === "engine.unrepresentable"
+    )
+    expect(found.map((d) => d.object)).toEqual(["acl:(table:app.doc).anon"])
+    expect(found[0]?.message).toContain("grantable")
+    expect(
+      extracted.model.units.filter((u) => u.identity.includes("app.doc"))
+    ).toEqual([])
   })
 
   it("extension comment is implicit unless it differs from the control file", async () => {

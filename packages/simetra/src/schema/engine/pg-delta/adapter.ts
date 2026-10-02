@@ -101,7 +101,7 @@ function engineDiagnostic(
  */
 function toEngineDiagnostics(
   diagnostics: readonly Diagnostic[],
-  counted: ReadonlySet<CensusClass> = new Set()
+  counted: ReadonlySet<CensusClass>
 ): EngineDiagnostic[] {
   return diagnostics
     .filter((d) => d.code !== "dangling_edge")
@@ -208,9 +208,11 @@ function planOptionsOf(resolved: PlanOptions, target: FactBase): PlanOptions {
     .facts()
     .flatMap((f) => (f.id.kind === "role" ? [f.id.name] : []))
   return {
-    renames: "off",
     scope: "database",
     ...resolved,
+    // Після розв'язаних опцій: перейменування вимкнені завжди, `physicalName`
+    // стабільний (спека П2 §3), і профіль цього не перекриє
+    renames: "off",
     ...(targetRoles.length > 0
       ? { assumedRoles: [...(resolved.assumedRoles ?? []), ...targetRoles] }
       : {}),
@@ -333,13 +335,22 @@ async function planAndRun<T>(
       }
     )
     plan = toEnginePlan(result.plan)
+    // Той самий фільтр `unmodeled_kind`, що в extract: клас, який перепис
+    // бази-джерела діагностики вже назвав у межі, вдруге не звучить
+    const counted = async (pool: pg.Pool) =>
+      unmodeledClasses(await readCensus(pool, scope), CENSUS_COVERAGE)
+    const [targetCounted, shadowCounted] = await Promise.all([
+      counted(targetPool),
+      counted(shadowPool),
+    ])
+    const bothCounted = new Set([...targetCounted, ...shadowCounted])
     diagnostics = [
-      ...toEngineDiagnostics([
-        ...result.loadDiagnostics,
-        ...result.targetDiagnostics,
-        ...result.driftDiagnostics,
-        ...(result.plan.diagnostics ?? []),
-      ]),
+      ...toEngineDiagnostics(result.loadDiagnostics, shadowCounted),
+      ...toEngineDiagnostics(result.targetDiagnostics, targetCounted),
+      ...toEngineDiagnostics(
+        [...result.driftDiagnostics, ...(result.plan.diagnostics ?? [])],
+        bothCounted
+      ),
       // Попередження фронтенду — проза без коду й суб'єкта
       ...warnings.map((message) =>
         engineDiagnostic(

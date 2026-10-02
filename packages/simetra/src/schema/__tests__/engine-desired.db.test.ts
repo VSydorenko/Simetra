@@ -189,4 +189,28 @@ describe("compareWithDesired", () => {
     expect(result.diagnostics).toContainEqual(diagnostics[0])
     expect(result.empty).toBe(false)
   })
+
+  it("the engine's unmodeled kind is not repeated for a class the census names", async () => {
+    const result = await compareWithDesired(
+      engine,
+      stack,
+      `create schema app;
+       create type app.pair as (a int, b int);
+       create cast (app.pair as text) with inout;`,
+      scopeOf("app"),
+      []
+    )
+    expect(result.status).toBe("compared")
+    if (result.status !== "compared") return
+    // Перепис тіні називає клас помилкою в межі, тож сигнал двигуна без межі
+    // (з плану тіні чи з її extract) вдруге не звучить
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "engine.unmodeled-class")
+        .map((d) => d.message)
+    ).toEqual([expect.stringMatching(/ of class cast /)])
+    expect(
+      result.diagnostics.filter((d) => d.engineCode === "unmodeled_kind")
+    ).toEqual([])
+  })
 })
