@@ -1,11 +1,25 @@
 import { compile, type CompiledModel } from "../compile"
 import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
+import { withRanges } from "../locate"
 import { changesBetween } from "./changes"
 import type { OperationResult } from "./types"
 
-/** Відмова операції: нічого не змінено, обгортці писати нічого. */
-export function refused(diagnostics: Diagnostic[]): OperationResult {
-  return { ok: false, changes: [], diagnostics: sortDiagnostics(diagnostics) }
+/**
+ * Відмова операції: нічого не змінено, обгортці писати нічого. Діапазони
+ * рахуються по вхідних файлах, як для діагностик компілятора: без них
+ * кожне місце відмови (наприклад, кожне посилання, що блокує видалення)
+ * друкувалося б як початок файлу. Діагностика без файлу лишається без
+ * діапазону — позиції в неї немає.
+ */
+export function refused(
+  files: ReadonlyMap<string, string>,
+  diagnostics: Diagnostic[]
+): OperationResult {
+  return {
+    ok: false,
+    changes: [],
+    diagnostics: sortDiagnostics(withRanges(diagnostics, files)),
+  }
 }
 
 /**
@@ -24,7 +38,7 @@ export async function compileInput(
   }
   return {
     ok: false,
-    result: refused([
+    result: refused(files, [
       diagnostic("operation.input-invalid", "", ""),
       ...compiled.diagnostics,
     ]),

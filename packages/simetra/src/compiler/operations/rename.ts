@@ -46,7 +46,7 @@ export async function renameElement(
   const { model } = clean
 
   const target = resolveTarget(model, files, input.target)
-  if (!target.ok) return refused([target.diagnostic])
+  if (!target.ok) return refused(files, [target.diagnostic])
   const { newName } = input
 
   // Ціль-об'єкт: його тека й файли переїжджають під нове ім'я.
@@ -61,7 +61,7 @@ export async function renameElement(
       [...files.keys()].some((path) => path.startsWith(to))
     if (taken) {
       // Без цієї перевірки перенос мовчки затер би файли наявного об'єкта.
-      return refused([
+      return refused(files, [
         diagnostic("operation.object-exists", `${to}${newName}.meta.json`, "", {
           kind: object.kind,
           name: newName,

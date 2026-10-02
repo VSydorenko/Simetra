@@ -24,7 +24,7 @@ export async function createObject(
     (object) => object.kind === input.kind && object.name === input.name
   )
   if (existing !== undefined || files.has(path)) {
-    return refused([
+    return refused(files, [
       diagnostic("operation.object-exists", existing?.file ?? path, "", {
         kind: input.kind,
         name: input.name,

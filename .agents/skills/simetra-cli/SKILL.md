@@ -31,8 +31,10 @@ only with `compile --out <dir>`, and `--out` takes exactly one directory.
 
 - Exit code of `compile`: `0` no errors (warnings allowed), `1` errors,
   `2` usage or I/O error. `pnpm metadata:check` passes it through.
-- Text diagnostics look like `path/File.meta.json:LINE:COL severity code message`;
-  the code (`file.kind-mismatch`, …) is the stable handle — search for it in the
+- Text diagnostics look like `path/File.meta.json:LINE:COL severity code message`.
+  A diagnostic without a position (the operation input as a whole, a missing
+  file) prints `dir:` or `path:` with no `LINE:COL`. The code
+  (`file.kind-mismatch`, …) is the stable handle — search for it in the
   compiler rules rather than matching message text.
 - `--format json` carries the same diagnostics as data; use it when a tool,
   not a human, reads the output.

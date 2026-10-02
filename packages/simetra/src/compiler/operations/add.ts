@@ -39,11 +39,11 @@ export async function addElement(
   if (!clean.ok) return clean.result
 
   const container = locateContainer(clean.model, files, input.target)
-  if (!container.ok) return refused([container.diagnostic])
+  if (!container.ok) return refused(files, [container.diagnostic])
 
   const collections = [...namedCollections(container.schema).keys()]
   if (!collections.includes(input.collection)) {
-    return refused([
+    return refused(files, [
       diagnostic(
         "operation.collection-unknown",
         container.file,

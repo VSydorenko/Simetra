@@ -46,11 +46,14 @@ async function call(
   client: Client,
   name: string,
   args: Record<string, unknown>
-): Promise<{ isError: boolean; out: Out }> {
+): Promise<{ isError: boolean; out: Out; text: string }> {
   const r = await client.callTool({ name, arguments: args })
   return {
     isError: r.isError === true,
     out: r.structuredContent as unknown as Out,
+    text: (r.content as { type: string; text?: string }[])
+      .map((c) => c.text ?? "")
+      .join("\n"),
   }
 }
 
@@ -158,6 +161,13 @@ describe("simetra mcp", () => {
     expect(r.isError).toBe(true)
     expect(r.out.ok).toBe(false)
     expect(await snapshotOf(dir)).toEqual(before)
+    // Діагностика без файлу не має позиції: фальшивого `:1:1` у тексті немає.
+    const line = r.text
+      .split("\n")
+      .find((l) => l.includes("operation.input-invalid"))
+    expect(line).toBe(
+      `${dir}: error operation.input-invalid The operation needs metadata that compiles without errors; nothing was changed`
+    )
   })
 
   it("rejects unknown tool fields", async () => {

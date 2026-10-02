@@ -30,15 +30,23 @@ export function formatDiagnostics(
   }
   const lines: string[] = []
   for (const d of items) {
-    // Позиції LSP 0-базні, а редактори й термінали чекають 1-базні.
-    const line = (d.range?.start.line ?? 0) + 1
-    const col = (d.range?.start.character ?? 0) + 1
-    lines.push(
-      `${dir}/${d.file}:${line}:${col} ${d.severity} ${d.code} ${d.message}`
-    )
+    lines.push(`${placeOf(d, dir)} ${d.severity} ${d.code} ${d.message}`)
     if (d.hint !== undefined) lines.push(`  hint: ${d.hint}`)
   }
   const errors = items.filter((d) => d.severity === "error").length
   lines.push(`${errors} error(s), ${items.length - errors} warning(s)`)
   return lines.join("\n")
+}
+
+/**
+ * Місце діагностики в тексті. Позиція друкується лише тоді, коли вона є:
+ * діагностика без файлу (вхід операції загалом) чи файлу, якого немає в
+ * теці, отримала б фальшиве `:1:1`, а читач шукав би там неіснуючу причину.
+ */
+function placeOf(d: Diagnostic, dir: string): string {
+  if (d.file === "") return `${dir}:`
+  if (d.range === undefined) return `${dir}/${d.file}:`
+  // Позиції LSP 0-базні, а редактори й термінали чекають 1-базні.
+  const { line, character } = d.range.start
+  return `${dir}/${d.file}:${line + 1}:${character + 1}`
 }

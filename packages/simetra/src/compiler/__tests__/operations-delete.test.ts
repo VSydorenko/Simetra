@@ -63,6 +63,33 @@ describe("deleteElement", () => {
     )
   })
 
+  it("refusal places carry real ranges: JSON by pointer, .sql by marker line", async () => {
+    // Без діапазону кожне місце друкувалося як `файл:1:1`, і «тут» у тексті
+    // відмови не відрізняло одне посилання від іншого.
+    const files = readReferenceDomain()
+    const model = await modelOf(files)
+    const register = model.objects.find(
+      (o) => o.name === "PerformerSettlements"
+    )!
+    const marker = model.references.find(
+      (r) => r.to.id === register.id && r.line !== undefined
+    )!
+    expect(marker.from.file.endsWith(".sql")).toBe(true)
+
+    const result = await deleteElement(files, {
+      target: { kind: "AccumulationRegister", name: "PerformerSettlements" },
+    })
+    expect(result.ok).toBe(false)
+    const json = result.diagnostics.filter((d) => d.file === SERVICE_ACCRUAL)
+    expect(json.length).toBeGreaterThan(0)
+    for (const d of json) {
+      expect(d.range).toBeDefined()
+      expect(d.range!.start.line).toBeGreaterThan(0)
+    }
+    const sql = result.diagnostics.find((d) => d.file === marker.from.file)!
+    expect(sql.range?.start.line).toBe(marker.line! - 1)
+  })
+
   it("deletes an unreferenced attribute", async () => {
     const files = readReferenceDomain()
     const result = await deleteElement(files, {

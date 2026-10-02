@@ -52,7 +52,7 @@ export async function deleteElement(
   const { model } = clean
 
   const target = resolveTarget(model, files, input.target)
-  if (!target.ok) return refused([target.diagnostic])
+  if (!target.ok) return refused(files, [target.diagnostic])
 
   const object = model.objects.find((o) => o.id === target.id)
   const raw = JSON.parse(files.get(target.file)!) as Json
@@ -77,12 +77,19 @@ export async function deleteElement(
   )
   if (blockers.length > 0) {
     return refused(
+      files,
       blockers.map((ref) =>
         diagnostic(
           "operation.delete-referenced",
           ref.from.file,
           ref.from.pointer,
-          { target: describeTarget(input.target), role: ref.role }
+          {
+            target: describeTarget(input.target),
+            role: ref.role,
+            // Маркер `.sql` адресує рядок, а не pointer: за ним `locate`
+            // і ставить діапазон.
+            ...(ref.line === undefined ? {} : { line: ref.line }),
+          }
         )
       )
     )
