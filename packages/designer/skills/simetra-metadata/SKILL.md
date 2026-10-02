@@ -1,6 +1,6 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, read a live database into metadata (`introspect`) or compare it with the metadata (`diff`), or expose them to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, compare a database with the metadata (`diff`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
 ---
 
 # Simetra metadata — compile, explain, fix, create, add, rename, delete, introspect, diff
@@ -16,17 +16,17 @@ diagnostics themselves.
 
 ## Which tool when
 
-| Task | Tool | CLI | MCP call |
-| --- | --- | --- | --- |
-| Is the metadata accepted by the compiler? | `compile` | `simetra compile [dirs...]` | `compile` with `{}` |
-| What does the compiler derive for one object (tables, columns, keys, queries)? | `explain` | `simetra explain <Kind>.<Name> [dir]` | `explain` with `{kind, name}` |
-| New elements miss `id` / `physicalName`, or files are not canonical | `fix` | `simetra fix [dir]` | `fix` with `{}` |
-| New object | `create` | `simetra create '<json>' [dir]` | `create` with `{kind, name, data?}` |
-| New element in a collection of an object or of the project root | `add` | `simetra add '<json>' [dir]` | `add` with `{target, collection, element}` |
-| Rename an object or a nested element | `rename` | `simetra rename '<json>' [dir]` | `rename` with `{target, newName}` |
-| Remove an object or a nested element | `delete` | `simetra delete '<json>' [dir] --yes` | `delete` with `{target, confirm}` |
-| Read a live database into metadata | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}` |
-| Does the database match the metadata? | `diff` | `simetra diff [dir] --tables a,b` | `diff` with `{tables?}` |
+| Task                                                                           | Tool         | CLI                                      | MCP call                                   |
+| ------------------------------------------------------------------------------ | ------------ | ---------------------------------------- | ------------------------------------------ |
+| Is the metadata accepted by the compiler?                                      | `compile`    | `simetra compile [dirs...]`              | `compile` with `{}`                        |
+| What does the compiler derive for one object (tables, columns, keys, queries)? | `explain`    | `simetra explain <Kind>.<Name> [dir]`    | `explain` with `{kind, name}`              |
+| New elements miss `id` / `physicalName`, or files are not canonical            | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                            |
+| New object                                                                     | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`        |
+| New element in a collection of an object or of the project root                | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}` |
+| Rename an object or a nested element                                           | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`          |
+| Remove an object or a nested element                                           | `delete`     | `simetra delete '<json>' [dir] --yes`    | `delete` with `{target, confirm}`          |
+| Read a live database into metadata                                             | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}`   |
+| Does the database match the metadata?                                          | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                    |
 
 `compile`, `explain`, `diff` only read files. `fix`, `create`, `add`,
 `rename`, `delete`, `introspect` change files. `introspect` and `diff` read
@@ -68,21 +68,6 @@ Preview a deletion without writing and without confirmation:
 }
 ```
 
-Read the `app` schema of the database into a directory that has no
-`project.meta.json` yet (`schemas` is required there; the first one becomes the
-default schema). In an existing project the scope is the schemas of its
-metadata, so `{}` re-reads it; ids of objects already described are kept:
-
-```json simetra:introspect
-{ "schemas": ["app"], "project": { "name": "Shop", "attributeCase": "snake_case" } }
-```
-
-Compare the database with the metadata, narrowed to two tables:
-
-```json simetra:diff
-{ "tables": ["app.orders", "app.order_lines"] }
-```
-
 The same calls from a shell. A mutation takes its JSON as an argument, as
 `--input`, or as `-` for stdin:
 
@@ -91,9 +76,7 @@ pnpm exec simetra compile
 pnpm exec simetra explain Catalog.Currency
 pnpm exec simetra create '{"kind":"Catalog","name":"Currency"}' --dry-run
 pnpm exec simetra delete --input '{"target":{"kind":"Catalog","name":"Currency"}}' --yes
-pnpm exec simetra introspect --schemas app --dry-run
-pnpm exec simetra diff --tables app.orders,app.order_lines
-pnpm exec simetra diff --database-url-env STAGING_DATABASE_URL --format json
+pnpm exec simetra diff
 ```
 
 An input that does not match the tool's schema is refused with the path of the
@@ -142,31 +125,11 @@ offending field (for example `target.kind`); nothing is written.
 
 ## The database: introspect and diff
 
-- The connection comes **only from the environment**: the variable
-  `SIMETRA_DATABASE_URL`, or the one named at launch with
-  `--database-url-env <NAME>` (CLI and `simetra mcp`). A tool input never
-  carries a connection string, and none of the output shows it, the user or
-  the password — only `host:port/db`. Without the variable the call is
-  refused with its name (exit 2); ask the owner to set it, never paste a
-  connection string into a command.
-- The target is opened read-only. `diff` loads the metadata into a throwaway
-  shadow database next to the target (its role needs `CREATEDB`) and drops it
-  afterwards; `--shadow-url-env <NAME>` puts the shadow on another server of
-  the same PostgreSQL major version.
-- `introspect` writes nothing when anything in the database cannot be
-  represented (an `EXCLUDE` constraint, an owner other than the session role,
-  …): the diagnostics name the object. Run it with `--dry-run` (MCP:
-  `dryRun: true`) first; a second run on an unchanged database changes
-  nothing.
-- `diff` returns the plan from the database to the metadata, the catalog
-  differences and diagnostics (`--format json`, MCP `structuredContent`);
-  `--tables` narrows the plan and the differences to the named tables
-  (`schema.table` or `table`). An unknown table is refused, not ignored.
-- An unreachable database, a failed login, a missing database or privilege is
-  exit 2 (MCP: `isError`): fix the connection, then rerun. A failure during
-  the database work itself is the diagnostic `database.failed` with its
-  SQLSTATE (exit 1); the driver's text is withheld because it may carry
-  credentials.
+`introspect` and `diff` read a live database and never write to it. The
+connection comes only from the environment (`SIMETRA_DATABASE_URL`, or the
+variable named with `--database-url-env`); never paste a connection string.
+Scope, the shadow database, exit codes and how to judge a result are in the
+`simetra-adoption` skill.
 
 ## Agents over MCP
 
