@@ -40,6 +40,8 @@ export {
   createObjectInput,
   elementTarget,
   fixFiles,
+  renameElement,
+  renameInput,
   resolveTarget,
   type AddElementInput,
   type CompletionOptions,
@@ -49,6 +51,7 @@ export {
   type FileChange,
   type IdSource,
   type OperationResult,
+  type RenameInput,
   type ResolvedTarget,
   type SchemaPathResolver,
 } from "./operations"

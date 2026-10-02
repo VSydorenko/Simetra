@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest"
 import { z } from "zod"
-import { formatMetaFile, formatProjectFile, PROJECT_KEY_ORDER } from "../format"
+import {
+  formatMetaFile,
+  formatProjectFile,
+  isRecordKeyAt,
+  PROJECT_KEY_ORDER,
+} from "../format"
 import { projectSchema } from "../schemas"
 
 const ID = "3f2b8a52-6d1e-4c0a-9b7e-5a1c2d3e4f50"
@@ -398,5 +403,29 @@ describe("formatMetaFile nested levels", () => {
     expect(
       keysAt(out, "standardAttributeOverrides", "zeta", "description")
     ).toEqual(["uk", "en"])
+  })
+})
+
+describe("isRecordKeyAt", () => {
+  const schema = z.object({
+    plain: z.string(),
+    list: z.array(z.object({ name: z.string() })),
+    source: z.union([z.literal("doc"), z.object({ section: z.string() })]),
+    fields: z.record(z.string(), z.string()),
+  })
+  const data = {
+    plain: "fields",
+    list: [{ name: "x" }],
+    source: { section: "rows" },
+    fields: { amount: "amount" },
+  }
+
+  it("is true only for a key of a record", () => {
+    expect(isRecordKeyAt(schema, data, "/fields/amount")).toBe(true)
+    expect(isRecordKeyAt(schema, data, "/plain")).toBe(false)
+    expect(isRecordKeyAt(schema, data, "/list/0/name")).toBe(false)
+    expect(isRecordKeyAt(schema, data, "/source/section")).toBe(false)
+    expect(isRecordKeyAt(schema, data, "/fields")).toBe(false)
+    expect(isRecordKeyAt(schema, data, "")).toBe(false)
   })
 })

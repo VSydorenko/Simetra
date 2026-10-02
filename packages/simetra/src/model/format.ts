@@ -154,3 +154,56 @@ export function formatMetaFile(data: Record<string, unknown>): string {
 export function formatProjectFile(data: Record<string, unknown>): string {
   return serialize(canonicalize(data, projectSchema, PROJECT_KEY_ORDER))
 }
+
+/** Сегменти JSON Pointer (RFC 6901) без екранування `~1`/`~0`. */
+function pointerSegments(pointer: string): string[] {
+  return pointer
+    .split("/")
+    .slice(1)
+    .map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"))
+}
+
+/**
+ * Чи останній крок pointer — ключ `record`, а не поле схеми чи індекс масиву.
+ * Ключ `record` — дані автора (поля руху називають поля регістра), тож місце
+ * за таким pointer — сам ключ: його перейменовують, а не значення під ним.
+ * Варіант union обирається за даними, як і в канонічній формі.
+ */
+export function isRecordKeyAt(
+  schema: z.ZodType,
+  data: unknown,
+  pointer: string
+): boolean {
+  const segments = pointerSegments(pointer)
+  let node: z.ZodType | undefined = schema
+  let value = data
+  for (const [index, segment] of segments.entries()) {
+    if (node === undefined) return false
+    let current = unwrap(node)
+    while (defOf(current).type === "union") {
+      const def = defOf(current)
+      const options = def.options ?? []
+      const variant = isPlainObject(value)
+        ? pickVariant(options, def.discriminator, value)
+        : options.find((option) => option.safeParse(value).success)
+      if (variant === undefined) return false
+      current = unwrap(variant)
+    }
+    const def = defOf(current)
+    if (def.type === "record") {
+      if (index === segments.length - 1) return true
+      node = def.valueType
+    } else if (def.type === "object") {
+      node = def.shape?.[segment]
+    } else if (def.type === "array") {
+      node = def.element
+    } else {
+      return false
+    }
+    value =
+      isPlainObject(value) || Array.isArray(value)
+        ? (value as Record<string, unknown>)[segment]
+        : undefined
+  }
+  return false
+}

@@ -1,5 +1,6 @@
 import { compile, type CompiledModel } from "../compile"
 import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
+import { changesBetween } from "./changes"
 import type { OperationResult } from "./types"
 
 /** Відмова операції: нічого не змінено, обгортці писати нічого. */
@@ -27,5 +28,21 @@ export async function compileInput(
       diagnostic("operation.input-invalid", "", ""),
       ...compiled.diagnostics,
     ]),
+  }
+}
+
+/**
+ * Хвіст мутації без доповнення: компіляція результату й перелік змін
+ * відносно входу. `ok` — результат без помилок; лише тоді обгортка пише.
+ */
+export async function compileResult(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>
+): Promise<OperationResult> {
+  const compiled = await compile(after)
+  return {
+    ok: compiled.ok,
+    changes: changesBetween(before, after),
+    diagnostics: sortDiagnostics(compiled.diagnostics),
   }
 }

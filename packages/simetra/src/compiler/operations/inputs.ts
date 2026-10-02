@@ -74,3 +74,15 @@ export const addElementInput = z.strictObject({
   }),
 })
 export type AddElementInput = z.infer<typeof addElementInput>
+
+export const renameInput = z.strictObject({
+  target: elementTarget,
+  // Ім'я об'єкта стає текою й файлом, тож схема заразом не пускає сегментів
+  // шляху; стиль, унікальність і зарезервованість перевіряє компіляція
+  // результату — ті самі правила стадії 2, що й для імені, набраного руками.
+  newName: elementNameSchema.meta({
+    description:
+      "New logical name; ids and physical names never change, references to the element are rewritten.",
+  }),
+})
+export type RenameInput = z.infer<typeof renameInput>
