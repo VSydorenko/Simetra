@@ -48,6 +48,15 @@ describe("simetra explain", () => {
   it("usage errors exit 2", async () => {
     const base = { dir: REFERENCE, format: "text" as const }
     expect((await runExplain({ ...base, target: "Nope" })).exitCode).toBe(2)
+    expect(
+      (
+        await runExplain({
+          ...base,
+          target: "Catalog.Currency",
+          locale: "xx" as "en",
+        })
+      ).exitCode
+    ).toBe(2)
     expect((await runExplain({ ...base, target: "Bogus.X" })).exitCode).toBe(2)
     expect(
       (await runExplain({ ...base, target: "Catalog.Nope" })).exitCode

@@ -16,7 +16,18 @@ it("bin runs under node", async () => {
 }, 60_000)
 
 it("usage errors exit with code 2", async () => {
-  for (const args of [["bogus"], ["compile", "--locale", "xx"]]) {
+  for (const args of [
+    ["bogus"],
+    ["compile", "--locale", "xx"],
+    ["fix", "../../examples/reference/metadata", "--dry-run", "--locale", "xx"],
+    [
+      "explain",
+      "Catalog.Currency",
+      "../../examples/reference/metadata",
+      "--locale",
+      "xx",
+    ],
+  ]) {
     await expect(
       exec(process.execPath, ["bin/simetra.mjs", ...args], { cwd: PACKAGE })
     ).rejects.toMatchObject({ code: 2 })

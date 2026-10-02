@@ -103,5 +103,15 @@ describe("simetra fix", () => {
       (await runFix({ dir: "/nonexistent/x", dryRun: true, format: "text" }))
         .exitCode
     ).toBe(2)
+    expect(
+      (
+        await runFix({
+          dir: REFERENCE,
+          dryRun: true,
+          format: "text",
+          locale: "xx" as "en",
+        })
+      ).exitCode
+    ).toBe(2)
   })
 })

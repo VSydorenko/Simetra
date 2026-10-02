@@ -22,6 +22,9 @@ export async function runFix(o: FixOptions): Promise<RunResult> {
     stdout: "",
     stderr: `error: ${message}\n`,
   })
+  if (o.locale !== undefined && o.locale !== "en" && o.locale !== "uk") {
+    return usageError(`Invalid --locale "${o.locale}". Expected en or uk.`)
+  }
   if (o.format !== "text" && o.format !== "json") {
     return usageError(`Invalid --format "${o.format}". Expected text or json.`)
   }
@@ -84,6 +87,12 @@ export default defineCommand({
       default: false,
       description: "Report the changes without writing them",
     },
+    locale: {
+      type: "enum",
+      options: ["en", "uk"],
+      default: "en",
+      description: "Diagnostic language",
+    },
     format: {
       type: "enum",
       options: ["text", "json"],
@@ -95,6 +104,7 @@ export default defineCommand({
     const result = await runFix({
       dir: args.dir ?? "./metadata",
       dryRun: args["dry-run"],
+      locale: args.locale,
       format: args.format,
     })
     process.stdout.write(result.stdout)

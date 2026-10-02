@@ -66,6 +66,9 @@ export async function runExplain(o: ExplainOptions): Promise<RunResult> {
     stdout: "",
     stderr: `error: ${message}\n`,
   })
+  if (o.locale !== undefined && o.locale !== "en" && o.locale !== "uk") {
+    return usageError(`Invalid --locale "${o.locale}". Expected en or uk.`)
+  }
   if (o.format !== "text" && o.format !== "json") {
     return usageError(`Invalid --format "${o.format}". Expected text or json.`)
   }
@@ -124,6 +127,12 @@ export default defineCommand({
       description: "Metadata directory (default: ./metadata)",
       required: false,
     },
+    locale: {
+      type: "enum",
+      options: ["en", "uk"],
+      default: "en",
+      description: "Diagnostic language",
+    },
     format: {
       type: "enum",
       options: ["text", "json"],
@@ -135,6 +144,7 @@ export default defineCommand({
     const result = await runExplain({
       target: args.target,
       dir: args.dir ?? "./metadata",
+      locale: args.locale,
       format: args.format,
     })
     process.stdout.write(result.stdout)
