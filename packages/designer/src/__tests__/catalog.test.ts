@@ -336,6 +336,20 @@ describe("database as a launch resource", () => {
     expect(r.refusal?.message).toContain("SIMETRA_DATABASE_URL")
   })
 
+  it("read-only is decided before the missing connection", async () => {
+    const dir = await project()
+    const writer = { ...dbStub, database: "write" } as Tool
+    const r = await invoke(writer, {}, { ...opts(dir), readOnly: true })
+    expect(r.refusal?.reason).toBe("read-only")
+  })
+
+  it("the missing connection is decided before confirmation", async () => {
+    const dir = await project()
+    const destructive = { ...dbStub, destructive: true } as Tool
+    const r = await invoke(destructive, {}, opts(dir))
+    expect(r.refusal?.reason).toBe("no-database")
+  })
+
   it("passes the resource only to a tool that uses the database", async () => {
     const dir = await project()
     let connects = 0

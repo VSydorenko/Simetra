@@ -20,7 +20,7 @@ export function readOnlyHint(
     : [...launchArgs, READ_ONLY_FLAG]
   const after = before.filter((a) => a !== READ_ONLY_FLAG)
   return [
-    `This server runs with ${READ_ONLY_FLAG}: tools that change files are disabled.`,
+    `This server runs with ${READ_ONLY_FLAG}: tools that write are disabled.`,
     `To enable them, remove ${READ_ONLY_FLAG} from this server's args in the MCP client config and restart it:`,
     `args ending in ${JSON.stringify(before)} become ${JSON.stringify(after)}.`,
   ].join(" ")

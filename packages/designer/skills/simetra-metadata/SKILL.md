@@ -126,7 +126,8 @@ pnpm exec simetra mcp --read-only
 
 - By default the write tools change files in the served directory, under the
   same rules as the CLI: the metadata is in git, and nothing is written unless
-  the result compiles.
+  the result compiles. `--read-only` is a flag of `simetra mcp` only; the CLI
+  has none (preview with `--dry-run`).
 - With `--read-only` every tool is still listed, but a write tool is refused
   with a hint to remove `--read-only` from the server's args. Ask the owner
   before restarting the server without it.

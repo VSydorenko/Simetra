@@ -77,11 +77,11 @@ node packages/designer/bin/simetra.mjs mcp examples/reference/metadata    # MCP 
 
 The MCP server writes metadata files by default, under the same rules as the
 CLI (only a result that compiles, only inside the directory). With
-`--read-only` every tool is still listed, and a write tool answers with how to
-enable writes (remove `--read-only` from the server's arguments). In a consumer project the package will
-be installed as a dev dependency, and `simetra init` will link its agent skills
-and write a read-only MCP configuration — that arrives with package delivery
-(see the roadmap). How it works: [docs/architecture/designer.md](docs/architecture/designer.md).
+`simetra mcp --read-only` every tool is still listed, and a write tool answers
+with how to enable writes (remove `--read-only` from the server's arguments).
+In a consumer project the package will be installed as a dev dependency, and
+`simetra init` will link its agent skills and write an MCP configuration —
+that arrives with package delivery (see the roadmap). How it works: [docs/architecture/designer.md](docs/architecture/designer.md).
 
 ## Getting started
 

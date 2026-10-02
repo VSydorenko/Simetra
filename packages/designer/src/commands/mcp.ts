@@ -17,7 +17,7 @@ export default defineCommand({
     "read-only": {
       type: "boolean",
       default: false,
-      description: "Refuse the tools that change files",
+      description: "Refuse the tools that write",
     },
   },
   async run({ args }) {
