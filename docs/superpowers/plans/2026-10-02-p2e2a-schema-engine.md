@@ -1,152 +1,191 @@
-# П2, план E2a — порт `SchemaEngine`, адаптер pg-delta, тінь, round-trip бажаного стану: план імплементації
+# П2, план E2a — порт `SchemaEngine`, адаптер pg-delta, тінь, звірка розгорнутого бажаного стану: план імплементації
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Мета:** порівнювати живу базу з бажаним станом не тестовим читачем, а
 каталожним двигуном за власним портом: extract бази в модель каталогу
-Simetra, план двигуна між базою й тінню з рендером, перепис класів поза
-моделлю двигуна; довести це round-trip-ом бажаного стану на корпусі
-фікстур E1 і синтетичному домені.
+Simetra, структурований план двигуна між базою й тінню з рендером, перепис
+класів об'єктів поза моделлю двигуна. Довести це звіркою розгорнутого
+бажаного стану на корпусі фікстур E1 і синтетичному домені. Повний
+round-trip (`extract → зворотна генерація → компіляція → тінь`, спека §9) —
+E2b.
 
-**Архітектура:** порт `SchemaEngine` (T2 `simetra/schema`) з трьома діями —
+**Архітектура:** порт `SchemaEngine` (T2 `simetra/schema`) з діями
 `extract`, `plan`, `withShadow`; перший адаптер — `@supabase/pg-delta`.
 Модель каталогу порту — форма фізичного знімка T0 без `origin` плюс дослівні
-SQL-одиниці (спека §9); адаптер мапить у неї FactBase двигуна, розбираючи
-текстові дефініції обмежень та індексів тим самим парсером libpg-query, що
-й компілятор. Тінь — окрема co-located база (`CREATE DATABASE … TEMPLATE
-template0`) із базовим станом провайдера. Порівняння виразів іде між двома
-extract-ами (база ↔ тінь), тож канонічну форму дає Postgres.
+SQL-одиниці (спека §9). Адаптер мапить у неї FactBase двигуна за явною
+таблицею властивостей: кожна властивість факту або має поле моделі, або
+стає SQL-одиницею, або дає гучну діагностику «не виражається». Тексти
+дефініцій обмежень та індексів розбирає libpg-query. Порівняння виразів іде
+між двома extract-ами (база ↔ тінь), тож канонічну форму дає Postgres. Тихі
+втрати двигуна закриває власний вузький перепис каталогу, який спека §9
+дозволяє явно.
 
 **Технології:** TypeScript 7, Vitest 5, `@supabase/pg-delta`
-**1.0.0-alpha.56** (точний пін; ліцензія в репо джерела з 2026-10-02 —
-PostgreSQL License, дозволена `CONTRIBUTING.md`), `pg` 8.23.1, libpg-query
-17.7.4, локальний стек Supabase (Postgres 17).
+**1.0.0-alpha.56** (точний пін), `pg` 8.23.1, libpg-query 17.7.4, локальний
+стек Supabase (Postgres 17).
 
 **Спека:** [спека П2](../specs/2026-09-28-p2-metamodel-compiler-design.md)
-§9, §10.4, §8.3; [платформна спека](../specs/2026-09-24-simetra-platform-design.md)
+§8.3, §9, §10.4; [платформна спека](../specs/2026-09-24-simetra-platform-design.md)
 Р6, §6.2, §6.4, §6.9; [карта перевикористання](../../research/stack/reuse-map-2026-09.md)
 (рядки pg-delta, тінь).
 
 **Передумова:** D2 приземлено. Перед стартом — `orient --plan` цього файлу.
 
 **Серія:** D2 → **E2a** (цей) → E2b (зворотна генерація, фікстури класів,
-`simetra introspect`/`simetra diff`, приватна звірка) → П3.
+повний round-trip, `simetra introspect`/`simetra diff`, приватна звірка) → П3.
 
 ## Рішення плану
 
-1. **Порт — у T2 флагманського пакета** (платформна спека §3.1:
-   «порт `SchemaEngine` і його адаптер»), не окремим пакетом. `pg` і
-   `@supabase/pg-delta` стають runtime-залежностями `simetra`; лінт-зони
-   T2 це дозволяють, T0/T1 лишаються чистими.
-2. **Модель каталогу порту — у T0** (`model/physical/catalog.ts`): типи
-   `CatalogModel` = таблиці й енам-типи у формі знімка без `origin` плюс
-   SQL-одиниці `{ class, identity, schema, name, sql }`. Адаптер мапить у неї
-   FactBase pg-delta; FactBase назовні порту не виходить (лише як непрозорий
-   `EngineCatalog` для `plan`).
-3. **Текстові дефініції обмежень та індексів розбирає libpg-query**
-   (`ALTER TABLE … ADD CONSTRAINT <def>`, `CREATE INDEX …`), а не регекспи й
-   не власна інтроспекція `pg_catalog` (спека §9 її забороняє, крім
-   доведеної прогалини). Для цього T1 експортує `loadSqlParser`/`SqlParser`.
-4. **SQL-одиниці моделі каталогу** — оператори плану двигуна «порожня база →
-   ця база» для об'єктів, яких модель не виражає таблицею чи енам-типом
-   (функції, тригери, політики, в'юхи, гранти, типові привілеї, publication
-   тощо); ідентичність кожної — той самий класифікатор, що в компіляторі
-   (`readSqlUnits`), тож ідентичності бази й метаданих порівнювані.
-5. **Межа керування — керовані схеми** (`EngineScope.schemas`); політика
-   адаптера = `supabasePolicy` плюс фільтр «лише керовані схеми та їхні
-   сателіти» (форма фільтра — з розвідки: схема, `{ kind: "schema", name }`,
-   `target.schema`). Без фільтра профіль Supabase планує `DROP EXTENSION`
-   і `REVOKE` у `public` — тест це закріплює.
-6. **Тінь — co-located база** (`provisionCoLocatedShadow`) з базовим станом
-   провайдера, відтвореним із бази-цілі (засіб двигуна для припущених схем —
-   `seedAssumedSchemas`/його API); без засіву FK на `auth.users` не
-   розгорнеться. Тінь прибирається завжди, зокрема при помилці.
-7. **Round-trip-критерій посилено:** окрім порожнього плану двигуна
-   вимагається рівність моделей каталогу бази й тіні **з порядком колонок**.
-   Розвідка показала, що pg-delta не бачить порядку колонок (`_position` поза
-   хешем) і стану заповнення матеріалізованого подання: тихі втрати
-   закриває власна перевірка порту, а не довіра двигуну. Спека §9
+1. **Порт — у T2 флагманського пакета** (платформна спека §3.1: «порт
+   `SchemaEngine` і його адаптер»). `pg` і `@supabase/pg-delta` стають
+   runtime-залежностями `simetra`; лінт-зони T2 це дозволяють, T0/T1
+   лишаються чистими.
+2. **Спершу спайк, потім інтерфейси** (задача 1): засів тіні базовим станом
+   провайдера, межа керування за §6.9 і представність фактів перевіряються на
+   закріпленій версії до того, як порт фіксує контракт. Висновки — у
+   `docs/research/`; якщо публічного засобу засіву немає, — стоп і рішення
+   архітектора, а не внутрішній імпорт пакета.
+3. **Межа керування — за платформною спекою §6.9**, а не лише схеми:
+   `EngineScope` = керовані схеми застосунку цілком (зокрема `public`, якщо
+   застосунок у ній живе) **плюс** об'єкти застосунку в чужих схемах із
+   пресета провайдера — політики на таблицях провайдера, тригери на таблиці
+   користувачів, членство в publications, розширення, гранти й типові
+   привілеї. Внутрішні об'єкти провайдера — поза межею. `UNMANAGED_SCHEMAS`
+   рендера означає «схему не створювати», а не «її об'єктами не керувати».
+   Межу перевіряють структуровані цілі дій плану, а не пошук слів у SQL.
+4. **Модель каталогу порту — у T0** (`model/physical/catalog.ts`): таблиці й
+   енам-типи у формі знімка без `origin` плюс SQL-одиниці
+   `{ class, identity, schema, name, sql }`. FactBase назовні порту не
+   виходить (лише непрозорий `EngineCatalog` для `plan`).
+5. **Мапінг фактів — за явною таблицею властивостей** (задача 1 складає,
+   задача 4 реалізує): поле моделі, SQL-одиниця або діагностика
+   `engine.unrepresentable` з ім'ям об'єкта й властивості. Значення
+   властивостей, яких модель не має (`persistence` ≠ звичайна,
+   `replicaIdentity` ≠ типова, секціонування, `constraint.validated = false`,
+   `index.valid = false`, EXCLUDE-обмеження тощо), — гучна помилка, не тиха
+   втрата. Форма EXCLUDE у моделі — окреме рішення власника поза E2a.
+6. **SQL-одиниці — з фактів класів, які модель тримає дослівно**
+   (функції, процедури, агрегати, тригери, політики, в'юхи, гранти, типові
+   привілеї, publication, розширення, домени, послідовності): текст
+   оператора — з дефініції факту двигуна або з дії плану «порожня база →
+   факт», згрупованої за `produces` цього факту; одна дія на факт, інакше —
+   `engine.unrepresentable`. Ідентичність одиниці — той самий класифікатор,
+   що в компіляторі (`readSqlUnits`), і лише для операторів його дозволеної
+   мови (спека §8.3: `CREATE INDEX` — не одиниця).
+7. **Звірка вимагає і порожнього плану двигуна, і рівності моделей каталогу
+   з порядком колонок:** двигун не бачить порядку колонок (`_position` поза
+   хешем) і стану заповнення матеріалізованого подання. Спека §9
    доповнюється одним реченням.
-8. **Перепис класів поза моделлю:** адаптер оголошує покриті класи
-   (`COVERED_CLASSES`) і перетворює діагностики двигуна `unmodeled_kind` на
-   діагностику порту `engine.unmodeled-class`; матеріалізоване подання
-   `WITH NO DATA` — `engine.matview-unpopulated`. Попередження двигуна
-   `dangling_edge` (шум alpha на генерованих колонках) порт не пропускає
-   назовні — з тестом, що доводить шум.
-9. **Тестовий читач `test/db/catalog.ts` лишається тестовим оракулом** E1
-   (незалежна перевірка), не стає продуктовим читачем і не видаляється в E2a.
+8. **Перепис класів — власний вузький запит до каталогу** (спека §9:
+   «простий запит до каталогу, що лише рахує об'єкти за класами, а не
+   читач») у межі керування, звірений із покриттям двигуна
+   (`COVERED_CLASSES`); він же рахує незаповнені матеріалізовані подання —
+   доведену прогалину двигуна. Діагностики двигуна `unmodeled_kind` —
+   додатковий сигнал, не єдине джерело.
+9. **План порту — структурований:** дії зберігають `sql`, дієслово, цілі
+   (`produces`/`destroys`), транзакційність, клас блокування, втрату даних і
+   ризик перезапису — потоку П3 (платформна спека §6.2) вони потрібні.
+10. **Тестовий читач `test/db/catalog.ts` лишається незалежним оракулом**
+    тестів E1 і не стає продуктовим читачем.
 
 ## Global Constraints
 
-- Ярус: порт, адаптер і тінь — `packages/simetra/src/schema/engine/`; типи
-  моделі каталогу — T0 `src/model/physical/catalog.ts` (лише типи й чисті
-  функції, без залежностей). Імпорти — лише вниз.
-- `@supabase/pg-delta` — точна версія `1.0.0-alpha.56` без каретки (тег
-  `latest` на npm — заглушка 0.0.0); перед піном — `npm view @supabase/pg-delta dist-tags`
-  і `LICENSE` у тарболі (якщо нова alpha вже під PostgreSQL License — пін на
-  неї дозволений; назвати версію в звіті). `pg` — точна `8.23.1`, переходить
-  у `dependencies`. `reuse-map-2026-09.md` — ліцензію й версію pg-delta
-  оновити.
+- Ярус: порт, адаптер, тінь і перепис — `packages/simetra/src/schema/engine/`;
+  типи моделі каталогу — T0 `src/model/physical/catalog.ts` (лише типи й
+  чисті функції). Імпорти — лише вниз.
+- `@supabase/pg-delta` — рівно `1.0.0-alpha.56` (тег `latest` на npm —
+  заглушка 0.0.0). Ліцензійні факти: у тарболі цієї версії — MIT; у репо
+  джерела з 2026-10-02 — PostgreSQL License; обидві дозволені
+  `CONTRIBUTING.md`. Інша версія — лише окремим рішенням із повтором
+  розвідки й тестів. `pg` — рівно `8.23.1`, переходить у `dependencies`.
+  `reuse-map-2026-09.md` оновити (версія, обидві ліцензії).
 - Перейменування двигуна вимкнені завжди (`renames: "off"`): `physicalName`
   стабільний (спека §3).
-- Порт не застосовує план до бази-цілі в E2a: `apply`/`provePlan` — П3.
-  Тінь — єдина база, у яку порт пише, і її завжди прибирають.
+- Порт не застосовує план до бази-цілі: `apply`/`provePlan` — П3. Тінь —
+  єдина база, у яку порт пише, і її прибирають завжди, зокрема при помилці.
 - Тексти діагностик порту — англійською з `en`/`uk`/`hint` у `MESSAGES`;
   коди — у `COMPILER_RULES` (простір `engine.*`).
-- DB-тести — `*.db.test.ts` (проєкт `db`), без бази червоні; scratch-бази
-  тестів створює й прибирає порт (`withShadow`), не ручний SQL у тестах.
+- DB-тести — `*.db.test.ts`, без бази червоні; scratch-бази тестів створює й
+  прибирає порт (`withShadow`).
 - Коміти — Conventional Commits, опис українською, без трейлерів.
 - Гейти в кожній задачі: scoped-тести, typecheck, lint, `pnpm format:check`,
-  для задач 3–6 — `pnpm --filter simetra test:db`; перед фінальним рев'ю —
+  для задач 3–7 — `pnpm --filter simetra test:db`; перед фінальним рев'ю —
   повні кореневі гейти з `pnpm metadata:check` і `pnpm test:db`.
 
 ## Review Focus
 
-1. **Тінь не лишається після помилки** — збій завантаження SQL у тінь
-   (синтаксис, FK без засіву) прибирає тіньову базу; тест рахує бази
-   `pgdelta_shadow_%` до й після. Задача 4.
-2. **Політика не чіпає нічого поза керованими схемами** — план бази стеку
-   проти тіні з рендером синтетичного домену не має жодного оператора поза
-   `app` (ні `DROP EXTENSION`, ні `REVOKE … ON SCHEMA public`). Задача 4.
-3. **Перестановка колонок ловиться**, хоча план двигуна порожній. Задача 5.
-4. **Розбір дефініцій не губить ознак:** `NULLS NOT DISTINCT`,
-   `DEFERRABLE INITIALLY DEFERRED`, `INCLUDE`, опклас, колляція, `DESC NULLS
-   LAST`, частковий предикат, дії FK — кожна ознака має тест мапінгу.
-   Задача 3.
-5. **Об'єкт класу поза моделлю двигуна** (cast, statistics, text search
-   config) дає діагностику, а не тихий порожній план. Задача 5.
+1. **Тінь не лишається після помилки** — кількість баз `pgdelta_shadow_%`
+   до й після прогону з помилкою завантаження однакова. Задача 6.
+2. **Межа керування за §6.9:** план не має дій із цілями поза межею (за
+   `produces`/`destroys`), але має дії для політики на `storage.objects`,
+   тригера на `auth.users` і застосунку в `public`. Задачі 3 і 6.
+3. **Перестановка колонок ловиться**, хоча план двигуна порожній. Задача 7.
+4. **Властивість без поля моделі не губиться** — `UNLOGGED`-таблиця,
+   не-типовий `REPLICA IDENTITY`, `NOT VALID`-обмеження дають
+   `engine.unrepresentable`. Задача 4.
+5. **Об'єкт класу поза моделлю двигуна й незаповнене подання** дають
+   діагностику перепису, а не тихе «порожньо». Задача 5.
 
 ---
 
-### Task 0: Стабілізація тестів під навантаженням
+### Task 0: Флейки під навантаженням — відтворити або закрити
+
+Контекст: під паралельним навантаженням turbo двічі разово впали таймаут
+`codegen.test.ts` і один неназваний тест повного прогону; рерани зелені.
+
+- [ ] **Step 1:** `pnpm test` з кореня п'ять разів поспіль; профіль —
+  `pnpm --filter simetra exec vitest run --project unit --reporter=json
+  --outputFile=<tmp>/times.json`, десять найповільніших тестів із часом.
+- [ ] **Step 2:** якщо збій відтворився — виправити причину в тесті
+  (спільна компіляція фікстур у `beforeAll`, без зміни глобального
+  таймауту), п'ять зелених прогонів, коміт
+  `test(compiler): стабільні тести під навантаженням`. Якщо не відтворився —
+  без змін коду: профіль і висновок у звіт задачі, коміту немає.
+
+---
+
+### Task 1: Спайк API pg-delta під контракт порту
 
 **Files:**
-- Modify: найповільніші тести компілятора (за профілем), `packages/simetra/vitest.config.ts` (за потреби)
+- Create: `docs/research/schema-engine/pg-delta-e2a-spike-2026-10.md`; рядок в індексі `docs/research/README.md`
+- Скрипти спайку — у scratch-теці поза репо (не комітяться)
 
-Контекст: під паралельним навантаженням turbo (`pnpm test` з кореня) двічі
-разово впали `codegen.test.ts` (таймаут) і один тест повного прогону
-(не названий; `operations-delete` в ізоляції стабільний). Рерани зелені.
+Перевірити на `1.0.0-alpha.56` проти локального стеку (scratch-бази через
+`provisionCoLocatedShadow`, прибрати всі) і записати відповіді з доказом
+(фрагмент виклику й виходу):
 
-- [ ] **Step 1:** відтворити: `pnpm test` з кореня тричі поспіль; профіль —
-  `pnpm --filter simetra exec vitest run --project unit --reporter=json
-  --outputFile=<tmp>/times.json`; назвати десять найповільніших тестів і
-  їхній час.
-- [ ] **Step 2:** для кожного повільного тесту, що компілює той самий вхід
-  кілька разів, — спільна компіляція в `beforeAll` (результат лише
-  читається); якщо після цього тест-файл усе ще ближчий до 50% таймауту, —
-  явний `timeout` на рівні файлу з коментарем-причиною. Глобальний таймаут
-  не піднімати.
-- [ ] **Step 3:** `pnpm test` з кореня тричі поспіль — зелено; у звіті —
-  час до/після для змінених файлів.
-- [ ] **Step 4: Commit** `test(compiler): стабільні тести під навантаженням — спільна компіляція фікстур`
+- [ ] **Step 1: Засів тіні.** Чи є **публічний** експорт, що засіває
+  co-located тінь базовим станом провайдера з бази-цілі
+  (`deriveAssumedSchemaSeed` чи інший), або засів доступний лише всередині
+  `planSchemaFiles`. Доказ: у засіяній тіні розгортається FK на
+  `auth.users`; після збою завантаження тінь прибрано. **Якщо публічного
+  засобу немає — стоп і повідомлення архітектору** з варіантами (засів через
+  `planSchemaFiles` як єдиний вхід тіні, власний засів із моделі каталогу
+  бази-цілі, інше).
+- [ ] **Step 2: Межа §6.9.** Політика (`extends: [supabasePolicy]` +
+  фільтр), за якої в межі: усі об'єкти керованих схем (зокрема `public` як
+  керованої), політика на `storage.objects`, тригер на `auth.users`,
+  членство таблиці в publication, розширення, гранти, типові привілеї; поза
+  межею — внутрішні об'єкти провайдера й некеровані схеми. Записати форму
+  фільтра і як визначається «об'єкт застосунку в чужій схемі».
+- [ ] **Step 3: Таблиця властивостей.** Для кожного класу фактів, який
+  зустрічається в межі, — кожна властивість payload → поле моделі каталогу /
+  SQL-одиниця / «не виражається»; для класів-одиниць — звідки береться текст
+  (`def` факту чи дія плану з `produces`) і чи одна дія на факт.
+- [ ] **Step 4: Перепис.** Запит до `pg_catalog`, що рахує об'єкти за
+  класами в межі (зокрема cast, operator, opclass, statistics, text search,
+  незаповнені матеріалізовані подання), і відповідність його класів
+  класам фактів двигуна.
+- [ ] **Step 5: Commit** `docs(research): спайк pg-delta під контракт порту SchemaEngine`
 
 ---
 
-### Task 1: Модель каталогу порту (T0)
+### Task 2: Модель каталогу порту (T0)
 
 **Files:**
 - Create: `packages/simetra/src/model/physical/catalog.ts`
-- Modify: `packages/simetra/src/model/index.ts`
+- Modify: `packages/simetra/src/model/index.ts`; `compiler/sql/units.ts` (тип класу одиниці переходить у T0, T1 імпортує)
 - Test: `packages/simetra/src/model/__tests__/catalog-model.test.ts`
 
 **Interfaces:**
@@ -156,42 +195,47 @@ PostgreSQL License, дозволена `CONTRIBUTING.md`), `pg` 8.23.1, libpg-qu
   type CatalogTable = Omit<PhysicalTable, "origin" | "columns"> & { columns: CatalogColumn[] }
   type CatalogEnumType = Omit<PhysicalEnumType, "origin">
   interface CatalogUnit { class: SqlUnitClassName; identity: string; schema: string; name: string; sql: string }
-  interface CatalogModel { tables: CatalogTable[]; enumTypes: CatalogEnumType[]; units: CatalogUnit[] }  // відсортовано як знімок; units — за identity
+  interface CatalogModel { tables: CatalogTable[]; enumTypes: CatalogEnumType[]; units: CatalogUnit[] }  // сортування як у знімку; units — за identity
   interface CatalogDifference { path: string; kind: "missing" | "extra" | "changed" | "order"; detail: string }
   function catalogFromSnapshot(snapshot: PhysicalSnapshot): Pick<CatalogModel, "tables" | "enumTypes">
-  function diffCatalogModels(a: CatalogModel, b: CatalogModel): CatalogDifference[]   // відсортовано за path
+  function diffCatalogModels(a: CatalogModel, b: CatalogModel): CatalogDifference[]   // за path
   ```
-  `SqlUnitClassName` — рядковий union класів, що зараз у T1 `SqlUnitClass`;
-  перенести тип у T0, T1 імпортує його звідти (один тип, без дубля).
-  `diffCatalogModels` порівнює структурно: таблиці й енам-типи за
-  `schema.name`, колонки **у порядку** (`kind: "order"`, коли ті самі колонки
-  в іншому порядку), ключі, обмеження й індекси за іменем, одиниці за
-  `identity` і текстом `sql`.
-- [ ] **Step 1: Тести** — `catalog from snapshot drops origin`;
-  `identical models have no differences`; `reordered columns are an order
-  difference`; `missing and extra index`; `changed check expression`;
-  `units compared by identity and text`.
-- [ ] **Step 2:** червоні. **Step 3:** реалізація. **Step 4:** зелені, гейти.
+  `diffCatalogModels` — структурно: таблиці й енам-типи за `schema.name`,
+  колонки **в порядку** (ті самі колонки в іншому порядку — `kind: "order"`),
+  ключі, обмеження й індекси за іменем, одиниці за `identity` і текстом.
+- [ ] **Step 1: Тести** — `catalog from snapshot drops origin`; `identical
+  models have no differences`; `reordered columns are an order difference`;
+  `missing and extra index`; `changed check expression`; `units compared by
+  identity and text`.
+- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
 - [ ] **Step 5: Commit** `feat(model): модель каталогу порту SchemaEngine і її порівняння`
 
 ---
 
-### Task 2: Порт `SchemaEngine` і каркас адаптера pg-delta
+### Task 3: Порт, політика межі, тінь
 
 **Files:**
 - Create: `packages/simetra/src/schema/engine/port.ts`, `engine/pg-delta/adapter.ts`, `engine/pg-delta/policy.ts`, `engine/index.ts`
-- Modify: `packages/simetra/package.json` (`dependencies`: `@supabase/pg-delta`, `pg`), `pnpm-lock.yaml`, `packages/simetra/src/schema/index.ts`, `compiler/index.ts` (експорт `loadSqlParser`, `SqlParser`), `docs/research/stack/reuse-map-2026-09.md` (версія й ліцензія pg-delta)
-- Test: `packages/simetra/src/schema/__tests__/engine-policy.db.test.ts`
+- Modify: `packages/simetra/package.json` (`dependencies`), `pnpm-lock.yaml`, `src/schema/index.ts`, `compiler/index.ts` (експорт `loadSqlParser`, `SqlParser`), `docs/research/stack/reuse-map-2026-09.md`
+- Test: `packages/simetra/src/schema/__tests__/engine-scope.db.test.ts`
 
 **Interfaces:**
 - Produces (`simetra/schema`):
   ```ts
   interface DbConnection { url: string }
-  interface EngineScope { schemas: readonly string[] }                 // керовані схеми
+  interface EngineScope {
+    schemas: readonly string[]                 // схеми застосунку цілком
+    provider: "supabase"                       // пресет «об'єкти застосунку в чужих схемах» (§6.9)
+  }
   interface EngineDiagnostic { code: RuleCode; severity: Severity; message: string; object?: string }
-  interface EngineCatalog { readonly engine: string }                  // непрозорий; лише для plan
+  interface EngineCatalog { readonly engine: string }                     // непрозорий
   interface Extracted { model: CatalogModel; catalog: EngineCatalog; diagnostics: EngineDiagnostic[] }
-  interface EnginePlan { statements: string[]; empty: boolean; hazards: string[] }
+  interface EngineAction {
+    sql: string; verb: "create" | "alter" | "drop"
+    produces: string[]; destroys: string[]     // ідентичності об'єктів (рядкова форма StableId двигуна)
+    transactional: boolean; lockClass: string; dataLoss: boolean; rewriteRisk: boolean
+  }
+  interface EnginePlan { actions: EngineAction[]; empty: boolean }
   interface SchemaEngine {
     extract(db: DbConnection, scope: EngineScope): Promise<Extracted>
     plan(source: EngineCatalog, target: EngineCatalog, scope: EngineScope): EnginePlan   // чисто, без бази
@@ -199,190 +243,170 @@ PostgreSQL License, дозволена `CONTRIBUTING.md`), `pg` 8.23.1, libpg-qu
   }
   function createPgDeltaEngine(): SchemaEngine
   ```
-  `withShadow` — co-located база з `template0`, засіяна базовим станом
-  провайдера з `base`, прибрана після `fn` завжди. Політика
-  (`policy.ts`): `simetraPolicy(scope)` = `extends: [supabasePolicy]` + фільтр
-  виключення «не керована схема й не її сателіт» (рішення плану 5).
-- [ ] **Step 1: Тести** (`engine-policy.db.test.ts`) — `stack database with
-  no managed schemas extracts an empty model` (extract бази стеку, `scope:
-  { schemas: [] }` → порожні `tables`, `enumTypes`, `units`);
-  `managed schema is kept` (тінь з `CREATE SCHEMA app; CREATE TABLE
-  app.t(id int primary key)` → у моделі одна таблиця); `self plan is empty`
-  (plan бази стеку проти самої себе, `scope: { schemas: ["app"] }` →
-  `empty`).
-- [ ] **Step 2:** червоні. **Step 3:** реалізація; мапінг моделі в цій
-  задачі — лише таблиці з колонками (решта — задача 3); `withShadow` — повна.
-- [ ] **Step 4:** зелені; гейти; `pnpm --filter simetra test:db engine`.
-- [ ] **Step 5: Commit** `feat(schema): порт SchemaEngine і адаптер pg-delta — extract, plan, тінь`
+  Політика й засів — за висновками задачі 1. `withShadow` прибирає тінь у
+  `finally`. Мапінг моделі в цій задачі — лише таблиці з колонками
+  (решта — задача 4).
+- [ ] **Step 1: Тести** — `stack database with no managed schemas extracts
+  an empty model`; `managed schema is kept`; `self plan is empty`;
+  `scope follows 6.9` (тінь: таблиця в `public` як керованій схемі, політика
+  на `storage.objects`, тригер на `auth.users`; plan «порожня тінь → ця
+  тінь» має дії для кожного з трьох і жодної з `produces` у внутрішніх
+  об'єктах провайдера чи некерованій схемі).
+- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
+- [ ] **Step 5: Commit** `feat(schema): порт SchemaEngine і адаптер pg-delta — extract, структурований plan, тінь`
 
 ---
 
-### Task 3: Мапінг FactBase у модель каталогу
+### Task 4: Мапінг фактів у модель каталогу
 
 **Files:**
 - Create: `packages/simetra/src/schema/engine/pg-delta/map-tables.ts`, `map-definitions.ts`, `map-units.ts`
-- Modify: `engine/pg-delta/adapter.ts`
-- Test: `packages/simetra/src/schema/__tests__/engine-definitions.test.ts` (юніт, без бази), `engine-extract.db.test.ts`
+- Modify: `engine/pg-delta/adapter.ts`, `compiler/diagnostics.ts`, `messages.ts` (`engine.unrepresentable`)
+- Test: `packages/simetra/src/schema/__tests__/engine-definitions.test.ts` (юніт), `engine-extract.db.test.ts`
 
 **Interfaces:**
-- Consumes: `SqlParser` (T1), `readSqlUnits` (T1, класифікатор одиниць), типи задачі 1.
+- Consumes: `SqlParser`, `readSqlUnits` (T1); таблиця властивостей задачі 1.
 - Produces:
   ```ts
-  // map-definitions.ts — чисті функції над текстом дефініції
   function parseConstraintDefinition(parse: SqlParser, table: { schema: string; name: string }, name: string, def: string):
     | { type: "primaryKey"; value: NonNullable<CatalogTable["primaryKey"]> }
     | { type: "unique"; value: CatalogTable["uniques"][number] }
     | { type: "check"; value: CatalogTable["checks"][number] }
     | { type: "foreignKey"; value: CatalogTable["foreignKeys"][number] }
-    | { type: "exclude"; def: string }
+    | { type: "unrepresentable"; reason: string }                       // EXCLUDE тощо
   function parseIndexDefinition(parse: SqlParser, def: string): CatalogTable["indexes"][number]
   ```
-  Форма значень — та сама, що в знімку (спека §8.3): значення Postgres за
-  замовчуванням не пишуться (`ASC`, типове `NULLS`, `deferrable` PK/UNIQUE
-  відсутнє для «no», FK пише `"no"`); колляція `pg_catalog."C"` → `{ name: "C" }`
-  (як у схемі `CustomTable`: без `pg_catalog`); вираз CHECK — без обгортки
-  `CHECK (...)`. Індекси, що підтримують PK/UNIQUE, у `indexes` не
-  потрапляють (як у знімку). EXCLUDE-обмеження моделлю таблиці не
-  виражається — воно стає SQL-одиницею (`ALTER TABLE … ADD CONSTRAINT`).
-  Колонки — у порядку `_position`; `default` — з окремого факту `default`;
-  identity — `{ generation, sequence }` з ім'ям послідовності; генерована —
-  `generated.expression`. SQL-одиниці — рішення плану 4.
-- [ ] **Step 1: Тести юніт** (`engine-definitions.test.ts`, тексти дефініцій
-  дослівно з розвідки): `primary key`; `unique nulls not distinct deferrable
-  initially deferred`; `check strips wrapper`; `foreign key with cascade and
-  external target`; `exclude becomes a unit`; `partial expression index with
-  opclass desc nulls last include` (`CREATE INDEX doc_title_idx ON app.doc
-  USING btree (lower(title) text_pattern_ops DESC NULLS LAST) INCLUDE
-  (amount) WHERE (status <> 'void'::app.status)`); `default ordering is
-  omitted`.
-- [ ] **Step 2: Тести з базою** (`engine-extract.db.test.ts`): для кожної
-  фікстури E1 (`deploy.db.test.ts` — винести їхні побудовники в спільний
-  модуль фікстур) і синтетичного домену: у `withShadow` розгорнути
-  `renderDesiredState(model).sql`, extract зі `scope` = схеми моделі →
-  `diffCatalogModels(extracted, { ...catalogFromSnapshot(model.physical), units: extracted.units })`
-  дає відмінності **лише** в текстах виразів (`checks[].expression`,
-  `default`, `generated`, `where`, ключі-вирази — Postgres канонізує їх);
-  тест перелічує ці шляхи явно, будь-яка інша відмінність — червона.
-  Окремо: `units carry compiler identities` — SQL-одиниці синтетичного домену
-  (функції множини скоупу, обгортки рухів) мають ті самі `identity`, що
-  `model.sqlUnits`.
-- [ ] **Step 3:** червоні. **Step 4:** реалізація. **Step 5:** зелені, гейти.
-- [ ] **Step 6: Commit** `feat(schema): extract мапить FactBase pg-delta у модель каталогу через libpg-query`
+  Форма значень — як у знімку (спека §8.3): типові значення Postgres не
+  пишуться (`ASC`, типове `NULLS`, `deferrable` PK/UNIQUE відсутнє для «no»,
+  FK пише `"no"`); колляція `pg_catalog."C"` → `{ name: "C" }`; вираз CHECK —
+  без обгортки `CHECK (...)`; індекси PK/UNIQUE до `indexes` не потрапляють;
+  колонки — за `_position`; `default` — з окремого факту; identity —
+  `{ generation, sequence }`. Одиниці — рішення плану 6. Кожен рядок таблиці
+  властивостей задачі 1 має гілку: поле, одиниця або
+  `engine.unrepresentable`.
+- [ ] **Step 1: Тести юніт** (тексти дефініцій дослівно з розвідки):
+  `primary key`; `unique nulls not distinct deferrable initially deferred`;
+  `check strips wrapper`; `foreign key with cascade and external target`;
+  `exclude is unrepresentable`; `partial expression index with opclass desc
+  nulls last include`; `default ordering is omitted`.
+- [ ] **Step 2: Тести з базою** — для кожної фікстури E1 (побудовники з
+  `deploy.db.test.ts` винести в спільний модуль фікстур) і синтетичного
+  домену: рендер у тіні → extract → `diffCatalogModels` проти
+  `catalogFromSnapshot(model.physical)` дає відмінності лише за явно
+  переліченими шляхами текстів виразів; кожен такий вираз у моделі
+  непорожній. Одиниці: множина `identity` з extract = множина `identity`
+  `model.sqlUnits` (з урахуванням класів, які база тримає інакше — перелік
+  у тесті з причинами). Негативні (Review Focus 4): `UNLOGGED`-таблиця,
+  `REPLICA IDENTITY FULL`, `NOT VALID`-FK → `engine.unrepresentable` з
+  ім'ям об'єкта.
+- [ ] **Step 3–5:** червоні → реалізація → зелені, гейти.
+- [ ] **Step 6: Commit** `feat(schema): extract мапить факти pg-delta у модель каталогу — поле, одиниця або гучна помилка`
 
 ---
 
-### Task 4: Тінь, політика й план бажаного стану
+### Task 5: Перепис класів і тихі втрати двигуна
+
+**Files:**
+- Create: `packages/simetra/src/schema/engine/census.ts`
+- Modify: `engine/pg-delta/adapter.ts`, `compiler/diagnostics.ts`, `messages.ts`
+- Test: `packages/simetra/src/schema/__tests__/engine-census.db.test.ts`
+
+**Interfaces:**
+- Produces: `COVERED_CLASSES: readonly string[]` (класи, які адаптер
+  покриває моделлю чи одиницями); `readCensus(db, scope): Promise<{ class:
+  string; count: number }[]>` — запит задачі 1, лише лічильники; коди
+  `engine.unmodeled-class` (error: клас поза `COVERED_CLASSES` з
+  ненульовим лічильником у межі), `engine.matview-unpopulated` (error: модель
+  не виражає стан заповнення). `dangling_edge` двигуна до порту не доходить.
+- [ ] **Step 1: Тести** — `unmodeled classes are counted` (cast,
+  statistics, text search config у тіні → діагностика за класом із
+  лічильником); `unpopulated materialized view is diagnosed` (два extract-и й
+  план однакові, лічильник перепису — ні); `generated column noise is
+  filtered`; `covered classes match the pinned engine` (контрактний тест:
+  кожен клас фактів двигуна, що трапляється в корпусі, — у
+  `COVERED_CLASSES` або в переписі).
+- [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
+- [ ] **Step 5: Commit** `feat(schema): перепис класів у межі керування й діагностика тихих втрат двигуна`
+
+---
+
+### Task 6: Порівняння бази з бажаним станом
 
 **Files:**
 - Create: `packages/simetra/src/schema/engine/desired.ts`
 - Modify: `engine/index.ts`
-- Test: `packages/simetra/src/schema/__tests__/engine-shadow.db.test.ts`
+- Test: `packages/simetra/src/schema/__tests__/engine-desired.db.test.ts`
 
 **Interfaces:**
 - Produces:
   ```ts
-  interface DesiredComparison {
-    plan: EnginePlan                       // ціль → тінь
-    target: Extracted; desired: Extracted
-    differences: CatalogDifference[]       // diffCatalogModels(target.model, desired.model)
-    diagnostics: EngineDiagnostic[]
-    empty: boolean                         // plan.empty && differences.length === 0
-  }
+  type DesiredComparison =
+    | { status: "compared"; plan: EnginePlan; target: Extracted; desired: Extracted
+        differences: CatalogDifference[]; diagnostics: EngineDiagnostic[]; empty: boolean }
+    | { status: "shadow-failed"; diagnostics: EngineDiagnostic[] }      // engine.shadow-load-failed з текстом Postgres
   function compareWithDesired(engine: SchemaEngine, target: DbConnection, desiredSql: string, scope: EngineScope): Promise<DesiredComparison>
-  function managedSchemas(model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">): string[]
+  function engineScope(model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">): EngineScope
   ```
-  `compareWithDesired`: тінь від цілі → завантажити `desiredSql` → extract
-  тіні й цілі → `plan` і `diffCatalogModels`. Помилка завантаження SQL у тінь
-  — діагностика `engine.shadow-load-failed` з текстом помилки Postgres, а не
-  виняток назовні; тінь прибрано. `managedSchemas` — `defaultSchema` проєкту,
-  схеми таблиць, енам-типів і одиниць моделі, без схем провайдера
-  (`UNMANAGED_SCHEMAS` рендера — один перелік).
-- [ ] **Step 1: Тести** — `no shadow is left behind` (кількість баз
-  `pgdelta_shadow_%` до й після: успіх і помилка завантаження однакові);
-  `broken desired sql is a diagnostic`; `plan stays inside managed schemas`
-  (Review Focus 2: ціль — база стеку, бажаний — рендер синтетичного
-  домену; жоден оператор плану не згадує `public`, `extensions`,
-  `DROP EXTENSION`, `REVOKE`); `foreign key to auth.users deploys in the
-  shadow` (засів базового стану).
+  `empty` = порожній план, нуль `differences` і жодної діагностики рівня
+  error (перепис, `unrepresentable`). `engineScope` — схеми застосунку з
+  моделі (`defaultSchema`, схеми таблиць, енам-типів і одиниць) з
+  урахуванням рішення плану 3.
+- [ ] **Step 1: Тести** — `no shadow is left behind` (успіх і помилка);
+  `broken desired sql is shadow-failed`; `plan stays inside the scope`
+  (Review Focus 2 за `produces`/`destroys`); `foreign key to auth.users
+  deploys in the shadow`.
 - [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
 - [ ] **Step 5: Commit** `feat(schema): порівняння бази з бажаним станом через тінь`
 
 ---
 
-### Task 5: Перепис класів поза моделлю двигуна й тихі втрати
+### Task 7: Звірка розгорнутого бажаного стану на корпусі, канон
 
 **Files:**
-- Create: `packages/simetra/src/schema/engine/pg-delta/coverage.ts`
-- Modify: `engine/pg-delta/adapter.ts`, `compiler/diagnostics.ts`, `messages.ts`
-- Test: `packages/simetra/src/schema/__tests__/engine-coverage.db.test.ts`
-
-**Interfaces:**
-- Produces: `COVERED_CLASSES: readonly string[]` (класи фактів, які покриває
-  закріплена версія pg-delta — з її `COVERAGE.md`; список дублюється
-  свідомо, бо двигун його не експортує, і контрактний тест ловить
-  розбіжність); коди `engine.unmodeled-class` (error),
-  `engine.matview-unpopulated` (warning); `dangling_edge` двигуна до порту не
-  доходить.
-- [ ] **Step 1: Тести** — `cast, statistics and text search config are
-  diagnosed` (кожен об'єкт у тіні → `engine.unmodeled-class` з ім'ям об'єкта;
-  план порожній, але `DesiredComparison.empty` — `false`, бо є помилки);
-  `unpopulated materialized view is diagnosed`; `column order difference is
-  not empty` (Review Focus 3: ціль — таблиця з колонками `a, b`, бажане —
-  `b, a`; `plan.empty === true`, `differences` має `kind: "order"`,
-  `empty === false`); `generated column noise is filtered` (генерована
-  колонка → жодної діагностики `dangling_edge`); `covered classes match the
-  pinned engine` (контрактний тест: читає `COVERAGE.md` із встановленого
-  пакета й порівнює зі списком).
-- [ ] **Step 2–4:** червоні → реалізація (`DesiredComparison.empty` —
-  `false`, якщо є діагностика рівня error) → зелені, гейти.
-- [ ] **Step 5: Commit** `feat(schema): перепис класів поза моделлю двигуна й власна перевірка тихих втрат`
-
----
-
-### Task 6: Round-trip бажаного стану, контрактні тести порту, канон
-
-**Files:**
-- Create: `packages/simetra/src/schema/__tests__/engine-round-trip.db.test.ts`
-- Modify: спека П2 §9 (рішення плану 7 — одне речення) і §10.4 (тінь — co-located база двигуна з базовим станом провайдера; транзакція з відкатом лишається для тестів E1), `docs/ROADMAP.md`
+- Create: `packages/simetra/src/schema/__tests__/engine-desired-corpus.db.test.ts`
+- Modify: спека П2 §9 і §10.4, `docs/ROADMAP.md`
 
 - [ ] **Step 1: Тести** — для кожної фікстури E1 і синтетичного домену:
-  ціль — тінь із розгорнутим рендером (через `withShadow` від бази стеку),
-  `compareWithDesired(engine, ціль, той самий рендер, scope)` → `empty`;
-  негативні: ціль із зайвим індексом → план не порожній і `differences`
-  називає індекс; ціль без однієї колонки → план має `ADD COLUMN`;
-  ціль із переставленими колонками → `differences` `order`.
-- [ ] **Step 2:** `pnpm --filter simetra test:db` — зелено; час прогону
-  db-проєкту в звіті (тіні множать час — якщо понад 2× від E1, групувати
-  фікстури в одну тінь).
-- [ ] **Step 3: Канон** — спека §9: «Round-trip вимагає, крім порожнього
-  плану двигуна, рівності моделей каталогу бази й тіні з порядком колонок:
-  двигун не бачить порядку колонок і стану заповнення матеріалізованого
-  подання»; §10.4 — тінь; ROADMAP: план E2a в рядку П2, «Зараз» — E2a
-  виконано, далі E2b; `python3 scripts/check-doc-anchors.py`.
+  ціль — тінь із розгорнутим рендером, `compareWithDesired` з тим самим
+  рендером → `empty`. Мутаційні (кожна мутація цілі → не `empty` і
+  відмінність або дія називає об'єкт): зайвий індекс; відсутня колонка;
+  переставлені колонки (Review Focus 3: `plan.empty`, але `differences`
+  `order`); змінене тіло функції; змінений вираз CHECK; змінений предикат
+  часткового індексу.
+- [ ] **Step 2:** `pnpm --filter simetra test:db` — зелено; час db-проєкту
+  в звіті (якщо понад 2× від E1 — групувати фікстури в одну тінь).
+- [ ] **Step 3: Канон** — спека §9: звірка й round-trip вимагають, крім
+  порожнього плану двигуна, рівності моделей каталогу з порядком колонок і
+  чистого перепису класів; §10.4: тінь — co-located база двигуна з базовим
+  станом провайдера (транзакція з відкатом лишається для тестів E1); ROADMAP:
+  план E2a в рядку П2, «Зараз» — E2a виконано, далі E2b;
+  `python3 scripts/check-doc-anchors.py`.
 - [ ] **Step 4:** повні кореневі гейти й `pnpm test:db`.
-- [ ] **Step 5: Commit** `test(schema): round-trip бажаного стану через порт SchemaEngine на корпусі фікстур`
+- [ ] **Step 5: Commit** `test(schema): звірка розгорнутого бажаного стану через порт на корпусі фікстур`
 
 ---
 
 ## Поза E2a (у E2b)
 
 - Зворотний генератор (модель каталогу → `CustomTable`, `PgEnum`,
-  дослівний `*.sql`; логічні імена з фізичних за стилем проєкту), гучна
-  помилка на невиражене, фікстури round-trip за класами (спека §9).
+  дослівний `*.sql`; логічні імена з фізичних за стилем проєкту), повний
+  round-trip `extract → зворотна генерація → компіляція → тінь` і фікстури
+  за класами (спека §9).
 - Команди `simetra introspect <db-url> --out <dir>` і `simetra diff <db-url>
   [dir]` (лише читання бази; рішення власника 2026-10-02) і доповнення спеки
   §8.6–§8.7.
-- Приватна звірка на schema-only копії першого споживача (§10.3) — виходи
-  поза репо.
+- Приватна звірка на schema-only копії першого споживача (§10.3).
 - Друга форма знімка при явному типовому опкласі чи колляції й асиметрія
   `deferrable` (борг F) — нормалізація у зворотному генераторі.
+- Форма EXCLUDE-обмежень у моделі — рішення власника.
 
 ## Критерії приймання плану E2a
 
-- `SchemaEngine` з адаптером pg-delta: extract у модель каталогу порту,
-  чистий plan, тінь, що завжди прибирається.
-- Модель каталогу збігається зі знімком компілятора на корпусі фікстур
-  E1 і синтетичному домені (з точністю до канонізації виразів Postgres).
-- Round-trip бажаного стану порожній на всьому корпусі; перестановка колонок,
-  клас поза моделлю й незаповнене подання не дають тихого «порожньо».
-- Політика не торкається нічого поза керованими схемами.
+- `SchemaEngine` з адаптером pg-delta: extract у модель каталогу порту з
+  гучною помилкою на невиражене, структурований plan, тінь, що завжди
+  прибирається.
+- Межа керування відповідає платформній спеці §6.9 і перевіряється за
+  цілями дій плану.
+- Звірка розгорнутого бажаного стану порожня на всьому корпусі; мутації,
+  перестановка колонок, клас поза моделлю й незаповнене подання не дають
+  тихого «порожньо».
