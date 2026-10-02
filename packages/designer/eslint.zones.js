@@ -1,4 +1,4 @@
-// Лінт-зони @simetra/designer (план designer-1, рішення 12).
+// Лінт-зони @simetra/designer: межа тестової опори `simetra` і зона студії.
 //
 // Обмеження механізму те саме, що в `packages/simetra/eslint.tier-zones.js`:
 // `no-restricted-imports` звіряє рядок специфікатора, а не резолвлений модуль.
@@ -15,6 +15,27 @@ const TEST_SUPPORT_PATTERN = {
     "simetra test support boundary: only packages/designer/**/__tests__/** may import packages/simetra/test/support (designer plan, decision 12).",
 }
 
+// Студія — єдине місце designer, що імпортує host-фреймворк (спека designer
+// §3.4): CLI, MCP і каталог інструментів лишаються незалежними від нього.
+const STUDIO_ZONE = {
+  files: ["src/**/*.{ts,tsx,mts,cts}"],
+  ignores: ["src/studio/**"],
+  rules: {
+    "no-restricted-imports": [
+      "error",
+      {
+        patterns: [
+          {
+            regex: "^@tanstack/(?:react-)?start(?:[-/].*)?$",
+            message:
+              "Framework boundary: only packages/designer/src/studio may import TanStack Start (designer spec §3.4).",
+          },
+        ],
+      },
+    ],
+  },
+}
+
 export const designerZoneConfigs = [
   {
     files: ["src/**/*.{ts,tsx,mts,cts}"],
@@ -26,4 +47,5 @@ export const designerZoneConfigs = [
       ],
     },
   },
+  STUDIO_ZONE,
 ]
