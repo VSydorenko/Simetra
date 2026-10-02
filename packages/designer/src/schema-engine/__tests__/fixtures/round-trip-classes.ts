@@ -38,6 +38,8 @@ export interface OracleShape {
   replicaIdentity: { table: string; identity: string }[]
   defaultAcls: { role: string; schema: string; type: string; acl: string[] }[]
   functions: { name: string; definition: string }[]
+  /** В'юхи й матеріалізовані в'юхи: `relkind` і текст `pg_get_viewdef`. */
+  views: { name: string; kind: string; definition: string }[]
 }
 
 const byCodePoint = (a: string, b: string): number =>
@@ -155,6 +157,14 @@ export async function readOracle(
 `,
     [schemas]
   )
+  const views = await client.query<OracleShape["views"][number]>(
+    `SELECT n.nspname || '.' || c.relname AS name, c.relkind::text AS kind,
+            pg_get_viewdef(c.oid) AS definition
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = ANY($1) AND c.relkind IN ('v', 'm')
+`,
+    [schemas]
+  )
   return {
     catalog,
     triggers: ordered(triggers.rows, (t) => `${t.table} ${t.name}`),
@@ -173,6 +183,7 @@ export async function readOracle(
       (r) => `${r.role} ${r.schema} ${r.type}`
     ),
     functions: ordered(functions.rows, (f) => f.name),
+    views: ordered(views.rows, (v) => v.name),
   }
 }
 
@@ -467,6 +478,61 @@ export const CLASS_FIXTURES: ClassFixture[] = [
         anon: a.acl.filter((item) => item.startsWith("anon=")),
       })),
     expected: [{ role: "postgres", type: "r", anon: ["anon=r/postgres"] }],
+  },
+  {
+    name: "view with a grant",
+    schemas: ["app"],
+    sql: `
+      CREATE SCHEMA app;
+      CREATE TABLE app.goods (id uuid PRIMARY KEY, title text, archived boolean NOT NULL DEFAULT false);
+      CREATE VIEW app.active_goods AS SELECT id, title FROM app.goods WHERE NOT archived;
+      GRANT SELECT ON app.active_goods TO anon;
+    `,
+    property: (shape) => ({
+      views: shape.views,
+      anon: shape.acls
+        .find((a) => a.object === "v:app.active_goods")
+        ?.acl.filter((item) => item.startsWith("anon=")),
+    }),
+    expected: {
+      views: [
+        {
+          name: "app.active_goods",
+          kind: "v",
+          definition:
+            " SELECT id,\n    title\n   FROM app.goods\n  WHERE (NOT archived);",
+        },
+      ],
+      anon: ["anon=r/postgres"],
+    },
+  },
+  {
+    name: "materialized view with a grant",
+    schemas: ["app"],
+    sql: `
+      CREATE SCHEMA app;
+      CREATE TABLE app.sale (id uuid PRIMARY KEY, day date NOT NULL, amount numeric NOT NULL);
+      CREATE MATERIALIZED VIEW app.daily_sales AS
+        SELECT day, sum(amount) AS total FROM app.sale GROUP BY day;
+      GRANT SELECT ON app.daily_sales TO authenticated;
+    `,
+    property: (shape) => ({
+      views: shape.views,
+      authenticated: shape.acls
+        .find((a) => a.object === "m:app.daily_sales")
+        ?.acl.filter((item) => item.startsWith("authenticated=")),
+    }),
+    expected: {
+      views: [
+        {
+          name: "app.daily_sales",
+          kind: "m",
+          definition:
+            " SELECT day,\n    sum(amount) AS total\n   FROM app.sale\n  GROUP BY day;",
+        },
+      ],
+      authenticated: ["authenticated=r/postgres"],
+    },
   },
   {
     name: "two tables with one name in different schemas",
