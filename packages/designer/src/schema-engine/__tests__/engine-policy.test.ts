@@ -5,7 +5,12 @@ import {
   type Predicate,
 } from "@supabase/pg-delta"
 import { describe, expect, it } from "vitest"
-import { SUPABASE_EXTENSIONS, SUPABASE_SCHEMAS } from "simetra/schema"
+import {
+  SUPABASE_EXTENSIONS,
+  SUPABASE_ROLES,
+  SUPABASE_SCHEMAS,
+  SUPABASE_SURFACES,
+} from "simetra/schema"
 import { scopePolicy } from "../pg-delta/policy"
 
 /**
@@ -36,6 +41,42 @@ function excludedExtensions(policy: Policy): Set<string> {
   )
 }
 
+/**
+ * Поверхня політик пресету: таблиці (`schema` + glob таблиці) і цілі схеми з
+ * правила `supabase.user-policy-surface`, у формі `схема.glob`.
+ */
+function policySurface(policy: Policy): Set<string> {
+  const rule = flattenPolicy(policy).filter.find(
+    (r) => r.audit?.reasonCode === "supabase.user-policy-surface"
+  )
+  if (rule === undefined || !("all" in rule.match)) return new Set()
+  const surfaces = rule.match.all.flatMap((m) => ("any" in m ? m.any : []))
+  return new Set(
+    surfaces.map((s) => {
+      if ("schema" in s) return `${list(s.schema).join()}.*`
+      if (!("all" in s)) return "?"
+      const schema = s.all.flatMap((m) => ("schema" in m ? list(m.schema) : []))
+      const table = s.all.flatMap((m) =>
+        "idField" in m && m.idField.field === "table"
+          ? list(m.idField.glob)
+          : []
+      )
+      return `${schema.join()}.${table.join()}`
+    })
+  )
+}
+
+/** Ролі провайдера — правило «власник — системна роль». */
+function ownerRoles(policy: Policy): Set<string> {
+  return new Set(
+    flattenPolicy(policy).filter.flatMap((rule) =>
+      rule.action === "exclude" && "owner" in rule.match
+        ? list(rule.match.owner)
+        : []
+    )
+  )
+}
+
 describe("provider preset matches the pinned engine", () => {
   it("provider schemas are the engine's assumed schemas", () => {
     expect(new Set(SUPABASE_SCHEMAS)).toEqual(
@@ -54,5 +95,23 @@ describe("provider preset matches the pinned engine", () => {
       expect(SUPABASE_EXTENSIONS, `engine preset excludes ${name}`).toContain(
         name
       )
+  })
+
+  it("surfaces match the engine preset", () => {
+    const policies = SUPABASE_SURFACES.filter((s) =>
+      s.classes.includes("policy")
+    ).map((s) => `${s.schema}.${s.table}`)
+    expect(new Set(policies)).toEqual(policySurface(supabasePolicy))
+    expect(policies.length).toBeGreaterThan(0)
+  })
+
+  it("extension list is not empty", () => {
+    // Порожній перелік робив би контракт вище тавтологічним
+    expect(SUPABASE_EXTENSIONS).toContain("pg_graphql")
+  })
+
+  it("provider roles are the engine's system roles", () => {
+    expect(new Set(SUPABASE_ROLES)).toEqual(ownerRoles(supabasePolicy))
+    expect(SUPABASE_ROLES).toContain("authenticated")
   })
 })

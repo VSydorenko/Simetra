@@ -56,3 +56,69 @@ export const SUPABASE_EVENT_TRIGGERS: readonly string[] = [
   "pgrst_%",
   "graphql_watch_%",
 ]
+
+/**
+ * Ролі провайдера: їх створює провайдер, а не застосунок. Порівняння з
+ * правилом «власник — системна роль» закріпленої версії двигуна тримає
+ * контрактний тест адаптера.
+ */
+export const SUPABASE_ROLES: readonly string[] = [
+  "anon",
+  "authenticated",
+  "authenticator",
+  "cli_login_postgres",
+  "dashboard_user",
+  "pgbouncer",
+  "pgsodium_keyholder",
+  "pgsodium_keyiduser",
+  "pgsodium_keymaker",
+  "pgtle_admin",
+  "service_role",
+  "supabase_admin",
+  "supabase_auth_admin",
+  "supabase_etl_admin",
+  "supabase_functions_admin",
+  "supabase_privileged_role",
+  "supabase_read_only_user",
+  "supabase_realtime_admin",
+  "supabase_replication_admin",
+  "supabase_storage_admin",
+  "supabase_superuser",
+]
+
+/**
+ * Таблиці схем провайдера, на яких одиниці застосунку належать застосунку
+ * (§6.9): `table` — glob імені таблиці, `classes` — класи одиниць.
+ */
+export interface ProviderSurface {
+  schema: string
+  table: string
+  classes: readonly ("policy" | "trigger")[]
+}
+
+/**
+ * Політики — перелік правила `supabase.user-policy-surface` двигуна
+ * (контрактний тест адаптера): окремі таблиці `storage`/`realtime` і вся
+ * схема `auth`. Тригери — таблиці будь-якої схеми провайдера, крім `pgmq`:
+ * двигун виключає там лише черги `q_*`/`a_*`, а позитивний glob такого
+ * виключення не виражає, тож тригер у `pgmq` — гучна помилка, а не тиха
+ * втрата. Умову «функція тригера поза схемами провайдера» перевіряє межа
+ * моделі: це властивість одиниці, а не таблиці.
+ */
+export const SUPABASE_SURFACES: readonly ProviderSurface[] = [
+  { schema: "auth", table: "*", classes: ["policy"] },
+  { schema: "realtime", table: "messages", classes: ["policy"] },
+  { schema: "realtime", table: "subscription", classes: ["policy"] },
+  { schema: "storage", table: "buckets", classes: ["policy"] },
+  { schema: "storage", table: "buckets_analytics", classes: ["policy"] },
+  { schema: "storage", table: "objects", classes: ["policy"] },
+  { schema: "storage", table: "s3_multipart_uploads", classes: ["policy"] },
+  {
+    schema: "storage",
+    table: "s3_multipart_uploads_parts",
+    classes: ["policy"],
+  },
+  ...SUPABASE_SCHEMAS.filter((schema) => schema !== "pgmq").map(
+    (schema): ProviderSurface => ({ schema, table: "*", classes: ["trigger"] })
+  ),
+]

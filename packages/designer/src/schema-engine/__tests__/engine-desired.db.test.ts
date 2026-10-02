@@ -104,7 +104,7 @@ describe("compareWithDesired", () => {
       []
     )
     const model = compiled.model!
-    const { scope, diagnostics } = engineScope(model)
+    const { scope, diagnostics } = await engineScope(model)
     expect(diagnostics).toEqual([])
     const result = await compareWithDesired(
       engine,
@@ -171,7 +171,7 @@ describe("compareWithDesired", () => {
       })
     )
     const model = compiled.model!
-    const { scope, diagnostics } = engineScope(model)
+    const { scope, diagnostics } = await engineScope(model)
     expect(diagnostics.map((d) => d.code)).toEqual(["engine.out-of-scope"])
     const result = await compareWithDesired(
       engine,

@@ -31,5 +31,9 @@ export { ALL_PRIVILEGES } from "./privileges"
 export {
   SUPABASE_EVENT_TRIGGERS,
   SUPABASE_EXTENSIONS,
+  SUPABASE_ROLES,
   SUPABASE_SCHEMAS,
+  SUPABASE_SURFACES,
+  type ProviderSurface,
 } from "./provider/supabase"
+export { unitTarget, unitTargets, type UnitTarget } from "./unit-target"

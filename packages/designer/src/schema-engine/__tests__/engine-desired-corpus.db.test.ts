@@ -73,7 +73,7 @@ async function reconcile(
 async function expectDeployedRenderIsEmpty(files: Map<string, string>) {
   const model = await compiled(files)
   const sql = renderDesiredState(model).sql
-  const { scope, diagnostics } = engineScope(model)
+  const { scope, diagnostics } = await engineScope(model)
   const result = await reconcile(sql, sql, scope, diagnostics)
   // Спершу — що саме не порожнє, а не голе `false`
   expect({
@@ -121,7 +121,7 @@ describe("a mutated target is never silently empty", () => {
   beforeEach(async () => {
     const model = await compiled(customTables())
     render = renderDesiredState(model).sql
-    scope = engineScope(model).scope
+    scope = (await engineScope(model)).scope
   })
 
   it("extra index", async () => {

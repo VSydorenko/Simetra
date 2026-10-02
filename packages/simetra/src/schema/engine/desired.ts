@@ -1,10 +1,20 @@
-import { localize, type CompiledModel, type SqlUnit } from "simetra/compiler"
 import {
-  diffCatalogModels,
-  type CatalogDifference,
-  type SqlUnitClass,
-} from "simetra/model"
-import { SUPABASE_EXTENSIONS, SUPABASE_SCHEMAS } from "./provider/supabase"
+  loadSqlParser,
+  localize,
+  type CompiledModel,
+  type SqlParser,
+} from "simetra/compiler"
+import { diffCatalogModels, type CatalogDifference } from "simetra/model"
+import {
+  SUPABASE_EXTENSIONS,
+  SUPABASE_SCHEMAS,
+  SUPABASE_SURFACES,
+} from "./provider/supabase"
+import {
+  triggerFunctionSchema,
+  unitTargets,
+  type UnitTarget,
+} from "./unit-target"
 import type {
   DbConnection,
   EngineDiagnostic,
@@ -144,54 +154,64 @@ export interface ModelScope {
   diagnostics: EngineDiagnostic[]
 }
 
-/**
- * Класи одиниць, які пресет провайдера пускає в межу в схемах провайдера
- * (§6.9): політики й тригери на таблицях провайдера. Членство в publication
- * схеми не має, тож перевірки не потребує.
- */
-const PROVIDER_SURFACE: ReadonlySet<SqlUnitClass> = new Set([
-  "policy",
-  "trigger",
-])
-
-/** Схеми `IN SCHEMA` типових привілеїв за деревом розбору; порожньо — глобальні. */
-function defaultPrivilegeSchemas(unit: SqlUnit): string[] {
-  const tree = unit.tree as {
-    AlterDefaultPrivilegesStmt?: { options?: unknown[] }
-  }
-  return (tree.AlterDefaultPrivilegesStmt?.options ?? []).flatMap((o) => {
-    const element = (o as { DefElem?: { defname?: string; arg?: unknown } })
-      .DefElem
-    if (element?.defname !== "schemas") return []
-    const arg = element.arg as { List?: { items?: unknown[] } } | undefined
-    return (arg?.List?.items ?? [arg]).map(
-      (n) => (n as { String?: { sval?: string } }).String?.sval ?? ""
+/** Glob пресету (`*`, `?`) у регулярний вираз на ціле ім'я. */
+function globMatches(glob: string, name: string): boolean {
+  const pattern = glob
+    .split("")
+    .map((c) =>
+      c === "*"
+        ? ".*"
+        : c === "?"
+          ? "."
+          : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     )
-  })
+    .join("")
+  return new RegExp(`^${pattern}$`).test(name)
 }
+
+/** Чи пускає пресет провайдера одиницю класу `cls` на цю таблицю (§6.9). */
+function onSurface(cls: "policy" | "trigger", target: UnitTarget): boolean {
+  return SUPABASE_SURFACES.some(
+    (surface) =>
+      surface.schema === target.schema &&
+      surface.classes.includes(cls) &&
+      globMatches(surface.table, target.object ?? "")
+  )
+}
+
+type OutOfScopeReason =
+  | "provider-schema"
+  | "provider-surface"
+  | "provider-trigger-function"
+  | "global-default-privileges"
+  | "provider-extension"
 
 function outOfScope(
   object: string,
-  reason:
-    "provider-schema" | "global-default-privileges" | "provider-extension",
-  schema?: string
+  reason: OutOfScopeReason,
+  params: Record<string, string> = {}
 ): EngineDiagnostic {
-  const params = { object, reason, ...(schema === undefined ? {} : { schema }) }
+  const all = { object, reason, ...params }
   return {
     code: "engine.out-of-scope",
     severity: "error",
-    message: localize({ code: "engine.out-of-scope", params }, "en").message,
+    message: localize({ code: "engine.out-of-scope", params: all }, "en")
+      .message,
   }
 }
 
 /**
  * Об'єкти моделі, яких двигун у межі не бачить: фільтр двигуна виключає їх і
  * з цілі, і з тіні, тож без діагностики звірка мовчки назвала б їх рівними.
- * Це об'єкти в схемі провайдера поза поверхнею пресету, типові привілеї без
- * `IN SCHEMA` (і з `IN SCHEMA` схеми провайдера) та розширення провайдера.
+ * Схему одиниці дає її структурована ціль — та сама, що й межі
+ * (`engineScope`). Поза межею: об'єкти й цілі в схемі провайдера, крім
+ * поверхні пресету (політики й тригери на його таблицях; тригер — лише з
+ * функцією поза схемами провайдера, як у правилі двигуна), типові привілеї
+ * без `IN SCHEMA` і розширення провайдера.
  */
 function outOfScopeDiagnostics(
-  model: Pick<CompiledModel, "physical" | "sqlUnits">
+  model: Pick<CompiledModel, "physical" | "sqlUnits">,
+  parse: SqlParser
 ): EngineDiagnostic[] {
   const provider = new Set(SUPABASE_SCHEMAS)
   const extensions = new Set(SUPABASE_EXTENSIONS)
@@ -203,42 +223,72 @@ function outOfScopeDiagnostics(
     for (const { schema, name } of objects)
       if (provider.has(schema))
         out.push(
-          outOfScope(`${kind}:${schema}.${name}`, "provider-schema", schema)
+          outOfScope(`${kind}:${schema}.${name}`, "provider-schema", { schema })
         )
   for (const unit of model.sqlUnits) {
     if (unit.class === "extension") {
       if (extensions.has(unit.name))
         out.push(outOfScope(unit.identity, "provider-extension"))
-    } else if (unit.class === "defaultPrivileges") {
-      const schemas = defaultPrivilegeSchemas(unit)
-      if (schemas.length === 0)
-        out.push(outOfScope(unit.identity, "global-default-privileges"))
-      for (const schema of schemas.filter((s) => provider.has(s)))
-        out.push(outOfScope(unit.identity, "provider-schema", schema))
-    } else if (provider.has(unit.schema) && !PROVIDER_SURFACE.has(unit.class))
-      out.push(outOfScope(unit.identity, "provider-schema", unit.schema))
+      continue
+    }
+    const targets = unitTargets(unit, parse)
+    if (unit.class === "defaultPrivileges" && targets.length === 0) {
+      out.push(outOfScope(unit.identity, "global-default-privileges"))
+      continue
+    }
+    if (unit.class === "policy" || unit.class === "trigger") {
+      const [target] = targets
+      if (target === undefined || !provider.has(target.schema)) continue
+      const fnSchema = triggerFunctionSchema(unit, parse)
+      if (!onSurface(unit.class, target))
+        out.push(
+          outOfScope(unit.identity, "provider-surface", {
+            class: unit.class,
+            table: `${target.schema}.${target.object ?? ""}`,
+          })
+        )
+      else if (fnSchema !== undefined && provider.has(fnSchema))
+        out.push(
+          outOfScope(unit.identity, "provider-trigger-function", {
+            schema: fnSchema,
+          })
+        )
+      continue
+    }
+    const schemas =
+      targets.length > 0 ? targets.map((t) => t.schema) : [unit.schema]
+    for (const schema of new Set(schemas.filter((s) => provider.has(s))))
+      out.push(outOfScope(unit.identity, "provider-schema", { schema }))
   }
   return out
 }
 
 /**
- * Межа керування з моделі: схема за замовчуванням і схеми таблиць, енам-типів
- * та одиниць. Схеми провайдера не стають керованими, навіть коли одиниця
- * застосунку лежить у них (політика на `storage.objects`, тригер на
- * `auth.users`): такі об'єкти вже в межі за пресетом провайдера (§6.9), а
- * керована схема провайдера означала б відкликання його власних об'єктів.
- * Порожня схема одиниці (грант, типові привілеї) — не схема. Об'єкти моделі,
- * яких межа не охоплює, — діагностики `engine.out-of-scope`.
+ * Межа керування з моделі: схема за замовчуванням, схеми таблиць, енам-типів
+ * і одиниць, а для одиниці з ціллю (грант, коментар, типові привілеї,
+ * членство в publication, політика, тригер) — схеми її цілей: інакше грант на
+ * таблицю схеми, де модель більше нічого не має, фільтр двигуна мовчки
+ * виключив би з обох боків звірки. Схеми провайдера не стають керованими,
+ * навіть коли одиниця застосунку лежить у них (політика на `storage.objects`,
+ * тригер на `auth.users`): такі об'єкти вже в межі за пресетом провайдера
+ * (§6.9), а керована схема провайдера означала б відкликання його власних
+ * об'єктів. Порожня схема — не схема. Об'єкти моделі, яких межа не охоплює,
+ * — діагностики `engine.out-of-scope`. Асинхронна, бо цілі читає парсер
+ * Postgres, який вантажиться один раз на процес.
  */
-export function engineScope(
+export async function engineScope(
   model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">
-): ModelScope {
+): Promise<ModelScope> {
+  const parse = await loadSqlParser()
   const provider = new Set(SUPABASE_SCHEMAS)
   const schemas = new Set([
     model.project.defaultSchema,
     ...model.physical.tables.map((table) => table.schema),
     ...model.physical.enumTypes.map((type) => type.schema),
-    ...model.sqlUnits.map((unit) => unit.schema),
+    ...model.sqlUnits.flatMap((unit) => {
+      const targets = unitTargets(unit, parse)
+      return targets.length > 0 ? targets.map((t) => t.schema) : [unit.schema]
+    }),
   ])
   return {
     scope: {
@@ -247,6 +297,6 @@ export function engineScope(
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
       provider: "supabase",
     },
-    diagnostics: outOfScopeDiagnostics(model),
+    diagnostics: outOfScopeDiagnostics(model, parse),
   }
 }

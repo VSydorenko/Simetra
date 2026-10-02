@@ -31,24 +31,6 @@ function catalogOf(space: string | number | undefined): string {
  * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
  * каталог вичерпним: нове правило без обох текстів не пройде typecheck.
  */
-/** Причини `engine.out-of-scope`: параметр `reason` — ключ, текст — тут. */
-const OUT_OF_SCOPE_REASONS: Readonly<Record<string, Record<Locale, Text>>> = {
-  "provider-schema": {
-    en: (p) => `schema ${p.schema} belongs to the provider`,
-    uk: (p) => `схема ${p.schema} належить провайдерові`,
-  },
-  "global-default-privileges": {
-    en: () =>
-      "default privileges without IN SCHEMA belong to no managed schema",
-    uk: () =>
-      "типові привілеї без IN SCHEMA не належать жодній керованій схемі",
-  },
-  "provider-extension": {
-    en: () => "the provider installs this extension itself",
-    uk: () => "це розширення ставить сам провайдер",
-  },
-}
-
 export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // --- Перевірки схем T0 (issue з `params.rule`) ---
   "type.length-required": {
@@ -1018,9 +1000,39 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `${p.object} лежить поза межею, яку порівнює рушій схеми, тож звірка ніколи його не побачить: ${OUT_OF_SCOPE_REASONS[String(p.reason)]?.uk(p) ?? p.reason}`,
     hint: {
-      en: "In a provider schema the application owns only policies, triggers and publication membership; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
-      uk: "У схемі провайдера застосунку належать лише політики, тригери й членство в publication; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
+      en: "In a provider schema the application owns only policies and triggers on the provider's surface tables, with trigger functions outside provider schemas; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
+      uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
+  },
+}
+
+/** Причини `engine.out-of-scope`: параметр `reason` — ключ, текст — тут. */
+const OUT_OF_SCOPE_REASONS: Readonly<Record<string, Record<Locale, Text>>> = {
+  "provider-schema": {
+    en: (p) => `schema ${p.schema} belongs to the provider`,
+    uk: (p) => `схема ${p.schema} належить провайдерові`,
+  },
+  "provider-surface": {
+    en: (p) =>
+      `the provider lets the application own ${p.class === "trigger" ? "triggers" : "policies"} only on its surface tables, and ${p.table} is not one of them`,
+    uk: (p) =>
+      `провайдер віддає застосунку ${p.class === "trigger" ? "тригери" : "політики"} лише на таблицях своєї поверхні, а ${p.table} до них не належить`,
+  },
+  "provider-trigger-function": {
+    en: (p) =>
+      `the trigger calls a function in the provider schema ${p.schema}, so the provider preset treats it as the provider's own`,
+    uk: (p) =>
+      `тригер викликає функцію в схемі провайдера ${p.schema}, тож пресет провайдера вважає його власним тригером провайдера`,
+  },
+  "global-default-privileges": {
+    en: () =>
+      "default privileges without IN SCHEMA belong to no managed schema",
+    uk: () =>
+      "типові привілеї без IN SCHEMA не належать жодній керованій схемі",
+  },
+  "provider-extension": {
+    en: () => "the provider installs this extension itself",
+    uk: () => "це розширення ставить сам провайдер",
   },
 }
 
