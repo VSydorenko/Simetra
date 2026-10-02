@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { defineCommand, type ArgsDef, type CommandDef } from "citty"
 import type { CompiledModel, Locale } from "simetra/compiler"
+import { ATTRIBUTE_CASES } from "simetra/model"
 import { databaseResource } from "../io/database"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
@@ -150,7 +151,8 @@ export async function runTool(
         // Відмінності звірки — теж код 1: CI чекає порожньої звірки
         failed ||=
           !result.ok ||
-          (tool.name === "diff" && (result.data as DiffData).empty !== true)
+          (tool.name === "diff" &&
+            (result.data as DiffData | undefined)?.empty !== true)
         const rendered = renderResult(tool, result, {
           dir: shown[i] ?? dir,
           locale,
@@ -255,7 +257,7 @@ function argsFor(tool: Tool): ArgsDef {
     }
     args["attribute-case"] = {
       type: "enum",
-      options: ["camelCase", "snake_case"],
+      options: [...ATTRIBUTE_CASES],
       description: "Attribute case of a new project",
     }
   }

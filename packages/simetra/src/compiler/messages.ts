@@ -1004,6 +1004,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
   },
+  "database.failed": {
+    en: (p) =>
+      `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,
+    uk: (p) =>
+      `Виклик ${p.tool} до бази ${p.database} не вдався (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Нічого не записано.`,
+    hint: {
+      en: "The connection itself worked; the failure happened during the database work. The text of the driver error is withheld because it may carry credentials; look up the SQLSTATE, or rerun after fixing the database.",
+      uk: "Саме підключення вдалося; збій стався під час роботи з базою. Текст помилки драйвера приховано, бо він може нести облікові дані; знайдіть SQLSTATE або повторіть після виправлення бази.",
+    },
+  },
   "introspect.unrepresentable": {
     en: (p) =>
       `${p.object}: ${p.property} cannot be represented in metadata files: ${p.detail}`,

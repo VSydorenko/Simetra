@@ -512,6 +512,39 @@ describe("pools", () => {
     })
   })
 
+  it("no pool is left open after a failure in the middle of the database work", async () => {
+    await introspected(async (dir, env, url) => {
+      const before = await sessions(url)
+      // Підключення вдається, а запити двигуна падають за таймаутом
+      // (57014): збій роботи з базою, а не відмова підключення
+      const slow = new URL(url)
+      slow.searchParams.set("options", "-c statement_timeout=1")
+      for (const tool of ["introspect", "diff"] as const) {
+        const r = await call(tool, {}, options(dir, { [ENV]: slow.toString() }))
+        expect(r.refusal, tool).toBeUndefined()
+        expect(r.ok, tool).toBe(false)
+        expect(
+          r.diagnostics.filter((d) => d.code === "database.failed"),
+          tool
+        ).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ tool, sqlstate: "57014" }),
+          }),
+        ])
+        expect(await settled(url, before), tool).toBe(before)
+      }
+      const cli = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        { [ENV]: slow.toString() }
+      )
+      expect(cli.exitCode).toBe(1)
+      expect(cli.stdout).toContain("database.failed")
+    })
+  })
+
   it("no pool is left open after introspect with errors", async () => {
     await inTarget(
       `CREATE SCHEMA app;

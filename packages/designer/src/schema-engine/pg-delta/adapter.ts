@@ -2,6 +2,7 @@ import {
   encodeId,
   plan as enginePlan,
   planSchemaFiles,
+  isShadowProvisionError,
   provisionCoLocatedShadow,
   resolveProfile,
   SchemaFrontendError,
@@ -45,6 +46,11 @@ import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
 import { aclDefaultsOf, producedBy } from "./map-units"
 import { scopeProfile } from "./policy"
+import {
+  ShadowCreateRefusedError,
+  ShadowServerError,
+  ShadowServerMismatchError,
+} from "../errors"
 
 const ENGINE = "pg-delta"
 
@@ -86,11 +92,6 @@ function quietPool(
   return pool
 }
 
-/** Тінь на сервері іншої мажорної версії: каталоги двох версій не порівнюються. */
-export class ShadowServerMismatchError extends Error {
-  override name = "ShadowServerMismatchError"
-}
-
 /**
  * Тінь на іншому сервері допустима лише тієї самої мажорної версії: двигун
  * читає каталог версійно залежними запитами, і план «ціль → тінь» між
@@ -117,10 +118,11 @@ async function assertShadowServer(o: ShadowOptions): Promise<void> {
   const target = readOnlyPool(o.target.url)
   const shadow = readOnlyPool(o.shadowBase.url)
   try {
-    const refusal = shadowServerRefusal(
-      await serverMajor(target),
-      await serverMajor(shadow)
-    )
+    const targetMajor = await serverMajor(target)
+    const shadowMajor = await serverMajor(shadow).catch((error: unknown) => {
+      throw new ShadowServerError(error)
+    })
+    const refusal = shadowServerRefusal(targetMajor, shadowMajor)
     if (refusal !== undefined) throw new ShadowServerMismatchError(refusal)
   } finally {
     await target.end()
@@ -453,6 +455,23 @@ async function planAndRun<T>(
   }
 }
 
+/**
+ * Збій провізії називає сервер, на якому він стався: без `CREATEDB` —
+ * відмова з адресою того сервера, інший збій окремого сервера тіні — його.
+ */
+async function provisionShadow(
+  o: ShadowOptions
+): Promise<Awaited<ReturnType<typeof provisionCoLocatedShadow>>> {
+  try {
+    return await provisionCoLocatedShadow((o.shadowBase ?? o.target).url)
+  } catch (error) {
+    if (isShadowProvisionError(error))
+      throw new ShadowCreateRefusedError(o.shadowBase !== undefined)
+    if (o.shadowBase !== undefined) throw new ShadowServerError(error)
+    throw error
+  }
+}
+
 export function createPgDeltaEngine(): SchemaEngine {
   return {
     async extract(db, scope) {
@@ -486,9 +505,7 @@ export function createPgDeltaEngine(): SchemaEngine {
       await assertShadowServer(o)
       // Адміністративна сесія тіні — окремий пул двигуна з правом
       // `CREATE DATABASE`; сесія цілі лишається лише для читання
-      const shadow = await provisionCoLocatedShadow(
-        (o.shadowBase ?? o.target).url
-      )
+      const shadow = await provisionShadow(o)
       let outcome: ShadowOutcome<T>
       try {
         outcome = await planAndRun(o.target, shadow.url, desiredSql, scope, fn)

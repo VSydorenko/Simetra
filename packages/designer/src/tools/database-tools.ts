@@ -155,9 +155,12 @@ export const introspectTool = defineTool({
     }
 
     const engine = await loadEngine()
-    const extracted = await withDatabase(required(database), (db) =>
+    const read = await withDatabase(required(database), "introspect", (db) =>
       engine.extract(db.target, scope)
     )
+    if (!read.ok)
+      return { ok: false, changes: [], diagnostics: [read.diagnostic] }
+    const extracted = read.value
     const extractDiagnostics = extracted.diagnostics.map(fromEngine)
     // Невиражене в extract (EXCLUDE, чужий власник) — уже втрата: генератор
     // не побачить того, чого немає в моделі, тож запис зупиняє і воно
@@ -249,7 +252,7 @@ function targetsOf(a: EngineAction): string[] {
  * його ТЧ і регістрами, а не всієї бази). Діагностики не звужуються:
  * помилка поза фільтром однаково робить звірку неповною.
  */
-function narrow(
+export function narrow(
   data: Omit<DiffData, "empty">,
   tables: readonly Qualified[],
   models: readonly CompiledTables[]
@@ -302,7 +305,7 @@ export const diffTool = defineTool({
       return { ok: false, changes: [], diagnostics: compiled.diagnostics }
     const { scope, diagnostics: scopeDiagnostics } = await engineScope(model)
     const engine = await loadEngine()
-    const comparison = await withDatabase(required(database), (db) =>
+    const compared = await withDatabase(required(database), "diff", (db) =>
       compareWithDesired(
         engine,
         {
@@ -314,6 +317,13 @@ export const diffTool = defineTool({
         scopeDiagnostics
       )
     )
+    if (!compared.ok)
+      return {
+        ok: false,
+        changes: [],
+        diagnostics: [...compiled.diagnostics, compared.diagnostic],
+      }
+    const comparison = compared.value
     const diagnostics = [
       ...compiled.diagnostics,
       ...comparison.diagnostics.map(fromEngine),

@@ -162,7 +162,11 @@ offending field (for example `target.kind`); nothing is written.
   differences and diagnostics (`--format json`, MCP `structuredContent`);
   `--tables` narrows the plan and the differences to the named tables
   (`schema.table` or `table`). An unknown table is refused, not ignored.
-- An unreachable database or a failed login is exit 2 (MCP: `isError`).
+- An unreachable database, a failed login, a missing database or privilege is
+  exit 2 (MCP: `isError`): fix the connection, then rerun. A failure during
+  the database work itself is the diagnostic `database.failed` with its
+  SQLSTATE (exit 1); the driver's text is withheld because it may carry
+  credentials.
 
 ## Agents over MCP
 

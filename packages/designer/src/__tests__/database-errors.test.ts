@@ -1,11 +1,23 @@
+import type { EngineAction } from "simetra/schema"
 import { describe, expect, it } from "vitest"
+import { narrow } from "../tools/database-tools"
+import { toolByName } from "../tools/catalog"
+import { invoke } from "../tools/invoke"
+import type { DatabaseResource } from "../tools/types"
+import { opts, project, useTmpProjects } from "./helpers/catalog"
 import {
   DatabaseRefusal,
+  classifyDatabaseError,
   connectionErrorMessage,
   databaseResource,
   describeConnection,
   withDatabase,
 } from "../io/database"
+import {
+  ShadowCreateRefusedError,
+  ShadowServerError,
+  ShadowServerMismatchError,
+} from "../schema-engine/errors"
 import { shadowServerRefusal } from "../schema-engine/pg-delta/adapter"
 
 /**
@@ -14,6 +26,8 @@ import { shadowServerRefusal } from "../schema-engine/pg-delta/adapter"
  * `host:port/db` і коду помилки. Рядки нижче досить незвичні, щоб пошук
  * підрядка доводив їхню відсутність.
  */
+useTmpProjects()
+
 const USER = "leaky_user_q7x"
 const PASSWORD = "S3cret-pa55-Zq9"
 const URL_ = `postgresql://${USER}:${PASSWORD}@db.example.test:6543/app_db`
@@ -38,12 +52,21 @@ describe("describeConnection", () => {
   })
 })
 
-describe("connectionErrorMessage", () => {
-  const cases: [string, unknown, RegExp][] = [
+describe("classifyDatabaseError", () => {
+  const names = {
+    target: DESCRIBE,
+    shadow: "shadow.example.test:5432/postgres",
+  }
+  const refusals: [string, unknown, RegExp][] = [
     [
       "a bad password",
       pgError("28P01", `password authentication failed for user "${USER}"`),
-      /Authentication to the database at db\.example\.test:6543\/app_db failed/,
+      /^Authentication to the database at db\.example\.test:6543\/app_db failed/,
+    ],
+    [
+      "another 28xxx",
+      pgError("28000", `role "${USER}" is not permitted to log in`),
+      /^Authentication to the database/,
     ],
     [
       "an unreachable host",
@@ -56,38 +79,154 @@ describe("connectionErrorMessage", () => {
       /is unreachable \(ENOTFOUND\)/,
     ],
     [
+      "a connection exception 08xxx",
+      pgError("08006", `connection failure ${URL_}`),
+      /connection to the database at .* failed \(SQLSTATE 08006\)/,
+    ],
+    [
       "a missing database",
       pgError("3D000", `database "${PASSWORD}" does not exist`),
       /does not exist/,
     ],
     [
-      "any other SQLSTATE",
-      pgError("25006", `cannot execute CREATE TABLE ${URL_}`),
-      /\(SQLSTATE 25006\)/,
+      "a missing privilege",
+      pgError("42501", `permission denied for ${USER}`),
+      /lacks a privilege .* \(SQLSTATE 42501\)/,
     ],
-    ["an error without a code", new Error(`boom ${URL_}`), /failed \(Error\)/],
+    [
+      "an invalid URL",
+      Object.assign(new TypeError(`Invalid URL ${URL_}`), {
+        code: "ERR_INVALID_URL",
+      }),
+      /^The connection string is not a valid URL/,
+    ],
+    [
+      "a lost connection without a code",
+      new Error(`Connection terminated unexpectedly ${URL_}`),
+      /was lost or timed out/,
+    ],
+    [
+      "a connection timeout without a code",
+      new Error("Connection terminated due to connection timeout"),
+      /was lost or timed out/,
+    ],
     [
       "a failed shadow cleanup",
       new AggregateError(
         [pgError("28P01", USER), new Error(PASSWORD)],
         `shadow run failed ${URL_}`
       ),
-      /Authentication to the database/,
+      /^Authentication to the database/,
     ],
-    ["a non-error", `${USER}:${PASSWORD}`, /failed\. Nothing changed\.$/],
+    [
+      "another major version of the shadow server",
+      new ShadowServerMismatchError("safe mismatch text"),
+      /^safe mismatch text$/,
+    ],
+    ["our own refusal", new DatabaseRefusal("safe text"), /^safe text$/],
   ]
-  for (const [name, error, expected] of cases) {
-    it(`redacts ${name}`, () => {
-      const text = connectionErrorMessage(error, DESCRIBE)
+  for (const [name, error, expected] of refusals) {
+    it(`refuses ${name} with a redacted message`, () => {
+      const c = classifyDatabaseError(error, names)
+      expect(c.kind).toBe("refusal")
+      const text = c.kind === "refusal" ? c.message : ""
       expect(text).toMatch(expected)
       expect(leaks(text)).toEqual([])
     })
   }
 
-  it("lets our own refusals through as they are", () => {
+  const failures: [string, unknown, Record<string, string>][] = [
+    [
+      "a read-only violation",
+      pgError("25006", `cannot execute CREATE TABLE ${URL_}`),
+      { database: DESCRIBE, error: "Error", sqlstate: "25006" },
+    ],
+    [
+      "an internal error",
+      pgError("XX000", `boom ${PASSWORD}`),
+      { database: DESCRIBE, error: "Error", sqlstate: "XX000" },
+    ],
+    [
+      // П'ять літер, як SQLSTATE, але це код Node
+      "a Node code shaped like a SQLSTATE",
+      pgError("EPIPE", `write EPIPE ${URL_}`),
+      { database: DESCRIBE, error: "Error EPIPE" },
+    ],
+    [
+      "a TypeError that mentions a url",
+      new TypeError(`cannot read url of ${URL_}`),
+      { database: DESCRIBE, error: "TypeError" },
+    ],
+    [
+      "an error without a code",
+      new Error(`boom ${URL_}`),
+      { database: DESCRIBE, error: "Error" },
+    ],
+    [
+      "a non-error",
+      `${USER}:${PASSWORD}`,
+      { database: DESCRIBE, error: "unknown" },
+    ],
+  ]
+  for (const [name, error, params] of failures) {
+    it(`reports ${name} as a failure, not a refusal`, () => {
+      expect(classifyDatabaseError(error, names)).toEqual({
+        kind: "failure",
+        params,
+      })
+      const text = connectionErrorMessage(error, DESCRIBE, "diff")
+      expect(text).toMatch(/^The diff call to the database at /)
+      expect(leaks(text)).toEqual([])
+    })
+  }
+
+  it("names the server that failed to create the shadow", () => {
+    const own = classifyDatabaseError(
+      new ShadowCreateRefusedError(false),
+      names
+    )
+    expect(own).toMatchObject({ kind: "refusal" })
+    expect(own.kind === "refusal" && own.message).toContain(
+      `created on ${DESCRIBE}: the connecting role lacks CREATEDB. Point --shadow-url-env`
+    )
+    const base = classifyDatabaseError(
+      new ShadowCreateRefusedError(true),
+      names
+    )
+    expect(base.kind === "refusal" && base.message).toContain(
+      "created on shadow.example.test:5432/postgres: the connecting role lacks CREATEDB."
+    )
+  })
+
+  it("describes a failure on the shadow server by its own address", () => {
+    const unreachable = classifyDatabaseError(
+      new ShadowServerError(pgError("ECONNREFUSED", URL_)),
+      names
+    )
+    expect(unreachable.kind === "refusal" && unreachable.message).toContain(
+      "The database at shadow.example.test:5432/postgres is unreachable"
+    )
     expect(
-      connectionErrorMessage(new DatabaseRefusal("safe text"), DESCRIBE)
-    ).toBe("safe text")
+      classifyDatabaseError(
+        new ShadowServerError(pgError("XX000", USER)),
+        names
+      )
+    ).toEqual({
+      kind: "failure",
+      params: {
+        database: "shadow.example.test:5432/postgres",
+        error: "Error",
+        sqlstate: "XX000",
+      },
+    })
+  })
+
+  it("recognises our errors by class, not by name", () => {
+    const impostor = new Error(`impostor ${PASSWORD}`)
+    impostor.name = "ShadowServerMismatchError"
+    expect(classifyDatabaseError(impostor, names)).toMatchObject({
+      kind: "failure",
+    })
   })
 })
 
@@ -132,9 +271,10 @@ describe("databaseResource", () => {
 })
 
 describe("withDatabase", () => {
-  it("turns any failure into a redacted refusal", async () => {
-    const resource = databaseResource({ APP_DB: URL_ }, { url: "APP_DB" })!
-    const error = await withDatabase(resource, () =>
+  const resource = databaseResource({ APP_DB: URL_ }, { url: "APP_DB" })!
+
+  it("turns a connection failure into a redacted refusal without a cause", async () => {
+    const error = await withDatabase(resource, "diff", () =>
       Promise.reject(
         pgError("28P01", `password authentication failed for user "${USER}"`)
       )
@@ -142,6 +282,41 @@ describe("withDatabase", () => {
     expect(error).toBeInstanceOf(DatabaseRefusal)
     expect(leaks((error as Error).message)).toEqual([])
     expect((error as Error).cause).toBeUndefined()
+  })
+
+  it("turns a failure of the database work into a redacted diagnostic", async () => {
+    const outcome = await withDatabase(resource, "diff", () =>
+      Promise.reject(pgError("XX000", `internal error near ${URL_}`))
+    )
+    expect(outcome).toMatchObject({
+      ok: false,
+      diagnostic: {
+        code: "database.failed",
+        severity: "error",
+        params: {
+          tool: "diff",
+          database: DESCRIBE,
+          error: "Error",
+          sqlstate: "XX000",
+        },
+      },
+    })
+    expect(leaks(JSON.stringify(outcome))).toEqual([])
+  })
+
+  it("describes a shadow-server failure with the shadow address", async () => {
+    const withShadow = databaseResource(
+      {
+        APP_DB: URL_,
+        APP_SHADOW: `postgres://${USER}:${PASSWORD}@sh.test:7000/x`,
+      },
+      { url: "APP_DB", shadow: "APP_SHADOW" }
+    )!
+    const error = await withDatabase(withShadow, "diff", () =>
+      Promise.reject(new ShadowServerError(pgError("ECONNREFUSED", URL_)))
+    ).catch((e: unknown) => e)
+    expect((error as Error).message).toContain("The database at sh.test:7000/x")
+    expect(leaks((error as Error).message)).toEqual([])
   })
 })
 
@@ -156,5 +331,122 @@ describe("shadow on another server", () => {
     expect(shadowServerRefusal(17, 16)).toBe(
       "The shadow server runs PostgreSQL 16, the target runs PostgreSQL 17; the shadow must run the same major version. Nothing changed."
     )
+  })
+})
+
+describe("diff narrowed to tables", () => {
+  const action = (
+    over: Partial<EngineAction> & Pick<EngineAction, "sql">
+  ): EngineAction => ({
+    verb: "create",
+    produces: [],
+    consumes: [],
+    destroys: [],
+    transactionality: "transactional",
+    lockClass: "accessExclusive",
+    dataLoss: false,
+    rewriteRisk: false,
+    ...over,
+  })
+  // FK замовлення залежить від клієнта, але належить замовленню; GRANT не
+  // має ні `produces`, ні `destroys` — його ціль лише в `consumes`
+  const fk = action({
+    sql: "alter table app.orders add constraint orders_customer_id_fkey …",
+    produces: ["constraint:app.orders.orders_customer_id_fkey"],
+    consumes: ["table:app.orders", "table:app.customer"],
+  })
+  const grant = action({
+    sql: "grant select on app.customer to anon",
+    verb: "alter",
+    consumes: ["table:app.customer", "role:anon"],
+  })
+  const index = action({
+    sql: "create index customer_name_idx on app.customer (name)",
+    produces: ["index:app.customer_name_idx"],
+    consumes: ["table:app.customer"],
+  })
+  const models = [
+    [
+      {
+        schema: "app",
+        name: "customer",
+        indexes: [{ name: "customer_name_idx" }],
+      },
+      { schema: "app", name: "orders", indexes: [] },
+    ],
+  ]
+  const data = {
+    plan: [fk, grant, index],
+    differences: [
+      {
+        path: "tables.app.orders.foreignKeys.orders_customer_id_fkey",
+        kind: "missing" as const,
+        detail: "",
+      },
+      {
+        path: "tables.app.customer.indexes.customer_name_idx",
+        kind: "missing" as const,
+        detail: "",
+      },
+      {
+        path: "units.acl:(table:app.customer).anon",
+        kind: "missing" as const,
+        detail: "",
+      },
+    ],
+    diagnostics: [],
+  }
+
+  it("keeps an action by what it creates or drops, not by what it depends on", () => {
+    const customer = narrow(data, [{ schema: "app", name: "customer" }], models)
+    expect(customer.plan).toEqual([grant, index])
+    expect(customer.differences.map((d) => d.path)).toEqual([
+      "tables.app.customer.indexes.customer_name_idx",
+      "units.acl:(table:app.customer).anon",
+    ])
+    const orders = narrow(data, [{ schema: "app", name: "orders" }], models)
+    expect(orders.plan).toEqual([fk])
+    expect(orders.differences.map((d) => d.path)).toEqual([
+      "tables.app.orders.foreignKeys.orders_customer_id_fkey",
+    ])
+  })
+})
+
+describe("database failures through the catalog", () => {
+  const failing = (error: Error): DatabaseResource => ({
+    describe: DESCRIBE,
+    connect: () => Promise.reject(error),
+  })
+
+  it("a failure of the database work exits 1 with a redacted diagnostic", async () => {
+    const dir = await project()
+    const r = await invoke(
+      toolByName("diff")!,
+      {},
+      {
+        ...opts(dir),
+        database: failing(pgError("XX000", `boom ${URL_}`)),
+      }
+    )
+    expect(r.refusal).toBeUndefined()
+    expect(r.ok).toBe(false)
+    expect(r.diagnostics.map((d) => d.code)).toContain("database.failed")
+    expect(leaks(JSON.stringify(r))).toEqual([])
+  })
+
+  it("a refused connection is a refusal", async () => {
+    const dir = await project()
+    const r = await invoke(
+      toolByName("diff")!,
+      {},
+      {
+        ...opts(dir),
+        database: failing(
+          pgError("28P01", `password authentication failed for user "${USER}"`)
+        ),
+      }
+    )
+    expect(r.refusal?.reason).toBe("refused")
+    expect(leaks(JSON.stringify(r))).toEqual([])
   })
 })
