@@ -48,7 +48,8 @@ function isFormat(v: string): v is "text" | "json" {
 export async function runTool(
   tool: Tool,
   argv: CliArgs,
-  stdin: () => Promise<string> = readStdin
+  stdin: () => Promise<string> = readStdin,
+  cwd: string = process.cwd()
 ): Promise<RunResult> {
   try {
     const locale = argv.locale ?? "en"
@@ -74,22 +75,24 @@ export async function runTool(
       throw new UsageError("--all cannot be combined with --out.")
     }
     const parsed = sweep
-      ? { input: {}, dirs: await findMetadataDirs(process.cwd()) }
+      ? { input: {}, dirs: await findMetadataDirs(cwd) }
       : await cliInput(tool, argv, stdin)
     const { input } = parsed
     let { dirs } = parsed
+    const shown = dirs
+    // Теки з `--all` відносні до `cwd`, а читання йде від процесу.
+    if (sweep) dirs = dirs.map((d) => resolve(cwd, d))
     if (sweep && dirs.length === 0) {
       return {
         exitCode: 0,
-        stdout: "metadata:check — no metadata directories found.\n",
+        stdout: "no metadata directories found.\n",
         stderr: "",
       }
     }
     // Індексний режим читає копію з тимчасової теки, а показує справжні шляхи.
     let staged: Awaited<ReturnType<typeof stageMetadataDirs>> | undefined
-    const shown = dirs
     if (sweep && argv.staged === true) {
-      staged = await stageMetadataDirs(process.cwd(), dirs)
+      staged = await stageMetadataDirs(cwd, shown)
       dirs = staged.dirs
     }
     try {
@@ -118,7 +121,7 @@ export async function runTool(
       const blocks: string[] = []
       const allJson: unknown[] = []
       let failed = false
-      for (const dir of dirs) {
+      for (const [i, dir] of dirs.entries()) {
         const result = await invoke(tool, input, {
           dir,
           allowWrite: true,
@@ -128,7 +131,7 @@ export async function runTool(
         if (result.refusal !== undefined) return fail(result.refusal.message)
         failed ||= !result.ok
         const rendered = renderResult(tool, result, {
-          dir: shown[dirs.indexOf(dir)] ?? dir,
+          dir: shown[i] ?? dir,
           locale,
           format,
         })
@@ -167,7 +170,7 @@ function argsFor(tool: Tool): ArgsDef {
     args.all = {
       type: "boolean",
       default: false,
-      description: "Check every metadata directory of the repository",
+      description: "Check every metadata directory under the current directory",
     }
     args.staged = {
       type: "boolean",

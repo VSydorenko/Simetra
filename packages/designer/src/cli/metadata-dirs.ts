@@ -19,7 +19,13 @@ function git(cwd: string, args: string[], input?: string): Promise<GitResult> {
     const err: Buffer[] = []
     child.stdout.on("data", (c: Buffer) => out.push(c))
     child.stderr.on("data", (c: Buffer) => err.push(c))
-    child.on("error", reject)
+    child.on("error", (error) =>
+      reject(
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? new UsageError("git is not installed or not on PATH")
+          : error
+      )
+    )
     child.on("close", (status) =>
       resolve({
         status: status ?? 1,
@@ -38,23 +44,28 @@ async function isGitRepo(cwd: string): Promise<boolean> {
 
 const nulList = (s: string): string[] => s.split("\0").filter(Boolean)
 
-/** Обхід без Git: `node_modules` і `.git` не містять метаданих проєкту. */
-async function walk(cwd: string): Promise<string[]> {
-  const entries = await readdir(cwd, { recursive: true, withFileTypes: true })
+/** Обхід без Git: у `node_modules` і `.git` не спускаємось — метаданих проєкту там немає. */
+async function walk(cwd: string, rel = ""): Promise<string[]> {
+  const entries = await readdir(join(cwd, rel), { withFileTypes: true })
   const found: string[] = []
-  for (const e of entries) {
-    if (!e.isFile() || e.name !== PROJECT_FILE) continue
-    const dir = join(e.parentPath, ".")
-    const rel = dir.slice(cwd.length).replace(/^[\\/]+/, "")
-    const parts = rel.split(/[\\/]/)
-    if (parts.includes("node_modules") || parts.includes(".git")) continue
-    if (rel !== "" && basename(rel).endsWith("metadata")) found.push(rel)
+  if (
+    rel !== "" &&
+    basename(rel).endsWith("metadata") &&
+    entries.some((e) => e.isFile() && e.name === PROJECT_FILE)
+  ) {
+    found.push(rel)
   }
-  return found.map((d) => d.split("\\").join("/")).sort()
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name === "node_modules" || e.name === ".git") {
+      continue
+    }
+    found.push(...(await walk(cwd, rel === "" ? e.name : `${rel}/${e.name}`)))
+  }
+  return found.sort()
 }
 
 /**
- * Теки метаданих репо: у Git — відстежені `*metadata/project.meta.json`
+ * Теки метаданих у поточній теці й нижче: у Git — відстежені `*metadata/project.meta.json`
  * (pathspec `*` перетинає `/`, тож збігаються корінь і вкладені теки); поза
  * Git — обхід файлової системи.
  */
@@ -81,15 +92,27 @@ export async function stageMetadataDirs(
   if (!(await isGitRepo(cwd))) {
     throw new UsageError(`--staged: not a git repository: ${cwd}`)
   }
+  // `ls-files` дає шляхи від cwd, а `checkout-index --prefix` пише від кореня
+  // репо: тому йдемо через повні імена й запускаємо checkout-index з кореня.
+  const top = await git(cwd, ["rev-parse", "--show-toplevel", "--show-prefix"])
+  if (top.status !== 0) throw new UsageError(top.stderr.trim())
+  const [toplevel = cwd, prefix = ""] = top.stdout.split("\n")
   const root = await mkdtemp(join(tmpdir(), "simetra-staged-"))
   const dispose = () => rm(root, { recursive: true, force: true })
   try {
-    const list = await git(cwd, ["ls-files", "-z", "--cached", "--", ...dirs])
+    const list = await git(cwd, [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--full-name",
+      "--",
+      ...dirs,
+    ])
     if (list.status !== 0) throw new UsageError(list.stderr.trim())
     // Префікс мусить закінчуватись слешем; список іде через stdin (ліміт аргументів).
     const files = nulList(list.stdout)
     const out = await git(
-      cwd,
+      toplevel,
       ["checkout-index", `--prefix=${root}/`, "-z", "--stdin"],
       files.length > 0 ? files.join("\0") + "\0" : ""
     )
@@ -98,5 +121,5 @@ export async function stageMetadataDirs(
     await dispose()
     throw error
   }
-  return { root, dirs: dirs.map((d) => join(root, d)), dispose }
+  return { root, dirs: dirs.map((d) => join(root, prefix, d)), dispose }
 }

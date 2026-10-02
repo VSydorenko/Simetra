@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -38,16 +45,9 @@ async function gitProject(): Promise<{ root: string; project: string }> {
 
 const BROKEN = "{ not json"
 
-/** `process.cwd()` — єдиний спосіб задати корінь для `--all`; тести ходять послідовно. */
-async function runIn<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
-  const prev = process.cwd()
-  process.chdir(cwd)
-  try {
-    return await fn()
-  } finally {
-    process.chdir(prev)
-  }
-}
+const noStdin = async (): Promise<string> => ""
+const runAll = (cwd: string, extra: { staged?: boolean } = {}) =>
+  runTool(compile, { _: [], all: true, ...extra }, noStdin, cwd)
 
 describe("compile --all / --staged", () => {
   it("finds a root metadata dir and nested ones", async () => {
@@ -90,16 +90,14 @@ describe("compile --all / --staged", () => {
     const root = await emptyDir()
     await mkdir(join(root, "metadata"))
     await writeFile(join(root, "metadata/project.meta.json"), "{}")
-    const r = await runIn(root, () =>
-      runTool(compile, { _: [], all: true, staged: true })
-    )
+    const r = await runAll(root, { staged: true })
     expect(r.exitCode).toBe(2)
     expect(r.stderr).toContain("not a git repository")
   })
 
   it("--all without metadata prints a note and exits 0", async () => {
     const root = await emptyDir()
-    const r = await runIn(root, () => runTool(compile, { _: [], all: true }))
+    const r = await runAll(root)
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("no metadata directories found")
   })
@@ -117,22 +115,49 @@ describe("compile --all / --staged", () => {
     } finally {
       await staged.dispose()
     }
-    const viaFlag = await runIn(root, () =>
-      runTool(compile, { _: [], all: true, staged: true })
-    )
+    const viaFlag = await runAll(root, { staged: true })
     expect(viaFlag.exitCode).toBe(0)
 
     // Навпаки: індекс зламано, робоче дерево чисте.
     await git(root, "add", "metadata")
     await writeFile(project, clean)
-    const broken = await runIn(root, () =>
-      runTool(compile, { _: [], all: true, staged: true })
-    )
+    const broken = await runAll(root, { staged: true })
     expect(broken.exitCode).toBe(1)
-    const working = await runIn(root, () =>
-      runTool(compile, { _: [], all: true })
-    )
+    const working = await runAll(root)
     expect(working.exitCode).toBe(0)
+  }, 60_000)
+
+  it("--all and --all --staged scope to the current subdirectory", async () => {
+    const { root, project } = await gitProject()
+    const sub = join(root, "sub")
+    await mkdir(sub)
+    await rename(join(root, "metadata"), join(sub, "metadata"))
+    // Зламана тека поза `sub/`, але в індексі: на результат впливати не має.
+    await mkdir(join(root, "other/metadata"), { recursive: true })
+    await writeFile(join(root, "other/metadata/project.meta.json"), BROKEN)
+    await git(root, "add", "-A")
+    const moved = join(sub, "metadata/project.meta.json")
+    const clean = await readFile(moved, "utf8")
+    expect(project).not.toBe(moved)
+
+    expect(await findMetadataDirs(sub)).toEqual(["metadata"])
+    expect((await findMetadataDirs(root)).sort()).toEqual([
+      "other/metadata",
+      "sub/metadata",
+    ])
+    expect((await runAll(sub)).exitCode).toBe(0)
+    expect((await runAll(sub, { staged: true })).exitCode).toBe(0)
+
+    // Індекс чистий, робоче дерево зламано.
+    await writeFile(moved, BROKEN)
+    expect((await runAll(sub, { staged: true })).exitCode).toBe(0)
+    expect((await runAll(sub)).exitCode).toBe(1)
+
+    // Навпаки.
+    await git(root, "add", "-A")
+    await writeFile(moved, clean)
+    expect((await runAll(sub, { staged: true })).exitCode).toBe(1)
+    expect((await runAll(sub)).exitCode).toBe(0)
   }, 60_000)
 
   it("pnpm metadata:check --staged runs the real chain", async () => {
