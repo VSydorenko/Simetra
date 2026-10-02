@@ -2,18 +2,13 @@ import { McpServer } from "@modelcontextprotocol/server"
 import { writeAccessHint } from "../tools/write-access"
 import { registerCatalog, type McpToolOptions } from "./tools"
 
-export interface McpServerOptions extends McpToolOptions {
-  /** Справжній argv запуску: з нього будується фрагмент `args` у підказці. */
-  launchArgs?: readonly string[]
-}
-
 /**
  * Сервер не знає транспорту: stdio підключає команда, тести — пару в пам'яті.
  * До бази сервер не звертається, лише до теки метаданих. Інструменти запису
  * видно завжди: у режимі лише читання вони відмовляють із поясненням, а не
  * зникають, тож агент знає, що запис існує, і що саме увімкнути.
  */
-export function createMcpServer(o: McpServerOptions): McpServer {
+export function createMcpServer(o: McpToolOptions): McpServer {
   const instructions = [
     `Metadata tools for the directory ${o.dir}: compile, explain and the editing tools.`,
     o.allowWrite

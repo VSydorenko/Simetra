@@ -8,6 +8,8 @@ import { ALLOW_WRITE_FLAG } from "../tools/write-access"
 export interface McpToolOptions {
   dir: string
   allowWrite: boolean
+  /** Справжній argv запуску: потрапляє в підказку відмови запису. */
+  launchArgs?: readonly string[]
 }
 
 const dryRun = z.boolean().optional().meta({
@@ -113,6 +115,7 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
           allowWrite: o.allowWrite,
           dryRun: dry === true,
           confirmed: confirmed === true,
+          launchArgs: o.launchArgs,
         })
         return toResponse(tool, result, o, dry === true)
       }

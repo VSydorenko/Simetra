@@ -92,7 +92,7 @@ describe("simetra mcp", () => {
     const client = await connect(dir, false)
     const r = await call(client, "rename", { ...rename, dryRun: true })
     expect(r.isError).toBe(true)
-    expect(r.text).toContain(ALLOW_WRITE_FLAG)
+    expect(r.text).toContain(writeAccessHint())
     expect(await snapshotOf(dir)).toEqual(before)
   })
 
@@ -106,6 +106,17 @@ describe("simetra mcp", () => {
     expect(client.getInstructions()).toContain(
       writeAccessHint(["mcp", "metadata"])
     )
+  })
+
+  it("refusal and instructions carry the same hint built from launch arguments", async () => {
+    const dir = await project()
+    const launchArgs = ["mcp", dir]
+    const client = await connect(dir, false, launchArgs)
+    const r = await call(client, "rename", rename)
+    expect(r.isError).toBe(true)
+    expect(r.text).toBe(writeAccessHint(launchArgs))
+    expect(r.text).toContain(dir)
+    expect(client.getInstructions()).toContain(r.text)
   })
 
   it("tools/list is the same with and without --allow-write", async () => {

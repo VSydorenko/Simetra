@@ -51,7 +51,8 @@ export async function invoke<D>(
       .join("; ")
     return refused("invalid-input", message)
   }
-  if (!permits(tool, o)) return refused("write-disabled", writeAccessHint())
+  if (!permits(tool, o))
+    return refused("write-disabled", writeAccessHint(o.launchArgs))
   // Dry-run нічого не пише, тож підтвердження там нічого не захищає, а агентові
   // перегляд потрібен саме до `confirm`.
   if (tool.destructive && !o.dryRun && !o.confirmed) {

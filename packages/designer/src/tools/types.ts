@@ -43,6 +43,8 @@ export interface InvokeOptions {
   allowWrite: boolean
   dryRun: boolean
   confirmed: boolean
+  /** Argv запуску сервера: з нього будується підказка про `--allow-write`. */
+  launchArgs?: readonly string[]
 }
 
 /** Виводить типи входу й даних з аргументів, щоб записи не писали generics. */
