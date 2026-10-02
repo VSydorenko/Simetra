@@ -95,6 +95,40 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 10. **Тестовий читач `test/db/catalog.ts` лишається незалежним оракулом**
     тестів E1 і не стає продуктовим читачем.
 
+## Рішення за спайком
+
+Спайк — [pg-delta-e2a-spike-2026-10.md](../../research/schema-engine/pg-delta-e2a-spike-2026-10.md);
+відповіді на його «Питання до плану E2a»:
+
+1. **Тінь-сирота після сигналу** (`finally` не виконується): тести рахують
+   бази `pgdelta_shadow_%` до й після прогону, не покладаючись на ім'я.
+   Прибирання сиріт — борг поза E2a (команда CLI чи старт порту, П3).
+2. **Межа перевіряється за `produces` ∪ `consumes` ∪ `destroys`:** GRANT,
+   `ENABLE/FORCE RLS`, `REPLICA IDENTITY`, `OWNED BY`, `DISABLE TRIGGER` і
+   REVOKE мають порожні `produces`/`destroys`; `EngineAction` несе й
+   `consumes`.
+3. **`REPLICA IDENTITY` — одиниця класу `replicaIdentity`** (мова
+   компілятора її приймає); негативні приклади Review Focus 4 —
+   `UNLOGGED`-таблиця й `NOT VALID`-обмеження.
+4. **`functionSettings`** база тримає всередині дефініції функції: у
+   порівнянні ідентичностей задачі 4 одиниця `functionSettings`
+   компілятора зводиться до ідентичності своєї функції (перелік «класи, які
+   база тримає інакше»).
+5. **Зернистість:** extract дає одиницю на пару факту двигуна (об'єкт ×
+   роль для `grant`/`defaultPrivileges`, publication × таблиця); для
+   порівняння ідентичностей задачі 4 оператори компілятора розгортаються в
+   ті самі пари (за деревом розбору).
+6. **Керована схема керується цілком, зокрема її гранти й типові
+   привілеї** (платформна спека §6.9 включає їх у межу). Правило спайку
+   «гранти й ADP у `public` — за провайдером» відхилено: якщо `public`
+   керована, бажаний стан оголошує її гранти й ADP явно (зворотна генерація
+   E2b видасть їх із бази), і тоді REVOKE для `anon`/`authenticated`/`service_role`
+   не з'являється. Тест межі (задача 3) — фікстура з керованою `public`, у
+   бажаному SQL якої ці гранти й ADP оголошено, дає порожнє порівняння.
+7. **`dangling_edge`** адаптер відфільтровує (на засіяній тіні їх десять).
+8. **ACL власника, що дорівнює типовому** (`_ownerDefault`), — не одиниця
+   й не відмінність; явне відкликання прав власника — одиниця.
+
 ## Global Constraints
 
 - Ярус: порт, адаптер, тінь і перепис — `packages/simetra/src/schema/engine/`;
@@ -127,9 +161,8 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
    `produces`/`destroys`), але має дії для політики на `storage.objects`,
    тригера на `auth.users` і застосунку в `public`. Задачі 3 і 6.
 3. **Перестановка колонок ловиться**, хоча план двигуна порожній. Задача 7.
-4. **Властивість без поля моделі не губиться** — `UNLOGGED`-таблиця,
-   не-типовий `REPLICA IDENTITY`, `NOT VALID`-обмеження дають
-   `engine.unrepresentable`. Задача 4.
+4. **Властивість без поля моделі не губиться** — `UNLOGGED`-таблиця й
+   `NOT VALID`-обмеження дають `engine.unrepresentable`. Задача 4.
 5. **Об'єкт класу поза моделлю двигуна й незаповнене подання** дають
    діагностику перепису, а не тихе «порожньо». Задача 5.
 
@@ -238,7 +271,7 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   interface Extracted { model: CatalogModel; catalog: EngineCatalog; diagnostics: EngineDiagnostic[] }
   interface EngineAction {
     sql: string; verb: "create" | "alter" | "drop"
-    produces: string[]; destroys: string[]     // ідентичності об'єктів (рядкова форма StableId двигуна)
+    produces: string[]; consumes: string[]; destroys: string[]   // ідентичності об'єктів (рядкова форма StableId двигуна)
     transactional: boolean; lockClass: string; dataLoss: boolean; rewriteRisk: boolean
   }
   interface EnginePlan { actions: EngineAction[]; empty: boolean }
@@ -309,8 +342,8 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   непорожній. Одиниці: множина `identity` з extract = множина `identity`
   `model.sqlUnits` (з урахуванням класів, які база тримає інакше — перелік
   у тесті з причинами). Негативні (Review Focus 4): `UNLOGGED`-таблиця,
-  `REPLICA IDENTITY FULL`, `NOT VALID`-FK → `engine.unrepresentable` з
-  ім'ям об'єкта.
+  `NOT VALID`-FK → `engine.unrepresentable` з ім'ям об'єкта;
+  `REPLICA IDENTITY FULL` → одиниця `replicaIdentity`.
 - [ ] **Step 3–5:** червоні → реалізація → зелені, гейти.
 - [ ] **Step 6: Commit** `feat(schema): extract мапить факти pg-delta у модель каталогу — поле, одиниця або гучна помилка`
 
