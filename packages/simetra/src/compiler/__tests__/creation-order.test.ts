@@ -143,6 +143,53 @@ describe("creation order", () => {
     ])
   })
 
+  it("schema default privileges come before the objects of their schema", async () => {
+    const list = await order({
+      [CODES]: codes([]),
+      [MISC]: [
+        "CREATE VIEW public.v AS SELECT id FROM public.codes;",
+        "CREATE SEQUENCE public.a_seq;",
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO anon;",
+      ].join("\n"),
+    })
+    expect(list).toEqual([
+      "defaultPrivileges:postgres:public:table:grant:anon:select",
+      "table:public.codes",
+      "sequence:public.a_seq",
+      "view:public.v",
+    ])
+  })
+
+  it("default privileges of another schema do not pull its neighbours", async () => {
+    const list = await order({
+      [CODES]: codes([]),
+      [MISC]:
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA z GRANT SELECT ON TABLES TO anon;\nCREATE SEQUENCE z.s;",
+    })
+    expect(list).toEqual([
+      "table:public.codes",
+      "defaultPrivileges:postgres:z:table:grant:anon:select",
+      "sequence:z.s",
+    ])
+  })
+
+  it("global default privileges come first after extensions", async () => {
+    const list = await order({
+      [CODES]: codes([]),
+      [MISC]: [
+        "CREATE SEQUENCE z.s;",
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT SELECT ON TABLES TO anon;",
+        'CREATE EXTENSION "uuid-ossp" SCHEMA extensions;',
+      ].join("\n"),
+    })
+    expect(list).toEqual([
+      "extension:uuid-ossp",
+      "defaultPrivileges:postgres::table:grant:anon:select",
+      "table:public.codes",
+      "sequence:z.s",
+    ])
+  })
+
   it("domain and sequence before the table", async () => {
     const list = await order({
       [CODES]: codes([

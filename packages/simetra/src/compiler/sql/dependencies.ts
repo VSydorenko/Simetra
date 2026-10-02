@@ -164,6 +164,37 @@ class Graph {
 
     for (const table of physical.tables) this.tableEdges(table)
     for (const unit of units) this.unitEdges(unit)
+    for (const unit of units)
+      if (unit.class === "defaultPrivileges") this.defaultPrivilegeEdges(unit)
+  }
+
+  /**
+   * Типові привілеї діють на об'єкти, створені після них, тож ADP схеми `s`
+   * передує кожному вузлу в `s`, а глобальне ADP (без `IN SCHEMA`) — усім.
+   * Це ребра, а не tie-break: інакше таблиці моделі (вони йдуть перед
+   * одиницями) і одиниці з меншою ідентичністю створювалися б без цих прав.
+   */
+  private defaultPrivilegeEdges(unit: SqlUnit): void {
+    const tree = unit.tree as {
+      AlterDefaultPrivilegesStmt?: { options?: Node[] }
+    }
+    const schemas = new Set(
+      (tree.AlterDefaultPrivilegesStmt?.options ?? []).flatMap((o) =>
+        "DefElem" in o && o.DefElem.defname === "schemas" && o.DefElem.arg
+          ? strings(
+              "List" in o.DefElem.arg
+                ? o.DefElem.arg.List.items
+                : [o.DefElem.arg]
+            )
+          : []
+      )
+    )
+    for (const node of this.nodes.values()) {
+      const cls = node.unit?.class
+      if (cls === "defaultPrivileges" || cls === "extension") continue
+      if (schemas.size === 0 || schemas.has(node.schema))
+        this.edge(node.label, unit.identity)
+    }
   }
 
   private add(node: CreationNode, key: string, unit?: SqlUnit): string {
