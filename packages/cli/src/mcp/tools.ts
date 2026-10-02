@@ -75,13 +75,17 @@ async function mutate(
       path: c.path,
       deleted: c.content === null,
     }))
-    const verb = write ? "written" : "would write"
+    const verb = (deleted: boolean) =>
+      write
+        ? deleted
+          ? "deleted"
+          : "written"
+        : deleted
+          ? "would delete"
+          : "would write"
     const lines = result.ok
       ? [
-          ...changes.map(
-            (c) =>
-              `${c.deleted ? verb.replace("write", "delete") : verb} ${c.path}`
-          ),
+          ...changes.map((c) => `${verb(c.deleted)} ${c.path}`),
           ...(dryRun === true ? ["dry run: nothing written"] : []),
         ]
       : ["nothing written: the operation was refused or the result has errors"]

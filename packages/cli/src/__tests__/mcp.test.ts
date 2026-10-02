@@ -187,9 +187,16 @@ describe("simetra mcp", () => {
     const refused = await call(client, "delete", { target, confirm: false })
     expect(refused.isError).toBe(true)
     expect(existsSync(file)).toBe(true)
-    const done = await call(client, "delete", { target, confirm: true })
-    expect(done.isError).toBe(false)
+    const done = await client.callTool({
+      name: "delete",
+      arguments: { target, confirm: true },
+    })
+    expect(done.isError).not.toBe(true)
     expect(existsSync(file)).toBe(false)
+    const text = (done.content as { type: string; text?: string }[])
+      .map((c) => c.text ?? "")
+      .join("\n")
+    expect(text).toContain("deleted catalogs/Scratch/Scratch.meta.json")
   })
 
   it("delete refuses a referenced object", async () => {
