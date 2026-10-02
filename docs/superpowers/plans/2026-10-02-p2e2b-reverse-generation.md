@@ -387,7 +387,7 @@
 ### Task 6: Процедура приватної звірки, канон, ROADMAP
 
 **Files:**
-- Create: `.agents/skills/consumer-reconciliation/SKILL.md` (+ симлінк `.claude/skills/consumer-reconciliation`), запис у skill mappings `AGENTS.md`
+- Create: `packages/designer/skills/simetra-adoption/SKILL.md` (загальний прийом наявної бази для споживачів); одноразова процедура звірки — кроки Step 1 нижче
 - Modify: спека П2 §10.3 (команди звірки), `docs/ROADMAP.md`
 
 - [ ] **Step 1:** процедура приватної звірки (рішення плану 11). Що й
