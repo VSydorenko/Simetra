@@ -1,6 +1,9 @@
 import { parseId, type StableId } from "@supabase/pg-delta"
-import type { EngineAction, EngineScope } from "simetra/schema"
-import { SUPABASE_SCHEMAS } from "../../engine/provider/supabase"
+import {
+  SUPABASE_SCHEMAS,
+  type EngineAction,
+  type EngineScope,
+} from "simetra/schema"
 
 /** Схема ідентичності: власна або цілі сателіта; без схеми — `undefined`. */
 function schemaOf(id: StableId): string | undefined {

@@ -10,7 +10,7 @@
     "lint": "turbo lint",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
-    "test:db": "supabase test db && pnpm --filter simetra test:db",
+    "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetra/designer test:db",
     "format": "turbo format",
     "typecheck": "turbo typecheck",
     "test": "turbo test",

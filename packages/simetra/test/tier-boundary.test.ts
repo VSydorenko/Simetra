@@ -27,6 +27,13 @@ async function purity(code: string, file: string): Promise<string[]> {
     .filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports")
     .map((m) => m.message)
 }
+async function ruleIds(code: string, file: string): Promise<string[]> {
+  const [result] = await eslint.lintText(code, {
+    filePath: join(PKG, file),
+    warnIgnored: true,
+  })
+  return (result?.messages ?? []).flatMap((m) => (m.ruleId ? [m.ruleId] : []))
+}
 const importOf = (s: string) =>
   `import { probe } from "${s}"\nexport const used = probe\n`
 
@@ -199,6 +206,36 @@ describe("tier zones", () => {
     expect(await purity(importOf("zod"), file)).toEqual([])
     expect(
       await purity(importOf("node:fs"), "src/compiler/__tests__/__fixture.ts")
+    ).toEqual([])
+  })
+
+  it("production sources import neither pg nor pg-delta", async () => {
+    // Рушій схеми й читачі бази живуть у @simetra/designer (рішення Д5):
+    // рантайм-пакет не тягне драйвер бази й двигун навіть типами
+    for (const code of [
+      'import pg from "pg"\nexport const used = pg\n',
+      'import type pg from "pg"\nexport type Used = pg.Pool\n',
+      'import pool from "pg/lib/pool"\nexport const used = pool\n',
+      'import { parseId } from "@supabase/pg-delta"\nexport const used = parseId\n',
+      'import { resolveView } from "@supabase/pg-delta/policy"\nexport const used = resolveView\n',
+    ])
+      for (const file of [
+        "src/schema/engine/x.ts",
+        "src/server/x.ts",
+        "src/model/x.ts",
+        "src/compiler/x.ts",
+      ])
+        expect(await ruleIds(code, file), `${file}: ${code}`).toContain(
+          "@typescript-eslint/no-restricted-imports"
+        )
+    expect(
+      await ruleIds(
+        'import pg from "pg"\nexport const used = pg\n',
+        "src/schema/__tests__/x.db.test.ts"
+      )
+    ).toEqual([])
+    expect(
+      await ruleIds(importOf("pg-query-emscripten"), "src/schema/engine/x.ts")
     ).toEqual([])
   })
 

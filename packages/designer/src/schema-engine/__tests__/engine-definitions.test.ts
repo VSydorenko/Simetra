@@ -3,7 +3,7 @@ import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import {
   parseConstraintDefinition,
   parseIndexDefinition,
-} from "../engine/pg-delta/map-definitions"
+} from "../pg-delta/map-definitions"
 
 /**
  * Розбір дефініцій, які двигун бере з `pg_get_constraintdef` і

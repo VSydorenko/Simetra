@@ -15,25 +15,25 @@ import {
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { loadSqlParser, localize, type RuleCode } from "simetra/compiler"
-import type {
-  DbConnection,
-  EngineAction,
-  EngineCatalog,
-  EngineDiagnostic,
-  EnginePlan,
-  EngineScope,
-  Extracted,
-  SchemaEngine,
-  ShadowOutcome,
-} from "../port"
 import {
   censusDiagnostics,
+  unmodeledClasses,
+  type CensusClass,
+  type DbConnection,
+  type EngineAction,
+  type EngineCatalog,
+  type EngineDiagnostic,
+  type EnginePlan,
+  type EngineScope,
+  type Extracted,
+  type SchemaEngine,
+  type ShadowOutcome,
+} from "simetra/schema"
+import {
   readCensus,
   readUnmodeledProperties,
   readUnpopulatedViews,
-  unmodeledClasses,
-  type CensusClass,
-} from "../census"
+} from "../census-read"
 import {
   CENSUS_COVERAGE,
   censusClassOfFact,

@@ -20,6 +20,15 @@ export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export { readSqlUnits, type SqlSource, type SqlUnit } from "./sql/units"
 export { loadSqlParser, type SqlParser } from "./sql/parse"
+// Вузли дерева розбору, яке віддає `SqlParser`: споживач розбору (адаптер
+// двигуна в designer) бере їх звідси, а не тримає другий пін libpg-query
+export type {
+  Constraint,
+  IndexElem,
+  IndexStmt,
+  Node,
+  RangeVar,
+} from "libpg-query"
 export type {
   Contracts,
   PostingContract,

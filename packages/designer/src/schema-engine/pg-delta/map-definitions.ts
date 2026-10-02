@@ -4,8 +4,8 @@ import type {
   IndexStmt,
   Node,
   RangeVar,
-} from "libpg-query"
-import type { SqlParser } from "simetra/compiler"
+  SqlParser,
+} from "simetra/compiler"
 import {
   quoteIdent,
   type CatalogTable,

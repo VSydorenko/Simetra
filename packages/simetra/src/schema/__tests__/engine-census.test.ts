@@ -3,8 +3,58 @@ import {
   censusDiagnostics,
   reconcileCensus,
   type CensusClass,
+  type EngineCoverage,
 } from "../engine/census"
-import { CENSUS_COVERAGE } from "../engine/pg-delta/census-facts"
+
+/**
+ * Власна мапа покриття тесту: чисті функції не залежать від покриття
+ * конкретного двигуна; покриття pg-delta перевіряє тест адаптера в
+ * @simetra/designer (`schema-engine/__tests__/census-coverage.test.ts`).
+ */
+const COVERAGE = {
+  table: "compared",
+  view: "compared",
+  materializedView: "compared",
+  sequence: "compared",
+  foreignTable: "compared",
+  index: "compared",
+  "type.enum": "compared",
+  "type.composite": "compared",
+  "type.range": "compared",
+  "type.base": "compared",
+  "type.shell": "unmodeled",
+  domain: "compared",
+  function: "compared",
+  procedure: "compared",
+  aggregate: "compared",
+  "constraint.exclusion": "compared",
+  "constraint.trigger": "uncompared",
+  trigger: "compared",
+  policy: "compared",
+  rule: "compared",
+  collation: "compared",
+  conversion: "compared",
+  operator: "compared",
+  operatorClass: "compared",
+  operatorFamily: "compared",
+  cast: "unmodeled",
+  textSearchConfiguration: "compared",
+  textSearchDictionary: "compared",
+  textSearchParser: "compared",
+  textSearchTemplate: "compared",
+  statistics: "compared",
+  transform: "compared",
+  publicationRel: "compared",
+  publicationSchema: "compared",
+  defaultPrivilege: "uncompared",
+  extension: "compared",
+  language: "unmodeledGlobal",
+  accessMethod: "unmodeledGlobal",
+  eventTrigger: "compared",
+  foreignDataWrapper: "compared",
+  server: "compared",
+  subscription: "compared",
+} as const satisfies EngineCoverage
 
 /**
  * Звірка лічильників перепису з фактами двигуна (план E2a, рішення 8):
@@ -23,7 +73,7 @@ describe("census reconciliation with engine facts", () => {
           { class: "type.enum", count: 1 },
         ],
         facts,
-        CENSUS_COVERAGE
+        COVERAGE
       )
     ).toEqual([])
   })
@@ -32,7 +82,7 @@ describe("census reconciliation with engine facts", () => {
     const [found, ...rest] = reconcileCensus(
       [{ class: "policy", count: 3 }],
       new Map<CensusClass, number>([["policy", 2]]),
-      CENSUS_COVERAGE
+      COVERAGE
     )
     expect(rest).toEqual([])
     expect(found).toMatchObject({
@@ -49,7 +99,7 @@ describe("census reconciliation with engine facts", () => {
       reconcileCensus(
         [],
         new Map<CensusClass, number>([["view", 1]]),
-        CENSUS_COVERAGE
+        COVERAGE
       ).map((d) => d.code)
     ).toEqual(["engine.census-mismatch"])
   })
@@ -63,7 +113,7 @@ describe("census reconciliation with engine facts", () => {
           { class: "cast", count: 1 },
         ],
         new Map(),
-        CENSUS_COVERAGE
+        COVERAGE
       )
     ).toEqual([])
   })
@@ -77,7 +127,7 @@ describe("census reconciliation with engine facts", () => {
           { class: "accessMethod", count: 2 },
         ],
         new Map(),
-        CENSUS_COVERAGE,
+        COVERAGE,
         []
       ).map((d) => [d.code, d.severity])
     ).toEqual([
@@ -88,7 +138,7 @@ describe("census reconciliation with engine facts", () => {
   })
 
   it("a non-default physical property is an error naming it", () => {
-    const [found, ...rest] = censusDiagnostics([], new Map(), CENSUS_COVERAGE, [
+    const [found, ...rest] = censusDiagnostics([], new Map(), COVERAGE, [
       { property: "column storage", count: 2 },
     ])
     expect(rest).toEqual([])

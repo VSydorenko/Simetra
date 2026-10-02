@@ -7,25 +7,23 @@ import {
   type CatalogTable,
 } from "simetra/model"
 import {
-  createPgDeltaEngine,
+  ALL_PRIVILEGES,
   engineScope,
   type EngineScope,
   renderDesiredState,
   type Extracted,
 } from "simetra/schema"
-import { ALL_PRIVILEGES } from "../engine/privileges"
+import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
-} from "../../../test/db/connection"
-import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
-import {
+  readReferenceDomain,
   customTable,
   metaFiles,
   project,
   uuid,
-} from "../../compiler/__tests__/helpers"
-import { FIXTURES } from "./fixtures/e1-fixtures"
+  FIXTURES,
+} from "../../../../simetra/test/support"
 
 /**
  * Extract порту мапить факти pg-delta у модель каталогу (план E2a, задача 4):

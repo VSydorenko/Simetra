@@ -14,10 +14,8 @@
     "test:db": "vitest run --project db"
   },
   "dependencies": {
-    "@supabase/pg-delta": "1.0.0-alpha.56",
     "jsonc-parser": "3.3.1",
     "libpg-query": "17.7.4",
-    "pg": "8.23.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -26,6 +24,7 @@
     "@types/pg": "^8.23.1",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^10.11.0",
+    "pg": "8.23.1",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.2"

@@ -1,5 +1,5 @@
 import type { FactKind } from "@supabase/pg-delta"
-import type { CensusClass, ClassCoverage, EngineCoverage } from "../census"
+import type { CensusClass, ClassCoverage, EngineCoverage } from "simetra/schema"
 
 /**
  * Що двигун робить з об'єктами класу перепису (спайк E2a, крок 4,

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { createPgDeltaEngine, type EngineScope } from "simetra/schema"
-import { boundaryViolations } from "./fixtures/engine-boundary"
+import type { EngineScope } from "simetra/schema"
+import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
-} from "../../../test/db/connection"
+} from "../../../../simetra/test/support"
+import { boundaryViolations } from "./fixtures/engine-boundary"
 
 /**
  * Порт `SchemaEngine` на живому стеку (план E2a, задача 3): extract у межі,

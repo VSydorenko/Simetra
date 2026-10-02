@@ -2,20 +2,18 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   compareWithDesired,
-  createPgDeltaEngine,
   engineScope,
   renderDesiredState,
   type EngineScope,
 } from "simetra/schema"
+import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
-} from "../../../test/db/connection"
-import {
   customTable,
   metaFiles,
   project,
-} from "../../compiler/__tests__/helpers"
+} from "../../../../simetra/test/support"
 import { boundaryViolations } from "./fixtures/engine-boundary"
 
 /**

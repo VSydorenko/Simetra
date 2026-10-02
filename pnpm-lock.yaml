@@ -41,9 +41,15 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.2.0
         version: 2.2.0
+      '@supabase/pg-delta':
+        specifier: 1.0.0-alpha.56
+        version: 1.0.0-alpha.56
       citty:
         specifier: 0.2.2
         version: 0.2.2
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
       simetra:
         specifier: workspace:*
         version: link:../simetra
@@ -63,6 +69,9 @@ importers:
       '@types/node':
         specifier: ^24.13.6
         version: 24.13.6
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
       '@typescript/native':
         specifier: npm:typescript@^7.0.2
         version: typescript@7.0.2
@@ -81,18 +90,12 @@ importers:
 
   packages/simetra:
     dependencies:
-      '@supabase/pg-delta':
-        specifier: 1.0.0-alpha.56
-        version: 1.0.0-alpha.56
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
       libpg-query:
         specifier: 17.7.4
         version: 17.7.4
-      pg:
-        specifier: 8.23.1
-        version: 8.23.1
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -112,6 +115,9 @@ importers:
       eslint:
         specifier: ^10.11.0
         version: 10.11.0
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
       typescript:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'

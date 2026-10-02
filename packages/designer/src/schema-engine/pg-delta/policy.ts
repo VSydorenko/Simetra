@@ -5,8 +5,11 @@ import {
   type IntegrationProfile,
   type Policy,
 } from "@supabase/pg-delta"
-import type { EngineScope } from "../port"
-import { SUPABASE_EXTENSIONS, SUPABASE_SCHEMAS } from "../provider/supabase"
+import {
+  SUPABASE_EXTENSIONS,
+  SUPABASE_SCHEMAS,
+  type EngineScope,
+} from "simetra/schema"
 
 /**
  * Політика межі §6.9 поверх `supabasePolicy`. Фільтр двигуна — «перше збігле

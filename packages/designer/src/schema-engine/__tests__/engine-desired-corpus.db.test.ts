@@ -2,19 +2,20 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
   compareWithDesired,
-  createPgDeltaEngine,
   engineScope,
   renderDesiredState,
   type DesiredComparison,
   type EngineDiagnostic,
   type EngineScope,
 } from "simetra/schema"
+import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
-} from "../../../test/db/connection"
-import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
-import { customTables, FIXTURES } from "./fixtures/e1-fixtures"
+  readReferenceDomain,
+  customTables,
+  FIXTURES,
+} from "../../../../simetra/test/support"
 
 /**
  * Звірка розгорнутого бажаного стану через порт: ціль — тінь із рендером

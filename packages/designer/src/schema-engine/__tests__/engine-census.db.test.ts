@@ -4,22 +4,23 @@ import pg from "pg"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
-  createPgDeltaEngine,
   renderDesiredState,
+  SUPABASE_SCHEMAS,
+  type CensusCount,
   type DbConnection,
   type EngineScope,
   type Extracted,
 } from "simetra/schema"
-import { readCensus, type CensusCount } from "../engine/census"
-import { COVERED_CLASSES, factKindOf } from "../engine/pg-delta/census-facts"
-import { scopeProfile } from "../engine/pg-delta/policy"
-import { SUPABASE_SCHEMAS } from "../engine/provider/supabase"
+import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
   testSuperuserUrl,
-} from "../../../test/db/connection"
-import { FIXTURES } from "./fixtures/e1-fixtures"
+  FIXTURES,
+} from "../../../../simetra/test/support"
+import { readCensus } from "../census-read"
+import { COVERED_CLASSES, factKindOf } from "../pg-delta/census-facts"
+import { scopeProfile } from "../pg-delta/policy"
 
 /**
  * Перепис класів у межі керування (план E2a, рішення 8): клас, якого двигун
