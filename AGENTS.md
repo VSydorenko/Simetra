@@ -271,6 +271,4 @@ skills:
   load: ".agents/skills/codebase-research/SKILL.md"
 - task: "review landed work before merge: choosing lenses, severity x confidence scale, adversarial verification of findings"
   load: ".agents/skills/code-review/SKILL.md"
-- task: "validate, inspect, repair or edit metadata with the simetra CLI or MCP server; read compiler diagnostics; a failing metadata check in pre-commit or CI"
-  load: ".agents/skills/simetra-cli/SKILL.md"
 <!-- intent-skills:end -->
