@@ -14,4 +14,5 @@ export {
   compareWithDesired,
   engineScope,
   type DesiredComparison,
+  type ModelScope,
 } from "./desired"

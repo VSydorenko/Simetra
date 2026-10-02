@@ -248,7 +248,7 @@ async function expectExtractMatchesModel(files: Map<string, string>) {
   const model = await compiled(files)
   const extracted = await extractDesired(
     renderDesiredState(model).sql,
-    engineScope(model)
+    engineScope(model).scope
   )
   expect(extracted.diagnostics.filter((d) => d.severity === "error")).toEqual(
     []

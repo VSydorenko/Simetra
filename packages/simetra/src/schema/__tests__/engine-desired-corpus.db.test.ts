@@ -6,6 +6,7 @@ import {
   engineScope,
   renderDesiredState,
   type DesiredComparison,
+  type EngineDiagnostic,
   type EngineScope,
 } from "simetra/schema"
 import {
@@ -46,13 +47,15 @@ async function compiled(files: Map<string, string>): Promise<CompiledModel> {
 async function reconcile(
   targetSql: string,
   desiredSql: string,
-  scope: EngineScope
+  scope: EngineScope,
+  scopeDiagnostics: readonly EngineDiagnostic[] = []
 ): Promise<Extract<DesiredComparison, { status: "compared" }>> {
   const outcome = await engine.withDesiredShadow(
     stack,
     targetSql,
     scope,
-    (target) => compareWithDesired(engine, target, desiredSql, scope)
+    (target) =>
+      compareWithDesired(engine, target, desiredSql, scope, scopeDiagnostics)
   )
   expect(outcome.status === "loaded" ? [] : outcome.diagnostics).toEqual([])
   if (outcome.status !== "loaded") throw new Error("target did not load")
@@ -69,7 +72,8 @@ async function reconcile(
 async function expectDeployedRenderIsEmpty(files: Map<string, string>) {
   const model = await compiled(files)
   const sql = renderDesiredState(model).sql
-  const result = await reconcile(sql, sql, engineScope(model))
+  const { scope, diagnostics } = engineScope(model)
+  const result = await reconcile(sql, sql, scope, diagnostics)
   // Спершу — що саме не порожнє, а не голе `false`
   expect({
     actions: result.plan.actions.map((a) => a.sql),
@@ -116,7 +120,7 @@ describe("a mutated target is never silently empty", () => {
   beforeEach(async () => {
     const model = await compiled(customTables())
     render = renderDesiredState(model).sql
-    scope = engineScope(model)
+    scope = engineScope(model).scope
   })
 
   it("extra index", async () => {

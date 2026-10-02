@@ -31,6 +31,24 @@ function catalogOf(space: string | number | undefined): string {
  * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
  * каталог вичерпним: нове правило без обох текстів не пройде typecheck.
  */
+/** Причини `engine.out-of-scope`: параметр `reason` — ключ, текст — тут. */
+const OUT_OF_SCOPE_REASONS: Readonly<Record<string, Record<Locale, Text>>> = {
+  "provider-schema": {
+    en: (p) => `schema ${p.schema} belongs to the provider`,
+    uk: (p) => `схема ${p.schema} належить провайдерові`,
+  },
+  "global-default-privileges": {
+    en: () =>
+      "default privileges without IN SCHEMA belong to no managed schema",
+    uk: () =>
+      "типові привілеї без IN SCHEMA не належать жодній керованій схемі",
+  },
+  "provider-extension": {
+    en: () => "the provider installs this extension itself",
+    uk: () => "це розширення ставить сам провайдер",
+  },
+}
+
 export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // --- Перевірки схем T0 (issue з `params.rule`) ---
   "type.length-required": {
@@ -982,6 +1000,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The engine skipped or added objects of a class it models, so the catalog model would silently differ from the database; find the objects the engine policy or extraction treats differently.",
       uk: "Рушій пропустив або додав об'єкти класу, який він моделює, тож модель каталогу тихо розійшлася б із базою; знайдіть об'єкти, які політика чи екстракт рушія обробляє інакше.",
+    },
+  },
+  "engine.out-of-scope": {
+    en: (p) =>
+      `${p.object} lies outside the boundary the schema engine compares, so a comparison would never see it: ${OUT_OF_SCOPE_REASONS[String(p.reason)]?.en(p) ?? p.reason}`,
+    uk: (p) =>
+      `${p.object} лежить поза межею, яку порівнює рушій схеми, тож звірка ніколи його не побачить: ${OUT_OF_SCOPE_REASONS[String(p.reason)]?.uk(p) ?? p.reason}`,
+    hint: {
+      en: "In a provider schema the application owns only policies, triggers and publication membership; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
+      uk: "У схемі провайдера застосунку належать лише політики, тригери й членство в publication; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
   },
 }

@@ -46,7 +46,8 @@ describe("compareWithDesired", () => {
       engine,
       stack,
       "create schema app; create table app.t (id int primary key);",
-      scopeOf("app")
+      scopeOf("app"),
+      []
     )
     expect(ok.status).toBe("compared")
     expect(await shadowDatabaseCount()).toBe(shadowsBefore)
@@ -55,7 +56,8 @@ describe("compareWithDesired", () => {
       engine,
       stack,
       "create table app.nowhere (id int);",
-      scopeOf("app")
+      scopeOf("app"),
+      []
     )
     expect(failed.status).toBe("shadow-failed")
     expect(await shadowDatabaseCount()).toBe(shadowsBefore)
@@ -66,7 +68,8 @@ describe("compareWithDesired", () => {
       engine,
       stack,
       "create schema app; create table app.t (id int references app.missing (id));",
-      scopeOf("app")
+      scopeOf("app"),
+      []
     )
     expect(result.status).toBe("shadow-failed")
     if (result.status !== "shadow-failed") return
@@ -103,12 +106,14 @@ describe("compareWithDesired", () => {
       []
     )
     const model = compiled.model!
-    const scope = engineScope(model)
+    const { scope, diagnostics } = engineScope(model)
+    expect(diagnostics).toEqual([])
     const result = await compareWithDesired(
       engine,
       stack,
       renderDesiredState(model).sql,
-      scope
+      scope,
+      diagnostics
     )
     expect(result.status).toBe("compared")
     if (result.status !== "compared") return
@@ -130,7 +135,8 @@ describe("compareWithDesired", () => {
          id uuid primary key,
          user_id uuid not null references auth.users (id)
        );`,
-      scopeOf("app")
+      scopeOf("app"),
+      []
     )
     expect(result.status).toBe("compared")
     if (result.status !== "compared") return
@@ -146,11 +152,41 @@ describe("compareWithDesired", () => {
       engine,
       stack,
       "select 1;",
-      scopeOf("app")
+      scopeOf("app"),
+      []
     )
     expect(result.status).toBe("compared")
     if (result.status !== "compared") return
     expect(result.differences).toEqual([])
     expect(result.empty).toBe(true)
+  })
+
+  it("objects outside the boundary make the comparison non-empty", async () => {
+    // Фільтр двигуна виключає таблицю в `auth` і з цілі, і з тіні: план і
+    // моделі порожні, і лише діагностика межі не дає назвати звірку рівною
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "custom-tables/Profile/Profile.meta.json": customTable("Profile", {
+          schema: "auth",
+        }),
+      })
+    )
+    const model = compiled.model!
+    const { scope, diagnostics } = engineScope(model)
+    expect(diagnostics.map((d) => d.code)).toEqual(["engine.out-of-scope"])
+    const result = await compareWithDesired(
+      engine,
+      stack,
+      renderDesiredState(model).sql,
+      scope,
+      diagnostics
+    )
+    expect(result.status).toBe("compared")
+    if (result.status !== "compared") return
+    expect(result.plan.empty).toBe(true)
+    expect(result.differences).toEqual([])
+    expect(result.diagnostics).toContainEqual(diagnostics[0])
+    expect(result.empty).toBe(false)
   })
 })
