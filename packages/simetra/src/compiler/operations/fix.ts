@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  MAX_PHYSICAL_NAME_BYTES,
   assignPhysicalName,
   formatMetaFile,
   formatProjectFile,
@@ -50,8 +51,6 @@ export interface CompletionResult {
   diagnostics: Diagnostic[]
 }
 
-/** Ліміт ідентифікатора Postgres у байтах UTF-8. */
-const MAX_IDENT_BYTES = 63
 const PROJECT_SCHEMA_FILE = "project.schema.json"
 const META_SUFFIX = ".meta.json"
 const NO_SCOPE = "none"
@@ -242,7 +241,7 @@ class NameAssigner {
     const longest = [candidate, ...suffixes.map((s) => `${candidate}${s}`)]
       .sort((a, b) => byteLength(b) - byteLength(a))
       .at(0)!
-    if (byteLength(longest) > MAX_IDENT_BYTES) {
+    if (byteLength(longest) > MAX_PHYSICAL_NAME_BYTES) {
       this.diagnostics.push(
         diagnostic("operation.physical-name-too-long", file, at.pointer, {
           name: candidate,

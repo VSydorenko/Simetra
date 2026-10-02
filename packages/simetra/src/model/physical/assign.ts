@@ -37,7 +37,7 @@ function baseName(logicalName: string, role: PhysicalNameRole): string {
  * Фізичне ім'я нового елемента — факт моделі, а не CLI. Призначається раз і
  * ніколи не змінюється, тож зарезервоване слово чи зайняте ім'я обходиться
  * суфіксом `_`, доки ім'я не стане вільним: квотування врятувало б SQL, але
- * не читача. `taken` — імена тієї ж області унікальності; їх збирає виклик.
+ * не читача. Мітці суфікс дає лише зайнятість. `taken` — імена тієї ж області унікальності; їх збирає виклик.
  */
 export function assignPhysicalName(
   logicalName: string,
@@ -45,6 +45,9 @@ export function assignPhysicalName(
   taken: ReadonlySet<string>
 ): string {
   let name = baseName(logicalName, role)
-  while (isSqlReservedWord(name) || taken.has(name)) name += "_"
+  // Мітка — літерал даних (значення в CHECK, `predefined_name`), а не
+  // ідентифікатор SQL, тож зарезервоване слово їй не заважає.
+  const reserved = (n: string) => role.role !== "label" && isSqlReservedWord(n)
+  while (reserved(name) || taken.has(name)) name += "_"
   return name
 }

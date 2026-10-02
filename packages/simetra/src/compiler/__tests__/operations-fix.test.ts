@@ -119,6 +119,75 @@ describe("fixFiles", () => {
     expect(metadataIdSchema.safeParse(added.id).success).toBe(true)
   })
 
+  it("keeps authored physical names the rule would not produce", async () => {
+    // Імена домену збігаються з правилом, тож перерахунок їх не виявив би;
+    // тут — імена, яких правило не дало б, на об'єкті, реквізиті й мітці.
+    const files = readReferenceDomain()
+    const edit = (path: string, change: (data: Json) => void) => {
+      const data = JSON.parse(files.get(path)!) as Json
+      change(data)
+      files.set(path, JSON.stringify(data))
+    }
+    edit("information-registers/Rates/Rates.meta.json", (data) => {
+      data.physicalName = "legacy_tbl"
+    })
+    edit("catalogs/Counterparty/Counterparty.meta.json", (data) => {
+      ;(data.attributes as Json[])[0]!.physicalName = "cp_ref"
+    })
+    edit("enumerations/AccrualKind/AccrualKind.meta.json", (data) => {
+      ;(data.values as Json[])[1]!.physicalName = "legacy_bonus"
+    })
+    const before = await compile(files)
+    expect(before.ok).toBe(true)
+
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    const read = (path: string) => JSON.parse(fixed.get(path)!) as Json
+    expect(
+      read("information-registers/Rates/Rates.meta.json").physicalName
+    ).toBe("legacy_tbl")
+    expect(
+      (
+        read("catalogs/Counterparty/Counterparty.meta.json")
+          .attributes as Json[]
+      )[0]!.physicalName
+    ).toBe("cp_ref")
+    expect(
+      (
+        read("enumerations/AccrualKind/AccrualKind.meta.json").values as Json[]
+      )[1]!.physicalName
+    ).toBe("legacy_bonus")
+    expect((await compile(fixed)).model!.hash).toBe(before.model!.hash)
+  })
+
+  it("a reserved word label compiles without a reserved-word warning", async () => {
+    // Мітка — літерал даних (CHECK, `predefined_name`), а не ідентифікатор.
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "enumerations/Status/Status.meta.json": {
+        kind: "Enumeration",
+        name: "Status",
+        values: [{ name: "Order" }],
+      },
+      "catalogs/Item/Item.meta.json": {
+        kind: "Catalog",
+        name: "Item",
+        predefinedItems: [{ name: "Order" }],
+      },
+    })
+    const result = await fixFiles(files, options())
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    const status = JSON.parse(
+      fixed.get("enumerations/Status/Status.meta.json")!
+    )
+    const item = JSON.parse(fixed.get("catalogs/Item/Item.meta.json")!)
+    expect(status.values[0].physicalName).toBe("order")
+    expect(item.predefinedItems[0].physicalName).toBe("order")
+  })
+
   it("idempotent", async () => {
     const first = await fixFiles(strippedDomain(), options())
     const fixed = applyChanges(strippedDomain(), first.changes)

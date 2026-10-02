@@ -77,6 +77,13 @@ describe("assignPhysicalName", () => {
     expect(assignPhysicalName("order", { role: "field" }, none)).toBe("order_")
   })
 
+  it("a label is a data literal, not an identifier", () => {
+    expect(assignPhysicalName("Order", { role: "label" }, none)).toBe("order")
+    expect(
+      assignPhysicalName("Order", { role: "label" }, new Set(["order"]))
+    ).toBe("order_")
+  })
+
   it("taken", () => {
     expect(
       assignPhysicalName("amount", { role: "field" }, new Set(["amount"]))

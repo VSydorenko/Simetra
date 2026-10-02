@@ -17,6 +17,7 @@ export {
   objectNameSchema,
   elementNameSchema,
   physicalNameSchema,
+  MAX_PHYSICAL_NAME_BYTES,
   ATTRIBUTE_CASES,
   matchesAttributeCase,
   toSnakeCase,

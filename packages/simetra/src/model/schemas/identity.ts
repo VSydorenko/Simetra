@@ -38,7 +38,7 @@ export const elementNameSchema = z
   })
 
 /** Ліміт ідентифікатора PostgreSQL — 63 байти, а не символи. */
-const MAX_PHYSICAL_NAME_BYTES = 63
+export const MAX_PHYSICAL_NAME_BYTES = 63
 
 export const physicalNameSchema = z
   .string()
