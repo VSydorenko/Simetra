@@ -120,6 +120,35 @@ describe("createObject", () => {
     expect(result.diagnostics.some((d) => d.file === CURRENCY)).toBe(true)
   })
 
+  it("refuses an explicit id in data, top-level or nested", async () => {
+    // Id видає лише `newId`: id видаленого елемента, переданий ззовні,
+    // компіляція не відрізнила б від нового, і правило «ніколи не
+    // перевикористовується» тихо порушилось би.
+    for (const [data, at] of [
+      [{ scope: "none", id: uuid(1) }, "/data/id"],
+      [
+        {
+          scope: "none",
+          attributes: [{ name: "x", type: "Boolean", id: uuid(2) }],
+        },
+        "/data/attributes/0/id",
+      ],
+    ] as const) {
+      const result = await createObject(
+        readReferenceDomain(),
+        { kind: "Catalog", name: "Warehouse", data },
+        options()
+      )
+      expect(result.ok).toBe(false)
+      expect(result.changes).toEqual([])
+      expect(codes(result)).toEqual(["operation.input-invalid"])
+      const d = result.diagnostics[0]!
+      expect(d.file).toBe("")
+      expect(d.params?.at).toBe(at)
+      expect(d.message).toContain(`"id"`)
+    }
+  })
+
   it("result that fails compile is not ok", async () => {
     // Документ без обов'язкового `scope`: зміна є, але обгортка її не запише.
     const result = await createObject(
@@ -175,6 +204,33 @@ describe("addElement", () => {
     expect(added.physicalName).toBe("note")
     expect(target.ok && target.id).toBe(added.id)
     expect(metadataIdSchema.safeParse(added.id).success).toBe(true)
+  })
+
+  it("refuses an explicit id in the element, top-level or nested", async () => {
+    for (const [element, at] of [
+      [{ name: "x", type: "Boolean", id: uuid(3) }, "/element/id"],
+      [
+        {
+          name: "lines",
+          attributes: [{ name: "y", type: "Boolean", id: uuid(4) }],
+        },
+        "/element/attributes/0/id",
+      ],
+    ] as const) {
+      const result = await addElement(
+        readReferenceDomain(),
+        {
+          target: { kind: "Catalog", name: "Currency" },
+          collection: element.name === "x" ? "attributes" : "tabularSections",
+          element,
+        },
+        options()
+      )
+      expect(result.ok).toBe(false)
+      expect(result.changes).toEqual([])
+      expect(codes(result)).toEqual(["operation.input-invalid"])
+      expect(result.diagnostics[0]!.params?.at).toBe(at)
+    }
   })
 
   it("unknown collection", async () => {

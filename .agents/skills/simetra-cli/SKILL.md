@@ -57,6 +57,9 @@ only with `compile --out <dir>`, and `--out` takes exactly one directory.
   listing every place that references it.
 - Rename never changes `physicalName` (no DDL); do not edit ids or
   `physicalName` of existing elements by hand.
+- Never pass an `id` to `create_object` or `add_element`: ids are assigned by
+  the operation, and an input carrying one is refused
+  (`operation.input-invalid`).
 
 ## Pre-commit and CI
 

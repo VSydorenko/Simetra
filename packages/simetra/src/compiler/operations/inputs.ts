@@ -57,7 +57,7 @@ export const createObjectInput = z.strictObject({
   name: objectNameSchema,
   data: z.record(z.string(), z.unknown()).optional().meta({
     description:
-      "Other fields of the new object file; id, physicalName and $schema are assigned by the operation.",
+      "Other fields of the new object file; ids, physicalName and $schema are assigned by the operation, and an id anywhere in the input is refused.",
   }),
 })
 export type CreateObjectInput = z.infer<typeof createObjectInput>
@@ -70,7 +70,7 @@ export const addElementInput = z.strictObject({
   }),
   element: z.record(z.string(), z.unknown()).meta({
     description:
-      "The new element; id and physicalName are assigned by the operation.",
+      "The new element; ids and physicalName are assigned by the operation, and an id anywhere in the input is refused.",
   }),
 })
 export type AddElementInput = z.infer<typeof addElementInput>

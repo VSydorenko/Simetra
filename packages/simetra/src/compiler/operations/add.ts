@@ -2,7 +2,7 @@ import { namedCollections } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { AddElementInput } from "./inputs"
-import { compileInput, refused } from "./refuse"
+import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import { describeTarget, locateContainer } from "./target"
 import type { OperationResult } from "./types"
 
@@ -35,6 +35,8 @@ export async function addElement(
   input: AddElementInput,
   o: CompletionOptions
 ): Promise<OperationResult> {
+  const supplied = refuseSuppliedId(files, input.element, "element")
+  if (supplied !== undefined) return supplied
   const clean = await compileInput(files)
   if (!clean.ok) return clean.result
 

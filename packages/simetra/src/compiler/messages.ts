@@ -860,14 +860,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Задайте коротше physicalName самі; воно призначається раз і більше не змінюється.",
     },
   },
+  // Дві причини одного коду: зламаний вхідний каталог або `id` у вхідних
+  // даних операції (`at` — pointer у вході). Обидві — «вхід непридатний».
   "operation.input-invalid": {
-    en: () =>
-      "The operation needs metadata that compiles without errors; nothing was changed",
-    uk: () =>
-      "Операція потребує метаданих, що компілюються без помилок; нічого не змінено",
+    en: (p) =>
+      p.at === undefined
+        ? "The operation needs metadata that compiles without errors; nothing was changed"
+        : `The operation input must not carry "id" (at ${p.at}): ids are assigned by the operation; nothing was changed`,
+    uk: (p) =>
+      p.at === undefined
+        ? "Операція потребує метаданих, що компілюються без помилок; нічого не змінено"
+        : `Вхід операції не повинен містити "id" (у ${p.at}): id призначає операція; нічого не змінено`,
     hint: {
-      en: "Fix the errors reported with this diagnostic (simetra fix handles missing ids and physical names), then repeat the operation.",
-      uk: "Виправте помилки, наведені поряд із цією діагностикою (відсутні id і фізичні імена лагодить simetra fix), і повторіть операцію.",
+      en: (p) =>
+        p.at === undefined
+          ? "Fix the errors reported with this diagnostic (simetra fix handles missing ids and physical names), then repeat the operation."
+          : "Remove the id from the input; a new element gets a fresh id that is never reused.",
+      uk: (p) =>
+        p.at === undefined
+          ? "Виправте помилки, наведені поряд із цією діагностикою (відсутні id і фізичні імена лагодить simetra fix), і повторіть операцію."
+          : "Приберіть id із входу; новий елемент отримує свіжий id, який ніколи не перевикористовується.",
     },
   },
   "operation.target-not-found": {

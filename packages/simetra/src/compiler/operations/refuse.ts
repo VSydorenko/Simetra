@@ -1,5 +1,10 @@
 import { compile, type CompiledModel } from "../compile"
-import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
+import {
+  diagnostic,
+  sortDiagnostics,
+  toPointer,
+  type Diagnostic,
+} from "../diagnostics"
 import { withRanges } from "../locate"
 import { changesBetween } from "./changes"
 import type { OperationResult } from "./types"
@@ -20,6 +25,36 @@ export function refused(
     changes: [],
     diagnostics: sortDiagnostics(withRanges(diagnostics, files)),
   }
+}
+
+/**
+ * Відмова, якщо вхідні дані нового об'єкта чи елемента несуть `id` на будь-якій
+ * глибині. Id видає лише `newId` операції: переданий ззовні id видаленого
+ * елемента компіляція не відрізнила б від нового, і правило «id ніколи не
+ * перевикористовується» (Р4) тихо порушилось би. Кожен ключ `id` у схемах
+ * метаданих — ідентичність, тож інших значень у цього ключа немає.
+ */
+export function refuseSuppliedId(
+  files: ReadonlyMap<string, string>,
+  value: unknown,
+  root: string
+): OperationResult | undefined {
+  const path = findId(value, [root])
+  return path === undefined
+    ? undefined
+    : refused(files, [
+        diagnostic("operation.input-invalid", "", "", { at: toPointer(path) }),
+      ])
+}
+
+function findId(value: unknown, path: string[]): string[] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "id" && !Array.isArray(value)) return [...path, key]
+    const found = findId(item, [...path, key])
+    if (found !== undefined) return found
+  }
+  return undefined
 }
 
 /**

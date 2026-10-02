@@ -2,7 +2,7 @@ import { KIND_REGISTRY } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { CreateObjectInput } from "./inputs"
-import { compileInput, refused } from "./refuse"
+import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import type { OperationResult } from "./types"
 
 /**
@@ -15,6 +15,8 @@ export async function createObject(
   input: CreateObjectInput,
   o: CompletionOptions
 ): Promise<OperationResult> {
+  const supplied = refuseSuppliedId(files, input.data, "data")
+  if (supplied !== undefined) return supplied
   const clean = await compileInput(files)
   if (!clean.ok) return clean.result
 
