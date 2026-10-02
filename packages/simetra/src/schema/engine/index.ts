@@ -10,3 +10,8 @@ export type {
   ShadowOutcome,
 } from "./port"
 export { createPgDeltaEngine } from "./pg-delta/adapter"
+export {
+  compareWithDesired,
+  engineScope,
+  type DesiredComparison,
+} from "./desired"

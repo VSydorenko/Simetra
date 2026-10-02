@@ -8,11 +8,11 @@ import {
 } from "simetra/model"
 import {
   createPgDeltaEngine,
-  renderDesiredState,
+  engineScope,
   type EngineScope,
+  renderDesiredState,
   type Extracted,
 } from "simetra/schema"
-import { PROVIDER_SCHEMAS } from "../engine/pg-delta/policy"
 import { ALL_PRIVILEGES } from "../engine/privileges"
 import {
   shadowDatabaseCount,
@@ -107,22 +107,6 @@ async function compiled(files: Map<string, string>): Promise<CompiledModel> {
   const result = await compile(files)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!
-}
-
-/**
- * Межа тесту — схеми застосунку з моделі без схем провайдера (задача 6
- * дасть продуктовий `engineScope`).
- */
-function scopeOf(model: CompiledModel): EngineScope {
-  const provider = new Set(PROVIDER_SCHEMAS)
-  const schemas = [
-    ...new Set([
-      ...model.physical.tables.map((t) => t.schema),
-      ...model.physical.enumTypes.map((t) => t.schema),
-      ...model.sqlUnits.map((u) => u.schema),
-    ]),
-  ].filter((s) => s !== "" && !provider.has(s))
-  return { schemas, provider: "supabase" }
 }
 
 /** Рендер у тіні → extract тіні. */
@@ -264,7 +248,7 @@ async function expectExtractMatchesModel(files: Map<string, string>) {
   const model = await compiled(files)
   const extracted = await extractDesired(
     renderDesiredState(model).sql,
-    scopeOf(model)
+    engineScope(model)
   )
   expect(extracted.diagnostics.filter((d) => d.severity === "error")).toEqual(
     []
