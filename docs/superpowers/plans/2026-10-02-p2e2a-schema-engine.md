@@ -11,7 +11,7 @@ round-trip (`extract → зворотна генерація → компіля�
 E2b.
 
 **Архітектура:** порт `SchemaEngine` (T2 `simetra/schema`) з діями
-`extract`, `plan`, `withShadow`; перший адаптер — `@supabase/pg-delta`.
+`extract`, `plan`, `withDesiredShadow`; перший адаптер — `@supabase/pg-delta`.
 Модель каталогу порту — форма фізичного знімка T0 без `origin` плюс дослівні
 SQL-одиниці (спека §9). Адаптер мапить у неї FactBase двигуна за явною
 таблицею властивостей: кожна властивість факту або має поле моделі, або
@@ -45,7 +45,13 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
    провайдера, межа керування за §6.9 і представність фактів перевіряються на
    закріпленій версії до того, як порт фіксує контракт. Висновки — у
    `docs/research/`; якщо публічного засобу засіву немає, — стоп і рішення
-   архітектора, а не внутрішній імпорт пакета.
+   архітектора, а не внутрішній імпорт пакета. **Рішення за спайком:**
+   публічного засіву в `1.0.0-alpha.56` немає (`deriveAssumedSchemaSeed` не
+   експортовано), тож тінь — лише бажана: порт створює co-located тінь
+   (`provisionCoLocatedShadow`), передає її пул у `planSchemaFiles({
+   seedAssumedSchemas: true })` з бажаним SQL як файлом і після повернення
+   сам читає тінь (extract, перепис, порівняння моделей), прибираючи її в
+   `finally`. Порожньої тіні для довільного вмісту порт не дає.
 3. **Межа керування — за платформною спекою §6.9**, а не лише схеми:
    `EngineScope` = керовані схеми застосунку цілком (зокрема `public`, якщо
    застосунок у ній живе) **плюс** об'єкти застосунку в чужих схемах із
@@ -107,7 +113,7 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 - Тексти діагностик порту — англійською з `en`/`uk`/`hint` у `MESSAGES`;
   коди — у `COMPILER_RULES` (простір `engine.*`).
 - DB-тести — `*.db.test.ts`, без бази червоні; scratch-бази тестів створює й
-  прибирає порт (`withShadow`).
+  прибирає порт (`withDesiredShadow`).
 - Коміти — Conventional Commits, опис українською, без трейлерів.
 - Гейти в кожній задачі: scoped-тести, typecheck, lint, `pnpm format:check`,
   для задач 3–7 — `pnpm --filter simetra test:db`; перед фінальним рев'ю —
@@ -239,18 +245,24 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
   interface SchemaEngine {
     extract(db: DbConnection, scope: EngineScope): Promise<Extracted>
     plan(source: EngineCatalog, target: EngineCatalog, scope: EngineScope): EnginePlan   // чисто, без бази
-    withShadow<T>(base: DbConnection, fn: (shadow: DbConnection) => Promise<T>): Promise<T>
+    withDesiredShadow<T>(target: DbConnection, desiredSql: string, scope: EngineScope,
+      fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>):
+      Promise<{ status: "loaded"; value: T } | { status: "shadow-failed"; diagnostics: EngineDiagnostic[] }>
   }
   function createPgDeltaEngine(): SchemaEngine
   ```
-  Політика й засів — за висновками задачі 1. `withShadow` прибирає тінь у
-  `finally`. Мапінг моделі в цій задачі — лише таблиці з колонками
+  Політика й засів — за висновками задачі 1 (рішення плану 2).
+  `plan` у колбеку — ціль → тінь від `planSchemaFiles` у формі порту;
+  тест доводить, що він дорівнює `plan(extract(ціль), extract(тінь))`.
+  `EngineCatalog` несе розв'язані опції профілю разом із FactBase.
+  `withDesiredShadow` прибирає тінь у `finally`; тести, яким потрібна тінь
+  із довільними об'єктами, передають їх як `desiredSql`. Мапінг моделі в цій задачі — лише таблиці з колонками
   (решта — задача 4).
 - [ ] **Step 1: Тести** — `stack database with no managed schemas extracts
   an empty model`; `managed schema is kept`; `self plan is empty`;
   `scope follows 6.9` (тінь: таблиця в `public` як керованій схемі, політика
   на `storage.objects`, тригер на `auth.users`; plan «порожня тінь → ця
-  тінь» має дії для кожного з трьох і жодної з `produces` у внутрішніх
+  тінь» має дії для кожного з трьох; `shadow plan equals port plan` і жодної з `produces` у внутрішніх
   об'єктах провайдера чи некерованій схемі).
 - [ ] **Step 2–4:** червоні → реалізація → зелені, гейти.
 - [ ] **Step 5: Commit** `feat(schema): порт SchemaEngine і адаптер pg-delta — extract, структурований plan, тінь`
@@ -367,7 +379,7 @@ SQL-одиниці (спека §9). Адаптер мапить у неї FactB
 - Modify: спека П2 §9 і §10.4, `docs/ROADMAP.md`
 
 - [ ] **Step 1: Тести** — для кожної фікстури E1 і синтетичного домену:
-  ціль — тінь із розгорнутим рендером, `compareWithDesired` з тим самим
+  ціль — тінь із розгорнутим рендером (вкладений `withDesiredShadow`), `compareWithDesired` з тим самим
   рендером → `empty`. Мутаційні (кожна мутація цілі → не `empty` і
   відмінність або дія називає об'єкт): зайвий індекс; відсутня колонка;
   переставлені колонки (Review Focus 3: `plan.empty`, але `differences`
