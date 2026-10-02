@@ -115,7 +115,7 @@ export const purityConfigs = [
               regex:
                 "^(?:node:|(?:fs|path|os|crypto|url|child_process)(?:/|$))",
               message:
-                "T1 purity: the compiler is a pure function over a file map; disk access belongs to the CLI (P2 spec §8.2).",
+                "T1 purity: the compiler is a pure function over a file map; disk access belongs to @simetra/designer (P2 spec §8.2).",
             },
           ],
         },

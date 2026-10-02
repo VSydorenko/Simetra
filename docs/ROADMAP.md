@@ -31,9 +31,9 @@
 [D2](superpowers/plans/2026-10-02-p2d2-cli-mcp.md) (CLI, MCP, єдині двері в
 pre-commit і CI) і [E2a](superpowers/plans/2026-10-02-p2e2a-schema-engine.md)
 (порт `SchemaEngine`, адаптер pg-delta, тінь, звірка розгорнутого бажаного
-стану) виконано; далі [designer-1](superpowers/plans/2026-10-02-designer-1.md)
-(пакет `@simetra/designer`: каталог інструментів, режими командного рядка й
-MCP, скіл споживача), потім E2b.
+стану) і [designer-1](superpowers/plans/2026-10-02-designer-1.md) (пакет
+`@simetra/designer`: каталог інструментів, режими командного рядка й MCP, скіл
+споживача) виконано; далі E2b.
 
 Рядки йдуть у порядку виконання; колонка «Після» — залежності зі спеки §12.
 
