@@ -315,7 +315,7 @@ export function kitchenSink(): Map<string, string> {
     value: Record<string, unknown>
   ) => ({ ...header("Constant", name, physicalName), ...value })
 
-  const constants = {
+  const constants: Record<string, Record<string, unknown>> = {
     MainCurrency: constant("MainCurrency", "main_currency", {
       type: "String",
       length: 3,
@@ -486,6 +486,49 @@ export function kitchenSink(): Map<string, string> {
     rowLevelSecurity: "forced",
   }
 
+  // Оголошено після решти, щоб лічильник id не зсунув id наявних елементів.
+  // Константа-перерахування з типовим значенням — роль
+  // `constant.enumDefault`.
+  constants.MainColor = constant("MainColor", "main_color", {
+    type: "Ref",
+    ref: ref("Enumeration", "Color"),
+    defaultValue: "Red",
+  })
+
+  // FK на власну колонку іншої прийнятої таблиці — роль
+  // `customTable.foreignKeyTarget` на елемент, який можна перейменувати.
+  const ledgerTag = {
+    ...header("CustomTable", "LedgerTag", "ledger_tag"),
+    columns: [
+      {
+        id: id(),
+        name: "tag",
+        physicalName: "tag",
+        notNull: true,
+        type: "Text",
+      },
+      {
+        id: id(),
+        name: "ledgerId",
+        physicalName: "ledger_id",
+        type: "BigInt",
+      },
+    ],
+    primaryKey: { name: "ledger_tag_pk", columns: ["tag"] },
+    foreignKeys: [
+      {
+        name: "ledger_tag_ledger_fk",
+        columns: ["ledgerId"],
+        references: {
+          object: ref("CustomTable", "Ledger"),
+          // Ціль — недеферований PK: деферований ключ FK не приймає.
+          columns: ["id"],
+        },
+      },
+    ],
+    scope: "none",
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
@@ -497,6 +540,7 @@ export function kitchenSink(): Map<string, string> {
     "accumulation-registers/Stock/Stock.meta.json": stock,
     "pg-enums/Mood/Mood.meta.json": mood,
     "custom-tables/Ledger/Ledger.meta.json": ledger,
+    "custom-tables/LedgerTag/LedgerTag.meta.json": ledgerTag,
   }
   for (const [name, value] of Object.entries(constants)) {
     entries[`constants/${name}/${name}.meta.json`] = value

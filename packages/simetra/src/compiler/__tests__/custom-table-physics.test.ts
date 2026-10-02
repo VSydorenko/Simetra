@@ -302,17 +302,22 @@ describe("CustomTable physics round-trip", () => {
     const result = await compile(kitchenSink())
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
     const physical = result.model!.physical
-    // Знімок похідних таблиць видів 1С (усе, крім CustomTable `ledger`)
+    // Знімок похідних таблиць видів 1С (усе, крім CustomTable `ledger` і
+    // `ledger_tag`)
     // побайтно той самий, що до появи нових полів: хеш зафіксовано до зміни.
+    // Оновлено свідомо разом із константою `MainColor` фікстури: єдина
+    // різниця — її власна таблиця `main_color`.
     const derived = {
-      tables: physical.tables.filter((t) => t.name !== "ledger"),
+      tables: physical.tables.filter(
+        (t) => t.name !== "ledger" && t.name !== "ledger_tag"
+      ),
       enumTypes: physical.enumTypes,
     }
     const digest = createHash("sha256")
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "9cc3c2dec0366e9c4fa6c2d4fe60b500becf428804159bae22b82a84590d0d11"
+      "5068ef626588d53d36cdf261e14b4ef6ad8a3d7af0e2da2550c49f3a7628abc7"
     )
   })
 })

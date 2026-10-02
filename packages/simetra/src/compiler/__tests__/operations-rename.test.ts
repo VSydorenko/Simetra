@@ -363,6 +363,34 @@ describe("renameElement", () => {
     expect(codes(refusedOnBroken)).toContain("operation.input-invalid")
   })
 
+  it("refuses an element name taken in the same namespace", async () => {
+    const files = readReferenceDomain()
+    const result = await renameElement(files, {
+      target: {
+        kind: "Document",
+        name: "ServiceAccrual",
+        element: ["comment"],
+      },
+      newName: "contract",
+    })
+    expect(result.ok).toBe(false)
+    expect(codes(result)).toContain("identity.name-duplicate")
+  })
+
+  it("renames a CustomTable column targeted by another table's foreign key", async () => {
+    const files = kitchenSink()
+    const before = await modelOf(files)
+    const { after } = await renamed(
+      files,
+      { kind: "CustomTable", name: "Ledger", element: ["id"] },
+      "entryId"
+    )
+    const tag = json(after, "custom-tables/LedgerTag/LedgerTag.meta.json")
+    const fk = (tag.foreignKeys as Json[])[0]!
+    expect((fk.references as Json).columns).toEqual(["entryId"])
+    expect((await modelOf(after)).physical).toEqual(before.physical)
+  })
+
   it("rename input is strict and path-safe", () => {
     const target = { kind: "Catalog", name: "Counterparty" }
     expect(renameInput.safeParse({ target, newName: "Partner" }).success).toBe(
@@ -442,23 +470,33 @@ function targetOf(model: CompiledModel, id: string): ElementTarget | undefined {
   return undefined
 }
 
-describe("rename cascade", () => {
-  // Форми, які прогін справді зачепив: без якоїсь форми тест її не доводить.
-  const forms = new Set<string>()
+const CASCADE_FIXTURES: [string, () => Map<string, string>][] = [
+  ["reference domain", readReferenceDomain],
+  ["kitchen sink", kitchenSink],
+]
 
-  it.each([
-    ["reference domain", readReferenceDomain],
-    ["kitchen sink", kitchenSink],
-  ])(
+/** Стандартні реквізити мають синтетичний id і не перейменовуються. */
+const renameable = (references: readonly ResolvedReference[]) =>
+  references.filter((r) => !r.to.id.includes("#"))
+
+/** Форма місця з погляду тесту (ключ — поле регістра в `fields` руху). */
+const formOf = (r: ResolvedReference) =>
+  r.span !== undefined
+    ? "token"
+    : r.line !== undefined
+      ? "marker"
+      : r.role === "posting.registerField"
+        ? "key"
+        : "value"
+
+describe("rename cascade", () => {
+  it.each(CASCADE_FIXTURES)(
     "%s: every role is renamed in every form it takes",
     async (_, load) => {
       const files = load()
       const model = await modelOf(files)
-      // Стандартні реквізити мають синтетичний id і не перейменовуються.
       const targets = [
-        ...new Set(
-          model.references.map((r) => r.to.id).filter((id) => !id.includes("#"))
-        ),
+        ...new Set(renameable(model.references).map((r) => r.to.id)),
       ]
       for (const id of targets) {
         const target = targetOf(model, id)
@@ -489,23 +527,29 @@ describe("rename cascade", () => {
             newName
           )
         }
-        for (const r of before) {
-          forms.add(
-            r.span !== undefined
-              ? "token"
-              : r.line !== undefined
-                ? "marker"
-                : r.role === "posting.registerField"
-                  ? "key"
-                  : "value"
-          )
-        }
       }
     },
     60_000
   )
 
-  it("the cascade runs exercised every place form", () => {
-    expect([...forms].sort()).toEqual(["key", "marker", "token", "value"])
+  it("the cascade runs exercise every place form and the edge roles", async () => {
+    // Самодостатньо, без залежності від порядку тестів: форми й ролі
+    // рахуються з тих самих фікстур, які проходить каскад.
+    const refs = (
+      await Promise.all(
+        CASCADE_FIXTURES.map(async ([, load]) =>
+          renameable((await modelOf(load())).references)
+        )
+      )
+    ).flat()
+    expect([...new Set(refs.map(formOf))].sort()).toEqual([
+      "key",
+      "marker",
+      "token",
+      "value",
+    ])
+    const roles = new Set(refs.map((r) => r.role))
+    expect(roles).toContain("constant.enumDefault")
+    expect(roles).toContain("customTable.foreignKeyTarget")
   })
 })

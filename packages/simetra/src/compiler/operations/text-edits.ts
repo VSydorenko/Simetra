@@ -99,6 +99,11 @@ export function renameJsonPlaces(
         break
       case "marker":
         throw new Error(`marker place in JSON file ${place.file}`)
+      default: {
+        // П'ята форма місця не скомпілюється, доки тут немає її гілки.
+        const unhandled: never = place
+        throw new Error(`unknown place form ${JSON.stringify(unhandled)}`)
+      }
     }
   }
   for (const [pointer, spans] of tokens) {
