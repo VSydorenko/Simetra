@@ -11,7 +11,7 @@ This skill is the how-to; do not restate the spec here.
 
 The CLI is a thin wrapper over the T1 compiler and its operations
 (`packages/simetra/src/compiler/`); it holds no stage logic of its own. Entry:
-`packages/cli/bin/simetra.mjs` (runs from sources, no build step). Every
+`packages/designer/bin/simetra.mjs` (runs from sources, no build step). Every
 command defaults to `./metadata`.
 
 ## Which command when

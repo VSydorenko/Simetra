@@ -73,7 +73,10 @@ describe("simetra explain", () => {
   })
 
   it("broken compile prints diagnostics and exits 1", async () => {
-    const dir = join(await mkdtemp(join(tmpdir(), "simetra-cli-")), "metadata")
+    const dir = join(
+      await mkdtemp(join(tmpdir(), "simetra-designer-")),
+      "metadata"
+    )
     temps.push(join(dir, ".."))
     await cp(REFERENCE, dir, { recursive: true })
     const file = join(dir, "catalogs/Currency/Currency.meta.json")

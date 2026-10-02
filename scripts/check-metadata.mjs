@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 // Шлях до bin — від кореня репо, без залежності від PATH.
-const bin = join(root, "packages/cli/bin/simetra.mjs")
+const bin = join(root, "packages/designer/bin/simetra.mjs")
 const staged = process.argv.includes("--staged")
 
 function git(args, input) {

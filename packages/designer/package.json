@@ -1,8 +1,13 @@
 {
-  "name": "@simetra/cli",
+  "name": "@simetra/designer",
   "version": "0.0.1",
   "type": "module",
   "private": true,
+  "files": [
+    "bin",
+    "src",
+    "skills"
+  ],
   "license": "Apache-2.0",
   "bin": {
     "simetra": "bin/simetra.mjs"

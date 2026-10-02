@@ -11,7 +11,7 @@ const REFERENCE = resolve(__dirname, "../../../../examples/reference/metadata")
 const temps: string[] = []
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "simetra-cli-"))
+  const dir = await mkdtemp(join(tmpdir(), "simetra-designer-"))
   temps.push(dir)
   return dir
 }
