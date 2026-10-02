@@ -964,6 +964,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "База тримає форму, для якої модель не має ні поля, ні SQL-одиниці; приведіть об'єкт до форми, яку можуть оголосити метадані, або спершу розширте модель.",
     },
   },
+  "engine.unmodeled-class": {
+    en: (p) =>
+      `${p.count} object(s) of class ${p.class} in the managed boundary have no fact in the schema engine, so the catalog model cannot see them`,
+    uk: (p) =>
+      `${p.count} об'єкт(ів) класу ${p.class} у межі керування не мають факту в рушії схеми, тож модель каталогу їх не бачить`,
+    hint: {
+      en: "The schema engine does not model this class, so neither the comparison nor a plan would ever mention these objects; remove them from the managed schemas or keep them outside the managed boundary.",
+      uk: "Рушій схеми не моделює цей клас, тож ні звірка, ні план ніколи не згадали б ці об'єкти; приберіть їх із керованих схем або тримайте поза межею керування.",
+    },
+  },
+  "engine.matview-unpopulated": {
+    en: (p) =>
+      `${p.view}: materialized view is not populated, and the catalog model does not express whether a view is populated`,
+    uk: (p) =>
+      `${p.view}: матеріалізоване подання не заповнене, а модель каталогу не виражає стан заповнення`,
+    hint: {
+      en: "The schema engine plans CREATE MATERIALIZED VIEW without WITH NO DATA and sees no difference in population; run REFRESH MATERIALIZED VIEW on it before comparing.",
+      uk: "Рушій схеми планує CREATE MATERIALIZED VIEW без WITH NO DATA й не бачить різниці в заповненні; виконайте для нього REFRESH MATERIALIZED VIEW перед звіркою.",
+    },
+  },
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */

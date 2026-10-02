@@ -14,13 +14,23 @@ import type { EngineScope } from "../port"
  * (§6.9: «перелік для конкретного провайдера — пресет»); пакет двигуна
  * публічно його не експортує.
  */
-const SUPABASE_PROVIDER_EXTENSIONS = [
+export const SUPABASE_PROVIDER_EXTENSIONS: readonly string[] = [
   "plpgsql",
   "pgcrypto",
   "uuid-ossp",
   "pg_stat_statements",
   "supabase_vault",
   "pg_graphql",
+]
+
+/**
+ * Тригери подій базового стану Supabase (LIKE-шаблони): їх ставить провайдер,
+ * тож перепис класів їх не рахує.
+ */
+export const SUPABASE_PROVIDER_EVENT_TRIGGERS: readonly string[] = [
+  "issue_%",
+  "pgrst_%",
+  "graphql_watch_%",
 ]
 
 /** Схеми, які пресет провайдера вважає своїми (засів тіні, reference-only). */
@@ -47,7 +57,10 @@ export function scopePolicy(scope: EngineScope): Policy {
     filter: [
       {
         match: {
-          all: [{ kind: "extension" }, { name: SUPABASE_PROVIDER_EXTENSIONS }],
+          all: [
+            { kind: "extension" },
+            { name: [...SUPABASE_PROVIDER_EXTENSIONS] },
+          ],
         },
         action: "exclude",
       },

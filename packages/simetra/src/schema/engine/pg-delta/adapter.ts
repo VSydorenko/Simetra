@@ -26,6 +26,13 @@ import type {
   SchemaEngine,
   ShadowOutcome,
 } from "../port"
+import {
+  censusClassOfUnmodeledKind,
+  censusDiagnostics,
+  readCensus,
+  unmodeledClasses,
+  type CensusClass,
+} from "../census"
 import { readExtensionComments } from "../extension-comments"
 import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
@@ -87,10 +94,12 @@ function engineDiagnostic(
  * провайдера, яких тінь не відтворює), а не стан застосунку.
  */
 function toEngineDiagnostics(
-  diagnostics: readonly Diagnostic[]
+  diagnostics: readonly Diagnostic[],
+  counted: ReadonlySet<CensusClass> = new Set()
 ): EngineDiagnostic[] {
   return diagnostics
     .filter((d) => d.code !== "dangling_edge")
+    .filter((d) => !countedByCensus(d, counted))
     .map((d) =>
       d.code === "unmodeled_drift"
         ? engineDiagnostic(
@@ -108,6 +117,23 @@ function toEngineDiagnostics(
             d.code
           )
     )
+}
+
+/**
+ * `unmodeled_kind` двигуна — додатковий сигнал, не джерело (план E2a,
+ * рішення 8): двигун пробує всю базу без межі, тож лишається попередженням
+ * `engine.diagnostic`, а клас, який перепис уже назвав помилкою в межі,
+ * вдруге не звучить.
+ */
+function countedByCensus(
+  d: Diagnostic,
+  counted: ReadonlySet<CensusClass>
+): boolean {
+  if (d.code !== "unmodeled_kind") return false
+  const kind = d.context?.kind
+  if (typeof kind !== "string") return false
+  const censusClass = censusClassOfUnmodeledKind(kind)
+  return censusClass !== undefined && counted.has(censusClass)
 }
 
 /**
@@ -206,6 +232,7 @@ async function extractFrom(
     defaults: aclDefaultsOf(view, await currentRole(pool)),
     extensionComments: await readExtensionComments(pool),
   })
+  const census = await readCensus(pool, scope)
   return {
     model,
     catalog: new PgDeltaCatalog(
@@ -214,8 +241,9 @@ async function extractFrom(
       scopeKeyOf(scope)
     ),
     diagnostics: [
-      ...toEngineDiagnostics(result.diagnostics),
+      ...toEngineDiagnostics(result.diagnostics, unmodeledClasses(census)),
       ...issues.map(unrepresentableDiagnostic),
+      ...(await censusDiagnostics(pool, scope, census)),
     ],
   }
 }

@@ -96,6 +96,8 @@ export const COMPILER_RULES = [
   "engine.shadow-load-failed",
   "engine.desired-rejected",
   "engine.unrepresentable",
+  "engine.unmodeled-class",
+  "engine.matview-unpopulated",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

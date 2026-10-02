@@ -114,13 +114,14 @@ describe("SchemaEngine on pg-delta", () => {
     )
     expect(outcome.status).toBe("loaded")
     if (outcome.status !== "loaded") return
-    // Немодельований клас двигуна — гучна діагностика, а `dangling_edge`
-    // засіяної тіні (шум засіву) відфільтровано
+    // Немодельований клас двигуна в межі — помилка перепису, а
+    // `dangling_edge` засіяної тіні (шум засіву) відфільтровано
     const messages = outcome.value.diagnostics.map((d) => d.message)
     expect(
       outcome.value.diagnostics.some(
         (d) =>
-          d.code === "engine.diagnostic" && d.engineCode === "unmodeled_kind"
+          d.code === "engine.unmodeled-class" &&
+          d.message.includes("textSearchConfiguration")
       )
     ).toBe(true)
     expect(messages.filter((m) => m.includes("dangling_edge"))).toEqual([])
