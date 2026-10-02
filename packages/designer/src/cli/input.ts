@@ -11,6 +11,8 @@ export interface CliArgs {
   locale?: string
   "dry-run"?: boolean
   yes?: boolean
+  all?: boolean
+  staged?: boolean
 }
 
 export const DEFAULT_DIR = "./metadata"

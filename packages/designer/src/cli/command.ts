@@ -7,6 +7,7 @@ import { UsageError } from "../io/usage-error"
 import { compileArtifacts } from "../tools/artifacts"
 import { toolByName, type Tool } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
+import { findMetadataDirs, stageMetadataDirs } from "./metadata-dirs"
 import { cliInput, takesJsonInput, type CliArgs } from "./input"
 import { renderResult } from "./render"
 
@@ -60,57 +61,95 @@ export async function runTool(
         `Invalid --format "${format}". Expected text or json.`
       )
     }
-    const { input, dirs } = await cliInput(tool, argv, stdin)
-    const out = tool.name === "compile" ? argv.out : undefined
-    if (out !== undefined) {
-      // Усі теки метаданих названі однаково (`metadata`), тож спільного `--out`
-      // для кількох не вигадати без колізій.
-      if (dirs.length > 1) {
-        throw new UsageError("--out accepts exactly one metadata directory.")
-      }
-      // Створювати вкладений шлях мовчки — ховати помилку в написанні.
-      const parent = dirname(resolve(out))
-      const isDir = await stat(parent).then(
-        (s) => s.isDirectory(),
-        () => false
+    const sweep = tool.name === "compile" && argv.all === true
+    if (tool.name === "compile" && argv.staged === true && !sweep) {
+      throw new UsageError("--staged works only together with --all.")
+    }
+    if (sweep && argv._.length > 0) {
+      throw new UsageError(
+        "--all cannot be combined with explicit directories."
       )
-      if (!isDir) {
-        throw new UsageError(`--out parent directory not found: ${parent}`)
-      }
-      const existing = await stat(resolve(out)).catch(() => undefined)
-      if (existing !== undefined && !existing.isDirectory()) {
-        throw new UsageError(`--out is not a directory: ${out}`)
+    }
+    if (sweep && argv.out !== undefined) {
+      throw new UsageError("--all cannot be combined with --out.")
+    }
+    const parsed = sweep
+      ? { input: {}, dirs: await findMetadataDirs(process.cwd()) }
+      : await cliInput(tool, argv, stdin)
+    const { input } = parsed
+    let { dirs } = parsed
+    if (sweep && dirs.length === 0) {
+      return {
+        exitCode: 0,
+        stdout: "metadata:check — no metadata directories found.\n",
+        stderr: "",
       }
     }
-
-    const blocks: string[] = []
-    const allJson: unknown[] = []
-    let failed = false
-    for (const dir of dirs) {
-      const result = await invoke(tool, input, {
-        dir,
-        allowWrite: true,
-        dryRun: argv["dry-run"] === true,
-        confirmed: argv.yes === true,
-      })
-      if (result.refusal !== undefined) return fail(result.refusal.message)
-      failed ||= !result.ok
-      const rendered = renderResult(tool, result, { dir, locale, format })
-      if (rendered.json !== undefined) allJson.push(...rendered.json)
-      else blocks.push(rendered.stdout)
-
-      // Артефакти — лише з `--out` і лише з моделі без помилок.
-      const model = (result.data as { model?: CompiledModel } | undefined)
-        ?.model
-      if (out !== undefined && model !== undefined) {
-        await writeChanges(out, compileArtifacts(model))
-      }
+    // Індексний режим читає копію з тимчасової теки, а показує справжні шляхи.
+    let staged: Awaited<ReturnType<typeof stageMetadataDirs>> | undefined
+    const shown = dirs
+    if (sweep && argv.staged === true) {
+      staged = await stageMetadataDirs(process.cwd(), dirs)
+      dirs = staged.dirs
     }
-    const stdout =
-      tool.name === "compile" && format === "json"
-        ? `${JSON.stringify(allJson, null, 2)}\n`
-        : `${blocks.join("\n")}\n`
-    return { exitCode: failed ? 1 : 0, stdout, stderr: "" }
+    try {
+      const out = tool.name === "compile" ? argv.out : undefined
+      if (out !== undefined) {
+        // Усі теки метаданих названі однаково (`metadata`), тож спільного `--out`
+        // для кількох не вигадати без колізій.
+        if (dirs.length > 1) {
+          throw new UsageError("--out accepts exactly one metadata directory.")
+        }
+        // Створювати вкладений шлях мовчки — ховати помилку в написанні.
+        const parent = dirname(resolve(out))
+        const isDir = await stat(parent).then(
+          (s) => s.isDirectory(),
+          () => false
+        )
+        if (!isDir) {
+          throw new UsageError(`--out parent directory not found: ${parent}`)
+        }
+        const existing = await stat(resolve(out)).catch(() => undefined)
+        if (existing !== undefined && !existing.isDirectory()) {
+          throw new UsageError(`--out is not a directory: ${out}`)
+        }
+      }
+
+      const blocks: string[] = []
+      const allJson: unknown[] = []
+      let failed = false
+      for (const dir of dirs) {
+        const result = await invoke(tool, input, {
+          dir,
+          allowWrite: true,
+          dryRun: argv["dry-run"] === true,
+          confirmed: argv.yes === true,
+        })
+        if (result.refusal !== undefined) return fail(result.refusal.message)
+        failed ||= !result.ok
+        const rendered = renderResult(tool, result, {
+          dir: shown[dirs.indexOf(dir)] ?? dir,
+          locale,
+          format,
+        })
+        if (rendered.json !== undefined) allJson.push(...rendered.json)
+        else blocks.push(rendered.stdout)
+
+        // Артефакти — лише з `--out` і лише з моделі без помилок.
+        const model = (result.data as { model?: CompiledModel } | undefined)
+          ?.model
+        if (out !== undefined && model !== undefined) {
+          await writeChanges(out, compileArtifacts(model))
+        }
+      }
+      const stdout =
+        tool.name === "compile" && format === "json"
+          ? `${JSON.stringify(allJson, null, 2)}\n`
+          : `${blocks.join("\n")}\n`
+      return { exitCode: failed ? 1 : 0, stdout, stderr: "" }
+    } finally {
+      await staged?.dispose()
+    }
   } catch (error) {
     if (error instanceof UsageError) return fail(error.message)
     throw error
@@ -124,6 +163,17 @@ function argsFor(tool: Tool): ArgsDef {
       type: "positional",
       description: "Metadata directories (default: ./metadata)",
       required: false,
+    }
+    args.all = {
+      type: "boolean",
+      default: false,
+      description: "Check every metadata directory of the repository",
+    }
+    args.staged = {
+      type: "boolean",
+      default: false,
+      description:
+        "With --all: check the Git index instead of the working tree",
     }
     args.out = {
       type: "string",
@@ -204,6 +254,8 @@ function toCliArgs(args: { _: string[] } & Record<string, unknown>): CliArgs {
     locale: str(args.locale),
     "dry-run": args["dry-run"] === true,
     yes: args.yes === true,
+    all: args.all === true,
+    staged: args.staged === true,
   }
 }
 
