@@ -897,6 +897,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Колекція — ключ масиву іменованих елементів у схемі цілі.",
     },
   },
+  "operation.delete-referenced": {
+    en: (p) =>
+      `${p.target} cannot be deleted: it is referenced here (${p.role})`,
+    uk: (p) =>
+      `${p.target} не можна видалити: на нього посилаються тут (${p.role})`,
+    hint: {
+      en: "Remove or repoint every reference listed, then repeat the deletion.",
+      uk: "Приберіть або перенаправте кожне зазначене посилання й повторіть видалення.",
+    },
+  },
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */

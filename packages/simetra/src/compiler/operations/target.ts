@@ -142,3 +142,15 @@ export function resolveTarget(
     id: located.id,
   }
 }
+
+/**
+ * Усі файли об'єкта в мапі: `.meta.json`, `.sql`, `.module.ts` — усе під
+ * текою `<тека виду>/<Name>/`. Перейменування переносить їх, видалення стирає.
+ */
+export function objectFiles(
+  files: ReadonlyMap<string, string>,
+  object: { kind: keyof typeof KIND_REGISTRY; name: string }
+): string[] {
+  const prefix = `${KIND_REGISTRY[object.kind].dir}/${object.name}/`
+  return [...files.keys()].filter((path) => path.startsWith(prefix))
+}

@@ -90,6 +90,7 @@ export const COMPILER_RULES = [
   "operation.target-not-found",
   "operation.object-exists",
   "operation.collection-unknown",
+  "operation.delete-referenced",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

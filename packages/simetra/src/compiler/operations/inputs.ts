@@ -86,3 +86,8 @@ export const renameInput = z.strictObject({
   }),
 })
 export type RenameInput = z.infer<typeof renameInput>
+
+export const deleteInput = z.strictObject({
+  target: elementTarget,
+})
+export type DeleteInput = z.infer<typeof deleteInput>

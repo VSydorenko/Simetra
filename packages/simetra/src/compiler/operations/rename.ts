@@ -9,7 +9,7 @@ import { diagnostic } from "../diagnostics"
 import { PROJECT_FILE } from "../stages/files"
 import type { RenameInput } from "./inputs"
 import { compileInput, compileResult, refused } from "./refuse"
-import { resolveTarget } from "./target"
+import { objectFiles, resolveTarget } from "./target"
 import {
   placeOf,
   renameJsonPlaces,
@@ -68,8 +68,7 @@ export async function renameElement(
         }),
       ])
     }
-    for (const path of files.keys()) {
-      if (!path.startsWith(from)) continue
+    for (const path of objectFiles(files, object)) {
       const fileName = path.slice(from.length)
       moves.set(
         path,
