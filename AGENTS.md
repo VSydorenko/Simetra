@@ -286,4 +286,6 @@ skills:
   load: ".agents/skills/codebase-research/SKILL.md"
 - task: "review landed work before merge: choosing lenses, severity x confidence scale, adversarial verification of findings"
   load: ".agents/skills/code-review/SKILL.md"
+- task: "run the private reconciliation of the first consumer's database against Simetra metadata (schema-only dump, introspect/diff, expected plan), keeping every consumer artefact out of this repo"
+  load: ".agents/skills/consumer-reconciliation/SKILL.md"
 <!-- intent-skills:end -->
