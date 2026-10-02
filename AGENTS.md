@@ -75,6 +75,19 @@ owner decision.
 the navigation adapter interface; framework adapters live in T6; the host
 template and the studio are the only places that import TanStack Start. It is
 held by the same `packages/simetra/eslint.tier-zones.js` and its negative test.
+In `@simetra/designer` the studio is `src/studio` and nothing else there imports
+TanStack Start; that zone is held by `packages/designer/eslint.zones.js` and its
+negative test `packages/designer/test/studio-boundary.test.ts`.
+
+**Engine adapter boundary.** Production sources of `simetra` do not import `pg`
+or the pg-delta engine package: the schema-engine adapter lives in `@simetra/designer`
+and is passed into the T2 port from outside. It is held by
+`packages/simetra/eslint.tier-zones.js` and its negative test
+`packages/simetra/test/tier-boundary.test.ts`.
+
+**Consumer skills** live in `packages/<package>/skills/` and ship with the
+package; they never live in `.agents/skills`, which holds only skills for
+developing the platform itself. Platform agents never load a consumer skill.
 
 **Current code is a prototype.** The prototype metamodel lives in T0
 (`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest
@@ -154,10 +167,10 @@ pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # before a PR
 pnpm format:fix                           # fixes what format:check reports
 
 python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
-pnpm metadata:check                       # simetra compile over every metadata dir; pre-commit runs it with --staged
+pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
 
 pnpm db:start                             # local Supabase stack (needs Docker)
-pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) against the local stack
+pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) of simetra and @simetra/designer against the local stack
 pnpm db:stop
 ```
 

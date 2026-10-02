@@ -146,6 +146,6 @@ environment-level dependencies; install them per machine:
 Where a dependency is missing (a fresh clone, a cloud session), the command
 still runs: follow its steps without the named skill.
 
-Skills for **consumers** of the platform ship inside the package (`skills/`),
-versioned with the code; the repo skills above are for developing the platform
-itself.
+Skills for **consumers** of the platform ship inside their package, versioned
+with the code; they are not used when developing the platform itself — the repo
+skills above are.
