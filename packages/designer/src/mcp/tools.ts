@@ -83,15 +83,24 @@ function toResponse(
       content: [{ type: "text", text: renderDiff(data, report) }],
     }
   }
+  // Збій роботи з базою — не помилка метаданих: зведення не має слати
+  // викликача правити теку, коли виправляти треба базу чи підключення
+  const databaseFailed = diagnostics.some((d) => d.code === "database.failed")
   const lines = ok
     ? [
         ...changes.map((c) => lineFor(c, written)),
         ...(dry && tool.files === "write" ? ["dry run: nothing written"] : []),
         ...(tool.files === "read" ? [`${tool.name}: no errors`] : []),
       ]
-    : tool.files === "write"
-      ? ["nothing written: the operation was refused or the result has errors"]
-      : [`${tool.name}: the metadata has errors`]
+    : databaseFailed
+      ? [
+          `${tool.files === "write" ? "nothing written" : tool.name}: the database work failed`,
+        ]
+      : tool.files === "write"
+        ? [
+            "nothing written: the operation was refused or the result has errors",
+          ]
+        : [`${tool.name}: the metadata has errors`]
   return {
     isError: !ok,
     structuredContent: {
@@ -132,6 +141,7 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
           readOnly: o.readOnly,
           dryRun: dry === true,
           confirmed: confirmed === true,
+          channel: "mcp",
           database: o.database,
           ...(o.databaseEnv === undefined
             ? {}

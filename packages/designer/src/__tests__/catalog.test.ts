@@ -333,7 +333,7 @@ describe("database as a launch resource", () => {
     const r = await invoke(dbStub, {}, opts(dir))
     expect(r.refusal).toEqual({
       reason: "no-database",
-      message: noDatabaseHint(DEFAULT_DATABASE_URL_ENV),
+      message: noDatabaseHint(DEFAULT_DATABASE_URL_ENV, "cli"),
     })
     expect(r.refusal?.message).toContain("SIMETRA_DATABASE_URL")
   })
@@ -341,7 +341,7 @@ describe("database as a launch resource", () => {
   it("the hint names the variable chosen at launch", async () => {
     const dir = await project()
     const r = await invoke(dbStub, {}, { ...opts(dir), databaseEnv: "APP_DB" })
-    expect(r.refusal?.message).toBe(noDatabaseHint("APP_DB"))
+    expect(r.refusal?.message).toBe(noDatabaseHint("APP_DB", "cli"))
     expect(r.refusal?.message).not.toContain(DEFAULT_DATABASE_URL_ENV)
   })
 
@@ -390,8 +390,20 @@ describe("database as a launch resource", () => {
 
 describe("noDatabaseHint", () => {
   it("names the environment variable and nothing else", () => {
-    const hint = noDatabaseHint("MY_DB_URL")
-    expect(hint).toContain("MY_DB_URL")
-    expect(hint).not.toContain(DEFAULT_DATABASE_URL_ENV)
+    for (const channel of ["cli", "mcp"] as const) {
+      const hint = noDatabaseHint("MY_DB_URL", channel)
+      expect(hint).toContain("MY_DB_URL")
+      expect(hint).not.toContain(DEFAULT_DATABASE_URL_ENV)
+    }
+  })
+
+  it("tells the command line to export the variable, not to restart a server", () => {
+    const hint = noDatabaseHint("MY_DB_URL", "cli")
+    expect(hint).not.toMatch(/restart|server/i)
+    expect(hint).toContain("--database-url-env")
+  })
+
+  it("tells the MCP server to set the variable in its environment and restart", () => {
+    expect(noDatabaseHint("MY_DB_URL", "mcp")).toMatch(/restart/)
   })
 })

@@ -144,6 +144,7 @@ export async function runTool(
           readOnly: false,
           dryRun: argv["dry-run"] === true,
           confirmed: argv.yes === true,
+          channel: "cli",
           database,
           databaseEnv,
         })

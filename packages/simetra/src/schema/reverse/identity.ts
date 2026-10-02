@@ -25,7 +25,11 @@ export interface ExistingObject {
 }
 
 export interface ExistingFolder {
-  project?: { defaultSchema: string; attributeCase: AttributeCase }
+  project?: {
+    name: string
+    defaultSchema: string
+    attributeCase: AttributeCase
+  }
   objects: ReadonlyMap<string, ExistingObject>
   diagnostics: Diagnostic[]
 }
@@ -74,6 +78,7 @@ export function readExisting(
   )
   const project = parsedProject.success
     ? {
+        name: parsedProject.data.name,
         defaultSchema: parsedProject.data.defaultSchema,
         attributeCase: parsedProject.data.naming.attributeCase,
       }

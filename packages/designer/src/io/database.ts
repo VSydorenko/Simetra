@@ -199,6 +199,22 @@ export function connectionErrorMessage(
         .message
 }
 
+/**
+ * Помилка програми, а не бази: вбудовані класи JS без коду драйвера чи Node
+ * (у Node `TypeError` буває з кодом `ERR_*`, як `ERR_INVALID_URL`). Драйвер
+ * кидає `Error` чи `DatabaseError`, тож його текст сюди не потрапляє, а
+ * баг не маскується під збій бази.
+ */
+function isProgramBug(error: unknown): boolean {
+  return (
+    (error instanceof TypeError ||
+      error instanceof RangeError ||
+      error instanceof ReferenceError ||
+      error instanceof SyntaxError) &&
+    codeOf(error) === undefined
+  )
+}
+
 export type DatabaseOutcome<T> =
   { ok: true; value: T } | { ok: false; diagnostic: Diagnostic }
 
@@ -206,8 +222,9 @@ export type DatabaseOutcome<T> =
  * Підключення одного виклику — єдина межа помилок бази. Відмова
  * (`DatabaseRefusal`) летить до `invoke` і стає кодом 2; збій роботи з базою
  * стає діагностикою `database.failed` (код 1, MCP `isError`). Сирий виняток
- * далі не йде: SDK MCP показав би агенту його текст. Пули відкриває й
- * закриває двигун усередині `fn`.
+ * бази далі не йде: SDK MCP показав би агенту його текст. Баг програми
+ * (`isProgramBug`) летить далі як є — шлях внутрішньої помилки `invoke`.
+ * Пули відкриває й закриває двигун усередині `fn`.
  */
 export async function withDatabase<T>(
   resource: DatabaseResource,
@@ -221,6 +238,7 @@ export async function withDatabase<T>(
       names = { ...names, shadow: describeConnection(db.shadowBase.url) }
     return { ok: true, value: await fn(db) }
   } catch (error) {
+    if (isProgramBug(error)) throw error
     const c = classifyDatabaseError(error, names)
     if (c.kind === "refusal") throw new DatabaseRefusal(c.message)
     return {

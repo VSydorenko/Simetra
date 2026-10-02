@@ -8,6 +8,7 @@ import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { createMcpServer } from "../mcp/server"
 import { READ_ONLY_FLAG, readOnlyHint } from "../tools/hints"
+import type { DatabaseResource } from "../tools/types"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
@@ -24,9 +25,10 @@ afterEach(async () => {
 async function connect(
   dir: string,
   readOnly: boolean,
-  launchArgs?: string[]
+  launchArgs?: string[],
+  database?: DatabaseResource
 ): Promise<Client> {
-  const server = createMcpServer({ dir, readOnly, launchArgs })
+  const server = createMcpServer({ dir, readOnly, launchArgs, database })
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: "test", version: "0.0.0" })
   clients.push(client)
@@ -76,6 +78,30 @@ describe("simetra mcp", () => {
       "introspect",
       "rename",
     ])
+  })
+
+  it("a database tool without a connection tells the server to restart", async () => {
+    const client = await connect(await project(), false)
+    const r = await call(client, "diff", {})
+    expect(r.isError).toBe(true)
+    expect(r.text).toContain("SIMETRA_DATABASE_URL")
+    expect(r.text).toMatch(/restart the server/)
+  })
+
+  it("a failed database work is summarised as such, not as metadata errors", async () => {
+    // Збій роботи з базою (SQLSTATE не класу підключення) — діагностика
+    // `database.failed`, і зведення мусить назвати саме його
+    const failing: DatabaseResource = {
+      describe: "db.example.test:5432/app",
+      connect: () =>
+        Promise.reject(Object.assign(new Error("boom"), { code: "XX000" })),
+    }
+    const client = await connect(await project(), false, undefined, failing)
+    const r = await call(client, "diff", {})
+    expect(r.isError).toBe(true)
+    expect(r.out.diagnostics.map((d) => d.code)).toContain("database.failed")
+    expect(r.text).not.toContain("the metadata has errors")
+    expect(r.text).toContain("diff: the database work failed")
   })
 
   it("--read-only refuses a write, changes nothing and names the flag", async () => {

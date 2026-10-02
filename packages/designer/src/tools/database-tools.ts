@@ -7,8 +7,11 @@ import {
 } from "simetra/compiler"
 import {
   ATTRIBUTE_CASES,
+  logicalTypeOf,
   type AttributeCase,
+  type CatalogColumn,
   type CatalogDifference,
+  type CatalogUnit,
 } from "simetra/model"
 import {
   SUPABASE_SCHEMAS,
@@ -97,7 +100,7 @@ export const introspectTool = defineTool({
       .optional()
       .meta({
         description:
-          "Name and attribute case of a new project; an existing project.meta.json is never rewritten.",
+          "Name and attribute case of a new project; an existing project.meta.json is never rewritten, and a value that differs from it is an error.",
       }),
   }),
   files: "write",
@@ -124,8 +127,9 @@ export const introspectTool = defineTool({
       if (compiled.model === undefined)
         return { ok: false, changes: [], diagnostics: compiled.diagnostics }
       const own = compiled.model.project
-      // Власні значення теки: генератор звітує розбіжність з ними помилкою,
-      // тож перекрити їх може лише явний вхід
+      // Файл проєкту не переписується: без явного входу діють його значення,
+      // а явно назване інше значення генератор звітує помилкою
+      // `introspect.project-mismatch`, і нічого не пишеться
       project = {
         name: input.project?.name ?? own.name,
         defaultSchema: own.defaultSchema,
@@ -215,19 +219,20 @@ function resolveTables(
 
 /**
  * Чи стосується ідентичність двигуна однієї з таблиць: сама таблиця, її
- * колонки, обмеження, тригери, політики, типові значення, її індекси й
- * обгортки (`comment:(…)`, `acl:(…)`) над будь-чим із цього. Індекс у
- * Postgres адресується схемою, а не таблицею, тож його таблицю дають моделі.
+ * колонки, обмеження, тригери, політики, типові значення, пов'язані з нею
+ * індекси, енами й послідовності (`related`) і обгортки (`comment:(…)`,
+ * `acl:(…)`) над будь-чим із цього. Індекс, енам і послідовність у Postgres
+ * адресуються схемою, а не таблицею, тож зв'язок з таблицею дають моделі.
  */
 function touchesTables(
   tables: readonly Qualified[],
-  indexes: ReadonlySet<string>
+  related: ReadonlySet<string>
 ): (id: string) => boolean {
   const own = new Set(tables.map((t) => `table:${t.schema}.${t.name}`))
   const prefixes = tables.map((t) => `${t.schema}.${t.name}.`)
   const sub = /^(column|constraint|trigger|rule|policy|default):(.*)$/
   const touches = (id: string): boolean => {
-    if (own.has(id) || indexes.has(id)) return true
+    if (own.has(id) || related.has(id)) return true
     const m = sub.exec(id)
     if (m !== null) return prefixes.some((p) => m[2]!.startsWith(p))
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(id)
@@ -247,42 +252,126 @@ function targetsOf(a: EngineAction): string[] {
   return own.length > 0 ? own : a.consumes
 }
 
+/** Частини `a.b.c` з лапками Postgres; `undefined` — не ім'я. */
+function nameParts(text: string): string[] | undefined {
+  const parts: string[] = []
+  const part = /\s*(?:"((?:[^"]|"")+)"|([A-Za-z_][\w$]*))\s*(\.|$)/y
+  while (part.lastIndex < text.length) {
+    const m = part.exec(text)
+    if (m === null) return undefined
+    parts.push(
+      m[1] === undefined ? m[2]!.toLowerCase() : m[1].replace(/""/g, '"')
+    )
+    if (m[3] === "") break
+  }
+  return parts.length > 0 ? parts : undefined
+}
+
+/**
+ * Енами й послідовності названих таблиць. Вони адресуються схемою, а не
+ * таблицею, тож зв'язок дають колонки (тип, identity, `nextval` у типовому
+ * значенні) і `OWNED BY` одиниць — з обох моделей: енам нової колонки є
+ * лише в бажаній, видаленої — лише в цільовій.
+ */
+function dependentIds(
+  keys: ReadonlySet<string>,
+  models: readonly NarrowModel[]
+): Set<string> {
+  const enums = new Set(
+    models.flatMap((m) => m.enumTypes.map((e) => `${e.schema}.${e.name}`))
+  )
+  const ids = new Set<string>()
+  const sequence = (schema: string, parts: string[] | undefined) => {
+    if (parts === undefined || parts.length > 2) return
+    const qualified = parts.length === 2 ? parts : [schema, parts[0]!]
+    const key = qualified.join(".")
+    ids.add(`sequence:${key}`).add(`sequenceOwnedBy:${key}`)
+  }
+  for (const table of models.flatMap((m) => m.tables)) {
+    if (!keys.has(`${table.schema}.${table.name}`)) continue
+    for (const column of table.columns) {
+      const type = logicalTypeOf(column.type.replace(/(\[\])+$/, ""), enums)
+      if (type.form === "enum") ids.add(`type:${type.schema}.${type.name}`)
+      if (column.identity !== undefined)
+        sequence(table.schema, [column.identity.sequence])
+      const next = /nextval\('((?:[^']|'')+)'::regclass\)/.exec(
+        column.default ?? ""
+      )
+      if (next !== null)
+        sequence(table.schema, nameParts(next[1]!.replace(/''/g, "'")))
+    }
+  }
+  for (const unit of models.flatMap((m) => m.units)) {
+    if (unit.class !== "sequenceOwnedBy") continue
+    const owner = /OWNED\s+BY\s+(.+?)\s*;?\s*$/i.exec(unit.sql)
+    const parts = owner === null ? undefined : nameParts(owner[1]!)
+    // `schema.table.column` або `table.column` у схемі послідовності
+    const table =
+      parts === undefined
+        ? undefined
+        : parts.length === 3
+          ? `${parts[0]}.${parts[1]}`
+          : parts.length === 2
+            ? `${unit.schema}.${parts[0]}`
+            : undefined
+    if (table !== undefined && keys.has(table))
+      sequence(
+        unit.schema,
+        nameParts(unit.identity.slice(unit.identity.indexOf(":") + 1))
+      )
+  }
+  return ids
+}
+
 /**
  * Звуження звірки до названих таблиць (§10.3 спеки П2: звірка документа з
- * його ТЧ і регістрами, а не всієї бази). Діагностики не звужуються:
- * помилка поза фільтром однаково робить звірку неповною.
+ * його ТЧ і регістрами, а не всієї бази) разом з їхніми енамами й
+ * послідовностями. Діагностики не звужуються: помилка поза фільтром
+ * однаково робить звірку неповною.
  */
 export function narrow(
   data: Omit<DiffData, "empty">,
   tables: readonly Qualified[],
-  models: readonly CompiledTables[]
+  models: readonly NarrowModel[]
 ): Omit<DiffData, "empty"> {
   const keys = new Set(tables.map((t) => `${t.schema}.${t.name}`))
   const indexes = new Set(
     models.flatMap((m) =>
-      m
+      m.tables
         .filter((t) => keys.has(`${t.schema}.${t.name}`))
         .flatMap((t) => t.indexes.map((i) => `index:${t.schema}.${i.name}`))
     )
   )
-  const touches = touchesTables(tables, indexes)
+  const dependent = dependentIds(keys, models)
+  const touches = touchesTables(tables, new Set([...indexes, ...dependent]))
   const tablePaths = [...keys].map((k) => `tables.${k}`)
+  const enumPaths = new Set(
+    [...dependent]
+      .filter((id) => id.startsWith("type:"))
+      .map((id) => `enumTypes.${id.slice("type:".length)}`)
+  )
   return {
     plan: data.plan.filter((a) => targetsOf(a).some(touches)),
     differences: data.differences.filter(
       (d) =>
         tablePaths.some((p) => d.path === p || d.path.startsWith(`${p}.`)) ||
+        enumPaths.has(d.path) ||
         (d.path.startsWith("units.") && touches(d.path.slice("units.".length)))
     ),
     diagnostics: data.diagnostics,
   }
 }
 
-type CompiledTables = {
-  schema: string
-  name: string
-  indexes: { name: string }[]
-}[]
+type NarrowModel = {
+  tables: {
+    schema: string
+    name: string
+    columns: Pick<CatalogColumn, "type" | "default" | "identity">[]
+    indexes: { name: string }[]
+  }[]
+  enumTypes: Qualified[]
+  units: Pick<CatalogUnit, "class" | "identity" | "schema" | "sql">[]
+}
 
 export const diffTool = defineTool({
   name: "diff",
@@ -337,11 +426,11 @@ export const diffTool = defineTool({
       diagnostics,
     }
     if (input.tables !== undefined) {
-      const models = [
-        comparison.target.model.tables,
-        comparison.desired.model.tables,
-      ]
-      const { tables, unknown } = resolveTables(input.tables, models.flat())
+      const models = [comparison.target.model, comparison.desired.model]
+      const { tables, unknown } = resolveTables(
+        input.tables,
+        models.flatMap((m) => m.tables)
+      )
       if (unknown.length > 0)
         throw new UsageError(
           `Unknown tables in the filter: ${unknown.join(", ")}. They are neither in the database nor in the metadata. Nothing compared.`

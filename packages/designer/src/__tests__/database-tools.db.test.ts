@@ -99,6 +99,7 @@ const options = (
   readOnly: false,
   dryRun: false,
   confirmed: false,
+  channel: "cli",
   database: databaseResource(env, {
     url: ENV,
     ...(shadow === undefined ? {} : { shadow }),
@@ -175,6 +176,7 @@ describe("introspect", () => {
           readOnly: false,
           dryRun: false,
           confirmed: false,
+          channel: "cli",
         }
       )
       expect(compiled.ok).toBe(true)

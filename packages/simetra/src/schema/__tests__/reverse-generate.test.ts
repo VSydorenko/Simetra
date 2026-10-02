@@ -40,11 +40,15 @@ const schemaPath: SchemaPathResolver = (file, schemaFile) =>
 
 function options(
   existing: ReadonlyMap<string, string> = new Map(),
-  overrides: { defaultSchema?: string; attributeCase?: AttributeCase } = {}
+  overrides: {
+    name?: string
+    defaultSchema?: string
+    attributeCase?: AttributeCase
+  } = {}
 ) {
   return {
     project: {
-      name: "App",
+      name: overrides.name ?? "App",
       defaultSchema: overrides.defaultSchema ?? "app",
       attributeCase: overrides.attributeCase ?? "snake_case",
     },
@@ -114,7 +118,9 @@ function withoutId(column: Json): Json {
 const errors = (result: ReverseResult) =>
   result.diagnostics.filter((d) => d.severity === "error")
 
+// Ім'я — те саме, що в `options`: розбіжність з ним — діагностика
 const SNAKE_PROJECT = project({
+  name: "App",
   defaultSchema: "app",
   naming: { attributeCase: "snake_case" },
 })
@@ -620,7 +626,7 @@ describe("reverseGenerate", () => {
     const existing = new Map([["project.meta.json", text]])
     const result = await reverseGenerate(
       model({ tables: [table("app", "note")] }),
-      options(existing)
+      options(existing, { name: "Mine" })
     )
     expect(result.diagnostics).toEqual([])
     expect(result.files.get("project.meta.json")).toBe(text)
@@ -630,7 +636,7 @@ describe("reverseGenerate", () => {
 
     const mismatch = await reverseGenerate(
       model({ tables: [table("public", "note")] }),
-      options(existing, { defaultSchema: "public" })
+      options(existing, { name: "Mine", defaultSchema: "public" })
     )
     expect(errors(mismatch).map((d) => [d.code, d.pointer])).toEqual([
       ["introspect.project-mismatch", "/defaultSchema"],
@@ -640,11 +646,21 @@ describe("reverseGenerate", () => {
     // Стиль імен файлу проєкту теж діє мовчки лише тоді, коли збігається
     const style = await reverseGenerate(
       model({ tables: [table("app", "note")] }),
-      options(existing, { attributeCase: "camelCase" })
+      options(existing, { name: "Mine", attributeCase: "camelCase" })
     )
     expect(errors(style).map((d) => [d.code, d.pointer])).toEqual([
       ["introspect.project-mismatch", "/naming/attributeCase"],
     ])
+
+    // Явно назване інше ім'я проєкту так само не ігнорується мовчки
+    const name = await reverseGenerate(
+      model({ tables: [table("app", "note")] }),
+      options(existing, { name: "Other" })
+    )
+    expect(errors(name).map((d) => [d.code, d.pointer])).toEqual([
+      ["introspect.project-mismatch", "/name"],
+    ])
+    expect(name.changes).toEqual([])
   })
 
   it("default opclass, collation and deferrable are omitted", async () => {
@@ -850,6 +866,62 @@ describe("reverseGenerate", () => {
         (r) => r.role === "customTable.foreignKey"
       )
     ).toBe(true)
+  })
+
+  it("fk to a tabular section of a kept 1C object is unrepresentable", async () => {
+    // Таблиця ТЧ належить об'єкту, але власного `MetadataRef` не має
+    const kept = metaFiles({
+      "project.meta.json": SNAKE_PROJECT,
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        schema: "app",
+        tabularSections: [
+          { id: uuid(9101), name: "rates", physicalName: "rates" },
+        ],
+      }),
+    })
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const rates = compiled.model!.physical.tables.find(
+      (t) => t.origin.tabularSectionId !== undefined
+    )!
+    const result = await reverseGenerate(
+      model({
+        tables: [
+          ...catalogFromSnapshot(compiled.model!.physical).tables,
+          table("app", "quote", {
+            columns: [
+              idColumn,
+              { name: "rate_id", type: "uuid", notNull: true },
+            ],
+            foreignKeys: [
+              {
+                name: "quote_rate_id_fkey",
+                columns: ["rate_id"],
+                references: {
+                  schema: rates.schema,
+                  table: rates.name,
+                  columns: ["id"],
+                },
+                onDelete: "noAction",
+                onUpdate: "noAction",
+                deferrable: "no",
+              },
+            ],
+          }),
+        ],
+      }),
+      options(kept)
+    )
+    expect(
+      errors(result).map((d) => [d.code, d.params?.object, d.params?.property])
+    ).toEqual([
+      [
+        "introspect.unrepresentable",
+        "app.quote.quote_rate_id_fkey",
+        "references",
+      ],
+    ])
+    expect(result.changes).toEqual([])
   })
 
   it("a trigger function also called from a kept file is shared", async () => {

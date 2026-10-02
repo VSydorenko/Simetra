@@ -29,11 +29,20 @@ export function readOnlyHint(
 /**
  * Називає лише змінну, ніколи її значення: рядок підключення несе
  * користувача й пароль, а відмова йде агентові й у журнали клієнта.
+ * Середовище команди задає сам викликач перед наступним запуском, а
+ * середовище MCP-сервера фіксується при його старті — звідси дві поради.
  */
-export function noDatabaseHint(envName: string): string {
+export function noDatabaseHint(
+  envName: string,
+  channel: "cli" | "mcp"
+): string {
+  const how =
+    channel === "cli"
+      ? `Export the environment variable ${envName} with the connection string of the target database, or name another variable with --database-url-env.`
+      : `Set the environment variable ${envName} to the connection string of the target database in this server's environment and restart the server.`
   return [
-    "This tool needs a database connection, and the server has none.",
-    `Set the environment variable ${envName} to the connection string of the target database and restart the server.`,
+    `This tool needs a database connection, and ${channel === "cli" ? "none is configured" : "the server has none"}.`,
+    how,
     "Nothing changed.",
   ].join(" ")
 }

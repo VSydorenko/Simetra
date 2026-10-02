@@ -88,6 +88,8 @@ export interface InvokeOptions {
   readOnly: boolean
   dryRun: boolean
   confirmed: boolean
+  /** Хто викликає: від цього залежить, як підказка радить дати підключення. */
+  channel: "cli" | "mcp"
   database?: DatabaseResource
   /**
    * Ім'я змінної середовища з рядком підключення, зафіксоване при запуску:

@@ -77,7 +77,7 @@ export async function invoke<D>(
   if (tool.database !== "none" && o.database === undefined)
     return refused(
       "no-database",
-      noDatabaseHint(o.databaseEnv ?? DEFAULT_DATABASE_URL_ENV)
+      noDatabaseHint(o.databaseEnv ?? DEFAULT_DATABASE_URL_ENV, o.channel)
     )
   // Dry-run нічого не пише, тож підтвердження там нічого не захищає, а агентові
   // перегляд потрібен саме до `confirm`.

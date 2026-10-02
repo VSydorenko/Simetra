@@ -184,8 +184,8 @@ function foreignKeyDiagnostics(
 
 /**
  * Розбіжність наявного проєкту з запитом: файл проєкту не переписується, тож
- * діють його `defaultSchema` і `naming.attributeCase`, а виклик має про це
- * знати, а не отримати інші імена й схеми мовчки.
+ * діють його `name`, `defaultSchema` і `naming.attributeCase`, а виклик має
+ * про це знати, а не отримати інші імена й схеми мовчки.
  */
 function projectMismatch(
   folder: ExistingFolder,
@@ -194,6 +194,7 @@ function projectMismatch(
   const project = folder.project
   if (project === undefined) return []
   const fields = [
+    ["name", "/name", project.name, requested.name],
     [
       "defaultSchema",
       "/defaultSchema",

@@ -26,6 +26,7 @@ export const opts = (dir: string): InvokeOptions => ({
   readOnly: false,
   dryRun: false,
   confirmed: false,
+  channel: "cli",
 })
 
 export const run = (

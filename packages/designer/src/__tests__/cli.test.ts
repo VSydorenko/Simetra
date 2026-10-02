@@ -237,6 +237,7 @@ describe("cli adapter", () => {
     expect(r.exitCode).toBe(2)
     expect(r.stderr).toContain("APP_DB")
     expect(r.stderr).not.toContain("SIMETRA_DATABASE_URL")
+    expect(r.stderr).not.toMatch(/restart/i)
   })
 
   it("a tool without the database never reads the environment", async () => {

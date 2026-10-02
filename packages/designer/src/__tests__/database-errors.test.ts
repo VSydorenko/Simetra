@@ -304,6 +304,28 @@ describe("withDatabase", () => {
     expect(leaks(JSON.stringify(outcome))).toEqual([])
   })
 
+  it("lets a bug in the work through instead of reporting database.failed", async () => {
+    const bug = new TypeError(
+      "Cannot read properties of undefined (reading 'x')"
+    )
+    const error = await withDatabase(resource, "diff", () =>
+      Promise.reject(bug)
+    ).catch((e: unknown) => e)
+    expect(error).toBe(bug)
+  })
+
+  it("still classifies a driver error without a code as database.failed", async () => {
+    // Текст драйвера без коду (`Error`) лишається за межею: його не цитують
+    const outcome = await withDatabase(resource, "diff", () =>
+      Promise.reject(new Error(`Client error near ${URL_}`))
+    )
+    expect(outcome).toMatchObject({
+      ok: false,
+      diagnostic: { code: "database.failed" },
+    })
+    expect(leaks(JSON.stringify(outcome))).toEqual([])
+  })
+
   it("describes a shadow-server failure with the shadow address", async () => {
     const withShadow = databaseResource(
       {
@@ -366,14 +388,19 @@ describe("diff narrowed to tables", () => {
     consumes: ["table:app.customer"],
   })
   const models = [
-    [
-      {
-        schema: "app",
-        name: "customer",
-        indexes: [{ name: "customer_name_idx" }],
-      },
-      { schema: "app", name: "orders", indexes: [] },
-    ],
+    {
+      tables: [
+        {
+          schema: "app",
+          name: "customer",
+          columns: [],
+          indexes: [{ name: "customer_name_idx" }],
+        },
+        { schema: "app", name: "orders", columns: [], indexes: [] },
+      ],
+      enumTypes: [],
+      units: [],
+    },
   ]
   const data = {
     plan: [fk, grant, index],
@@ -409,6 +436,128 @@ describe("diff narrowed to tables", () => {
     expect(orders.differences.map((d) => d.path)).toEqual([
       "tables.app.orders.foreignKeys.orders_customer_id_fkey",
     ])
+  })
+  describe("types and sequences of the named tables", () => {
+    // Енам і послідовність адресуються схемою, а не таблицею: зв'язок з
+    // таблицею дають колонки й одиниці обох моделей
+    const table = (
+      name: string,
+      columns: {
+        name: string
+        type: string
+        default?: string
+        identity?: { generation: "always" | "byDefault"; sequence: string }
+      }[]
+    ) => ({ schema: "app", name, columns, indexes: [] })
+    const desired = {
+      tables: [
+        table("orders", [
+          {
+            name: "id",
+            type: "bigint",
+            identity: {
+              generation: "always" as const,
+              sequence: "orders_id_seq",
+            },
+          },
+          { name: "status", type: "app.order_status" },
+          {
+            name: "number",
+            type: "integer",
+            default: "nextval('app.order_number_seq'::regclass)",
+          },
+          { name: "line", type: "integer" },
+        ]),
+        table("customer", [{ name: "kind", type: "customer_kind[]" }]),
+      ],
+      enumTypes: [
+        { schema: "app", name: "order_status", values: ["new", "done"] },
+        { schema: "app", name: "customer_kind", values: ["a"] },
+      ],
+      units: [
+        {
+          class: "sequenceOwnedBy" as const,
+          identity: "sequenceOwnedBy:app.order_line_seq",
+          schema: "app",
+          name: "order_line_seq",
+          sql: 'ALTER SEQUENCE app.order_line_seq OWNED BY app."orders".line',
+        },
+        {
+          class: "sequenceOwnedBy" as const,
+          identity: "sequenceOwnedBy:app.customer_seq",
+          schema: "app",
+          name: "customer_seq",
+          sql: "ALTER SEQUENCE app.customer_seq OWNED BY app.customer.id",
+        },
+      ],
+    }
+    // У живій базі колонки статусу ще немає: енам видно лише з бажаної моделі
+    const target = {
+      tables: [table("orders", []), table("customer", [])],
+      enumTypes: [{ schema: "app", name: "order_status", values: ["new"] }],
+      units: [],
+    }
+    const typeAction = (id: string) =>
+      action({ sql: `alter type ${id}`, verb: "alter", produces: [id] })
+    const seqAction = (id: string) =>
+      action({ sql: `create sequence ${id}`, produces: [id] })
+    const plan = [
+      typeAction("type:app.order_status"),
+      typeAction("type:app.customer_kind"),
+      seqAction("sequence:app.orders_id_seq"),
+      seqAction("sequence:app.order_number_seq"),
+      seqAction("sequence:app.order_line_seq"),
+      seqAction("sequence:app.customer_seq"),
+    ]
+    const difference = (path: string) => ({
+      path,
+      kind: "missing" as const,
+      detail: "",
+    })
+    const differences = [
+      difference("enumTypes.app.customer_kind"),
+      difference("enumTypes.app.order_status"),
+      difference("units.acl:(sequence:app.order_number_seq).anon"),
+      difference("units.sequence:app.customer_seq"),
+      difference("units.sequence:app.order_line_seq"),
+      difference("units.sequenceOwnedBy:app.order_line_seq"),
+    ]
+
+    it("keeps the enum types and sequences of the named tables and drops the others", () => {
+      const orders = narrow(
+        { plan, differences, diagnostics: [] },
+        [{ schema: "app", name: "orders" }],
+        [target, desired]
+      )
+      expect(orders.plan.map((a) => a.produces[0])).toEqual([
+        "type:app.order_status",
+        "sequence:app.orders_id_seq",
+        "sequence:app.order_number_seq",
+        "sequence:app.order_line_seq",
+      ])
+      expect(orders.differences.map((d) => d.path)).toEqual([
+        "enumTypes.app.order_status",
+        "units.acl:(sequence:app.order_number_seq).anon",
+        "units.sequence:app.order_line_seq",
+        "units.sequenceOwnedBy:app.order_line_seq",
+      ])
+    })
+
+    it("resolves an unqualified array of an enum type", () => {
+      const customer = narrow(
+        { plan, differences, diagnostics: [] },
+        [{ schema: "app", name: "customer" }],
+        [target, desired]
+      )
+      expect(customer.plan.map((a) => a.produces[0])).toEqual([
+        "type:app.customer_kind",
+        "sequence:app.customer_seq",
+      ])
+      expect(customer.differences.map((d) => d.path)).toEqual([
+        "enumTypes.app.customer_kind",
+        "units.sequence:app.customer_seq",
+      ])
+    })
   })
 })
 
