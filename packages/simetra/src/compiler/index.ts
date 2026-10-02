@@ -18,7 +18,7 @@ export {
 } from "./compile"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
-export type { SqlUnit } from "./sql/units"
+export { readSqlUnits, type SqlSource, type SqlUnit } from "./sql/units"
 export { loadSqlParser, type SqlParser } from "./sql/parse"
 export type {
   Contracts,

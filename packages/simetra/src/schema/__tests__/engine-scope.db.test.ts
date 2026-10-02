@@ -1,5 +1,4 @@
 import { parseId, type StableId } from "@supabase/pg-delta"
-import pg from "pg"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   createPgDeltaEngine,
@@ -7,7 +6,10 @@ import {
   type EngineScope,
 } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "../engine/pg-delta/policy"
-import { testDatabaseUrl } from "../../../test/db/connection"
+import {
+  shadowDatabaseCount,
+  testDatabaseUrl,
+} from "../../../test/db/connection"
 
 /**
  * Порт `SchemaEngine` на живому стеку (план E2a, задача 3): extract у межі,
@@ -23,29 +25,12 @@ const scopeOf = (...schemas: string[]): EngineScope => ({
   provider: "supabase",
 })
 
-/**
- * Тінь-сирота лишається, якщо процес убито до `finally` (рішення за спайком,
- * 1), тож тести рахують scratch-бази до й після, а не покладаються на ім'я.
- */
-async function shadowCount(): Promise<number> {
-  const client = new pg.Client({ connectionString: stack.url })
-  await client.connect()
-  try {
-    const result = await client.query<{ n: number }>(
-      "select count(*)::int as n from pg_database where datname like 'pgdelta_shadow_%'"
-    )
-    return result.rows[0]?.n ?? -1
-  } finally {
-    await client.end()
-  }
-}
-
 let shadowsBefore = 0
 beforeEach(async () => {
-  shadowsBefore = await shadowCount()
+  shadowsBefore = await shadowDatabaseCount()
 })
 afterEach(async () => {
-  expect(await shadowCount()).toBe(shadowsBefore)
+  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
 })
 
 /** Схема ідентичності: власна або цілі сателіта; без схеми — `undefined`. */
@@ -148,6 +133,7 @@ describe("SchemaEngine on pg-delta", () => {
           { name: "id", type: "integer", notNull: true },
           { name: "title", type: "text", notNull: true },
         ],
+        primaryKey: { name: "doc_pkey", columns: ["id"] },
         uniques: [],
         checks: [],
         foreignKeys: [],

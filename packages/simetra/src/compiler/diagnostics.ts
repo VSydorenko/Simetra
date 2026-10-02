@@ -95,6 +95,7 @@ export const COMPILER_RULES = [
   "engine.unmodeled-drift",
   "engine.shadow-load-failed",
   "engine.desired-rejected",
+  "engine.unrepresentable",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

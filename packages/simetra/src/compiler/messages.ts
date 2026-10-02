@@ -954,6 +954,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Рушій схеми відмовив бажаному SQL до планування (порожній вхід, кластерний DDL на кшталт ролей, розширення, яке тінь не виконає, або збій засіву провайдера); усуньте причину з повідомлення.",
     },
   },
+  "engine.unrepresentable": {
+    en: (p) =>
+      `${p.object}: property ${p.property} cannot be represented in the catalog model: ${p.detail}`,
+    uk: (p) =>
+      `${p.object}: властивість ${p.property} не виражається в моделі каталогу: ${p.detail}`,
+    hint: {
+      en: "The database holds a form the model has no field or SQL unit for; bring the object to a form the metadata can declare, or extend the model first.",
+      uk: "База тримає форму, для якої модель не має ні поля, ні SQL-одиниці; приведіть об'єкт до форми, яку можуть оголосити метадані, або спершу розширте модель.",
+    },
+  },
 }
 
 /** Текст діагностики потрібною мовою; `message`/`hint` самої діагностики — англійські. */

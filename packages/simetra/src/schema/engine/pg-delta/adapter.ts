@@ -8,14 +8,26 @@ import {
   ShadowLoadError,
   type Action,
   type Diagnostic,
+  type Fact,
   type FactBase,
   type Plan,
   type PlanOptions,
+  type StableId,
 } from "@supabase/pg-delta"
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
-import { localize, type RuleCode } from "simetra/compiler"
-import type { CatalogColumn, CatalogModel, CatalogTable } from "simetra/model"
+import {
+  loadSqlParser,
+  localize,
+  type RuleCode,
+  type SqlParser,
+} from "simetra/compiler"
+import type {
+  CatalogEnumType,
+  CatalogModel,
+  CatalogTable,
+  CatalogUnit,
+} from "simetra/model"
 import type {
   DbConnection,
   EngineAction,
@@ -27,6 +39,13 @@ import type {
   SchemaEngine,
   ShadowOutcome,
 } from "../port"
+import { mapEnumType, mapTable, type MappingIssue } from "./map-tables"
+import {
+  classifyUnit,
+  producedBy,
+  unitStatements,
+  type ProducedBy,
+} from "./map-units"
 import { scopeProfile } from "./policy"
 
 const ENGINE = "pg-delta"
@@ -111,49 +130,141 @@ function toEngineDiagnostics(
     )
 }
 
-function stringField(value: unknown): string {
-  if (typeof value !== "string")
-    throw new Error(`pg-delta fact field is not a string: ${String(value)}`)
-  return value
+/**
+ * Діагностика невираженої властивості. Серйозність — error: модель без цієї
+ * властивості тихо назвала б базу рівною бажаному стану.
+ */
+function unrepresentableDiagnostic(issue: MappingIssue): EngineDiagnostic {
+  return engineDiagnostic(
+    "engine.unrepresentable",
+    {
+      object: encodeId(issue.object),
+      property: issue.property,
+      detail: issue.detail,
+    },
+    "error",
+    issue.object
+  )
 }
 
+/** Дочірні факти таблиці, які мапить сама таблиця (`mapTable`). */
+const TABLE_PARTS = new Set(["column", "default", "constraint", "index"])
+
 /**
- * Модель каталогу з керованого виду двигуна. Поки що лише таблиці з
- * колонками (ім'я, тип, NOT NULL) і RLS таблиці; решту властивостей мапить
- * задача 4 за таблицею властивостей спайку.
+ * Класи фактів, текст яких модель тримає дослівно: кожен дає SQL-одиницю
+ * (план E2a, рішення 6).
  */
-function modelOf(view: FactBase): CatalogModel {
+const UNIT_KINDS = new Set([
+  "acl",
+  "defaultPrivilege",
+  "function",
+  "procedure",
+  "aggregate",
+  "trigger",
+  "policy",
+  "view",
+  "materializedView",
+  "sequence",
+  "domain",
+  "extension",
+  "publicationRel",
+  "publicationSchema",
+])
+
+/**
+ * Модель каталогу з керованого виду двигуна: кожен керований факт стає полем
+ * моделі, SQL-одиницею або діагностикою `engine.unrepresentable` — за
+ * таблицею властивостей спайку E2a. Факти «лише для посилань» (об'єкти
+ * провайдера) моделі не належать.
+ */
+function modelOf(
+  view: FactBase,
+  produced: ProducedBy,
+  parse: SqlParser
+): { model: CatalogModel; issues: MappingIssue[] } {
+  const issues: MappingIssue[] = []
   const tables: CatalogTable[] = []
+  const enumTypes: CatalogEnumType[] = []
+  const units: CatalogUnit[] = []
+  const sources = new Map<string, StableId>()
+  const managed = (id: StableId) =>
+    view.get(id) !== undefined && !view.isReferenceOnly(id)
+  const modelTable = (schema: string, name: string) =>
+    managed({ kind: "table", schema, name })
+  const unit = (fact: Fact, statements: string[]) => {
+    for (const sql of statements) {
+      if (sql === "") continue
+      const mapped = classifyUnit(fact.id, sql, parse, issues)
+      if (mapped === undefined) continue
+      // Дві пари з однією ідентичністю порівняння за ключем мовчки злило б
+      const earlier = sources.get(mapped.identity)
+      if (earlier !== undefined)
+        issues.push({
+          object: fact.id,
+          property: "identity",
+          detail: `${encodeId(earlier)} maps to the same unit ${mapped.identity}`,
+        })
+      sources.set(mapped.identity, fact.id)
+      units.push(mapped)
+    }
+  }
   for (const fact of view.facts()) {
     const id = fact.id
-    if (id.kind !== "table" || !("schema" in id) || view.isReferenceOnly(id))
-      continue
-    const columns = view
-      .childrenOf(id)
-      .flatMap((c) =>
-        c.id.kind === "column" ? [{ name: c.id.name, payload: c.payload }] : []
-      )
-      .sort((a, b) => Number(a.payload._position) - Number(b.payload._position))
-      .map((c): CatalogColumn => ({
-        name: c.name,
-        type: stringField(c.payload.type),
-        notNull: c.payload.notNull === true,
-      }))
-    const rowSecurity = fact.payload.rowSecurity === true
-    const forced = fact.payload.forceRowSecurity === true
-    tables.push({
-      schema: id.schema,
-      name: id.name,
-      rowLevelSecurity: !rowSecurity ? "off" : forced ? "forced" : "enabled",
-      columns,
-      uniques: [],
-      checks: [],
-      foreignKeys: [],
-      indexes: [],
-    })
+    if (view.isReferenceOnly(id)) continue
+    // Власник — ребро, а не payload; типового власника проєкція двигуна
+    // прибирає, тож ребро, що лишилось, — інший власник, якого модель не має
+    for (const edge of view.outgoingEdges(id))
+      if (edge.kind === "owner")
+        issues.push({
+          object: id,
+          property: "owner",
+          detail: `owner ${encodeId(edge.to)} is not the default owner`,
+        })
+    const parent = fact.parent
+    if (id.kind === "table") {
+      tables.push(mapTable(view, fact, parse, issues))
+      unit(fact, unitStatements(view, fact, produced, issues))
+    } else if (TABLE_PARTS.has(id.kind)) {
+      // Обмеження домену входить в одиницю домену (дія створення домену
+      // створює і його обмеження); решта — частини таблиці моделі
+      const ofTable =
+        parent !== undefined &&
+        (parent.kind === "table" ? managed(parent) : parent.kind === "column")
+      const ofDomain = id.kind === "constraint" && parent?.kind === "domain"
+      if (!ofTable && !ofDomain)
+        issues.push({
+          object: id,
+          property: "parent",
+          detail: `${id.kind} of ${parent === undefined ? "nothing" : encodeId(parent)} is not part of a model table`,
+        })
+    } else if (id.kind === "type") {
+      const enumType = mapEnumType(fact, issues)
+      if (enumType !== undefined) enumTypes.push(enumType)
+    } else if (id.kind === "typeAttribute" || id.kind === "schema") {
+      // Атрибут складеного типу вже названо діагностикою самого типу; схема
+      // в моделі неявна — її створює рендер зі схем об'єктів
+    } else if (id.kind === "comment") {
+      const target = id.target
+      const field =
+        (target.kind === "table" && managed(target)) ||
+        (target.kind === "column" && modelTable(target.schema, target.table))
+      if (!field) unit(fact, unitStatements(view, fact, produced, issues))
+    } else if (UNIT_KINDS.has(id.kind)) {
+      unit(fact, unitStatements(view, fact, produced, issues))
+    } else {
+      issues.push({
+        object: id,
+        property: "kind",
+        detail: `${id.kind} has no field or unit class in the catalog model`,
+      })
+    }
   }
   tables.sort((a, b) => compare(a.schema, b.schema) || compare(a.name, b.name))
-  return { tables, enumTypes: [], units: [] }
+  enumTypes.sort(
+    (a, b) => compare(a.schema, b.schema) || compare(a.name, b.name)
+  )
+  units.sort((a, b) => compare(a.identity, b.identity))
+  return { model: { tables, enumTypes, units }, issues }
 }
 
 function toEngineAction(action: Action): EngineAction {
@@ -218,14 +329,22 @@ async function extractFrom(
     planOptions.capability,
     planOptions.baseline
   )
+  const { model, issues } = modelOf(
+    view,
+    producedBy(result.factBase, view, planOptions),
+    await loadSqlParser()
+  )
   return {
-    model: modelOf(view),
+    model,
     catalog: new PgDeltaCatalog(
       result.factBase,
       planOptions,
       scopeKeyOf(scope)
     ),
-    diagnostics: toEngineDiagnostics(result.diagnostics),
+    diagnostics: [
+      ...toEngineDiagnostics(result.diagnostics),
+      ...issues.map(unrepresentableDiagnostic),
+    ],
   }
 }
 
