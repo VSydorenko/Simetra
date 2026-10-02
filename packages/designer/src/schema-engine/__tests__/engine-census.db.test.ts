@@ -62,7 +62,7 @@ async function inShadow<T>(
   fn: (shadow: DbConnection) => Promise<T>
 ): Promise<T> {
   const outcome = await engine.withDesiredShadow(
-    stack,
+    { target: stack },
     desiredSql,
     shadowScope,
     (shadow) => fn(shadow)

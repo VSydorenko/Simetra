@@ -42,7 +42,7 @@ describe("compareWithDesired", () => {
     // Лічильник до/після перевіряє `afterEach`; тут — успіх, а нижче — помилка
     const ok = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       "create schema app; create table app.t (id int primary key);",
       scopeOf("app"),
       []
@@ -52,7 +52,7 @@ describe("compareWithDesired", () => {
 
     const failed = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       "create table app.nowhere (id int);",
       scopeOf("app"),
       []
@@ -64,7 +64,7 @@ describe("compareWithDesired", () => {
   it("broken desired sql is shadow-failed", async () => {
     const result = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       "create schema app; create table app.t (id int references app.missing (id));",
       scopeOf("app"),
       []
@@ -108,7 +108,7 @@ describe("compareWithDesired", () => {
     expect(diagnostics).toEqual([])
     const result = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       renderDesiredState(model).sql,
       scope,
       diagnostics
@@ -127,7 +127,7 @@ describe("compareWithDesired", () => {
   it("foreign key to auth.users deploys in the shadow", async () => {
     const result = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       `create schema app;
        create table app.profile (
          id uuid primary key,
@@ -148,7 +148,7 @@ describe("compareWithDesired", () => {
   it("an empty comparison is empty only without differences", async () => {
     const result = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       "select 1;",
       scopeOf("app"),
       []
@@ -175,7 +175,7 @@ describe("compareWithDesired", () => {
     expect(diagnostics.map((d) => d.code)).toEqual(["engine.out-of-scope"])
     const result = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       renderDesiredState(model).sql,
       scope,
       diagnostics
@@ -191,7 +191,7 @@ describe("compareWithDesired", () => {
   it("the engine's unmodeled kind is not repeated for a class the census names", async () => {
     const result = await compareWithDesired(
       engine,
-      stack,
+      { target: stack },
       `create schema app;
        create type app.pair as (a int, b int);
        create cast (app.pair as text) with inout;`,

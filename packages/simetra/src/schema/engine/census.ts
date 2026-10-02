@@ -121,6 +121,7 @@ function diagnostic(
     code,
     severity,
     message: localize({ code, params }, "en").message,
+    params,
   }
 }
 

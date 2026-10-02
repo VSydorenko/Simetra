@@ -25,7 +25,8 @@ export interface OracleShape {
     check: string | null
   }[]
   /**
-   * Діючий ACL відношень і функцій, відсортований: порядок елементів — не
+   * Діючий ACL відношень і функцій і ACL колонок (`c:`; у колонки немає
+   * `acldefault`, тож рядок є лише за явного гранту), відсортований: порядок елементів — не
    * форма. `NULL` у каталозі за визначенням Postgres означає `acldefault`,
    * тож оракул порівнює саме його — інакше таблиця, створена до ADP, і та
    * сама таблиця з явним ACL власника різнилися б без різниці в правах.
@@ -94,6 +95,14 @@ export async function readOracle(
       WHERE n.nspname = ANY($1)
         AND NOT EXISTS (SELECT 1 FROM pg_depend d
                          WHERE d.objid = p.oid AND d.deptype = 'e')
+     UNION ALL
+     SELECT 'c:' || n.nspname || '.' || c.relname || '.' || a.attname,
+            a.attacl::text[]
+       FROM pg_attribute a
+       JOIN pg_class c ON c.oid = a.attrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped
+        AND a.attacl IS NOT NULL
 `,
     [schemas]
   )
@@ -382,11 +391,17 @@ export const CLASS_FIXTURES: ClassFixture[] = [
       GRANT SELECT ON app.price TO anon;
       GRANT SELECT, UPDATE (amount) ON app.price TO authenticated;
     `,
-    property: (shape) =>
-      shape.acls
+    property: (shape) => ({
+      table: shape.acls
         .find((a) => a.object === "r:app.price")
         ?.acl.filter((item) => item.startsWith("anon=")),
-    expected: ["anon=r/postgres"],
+      // Грант на колонку живе в `pg_attribute.attacl`, а не в ACL таблиці
+      column: shape.acls.find((a) => a.object === "c:app.price.amount")?.acl,
+    }),
+    expected: {
+      table: ["anon=r/postgres"],
+      column: ["authenticated=w/postgres"],
+    },
   },
   {
     name: "comments",

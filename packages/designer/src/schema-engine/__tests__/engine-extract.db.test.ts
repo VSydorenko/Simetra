@@ -113,7 +113,7 @@ async function extractDesired(
   scope: EngineScope
 ): Promise<Extracted> {
   const outcome = await engine.withDesiredShadow(
-    stack,
+    { target: stack },
     desiredSql,
     scope,
     (shadow) => engine.extract(shadow, scope)

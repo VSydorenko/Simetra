@@ -7,6 +7,7 @@ export type {
   EngineScope,
   Extracted,
   SchemaEngine,
+  ShadowOptions,
   ShadowOutcome,
 } from "./port"
 export {

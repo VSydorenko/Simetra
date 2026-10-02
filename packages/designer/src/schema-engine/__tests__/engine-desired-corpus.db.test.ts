@@ -52,11 +52,17 @@ async function reconcile(
   scopeDiagnostics: readonly EngineDiagnostic[] = []
 ): Promise<Extract<DesiredComparison, { status: "compared" }>> {
   const outcome = await engine.withDesiredShadow(
-    stack,
+    { target: stack },
     targetSql,
     scope,
     (target) =>
-      compareWithDesired(engine, target, desiredSql, scope, scopeDiagnostics)
+      compareWithDesired(
+        engine,
+        { target: target },
+        desiredSql,
+        scope,
+        scopeDiagnostics
+      )
   )
   expect(outcome.status === "loaded" ? [] : outcome.diagnostics).toEqual([])
   if (outcome.status !== "loaded") throw new Error("target did not load")

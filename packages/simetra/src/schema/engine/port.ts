@@ -7,6 +7,17 @@ export interface DbConnection {
 }
 
 /**
+ * Де будувати тінь. Без `shadowBase` тінь co-located із ціллю (платформна
+ * спека §6.2): той самий кластер, ті самі ролі й розширення. `shadowBase` —
+ * інший сервер тієї самої мажорної версії: адміністративна сесія з правом
+ * `CREATE DATABASE`, якої в цілі може не бути.
+ */
+export interface ShadowOptions {
+  target: DbConnection
+  shadowBase?: DbConnection
+}
+
+/**
  * Межа керування (платформна спека §6.9): керовані схеми застосунку цілком
  * плюс об'єкти застосунку в чужих схемах за пресетом провайдера. Внутрішні
  * об'єкти провайдера й некеровані схеми — поза межею.
@@ -24,6 +35,11 @@ export interface EngineDiagnostic {
   message: string
   /** Ідентичність об'єкта двигуна, якого стосується діагностика. */
   object?: string
+  /**
+   * Параметри тексту з `MESSAGES`: `message` — англійською, а інші мови
+   * адаптер будує з коду й параметрів, як для діагностик компілятора.
+   */
+  params: Record<string, string | number>
   /**
    * Власний код двигуна (`unmodeled_drift`, `unmodeled_kind`, …): гейти й
    * перепис класів розпізнають його за полем, а не розбором тексту.
@@ -87,7 +103,8 @@ export interface SchemaEngine {
     scope: EngineScope
   ): EnginePlan
   /**
-   * Створює тінь поруч із `target`, засіває її базовим станом провайдера й
+   * Створює тінь поруч із `target` (або на `shadowBase` тієї самої мажорної
+   * версії — розбіжність є винятком, не результатом), засіває її базовим станом провайдера й
    * завантажує `desiredSql`; `plan` у колбеку — «ціль → тінь».
    * Діагностики двигуна щодо завантаження, цілі й плану (зокрема
    * `unmodeled_drift`: оператор плану впаде на цілі) — у результаті.
@@ -98,7 +115,7 @@ export interface SchemaEngine {
    * зокрема при помилці; порожньої тіні порт не дає.
    */
   withDesiredShadow<T>(
-    target: DbConnection,
+    o: ShadowOptions,
     desiredSql: string,
     scope: EngineScope,
     fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>

@@ -44,7 +44,7 @@ describe("SchemaEngine on pg-delta", () => {
       create table other.x (id int);
     `
     const outcome = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       desired,
       scopeOf("app"),
       (shadow) => engine.extract(shadow, scopeOf("app"))
@@ -83,7 +83,7 @@ describe("SchemaEngine on pg-delta", () => {
   it("self plan is empty", async () => {
     const scope = scopeOf("app")
     const outcome = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       "create schema app; create table app.doc (id int primary key);",
       scope,
       async (shadow) => {
@@ -120,12 +120,12 @@ describe("SchemaEngine on pg-delta", () => {
     // Ціль — засіяна тінь, у якій поза межею лежить лише некерована `other`:
     // у межі вона порожня, а план не сміє торкнутися `other`
     const outcome = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       "create schema other; create table other.x (id int);",
       scope,
       async (empty) => {
         const inner = await engine.withDesiredShadow(
-          empty,
+          { target: empty },
           desired,
           scope,
           async (shadow, shadowPlan) => {
@@ -158,7 +158,7 @@ describe("SchemaEngine on pg-delta", () => {
     // Двигун не моделює text search configuration: план не створить її на
     // цілі, і порт мусить сказати про це, а не віддати мовчазний план
     const outcome = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       `
         create schema app;
         create text search configuration app.simple_ua (copy = simple);
@@ -196,13 +196,13 @@ describe("SchemaEngine on pg-delta", () => {
         grant all on functions to postgres, anon, authenticated, service_role;
     `
     const undeclared = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       "select 1;",
       scope,
       (_shadow, plan) => Promise.resolve(plan)
     )
     const withGrants = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       declared,
       scope,
       (_shadow, plan) => Promise.resolve(plan)
@@ -218,7 +218,7 @@ describe("SchemaEngine on pg-delta", () => {
 
   it("desired state that fails to load is shadow-failed", async () => {
     const outcome = await engine.withDesiredShadow(
-      stack,
+      { target: stack },
       "create schema app; create table app.t (id int references app.missing (id));",
       scopeOf("app"),
       () => Promise.resolve("unreachable")
@@ -238,7 +238,7 @@ describe("SchemaEngine on pg-delta", () => {
   it("shadow is dropped when the callback throws", async () => {
     await expect(
       engine.withDesiredShadow(
-        stack,
+        { target: stack },
         "create schema app;",
         scopeOf("app"),
         () => Promise.reject(new Error("callback failed"))

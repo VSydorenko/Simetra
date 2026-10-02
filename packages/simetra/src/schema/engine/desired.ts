@@ -18,12 +18,12 @@ import {
   type UnitTarget,
 } from "./unit-target"
 import type {
-  DbConnection,
   EngineDiagnostic,
   EnginePlan,
   EngineScope,
   Extracted,
   SchemaEngine,
+  ShadowOptions,
 } from "./port"
 
 export type DesiredComparison =
@@ -101,19 +101,19 @@ function populationDifferences(
  */
 export async function compareWithDesired(
   engine: SchemaEngine,
-  target: DbConnection,
+  o: ShadowOptions,
   desiredSql: string,
   scope: EngineScope,
   /** Діагностики межі з `engineScope`: об'єкти моделі, яких звірка не бачить. */
   scopeDiagnostics: readonly EngineDiagnostic[]
 ): Promise<DesiredComparison> {
   const outcome = await engine.withDesiredShadow(
-    target,
+    o,
     desiredSql,
     scope,
     async (shadow, plan) => {
       const [targetExtracted, desired] = await Promise.all([
-        engine.extract(target, scope),
+        engine.extract(o.target, scope),
         engine.extract(shadow, scope),
       ])
       return { plan, target: targetExtracted, desired }
@@ -192,6 +192,7 @@ function outOfScope(
     severity: "error",
     message: localize({ code: "engine.out-of-scope", params: all }, "en")
       .message,
+    params: all,
   }
 }
 

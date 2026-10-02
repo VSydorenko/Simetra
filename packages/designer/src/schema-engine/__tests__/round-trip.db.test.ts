@@ -81,8 +81,11 @@ async function inTarget<T>(
   scope: EngineScope,
   fn: (target: DbConnection) => Promise<T>
 ): Promise<T> {
-  const outcome = await engine.withDesiredShadow(stack, sql, scope, (target) =>
-    fn(target)
+  const outcome = await engine.withDesiredShadow(
+    { target: stack },
+    sql,
+    scope,
+    (target) => fn(target)
   )
   if (outcome.status !== "loaded")
     throw new Error(
@@ -137,7 +140,7 @@ async function roundTripOf(
 
   const comparison = await compareWithDesired(
     engine,
-    target,
+    { target: target },
     sql,
     scope,
     diagnostics
@@ -156,7 +159,7 @@ async function roundTripOf(
 
   const schemas = [...scope.schemas]
   const oracle = await engine.withDesiredShadow(
-    target,
+    { target: target },
     sql,
     scope,
     async (shadow) => ({

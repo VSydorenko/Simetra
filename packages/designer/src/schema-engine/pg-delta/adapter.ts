@@ -27,6 +27,7 @@ import {
   type EngineScope,
   type Extracted,
   type SchemaEngine,
+  type ShadowOptions,
   type ShadowOutcome,
 } from "simetra/schema"
 import {
@@ -52,6 +53,80 @@ const ENGINE = "pg-delta"
  * режим, що й типовий у `planSchemaFiles`, інакше відбитки сторін розійдуться.
  */
 const REDACT_SECRETS = true
+
+/**
+ * Пул сесій цілі: лише читання (спека designer §3.2). Не через `options`
+ * конфігу: параметр `options` у рядку підключення перекрив би його, а рядок
+ * приходить ззовні. Хук `onConnect` пулу виконується до того, як клієнт
+ * отримає перший запит, а його збій закриває клієнт і стає помилкою запиту.
+ * Цим самим пулом читається й тінь: extract нічого не пише.
+ */
+export function readOnlyPool(url: string): pg.Pool {
+  return quietPool(url, async (client) => {
+    await client.query("SET default_transaction_read_only = on")
+  })
+}
+
+/** Пул адміністративної сесії тіні: завантаження бажаного стану пише. */
+function writablePool(url: string): pg.Pool {
+  return quietPool(url)
+}
+
+function quietPool(
+  url: string,
+  onConnect?: (client: pg.ClientBase) => Promise<void>
+): pg.Pool {
+  const pool = new pg.Pool({
+    connectionString: url,
+    ...(onConnect === undefined ? {} : { onConnect }),
+  })
+  // Помилка простого клієнта (рестарт сервера) не має валити процес: пул
+  // закривається в `finally` виклику
+  pool.on("error", () => {})
+  return pool
+}
+
+/** Тінь на сервері іншої мажорної версії: каталоги двох версій не порівнюються. */
+export class ShadowServerMismatchError extends Error {
+  override name = "ShadowServerMismatchError"
+}
+
+/**
+ * Тінь на іншому сервері допустима лише тієї самої мажорної версії: двигун
+ * читає каталог версійно залежними запитами, і план «ціль → тінь» між
+ * версіями показував би відмінності версій, а не стану.
+ */
+export function shadowServerRefusal(
+  targetMajor: number,
+  shadowMajor: number
+): string | undefined {
+  return targetMajor === shadowMajor
+    ? undefined
+    : `The shadow server runs PostgreSQL ${shadowMajor}, the target runs PostgreSQL ${targetMajor}; the shadow must run the same major version. Nothing changed.`
+}
+
+async function serverMajor(pool: pg.Pool): Promise<number> {
+  const { rows } = await pool.query<{ major: number }>(
+    "select current_setting('server_version_num')::int / 10000 as major"
+  )
+  return rows[0]!.major
+}
+
+async function assertShadowServer(o: ShadowOptions): Promise<void> {
+  if (o.shadowBase === undefined) return
+  const target = readOnlyPool(o.target.url)
+  const shadow = readOnlyPool(o.shadowBase.url)
+  try {
+    const refusal = shadowServerRefusal(
+      await serverMajor(target),
+      await serverMajor(shadow)
+    )
+    if (refusal !== undefined) throw new ShadowServerMismatchError(refusal)
+  } finally {
+    await target.end()
+    await shadow.end()
+  }
+}
 
 /**
  * Факти двигуна разом із розв'язаними під ціль опціями плану: `plan` двигуна
@@ -85,6 +160,7 @@ function engineDiagnostic(
     code,
     severity,
     message: localize({ code, params }, "en").message,
+    params,
     ...(subject === undefined ? {} : { object: encodeId(subject) }),
     ...(engineCode === undefined ? {} : { engineCode }),
   }
@@ -317,8 +393,8 @@ async function planAndRun<T>(
   fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
 ): Promise<ShadowOutcome<T>> {
   const warnings: string[] = []
-  const targetPool = new pg.Pool({ connectionString: target.url })
-  const shadowPool = new pg.Pool({ connectionString: shadowUrl })
+  const targetPool = readOnlyPool(target.url)
+  const shadowPool = writablePool(shadowUrl)
   let plan: EnginePlan
   let diagnostics: EngineDiagnostic[]
   try {
@@ -380,7 +456,7 @@ async function planAndRun<T>(
 export function createPgDeltaEngine(): SchemaEngine {
   return {
     async extract(db, scope) {
-      const pool = new pg.Pool({ connectionString: db.url })
+      const pool = readOnlyPool(db.url)
       try {
         return await extractFrom(pool, scope)
       } finally {
@@ -402,15 +478,20 @@ export function createPgDeltaEngine(): SchemaEngine {
     },
 
     async withDesiredShadow<T>(
-      target: DbConnection,
+      o: ShadowOptions,
       desiredSql: string,
       scope: EngineScope,
       fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
     ): Promise<ShadowOutcome<T>> {
-      const shadow = await provisionCoLocatedShadow(target.url)
+      await assertShadowServer(o)
+      // Адміністративна сесія тіні — окремий пул двигуна з правом
+      // `CREATE DATABASE`; сесія цілі лишається лише для читання
+      const shadow = await provisionCoLocatedShadow(
+        (o.shadowBase ?? o.target).url
+      )
       let outcome: ShadowOutcome<T>
       try {
-        outcome = await planAndRun(target, shadow.url, desiredSql, scope, fn)
+        outcome = await planAndRun(o.target, shadow.url, desiredSql, scope, fn)
       } catch (error) {
         // Збій прибирання не має затирати першопричину: вона перша в `errors`,
         // а `cause` — збій прибирання, який і перервав нормальний шлях

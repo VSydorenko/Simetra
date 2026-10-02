@@ -9,6 +9,7 @@ import {
   type EngineScope,
   type Extracted,
   type SchemaEngine,
+  type ShadowOptions,
   type ShadowOutcome,
 } from "simetra/schema"
 
@@ -50,7 +51,7 @@ function diagnostic(
   severity: EngineDiagnostic["severity"],
   object: string
 ): EngineDiagnostic {
-  return { code, severity, message: `${code} on ${object}`, object }
+  return { code, severity, message: `${code} on ${object}`, params: {}, object }
 }
 
 const ACTION: EngineAction = {
@@ -86,12 +87,12 @@ function fakeEngine(fake: Fake): SchemaEngine {
       throw new Error("compareWithDesired takes the plan from the shadow")
     },
     async withDesiredShadow<T>(
-      target: DbConnection,
+      o: ShadowOptions,
       _desiredSql: string,
       _scope: EngineScope,
       fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
     ): Promise<ShadowOutcome<T>> {
-      expect(target).toBe(TARGET)
+      expect(o.target).toBe(TARGET)
       if (fake.shadowFailed !== undefined)
         return { status: "shadow-failed", diagnostics: fake.shadowFailed }
       return {
@@ -106,7 +107,7 @@ function fakeEngine(fake: Fake): SchemaEngine {
 const compare = (fake: Fake, scopeDiagnostics: EngineDiagnostic[] = []) =>
   compareWithDesired(
     fakeEngine(fake),
-    TARGET,
+    { target: TARGET },
     "-- desired",
     SCOPE,
     scopeDiagnostics
