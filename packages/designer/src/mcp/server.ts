@@ -10,7 +10,7 @@ import { registerCatalog, type McpToolOptions } from "./tools"
  */
 export function createMcpServer(o: McpToolOptions): McpServer {
   const instructions = [
-    `Metadata tools for the directory ${o.dir}: compile, explain and the editing tools.`,
+    `Metadata tools for the directory ${o.dir}: compile, explain, the editing tools, and introspect and diff against the database named by the server's environment.`,
     o.readOnly
       ? readOnlyHint(o.launchArgs)
       : "Writing is enabled; destructive tools need confirm: true, and dryRun previews any change.",

@@ -1,6 +1,7 @@
 import type { Explanation, Locale } from "simetra/compiler"
-import { formatDiagnostics } from "../io/report"
+import { formatDiagnostics, renderDiff } from "../io/report"
 import type { Tool, ToolResult } from "../tools/catalog"
+import type { DiffData } from "../tools/database-tools"
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
 export function renderExplanation(e: Explanation): string {
@@ -63,6 +64,25 @@ export function renderResult(
         o.format === "json"
           ? JSON.stringify(explanation, null, 2)
           : renderExplanation(explanation).trimEnd(),
+    }
+  }
+  if (tool.name === "diff" && r.data !== undefined) {
+    const data = r.data as DiffData
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify(
+              {
+                ok: r.ok,
+                empty: data.empty,
+                plan: data.plan,
+                differences: data.differences,
+                diagnostics: JSON.parse(report) as unknown,
+              },
+              null,
+              2
+            )
+          : renderDiff(data, report),
     }
   }
   if (tool.files === "read") return { stdout: report }

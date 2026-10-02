@@ -2,11 +2,14 @@ import { stat } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { defineCommand, type ArgsDef, type CommandDef } from "citty"
 import type { CompiledModel, Locale } from "simetra/compiler"
+import { databaseResource } from "../io/database"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { compileArtifacts } from "../tools/artifacts"
 import { toolByName, type Tool } from "../tools/catalog"
+import { DEFAULT_DATABASE_URL_ENV } from "../tools/hints"
 import { invoke } from "../tools/invoke"
+import type { DiffData } from "../tools/database-tools"
 import { findMetadataDirs, stageMetadataDirs } from "./metadata-dirs"
 import { cliInput, takesJsonInput, type CliArgs } from "./input"
 import { renderResult } from "./render"
@@ -49,7 +52,8 @@ export async function runTool(
   tool: Tool,
   argv: CliArgs,
   stdin: () => Promise<string> = readStdin,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<RunResult> {
   try {
     const locale = argv.locale ?? "en"
@@ -78,6 +82,18 @@ export async function runTool(
       ? { input: {}, dirs: await findMetadataDirs(cwd) }
       : await cliInput(tool, argv, stdin)
     const { input } = parsed
+    // Ім'я змінної — з прапорця запуску, значення — лише із середовища;
+    // інструмент без бази середовища не читає
+    const databaseEnv = argv["database-url-env"] ?? DEFAULT_DATABASE_URL_ENV
+    const database =
+      tool.database === "none"
+        ? undefined
+        : databaseResource(env, {
+            url: databaseEnv,
+            ...(argv["shadow-url-env"] === undefined
+              ? {}
+              : { shadow: argv["shadow-url-env"] }),
+          })
     let { dirs } = parsed
     const shown = dirs
     // Теки з `--all` відносні до `cwd`, а читання йде від процесу.
@@ -127,9 +143,14 @@ export async function runTool(
           readOnly: false,
           dryRun: argv["dry-run"] === true,
           confirmed: argv.yes === true,
+          database,
+          databaseEnv,
         })
         if (result.refusal !== undefined) return fail(result.refusal.message)
-        failed ||= !result.ok
+        // Відмінності звірки — теж код 1: CI чекає порожньої звірки
+        failed ||=
+          !result.ok ||
+          (tool.name === "diff" && (result.data as DiffData).empty !== true)
         const rendered = renderResult(tool, result, {
           dir: shown[i] ?? dir,
           locale,
@@ -222,6 +243,39 @@ function argsFor(tool: Tool): ArgsDef {
       required: false,
     }
   }
+  if (tool.name === "introspect") {
+    args.schemas = {
+      type: "string",
+      description:
+        "Comma-separated schemas to read (required for a directory without project.meta.json)",
+    }
+    args["project-name"] = {
+      type: "string",
+      description: "Name of a new project",
+    }
+    args["attribute-case"] = {
+      type: "enum",
+      options: ["camelCase", "snake_case"],
+      description: "Attribute case of a new project",
+    }
+  }
+  if (tool.name === "diff") {
+    args.tables = {
+      type: "string",
+      description: "Comma-separated tables to compare: schema.table or table",
+    }
+  }
+  if (tool.database !== "none") {
+    args["database-url-env"] = {
+      type: "string",
+      description: `Environment variable with the connection string (default: ${DEFAULT_DATABASE_URL_ENV})`,
+    }
+    args["shadow-url-env"] = {
+      type: "string",
+      description:
+        "Environment variable with a connection string to another server of the same PostgreSQL major version for the shadow database",
+    }
+  }
   if (tool.files === "write") {
     args["dry-run"] = {
       type: "boolean",
@@ -266,6 +320,12 @@ function toCliArgs(args: { _: string[] } & Record<string, unknown>): CliArgs {
     yes: args.yes === true,
     all: args.all === true,
     staged: args.staged === true,
+    schemas: str(args.schemas),
+    tables: str(args.tables),
+    "project-name": str(args["project-name"]),
+    "attribute-case": str(args["attribute-case"]),
+    "database-url-env": str(args["database-url-env"]),
+    "shadow-url-env": str(args["shadow-url-env"]),
   }
 }
 

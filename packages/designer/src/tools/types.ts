@@ -11,6 +11,8 @@ export const TOOL_NAMES = [
   "add",
   "rename",
   "delete",
+  "introspect",
+  "diff",
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
@@ -87,6 +89,11 @@ export interface InvokeOptions {
   dryRun: boolean
   confirmed: boolean
   database?: DatabaseResource
+  /**
+   * Ім'я змінної середовища з рядком підключення, зафіксоване при запуску:
+   * відмова без підключення має назвати саме її. Типово `SIMETRA_DATABASE_URL`.
+   */
+  databaseEnv?: string
   /** Argv запуску сервера: з нього будується підказка про `--read-only`. */
   launchArgs?: readonly string[]
 }

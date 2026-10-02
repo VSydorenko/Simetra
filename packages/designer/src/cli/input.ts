@@ -14,13 +14,36 @@ export interface CliArgs {
   yes?: boolean
   all?: boolean
   staged?: boolean
+  schemas?: string
+  tables?: string
+  "project-name"?: string
+  "attribute-case"?: string
+  "database-url-env"?: string
+  "shadow-url-env"?: string
 }
 
 /**
  * Читальні інструменти й `fix` мають зручні позиційні форми — це лише вигляд
  * над тим самим входом каталогу. Усі інші беруть вхід каталогу як JSON.
  */
-const ERGONOMIC = new Set<string>(["compile", "explain", "fix"])
+const ERGONOMIC = new Set<string>([
+  "compile",
+  "explain",
+  "fix",
+  "introspect",
+  "diff",
+])
+
+/** `a,b` → `["a", "b"]`; порожні елементи — помилка написання, не фільтр. */
+function list(flag: string, value: string): string[] {
+  const items = value.split(",").map((s) => s.trim())
+  if (items.some((s) => s === "")) {
+    throw new UsageError(
+      `--${flag} expects a comma-separated list, got "${value}".`
+    )
+  }
+  return items
+}
 
 export function takesJsonInput(tool: Tool): boolean {
   return !ERGONOMIC.has(tool.name)
@@ -32,7 +55,10 @@ export function takesJsonInput(tool: Tool): boolean {
  */
 export async function cliInput(
   tool: Tool,
-  args: Pick<CliArgs, "_" | "input">,
+  args: Pick<
+    CliArgs,
+    "_" | "input" | "schemas" | "tables" | "project-name" | "attribute-case"
+  >,
   stdin: () => Promise<string>
 ): Promise<{ input: unknown; dirs: string[] }> {
   const positional = args._
@@ -55,6 +81,32 @@ export async function cliInput(
   }
   if (tool.name === "fix") {
     return { input: {}, dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)] }
+  }
+  if (tool.name === "introspect") {
+    const name = args["project-name"]
+    const attributeCase = args["attribute-case"]
+    const project = {
+      ...(name === undefined ? {} : { name }),
+      ...(attributeCase === undefined ? {} : { attributeCase }),
+    }
+    return {
+      input: {
+        ...(args.schemas === undefined
+          ? {}
+          : { schemas: list("schemas", args.schemas) }),
+        ...(Object.keys(project).length === 0 ? {} : { project }),
+      },
+      dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)],
+    }
+  }
+  if (tool.name === "diff") {
+    return {
+      input:
+        args.tables === undefined
+          ? {}
+          : { tables: list("tables", args.tables) },
+      dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)],
+    }
   }
   const fromFlag = args.input !== undefined
   const raw = fromFlag ? args.input : positional[0]

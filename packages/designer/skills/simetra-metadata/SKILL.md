@@ -1,9 +1,9 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, or expose them to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, read a live database into metadata (`introspect`) or compare it with the metadata (`diff`), or expose them to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails.
 ---
 
-# Simetra metadata — compile, explain, fix, create, add, rename, delete
+# Simetra metadata — compile, explain, fix, create, add, rename, delete, introspect, diff
 
 The tools are one catalog served by the command line and by the MCP server,
 with the same tool names and the same input in both. Run the CLI
@@ -25,9 +25,12 @@ diagnostics themselves.
 | New element in a collection of an object or of the project root | `add` | `simetra add '<json>' [dir]` | `add` with `{target, collection, element}` |
 | Rename an object or a nested element | `rename` | `simetra rename '<json>' [dir]` | `rename` with `{target, newName}` |
 | Remove an object or a nested element | `delete` | `simetra delete '<json>' [dir] --yes` | `delete` with `{target, confirm}` |
+| Read a live database into metadata | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}` |
+| Does the database match the metadata? | `diff` | `simetra diff [dir] --tables a,b` | `diff` with `{tables?}` |
 
-`compile`, `explain` only read. `fix`, `create`, `add`, `rename`, `delete`
-change files.
+`compile`, `explain`, `diff` only read files. `fix`, `create`, `add`,
+`rename`, `delete`, `introspect` change files. `introspect` and `diff` read
+the database; neither ever writes to it.
 
 ## Examples
 
@@ -65,6 +68,21 @@ Preview a deletion without writing and without confirmation:
 }
 ```
 
+Read the `app` schema of the database into a directory that has no
+`project.meta.json` yet (`schemas` is required there; the first one becomes the
+default schema). In an existing project the scope is the schemas of its
+metadata, so `{}` re-reads it; ids of objects already described are kept:
+
+```json simetra:introspect
+{ "schemas": ["app"], "project": { "name": "Shop", "attributeCase": "snake_case" } }
+```
+
+Compare the database with the metadata, narrowed to two tables:
+
+```json simetra:diff
+{ "tables": ["app.orders", "app.order_lines"] }
+```
+
 The same calls from a shell. A mutation takes its JSON as an argument, as
 `--input`, or as `-` for stdin:
 
@@ -73,6 +91,9 @@ pnpm exec simetra compile
 pnpm exec simetra explain Catalog.Currency
 pnpm exec simetra create '{"kind":"Catalog","name":"Currency"}' --dry-run
 pnpm exec simetra delete --input '{"target":{"kind":"Catalog","name":"Currency"}}' --yes
+pnpm exec simetra introspect --schemas app --dry-run
+pnpm exec simetra diff --tables app.orders,app.order_lines
+pnpm exec simetra diff --database-url-env STAGING_DATABASE_URL --format json
 ```
 
 An input that does not match the tool's schema is refused with the path of the
@@ -81,7 +102,9 @@ offending field (for example `target.kind`); nothing is written.
 ## Reading the result
 
 - Exit code: `0` ok (warnings allowed), `1` the result has error diagnostics
-  (this includes refused operations such as `operation.delete-referenced`),
+  (this includes refused operations such as `operation.delete-referenced`)
+  or, for `diff`, differences or errors — `0` from `diff` means the database
+  matches the metadata,
   `2` the call itself was refused: input that does not match the tool's schema
   (bad JSON, unknown field), a missing `--yes`, a usage or I/O error (bad flag,
   missing directory) or an unknown `explain` target. In MCP the same cases are
@@ -117,11 +140,36 @@ offending field (for example `target.kind`); nothing is written.
 - Never pass an `id` to `create` or `add`: ids are assigned by the operation, and
   an input carrying one gets `operation.input-invalid` (exit 1, nothing written).
 
+## The database: introspect and diff
+
+- The connection comes **only from the environment**: the variable
+  `SIMETRA_DATABASE_URL`, or the one named at launch with
+  `--database-url-env <NAME>` (CLI and `simetra mcp`). A tool input never
+  carries a connection string, and none of the output shows it, the user or
+  the password — only `host:port/db`. Without the variable the call is
+  refused with its name (exit 2); ask the owner to set it, never paste a
+  connection string into a command.
+- The target is opened read-only. `diff` loads the metadata into a throwaway
+  shadow database next to the target (its role needs `CREATEDB`) and drops it
+  afterwards; `--shadow-url-env <NAME>` puts the shadow on another server of
+  the same PostgreSQL major version.
+- `introspect` writes nothing when anything in the database cannot be
+  represented (an `EXCLUDE` constraint, an owner other than the session role,
+  …): the diagnostics name the object. Run it with `--dry-run` (MCP:
+  `dryRun: true`) first; a second run on an unchanged database changes
+  nothing.
+- `diff` returns the plan from the database to the metadata, the catalog
+  differences and diagnostics (`--format json`, MCP `structuredContent`);
+  `--tables` narrows the plan and the differences to the named tables
+  (`schema.table` or `table`). An unknown table is refused, not ignored.
+- An unreachable database or a failed login is exit 2 (MCP: `isError`).
+
 ## Agents over MCP
 
 ```sh
 pnpm exec simetra mcp
 pnpm exec simetra mcp --read-only
+pnpm exec simetra mcp --database-url-env STAGING_DATABASE_URL
 ```
 
 - By default the write tools change files in the served directory, under the

@@ -75,7 +75,10 @@ export async function invoke<D>(
   }
   if (!permits(tool, o)) return refused("read-only", readOnlyHint(o.launchArgs))
   if (tool.database !== "none" && o.database === undefined)
-    return refused("no-database", noDatabaseHint(DEFAULT_DATABASE_URL_ENV))
+    return refused(
+      "no-database",
+      noDatabaseHint(o.databaseEnv ?? DEFAULT_DATABASE_URL_ENV)
+    )
   // Dry-run нічого не пише, тож підтвердження там нічого не захищає, а агентові
   // перегляд потрібен саме до `confirm`.
   if (tool.destructive && !o.dryRun && !o.confirmed) {

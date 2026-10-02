@@ -1,8 +1,9 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
-import { formatDiagnostics } from "../io/report"
+import { formatDiagnostics, renderDiff } from "../io/report"
 import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
+import type { DiffData } from "../tools/database-tools"
 import type { DatabaseResource } from "../tools/types"
 
 export interface McpToolOptions {
@@ -10,6 +11,8 @@ export interface McpToolOptions {
   readOnly: boolean
   /** Ресурс запуску; без нього інструменти бази відмовляють із підказкою. */
   database?: DatabaseResource
+  /** Ім'я змінної середовища з рядком підключення: його називає відмова. */
+  databaseEnv?: string
   /** Справжній argv запуску: потрапляє в підказку відмови запису. */
   launchArgs?: readonly string[]
 }
@@ -70,6 +73,16 @@ function toResponse(
     locale: "en",
     format: "text",
   })
+  // Дані бази — повністю в `structuredContent`, текст — зведення. Відмінності
+  // звірки — не помилка виклику: `isError` лише за помилками діагностики
+  if (tool.name === "diff" && result.data !== undefined) {
+    const data = result.data as DiffData
+    return {
+      isError: !ok,
+      structuredContent: { ok, written, changes, ...data },
+      content: [{ type: "text", text: renderDiff(data, report) }],
+    }
+  }
   const lines = ok
     ? [
         ...changes.map((c) => lineFor(c, written)),
@@ -81,7 +94,15 @@ function toResponse(
       : [`${tool.name}: the metadata has errors`]
   return {
     isError: !ok,
-    structuredContent: { ok, written, changes, diagnostics },
+    structuredContent: {
+      ok,
+      written,
+      changes,
+      diagnostics,
+      ...(tool.name === "introspect" && result.data !== undefined
+        ? (result.data as Record<string, unknown>)
+        : {}),
+    },
     content: [{ type: "text", text: [...lines, report].join("\n") }],
   }
 }
@@ -112,6 +133,9 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
           dryRun: dry === true,
           confirmed: confirmed === true,
           database: o.database,
+          ...(o.databaseEnv === undefined
+            ? {}
+            : { databaseEnv: o.databaseEnv }),
           launchArgs: o.launchArgs,
         })
         return toResponse(tool, result, o, dry === true)

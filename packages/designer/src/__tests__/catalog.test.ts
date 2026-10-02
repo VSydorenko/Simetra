@@ -49,8 +49,10 @@ describe("tool catalog", () => {
       "compile",
       "create",
       "delete",
+      "diff",
       "explain",
       "fix",
+      "introspect",
       "rename",
     ])
   })
@@ -311,7 +313,7 @@ describe("readOnlyHint", () => {
   })
 })
 
-/** Інструмент бази ще не існує: заглушка перевіряє відмову `invoke` без нього. */
+/** Заглушка бази: відмови `invoke` перевіряються без двигуна й без стеку. */
 const dbStub = defineTool({
   name: "compile",
   description: "Database stub.",
@@ -334,6 +336,13 @@ describe("database as a launch resource", () => {
       message: noDatabaseHint(DEFAULT_DATABASE_URL_ENV),
     })
     expect(r.refusal?.message).toContain("SIMETRA_DATABASE_URL")
+  })
+
+  it("the hint names the variable chosen at launch", async () => {
+    const dir = await project()
+    const r = await invoke(dbStub, {}, { ...opts(dir), databaseEnv: "APP_DB" })
+    expect(r.refusal?.message).toBe(noDatabaseHint("APP_DB"))
+    expect(r.refusal?.message).not.toContain(DEFAULT_DATABASE_URL_ENV)
   })
 
   it("read-only is decided before the missing connection", async () => {

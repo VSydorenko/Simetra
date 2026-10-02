@@ -177,4 +177,82 @@ describe("cli adapter", () => {
     expect(r.exitCode).toBe(2)
     expect(r.stderr).toContain("not a directory")
   })
+
+  it("maps introspect and diff flags onto the catalog input", async () => {
+    expect(
+      await cliInput(
+        tool("introspect"),
+        {
+          _: ["meta/"],
+          schemas: "app, reports",
+          "project-name": "Shop",
+          "attribute-case": "snake_case",
+        },
+        noStdin
+      )
+    ).toEqual({
+      input: {
+        schemas: ["app", "reports"],
+        project: { name: "Shop", attributeCase: "snake_case" },
+      },
+      dirs: ["meta"],
+    })
+    expect(await cliInput(tool("introspect"), { _: [] }, noStdin)).toEqual({
+      input: {},
+      dirs: ["./metadata"],
+    })
+    expect(
+      await cliInput(
+        tool("diff"),
+        { _: [], tables: "app.orders,lines" },
+        noStdin
+      )
+    ).toEqual({
+      input: { tables: ["app.orders", "lines"] },
+      dirs: ["./metadata"],
+    })
+    await expect(
+      cliInput(tool("diff"), { _: [], tables: "a,,b" }, noStdin)
+    ).rejects.toThrow("--tables expects a comma-separated list")
+  })
+
+  it("database flags exist only on database tools", () => {
+    for (const t of TOOLS) {
+      const args = toolCommand(t).args ?? {}
+      const db = t.database !== "none"
+      expect("database-url-env" in args, t.name).toBe(db)
+      expect("shadow-url-env" in args, t.name).toBe(db)
+    }
+  })
+
+  it("a database tool without a connection exits 2 naming the chosen variable", async () => {
+    const dir = await project()
+    const r = await runTool(
+      tool("diff"),
+      { _: [dir], "database-url-env": "APP_DB" },
+      noStdin,
+      process.cwd(),
+      { SIMETRA_DATABASE_URL: "postgres://u:p@h/db" }
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("APP_DB")
+    expect(r.stderr).not.toContain("SIMETRA_DATABASE_URL")
+  })
+
+  it("a tool without the database never reads the environment", async () => {
+    const dir = await project()
+    const env = new Proxy({} as NodeJS.ProcessEnv, {
+      get: () => {
+        throw new Error("the environment must not be read")
+      },
+    })
+    const r = await runTool(
+      tool("compile"),
+      { _: [dir] },
+      noStdin,
+      process.cwd(),
+      env
+    )
+    expect(r.exitCode).toBe(0)
+  })
 })

@@ -1,5 +1,6 @@
 import type { Diagnostic, Locale } from "simetra/compiler"
 import { localize } from "simetra/compiler"
+import type { DiffData } from "../tools/database-tools"
 
 export interface ReportOptions {
   dir: string
@@ -49,4 +50,29 @@ function placeOf(d: Diagnostic, dir: string): string {
   // Позиції LSP 0-базні, а редактори й термінали чекають 1-базні.
   const { line, character } = d.range.start
   return `${dir}/${d.file}:${line + 1}:${character + 1}`
+}
+
+/** Зведення звірки: дії плану, відмінності каталогу, діагностика. */
+export function renderDiff(d: DiffData, report: string): string {
+  const lines: string[] = []
+  if (d.plan.length > 0) {
+    lines.push(`plan (${d.plan.length} action(s), database -> metadata):`)
+    for (const a of d.plan) {
+      const tags = [
+        a.dataLoss ? "data loss" : undefined,
+        a.rewriteRisk ? "rewrite" : undefined,
+      ].filter((x) => x !== undefined)
+      lines.push(
+        `  ${a.sql.trim()}${tags.length > 0 ? ` -- ${tags.join(", ")}` : ""}`
+      )
+    }
+  }
+  if (d.differences.length > 0) {
+    lines.push(`differences (${d.differences.length}):`)
+    for (const x of d.differences)
+      lines.push(`  ${x.kind} ${x.path}: ${x.detail}`)
+  }
+  if (d.empty) lines.push("diff: the database matches the metadata")
+  lines.push(report)
+  return lines.join("\n")
 }

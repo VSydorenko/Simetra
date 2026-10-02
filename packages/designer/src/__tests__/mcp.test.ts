@@ -11,8 +11,8 @@ import { READ_ONLY_FLAG, readOnlyHint } from "../tools/hints"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
-// виміряно в designer-1: 8398 символів JSON усіх інструментів
-const TOOLS_LIST_MEASURED = 8398
+// перевиміряно в E2b: 10055 символів JSON усіх інструментів (+introspect, diff)
+const TOOLS_LIST_MEASURED = 10055
 const TOOLS_LIST_BUDGET = Math.ceil(TOOLS_LIST_MEASURED * 1.2)
 const clients: Client[] = []
 
@@ -70,8 +70,10 @@ describe("simetra mcp", () => {
       "compile",
       "create",
       "delete",
+      "diff",
       "explain",
       "fix",
+      "introspect",
       "rename",
     ])
   })
