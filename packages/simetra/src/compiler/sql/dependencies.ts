@@ -1,5 +1,5 @@
 import type { Node } from "libpg-query"
-import type { PhysicalSnapshot } from "simetra/model"
+import type { PhysicalSnapshot, SqlUnitClass } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { SqlParser } from "./parse"
 import {
@@ -9,7 +9,6 @@ import {
   type PgName,
   type PgSpace,
   type SqlUnit,
-  type SqlUnitClass,
 } from "./units"
 
 /** Вузол порядку створення: об'єкт моделі або SQL-одиниця. */

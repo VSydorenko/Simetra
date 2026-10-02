@@ -8,30 +8,14 @@ import type {
   RoleSpec,
   TypeName,
 } from "libpg-query"
-import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
+import type {
+  PhysicalSnapshot,
+  PhysicalTable,
+  SqlUnitClass,
+} from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { extractMovementBlocks } from "../movement-blocks"
 import type { ParsedStatement, SqlParser } from "./parse"
-
-export type SqlUnitClass =
-  | "function"
-  | "procedure"
-  | "aggregate"
-  | "trigger"
-  | "policy"
-  | "view"
-  | "materializedView"
-  | "grant"
-  | "defaultPrivileges"
-  | "comment"
-  | "extension"
-  | "sequence"
-  | "sequenceOwnedBy"
-  | "domain"
-  | "publication"
-  | "replicaIdentity"
-  | "functionSettings"
-  | "movementQuery"
 
 /**
  * SQL-одиниця скомпільованої моделі (спека П2 §8.3): оператор верхнього рівня
