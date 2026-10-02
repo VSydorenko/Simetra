@@ -2,7 +2,7 @@ import { cp, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { compile, MESSAGES } from "simetra/compiler"
+import { compile, MESSAGES, type Locale } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import { readMetadataDir } from "../io/metadata-dir"
 import { runCompile } from "../commands/compile"
@@ -133,5 +133,37 @@ describe("simetra compile", () => {
     const before = await snapshotOf(dir)
     await runCompile({ dirs: [dir], locale: "en", format: "text" })
     expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("invalid locale gives exit code 2", async () => {
+    const r = await runCompile({
+      dirs: [REFERENCE],
+      locale: "xx" as Locale,
+      format: "text",
+    })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--locale")
+  })
+
+  it("--out with several dirs gives exit code 2 and writes nothing", async () => {
+    const out = join(await tempDir(), "out")
+    const r = await runCompile({
+      dirs: [REFERENCE, REFERENCE],
+      out,
+      locale: "en",
+      format: "text",
+    })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--out")
+    await expect(readdir(out)).rejects.toThrow()
+  })
+
+  it("trailing slash does not double the separator", async () => {
+    const r = await runCompile({
+      dirs: [`${REFERENCE}/`],
+      locale: "en",
+      format: "text",
+    })
+    expect(r.stdout).not.toContain("//")
   })
 })

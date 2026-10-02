@@ -1,4 +1,3 @@
-import { basename, join } from "node:path"
 import { defineCommand } from "citty"
 import {
   canonicalSnapshot,
@@ -30,11 +29,28 @@ export interface RunResult {
  * проганяють команду в процесі. Логіки стадій тут немає — лише диск і друк.
  */
 export async function runCompile(o: CompileOptions): Promise<RunResult> {
+  const usageError = (message: string): RunResult => ({
+    exitCode: 2,
+    stdout: "",
+    stderr: `error: ${message}\n`,
+  })
+  if (o.locale !== "en" && o.locale !== "uk") {
+    return usageError(`Invalid --locale "${o.locale}". Expected en or uk.`)
+  }
+  if (o.format !== "text" && o.format !== "json") {
+    return usageError(`Invalid --format "${o.format}". Expected text or json.`)
+  }
+  // Усі теки метаданих названі однаково (`metadata`), тож спільного `--out`
+  // для кількох не вигадати без колізій.
+  if (o.out !== undefined && o.dirs.length > 1) {
+    return usageError("--out accepts exactly one metadata directory.")
+  }
   const blocks: string[] = []
   const allJson: unknown[] = []
   let hasErrors = false
 
-  for (const dir of o.dirs) {
+  // Кінцевий слеш дав би в тексті `dir//file`.
+  for (const dir of o.dirs.map((d) => d.replace(/(?<=.)[\\/]+$/, ""))) {
     try {
       const files = await readMetadataDir(dir)
       const result = await compile(files)
@@ -48,7 +64,6 @@ export async function runCompile(o: CompileOptions): Promise<RunResult> {
       // Артефакти — лише з `--out` і лише з моделі без помилок.
       if (o.out !== undefined && result.model !== undefined) {
         const { model } = result
-        const target = o.dirs.length === 1 ? o.out : join(o.out, basename(dir))
         const changes: FileChange[] = [
           {
             path: "snapshot.json",
@@ -57,7 +72,7 @@ export async function runCompile(o: CompileOptions): Promise<RunResult> {
           { path: "desired-state.sql", content: renderDesiredState(model).sql },
           { path: "entities.d.ts", content: emitEntityTypes(model) },
         ]
-        await writeChanges(target, changes)
+        await writeChanges(o.out, changes)
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)

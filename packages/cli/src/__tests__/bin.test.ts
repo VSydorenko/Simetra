@@ -14,3 +14,11 @@ it("bin runs under node", async () => {
   )
   expect(stdout).toContain("0 error(s)")
 }, 60_000)
+
+it("usage errors exit with code 2", async () => {
+  for (const args of [["bogus"], ["compile", "--locale", "xx"]]) {
+    await expect(
+      exec(process.execPath, ["bin/simetra.mjs", ...args], { cwd: PACKAGE })
+    ).rejects.toMatchObject({ code: 2 })
+  }
+}, 60_000)
