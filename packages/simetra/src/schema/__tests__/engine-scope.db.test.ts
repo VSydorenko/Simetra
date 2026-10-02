@@ -135,7 +135,7 @@ describe("SchemaEngine on pg-delta", () => {
     expect(
       outcome.value.diagnostics.some(
         (d) =>
-          d.code === "engine.reported" && d.message.includes("unmodeled_kind")
+          d.code === "engine.diagnostic" && d.engineCode === "unmodeled_kind"
       )
     ).toBe(true)
     expect(messages.filter((m) => m.includes("dangling_edge"))).toEqual([])
@@ -230,9 +230,37 @@ describe("SchemaEngine on pg-delta", () => {
     expect(portPlan).toEqual(shadowPlan)
   })
 
+  it("unmodeled object in the shadow is reported as drift", async () => {
+    // Двигун не моделює text search configuration: план не створить її на
+    // цілі, і порт мусить сказати про це, а не віддати мовчазний план
+    const outcome = await engine.withDesiredShadow(
+      stack,
+      `
+        create schema app;
+        create text search configuration app.simple_ua (copy = simple);
+      `,
+      scopeOf("app"),
+      () => Promise.resolve(null)
+    )
+    expect(outcome.status).toBe("loaded")
+    if (outcome.status !== "loaded") return
+    expect(outcome.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "engine.unmodeled-drift",
+        severity: "error",
+        engineCode: "unmodeled_drift",
+      })
+    )
+    expect(
+      outcome.diagnostics.filter((d) => d.engineCode === "dangling_edge")
+    ).toEqual([])
+  })
+
   it("managed public with declared provider grants plans nothing against the stack", async () => {
     // Керована схема керується цілком: без явних грантів і типових привілеїв
     // для ролей провайдера план їх відкликає, з ними — порівняння порожнє
+    // Припущення: у `public` стеку немає об'єктів застосунку — інші DB-тести
+    // працюють у транзакції, яку відкочують
     const scope = scopeOf("public")
     const declared = `
       grant usage on schema public to postgres, anon, authenticated, service_role;

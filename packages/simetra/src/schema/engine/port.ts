@@ -24,6 +24,11 @@ export interface EngineDiagnostic {
   message: string
   /** Ідентичність об'єкта двигуна, якого стосується діагностика. */
   object?: string
+  /**
+   * Власний код двигуна (`unmodeled_drift`, `unmodeled_kind`, …): гейти й
+   * перепис класів розпізнають його за полем, а не розбором тексту.
+   */
+  engineCode?: string
 }
 
 /**
@@ -64,7 +69,7 @@ export interface EnginePlan {
 }
 
 export type ShadowOutcome<T> =
-  | { status: "loaded"; value: T }
+  | { status: "loaded"; value: T; diagnostics: EngineDiagnostic[] }
   | { status: "shadow-failed"; diagnostics: EngineDiagnostic[] }
 
 export interface SchemaEngine {
@@ -77,7 +82,9 @@ export interface SchemaEngine {
   ): EnginePlan
   /**
    * Створює тінь поруч із `target`, засіває її базовим станом провайдера й
-   * завантажує `desiredSql`; `plan` у колбеку — «ціль → тінь». Тінь
+   * завантажує `desiredSql`; `plan` у колбеку — «ціль → тінь».
+   * Діагностики двигуна щодо завантаження, цілі й плану (зокрема
+   * `unmodeled_drift`: оператор плану впаде на цілі) — у результаті. Тінь
    * прибирається завжди, зокрема при помилці; порожньої тіні порт не дає.
    */
   withDesiredShadow<T>(

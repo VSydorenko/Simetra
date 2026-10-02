@@ -66,17 +66,24 @@ function engineDiagnostic(
   code: RuleCode,
   params: Record<string, string>,
   severity: EngineDiagnostic["severity"],
-  subject: Diagnostic["subject"]
+  subject: Diagnostic["subject"],
+  engineCode?: string
 ): EngineDiagnostic {
   return {
     code,
     severity,
     message: localize({ code, params }, "en").message,
     ...(subject === undefined ? {} : { object: encodeId(subject) }),
+    ...(engineCode === undefined ? {} : { engineCode }),
   }
 }
 
 /**
+ * Код і серйозність діагностики порту — наші: гейти вирішують за ними, а код
+ * двигуна лише супроводжує їх у `engineCode`. Невідомий код двигуна — загальне
+ * попередження `engine.diagnostic`; клас, що має наслідок для плану, отримує
+ * власний код (`unmodeled_drift` — оператор плану впаде на цілі).
+ *
  * `dangling_edge` на засіяній тіні — шум засіву (ребра до об'єктів
  * провайдера, яких тінь не відтворює), а не стан застосунку.
  */
@@ -86,12 +93,21 @@ function toEngineDiagnostics(
   return diagnostics
     .filter((d) => d.code !== "dangling_edge")
     .map((d) =>
-      engineDiagnostic(
-        "engine.reported",
-        { engineCode: d.code, detail: d.message },
-        d.severity === "error" ? "error" : "warning",
-        d.subject
-      )
+      d.code === "unmodeled_drift"
+        ? engineDiagnostic(
+            "engine.unmodeled-drift",
+            { detail: d.message },
+            "error",
+            d.subject,
+            d.code
+          )
+        : engineDiagnostic(
+            "engine.diagnostic",
+            { engineCode: d.code, detail: d.message },
+            "warning",
+            d.subject,
+            d.code
+          )
     )
 }
 
@@ -221,19 +237,87 @@ function shadowFailure(error: unknown): EngineDiagnostic[] | undefined {
         "engine.shadow-load-failed",
         { detail: d.message },
         "error",
-        d.subject
+        d.subject,
+        d.code
       )
     )
+  // Відмова фронтенду — не обов'язково збій завантаження: порожній SQL,
+  // кластерний DDL (`create role`), прекчек розширень, збій засіву
   if (error instanceof SchemaFrontendError)
     return [
       engineDiagnostic(
-        "engine.shadow-load-failed",
+        "engine.desired-rejected",
         { detail: error.message },
         "error",
         undefined
       ),
     ]
   return undefined
+}
+
+/**
+ * Тіло тіні без її прибирання: план «ціль → тінь» і колбек. Діагностики
+ * завантаження, цілі, дрейфу немодельованих об'єктів і самого плану
+ * віддаються разом із результатом — `unmodeled_drift` означає, що оператор
+ * плану впаде на цілі, і мовчати про це не можна.
+ */
+async function planAndRun<T>(
+  target: DbConnection,
+  shadowUrl: string,
+  desiredSql: string,
+  scope: EngineScope,
+  fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
+): Promise<ShadowOutcome<T>> {
+  const warnings: string[] = []
+  const targetPool = new pg.Pool({ connectionString: target.url })
+  const shadowPool = new pg.Pool({ connectionString: shadowUrl })
+  let plan: EnginePlan
+  let diagnostics: EngineDiagnostic[]
+  try {
+    const result = await planSchemaFiles(
+      targetPool,
+      shadowPool,
+      [{ name: "desired.sql", sql: desiredSql }],
+      {
+        profile: scopeProfile(scope),
+        seedAssumedSchemas: true,
+        renames: "off",
+        redactSecrets: REDACT_SECRETS,
+        onWarning: (message) => warnings.push(message),
+      }
+    )
+    plan = toEnginePlan(result.plan)
+    diagnostics = [
+      ...toEngineDiagnostics([
+        ...result.loadDiagnostics,
+        ...result.targetDiagnostics,
+        ...result.driftDiagnostics,
+        ...(result.plan.diagnostics ?? []),
+      ]),
+      // Попередження фронтенду — проза без коду й суб'єкта
+      ...warnings.map((message) =>
+        engineDiagnostic(
+          "engine.diagnostic",
+          { engineCode: "frontend_warning", detail: message },
+          "warning",
+          undefined,
+          "frontend_warning"
+        )
+      ),
+    ]
+  } catch (error) {
+    const failure = shadowFailure(error)
+    if (failure === undefined) throw error
+    return { status: "shadow-failed", diagnostics: failure }
+  } finally {
+    await targetPool.end()
+    await shadowPool.end()
+  }
+  return {
+    status: "loaded",
+    value: await fn({ url: shadowUrl }, plan),
+    diagnostics,
+  }
 }
 
 export function createPgDeltaEngine(): SchemaEngine {
@@ -267,35 +351,25 @@ export function createPgDeltaEngine(): SchemaEngine {
       fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
     ): Promise<ShadowOutcome<T>> {
       const shadow = await provisionCoLocatedShadow(target.url)
+      let outcome: ShadowOutcome<T>
       try {
-        let plan: EnginePlan
-        const targetPool = new pg.Pool({ connectionString: target.url })
-        const shadowPool = new pg.Pool({ connectionString: shadow.url })
+        outcome = await planAndRun(target, shadow.url, desiredSql, scope, fn)
+      } catch (error) {
+        // Збій прибирання не має затирати першопричину: вона перша в `errors`,
+        // а `cause` — збій прибирання, який і перервав нормальний шлях
         try {
-          const result = await planSchemaFiles(
-            targetPool,
-            shadowPool,
-            [{ name: "desired.sql", sql: desiredSql }],
-            {
-              profile: scopeProfile(scope),
-              seedAssumedSchemas: true,
-              renames: "off",
-              redactSecrets: REDACT_SECRETS,
-            }
+          await shadow.cleanup()
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "shadow run failed and the shadow could not be dropped",
+            { cause: cleanupError }
           )
-          plan = toEnginePlan(result.plan)
-        } catch (error) {
-          const diagnostics = shadowFailure(error)
-          if (diagnostics === undefined) throw error
-          return { status: "shadow-failed", diagnostics }
-        } finally {
-          await targetPool.end()
-          await shadowPool.end()
         }
-        return { status: "loaded", value: await fn({ url: shadow.url }, plan) }
-      } finally {
-        await shadow.cleanup()
+        throw error
       }
+      await shadow.cleanup()
+      return outcome
     },
   }
 }

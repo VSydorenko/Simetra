@@ -919,9 +919,23 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть або перенаправте кожне зазначене посилання й повторіть видалення.",
     },
   },
-  "engine.reported": {
+  "engine.diagnostic": {
     en: (p) => `Schema engine reported ${p.engineCode}: ${p.detail}`,
     uk: (p) => `Рушій схеми повідомив ${p.engineCode}: ${p.detail}`,
+    hint: {
+      en: "The engine code is in the diagnostic's engineCode field; check the named object in the schema engine's documentation.",
+      uk: "Код рушія — у полі engineCode діагностики; перевірте названий об'єкт за документацією рушія схеми.",
+    },
+  },
+  "engine.unmodeled-drift": {
+    en: (p) =>
+      `Desired state has an object the schema engine does not model, so the plan cannot create it on the target: ${p.detail}`,
+    uk: (p) =>
+      `Бажаний стан має об'єкт, якого рушій схеми не моделює, тож план не створить його на цілі: ${p.detail}`,
+    hint: {
+      en: "A planned statement that depends on this object will fail on the target; create the object on the target first or remove it from the desired state.",
+      uk: "Запланований оператор, що залежить від цього об'єкта, впаде на цілі; спершу створіть об'єкт на цілі або приберіть його з бажаного стану.",
+    },
   },
   "engine.shadow-load-failed": {
     en: (p) =>
@@ -930,6 +944,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Fix the SQL statement named in the message; the shadow is a fresh database seeded with the provider's base state.",
       uk: "Виправте SQL-оператор, названий у повідомленні; тінь — свіжа база, засіяна базовим станом провайдера.",
+    },
+  },
+  "engine.desired-rejected": {
+    en: (p) => `Desired state was rejected: ${p.detail}`,
+    uk: (p) => `Бажаний стан відхилено: ${p.detail}`,
+    hint: {
+      en: "The schema engine refused the desired SQL before planning (empty input, cluster DDL such as roles, an extension the shadow cannot run, or a failed provider seed); fix the cause named in the message.",
+      uk: "Рушій схеми відмовив бажаному SQL до планування (порожній вхід, кластерний DDL на кшталт ролей, розширення, яке тінь не виконає, або збій засіву провайдера); усуньте причину з повідомлення.",
     },
   },
 }
