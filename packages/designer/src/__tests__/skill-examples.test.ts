@@ -34,7 +34,7 @@ describe("simetra-metadata skill", () => {
     expect(blocks.length).toBeGreaterThan(0)
     for (const [, body] of blocks) {
       for (const line of body!.split("\n")) {
-        const m = /^(?:\S+\s+)*?simetra\s+(\S+)/.exec(line.trim())
+        const m = /^(?:pnpm exec |npx )?simetra\s+(\S+)/.exec(line.trim())
         if (line.trim() === "" || line.trim().startsWith("#")) continue
         expect(m, line).not.toBeNull()
         expect(known.has(m![1]!), line).toBe(true)

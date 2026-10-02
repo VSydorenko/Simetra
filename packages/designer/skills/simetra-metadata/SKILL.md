@@ -5,8 +5,8 @@ description: Use when you need to create, change, validate or explain Simetra me
 
 # Simetra metadata — compile, explain, fix, create, add, rename, delete
 
-The tools are one catalog served in three modes: the command line, the MCP
-server and the studio. Same tool name and same input in every mode. Run the CLI
+The tools are one catalog served by the command line and by the MCP server,
+with the same tool names and the same input in both. Run the CLI
 from the project root as `pnpm exec simetra …` (or `node_modules/.bin/simetra …`).
 Every command defaults to `./metadata`.
 
@@ -72,7 +72,7 @@ The same calls from a shell. A mutation takes its JSON as an argument, as
 pnpm exec simetra compile
 pnpm exec simetra explain Catalog.Currency
 pnpm exec simetra create '{"kind":"Catalog","name":"Currency"}' --dry-run
-echo '{"target":{"kind":"Catalog","name":"Currency"}}' | pnpm exec simetra delete - --yes
+pnpm exec simetra delete --input '{"target":{"kind":"Catalog","name":"Currency"}}' --yes
 ```
 
 An input that does not match the tool's schema is refused with the path of the
@@ -80,8 +80,12 @@ offending field (for example `target.kind`); nothing is written.
 
 ## Reading the result
 
-- Exit code: `0` ok (warnings allowed), `1` diagnostics with errors, `2` a
-  refusal or a usage error (bad flag, bad JSON, missing directory).
+- Exit code: `0` ok (warnings allowed), `1` the result has error diagnostics
+  (this includes refused operations such as `operation.delete-referenced`),
+  `2` the call itself was refused: input that does not match the tool's schema
+  (bad JSON, unknown field), a missing `--yes`, a usage or I/O error (bad flag,
+  missing directory) or an unknown `explain` target. In MCP the same cases are
+  `isError`, with diagnostics for the exit-1 ones.
 - Text diagnostics look like `path/File.meta.json:LINE:COL severity code message`.
   A diagnostic without a position (the input as a whole, a missing file) has no
   `LINE:COL`. The code (`file.kind-mismatch`, …) is the stable handle; do not
@@ -92,7 +96,7 @@ offending field (for example `target.kind`); nothing is written.
   location are identical in both.
 - Start from the first error: one root cause often produces several follow-ups.
 - Artifacts (`snapshot.json`, `desired-state.sql`, `entities.d.ts`) are written
-  only with `compile --out <dir>`, and `--out` takes exactly one directory.
+  only with `compile --out <dir>`, and `--out` takes one metadata directory per run.
 
 ## Mutations are checked, never raw
 
@@ -104,12 +108,14 @@ offending field (for example `target.kind`); nothing is written.
 - `--dry-run` (MCP: `dryRun: true`) reports the changes without writing. Use it
   before the real run.
 - `delete` is destructive: it needs `--yes` (MCP: `confirm: true`) and is refused
-  while anything references the target, listing every reference. A dry run needs
-  no confirmation and reports `would delete …`.
+  while anything references the target: the result then carries
+  `operation.delete-referenced` listing every reference (exit 1, nothing
+  written). A dry run needs no confirmation; it reports `would write <file>` for
+  a file that changes and `would delete <file>` only for a file that is removed.
 - Rename never changes `physicalName` (no DDL). Do not edit ids or `physicalName`
   of existing elements by hand.
 - Never pass an `id` to `create` or `add`: ids are assigned by the operation, and
-  an input carrying one is refused (`operation.input-invalid`).
+  an input carrying one gets `operation.input-invalid` (exit 1, nothing written).
 
 ## Agents over MCP
 

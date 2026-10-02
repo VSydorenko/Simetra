@@ -138,14 +138,6 @@ DUPLICATE_BLOCK = 3
 # Скіли репо (про цей код) і скіли споживача, що їдуть у пакетах: канон один.
 SKILLS_DIRS = [ROOT / ".agents/skills", *sorted(ROOT.glob("packages/*/skills"))]
 
-
-def skills_root_of(path: Path) -> Path | None:
-    """Тека скілів, якій належить файл, або `None` — файл не скіл."""
-    resolved = path.resolve()
-    for d in SKILLS_DIRS:
-        if resolved.is_relative_to(d.resolve()):
-            return d
-    return None
 CONTENTS_MARK = re.compile(r"зміст|contents", re.I)
 # Хвіст «:рядок» у якорі: `:171`, `:148-149`, `:82, 85`.
 LINE_SUFFIX = re.compile(r":\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*$")
@@ -162,6 +154,15 @@ POINTER_ONLY = re.compile(
 )
 LONE_LINK = re.compile(r"^[-*>\s]*\[[^\]]+\]\([^)\s]+\)[.,;:]?$")
 SPACES = re.compile(r"\s+")
+
+
+def skills_root_of(path: Path) -> Path | None:
+    """Тека скілів, якій належить файл, або `None` — файл не скіл."""
+    resolved = path.resolve()
+    for d in SKILLS_DIRS:
+        if resolved.is_relative_to(d.resolve()):
+            return d
+    return None
 
 
 def glob_regex(pattern: str) -> re.Pattern[str]:
