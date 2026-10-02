@@ -194,6 +194,48 @@ describe("class fixtures survive the round trip", () => {
   }
 })
 
+describe("a role of the application's own", () => {
+  it("is assumed, and a grant to it survives the round trip", async () => {
+    // Роль — інфраструктура кластера (спека §6.9): межа керує грантами на неї,
+    // а не нею самою. Роль кластерна, тож видна й тіні поруч із ціллю;
+    // прибирається в `finally`
+    const role = "simetra_round_trip_reader"
+    const admin = { url: testDatabaseUrl() }
+    await withClient(admin, async (c) => {
+      await c.query(`DROP ROLE IF EXISTS ${role}`)
+      await c.query(`CREATE ROLE ${role} NOLOGIN`)
+    })
+    try {
+      const scope = scopeOf(["app"])
+      await inTarget(
+        `CREATE SCHEMA app;
+         CREATE TABLE app.report (id uuid PRIMARY KEY, body text);
+         GRANT SELECT ON app.report TO ${role};`,
+        scope,
+        async (target) => {
+          const result = await roundTripOf(target, scope, {
+            defaultSchema: "app",
+            attributeCase: "snake_case",
+          })
+          expect(
+            result.extracted.model.units
+              .filter((u) => u.class === "grant")
+              .map((u) => u.sql)
+          ).toEqual([expect.stringContaining(role)])
+          const granted = (shape: OracleShape) =>
+            shape.acls
+              .find((a) => a.object === "r:app.report")
+              ?.acl.filter((item) => item.startsWith(`${role}=`))
+          expect(granted(result.target)).toEqual([`${role}=r/postgres`])
+          expect(granted(result.shadow)).toEqual([`${role}=r/postgres`])
+        }
+      )
+    } finally {
+      await withClient(admin, (c) => c.query(`DROP ROLE IF EXISTS ${role}`))
+    }
+  })
+})
+
 /** Ключ таблиці моделі: схема й фізичне ім'я. */
 const tableKeys = (model: CompiledModel) =>
   model.physical.tables.map((t) => `${t.schema}.${t.name}`).sort()
@@ -285,15 +327,11 @@ describe("what the round trip cannot carry is loud", () => {
          ALTER TABLE app.ledger OWNER TO ${role};`,
         ["app"]
       )
-      // Сама роль поза моделлю каталогу — ще одна гучна діагностика; тут
-      // важить та, що називає таблицю й власника
+      // Сама роль — припущена інфраструктура кластера, не помилка: гучна
+      // лише таблиця з чужим власником
       expect(
         diagnostics
-          .filter(
-            (d) =>
-              d.code === "engine.unrepresentable" &&
-              d.message.includes("property owner")
-          )
+          .filter((d) => d.code === "engine.unrepresentable")
           .map((d) => d.message)
       ).toEqual([
         `table:app.ledger: property owner cannot be represented in the catalog model: owner role:${role} is not the default owner`,
