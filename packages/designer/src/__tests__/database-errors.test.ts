@@ -1,3 +1,4 @@
+import type { Diagnostic } from "simetra/compiler"
 import type { EngineAction } from "simetra/schema"
 import { describe, expect, it } from "vitest"
 import { narrow } from "../tools/database-tools"
@@ -437,6 +438,49 @@ describe("diff narrowed to tables", () => {
       "tables.app.orders.foreignKeys.orders_customer_id_fkey",
     ])
   })
+  it("keeps diagnostics of the named tables and those it cannot attribute", () => {
+    // Мітка — у `message`: код діагностики — закритий перелік правил
+    const engine = (label: string, object?: string): Diagnostic => ({
+      code: "engine.unrepresentable",
+      severity: "error",
+      file: "",
+      pointer: "",
+      message: label,
+      params: object === undefined ? {} : { object },
+    })
+    const diagnostics = [
+      engine("orders-table", "table:app.orders"),
+      engine("orders-constraint", "constraint:app.orders.orders_check"),
+      engine("orders-acl", "acl:(table:app.orders).grantee:anon"),
+      engine("customer-table", "table:app.customer"),
+      engine("customer-index", "index:app.customer_name_idx"),
+      engine("customer-comment", "comment:(column:app.customer.name)"),
+      // Без атрибуції чи з об'єктом поза таблицями фільтр не судить
+      engine("whole-schema"),
+      engine("function", "function:app.touch()"),
+      engine("role", "role:reader"),
+      // Діагностика компілятора стосується файлу метаданих, а не бази
+      {
+        ...engine("metadata", "table:app.customer"),
+        file: "custom-tables/Customer/Customer.meta.json",
+      },
+    ]
+    const orders = narrow(
+      { plan: [], differences: [], diagnostics },
+      [{ schema: "app", name: "orders" }],
+      models
+    )
+    expect(orders.diagnostics.map((d) => d.message)).toEqual([
+      "orders-table",
+      "orders-constraint",
+      "orders-acl",
+      "whole-schema",
+      "function",
+      "role",
+      "metadata",
+    ])
+  })
+
   describe("types and sequences of the named tables", () => {
     // Енам і послідовність адресуються схемою, а не таблицею: зв'язок з
     // таблицею дають колонки й одиниці обох моделей

@@ -324,10 +324,36 @@ function dependentIds(
 }
 
 /**
+ * Чи належить ідентичність двигуна якійсь таблиці моделей, її індексу чи
+ * енаму: лише тоді фільтр може судити, що вона поза названими таблицями.
+ * Функція, в'юха, роль чи грант-одиниця таблиці не мають — їх не відкидаємо.
+ */
+function attributable(models: readonly NarrowModel[]): (id: string) => boolean {
+  const indexes = new Set(
+    models.flatMap((m) =>
+      m.tables.flatMap((t) =>
+        t.indexes.map((i) => `index:${t.schema}.${i.name}`)
+      )
+    )
+  )
+  const enums = new Set(
+    models.flatMap((m) => m.enumTypes.map((e) => `type:${e.schema}.${e.name}`))
+  )
+  const tableKinds = /^(?:table|column|constraint|trigger|rule|policy|default):/
+  const check = (id: string): boolean => {
+    const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(id)
+    if (wrapped !== null) return check(wrapped[1]!)
+    return tableKinds.test(id) || indexes.has(id) || enums.has(id)
+  }
+  return check
+}
+
+/**
  * Звуження звірки до названих таблиць (§10.3 спеки П2: звірка документа з
  * його ТЧ і регістрами, а не всієї бази) разом з їхніми енамами й
- * послідовностями. Діагностики не звужуються: помилка поза фільтром
- * однаково робить звірку неповною.
+ * послідовностями. Діагностика двигуна (без файлу) відкидається лише тоді,
+ * коли її об'єкт належить іншій таблиці; без атрибуції вона лишається, бо
+ * помилка, яку не віднести до таблиці, може стосуватися й названих.
  */
 export function narrow(
   data: Omit<DiffData, "empty">,
@@ -343,6 +369,7 @@ export function narrow(
     )
   )
   const dependent = dependentIds(keys, models)
+  const owned = attributable(models)
   const touches = touchesTables(tables, new Set([...indexes, ...dependent]))
   const tablePaths = [...keys].map((k) => `tables.${k}`)
   const enumPaths = new Set(
@@ -358,7 +385,15 @@ export function narrow(
         enumPaths.has(d.path) ||
         (d.path.startsWith("units.") && touches(d.path.slice("units.".length)))
     ),
-    diagnostics: data.diagnostics,
+    diagnostics: data.diagnostics.filter((d) => {
+      const object = d.params?.object
+      return (
+        d.file !== "" ||
+        typeof object !== "string" ||
+        !owned(object) ||
+        touches(object)
+      )
+    }),
   }
 }
 
@@ -376,7 +411,7 @@ type NarrowModel = {
 export const diffTool = defineTool({
   name: "diff",
   description:
-    "Compare the live database with the metadata through a throwaway shadow database: the plan from the database to the metadata, catalog differences and diagnostics. The connection comes from the server's environment; the target is only read. `tables` narrows the plan and differences to the named tables.",
+    "Compare the live database with the metadata through a throwaway shadow database: the plan from the database to the metadata, catalog differences and diagnostics. The connection comes from the server's environment; the target is only read. `tables` narrows the plan, differences and table-attributed diagnostics to the named tables.",
   input: z.strictObject({
     tables: z
       .array(z.string().min(1))
@@ -437,11 +472,12 @@ export const diffTool = defineTool({
         )
       data = narrow(data, tables, models)
     }
-    const ok = !hasErrors(diagnostics)
+    // Код виходу й зведення судять за звуженими діагностиками
+    const ok = !hasErrors(data.diagnostics)
     return {
       ok,
       changes: [],
-      diagnostics,
+      diagnostics: data.diagnostics,
       data: {
         ...data,
         empty: ok && data.plan.length === 0 && data.differences.length === 0,

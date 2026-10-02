@@ -25,6 +25,10 @@ are served by `simetra mcp` with the same input.
   connecting role needs `CREATEDB`. Otherwise name a variable with
   `--shadow-url-env <NAME>` pointing at another server of the **same
   PostgreSQL major version**; a different major version is refused.
+- Roles are cluster infrastructure: they are not described in metadata, and
+  grants to them are. A role the database grants to is assumed to exist; a
+  shadow on another server must have the same roles, or the metadata does not
+  load there.
 
 ## Steps
 
@@ -49,11 +53,12 @@ are served by `simetra mcp` with the same input.
    introspect is the baseline; any non-empty result is a finding** — report it
    instead of editing the metadata until it disappears.
 6. **Narrow when reconciling part of the schema.** `--tables` (MCP: `tables`)
-   narrows the plan and differences to the named tables (`schema.table` or
-   `table`) together with their enum types and sequences; an unknown table is
-   refused. Diagnostics are **not** narrowed: a narrowed run usually exits 1
-   because of diagnostics on unrelated objects of the whole schema, so judge
-   the plan and the differences, not the exit code alone.
+   narrows the plan, the differences and the diagnostics to the named tables
+   (`schema.table` or `table`) together with their enum types and sequences;
+   an unknown table is refused. A diagnostic that cannot be tied to a table
+   (one about the whole schema, a function, a view) stays, so a narrowed run
+   can still exit 1 because of an object outside the tables: judge the plan
+   and the differences, not the exit code alone.
 
 ## Examples
 
