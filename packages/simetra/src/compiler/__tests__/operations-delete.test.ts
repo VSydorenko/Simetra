@@ -6,8 +6,8 @@ import {
   deleteElement,
   deleteInput,
   type CompiledModel,
-  type ElementTarget,
 } from "simetra/compiler"
+import { isInsideElement } from "../operations/delete"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 
 type Json = Record<string, unknown>
@@ -82,7 +82,7 @@ describe("deleteElement", () => {
     expect(doc.attributes.length).toBeGreaterThan(0)
   })
 
-  it("deletes an object with its module file when only its own subtree references it", async () => {
+  it("deletes an object with its module and sql files when only its own subtree references it", async () => {
     // Документ із `.sql` у довідковому домені видалити не можна за побудовою:
     // його рекордери вписані в регістри, а чистий вхід вимагає обох сторін
     // зв'язку. Тому синтетичний довідник із `.module.ts` і посиланням на себе.
@@ -112,8 +112,10 @@ describe("deleteElement", () => {
     })
     const META = "catalogs/Scratch/Scratch.meta.json"
     const MODULE = "catalogs/Scratch/Scratch.module.ts"
+    const SQL = "catalogs/Scratch/Scratch.sql"
     files.set(META, JSON.stringify(scratch))
     files.set(MODULE, "export const marker = 1\n")
+    files.set(SQL, "-- scratch\n")
     const model = await modelOf(files)
     const own = model.objects.find((o) => o.name === "Scratch")!
     expect(
@@ -132,6 +134,7 @@ describe("deleteElement", () => {
     ).toEqual([
       { path: META, content: null },
       { path: MODULE, content: null },
+      { path: SQL, content: null },
     ])
   })
 
@@ -142,42 +145,58 @@ describe("deleteElement", () => {
     const raw = JSON.parse(files.get(SERVICE_ACCRUAL)!) as {
       tabularSections: { name: string }[]
     }
-    const sectionPointers = raw.tabularSections.map(
-      (s, i) => `/tabularSections/${i}`
-    )
-    // Ціль — ТЧ, на реквізит якої посилається проведення поза її піддеревом.
-    const index = sectionPointers.findIndex((pointer) =>
-      model.references.some(
+    // ТЧ, на реквізити якої посилається проведення поза її піддеревом.
+    const blockersOf = (index: number) => {
+      const pointer = `/tabularSections/${index}`
+      const ids = idsIn(raw.tabularSections[index])
+      return model.references.filter(
         (r) =>
-          r.from.file === SERVICE_ACCRUAL &&
-          !r.from.pointer.startsWith(pointer) &&
-          r.to.kind === "Element" &&
-          idsIn(
-            (JSON.parse(files.get(SERVICE_ACCRUAL)!) as Json).tabularSections
-              ? (
-                  (JSON.parse(files.get(SERVICE_ACCRUAL)!) as Json)
-                    .tabularSections as unknown[]
-                )[Number(pointer.split("/")[2])]
-              : undefined
-          ).has(r.to.id)
+          ids.has(r.to.id) &&
+          !(
+            r.from.objectId === doc.id &&
+            (r.from.pointer === pointer ||
+              r.from.pointer.startsWith(`${pointer}/`))
+          )
       )
+    }
+    const index = raw.tabularSections.findIndex(
+      (_, i) => blockersOf(i).length > 0
     )
     expect(index).toBeGreaterThanOrEqual(0)
-    const target: ElementTarget = {
-      kind: "Document",
-      name: "ServiceAccrual",
-      element: [raw.tabularSections[index]!.name],
-    }
-    const result = await deleteElement(files, { target })
+    const expected = blockersOf(index).map(
+      (r) => `${r.from.file}#${r.from.pointer}`
+    )
+
+    const result = await deleteElement(files, {
+      target: {
+        kind: "Document",
+        name: "ServiceAccrual",
+        element: [raw.tabularSections[index]!.name],
+      },
+    })
     expect(result.ok).toBe(false)
     expect(result.changes).toEqual([])
-    expect(result.diagnostics.length).toBeGreaterThan(0)
-    for (const d of result.diagnostics) {
-      expect(d.code).toBe("operation.delete-referenced")
-      expect(d.file).toBe(SERVICE_ACCRUAL)
-      expect(d.pointer.startsWith(sectionPointers[index]!)).toBe(false)
-    }
-    expect(doc.file).toBe(SERVICE_ACCRUAL)
+    expect(result.diagnostics.map((d) => d.code)).toEqual(
+      result.diagnostics.map(() => "operation.delete-referenced")
+    )
+    expect(new Set(result.diagnostics.map(place))).toEqual(new Set(expected))
+  })
+
+  it("treats only the element subtree as inside", () => {
+    // Посилань усередині піддерева елемента модель не містить (знайдені
+    // ролі виходять лише з рівня об'єкта), тож гілку «всередині» доводить
+    // сам предикат, яким користується deleteElement.
+    const target = { file: "a.meta.json", pointer: "/tabularSections/1" }
+    const inside = (file: string, pointer: string) =>
+      isInsideElement(target, { file, pointer })
+    expect(inside("a.meta.json", "/tabularSections/1")).toBe(true)
+    expect(inside("a.meta.json", "/tabularSections/1/attributes/0")).toBe(true)
+    expect(inside("a.meta.json", "/tabularSections/10")).toBe(false)
+    expect(inside("a.meta.json", "/tabularSections/10/attributes/0")).toBe(
+      false
+    )
+    expect(inside("a.meta.json", "/posting/movements/0")).toBe(false)
+    expect(inside("b.meta.json", "/tabularSections/1")).toBe(false)
   })
 
   it("reports a missing target", async () => {

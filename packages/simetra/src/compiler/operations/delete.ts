@@ -22,6 +22,22 @@ function collectIds(node: unknown, into: Set<string>): Set<string> {
 }
 
 /**
+ * Чи лежить місце посилання в піддереві елемента-цілі: той самий файл і
+ * pointer цілі або під ним. Префікс із кінцевим `/`, щоб `/items/1` не
+ * вважав своїм `/items/10`.
+ */
+export function isInsideElement(
+  target: { file: string; pointer: string },
+  from: { file: string; pointer: string }
+): boolean {
+  return (
+    from.file === target.file &&
+    (from.pointer === target.pointer ||
+      from.pointer.startsWith(`${target.pointer}/`))
+  )
+}
+
+/**
  * Видаляє об'єкт (усі його файли) чи вкладений іменований елемент (спека П2
  * §8.6). Посилання з-поза піддерева цілі блокують видалення: по діагностиці
  * на кожне місце. Посилання зсередини піддерева (конструктор документа на
@@ -45,8 +61,8 @@ export async function deleteElement(
   for (const segment of segments) node = (node as Json)[segment]
   const ids = collectIds(node, new Set())
 
-  // Файл цілі-елемента належить одному об'єктові (чи проєкту), тож «усередині»
-  // — той самий файл і pointer у піддереві елемента.
+  // `object !== undefined` — ознака, що ціль є об'єктом (усі його файли —
+  // піддерево); інакше ціль — вкладений елемент.
   const isOutside = (from: {
     objectId: string
     file: string
@@ -54,11 +70,7 @@ export async function deleteElement(
   }) =>
     object !== undefined
       ? from.objectId !== object.id
-      : from.file !== target.file ||
-        !(
-          from.pointer === target.pointer ||
-          from.pointer.startsWith(`${target.pointer}/`)
-        )
+      : !isInsideElement(target, from)
 
   const blockers = model.references.filter(
     (ref) => ids.has(ref.to.id) && isOutside(ref.from)
