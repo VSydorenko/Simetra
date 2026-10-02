@@ -30,13 +30,22 @@ export async function readMetadataDir(
   return files
 }
 
-/** Єдине місце запису; `content: null` видаляє файл і прибирає порожні теки. */
+/**
+ * Єдине місце запису; `content: null` видаляє файл і прибирає порожні теки.
+ * Видалення йдуть першими: на регістронезалежній ФС перейменування лише
+ * регістру — це видалення старого шляху й запис нового, що вказують на той
+ * самий файл, і зворотний порядок стер би щойно записане.
+ */
 export async function writeChanges(
   dir: string,
   changes: readonly FileChange[]
 ): Promise<void> {
   const root = resolve(dir)
-  for (const change of changes) {
+  const ordered = [
+    ...changes.filter((c) => c.content === null),
+    ...changes.filter((c) => c.content !== null),
+  ]
+  for (const change of ordered) {
     const target = resolve(root, change.path)
     // Шлях зміни не повинен виходити за межі теки метаданих.
     if (!target.startsWith(root + sep)) {

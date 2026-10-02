@@ -16,12 +16,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.2.0",
     "citty": "0.2.2",
     "simetra": "workspace:*",
-    "tsx": "4.23.15"
+    "tsx": "4.23.15",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "2.2.0",
     "@types/node": "^24.13.6",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^10.11.0",

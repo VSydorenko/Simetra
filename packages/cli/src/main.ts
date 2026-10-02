@@ -10,6 +10,7 @@ const main = defineCommand({
     compile: () => import("./commands/compile").then((m) => m.default),
     explain: () => import("./commands/explain").then((m) => m.default),
     fix: () => import("./commands/fix").then((m) => m.default),
+    mcp: () => import("./commands/mcp").then((m) => m.default),
   },
 })
 
