@@ -307,13 +307,28 @@ function note() {
 
 /**
  * Одиниці всіх класів, які оголошує `.sql` (спека П2 §8.3), над таблицею
- * `CustomTable`: гранти кількох ролей на кілька об'єктів, членство в
- * publication, `REPLICA IDENTITY`, налаштування функції.
+ * `CustomTable`: гранти кількох ролей на кілька об'єктів, типові привілеї,
+ * членство в publication, `REPLICA IDENTITY`, налаштування функції,
+ * розширення.
  */
 function unitClasses(): Map<string, string> {
   return metaFiles({
     "project.meta.json": project({ defaultSchema: "app" }),
     "custom-tables/Note/Note.meta.json": note(),
+    // Таблиця моделі без грантів: права ADP вона отримує, лише якщо ADP
+    // створено раніше за неї
+    "custom-tables/Tag/Tag.meta.json": customTable("Tag", {
+      columns: [
+        {
+          id: uuid(211),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+      ],
+      primaryKey: { name: "tag_pk", columns: ["id"] },
+    }),
     "sql/app/units.sql": [
       "CREATE FUNCTION app.note_count(p_from int, p_note uuid) RETURNS bigint",
       "  LANGUAGE sql STABLE AS $$ SELECT count(*) FROM app.note $$;",
@@ -335,6 +350,11 @@ function unitClasses(): Map<string, string> {
       "GRANT SELECT, INSERT ON app.note, app.note_view TO authenticated, anon;",
       "GRANT UPDATE ON app.note TO authenticated;",
       "GRANT ALL ON app.note_view TO service_role;",
+      // ADP дає `anon` SELECT на кожну таблицю, створену після нього (порядок
+      // створення ставить його перед об'єктами схеми): рівні йому гранти
+      // неявні, а `note_totals` має більше — явна одиниця
+      "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT SELECT ON TABLES TO anon;",
+      "GRANT SELECT, UPDATE ON app.note_totals TO anon;",
       // Коментар control-файлу розширення ставить сам CREATE EXTENSION: він
       // неявний, тож одиниці коментаря немає
       "CREATE EXTENSION citext WITH SCHEMA extensions;",
@@ -343,20 +363,6 @@ function unitClasses(): Map<string, string> {
       "ALTER TABLE app.note REPLICA IDENTITY FULL;",
       "",
     ].join("\n"),
-  })
-}
-
-/**
- * Типові привілеї окремо: роль застосовує їх до кожного об'єкта, який створює
- * після них, і каталог тримає ці права як звичайні гранти, яких жоден
- * оператор не оголошує. Тож тут немає об'єктів виду, якого вони стосуються.
- */
-function defaultPrivileges(): Map<string, string> {
-  return metaFiles({
-    "project.meta.json": project({ defaultSchema: "app" }),
-    "custom-tables/Note/Note.meta.json": note(),
-    "sql/app/units.sql":
-      "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT SELECT, USAGE ON SEQUENCES TO anon, authenticated;\n",
   })
 }
 
@@ -373,10 +379,6 @@ describe("extract maps pg-delta facts into the catalog model", () => {
 
   it("every unit class maps to the compiler identity", async () => {
     await expectExtractMatchesModel(unitClasses())
-  })
-
-  it("default privileges map to pairs", async () => {
-    await expectExtractMatchesModel(defaultPrivileges())
   })
 
   it("the lists of tolerated differences carry their reasons", () => {
