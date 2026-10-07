@@ -64,8 +64,9 @@ describe("explainObject", () => {
     expect(e.contracts).toEqual([
       expect.objectContaining({
         name: "check_contract_start",
-        sources: [{ schema: "app", table: "contract" }],
-        whenChanged: ["start_date"],
+        sources: [
+          { schema: "app", table: "contract", whenChanged: ["start_date"] },
+        ],
         handler: { schema: "app", name: "check_contract_start" },
       }),
     ])

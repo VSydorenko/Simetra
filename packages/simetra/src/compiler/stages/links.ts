@@ -138,10 +138,11 @@ function checkSetFunctions(
     const schema = kind.setFunction.schema ?? project.defaultSchema
     const name = kind.setFunction.name
     const pointer = toPointer(["scopeKinds", index, "setFunction"])
-    const sameName = units.filter(
-      (u) => u.class === "function" && u.schema === schema && u.name === name
-    )
-    if (sameName.length === 0) {
+    const fn = nullaryFunction(units, schema, name, {
+      type: "uuid",
+      setof: true,
+    })
+    if (fn === undefined) {
       found.push(
         diagnostic("scope.set-function-missing", "project.meta.json", pointer, {
           function: `${schema}.${name}`,
@@ -149,13 +150,7 @@ function checkSetFunctions(
       )
       return
     }
-    const exact = sameName.find(
-      (u) => u.identity === functionIdentity(schema, name, [])
-    )
-    const problem =
-      exact === undefined
-        ? "it takes arguments"
-        : signatureProblem(exact.tree as Node)
+    const problem = typeof fn === "string" ? fn : volatilityProblem(fn)
     if (problem !== undefined) {
       found.push(
         diagnostic(
@@ -219,9 +214,30 @@ function nullaryReturning(
   return fn
 }
 
-function signatureProblem(tree: Node): string | undefined {
-  const fn = nullaryReturning(tree, { type: "uuid", setof: true })
-  if (typeof fn === "string") return fn
+/**
+ * Функція `<схема>.<ім'я>` без аргументів серед SQL-одиниць: `undefined` —
+ * функції з таким ім'ям немає, рядок — причина невідповідності підпису.
+ */
+function nullaryFunction(
+  units: readonly VerbatimUnit[],
+  schema: string,
+  name: string,
+  returns: { type: string; setof: boolean }
+): FunctionNode | string | undefined {
+  const sameName = units.filter(
+    (u) => u.class === "function" && u.schema === schema && u.name === name
+  )
+  if (sameName.length === 0) return undefined
+  const exact = sameName.find(
+    (u) => u.identity === functionIdentity(schema, name, [])
+  )
+  return exact === undefined
+    ? "it takes arguments"
+    : nullaryReturning(exact.tree as Node, returns)
+}
+
+/** Функція множини читає дані, тож мусить бути STABLE. */
+function volatilityProblem(fn: FunctionNode): string | undefined {
   const volatility = (fn.options ?? [])
     .map((o) => o.DefElem)
     .find((o) => o?.defname === "volatility")?.arg?.String?.sval
@@ -246,33 +262,21 @@ function checkSubscriptionHandlers(
     const schema = spec.handler.schema ?? project.defaultSchema
     const { name } = spec.handler
     const fn = `${schema}.${name}`
-    const sameName = units.filter(
-      (u) => u.class === "function" && u.schema === schema && u.name === name
-    )
-    if (sameName.length === 0) {
+    const handler = nullaryFunction(units, schema, name, {
+      type: "trigger",
+      setof: false,
+    })
+    if (handler === undefined) {
       found.push(
         diagnostic("subscription.handler-missing", object.file, "/handler", {
           function: fn,
         })
       )
-      continue
-    }
-    const exact = sameName.find(
-      (u) => u.identity === functionIdentity(schema, name, [])
-    )
-    const shape =
-      exact === undefined
-        ? "it takes arguments"
-        : nullaryReturning(exact.tree as Node, {
-            type: "trigger",
-            setof: false,
-          })
-    const problem = typeof shape === "string" ? shape : undefined
-    if (problem !== undefined) {
+    } else if (typeof handler === "string") {
       found.push(
         diagnostic("subscription.handler-signature", object.file, "/handler", {
           function: fn,
-          problem,
+          problem: handler,
         })
       )
     }

@@ -51,9 +51,10 @@ describe("EventSubscription", () => {
       {
         subscriptionId: uuid(7001),
         name: "stamp_contract",
-        sources: [{ schema: "public", table: "contract" }],
+        sources: [
+          { schema: "public", table: "contract", whenChanged: ["number"] },
+        ],
         event: "beforeWrite",
-        whenChanged: ["number"],
         handler: { schema: "app", name: "stamp" },
       },
     ])
@@ -78,8 +79,9 @@ describe("EventSubscription", () => {
     )
     expect(result.diagnostics).toEqual([])
     expect(result.model!.contracts.eventSubscriptions[0]).toMatchObject({
-      sources: [{ schema: "auth", table: "users" }],
-      whenChanged: ["email", "phone"],
+      sources: [
+        { schema: "auth", table: "users", whenChanged: ["email", "phone"] },
+      ],
       handler: { schema: "public", name: "on_user" },
     })
     const standard = await compile(
@@ -87,7 +89,7 @@ describe("EventSubscription", () => {
     )
     expect(standard.diagnostics).toEqual([])
     expect(
-      standard.model!.contracts.eventSubscriptions[0]!.whenChanged
+      standard.model!.contracts.eventSubscriptions[0]!.sources[0]!.whenChanged
     ).toEqual(["description", "code"])
   })
 
@@ -119,9 +121,9 @@ describe("EventSubscription", () => {
     ])
   })
 
-  it("whenChanged must name the same physical columns in every source", async () => {
-    expect(
-      await codes(
+  it("each source carries its own physical whenChanged columns", async () => {
+    const result = await compile(
+      metaFiles(
         entries(
           {
             sources: [
@@ -142,8 +144,83 @@ describe("EventSubscription", () => {
           }
         )
       )
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(result.model!.contracts.eventSubscriptions[0]!.sources).toEqual([
+      { schema: "public", table: "contract", whenChanged: ["number"] },
+      { schema: "public", table: "partner", whenChanged: ["partner_number"] },
+    ])
+  })
+
+  it("a polymorphic attribute watches both pair columns", async () => {
+    const result = await compile(
+      metaFiles(
+        entries(
+          { whenChanged: ["party"] },
+          {
+            "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+              attributes: [
+                attribute("party", {
+                  type: "Ref",
+                  allowedTypes: [
+                    { kind: "Catalog", name: "Contract" },
+                    { kind: "Catalog", name: "Partner" },
+                  ],
+                }),
+              ],
+            }),
+            "catalogs/Partner/Partner.meta.json": catalog("Partner"),
+          }
+        )
+      )
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(
+      result.model!.contracts.eventSubscriptions[0]!.sources[0]!.whenChanged
+    ).toEqual(["party_type", "party_id"])
+  })
+
+  it("a source and a whenChanged name are listed once", async () => {
+    expect(
+      await codes(
+        entries({
+          sources: [
+            { kind: "Catalog", name: "Contract" },
+            { providerTable: "auth.users" },
+            { kind: "Catalog", name: "Contract" },
+            { providerTable: "auth.users" },
+          ],
+          whenChanged: undefined,
+        })
+      )
     ).toEqual([
-      ["subscription.when-changed-diverges", SUBSCRIPTION, "/whenChanged/0"],
+      ["subscription.source-duplicate", SUBSCRIPTION, "/sources/2"],
+      ["subscription.source-duplicate", SUBSCRIPTION, "/sources/3"],
+    ])
+    expect(await codes(entries({ whenChanged: ["number", "number"] }))).toEqual(
+      [["subscription.when-changed-duplicate", SUBSCRIPTION, "/whenChanged/1"]]
+    )
+  })
+
+  it("two subscriptions cannot share a trigger base name", async () => {
+    const other = "event-subscriptions/StampAgain/StampAgain.meta.json"
+    expect(
+      await codes(
+        entries(
+          {},
+          {
+            [other]: subscription({
+              id: uuid(7003),
+              name: "StampAgain",
+              physicalName: "stamp_contract",
+              whenChanged: undefined,
+            }),
+          }
+        )
+      )
+    ).toEqual([
+      // Помилку отримує пізніший за шляхом файл.
+      ["subscription.name-duplicate", SUBSCRIPTION, "/physicalName"],
     ])
   })
 

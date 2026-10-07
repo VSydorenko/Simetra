@@ -277,10 +277,12 @@ function referenceTargetError(
 
 /**
  * Підписки на подію (спека промоції §9.3): таблиця провайдера — з пресету
- * провайдера проєкту; `whenChanged` — лише з подіями запису, і кожне ім'я
- * мусить мати ті самі фізичні колонки в кожному джерелі, бо контракт несе
- * один перелік колонок для тригера кожного джерела. Джерело-об'єкт без
- * таблиці звітує перевірка цілей посилань, невідоме — стадія 2.
+ * провайдера проєкту; джерело й ім'я `whenChanged` — не більше разу;
+ * `whenChanged` — лише з подіями запису, і кожне ім'я мусить бути в кожному
+ * джерелі (фізичні колонки контракт несе окремо для кожного джерела).
+ * `physicalName` — база імені тригера: дві однакові дали б однойменні тригери
+ * на спільній таблиці, а простору імен таблиць підписка не займає. Джерело-
+ * об'єкт без таблиці звітує перевірка цілей посилань, невідоме — стадія 2.
  */
 function checkSubscriptions(
   objects: readonly ParsedObject[],
@@ -288,16 +290,54 @@ function checkSubscriptions(
   provider: DatabaseProvider
 ): Diagnostic[] {
   const found: Diagnostic[] = []
+  const triggerNames = new Map<string, string>()
   for (const object of objects) {
     const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
     if (spec === undefined) continue
+    const { physicalName } = object.data as { physicalName?: string }
+    if (physicalName !== undefined) {
+      const firstFile = triggerNames.get(physicalName)
+      if (firstFile === undefined) {
+        triggerNames.set(physicalName, object.file)
+      } else {
+        found.push(
+          diagnostic(
+            "subscription.name-duplicate",
+            object.file,
+            "/physicalName",
+            {
+              name: physicalName,
+              firstFile,
+            }
+          )
+        )
+      }
+    }
     const tables = subscriptionSourceTables(
       object,
       objects,
       model.physical,
       provider
     )
+    const seenSources = new Set<string>()
     for (const source of spec.sources) {
+      const key =
+        "ref" in source
+          ? objectKey(source.ref.kind, source.ref.name)
+          : `${source.providerTable.schema}.${source.providerTable.table}`
+      if (seenSources.has(key)) {
+        found.push(
+          diagnostic(
+            "subscription.source-duplicate",
+            object.file,
+            source.pointer,
+            {
+              source: key,
+            }
+          )
+        )
+      }
+      seenSources.add(key)
       if (!("providerTable" in source) || tables.get(source.pointer)) continue
       const { schema, table } = source.providerTable
       found.push(
@@ -327,44 +367,37 @@ function checkSubscriptions(
       )
       continue
     }
+    const seenNames = new Set<string>()
     spec.whenChanged.forEach((name, index) => {
       const pointer = `/whenChanged/${index}`
-      const mapped: string[] = []
-      for (const source of spec.sources) {
-        const table = tables.get(source.pointer)
-        if (table === undefined) continue
-        const columns = table.columns.get(name)
-        if (columns === undefined) {
-          found.push(
-            diagnostic(
-              "subscription.when-changed-unknown",
-              object.file,
-              pointer,
-              {
-                name,
-                source:
-                  "ref" in source
-                    ? `${source.ref.kind} "${source.ref.name}"`
-                    : `provider table ${table.schema}.${table.table}`,
-              }
-            )
-          )
-          continue
-        }
-        mapped.push(`${table.schema}.${table.table}(${columns.join(", ")})`)
-      }
-      const distinct = new Set(
-        mapped.map((entry) => entry.slice(entry.indexOf("(")))
-      )
-      if (distinct.size > 1) {
+      if (seenNames.has(name)) {
         found.push(
           diagnostic(
-            "subscription.when-changed-diverges",
+            "subscription.when-changed-duplicate",
             object.file,
             pointer,
             {
               name,
-              columns: mapped.join("; "),
+            }
+          )
+        )
+        return
+      }
+      seenNames.add(name)
+      for (const source of spec.sources) {
+        const table = tables.get(source.pointer)
+        if (table === undefined || table.columns.has(name)) continue
+        found.push(
+          diagnostic(
+            "subscription.when-changed-unknown",
+            object.file,
+            pointer,
+            {
+              name,
+              source:
+                "ref" in source
+                  ? `${source.ref.kind} "${source.ref.name}"`
+                  : `provider table ${table.schema}.${table.table}`,
             }
           )
         )

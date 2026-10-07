@@ -717,14 +717,25 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Кожне ім'я мусить бути реквізитом чи стандартним реквізитом кожного джерела-об'єкта або колонкою пресету кожної таблиці провайдера.",
     },
   },
-  "subscription.when-changed-diverges": {
-    en: (p) =>
-      `whenChanged "${p.name}" maps to different columns in the sources: ${p.columns}`,
-    uk: (p) =>
-      `whenChanged "${p.name}" відповідає різним колонкам у джерелах: ${p.columns}`,
+  "subscription.when-changed-duplicate": {
+    en: (p) => `whenChanged names "${p.name}" more than once`,
+    uk: (p) => `whenChanged називає "${p.name}" більше одного разу`,
+  },
+  "subscription.source-duplicate": {
+    en: (p) => `Subscription source ${p.source} is listed more than once`,
+    uk: (p) => `Джерело підписки ${p.source} указане більше одного разу`,
     hint: {
-      en: "The trigger of every source watches one column list, so a name must have the same physical columns in each source; split the subscription per source.",
-      uk: "Тригер кожного джерела стежить за одним переліком колонок, тож ім'я мусить мати ті самі фізичні колонки в кожному джерелі; розділіть підписку за джерелами.",
+      en: "One source gets one trigger per subscription; list it once.",
+      uk: "Джерело отримує один тригер на підписку; вкажіть його один раз.",
+    },
+  },
+  "subscription.name-duplicate": {
+    en: (p) =>
+      `Subscription physical name "${p.name}" is already used in ${p.firstFile}`,
+    uk: (p) => `Фізичне ім'я підписки "${p.name}" уже зайняте в ${p.firstFile}`,
+    hint: {
+      en: "The physical name is the base of the trigger name; two equal ones would give same-named triggers on a shared table.",
+      uk: "Фізичне ім'я — база імені тригера; два однакові дали б однойменні тригери на спільній таблиці.",
     },
   },
   "subscription.when-changed-on-delete": {

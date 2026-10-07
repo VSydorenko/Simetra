@@ -183,10 +183,13 @@ export interface EventSubscriptionContract {
   subscriptionId: string
   /** `physicalName` підписки — база імені тригера, призначена раз. */
   name: string
-  sources: { schema: string; table: string }[]
+  /**
+   * `whenChanged` — фізичні колонки цього джерела (поліморфна пара — обидві):
+   * те саме логічне ім'я в різних джерелах може мати різні фізичні імена.
+   * Порожньо — будь-який запис.
+   */
+  sources: { schema: string; table: string; whenChanged: string[] }[]
   event: SubscriptionEvent
-  /** Фізичні колонки, однакові в кожному джерелі (стадія 4); порожньо — будь-який запис. */
-  whenChanged: string[]
   handler: QualifiedName
   /** Текст для `COMMENT ON TRIGGER`: коментар прийнятого тригера стає ним. */
   title?: LocalizedString
@@ -645,8 +648,8 @@ function eventSubscriptionContracts(
     .flatMap((object): EventSubscriptionContract[] => {
       const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
       if (spec === undefined) return []
-      // Модель без помилок: кожне джерело — таблиця, кожне ім'я `whenChanged`
-      // має в усіх джерелах ті самі колонки (стадія 4), тож беремо першого.
+      // Модель без помилок: кожне джерело — таблиця, і кожне ім'я
+      // `whenChanged` є в кожному джерелі (стадія 4).
       const tables = [
         ...subscriptionSourceTables(
           object,
@@ -664,11 +667,14 @@ function eventSubscriptionContracts(
         {
           subscriptionId: object.id ?? "",
           name: must(data.physicalName),
-          sources: tables.map(({ schema, table }) => ({ schema, table })),
+          sources: tables.map(({ schema, table, columns }) => ({
+            schema,
+            table,
+            whenChanged: (spec.whenChanged ?? []).flatMap((name) => [
+              ...must(columns.get(name)),
+            ]),
+          })),
           event: spec.event,
-          whenChanged: (spec.whenChanged ?? []).flatMap((name) => [
-            ...must(tables[0]!.columns.get(name)),
-          ]),
           handler: {
             schema: spec.handler.schema ?? project.defaultSchema,
             name: spec.handler.name,
