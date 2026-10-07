@@ -95,7 +95,7 @@ function object(
     ...overrides,
   }
   // Мітку ставимо, лише коли вид її очікує: прийнята таблиця без єдиного
-  // uuid-ключа з міткою дала б `identity.kind-label-not-allowed`.
+  // uuid-ключа з міткою дала б `identity.kind-label-retained`.
   const labelled = expectsKindLabel(kind as MetadataKind, base)
   return {
     ...(labelled ? { kindLabel: toSnakeCase(name) } : {}),

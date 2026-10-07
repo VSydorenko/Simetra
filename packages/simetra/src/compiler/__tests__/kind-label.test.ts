@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
-import { catalog, customTable, document, metaFiles, project } from "./helpers"
+import {
+  attribute,
+  catalog,
+  customTable,
+  document,
+  metaFiles,
+  project,
+  uuid,
+} from "./helpers"
 
 function codes(result: CompileResult) {
   return result.diagnostics.map((d) => [d.code, d.file, d.pointer])
@@ -59,7 +67,7 @@ describe("stage 2: kind label", () => {
     ])
   })
 
-  it("a custom table without a single uuid key takes no label", async () => {
+  it("a new custom table without a uuid key keeps its label with a warning", async () => {
     const result = await compile(
       metaFiles({
         "project.meta.json": project(),
@@ -68,7 +76,86 @@ describe("stage 2: kind label", () => {
     )
     expect(codes(result)).toEqual([
       [
-        "identity.kind-label-not-allowed",
+        "identity.kind-label-retained",
+        "custom-tables/T/T.meta.json",
+        "/kindLabel",
+      ],
+    ])
+    expect(result.diagnostics[0]!.severity).toBe("warning")
+    expect(result.ok).toBe(true)
+  })
+
+  it("a table that lost its uuid key keeps the label: a warning, not a change", async () => {
+    const before = customTable("T", { id: uuid(1), ...uuidKey })
+    const after = { ...before }
+    delete (after as Record<string, unknown>).primaryKey
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "custom-tables/T/T.meta.json": after,
+      }),
+      {
+        baseline: metaFiles({
+          "project.meta.json": project(),
+          "custom-tables/T/T.meta.json": before,
+        }),
+      }
+    )
+    expect(before.kindLabel).toBe("t")
+    expect(codes(result)).toEqual([
+      [
+        "identity.kind-label-retained",
+        "custom-tables/T/T.meta.json",
+        "/kindLabel",
+      ],
+    ])
+    expect(result.ok).toBe(true)
+  })
+
+  it("a polymorphic reference to a table with a retained label is an error", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "custom-tables/T/T.meta.json": customTable("T", { kindLabel: "t" }),
+        "catalogs/Holder/Holder.meta.json": catalog("Holder", {
+          attributes: [
+            attribute("target", {
+              type: "Ref",
+              allowedTypes: [
+                { kind: "CustomTable", name: "T" },
+                { kind: "Catalog", name: "Holder" },
+              ],
+            }),
+          ],
+        }),
+      })
+    )
+    expect(result.ok).toBe(false)
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code)
+    ).toEqual(["reference.custom-table-key"])
+  })
+
+  it("removing a retained label is an assigned-once change", async () => {
+    const before = customTable("T", { id: uuid(1), kindLabel: "t" })
+    const after = withoutLabel(before)
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "custom-tables/T/T.meta.json": after,
+      }),
+      {
+        baseline: metaFiles({
+          "project.meta.json": project(),
+          "custom-tables/T/T.meta.json": before,
+        }),
+      }
+    )
+    expect(codes(result)).toEqual([
+      [
+        "identity.assigned-once-changed",
         "custom-tables/T/T.meta.json",
         "/kindLabel",
       ],

@@ -26,7 +26,7 @@ export const COMPILER_RULES = [
   "identity.id-duplicate",
   "identity.physical-name-missing",
   "identity.kind-label-missing",
-  "identity.kind-label-not-allowed",
+  "identity.kind-label-retained",
   "identity.kind-label-duplicate",
   "identity.assigned-once-changed",
   "identity.name-duplicate",
@@ -155,7 +155,10 @@ export interface Diagnostic {
  * запит мовчки не потрапив би в рухи — але файл від цього не ламається.
  * Запит рухів без ORDER BY дає рухи в недетермінованому порядку, але лишається
  * чинним. Ім'я, яке `fix` не призначив через ліміт довжини, — пояснення до
- * помилки `identity.physical-name-missing`, а не друга помилка.
+ * помилки `identity.physical-name-missing`, а не друга помилка. Мітка
+ * прийнятої таблиці, що втратила uuid-ключ, — зарезервоване значення: вона
+ * могла лягти в збережені поліморфні пари й права, тож лишається, а ціллю
+ * поліморфних посилань таблицю не робить.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -163,6 +166,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "file.movements-marker-indented",
   "posting.query-order-missing",
   "operation.physical-name-too-long",
+  "identity.kind-label-retained",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

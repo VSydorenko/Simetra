@@ -315,15 +315,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: () => "Немає kindLabel",
     hint: FIX_PHYSICAL_NAMES,
   },
-  "identity.kind-label-not-allowed": {
+  "identity.kind-label-retained": {
     en: () =>
-      "kindLabel is allowed only for a kind with a label; a custom table needs a single uuid primary key",
+      "Without a single-column uuid key this object can no longer be a target of polymorphic references; kindLabel is kept because it is assigned once",
     uk: () =>
-      "kindLabel дозволена лише виду з міткою; прийнятій таблиці — лише з єдиним uuid-ключем",
-    hint: {
-      en: "Remove kindLabel from this file.",
-      uk: "Приберіть kindLabel з цього файлу.",
-    },
+      "Без одноколонкового uuid-ключа цей об'єкт більше не може бути ціллю поліморфних посилань; kindLabel лишається, бо призначається раз",
   },
   "identity.kind-label-duplicate": {
     en: (p) => `kindLabel "${p.label}" is already used in ${p.firstFile}`,

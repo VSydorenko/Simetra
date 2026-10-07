@@ -10,6 +10,7 @@
 
 import {
   KIND_REGISTRY,
+  expectsKindLabel,
   chooseConstraintName,
   makeObjectName,
   monthColumn,
@@ -1419,10 +1420,13 @@ function physicalNameOf(object: ParsedObject): string {
 /**
  * Мітка виду — значення дискримінатора поліморфної пари. Ціль без мітки
  * (регістр у `allowedTypes`) помилка стадії 4, а не стадії 3: тут значення
- * просто не потрапляє в CHECK.
+ * просто не потрапляє в CHECK. Збережена мітка прийнятої таблиці без
+ * uuid-ключа — зарезервоване значення, а не дискримінатор, тож її теж немає.
  */
 export function kindLabelOf(object: ParsedObject): string | undefined {
-  return (object.data as { kindLabel?: string }).kindLabel
+  return expectsKindLabel(object.kind, object.data)
+    ? (object.data as { kindLabel?: string }).kindLabel
+    : undefined
 }
 
 function labelsOf(object: ParsedObject): string[] {

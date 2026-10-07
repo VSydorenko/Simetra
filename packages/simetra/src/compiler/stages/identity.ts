@@ -115,9 +115,11 @@ export function checkIdentity(
       }
       return
     }
+    // Мітку призначено раз: таблиця, що втратила uuid-ключ, її лишає як
+    // зарезервоване значення (не дискримінатор), а не стирає.
     if (!expected) {
       diagnostics.push(
-        diagnostic("identity.kind-label-not-allowed", object.file, "/kindLabel")
+        diagnostic("identity.kind-label-retained", object.file, "/kindLabel")
       )
       return
     }
