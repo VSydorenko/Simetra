@@ -237,9 +237,10 @@ describe("cli adapter", () => {
       { _: [dir], schemas: "app", "database-provider": "mysql" },
       noStdin,
       process.cwd(),
-      {}
+      { SIMETRA_DATABASE_URL: "postgres://u:p@h/db" }
     )
     expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("project.database.provider")
   })
 
   it("a database tool without a connection exits 2 naming the chosen variable", async () => {

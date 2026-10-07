@@ -7,6 +7,7 @@ export type Severity = "error" | "warning"
 export const COMPILER_RULES = [
   "project.missing",
   "project.timezone-unknown",
+  "project.database-required",
   "file.unknown-path",
   "file.orphan",
   "file.invalid-json",

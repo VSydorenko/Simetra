@@ -412,10 +412,18 @@ describe("projectSchema", () => {
 
   it("rejects an unknown locale or attribute case", () => {
     expect(() =>
-      projectSchema.parse({ name: "D", defaultLocale: "de" })
+      projectSchema.parse({
+        name: "D",
+        database: { provider: "supabase" },
+        defaultLocale: "de",
+      })
     ).toThrow()
     expect(() =>
-      projectSchema.parse({ name: "D", naming: { attributeCase: "kebab" } })
+      projectSchema.parse({
+        name: "D",
+        database: { provider: "supabase" },
+        naming: { attributeCase: "kebab" },
+      })
     ).toThrow()
   })
 
@@ -424,6 +432,18 @@ describe("projectSchema", () => {
       expect(projectSchema.shape).not.toHaveProperty(key)
     }
     expect(projectSchema.shape).not.toHaveProperty("schemaVersion")
+  })
+
+  it("database holds the provider only, never deployment identifiers", () => {
+    expect(Object.keys(projectSchema.shape.database.shape)).toEqual([
+      "provider",
+    ])
+    expect(
+      projectSchema.safeParse({
+        name: "D",
+        database: { provider: "supabase", url: "x" },
+      }).success
+    ).toBe(false)
   })
 })
 
