@@ -144,7 +144,9 @@ Supabase (Postgres 17).
 - [ ] **Step 1: Звірити якори плану**
 
 Run: `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-07-promotion-1-adoption-privileges.md`
-Expected: усі шляхи й символи плану існують. Зниклий якір — стоп і звіт.
+Expected: усі шляхи й символи плану існують, крім файлів із позначкою
+`Create` (зараз — `provider-preset.db.test.ts`). Інший зниклий якір — стоп і
+звіт.
 
 - [ ] **Step 2: Базова лінія тестів**
 
@@ -161,6 +163,7 @@ Expected: зелено. Червоне до початку роботи — ст
 - Delete: `packages/simetra/src/model/schemas/sql-reserved-words.ts`
 - Delete: `packages/simetra/src/model/__tests__/sql-reserved-words.test.ts`
 - Modify: `packages/simetra/src/model/schemas/index.ts` (прибрати реекспорт)
+- Modify: `packages/simetra/src/model/physical/index.ts` (експортувати `isSqlReservedWord`)
 - Modify: `packages/simetra/src/model/physical/assign.ts`
 - Modify: `packages/simetra/src/compiler/stages/integrity.ts` (імпорт)
 - Modify: `packages/simetra/src/compiler/messages.ts` (`physical.reserved-word`)
@@ -171,8 +174,9 @@ Expected: зелено. Червоне до початку роботи — ст
 **Interfaces:**
 - Produces: `isSqlReservedWord(name: string): boolean` у
   `model/physical/pg-keywords.ts` — `PG_QUOTED_KEYWORDS.has(name.toLowerCase())`;
-  експорт `simetra/model` — той самий, що й зараз для функції; константа
-  `SQL_RESERVED_WORDS` зникає.
+  у `simetra/model` функція лишається через `model/physical/index.ts` (цей
+  індекс зараз `pg-keywords` не експортує); константа `SQL_RESERVED_WORDS`
+  зникає.
 
 - [ ] **Step 1: Failing tests**
 
@@ -509,12 +513,16 @@ it("provider seed grants the public preset and creates base extensions", () => {
 })
 ```
 
-- [ ] **Step 2: Failing contract test** (`provider-preset.db.test.ts`, проти стеку)
+- [ ] **Step 2: Контрактна передумова** (`provider-preset.db.test.ts`, проти стеку)
+
+Це не red/green-доказ виправлення (його дає крок 3), а фіксація образу
+провайдера: тест зелений, щойно з'являються константи.
 
 ```ts
 it("the stack's public schema ACL equals the preset", async () => {
   // SELECT grantee, privilege_type FROM aclexplode((SELECT nspacl FROM pg_namespace WHERE nspname='public'))
-  // без власника схеми (pg_database_owner) — множина {PUBLIC, postgres, anon,
+  // без фактичного власника схеми (grantee = nspowner, читати з каталогу,
+  // а не вшивати pg_database_owner) — множина {PUBLIC, postgres, anon,
   // authenticated, service_role} × USAGE дорівнює SUPABASE_PUBLIC_SCHEMA_GRANTS
 })
 it("the stack has every base extension in its schema", async () => {
@@ -557,9 +565,9 @@ Run: `pnpm --filter simetra test engine-provider`,
 `pnpm --filter simetra test:db provider-preset`,
 `pnpm --filter @simetra/designer test:db engine-scope`
 Expected: FAIL — немає експортів; у тіні `public` лише `=U`; є
-`invalid_routine_body` і попередження pg-topo. Контрактний тест стеку —
-PASS одразу після появи констант (він фіксує образ); якщо FAIL — стоп і
-звіт (образ не той, що зафіксовано 2026-10-07).
+`invalid_routine_body` і попередження pg-topo. Контрактна передумова
+(крок 2) — PASS одразу після появи констант; якщо FAIL — стоп і звіт (образ
+не той, що зафіксовано 2026-10-07).
 
 - [ ] **Step 5: Implement** константи, `renderProviderSeed` і зміну
 `planAndRun` за Interfaces. Коментар у `supabase.ts` до
@@ -597,6 +605,14 @@ git commit -m "feat(schema): пресет провайдера — базови�
 **Interfaces:**
 - Consumes: `SUPABASE_PUBLIC_SCHEMA_GRANTS` (задача 4); `grantTarget`, `aclStatement`.
 - Produces:
+  - `aclStatement(fact, defaults, issues): string[]` (було `string`): пара, у
+    якої є і зайві, і відсутні відносно очікуваного привілеї, дає два
+    оператори — `REVOKE <missing>` і `GRANT <extra>` (ідентичності різні,
+    порядок дає задача 2); інші гілки — як зараз, один оператор або
+    порожньо. Правила опції гранту (`grantable`) не змінюються. Виклик у
+    `unitStatements` розгортає масив. Зараз така пара мовчки дає один
+    `GRANT` усіх прав і зберігає відкликане (діє й для ADP таблиць, не лише
+    для пресету).
   - `expectedPrivileges` для ACL-факту з ціллю `{ kind: "schema", name: "public" }`
     і отримувачем із пресету повертає привілеї пресету (`grantable: []`).
   - `revokedPresetStatements(view: FactBase, schema: StableId): string[]` —
@@ -628,7 +644,25 @@ git commit -m "feat(schema): пресет провайдера — базови�
     "service_role=U",
   ],
 },
+{
+  name: "a preset grantee with one privilege swapped for another",
+  schemas: ["public"],
+  sql: `
+    REVOKE USAGE ON SCHEMA public FROM anon;
+    GRANT CREATE ON SCHEMA public TO anon;
+    CREATE TABLE public.memo (id uuid PRIMARY KEY);
+  `,
+  property: (shape) =>
+    shape.acls
+      .find((a) => a.object === "n:public")
+      ?.acl.map((item) => item.split("/")[0])
+      .filter((item) => item.startsWith("anon=")),
+  expected: ["anon=C"],
+},
 ```
+
+Друга фікстура — змішана пара (бракує `USAGE`, зайвий `CREATE`): один
+`GRANT` її не виражає.
 
 Ціль фікстур — тінь, засіяна пресетом (задача 4), тож відкликання
 `PUBLIC` — саме відмінність від пресету.
@@ -646,8 +680,9 @@ stack» → дві перевірки: (а) бажаний стан без гр�
 - [ ] **Step 3: Run — FAIL**
 
 Run: `pnpm --filter @simetra/designer test:db round-trip engine-scope`
-Expected: фікстура FAIL — у тіні знову `=U` (одиниці `REVOKE` немає), а
-зайвий `GRANT USAGE … TO anon` тощо з'являється в одиницях.
+Expected: перша фікстура FAIL — у тіні знову `=U` (одиниці `REVOKE`
+немає), а зайвий `GRANT USAGE … TO anon` тощо з'являється в одиницях; друга
+— FAIL з `anon=UC` у тіні.
 
 - [ ] **Step 4: Implement** за Interfaces. Коментар — чому окрема функція:
 для схем двигун маркера відкликаного `PUBLIC` не дає (у `acldefault('n')`
@@ -656,8 +691,9 @@ Expected: фікстура FAIL — у тіні знову `=U` (одиниці 
 - [ ] **Step 5: Run — PASS**
 
 Run: `pnpm --filter @simetra/designer test:db` і `pnpm --filter @simetra/designer test`
-Expected: PASS; обидві одиниці схеми лягають окремими файлами в
-`sql/public/` без `introspect.path-collision`.
+Expected: PASS; одиниці схеми лягають окремими файлами в `sql/public/` без
+`introspect.path-collision`; наявні фікстури (зокрема «grant on a table»,
+«default privileges») зелені.
 
 - [ ] **Step 6: Commit**
 
