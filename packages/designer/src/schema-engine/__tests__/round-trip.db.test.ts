@@ -194,6 +194,39 @@ describe("class fixtures survive the round trip", () => {
   }
 })
 
+describe("the builtin PUBLIC privilege beside a schema ADP", () => {
+  it("builtin PUBLIC execute beside a schema ADP writes no PUBLIC grant", async () => {
+    // Маркер двигуна для рядка ADP схеми не означає відкликання: вбудований
+    // `EXECUTE` для `PUBLIC` не має ставати ні `GRANT`, ні `REVOKE`
+    const scope = scopeOf(["app"])
+    await inTarget(
+      `CREATE SCHEMA app;
+       ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon;
+       CREATE FUNCTION app.open() RETURNS int LANGUAGE sql AS $$ select 1 $$;`,
+      scope,
+      async (target) => {
+        const result = await roundTripOf(target, scope, {
+          defaultSchema: "app",
+          attributeCase: "snake_case",
+        })
+        // Лише гранти на об'єкти: рядок ADP схеми з синтезованим маркером
+        // `PUBLIC` — окрема одиниця `defaultPrivileges`, поза цією перевіркою
+        expect(
+          result.extracted.model.units.filter(
+            (u) => u.class === "grant" && /\bPUBLIC\b/i.test(u.sql)
+          )
+        ).toEqual([])
+        const publicAcl = (shape: OracleShape) =>
+          shape.acls
+            .find((a) => a.object === "f:app.open()")
+            ?.acl.filter((item) => item.startsWith("="))
+        expect(publicAcl(result.target)).toEqual(["=X/postgres"])
+        expect(publicAcl(result.shadow)).toEqual(["=X/postgres"])
+      }
+    )
+  })
+})
+
 describe("a role of the application's own", () => {
   it("is assumed, and a grant to it survives the round trip", async () => {
     // Роль — інфраструктура кластера (спека §6.9): межа керує грантами на неї,

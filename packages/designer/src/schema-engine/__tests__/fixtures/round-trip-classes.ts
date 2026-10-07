@@ -98,6 +98,22 @@ export async function readOracle(
         AND NOT EXISTS (SELECT 1 FROM pg_depend d
                          WHERE d.objid = p.oid AND d.deptype = 'e')
      UNION ALL
+     SELECT 'T:' || n.nspname || '.' || t.typname,
+            COALESCE(t.typacl, acldefault('T'::"char", t.typowner))::text[]
+       FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE n.nspname = ANY($1)
+        AND (t.typtype IN ('e', 'd', 'r')
+             OR (t.typtype = 'c' AND EXISTS (
+                   SELECT 1 FROM pg_class tc
+                    WHERE tc.oid = t.typrelid AND tc.relkind = 'c')))
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                         WHERE d.objid = t.oid AND d.deptype = 'e')
+     UNION ALL
+     SELECT 'n:' || n.nspname,
+            COALESCE(n.nspacl, acldefault('n'::"char", n.nspowner))::text[]
+       FROM pg_namespace n
+      WHERE n.nspname = ANY($1)
+     UNION ALL
      SELECT 'c:' || n.nspname || '.' || c.relname || '.' || a.attname,
             a.attacl::text[]
        FROM pg_attribute a
@@ -567,5 +583,39 @@ export const CLASS_FIXTURES: ClassFixture[] = [
       ["app", "orders", ["id", "total"]],
       ["reports", "orders", ["id", "day"]],
     ],
+  },
+  {
+    name: "PUBLIC execute revoked by a global ADP beside a schema ADP",
+    schemas: ["app"],
+    sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon;
+      CREATE FUNCTION app.secret() RETURNS int LANGUAGE sql AS $$ select 1 $$;
+    `,
+    property: (shape) =>
+      shape.acls
+        .find((a) => a.object === "f:app.secret()")
+        ?.acl.filter((item) => item.startsWith("=")),
+    expected: [],
+  },
+  {
+    name: "PUBLIC usage revoked on a type and a domain beside a schema ADP",
+    schemas: ["app"],
+    sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT USAGE ON TYPES TO anon;
+      CREATE TYPE app.mood AS ENUM ('ok', 'bad');
+      CREATE DOMAIN app.positive AS int CHECK (VALUE > 0);
+      REVOKE USAGE ON TYPE app.mood FROM PUBLIC;
+      REVOKE USAGE ON DOMAIN app.positive FROM PUBLIC;
+    `,
+    property: (shape) =>
+      shape.acls
+        .filter(
+          (a) => a.object === "T:app.mood" || a.object === "T:app.positive"
+        )
+        .map((a) => a.acl.filter((item) => item.startsWith("="))),
+    expected: [[], []],
   },
 ]

@@ -193,12 +193,19 @@ function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
   const adp = defaultsFor(id.target, defaults).find(
     (e) => e.grantee === id.grantee
   )
-  if (adp !== undefined) return adp
-  const publicDefault =
+  const builtin =
     id.grantee === "PUBLIC" ? PUBLIC_DEFAULT[id.target.kind] : undefined
+  // Об'єднання, а не вибір: ADP схеми лише додає права, а для рядка схеми
+  // двигун синтезує порожній маркер `PUBLIC`, який відкликання не означає —
+  // «або-або» губило б вбудований `EXECUTE`/`USAGE` і явний `REVOKE … FROM PUBLIC`
   return {
-    privileges: publicDefault === undefined ? [] : [publicDefault],
-    grantable: [],
+    privileges: [
+      ...new Set([
+        ...(builtin === undefined ? [] : [builtin]),
+        ...(adp?.privileges ?? []),
+      ]),
+    ],
+    grantable: adp?.grantable ?? [],
   }
 }
 
