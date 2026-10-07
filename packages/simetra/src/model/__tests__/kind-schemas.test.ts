@@ -105,6 +105,7 @@ describe("tabularSectionSchema", () => {
       title: { en: "Items" },
       standardAttributeOverrides: {},
       attributes: [],
+      indexes: [],
     })
   })
 

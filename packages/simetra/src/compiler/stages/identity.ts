@@ -426,6 +426,7 @@ export function checkIdentity(
     checkBalanceControl(object, references, diagnostics)
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
+      resolveIndexAttributes(object, style, references)
     }
     resolveMovementBlocks(object, objects, brokenNames, references, diagnostics)
   }
@@ -822,6 +823,72 @@ function resolveMovementBlocks(
       line: block.line,
     })
   }
+}
+
+/**
+ * Імена в `indexes` резолвляться в UUID реквізитів своєї таблиці (чи в
+ * синтетичний id стандартного), щоб перейменування реквізиту переписало й
+ * індекс. Невідоме ім'я тут мовчить: звітує стадія 4
+ * (`index.attribute-unknown`), як і про повтор.
+ */
+function resolveIndexAttributes(
+  object: ParsedObject,
+  style: AttributeCase,
+  references: ResolvedReference[]
+) {
+  const def = KIND_REGISTRY[object.kind]
+  if (def.compositeIndexes !== true || object.id === undefined) return
+  type Declared = { attributes: (string | { name: string })[] }[]
+  const data = object.data as Record<string, unknown> & {
+    tabularSections?: (Element & { indexes?: Declared })[]
+  }
+  const ownerId = object.id
+  const resolve = (
+    declared: Declared | undefined,
+    table: NameTable,
+    prefix: string
+  ) => {
+    ;(declared ?? []).forEach((index, i) => {
+      index.attributes.forEach((part, j) => {
+        const name = typeof part === "string" ? part : part.name
+        const id = table.get(name)
+        if (id === undefined) return
+        const at = `${prefix}/indexes/${i}/attributes/${j}`
+        references.push({
+          from: {
+            file: object.file,
+            pointer: typeof part === "string" ? at : `${at}/name`,
+            objectId: ownerId,
+          },
+          to: { kind: "Element", id },
+          role: "index.attribute",
+        })
+      })
+    })
+  }
+  resolve(
+    data.indexes as Declared | undefined,
+    nameTable(
+      ownerId,
+      def.columnFields.flatMap((field) => (data[field] as Element[]) ?? []),
+      def.standardColumns(data),
+      style
+    ),
+    ""
+  )
+  ;(data.tabularSections ?? []).forEach((section, index) => {
+    if (typeof section.id !== "string") return
+    resolve(
+      section.indexes,
+      nameTable(
+        section.id,
+        (section.attributes as Element[]) ?? [],
+        def.tabularSectionColumns?.(data) ?? [],
+        style
+      ),
+      `/tabularSections/${index}`
+    )
+  })
 }
 
 /**

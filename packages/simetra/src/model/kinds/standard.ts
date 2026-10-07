@@ -104,6 +104,8 @@ export type ReferenceRole =
   | "posting.docField"
   | "posting.rowField"
   | "posting.tabularSection"
+  /** Реквізит свого рядка в `indexes` об'єкта чи його табличної частини. */
+  | "index.attribute"
   | "posting.movementsBlock"
   | "customTable.foreignKey"
   | "customTable.foreignKeyTarget"
@@ -254,6 +256,11 @@ export interface KindDefinition {
    * контракт оболонки.
    */
   requiredOnPost?: true
+  /**
+   * Вид приймає складені індекси `indexes` (свої й табличних частин): поле є
+   * в схемі лише там, де є цей факт, а компілятор читає його звідси.
+   */
+  compositeIndexes?: true
   /**
    * RLS таблиць виду 1С (спека П2 §8.3): дані застосунку за замовчуванням
    * закриті, доступ відкривають політики. Немає — без RLS; прийнята таблиця

@@ -24,6 +24,7 @@ import {
   type Attribute,
   type CatalogAttribute,
   type AttributeCase,
+  type CompositeIndexes,
   type CustomTable,
   type CustomTableColumn,
   type Deferrable,
@@ -220,7 +221,19 @@ interface PendingTable {
    * Похідні індекси виду (колонки в порядку ключа) — стають індексами після
    * всіх ключів таблиці, бо покриття перевіряється за ними всіма.
    */
-  derivedIndexes: string[][]
+  derivedIndexes: DerivedIndex[]
+}
+
+/** Елемент ключа похідного індексу; `order` лише там, де не `asc`. */
+interface DerivedIndexKey {
+  column: string
+  order?: "desc"
+}
+type DerivedIndex = DerivedIndexKey[]
+
+/** Індекс з усіх колонок за зростанням — вид похідних індексів без порядку. */
+function ascending(columns: readonly string[]): DerivedIndex {
+  return columns.map((column) => ({ column }))
 }
 
 /**
@@ -367,6 +380,9 @@ class SnapshotBuilder {
     )
     const dimensionFields: Field[] = []
     const requiredHeader: Field[] = []
+    // Логічне ім'я → поле таблиці для `indexes`: стандартні реквізити в обох
+    // стилях імен і власні реквізити.
+    const named = this.standardFieldsByName(standardFields)
     // Колонкові поля й їхній порядок дає реєстр: у регістра — виміри,
     // ресурси, реквізити, у решти видів — лише реквізити.
     for (const field of def.columnFields) {
@@ -395,6 +411,7 @@ class SnapshotBuilder {
           built.notNull = true
         }
         fields.push(built)
+        named.set(attribute.name, built)
         this.declare(
           object.file,
           `/${field}/${index}/physicalName`,
@@ -403,6 +420,15 @@ class SnapshotBuilder {
       })
     }
     const columnsOf = this.addTable(main, fields, object.file, "/physicalName")
+    if (def.compositeIndexes === true) {
+      this.addCompositeIndexes(
+        main,
+        (data as { indexes: CompositeIndexes }).indexes,
+        named,
+        columnsOf,
+        scope
+      )
+    }
     if (requiredHeader.length > 0) {
       const posted = [...standardFields].find(
         ([column]) => column.logicalName === "posted"
@@ -501,18 +527,22 @@ class SnapshotBuilder {
               own: false,
               partitioned: true,
             }
-      const sectionFields = this.withScope(rowColumns, rowScope, (column) =>
-        this.standardField(column, object, main, rowScope)
-      )
+      const rowStandard = new Map<StandardColumnDef, Field>()
+      const sectionFields = this.withScope(rowColumns, rowScope, (column) => {
+        const field = this.standardField(column, object, main, rowScope)
+        rowStandard.set(column, field)
+        return field
+      })
+      const sectionNamed = this.standardFieldsByName(rowStandard)
       section.attributes.forEach((attribute, i) => {
-        sectionFields.push(
-          this.attributeField(
-            attribute,
-            `${pointer}/attributes/${i}`,
-            rowScope,
-            def.requiredOnPost === true
-          )
+        const built = this.attributeField(
+          attribute,
+          `${pointer}/attributes/${i}`,
+          rowScope,
+          def.requiredOnPost === true
         )
+        sectionFields.push(built)
+        sectionNamed.set(attribute.name, built)
         this.declare(
           object.file,
           `${pointer}/attributes/${i}/physicalName`,
@@ -520,13 +550,64 @@ class SnapshotBuilder {
         )
       })
       this.declare(object.file, `${pointer}/physicalName`, table.name)
-      this.addTable(
+      const sectionColumns = this.addTable(
         table,
         sectionFields,
         object.file,
         `${pointer}/physicalName`
       )
+      if (def.compositeIndexes === true) {
+        this.addCompositeIndexes(
+          table,
+          section.indexes,
+          sectionNamed,
+          sectionColumns,
+          rowScope
+        )
+      }
     })
+  }
+
+  private standardFieldsByName(
+    standardFields: ReadonlyMap<StandardColumnDef, Field>
+  ): Map<string, Field> {
+    const named = new Map<string, Field>()
+    for (const [column, field] of standardFields) {
+      named.set(column.logicalName, field)
+      named.set(standardLogicalName(column, this.style), field)
+    }
+    return named
+  }
+
+  /**
+   * Складені індекси `indexes`: носій скоупу йде першим (запити об'єкта
+   * завжди несуть предикат скоупу), поліморфний реквізит дає обидві колонки
+   * пари. Невідоме чи повторене ім'я відсіяла стадія 4, тут їх немає. Покриті
+   * префіксом іншого індексу чи ключа відкидає materializeIndexes.
+   */
+  private addCompositeIndexes(
+    table: PendingTable,
+    declared: CompositeIndexes,
+    named: ReadonlyMap<string, Field>,
+    columnsOf: ReadonlyMap<Field, string[]>,
+    scope: TableScope | undefined
+  ): void {
+    for (const index of declared) {
+      const keys: DerivedIndex = index.attributes.flatMap((part) => {
+        const [name, order] =
+          typeof part === "string" ? [part, undefined] : [part.name, part.order]
+        return (columnsOf.get(named.get(name)!) ?? []).map((column) => ({
+          column,
+          ...(order !== undefined ? { order } : {}),
+        }))
+      })
+      const lead = indexWithin(scope).indexWithin
+      table.derivedIndexes.push(
+        lead === undefined || keys[0]?.column === lead
+          ? keys
+          : [{ column: lead }, ...keys]
+      )
+    }
   }
 
   /**
@@ -566,13 +647,10 @@ class SnapshotBuilder {
       table.uniques.push({ columns: recordKey, nullsNotDistinct: true })
     }
     if (keys.movementIndexes && period.length > 0) {
-      table.derivedIndexes.push([
-        ...carrier,
-        ...dimensions,
-        ...period,
-        ...recorder,
-      ])
-      table.derivedIndexes.push([...carrier, ...period])
+      table.derivedIndexes.push(
+        ascending([...carrier, ...dimensions, ...period, ...recorder])
+      )
+      table.derivedIndexes.push(ascending([...carrier, ...period]))
     }
   }
 
@@ -1759,10 +1837,10 @@ function addField(table: PendingTable, field: Field): string[] {
     })
     // FK сам індексу не має, а перевірка при DELETE/UPDATE ключа цілі шукає
     // рядки рівно за колонками FK — тож індекс саме на них, у порядку FK.
-    table.derivedIndexes.push(columns)
+    table.derivedIndexes.push(ascending(columns))
   } else if (field.indexed) {
     // Пошуковий індекс; `indexed` посилання вже задоволено індексом його FK.
-    table.derivedIndexes.push(withinScope(names, field.indexWithin))
+    table.derivedIndexes.push(ascending(withinScope(names, field.indexWithin)))
   }
   return names
 }
@@ -1773,25 +1851,31 @@ function addField(table: PendingTable, field: Field): string[] {
  * того ключа вже обслуговує такі пошуки. З однакових лишається перший.
  */
 function materializeIndexes(table: PendingTable): void {
+  // Ключі PK і UNIQUE-обмежень зростають; унікальні індекси (вираз, умова)
+  // сюди не входять: вони не обслуговують пошук за префіксом колонок, тож
+  // не покривають нічого й самі не відкидаються.
   const keys = [
     ...(table.primaryKey !== undefined ? [table.primaryKey.columns] : []),
     ...table.uniques.map((unique) => unique.columns),
-  ]
+  ].map(ascending)
   const { derivedIndexes: candidates } = table
-  candidates.forEach((columns, i) => {
+  candidates.forEach((index, i) => {
     const covered =
-      keys.some((key) => startsWith(key, columns)) ||
+      keys.some((key) => startsWith(key, index)) ||
       candidates.some(
         (other, j) =>
           j !== i &&
-          startsWith(other, columns) &&
-          (other.length > columns.length || j < i)
+          startsWith(other, index) &&
+          (other.length > index.length || j < i)
       )
     if (covered) return
     table.indexes.push({
       unique: false,
       method: "btree",
-      keys: columns.map((column) => ({ column })),
+      keys: index.map(({ column, order }) => ({
+        column,
+        ...(order !== undefined ? { order } : {}),
+      })),
       include: [],
       nullsNotDistinct: false,
     })
@@ -1805,8 +1889,15 @@ function withinScope(columns: string[], scope: string | undefined): string[] {
     : [scope, ...columns]
 }
 
-function startsWith(key: readonly string[], prefix: readonly string[]) {
-  return prefix.length <= key.length && prefix.every((c, i) => key[i] === c)
+/** Префікс збігається і колонкою, і порядком: `b DESC` не те саме, що `b`. */
+function startsWith(key: DerivedIndex, prefix: DerivedIndex) {
+  return (
+    prefix.length <= key.length &&
+    prefix.every(
+      (part, i) =>
+        key[i]!.column === part.column && key[i]!.order === part.order
+    )
+  )
 }
 
 /**

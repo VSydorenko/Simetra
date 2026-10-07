@@ -1111,4 +1111,52 @@ describe("stage 4: integrity", () => {
       ])
     })
   })
+
+  describe("index.attribute-unknown and index.attribute-duplicate", () => {
+    it("reports an unknown or repeated name in an object and a section index", async () => {
+      const result = await compileWith({
+        "documents/D/D.meta.json": document("D", {
+          attributes: [attribute("qty", { type: "Integer" })],
+          indexes: [
+            { attributes: ["qty", "missing"] },
+            { attributes: ["qty", { name: "qty", order: "desc" }] },
+            { attributes: ["deletionMark", "deletionMark"] },
+          ],
+          tabularSections: [
+            {
+              id: uuid(741),
+              name: "lines",
+              physicalName: "d_lines",
+              attributes: [attribute("price", { type: "Integer" })],
+              indexes: [{ attributes: ["qty"] }, { attributes: ["price"] }],
+            },
+          ],
+        }),
+      })
+      expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+        ["index.attribute-unknown", "/indexes/0/attributes/1"],
+        ["index.attribute-duplicate", "/indexes/1/attributes/1"],
+        ["index.attribute-duplicate", "/indexes/2/attributes/1"],
+        [
+          "index.attribute-unknown",
+          "/tabularSections/0/indexes/0/attributes/0",
+        ],
+      ])
+    })
+
+    it("accepts a standard attribute in the project case and rejects indexes on other kinds", async () => {
+      const result = await compileWith({
+        "project.meta.json": project({
+          naming: { attributeCase: "snake_case" },
+        }),
+        "catalogs/A/A.meta.json": catalog("A", {
+          indexes: [{ attributes: ["deletion_mark", "predefinedName"] }],
+        }),
+        "enumerations/E/E.meta.json": { ...ENUMERATION, indexes: [] },
+      })
+      expect(result.diagnostics.map((d) => [d.code, d.pointer])).toEqual([
+        ["file.unknown-key", "/indexes"],
+      ])
+    })
+  })
 })

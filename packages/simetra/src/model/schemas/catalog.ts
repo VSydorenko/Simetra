@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import { catalogAttributeSchema } from "./attribute"
+import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
 import {
   metadataIdSchema,
@@ -99,6 +100,9 @@ export const catalogSchema = z.strictObject({
     .array(tabularSectionSchema)
     .default([])
     .meta({ description: "Tabular sections of the catalog." }),
+  indexes: compositeIndexesSchema.meta({
+    description: "Composite indexes over the catalog attributes.",
+  }),
 })
 
 export type Catalog = z.infer<typeof catalogSchema>

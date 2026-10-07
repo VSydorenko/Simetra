@@ -64,6 +64,22 @@ describe("KIND_REGISTRY", () => {
     expect(flagged).toEqual(["Document"])
   })
 
+  it("the indexes field exists exactly in kinds with the compositeIndexes fact", () => {
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      const shape = (def.schema as z.ZodObject).shape
+      // `indexes` прийнятої таблиці — фізичні індекси, а не складені індекси
+      // реквізитів: інший зміст при тому самому ключі.
+      if (!def.declared) {
+        expect("indexes" in shape, kind).toBe(def.compositeIndexes === true)
+      }
+      // Секція несе `indexes` разом із видом: без факту вона не має б читача.
+      if (def.tabularSectionColumns !== undefined) {
+        expect(def.compositeIndexes, kind).toBe(true)
+      }
+    }
+  })
+
   it("materialization and write pattern follow the kind", () => {
     expect(KIND_REGISTRY.Catalog.writePattern).toBe("optimistic")
     expect(KIND_REGISTRY.Document.writePattern).toBe("server")

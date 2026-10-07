@@ -14,6 +14,10 @@ export {
 } from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export {
+  compositeIndexesSchema,
+  type CompositeIndexes,
+} from "./composite-index"
+export {
   objectHeaderShape,
   standardAttributeOverridesSchema,
 } from "./object-header"

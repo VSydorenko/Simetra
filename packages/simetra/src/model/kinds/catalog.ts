@@ -116,6 +116,7 @@ export const catalogKind: KindDefinition = {
   schema: catalogSchema,
   keyOrder: keyOrderOf(catalogSchema),
   referenceable: true,
+  compositeIndexes: true,
   writePattern: "optimistic",
   actions: ["read", "create", "update", "markDeletion", "delete"],
   materializes: "table",

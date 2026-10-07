@@ -1454,3 +1454,144 @@ describe("stage 3: physical snapshot", () => {
     })
   })
 })
+
+describe("stage 3: composite indexes", () => {
+  const counterparty = (extra: Record<string, unknown> = {}) =>
+    attribute("counterparty", {
+      physicalName: "counterparty_id",
+      type: "Ref",
+      ref: { kind: "Catalog", name: "Counterparty" },
+      ...extra,
+    })
+  const scopedSale = (overrides: Record<string, unknown>) => ({
+    "project.meta.json": scopedProject(),
+    "catalogs/Organization/Organization.meta.json": organization(),
+    "catalogs/Counterparty/Counterparty.meta.json": catalog("Counterparty", {
+      scope: "org",
+    }),
+    "documents/Sale/Sale.meta.json": document("Sale", {
+      scope: "org",
+      ...overrides,
+    }),
+  })
+
+  it("composite index puts the scope carrier first and keeps desc order", async () => {
+    const physical = await compileWith(
+      scopedSale({
+        attributes: [counterparty()],
+        indexes: [
+          { attributes: ["counterparty", { name: "date", order: "desc" }] },
+        ],
+      })
+    )
+    expect(tableOf(physical, "sale").indexes).toContainEqual(
+      expect.objectContaining({
+        unique: false,
+        keys: [
+          { column: "org_id" },
+          { column: "counterparty_id" },
+          { column: "date", order: "desc" },
+        ],
+      })
+    )
+  })
+
+  it("tabular section index uses the section's own attributes", async () => {
+    const physical = await compileWith(
+      scopedSale({
+        tabularSections: [
+          {
+            id: uuid(11),
+            name: "goods",
+            physicalName: "sale_goods",
+            attributes: [attribute("qty", { type: "Integer" })],
+            indexes: [
+              { attributes: ["qty", { name: "lineNumber", order: "desc" }] },
+            ],
+          },
+        ],
+      })
+    )
+    expect(tableOf(physical, "sale_goods").indexes).toContainEqual(
+      expect.objectContaining({
+        unique: false,
+        keys: [
+          { column: "org_id" },
+          { column: "qty" },
+          { column: "line_number", order: "desc" },
+        ],
+      })
+    )
+  })
+
+  it("a polymorphic attribute gives both pair columns", async () => {
+    const physical = await compileWith({
+      "catalogs/A/A.meta.json": catalog("A"),
+      "catalogs/B/B.meta.json": catalog("B"),
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        attributes: [
+          attribute("subject", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "Catalog", name: "A" },
+              { kind: "Catalog", name: "B" },
+            ],
+          }),
+        ],
+        indexes: [{ attributes: ["subject"] }],
+      }),
+    })
+    const keys = tableOf(physical, "sale").indexes.map((i) =>
+      i.keys.map((k) => ("column" in k ? k.column : k.expression))
+    )
+    expect(keys).toContainEqual(["subject_type", "subject_id"])
+  })
+
+  it("an index covered by a longer one is dropped, a different order is not covered", async () => {
+    const physical = await compileWith({
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        attributes: [attribute("qty", { type: "Integer" })],
+        indexes: [
+          { attributes: ["qty"] },
+          { attributes: ["qty", "date"] },
+          { attributes: ["qty", { name: "date", order: "desc" }] },
+        ],
+      }),
+    })
+    const keys = tableOf(physical, "sale")
+      .indexes.filter(
+        (i) => !i.unique && "column" in i.keys[0]! && i.keys[0].column === "qty"
+      )
+      .map((i) => JSON.stringify(i.keys))
+    expect(keys).toEqual([
+      JSON.stringify([{ column: "qty" }, { column: "date" }]),
+      JSON.stringify([{ column: "qty" }, { column: "date", order: "desc" }]),
+    ])
+  })
+
+  it("an expression or partial unique index never covers a composite index", async () => {
+    const physical = await compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [
+          attribute("sku", {
+            type: "String",
+            length: 20,
+            unique: "ignoreCase",
+          }),
+        ],
+        indexes: [{ attributes: ["sku"] }, { attributes: ["predefinedName"] }],
+      }),
+    })
+    const indexes = tableOf(physical, "item").indexes
+    expect(indexes.filter((i) => i.unique)).toHaveLength(2)
+    expect(indexes).toContainEqual(
+      expect.objectContaining({ unique: false, keys: [{ column: "sku" }] })
+    )
+    expect(indexes).toContainEqual(
+      expect.objectContaining({
+        unique: false,
+        keys: [{ column: "predefined_name" }],
+      })
+    )
+  })
+})

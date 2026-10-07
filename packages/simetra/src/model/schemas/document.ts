@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { attributeSchema } from "./attribute"
+import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
 import { physicalNameSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
@@ -133,6 +134,9 @@ export const documentSchema = z.strictObject({
     .array(tabularSectionSchema)
     .default([])
     .meta({ description: "Tabular sections of the document." }),
+  indexes: compositeIndexesSchema.meta({
+    description: "Composite indexes over the document attributes.",
+  }),
 })
 
 export type Document = z.infer<typeof documentSchema>

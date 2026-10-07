@@ -229,6 +229,10 @@ export function kitchenSink(): Map<string, string> {
         uniqueWithin: "owner",
       },
     ],
+    // Складені індекси довідника й його секції.
+    indexes: [
+      { attributes: ["itemSku", { name: "itemRating", order: "desc" }] },
+    ],
     tabularSections: [
       {
         id: id(),
@@ -237,6 +241,9 @@ export function kitchenSink(): Map<string, string> {
         title: text("barcodes"),
         standardAttributeOverrides: overrides("lineNumber"),
         attributes: attributes("barcode"),
+        indexes: [
+          { attributes: ["barcodeSku", { name: "lineNumber", order: "desc" }] },
+        ],
       },
     ],
   }
@@ -281,6 +288,7 @@ export function kitchenSink(): Map<string, string> {
     ],
     standardAttributeOverrides: overrides("number"),
     attributes: attributes("sale"),
+    indexes: [{ attributes: ["saleSku", { name: "date", order: "desc" }] }],
     tabularSections: [
       {
         id: id(),
@@ -306,6 +314,7 @@ export function kitchenSink(): Map<string, string> {
           },
           ...attributes("goods"),
         ],
+        indexes: [{ attributes: ["item", { name: "qty", order: "desc" }] }],
       },
     ],
   }

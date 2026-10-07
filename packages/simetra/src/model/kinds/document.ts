@@ -114,6 +114,7 @@ export const documentKind: KindDefinition = {
   schema: documentSchema,
   keyOrder: keyOrderOf(documentSchema),
   referenceable: true,
+  compositeIndexes: true,
   writePattern: "server",
   actions: [
     "read",

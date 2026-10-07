@@ -194,6 +194,7 @@ export function checkIntegrity(
   diagnostics.push(...checkDefaultValues(references, byId))
   diagnostics.push(...checkStandardOverrides(objects, style))
   diagnostics.push(...checkUniqueWithinPlace(objects))
+  diagnostics.push(...checkCompositeIndexes(objects, style))
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
 
@@ -462,6 +463,105 @@ function checkUniqueWithinPlace(
             `/${field}/${index}/uniqueWithin`,
             { kind: object.kind, name: object.name, within }
           )
+        )
+      })
+    }
+  }
+  return found
+}
+
+/**
+ * Імена в `indexes` — реквізити й стандартні реквізити власної таблиці:
+ * об'єкта або рядка секції (для секції — за `tabularSectionColumns`). Ім'я
+ * стандартного реквізиту приймається канонічним чи в стилі проєкту. Один
+ * реквізит двічі в індексі не додає нічого до ключа.
+ */
+function checkCompositeIndexes(
+  objects: readonly ParsedObject[],
+  style: AttributeCase
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  type Declared = {
+    attributes: readonly (string | { name: string })[]
+  }[]
+  for (const object of objects) {
+    const def = KIND_REGISTRY[object.kind]
+    if (def.compositeIndexes !== true) continue
+    const data = object.data as {
+      attributes?: { name: string }[]
+      indexes?: Declared
+      tabularSections?: {
+        name: string
+        attributes: { name: string }[]
+        indexes?: Declared
+      }[]
+    }
+    const report = (
+      declared: Declared | undefined,
+      known: ReadonlyMap<string, string>,
+      prefix: string,
+      section?: string
+    ) => {
+      ;(declared ?? []).forEach((index, i) => {
+        const seen = new Set<string>()
+        index.attributes.forEach((part, j) => {
+          const name = typeof part === "string" ? part : part.name
+          const pointer = `${prefix}/indexes/${i}/attributes/${j}`
+          const params = {
+            kind: object.kind,
+            object: object.name,
+            name,
+            ...(section === undefined ? {} : { section }),
+          }
+          const canonical = known.get(name)
+          if (canonical === undefined) {
+            found.push(
+              diagnostic(
+                "index.attribute-unknown",
+                object.file,
+                pointer,
+                params
+              )
+            )
+          } else if (seen.has(canonical)) {
+            found.push(
+              diagnostic(
+                "index.attribute-duplicate",
+                object.file,
+                pointer,
+                params
+              )
+            )
+          }
+          seen.add(canonical ?? name)
+        })
+      })
+    }
+    // Стандартний реквізит — під канонічним ім'ям (обидва стилі ведуть до
+    // однієї колонки), власний — під своїм.
+    const known = (
+      columns: readonly StandardColumnDef[],
+      attributes: readonly { name: string }[] | undefined
+    ) =>
+      new Map([
+        ...standardOverrideNames(columns, style),
+        ...(attributes ?? []).map(
+          (attribute) => [attribute.name, attribute.name] as const
+        ),
+      ])
+    report(
+      data.indexes,
+      known(def.standardColumns(object.data), data.attributes),
+      ""
+    )
+    if (def.tabularSectionColumns !== undefined) {
+      const rowColumns = def.tabularSectionColumns(object.data)
+      ;(data.tabularSections ?? []).forEach((section, index) => {
+        report(
+          section.indexes,
+          known(rowColumns, section.attributes),
+          `/tabularSections/${index}`,
+          section.name
         )
       })
     }

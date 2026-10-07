@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { compositeIndexesSchema } from "./composite-index"
 import { localizedStringSchema } from "./localized-string"
 import { attributeSchema } from "./attribute"
 import {
@@ -22,6 +23,9 @@ export const tabularSectionSchema = z
       .array(attributeSchema)
       .default([])
       .meta({ description: "Attributes of the section rows." }),
+    indexes: compositeIndexesSchema.meta({
+      description: "Composite indexes over the section rows.",
+    }),
   })
   .meta({ description: "Tabular section: a list of rows owned by an object." })
 

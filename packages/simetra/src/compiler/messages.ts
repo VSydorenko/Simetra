@@ -736,6 +736,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "owner потребує власників довідника, parent — ієрархії.",
     },
   },
+  "index.attribute-unknown": {
+    en: (p) =>
+      p.section === undefined
+        ? `${p.kind} "${p.object}" has no attribute "${p.name}" for an index`
+        : `Tabular section "${p.section}" of ${p.kind} "${p.object}" has no attribute "${p.name}" for an index`,
+    uk: (p) =>
+      p.section === undefined
+        ? `${p.kind} "${p.object}" не має реквізиту "${p.name}" для індексу`
+        : `Таблична частина "${p.section}" виду ${p.kind} "${p.object}" не має реквізиту "${p.name}" для індексу`,
+    hint: {
+      en: "An index names attributes and standard attributes of its own table (the object, or the section rows).",
+      uk: "Індекс називає реквізити й стандартні реквізити власної таблиці (об'єкта чи рядків секції).",
+    },
+  },
+  "index.attribute-duplicate": {
+    en: (p) => `Attribute "${p.name}" is repeated in one index`,
+    uk: (p) => `Реквізит "${p.name}" повторюється в одному індексі`,
+    hint: {
+      en: "List each attribute once per index; a second occurrence adds nothing to the key.",
+      uk: "Вказуйте кожен реквізит в індексі один раз: друге входження нічого не додає до ключа.",
+    },
+  },
   "catalog.owner-kind": {
     en: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
     uk: (p) => `${p.kind} "${p.name}" не може бути власником довідника`,
