@@ -554,6 +554,19 @@ describe("creation order", () => {
     ])
   })
 
+  it("a table revoke goes before a grant on the same table", async () => {
+    // Табличний REVOKE знімає й колонкові гранти: навпаки грант пропав би
+    const list = await order({
+      [CODES]: codes([column("body", {})]),
+      [MISC]:
+        "GRANT SELECT (body) ON public.codes TO anon;\n" +
+        "REVOKE ALL ON public.codes FROM anon;",
+    })
+    const revoke = list.find((id) => id.startsWith("grant:revoke:"))!
+    const grant = list.find((id) => id.startsWith("grant:grant:"))!
+    expectBefore(list, [[revoke, grant]])
+  })
+
   it("same-named unqualified views, sequences and materialized views in two schemas are not a cycle", async () => {
     // Створюване ім'я — не посилання: інакше голе `v` резолвилося б в обидві
     // схеми й дало взаємні ребра.

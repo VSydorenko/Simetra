@@ -445,6 +445,21 @@ describe("reverseGenerate", () => {
     expect(sql).toContain("REPLICA IDENTITY FULL")
   })
 
+  it("a table revoke precedes a column grant in the sidecar", async () => {
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units(
+          "GRANT SELECT (id) ON TABLE app.note TO anon;\n" +
+            "REVOKE ALL ON TABLE app.note FROM anon;"
+        ),
+      }),
+      options()
+    )
+    const sql = result.files.get("custom-tables/Note/Note.sql")!
+    expect(sql.indexOf("REVOKE")).toBeLessThan(sql.indexOf("GRANT"))
+  })
+
   it("orders in two schemas get distinct names", async () => {
     const result = await reverseGenerate(
       model({ tables: [table("app", "orders"), table("reports", "orders")] }),

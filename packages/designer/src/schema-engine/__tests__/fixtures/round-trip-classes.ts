@@ -415,6 +415,20 @@ export const CLASS_FIXTURES: ClassFixture[] = [
     },
   },
   {
+    name: "column grant after a table revoke",
+    schemas: ["app"],
+    sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO anon;
+      CREATE TABLE app.ledger (id uuid PRIMARY KEY, amount numeric);
+      REVOKE ALL ON app.ledger FROM anon;
+      GRANT SELECT (amount) ON app.ledger TO anon;
+    `,
+    property: (shape) =>
+      shape.acls.find((a) => a.object === "c:app.ledger.amount")?.acl,
+    expected: ["anon=r/postgres"],
+  },
+  {
     name: "comments",
     schemas: ["app"],
     sql: `

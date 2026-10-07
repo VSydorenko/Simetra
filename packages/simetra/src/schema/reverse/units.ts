@@ -256,6 +256,10 @@ export function layoutUnits(
     const index = SIDECAR_ORDER.indexOf(u.class)
     return index === -1 ? SIDECAR_ORDER.length : index
   }
+  // Табличний REVOKE знімає й колонкові гранти: у межах одного файлу він
+  // раніше за GRANT, інакше повторне виконання тіні втратило б грант.
+  const revokeFirst = (u: CatalogUnit) =>
+    u.class === "grant" && u.identity.startsWith("grant:revoke:") ? 0 : 1
   const files = new Map<string, string>()
   const diagnostics: Diagnostic[] = []
   // Файлова система без регістру злила б `F.sql` і `f.sql` в один файл.
@@ -266,6 +270,7 @@ export function layoutUnits(
     const ordered = [...list].sort(
       (a, b) =>
         rank(a) - rank(b) ||
+        revokeFirst(a) - revokeFirst(b) ||
         (a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0)
     )
     const clash = folded.get(path.toLowerCase())

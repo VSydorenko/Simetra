@@ -139,6 +139,8 @@ class Graph {
     ["type", new Map()],
   ])
   private readonly categories = new Map<string, Category>()
+  /** Одиниці `REVOKE` за ціллю: `<objtype>|<ім'я об'єкта>`. */
+  private readonly revokes = new Map<string, string[]>()
 
   constructor(
     physical: PhysicalSnapshot,
@@ -163,6 +165,7 @@ class Graph {
     for (const unit of units) this.addUnit(unit)
 
     for (const table of physical.tables) this.tableEdges(table)
+    for (const unit of units) this.collectRevokes(unit)
     for (const unit of units) this.unitEdges(unit)
     for (const unit of units)
       if (unit.class === "defaultPrivileges") this.defaultPrivilegeEdges(unit)
@@ -332,6 +335,15 @@ class Graph {
     const grant = tree.GrantStmt
     if (grant?.targtype === "ACL_TARGET_OBJECT") {
       this.edges(label, targetReferences(String(grant.objtype), grant.objects))
+      // Табличний REVOKE знімає й колонкові гранти, тож грант на тій самій
+      // цілі, виконаний раніше за нього, пропав би.
+      if (grant.is_grant === true) {
+        for (const key of grantTargets(unit, grant)) {
+          for (const revoke of this.revokes.get(key) ?? []) {
+            this.edge(label, revoke)
+          }
+        }
+      }
     }
     if (grant?.targtype === "ACL_TARGET_ALL_IN_SCHEMA") {
       const category = ALL_IN_SCHEMA[String(grant.objtype)] ?? "none"
@@ -342,6 +354,17 @@ class Graph {
           this.edge(label, other)
         }
       }
+    }
+  }
+
+  private collectRevokes(unit: SqlUnit): void {
+    const grant = (unit.tree as Record<string, Record<string, unknown>>)
+      .GrantStmt
+    if (grant?.targtype !== "ACL_TARGET_OBJECT" || grant.is_grant === true) {
+      return
+    }
+    for (const key of grantTargets(unit, grant)) {
+      this.revokes.set(key, [...(this.revokes.get(key) ?? []), unit.identity])
     }
   }
 
@@ -641,6 +664,32 @@ function targetReferences(objtype: string, nodes: unknown): Reference[] {
       },
     ]
   })
+}
+
+/**
+ * Цілі `GRANT`/`REVOKE` на об'єкти: `<objtype>|<ім'я>`. Ім'я бере вже
+ * нормалізоване ім'я одиниці (кваліфіковане схемою), а не текст дерева;
+ * колонковий грант має ціль-таблицю, бо колонки лежать у привілеях.
+ */
+function grantTargets(unit: SqlUnit, grant: Record<string, unknown>): string[] {
+  const objtype = String(grant.objtype)
+  const names: string[] = []
+  let depth = 0
+  let quoted = false
+  let current = ""
+  for (const char of unit.name) {
+    if (char === '"') quoted = !quoted
+    if (!quoted && char === "(") depth += 1
+    if (!quoted && char === ")") depth -= 1
+    if (!quoted && depth === 0 && char === ",") {
+      names.push(current)
+      current = ""
+    } else {
+      current += char
+    }
+  }
+  names.push(current)
+  return names.map((name) => `${objtype}|${name}`)
 }
 
 function cteNames(withClause: unknown): string[] {
