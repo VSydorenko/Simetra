@@ -14,7 +14,7 @@ import {
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
-import type { ModelStageResult } from "./stages/model"
+import { kindLabelOf, type ModelStageResult } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
 import type { ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
@@ -597,7 +597,7 @@ function numberingContracts(
       return [
         {
           objectId: object.id ?? "",
-          kindLabel: must((object.data as { kindLabel?: string }).kindLabel),
+          kindLabel: must(kindLabelOf(object)),
           column: columnOf(spec.column),
           ...(spec.periodColumn !== undefined
             ? { periodColumn: columnOf(spec.periodColumn) }

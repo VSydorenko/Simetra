@@ -164,24 +164,12 @@ function injectBaitEverywhere(stage1: FilesStageResult): string[] {
 }
 
 /**
- * Загальні обходи форми даних: перебирають усі ключі об'єкта, шукаючи свої
- * (стадія 4 шукає поліморфні множини `allowedTypes`, власників і реєстраторів
- * за ключем на будь-якій глибині). Їхній перелік ключів — не споживання:
- * зарахувати його означало б зарахувати будь-яке поле. Перейменування обходу
- * без правки тут ловить контрольний тест нижче (поле-приманку обхід
- * «прочитав» би).
- */
-const SHAPE_WALKERS = ["polymorphicSets"]
-
-/**
  * Proxy, що записує кожне прочитане поле як `<корінь>.<поле>.<підполе>`:
  * індекс масиву в шлях не входить, тож елементи масиву пишуть шлях самого
  * масиву. Методи прототипу (`map`, `length`) не є полями й не пишуться.
  *
- * Читання переліком (`Object.entries`, spread — обидва беруть дескриптор
- * ключа перед `get`) зараховується, якщо його робить не загальний обхід
- * форми: spread реквізиту з подальшим читанням копії за іменем — справжнє
- * споживання, якого Proxy інакше не побачить.
+ * Spread реквізиту з подальшим читанням копії за іменем — справжнє
+ * споживання: spread іде через `get`, тож Proxy його бачить.
  */
 function recorder(reads: Set<string>) {
   const proxies = new WeakMap<object, unknown>()
@@ -189,12 +177,7 @@ function recorder(reads: Set<string>) {
     if (typeof value !== "object" || value === null) return value
     const cached = proxies.get(value)
     if (cached !== undefined) return cached as T
-    const described = new Set<string>()
     const proxy = new Proxy(value, {
-      getOwnPropertyDescriptor(target, key) {
-        if (typeof key === "string") described.add(key)
-        return Reflect.getOwnPropertyDescriptor(target, key)
-      },
       get(target, key) {
         const child: unknown = Reflect.get(target, key)
         if (typeof key !== "string" || !Object.hasOwn(target, key)) {
@@ -204,10 +187,7 @@ function recorder(reads: Set<string>) {
           return key === "length" ? child : wrap(child, path)
         }
         const childPath = `${path}.${key}`
-        const enumerated = described.delete(key)
-        if (!recording.paused && !(enumerated && byShapeWalker())) {
-          reads.add(childPath)
-        }
+        if (!recording.paused) reads.add(childPath)
         return wrap(child, childPath)
       },
     })
@@ -215,23 +195,6 @@ function recorder(reads: Set<string>) {
     return proxy
   }
   return wrap
-}
-
-/**
- * Стек без ліміту: V8 тримає лише `Error.stackTraceLimit` кадрів (типово 10),
- * а рекурсивний `visit` обходу на третьому рівні вкладеності витісняє кадр
- * обходу зі стеку — і його перелік ключів зараховувався б як читання.
- */
-function byShapeWalker(): boolean {
-  const limit = Error.stackTraceLimit
-  Error.stackTraceLimit = Infinity
-  let stack: string
-  try {
-    stack = new Error().stack ?? ""
-  } finally {
-    Error.stackTraceLimit = limit
-  }
-  return SHAPE_WALKERS.some((name) => stack.includes(`at ${name} `))
 }
 
 /** Прочитаний шлях покриває шлях схеми, де `*` — будь-який ключ запису. */

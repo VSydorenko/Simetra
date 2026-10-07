@@ -25,7 +25,7 @@ import {
 } from "./sql/units"
 import { objectKey, type ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
-import { registerSingletonOf } from "./stages/model"
+import { kindLabelOf, registerSingletonOf } from "./stages/model"
 
 /**
  * Обгортки запитів рухів (спека П2 §7): блок запиту — як є, рухи
@@ -591,10 +591,7 @@ function findAttribute(document: ParsedObject, id: string): Attribute {
 
 /** Стадія 4 гарантує мітку в цілі поліморфної пари; відсутність — дефект. */
 function kindLabel(object: ParsedObject): string {
-  return must(
-    (object.data as { kindLabel?: string }).kindLabel,
-    `kindLabel of ${object.name}`
-  )
+  return must(kindLabelOf(object), `kindLabel of ${object.name}`)
 }
 
 function qualified(table: PhysicalTable): string {
