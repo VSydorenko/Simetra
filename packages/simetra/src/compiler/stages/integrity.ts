@@ -91,9 +91,6 @@ const ENUM_DEFAULT_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "constant.enumDefault",
 ])
 
-/** Поліморфні множини: їхні цілі розрізняє `physicalName` (спека §5). */
-const POLYMORPHIC_SETS = ["allowedTypes", "owners", "recorderTypes"] as const
-
 /**
  * Стадія 4, частина П2 (спека §3, §4, §5, §8.2): придатність цілей
  * посилань і унікальність фізичних імен. Першим вважається те, що раніше за
@@ -187,28 +184,6 @@ export function checkIntegrity(
     }
   }
   diagnostics.push(...relationNameCollisions(model))
-
-  for (const object of objects) {
-    for (const { pointer, refs } of polymorphicSets(object.data)) {
-      const seen = new Set<string>()
-      refs.forEach((ref, index) => {
-        const target = byKey.get(objectKey(ref.kind, ref.name))
-        if (target === undefined) return
-        const name = (target.data as { physicalName: string }).physicalName
-        if (seen.has(name)) {
-          diagnostics.push(
-            diagnostic(
-              "physical.discriminator-duplicate",
-              object.file,
-              `${pointer}/${index}`,
-              { name }
-            )
-          )
-        }
-        seen.add(name)
-      })
-    }
-  }
 
   for (const object of objects) {
     if (isDeclaredTable(object)) {
@@ -460,35 +435,6 @@ function checkStandardOverrides(
 
 function byteLength(name: string): number {
   return new TextEncoder().encode(name).length
-}
-
-/**
- * Поліморфні множини об'єкта з pointer на масив. Обхід іде за формою даних,
- * бо ключі множин однакові в усіх видах: `allowedTypes` — у реквізитів,
- * вимірів, ресурсів, колонок і самої константи, списки власників і
- * реєстраторів — на верхньому рівні.
- */
-function polymorphicSets(
-  data: unknown
-): { pointer: string; refs: MetadataRef[] }[] {
-  const found: { pointer: string; refs: MetadataRef[] }[] = []
-  const visit = (value: unknown, pointer: string) => {
-    if (Array.isArray(value)) {
-      value.forEach((item, index) => visit(item, `${pointer}/${index}`))
-      return
-    }
-    if (typeof value !== "object" || value === null) return
-    for (const [key, child] of Object.entries(value)) {
-      const at = `${pointer}/${key}`
-      if ((POLYMORPHIC_SETS as readonly string[]).includes(key)) {
-        if (Array.isArray(child)) found.push({ pointer: at, refs: child })
-      } else {
-        visit(child, at)
-      }
-    }
-  }
-  visit(data, "")
-  return found
 }
 
 /**

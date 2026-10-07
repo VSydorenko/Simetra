@@ -444,7 +444,9 @@ describe("stage 3: physical snapshot", () => {
 
   it("polymorphic reference", async () => {
     const physical = await compileWith({
-      "catalogs/Contract/Contract.meta.json": catalog("Contract"),
+      "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+        kindLabel: "agreement",
+      }),
       "catalogs/Counterparty/Counterparty.meta.json": catalog("Counterparty"),
       "catalogs/Note/Note.meta.json": catalog("Note", {
         attributes: [
@@ -465,6 +467,7 @@ describe("stage 3: physical snapshot", () => {
       {
         name: "subject_type",
         type: "text",
+        collation: { name: "C" },
         notNull: true,
         origin: { elementId: uuid(20) },
       },
@@ -478,10 +481,36 @@ describe("stage 3: physical snapshot", () => {
     expect(note.checks).toEqual([
       {
         name: "note_subject_type_check",
-        expression: "subject_type IN ('contract', 'counterparty')",
+        expression: "subject_type IN ('agreement', 'counterparty')",
       },
     ])
     expect(note.foreignKeys).toEqual([])
+  })
+
+  it("polymorphic target without a label", async () => {
+    // Перерахування в allowedTypes: мітки в нього немає, стадія 3 не падає, а
+    // значення просто відсутнє в CHECK; помилку дає стадія 4.
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/A/A.meta.json": catalog("A"),
+        "enumerations/Status/Status.meta.json": enumeration("Status", ["open"]),
+        "catalogs/Note/Note.meta.json": catalog("Note", {
+          attributes: [
+            attribute("subject", {
+              type: "Ref",
+              allowedTypes: [
+                { kind: "Catalog", name: "A" },
+                { kind: "Enumeration", name: "Status" },
+              ],
+            }),
+          ],
+        }),
+      })
+    )
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "reference.polymorphic-target-kind"
+    )
   })
 
   it("standard polymorphic pairs: catalog owners and register recorder", async () => {
@@ -555,6 +584,11 @@ describe("stage 3: physical snapshot", () => {
       "stock_recorder_type_check",
     ])
     expect(stock.checks[1]!.expression).toBe("recorder_type IN ('sale')")
+    expect(
+      stock.columns.find((c) => c.name === "recorder_type")!.collation
+    ).toEqual({
+      name: "C",
+    })
     expect(stock.indexes.map((i) => i.name)).toEqual([
       "stock_period_recorder_type_recorder_id_idx",
     ])

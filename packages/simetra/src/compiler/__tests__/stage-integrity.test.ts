@@ -487,59 +487,6 @@ describe("stage 4: integrity", () => {
     ])
   })
 
-  it("two polymorphic targets with the same physicalName in different schemas", async () => {
-    const result = await compileWith({
-      "catalogs/A/A.meta.json": catalog("A", { physicalName: "party" }),
-      "catalogs/B/B.meta.json": catalog("B", {
-        physicalName: "party",
-        schema: "crm",
-      }),
-      [NOTE]: catalog("Note", {
-        attributes: [
-          attribute("subject", {
-            type: "Ref",
-            allowedTypes: [
-              { kind: "Catalog", name: "A" },
-              { kind: "Catalog", name: "B" },
-            ],
-          }),
-        ],
-      }),
-    })
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        code: "physical.discriminator-duplicate",
-        severity: "error",
-        file: NOTE,
-        pointer: "/attributes/0/allowedTypes/1",
-      }),
-    ])
-  })
-
-  it("register recorders with the same physicalName", async () => {
-    const result = await compileWith({
-      "documents/A/A.meta.json": document("A", { physicalName: "doc" }),
-      "documents/B/B.meta.json": document("B", {
-        physicalName: "doc",
-        schema: "other",
-      }),
-      "information-registers/Log/Log.meta.json": register("Log", {
-        writeMode: "RecorderSubordinate",
-        recorderTypes: [
-          { kind: "Document", name: "A" },
-          { kind: "Document", name: "B" },
-        ],
-      }),
-    })
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        code: "physical.discriminator-duplicate",
-        file: "information-registers/Log/Log.meta.json",
-        pointer: "/recorderTypes/1",
-      }),
-    ])
-  })
-
   it("reserved word is a warning", async () => {
     const result = await compileWith({
       "catalogs/Order/Order.meta.json": catalog("Order", {

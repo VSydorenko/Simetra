@@ -169,7 +169,7 @@ ALTER TABLE accepted.service_accrual_performers ENABLE ROW LEVEL SECURITY;
 CREATE TABLE accepted.performer_settlements (
   org_id uuid NOT NULL REFERENCES accepted.organization (id) ON DELETE RESTRICT,
   period timestamptz NOT NULL,
-  recorder_type text NOT NULL CHECK (recorder_type IN ('service_accrual')),
+  recorder_type text COLLATE "C" NOT NULL CHECK (recorder_type IN ('service_accrual')),
   recorder_id uuid NOT NULL,
   line_number integer NOT NULL,
   active boolean NOT NULL DEFAULT true,
@@ -187,7 +187,7 @@ ALTER TABLE accepted.performer_settlements ENABLE ROW LEVEL SECURITY;
 CREATE TABLE accepted.income_expenses (
   org_id uuid NOT NULL REFERENCES accepted.organization (id) ON DELETE RESTRICT,
   period timestamptz NOT NULL,
-  recorder_type text NOT NULL CHECK (recorder_type IN ('service_accrual')),
+  recorder_type text COLLATE "C" NOT NULL CHECK (recorder_type IN ('service_accrual')),
   recorder_id uuid NOT NULL,
   line_number integer NOT NULL,
   active boolean NOT NULL DEFAULT true,

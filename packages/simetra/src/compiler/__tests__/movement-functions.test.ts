@@ -469,6 +469,18 @@ describe("movement query functions", () => {
       )
     })
 
+    it("discriminator is the kind label, not the physical name", async () => {
+      const entries = polymorphic(fields("row.item"))
+      const item = entries["catalogs/Item/Item.meta.json"] as {
+        kindLabel: string
+      }
+      item.kindLabel = "goods_item"
+      const [unit] = await units(entries)
+      expect(unit!.sql).toContain(
+        "'goods_item' AS source_type, r.item_id AS source_id"
+      )
+    })
+
     it("polymorphic value copies the pair", async () => {
       const [unit] = await units(polymorphic(fields("row.origin")))
       expect(unit!.sql).toContain(

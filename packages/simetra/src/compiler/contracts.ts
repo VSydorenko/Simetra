@@ -26,6 +26,8 @@ export interface QualifiedName {
 
 export interface PostingContract {
   documentId: string
+  /** Мітка виду документа — значення, яке оболонка пише в `recorder_type`. */
+  kindLabel: string
   /** `<doc>_save(p_document jsonb, p_expected_version bigint)`. */
   save: QualifiedName
   /** `<doc>_post(p_id uuid)`. */
@@ -66,11 +68,18 @@ export interface VirtualTableContract {
    * реєстратором — `(period, recorder_type, recorder_id) <
    * (p_at, p_recorder_type, p_recorder_id)`, строго до документа. `p_at` NULL —
    * поточні `totals`. SQL — П3.
+   *
+   * Параметр `p_recorder_type` лишається `text`: Postgres не приймає COLLATE
+   * в оголошенні аргумента функції. Колонка `recorder_type` має колляцію "C",
+   * тож порівняння моменту SQL П3 пише `p_recorder_type COLLATE "C"` явно
+   * (`momentCollation`), інакше порядок міток залежав би від колляції бази.
    */
   parameters: {
     name: "p_at" | "p_from" | "p_to" | "p_recorder_type" | "p_recorder_id"
     type: string
   }[]
+  /** Є рівно тоді, коли серед параметрів є `p_recorder_type`. */
+  momentCollation?: "C"
   columns: VirtualTableColumn[]
 }
 
@@ -145,6 +154,8 @@ export interface PredefinedContract {
  */
 export interface NumberingContract {
   objectId: string
+  /** Мітка виду об'єкта — ключ лічильника. */
+  kindLabel: string
   /** Фізичне ім'я колонки номера чи коду. */
   column: string
   /** Фізичне ім'я генерованої колонки періоду. */
@@ -465,6 +476,7 @@ export function buildContracts(
         .sort((a, b) => compareStrings(a.registerId, b.registerId))
       return {
         documentId: document.id ?? "",
+        kindLabel: must((document.data as { kindLabel?: string }).kindLabel),
         ...postingFunctions(table),
         requiredOnPost: requiredOnPost(document, physical, requiredChecks),
         immutability: immutability(document, table, physical),
@@ -585,6 +597,7 @@ function numberingContracts(
       return [
         {
           objectId: object.id ?? "",
+          kindLabel: must((object.data as { kindLabel?: string }).kindLabel),
           column: columnOf(spec.column),
           ...(spec.periodColumn !== undefined
             ? { periodColumn: columnOf(spec.periodColumn) }
@@ -787,6 +800,11 @@ function registerContract(
       kind,
       function: virtualTableFunction(table, kind),
       parameters: VIRTUAL_TABLES[kind].parameters,
+      ...(VIRTUAL_TABLES[kind].parameters.some(
+        (p) => p.name === "p_recorder_type"
+      )
+        ? { momentCollation: "C" as const }
+        : {}),
       columns: columnsFor[kind],
     })),
     ...(maintainsDerivedTables(keys)

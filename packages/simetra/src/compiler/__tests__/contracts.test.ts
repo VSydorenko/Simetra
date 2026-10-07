@@ -68,6 +68,7 @@ describe("numbering contract", () => {
     })
     expect(numbering).toContainEqual({
       objectId: "00000000-0000-4000-8000-000000000d01",
+      kindLabel: "invoice",
       column: "number",
       periodColumn: "number_period",
       type: "String",
@@ -93,6 +94,7 @@ describe("numbering contract", () => {
     expect(numbering).toEqual([
       {
         objectId: "00000000-0000-4000-8000-000000000a01",
+        kindLabel: "a",
         column: "code",
         type: "String",
         length: 9,
@@ -191,6 +193,11 @@ describe("posting and register contracts", () => {
     expect(sale!.movements[0]!.registerId).toBe(
       sale!.balanceControl[0]!.registerId
     )
+  })
+
+  it("posting contract carries the kind label of the document", async () => {
+    const { posting } = await contracts(withStock({}))
+    expect(posting[0]!.kindLabel).toBe("sale")
   })
 
   it("posting contract names save", async () => {
@@ -303,6 +310,7 @@ describe("posting and register contracts", () => {
           { name: "p_recorder_type", type: "text" },
           { name: "p_recorder_id", type: "uuid" },
         ],
+        momentCollation: "C",
         columns: [
           { name: "item_id", type: "uuid" },
           {

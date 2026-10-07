@@ -83,8 +83,6 @@ export function movementWrapperName(
   return makeObjectName(document.name, register.name, "movements")
 }
 
-type Element = Record<string, unknown>
-
 class Context {
   private readonly byId: Map<string, ParsedObject>
   private readonly byKey: Map<string, ParsedObject>
@@ -433,7 +431,7 @@ class Context {
 
   /**
    * Дискримінатор пари для одноцільового посилання в поліморфному полі:
-   * фізичне ім'я цілі, як його пише стадія 3 у `<поле>_type`. Одноцільове
+   * мітка виду цілі, як її пише стадія 3 у `<поле>_type`. Одноцільове
    * значення — лише голе поле (посилання без операцій), тож ціль — його `ref`.
    */
   private discriminator(
@@ -452,12 +450,12 @@ class Context {
     )
     const hash = id.indexOf("#")
     // Стандартні посилання з однією ціллю — ключ документа й власник рядка.
-    if (hash >= 0) return literal(physicalName(document))
+    if (hash >= 0) return literal(kindLabel(document))
     const attribute = findAttribute(document, id)
     const target = this.byKey.get(
       objectKey(attribute.ref!.kind, attribute.ref!.name)
     )
-    return literal(physicalName(must(target, `target of ${id}`)))
+    return literal(kindLabel(must(target, `target of ${id}`)))
   }
 }
 
@@ -591,8 +589,12 @@ function findAttribute(document: ParsedObject, id: string): Attribute {
   )
 }
 
-function physicalName(object: ParsedObject): string {
-  return (object.data as Element & { physicalName: string }).physicalName
+/** Стадія 4 гарантує мітку в цілі поліморфної пари; відсутність — дефект. */
+function kindLabel(object: ParsedObject): string {
+  return must(
+    (object.data as { kindLabel?: string }).kindLabel,
+    `kindLabel of ${object.name}`
+  )
 }
 
 function qualified(table: PhysicalTable): string {

@@ -791,16 +791,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Стандартні колонки виду та поліморфні пари <ім'я>_type/<ім'я>_id теж займають імена колонок.",
     },
   },
-  "physical.discriminator-duplicate": {
-    en: (p) =>
-      `Another target of this polymorphic reference has physical name ${p.name}`,
-    uk: (p) =>
-      `Інша ціль цього поліморфного посилання має фізичне ім'я ${p.name}`,
-    hint: {
-      en: "The type column stores the target's physicalName, so targets must differ by it regardless of schema.",
-      uk: "Колонка типу зберігає physicalName цілі, тож цілі мають відрізнятися ним незалежно від схеми.",
-    },
-  },
   "physical.function-duplicate": {
     en: (p) =>
       `Function ${p.name} (${p.description}) collides with ${p.other} in schema ${p.schema}`,

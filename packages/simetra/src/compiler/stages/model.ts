@@ -770,7 +770,7 @@ class SnapshotBuilder {
       const refs = this.standardTargets(column, object)
       target =
         column.polymorphic !== undefined
-          ? { form: "pair", discriminators: refs.map(physicalNameOf) }
+          ? { form: "pair", discriminators: refs.flatMap(labelsOf) }
           : column.ref === "self" || column.ref === "owningObject"
             ? // Ключ власної таблиці: рядок ТЧ і батько ієрархії посилаються
               // на таблицю самого об'єкта.
@@ -963,8 +963,8 @@ class SnapshotBuilder {
         array,
         target: {
           form: "pair",
-          discriminators: value.allowedTypes.map((ref) =>
-            physicalNameOf(this.lookup(ref))
+          discriminators: value.allowedTypes.flatMap((ref) =>
+            labelsOf(this.lookup(ref))
           ),
         },
       }
@@ -1388,6 +1388,20 @@ function physicalNameOf(object: ParsedObject): string {
 }
 
 /**
+ * Мітка виду — значення дискримінатора поліморфної пари. Ціль без мітки
+ * (регістр у `allowedTypes`) помилка стадії 4, а не стадії 3: тут значення
+ * просто не потрапляє в CHECK.
+ */
+export function kindLabelOf(object: ParsedObject): string | undefined {
+  return (object.data as { kindLabel?: string }).kindLabel
+}
+
+function labelsOf(object: ParsedObject): string[] {
+  const label = kindLabelOf(object)
+  return label === undefined ? [] : [label]
+}
+
+/**
  * Прийнята таблиця: вид дає таблицю, але її форму описує файл (спека §4).
  * Одного `declared` замало — прийнятий енам-тип теж описаний як є, а стадія 3
  * бачить цілі посилань ще до того, як стадія 4 відкине невідповідні.
@@ -1460,6 +1474,9 @@ function addField(table: PendingTable, field: Field): string[] {
           {
             name: `${field.name}_type`,
             type: `text${suffix}`,
+            // Мітки порівнюються побайтово: порядок і рівність не залежать від
+            // колляції бази (момент проведення порівнює `recorder_type`).
+            collation: { name: "C" },
             notNull: field.notNull,
             origin: field.origin,
           },
