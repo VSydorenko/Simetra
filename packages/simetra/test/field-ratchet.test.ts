@@ -1,3 +1,9 @@
+/**
+ * Ратчет «поле без споживача» (спека П2 §8.6): кожне поле метамоделі читає
+ * стадія компілятора, кодоген або читач моделі в T2/T3 (межа звірки
+ * `engineScope`). Тест живе поза `src/compiler`: лінт-зона T1 не дає тестам
+ * компілятора імпортувати T2.
+ */
 import { describe, expect, it, vi } from "vitest"
 import type { z } from "zod"
 import {
@@ -7,10 +13,11 @@ import {
   projectSchema,
 } from "simetra/model"
 import { canonicalSnapshot, emitEntityTypes, localize } from "simetra/compiler"
+import { engineScope } from "simetra/schema"
 // Внутрішній шов компілятора: з `simetra/compiler` навмисно не експортується.
-import { readFiles, runStages } from "../pipeline"
-import type { FilesStageResult } from "../stages/files"
-import { kitchenSink } from "./fixtures/kitchen-sink"
+import { readFiles, runStages } from "../src/compiler/pipeline"
+import type { FilesStageResult } from "../src/compiler/stages/files"
+import { kitchenSink } from "../src/compiler/__tests__/fixtures/kitchen-sink"
 
 /**
  * Хеш — не споживач значення: канонічний знімок копіює `data` і `project`
@@ -20,8 +27,9 @@ import { kitchenSink } from "./fixtures/kitchen-sink"
  * накриває повністю.
  */
 const recording = vi.hoisted(() => ({ paused: false }))
-vi.mock("../canonical", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../canonical")>()
+vi.mock("../src/compiler/canonical", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/compiler/canonical")>()
   return {
     ...actual,
     modelHash: (model: Parameters<typeof actual.modelHash>[0]) => {
@@ -46,10 +54,6 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
   // Підказка редактору — шлях до JSON Schema файлу, не модель: компілятор її
   // не читає, а канонічний знімок відкидає свідомо.
   ["project.$schema", "editor hint"],
-  // Споживач — T2 engineScope (межа гейта, платформна §6.9): компілятор лише
-  // перевіряє наявність поля.
-  ["project.database", "read by T2 engineScope"],
-  ["project.database.provider", "read by T2 engineScope"],
   ...METADATA_KINDS.map((kind) => [`${kind}.$schema`, "editor hint"]),
   // `kind` і `name` споживає стадія 1, до шва: вона звіряє вид з текою й
   // копіює вид та ім'я в `ParsedObject`, а наступні стадії читають копію, яку
@@ -271,6 +275,7 @@ async function unreadPaths(
   ).toEqual([])
   const model = result.model!
   emitEntityTypes(model)
+  await engineScope(model)
   recording.paused = true
   try {
     canonicalSnapshot(model)
