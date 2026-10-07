@@ -34,15 +34,12 @@ describe("unitTarget", () => {
     ).toEqual({ schema: "app", object: "f", kind: "function" })
   })
 
-  it("a grant on a schema and ALL IN SCHEMA target the schema", () => {
+  it("a grant on a schema targets the schema", () => {
     expect(target("grant", "GRANT USAGE ON SCHEMA reports TO anon")).toEqual({
       schema: "reports",
       object: "reports",
       kind: "schema",
     })
-    expect(
-      target("grant", "GRANT SELECT ON ALL TABLES IN SCHEMA reports TO anon")
-    ).toEqual({ schema: "reports", object: "reports", kind: "schema" })
   })
 
   it("a grant on objects of several schemas has one target per object", () => {

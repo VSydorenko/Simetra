@@ -510,24 +510,6 @@ describe("creation order", () => {
     ])
   })
 
-  it("grants on all functions and sequences in a schema after them", async () => {
-    const list = await order({
-      [MISC]:
-        "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA z TO anon;\n" +
-        "GRANT USAGE ON ALL SEQUENCES IN SCHEMA z TO anon;\n" +
-        "CREATE SEQUENCE z.s;\n" +
-        `CREATE FUNCTION z.f() RETURNS text ${PLPGSQL};`,
-    })
-    const [functions, sequences] = [
-      list.find((n) => n.startsWith("grant:grant:allInSchema.function:")),
-      list.find((n) => n.startsWith("grant:grant:allInSchema.sequence:")),
-    ]
-    expectBefore(list, [
-      ["function:z.f()", functions!],
-      ["sequence:z.s", sequences!],
-    ])
-  })
-
   it("comment target is read from the parse tree, quoted dots included", async () => {
     const list = await order({
       [MISC]:
@@ -538,17 +520,15 @@ describe("creation order", () => {
   })
 
   it("grants and comments after their objects", async () => {
-    // Схема гранту й коментаря порожня, тож без ребер вони йшли б раніше.
+    // Без ребер коментар і грант ішли б раніше за свої об'єкти.
     const list = await order({
       [MISC]:
-        "GRANT SELECT ON ALL TABLES IN SCHEMA z TO anon;\n" +
         "COMMENT ON COLUMN z.v.x IS 'x';\n" +
         "GRANT EXECUTE ON FUNCTION z.f() TO anon;\n" +
         "CREATE VIEW z.v AS SELECT 1 AS x;\n" +
         `CREATE FUNCTION z.f() RETURNS text ${PLPGSQL};`,
     })
     expectBefore(list, [
-      ["view:z.v", "grant:grant:allInSchema.table:z:anon:select"],
       ["view:z.v", "comment:column:z.v.x"],
       ["function:z.f()", "grant:grant:function:z.f():anon:execute"],
     ])

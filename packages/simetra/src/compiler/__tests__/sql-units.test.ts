@@ -29,6 +29,26 @@ async function identities(sql: string): Promise<string[]> {
 }
 
 describe("sql units", () => {
+  it("grant on all objects in a schema is not a unit", async () => {
+    const result = await compileSql(
+      "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon;\n" +
+        "REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM anon;"
+    )
+    expect(
+      result.diagnostics.map((d) => [
+        d.code,
+        d.params?.statement,
+        d.params?.line,
+      ])
+    ).toEqual([
+      ["sql.statement-not-allowed", "GrantStmt", 1],
+      ["sql.statement-not-allowed", "GrantStmt", 2],
+    ])
+    expect(result.diagnostics[0]!.params).toMatchObject({
+      detail: "allInSchema",
+    })
+  })
+
   it("function identity includes argument types", async () => {
     const result = await compileSql(
       "CREATE FUNCTION public.f(a uuid, b text) RETURNS int LANGUAGE sql AS $$ select 1 $$;"

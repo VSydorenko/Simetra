@@ -134,8 +134,6 @@ function targetsOf(stmt: Node, schema: string): UnitTarget[] {
   if ("GrantStmt" in stmt) {
     const node = stmt.GrantStmt
     const objects = node.objects ?? []
-    if (node.targtype === "ACL_TARGET_ALL_IN_SCHEMA")
-      return objects.map((o) => schemaTarget(strings([o])[0] ?? ""))
     return objects.map((o) => objectTarget(o, node.objtype, schema))
   }
   if ("CommentStmt" in stmt) {

@@ -197,26 +197,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.statement-not-allowed": {
     en: (p) =>
-      p.detail === undefined
+      p.detail === undefined || p.detail === "allInSchema"
         ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
         : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
     uk: (p) =>
-      p.detail === undefined
+      p.detail === undefined || p.detail === "allInSchema"
         ? `${p.statement} у рядку ${p.line} не дозволений у файлі .sql`
         : `${p.statement} у рядку ${p.line} не дозволений у файлі .sql: ${p.detail}`,
     hint: {
       en: (p) =>
-        p.feature === "rowLevelSecurity"
-          ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
-          : p.feature === "publication"
-            ? "The provider creates publications; a .sql file manages only their membership: use ALTER PUBLICATION … ADD/DROP/SET TABLE."
-            : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publication membership (ALTER PUBLICATION), REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
+        p.detail === "allInSchema"
+          ? "Grant on each object: ON ALL … IN SCHEMA is a one-off action, not a catalog state."
+          : p.feature === "rowLevelSecurity"
+            ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
+            : p.feature === "publication"
+              ? "The provider creates publications; a .sql file manages only their membership: use ALTER PUBLICATION … ADD/DROP/SET TABLE."
+              : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publication membership (ALTER PUBLICATION), REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
       uk: (p) =>
-        p.feature === "rowLevelSecurity"
-          ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
-          : p.feature === "publication"
-            ? "Публікації створює провайдер; файл .sql керує лише членством у них: використайте ALTER PUBLICATION … ADD/DROP/SET TABLE."
-            : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, членство в публікаціях (ALTER PUBLICATION), REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
+        p.detail === "allInSchema"
+          ? "Надавайте гранти на кожен об'єкт: ON ALL … IN SCHEMA — разова дія, а не стан каталогу."
+          : p.feature === "rowLevelSecurity"
+            ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
+            : p.feature === "publication"
+              ? "Публікації створює провайдер; файл .sql керує лише членством у них: використайте ALTER PUBLICATION … ADD/DROP/SET TABLE."
+              : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, членство в публікаціях (ALTER PUBLICATION), REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
     },
   },
   "sql.unit-duplicate": {

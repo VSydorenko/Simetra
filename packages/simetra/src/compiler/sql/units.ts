@@ -553,19 +553,21 @@ function classify(stmt: Node, scope: TypeScope): Classified {
   }
   if ("GrantStmt" in stmt) {
     const node = stmt.GrantStmt
-    const allInSchema = node.targtype === "ACL_TARGET_ALL_IN_SCHEMA"
-    // `ALL … IN SCHEMA` перелічує схеми, а не об'єкти.
+    // `ALL … IN SCHEMA` — разова дія над наявними об'єктами, а не стан
+    // каталогу: каталог тримає гранти поштучно, зворотна генерація такої
+    // форми не пише.
+    if (node.targtype === "ACL_TARGET_ALL_IN_SCHEMA") {
+      return { notAllowed: statement, detail: "allInSchema" }
+    }
     const objects = sorted(
-      (node.objects ?? []).map((o) =>
-        allInSchema ? nodeText(o) : targetName(o, node.objtype, scope)
-      )
+      (node.objects ?? []).map((o) => targetName(o, node.objtype, scope))
     ).join(",")
     return unit(
       "grant",
       { schema: "", name: objects },
       [
         node.is_grant === true ? "grant" : "revoke",
-        `${allInSchema ? "allInSchema." : ""}${objectType(node.objtype)}`,
+        objectType(node.objtype),
         objects,
         roles(node.grantees),
         privileges(node.privileges),

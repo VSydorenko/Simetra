@@ -182,7 +182,7 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
       // всіх операторів пари, а ALL — повним переліком прав класу
       case "grant": {
         const [, verb, type, objects, roles, privileges] = parts
-        if (verb !== "grant" || type!.startsWith("allInSchema."))
+        if (verb !== "grant")
           throw new Error(`fixture form not expanded: ${unit.identity}`)
         for (const object of splitList(objects!))
           for (const role of roles!.split(","))

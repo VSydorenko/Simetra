@@ -3,7 +3,6 @@ import type { PhysicalSnapshot, SqlUnitClass } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { SqlParser } from "./parse"
 import {
-  FUNCTION_CLASSES,
   pgNamespaceKeys,
   targetParts,
   type PgName,
@@ -30,9 +29,6 @@ interface Reference {
   names: readonly string[]
 }
 
-/** Чим вузол є для `GRANT … ON ALL … IN SCHEMA`. */
-type Category = "relation" | "sequence" | "function" | "none"
-
 interface GraphNode {
   label: string
   node: CreationNode
@@ -53,14 +49,6 @@ const AGGREGATE_FUNCTIONS: ReadonlySet<string> = new Set([
   "minvfunc",
   "mfinalfunc",
 ])
-
-const ALL_IN_SCHEMA: Readonly<Record<string, Category>> = {
-  OBJECT_TABLE: "relation",
-  OBJECT_SEQUENCE: "sequence",
-  OBJECT_FUNCTION: "function",
-  OBJECT_PROCEDURE: "function",
-  OBJECT_ROUTINE: "function",
-}
 
 /**
  * Простір імен цілі гранту чи коментаря за типом об'єкта. Індекс — у
@@ -138,7 +126,6 @@ class Graph {
     ["proc", new Map()],
     ["type", new Map()],
   ])
-  private readonly categories = new Map<string, Category>()
   /** Одиниці `REVOKE` за ціллю: `<objtype>|<ім'я об'єкта>`. */
   private readonly revokes = new Map<string, string[]>()
 
@@ -160,7 +147,6 @@ class Graph {
       // ділять із нею простір відношень, тож ціль `COMMENT ON INDEX`
       // створюється разом із таблицею.
       this.registerAll(pgNamespaceKeys({ type: "table", table }), label)
-      this.categories.set(label, "relation")
     }
     for (const unit of units) this.addUnit(unit)
 
@@ -221,13 +207,6 @@ class Graph {
       unit
     )
     this.registerAll(pgNamespaceKeys({ type: "unit", unit }), label)
-    if (FUNCTION_CLASSES.has(unit.class)) {
-      this.categories.set(label, "function")
-    } else if (unit.class === "view" || unit.class === "materializedView") {
-      this.categories.set(label, "relation")
-    } else if (unit.class === "sequence") {
-      this.categories.set(label, "sequence")
-    }
   }
 
   /** Імена об'єкта в просторах Postgres — одне джерело з перевіркою конфліктів. */
@@ -342,16 +321,6 @@ class Graph {
           for (const revoke of this.revokes.get(key) ?? []) {
             this.edge(label, revoke)
           }
-        }
-      }
-    }
-    if (grant?.targtype === "ACL_TARGET_ALL_IN_SCHEMA") {
-      const category = ALL_IN_SCHEMA[String(grant.objtype)] ?? "none"
-      const schemas = new Set(strings(grant.objects))
-      for (const [other, cat] of this.categories) {
-        const node = this.nodes.get(other)!
-        if (cat === category && schemas.has(node.schema)) {
-          this.edge(label, other)
         }
       }
     }
