@@ -225,7 +225,7 @@ export async function readHeadMetadata(
     entries.length === 0
       ? []
       : await readBlobs(
-          cwd,
+          at,
           entries.map((e) => e.sha)
         )
   return new Map(entries.map((e, i) => [e.key, texts[i] ?? ""]))
