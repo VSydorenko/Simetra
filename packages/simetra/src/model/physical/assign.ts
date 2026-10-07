@@ -1,5 +1,5 @@
 import { toSnakeCase } from "../schemas/identity"
-import { isSqlReservedWord } from "../schemas/sql-reserved-words"
+import { isSqlReservedWord } from "./pg-keywords"
 
 /**
  * Роль елемента, що її знає правило фізичного імені (спека П2 §3, Р5).

@@ -8,9 +8,10 @@
 /**
  * Ключові слова Postgres, які `quote_ident` бере в лапки: усі, що не
  * UNRESERVED_KEYWORD у `kwlist.h` (зарезервовані, col_name і
- * type_func_name). Окремий від `isSqlReservedWord` список: той — про імена,
- * які забороняє сама платформа, цей — про точну поведінку `quote_ident`,
- * від якої залежить збіг імен у знімку й у каталозі БД.
+ * type_func_name). Один список для обох ролей: точна поведінка `quote_ident`
+ * (від неї залежить збіг імен у знімку й у каталозі БД) і те, що платформа
+ * вважає зарезервованим словом у фізичних іменах — інакше ім'я, яке БД не
+ * потребує брати в лапки, отримувало б зайвий суфікс.
  */
 export const PG_QUOTED_KEYWORDS: ReadonlySet<string> = new Set([
   // RESERVED_KEYWORD
@@ -36,3 +37,8 @@ export const PG_QUOTED_KEYWORDS: ReadonlySet<string> = new Set([
   xmlconcat xmlelement xmlexists xmlforest xmlnamespaces xmlparse xmlpi
   xmlroot xmlserialize xmltable`.split(/\s+/),
 ])
+
+/** Слово, яке `quote_ident` бере в лапки; регістр не важливий. */
+export function isSqlReservedWord(name: string): boolean {
+  return PG_QUOTED_KEYWORDS.has(name.toLowerCase())
+}

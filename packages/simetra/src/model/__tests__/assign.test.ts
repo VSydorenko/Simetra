@@ -77,6 +77,11 @@ describe("assignPhysicalName", () => {
     expect(assignPhysicalName("order", { role: "field" }, none)).toBe("order_")
   })
 
+  it("an unreserved keyword takes no suffix", () => {
+    expect(assignPhysicalName("key", { role: "field" }, none)).toBe("key")
+    expect(assignPhysicalName("type", { role: "field" }, none)).toBe("type")
+  })
+
   it("a label is a data literal, not an identifier", () => {
     expect(assignPhysicalName("Order", { role: "label" }, none)).toBe("order")
     expect(

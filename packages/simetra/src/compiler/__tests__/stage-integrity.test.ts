@@ -556,6 +556,27 @@ describe("stage 4: integrity", () => {
     ])
   })
 
+  it("an existing suffixed name stays as is and is not a warning", async () => {
+    // Правило слів змінилося, але physicalName призначено раз (Р5)
+    const result = await compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [attribute("key", { physicalName: "key_" })],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+    const table = result.model!.physical.tables.find((t) => t.name === "item")
+    expect(table?.columns.map((c) => c.name)).toContain("key_")
+  })
+
+  it("an unreserved keyword as physicalName is not a warning", async () => {
+    const result = await compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [attribute("type", { physicalName: "type" })],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
   it("derived name longer than 63 bytes", async () => {
     const base = "s".repeat(60)
     const result = await compileWith({

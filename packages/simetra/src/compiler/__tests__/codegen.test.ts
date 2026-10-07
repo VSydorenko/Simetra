@@ -471,7 +471,8 @@ describe("emitEntityTypes", () => {
       id: uuid(id),
       kind: "PgEnum",
       name,
-      physicalName: name.toLowerCase(),
+      // `json` — ключове слово Postgres (COL_NAME), тож ім'я беруть із суфіксом
+      physicalName: name === "Json" ? "json_" : name.toLowerCase(),
       values: ["on"],
     })
     const column = (id: number, name: string) => ({
@@ -1019,7 +1020,9 @@ describe("emitEntityTypes", () => {
   it("an object named Json does not shadow the shared Json", async () => {
     const code = await emit({
       "project.meta.json": project(),
-      "catalogs/Json/Json.meta.json": catalog("Json"),
+      "catalogs/Json/Json.meta.json": catalog("Json", {
+        physicalName: "json_",
+      }),
       "catalogs/Doc/Doc.meta.json": catalog("Doc", {
         attributes: [attribute("payload", { type: "Json" })],
       }),

@@ -771,8 +771,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   "physical.reserved-word": {
-    en: (p) => `Physical name ${p.name} is an SQL reserved word`,
-    uk: (p) => `Фізичне ім'я ${p.name} — зарезервоване слово SQL`,
+    en: (p) =>
+      `Physical name ${p.name} is a PostgreSQL keyword that must be quoted`,
+    uk: (p) =>
+      `Фізичне ім'я ${p.name} — ключове слово Postgres, яке треба брати в лапки`,
     hint: {
       en: "It works when quoted, but new elements should not take reserved words.",
       uk: "У лапках воно працює, але нові елементи не мають брати зарезервованих слів.",

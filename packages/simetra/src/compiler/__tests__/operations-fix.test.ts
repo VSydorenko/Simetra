@@ -188,6 +188,31 @@ describe("fixFiles", () => {
     expect(item.predefinedItems[0].physicalName).toBe("order")
   })
 
+  it("keeps an assigned physicalName even when the word is no longer reserved", async () => {
+    // Правило слів змінилося, але physicalName призначено раз (Р5)
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "catalogs/Item/Item.meta.json": {
+        kind: "Catalog",
+        name: "Item",
+        attributes: [
+          {
+            id: uuid(1),
+            name: "key",
+            type: "String",
+            physicalName: "key_",
+          },
+        ],
+      },
+    })
+    const first = await fixFiles(files, options())
+    const fixed = applyChanges(files, first.changes)
+    const second = await fixFiles(fixed, options())
+    expect(second.changes).toEqual([])
+    const item = JSON.parse(fixed.get("catalogs/Item/Item.meta.json")!)
+    expect(item.attributes[0].physicalName).toBe("key_")
+  })
+
   it("idempotent", async () => {
     const first = await fixFiles(strippedDomain(), options())
     const fixed = applyChanges(strippedDomain(), first.changes)

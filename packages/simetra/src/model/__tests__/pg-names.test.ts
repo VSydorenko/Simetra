@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { chooseConstraintName, makeObjectName, quoteIdent } from "../physical"
+import {
+  chooseConstraintName,
+  isSqlReservedWord,
+  makeObjectName,
+  quoteIdent,
+} from "../physical"
 
 describe("makeObjectName", () => {
   it("builds a primary key name", () => {
@@ -88,5 +93,19 @@ describe("quoteIdent", () => {
 
   it("doubles embedded quotes", () => {
     expect(quoteIdent('a"b')).toBe('"a""b"')
+  })
+})
+
+describe("isSqlReservedWord", () => {
+  it("is every keyword quote_ident quotes, case-insensitive", () => {
+    expect(isSqlReservedWord("check")).toBe(true) // RESERVED
+    expect(isSqlReservedWord("Join")).toBe(true) // TYPE_FUNC_NAME
+    expect(isSqlReservedWord("INT")).toBe(true) // COL_NAME
+  })
+  it("unreserved keywords and plain names are not reserved", () => {
+    expect(isSqlReservedWord("key")).toBe(false)
+    expect(isSqlReservedWord("type")).toBe(false)
+    expect(isSqlReservedWord("index")).toBe(false)
+    expect(isSqlReservedWord("orders")).toBe(false)
   })
 })
