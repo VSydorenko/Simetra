@@ -95,6 +95,9 @@ describe("row rule of a kind module", () => {
       "num_nonnulls bound not an integer",
     ],
     ["code LIKE 'x%'", "AEXPR_LIKE"],
+    ["code = NULL", "NULL literal (use IS [NOT] NULL)"],
+    ["code <> NULL", "NULL literal (use IS [NOT] NULL)"],
+    ["code IN ('a', NULL)", "NULL literal (use IS [NOT] NULL)"],
   ])("grammar rejects %s", async (expression, construct) => {
     const result = await compile(files({ [SALE_SQL]: rule(expression) }))
     expect(
@@ -140,6 +143,55 @@ describe("row rule of a kind module", () => {
     expect(
       result.diagnostics.map((d) => [d.code, d.file, d.params?.name])
     ).toEqual([["sql.row-rule-name-taken", SALE_SQL, taken]])
+  })
+
+  it.each([
+    ["primary key", (t: PhysicalTable) => t.primaryKey?.name],
+    ["unique", (t: PhysicalTable) => t.uniques[0]?.name],
+    ["foreign key", (t: PhysicalTable) => t.foreignKeys[0]?.name],
+  ])(
+    "row rule name equal to the %s of the table is an error",
+    async (_name, nameOf) => {
+      const derived = await compile(files({ [SALE_SQL]: "" }))
+      const taken = nameOf(tableOf(derived.model!.physical, "sale"))
+      expect(taken).toBeDefined()
+      const result = await compile(
+        files({ [SALE_SQL]: rule("code IS NOT NULL", "public.sale", taken) })
+      )
+      expect(
+        result.diagnostics.map((d) => [d.code, d.file, d.params?.name])
+      ).toEqual([["sql.row-rule-name-taken", SALE_SQL, taken]])
+    }
+  )
+
+  it("two row rules with the same name on one table are an error", async () => {
+    const result = await compile(
+      files({
+        [SALE_SQL]:
+          rule("code IS NOT NULL") + "\n" + rule("amount IS NOT NULL"),
+      })
+    )
+    expect(
+      result.diagnostics.map((d) => [d.code, d.params?.name, d.params?.line])
+    ).toEqual([["sql.row-rule-name-taken", "sale_rule", 2]])
+  })
+
+  it("a row rule on the object's own tabular section table is accepted", async () => {
+    const result = await compile(
+      files({
+        [SALE_SQL]: rule(
+          "num_nonnulls(item_id, qty) >= 1 OR qty IS NULL",
+          "public.goods",
+          "sale_goods_rule"
+        ),
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(tableOf(result.model!.physical, "goods").checks).toContainEqual({
+      name: "sale_goods_rule",
+      expression: "num_nonnulls(item_id, qty) >= 1 OR qty IS NULL",
+      origin: { rowRule: { file: SALE_SQL } },
+    })
   })
 
   it("a CHECK without a name is not allowed", async () => {

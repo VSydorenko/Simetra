@@ -62,7 +62,8 @@ export async function runStages(
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
-  // Без помилок стадії 2 id є в кожного об'єкта.
+  // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
+  // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
   const ownerId = (ownerFile: string) => idByFile.get(ownerFile) ?? ""
   // Правило рядка модуля виду — CHECK таблиці у знімку, а не одиниця: його

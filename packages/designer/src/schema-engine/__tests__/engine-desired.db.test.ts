@@ -10,6 +10,8 @@ import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
+  attribute,
+  catalog,
   customTable,
   metaFiles,
   project,
@@ -143,6 +145,52 @@ describe("compareWithDesired", () => {
     expect(result.plan.actions.flatMap((a) => a.produces)).toContain(
       "table:app.profile"
     )
+  })
+
+  it("a deployed row rule reconciles with no difference", async () => {
+    // База друкує CHECK своїм текстом (`IN` — як `= ANY (ARRAY[…])`), а
+    // бажаний стан — канонічним текстом компілятора: звірка через тінь
+    // мусить бачити той самий обмеження, а не хибну зміну виразу
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "catalogs/Party/Party.meta.json": catalog("Party", {
+          schema: "app",
+          attributes: [
+            attribute("person", { type: "String", length: 20 }),
+            attribute("company", { type: "String", length: 20 }),
+            attribute("status", { type: "String", length: 10 }),
+          ],
+        }),
+        "catalogs/Party/Party.sql":
+          "ALTER TABLE app.party ADD CONSTRAINT party_one_side CHECK (num_nonnulls(person, company) <= 1 AND (status IN ('new', 'done') OR status IS NULL) AND person <> company);",
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const model = compiled.model!
+    const { scope, diagnostics } = await engineScope(model)
+    expect(diagnostics).toEqual([])
+    const desired = renderDesiredState(model).sql
+    const outcome = await engine.withDesiredShadow(
+      { target: stack },
+      desired,
+      scope,
+      (target) =>
+        compareWithDesired(engine, { target }, desired, scope, diagnostics)
+    )
+    expect(outcome.status).toBe("loaded")
+    if (outcome.status !== "loaded") return
+    const result = outcome.value
+    expect(result.status).toBe("compared")
+    if (result.status !== "compared") return
+    expect(
+      result.desired.model.tables
+        .find((t) => t.name === "party")
+        ?.checks.map((c) => c.name)
+    ).toContain("party_one_side")
+    expect(result.differences).toEqual([])
+    expect(result.plan.empty).toBe(true)
+    expect(result.empty).toBe(true)
   })
 
   it("an empty comparison is empty only without differences", async () => {

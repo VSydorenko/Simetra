@@ -50,8 +50,9 @@ export function rowRuleProblem(
   if (lexpr === undefined || rexpr === undefined) return "A_Expr"
   if (kind === "AEXPR_IN") {
     const items = "List" in rexpr ? (rexpr.List.items ?? []) : []
-    const literal = items.find((item) => literalOf(item) === undefined)
     if (items.length === 0) return nodeName(rexpr)
+    if (items.some(isNullLiteral)) return NULL_LITERAL
+    const literal = items.find((item) => literalOf(item) === undefined)
     if (literal !== undefined) return nodeName(literal)
     return columnProblem(lexpr, columns)
   }
@@ -71,6 +72,7 @@ export function rowRuleProblem(
   }
   const left = columnProblem(lexpr, columns)
   if (left !== undefined) return left
+  if (isNullLiteral(rexpr)) return NULL_LITERAL
   if (literalOf(rexpr) !== undefined) {
     return LITERAL_COMPARISONS.has(op)
       ? undefined
@@ -119,7 +121,9 @@ export function rowRuleExpression(expr: Node): string {
     }
     return `${left} ${operatorOf(name)} ${rowRuleExpression(rexpr!)}`
   }
-  return ""
+  // Сюди веде лише вузол поза граматикою, а `rowRuleProblem` його вже
+  // відхилив би: тихий порожній текст зробив би CHECK зламаним без діагностики.
+  throw new Error(`row rule node outside the grammar: ${nodeName(expr)}`)
 }
 
 /**
@@ -256,15 +260,26 @@ function numNonnullsArgs(node: Node): Node[] | undefined {
     : undefined
 }
 
-/** Літерал правила: без бітових рядків, бо їхній текст — окрема граматика. */
+/**
+ * `NULL` як літерал порівняння: `= NULL`, `<> NULL` чи `IN (NULL, …)` дають
+ * NULL, а CHECK з NULL не порушується — правило, яке ніколи не спрацює.
+ * Порожнечу перевіряє `IS [NOT] NULL`.
+ */
+const NULL_LITERAL = "NULL literal (use IS [NOT] NULL)"
+
+function isNullLiteral(node: Node): boolean {
+  return "A_Const" in node && node.A_Const.isnull === true
+}
+
+/** Літерал правила: без `NULL` і бітових рядків (їхній текст — окрема граматика). */
 function literalOf(node: Node): AConst | undefined {
   if (!("A_Const" in node)) return undefined
-  return node.A_Const.bsval === undefined ? node.A_Const : undefined
+  const value = node.A_Const
+  return value.bsval === undefined && value.isnull !== true ? value : undefined
 }
 
 function literalText(value: AConst): string {
   // Нульові значення libpg-query пропускає: `{ ival: {} }` — це 0.
-  if (value.isnull === true) return "NULL"
   if (value.ival !== undefined) return String(value.ival.ival ?? 0)
   if (value.fval !== undefined) return value.fval.fval ?? "0"
   if (value.boolval !== undefined) {
