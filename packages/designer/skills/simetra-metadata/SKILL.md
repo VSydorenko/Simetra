@@ -20,7 +20,7 @@ diagnostics themselves.
 | ------------------------------------------------------------------------------ | ------------ | ---------------------------------------- | ------------------------------------------ |
 | Is the metadata accepted by the compiler?                                      | `compile`    | `simetra compile [dirs...]`              | `compile` with `{}`                        |
 | What does the compiler derive for one object (tables, columns, keys, queries)? | `explain`    | `simetra explain <Kind>.<Name> [dir]`    | `explain` with `{kind, name}`              |
-| New elements miss `id` / `physicalName`, or files are not canonical            | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                            |
+| New elements miss `id` / `physicalName` / `kindLabel`, or files are not canonical | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                            |
 | New object                                                                     | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`        |
 | New element in a collection of an object or of the project root                | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}` |
 | Rename an object or a nested element                                           | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`          |
@@ -118,8 +118,12 @@ offending field (for example `target.kind`); nothing is written.
   `operation.delete-referenced` listing every reference (exit 1, nothing
   written). A dry run needs no confirmation; it reports `would write <file>` for
   a file that changes and `would delete <file>` only for a file that is removed.
-- Rename never changes `physicalName` (no DDL). Do not edit ids or `physicalName`
-  of existing elements by hand.
+- Rename never changes `physicalName` or `kindLabel` (no DDL). Do not edit ids,
+  `physicalName` or `kindLabel` of existing elements by hand: they are assigned
+  once (by `fix`, `create`, `add`), and in a Git repository `compile` checks
+  them, together with an object's PG schema, against `HEAD`
+  (`identity.assigned-once-changed`). Outside Git that check is skipped with a
+  warning.
 - Never pass an `id` to `create` or `add`: ids are assigned by the operation, and
   an input carrying one gets `operation.input-invalid` (exit 1, nothing written).
 
@@ -153,7 +157,8 @@ pnpm exec simetra mcp --database-url-env STAGING_DATABASE_URL
 
 Check every metadata directory under the current directory with
 `simetra compile --all`; add `--staged` to compile the Git **index** instead of
-the working tree (what a pre-commit hook wants):
+the working tree (what a pre-commit hook wants). Fields assigned once are
+compared with `HEAD` in both modes:
 
 ```sh
 pnpm exec simetra compile --all
