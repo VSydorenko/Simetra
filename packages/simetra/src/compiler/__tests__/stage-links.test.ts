@@ -338,8 +338,9 @@ describe("stage 5: scope set functions", () => {
   const FUNCTIONS = SCOPE_FUNCTIONS_FILE
   const create = (
     name: string,
-    tail = "RETURNS SETOF uuid LANGUAGE sql STABLE"
-  ) => `CREATE FUNCTION public.${name}${tail} AS $$ SELECT NULL::uuid $$;\n`
+    tail = "RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''",
+    body = "SELECT NULL::uuid"
+  ) => `CREATE FUNCTION public.${name}${tail} AS $$ ${body} $$;\n`
   const good = (name: string) => create(`${name}()`)
   const buildScoped = async (sql?: string) =>
     await compile(
@@ -374,6 +375,60 @@ describe("stage 5: scope set functions", () => {
 
   it.each([
     [
+      "LANGUAGE plpgsql",
+      create(
+        "org_ids()",
+        "RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''",
+        "BEGIN RETURN QUERY SELECT NULL::uuid; END"
+      ),
+      "language",
+    ],
+    [
+      "without SECURITY DEFINER",
+      create(
+        "org_ids()",
+        "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = ''"
+      ),
+      "security",
+    ],
+    [
+      "without SET search_path = ''",
+      create(
+        "org_ids()",
+        "RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER"
+      ),
+      "searchPath",
+    ],
+    [
+      "unqualified relation in the body",
+      create("org_ids()", undefined, "SELECT m.org_id FROM org_member m"),
+      "unqualified",
+    ],
+  ])("set function: %s", async (_name, bad, reason) => {
+    const result = await buildScoped(bad + good("user_ids"))
+    expect(codes(result)).toEqual([
+      [
+        "scope.set-function-signature",
+        "project.meta.json",
+        "/scopeKinds/0/setFunction",
+      ],
+    ])
+    expect(result.diagnostics[0]!.params?.reason).toBe(reason)
+  })
+
+  it("set function with qualified relations, a CTE and calls passes", async () => {
+    const result = await buildScoped(
+      create(
+        "org_ids()",
+        undefined,
+        "WITH mine AS (SELECT m.org_id FROM app.org_member m WHERE m.user_id = auth.uid()) SELECT org_id FROM mine"
+      ) + good("user_ids")
+    )
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it.each([
+    [
       "RETURNS TABLE",
       "org_ids() RETURNS TABLE (id uuid) LANGUAGE sql STABLE",
       "table",
@@ -396,10 +451,19 @@ describe("stage 5: scope set functions", () => {
     ["arguments", create("org_ids(a uuid)")],
     ["not setof", create("org_ids()", "RETURNS uuid LANGUAGE sql STABLE")],
     ["not uuid", create("org_ids()", "RETURNS SETOF text LANGUAGE sql STABLE")],
-    ["volatile", create("org_ids()", "RETURNS SETOF uuid LANGUAGE sql")],
+    [
+      "volatile",
+      create(
+        "org_ids()",
+        "RETURNS SETOF uuid LANGUAGE sql SECURITY DEFINER SET search_path = ''"
+      ),
+    ],
     [
       "immutable",
-      create("org_ids()", "RETURNS SETOF uuid LANGUAGE sql IMMUTABLE"),
+      create(
+        "org_ids()",
+        "RETURNS SETOF uuid LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = ''"
+      ),
     ],
   ])("wrong signature: %s", async (_name, bad) => {
     const result = await buildScoped(bad + good("user_ids"))

@@ -61,7 +61,7 @@ export function metaFiles(
     const sql = [...new Set(names)]
       .map(
         (name) =>
-          `CREATE FUNCTION ${name}() RETURNS SETOF uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;`
+          `CREATE FUNCTION ${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`
       )
       .join("\n")
     if (sql !== "") files.set(SCOPE_FUNCTIONS_FILE, sql)

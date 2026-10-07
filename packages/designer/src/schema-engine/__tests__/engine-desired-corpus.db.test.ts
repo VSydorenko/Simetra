@@ -185,7 +185,7 @@ describe("a mutated target is never silently empty", () => {
 
   it("changed function body", async () => {
     const result = await reconcile(
-      `${render}\nCREATE OR REPLACE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid LIMIT 0 $$;\n`,
+      `${render}\nCREATE OR REPLACE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid LIMIT 0 $$;\n`,
       render,
       scope
     )

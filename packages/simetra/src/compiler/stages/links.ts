@@ -27,7 +27,7 @@ export function checkLinks(
   return [
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
-    ...checkSetFunctions(project, units),
+    ...checkSetFunctions(project, units, parse),
     ...checkSubscriptionHandlers(objects, project, units),
   ]
 }
@@ -132,7 +132,8 @@ function lineOf(text: string, offset: number): number {
  */
 function checkSetFunctions(
   project: Project,
-  units: readonly VerbatimUnit[]
+  units: readonly VerbatimUnit[],
+  parse: SqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   project.scopeKinds.forEach((kind, index) => {
@@ -152,7 +153,20 @@ function checkSetFunctions(
       return
     }
     const problem = typeof fn === "string" ? fn : volatilityProblem(fn)
-    if (problem !== undefined) {
+    const reason =
+      problem !== undefined || typeof fn === "string"
+        ? undefined
+        : setFunctionClosedProblem(fn, units, schema, name, parse)
+    if (reason !== undefined) {
+      found.push(
+        diagnostic(
+          "scope.set-function-signature",
+          "project.meta.json",
+          pointer,
+          { function: `${schema}.${name}`, reason }
+        )
+      )
+    } else if (problem !== undefined) {
       found.push(
         diagnostic(
           "scope.set-function-signature",
@@ -177,7 +191,14 @@ interface FunctionNode {
     arrayBounds?: unknown[]
   }
   options?: {
-    DefElem?: { defname?: string; arg?: { String?: { sval?: string } } }
+    DefElem?: {
+      defname?: string
+      arg?: {
+        String?: { sval?: string }
+        Boolean?: { boolval?: boolean }
+        List?: { items?: { String?: { sval?: string } }[] }
+      }
+    }
   }[]
 }
 
@@ -235,6 +256,87 @@ function nullaryFunction(
   return exact === undefined
     ? "it takes arguments"
     : nullaryReturning(exact.tree as Node, returns)
+}
+
+/** Чим функція множини виходить за закриту форму (`params.reason`). */
+export type SetFunctionReason =
+  "language" | "security" | "searchPath" | "unqualified"
+
+/**
+ * Функція множини — `LANGUAGE sql SECURITY DEFINER SET search_path = ''` із
+ * відношеннями, кваліфікованими схемою: RLS-політики викликають її над
+ * таблицями з RLS, тож виклик від імені користувача зациклив би політику, а
+ * порожній search_path не лишає простору для підміни імен. Оболонку
+ * `search_path` читає спільний `closedShellProblem`, щоб не дублювати його.
+ * Тіло, яке не розбирається, не перевіряється: його відхилить тіньова база.
+ */
+function setFunctionClosedProblem(
+  fn: FunctionNode,
+  units: readonly VerbatimUnit[],
+  schema: string,
+  name: string,
+  parse: SqlParser
+): SetFunctionReason | undefined {
+  const option = (key: string) =>
+    (fn.options ?? []).map((o) => o.DefElem).filter((o) => o?.defname === key)
+  const language = option("language")[0]?.arg?.String?.sval?.toLowerCase()
+  if (language !== "sql") return "language"
+  if (option("security")[0]?.arg?.Boolean?.boolval !== true) return "security"
+  const tree = units.find(
+    (u) => u.identity === functionIdentity(schema, name, [])
+  )?.tree
+  if (tree !== undefined && closedShellProblem(tree as Node) === "searchPath") {
+    return "searchPath"
+  }
+  // `AS` — список рядків; для `LANGUAGE sql` перший і є тілом.
+  const body = option("as")[0]?.arg?.List?.items?.[0]?.String?.sval
+  if (body === undefined) return undefined
+  const parsed = parse(body)
+  if (!parsed.ok) return undefined
+  return hasUnqualifiedRelation(
+    parsed.statements.map((s) => s.stmt),
+    new Set()
+  )
+    ? "unqualified"
+    : undefined
+}
+
+/**
+ * Некваліфіковане відношення в дереві: `RangeVar` без схеми, ім'я якого не CTE
+ * в області видимості. Виклики функцій (`auth.uid()`) — не `RangeVar`.
+ */
+function hasUnqualifiedRelation(
+  value: unknown,
+  ctes: ReadonlySet<string>
+): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasUnqualifiedRelation(item, ctes))
+  }
+  if (typeof value !== "object" || value === null) return false
+  const node = value as Record<string, unknown>
+  const clause = node.withClause as
+    { ctes?: { CommonTableExpr?: { ctename?: string } }[] } | undefined
+  const visible =
+    clause === undefined
+      ? ctes
+      : new Set([
+          ...ctes,
+          ...(clause.ctes ?? []).flatMap((c) =>
+            c.CommonTableExpr?.ctename === undefined
+              ? []
+              : [c.CommonTableExpr.ctename]
+          ),
+        ])
+  if (
+    typeof node.relname === "string" &&
+    node.schemaname === undefined &&
+    !visible.has(node.relname)
+  ) {
+    return true
+  }
+  return Object.values(node).some((child) =>
+    hasUnqualifiedRelation(child, visible)
+  )
 }
 
 /** Функція множини читає дані, тож мусить бути STABLE. */

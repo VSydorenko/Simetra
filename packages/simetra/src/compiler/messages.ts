@@ -91,6 +91,24 @@ const CLOSED_SHELL_PROBLEM: Readonly<
     uk: "вона SECURITY DEFINER без SET search_path = ''",
   },
 }
+/** Причини виходу функції множини скоупу за закриту форму. */
+const SET_FUNCTION_REASON: Readonly<
+  Record<string, { en: string; uk: string }>
+> = {
+  language: { en: "its language is not sql", uk: "її мова не sql" },
+  security: {
+    en: "it is not SECURITY DEFINER",
+    uk: "вона не SECURITY DEFINER",
+  },
+  searchPath: {
+    en: "it has no SET search_path = ''",
+    uk: "вона без SET search_path = ''",
+  },
+  unqualified: {
+    en: "with an empty search_path an unqualified relation does not resolve",
+    uk: "з порожнім search_path некваліфіковане відношення не розв'язується",
+  },
+}
 const ROW_RULE_GRAMMAR = {
   en: "A row rule combines with AND, OR, NOT and parentheses the atoms <column> IS [NOT] NULL, <column> = or <> <literal>, <column> [NOT] IN (<literals>), <column> <op> <column> of the same type and num_nonnulls(<columns>) <op> <integer>, where <op> is =, <>, <, <=, > or >=; columns are unqualified columns of the table, without casts, other functions or subqueries; emptiness is checked with IS [NOT] NULL, never with a NULL literal.",
   uk: "Правило рядка поєднує через AND, OR, NOT і дужки атоми <колонка> IS [NOT] NULL, <колонка> = чи <> <літерал>, <колонка> [NOT] IN (<літерали>), <колонка> <оп> <колонка> одного типу й num_nonnulls(<колонки>) <оп> <ціле>, де <оп> — =, <>, <, <=, > чи >=; колонки — некваліфіковані колонки таблиці, без приведень, інших функцій і підзапитів; порожнечу перевіряє IS [NOT] NULL, а не літерал NULL.",
@@ -830,12 +848,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "scope.set-function-signature": {
     en: (p) =>
-      `Scope set function ${p.function}() has the wrong signature: ${p.problem}`,
+      p.reason === undefined
+        ? `Scope set function ${p.function}() has the wrong signature: ${p.problem}`
+        : `Scope set function ${p.function}() is outside the closed form: ${SET_FUNCTION_REASON[String(p.reason)]?.en ?? p.reason}`,
     uk: (p) =>
-      `Функція множини скоупу ${p.function}() має хибну сигнатуру: ${p.problem}`,
+      p.reason === undefined
+        ? `Функція множини скоупу ${p.function}() має хибну сигнатуру: ${p.problem}`
+        : `Функція множини скоупу ${p.function}() поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
     hint: {
-      en: "A set function takes no arguments, returns SETOF uuid and is STABLE.",
-      uk: "Функція множини не приймає аргументів, повертає SETOF uuid і є STABLE.",
+      en: "A set function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '', with every relation in its body qualified by a schema.",
+      uk: "Функція множини не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '', а кожне відношення в тілі кваліфіковане схемою.",
     },
   },
 

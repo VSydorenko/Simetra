@@ -444,8 +444,10 @@ export function movementQuery(): Map<string, string> {
     // домену й провайдера: `LANGUAGE sql` перевіряє його при створенні.
     [SCOPE_FUNCTIONS_FILE]: [
       "CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
+      "  SECURITY DEFINER SET search_path = ''",
       "  AS $$ SELECT id FROM app.organization $$;",
       "CREATE FUNCTION app.user_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
+      "  SECURITY DEFINER SET search_path = ''",
       "  AS $$ SELECT id FROM auth.users WHERE id = auth.uid() $$;",
     ].join("\n"),
     [MOVEMENTS_SQL]: [
