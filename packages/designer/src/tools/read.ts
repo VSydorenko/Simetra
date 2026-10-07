@@ -19,8 +19,11 @@ export const compileTool = defineTool({
   files: "read",
   database: "none",
   destructive: false,
-  async run({ dir }) {
-    const result = await compile(await readMetadataDir(dir))
+  async run({ dir, baseline }) {
+    const result = await compile(
+      await readMetadataDir(dir),
+      baseline === undefined ? undefined : { baseline }
+    )
     return {
       ok: result.ok,
       changes: [],

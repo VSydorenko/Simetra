@@ -11,7 +11,11 @@ import { toolByName, type Tool } from "../tools/catalog"
 import { DEFAULT_DATABASE_URL_ENV } from "../tools/hints"
 import { invoke } from "../tools/invoke"
 import type { DiffData } from "../tools/database-tools"
-import { findMetadataDirs, stageMetadataDirs } from "./metadata-dirs"
+import {
+  findMetadataDirs,
+  readHeadMetadata,
+  stageMetadataDirs,
+} from "./metadata-dirs"
 import { cliInput, takesJsonInput, type CliArgs } from "./input"
 import { renderResult } from "./render"
 
@@ -138,7 +142,15 @@ export async function runTool(
       const blocks: string[] = []
       const allJson: unknown[] = []
       let failed = false
+      let notGit = false
       for (const [i, dir] of dirs.entries()) {
+        // Базовий стан — від справжньої теки, навіть коли `--staged` читає
+        // вміст з тимчасової: HEAD там не існує.
+        const baseline =
+          tool.name === "compile"
+            ? await readHeadMetadata(cwd, shown[i] ?? dir)
+            : undefined
+        if (tool.name === "compile" && baseline === undefined) notGit = true
         const result = await invoke(tool, input, {
           dir,
           readOnly: false,
@@ -147,6 +159,7 @@ export async function runTool(
           channel: "cli",
           database,
           databaseEnv,
+          ...(baseline === undefined ? {} : { baseline }),
         })
         if (result.refusal !== undefined) return fail(result.refusal.message)
         // Відмінності звірки — теж код 1: CI чекає порожньої звірки
@@ -180,7 +193,11 @@ export async function runTool(
         tool.name === "compile" && format === "json"
           ? `${JSON.stringify(allJson, null, 2)}\n`
           : `${blocks.join("\n")}\n`
-      return { exitCode: failed ? 1 : 0, stdout, stderr: "" }
+      // Одне попередження на прогін, а не на кожну теку.
+      const stderr = notGit
+        ? "warning: not a git repository: assigned-once fields are not checked\n"
+        : ""
+      return { exitCode: failed ? 1 : 0, stdout, stderr }
     } finally {
       await staged?.dispose()
     }

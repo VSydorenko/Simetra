@@ -13,7 +13,11 @@ import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { runTool } from "../cli/command"
-import { findMetadataDirs, stageMetadataDirs } from "../cli/metadata-dirs"
+import {
+  findMetadataDirs,
+  readHeadMetadata,
+  stageMetadataDirs,
+} from "../cli/metadata-dirs"
 import { toolByName } from "../tools/catalog"
 import { tmpProject } from "./helpers/tmp-project"
 
@@ -219,4 +223,68 @@ describe("compile --all / --staged", () => {
     await writeFile(project, clean)
     expect(await run()).toBe(1)
   }, 120_000)
+  describe("baseline HEAD for assigned-once fields", () => {
+    const CONTRACT = "metadata/catalogs/Contract/Contract.meta.json"
+
+    async function committed() {
+      const { root } = await gitProject()
+      await git(root, "commit", "-q", "-m", "init")
+      return { root, file: join(root, CONTRACT) }
+    }
+    const relabel = async (file: string) =>
+      writeFile(
+        file,
+        (await readFile(file, "utf8")).replace(
+          '"kindLabel": "contract"',
+          '"kindLabel": "agreement"'
+        )
+      )
+
+    it("compile --all in git checks assigned-once fields against HEAD", async () => {
+      const { root, file } = await committed()
+      expect((await runAll(root)).exitCode).toBe(0)
+      await relabel(file)
+      const r = await runAll(root)
+      expect(r.exitCode).toBe(1)
+      expect(r.stdout).toContain("identity.assigned-once-changed")
+      expect(r.stderr).toBe("")
+    })
+
+    it("compile --all --staged compares the index with HEAD", async () => {
+      const { root, file } = await committed()
+      const clean = await readFile(file, "utf8")
+      await relabel(file)
+      // Правка лише в робочому дереві індекс не зачіпає.
+      expect((await runAll(root, { staged: true })).exitCode).toBe(0)
+      await git(root, "add", "metadata")
+      await writeFile(file, clean)
+      const r = await runAll(root, { staged: true })
+      expect(r.exitCode).toBe(1)
+      expect(r.stdout).toContain("identity.assigned-once-changed")
+    }, 60_000)
+
+    it("a repo without commits has an empty baseline", async () => {
+      const { root, project } = await gitProject()
+      expect(await readHeadMetadata(root, "metadata")).toEqual(new Map())
+      expect(project).toBeTruthy()
+      expect((await runAll(root)).exitCode).toBe(0)
+    })
+
+    it("readHeadMetadata keys are relative to the metadata dir", async () => {
+      const { root } = await committed()
+      const head = await readHeadMetadata(root, "metadata")
+      expect(head?.has("project.meta.json")).toBe(true)
+      expect(head?.has("catalogs/Contract/Contract.meta.json")).toBe(true)
+    })
+
+    it("outside git compile warns that assigned-once fields are not checked", async () => {
+      const p = await tmpProject()
+      roots.push(p.root)
+      expect(await readHeadMetadata(p.root, "metadata")).toBeUndefined()
+      const r = await runAll(p.root)
+      expect(r.exitCode).toBe(0)
+      expect(r.stderr).toContain("assigned-once fields are not checked")
+      expect(r.stderr.match(/warning:/g)).toHaveLength(1)
+    })
+  })
 })

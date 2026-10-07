@@ -49,6 +49,8 @@ export interface DatabaseResource {
 export interface ToolContext {
   dir: string
   database?: DatabaseResource
+  /** Вміст теки в `HEAD`: лише CLI його дає, MCP змін поза `fix` не перевіряє. */
+  baseline?: ReadonlyMap<string, string>
 }
 
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
@@ -91,6 +93,8 @@ export interface InvokeOptions {
   /** Хто викликає: від цього залежить, як підказка радить дати підключення. */
   channel: "cli" | "mcp"
   database?: DatabaseResource
+  /** Базовий стан для полів, призначених раз (див. `ToolContext.baseline`). */
+  baseline?: ReadonlyMap<string, string>
   /**
    * Ім'я змінної середовища з рядком підключення, зафіксоване при запуску:
    * відмова без підключення має назвати саме її. Типово `SIMETRA_DATABASE_URL`.

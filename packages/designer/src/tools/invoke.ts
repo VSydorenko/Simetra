@@ -91,9 +91,11 @@ export async function invoke<D>(
     try {
       // Інструмент без осі бази ресурсу не бачить, тож і не відкриє пулу.
       const outcome = await tool.run(
-        tool.database === "none"
-          ? { dir: o.dir }
-          : { dir: o.dir, database: o.database },
+        {
+          dir: o.dir,
+          ...(tool.database === "none" ? {} : { database: o.database }),
+          ...(o.baseline === undefined ? {} : { baseline: o.baseline }),
+        },
         parsed.data
       )
       const write =
