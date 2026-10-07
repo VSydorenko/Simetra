@@ -192,6 +192,35 @@ export function checkIdentity(
       )
     }
   })
+  // Бакет називає вид скоупу за логічним іменем (id призначає цей самий
+  // файл), тож резолв тут — поруч із видами, а контракт бере вже id.
+  const bucketsSeen = new Set<string>()
+  ;(project?.storageBuckets ?? []).forEach((entry, index) => {
+    const pointer = `/storageBuckets/${index}`
+    if (bucketsSeen.has(entry.bucket)) {
+      diagnostics.push(
+        diagnostic(
+          "storage.bucket-duplicate",
+          PROJECT_FILE,
+          `${pointer}/bucket`,
+          {
+            bucket: entry.bucket,
+          }
+        )
+      )
+    }
+    bucketsSeen.add(entry.bucket)
+    if (!scopeKindsByName.has(entry.scopeKind)) {
+      diagnostics.push(
+        diagnostic(
+          "storage.scope-kind-unknown",
+          PROJECT_FILE,
+          `${pointer}/scopeKind`,
+          { bucket: entry.bucket, name: entry.scopeKind }
+        )
+      )
+    }
+  })
   // Один корінь на вид: два види на одному корені зробили б значення скоупу
   // двозначним, а скоуп-колонка цього об'єкта не мала б чийого імені.
   const rootsSeen = new Set<string>()
@@ -394,6 +423,21 @@ export function checkIdentity(
       },
       "scopeKind.root"
     )
+  })
+  ;(project?.storageBuckets ?? []).forEach((entry, index) => {
+    const scopeKind = scopeKindsByName.get(entry.scopeKind)
+    if (scopeKind?.id === undefined) return
+    // Бакет id не має, тож власником посилання виступає сам вид скоупу — як
+    // у кореня виду: перейменування й видалення виду бачить індекс.
+    references.push({
+      from: {
+        file: PROJECT_FILE,
+        pointer: `/storageBuckets/${index}/scopeKind`,
+        objectId: scopeKind.id,
+      },
+      to: { kind: "ScopeKind", id: scopeKind.id },
+      role: "storage.scopeKind",
+    })
   })
   for (const object of objects) {
     for (const found of KIND_REGISTRY[object.kind].references(object.data)) {

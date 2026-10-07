@@ -76,6 +76,11 @@ export {
   type RowLevelSecurity,
 } from "./custom-table"
 export { NO_SCOPE, scopeKindSchema, type ScopeKind } from "./scope"
+export {
+  PUBLIC_READ_ROLES,
+  publicReadSchema,
+  type PublicReadRole,
+} from "./public-read"
 export { pgEnumSchema, type PgEnum } from "./pg-enum"
 
 // Project

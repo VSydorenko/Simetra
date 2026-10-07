@@ -524,6 +524,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: 'Види скоупу оголошують у project.meta.json у "scopeKinds"; "none" виводить об\'єкт зі скоупу.',
     },
   },
+  "storage.bucket-duplicate": {
+    en: (p) => `Storage bucket "${p.bucket}" is declared more than once`,
+    uk: (p) => `Бакет сховища "${p.bucket}" оголошений більше одного разу`,
+    hint: {
+      en: "A bucket has one access policy, so it names exactly one scope kind.",
+      uk: "Бакет має одну політику доступу, тож називає рівно один вид скоупу.",
+    },
+  },
+  "storage.scope-kind-unknown": {
+    en: (p) =>
+      `Storage bucket "${p.bucket}" names scope kind "${p.name}" that is not declared in the project`,
+    uk: (p) =>
+      `Бакет сховища "${p.bucket}" називає вид скоупу "${p.name}", якого немає в проєкті`,
+    hint: {
+      en: 'Scope kinds are declared in project.meta.json under "scopeKinds".',
+      uk: 'Види скоупу оголошують у project.meta.json у "scopeKinds".',
+    },
+  },
   "scope.attribute-name-collision": {
     en: (p) =>
       `Name "${p.name}" collides with the scope column of this ${p.kind}`,

@@ -207,7 +207,8 @@ export async function runStages(
       stage1.project.naming.attributeCase,
       sqlUnits,
       stage1.project.timezone,
-      stage3.elementChecks
+      stage3.elementChecks,
+      stage1.project
     ),
     presentation: buildPresentation(
       stage1.objects,

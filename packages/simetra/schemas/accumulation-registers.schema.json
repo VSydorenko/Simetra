@@ -126,6 +126,14 @@
       ],
       "additionalProperties": false
     },
+    "publicRead": {
+      "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
+      "type": "string",
+      "enum": [
+        "authenticated",
+        "anon"
+      ]
+    },
     "standardAttributeOverrides": {
       "default": {},
       "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",

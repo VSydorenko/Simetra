@@ -55,6 +55,8 @@ export const COMPILER_RULES = [
   "scope.cross-scope-redundant",
   "scope.set-function-missing",
   "scope.set-function-signature",
+  "storage.bucket-duplicate",
+  "storage.scope-kind-unknown",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",

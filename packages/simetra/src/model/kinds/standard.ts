@@ -114,6 +114,8 @@ export type ReferenceRole =
   | "customTable.scopeColumn"
   | "object.scope"
   | "scopeKind.root"
+  /** Вид скоупу в `project.storageBuckets[].scopeKind`. */
+  | "storage.scopeKind"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */

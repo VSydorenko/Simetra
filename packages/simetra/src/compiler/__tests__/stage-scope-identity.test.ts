@@ -354,4 +354,22 @@ describe("stage 2: scope identity", () => {
     )
     expect(result.ok).toBe(false)
   })
+
+  it("bucket with an unknown scope kind or a repeated bucket is an error", async () => {
+    const result = await compileScoped(
+      {},
+      {
+        ...scopedProject(),
+        storageBuckets: [
+          { bucket: "files", scopeKind: "org" },
+          { bucket: "files", scopeKind: "user" },
+          { bucket: "docs", scopeKind: "ghost" },
+        ],
+      }
+    )
+    expect(codes(result)).toEqual([
+      ["storage.bucket-duplicate", PROJECT, "/storageBuckets/1/bucket"],
+      ["storage.scope-kind-unknown", PROJECT, "/storageBuckets/2/scopeKind"],
+    ])
+  })
 })

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { publicReadSchema } from "./public-read"
 import { attributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
@@ -123,6 +124,8 @@ export const documentSchema = z.strictObject({
   registerMovements: z.array(metadataRefSchema).default([]).meta({
     description: "Registers the document writes movements into.",
   }),
+
+  publicRead: publicReadSchema,
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

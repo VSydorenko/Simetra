@@ -10,6 +10,8 @@ import {
   type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type Project,
+  type PublicReadRole,
   type RegisterKeySpec,
   type VirtualTableKind,
 } from "simetra/model"
@@ -178,6 +180,10 @@ export interface Contracts {
   predefined: PredefinedContract[]
   /** За `objectId`. */
   numbering: NumberingContract[]
+  /** За `objectId`: роль API, якій об'єкт відкриває читання. */
+  publicRead: { objectId: string; role: PublicReadRole }[]
+  /** За `bucket`: вид скоупу вказано id, бо ім'я виду може змінитися. */
+  storageBuckets: { bucket: string; scopeKindId: string }[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -451,7 +457,8 @@ export function buildContracts(
   style: AttributeCase,
   sqlUnits: readonly SqlUnit[],
   timezone: string,
-  elementChecks: ModelStageResult["elementChecks"]
+  elementChecks: ModelStageResult["elementChecks"],
+  project: Pick<Project, "scopeKinds" | "storageBuckets">
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -493,6 +500,22 @@ export function buildContracts(
     registers,
     predefined: predefinedContracts(objects, physical, style),
     numbering: numberingContracts(objects, physical, style),
+    publicRead: objects
+      .flatMap((object) => {
+        const role = (object.data as { publicRead?: PublicReadRole }).publicRead
+        return role === undefined ? [] : [{ objectId: object.id ?? "", role }]
+      })
+      .sort((a, b) => compareStrings(a.objectId, b.objectId)),
+    storageBuckets: project.storageBuckets
+      .map(({ bucket, scopeKind }) => ({
+        bucket,
+        // Існування виду стереже стадія 2: до контрактів доходить лише модель
+        // без помилок.
+        scopeKindId: must(
+          project.scopeKinds.find((k) => k.name === scopeKind)?.id
+        ),
+      }))
+      .sort((a, b) => compareStrings(a.bucket, b.bucket)),
   }
 }
 

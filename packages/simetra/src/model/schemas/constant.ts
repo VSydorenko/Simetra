@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { publicReadSchema } from "./public-read"
 import { objectHeaderShape } from "./object-header"
 import {
   defaultValueSchema,
@@ -13,6 +14,7 @@ export const constantSchema = z
     kind: z
       .literal("Constant")
       .meta({ description: "Metadata kind; always Constant." }),
+    publicRead: publicReadSchema,
     ...valueTypeShape,
     defaultValue: defaultValueSchema
       .optional()

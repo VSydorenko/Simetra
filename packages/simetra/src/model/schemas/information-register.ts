@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { publicReadSchema } from "./public-read"
 import { attributeSchema } from "./attribute"
 import { metadataRefSchema } from "./metadata-ref"
 import {
@@ -27,6 +28,8 @@ export const informationRegisterSchema = z.strictObject({
   recorderTypes: z.array(metadataRefSchema).default([]).meta({
     description: "Document kinds allowed to write records of this register.",
   }),
+
+  publicRead: publicReadSchema,
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

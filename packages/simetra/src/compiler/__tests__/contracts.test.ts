@@ -57,6 +57,35 @@ const at = { name: "p_at", type: "timestamp with time zone" }
 const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
 
+describe("publicRead and storage buckets contracts", () => {
+  it("contracts carry publicRead and storage buckets", async () => {
+    const entries = scopedProject2()
+    const cp = catalog("Counterparty", { scope: "org", publicRead: "anon" })
+    entries["catalogs/Counterparty/Counterparty.meta.json"] = cp
+    Object.assign(entries["project.meta.json"] as object, {
+      storageBuckets: [
+        { bucket: "b-files", scopeKind: "user" },
+        { bucket: "a-files", scopeKind: "org" },
+      ],
+    })
+    const result = await compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const model = result.model!
+    const id = (name: string) =>
+      model.scopeKinds.find((kind) => kind.name === name)!.id
+    expect(model.contracts.publicRead).toEqual([
+      {
+        objectId: model.objects.find((o) => o.name === "Counterparty")!.id,
+        role: "anon",
+      },
+    ])
+    expect(model.contracts.storageBuckets).toEqual([
+      { bucket: "a-files", scopeKindId: id("org") },
+      { bucket: "b-files", scopeKindId: id("user") },
+    ])
+  })
+})
+
 describe("numbering contract", () => {
   it("document numbering contract", async () => {
     const { numbering } = await contracts({

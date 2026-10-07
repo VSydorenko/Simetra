@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { publicReadSchema } from "./public-read"
 import { localizedStringSchema } from "./localized-string"
 import { catalogAttributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
@@ -89,6 +90,8 @@ export const catalogSchema = z.strictObject({
       description:
         "Items that exist in every deployment and are referenced by name.",
     }),
+
+  publicRead: publicReadSchema,
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

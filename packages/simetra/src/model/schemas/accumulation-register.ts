@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { publicReadSchema } from "./public-read"
 import { attributeSchema } from "./attribute"
 import {
   elementNameSchema,
@@ -74,6 +75,8 @@ export const accumulationRegisterSchema = z
         description:
           "Negative-balance control at posting; allowed only on a Balance register.",
       }),
+
+    publicRead: publicReadSchema,
 
     standardAttributeOverrides: standardAttributeOverridesSchema,
 

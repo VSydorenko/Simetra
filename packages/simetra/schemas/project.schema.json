@@ -237,6 +237,31 @@
         "additionalProperties": false,
         "description": "Scope kind of the application (tenant dimension)."
       }
+    },
+    "storageBuckets": {
+      "default": [],
+      "description": "Provider storage buckets whose access policies follow a scope kind.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name of the provider storage bucket."
+          },
+          "scopeKind": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Name of the project scope kind that scopes access to the bucket."
+          }
+        },
+        "required": [
+          "bucket",
+          "scopeKind"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

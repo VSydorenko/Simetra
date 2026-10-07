@@ -65,6 +65,14 @@
       "const": "Constant",
       "description": "Metadata kind; always Constant."
     },
+    "publicRead": {
+      "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
+      "type": "string",
+      "enum": [
+        "authenticated",
+        "anon"
+      ]
+    },
     "type": {
       "type": "string",
       "enum": [

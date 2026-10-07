@@ -242,6 +242,14 @@
         "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
       }
     },
+    "publicRead": {
+      "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
+      "type": "string",
+      "enum": [
+        "authenticated",
+        "anon"
+      ]
+    },
     "standardAttributeOverrides": {
       "default": {},
       "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",

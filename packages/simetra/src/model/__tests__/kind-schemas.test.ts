@@ -398,6 +398,7 @@ describe("projectSchema", () => {
       naming: { attributeCase: "camelCase" },
       timezone: "UTC",
       scopeKinds: [],
+      storageBuckets: [],
     })
   })
 
@@ -697,5 +698,18 @@ describe("kindLabel", () => {
       expect(
         Object.keys((unwrap(KIND_REGISTRY[kind].schema) as z.ZodObject).shape)
       ).not.toContain("kindLabel")
+  })
+})
+
+describe("publicRead", () => {
+  it("publicRead is a field exactly of kinds with row level security", () => {
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      // Прийнята таблиця описує RLS полем файлу, а не фактом виду.
+      expect(
+        "publicRead" in (unwrap(def.schema) as z.ZodObject).shape,
+        kind
+      ).toBe(def.rowLevelSecurity === "enabled")
+    }
   })
 })

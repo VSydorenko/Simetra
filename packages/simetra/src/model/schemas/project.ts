@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
 import type { SchemaRule } from "./rules"
-import { ATTRIBUTE_CASES } from "./identity"
+import { ATTRIBUTE_CASES, elementNameSchema } from "./identity"
 import { NO_SCOPE, scopeKindSchema } from "./scope"
 
 /**
@@ -59,6 +59,25 @@ export const projectSchema = z
       description:
         "Scope kinds of the application; leave empty for a single-tenant application.",
     }),
+    // Бакет — ключ політик сховища провайдера; сам бакет створює провайдер,
+    // а тут лише декларація, за якою П3 генерує політики за скоупом.
+    storageBuckets: z
+      .array(
+        z.strictObject({
+          bucket: z.string().min(1).meta({
+            description: "Name of the provider storage bucket.",
+          }),
+          scopeKind: elementNameSchema.meta({
+            description:
+              "Name of the project scope kind that scopes access to the bucket.",
+          }),
+        })
+      )
+      .default([])
+      .meta({
+        description:
+          "Provider storage buckets whose access policies follow a scope kind.",
+      }),
   })
   .superRefine((project, ctx) => {
     project.scopeKinds.forEach((kind, index) => {

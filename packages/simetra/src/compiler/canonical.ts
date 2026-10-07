@@ -119,10 +119,12 @@ export function canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown {
     model.project.scopeKinds.map((kind) => [kind.id, kind.title])
   )
   // Види скоупу — лише резолвленою формою: у файлі проєкту корінь названо
-  // іменем, а `$schema` — шлях для редактора.
+  // іменем, а `$schema` — шлях для редактора. Бакети теж називають вид іменем;
+  // їхня резолвлена форма — `contracts.storageBuckets`.
   const project = Object.fromEntries(
     Object.entries(model.project).filter(
-      ([key]) => key !== "$schema" && key !== "scopeKinds"
+      ([key]) =>
+        key !== "$schema" && key !== "scopeKinds" && key !== "storageBuckets"
     )
   )
 

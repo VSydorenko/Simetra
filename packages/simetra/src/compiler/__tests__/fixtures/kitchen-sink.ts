@@ -177,6 +177,7 @@ export function kitchenSink(): Map<string, string> {
         onRootDelete: "restrict",
       },
     ],
+    storageBuckets: [{ bucket: "attachments", scopeKind: "org" }],
   }
 
   const organization = {
@@ -186,6 +187,7 @@ export function kitchenSink(): Map<string, string> {
 
   const item = {
     ...header("Catalog", "Item", "item"),
+    publicRead: "anon",
     codeLength: 12,
     codeType: "Number",
     descriptionLength: 200,
@@ -250,6 +252,7 @@ export function kitchenSink(): Map<string, string> {
 
   const sale = {
     ...header("Document", "Sale", "sale"),
+    publicRead: "authenticated",
     numberLength: 9,
     numberType: "Number",
     autonumber: false,
@@ -330,6 +333,7 @@ export function kitchenSink(): Map<string, string> {
 
   const prices = {
     ...header("InformationRegister", "Prices", "prices"),
+    publicRead: "anon",
     periodicity: "Month",
     writeMode: "RecorderSubordinate",
     recorderTypes: [ref("Document", "Sale")],
@@ -360,6 +364,7 @@ export function kitchenSink(): Map<string, string> {
 
   const stock = {
     ...header("AccumulationRegister", "Stock", "stock"),
+    publicRead: "authenticated",
     registerType: "Balance",
     recorderTypes: [ref("Document", "Sale")],
     balanceControl: { resources: ["qty"] },
@@ -400,6 +405,7 @@ export function kitchenSink(): Map<string, string> {
       type: "String",
       length: 3,
       defaultValue: "UAH",
+      publicRead: "anon",
     }),
     VatRate: constant("VatRate", "vat_rate", {
       type: "Numeric",
