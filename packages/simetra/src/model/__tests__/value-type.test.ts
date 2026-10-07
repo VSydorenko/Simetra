@@ -209,6 +209,39 @@ describe("default value (spec §5)", () => {
     )
   })
 
+  it.each([
+    [{ type: "DateTime", defaultValue: { fill: "now" } }, []],
+    [{ type: "Date", defaultValue: { fill: "today" } }, []],
+    [{ type: "UUID", defaultValue: { fill: "newUuid" } }, []],
+    [
+      { type: "Date", defaultValue: { fill: "now" } },
+      ["type.default-fill-mismatch"],
+    ],
+    [
+      { type: "DateTime", array: true, defaultValue: { fill: "now" } },
+      ["type.default-fill-mismatch"],
+    ],
+    [
+      { type: "String", length: 5, array: true, defaultValue: { empty: true } },
+      [],
+    ],
+    [{ type: "Json", defaultValue: { empty: "array" } }, []],
+    [
+      { type: "Json", defaultValue: { empty: true } },
+      ["type.default-empty-mismatch"],
+    ],
+    [
+      { type: "Integer", defaultValue: { empty: "object" } },
+      ["type.default-empty-mismatch"],
+    ],
+    [
+      { type: "Integer", array: true, defaultValue: { empty: "array" } },
+      ["type.default-empty-mismatch"],
+    ],
+  ])("default form %j", (input, expected) =>
+    expect(defaultRules(input).map(([rule]) => rule)).toEqual(expected)
+  )
+
   it("constant default follows the same rules", () => {
     const issues = (input: Record<string, unknown>) =>
       constantSchema

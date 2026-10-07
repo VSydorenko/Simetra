@@ -8,7 +8,7 @@ import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import type { MetadataRef } from "../schemas/metadata-ref"
 import type { TabularSection } from "../schemas/tabular-section"
-import type { ValueType } from "../schemas/value-type"
+import type { DefaultValue, ValueType } from "../schemas/value-type"
 
 /**
  * Хто призначає ключ і як пишуться рядки (спека П2 §5): довідник —
@@ -38,7 +38,7 @@ export interface StandardColumnDef {
    * нього будує стадія 3 тим самим шляхом, що й для реквізиту, тож екранування
    * не дублюється в реєстрі. Взаємовиключне з `default`.
    */
-  defaultValue?: string | number | boolean
+  defaultValue?: DefaultValue
   /**
    * Колонка, що її значення — усічення іншої колонки до дати. Структурно,
    * бо пояс проєкту реєстр не знає: вираз будує стадія 3 через

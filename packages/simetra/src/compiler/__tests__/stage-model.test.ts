@@ -730,6 +730,58 @@ describe("stage 3: physical snapshot", () => {
     expect(valueOf("plain")).not.toHaveProperty("default")
   })
 
+  it("fill and empty default forms become DEFAULT expressions", async () => {
+    const physical = await compileWith({
+      "project.meta.json": project({ timezone: "Europe/Kyiv" }),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        codeLength: 0,
+        attributes: [
+          attribute("seenAt", {
+            type: "DateTime",
+            defaultValue: { fill: "now" },
+          }),
+          attribute("seenOn", {
+            type: "Date",
+            defaultValue: { fill: "today" },
+          }),
+          attribute("token", {
+            type: "UUID",
+            defaultValue: { fill: "newUuid" },
+          }),
+          attribute("tags", {
+            type: "String",
+            length: 5,
+            array: true,
+            defaultValue: { empty: true },
+          }),
+          attribute("doc", { type: "Json", defaultValue: { empty: "object" } }),
+          attribute("list", { type: "Json", defaultValue: { empty: "array" } }),
+        ],
+      }),
+      "constants/Day/Day.meta.json": {
+        id: uuid(70),
+        kind: "Constant",
+        name: "Day",
+        physicalName: "day",
+        type: "Date",
+        defaultValue: { fill: "today" },
+      },
+    })
+    const item = tableOf(physical, "item")
+    const column = (name: string) => item.columns.find((c) => c.name === name)!
+    expect(column("seen_at").default).toBe("now()")
+    expect(column("seen_on").default).toBe(
+      "(now() AT TIME ZONE 'Europe/Kyiv')::date"
+    )
+    expect(column("token").default).toBe("gen_random_uuid()")
+    expect(column("tags").default).toBe("'{}'")
+    expect(column("doc").default).toBe("'{}'::jsonb")
+    expect(column("list").default).toBe("'[]'::jsonb")
+    expect(
+      tableOf(physical, "day").columns.find((c) => c.name === "value")!.default
+    ).toBe("(now() AT TIME ZONE 'Europe/Kyiv')::date")
+  })
+
   it("enumeration default becomes its label in DEFAULT for attributes and constants", async () => {
     const status = { kind: "Enumeration", name: "Status" }
     const physical = await compileWith({

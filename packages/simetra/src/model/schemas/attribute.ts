@@ -5,7 +5,11 @@ import {
   metadataIdSchema,
   physicalNameSchema,
 } from "./identity"
-import { refineValueType, valueTypeShape } from "./value-type"
+import {
+  defaultValueSchema,
+  refineValueType,
+  valueTypeShape,
+} from "./value-type"
 
 /**
  * Реквізит (а також вимір чи ресурс регістра). Унікальність імен у масиві й
@@ -35,8 +39,7 @@ export const attributeSchema = z
       .boolean()
       .default(false)
       .meta({ description: "Whether values must be unique." }),
-    defaultValue: z
-      .union([z.string(), z.number(), z.boolean()])
+    defaultValue: defaultValueSchema
       .optional()
       .meta({ description: "Default value of the attribute." }),
   })

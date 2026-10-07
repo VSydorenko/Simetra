@@ -54,8 +54,53 @@ export const valueTypeShape = {
 
 export type ValueType = z.infer<z.ZodObject<typeof valueTypeShape>>
 
-/** Скаляр типового значення реквізиту й константи (спека П2 §5). */
-type DefaultValue = string | number | boolean
+/** Значення заповнення: вираз, який рахує сама БД на вставці (спека промоції §9.2). */
+export const FILL_VALUES = ["now", "today", "newUuid"] as const
+/** Порожнє значення: `true` — порожній масив, `object`/`array` — порожній JSON. */
+export const EMPTY_VALUES = [true, "object", "array"] as const
+
+const FILL_TYPES: Record<(typeof FILL_VALUES)[number], LogicalType> = {
+  now: "DateTime",
+  today: "Date",
+  newUuid: "UUID",
+}
+
+/**
+ * Типове значення реквізиту й константи: скаляр (спека П2 §5) або об'єктна
+ * форма `fill` / `empty` — вираз колонки без літерала в метаданих.
+ */
+export type DefaultValue =
+  | string
+  | number
+  | boolean
+  | { fill: (typeof FILL_VALUES)[number] }
+  | { empty: (typeof EMPTY_VALUES)[number] }
+
+/** Схема `defaultValue`; суворі об'єкти, щоб зайвий ключ не пройшов мовчки. */
+export const defaultValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.strictObject({
+    fill: z.enum(FILL_VALUES).meta({
+      description:
+        "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID).",
+    }),
+  }),
+  z.strictObject({
+    empty: z.union([z.literal(true), z.enum(["object", "array"])]).meta({
+      description:
+        "Empty value: true for an array of any type, object or array for a scalar Json.",
+    }),
+  }),
+])
+
+/** Скаляр відрізняється від об'єктної форми заповнення. */
+export function isScalarDefault(
+  value: DefaultValue
+): value is string | number | boolean {
+  return typeof value !== "object"
+}
 
 /** Межі цілих типів Postgres; `BigInt`-число — у межах точного числа JSON. */
 const INTEGER_RANGES: Partial<Record<LogicalType, [number, number]>> = {
@@ -210,6 +255,54 @@ function isDateTime(text: string): boolean {
 }
 
 /**
+ * Об'єктні форми типового значення (спека промоції §9.2): `fill` — лише на
+ * скалярі свого типу, `empty` — лише на масиві або скалярному Json. Підказка
+ * називає форму, яку слід ужити.
+ */
+function refineObjectDefault(
+  value: ValueType,
+  defaultValue: Exclude<DefaultValue, string | number | boolean>,
+  issue: (
+    rule: SchemaRule,
+    message: string,
+    path: string[],
+    expected?: string
+  ) => void
+): void {
+  const path = ["defaultValue"]
+  if ("fill" in defaultValue) {
+    const wanted = FILL_TYPES[defaultValue.fill]
+    if (value.array === true || value.type !== wanted) {
+      const form = FILL_VALUES.find((f) => FILL_TYPES[f] === value.type)
+      issue(
+        "type.default-fill-mismatch",
+        "fill does not match the logical type",
+        path,
+        value.array !== true && form !== undefined
+          ? `{ "fill": "${form}" }`
+          : ""
+      )
+    }
+    return
+  }
+  const ok =
+    value.array === true
+      ? defaultValue.empty === true
+      : value.type === "Json" && defaultValue.empty !== true
+  if (ok) return
+  issue(
+    "type.default-empty-mismatch",
+    "empty does not match the logical type",
+    path,
+    value.array === true
+      ? '{ "empty": true }'
+      : value.type === "Json"
+        ? '{ "empty": "object" } or { "empty": "array" }'
+        : ""
+  )
+}
+
+/**
  * Перевірки сумісності параметрів типу; кожне порушення несе код правила.
  * Типове значення перевіряється тут же — для реквізиту й константи одним
  * шляхом.
@@ -218,8 +311,18 @@ export function refineValueType(
   value: ValueType & { defaultValue?: DefaultValue },
   ctx: z.RefinementCtx
 ): void {
-  const issue = (rule: SchemaRule, message: string, path: string[]) =>
-    ctx.addIssue({ code: "custom", message, path, params: { rule } })
+  const issue = (
+    rule: SchemaRule,
+    message: string,
+    path: string[],
+    expected?: string
+  ) =>
+    ctx.addIssue({
+      code: "custom",
+      message,
+      path,
+      params: expected === undefined ? { rule } : { rule, expected },
+    })
 
   if (value.type === "String" && value.length === undefined) {
     issue("type.length-required", "String type requires length", ["length"])
@@ -275,6 +378,10 @@ export function refineValueType(
 
   const { defaultValue } = value
   if (defaultValue === undefined) return
+  if (!isScalarDefault(defaultValue)) {
+    refineObjectDefault(value, defaultValue, issue)
+    return
+  }
   // Масив, поліморфна пара, байти й JSON не мають скалярного літерала, який
   // дав би коректний `DEFAULT` (спека П2 §5).
   if (

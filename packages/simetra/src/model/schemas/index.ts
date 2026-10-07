@@ -30,6 +30,8 @@ export {
   LOGICAL_TYPES,
   valueTypeShape,
   refineValueType,
+  isScalarDefault,
+  type DefaultValue,
   type LogicalType,
   type ValueType,
 } from "./value-type"

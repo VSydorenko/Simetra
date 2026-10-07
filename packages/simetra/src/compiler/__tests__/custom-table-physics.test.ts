@@ -309,7 +309,9 @@ describe("CustomTable physics round-trip", () => {
     // різниця — її власна таблиця `main_color`. Потім додано `COLLATE "C"`
     // колонкам `_type` поліморфних пар — єдина різниця знімка. Далі `required`
     // рядка отримав CHECK непорожнього (`nonempty`, `required` шапки) — єдина
-    // різниця знімка.
+    // різниця знімка. Далі в реквізити й константи фікстури додано об'єктні
+    // форми типового значення (`fill`, `empty`) — нові колонки й таблиці
+    // констант, а наявні таблиці лишилися тими самими.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -320,7 +322,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "d7277f57e558c9e68ef4eb82bb44c1b89a8099d894d32f5d396346cdd2ab60ce"
+      "ba43f038da6a896a3c242cdf7a4c333e7655db00f4ef1342a693e8af78d22b51"
     )
   })
 })

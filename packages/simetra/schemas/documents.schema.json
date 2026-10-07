@@ -467,10 +467,59 @@
           },
           "defaultValue": {
             "description": "Default value of the attribute.",
-            "type": [
-              "string",
-              "number",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "fill": {
+                    "type": "string",
+                    "enum": [
+                      "now",
+                      "today",
+                      "newUuid"
+                    ],
+                    "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
+                  }
+                },
+                "required": [
+                  "fill"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "empty": {
+                    "anyOf": [
+                      {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "object",
+                          "array"
+                        ]
+                      }
+                    ],
+                    "description": "Empty value: true for an array of any type, object or array for a scalar Json."
+                  }
+                },
+                "required": [
+                  "empty"
+                ],
+                "additionalProperties": false
+              }
             ]
           }
         },
@@ -744,10 +793,59 @@
                 },
                 "defaultValue": {
                   "description": "Default value of the attribute.",
-                  "type": [
-                    "string",
-                    "number",
-                    "boolean"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "fill": {
+                          "type": "string",
+                          "enum": [
+                            "now",
+                            "today",
+                            "newUuid"
+                          ],
+                          "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
+                        }
+                      },
+                      "required": [
+                        "fill"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "empty": {
+                          "anyOf": [
+                            {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "object",
+                                "array"
+                              ]
+                            }
+                          ],
+                          "description": "Empty value: true for an array of any type, object or array for a scalar Json."
+                        }
+                      },
+                      "required": [
+                        "empty"
+                      ],
+                      "additionalProperties": false
+                    }
                   ]
                 }
               },

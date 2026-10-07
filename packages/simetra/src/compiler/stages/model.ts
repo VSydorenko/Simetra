@@ -26,6 +26,7 @@ import {
   type CustomTableColumn,
   type Deferrable,
   type DeferredConstraint,
+  type DefaultValue,
   type MetadataRef,
   type PgQualifiedName,
   type PhysicalColumn,
@@ -36,6 +37,7 @@ import {
   type RegisterKeySpec,
   type ScopeKind,
   singleUuidKeyColumn,
+  isScalarDefault,
   type StandardColumnDef,
   type TabularSection,
   type ValueType,
@@ -806,7 +808,8 @@ class SnapshotBuilder {
           defaultOf(
             column.defaultValue,
             target,
-            this.enumDefaultLabels.get(object.id ?? "")
+            this.enumDefaultLabels.get(object.id ?? ""),
+            this.project.timezone
           )),
       ...(column.generated !== undefined
         ? {
@@ -950,7 +953,8 @@ class SnapshotBuilder {
       ...defaultOf(
         attribute.defaultValue,
         resolved.target,
-        this.enumDefaultLabels.get(attribute.id ?? "")
+        this.enumDefaultLabels.get(attribute.id ?? ""),
+        this.project.timezone
       ),
       primaryKey: false,
       indexed: attribute.indexed === true,
@@ -1668,16 +1672,44 @@ function startsWith(key: readonly string[], prefix: readonly string[]) {
  * посилань; невідоме ім'я запису не має й звітує стадія 4.
  */
 function defaultOf(
-  value: string | number | boolean | undefined,
+  value: DefaultValue | undefined,
   target: Target,
-  label: string | undefined
+  label: string | undefined,
+  timezone: string
 ): { default?: string } {
   if (value === undefined) return {}
+  if (!isScalarDefault(value))
+    return { default: fillExpression(value, timezone) }
   return {
     default: sqlLiteral(
       target.form === "label" && label !== undefined ? label : value
     ),
   }
+}
+
+/**
+ * Вираз `DEFAULT` об'єктної форми: «сьогодні» береться в поясі проєкту, бо
+ * `now()::date` читав б пояс сесії, а не домену.
+ */
+function fillExpression(
+  value: Exclude<DefaultValue, string | number | boolean>,
+  timezone: string
+): string {
+  if ("fill" in value) {
+    switch (value.fill) {
+      case "now":
+        return "now()"
+      case "today":
+        return `(now() AT TIME ZONE ${sqlLiteral(timezone)})::date`
+      case "newUuid":
+        return "gen_random_uuid()"
+    }
+  }
+  return value.empty === true
+    ? "'{}'"
+    : value.empty === "object"
+      ? "'{}'::jsonb"
+      : "'[]'::jsonb"
 }
 
 /**

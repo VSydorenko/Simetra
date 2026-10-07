@@ -131,6 +131,34 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Boolean приймає булеве значення; SmallInt і Integer — число; BigInt і Numeric — число або рядок; UUID, String, Text, Date, DateTime і Ref на перерахування — рядок.",
     },
   },
+  "type.default-fill-mismatch": {
+    en: () => "defaultValue fill does not match the logical type",
+    uk: () => "fill у defaultValue не відповідає логічному типу",
+    hint: {
+      en: (p) =>
+        p.expected
+          ? `Use ${p.expected} for this type.`
+          : "fill applies only to a scalar DateTime (now), Date (today) or UUID (newUuid).",
+      uk: (p) =>
+        p.expected
+          ? `Для цього типу вжийте ${p.expected}.`
+          : "fill застосовується лише до скалярних DateTime (now), Date (today) чи UUID (newUuid).",
+    },
+  },
+  "type.default-empty-mismatch": {
+    en: () => "defaultValue empty does not match the logical type",
+    uk: () => "empty у defaultValue не відповідає логічному типу",
+    hint: {
+      en: (p) =>
+        p.expected
+          ? `Use ${p.expected} for this type.`
+          : "empty applies only to an array (true) or a scalar Json (object or array).",
+      uk: (p) =>
+        p.expected
+          ? `Для цього типу вжийте ${p.expected}.`
+          : "empty застосовується лише до масиву (true) чи скалярного Json (object або array).",
+    },
+  },
   "type.default-invalid": {
     en: () => "defaultValue is outside the type",
     uk: () => "defaultValue виходить за межі типу",

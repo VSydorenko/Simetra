@@ -22,6 +22,8 @@ export const SCHEMA_RULES = [
   "type.default-not-allowed",
   "type.default-mismatch",
   "type.default-invalid",
+  "type.default-fill-mismatch",
+  "type.default-empty-mismatch",
   "posting.parse",
 ] as const
 

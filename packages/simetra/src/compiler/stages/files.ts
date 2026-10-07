@@ -457,9 +457,13 @@ function zodDiagnostics(
     if (isSchemaRule(rule)) {
       const field = issue.path.at(-1)
       const offset = issue.code === "custom" ? issue.params?.offset : undefined
+      const expected =
+        issue.code === "custom" ? issue.params?.expected : undefined
       return [
         diagnostic(rule, file, pointer, {
           ...(field === undefined ? {} : { field: String(field) }),
+          // Форма, яку слід ужити замість хибної (підказка правил типового значення).
+          ...(typeof expected === "string" ? { expected } : {}),
           // Помилка розбору виразу: текст парсера й зміщення в рядку виразу.
           ...(typeof offset === "number"
             ? { offset, detail: issue.message }

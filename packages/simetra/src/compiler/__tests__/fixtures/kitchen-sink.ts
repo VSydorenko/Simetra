@@ -73,8 +73,30 @@ function attributes(prefix: string) {
       ...common(`${prefix}Tags`, `${prefix}_tags`),
       type: "Boolean",
       array: true,
+      defaultValue: { empty: true },
     },
-    // Типове значення масиву схема відхиляє (спека §5): лише скалярний елемент.
+    // Об'єктні форми типового значення: заповнення й порожнє.
+    {
+      ...common(`${prefix}Seen`, `${prefix}_seen`),
+      type: "DateTime",
+      defaultValue: { fill: "now" },
+    },
+    {
+      ...common(`${prefix}Token`, `${prefix}_token`),
+      type: "UUID",
+      defaultValue: { fill: "newUuid" },
+    },
+    {
+      ...common(`${prefix}Payload`, `${prefix}_payload`),
+      type: "Json",
+      defaultValue: { empty: "object" },
+    },
+    {
+      ...common(`${prefix}Items`, `${prefix}_items`),
+      type: "Json",
+      defaultValue: { empty: "array" },
+    },
+    // Скалярне типове значення масиву схема відхиляє (спека §5).
     {
       ...common(`${prefix}Active`, `${prefix}_active`),
       type: "Boolean",
@@ -333,6 +355,20 @@ export function kitchenSink(): Map<string, string> {
       precision: 5,
       scale: 2,
       defaultValue: 20,
+    }),
+    Today: constant("Today", "today", {
+      type: "Date",
+      defaultValue: { fill: "today" },
+    }),
+    EmptyList: constant("EmptyList", "empty_list", {
+      type: "Json",
+      defaultValue: { empty: "array" },
+    }),
+    EmptyTags: constant("EmptyTags", "empty_tags", {
+      type: "String",
+      length: 10,
+      array: true,
+      defaultValue: { empty: true },
     }),
     MainItem: constant("MainItem", "main_item", {
       type: "Ref",
