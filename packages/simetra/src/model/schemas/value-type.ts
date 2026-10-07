@@ -450,3 +450,169 @@ export function refineValueType(
     ])
   }
 }
+
+/** Поля меж числа й формату рядка реквізиту (спека промоції §9.3). */
+export interface ValueCheckProps {
+  nonNegative?: true
+  positive?: true
+  minValue?: number | string
+  maxValue?: number | string
+  pattern?: string
+  minLength?: number
+}
+
+const NUMERIC_BOUND_TYPES: readonly LogicalType[] = [
+  "Integer",
+  "SmallInt",
+  "BigInt",
+  "Numeric",
+]
+
+/**
+ * Конструкції JS-виразу, яких регулярні вирази Postgres (POSIX ARE) не знають
+ * або читають інакше: іменовані групи, `\p{…}`/`\P{…}`, `\k<…>`, а також
+ * `\b`/`\B` (в ARE це символ повернення й синонім скісної риски, межа слова
+ * — `\y`). Ці вирази `new RegExp` приймає, а CHECK на розгортанні впав би.
+ * Розбір по символах, щоб екранована скісна риска й клас `[...]` не давали
+ * хибних спрацювань.
+ */
+function usesJsOnlyRegexSyntax(pattern: string): boolean {
+  let inClass = false
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]!
+    if (char === "\\") {
+      const next = pattern[i + 1]
+      if (next === "p" || next === "P" || next === "k") return true
+      if (!inClass && (next === "b" || next === "B")) return true
+      i++
+    } else if (inClass) {
+      if (char === "]") inClass = false
+    } else if (char === "[") {
+      inClass = true
+    } else if (
+      char === "(" &&
+      pattern[i + 1] === "?" &&
+      pattern[i + 2] === "<" &&
+      pattern[i + 3] !== "=" &&
+      pattern[i + 3] !== "!"
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/** Десятковий запис у вигляді `цілі × 10^степінь` — для точного порівняння меж. */
+function decimalParts(value: number | string): { int: bigint; exp: number } {
+  const match = /^([+-]?)(\d*)\.?(\d*)(?:[eE]([+-]?\d+))?$/.exec(String(value))!
+  const [, sign = "", whole = "", fraction = "", exponent = "0"] = match
+  const int = BigInt(`${whole}${fraction}` || "0")
+  return {
+    int: sign === "-" ? -int : int,
+    exp: Number(exponent) - fraction.length,
+  }
+}
+
+function compareDecimals(a: number | string, b: number | string): number {
+  const left = decimalParts(a)
+  const right = decimalParts(b)
+  const exp = Math.min(left.exp, right.exp)
+  const x = left.int * 10n ** BigInt(left.exp - exp)
+  const y = right.int * 10n ** BigInt(right.exp - exp)
+  return x < y ? -1 : x > y ? 1 : 0
+}
+
+/**
+ * Межі числа й формат рядка (спека промоції §9.3): властивість лише на
+ * скалярі свого типу, межі — у множині значень типу й упорядковані, вираз
+ * мусить бути придатним для Postgres. Схема пропускає лише те, що компілятор
+ * зможе виразити CHECK-ом колонки.
+ */
+export function refineValueChecks(
+  value: ValueType & ValueCheckProps,
+  ctx: z.RefinementCtx
+): void {
+  const issue = (rule: SchemaRule, message: string, path: string) =>
+    ctx.addIssue({
+      code: "custom",
+      message,
+      path: [path],
+      params: { rule },
+    })
+  const scalar = value.array !== true
+  const numeric = scalar && NUMERIC_BOUND_TYPES.includes(value.type)
+  const textual = scalar && (value.type === "String" || value.type === "Text")
+
+  for (const key of [
+    "nonNegative",
+    "positive",
+    "minValue",
+    "maxValue",
+  ] as const) {
+    if (value[key] !== undefined && !numeric) {
+      issue(
+        "type.bound-type",
+        "Numeric bounds apply only to a scalar Integer, SmallInt, BigInt or Numeric",
+        key
+      )
+    }
+  }
+  for (const key of ["pattern", "minLength"] as const) {
+    if (value[key] !== undefined && !textual) {
+      issue(
+        "type.format-type",
+        "pattern and minLength apply only to a scalar String or Text",
+        key
+      )
+    }
+  }
+
+  if (numeric) {
+    if (value.positive !== undefined && value.nonNegative !== undefined) {
+      issue(
+        "type.bound-conflict",
+        "positive and nonNegative are mutually exclusive",
+        "nonNegative"
+      )
+    }
+    let valid = true
+    for (const key of ["minValue", "maxValue"] as const) {
+      const bound = value[key]
+      if (bound === undefined) continue
+      // Рядок-межа — лише десятковий дріб; ту саму форму й межі типу, що в
+      // типового значення, тож перевірка спільна.
+      const fits =
+        fitsType(value.type, bound) &&
+        (typeof bound === "number" || DECIMAL.test(bound)) &&
+        isWithinType(value, bound)
+      if (!fits) {
+        valid = false
+        issue("type.bound-invalid", `${key} is outside the type`, key)
+      }
+    }
+    if (
+      valid &&
+      value.minValue !== undefined &&
+      value.maxValue !== undefined &&
+      compareDecimals(value.minValue, value.maxValue) > 0
+    ) {
+      issue("type.bound-order", "minValue must not exceed maxValue", "minValue")
+    }
+  }
+
+  if (textual && value.pattern !== undefined) {
+    let compiles = true
+    try {
+      new RegExp(value.pattern, "u")
+    } catch {
+      compiles = false
+    }
+    if (!compiles || usesJsOnlyRegexSyntax(value.pattern)) {
+      issue(
+        "type.pattern-invalid",
+        "pattern is not a valid expression for both JavaScript and Postgres",
+        "pattern"
+      )
+    }
+  }
+}

@@ -9,6 +9,7 @@ import {
   defaultValueSchema,
   refineUnique,
   refineUniqueWithin,
+  refineValueChecks,
   refineValueType,
   valueTypeShape,
 } from "./value-type"
@@ -46,6 +47,30 @@ const attributeShape = {
   defaultValue: defaultValueSchema
     .optional()
     .meta({ description: "Default value of the attribute." }),
+  nonNegative: z.literal(true).optional().meta({
+    description:
+      "Value must be zero or greater (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes positive.",
+  }),
+  positive: z.literal(true).optional().meta({
+    description:
+      "Value must be greater than zero (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes nonNegative.",
+  }),
+  minValue: z.union([z.number(), z.string()]).optional().meta({
+    description:
+      "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
+  }),
+  maxValue: z.union([z.number(), z.string()]).optional().meta({
+    description:
+      "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
+  }),
+  pattern: z.string().min(1).optional().meta({
+    description:
+      "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+  }),
+  minLength: z.number().int().positive().optional().meta({
+    description:
+      "Minimum number of characters (CHECK); scalar String or Text only.",
+  }),
 }
 
 export const attributeSchema = z
@@ -53,6 +78,7 @@ export const attributeSchema = z
   .superRefine((value, ctx) => {
     refineValueType(value, ctx)
     refineUnique(value, ctx)
+    refineValueChecks(value, ctx)
   })
 
 /**
@@ -71,6 +97,7 @@ export const catalogAttributeSchema = z
   .superRefine((value, ctx) => {
     refineValueType(value, ctx)
     refineUnique(value, ctx)
+    refineValueChecks(value, ctx)
     refineUniqueWithin(value, ctx)
   })
 

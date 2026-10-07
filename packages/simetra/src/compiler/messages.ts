@@ -78,6 +78,55 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: 'Задайте unique: true чи "ignoreCase" або приберіть uniqueWithin.',
     },
   },
+  "type.bound-type": {
+    en: () =>
+      "Numeric bounds apply only to a scalar Integer, SmallInt, BigInt or Numeric",
+    uk: () =>
+      "Межі числа застосовуються лише до скалярних Integer, SmallInt, BigInt і Numeric",
+    hint: {
+      en: "Remove the bound or change the type.",
+      uk: "Приберіть межу або змініть тип.",
+    },
+  },
+  "type.bound-conflict": {
+    en: () => "positive and nonNegative are mutually exclusive",
+    uk: () => "positive і nonNegative взаємовиключні",
+    hint: {
+      en: "Keep positive (> 0) or nonNegative (>= 0), not both.",
+      uk: "Залиште positive (> 0) або nonNegative (>= 0), не обидва.",
+    },
+  },
+  "type.bound-order": {
+    en: () => "minValue must not exceed maxValue",
+    uk: () => "minValue не може перевищувати maxValue",
+  },
+  "type.bound-invalid": {
+    en: () => "The bound is not a value of the attribute type",
+    uk: () => "Межа не є значенням типу реквізиту",
+    hint: {
+      en: "Use a number (Integer, SmallInt) or a number or decimal-fraction string (BigInt, Numeric) within the type's range and scale.",
+      uk: "Задайте число (Integer, SmallInt) або число чи десятковий дріб рядком (BigInt, Numeric) у межах діапазону й scale типу.",
+    },
+  },
+  "type.format-type": {
+    en: () => "pattern and minLength apply only to a scalar String or Text",
+    uk: () =>
+      "pattern і minLength застосовуються лише до скалярних String і Text",
+    hint: {
+      en: "Remove the property or change the type.",
+      uk: "Приберіть властивість або змініть тип.",
+    },
+  },
+  "type.pattern-invalid": {
+    en: () =>
+      "pattern is not a valid expression for both JavaScript and Postgres",
+    uk: () =>
+      "pattern не є коректним виразом одночасно для JavaScript і Postgres",
+    hint: {
+      en: 'It must compile with new RegExp(pattern, "u") and avoid named groups, \\p{...}, \\k<...>, \\b and \\B, which Postgres reads differently or not at all.',
+      uk: 'Вираз мусить компілюватися через new RegExp(pattern, "u") і не містити іменованих груп, \\p{...}, \\k<...>, \\b та \\B: Postgres читає їх інакше або не знає.',
+    },
+  },
   "register.balance-control-type": {
     en: () => "balanceControl is allowed only on a Balance register",
     uk: () => "balanceControl дозволений лише для регістра залишків (Balance)",

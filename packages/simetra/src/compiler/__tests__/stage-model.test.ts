@@ -339,6 +339,66 @@ describe("stage 3: physical snapshot", () => {
     ).toHaveLength(1)
   })
 
+  it("numeric bounds form one CHECK", async () => {
+    const physical = await compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [
+          attribute("qty", {
+            type: "Numeric",
+            precision: 10,
+            scale: 2,
+            nonNegative: true,
+            maxValue: "1000",
+          }),
+          attribute("rank", { type: "Integer", positive: true, minValue: 5 }),
+          attribute("delta", { type: "Integer", minValue: -3, maxValue: 3 }),
+          attribute("plain", { type: "Integer" }),
+        ],
+      }),
+    })
+    const item = tableOf(physical, "item")
+    expect(item.checks).toContainEqual({
+      name: "item_qty_bounds",
+      expression: "qty >= 0 AND qty <= 1000",
+    })
+    expect(item.checks).toContainEqual({
+      name: "item_rank_bounds",
+      expression: "rank > 0 AND rank >= 5",
+    })
+    expect(item.checks).toContainEqual({
+      name: "item_delta_bounds",
+      expression: "delta >= -3 AND delta <= 3",
+    })
+    expect(item.checks.filter((c) => c.name.startsWith("item_plain"))).toEqual(
+      []
+    )
+  })
+
+  it("pattern and minLength form one CHECK", async () => {
+    const physical = await compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [
+          attribute("sku", {
+            type: "String",
+            length: 20,
+            pattern: "^[A-Z]+$",
+            minLength: 2,
+          }),
+          attribute("memo", { type: "Text", pattern: "it's" }),
+        ],
+      }),
+    })
+    const item = tableOf(physical, "item")
+    expect(item.checks).toContainEqual({
+      name: "item_sku_format",
+      expression: "sku ~ '^[A-Z]+$' AND char_length(sku) >= 2",
+    })
+    expect(item.checks).toContainEqual({
+      name: "item_memo_format",
+      expression: "memo ~ 'it''s'",
+    })
+  })
+
   it("required text of a register dimension is nonempty too", async () => {
     const physical = await compileWith({
       "information-registers/Rate/Rate.meta.json": {

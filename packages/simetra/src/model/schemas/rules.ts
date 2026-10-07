@@ -26,6 +26,12 @@ export const SCHEMA_RULES = [
   "type.default-empty-mismatch",
   "type.unique-ignore-case-type",
   "attribute.unique-within-requires-unique",
+  "type.bound-type",
+  "type.bound-conflict",
+  "type.bound-order",
+  "type.bound-invalid",
+  "type.format-type",
+  "type.pattern-invalid",
   "posting.parse",
 ] as const
 

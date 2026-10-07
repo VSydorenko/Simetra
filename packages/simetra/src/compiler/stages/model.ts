@@ -141,6 +141,10 @@ interface Field {
   /** Вираз генерованої колонки (`STORED`); з `default` несумісний. */
   generated?: string
   check?: string
+  /** Умова меж числа (`bounds`): частини `AND`-ом; порожнє значення проходить. */
+  bounds?: string
+  /** Умова формату рядка (`format`): `pattern` і `minLength`. */
+  format?: string
   primaryKey: boolean
   indexed: boolean
   unique: boolean
@@ -970,6 +974,8 @@ class SnapshotBuilder {
         this.enumDefaultLabels.get(attribute.id ?? ""),
         this.project.timezone
       ),
+      ...boundsOf(attribute),
+      ...formatOf(attribute),
       primaryKey: false,
       indexed: attribute.indexed === true,
       unique: unique,
@@ -1328,6 +1334,45 @@ const REQUIRED_LABEL = "required"
 /** Мітка CHECK непорожнього рядка (`<таблиця>_<колонка>_nonempty`). */
 const NONEMPTY_LABEL = "nonempty"
 
+/** Мітки CHECK меж числа й формату рядка (`<таблиця>_<колонка>_bounds` / `_format`). */
+const BOUNDS_LABEL = "bounds"
+const FORMAT_LABEL = "format"
+
+/**
+ * Умова меж числа реквізиту. Межа-рядок уже перевірена схемою як десятковий
+ * дріб, тож іде в SQL як число, а не рядкова константа; `NULL` CHECK пропускає.
+ */
+function boundsOf(attribute: ColumnElement): { bounds?: string } {
+  const column = quoteIdent(attribute.physicalName!)
+  const bound = (value: number | string) =>
+    typeof value === "number" ? sqlLiteral(value) : value
+  const parts = [
+    attribute.nonNegative === true ? `${column} >= 0` : undefined,
+    attribute.positive === true ? `${column} > 0` : undefined,
+    attribute.minValue !== undefined
+      ? `${column} >= ${bound(attribute.minValue)}`
+      : undefined,
+    attribute.maxValue !== undefined
+      ? `${column} <= ${bound(attribute.maxValue)}`
+      : undefined,
+  ].filter((part) => part !== undefined)
+  return parts.length > 0 ? { bounds: parts.join(" AND ") } : {}
+}
+
+/** Умова формату рядка: збіг із виразом і мінімальна довжина в символах. */
+function formatOf(attribute: ColumnElement): { format?: string } {
+  const column = quoteIdent(attribute.physicalName!)
+  const parts = [
+    attribute.pattern !== undefined
+      ? `${column} ~ ${sqlLiteral(attribute.pattern)}`
+      : undefined,
+    attribute.minLength !== undefined
+      ? `char_length(${column}) >= ${attribute.minLength}`
+      : undefined,
+  ].filter((part) => part !== undefined)
+  return parts.length > 0 ? { format: parts.join(" AND ") } : {}
+}
+
 /** POSIX `\s`: рядок з самих пробільних символів вважається порожнім. */
 function nonEmptyExpression(column: string): string {
   return `${quoteIdent(column)} !~ '^\\s*$'`
@@ -1423,7 +1468,17 @@ type ColumnElement = ValueType &
   Partial<
     Pick<
       CatalogAttribute,
-      "required" | "indexed" | "unique" | "uniqueWithin" | "defaultValue"
+      | "required"
+      | "indexed"
+      | "unique"
+      | "uniqueWithin"
+      | "defaultValue"
+      | "nonNegative"
+      | "positive"
+      | "minValue"
+      | "maxValue"
+      | "pattern"
+      | "minLength"
     >
   >
 
@@ -1600,6 +1655,22 @@ function addField(table: PendingTable, field: Field): string[] {
       column: first,
       elementId: field.origin.elementId,
       expression: nonEmptyExpression(first),
+    })
+  }
+  // Мітки `bounds` і `format` не несуть `elementId`: контракт проведення їх не
+  // читає, тож до `elementChecks` вони не потрапляють.
+  if (field.bounds !== undefined) {
+    table.checks.push({
+      label: BOUNDS_LABEL,
+      column: first,
+      expression: field.bounds,
+    })
+  }
+  if (field.format !== undefined) {
+    table.checks.push({
+      label: FORMAT_LABEL,
+      column: first,
+      expression: field.format,
     })
   }
   const labels =

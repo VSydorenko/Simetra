@@ -312,3 +312,115 @@ describe("attribute uniqueness", () => {
     ).toBe(false)
   })
 })
+
+describe("attribute value checks", () => {
+  const issues = (input: Record<string, unknown>) =>
+    (
+      attributeSchema.safeParse({ name: "a", ...input }).error?.issues ?? []
+    ).map((i) => (i as { params?: { rule?: string } }).params?.rule)
+
+  it("accepts bounds on numeric and format on string types", () => {
+    expect(
+      issues({
+        type: "Numeric",
+        precision: 10,
+        scale: 2,
+        nonNegative: true,
+        maxValue: "1000.50",
+      })
+    ).toEqual([])
+    expect(issues({ type: "Integer", positive: true, maxValue: 10 })).toEqual(
+      []
+    )
+    expect(
+      issues({ type: "BigInt", minValue: "-9223372036854775808" })
+    ).toEqual([])
+    expect(
+      issues({
+        type: "String",
+        length: 10,
+        pattern: "^[A-Z]{2,}\\d*$",
+        minLength: 2,
+      })
+    ).toEqual([])
+    expect(issues({ type: "Text", pattern: "(?<=a)b(?=c)" })).toEqual([])
+  })
+
+  it("positive and nonNegative are mutually exclusive", () => {
+    expect(
+      issues({ type: "Integer", positive: true, nonNegative: true })
+    ).toEqual(["type.bound-conflict"])
+  })
+
+  it("minValue must not exceed maxValue", () => {
+    expect(issues({ type: "Integer", minValue: 5, maxValue: 4 })).toEqual([
+      "type.bound-order",
+    ])
+    expect(issues({ type: "Integer", minValue: 5, maxValue: 5 })).toEqual([])
+    expect(
+      issues({ type: "Numeric", minValue: "0.30", maxValue: 0.3 })
+    ).toEqual([])
+    expect(
+      issues({ type: "Numeric", minValue: "10.01", maxValue: 10 })
+    ).toEqual(["type.bound-order"])
+  })
+
+  it("a bound outside the type is invalid", () => {
+    expect(issues({ type: "SmallInt", maxValue: 40000 })).toEqual([
+      "type.bound-invalid",
+    ])
+    expect(issues({ type: "Integer", maxValue: "5" })).toEqual([
+      "type.bound-invalid",
+    ])
+    expect(issues({ type: "Integer", minValue: 1.5 })).toEqual([
+      "type.bound-invalid",
+    ])
+    expect(
+      issues({ type: "Numeric", precision: 5, scale: 2, maxValue: "1000" })
+    ).toEqual(["type.bound-invalid"])
+    expect(issues({ type: "Numeric", maxValue: "abc" })).toEqual([
+      "type.bound-invalid",
+    ])
+  })
+
+  it("bounds apply only to a scalar numeric type", () => {
+    expect(issues({ type: "String", length: 5, minValue: 1 })).toEqual([
+      "type.bound-type",
+    ])
+    expect(issues({ type: "Integer", array: true, positive: true })).toEqual([
+      "type.bound-type",
+    ])
+    expect(issues({ type: "Date", nonNegative: true })).toEqual([
+      "type.bound-type",
+    ])
+  })
+
+  it("pattern and minLength apply only to a scalar String or Text", () => {
+    expect(issues({ type: "Integer", pattern: "^1$" })).toEqual([
+      "type.format-type",
+    ])
+    expect(
+      issues({ type: "String", length: 5, array: true, minLength: 1 })
+    ).toEqual(["type.format-type"])
+    expect(issues({ type: "String", length: 5, minLength: 0 })).not.toEqual([])
+  })
+
+  it.each([
+    ["(", "unbalanced group"],
+    ["(?<name>x)", "named group"],
+    ["\\p{L}", "unicode property"],
+    ["\\P{L}", "negated unicode property"],
+    ["\\k<a>", "named backreference"],
+    ["\\bword\\b", "word boundary"],
+    ["[a-z]+(?<n>x)", "named group after a class"],
+  ])("pattern %s is rejected (%s)", (pattern) => {
+    expect(issues({ type: "String", length: 5, pattern })).toEqual([
+      "type.pattern-invalid",
+    ])
+  })
+
+  it("an escaped backslash or a class does not trip the divergence scan", () => {
+    expect(issues({ type: "Text", pattern: "^\\\\p\\d$" })).toEqual([])
+    expect(issues({ type: "Text", pattern: "[(?<a]" })).toEqual([])
+  })
+})

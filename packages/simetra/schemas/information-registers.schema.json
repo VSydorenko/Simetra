@@ -408,6 +408,41 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "nonNegative": {
+            "description": "Value must be zero or greater (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes positive.",
+            "type": "boolean",
+            "const": true
+          },
+          "positive": {
+            "description": "Value must be greater than zero (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes nonNegative.",
+            "type": "boolean",
+            "const": true
+          },
+          "minValue": {
+            "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "maxValue": {
+            "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "pattern": {
+            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+            "type": "string",
+            "minLength": 1
+          },
+          "minLength": {
+            "description": "Minimum number of characters (CHECK); scalar String or Text only.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -660,6 +695,41 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "nonNegative": {
+            "description": "Value must be zero or greater (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes positive.",
+            "type": "boolean",
+            "const": true
+          },
+          "positive": {
+            "description": "Value must be greater than zero (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes nonNegative.",
+            "type": "boolean",
+            "const": true
+          },
+          "minValue": {
+            "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "maxValue": {
+            "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "pattern": {
+            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+            "type": "string",
+            "minLength": 1
+          },
+          "minLength": {
+            "description": "Minimum number of characters (CHECK); scalar String or Text only.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -912,6 +982,41 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "nonNegative": {
+            "description": "Value must be zero or greater (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes positive.",
+            "type": "boolean",
+            "const": true
+          },
+          "positive": {
+            "description": "Value must be greater than zero (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes nonNegative.",
+            "type": "boolean",
+            "const": true
+          },
+          "minValue": {
+            "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "maxValue": {
+            "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "pattern": {
+            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+            "type": "string",
+            "minLength": 1
+          },
+          "minLength": {
+            "description": "Minimum number of characters (CHECK); scalar String or Text only.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [

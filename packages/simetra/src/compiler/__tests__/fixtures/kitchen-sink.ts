@@ -37,6 +37,21 @@ function attributes(prefix: string) {
     description: text(name),
   })
   return [
+    // Межі числа й формат рядка.
+    {
+      ...common(`${prefix}Rating`, `${prefix}_rating`),
+      type: "Integer",
+      positive: true,
+      minValue: 1,
+      maxValue: 5,
+    },
+    {
+      ...common(`${prefix}Sku`, `${prefix}_sku`),
+      type: "String",
+      length: 12,
+      pattern: "^[A-Z]{2,}\\d*$",
+      minLength: 2,
+    },
     {
       ...common(`${prefix}Note`, `${prefix}_note`),
       type: "String",
@@ -52,6 +67,8 @@ function attributes(prefix: string) {
       precision: 15,
       scale: 2,
       defaultValue: 0,
+      nonNegative: true,
+      maxValue: "1000000",
     },
     {
       ...common(`${prefix}Item`, `${prefix}_item_id`),
