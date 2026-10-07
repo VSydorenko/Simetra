@@ -195,9 +195,19 @@ describe("class fixtures survive the round trip", () => {
 })
 
 describe("the builtin PUBLIC privilege beside a schema ADP", () => {
-  it("builtin PUBLIC execute beside a schema ADP writes no PUBLIC grant", async () => {
-    // Маркер двигуна для рядка ADP схеми не означає відкликання: вбудований
-    // `EXECUTE` для `PUBLIC` не має ставати ні `GRANT`, ні `REVOKE`
+  const roundTripOptions = {
+    defaultSchema: "app",
+    attributeCase: "snake_case" as const,
+  }
+  const publicAcl = (object: string) => (shape: OracleShape) =>
+    shape.acls
+      .find((a) => a.object === object)
+      ?.acl.filter((item) => item.startsWith("="))
+
+  // Маркер двигуна для рядка ADP схеми не означає відкликання: вбудований
+  // `EXECUTE`/`USAGE` для `PUBLIC` не має ставати ні `GRANT`, ні `REVOKE`,
+  // ні одиницею ADP
+  it("builtin PUBLIC execute beside a schema ADP writes no PUBLIC unit", async () => {
     const scope = scopeOf(["app"])
     await inTarget(
       `CREATE SCHEMA app;
@@ -205,23 +215,52 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
        CREATE FUNCTION app.open() RETURNS int LANGUAGE sql AS $$ select 1 $$;`,
       scope,
       async (target) => {
-        const result = await roundTripOf(target, scope, {
-          defaultSchema: "app",
-          attributeCase: "snake_case",
-        })
-        // Лише гранти на об'єкти: рядок ADP схеми з синтезованим маркером
-        // `PUBLIC` — окрема одиниця `defaultPrivileges`, поза цією перевіркою
+        const result = await roundTripOf(target, scope, roundTripOptions)
         expect(
-          result.extracted.model.units.filter(
-            (u) => u.class === "grant" && /\bPUBLIC\b/i.test(u.sql)
-          )
+          result.extracted.model.units.filter((u) => /\bPUBLIC\b/i.test(u.sql))
         ).toEqual([])
-        const publicAcl = (shape: OracleShape) =>
-          shape.acls
-            .find((a) => a.object === "f:app.open()")
-            ?.acl.filter((item) => item.startsWith("="))
-        expect(publicAcl(result.target)).toEqual(["=X/postgres"])
-        expect(publicAcl(result.shadow)).toEqual(["=X/postgres"])
+        const acl = publicAcl("f:app.open()")
+        expect(acl(result.target)).toEqual(["=X/postgres"])
+        expect(acl(result.shadow)).toEqual(["=X/postgres"])
+      }
+    )
+  })
+
+  it("builtin PUBLIC usage on a type beside a schema ADP writes no PUBLIC unit", async () => {
+    const scope = scopeOf(["app"])
+    await inTarget(
+      `CREATE SCHEMA app;
+       ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT USAGE ON TYPES TO anon;
+       CREATE TYPE app.mood AS ENUM ('ok', 'bad');`,
+      scope,
+      async (target) => {
+        const result = await roundTripOf(target, scope, roundTripOptions)
+        expect(
+          result.extracted.model.units.filter((u) => /\bPUBLIC\b/i.test(u.sql))
+        ).toEqual([])
+        const acl = publicAcl("T:app.mood")
+        expect(acl(result.target)).toEqual(["=U/postgres"])
+        expect(acl(result.shadow)).toEqual(["=U/postgres"])
+      }
+    )
+  })
+
+  it("a schema ADP that grants to PUBLIC is kept as a unit", async () => {
+    const scope = scopeOf(["app"])
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.note (id uuid PRIMARY KEY);
+       ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO PUBLIC;`,
+      scope,
+      async (target) => {
+        const result = await roundTripOf(target, scope, roundTripOptions)
+        expect(
+          result.extracted.model.units
+            .filter((u) => u.class === "defaultPrivileges")
+            .map((u) => u.sql)
+        ).toEqual([expect.stringMatching(/GRANT SELECT ON TABLES TO PUBLIC/i)])
+        expect(result.shadow.defaultAcls).toEqual(result.target.defaultAcls)
+        expect(result.target.defaultAcls).not.toEqual([])
       }
     )
   })

@@ -446,6 +446,20 @@ export function unitStatements(
         )
       return statements
     }
+    case "defaultPrivilege": {
+      // ADP схеми лише додає до глобальних і вбудованих типових прав і
+      // відкликати їх не може (ALTER DEFAULT PRIVILEGES у документації
+      // Postgres): порожній маркер `PUBLIC` на рядку схеми двигун синтезує
+      // сам, стану він не несе, тож `REVOKE … FROM PUBLIC` з нього — зайва одиниця
+      const id = fact.id as Extract<StableId, { kind: "defaultPrivilege" }>
+      if (
+        id.schema !== null &&
+        id.grantee === "PUBLIC" &&
+        strings(fact.payload.privileges).length === 0
+      )
+        return []
+      return [actionStatement(view, fact, produced, issues)]
+    }
     case "table":
       return [replicaIdentityStatement(fact, issues)]
     default:

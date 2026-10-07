@@ -96,7 +96,8 @@ export async function readOracle(
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = ANY($1)
         AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                         WHERE d.objid = p.oid AND d.deptype = 'e')
+                         WHERE d.classid = 'pg_proc'::regclass
+                           AND d.objid = p.oid AND d.deptype = 'e')
      UNION ALL
      SELECT 'T:' || n.nspname || '.' || t.typname,
             COALESCE(t.typacl, acldefault('T'::"char", t.typowner))::text[]
@@ -107,7 +108,8 @@ export async function readOracle(
                    SELECT 1 FROM pg_class tc
                     WHERE tc.oid = t.typrelid AND tc.relkind = 'c')))
         AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                         WHERE d.objid = t.oid AND d.deptype = 'e')
+                         WHERE d.classid = 'pg_type'::regclass
+                           AND d.objid = t.oid AND d.deptype = 'e')
      UNION ALL
      SELECT 'n:' || n.nspname,
             COALESCE(n.nspacl, acldefault('n'::"char", n.nspowner))::text[]
@@ -169,7 +171,8 @@ export async function readOracle(
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = ANY($1) AND p.prokind IN ('f', 'p')
         AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                         WHERE d.objid = p.oid AND d.deptype = 'e')
+                         WHERE d.classid = 'pg_proc'::regclass
+                           AND d.objid = p.oid AND d.deptype = 'e')
 `,
     [schemas]
   )
