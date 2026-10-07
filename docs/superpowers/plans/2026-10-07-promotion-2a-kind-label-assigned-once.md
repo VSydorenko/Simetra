@@ -105,7 +105,9 @@
    (явна `schema` чи успадкована `defaultSchema`, лише для видів, що
    матеріалізуються); у кожного іменованого елемента з `id` (реквізит, ТЧ,
    колонка, значення перерахування, предвизначений, вид скоупу) —
-   `physicalName`. API: `compile(files, { baseline })`, де `baseline` —
+   `physicalName`. Запис переліку сам описує, як обчислити ефективне
+   значення (успадкування схеми), і порівнюються ефективні значення — без
+   `switch` за полем. API: `compile(files, { baseline })`, де `baseline` —
    мапа файлів попереднього стану; зміна поля в елемента з тим самим `id` —
    `identity.assigned-once-changed` (параметри: поле, було, стало). Значення
    → відсутність — теж зміна; відсутність → значення — ні (це робота `fix`).
@@ -161,8 +163,9 @@
 - [ ] **Step 1: Звірити якори плану**
 
 Run: `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-07-promotion-2a-kind-label-assigned-once.md`
-Expected: усі шляхи й символи існують, крім позначених `Create`. Інший
-зниклий якір — стоп і звіт.
+Expected: усі шляхи й символи існують, крім позначених `Create` і цілей
+`Move` (`packages/simetra/test/field-ratchet.test.ts`). Інший зниклий якір —
+стоп і звіт.
 
 - [ ] **Step 2: Базова лінія**
 
@@ -196,9 +199,14 @@ Expected: зелено. Червоне до початку — стоп і зв�
    **«Призначене раз — правило компілятора»** за рішенням 8 (перелік полів,
    `compile(files, { baseline })`, `identity.assigned-once-changed`, без
    базового стану — без перевірки, двері designer подають `HEAD`; виняток
-   промоції — ledger П3, не цей механізм). У §8.2 стадія 4 «незмінність
-   мітки наявного об'єкта (§3, §5)» → «поля, призначені раз, проти базового
-   стану (§3)».
+   промоції — ledger П3, не цей механізм). У §8.2: унікальність мітки виду
+   в проєкті — стадія 2 (ідентичність), а не 4; «незмінність мітки
+   наявного об'єкта (§3, §5)» прибирається зі стадії 4 — перевірка «призначено
+   раз» є кроком `compile` над базовим станом поза стадіями 1–5 (§3).
+   Спека П2 §5 «Типове значення»: поруч зі скаляром — форми `{ fill: now |
+   today | newUuid }` і `{ empty: true | "object" | "array" }` за пунктом 6
+   нижче; речення «схема відхиляє його для `array` … і `Json`» — лише для
+   скалярного значення.
 3. Спека П2 §5 «Посилання "тип + id"» і §7 (віртуальні таблиці): параметр
    реєстратора — `text`, порівняння моменту пише `p_recorder_type COLLATE
    "C"` явно; контракт несе `momentCollation: "C"` (рішення 6).
@@ -311,7 +319,8 @@ git commit -m "test(simetra): ратчет полів бачить читачі�
 - Modify: `packages/simetra/src/compiler/sql/dependencies.ts` (видалити `Category`, `ALL_IN_SCHEMA`, `categories` і гілку `ACL_TARGET_ALL_IN_SCHEMA`)
 - Modify: `packages/simetra/src/schema/engine/unit-target.ts` (видалити гілку `ACL_TARGET_ALL_IN_SCHEMA`)
 - Modify: `packages/simetra/src/compiler/messages.ts` (підказка `sql.statement-not-allowed` для цієї форми)
-- Test: `packages/simetra/src/compiler/__tests__/sql-units.test.ts`, `packages/simetra/src/compiler/__tests__/creation-order.test.ts`
+- Modify: `packages/designer/src/schema-engine/__tests__/engine-extract.db.test.ts` (мертва гілка `allInSchema.`)
+- Test: `packages/simetra/src/compiler/__tests__/sql-units.test.ts`, `packages/simetra/src/compiler/__tests__/creation-order.test.ts`, `packages/simetra/src/schema/__tests__/unit-target.test.ts` (тест «a grant on a schema and ALL IN SCHEMA target the schema» лишає лише грант на схему)
 
 - [ ] **Step 1: Failing test**
 
@@ -349,7 +358,9 @@ action, not a catalog state»; uk — відповідник. Ідентичні
 його `set`, гілка в обробці `GrantStmt`; `unit-target.ts` — гілка
 `ACL_TARGET_ALL_IN_SCHEMA`. У `creation-order.test.ts` видалити тести «grants
 on all functions and sequences in a schema after them» і той, що чекає
-`grant:grant:allInSchema.table:z:anon:select`.
+`grant:grant:allInSchema.table:z:anon:select`; у `unit-target.test.ts` —
+частину про `ALL IN SCHEMA`; у `engine-extract.db.test.ts` — умову
+`type!.startsWith("allInSchema.")`.
 
 - [ ] **Step 4: Зелено**
 
@@ -359,7 +370,7 @@ Expected: PASS.
 - [ ] **Step 5: Коміт**
 
 ```bash
-git add packages/simetra/src/compiler packages/simetra/src/schema/engine/unit-target.ts
+git add packages/simetra/src/compiler packages/simetra/src/schema packages/designer/src/schema-engine/__tests__/engine-extract.db.test.ts
 git commit -m "fix(compiler): GRANT/REVOKE ON ALL IN SCHEMA — не одиниця, а разова дія"
 ```
 
@@ -385,7 +396,12 @@ git commit -m "fix(compiler): GRANT/REVOKE ON ALL IN SCHEMA — не одини�
   - `isUuidColumn(column: CustomTable["columns"][number]): boolean` (переїхав
     з `compiler/stages/model.ts`, без реекспорту там).
   - `expectsKindLabel(kind: MetadataKind, data: unknown): boolean`.
-  - `ASSIGNED_ONCE: { object: readonly ["physicalName", "kindLabel", "schema"]; element: readonly ["physicalName"] }`.
+  - `interface AssignedOnceField { on: "object" | "element"; field: "physicalName" | "kindLabel" | "schema"; effective?: (raw: Readonly<Record<string, unknown>>, ctx: { defaultSchema: string; materializes: boolean }) => string | undefined }`
+    і `ASSIGNED_ONCE: readonly AssignedOnceField[]` — записи `object/physicalName`,
+    `object/kindLabel`, `object/schema` (з `effective`: `ctx.materializes ?
+    (raw.schema ?? ctx.defaultSchema) : undefined`) і `element/physicalName`.
+    Без `effective` — значення поля як є. Ефективне значення — властивість
+    запису даних, а не гілка в коді, що порівнює.
 
 - [ ] **Step 1: Failing tests**
 
@@ -452,7 +468,9 @@ git commit -m "feat(model): мітка виду kindLabel — поле, факт
 - Modify: `packages/simetra/src/compiler/__tests__/helpers.ts` (`object()` ставить `kindLabel: toSnakeCase(name)` для видів із фактом `kindLabel`)
 - Modify: `packages/simetra/src/compiler/__tests__/fixtures/kitchen-sink.ts` (мітка в довідника, документа й CustomTable з uuid-PK)
 - Modify: фікстури тестів `packages/simetra/src/**/__tests__` і `packages/designer/src/**/__tests__`, що компілюють Catalog/Document/CustomTable з uuid-PK без `fix`
-- Test: `packages/simetra/src/compiler/__tests__/kind-label.test.ts` (Create), `operations-fix.test.ts`, `operations-create.test.ts`
+- Modify: `packages/simetra/src/schema/reverse/tables.ts` (`customTableData` зберігає наявну `kindLabel`)
+- Modify: `examples/reference/metadata/**/*.meta.json` (через `fix`, крок 4)
+- Test: `packages/simetra/src/compiler/__tests__/kind-label.test.ts` (Create), `operations-fix.test.ts`, `operations-create.test.ts`, `packages/simetra/src/schema/__tests__/reverse-generate.test.ts`, `packages/designer/src/schema-engine/__tests__/round-trip.db.test.ts`
 
 **Interfaces:**
 - Consumes: `expectsKindLabel`, `assignPhysicalName(…, { role: "label" }, taken)`.
@@ -496,7 +514,23 @@ it("fix labels a custom table only with a single uuid key", async () => { /* …
 `operations-create.test.ts`: створений довідник має `kindLabel` =
 snake_case імені.
 
-Run: `pnpm --filter simetra test kind-label operations-fix operations-create`
+`reverse-generate.test.ts` (зворотна генерація не губить мітку — інакше
+повторний `introspect` дав би `identity.assigned-once-changed`):
+
+```ts
+it("introspect keeps the existing kindLabel of a custom table", async () => {
+  // наявна тека: custom-tables/Note з uuid-PK і kindLabel "memo_note" (≠ snake_case імені)
+  // reverseGenerate над тією ж таблицею → файл Note має kindLabel "memo_note"
+})
+it("introspect labels a new custom table with a single uuid key the way fix does", async () => {
+  // нова таблиця app.note з PK id uuid → kindLabel "note"; таблиця без uuid-PK → без kindLabel
+})
+```
+
+`round-trip.db.test.ts`: повторний `introspect` у ту саму теку не змінює
+`kindLabel` (наявний round-trip доповнюється цією перевіркою).
+
+Run: `pnpm --filter simetra test kind-label operations-fix operations-create reverse-generate`
 Expected: FAIL.
 
 - [ ] **Step 2: Стадія 2**
@@ -515,19 +549,31 @@ Expected: FAIL.
 `kindLabel`. Поле запису — параметр `assign` (зараз пише лише
 `physicalName`), а не копія методу.
 
-- [ ] **Step 4: Фікстури**
+- [ ] **Step 4: Зворотна генерація зберігає мітку**
+
+`customTableData` переносить `kindLabel` з наявного файлу (поруч із `id`);
+новій таблиці мітку дає наявний виклик `completeFiles` у `reverseGenerate`
+(той самий `NameAssigner`, що й у `fix`).
+
+- [ ] **Step 5: Фікстури й приклад**
 
 `helpers.ts` (`object()`), kitchen-sink і фікстури тестів, що червоніють на
-`identity.kind-label-missing`.
+`identity.kind-label-missing`. Мітки прикладу — у цьому ж коміті, інакше
+pre-commit `metadata:check --staged` його не пропустить:
 
-Run: `pnpm --filter simetra test` і `pnpm --filter @simetra/designer test`
+Run: `node packages/designer/bin/simetra.mjs fix examples/reference/metadata`
+Expected: довідники, документ і CustomTable з uuid-PK отримали `kindLabel`;
+інших змін немає.
+
+Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`,
+`pnpm metadata:check`, `pnpm test:db`
 Expected: PASS.
 
-- [ ] **Step 5: Коміт**
+- [ ] **Step 6: Коміт**
 
 ```bash
-git add packages/simetra packages/designer
-git commit -m "feat(compiler): мітка виду — обов'язковість і унікальність у проєкті, призначення у fix/create"
+git add packages/simetra packages/designer examples/reference/metadata
+git commit -m "feat(compiler): мітка виду — обов'язковість і унікальність у проєкті, призначення у fix/create/introspect"
 ```
 
 ---
@@ -625,9 +671,10 @@ git commit -m "feat(compiler): мітка виду — дискримінато�
   - `assignedOnceDiagnostics(baseline: ReadonlyMap<string, string>, current: ReadonlyMap<string, string>): Diagnostic[]`
     — над сирим JSON обох мап (зламаний файл пропускається: про нього звітує
     стадія 1); елементи зіставляються за `id` у межах усього проєкту
-    (об'єкти, `namedElementsOf`, `scopeKinds` проєкту); ефективна схема
-    об'єкта — `schema ?? defaultSchema ?? "public"` своєї мапи, лише для
-    видів з `materializes !== "none"`.
+    (об'єкти, `namedElementsOf`, `scopeKinds` проєкту); для кожного запису
+    `ASSIGNED_ONCE` порівнюються ефективні значення (`effective` запису з
+    контекстом своєї мапи: `defaultSchema ?? "public"` її проєкту й
+    `materializes !== "none"` виду; без `effective` — поле як є).
   - Код `identity.assigned-once-changed`, params `{ field, before, after }`
     (`after` — `"(removed)"` для видаленого значення), pointer — на поле в
     поточному файлі (для схеми — `/schema` об'єкта або `/defaultSchema`
@@ -792,31 +839,24 @@ git commit -m "feat(compiler): required рядка — непорожній пі
 
 ---
 
-### Task 10: Приклад, скіл споживача, гейти
+### Task 10: Скіл споживача, гейти
 
 **Files:**
-- Modify: `examples/reference/metadata/**/*.meta.json` (через `fix`)
 - Modify: `packages/designer/skills/simetra-metadata/SKILL.md` (що `fix` призначає `kindLabel`; не редагувати `id`, `physicalName`, `kindLabel`; `compile` звіряє їх із `HEAD`)
 
-- [ ] **Step 1: Мітки прикладу**
-
-Run: `node packages/designer/bin/simetra.mjs fix examples/reference/metadata`
-Expected: довідники, документ і CustomTable з uuid-PK отримали `kindLabel`;
-інших змін немає.
-
-- [ ] **Step 2: Скіл**
+- [ ] **Step 1: Скіл**
 
 Точкові правки в рядках про `fix` і «Do not edit ids or `physicalName`».
 
-- [ ] **Step 3: Повні гейти**
+- [ ] **Step 2: Повні гейти**
 
 Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`,
 `pnpm metadata:check`, `pnpm test:db`, `python3 scripts/check-doc-anchors.py`
 Expected: усе зелене.
 
-- [ ] **Step 4: Коміт**
+- [ ] **Step 3: Коміт**
 
 ```bash
-git add examples/reference packages/designer/skills
-git commit -m "docs(designer): мітка виду в прикладі й скілі метаданих"
+git add packages/designer/skills
+git commit -m "docs(designer): мітка виду й призначене раз у скілі метаданих"
 ```

@@ -128,6 +128,9 @@ plpgsql — план переписувача (парсер PL/pgSQL) і `plpgsq
    кожне джерело лежить на поверхні тригерів `SUPABASE_SURFACES`.
 8. **Обробник підписки** — функція без аргументів `RETURNS trigger` у
    закритій оболонці (рішення 9), будь-де в `.sql`; перевірка — стадія 5.
+   Обробник не може бути боргом: поза оболонкою він — помилка
+   `subscription.handler-not-closed`, навіть у спільному `metadata/sql/` і
+   навіть коли його ідентичність є в `sql-debt.json`.
 9. **Закрита оболонка функції (П2):** `LANGUAGE sql | plpgsql`, явна
    волатильність, `SECURITY DEFINER` ⇒ `SET search_path = ''`. Модуль виду
    1С (факт реєстру `sqlModule: "closed"`) приймає лише функції в оболонці
@@ -136,9 +139,10 @@ plpgsql — план переписувача (парсер PL/pgSQL) і `plpgsq
    заміщує. Модуль `CustomTable`/`PgEnum` (`sqlModule: "debt"`) і спільні
    `metadata/sql/` — борг: дозволені всі нинішні класи, перевантаження теж.
    Динамічний SQL, перевірка викликача, `EXECUTE` — поза планом.
-10. **Правило рядка** — новий клас `rowRule`: `ALTER TABLE <таблиця> ADD
-    CONSTRAINT <ім'я> CHECK (<правило>)`, рівно одна підкоманда, ім'я
-    обов'язкове. Лише в модулі виду і лише на таблиці свого об'єкта
+10. **Правило рядка** — `ALTER TABLE <таблиця> ADD CONSTRAINT <ім'я> CHECK
+    (<правило>)`, рівно одна підкоманда, ім'я обов'язкове. Це результат
+    класифікації T1, а **не** клас SQL-одиниці: у T0 `SqlUnitClass` його
+    немає, бо правило рядка ніколи не стає одиницею. Лише в модулі виду і лише на таблиці свого об'єкта
     (`origin.objectId`). Граматика (до вкладення): `AND`/`OR`/`NOT`/дужки
     над атомами `<колонка> IS [NOT] NULL`; `<колонка> = | <> <літерал>`;
     `<колонка> IN (<літерали>)`; `<колонка> <оп> <колонка>` одного типу
@@ -563,16 +567,21 @@ git commit -m "feat(model): вид EventSubscription — декларація й
 - Modify: `packages/simetra/src/model/kinds/standard.ts` і записи всіх видів (факт `sqlModule: "closed" | "debt"`)
 - Create: `packages/simetra/src/compiler/sql/closed-forms.ts`
 - Modify: `packages/simetra/src/compiler/pipeline.ts` (виклик перевірки модулів після `readSqlUnits`)
+- Modify: `packages/simetra/src/compiler/stages/links.ts` (обробник підписки — `closedShellProblem`)
+- Modify: `packages/simetra/src/schema/reverse/units.ts` (обробник збереженої `EventSubscription` — користувач функції, як виклик із збереженого файлу)
 - Modify: `packages/simetra/src/compiler/diagnostics.ts`, `messages.ts`
-- Test: `packages/simetra/src/compiler/__tests__/closed-forms.test.ts` (Create)
+- Modify (фікстури модулів виду, які ламає гейт): `packages/simetra/src/compiler/__tests__/sql-units.test.ts` (модуль `documents/Sale/Sale.sql`: `sale_total … LANGUAGE sql` без волатильності → додати `STABLE`), `packages/simetra/src/schema/__tests__/reverse-generate.test.ts` (`keptCatalog` з `CREATE TRIGGER currency_touch` у `catalogs/Currency/Currency.sql` → збережена `event-subscriptions/CurrencyTouch` з `sources: [Currency]`, `event: "beforeWrite"`, `handler: app.touch`; тест «a trigger function also called from a kept file is shared» доводить, що `app.touch` іде в `sql/app/`), решта — за кроком 3
+- Test: `packages/simetra/src/compiler/__tests__/closed-forms.test.ts` (Create), `event-subscriptions.test.ts`
 
 **Interfaces:**
 - Produces:
   - `closedShellProblem(tree: Node): "language" | "volatility" | "searchPath" | undefined`
     — для `CreateFunctionStmt` (не процедури).
   - `checkSqlModules(objects: readonly ParsedObject[], units: readonly VerbatimUnit[]): Diagnostic[]`
-    — модуль виду з фактом `closed`: клас поза {`function`, `rowRule`} →
+    — модуль виду з фактом `closed`: клас поза {`function`} →
     `sql.statement-not-allowed` з `detail: "kindModule"` і `params.class`
+    (правило рядка приймає задача 8; до неї `ALTER TABLE … ADD CONSTRAINT`
+    відхиляє наявний `classify`)
     (підказка за класом: `trigger` → `EventSubscription`, `policy` →
     `publicRead` / права (П3), `grant`/`defaultPrivileges` → виводяться з
     виду, `comment` → `description`, `view`/`materializedView` → віртуальні
@@ -601,15 +610,33 @@ it("overload in a kind module is an error, in a custom table module is not", …
 it("movement query blocks of a document module stay valid", …)
 ```
 
-Run: `pnpm --filter simetra test closed-forms`
+`event-subscriptions.test.ts`:
+
+```ts
+it("a handler outside the closed shell is an error even in a shared file", …)   // sql/app/stamp.sql без волатильності → subscription.handler-not-closed
+```
+
+Run: `pnpm --filter simetra test closed-forms event-subscriptions`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація** — за рішенням 9; вид власника одиниці — за
-`ownerFile` через `stage1.objects`; факт — `KIND_REGISTRY[kind].sqlModule`.
+- [ ] **Step 2: Реалізація** — за рішеннями 8 і 9; вид власника одиниці —
+за `ownerFile` через `stage1.objects`; факт — `KIND_REGISTRY[kind].sqlModule`.
 
-- [ ] **Step 3: Зелено**
+- [ ] **Step 3: Фікстури модулів виду**
 
-Run: `pnpm --filter simetra test`, `pnpm metadata:check`
+Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`
+Кожна червона фікстура з `.sql` у теці виду 1С (`catalogs/`, `documents/`,
+регістри, константа; відомі — `sql-units.test.ts`, `reverse-generate.test.ts`,
+а також перевірити `canonical.test.ts`, `movement-functions.test.ts`,
+`stage-links.test.ts`, `stage-files.test.ts`, `operations-rename.test.ts`,
+`operations-delete.test.ts`) переводиться так: функція — у закриту оболонку
+(явна волатильність, `SET search_path = ''` при `SECURITY DEFINER`); інший
+клас, який сам є предметом тесту, — у модуль `CustomTable` або спільний
+`sql/<схема>/` (борг, задача 10), тригер на таблиці виду — у
+`EventSubscription`; інший клас, що не є предметом тесту, — видаляється з
+фікстури. Перелік переведених фікстур — у звіті задачі.
+
+Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`, `pnpm metadata:check`
 Expected: PASS (модуль документа прикладу містить лише блок рухів).
 
 - [ ] **Step 4: Коміт**
@@ -624,16 +651,17 @@ git commit -m "feat(compiler): модуль виду 1С — лише закри
 ### Task 8: Правило рядка — граматика й CHECK у знімку
 
 **Files:**
-- Modify: `packages/simetra/src/model/physical/catalog.ts` (клас `rowRule` у `SqlUnitClass`; `catalogFromSnapshot` не переносить походження CHECK)
+- Modify: `packages/simetra/src/model/physical/catalog.ts` (`catalogFromSnapshot` не переносить походження CHECK; `SqlUnitClass` **не** змінюється)
 - Modify: `packages/simetra/src/model/physical/snapshot.ts` (`checks[].origin?: { rowRule: { file: string } }`)
-- Modify: `packages/simetra/src/compiler/sql/units.ts` (`classify`: `AlterTableStmt` з однією `AT_AddConstraint` типу CHECK → `rowRule`, ідентичність `<схема>.<таблиця>.<ім'я>`; без імені — `sql.statement-not-allowed`, `detail: "rowRuleName"`)
+- Modify: `packages/simetra/src/compiler/sql/units.ts` (`classify`: `AlterTableStmt` з однією `AT_AddConstraint` типу CHECK → варіант результату `{ rowRule: { schema; table; name; expr: Node; line } }`; без імені — `sql.statement-not-allowed`, `detail: "rowRuleName"`; `readSqlUnits` повертає правила поруч з одиницями: `{ units, rowRules, diagnostics }`)
 - Create: `packages/simetra/src/compiler/sql/row-rule.ts`
-- Modify: `packages/simetra/src/compiler/pipeline.ts` (вкладення правил у знімок після `readSqlUnits`, до стадії 4; одиниця `rowRule` не йде в `sqlUnits`)
+- Modify: `packages/simetra/src/compiler/sql/closed-forms.ts` (правило рядка — дозволена форма модуля виду; поза модулем виду — `sql.row-rule-outside-module`)
+- Modify: `packages/simetra/src/compiler/pipeline.ts` (вкладення правил у знімок після `readSqlUnits`, до стадії 4)
 - Modify: `packages/simetra/src/compiler/explain.ts` (рішення 14)
-- Modify: `packages/simetra/src/schema/reverse/units.ts` — лише якщо новий клас вимагає запису в `SIDECAR_ORDER`/`SIGNED`/`NAMED` для вичерпності типів
 - Test: `packages/simetra/src/compiler/__tests__/row-rule.test.ts` (Create), `explain.test.ts`, `packages/simetra/src/model/__tests__/catalog-model.test.ts`
 
 **Interfaces:**
+- Consumes: `checkSqlModules` (задача 7).
 - Produces: `rowRuleProblem(expr: Node, columns: ReadonlyMap<string, string>): string | undefined`
   (ключ — фізичне ім'я колонки таблиці, значення — її тип знімка; повертає
   назву забороненої конструкції); правила `sql.row-rule-grammar` (params
@@ -649,7 +677,7 @@ it("a valid row rule becomes a table CHECK with its origin, not a unit", async (
   const sql = "ALTER TABLE public.sale ADD CONSTRAINT sale_one_party CHECK (num_nonnulls(buyer_id, seller_id) <= 1);"
   const sale = tableOf(model.physical, "sale")
   expect(sale.checks).toContainEqual({ name: "sale_one_party", expression: "num_nonnulls(buyer_id, seller_id) <= 1", origin: { rowRule: { file: "documents/Sale/Sale.sql" } } })
-  expect(model.sqlUnits.map((u) => u.class)).not.toContain("rowRule")
+  expect(model.sqlUnits.filter((u) => u.file === "documents/Sale/Sale.sql")).toEqual([])
 })
 it.each([
   ["lower(code) = 'x'", "FuncCall"],
@@ -694,6 +722,9 @@ git commit -m "feat(compiler): правило рядка модуля виду �
 - Modify: `packages/simetra/src/compiler/stages/links.ts` (`checkSetFunctions`, `signatureProblem`)
 - Modify: `packages/simetra/src/compiler/messages.ts`
 - Modify: `packages/simetra/src/compiler/__tests__/helpers.ts` (фікстурна функція множини: `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$`)
+- Modify: `examples/reference/metadata/sql/app/accessible_user_ids.sql` (додати `SECURITY DEFINER SET search_path = ''`, перевірити кваліфікацію відношень)
+- Modify: `packages/simetra/src/schema/__tests__/fixtures/e1-fixtures.ts` (`app.org_ids`, `app.user_ids`)
+- Modify: `packages/designer/src/schema-engine/__tests__/engine-desired-corpus.db.test.ts` (`app.org_ids`)
 - Test: `packages/simetra/src/compiler/__tests__/stage-links.test.ts`
 
 - [ ] **Step 1: Failing tests**
@@ -716,15 +747,20 @@ Expected: FAIL.
 `unqualified` — «with an empty search_path an unqualified relation does not
 resolve».
 
-- [ ] **Step 3: Зелено**
+- [ ] **Step 3: Фікстури й приклад**
 
-Run: `pnpm --filter simetra test`, `pnpm metadata:check`
-Expected: PASS (функції прикладу вже в цій формі).
+Оновити функції множини у файлах із переліку Files; знайти решту
+пошуком `RETURNS SETOF uuid` у `packages/` і `examples/` і перевести так
+само.
+
+Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`,
+`pnpm metadata:check`, `pnpm test:db`
+Expected: PASS.
 
 - [ ] **Step 4: Коміт**
 
 ```bash
-git add packages/simetra/src/compiler
+git add packages/simetra packages/designer examples/reference/metadata
 git commit -m "feat(compiler): функція множини скоупу — SECURITY DEFINER, порожній search_path, кваліфіковані відношення"
 ```
 
@@ -740,6 +776,8 @@ git commit -m "feat(compiler): функція множини скоупу — SE
 - Modify: `packages/simetra/src/compiler/json-schema.ts` (`sql-debt.schema.json`)
 - Modify: `packages/simetra/src/schema/reverse/generate.ts` (пише перелік)
 - Modify: `packages/simetra/src/compiler/operations/fix.ts` (лише прибирає)
+- Modify: `packages/simetra/src/compiler/__tests__/helpers.ts` (`acceptDebt`)
+- Modify (фікстури зі спільним `sql/public/misc.sql` чи модулями `CustomTable`, предмет яких — не борг): `packages/simetra/src/compiler/__tests__/sql-units.test.ts`, `sql-namespaces.test.ts`, `creation-order.test.ts`, `canonical.test.ts`, `predefined.test.ts`, а також кожен інший тест, що червоніє на `sql.debt-grows` (крок 3)
 - Test: `packages/simetra/src/compiler/__tests__/sql-debt.test.ts` (Create), `operations-fix.test.ts`, `packages/simetra/src/schema/__tests__/reverse-generate.test.ts`
 
 **Interfaces:**
@@ -752,6 +790,12 @@ git commit -m "feat(compiler): функція множини скоупу — SE
   - Зворотна генерація: `sql-debt.json` з `debtUnits` розкладених файлів
     (пише завжди, зокрема `units: []`).
   - `fix`: `units` ∩ поточний борг; файла немає — не створює.
+  - Тестовий хелпер `acceptDebt(files: Map<string, string>): Promise<Map<string, string>>`
+    — повертає копію мапи з `sql-debt.json` = `debtUnits` її одиниць (через
+    `readFiles` і `readSqlUnits`). Для тестів, чий предмет — класи одиниць,
+    ідентичності чи порядок, а не борг: їхній локальний хелпер компіляції
+    (`compileSql`, `order`, …) проганяє файли через `acceptDebt`. Тести
+    боргу (`sql-debt.test.ts`, `operations-fix.test.ts`) його не вживають.
 
 - [ ] **Step 1: Failing tests**
 
@@ -784,13 +828,24 @@ Expected: FAIL.
 - [ ] **Step 2: Реалізація** — за рішенням 12; «функція в закритій
 оболонці» — `closedShellProblem` із задачі 7.
 
-- [ ] **Step 3: Зелено, JSON Schema, DB**
+- [ ] **Step 3: Фікстури боргу**
+
+Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`
+Кожна фікстура, що червоніє на `sql.debt-grows`: якщо предмет тесту — сама
+дослівна одиниця (клас, ідентичність, порядок, простори імен) — її
+локальний хелпер компіляції йде через `acceptDebt`; якщо одиниця в
+фікстурі випадкова — вона переводиться в закриту форму (функція з явною
+волатильністю) або видаляється. Нових записів у `EXCEPTIONS` ратчета полів
+і ручних `sql-debt.json` у фікстурах немає. Перелік переведених фікстур —
+у звіті задачі.
+
+- [ ] **Step 4: Зелено, JSON Schema, DB**
 
 Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`, `pnpm test:db`
 Expected: PASS (round-trip DB-тести designer тепер отримують
 `sql-debt.json` від `introspect`; інша різниця — стоп і звіт).
 
-- [ ] **Step 4: Коміт**
+- [ ] **Step 5: Коміт**
 
 ```bash
 git add packages/simetra packages/designer
