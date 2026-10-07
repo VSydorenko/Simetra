@@ -4,6 +4,7 @@
   "kind": "Catalog",
   "name": "Contract",
   "physicalName": "contract",
+  "kindLabel": "contract",
   "scope": "org",
   "title": {
     "uk": "Договори"

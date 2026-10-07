@@ -25,13 +25,13 @@ type Json = Record<string, unknown>
 const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
-/** Копія JSON без ключів `id` і `physicalName` на будь-якій глибині. */
+/** Копія JSON без призначених ключів (`id`, `physicalName`, `kindLabel`) на будь-якій глибині. */
 function strip(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(strip)
   if (!isRecord(value)) return value
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => key !== "id" && key !== "physicalName")
+      .filter(([key]) => !["id", "physicalName", "kindLabel"].includes(key))
       .map(([key, item]) => [key, strip(item)])
   )
 }
@@ -80,6 +80,7 @@ describe("fixFiles", () => {
       expect(Object.fromEntries(valuesOf(after, "physicalName")), path).toEqual(
         Object.fromEntries(valuesOf(before, "physicalName"))
       )
+      expect((after as Json).kindLabel, path).toBe((before as Json).kindLabel)
       const ids = valuesOf(after, "id")
       expect([...ids.keys()], path).toEqual([...valuesOf(before, "id").keys()])
       for (const id of ids.values()) {
@@ -186,6 +187,99 @@ describe("fixFiles", () => {
     const item = JSON.parse(fixed.get("catalogs/Item/Item.meta.json")!)
     expect(status.values[0].physicalName).toBe("order")
     expect(item.predefinedItems[0].physicalName).toBe("order")
+  })
+
+  it("fix assigns kindLabel project-wide, never changing an existing one", async () => {
+    // Однойменні об'єкти різних PG-схем: мітка — літерал даних, унікальний
+    // на весь проєкт, тож друга отримує суфікс за порядком файлів.
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "catalogs/Contract/Contract.meta.json": {
+        kind: "Catalog",
+        name: "Contract",
+      },
+      "documents/Contract/Contract.meta.json": {
+        kind: "Document",
+        name: "Contract",
+        schema: "billing",
+      },
+      "documents/Order/Order.meta.json": {
+        kind: "Document",
+        name: "Order",
+        kindLabel: "contract_x",
+      },
+    })
+    const result = await fixFiles(files, options())
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    const label = (path: string) =>
+      (JSON.parse(fixed.get(path)!) as Json).kindLabel
+    expect(label("catalogs/Contract/Contract.meta.json")).toBe("contract")
+    expect(label("documents/Contract/Contract.meta.json")).toBe("contract_")
+    expect(label("documents/Order/Order.meta.json")).toBe("contract_x")
+    // Мітка — не ідентифікатор: зарезервоване слово її не зсуває, а
+    // фізичне ім'я того ж об'єкта зсуває.
+    const order = JSON.parse(
+      fixed.get("documents/Order/Order.meta.json")!
+    ) as Json
+    expect(order.physicalName).toBe("order_")
+
+    const again = await fixFiles(fixed, options())
+    expect(again.changes).toEqual([])
+  })
+
+  it("a reserved word kind label is not shifted", async () => {
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "documents/Order/Order.meta.json": { kind: "Document", name: "Order" },
+    })
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(true)
+    const order = JSON.parse(
+      applyChanges(files, result.changes).get(
+        "documents/Order/Order.meta.json"
+      )!
+    ) as Json
+    expect(order.physicalName).toBe("order_")
+    expect(order.kindLabel).toBe("order")
+  })
+
+  it("fix labels a custom table only with a single uuid key", async () => {
+    const column = (name: string, type: string) => ({
+      name,
+      type,
+      notNull: true,
+    })
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "custom-tables/Note/Note.meta.json": {
+        kind: "CustomTable",
+        name: "Note",
+        columns: [column("id", "UUID")],
+        primaryKey: { name: "note_pk", columns: ["id"] },
+      },
+      "custom-tables/Tag/Tag.meta.json": {
+        kind: "CustomTable",
+        name: "Tag",
+        columns: [column("tag", "Text")],
+        primaryKey: { name: "tag_pk", columns: ["tag"] },
+      },
+      "custom-tables/Log/Log.meta.json": {
+        kind: "CustomTable",
+        name: "Log",
+        columns: [column("id", "UUID")],
+      },
+    })
+    const result = await fixFiles(files, options())
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    const read = (name: string) =>
+      JSON.parse(fixed.get(`custom-tables/${name}/${name}.meta.json`)!) as Json
+    expect(read("Note").kindLabel).toBe("note")
+    expect(read("Tag")).not.toHaveProperty("kindLabel")
+    expect(read("Log")).not.toHaveProperty("kindLabel")
   })
 
   it("keeps an assigned physicalName even when the word is no longer reserved", async () => {

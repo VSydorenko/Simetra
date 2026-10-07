@@ -4,6 +4,7 @@
   "kind": "Document",
   "name": "ServiceAccrual",
   "physicalName": "service_accrual",
+  "kindLabel": "service_accrual",
   "scope": "org",
   "title": {
     "uk": "Нарахування за послуги"

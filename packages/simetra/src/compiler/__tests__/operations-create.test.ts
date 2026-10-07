@@ -69,6 +69,7 @@ describe("createObject", () => {
     expect(created.$schema).toBe(`schemas-of/${WAREHOUSE}/catalogs.schema.json`)
     expect(created.kind).toBe("Catalog")
     expect(created.physicalName).toBe("warehouse")
+    expect(created.kindLabel).toBe("warehouse")
     const attribute = (created.attributes as Json[])[0]!
     expect(attribute.physicalName).toBe("currency_id")
     for (const id of [created.id, attribute.id]) {

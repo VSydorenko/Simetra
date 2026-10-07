@@ -475,6 +475,7 @@ describe("creation order", () => {
         kind: "Document",
         name: "Invoice",
         physicalName: "invoice",
+        kindLabel: "invoice",
         numberPeriodicity: "Year",
       },
       [MISC]: `CREATE FUNCTION z.date_trunc(text, timestamp) RETURNS timestamp ${PLPGSQL};`,

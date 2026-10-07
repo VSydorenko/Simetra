@@ -4,6 +4,7 @@
   "kind": "Catalog",
   "name": "Currency",
   "physicalName": "currency",
+  "kindLabel": "currency",
   "scope": "none",
   "title": {
     "uk": "Валюти"

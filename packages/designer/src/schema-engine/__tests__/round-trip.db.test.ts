@@ -110,6 +110,45 @@ interface RoundTrip {
 }
 
 /**
+ * Повторний introspect у ту саму теку не змінює мітки виду: її призначено
+ * раз. Мітки свідомо зсунуто від тих, що дало б доповнення, — інакше загублену
+ * мітку непомітно відновило б саме доповнення.
+ */
+async function expectKindLabelsKept(
+  extracted: Extracted,
+  project: Project,
+  files: ReadonlyMap<string, string>
+): Promise<void> {
+  const labels = (map: ReadonlyMap<string, string>) =>
+    new Map(
+      [...map].flatMap(([path, text]) => {
+        if (!path.endsWith(".meta.json")) return []
+        const label = (JSON.parse(text) as { kindLabel?: unknown }).kindLabel
+        return typeof label === "string" ? [[path, label] as const] : []
+      })
+    )
+  const existing = new Map(files)
+  for (const [path, label] of labels(files)) {
+    existing.set(
+      path,
+      JSON.stringify({
+        ...(JSON.parse(files.get(path)!) as object),
+        kindLabel: `kept_${label}`,
+      })
+    )
+  }
+  const again = await reverseGenerate(extracted.model, {
+    project: { name: "RoundTrip", ...project },
+    existing,
+    newId: () => randomUUID(),
+    schemaPath,
+    parse,
+  })
+  expect(errors(again.diagnostics)).toEqual([])
+  expect(labels(again.files)).toEqual(labels(existing))
+}
+
+/**
  * Ланцюжок §9 над уже розгорнутою ціллю. Кожна ланка — без помилок, звірка —
  * порожня, а оракул читає ціль і окрему тінь того самого рендера.
  */
@@ -129,6 +168,7 @@ async function roundTripOf(
     parse,
   })
   expect(errors(reversed.diagnostics)).toEqual([])
+  await expectKindLabelsKept(extracted, project, reversed.files)
 
   const compiled = await compile(reversed.files)
   expect(errors(compiled.diagnostics)).toEqual([])

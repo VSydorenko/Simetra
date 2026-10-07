@@ -128,6 +128,7 @@ describe("deleteElement", () => {
     fresh(scratch)
     scratch.name = "Scratch"
     scratch.physicalName = "scratch"
+    scratch.kindLabel = "scratch"
     delete scratch.$schema
     ;(scratch.attributes as Json[]).push({
       id: randomUUID(),

@@ -1,4 +1,4 @@
-import { toSnakeCase } from "simetra/model"
+import { expectsKindLabel, toSnakeCase, type MetadataKind } from "simetra/model"
 
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */
 export function uuid(n: number): string {
@@ -87,12 +87,19 @@ function object(
   name: string,
   overrides: Record<string, unknown>
 ) {
-  return {
+  const base = {
     id: freshId(),
     kind,
     name,
     physicalName: toSnakeCase(name),
     ...overrides,
+  }
+  // Мітку ставимо, лише коли вид її очікує: прийнята таблиця без єдиного
+  // uuid-ключа з міткою дала б `identity.kind-label-not-allowed`.
+  const labelled = expectsKindLabel(kind as MetadataKind, base)
+  return {
+    ...(labelled ? { kindLabel: toSnakeCase(name) } : {}),
+    ...base,
   }
 }
 

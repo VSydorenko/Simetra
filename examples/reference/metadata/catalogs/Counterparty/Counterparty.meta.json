@@ -4,6 +4,7 @@
   "kind": "Catalog",
   "name": "Counterparty",
   "physicalName": "counterparty",
+  "kindLabel": "counterparty",
   "scope": "org",
   "title": {
     "uk": "Контрагенти"

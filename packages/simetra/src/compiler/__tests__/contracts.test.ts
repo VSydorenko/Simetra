@@ -738,6 +738,7 @@ describe("posting and register contracts", () => {
       id: `00000000-0000-4000-8000-00000000097${n}`,
       name,
       physicalName: name.toLowerCase(),
+      kindLabel: name.toLowerCase(),
       tabularSections: [],
       posting: {
         movements: [

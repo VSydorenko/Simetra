@@ -555,6 +555,48 @@ describe("reverseGenerate", () => {
     expect(third.files.has("custom-tables/Sale/Sale.sql")).toBe(true)
   })
 
+  it("introspect keeps the existing kindLabel of a custom table", async () => {
+    // Мітку призначено раз: інакше повторний introspect дав би
+    // `identity.assigned-once-changed`.
+    const catalogModel = model({ tables: [table("app", "note")] })
+    const first = await reverseGenerate(catalogModel, options())
+    expect(first.diagnostics).toEqual([])
+    const path = "custom-tables/Note/Note.meta.json"
+    const existing = new Map(first.files)
+    existing.set(
+      path,
+      JSON.stringify({ ...json(first, path), kindLabel: "memo_note" })
+    )
+    const second = await reverseGenerate(catalogModel, {
+      ...options(existing),
+      newId: counter(950_000),
+    })
+    expect(second.diagnostics).toEqual([])
+    expect(json(second, path).kindLabel).toBe("memo_note")
+  })
+
+  it("introspect labels a new custom table with a single uuid key the way fix does", async () => {
+    const result = await reverseGenerate(
+      model({
+        tables: [
+          table("app", "note"),
+          table("app", "tag", {
+            columns: [{ name: "tag", type: "text", notNull: true }],
+            primaryKey: { name: "tag_pkey", columns: ["tag"] },
+          }),
+        ],
+      }),
+      options()
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(json(result, "custom-tables/Note/Note.meta.json").kindLabel).toBe(
+      "note"
+    )
+    expect(json(result, "custom-tables/Tag/Tag.meta.json")).not.toHaveProperty(
+      "kindLabel"
+    )
+  })
+
   it("id columns in many tables keep their own ids", async () => {
     const catalogModel = model({
       tables: [table("app", "a"), table("app", "b"), table("reports", "a")],

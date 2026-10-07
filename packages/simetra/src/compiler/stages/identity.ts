@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   NO_SCOPE,
+  expectsKindLabel,
   matchesAttributeCase,
   parseExpression,
   walkExpr,
@@ -99,6 +100,40 @@ export function checkIdentity(
   const style = project?.naming.attributeCase
   const idOwners = new Map<string, string>()
   const objectsByName = new Map<string, ParsedObject>()
+  // Мітка виду — літерал даних у колонці виду поліморфних пар і в контракті
+  // прав, тож унікальна на весь проєкт, а не в межах схеми PG.
+  const labelOwners = new Map<string, string>()
+
+  const checkKindLabel = (object: ParsedObject, data: Element) => {
+    const label = data.kindLabel
+    const expected = expectsKindLabel(object.kind, data)
+    if (label === undefined) {
+      if (expected) {
+        diagnostics.push(
+          diagnostic("identity.kind-label-missing", object.file, "/kindLabel")
+        )
+      }
+      return
+    }
+    if (!expected) {
+      diagnostics.push(
+        diagnostic("identity.kind-label-not-allowed", object.file, "/kindLabel")
+      )
+      return
+    }
+    if (typeof label !== "string") return
+    const firstFile = labelOwners.get(label)
+    if (firstFile === undefined) {
+      labelOwners.set(label, object.file)
+    } else {
+      diagnostics.push(
+        diagnostic("identity.kind-label-duplicate", object.file, "/kindLabel", {
+          label,
+          firstFile,
+        })
+      )
+    }
+  }
 
   const checkIdentified = (file: string, pointer: string, element: Element) => {
     const id = element.id
@@ -216,6 +251,7 @@ export function checkIdentity(
   for (const object of objects) {
     const data = object.data as Element
     checkIdentified(object.file, "", data)
+    checkKindLabel(object, data)
     const scopeKind = checkDeclaration(object)
     if (scopeKind !== undefined) scopeOf.set(object, scopeKind)
     // `declared` — фізичну форму файл описує сам і скоуп-колонку називає

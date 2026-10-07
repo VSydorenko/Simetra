@@ -1,3 +1,4 @@
+import { expectsKindLabel, type MetadataKind } from "simetra/model"
 import { metaFiles, uuid } from "../helpers"
 
 /**
@@ -94,6 +95,11 @@ function header(kind: string, name: string, physicalName: string) {
     kind,
     name,
     physicalName,
+    // Мітка — у видів, що її мають без умов; прийнята таблиця з uuid-ключем
+    // ставить її сама.
+    ...(expectsKindLabel(kind as MetadataKind, {})
+      ? { kindLabel: physicalName }
+      : {}),
     schema: "public",
     scope: "org",
     title: text(name),
@@ -530,6 +536,23 @@ export function kitchenSink(): Map<string, string> {
     scope: "none",
   }
 
+  // Прийнята таблиця з єдиним uuid-ключем — єдина, де мітка виду дозволена.
+  const note = {
+    ...header("CustomTable", "Note", "note"),
+    kindLabel: "memo_note",
+    columns: [
+      {
+        id: id(),
+        name: "id",
+        physicalName: "id",
+        notNull: true,
+        type: "UUID",
+      },
+    ],
+    primaryKey: { name: "note_pk", columns: ["id"] },
+    scope: "none",
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
@@ -542,6 +565,7 @@ export function kitchenSink(): Map<string, string> {
     "pg-enums/Mood/Mood.meta.json": mood,
     "custom-tables/Ledger/Ledger.meta.json": ledger,
     "custom-tables/LedgerTag/LedgerTag.meta.json": ledgerTag,
+    "custom-tables/Note/Note.meta.json": note,
   }
   for (const [name, value] of Object.entries(constants)) {
     entries[`constants/${name}/${name}.meta.json`] = value

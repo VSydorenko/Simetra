@@ -824,6 +824,7 @@ describe("emitEntityTypes", () => {
       "catalogs/Item/Item.meta.json": catalog("Item"),
       "documents/Item/Item.meta.json": document("Item", {
         physicalName: "item_doc",
+        kindLabel: "item_doc",
       }),
     }
     const code = await emit(entries)

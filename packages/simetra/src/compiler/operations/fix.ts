@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   MAX_PHYSICAL_NAME_BYTES,
   assignPhysicalName,
+  expectsKindLabel,
   formatMetaFile,
   formatProjectFile,
   kindByDir,
@@ -157,8 +158,14 @@ function readObjectFiles(files: ReadonlyMap<string, string>): ObjectFile[] {
   return result
 }
 
+/** Поля, які доповнювач призначає раз: фізичне ім'я елемента й мітка виду. */
+type AssignedField = "physicalName" | "kindLabel"
+
+const assignedOf = (element: Json, field: AssignedField): string | undefined =>
+  typeof element[field] === "string" ? element[field] : undefined
+
 const physicalNameOf = (element: Json): string | undefined =>
-  typeof element.physicalName === "string" ? element.physicalName : undefined
+  assignedOf(element, "physicalName")
 
 /** Вид цілі `Ref` береться з сирого JSON: компіляція для цього не потрібна. */
 function fieldRole(element: Json): PhysicalNameRole {
@@ -219,22 +226,28 @@ class NameAssigner {
     for (const file of this.objects) this.assignSections(file)
     for (const file of this.objects) this.assignColumns(file)
     for (const file of this.objects) this.assignLabels(file)
+    this.assignKindLabels()
   }
 
   /**
    * Призначає ім'я елементу без нього. Ім'я, яке разом із похідними
    * (`suffixes`) перевищило б ліміт Postgres, не призначається: автор задає
    * коротше сам, а `identity.physical-name-missing` лишається в результаті.
+   * `field` — куди пишеться призначене: наявне значення не змінюється ніколи.
    */
   private assign(
     file: string,
     at: Located,
     role: PhysicalNameRole,
     taken: ReadonlySet<string>,
-    suffixes: readonly string[] = []
+    suffixes: readonly string[] = [],
+    field: AssignedField = "physicalName"
   ): string | undefined {
     const name = at.element.name
-    if (physicalNameOf(at.element) !== undefined || typeof name !== "string") {
+    if (
+      assignedOf(at.element, field) !== undefined ||
+      typeof name !== "string"
+    ) {
       return undefined
     }
     const candidate = assignPhysicalName(name, role, taken)
@@ -250,7 +263,7 @@ class NameAssigner {
       )
       return undefined
     }
-    at.element.physicalName = candidate
+    at.element[field] = candidate
     return candidate
   }
 
@@ -419,6 +432,34 @@ class NameAssigner {
     }
   }
 
+  /**
+   * Мітка виду — літерал даних (колонка виду поліморфних пар, контракт прав),
+   * а не ідентифікатор, тож унікальна на весь проєкт, а не в PG-схемі, і
+   * зарезервоване слово її не зсуває. Наявні мітки займаються першими: нова
+   * не забирає чужої, а однойменні об'єкти різних схем отримують мітки за
+   * порядком файлів.
+   */
+  private assignKindLabels(): void {
+    const taken = new Set(
+      this.objects.flatMap((file) => assignedOf(file.raw, "kindLabel") ?? [])
+    )
+    for (const file of this.objects) {
+      // Без розібраних даних не видно ключа прийнятої таблиці; зламаний
+      // файл однаково не скомпілюється.
+      if (file.data === undefined) continue
+      if (!expectsKindLabel(file.def.kind, file.data)) continue
+      const name = this.assign(
+        file.path,
+        { pointer: "", element: file.raw },
+        { role: "label" },
+        taken,
+        [],
+        "kindLabel"
+      )
+      if (name !== undefined) taken.add(name)
+    }
+  }
+
   private assignLabels(file: ObjectFile): void {
     for (const group of labelGroupsOf(file)) {
       const taken = new Set(
@@ -434,7 +475,8 @@ class NameAssigner {
 
 /**
  * Механічне доповнення файлів (спека П2 §3, §8.5, §8.6): відсутні `id`
- * (UUID v4) і `physicalName` іменованих елементів, `$schema`, канонічна
+ * (UUID v4) і `physicalName` іменованих елементів, `kindLabel` об'єктів,
+ * `$schema`, канонічна
  * форма й порядок ключів. Наявні id і фізичні імена не змінюються ніколи.
  * Спільне для `fix` і операцій, що створюють елементи: новий елемент
  * отримує ідентичність тим самим шляхом, що й елемент, доданий руками.

@@ -4,6 +4,7 @@
   "kind": "Catalog",
   "name": "Organization",
   "physicalName": "organization",
+  "kindLabel": "organization",
   "scope": "org",
   "title": {
     "uk": "Організації"

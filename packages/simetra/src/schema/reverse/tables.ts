@@ -279,6 +279,9 @@ export function customTableData(
     kind: "CustomTable",
     name: names.object,
     physicalName: table.name,
+    // Мітку призначено раз: повторний introspect її переносить, а нова
+    // таблиця отримує її від доповнення, як у `fix`.
+    ...(typeof raw?.kindLabel === "string" ? { kindLabel: raw.kindLabel } : {}),
     ...(table.schema !== ctx.defaultSchema ? { schema: table.schema } : {}),
     ...pick(raw, ["scope", "title", "description"]),
     ...(table.comment !== undefined ? { comment: table.comment } : {}),

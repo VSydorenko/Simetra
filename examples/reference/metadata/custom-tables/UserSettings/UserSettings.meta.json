@@ -4,6 +4,7 @@
   "kind": "CustomTable",
   "name": "UserSettings",
   "physicalName": "user_settings",
+  "kindLabel": "user_settings",
   "scope": "user",
   "title": {
     "uk": "Налаштування користувача"

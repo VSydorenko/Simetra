@@ -310,6 +310,29 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: () => "Немає physicalName",
     hint: FIX_PHYSICAL_NAMES,
   },
+  "identity.kind-label-missing": {
+    en: () => "kindLabel is missing",
+    uk: () => "Немає kindLabel",
+    hint: FIX_PHYSICAL_NAMES,
+  },
+  "identity.kind-label-not-allowed": {
+    en: () =>
+      "kindLabel is allowed only for a kind with a label; a custom table needs a single uuid primary key",
+    uk: () =>
+      "kindLabel дозволена лише виду з міткою; прийнятій таблиці — лише з єдиним uuid-ключем",
+    hint: {
+      en: "Remove kindLabel from this file.",
+      uk: "Приберіть kindLabel з цього файлу.",
+    },
+  },
+  "identity.kind-label-duplicate": {
+    en: (p) => `kindLabel "${p.label}" is already used in ${p.firstFile}`,
+    uk: (p) => `kindLabel "${p.label}" уже використано в ${p.firstFile}`,
+    hint: {
+      en: "Kind labels are unique across the project and assigned once; give one of the objects a new label.",
+      uk: "Мітки виду унікальні в проєкті й призначаються раз; дайте одному з об'єктів нову мітку.",
+    },
+  },
   "identity.name-duplicate": {
     en: (p) => `Name "${p.name}" is already declared in ${p.scope}`,
     uk: (p) => `Ім'я "${p.name}" уже оголошене в ${p.scope}`,

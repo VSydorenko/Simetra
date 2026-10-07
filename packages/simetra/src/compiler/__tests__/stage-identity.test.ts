@@ -264,7 +264,9 @@ describe("stage 2: identity", () => {
   it("duplicate object name within a kind", async () => {
     const result = await compileWith({
       "catalogs/Contract/Contract.meta.json": catalog("Contract"),
-      "catalogs/Other/Other.meta.json": catalog("Contract"),
+      "catalogs/Other/Other.meta.json": catalog("Contract", {
+        kindLabel: "other",
+      }),
     })
     expect(result.diagnostics.map((d) => [d.code, d.file])).toEqual([
       ["file.name-mismatch", "catalogs/Other/Other.meta.json"],

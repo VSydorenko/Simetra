@@ -256,6 +256,7 @@ describe("movement query functions", () => {
       kind: "Document",
       name: "Return",
       physicalName: "a_return",
+      kindLabel: "a_return",
       registerMovements: [{ kind: "AccumulationRegister", name: "Stock" }],
       attributes: [
         attribute("item", {
