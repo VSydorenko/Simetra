@@ -1,10 +1,13 @@
 import {
   KIND_REGISTRY,
+  PROVIDER_EVENT_SOURCES,
   makeObjectName,
   postsMovements,
   truncatedPeriodExpression,
   standardLogicalName,
   type Attribute,
+  type DatabaseProvider,
+  type LocalizedString,
   type NumberingSpec,
   type AttributeCase,
   type PhysicalColumn,
@@ -13,12 +16,13 @@ import {
   type Project,
   type PublicReadRole,
   type RegisterKeySpec,
+  type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
 import { kindLabelOf, type ModelStageResult } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
-import type { ParsedObject } from "./stages/files"
+import { objectKey, type ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
 
 export interface QualifiedName {
@@ -171,6 +175,24 @@ export interface NumberingContract {
   assignedAt: "firstWrite"
 }
 
+/**
+ * Підписка на подію (спека промоції §9.3): П3 генерує з неї тригер
+ * `FOR EACH ROW` на кожне джерело з викликом обробника.
+ */
+export interface EventSubscriptionContract {
+  subscriptionId: string
+  /** `physicalName` підписки — база імені тригера, призначена раз. */
+  name: string
+  sources: { schema: string; table: string }[]
+  event: SubscriptionEvent
+  /** Фізичні колонки, однакові в кожному джерелі (стадія 4); порожньо — будь-який запис. */
+  whenChanged: string[]
+  handler: QualifiedName
+  /** Текст для `COMMENT ON TRIGGER`: коментар прийнятого тригера стає ним. */
+  title?: LocalizedString
+  description?: LocalizedString
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -184,6 +206,8 @@ export interface Contracts {
   publicRead: { objectId: string; role: PublicReadRole }[]
   /** За `bucket`: вид скоупу вказано id, бо ім'я виду може змінитися. */
   storageBuckets: { bucket: string; scopeKindId: string }[]
+  /** За `subscriptionId`. */
+  eventSubscriptions: EventSubscriptionContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -458,7 +482,10 @@ export function buildContracts(
   sqlUnits: readonly SqlUnit[],
   timezone: string,
   elementChecks: ModelStageResult["elementChecks"],
-  project: Pick<Project, "scopeKinds" | "storageBuckets">
+  project: Pick<
+    Project,
+    "scopeKinds" | "storageBuckets" | "defaultSchema" | "database"
+  >
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -516,7 +543,144 @@ export function buildContracts(
         ),
       }))
       .sort((a, b) => compareStrings(a.bucket, b.bucket)),
+    eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
   }
+}
+
+/** Таблиця-джерело підписки: основна таблиця об'єкта чи таблиця провайдера. */
+export interface SubscriptionSourceTable {
+  schema: string
+  table: string
+  /** Фізичні колонки за логічним іменем (для таблиці провайдера — ім'я колонки). */
+  columns: ReadonlyMap<string, readonly string[]>
+}
+
+/**
+ * Колонки основної таблиці об'єкта за логічним іменем реквізиту чи
+ * стандартного реквізиту в стилі проєкту. Поліморфна пара дає дві колонки.
+ */
+function columnsByLogicalName(
+  object: ParsedObject,
+  table: PhysicalTable
+): Map<string, string[]> {
+  const def = KIND_REGISTRY[object.kind]
+  const data = object.data as Record<string, unknown>
+  const names = new Map(
+    def.columnFields.flatMap((field) =>
+      ((data[field] ?? []) as { id?: string; name: string }[]).map(
+        (element) => [element.id, element.name] as const
+      )
+    )
+  )
+  const result = new Map<string, string[]>()
+  for (const column of table.columns) {
+    // Скоуп-колонка без стандартного реквізиту реквізитом не є.
+    const logical =
+      column.origin.elementId !== undefined
+        ? names.get(column.origin.elementId)
+        : column.origin.standard
+    if (logical === undefined) continue
+    result.set(logical, [...(result.get(logical) ?? []), column.name])
+  }
+  return result
+}
+
+/**
+ * Таблиця джерела за pointer-ом підписки. `undefined` — джерело не
+ * резолвиться в таблицю (невідомий об'єкт, вид без таблиці, таблиця поза
+ * пресетом): про це звітують стадії 2 і 4, а не читачі.
+ */
+export function subscriptionSourceTables(
+  subscription: ParsedObject,
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  provider: DatabaseProvider
+): Map<string, SubscriptionSourceTable | undefined> {
+  const spec = KIND_REGISTRY[subscription.kind].subscription?.(
+    subscription.data
+  )
+  const byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
+  const result = new Map<string, SubscriptionSourceTable | undefined>()
+  for (const source of spec?.sources ?? []) {
+    if ("providerTable" in source) {
+      const { schema, table } = source.providerTable
+      const preset = PROVIDER_EVENT_SOURCES[provider].find(
+        (s) => s.schema === schema && s.table === table
+      )
+      result.set(
+        source.pointer,
+        preset === undefined
+          ? undefined
+          : {
+              schema,
+              table,
+              columns: new Map(preset.columns.map((c) => [c, [c]])),
+            }
+      )
+      continue
+    }
+    const target = byKey.get(objectKey(source.ref.kind, source.ref.name))
+    const table =
+      target === undefined ? undefined : mainTableOf(physical, target.id ?? "")
+    result.set(
+      source.pointer,
+      target === undefined || table === undefined
+        ? undefined
+        : {
+            schema: table.schema,
+            table: table.name,
+            columns: columnsByLogicalName(target, table),
+          }
+    )
+  }
+  return result
+}
+
+function eventSubscriptionContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  project: Pick<Project, "defaultSchema" | "database">
+): EventSubscriptionContract[] {
+  return objects
+    .flatMap((object): EventSubscriptionContract[] => {
+      const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
+      if (spec === undefined) return []
+      // Модель без помилок: кожне джерело — таблиця, кожне ім'я `whenChanged`
+      // має в усіх джерелах ті самі колонки (стадія 4), тож беремо першого.
+      const tables = [
+        ...subscriptionSourceTables(
+          object,
+          objects,
+          physical,
+          project.database.provider
+        ).values(),
+      ].map(must)
+      const data = object.data as {
+        physicalName?: string
+        title?: LocalizedString
+        description?: LocalizedString
+      }
+      return [
+        {
+          subscriptionId: object.id ?? "",
+          name: must(data.physicalName),
+          sources: tables.map(({ schema, table }) => ({ schema, table })),
+          event: spec.event,
+          whenChanged: (spec.whenChanged ?? []).flatMap((name) => [
+            ...must(tables[0]!.columns.get(name)),
+          ]),
+          handler: {
+            schema: spec.handler.schema ?? project.defaultSchema,
+            name: spec.handler.name,
+          },
+          ...(data.title === undefined ? {} : { title: data.title }),
+          ...(data.description === undefined
+            ? {}
+            : { description: data.description }),
+        },
+      ]
+    })
+    .sort((a, b) => compareStrings(a.subscriptionId, b.subscriptionId))
 }
 
 function columnsOfElement(table: PhysicalTable, id: string | undefined) {

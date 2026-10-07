@@ -10,6 +10,7 @@ import {
 } from "./custom-table"
 import { documentKind } from "./document"
 import { enumerationKind } from "./enumeration"
+import { eventSubscriptionKind } from "./event-subscription"
 import { informationRegisterKind } from "./information-register"
 import { pgEnumKind } from "./pg-enum"
 import type { KindDefinition } from "./standard"
@@ -27,6 +28,7 @@ export {
   type ReferenceRole,
   type RegisterKeySpec,
   type StandardColumnDef,
+  type SubscriptionSpec,
   type VirtualTableKind,
   type WritePattern,
 } from "./standard"
@@ -45,6 +47,7 @@ export const KIND_REGISTRY: Readonly<Record<MetadataKind, KindDefinition>> = {
   Constant: constantKind,
   CustomTable: customTableKind,
   PgEnum: pgEnumKind,
+  EventSubscription: eventSubscriptionKind,
 }
 
 const KINDS_BY_DIR = new Map(

@@ -1,5 +1,7 @@
 import {
+  DELETE_EVENTS,
   KIND_REGISTRY,
+  PROVIDER_EVENT_SOURCES,
   isUuidColumn,
   postsMovements,
   isSqlReservedWord,
@@ -8,6 +10,7 @@ import {
   type Attribute,
   type AttributeCase,
   type CustomTable,
+  type DatabaseProvider,
   type Expr,
   NO_SCOPE,
   type MetadataRef,
@@ -34,7 +37,11 @@ import {
   type OperandError,
   type PostingContext,
 } from "../posting-types"
-import { derivedFunctions, type DerivedFunction } from "../contracts"
+import {
+  derivedFunctions,
+  subscriptionSourceTables,
+  type DerivedFunction,
+} from "../contracts"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
@@ -102,7 +109,8 @@ export function checkIntegrity(
   model: ModelStageResult,
   style: AttributeCase,
   scopeKinds: readonly ScopeKind[],
-  sqlUnits: readonly VerbatimUnit[]
+  sqlUnits: readonly VerbatimUnit[],
+  provider: DatabaseProvider
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
@@ -197,6 +205,7 @@ export function checkIntegrity(
   diagnostics.push(...checkCompositeIndexes(objects, style))
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
+  diagnostics.push(...checkSubscriptions(objects, model, provider))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -224,6 +233,12 @@ function referenceTargetError(
   // Регістр і вид, що проводиться, — факти реєстру, а не перелік імен видів.
   if (REGISTER_TARGET_ROLES.has(role)) {
     return registerTargetError(target)
+  }
+  // Тригер підписки стоїть на таблиці, тож джерело без неї слухати нічого.
+  if (role === "eventSubscription.source") {
+    return def.materializes === "table"
+      ? undefined
+      : "subscription.source-not-table"
   }
   if (role === "register.recorder") {
     return postsMovements(target.kind) ? undefined : "register.recorder-kind"
@@ -258,6 +273,105 @@ function referenceTargetError(
   if (isDeclaredTable(target)) return "reference.custom-table-key"
   // Одиночний `Ref` на ціль без таблиці зберігає мітку (М15), ключ не потрібен.
   return polymorphic ? "reference.polymorphic-target-kind" : undefined
+}
+
+/**
+ * Підписки на подію (спека промоції §9.3): таблиця провайдера — з пресету
+ * провайдера проєкту; `whenChanged` — лише з подіями запису, і кожне ім'я
+ * мусить мати ті самі фізичні колонки в кожному джерелі, бо контракт несе
+ * один перелік колонок для тригера кожного джерела. Джерело-об'єкт без
+ * таблиці звітує перевірка цілей посилань, невідоме — стадія 2.
+ */
+function checkSubscriptions(
+  objects: readonly ParsedObject[],
+  model: ModelStageResult,
+  provider: DatabaseProvider
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const object of objects) {
+    const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
+    if (spec === undefined) continue
+    const tables = subscriptionSourceTables(
+      object,
+      objects,
+      model.physical,
+      provider
+    )
+    for (const source of spec.sources) {
+      if (!("providerTable" in source) || tables.get(source.pointer)) continue
+      const { schema, table } = source.providerTable
+      found.push(
+        diagnostic(
+          "subscription.provider-table-unknown",
+          object.file,
+          source.pointer,
+          {
+            table: `${schema}.${table}`,
+            provider,
+            known: PROVIDER_EVENT_SOURCES[provider]
+              .map((s) => `${s.schema}.${s.table}`)
+              .join(", "),
+          }
+        )
+      )
+    }
+    if (spec.whenChanged === undefined) continue
+    if (DELETE_EVENTS.has(spec.event)) {
+      found.push(
+        diagnostic(
+          "subscription.when-changed-on-delete",
+          object.file,
+          "/whenChanged",
+          { event: spec.event }
+        )
+      )
+      continue
+    }
+    spec.whenChanged.forEach((name, index) => {
+      const pointer = `/whenChanged/${index}`
+      const mapped: string[] = []
+      for (const source of spec.sources) {
+        const table = tables.get(source.pointer)
+        if (table === undefined) continue
+        const columns = table.columns.get(name)
+        if (columns === undefined) {
+          found.push(
+            diagnostic(
+              "subscription.when-changed-unknown",
+              object.file,
+              pointer,
+              {
+                name,
+                source:
+                  "ref" in source
+                    ? `${source.ref.kind} "${source.ref.name}"`
+                    : `provider table ${table.schema}.${table.table}`,
+              }
+            )
+          )
+          continue
+        }
+        mapped.push(`${table.schema}.${table.table}(${columns.join(", ")})`)
+      }
+      const distinct = new Set(
+        mapped.map((entry) => entry.slice(entry.indexOf("(")))
+      )
+      if (distinct.size > 1) {
+        found.push(
+          diagnostic(
+            "subscription.when-changed-diverges",
+            object.file,
+            pointer,
+            {
+              name,
+              columns: mapped.join("; "),
+            }
+          )
+        )
+      }
+    })
+  }
+  return found
 }
 
 /**

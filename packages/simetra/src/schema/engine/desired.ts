@@ -172,7 +172,10 @@ function globMatches(glob: string, name: string): boolean {
 }
 
 /** Чи пускає пресет провайдера одиницю класу `cls` на цю таблицю (§6.9). */
-function onSurface(cls: "policy" | "trigger", target: UnitTarget): boolean {
+export function onSurface(
+  cls: "policy" | "trigger",
+  target: UnitTarget
+): boolean {
   return SUPABASE_SURFACES.some(
     (surface) =>
       surface.schema === target.schema &&

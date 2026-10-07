@@ -21,7 +21,7 @@ import { unwrap } from "../format"
 const ID = "3f2b8a52-6d1e-4c0a-9b7e-5a1c2d3e4f50"
 
 describe("METADATA_KINDS", () => {
-  it("lists the 1C kinds plus CustomTable and PgEnum", () => {
+  it("lists the 1C kinds plus CustomTable, PgEnum and EventSubscription", () => {
     expect(METADATA_KINDS).toEqual([
       "Catalog",
       "Document",
@@ -31,6 +31,7 @@ describe("METADATA_KINDS", () => {
       "Constant",
       "CustomTable",
       "PgEnum",
+      "EventSubscription",
     ])
     expect(metadataKindSchema.options).toEqual([...METADATA_KINDS])
   })

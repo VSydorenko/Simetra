@@ -3,6 +3,7 @@ import type { PeriodUnit } from "../physical/period"
 import type { Attribute } from "../schemas/attribute"
 import type { FkAction } from "../schemas/custom-table"
 import type { Document } from "../schemas/document"
+import type { SubscriptionEvent } from "../schemas/event-subscription"
 import { toSnakeCase, type AttributeCase } from "../schemas/identity"
 import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
@@ -116,6 +117,10 @@ export type ReferenceRole =
   | "scopeKind.root"
   /** Вид скоупу в `project.storageBuckets[].scopeKind`. */
   | "storage.scopeKind"
+  /** Об'єкт-джерело підписки на подію. */
+  | "eventSubscription.source"
+  /** Реквізит джерела в `whenChanged` підписки. */
+  | "eventSubscription.whenChanged"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */
@@ -199,6 +204,21 @@ export interface NumberingSpec {
   periodicity: Document["numberPeriodicity"]
   /** UNIQUE (носій, період?, колонка) у фізичному знімку. */
   unique: boolean
+}
+
+/**
+ * Підписка на подію (спека промоції §9.3) у формі для стадій: джерела з
+ * pointer на місце у файлі, таблиця провайдера — розібраною парою.
+ */
+export interface SubscriptionSpec {
+  sources: (
+    | { pointer: string; ref: MetadataRef }
+    | { pointer: string; providerTable: { schema: string; table: string } }
+  )[]
+  event: SubscriptionEvent
+  /** Логічні імена (колонки пресету — для таблиці провайдера), у порядку файлу. */
+  whenChanged?: readonly string[]
+  handler: { schema?: string; name: string }
 }
 
 export interface KindDefinition {
@@ -286,6 +306,8 @@ export interface KindDefinition {
   registerKeys?(obj: unknown): RegisterKeySpec
   /** Нумерація; `undefined` — об'єкт номера чи коду не має. */
   numbering?(obj: unknown): NumberingSpec | undefined
+  /** Підписка на подію; є лише у виду підписок. */
+  subscription?(obj: unknown): SubscriptionSpec
 }
 
 /**

@@ -77,7 +77,8 @@ export async function runStages(
       stage3,
       stage1.project.naming.attributeCase,
       stage1.project.scopeKinds,
-      sql.units
+      sql.units,
+      stage1.project.database.provider
     ),
     ...checkLinks(
       stage1.objects,

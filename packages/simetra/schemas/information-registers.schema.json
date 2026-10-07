@@ -103,7 +103,8 @@
               "AccumulationRegister",
               "Constant",
               "CustomTable",
-              "PgEnum"
+              "PgEnum",
+              "EventSubscription"
             ],
             "description": "Kind of the referenced metadata object."
           },
@@ -277,7 +278,8 @@
                   "AccumulationRegister",
                   "Constant",
                   "CustomTable",
-                  "PgEnum"
+                  "PgEnum",
+                  "EventSubscription"
                 ],
                 "description": "Kind of the referenced metadata object."
               },
@@ -310,7 +312,8 @@
                     "AccumulationRegister",
                     "Constant",
                     "CustomTable",
-                    "PgEnum"
+                    "PgEnum",
+                    "EventSubscription"
                   ],
                   "description": "Kind of the referenced metadata object."
                 },
@@ -564,7 +567,8 @@
                   "AccumulationRegister",
                   "Constant",
                   "CustomTable",
-                  "PgEnum"
+                  "PgEnum",
+                  "EventSubscription"
                 ],
                 "description": "Kind of the referenced metadata object."
               },
@@ -597,7 +601,8 @@
                     "AccumulationRegister",
                     "Constant",
                     "CustomTable",
-                    "PgEnum"
+                    "PgEnum",
+                    "EventSubscription"
                   ],
                   "description": "Kind of the referenced metadata object."
                 },
@@ -851,7 +856,8 @@
                   "AccumulationRegister",
                   "Constant",
                   "CustomTable",
-                  "PgEnum"
+                  "PgEnum",
+                  "EventSubscription"
                 ],
                 "description": "Kind of the referenced metadata object."
               },
@@ -884,7 +890,8 @@
                     "AccumulationRegister",
                     "Constant",
                     "CustomTable",
-                    "PgEnum"
+                    "PgEnum",
+                    "EventSubscription"
                   ],
                   "description": "Kind of the referenced metadata object."
                 },

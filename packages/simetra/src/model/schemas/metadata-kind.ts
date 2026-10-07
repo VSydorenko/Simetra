@@ -14,6 +14,7 @@ export const METADATA_KINDS = [
   "Constant",
   "CustomTable",
   "PgEnum",
+  "EventSubscription",
 ] as const
 
 export const metadataKindSchema = z.enum(METADATA_KINDS).meta({

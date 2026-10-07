@@ -11,6 +11,90 @@ import { NO_SCOPE, scopeKindSchema } from "./scope"
 export const DATABASE_PROVIDERS = ["supabase"] as const
 export type DatabaseProvider = (typeof DATABASE_PROVIDERS)[number]
 
+/** Таблиця провайдера, на яку можна підписатися подією, з її колонками. */
+export interface ProviderEventSource {
+  schema: string
+  table: string
+  /** У порядку `ordinal_position` образу; `whenChanged` називає їх як є. */
+  columns: readonly string[]
+}
+
+/**
+ * Таблиці провайдера, які застосунок може слухати підпискою (спека промоції
+ * §9.3): запис у них команд платформи не проходить (реєстрація користувача,
+ * завантаження файлу). Колонки — факт образу провайдера; розходження з
+ * локальним стеком ловить DB-тест, а лежання на поверхні тригерів пресету
+ * схеми — тест T2 (T0 його не імпортує).
+ */
+export const PROVIDER_EVENT_SOURCES: Readonly<
+  Record<DatabaseProvider, readonly ProviderEventSource[]>
+> = {
+  supabase: [
+    {
+      schema: "auth",
+      table: "users",
+      columns: [
+        "instance_id",
+        "id",
+        "aud",
+        "role",
+        "email",
+        "encrypted_password",
+        "email_confirmed_at",
+        "invited_at",
+        "confirmation_token",
+        "confirmation_sent_at",
+        "recovery_token",
+        "recovery_sent_at",
+        "email_change_token_new",
+        "email_change",
+        "email_change_sent_at",
+        "last_sign_in_at",
+        "raw_app_meta_data",
+        "raw_user_meta_data",
+        "is_super_admin",
+        "created_at",
+        "updated_at",
+        "phone",
+        "phone_confirmed_at",
+        "phone_change",
+        "phone_change_token",
+        "phone_change_sent_at",
+        "confirmed_at",
+        "email_change_token_current",
+        "email_change_confirm_status",
+        "banned_until",
+        "reauthentication_token",
+        "reauthentication_sent_at",
+        "is_sso_user",
+        "deleted_at",
+        "is_anonymous",
+      ],
+    },
+    {
+      schema: "storage",
+      table: "objects",
+      columns: [
+        "id",
+        "bucket_id",
+        "name",
+        "owner",
+        "created_at",
+        "updated_at",
+        "last_accessed_at",
+        "metadata",
+        "path_tokens",
+        "version",
+        "owner_id",
+        "user_metadata",
+        "archived_at",
+        "is_delete_marker",
+        "is_versioned",
+      ],
+    },
+  ],
+}
+
 /** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */
 export const projectSchema = z
   .strictObject({

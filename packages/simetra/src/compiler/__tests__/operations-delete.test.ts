@@ -9,6 +9,7 @@ import {
 } from "simetra/compiler"
 import { isInsideElement } from "../operations/delete"
 import { readReferenceDomain } from "./fixtures/reference-domain"
+import { attribute, catalog, metaFiles, project } from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -225,6 +226,49 @@ describe("deleteElement", () => {
     )
     expect(inside("a.meta.json", "/posting/movements/0")).toBe(false)
     expect(inside("b.meta.json", "/tabularSections/1")).toBe(false)
+  })
+
+  it("refuses to delete a catalog that a subscription listens to", async () => {
+    const subscription = "event-subscriptions/Stamp/Stamp.meta.json"
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+        attributes: [attribute("number", { type: "String", length: 20 })],
+      }),
+      [subscription]: {
+        id: "00000000-0000-4000-8000-000000007101",
+        kind: "EventSubscription",
+        name: "Stamp",
+        physicalName: "stamp",
+        sources: [{ kind: "Catalog", name: "Contract" }],
+        event: "onWrite",
+        whenChanged: ["number"],
+        handler: { name: "stamp" },
+      },
+      "sql/public/stamp.sql":
+        "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+    })
+    await modelOf(files)
+    const result = await deleteElement(files, {
+      target: { kind: "Catalog", name: "Contract" },
+    })
+    expect(result.ok).toBe(false)
+    expect(
+      result.diagnostics.map((d) => [d.code, d.file, d.pointer, d.params?.role])
+    ).toEqual([
+      [
+        "operation.delete-referenced",
+        subscription,
+        "/sources/0",
+        "eventSubscription.source",
+      ],
+      [
+        "operation.delete-referenced",
+        subscription,
+        "/whenChanged/0",
+        "eventSubscription.whenChanged",
+      ],
+    ])
   })
 
   it("reports a missing target", async () => {

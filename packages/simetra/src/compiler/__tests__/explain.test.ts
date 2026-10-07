@@ -54,6 +54,30 @@ describe("explainObject", () => {
     expect(e.referencedBy.some((r) => r.file === doc.file)).toBe(true)
   })
 
+  it("explains an event subscription: no tables, its trigger contract", async () => {
+    const model = await referenceModel()
+    const e = explainObject(model, {
+      kind: "EventSubscription",
+      name: "CheckContractStart",
+    })!
+    expect(e.tables).toEqual([])
+    expect(e.contracts).toEqual([
+      expect.objectContaining({
+        name: "check_contract_start",
+        sources: [{ schema: "app", table: "contract" }],
+        whenChanged: ["start_date"],
+        handler: { schema: "app", name: "check_contract_start" },
+      }),
+    ])
+    const contract = explainObject(model, {
+      kind: "Catalog",
+      name: "Contract",
+    })!
+    expect(contract.referencedBy).toContainEqual(
+      expect.objectContaining({ role: "eventSubscription.source" })
+    )
+  })
+
   it("unknown object", async () => {
     expect(
       explainObject(await referenceModel(), { kind: "Catalog", name: "Nope" })

@@ -113,6 +113,9 @@ export function explainObject(
     ...contracts.registers.filter((c) => c.registerId === object.id),
     ...contracts.predefined.filter((c) => c.objectId === object.id),
     ...contracts.numbering.filter((c) => c.objectId === object.id),
+    ...contracts.eventSubscriptions.filter(
+      (c) => c.subscriptionId === object.id
+    ),
   ]
 
   const ownIds = new Set([object.id, ...elements.keys()])

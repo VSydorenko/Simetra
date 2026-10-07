@@ -689,6 +689,72 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
 
+  "subscription.source-not-table": {
+    en: (p) =>
+      `${p.kind} "${p.name}" has no table, so an event subscription cannot listen to it`,
+    uk: (p) =>
+      `${p.kind} "${p.name}" не має таблиці, тож підписка на подію не може її слухати`,
+    hint: {
+      en: "A subscription source is an object with a table (catalog, document, register, constant, custom table) or a provider table from the preset.",
+      uk: "Джерело підписки — об'єкт із таблицею (довідник, документ, регістр, константа, прийнята таблиця) або таблиця провайдера з пресету.",
+    },
+  },
+  "subscription.provider-table-unknown": {
+    en: (p) =>
+      `Provider table ${p.table} is not an event source of the ${p.provider} preset`,
+    uk: (p) =>
+      `Таблиця провайдера ${p.table} не є джерелом подій пресету ${p.provider}`,
+    hint: {
+      en: (p) => `Event sources of the preset: ${p.known}.`,
+      uk: (p) => `Джерела подій пресету: ${p.known}.`,
+    },
+  },
+  "subscription.when-changed-unknown": {
+    en: (p) => `whenChanged names "${p.name}", which ${p.source} does not have`,
+    uk: (p) => `whenChanged називає "${p.name}", якого немає в ${p.source}`,
+    hint: {
+      en: "Every name must be an attribute or standard attribute of each object source, or a preset column of each provider table.",
+      uk: "Кожне ім'я мусить бути реквізитом чи стандартним реквізитом кожного джерела-об'єкта або колонкою пресету кожної таблиці провайдера.",
+    },
+  },
+  "subscription.when-changed-diverges": {
+    en: (p) =>
+      `whenChanged "${p.name}" maps to different columns in the sources: ${p.columns}`,
+    uk: (p) =>
+      `whenChanged "${p.name}" відповідає різним колонкам у джерелах: ${p.columns}`,
+    hint: {
+      en: "The trigger of every source watches one column list, so a name must have the same physical columns in each source; split the subscription per source.",
+      uk: "Тригер кожного джерела стежить за одним переліком колонок, тож ім'я мусить мати ті самі фізичні колонки в кожному джерелі; розділіть підписку за джерелами.",
+    },
+  },
+  "subscription.when-changed-on-delete": {
+    en: (p) => `whenChanged is not allowed with the ${p.event} event`,
+    uk: (p) => `whenChanged недопустимий з подією ${p.event}`,
+    hint: {
+      en: "A deleted row changes no columns; remove whenChanged or choose a write event.",
+      uk: "Видалений рядок не змінює колонок; приберіть whenChanged або оберіть подію запису.",
+    },
+  },
+  "subscription.handler-missing": {
+    en: (p) =>
+      `Subscription handler ${p.function}() is not declared in .sql files`,
+    uk: (p) => `Обробник підписки ${p.function}() не оголошений у файлах .sql`,
+    hint: {
+      en: "Declare the handler with CREATE FUNCTION in an object .sql file or under sql/<schema>/.",
+      uk: "Оголосіть обробник через CREATE FUNCTION у .sql об'єкта або в sql/<схема>/.",
+    },
+  },
+  "subscription.handler-signature": {
+    en: (p) =>
+      `Subscription handler ${p.function}() has the wrong signature: ${p.problem}`,
+    uk: (p) =>
+      `Обробник підписки ${p.function}() має хибну сигнатуру: ${p.problem}`,
+    hint: {
+      en: "A handler takes no arguments and returns trigger.",
+      uk: "Обробник не приймає аргументів і повертає trigger.",
+    },
+  },
+
   // --- Стадія 4: цілісність ---
   "reference.not-referenceable": {
     en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,

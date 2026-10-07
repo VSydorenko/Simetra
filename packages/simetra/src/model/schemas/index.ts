@@ -82,11 +82,20 @@ export {
   type PublicReadRole,
 } from "./public-read"
 export { pgEnumSchema, type PgEnum } from "./pg-enum"
+export {
+  DELETE_EVENTS,
+  SUBSCRIPTION_EVENTS,
+  eventSubscriptionSchema,
+  type EventSubscription,
+  type SubscriptionEvent,
+} from "./event-subscription"
 
 // Project
 export {
   projectSchema,
   DATABASE_PROVIDERS,
+  PROVIDER_EVENT_SOURCES,
   type DatabaseProvider,
+  type ProviderEventSource,
   type Project,
 } from "./project"

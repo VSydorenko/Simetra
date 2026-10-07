@@ -471,6 +471,7 @@ export function checkIdentity(
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
       resolveIndexAttributes(object, style, references)
+      resolveWhenChanged(object, objectsByName, style, references)
     }
     resolveMovementBlocks(object, objects, brokenNames, references, diagnostics)
   }
@@ -933,6 +934,52 @@ function resolveIndexAttributes(
       `/tabularSections/${index}`
     )
   })
+}
+
+/**
+ * `whenChanged` підписки називає реквізити кожного джерела-об'єкта за
+ * логічним іменем: посилання на елемент кожного джерела потрапляє в індекс,
+ * тож перейменування реквізиту переписує й підписку, а видалення — блокується.
+ * Невідоме ім'я чи джерело без таблиці тут мовчать: їх звітує стадія 4.
+ */
+function resolveWhenChanged(
+  object: ParsedObject,
+  objectsByName: ReadonlyMap<string, ParsedObject>,
+  style: AttributeCase,
+  references: ResolvedReference[]
+) {
+  const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
+  if (spec?.whenChanged === undefined || object.id === undefined) return
+  const fromId = object.id
+  for (const source of spec.sources) {
+    if (!("ref" in source)) continue
+    const target = objectsByName.get(
+      objectKey(source.ref.kind, source.ref.name)
+    )
+    if (target?.id === undefined) continue
+    const def = KIND_REGISTRY[target.kind]
+    if (def.materializes !== "table") continue
+    const data = target.data as Element
+    const table = nameTable(
+      target.id,
+      def.columnFields.flatMap((field) => (data[field] as Element[]) ?? []),
+      def.standardColumns(data),
+      style
+    )
+    spec.whenChanged.forEach((name, index) => {
+      const id = table.get(name)
+      if (id === undefined) return
+      references.push({
+        from: {
+          file: object.file,
+          pointer: `/whenChanged/${index}`,
+          objectId: fromId,
+        },
+        to: { kind: "Element", id },
+        role: "eventSubscription.whenChanged",
+      })
+    })
+  }
 }
 
 /**

@@ -10,6 +10,7 @@ import {
 } from "simetra/compiler"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import { kitchenSink } from "./fixtures/kitchen-sink"
+import { attribute, catalog, metaFiles, project } from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -403,6 +404,49 @@ describe("renameElement", () => {
       renameInput.safeParse({ target, newName: "Partner", dryRun: true })
         .success
     ).toBe(false)
+  })
+})
+
+describe("renaming a subscription source", () => {
+  const SUBSCRIPTION = "event-subscriptions/Stamp/Stamp.meta.json"
+  const files = () =>
+    metaFiles({
+      "project.meta.json": project(),
+      "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+        attributes: [attribute("number", { type: "String", length: 20 })],
+      }),
+      [SUBSCRIPTION]: {
+        id: "00000000-0000-4000-8000-000000007201",
+        kind: "EventSubscription",
+        name: "Stamp",
+        physicalName: "stamp",
+        sources: [{ kind: "Catalog", name: "Contract" }],
+        event: "onWrite",
+        whenChanged: ["number"],
+        handler: { name: "stamp" },
+      },
+      "sql/public/stamp.sql":
+        "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+    })
+
+  it("renaming the catalog rewrites the subscription sources", async () => {
+    const { after } = await renamed(
+      files(),
+      { kind: "Catalog", name: "Contract" },
+      "Agreement"
+    )
+    expect(json(after, SUBSCRIPTION).sources).toEqual([
+      { kind: "Catalog", name: "Agreement" },
+    ])
+  })
+
+  it("renaming the attribute rewrites whenChanged", async () => {
+    const { after } = await renamed(
+      files(),
+      { kind: "Catalog", name: "Contract", element: ["number"] },
+      "contractNumber"
+    )
+    expect(json(after, SUBSCRIPTION).whenChanged).toEqual(["contractNumber"])
   })
 })
 

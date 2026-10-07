@@ -1,4 +1,9 @@
-import type { MetadataRef, MovementDecl, Project } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  type MetadataRef,
+  type MovementDecl,
+  type Project,
+} from "simetra/model"
 import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import type { SqlParser } from "../sql/parse"
@@ -22,6 +27,7 @@ export function checkLinks(
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
     ...checkSetFunctions(project, units),
+    ...checkSubscriptionHandlers(objects, project, units),
   ]
 }
 
@@ -179,7 +185,15 @@ interface FunctionNode {
   }[]
 }
 
-function signatureProblem(tree: Node): string | undefined {
+/**
+ * Функція без аргументів, що повертає `[SETOF] <тип>` (лише ім'я,
+ * `pg_catalog.` — допустимий префікс): спільна частина підпису функції
+ * множини й обробника підписки. Повертає вузол функції або причину.
+ */
+function nullaryReturning(
+  tree: Node,
+  returns: { type: string; setof: boolean }
+): FunctionNode | string {
   const fn = (tree as { CreateFunctionStmt?: FunctionNode }).CreateFunctionStmt
   if (fn === undefined) return "it is not a function"
   const modes = (fn.parameters ?? []).map(
@@ -191,20 +205,79 @@ function signatureProblem(tree: Node): string | undefined {
     return "it has OUT parameters"
   }
   if (modes.length > 0) return "it takes arguments"
-  const type = fn.returnType
-  const names = (type?.names ?? []).map((n) => n.String?.sval)
-  const isUuid =
+  const returned = fn.returnType
+  const names = (returned?.names ?? []).map((n) => n.String?.sval)
+  const matches =
     names.length > 0 &&
-    names[names.length - 1] === "uuid" &&
-    (names.length === 1 || (names.length === 2 && names[0] === "pg_catalog"))
-  if (type?.setof !== true || !isUuid || (type.arrayBounds ?? []).length > 0) {
-    return "it does not return SETOF uuid"
+    names[names.length - 1] === returns.type &&
+    (names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")) &&
+    (returned?.setof === true) === returns.setof &&
+    (returned?.arrayBounds ?? []).length === 0
+  if (!matches) {
+    return `it does not return ${returns.setof ? "SETOF " : ""}${returns.type}`
   }
+  return fn
+}
+
+function signatureProblem(tree: Node): string | undefined {
+  const fn = nullaryReturning(tree, { type: "uuid", setof: true })
+  if (typeof fn === "string") return fn
   const volatility = (fn.options ?? [])
     .map((o) => o.DefElem)
     .find((o) => o?.defname === "volatility")?.arg?.String?.sval
   // Без ключового слова Postgres бере VOLATILE.
   return volatility === "stable" ? undefined : "it is not STABLE"
+}
+
+/**
+ * Обробник підписки — функція без аргументів з `RETURNS trigger` (спека
+ * промоції §9.3) будь-де в `.sql` проєкту; тригер на неї генерує П3. Як і
+ * функція множини, підпис читається з дерева розбору, а не з тексту.
+ */
+function checkSubscriptionHandlers(
+  objects: readonly ParsedObject[],
+  project: Project,
+  units: readonly VerbatimUnit[]
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const object of objects) {
+    const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
+    if (spec === undefined) continue
+    const schema = spec.handler.schema ?? project.defaultSchema
+    const { name } = spec.handler
+    const fn = `${schema}.${name}`
+    const sameName = units.filter(
+      (u) => u.class === "function" && u.schema === schema && u.name === name
+    )
+    if (sameName.length === 0) {
+      found.push(
+        diagnostic("subscription.handler-missing", object.file, "/handler", {
+          function: fn,
+        })
+      )
+      continue
+    }
+    const exact = sameName.find(
+      (u) => u.identity === functionIdentity(schema, name, [])
+    )
+    const shape =
+      exact === undefined
+        ? "it takes arguments"
+        : nullaryReturning(exact.tree as Node, {
+            type: "trigger",
+            setof: false,
+          })
+    const problem = typeof shape === "string" ? shape : undefined
+    if (problem !== undefined) {
+      found.push(
+        diagnostic("subscription.handler-signature", object.file, "/handler", {
+          function: fn,
+          problem,
+        })
+      )
+    }
+  }
+  return found
 }
 
 /**

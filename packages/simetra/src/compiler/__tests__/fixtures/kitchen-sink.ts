@@ -646,6 +646,37 @@ export function kitchenSink(): Map<string, string> {
     scope: "none",
   }
 
+  // Підписки без PG-схеми й скоупу: тригер живе на таблиці джерела.
+  const subscriptionHeader = (name: string, physicalName: string) => {
+    const result: Partial<ReturnType<typeof header>> = header(
+      "EventSubscription",
+      name,
+      physicalName
+    )
+    delete result.schema
+    delete result.scope
+    return result
+  }
+  const stampItem = {
+    ...subscriptionHeader("StampItem", "stamp_item"),
+    sources: [ref("Catalog", "Item")],
+    event: "beforeWrite",
+    whenChanged: ["itemSku", "code"],
+    handler: { schema: "public", name: "stamp_item" },
+  }
+  const userDeleted = {
+    ...subscriptionHeader("UserDeleted", "user_deleted"),
+    sources: [{ providerTable: "auth.users" }],
+    event: "onDelete",
+    handler: { name: "on_user_deleted" },
+  }
+  const handlers = ["stamp_item", "on_user_deleted"]
+    .map(
+      (name) =>
+        `CREATE FUNCTION public.${name}() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;`
+    )
+    .join("\n")
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
@@ -659,6 +690,9 @@ export function kitchenSink(): Map<string, string> {
     "custom-tables/Ledger/Ledger.meta.json": ledger,
     "custom-tables/LedgerTag/LedgerTag.meta.json": ledgerTag,
     "custom-tables/Note/Note.meta.json": note,
+    "event-subscriptions/StampItem/StampItem.meta.json": stampItem,
+    "event-subscriptions/UserDeleted/UserDeleted.meta.json": userDeleted,
+    "sql/public/subscription-handlers.sql": handlers,
   }
   for (const [name, value] of Object.entries(constants)) {
     entries[`constants/${name}/${name}.meta.json`] = value
