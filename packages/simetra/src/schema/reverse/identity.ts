@@ -1,5 +1,10 @@
 import { diagnostic, type Diagnostic } from "simetra/compiler"
-import { KIND_REGISTRY, projectSchema, type AttributeCase } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  projectSchema,
+  type AttributeCase,
+  type DatabaseProvider,
+} from "simetra/model"
 
 export const PROJECT_FILE = "project.meta.json"
 
@@ -29,6 +34,7 @@ export interface ExistingFolder {
     name: string
     defaultSchema: string
     attributeCase: AttributeCase
+    databaseProvider: DatabaseProvider
   }
   objects: ReadonlyMap<string, ExistingObject>
   diagnostics: Diagnostic[]
@@ -81,6 +87,7 @@ export function readExisting(
         name: parsedProject.data.name,
         defaultSchema: parsedProject.data.defaultSchema,
         attributeCase: parsedProject.data.naming.attributeCase,
+        databaseProvider: parsedProject.data.database.provider,
       }
     : undefined
   const defaultSchema = project?.defaultSchema ?? requestedSchema

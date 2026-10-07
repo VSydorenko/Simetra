@@ -256,8 +256,10 @@ export function layoutUnits(
     const index = SIDECAR_ORDER.indexOf(u.class)
     return index === -1 ? SIDECAR_ORDER.length : index
   }
-  // Табличний REVOKE знімає й колонкові гранти: у межах одного файлу він
-  // раніше за GRANT, інакше повторне виконання тіні втратило б грант.
+  // Табличний REVOKE знімає й колонкові гранти, тож у файлі він іде раніше за
+  // GRANT. Рендер і тінь слідують графу створення (ребро в
+  // compiler/sql/dependencies.ts), а не порядку файлу; порядок тут потрібен
+  // людині, що читає файл або застосовує його вручну.
   const revokeFirst = (u: CatalogUnit) =>
     u.class === "grant" && u.identity.startsWith("grant:revoke:") ? 0 : 1
   const files = new Map<string, string>()

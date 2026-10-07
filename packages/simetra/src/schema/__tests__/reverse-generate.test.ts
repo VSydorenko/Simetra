@@ -680,6 +680,20 @@ describe("reverseGenerate", () => {
       ["introspect.project-mismatch", "/name"],
     ])
     expect(name.changes).toEqual([])
+
+    // Провайдер з виклику, відмінний від файлу проєкту, теж гучний. У переліку
+    // лише одне значення, тож інше подаємо через `unknown`-приведення
+    const provider = await reverseGenerate(
+      model({ tables: [table("app", "note")] }),
+      options(existing, {
+        name: "Mine",
+        databaseProvider: "other" as unknown as DatabaseProvider,
+      })
+    )
+    expect(errors(provider).map((d) => [d.code, d.pointer])).toEqual([
+      ["introspect.project-mismatch", "/database/provider"],
+    ])
+    expect(provider.changes).toEqual([])
   })
 
   it("default opclass, collation and deferrable are omitted", async () => {

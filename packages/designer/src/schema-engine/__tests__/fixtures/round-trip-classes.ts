@@ -660,4 +660,20 @@ export const CLASS_FIXTURES: ClassFixture[] = [
         .map((a) => a.acl.filter((item) => item.startsWith("="))),
     expected: [[], []],
   },
+  {
+    name: "mixed ACL pair on a table beside a schema ADP",
+    schemas: ["app"],
+    sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT, INSERT ON TABLES TO anon;
+      CREATE TABLE app.memo (id uuid PRIMARY KEY);
+      REVOKE INSERT ON app.memo FROM anon;
+      GRANT UPDATE ON app.memo TO anon;
+    `,
+    property: (shape) =>
+      shape.acls
+        .find((a) => a.object === "r:app.memo")
+        ?.acl.filter((item) => item.startsWith("anon=")),
+    expected: ["anon=rw/postgres"],
+  },
 ]

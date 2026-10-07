@@ -190,7 +190,8 @@ function foreignKeyDiagnostics(
 
 /**
  * Розбіжність наявного проєкту з запитом: файл проєкту не переписується, тож
- * діють його `name`, `defaultSchema` і `naming.attributeCase`, а виклик має
+ * діють його `name`, `defaultSchema`, `naming.attributeCase` і
+ * `database.provider`, а виклик має
  * про це знати, а не отримати інші імена й схеми мовчки.
  */
 function projectMismatch(
@@ -212,6 +213,12 @@ function projectMismatch(
       "/naming/attributeCase",
       project.attributeCase,
       requested.attributeCase,
+    ],
+    [
+      "database.provider",
+      "/database/provider",
+      project.databaseProvider,
+      requested.databaseProvider,
     ],
   ] as const
   return fields
