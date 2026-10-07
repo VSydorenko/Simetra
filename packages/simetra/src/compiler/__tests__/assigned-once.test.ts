@@ -5,7 +5,15 @@ import {
   renameElement,
   type CompileResult,
 } from "simetra/compiler"
-import { attribute, catalog, metaFiles, project, uuid } from "./helpers"
+import {
+  attribute,
+  catalog,
+  metaFiles,
+  organization,
+  project,
+  scopedProject,
+  uuid,
+} from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -133,17 +141,102 @@ describe("assigned-once fields against the baseline", () => {
       defaultSchema: "app",
     }))
     // Явна `schema` не рухається, перерахування не матеріалізується: помилка
-    // лише на кожен об'єкт, що успадковував схему проєкту.
-    expect(changes(await againstBase(base, current))).toEqual([
+    // лише на кожен об'єкт, що успадковував схему проєкту, і `objectFile`
+    // називає, який саме.
+    const result = await againstBase(base, current)
+    expect(changes(result)).toEqual([
       [
         PROJECT,
         "/defaultSchema",
-        { field: "schema", before: "public", after: "app" },
+        {
+          field: "schema",
+          before: "public",
+          after: "app",
+          objectFile: CONTRACT,
+        },
       ],
       [
         PROJECT,
         "/defaultSchema",
-        { field: "schema", before: "public", after: "app" },
+        {
+          field: "schema",
+          before: "public",
+          after: "app",
+          objectFile: "catalogs/Other/Other.meta.json",
+        },
+      ],
+    ])
+    expect(result.diagnostics[0]!.message).toBe(
+      `Schema of ${CONTRACT} changed from "public" to "app": it inherits defaultSchema, and the schema is assigned once`
+    )
+  })
+
+  it("removing an explicit schema points at the object, not the project", async () => {
+    const base = baseState({
+      [CONTRACT]: { ...contract(), schema: "billing" },
+    })
+    const current = edited(base, CONTRACT, (c) => {
+      delete c.schema
+      return c
+    })
+    expect(changes(await againstBase(base, current))).toEqual([
+      [
+        CONTRACT,
+        "/schema",
+        { field: "schema", before: "billing", after: "public" },
+      ],
+    ])
+  })
+
+  it("a project that dropped its defaultSchema key gets the pointer on the file root", async () => {
+    const base = baseState({ [PROJECT]: project({ defaultSchema: "app" }) })
+    const current = { ...base, [PROJECT]: project() }
+    expect(changes(await againstBase(base, current))).toEqual([
+      [
+        PROJECT,
+        "",
+        {
+          field: "schema",
+          before: "app",
+          after: "public",
+          objectFile: CONTRACT,
+        },
+      ],
+    ])
+  })
+
+  it.each([
+    ["baseline", "{ broken", project({ defaultSchema: "app" })],
+    [
+      "baseline",
+      project({ defaultSchema: 7 }),
+      project({ defaultSchema: "app" }),
+    ],
+    ["current", project({ defaultSchema: "app" }), "{ broken"],
+  ])(
+    "a broken %s project file leaves inherited schemas unchecked",
+    async (_, baseProject, currentProject) => {
+      const base = baseState({ [PROJECT]: baseProject })
+      const current = { ...baseState(), [PROJECT]: currentProject }
+      expect(changes(await againstBase(base, current))).toEqual([])
+    }
+  )
+
+  it("changing a scope kind physicalName is an error", async () => {
+    const scoped = scopedProject()
+    const base = {
+      [PROJECT]: scoped,
+      "catalogs/Organization/Organization.meta.json": organization(),
+    }
+    const current = edited(base, PROJECT, (p) => {
+      ;(p.scopeKinds as Json[])[0]!.physicalName = "tenant_id"
+      return p
+    })
+    expect(changes(await againstBase(base, current))).toEqual([
+      [
+        PROJECT,
+        "/scopeKinds/0/physicalName",
+        { field: "physicalName", before: "org_id", after: "tenant_id" },
       ],
     ])
   })

@@ -334,13 +334,25 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   "identity.assigned-once-changed": {
+    // `objectFile` є лише тоді, коли схема об'єкта успадкована з обох боків:
+    // діагностика стоїть на проєкті, і текст мусить назвати об'єкт.
     en: (p) =>
-      `${p.field} is assigned once and cannot change: "${p.before}" became "${p.after}"`,
+      p.objectFile === undefined
+        ? `${p.field} is assigned once and cannot change: "${p.before}" became "${p.after}"`
+        : `Schema of ${p.objectFile} changed from "${p.before}" to "${p.after}": it inherits defaultSchema, and the schema is assigned once`,
     uk: (p) =>
-      `${p.field} призначається раз і не змінюється: було "${p.before}", стало "${p.after}"`,
+      p.objectFile === undefined
+        ? `${p.field} призначається раз і не змінюється: було "${p.before}", стало "${p.after}"`
+        : `Схема ${p.objectFile} змінилася з "${p.before}" на "${p.after}": вона успадковує defaultSchema, а схема призначається раз`,
     hint: {
-      en: "Restore the previous value. A rename keeps physical names; a different table or column is a new element with a new id.",
-      uk: "Поверніть попереднє значення. Перейменування зберігає фізичні імена; інша таблиця чи колонка — новий елемент з новим id.",
+      en: (p) =>
+        p.objectFile === undefined
+          ? "Restore the previous value. A rename keeps physical names; a different table or column is a new element with a new id."
+          : `Restore defaultSchema, or give ${p.objectFile} an explicit schema "${p.before}".`,
+      uk: (p) =>
+        p.objectFile === undefined
+          ? "Поверніть попереднє значення. Перейменування зберігає фізичні імена; інша таблиця чи колонка — новий елемент з новим id."
+          : `Поверніть defaultSchema або задайте ${p.objectFile} явну схему "${p.before}".`,
     },
   },
   "identity.name-duplicate": {
