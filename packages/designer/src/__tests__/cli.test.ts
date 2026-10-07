@@ -187,13 +187,18 @@ describe("cli adapter", () => {
           schemas: "app, reports",
           "project-name": "Shop",
           "attribute-case": "snake_case",
+          "database-provider": "supabase",
         },
         noStdin
       )
     ).toEqual({
       input: {
         schemas: ["app", "reports"],
-        project: { name: "Shop", attributeCase: "snake_case" },
+        project: {
+          name: "Shop",
+          attributeCase: "snake_case",
+          database: { provider: "supabase" },
+        },
       },
       dirs: ["meta"],
     })
@@ -223,6 +228,18 @@ describe("cli adapter", () => {
       expect("database-url-env" in args, t.name).toBe(db)
       expect("shadow-url-env" in args, t.name).toBe(db)
     }
+  })
+
+  it("an unknown database provider exits 2", async () => {
+    const dir = await project()
+    const r = await runTool(
+      tool("introspect"),
+      { _: [dir], schemas: "app", "database-provider": "mysql" },
+      noStdin,
+      process.cwd(),
+      {}
+    )
+    expect(r.exitCode).toBe(2)
   })
 
   it("a database tool without a connection exits 2 naming the chosen variable", async () => {

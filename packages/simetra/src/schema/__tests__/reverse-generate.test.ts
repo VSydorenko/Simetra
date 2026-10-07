@@ -10,6 +10,7 @@ import {
   catalogFromSnapshot,
   customTableSchema,
   type AttributeCase,
+  type DatabaseProvider,
   type CatalogColumn,
   type CatalogModel,
   type CatalogTable,
@@ -44,6 +45,7 @@ function options(
     name?: string
     defaultSchema?: string
     attributeCase?: AttributeCase
+    databaseProvider?: DatabaseProvider
   } = {}
 ) {
   return {
@@ -51,6 +53,7 @@ function options(
       name: overrides.name ?? "App",
       defaultSchema: overrides.defaultSchema ?? "app",
       attributeCase: overrides.attributeCase ?? "snake_case",
+      databaseProvider: overrides.databaseProvider ?? "supabase",
     },
     existing,
     newId: counter(),
@@ -229,6 +232,7 @@ describe("reverseGenerate", () => {
     expect(json(result, "project.meta.json")).toMatchObject({
       name: "App",
       defaultSchema: "app",
+      database: { provider: "supabase" },
       naming: { attributeCase: "camelCase" },
     })
     expect(result.changes.map((c) => c.path)).toEqual([
@@ -637,7 +641,7 @@ describe("reverseGenerate", () => {
 
   it("existing project file is not rewritten", async () => {
     const text =
-      '{"name":"Mine","defaultSchema":"app","naming":{"attributeCase":"snake_case"},"title":{"uk":"Моє"}}'
+      '{"name":"Mine","defaultSchema":"app","database":{"provider":"supabase"},"naming":{"attributeCase":"snake_case"},"title":{"uk":"Моє"}}'
     const existing = new Map([["project.meta.json", text]])
     const result = await reverseGenerate(
       model({ tables: [table("app", "note")] }),

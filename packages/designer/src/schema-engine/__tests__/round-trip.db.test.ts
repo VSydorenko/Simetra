@@ -97,6 +97,7 @@ async function inTarget<T>(
 interface Project {
   defaultSchema: string
   attributeCase: CompiledModel["project"]["naming"]["attributeCase"]
+  databaseProvider: CompiledModel["project"]["database"]["provider"]
 }
 
 interface RoundTrip {
@@ -184,6 +185,7 @@ describe("class fixtures survive the round trip", () => {
         const result = await roundTripOf(target, scope, {
           defaultSchema: "app",
           attributeCase: "snake_case",
+          databaseProvider: "supabase",
         })
         // Властивість класу є в цілі (фікстура її створила) і в тіні
         expect(fixture.property(result.target)).toEqual(fixture.expected)
@@ -198,6 +200,7 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
   const roundTripOptions = {
     defaultSchema: "app",
     attributeCase: "snake_case" as const,
+    databaseProvider: "supabase" as const,
   }
   const publicAcl = (object: string) => (shape: OracleShape) =>
     shape.acls
@@ -288,6 +291,7 @@ describe("a role of the application's own", () => {
           const result = await roundTripOf(target, scope, {
             defaultSchema: "app",
             attributeCase: "snake_case",
+            databaseProvider: "supabase",
           })
           expect(
             result.extracted.model.units
@@ -321,6 +325,7 @@ async function corpusRoundTrip(files: Map<string, string>) {
     const result = await roundTripOf(target, scope, {
       defaultSchema: source.project.defaultSchema,
       attributeCase: source.project.naming.attributeCase,
+      databaseProvider: source.project.database.provider,
     })
     // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
     expect(tableKeys(result.model)).toEqual(tableKeys(source))

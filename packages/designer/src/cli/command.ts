@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { defineCommand, type ArgsDef, type CommandDef } from "citty"
 import type { CompiledModel, Locale } from "simetra/compiler"
-import { ATTRIBUTE_CASES } from "simetra/model"
+import { ATTRIBUTE_CASES, DATABASE_PROVIDERS } from "simetra/model"
 import { databaseResource } from "../io/database"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
@@ -261,6 +261,11 @@ function argsFor(tool: Tool): ArgsDef {
       options: [...ATTRIBUTE_CASES],
       description: "Attribute case of a new project",
     }
+    args["database-provider"] = {
+      type: "enum",
+      options: [...DATABASE_PROVIDERS],
+      description: 'Database provider of a new project (default "supabase")',
+    }
   }
   if (tool.name === "diff") {
     args.tables = {
@@ -327,6 +332,7 @@ function toCliArgs(args: { _: string[] } & Record<string, unknown>): CliArgs {
     tables: str(args.tables),
     "project-name": str(args["project-name"]),
     "attribute-case": str(args["attribute-case"]),
+    "database-provider": str(args["database-provider"]),
     "database-url-env": str(args["database-url-env"]),
     "shadow-url-env": str(args["shadow-url-env"]),
   }

@@ -7,8 +7,10 @@ import {
 } from "simetra/compiler"
 import {
   ATTRIBUTE_CASES,
+  DATABASE_PROVIDERS,
   logicalTypeOf,
   type AttributeCase,
+  type DatabaseProvider,
   type CatalogColumn,
   type CatalogDifference,
   type CatalogUnit,
@@ -96,11 +98,14 @@ export const introspectTool = defineTool({
       .strictObject({
         name: z.string().min(1).optional(),
         attributeCase: z.enum(ATTRIBUTE_CASES).optional(),
+        database: z
+          .strictObject({ provider: z.enum(DATABASE_PROVIDERS).optional() })
+          .optional(),
       })
       .optional()
       .meta({
         description:
-          "Name and attribute case of a new project; an existing project.meta.json is never rewritten, and a value that differs from it is an error.",
+          "Name, attribute case and database provider (default supabase) of a new project; an existing project.meta.json is never rewritten, and a value that differs from it is an error.",
       }),
   }),
   files: "write",
@@ -119,6 +124,7 @@ export const introspectTool = defineTool({
       name: string
       defaultSchema: string
       attributeCase: AttributeCase
+      databaseProvider: DatabaseProvider
     }
     let scope: EngineScope
     if (existing.has(PROJECT_FILE)) {
@@ -134,6 +140,9 @@ export const introspectTool = defineTool({
         name: input.project?.name ?? own.name,
         defaultSchema: own.defaultSchema,
         attributeCase: input.project?.attributeCase ?? own.naming.attributeCase,
+        // Провайдер — з файлу проєкту: з єдиним пресетом розбіжності бути не
+        // може, а з'явиться другий — запит іншого значення стане помилкою.
+        databaseProvider: own.database.provider,
       }
       const modelScope = (await engineScope(compiled.model)).scope
       scope = {
@@ -151,10 +160,13 @@ export const introspectTool = defineTool({
         name: input.project?.name ?? "App",
         defaultSchema: input.schemas[0]!,
         attributeCase: input.project?.attributeCase ?? "camelCase",
+        // Дефолт лише тут, на межі інструмента для теки без проєкту: файл, що
+        // його запише генератор, несе провайдера явно.
+        databaseProvider: input.project?.database?.provider ?? "supabase",
       }
       scope = {
         schemas: [...new Set(input.schemas)].sort(),
-        provider: "supabase",
+        provider: project.databaseProvider,
       }
     }
 

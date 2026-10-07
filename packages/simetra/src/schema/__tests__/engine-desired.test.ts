@@ -27,6 +27,11 @@ async function scopeOf(
 }
 
 describe("engineScope", () => {
+  it("takes the provider from the project database", async () => {
+    const scope = await scopeOf("")
+    expect(scope.scope.provider).toBe("supabase")
+  })
+
   it("takes the default schema and the schemas of tables and units", async () => {
     const scope = await scopeOf(
       "CREATE VIEW reports.note_view AS SELECT id FROM app.note;\n"

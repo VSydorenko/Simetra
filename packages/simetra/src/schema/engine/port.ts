@@ -1,5 +1,5 @@
 import type { RuleCode, Severity } from "simetra/compiler"
-import type { CatalogModel } from "simetra/model"
+import type { CatalogModel, DatabaseProvider } from "simetra/model"
 
 /** Адреса бази; пул і його життя — справа адаптера. */
 export interface DbConnection {
@@ -26,7 +26,7 @@ export interface EngineScope {
   /** Схеми застосунку, якими порт керує цілком, зокрема їхні гранти й типові привілеї. */
   schemas: readonly string[]
   /** Пресет «об'єкти застосунку в чужих схемах» (§6.9). */
-  provider: "supabase"
+  provider: DatabaseProvider
 }
 
 export interface EngineDiagnostic {

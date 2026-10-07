@@ -14,7 +14,11 @@ function freshId(): string {
 }
 
 export function project(overrides: Record<string, unknown> = {}) {
-  return { name: "TestApp", ...overrides }
+  return {
+    name: "TestApp",
+    database: { provider: "supabase" },
+    ...overrides,
+  }
 }
 
 /** Спільний `.sql` з функціями множини скоупів проєкту фікстури. */
@@ -127,6 +131,7 @@ export function customTable(
  */
 export function scopedProject(): {
   name: string
+  database: { provider: string }
   scopeKinds: Record<string, unknown>[]
 } {
   return project({
@@ -146,7 +151,11 @@ export function scopedProject(): {
         setFunction: { name: "user_ids" },
       },
     ],
-  }) as { name: string; scopeKinds: Record<string, unknown>[] }
+  }) as {
+    name: string
+    database: { provider: string }
+    scopeKinds: Record<string, unknown>[]
+  }
 }
 
 /** Довідник-корінь виду `org`: власний вид оголошує і він сам. */

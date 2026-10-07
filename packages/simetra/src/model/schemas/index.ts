@@ -68,4 +68,9 @@ export { NO_SCOPE, scopeKindSchema, type ScopeKind } from "./scope"
 export { pgEnumSchema, type PgEnum } from "./pg-enum"
 
 // Project
-export { projectSchema, type Project } from "./project"
+export {
+  projectSchema,
+  DATABASE_PROVIDERS,
+  type DatabaseProvider,
+  type Project,
+} from "./project"

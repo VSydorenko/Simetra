@@ -46,6 +46,10 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
   // Підказка редактору — шлях до JSON Schema файлу, не модель: компілятор її
   // не читає, а канонічний знімок відкидає свідомо.
   ["project.$schema", "editor hint"],
+  // Провайдера бази читає не компілятор, а T2: `engineScope` бере з нього
+  // пресет межі керування. Компілятор лише перевіряє наявність поля.
+  ["project.database", "read by the schema tier (engineScope)"],
+  ["project.database.provider", "read by the schema tier (engineScope)"],
   ...METADATA_KINDS.map((kind) => [`${kind}.$schema`, "editor hint"]),
   // `kind` і `name` споживає стадія 1, до шва: вона звіряє вид з текою й
   // копіює вид та ім'я в `ParsedObject`, а наступні стадії читають копію, яку

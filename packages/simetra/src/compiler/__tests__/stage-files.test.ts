@@ -17,6 +17,42 @@ function codes(diagnostics: Diagnostic[]): string[] {
   return diagnostics.map((d) => d.code)
 }
 
+describe("stage 1: database provider of the project", () => {
+  const brief = (result: { diagnostics: Diagnostic[] }) =>
+    result.diagnostics.map((d) => [d.code, d.severity, d.pointer])
+
+  it("a project without a database is an error with its own code", async () => {
+    const withoutDatabase: Record<string, unknown> = project()
+    delete withoutDatabase.database
+    const result = await compile(
+      metaFiles({ "project.meta.json": withoutDatabase })
+    )
+    expect(brief(result)).toEqual([
+      ["project.database-required", "error", "/database"],
+    ])
+  })
+
+  it("a database without a provider is an error with its own code", async () => {
+    const result = await compile(
+      metaFiles({ "project.meta.json": project({ database: {} }) })
+    )
+    expect(brief(result)).toEqual([
+      ["project.database-required", "error", "/database/provider"],
+    ])
+  })
+
+  it("an unknown database provider is a schema error", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project({ database: { provider: "mysql" } }),
+      })
+    )
+    expect(brief(result)).toEqual([
+      ["file.schema", "error", "/database/provider"],
+    ])
+  })
+})
+
 describe("stage 1: files", () => {
   it("empty map reports project.missing", async () => {
     const result = await compile(new Map())

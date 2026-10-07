@@ -300,7 +300,7 @@ export async function engineScope(
       schemas: [...schemas]
         .filter((schema) => schema !== "" && !provider.has(schema))
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-      provider: "supabase",
+      provider: model.project.database.provider,
     },
     diagnostics: outOfScopeDiagnostics(model, parse),
   }

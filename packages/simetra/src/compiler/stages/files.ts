@@ -240,7 +240,22 @@ function readProject(
   if (json === undefined) return undefined
   const parsed = projectSchema.safeParse(json.value)
   if (!parsed.success) {
-    diagnostics.push(...zodDiagnostics(PROJECT_FILE, projectSchema, json.value))
+    // Zod 4 не дає прикріпити `params.rule` до відсутнього поля, тож код
+    // `project.database-required` ставить ця перевірка, а `file.schema` на
+    // той самий pointer прибирається: одна проблема — одна діагностика.
+    const missing = missingDatabase(json.value)
+    if (missing !== undefined) {
+      diagnostics.push(
+        diagnostic("project.database-required", PROJECT_FILE, missing.pointer, {
+          field: missing.field,
+        })
+      )
+    }
+    diagnostics.push(
+      ...zodDiagnostics(PROJECT_FILE, projectSchema, json.value).filter(
+        (d) => missing === undefined || d.pointer !== missing.pointer
+      )
+    )
     return undefined
   }
   if (!isKnownTimeZone(parsed.data.timezone)) {
@@ -251,6 +266,19 @@ function readProject(
     )
   }
   return parsed.data
+}
+
+function missingDatabase(
+  value: unknown
+): { pointer: string; field: "database" | "provider" } | undefined {
+  if (!isRecord(value)) return undefined
+  if (value.database === undefined) {
+    return { pointer: "/database", field: "database" }
+  }
+  if (isRecord(value.database) && value.database.provider === undefined) {
+    return { pointer: "/database/provider", field: "provider" }
+  }
+  return undefined
 }
 
 /**

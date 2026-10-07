@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
@@ -185,6 +185,22 @@ describe("introspect", () => {
       expect(
         existsSync(join(dir, "custom-tables/Orders/Orders.meta.json"))
       ).toBe(true)
+    })
+  })
+
+  it("introspect into an empty directory writes the default provider explicitly", async () => {
+    await inTarget(SHOP, ["app"], async (url) => {
+      const dir = await freshProject()
+      const r = await call(
+        "introspect",
+        { schemas: ["app"] },
+        options(dir, { [ENV]: url })
+      )
+      expect(errors(r)).toEqual([])
+      const written = JSON.parse(
+        await readFile(join(dir, "project.meta.json"), "utf8")
+      ) as { database?: unknown }
+      expect(written.database).toEqual({ provider: "supabase" })
     })
   })
 

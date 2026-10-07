@@ -686,7 +686,7 @@ describe("стадія 4: скоуп", () => {
   it("однотенантний проєкт: crossScope без діагностик", async () => {
     const result = await compile(
       metaFiles({
-        [PROJECT]: { name: "TestApp" },
+        [PROJECT]: project(),
         [CP]: catalog("Counterparty", {
           attributes: [
             attribute(
@@ -704,7 +704,7 @@ describe("стадія 4: скоуп", () => {
   it("однотенантний проєкт не дає діагностик скоупу", async () => {
     const result = await compile(
       metaFiles({
-        [PROJECT]: { name: "TestApp" },
+        [PROJECT]: project(),
         [CP]: catalog("Counterparty", {
           attributes: [attribute("self", ref("Catalog", "Counterparty"))],
         }),

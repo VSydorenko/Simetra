@@ -4,6 +4,13 @@ import type { SchemaRule } from "./rules"
 import { ATTRIBUTE_CASES } from "./identity"
 import { NO_SCOPE, scopeKindSchema } from "./scope"
 
+/**
+ * Пресети провайдера бази (платформна спека §6.9). Проєкт вибирає пресет
+ * ключем, а його вміст — факти образу провайдера — лишається кодом платформи.
+ */
+export const DATABASE_PROVIDERS = ["supabase"] as const
+export type DatabaseProvider = (typeof DATABASE_PROVIDERS)[number]
+
 /** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */
 export const projectSchema = z
   .strictObject({
@@ -21,6 +28,16 @@ export const projectSchema = z
     defaultSchema: z.string().default("public").meta({
       description: "PostgreSQL schema for objects that declare none.",
     }),
+    // Без дефолту Zod: тихий дефолт сховав би від застосунку рішення, на якому
+    // стоїть межа керування базою. Дефолт існує лише на межі `introspect`.
+    database: z
+      .strictObject({
+        provider: z.enum(DATABASE_PROVIDERS).meta({
+          description:
+            "Database provider preset that defines the management boundary.",
+        }),
+      })
+      .meta({ description: "Database of the application." }),
     naming: z
       .strictObject({
         attributeCase: z.enum(ATTRIBUTE_CASES).default("camelCase").meta({

@@ -18,6 +18,7 @@ export interface CliArgs {
   tables?: string
   "project-name"?: string
   "attribute-case"?: string
+  "database-provider"?: string
   "database-url-env"?: string
   "shadow-url-env"?: string
 }
@@ -57,7 +58,13 @@ export async function cliInput(
   tool: Tool,
   args: Pick<
     CliArgs,
-    "_" | "input" | "schemas" | "tables" | "project-name" | "attribute-case"
+    | "_"
+    | "input"
+    | "schemas"
+    | "tables"
+    | "project-name"
+    | "attribute-case"
+    | "database-provider"
   >,
   stdin: () => Promise<string>
 ): Promise<{ input: unknown; dirs: string[] }> {
@@ -85,9 +92,11 @@ export async function cliInput(
   if (tool.name === "introspect") {
     const name = args["project-name"]
     const attributeCase = args["attribute-case"]
+    const provider = args["database-provider"]
     const project = {
       ...(name === undefined ? {} : { name }),
       ...(attributeCase === undefined ? {} : { attributeCase }),
+      ...(provider === undefined ? {} : { database: { provider } }),
     }
     return {
       input: {

@@ -5,6 +5,9 @@
     "uk": "Референсний застосунок"
   },
   "defaultSchema": "app",
+  "database": {
+    "provider": "supabase"
+  },
   "naming": {
     "attributeCase": "camelCase"
   },

@@ -39,6 +39,23 @@
       "description": "PostgreSQL schema for objects that declare none.",
       "type": "string"
     },
+    "database": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "supabase"
+          ],
+          "description": "Database provider preset that defines the management boundary."
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "additionalProperties": false,
+      "description": "Database of the application."
+    },
     "naming": {
       "default": {
         "attributeCase": "camelCase"
@@ -223,7 +240,8 @@
     }
   },
   "required": [
-    "name"
+    "name",
+    "database"
   ],
   "additionalProperties": false,
   "$id": "project.schema.json"

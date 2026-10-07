@@ -18,6 +18,7 @@ import {
   type AttributeCase,
   type CatalogModel,
   type CatalogTable,
+  type DatabaseProvider,
   type PhysicalColumn,
 } from "simetra/model"
 import {
@@ -41,7 +42,12 @@ import { layoutUnits } from "./units"
 
 export interface ReverseOptions {
   /** Проєкт нової теки; наявний `project.meta.json` не переписується. */
-  project: { name: string; defaultSchema: string; attributeCase: AttributeCase }
+  project: {
+    name: string
+    defaultSchema: string
+    attributeCase: AttributeCase
+    databaseProvider: DatabaseProvider
+  }
   /** Наявна тека метаданих: шлях відносно `metadata/` → вміст. */
   existing: ReadonlyMap<string, string>
   newId: IdSource
@@ -424,6 +430,7 @@ export async function reverseGenerate(
       formatProjectFile({
         name: o.project.name,
         defaultSchema: o.project.defaultSchema,
+        database: { provider: o.project.databaseProvider },
         naming: { attributeCase: o.project.attributeCase },
       })
     )

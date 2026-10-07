@@ -38,6 +38,9 @@ are served by `simetra mcp` with the same input.
    any named with `--schemas`. Provider schemas (`auth`, `storage`, …) are not
    introspected. The project file is never rewritten: a `--project-name` or
    `--attribute-case` that differs from it is an error, not a silent override.
+   A new project records its database provider explicitly (MCP:
+   `project.database.provider`, CLI: `--database-provider`; the default is
+   `supabase`); an existing project keeps the one in its file.
 2. **Preview.** Run `introspect` with `--dry-run` (MCP: `dryRun: true`) and read
    the diagnostics.
 3. **Unrepresentable objects are reported, not worked around.** When anything

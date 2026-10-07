@@ -381,10 +381,16 @@ describe("accumulationRegisterSchema", () => {
 
 describe("projectSchema", () => {
   it("project defaults", () => {
-    expect(projectSchema.parse({ name: "Demo" })).toEqual({
+    expect(
+      projectSchema.parse({
+        name: "Demo",
+        database: { provider: "supabase" },
+      })
+    ).toEqual({
       name: "Demo",
       defaultLocale: "uk",
       defaultSchema: "public",
+      database: { provider: "supabase" },
       naming: { attributeCase: "camelCase" },
       timezone: "UTC",
       scopeKinds: [],
@@ -398,6 +404,7 @@ describe("projectSchema", () => {
       title: { en: "Demo" },
       defaultLocale: "en",
       defaultSchema: "app",
+      database: { provider: "supabase" },
       naming: { attributeCase: "snake_case" },
     })
     expect(r.naming.attributeCase).toBe("snake_case")
@@ -413,7 +420,7 @@ describe("projectSchema", () => {
   })
 
   it("project has no generation block", () => {
-    for (const key of ["generation", "deployment", "database"]) {
+    for (const key of ["generation", "deployment"]) {
       expect(projectSchema.shape).not.toHaveProperty(key)
     }
     expect(projectSchema.shape).not.toHaveProperty("schemaVersion")
@@ -567,7 +574,10 @@ describe("strict metadata schemas", () => {
       indexed: false,
       unique: false,
     })
-    expect(projectSchema.parse({ name: "A" }).naming).toEqual({
+    expect(
+      projectSchema.parse({ name: "A", database: { provider: "supabase" } })
+        .naming
+    ).toEqual({
       attributeCase: "camelCase",
     })
   })
@@ -577,9 +587,13 @@ describe("strict metadata schemas", () => {
       catalogSchema.safeParse({ $schema: "x", kind: "Catalog", name: "C" })
         .success
     ).toBe(true)
-    expect(projectSchema.safeParse({ $schema: "x", name: "A" }).success).toBe(
-      true
-    )
+    expect(
+      projectSchema.safeParse({
+        $schema: "x",
+        name: "A",
+        database: { provider: "supabase" },
+      }).success
+    ).toBe(true)
     expect(
       unknown(
         catalogSchema.safeParse({

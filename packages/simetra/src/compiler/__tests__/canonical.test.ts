@@ -581,6 +581,7 @@ describe("scope kinds in the snapshot", () => {
     expect(snapshot.project).not.toHaveProperty("scopeKinds")
     // Решта полів проєкту — без посилань за іменем.
     expect(Object.keys(snapshot.project).sort()).toEqual([
+      "database",
       "defaultLocale",
       "defaultSchema",
       "name",

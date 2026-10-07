@@ -109,6 +109,7 @@ export function kitchenSink(): Map<string, string> {
     title: text("KitchenSink"),
     defaultLocale: "en",
     defaultSchema: "public",
+    database: { provider: "supabase" },
     naming: { attributeCase: "camelCase" },
     timezone: "Europe/Kyiv",
     scopeKinds: [

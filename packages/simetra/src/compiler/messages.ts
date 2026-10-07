@@ -91,6 +91,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: () => 'Scope kind name "none" is reserved',
     uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
   },
+  "project.database-required": {
+    en: (p) =>
+      p.field === "provider"
+        ? "project.meta.json declares no database provider"
+        : "project.meta.json declares no database",
+    uk: (p) =>
+      p.field === "provider"
+        ? "project.meta.json не вказує провайдера бази"
+        : "project.meta.json не описує базу",
+    hint: {
+      en: 'Add "database": { "provider": "supabase" } to project.meta.json.',
+      uk: 'Додайте "database": { "provider": "supabase" } до project.meta.json.',
+    },
+  },
   "scope.not-allowed": {
     en: () => 'Enumeration scope can only be "none"',
     uk: () => 'Скоуп переліку може бути лише "none"',

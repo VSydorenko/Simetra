@@ -18,6 +18,7 @@ describe("scope declarations", () => {
   it("project accepts object and external roots", () => {
     const res = projectSchema.safeParse({
       name: "app",
+      database: { provider: "supabase" },
       scopeKinds: [
         {
           name: "org",
@@ -36,13 +37,17 @@ describe("scope declarations", () => {
     if (!res.success) return
     expect(res.data.scopeKinds[0]?.onRootDelete).toBe("restrict")
     expect(res.data.scopeKinds[1]?.onRootDelete).toBe("cascade")
-    expect(projectSchema.parse({ name: "app" }).scopeKinds).toEqual([])
+    expect(
+      projectSchema.parse({ name: "app", database: { provider: "supabase" } })
+        .scopeKinds
+    ).toEqual([])
   })
 
   it("scope kind named none is rejected", () => {
     expect(
       rules(projectSchema, {
         name: "app",
+        database: { provider: "supabase" },
         scopeKinds: [
           {
             name: "none",
