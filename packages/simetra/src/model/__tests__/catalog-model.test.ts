@@ -59,6 +59,31 @@ describe("catalog model", () => {
     ])
   })
 
+  it("a row rule check equals the same check without origin", () => {
+    const check = {
+      name: "orders_amount_set",
+      expression: "amount IS NOT NULL",
+    }
+    const snapshot = {
+      tables: [
+        {
+          ...table({ checks: [check] }),
+          origin: { objectId: "o1" },
+          checks: [{ ...check, origin: { rowRule: { file: "x.sql" } } }],
+        },
+      ],
+      enumTypes: [],
+    } as unknown as PhysicalSnapshot
+    const catalog = catalogFromSnapshot(snapshot)
+    expect(catalog.tables).toEqual([table({ checks: [check] })])
+    expect(
+      diffCatalogModels(
+        { ...catalog, units: [] },
+        model(table({ checks: [check] }))
+      )
+    ).toEqual([])
+  })
+
   it("identical models have no differences", () => {
     expect(diffCatalogModels(model(), model())).toEqual([])
   })

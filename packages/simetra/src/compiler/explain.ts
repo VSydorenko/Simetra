@@ -27,6 +27,8 @@ export interface Explanation {
     primaryKey?: string[]
     uniques: string[][]
     foreignKeys: { columns: string[]; references: string }[]
+    /** CHECK таблиці: похідний від виду чи правило рядка модуля. */
+    checks: { name: string; expression: string; origin: "kind" | "rowRule" }[]
   }[]
   /** Одиниці `movementQuery`, власник яких — цей об'єкт. */
   movementQueries: { identity: string; sql: string }[]
@@ -103,6 +105,12 @@ export function explainObject(
         foreignKeys: t.foreignKeys.map((f) => ({
           columns: [...f.columns],
           references: `${f.references.schema}.${f.references.table}(${f.references.columns.join(", ")})`,
+        })),
+        checks: t.checks.map((c) => ({
+          name: c.name,
+          expression: c.expression,
+          origin:
+            c.origin === undefined ? ("kind" as const) : ("rowRule" as const),
         })),
       }
     })

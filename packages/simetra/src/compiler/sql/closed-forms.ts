@@ -2,7 +2,7 @@ import type { Node } from "libpg-query"
 import { KIND_REGISTRY } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import type { VerbatimUnit } from "./units"
+import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
 /** Чим функція виходить за закриту оболонку (спека промоції §9.4). */
 export type ClosedShellProblem = "language" | "volatility" | "searchPath"
@@ -69,31 +69,56 @@ export function closedShellProblem(tree: Node): ClosedShellProblem | undefined {
 }
 
 /**
+ * Файли об'єктів, чий вид має факт `sqlModule: "closed"`: модуль такого
+ * об'єкта приймає лише закриті форми. Вид — з `ownerFile` стадії 1, тож
+ * перевірка не чекає моделі стадії 3.
+ */
+export function closedModuleOwners(
+  objects: readonly ParsedObject[]
+): ReadonlySet<string> {
+  return new Set(
+    objects
+      .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "closed")
+      .map((o) => o.file)
+  )
+}
+
+/**
  * Модуль об'єкта виду з фактом `sqlModule: "closed"` приймає лише функції в
- * закритій оболонці без перевантажень; блоки запиту рухів вирізано до розбору,
- * тож одиницями вони не стають. Решта класів — `sql.statement-not-allowed` з
- * підказкою властивості, що їх заміщує. Модуль `debt` і спільні `sql/` тут не
- * звужуються: це борг, його ратчет — окремо.
+ * закритій оболонці без перевантажень і правила рядка; блоки запиту рухів
+ * вирізано до розбору, тож одиницями вони не стають. Решта класів —
+ * `sql.statement-not-allowed` з підказкою властивості, що їх заміщує. Модуль
+ * `debt` і спільні `sql/` тут не звужуються: це борг, його ратчет — окремо;
+ * правило рядка поза модулем виду — помилка, бо воно належить таблиці
+ * об'єкта, а таблиці боргу описані власними полями.
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
-  units: readonly VerbatimUnit[]
+  units: readonly VerbatimUnit[],
+  rowRules: readonly RowRule[]
 ): Diagnostic[] {
-  const kindByFile = new Map(objects.map((o) => [o.file, o.kind]))
-  const closed = (unit: VerbatimUnit) => {
-    const kind =
-      unit.ownerFile === undefined ? undefined : kindByFile.get(unit.ownerFile)
-    return kind !== undefined && KIND_REGISTRY[kind].sqlModule === "closed"
-  }
-  // Перевантаження рахуються серед усіх функцій схеми, а не лише модуля:
-  // інакше друга сигнатура в спільному файлі обходила б заборону.
+  const owners = closedModuleOwners(objects)
+  const closed = (unit: { ownerFile?: string }) =>
+    unit.ownerFile !== undefined && owners.has(unit.ownerFile)
+  // Перевантаження рахуються серед усіх функцій схеми (простір `pg_proc`:
+  // функції, процедури, агрегати), а не лише модуля: інакше друга сигнатура
+  // в спільному файлі чи процедура з тим самим ім'ям обходила б заборону.
   const functionsByName = new Map<string, number>()
   for (const unit of units) {
-    if (unit.class !== "function") continue
+    if (!FUNCTION_CLASSES.has(unit.class)) continue
     const key = `${unit.schema}.${unit.name}`
     functionsByName.set(key, (functionsByName.get(key) ?? 0) + 1)
   }
   const found: Diagnostic[] = []
+  for (const rule of rowRules) {
+    if (closed(rule)) continue
+    found.push(
+      diagnostic("sql.row-rule-outside-module", rule.file, "", {
+        table: `${rule.schema}.${rule.table}`,
+        line: rule.line,
+      })
+    )
+  }
   for (const unit of units) {
     if (!closed(unit)) continue
     if (unit.class !== "function") {

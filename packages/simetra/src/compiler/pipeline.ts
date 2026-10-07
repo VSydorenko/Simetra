@@ -15,9 +15,10 @@ import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
-import { checkSqlModules } from "./sql/closed-forms"
+import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { loadSqlParser } from "./sql/parse"
+import { embedRowRules } from "./sql/row-rule"
 import {
   namespaceConflicts,
   readSqlUnits,
@@ -56,32 +57,52 @@ export async function runStages(
   // проєкту одиниць немає: його помилку вже названо.
   const sql =
     stage1.project === undefined
-      ? { units: [], diagnostics: [] }
+      ? { units: [], rowRules: [], diagnostics: [] }
       : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse, [
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
+  // Без помилок стадії 2 id є в кожного об'єкта.
+  const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
+  const ownerId = (ownerFile: string) => idByFile.get(ownerFile) ?? ""
+  // Правило рядка модуля виду — CHECK таблиці у знімку, а не одиниця: його
+  // вкладено до стадії 4, тож цілісність, залежності, рендер і хеш бачать одну
+  // правду про таблицю. Правило поза модулем виду вже назване нижче.
+  const owners = closedModuleOwners(stage1.objects)
+  const embedded =
+    stage3 === undefined
+      ? undefined
+      : embedRowRules(
+          stage3.physical,
+          sql.rowRules.filter(
+            (r) => r.ownerFile !== undefined && owners.has(r.ownerFile)
+          ),
+          (ownerFile) => idByFile.get(ownerFile)
+        )
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
     ...upstream,
     ...sql.diagnostics,
-    ...checkSqlModules(stage1.objects, sql.units),
+    ...checkSqlModules(stage1.objects, sql.units, sql.rowRules),
+    ...(embedded?.diagnostics ?? []),
   ]
   if (
     hasErrors(early) ||
     stage1.project === undefined ||
-    stage3 === undefined
+    stage3 === undefined ||
+    embedded === undefined
   ) {
     return { ok: false, diagnostics: sortDiagnostics(early) }
   }
+  const physical = embedded.physical
 
   const diagnostics = sortDiagnostics([
     ...early,
     ...checkIntegrity(
       stage1.objects,
       stage2.references,
-      stage3,
+      { ...stage3, physical },
       stage1.project.naming.attributeCase,
       stage1.project.scopeKinds,
       sql.units,
@@ -97,10 +118,6 @@ export async function runStages(
   ])
   const ok = !hasErrors(diagnostics)
   if (!ok) return { ok, diagnostics }
-
-  // Без помилок стадії 2 id є в кожного об'єкта.
-  const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
-  const ownerId = (ownerFile: string) => idByFile.get(ownerFile) ?? ""
 
   const scopeKindIdByFile = new Map<string, string>()
   const rootIdByPointer = new Map<string, string>()
@@ -152,7 +169,7 @@ export async function runStages(
   const wrappers = buildMovementFunctions(
     stage1.objects,
     stage2.references,
-    stage3.physical,
+    physical,
     stage1.project,
     parse
   )
@@ -163,7 +180,7 @@ export async function runStages(
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const collisions = namespaceConflicts(
-    stage3.physical,
+    physical,
     sqlUnits,
     (unit) =>
       `the movement query of ${nameById.get(unit.documentId ?? "")} into ${nameById.get(unit.registerId ?? "")}`
@@ -176,7 +193,7 @@ export async function runStages(
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const ordered = creationOrder(
-    stage3.physical,
+    physical,
     sqlUnits,
     parse,
     // Обгортка рухів файлу не має: цикл через неї названо в документі.
@@ -206,12 +223,12 @@ export async function runStages(
         ownerObjectId: ownerId(ownerFile),
       }))
       .sort((a, b) => compareStrings(a.file, b.file)),
-    physical: stage3.physical,
+    physical,
     sqlUnits,
     creationOrder: ordered.order,
     contracts: buildContracts(
       stage1.objects,
-      stage3.physical,
+      physical,
       stage1.project.naming.attributeCase,
       sqlUnits,
       stage1.project.timezone,

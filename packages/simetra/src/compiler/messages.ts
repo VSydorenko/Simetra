@@ -70,8 +70,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
   },
 }
 const KIND_MODULE_GENERAL = {
-  en: "The .sql module of a kind object holds only closed forms: functions in the closed shell and movement query blocks. Describe the rest with metadata properties of the object.",
-  uk: "Модуль .sql об'єкта виду містить лише закриті форми: функції в закритій оболонці й блоки запиту рухів. Решту опишіть властивостями метаданих об'єкта.",
+  en: "The .sql module of a kind object holds only closed forms: functions in the closed shell, row rules (ALTER TABLE <own table> ADD CONSTRAINT <name> CHECK (…)) and movement query blocks. Describe the rest with metadata properties of the object.",
+  uk: "Модуль .sql об'єкта виду містить лише закриті форми: функції в закритій оболонці, правила рядка (ALTER TABLE <своя таблиця> ADD CONSTRAINT <ім'я> CHECK (…)) і блоки запиту рухів. Решту опишіть властивостями метаданих об'єкта.",
 }
 
 /** Тексти проблем закритої оболонки функції (`sql.closed-shell`). */
@@ -91,6 +91,11 @@ const CLOSED_SHELL_PROBLEM: Readonly<
     uk: "вона SECURITY DEFINER без SET search_path = ''",
   },
 }
+const ROW_RULE_GRAMMAR = {
+  en: "A row rule combines with AND, OR, NOT and parentheses the atoms <column> IS [NOT] NULL, <column> = or <> <literal>, <column> [NOT] IN (<literals>), <column> <op> <column> of the same type and num_nonnulls(<columns>) <op> <integer>, where <op> is =, <>, <, <=, > or >=; columns are unqualified columns of the table, without casts, other functions or subqueries.",
+  uk: "Правило рядка поєднує через AND, OR, NOT і дужки атоми <колонка> IS [NOT] NULL, <колонка> = чи <> <літерал>, <колонка> [NOT] IN (<літерали>), <колонка> <оп> <колонка> одного типу й num_nonnulls(<колонки>) <оп> <ціле>, де <оп> — =, <>, <, <=, > чи >=; колонки — некваліфіковані колонки таблиці, без приведень, інших функцій і підзапитів.",
+}
+
 const CLOSED_SHELL_HINT = {
   en: "A function in the closed shell is LANGUAGE sql or plpgsql, states IMMUTABLE, STABLE or VOLATILE, and a SECURITY DEFINER function sets search_path = '' and qualifies names with their schema.",
   uk: "Функція в закритій оболонці — LANGUAGE sql чи plpgsql, явно вказує IMMUTABLE, STABLE чи VOLATILE, а функція SECURITY DEFINER задає search_path = '' і кваліфікує імена схемою.",
@@ -368,36 +373,44 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.detail === "kindModule"
         ? `${p.statement} (${p.class}) at line ${p.line} is not allowed in the .sql module of a kind object`
-        : p.detail === undefined || p.detail === "allInSchema"
-          ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
-          : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
+        : p.detail === "rowRuleName"
+          ? `CHECK at line ${p.line} has no constraint name`
+          : p.detail === undefined || p.detail === "allInSchema"
+            ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
+            : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
     uk: (p) =>
       p.detail === "kindModule"
         ? `${p.statement} (${p.class}) у рядку ${p.line} не дозволений у модулі .sql об'єкта виду`
-        : p.detail === undefined || p.detail === "allInSchema"
-          ? `${p.statement} у рядку ${p.line} не дозволений у файлі .sql`
-          : `${p.statement} у рядку ${p.line} не дозволений у файлі .sql: ${p.detail}`,
+        : p.detail === "rowRuleName"
+          ? `CHECK у рядку ${p.line} не має імені обмеження`
+          : p.detail === undefined || p.detail === "allInSchema"
+            ? `${p.statement} у рядку ${p.line} не дозволений у файлі .sql`
+            : `${p.statement} у рядку ${p.line} не дозволений у файлі .sql: ${p.detail}`,
     hint: {
       en: (p) =>
         p.detail === "kindModule"
           ? (KIND_MODULE_REPLACEMENT[String(p.class)] ?? KIND_MODULE_GENERAL).en
-          : p.detail === "allInSchema"
-            ? "Grant on each object: ON ALL … IN SCHEMA is a one-off action, not a catalog state."
-            : p.feature === "rowLevelSecurity"
-              ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
-              : p.feature === "publication"
-                ? "The provider creates publications; a .sql file manages only their membership: use ALTER PUBLICATION … ADD/DROP/SET TABLE."
-                : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publication membership (ALTER PUBLICATION), REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
+          : p.detail === "rowRuleName"
+            ? "Name the row rule: ALTER TABLE <table> ADD CONSTRAINT <name> CHECK (…). The name identifies the constraint in the database and in explain."
+            : p.detail === "allInSchema"
+              ? "Grant on each object: ON ALL … IN SCHEMA is a one-off action, not a catalog state."
+              : p.feature === "rowLevelSecurity"
+                ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
+                : p.feature === "publication"
+                  ? "The provider creates publications; a .sql file manages only their membership: use ALTER PUBLICATION … ADD/DROP/SET TABLE."
+                  : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publication membership (ALTER PUBLICATION), REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
       uk: (p) =>
         p.detail === "kindModule"
           ? (KIND_MODULE_REPLACEMENT[String(p.class)] ?? KIND_MODULE_GENERAL).uk
-          : p.detail === "allInSchema"
-            ? "Надавайте гранти на кожен об'єкт: ON ALL … IN SCHEMA — разова дія, а не стан каталогу."
-            : p.feature === "rowLevelSecurity"
-              ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
-              : p.feature === "publication"
-                ? "Публікації створює провайдер; файл .sql керує лише членством у них: використайте ALTER PUBLICATION … ADD/DROP/SET TABLE."
-                : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, членство в публікаціях (ALTER PUBLICATION), REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
+          : p.detail === "rowRuleName"
+            ? "Дайте правилу рядка ім'я: ALTER TABLE <таблиця> ADD CONSTRAINT <ім'я> CHECK (…). Ім'я ідентифікує обмеження в базі й у explain."
+            : p.detail === "allInSchema"
+              ? "Надавайте гранти на кожен об'єкт: ON ALL … IN SCHEMA — разова дія, а не стан каталогу."
+              : p.feature === "rowLevelSecurity"
+                ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
+                : p.feature === "publication"
+                  ? "Публікації створює провайдер; файл .sql керує лише членством у них: використайте ALTER PUBLICATION … ADD/DROP/SET TABLE."
+                  : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, членство в публікаціях (ALTER PUBLICATION), REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
     },
   },
   "sql.unit-duplicate": {
@@ -434,6 +447,43 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Give each function of a kind module its own name in the schema: an overload makes a call resolve by argument types, which the frame cannot check.",
       uk: "Дайте кожній функції модуля виду власне ім'я в схемі: перевантаження робить виклик залежним від типів аргументів, чого рамка не перевіряє.",
+    },
+  },
+  "sql.row-rule-grammar": {
+    en: (p) =>
+      `Row rule on ${p.table} at line ${p.line} is outside the row rule grammar: ${p.construct}`,
+    uk: (p) =>
+      `Правило рядка на ${p.table} у рядку ${p.line} поза граматикою правила рядка: ${p.construct}`,
+    hint: ROW_RULE_GRAMMAR,
+  },
+  "sql.row-rule-foreign-table": {
+    en: (p) =>
+      `Row rule at line ${p.line} targets ${p.table}, which is not a table of this object`,
+    uk: (p) =>
+      `Правило рядка у рядку ${p.line} стоїть на ${p.table}, яка не є таблицею цього об'єкта`,
+    hint: {
+      en: "A row rule of a kind module constrains only the tables of its own object: move it to the module of the object that owns the table.",
+      uk: "Правило рядка модуля виду обмежує лише таблиці свого об'єкта: перенесіть його в модуль об'єкта, якому належить таблиця.",
+    },
+  },
+  "sql.row-rule-outside-module": {
+    en: (p) =>
+      `Row rule on ${p.table} at line ${p.line} is outside the .sql module of a kind object`,
+    uk: (p) =>
+      `Правило рядка на ${p.table} у рядку ${p.line} поза модулем .sql об'єкта виду`,
+    hint: {
+      en: "A row rule belongs to the .sql module of the kind object that owns the table; an adopted table describes its checks in its metadata (checks).",
+      uk: "Правило рядка належить модулю .sql об'єкта виду, якому належить таблиця; прийнята таблиця описує свої перевірки в метаданих (checks).",
+    },
+  },
+  "sql.row-rule-name-taken": {
+    en: (p) =>
+      `Row rule ${p.name} at line ${p.line} reuses the name of another constraint of ${p.table}`,
+    uk: (p) =>
+      `Правило рядка ${p.name} у рядку ${p.line} повторює ім'я іншого обмеження ${p.table}`,
+    hint: {
+      en: "Postgres keeps the constraint names of a table in one namespace, including the checks the kind derives: give the row rule its own name.",
+      uk: "Postgres тримає імена обмежень таблиці в одному просторі, разом із перевірками, які виводить вид: дайте правилу рядка власне ім'я.",
     },
   },
   "sql.dependency-cycle": {

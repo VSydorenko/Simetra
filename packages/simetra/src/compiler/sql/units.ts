@@ -87,6 +87,24 @@ export interface VerbatimUnit {
   tree: unknown
 }
 
+/**
+ * Правило рядка модуля виду (спека промоції §9.4) до перевірки граматики:
+ * `ALTER TABLE … ADD CONSTRAINT <ім'я> CHECK (…)`. Не SQL-одиниця — після
+ * перевірки воно стає CHECK таблиці у фізичному знімку, тож класу одиниці не
+ * має і в простір ідентичностей одиниць не входить.
+ */
+export interface RowRule {
+  schema: string
+  table: string
+  name: string
+  /** Вираз CHECK з дерева розбору (з позиціями) — для граматики й тексту знімка. */
+  expr: Node
+  file: string
+  /** 1-базний рядок першого токена оператора. */
+  line: number
+  ownerFile?: string
+}
+
 /** `.sql` для розбору; `schema` — схема некваліфікованих імен. */
 export interface SqlSource {
   file: string
@@ -112,8 +130,13 @@ export function readSqlUnits(
   sources: readonly SqlSource[],
   parse: SqlParser,
   known: readonly { schema: string; name: string }[]
-): { units: VerbatimUnit[]; diagnostics: Diagnostic[] } {
+): {
+  units: VerbatimUnit[]
+  rowRules: RowRule[]
+  diagnostics: Diagnostic[]
+} {
   const units: VerbatimUnit[] = []
+  const rowRules: RowRule[] = []
   const diagnostics: Diagnostic[] = []
   // Порядок файлів — за шляхом: «перша» з дублікатів не залежить від мапи.
   const ordered = [...sources].sort((a, b) => compareStrings(a.file, b.file))
@@ -182,6 +205,17 @@ export function readSqlUnits(
         )
         continue
       }
+      if ("rowRule" in classified) {
+        rowRules.push({
+          ...classified.rowRule,
+          file: source.file,
+          line,
+          ...(source.ownerFile === undefined
+            ? {}
+            : { ownerFile: source.ownerFile }),
+        })
+        continue
+      }
       units.push({
         ...classified,
         file: source.file,
@@ -203,7 +237,7 @@ export function readSqlUnits(
       diagnostics.push(duplicate(unit, `${earlier.file}:${earlier.line}`))
     }
   }
-  return { units, diagnostics }
+  return { units, rowRules, diagnostics }
 }
 
 /** Простір імен каталогу Postgres: `pg_proc`, `pg_class`, `pg_type`. */
@@ -463,6 +497,7 @@ function modelTypes(
 
 type Classified =
   | { class: SqlUnitClass; identity: string; schema: string; name: string }
+  | { rowRule: Pick<RowRule, "schema" | "table" | "name" | "expr"> }
   | {
       notAllowed: string
       detail?: string
@@ -665,6 +700,21 @@ function classify(stmt: Node, scope: TypeScope): Classified {
   }
   if ("AlterTableStmt" in stmt) {
     const node = stmt.AlterTableStmt
+    const rule = rowRuleOf(node)
+    if (rule !== undefined) {
+      if (rule.name === undefined) {
+        return { notAllowed: statement, detail: "rowRuleName" }
+      }
+      const table = relation(node.relation, schema)
+      return {
+        rowRule: {
+          schema: table.schema,
+          table: table.name,
+          name: rule.name,
+          expr: rule.expr,
+        },
+      }
+    }
     const subtypes = (node.cmds ?? []).map((c) =>
       "AlterTableCmd" in c ? (c.AlterTableCmd.subtype ?? "") : ""
     )
@@ -695,6 +745,34 @@ function classify(stmt: Node, scope: TypeScope): Classified {
     )
   }
   return { notAllowed: statement }
+}
+
+/**
+ * Рівно одна підкоманда `ADD CONSTRAINT … CHECK` — форма правила рядка; інші
+ * підкоманди поруч зробили б оператор сумішшю правила й дослівної зміни
+ * таблиці. `NOT VALID` і `NO INHERIT` не входять: знімок тримає перевірені
+ * обмеження без успадкування, тож такий оператор лишається забороненим.
+ */
+function rowRuleOf(node: {
+  objtype?: string
+  cmds?: Node[]
+}): { name: string | undefined; expr: Node } | undefined {
+  const cmds = node.cmds ?? []
+  if (node.objtype !== "OBJECT_TABLE" || cmds.length !== 1) return undefined
+  const cmd = "AlterTableCmd" in cmds[0]! ? cmds[0].AlterTableCmd : undefined
+  const def = cmd?.def
+  if (cmd?.subtype !== "AT_AddConstraint" || def === undefined) return undefined
+  if (!("Constraint" in def)) return undefined
+  const constraint = def.Constraint
+  if (
+    constraint.contype !== "CONSTR_CHECK" ||
+    constraint.raw_expr === undefined ||
+    constraint.skip_validation === true ||
+    constraint.is_no_inherit === true
+  ) {
+    return undefined
+  }
+  return { name: constraint.conname, expr: constraint.raw_expr }
 }
 
 function isInputParameter(parameter: FunctionParameter): boolean {

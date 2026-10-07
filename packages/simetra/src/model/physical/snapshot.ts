@@ -58,7 +58,7 @@ export interface PhysicalTable {
     nullsNotDistinct: boolean
     deferrable?: DeferredConstraint
   }[]
-  checks: { name: string; expression: string }[]
+  checks: PhysicalCheck[]
   foreignKeys: {
     name: string
     columns: string[]
@@ -79,6 +79,17 @@ export interface PhysicalTable {
     where?: string
     nullsNotDistinct: boolean
   }[]
+}
+
+/**
+ * CHECK таблиці. `origin` є лише в правила рядка модуля виду (спека промоції
+ * §9.4): похідний CHECK походить від самого виду, а правило — від файлу, який
+ * показує `explain`. Каталог походження не бачить: для бази це той самий CHECK.
+ */
+export interface PhysicalCheck {
+  name: string
+  expression: string
+  origin?: { rowRule: { file: string } }
 }
 
 /**

@@ -1,4 +1,5 @@
 import type {
+  PhysicalCheck,
   PhysicalColumn,
   PhysicalEnumType,
   PhysicalSnapshot,
@@ -33,8 +34,13 @@ export type SqlUnitClass =
  * структурним.
  */
 export type CatalogColumn = Omit<PhysicalColumn, "origin">
-export type CatalogTable = Omit<PhysicalTable, "origin" | "columns"> & {
+export type CatalogCheck = Omit<PhysicalCheck, "origin">
+export type CatalogTable = Omit<
+  PhysicalTable,
+  "origin" | "columns" | "checks"
+> & {
   columns: CatalogColumn[]
+  checks: CatalogCheck[]
 }
 export type CatalogEnumType = Omit<PhysicalEnumType, "origin">
 
@@ -84,6 +90,12 @@ export function catalogFromSnapshot(
           delete c.origin
           return c
         }),
+        // Походження правила рядка — знання компілятора; база бачить той
+        // самий CHECK, тож різниці між бажаним станом і витягом бути не може.
+        checks: table.checks.map(({ name, expression }) => ({
+          name,
+          expression,
+        })),
       } as CatalogTable
     }),
     enumTypes: snapshot.enumTypes.map((e) => {

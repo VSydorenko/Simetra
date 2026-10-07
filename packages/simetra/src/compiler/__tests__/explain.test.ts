@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, explainObject } from "simetra/compiler"
 import { readReferenceDomain } from "./fixtures/reference-domain"
+import { attribute, metaFiles, project, salesDocument } from "./helpers"
 
 async function referenceModel() {
   const result = await compile(readReferenceDomain())
@@ -77,6 +78,33 @@ describe("explainObject", () => {
     expect(contract.referencedBy).toContainEqual(
       expect.objectContaining({ role: "eventSubscription.source" })
     )
+  })
+
+  it("shows the origin of each CHECK of a table", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        ...salesDocument(
+          {},
+          {
+            attributes: [
+              attribute("code", { type: "String", length: 10, required: true }),
+            ],
+          }
+        ),
+        "documents/Sale/Sale.sql":
+          "ALTER TABLE public.sale ADD CONSTRAINT sale_code_set CHECK (code IS NOT NULL);",
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    const e = explainObject(result.model!, { kind: "Document", name: "Sale" })!
+    const checks = e.tables.find((t) => t.part === "main")!.checks
+    expect(checks).toContainEqual({
+      name: "sale_code_set",
+      expression: "code IS NOT NULL",
+      origin: "rowRule",
+    })
+    expect(checks.filter((c) => c.origin === "kind")).not.toEqual([])
   })
 
   it("unknown object", async () => {
