@@ -313,7 +313,7 @@ describe("CustomTable physics round-trip", () => {
     // форми типового значення (`fill`, `empty`) — нові колонки й таблиці
     // констант, а наявні таблиці лишилися тими самими.
     // Далі в довідник `Item` додано реквізити з `unique: "ignoreCase"` і
-    // `uniqueWithin` — нові колонки, ключ і індекс лише його таблиці.
+    // `uniqueWithin` — нові колонки, ключ і індекси лише його таблиці.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -324,7 +324,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "133230c04b3c601cf8b2fe20694d34296f7aac0e2ef838c3e96dd1bc4431118c"
+      "c9d8cb6b2bb21636d82ab7dc5dcf0e473bac0d9d0eb1791db319cfa1432a9bdb"
     )
   })
 })

@@ -1343,19 +1343,37 @@ describe("stage 3: physical snapshot", () => {
       ).toContainEqual(["owner_type", "owner_id", "code2"])
     })
 
-    it("uniqueWithin parent is NULLS NOT DISTINCT", async () => {
+    it("uniqueWithin parent is a NULLS NOT DISTINCT unique index partial on the column", async () => {
       const physical = await compileWith({
         "catalogs/Node/Node.meta.json": catalog("Node", {
           hierarchyType: "ItemsOnly",
           attributes: [code({ uniqueWithin: "parent" })],
         }),
       })
-      expect(tableOf(physical, "node").uniques).toContainEqual(
+      expect(tableOf(physical, "node").indexes).toContainEqual(
         expect.objectContaining({
-          columns: ["parent_id", "code2"],
+          unique: true,
+          keys: [{ column: "parent_id" }, { column: "code2" }],
+          where: "code2 IS NOT NULL",
           nullsNotDistinct: true,
         })
       )
+    })
+
+    it("scope carrier leads the key before the owner column", async () => {
+      const physical = await compileWith({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        "catalogs/A/A.meta.json": catalog("A", { scope: "org" }),
+        "catalogs/Child/Child.meta.json": catalog("Child", {
+          scope: "org",
+          owners: [{ kind: "Catalog", name: "A" }],
+          attributes: [code({ uniqueWithin: "owner" })],
+        }),
+      })
+      expect(
+        tableOf(physical, "child").uniques.map((u) => u.columns)
+      ).toContainEqual(["org_id", "owner_id", "code2"])
     })
 
     it("ignoreCase combined with uniqueWithin parent is a NULLS NOT DISTINCT expression index", async () => {
@@ -1369,6 +1387,7 @@ describe("stage 3: physical snapshot", () => {
         expect.objectContaining({
           unique: true,
           keys: [{ column: "parent_id" }, { expression: "lower(code2)" }],
+          where: "code2 IS NOT NULL",
           nullsNotDistinct: true,
         })
       )

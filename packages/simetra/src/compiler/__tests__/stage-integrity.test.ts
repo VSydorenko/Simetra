@@ -1054,7 +1054,7 @@ describe("stage 4: integrity", () => {
         uniqueWithin,
       })
 
-    it("tabular section, document and register attributes do not accept uniqueWithin", async () => {
+    it("tabular section and document attributes do not accept uniqueWithin", async () => {
       const result = await compileWith({
         "catalogs/A/A.meta.json": catalog("A", {
           tabularSections: [

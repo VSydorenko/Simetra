@@ -6,7 +6,8 @@
 // Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
 // Portions Copyright (c) 1994, Regents of the University of California
 // Licensed under the PostgreSQL License. Modified: translated from C to
-// TypeScript; index key expressions are not handled.
+// TypeScript; index key expressions are named only for the compiler's own
+// `function(...)` keys (expressionColumnName), other expressions are not handled.
 
 import {
   KIND_REGISTRY,
@@ -1628,17 +1629,26 @@ function addField(table: PendingTable, field: Field): string[] {
       ...(field.uniqueWithin?.columns ?? []),
     ]
     const nullsNotDistinct = field.uniqueWithin?.nullsNotDistinct === true
-    if (field.uniqueIgnoreCase === true) {
-      // `lower()` — вираз, який UNIQUE-обмеження не тримає, тож це унікальний
-      // індекс (без регістру лише скалярний String/Text — одна колонка).
+    if (field.uniqueIgnoreCase === true || nullsNotDistinct) {
+      // UNIQUE-обмеження не тримає ні виразу (`lower()`), ні умови, тож це
+      // унікальний індекс (без регістру лише скалярний String/Text — одна
+      // колонка). У межах батька NULLS NOT DISTINCT потрібен, щоб елементи
+      // верху (`parent_id IS NULL`) порівнювалися, але він зачепив би й саму
+      // колонку: необов'язковий реквізит мав би одне порожнє значення на
+      // батька. Тому індекс часткований за `колонка IS NOT NULL` — порожні
+      // значення, як у звичайному `unique`, не конфліктують.
+      const column = quoteIdent(names[0]!)
       table.indexes.push({
         unique: true,
         method: "btree",
         keys: [
-          ...lead.map((column) => ({ column })),
-          { expression: `lower(${quoteIdent(names[0]!)})` },
+          ...lead.map((name) => ({ column: name })),
+          field.uniqueIgnoreCase === true
+            ? { expression: `lower(${column})` }
+            : { column: names[0]! },
         ],
         include: [],
+        ...(nullsNotDistinct ? { where: `${column} IS NOT NULL` } : {}),
         nullsNotDistinct,
       })
     } else {
@@ -2013,8 +2023,9 @@ function byName(a: { name: string }, b: { name: string }): number {
 
 /**
  * Імена колонок індексу як у `ChooseIndexColumnNames`: повтор імені отримує
- * числовий суфікс (`dd`, `dd1`), INCLUDE теж входить. Ключ-вираз сюди не
- * доходить: безіменний індекс з виразом — помилка стадії 4.
+ * числовий суфікс (`dd`, `dd1`), INCLUDE теж входить. Ключ-вираз називається
+ * за `expressionColumnName`; безіменний індекс з виразом у `CustomTable` до
+ * сюди не доходить — це помилка стадії 4.
  */
 function indexColumnNames(index: Omit<Index, "name">): string[] {
   const result: string[] = []

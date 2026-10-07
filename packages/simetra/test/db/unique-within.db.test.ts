@@ -100,6 +100,31 @@ describe("uniqueWithin in Postgres", () => {
     })
   })
 
+  it("parent: empty (NULL) values do not conflict, like plain unique", async () => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const insert = (parent: string | null) =>
+        `INSERT INTO public.folder (id, parent_id) VALUES (gen_random_uuid(), ${
+          parent === null ? "NULL" : `'${parent}'`
+        })`
+      // Верх: два порожні значення поруч.
+      await client.query(insert(null))
+      expect(await violation(client, insert(null))).toBe("ok")
+      const { rows } = await client.query<{ id: string }>(
+        "SELECT id FROM public.folder LIMIT 1"
+      )
+      const parent = rows[0]!.id
+      // Під одним батьком — теж.
+      await client.query(insert(parent))
+      expect(await violation(client, insert(parent))).toBe("ok")
+      // А дублікат непорожнього значення на верху, як і раніше, порушення.
+      const value = (slug: string) =>
+        `INSERT INTO public.folder (id, slug) VALUES (gen_random_uuid(), '${slug}')`
+      await client.query(value("dup"))
+      expect(await violation(client, value("dup"))).toBe("23505")
+    })
+  })
+
   it("owner with ignoreCase: case differs but owner is the same", async () => {
     await withRollback(async (client) => {
       await deploy(client)
