@@ -451,7 +451,7 @@ export function buildContracts(
   style: AttributeCase,
   sqlUnits: readonly SqlUnit[],
   timezone: string,
-  requiredChecks: ModelStageResult["requiredChecks"]
+  elementChecks: ModelStageResult["elementChecks"]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -478,7 +478,7 @@ export function buildContracts(
         documentId: document.id ?? "",
         kindLabel: must((document.data as { kindLabel?: string }).kindLabel),
         ...postingFunctions(table),
-        requiredOnPost: requiredOnPost(document, physical, requiredChecks),
+        requiredOnPost: requiredOnPost(document, physical, elementChecks),
         immutability: immutability(document, table, physical),
         movements,
         balanceControl: movements.flatMap(({ registerId }) => {
@@ -505,7 +505,7 @@ function columnsOfElement(table: PhysicalTable, id: string | undefined) {
 function requiredOnPost(
   document: ParsedObject,
   physical: PhysicalSnapshot,
-  requiredChecks: ModelStageResult["requiredChecks"]
+  elementChecks: ModelStageResult["elementChecks"]
 ): PostingContract["requiredOnPost"] {
   const data = document.data as {
     attributes: Attribute[]
@@ -520,8 +520,11 @@ function requiredOnPost(
       // Ім'я призначила стадія 3 (з урахуванням колізій), контракт його не
       // перераховує.
       check: must(
-        requiredChecks.find(
-          (c) => c.objectId === document.id && c.attributeId === attribute.id
+        elementChecks.find(
+          (c) =>
+            c.label === "required" &&
+            c.objectId === document.id &&
+            c.attributeId === attribute.id
         )
       ).check,
     }))

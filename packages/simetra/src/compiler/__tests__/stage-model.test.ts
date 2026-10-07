@@ -312,6 +312,78 @@ describe("stage 3: physical snapshot", () => {
     expect(goods.checks).toEqual([])
   })
 
+  it("required string of a catalog is NOT NULL plus a nonempty check", async () => {
+    const physical = await compileWith({
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [
+          attribute("note", { type: "String", length: 20, required: true }),
+          attribute("qty", { type: "Integer", required: true }),
+          attribute("tags", {
+            type: "String",
+            length: 5,
+            array: true,
+            required: true,
+          }),
+          attribute("memo", { type: "Text" }),
+        ],
+      }),
+    })
+    const item = tableOf(physical, "item")
+    expect(item.columns.find((c) => c.name === "note")?.notNull).toBe(true)
+    expect(item.checks).toContainEqual({
+      name: "item_note_nonempty",
+      expression: "note !~ '^\\s*$'",
+    })
+    expect(
+      item.checks.filter((c) => c.name.endsWith("_nonempty"))
+    ).toHaveLength(1)
+  })
+
+  it("required text of a register dimension is nonempty too", async () => {
+    const physical = await compileWith({
+      "information-registers/Rate/Rate.meta.json": {
+        id: uuid(30),
+        kind: "InformationRegister",
+        name: "Rate",
+        physicalName: "rate",
+        periodicity: "Day",
+        dimensions: [attribute("zone", { type: "Text", required: true })],
+        resources: [attribute("value", { type: "Integer" })],
+      },
+    })
+    expect(tableOf(physical, "rate").checks).toContainEqual({
+      name: "rate_zone_nonempty",
+      expression: "zone !~ '^\\s*$'",
+    })
+  })
+
+  it("required string of a document header is nonempty only when posted", async () => {
+    const physical = await compileWith({
+      "documents/Sale/Sale.meta.json": document("Sale", {
+        attributes: [
+          attribute("note", { type: "String", length: 20, required: true }),
+        ],
+        tabularSections: [
+          {
+            id: uuid(11),
+            name: "goods",
+            physicalName: "sale_goods",
+            attributes: [
+              attribute("memo", { type: "String", length: 20, required: true }),
+            ],
+          },
+        ],
+      }),
+    })
+    const sale = tableOf(physical, "sale")
+    expect(sale.checks).toContainEqual({
+      name: "sale_note_required",
+      expression: "NOT posted OR (note IS NOT NULL AND note !~ '^\\s*$')",
+    })
+    expect(sale.checks.some((c) => c.name.endsWith("_nonempty"))).toBe(false)
+    expect(tableOf(physical, "sale_goods").checks).toEqual([])
+  })
+
   it("required catalog attribute stays not null", async () => {
     const physical = await compileWith({
       "catalogs/Item/Item.meta.json": catalog("Item", {

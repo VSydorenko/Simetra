@@ -278,7 +278,7 @@ describe("canonical snapshot and hash", () => {
     expect(text).not.toContain('"location"')
     expect(text).not.toContain('"stmt_location"')
     expect(text).not.toContain('"line"')
-    expect(text).not.toContain("requiredChecks")
+    expect(text).not.toContain("elementChecks")
     for (const unit of snapshot.sqlUnits as Record<string, unknown>[]) {
       expect(Object.keys(unit).sort()).toEqual([
         "class",

@@ -237,6 +237,23 @@ describe("posting and register contracts", () => {
     ])
   })
 
+  it("required string header contract takes the required check, not nonempty", async () => {
+    const entries = withStock({})
+    const sale = entries[SALE_FILE] as { attributes?: unknown[] }
+    const note = attribute("note", {
+      type: "String",
+      length: 20,
+      required: true,
+    })
+    sale.attributes = [note]
+    const result = await compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const [posting] = result.model!.contracts.posting
+    expect(posting!.requiredOnPost.header).toEqual([
+      { attributeId: note.id, columns: ["note"], check: "sale_note_required" },
+    ])
+  })
+
   it("required check name comes from the name assignment", async () => {
     const entries = withStock({})
     const sale = entries[SALE_FILE] as { attributes?: unknown[] }

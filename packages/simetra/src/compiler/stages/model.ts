@@ -90,14 +90,17 @@ export interface ModelStageResult {
   /** Оголошені у файлах `physicalName` — для перевірки зарезервованих слів. */
   declaredNames: { file: string; pointer: string; name: string }[]
   /**
-   * CHECK обов'язковості реквізитів шапки документа з ФАКТИЧНО призначеними
-   * іменами — контракт проведення бере їх звідси, а не перераховує вираз.
+   * CHECK реквізитів (обов'язковість шапки документа, непорожній рядок) з
+   * ФАКТИЧНО призначеними іменами — контракт проведення бере `required` звідси,
+   * а не перераховує вираз.
    */
-  requiredChecks: {
+  elementChecks: {
     objectId: string
     attributeId: string
     table: { schema: string; name: string }
     check: string
+    /** `required` — обов'язковість шапки документа; `nonempty` — непорожній рядок. */
+    label: "required" | "nonempty"
   }[]
 }
 
@@ -123,6 +126,12 @@ interface Field {
   type: string
   array: boolean
   notNull: boolean
+  /**
+   * `required` скалярного String/Text: значення не порожнє після обрізання
+   * пробілів. Окремий CHECK лише там, де `required` стало `NOT NULL`; у виду з
+   * обов'язковістю при проведенні умова входить у CHECK шапки.
+   */
+  nonEmpty?: boolean
   default?: string
   /** Вираз генерованої колонки (`STORED`); з `default` несумісний. */
   generated?: string
@@ -185,7 +194,7 @@ interface PendingTable {
     column?: string
     /** Мітка в імені обмеження; без неї — `check`. */
     label?: string
-    /** Реквізит, чию обов'язковість виражає CHECK; для `requiredChecks`. */
+    /** Реквізит, чию умову виражає CHECK; для `elementChecks`. */
     elementId?: string
     expression: string
   }[]
@@ -386,7 +395,11 @@ class SnapshotBuilder {
           label: REQUIRED_LABEL,
           column: columns[0]!,
           elementId: field.origin.elementId,
-          expression: requiredOnPostExpression(posted, columns),
+          expression: requiredOnPostExpression(
+            posted,
+            columns,
+            field.nonEmpty === true
+          ),
         })
       }
     }
@@ -688,7 +701,7 @@ class SnapshotBuilder {
     // виводить кожне ім'я явно зі знімка.
     for (const table of this.tables) materializeIndexes(table)
     const pending = [...this.tables].sort(bySchemaAndName)
-    const { tables, requiredChecks } = assignNames(pending)
+    const { tables, elementChecks } = assignNames(pending)
     return {
       physical: {
         tables,
@@ -696,7 +709,7 @@ class SnapshotBuilder {
       },
       sources: this.sources,
       declaredNames: this.declaredNames,
-      requiredChecks,
+      elementChecks,
     }
   }
 
@@ -928,6 +941,11 @@ class SnapshotBuilder {
       // Вид з обов'язковістю при проведенні тримає її не в схемі, а в CHECK
       // шапки й контракті: чернетка може бути неповною.
       notNull: attribute.required === true && !requiredOnPost,
+      // `!~` над `text[]` — не SQL, тож масив порожності не перевіряє.
+      nonEmpty:
+        attribute.required === true &&
+        attribute.array !== true &&
+        (attribute.type === "String" || attribute.type === "Text"),
       ...defaultOf(
         attribute.defaultValue,
         resolved.target,
@@ -1276,15 +1294,26 @@ const NONE: Target = { form: "none" }
 /** Мітка в імені CHECK обов'язковості при проведенні (`<таблиця>_<колонка>_required`). */
 const REQUIRED_LABEL = "required"
 
+/** Мітка CHECK непорожнього рядка (`<таблиця>_<колонка>_nonempty`). */
+const NONEMPTY_LABEL = "nonempty"
+
+/** POSIX `\s`: рядок з самих пробільних символів вважається порожнім. */
+function nonEmptyExpression(column: string): string {
+  return `${quoteIdent(column)} !~ '^\\s*$'`
+}
+
 /**
  * Вираз CHECK шапки: обов'язковість діє лише у проведеного документа. Пара
  * «тип + id» заповнена обома колонками, інакше посилання напівпорожнє.
  */
 function requiredOnPostExpression(
   posted: string,
-  columns: readonly string[]
+  columns: readonly string[],
+  nonEmpty: boolean
 ): string {
   const filled = columns.map((c) => `${quoteIdent(c)} IS NOT NULL`)
+  // Лише скалярний рядок має одну колонку, тож `columns[0]` — сам реквізит.
+  if (nonEmpty) filled.push(nonEmptyExpression(columns[0]!))
   const body = filled.length > 1 ? `(${filled.join(" AND ")})` : filled[0]!
   return `NOT ${quoteIdent(posted)} OR ${body}`
 }
@@ -1506,6 +1535,16 @@ function addField(table: PendingTable, field: Field): string[] {
   if (field.check !== undefined) {
     table.checks.push({ column: first, expression: field.check })
   }
+  // `notNull` відрізняє звичайну таблицю від шапки/рядків документа, де
+  // `required` перевіряється лише при проведенні й не тримається в схемі.
+  if (field.nonEmpty === true && field.notNull) {
+    table.checks.push({
+      label: NONEMPTY_LABEL,
+      column: first,
+      elementId: field.origin.elementId,
+      expression: nonEmptyExpression(first),
+    })
+  }
   const labels =
     target.form === "label"
       ? target.labels
@@ -1711,9 +1750,9 @@ interface SchemaNames {
 
 function assignNames(pending: readonly PendingTable[]): {
   tables: PhysicalTable[]
-  requiredChecks: ModelStageResult["requiredChecks"]
+  elementChecks: ModelStageResult["elementChecks"]
 } {
-  const requiredChecks: ModelStageResult["requiredChecks"] = []
+  const elementChecks: ModelStageResult["elementChecks"] = []
   const namespaces = new Map<string, SchemaNames>()
   const namesOf = (schema: string): SchemaNames => {
     let names = namespaces.get(schema)
@@ -1785,11 +1824,12 @@ function assignNames(pending: readonly PendingTable[]): {
           name ??
           choose(column, label ?? "check", names.constraints, false, true)
         if (elementId !== undefined) {
-          requiredChecks.push({
+          elementChecks.push({
             objectId: table.origin.objectId ?? "",
             attributeId: elementId,
             table: { schema: table.schema, name: table.name },
             check: assigned,
+            label: label === NONEMPTY_LABEL ? NONEMPTY_LABEL : REQUIRED_LABEL,
           })
         }
         return { name: assigned, expression }
@@ -1860,7 +1900,7 @@ function assignNames(pending: readonly PendingTable[]): {
     }
     return result
   })
-  return { tables, requiredChecks }
+  return { tables, elementChecks }
 }
 
 /** `NOT DEFERRABLE` у знімку не пишеться (див. `DeferredConstraint`). */
