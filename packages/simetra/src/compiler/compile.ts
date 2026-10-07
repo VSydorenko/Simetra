@@ -1,5 +1,6 @@
 import type { MetadataKind, PhysicalSnapshot, Project } from "simetra/model"
-import type { Diagnostic } from "./diagnostics"
+import { assignedOnceDiagnostics } from "./assigned-once"
+import { sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { withRanges } from "./locate"
 import type { Contracts } from "./contracts"
 import type { Presentation } from "./presentation"
@@ -70,6 +71,14 @@ export interface CompileResult {
   model?: CompiledModel
 }
 
+export interface CompileOptions {
+  /**
+   * Мапа файлів попереднього стану (у designer — `HEAD` git-репо). Є — поля,
+   * призначені раз, звіряються з нею; немає — перевірки немає.
+   */
+  baseline?: ReadonlyMap<string, string>
+}
+
 /**
  * Компілятор — чиста функція над мапою «шлях відносно `metadata/` → вміст»
  * (спека П2 §8.2): читання диска — справа CLI, тож одна реалізація служить
@@ -77,13 +86,24 @@ export interface CompileResult {
  * Асинхронна, бо парсер Postgres — WASM, який вантажиться один раз на процес.
  */
 export async function compile(
-  files: ReadonlyMap<string, string>
+  files: ReadonlyMap<string, string>,
+  options: CompileOptions = {}
 ): Promise<CompileResult> {
   const result = await runStages(readFiles(files))
+  // Звірка з базовим станом — крок поза стадіями 1–5: вона порівнює два
+  // стани файлів, а не читає модель, тож біжить і над зламаною моделлю.
+  const assigned =
+    options.baseline === undefined
+      ? []
+      : assignedOnceDiagnostics(options.baseline, files)
   // Діапазони дописуються в одному місці, а не стадіями: стадії знають лише
   // pointer, а текст файлу їм не потрібен.
-  return {
-    ...result,
-    diagnostics: withRanges(result.diagnostics, files),
-  }
+  const diagnostics = withRanges(
+    sortDiagnostics([...result.diagnostics, ...assigned]),
+    files
+  )
+  // Модель, що змінила призначене раз, наступним шарам не віддається.
+  return assigned.some((d) => d.severity === "error")
+    ? { ok: false, diagnostics }
+    : { ...result, diagnostics }
 }

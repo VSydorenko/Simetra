@@ -333,6 +333,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Мітки виду унікальні в проєкті й призначаються раз; дайте одному з об'єктів нову мітку.",
     },
   },
+  "identity.assigned-once-changed": {
+    en: (p) =>
+      `${p.field} is assigned once and cannot change: "${p.before}" became "${p.after}"`,
+    uk: (p) =>
+      `${p.field} призначається раз і не змінюється: було "${p.before}", стало "${p.after}"`,
+    hint: {
+      en: "Restore the previous value. A rename keeps physical names; a different table or column is a new element with a new id.",
+      uk: "Поверніть попереднє значення. Перейменування зберігає фізичні імена; інша таблиця чи колонка — новий елемент з новим id.",
+    },
+  },
   "identity.name-duplicate": {
     en: (p) => `Name "${p.name}" is already declared in ${p.scope}`,
     uk: (p) => `Ім'я "${p.name}" уже оголошене в ${p.scope}`,

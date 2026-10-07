@@ -19,6 +19,7 @@ export {
 } from "./messages"
 export {
   compile,
+  type CompileOptions,
   type CompileResult,
   type CompiledModel,
   type CompiledScopeKind,

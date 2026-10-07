@@ -5,22 +5,27 @@ import {
   expectsKindLabel,
   formatMetaFile,
   formatProjectFile,
-  kindByDir,
   makeObjectName,
   projectSchema,
-  type KindDefinition,
   type PhysicalNameRole,
   type StandardColumnDef,
 } from "simetra/model"
 import { compile } from "../compile"
 import { derivedFunctionLabels } from "../contracts"
-import {
-  compareStrings,
-  diagnostic,
-  sortDiagnostics,
-  type Diagnostic,
-} from "../diagnostics"
+import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
 import { withRanges } from "../locate"
+import {
+  elementsAt,
+  isRecord,
+  labelGroupsOf,
+  namedElementsOf,
+  parseJson,
+  readObjectFiles,
+  sectionsOf,
+  type Json,
+  type Located,
+  type ObjectFile,
+} from "../object-files"
 import { PROJECT_FILE } from "../stages/files"
 import { DERIVED_TABLE_LABELS } from "../stages/model"
 import { changesBetween } from "./changes"
@@ -53,110 +58,10 @@ export interface CompletionResult {
 }
 
 const PROJECT_SCHEMA_FILE = "project.schema.json"
-const META_SUFFIX = ".meta.json"
 const NO_SCOPE = "none"
-
-type Json = Record<string, unknown>
-
-const isRecord = (value: unknown): value is Json =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
 
 const encoder = new TextEncoder()
 const byteLength = (name: string) => encoder.encode(name).length
-
-interface Located {
-  pointer: string
-  element: Json
-}
-
-interface ObjectFile {
-  path: string
-  raw: Json
-  def: KindDefinition
-  /**
-   * Вихід схеми виду, коли файл її проходить: стандартні колонки, ключі
-   * регістра й похідні функції реєстр рахує з розібраних даних. Немає —
-   * файл зламаний, і доповнення працює без цих знань (запису все одно не
-   * буде: компіляція результату дасть помилку).
-   */
-  data?: unknown
-}
-
-/** Елементи масиву-поля, що є об'єктами, з їхніми pointer. */
-function elementsAt(owner: Json, field: string, base = ""): Located[] {
-  const value = owner[field]
-  if (!Array.isArray(value)) return []
-  return value.flatMap((element: unknown, index) =>
-    isRecord(element) ? [{ pointer: `${base}/${field}/${index}`, element }] : []
-  )
-}
-
-/** Табличні частини — лише у виду, якому реєстр їх дозволяє. */
-function sectionsOf(file: ObjectFile): Located[] {
-  return file.def.tabularSectionColumns === undefined
-    ? []
-    : elementsAt(file.raw, "tabularSections")
-}
-
-/** Елементи з мітками замість колонок: значення й предвизначені елементи. */
-function labelGroupsOf(file: ObjectFile): Located[][] {
-  const fields = [
-    ...(file.def.valueElements ? ["values"] : []),
-    ...(file.def.namedElementFields ?? []),
-  ]
-  return fields.map((field) => elementsAt(file.raw, field))
-}
-
-/**
- * Кожен іменований елемент файлу (спека П2 §3) — за полями реєстру видів, а
- * не за переліком видів: новий вид приходить зі своїм записом.
- */
-function namedElementsOf(file: ObjectFile): Located[] {
-  return [
-    { pointer: "", element: file.raw },
-    ...file.def.columnFields.flatMap((field) => elementsAt(file.raw, field)),
-    ...sectionsOf(file).flatMap((section) => [
-      section,
-      ...elementsAt(section.element, "attributes", section.pointer),
-    ]),
-    ...labelGroupsOf(file).flat(),
-  ]
-}
-
-function parseJson(text: string): Json | undefined {
-  try {
-    const value: unknown = JSON.parse(text)
-    return isRecord(value) ? value : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * Файли об'єктів, які доповнення розуміє: шлях `<тека виду>/<Ім'я>/<Ім'я>.meta.json`,
- * JSON-об'єкт і `kind` виду теки. Решту (зламаний JSON, чужий вид) лишаємо
- * як є — причину назве компіляція результату.
- */
-function readObjectFiles(files: ReadonlyMap<string, string>): ObjectFile[] {
-  const result: ObjectFile[] = []
-  for (const path of [...files.keys()].sort(compareStrings)) {
-    const segments = path.split("/")
-    if (segments.length !== 3 || !segments[2]!.endsWith(META_SUFFIX)) continue
-    const def = kindByDir(segments[0]!)
-    const raw = parseJson(files.get(path)!)
-    if (def === undefined || raw === undefined || raw.kind !== def.kind) {
-      continue
-    }
-    const parsed = def.schema.safeParse(raw)
-    result.push({
-      path,
-      raw,
-      def,
-      ...(parsed.success ? { data: parsed.data } : {}),
-    })
-  }
-  return result
-}
 
 /** Поля, які доповнювач призначає раз: фізичне ім'я елемента й мітка виду. */
 type AssignedField = "physicalName" | "kindLabel"

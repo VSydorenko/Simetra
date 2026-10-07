@@ -28,6 +28,7 @@ export const COMPILER_RULES = [
   "identity.kind-label-missing",
   "identity.kind-label-not-allowed",
   "identity.kind-label-duplicate",
+  "identity.assigned-once-changed",
   "identity.name-duplicate",
   "identity.name-case",
   "identity.name-reserved",
