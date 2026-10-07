@@ -1290,4 +1290,88 @@ describe("stage 3: physical snapshot", () => {
       "physical.duplicate-column"
     )
   })
+
+  describe("unique ignoreCase and uniqueWithin", () => {
+    const code = (extra: Record<string, unknown> = {}) =>
+      attribute("code2", { type: "String", length: 20, unique: true, ...extra })
+
+    it("ignoreCase unique is a unique index on lower(column) after the scope carrier", async () => {
+      const physical = await compileWith({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        "catalogs/Item/Item.meta.json": catalog("Item", {
+          scope: "org",
+          attributes: [code({ unique: "ignoreCase" })],
+        }),
+      })
+      const item = tableOf(physical, "item")
+      expect(item.uniques.map((u) => u.columns)).not.toContainEqual([
+        "org_id",
+        "code2",
+      ])
+      expect(item.indexes).toContainEqual({
+        name: "item_org_id_lower_idx",
+        unique: true,
+        method: "btree",
+        keys: [{ column: "org_id" }, { expression: "lower(code2)" }],
+        include: [],
+        nullsNotDistinct: false,
+      })
+    })
+
+    it("uniqueWithin owner keys by the owner column, a polymorphic owner by the pair", async () => {
+      const physical = await compileWith({
+        "catalogs/A/A.meta.json": catalog("A"),
+        "catalogs/B/B.meta.json": catalog("B"),
+        "catalogs/Single/Single.meta.json": catalog("Single", {
+          owners: [{ kind: "Catalog", name: "A" }],
+          attributes: [code({ uniqueWithin: "owner" })],
+        }),
+        "catalogs/Many/Many.meta.json": catalog("Many", {
+          owners: [
+            { kind: "Catalog", name: "A" },
+            { kind: "Catalog", name: "B" },
+          ],
+          attributes: [code({ uniqueWithin: "owner" })],
+        }),
+      })
+      expect(
+        tableOf(physical, "single").uniques.map((u) => u.columns)
+      ).toContainEqual(["owner_id", "code2"])
+      expect(
+        tableOf(physical, "many").uniques.map((u) => u.columns)
+      ).toContainEqual(["owner_type", "owner_id", "code2"])
+    })
+
+    it("uniqueWithin parent is NULLS NOT DISTINCT", async () => {
+      const physical = await compileWith({
+        "catalogs/Node/Node.meta.json": catalog("Node", {
+          hierarchyType: "ItemsOnly",
+          attributes: [code({ uniqueWithin: "parent" })],
+        }),
+      })
+      expect(tableOf(physical, "node").uniques).toContainEqual(
+        expect.objectContaining({
+          columns: ["parent_id", "code2"],
+          nullsNotDistinct: true,
+        })
+      )
+    })
+
+    it("ignoreCase combined with uniqueWithin parent is a NULLS NOT DISTINCT expression index", async () => {
+      const physical = await compileWith({
+        "catalogs/Node/Node.meta.json": catalog("Node", {
+          hierarchyType: "ItemsOnly",
+          attributes: [code({ unique: "ignoreCase", uniqueWithin: "parent" })],
+        }),
+      })
+      expect(tableOf(physical, "node").indexes).toContainEqual(
+        expect.objectContaining({
+          unique: true,
+          keys: [{ column: "parent_id" }, { expression: "lower(code2)" }],
+          nullsNotDistinct: true,
+        })
+      )
+    })
+  })
 })

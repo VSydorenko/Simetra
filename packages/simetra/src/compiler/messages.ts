@@ -61,6 +61,23 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) => `Only Ref type accepts ${p.field}`,
     uk: (p) => `Лише тип Ref приймає ${p.field}`,
   },
+  "type.unique-ignore-case-type": {
+    en: () => 'unique "ignoreCase" applies only to a scalar String or Text',
+    uk: () =>
+      'unique "ignoreCase" застосовується лише до скалярних String і Text',
+    hint: {
+      en: "Use unique: true for other types, or change the type.",
+      uk: "Для інших типів вжийте unique: true або змініть тип.",
+    },
+  },
+  "attribute.unique-within-requires-unique": {
+    en: () => "uniqueWithin requires unique",
+    uk: () => "uniqueWithin вимагає unique",
+    hint: {
+      en: 'Set unique to true or "ignoreCase", or remove uniqueWithin.',
+      uk: 'Задайте unique: true чи "ignoreCase" або приберіть uniqueWithin.',
+    },
+  },
   "register.balance-control-type": {
     en: () => "balanceControl is allowed only on a Balance register",
     uk: () => "balanceControl дозволений лише для регістра залишків (Balance)",
@@ -658,6 +675,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The pair stores a uuid key, so only a Catalog, a Document or a CustomTable with a single uuid primary key fits. Enumeration values are text labels and cannot share the uuid column of a polymorphic pair; use a separate attribute.",
       uk: "Пара зберігає ключ uuid, тож підходить лише Catalog, Document або CustomTable з єдиним первинним ключем uuid. Значення переліку — текстові мітки й не можуть ділити колонку uuid поліморфної пари; використайте окремий реквізит.",
+    },
+  },
+  "attribute.unique-within-place": {
+    en: (p) =>
+      `${p.kind} "${p.name}" has no standard ${p.within} for uniqueWithin`,
+    uk: (p) =>
+      `${p.kind} "${p.name}" не має стандартного реквізиту ${p.within} для uniqueWithin`,
+    hint: {
+      en: "owner needs catalog owners, parent needs a hierarchy.",
+      uk: "owner потребує власників довідника, parent — ієрархії.",
     },
   },
   "catalog.owner-kind": {

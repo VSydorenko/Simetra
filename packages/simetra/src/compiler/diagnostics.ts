@@ -61,6 +61,7 @@ export const COMPILER_RULES = [
   "reference.default-to-table",
   "reference.default-unknown-value",
   "reference.polymorphic-target-kind",
+  "attribute.unique-within-place",
   "catalog.owner-kind",
   "register.recorder-kind",
   "posting.register-kind",

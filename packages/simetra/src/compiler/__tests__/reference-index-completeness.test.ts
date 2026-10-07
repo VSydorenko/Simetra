@@ -52,6 +52,11 @@ const NOT_REFERENCES: { matches: (path: Path) => boolean; reason: string }[] = [
       "`external` (корінь виду скоупу, FK прийнятої таблиці) називає колонки таблиці поза метаданими: модель їх не перейменовує",
   },
   {
+    matches: (path) => path.at(-1) === "uniqueWithin",
+    reason:
+      "`uniqueWithin` називає стандартний реквізит довідника (owner чи parent), а не елемент метаданих; фікстура має колонку з іменем `owner`, тож збіг тут неминучий",
+  },
+  {
     matches: (path) => path.at(-1) === "comment",
     reason:
       "`comment` прийнятої таблиці й колонки — вільний текст `COMMENT ON`, як title/description",

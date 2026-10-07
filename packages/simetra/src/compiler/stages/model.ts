@@ -21,6 +21,7 @@ import {
   standardLogicalName,
   truncatedPeriodExpression,
   type Attribute,
+  type CatalogAttribute,
   type AttributeCase,
   type CustomTable,
   type CustomTableColumn,
@@ -142,10 +143,17 @@ interface Field {
   primaryKey: boolean
   indexed: boolean
   unique: boolean
+  /** Унікальність без регістру: індекс по `lower(колонка)`, а не UNIQUE. */
+  uniqueIgnoreCase?: boolean
+  /**
+   * Колонки власника чи батька (`uniqueWithin` реквізиту) між скоуп-колонкою
+   * й колонкою поля в ключі унікальності.
+   */
+  uniqueWithin?: { columns: string[]; nullsNotDistinct: boolean }
   /** Умова часткового унікального індексу (див. StandardColumnDef). */
   partialUnique?: string
   /** Скоуп-колонка, що передує колонці в UNIQUE: унікальність у межах скоупу. */
-  uniqueWithin?: string
+  uniqueCarrier?: string
   /** Скоуп-колонка, з якої починається пошуковий індекс поля. */
   indexWithin?: string
   target: Target
@@ -357,13 +365,15 @@ class SnapshotBuilder {
     // Колонкові поля й їхній порядок дає реєстр: у регістра — виміри,
     // ресурси, реквізити, у решти видів — лише реквізити.
     for (const field of def.columnFields) {
-      const list = data[field] as Attribute[]
+      // Лише довідник має `uniqueWithin` у схемі; в інших видів поле порожнє.
+      const list = data[field] as CatalogAttribute[]
       list.forEach((attribute, index) => {
         const built = this.attributeField(
           attribute,
           `/${field}/${index}`,
           scope,
-          def.requiredOnPost === true
+          def.requiredOnPost === true,
+          withinColumnsOf(standard, attribute)
         )
         if (def.requiredOnPost === true && attribute.required) {
           requiredHeader.push(built)
@@ -830,7 +840,7 @@ class SnapshotBuilder {
       ...(column.partialUnique !== undefined
         ? { partialUnique: column.partialUnique }
         : {}),
-      ...uniqueWithin(
+      ...uniqueCarrier(
         column.unique === true || column.partialUnique !== undefined,
         scope
       ),
@@ -936,9 +946,12 @@ class SnapshotBuilder {
     attribute: ColumnElement,
     pointer: string,
     scope: TableScope | undefined,
-    requiredOnPost = false
+    requiredOnPost = false,
+    uniqueWithinColumns?: string[]
   ): Field {
     const resolved = this.resolveValue(attribute, scope)
+    const unique =
+      attribute.unique === true || attribute.unique === "ignoreCase"
     return {
       name: attribute.physicalName!,
       ...resolved,
@@ -958,8 +971,20 @@ class SnapshotBuilder {
       ),
       primaryKey: false,
       indexed: attribute.indexed === true,
-      unique: attribute.unique === true,
-      ...uniqueWithin(attribute.unique === true, scope),
+      unique: unique,
+      ...(attribute.unique === "ignoreCase" ? { uniqueIgnoreCase: true } : {}),
+      ...(unique && uniqueWithinColumns !== undefined
+        ? {
+            uniqueWithin: {
+              columns: uniqueWithinColumns,
+              // Верх ієрархії — `parent IS NULL`: без NULLS NOT DISTINCT
+              // два елементи верхнього рівня з тим самим значенням
+              // пройшли б повз унікальність.
+              nullsNotDistinct: attribute.uniqueWithin === "parent",
+            },
+          }
+        : {}),
+      ...uniqueCarrier(unique, scope),
       ...indexWithin(scope),
       onDelete: "noAction",
       origin: { elementId: attribute.id ?? "" },
@@ -1394,14 +1419,19 @@ function indexWithin(scope: TableScope | undefined): { indexWithin?: string } {
  */
 type ColumnElement = ValueType &
   Pick<Attribute, "id" | "name" | "physicalName"> &
-  Partial<Pick<Attribute, "required" | "indexed" | "unique" | "defaultValue">>
+  Partial<
+    Pick<
+      CatalogAttribute,
+      "required" | "indexed" | "unique" | "uniqueWithin" | "defaultValue"
+    >
+  >
 
-function uniqueWithin(
+function uniqueCarrier(
   unique: boolean,
   scope: TableScope | undefined
-): { uniqueWithin?: string } {
+): { uniqueCarrier?: string } {
   return unique && scope?.partitioned === true && scope.carrier !== undefined
-    ? { uniqueWithin: scope.carrier }
+    ? { uniqueCarrier: scope.carrier }
     : {}
 }
 
@@ -1499,6 +1529,24 @@ export function keyColumnOf(object: ParsedObject): string | undefined {
 }
 
 /**
+ * Колонки власника чи батька для `uniqueWithin` реквізиту — зі стандартних
+ * колонок виду (поліморфний власник — пара `_type` + `_id`). Місце перевіряє
+ * стадія 4, тож відсутня колонка — не помилка цієї стадії.
+ */
+function withinColumnsOf(
+  standard: readonly StandardColumnDef[],
+  attribute: { uniqueWithin?: "owner" | "parent" }
+): string[] | undefined {
+  const column = standard.find(
+    (candidate) => candidate.logicalName === attribute.uniqueWithin
+  )
+  if (column === undefined) return undefined
+  return column.polymorphic !== undefined
+    ? [`${column.physicalName}_type`, `${column.physicalName}_id`]
+    : [column.physicalName]
+}
+
+/**
  * Розкладає поле на колонки та їхні обмеження. Повертає імена доданих
  * колонок: поліморфне поле дає пару `<ім'я>_type` + `<ім'я>_id` (спека §5).
  */
@@ -1574,13 +1622,28 @@ function addField(table: PendingTable, field: Field): string[] {
 
   if (field.primaryKey) table.primaryKey = { columns: names }
   if (field.unique) {
-    table.uniques.push({
-      columns:
-        field.uniqueWithin !== undefined
-          ? [field.uniqueWithin, ...names]
-          : names,
-      nullsNotDistinct: false,
-    })
+    // Ключ: носій скоупу, колонки власника чи батька, колонка поля.
+    const lead = [
+      ...(field.uniqueCarrier !== undefined ? [field.uniqueCarrier] : []),
+      ...(field.uniqueWithin?.columns ?? []),
+    ]
+    const nullsNotDistinct = field.uniqueWithin?.nullsNotDistinct === true
+    if (field.uniqueIgnoreCase === true) {
+      // `lower()` — вираз, який UNIQUE-обмеження не тримає, тож це унікальний
+      // індекс (без регістру лише скалярний String/Text — одна колонка).
+      table.indexes.push({
+        unique: true,
+        method: "btree",
+        keys: [
+          ...lead.map((column) => ({ column })),
+          { expression: `lower(${quoteIdent(names[0]!)})` },
+        ],
+        include: [],
+        nullsNotDistinct,
+      })
+    } else {
+      table.uniques.push({ columns: [...lead, ...names], nullsNotDistinct })
+    }
   }
   if (field.partialUnique !== undefined) {
     // Частковий унікальний індекс: UNIQUE-обмеження умови не має. Скоуп-колонка
@@ -1588,8 +1651,8 @@ function addField(table: PendingTable, field: Field): string[] {
     table.indexes.push({
       unique: true,
       method: "btree",
-      keys: (field.uniqueWithin !== undefined
-        ? [field.uniqueWithin, ...names]
+      keys: (field.uniqueCarrier !== undefined
+        ? [field.uniqueCarrier, ...names]
         : names
       ).map((column) => ({ column })),
       include: [],
@@ -1956,7 +2019,9 @@ function byName(a: { name: string }, b: { name: string }): number {
 function indexColumnNames(index: Omit<Index, "name">): string[] {
   const result: string[] = []
   const all = [
-    ...index.keys.flatMap((key) => ("column" in key ? [key.column] : [])),
+    ...index.keys.map((key) =>
+      "column" in key ? key.column : expressionColumnName(key.expression)
+    ),
     ...index.include,
   ]
   for (const original of all) {
@@ -1967,6 +2032,16 @@ function indexColumnNames(index: Omit<Index, "name">): string[] {
     result.push(candidate)
   }
   return result
+}
+
+/**
+ * Ім'я колонки-виразу в `ChooseIndexColumnNames` (`FigureIndexColname`): виклик
+ * функції називається іменем функції, решта — `expr`. Безіменний індекс з
+ * виразом у `CustomTable` стадія 4 відхиляє, тож сюди доходять лише вирази,
+ * які будує сам компілятор (`lower(...)`).
+ */
+function expressionColumnName(expression: string): string {
+  return /^([a-z_][a-z0-9_]*)\(/.exec(expression)?.[1] ?? "expr"
 }
 
 /**

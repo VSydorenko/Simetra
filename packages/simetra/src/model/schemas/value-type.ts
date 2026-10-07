@@ -303,6 +303,49 @@ function refineObjectDefault(
 }
 
 /**
+ * Перевірки унікальності реквізиту: порівняння без регістру має сенс лише для
+ * скалярного рядка, а звуження `uniqueWithin` — лише для вже унікального
+ * реквізиту. Місце (власник чи батько об'єкта) перевіряє стадія 4: схема не
+ * знає виду об'єкта.
+ */
+export function refineUnique(
+  value: ValueType & { unique?: boolean | "ignoreCase" },
+  ctx: z.RefinementCtx
+): void {
+  if (
+    value.unique === "ignoreCase" &&
+    (value.array === true || (value.type !== "String" && value.type !== "Text"))
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: 'unique "ignoreCase" applies only to a scalar String or Text',
+      path: ["unique"],
+      params: { rule: "type.unique-ignore-case-type" satisfies SchemaRule },
+    })
+  }
+}
+
+/** `uniqueWithin` звужує вже наявну унікальність, тож без `unique` безглуздий. */
+export function refineUniqueWithin(
+  value: { unique?: boolean | "ignoreCase"; uniqueWithin?: "owner" | "parent" },
+  ctx: z.RefinementCtx
+): void {
+  if (
+    value.uniqueWithin !== undefined &&
+    (value.unique === undefined || value.unique === false)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "uniqueWithin requires unique",
+      path: ["uniqueWithin"],
+      params: {
+        rule: "attribute.unique-within-requires-unique" satisfies SchemaRule,
+      },
+    })
+  }
+}
+
+/**
  * Перевірки сумісності параметрів типу; кожне порушення несе код правила.
  * Типове значення перевіряється тут же — для реквізиту й константи одним
  * шляхом.

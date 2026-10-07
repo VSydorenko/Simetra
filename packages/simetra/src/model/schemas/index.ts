@@ -6,7 +6,12 @@ export {
   type MetadataKind,
 } from "./metadata-kind"
 export { metadataRefSchema, type MetadataRef } from "./metadata-ref"
-export { attributeSchema, type Attribute } from "./attribute"
+export {
+  attributeSchema,
+  catalogAttributeSchema,
+  type Attribute,
+  type CatalogAttribute,
+} from "./attribute"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export {
   objectHeaderShape,

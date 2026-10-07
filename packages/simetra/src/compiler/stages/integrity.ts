@@ -193,6 +193,7 @@ export function checkIntegrity(
 
   diagnostics.push(...checkDefaultValues(references, byId))
   diagnostics.push(...checkStandardOverrides(objects, style))
+  diagnostics.push(...checkUniqueWithinPlace(objects))
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
 
@@ -426,6 +427,41 @@ function checkStandardOverrides(
           rowColumns,
           ["tabularSections", index],
           section.name
+        )
+      })
+    }
+  }
+  return found
+}
+
+/**
+ * `uniqueWithin` звужує унікальність до власника чи батька, тож діє лише на
+ * власні реквізити об'єкта, чий вид з налаштуваннями має відповідний
+ * стандартний реквізит (факт реєстру, а не ім'я виду). Де властивості місця
+ * немає взагалі (ТЧ, документ, регістр), її не приймає схема.
+ */
+function checkUniqueWithinPlace(
+  objects: readonly ParsedObject[]
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  type WithWithin = { uniqueWithin?: "owner" | "parent" }
+  for (const object of objects) {
+    const def = KIND_REGISTRY[object.kind]
+    const data = object.data as Record<string, unknown>
+    const standard = new Set(
+      def.standardColumns(object.data).map((column) => column.logicalName)
+    )
+    for (const field of def.columnFields) {
+      ;((data[field] ?? []) as WithWithin[]).forEach((attribute, index) => {
+        const within = attribute.uniqueWithin
+        if (within === undefined || standard.has(within)) return
+        found.push(
+          diagnostic(
+            "attribute.unique-within-place",
+            object.file,
+            `/${field}/${index}/uniqueWithin`,
+            { kind: object.kind, name: object.name, within }
+          )
         )
       })
     }

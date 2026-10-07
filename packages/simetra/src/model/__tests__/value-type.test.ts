@@ -5,7 +5,7 @@ import {
   valueTypeShape,
   refineValueType,
 } from "../schemas/value-type"
-import { attributeSchema } from "../schemas/attribute"
+import { attributeSchema, catalogAttributeSchema } from "../schemas/attribute"
 import { constantSchema } from "../schemas/constant"
 
 const schema = z.object(valueTypeShape).superRefine(refineValueType)
@@ -256,5 +256,59 @@ describe("default value (spec §5)", () => {
     expect(issues({ type: "Json", defaultValue: "{}" })).toEqual([
       "type.default-not-allowed",
     ])
+  })
+})
+
+describe("attribute uniqueness", () => {
+  const issues = (input: Record<string, unknown>) =>
+    (
+      attributeSchema.safeParse({ name: "a", ...input }).error?.issues ?? []
+    ).map((i) => (i as { params?: { rule?: string } }).params?.rule)
+
+  it("ignoreCase is only for a scalar String or Text", () => {
+    expect(issues({ type: "String", length: 5, unique: "ignoreCase" })).toEqual(
+      []
+    )
+    expect(issues({ type: "Text", unique: "ignoreCase" })).toEqual([])
+    expect(issues({ type: "Integer", unique: "ignoreCase" })).toEqual([
+      "type.unique-ignore-case-type",
+    ])
+    expect(
+      issues({ type: "String", length: 5, array: true, unique: "ignoreCase" })
+    ).toEqual(["type.unique-ignore-case-type"])
+    expect(issues({ type: "Integer", unique: true })).toEqual([])
+  })
+
+  it("uniqueWithin requires unique and exists only on catalog attributes", () => {
+    const own = (input: Record<string, unknown>) =>
+      (
+        catalogAttributeSchema.safeParse({ name: "a", ...input }).error
+          ?.issues ?? []
+      ).map((i) => (i as { params?: { rule?: string } }).params?.rule)
+    expect(
+      own({ type: "Integer", unique: true, uniqueWithin: "owner" })
+    ).toEqual([])
+    expect(own({ type: "Integer", uniqueWithin: "parent" })).toEqual([
+      "attribute.unique-within-requires-unique",
+    ])
+    expect(
+      own({ type: "Integer", unique: false, uniqueWithin: "parent" })
+    ).toEqual(["attribute.unique-within-requires-unique"])
+    expect(
+      catalogAttributeSchema.safeParse({
+        name: "a",
+        type: "Integer",
+        unique: true,
+        uniqueWithin: "x",
+      }).success
+    ).toBe(false)
+    expect(
+      attributeSchema.safeParse({
+        name: "a",
+        type: "Integer",
+        unique: true,
+        uniqueWithin: "owner",
+      }).success
+    ).toBe(false)
   })
 })

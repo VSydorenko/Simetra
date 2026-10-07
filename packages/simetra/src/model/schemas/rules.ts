@@ -24,6 +24,8 @@ export const SCHEMA_RULES = [
   "type.default-invalid",
   "type.default-fill-mismatch",
   "type.default-empty-mismatch",
+  "type.unique-ignore-case-type",
+  "attribute.unique-within-requires-unique",
   "posting.parse",
 ] as const
 

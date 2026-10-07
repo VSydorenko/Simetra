@@ -312,6 +312,8 @@ describe("CustomTable physics round-trip", () => {
     // різниця знімка. Далі в реквізити й константи фікстури додано об'єктні
     // форми типового значення (`fill`, `empty`) — нові колонки й таблиці
     // констант, а наявні таблиці лишилися тими самими.
+    // Далі в довідник `Item` додано реквізити з `unique: "ignoreCase"` і
+    // `uniqueWithin` — нові колонки, ключ і індекс лише його таблиці.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -322,7 +324,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "ba43f038da6a896a3c242cdf7a4c333e7655db00f4ef1342a693e8af78d22b51"
+      "133230c04b3c601cf8b2fe20694d34296f7aac0e2ef838c3e96dd1bc4431118c"
     )
   })
 })

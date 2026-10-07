@@ -346,8 +346,16 @@
           },
           "unique": {
             "default": false,
-            "description": "Whether values must be unique.",
-            "type": "boolean"
+            "description": "Whether values must be unique; \"ignoreCase\" compares a scalar String or Text value case-insensitively.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "const": "ignoreCase"
+              }
+            ]
           },
           "defaultValue": {
             "description": "Default value of the attribute.",
@@ -672,8 +680,16 @@
           },
           "unique": {
             "default": false,
-            "description": "Whether values must be unique.",
-            "type": "boolean"
+            "description": "Whether values must be unique; \"ignoreCase\" compares a scalar String or Text value case-insensitively.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "const": "ignoreCase"
+              }
+            ]
           },
           "defaultValue": {
             "description": "Default value of the attribute.",

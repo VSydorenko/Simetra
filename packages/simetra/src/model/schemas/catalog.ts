@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
-import { attributeSchema } from "./attribute"
+import { catalogAttributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
 import {
   metadataIdSchema,
@@ -92,7 +92,7 @@ export const catalogSchema = z.strictObject({
   standardAttributeOverrides: standardAttributeOverridesSchema,
 
   attributes: z
-    .array(attributeSchema)
+    .array(catalogAttributeSchema)
     .default([])
     .meta({ description: "Custom attributes of the catalog." }),
   tabularSections: z

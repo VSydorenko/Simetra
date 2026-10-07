@@ -1044,4 +1044,71 @@ describe("stage 4: integrity", () => {
       expect(result.diagnostics).toEqual([])
     })
   })
+
+  describe("attribute.unique-within-place", () => {
+    const code = (uniqueWithin: string) =>
+      attribute("code2", {
+        type: "String",
+        length: 20,
+        unique: true,
+        uniqueWithin,
+      })
+
+    it("tabular section, document and register attributes do not accept uniqueWithin", async () => {
+      const result = await compileWith({
+        "catalogs/A/A.meta.json": catalog("A", {
+          tabularSections: [
+            {
+              id: uuid(740),
+              name: "lines",
+              physicalName: "lines",
+              attributes: [code("parent")],
+            },
+          ],
+        }),
+        "documents/D/D.meta.json": document("D", {
+          attributes: [code("parent")],
+        }),
+      })
+      expect(
+        result.diagnostics.map((d) => [d.code, d.file, d.pointer])
+      ).toEqual([
+        [
+          "file.unknown-key",
+          "catalogs/A/A.meta.json",
+          "/tabularSections/0/attributes/0/uniqueWithin",
+        ],
+        [
+          "file.unknown-key",
+          "documents/D/D.meta.json",
+          "/attributes/0/uniqueWithin",
+        ],
+      ])
+    })
+
+    it("is an error for owner on a catalog without owners and parent without hierarchy", async () => {
+      const result = await compileWith({
+        "catalogs/A/A.meta.json": catalog("A", {
+          attributes: [code("owner")],
+        }),
+        "catalogs/B/B.meta.json": catalog("B", {
+          attributes: [code("parent")],
+        }),
+      })
+      expect(
+        result.diagnostics.map((d) => [d.code, d.file, d.pointer])
+      ).toEqual([
+        [
+          "attribute.unique-within-place",
+          "catalogs/A/A.meta.json",
+          "/attributes/0/uniqueWithin",
+        ],
+        [
+          "attribute.unique-within-place",
+          "catalogs/B/B.meta.json",
+          "/attributes/0/uniqueWithin",
+        ],
+      ])
+    })
+  })
 })

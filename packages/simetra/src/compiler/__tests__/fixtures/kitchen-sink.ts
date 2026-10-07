@@ -186,7 +186,32 @@ export function kitchenSink(): Map<string, string> {
       },
     ],
     standardAttributeOverrides: overrides("code"),
-    attributes: attributes("item"),
+    attributes: [
+      ...attributes("item"),
+      // Унікальність без регістру й у межах батька чи власника.
+      {
+        id: id(),
+        name: "itemSlug",
+        physicalName: "item_slug",
+        title: text("itemSlug"),
+        description: text("itemSlug"),
+        type: "String",
+        length: 40,
+        unique: "ignoreCase",
+        uniqueWithin: "parent",
+      },
+      {
+        id: id(),
+        name: "itemSerial",
+        physicalName: "item_serial",
+        title: text("itemSerial"),
+        description: text("itemSerial"),
+        type: "String",
+        length: 40,
+        unique: true,
+        uniqueWithin: "owner",
+      },
+    ],
     tabularSections: [
       {
         id: id(),

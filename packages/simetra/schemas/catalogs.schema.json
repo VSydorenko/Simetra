@@ -422,8 +422,16 @@
           },
           "unique": {
             "default": false,
-            "description": "Whether values must be unique.",
-            "type": "boolean"
+            "description": "Whether values must be unique; \"ignoreCase\" compares a scalar String or Text value case-insensitively.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "const": "ignoreCase"
+              }
+            ]
           },
           "defaultValue": {
             "description": "Default value of the attribute.",
@@ -480,6 +488,14 @@
                 ],
                 "additionalProperties": false
               }
+            ]
+          },
+          "uniqueWithin": {
+            "description": "Narrows uniqueness to the owner or the parent of the object (needs unique; own attributes of an object whose kind has that standard attribute).",
+            "type": "string",
+            "enum": [
+              "owner",
+              "parent"
             ]
           }
         },
@@ -748,8 +764,16 @@
                 },
                 "unique": {
                   "default": false,
-                  "description": "Whether values must be unique.",
-                  "type": "boolean"
+                  "description": "Whether values must be unique; \"ignoreCase\" compares a scalar String or Text value case-insensitively.",
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "string",
+                      "const": "ignoreCase"
+                    }
+                  ]
                 },
                 "defaultValue": {
                   "description": "Default value of the attribute.",
