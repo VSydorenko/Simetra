@@ -182,8 +182,10 @@ describe("class fixtures survive the round trip", () => {
     it(fixture.name, async () => {
       const scope = scopeOf(fixture.schemas)
       await inTarget(fixture.sql, scope, async (target) => {
+        // Схема за замовчуванням — завжди в межі (§6.9), тож це перша
+        // керована схема фікстури, а не вшита `app`
         const result = await roundTripOf(target, scope, {
-          defaultSchema: "app",
+          defaultSchema: fixture.schemas[0]!,
           attributeCase: "snake_case",
           databaseProvider: "supabase",
         })

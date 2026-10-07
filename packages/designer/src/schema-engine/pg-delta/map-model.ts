@@ -15,6 +15,7 @@ import { mapEnumType, mapTable, type MappingIssue } from "./map-tables"
 import {
   classifyUnit,
   revokedDefaultStatements,
+  revokedPresetStatements,
   unitStatements,
   type AclDefaults,
   type ProducedBy,
@@ -120,9 +121,12 @@ export function mapModel(
       const enumType = mapEnumType(fact, issues)
       if (enumType !== undefined) enumTypes.push(enumType)
       unit(fact, revokedDefaultStatements(view, fact.id, defaults))
-    } else if (id.kind === "typeAttribute" || id.kind === "schema") {
-      // Атрибут складеного типу вже названо діагностикою самого типу; схема
-      // в моделі неявна — її створює рендер зі схем об'єктів
+    } else if (id.kind === "schema") {
+      // Схема в моделі неявна — її створює рендер зі схем об'єктів; одиниці
+      // дає лише відкликане з пресету провайдера
+      unit(fact, revokedPresetStatements(view, id))
+    } else if (id.kind === "typeAttribute") {
+      // Атрибут складеного типу вже названо діагностикою самого типу
     } else if (id.kind === "role" || id.kind === "membership") {
       // Роль і членство — інфраструктура кластера, як ролі провайдера (спека
       // §6.9: межа керує грантами й типовими привілеями, а не ролями). Роль

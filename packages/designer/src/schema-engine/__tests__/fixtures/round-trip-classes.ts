@@ -588,6 +588,45 @@ export const CLASS_FIXTURES: ClassFixture[] = [
     ],
   },
   {
+    // Ціль — тінь, засіяна пресетом провайдера, тож відкликання `PUBLIC` —
+    // саме відмінність від пресету, яку видно лише з боку пресету
+    name: "public schema ACL differs from the provider preset",
+    schemas: ["public"],
+    sql: `
+      REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+      GRANT CREATE ON SCHEMA public TO authenticated;
+      CREATE TABLE public.memo (id uuid PRIMARY KEY);
+    `,
+    // Грантор залежить від сесії, тож порівнюємо отримувача й привілеї
+    property: (shape) =>
+      shape.acls
+        .find((a) => a.object === "n:public")
+        ?.acl.map((item) => item.split("/")[0]),
+    expected: [
+      "anon=U",
+      "authenticated=UC",
+      "pg_database_owner=UC",
+      "postgres=U",
+      "service_role=U",
+    ],
+  },
+  {
+    // Змішана пара (бракує `USAGE`, зайвий `CREATE`): один `GRANT` її не виражає
+    name: "a preset grantee with one privilege swapped for another",
+    schemas: ["public"],
+    sql: `
+      REVOKE USAGE ON SCHEMA public FROM anon;
+      GRANT CREATE ON SCHEMA public TO anon;
+      CREATE TABLE public.memo (id uuid PRIMARY KEY);
+    `,
+    property: (shape) =>
+      shape.acls
+        .find((a) => a.object === "n:public")
+        ?.acl.map((item) => item.split("/")[0])
+        .filter((item) => item.startsWith("anon=")),
+    expected: ["anon=C"],
+  },
+  {
     name: "PUBLIC execute revoked by a global ADP beside a schema ADP",
     schemas: ["app"],
     sql: `

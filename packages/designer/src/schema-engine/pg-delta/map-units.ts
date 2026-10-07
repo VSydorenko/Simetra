@@ -9,6 +9,7 @@ import {
 } from "@supabase/pg-delta"
 import { readSqlUnits, type SqlParser } from "simetra/compiler"
 import { quoteIdent, type CatalogUnit } from "simetra/model"
+import { SUPABASE_PUBLIC_SCHEMA_GRANTS } from "simetra/schema"
 import { unknownKeys, type MappingIssue } from "./map-tables"
 
 /**
@@ -183,6 +184,17 @@ function defaultsFor(target: StableId, defaults: AclDefaults): DefaultEntry[] {
   )
 }
 
+/**
+ * Гранти схеми з пресету провайдера: базовий стан `public` дає провайдер, і
+ * тінь засіяна саме ним, тож рівне пресету — не одиниця застосунку, а
+ * відмінність від нього — явна одиниця (спека промоції §9.9).
+ */
+function presetGrants(schema: StableId): typeof SUPABASE_PUBLIC_SCHEMA_GRANTS {
+  return schema.kind === "schema" && schema.name === "public"
+    ? SUPABASE_PUBLIC_SCHEMA_GRANTS
+    : []
+}
+
 /** Права, які пара (об'єкт, отримувач) має без жодного `GRANT`. */
 function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
   const id = fact.id as Extract<StableId, { kind: "acl" }>
@@ -195,6 +207,7 @@ function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
   )
   const builtin =
     id.grantee === "PUBLIC" ? PUBLIC_DEFAULT[id.target.kind] : undefined
+  const preset = presetGrants(id.target).find((g) => g.grantee === id.grantee)
   // Об'єднання, а не вибір: ADP схеми лише додає права, а для рядка схеми
   // двигун синтезує порожній маркер `PUBLIC`, який відкликання не означає —
   // «або-або» губило б вбудований `EXECUTE`/`USAGE` і явний `REVOKE … FROM PUBLIC`
@@ -203,6 +216,7 @@ function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
       ...new Set([
         ...(builtin === undefined ? [] : [builtin]),
         ...(adp?.privileges ?? []),
+        ...(preset?.privileges ?? []),
       ]),
     ],
     grantable: adp?.grantable ?? [],
@@ -219,17 +233,19 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((x) => b.includes(x))
 
 /**
- * Оператор ACL-пари з payload: дія двигуна для неї цілі не має. Пара, рівна
- * правам свіжого об'єкта (власник, `PUBLIC`, ADP схеми), — не одиниця
- * (рішення за спайком, 8, і рішення архітектора про ADP); відкликане з них —
- * `REVOKE`; решта — `GRANT` усіх прав пари. Розбіжність опції, якої один
- * оператор не виражає, — `engine.unrepresentable`. Порожній рядок — одиниці немає.
+ * Оператори ACL-пари з payload: дія двигуна для неї цілі не має. Пара, рівна
+ * правам свіжого об'єкта (власник, `PUBLIC`, ADP схеми, пресет провайдера), —
+ * не одиниця (рішення за спайком, 8, і рішення архітектора про ADP);
+ * відкликане з них — `REVOKE`; зайве — `GRANT` усіх прав пари; пара, якій і
+ * бракує очікуваного, і є зайве, — обидва: один `GRANT` відкликаного не
+ * виражає й мовчки зберіг би його. Розбіжність опції, якої оператори не
+ * виражають, — `engine.unrepresentable`. Порожній масив — одиниці немає.
  */
 function aclStatement(
   fact: Fact,
   defaults: AclDefaults,
   issues: MappingIssue[]
-): string {
+): string[] {
   unknownKeys(fact, issues)
   const id = fact.id as Extract<StableId, { kind: "acl" }>
   const target = grantTarget(id.target)
@@ -239,7 +255,7 @@ function aclStatement(
       property: "target",
       detail: `privileges on ${id.target.kind} have no GRANT form`,
     })
-    return ""
+    return []
   }
   const privileges = strings(fact.payload.privileges)
   const grantable = strings(fact.payload.grantable)
@@ -248,12 +264,13 @@ function aclStatement(
     sameSet(privileges, expected.privileges) &&
     sameSet(grantable, expected.grantable)
   )
-    return ""
+    return []
   const column = id.column === undefined ? "" : ` (${quoteIdent(id.column)})`
   const list = (privs: readonly string[]) =>
     privs.map((p) => `${p}${column}`).join(", ")
   const extra = privileges.filter((p) => !expected.privileges.includes(p))
   const missing = expected.privileges.filter((p) => !privileges.includes(p))
+  const revoke = `REVOKE ${list(missing)} ON ${target} FROM ${grantee(id.grantee)}`
   if (extra.length === 0 && missing.length > 0) {
     // `REVOKE` прибирає привілеї разом з опцією; розбіжність опції на тих, що
     // лишилися, — другий оператор на пару, тож гучно, а не тихо
@@ -266,9 +283,9 @@ function aclStatement(
         property: "grantable",
         detail: `grant option on ${grantable.join(",") || "nothing"} differs from the default ${keptGrantable.join(",") || "nothing"} besides revoked ${missing.join(",")}`,
       })
-      return ""
+      return []
     }
-    return `REVOKE ${list(missing)} ON ${target} FROM ${grantee(id.grantee)}`
+    return [revoke]
   }
   // `GRANT` опцію не відкликає: опція, вужча за типову на наявних правах,
   // потребує `REVOKE GRANT OPTION FOR` — другого оператора на пару
@@ -281,7 +298,7 @@ function aclStatement(
       property: "grantable",
       detail: `grant option on ${narrowed.join(",")} is revoked from the default, which GRANT cannot express`,
     })
-    return ""
+    return []
   }
   // Ідентичність гранту опцію не несе, а частковий `WITH GRANT OPTION` — це
   // два оператори на одну пару
@@ -291,9 +308,14 @@ function aclStatement(
       property: "grantable",
       detail: `grant option on ${grantable.join(",")} only of ${privileges.join(",")}`,
     })
-    return ""
+    return []
   }
-  return `GRANT ${list(privileges)} ON ${target} TO ${grantee(id.grantee)}${grantable.length > 0 ? " WITH GRANT OPTION" : ""}`
+  // Відкликання раніше за грант на тому самому об'єкті дає граф створення
+  // компілятора, а не порядок тут
+  return [
+    ...(missing.length > 0 ? [revoke] : []),
+    `GRANT ${list(privileges)} ON ${target} TO ${grantee(id.grantee)}${grantable.length > 0 ? " WITH GRANT OPTION" : ""}`,
+  ]
 }
 
 /**
@@ -319,6 +341,30 @@ export function revokedDefaultStatements(
     .map(
       (e) =>
         `REVOKE ${e.privileges.join(", ")} ON ${target} FROM ${grantee(e.grantee)}`
+    )
+}
+
+/**
+ * Отримувач пресету, якого в ACL схеми немає зовсім, ACL-факту теж не має.
+ * Для видів, чий `acldefault` містить `PUBLIC` (функції, типи), відкликаний
+ * `PUBLIC` двигун позначає порожнім маркером; для схем — ні (`acldefault('n')`
+ * без `PUBLIC`), тож відкликання видно лише з боку пресету.
+ */
+export function revokedPresetStatements(
+  view: FactBase,
+  schema: StableId
+): string[] {
+  const target = grantTarget(schema)
+  if (target === undefined) return []
+  return presetGrants(schema)
+    .filter(
+      (g) =>
+        view.get({ kind: "acl", target: schema, grantee: g.grantee }) ===
+        undefined
+    )
+    .map(
+      (g) =>
+        `REVOKE ${g.privileges.join(", ")} ON ${target} FROM ${grantee(g.grantee)}`
     )
 }
 
@@ -418,7 +464,7 @@ export function unitStatements(
         })
       return [String(fact.payload.def)]
     case "acl":
-      return [aclStatement(fact, defaults, issues)]
+      return aclStatement(fact, defaults, issues)
     case "sequence": {
       // Текст послідовності — з дії двигуна, а `OWNED BY` — окрема дія без
       // цілі, тож її форму звіряємо з payload тут
