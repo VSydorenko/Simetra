@@ -19,6 +19,12 @@ export const catalogSchema = z.strictObject({
   kind: z
     .literal("Catalog")
     .meta({ description: "Metadata kind; always Catalog." }),
+  // Мітка виду — дискримінатор поліморфних пар і ідентифікатор об'єкта в
+  // контракті прав; призначається раз, тож перейменування її не змінює.
+  kindLabel: physicalNameSchema.optional().meta({
+    description:
+      "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+  }),
 
   // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
   codeLength: z.number().int().nonnegative().default(9).meta({

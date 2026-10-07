@@ -122,6 +122,7 @@ export const catalogKind: KindDefinition = {
   rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
+  kindLabel: true,
   columnFields: ["attributes"],
   valueElements: false,
   namedElementFields: ["predefinedItems"],

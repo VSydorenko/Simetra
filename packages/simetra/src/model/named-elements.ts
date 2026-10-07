@@ -26,3 +26,33 @@ export function namedCollections(
   }
   return result
 }
+
+/**
+ * Поле, що призначається раз і далі не змінюється (спека промоції). Ефективне
+ * значення — властивість запису, а не гілка в коді, що порівнює: без
+ * `effective` береться значення поля як є.
+ */
+export interface AssignedOnceField {
+  on: "object" | "element"
+  field: "physicalName" | "kindLabel" | "schema"
+  effective?: (
+    raw: Readonly<Record<string, unknown>>,
+    ctx: { defaultSchema: string; materializes: boolean }
+  ) => string | undefined
+}
+
+export const ASSIGNED_ONCE: readonly AssignedOnceField[] = [
+  { on: "object", field: "physicalName" },
+  { on: "object", field: "kindLabel" },
+  {
+    // PG-схема має значення лише для видів, що матеріалізуються; явна `schema`
+    // й успадкований `defaultSchema` дають те саме ефективне значення.
+    on: "object",
+    field: "schema",
+    effective: (raw, ctx) =>
+      ctx.materializes
+        ? ((raw.schema as string | undefined) ?? ctx.defaultSchema)
+        : undefined,
+  },
+  { on: "element", field: "physicalName" },
+]

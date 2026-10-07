@@ -1,13 +1,20 @@
+import type { CustomTable } from "../schemas/custom-table"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import { accumulationRegisterKind } from "./accumulation-register"
 import { catalogKind } from "./catalog"
 import { constantKind } from "./constant"
-import { customTableKind } from "./custom-table"
+import {
+  customTableKind,
+  isUuidColumn,
+  singleUuidKeyColumn,
+} from "./custom-table"
 import { documentKind } from "./document"
 import { enumerationKind } from "./enumeration"
 import { informationRegisterKind } from "./information-register"
 import { pgEnumKind } from "./pg-enum"
 import type { KindDefinition } from "./standard"
+
+export { isUuidColumn, singleUuidKeyColumn }
 
 export {
   monthColumn,
@@ -58,4 +65,20 @@ const POST_ACTION = "post"
  */
 export function postsMovements(kind: MetadataKind): boolean {
   return KIND_REGISTRY[kind].actions.includes(POST_ACTION)
+}
+
+/**
+ * Чи очікується в об'єкта мітка виду: вид її має (факт реєстру), а прийнята
+ * таблиця — лише з єдиним uuid-ключем, бо без нього на неї не посилається
+ * жодна `Ref`-пара й мітці нема що розрізняти.
+ */
+export function expectsKindLabel(kind: MetadataKind, data: unknown): boolean {
+  const def = KIND_REGISTRY[kind]
+  if (def.kindLabel !== true) return false
+  if (!def.declared) return true
+  const table = data as Partial<CustomTable>
+  return (
+    Array.isArray(table.columns) &&
+    singleUuidKeyColumn(table as CustomTable) !== undefined
+  )
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import type { z } from "zod"
 import {
   projectSchema,
   catalogSchema,
@@ -14,6 +15,8 @@ import {
   metadataKindSchema,
   METADATA_KINDS,
 } from "../schemas"
+import { KIND_REGISTRY } from "../kinds/registry"
+import { unwrap } from "../format"
 
 const ID = "3f2b8a52-6d1e-4c0a-9b7e-5a1c2d3e4f50"
 
@@ -677,5 +680,21 @@ describe("strict metadata schemas", () => {
         })
       )
     ).toEqual([["balanceControl", ["strict"]]])
+  })
+})
+
+describe("kindLabel", () => {
+  it("is a field of Catalog, Document and CustomTable only", () => {
+    // `unwrap`: схема виду може бути обгорнута (`superRefine`)
+    for (const kind of ["Catalog", "Document", "CustomTable"] as const)
+      expect(
+        Object.keys((unwrap(KIND_REGISTRY[kind].schema) as z.ZodObject).shape)
+      ).toContain("kindLabel")
+    for (const kind of METADATA_KINDS.filter(
+      (k) => KIND_REGISTRY[k].kindLabel !== true
+    ))
+      expect(
+        Object.keys((unwrap(KIND_REGISTRY[kind].schema) as z.ZodObject).shape)
+      ).not.toContain("kindLabel")
   })
 })

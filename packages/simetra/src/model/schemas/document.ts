@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { attributeSchema } from "./attribute"
 import { tabularSectionSchema } from "./tabular-section"
+import { physicalNameSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import { parseExpression } from "../posting"
 import {
@@ -83,6 +84,12 @@ export const documentSchema = z.strictObject({
   kind: z
     .literal("Document")
     .meta({ description: "Metadata kind; always Document." }),
+  // Мітка виду — дискримінатор поліморфних пар і ідентифікатор об'єкта в
+  // контракті прав; призначається раз, тож перейменування її не змінює.
+  kindLabel: physicalNameSchema.optional().meta({
+    description:
+      "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+  }),
 
   numberLength: z
     .number()

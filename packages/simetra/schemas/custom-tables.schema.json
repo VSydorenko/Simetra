@@ -65,6 +65,11 @@
       "const": "CustomTable",
       "description": "Metadata kind; always CustomTable."
     },
+    "kindLabel": {
+      "description": "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+      "type": "string",
+      "minLength": 1
+    },
     "comment": {
       "description": "Comment on the table.",
       "type": "string"

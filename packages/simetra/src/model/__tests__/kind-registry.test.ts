@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import { z } from "zod"
 import {
   KIND_REGISTRY,
+  expectsKindLabel,
   kindByDir,
   postsMovements,
   standardLogicalName,
@@ -745,5 +746,26 @@ describe("numbering spec", () => {
       codeLength: 0,
     })
     expect(KIND_REGISTRY.Catalog.numbering?.(cat)).toBeUndefined()
+  })
+})
+
+describe("expectsKindLabel", () => {
+  it("catalog and document always, custom table only with a single uuid key", () => {
+    expect(expectsKindLabel("Catalog", {})).toBe(true)
+    expect(expectsKindLabel("InformationRegister", {})).toBe(false)
+    const id = { name: "id", type: "UUID" }
+    expect(
+      expectsKindLabel("CustomTable", {
+        columns: [id],
+        primaryKey: { columns: ["id"] },
+      })
+    ).toBe(true)
+    expect(expectsKindLabel("CustomTable", { columns: [id] })).toBe(false)
+    expect(
+      expectsKindLabel("CustomTable", {
+        columns: [{ name: "id", type: "Integer" }],
+        primaryKey: { columns: ["id"] },
+      })
+    ).toBe(false)
   })
 })

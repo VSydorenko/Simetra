@@ -128,6 +128,7 @@ export const documentKind: KindDefinition = {
   rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
+  kindLabel: true,
   requiredOnPost: true,
   columnFields: ["attributes"],
   valueElements: false,

@@ -96,6 +96,28 @@ function elementReferences(obj: unknown): FoundElementReference[] {
   return found
 }
 
+/** Скалярна колонка типу uuid: логічного `UUID` або `Raw` з `pgType` uuid. */
+export function isUuidColumn(column: CustomTable["columns"][number]): boolean {
+  return (
+    column.array !== true &&
+    (column.type === "UUID" ||
+      (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid"))
+  )
+}
+
+/**
+ * Колонка єдиного PK прийнятої таблиці, якщо вона скалярна uuid. Не залежить
+ * від `physicalName`, тож придатна й до призначення фізичних імен.
+ */
+export function singleUuidKeyColumn(
+  table: CustomTable
+): CustomTable["columns"][number] | undefined {
+  const key = table.primaryKey?.columns
+  if (key?.length !== 1) return undefined
+  const column = table.columns.find((c) => c.name === key[0])
+  return column !== undefined && isUuidColumn(column) ? column : undefined
+}
+
 /**
  * Прийнята таблиця описана повністю фізично: нічого похідного, тож
  * стандартних колонок немає (спека §4).
@@ -112,6 +134,7 @@ export const customTableKind: KindDefinition = {
   materializes: "table",
   scope: "required",
   declared: true,
+  kindLabel: true,
   columnFields: ["columns"],
   valueElements: false,
   standardColumns: () => [],

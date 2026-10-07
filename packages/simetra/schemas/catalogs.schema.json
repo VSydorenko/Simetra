@@ -65,6 +65,11 @@
       "const": "Catalog",
       "description": "Metadata kind; always Catalog."
     },
+    "kindLabel": {
+      "description": "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+      "type": "string",
+      "minLength": 1
+    },
     "codeLength": {
       "default": 9,
       "description": "Length of the code attribute; 0 means the catalog has no code.",

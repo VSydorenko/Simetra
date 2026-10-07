@@ -8,4 +8,8 @@ export {
   isRecordKeyAt,
   PROJECT_KEY_ORDER,
 } from "./format"
-export { namedCollections } from "./named-elements"
+export {
+  ASSIGNED_ONCE,
+  namedCollections,
+  type AssignedOnceField,
+} from "./named-elements"

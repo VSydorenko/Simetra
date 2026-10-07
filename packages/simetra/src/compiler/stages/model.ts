@@ -34,6 +34,7 @@ import {
   type Project,
   type RegisterKeySpec,
   type ScopeKind,
+  singleUuidKeyColumn,
   type StandardColumnDef,
   type TabularSection,
   type ValueType,
@@ -1432,12 +1433,7 @@ export function keyColumnOf(object: ParsedObject): string | undefined {
   const data = object.data as Element
   if (isDeclaredTable(object)) {
     const table = data as unknown as CustomTable
-    const key = table.primaryKey?.columns
-    if (key?.length !== 1) return undefined
-    const column = table.columns.find((c) => c.name === key[0])
-    return column !== undefined && isUuidColumn(column)
-      ? column.physicalName
-      : undefined
+    return singleUuidKeyColumn(table)?.physicalName
   }
   const keys = def
     .standardColumns(data)
@@ -1449,15 +1445,6 @@ export function keyColumnOf(object: ParsedObject): string | undefined {
     key.type.type === "UUID"
     ? key.physicalName
     : undefined
-}
-
-/** Скалярна колонка типу uuid: логічного `UUID` або `Raw` з `pgType` uuid. */
-export function isUuidColumn(column: CustomTable["columns"][number]): boolean {
-  return (
-    column.array !== true &&
-    (column.type === "UUID" ||
-      (column.type === "Raw" && column.pgType?.toLowerCase() === "uuid"))
-  )
 }
 
 /**

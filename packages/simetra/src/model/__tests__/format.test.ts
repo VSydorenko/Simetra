@@ -41,6 +41,25 @@ describe("formatMetaFile", () => {
     ])
   })
 
+  it("puts kindLabel right after physicalName", () => {
+    const out = formatMetaFile({
+      kindLabel: "item_kind",
+      title: { en: "Items" },
+      physicalName: "item",
+      name: "Item",
+      kind: "Catalog",
+      id: ID,
+    })
+    expect(Object.keys(JSON.parse(out))).toEqual([
+      "id",
+      "kind",
+      "name",
+      "physicalName",
+      "kindLabel",
+      "title",
+    ])
+  })
+
   it("unknown keys keep input order after known ones", () => {
     const out = formatMetaFile({
       zeta: 1,

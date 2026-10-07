@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  isUuidColumn,
   postsMovements,
   isSqlReservedWord,
   parseExpression,
@@ -43,12 +44,7 @@ import {
   standardElementId,
   type ResolvedReference,
 } from "./identity"
-import {
-  isDeclaredTable,
-  isUuidColumn,
-  keyColumnOf,
-  type ModelStageResult,
-} from "./model"
+import { isDeclaredTable, keyColumnOf, type ModelStageResult } from "./model"
 
 /** NAMEDATALEN Postgres мінус завершальний нуль: довше ім'я БД мовчки обріже. */
 const MAX_IDENT_BYTES = 63
