@@ -135,9 +135,15 @@ These hold for T0 and for every tier that reads metadata:
   named element — object, attribute, tabular section, enumeration value,
   `CustomTable` column — carries a UUID `id` that is never reused. References
   in files use the logical name, `{ kind, name }`; the compiler resolves them
-  to ids. `physicalName` is assigned once at creation and never changes, so a
-  rename emits no DDL. The style of logical attribute names is the project's
-  `naming.attributeCase`. Never build a mechanism on the name as identity.
+  to ids. `physicalName` is assigned once at creation, so a rename emits no
+  DDL; the one documented exception is promotion of an adopted table into a
+  kind, which re-assigns the promoted object's physical names and records it
+  in the ledger. Labels assigned once and never changed, not even by
+  promotion: enumeration value labels, predefined-item labels and the
+  object's kind label — the kind label, not a table name, discriminates
+  polymorphic pairs and identifies the object in the rights contract. The
+  style of logical attribute names is the project's `naming.attributeCase`.
+  Never build a mechanism on the name as identity.
 
 ## Behavioural principles
 
