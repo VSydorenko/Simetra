@@ -31,8 +31,8 @@ Supabase (Postgres 17).
 
 **Поза планом:** глобальні типові привілеї ролі (поза межею, §6.9 — їх не
 читаємо і не пишемо); ADP провайдера в `public` (лишаються явними
-одиницями); пресет у конфігурації проєкту замість TS-констант (див. «Відома
-розбіжність»); датований план E2b не правиться.
+одиницями); реєстр пресетів за ключем провайдера (з'явиться з другим
+провайдером, рішення 9); датований план E2b не правиться.
 
 ## Global Constraints
 
@@ -106,18 +106,24 @@ Supabase (Postgres 17).
    й так недоступне, а бажаний SQL уже впорядковано `creationOrder`; опція
    описує фактичну поведінку замість фільтра за текстом повідомлення.
    Тест доводить, що в каналі `frontend_warning` немає попередження про
-   пересортування (задача 4). Запасний шлях — лише описаний тут відкат, а не
+   пересортування (задача 5). Запасний шлях — лише описаний тут відкат, а не
    код: якщо з опцією падає будь-який DB-тест, що проходив без неї, —
    відкотити опцію, відфільтрувати рівно повідомлення
    `reorder assist unavailable` на межі адаптера (з тим самим тестом) і
    назвати це у звіті. Рішення прийняв архітектор спеки промоції 2026-10-07.
-
-## Відома розбіжність (не в обсязі, лише звіт)
-
-Платформна спека §6.9: «перелік … — пресет у конфігурації проєкту». Код:
-пресет — TS-константи, `engineScope` вшиває `provider: "supabase"`
-(`packages/simetra/src/schema/engine/desired.ts`). План цього не змінює;
-нові частини пресету кладуться поруч із наявними константами.
+9. **Провайдер бази — явний вибір у `project.meta.json`** (платформна спека
+   §6.9: «пресет у конфігурації проєкту»; аудит Codex назвав вшитий
+   `provider: "supabase"` блокером). Проєкт **вибирає** пресет ключем, **вміст**
+   пресету — код платформи (факти образу провайдера). Поле вкладене —
+   `database: { provider: "supabase" }`, бо спека користувачів вводить
+   окрему вісь провайдера ідентичності (Supabase + Better Auth — валідна
+   пара), і плоский `provider` був би неоднозначним. Поле **обов'язкове,
+   без дефолту Zod**: тихий дефолт сховав би рішення застосунку; усі
+   `project.meta.json` репо й фікстури оновлюються в тому самому коміті.
+   Дефолт `"supabase"` діє лише на межі інструмента `introspect` для нової
+   теки, а записаний файл несе поле явно. Реєстру пресетів за ключем немає
+   (один провайдер); він з'явиться з другим. Рішення ухвалив архітектор
+   спеки промоції 2026-10-07 за дорученням власника.
 
 ## Review Focus
 
@@ -127,9 +133,9 @@ Supabase (Postgres 17).
    execute beside schema ADP»).
 2. **Засів конфліктує із засівом припущених схем двигуна** (`extensions`
    уже засіяна з цілі разом із функціями розширень) — тест засіву на
-   цілі-стеку й на цілі-тіні (задача 4); конфлікт — стоп і звіт.
+   цілі-стеку й на цілі-тіні (задача 5); конфлікт — стоп і звіт.
 3. **Стек, де `public` дорівнює пресету, після засіву дає порожній план без
-   жодних одиниць на схему** — задача 5, оновлений тест `engine-scope`.
+   жодних одиниць на схему** — задача 6, оновлений тест `engine-scope`.
 4. **Наявний `physicalName` з суфіксом `_`** (`key_`) після зміни правила не
    перевиводиться й не дає діагностик — задача 1.
 5. **Табличний `REVOKE` і колонковий `GRANT` в одному сайдкарі** в обох
@@ -471,7 +477,108 @@ git commit -m "fix(designer): очікуваний PUBLIC — вбудоване
 
 ---
 
-### Task 4: Пресет провайдера — базовий стан `public` і розширень, засів тіні (Р-2, Р-5)
+### Task 4: Провайдер бази — явний вибір у `project.meta.json` (рішення 9)
+
+**Files:**
+- Modify: `packages/simetra/src/model/schemas/project.ts`, `packages/simetra/src/model/schemas/index.ts`
+- Modify: `packages/simetra/src/model/schemas/rules.ts` (код `project.database-required`)
+- Modify: `packages/simetra/src/compiler/messages.ts`; за потреби `packages/simetra/src/compiler/stages/files.ts`
+- Modify: `packages/simetra/src/schema/engine/port.ts`, `packages/simetra/src/schema/engine/desired.ts`
+- Modify: `packages/simetra/src/schema/reverse/generate.ts` (`ReverseOptions.project`, запис нового файлу проєкту)
+- Modify: `packages/designer/src/tools/database-tools.ts`, `packages/designer/src/cli/input.ts`
+- Modify: `examples/reference/metadata/project.meta.json`, `packages/simetra/schemas/project.schema.json` (генерується)
+- Modify: `packages/designer/skills/simetra-adoption/SKILL.md` (вхід `introspect` для нової теки)
+- Modify: `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` §6.9 — одне речення з іменем поля
+- Modify: кожен тестовий опис проєкту — `packages/simetra/src/compiler/__tests__/helpers.ts` (`project()`),
+  `packages/simetra/src/compiler/__tests__/fixtures/kitchen-sink.ts`,
+  `packages/simetra/src/schema/__tests__/fixtures/e1-fixtures.ts`,
+  `packages/designer/src/__tests__/helpers/catalog.ts` (`project()`), `round-trip.db.test.ts`
+  (опції `roundTripOf`) і решта, яку знайде `grep -rln "defaultSchema" packages/*/src packages/*/test`
+- Test: `packages/simetra/src/compiler/__tests__/stage-files.test.ts`,
+  `packages/simetra/src/schema/__tests__/engine-desired.test.ts`,
+  `packages/simetra/src/schema/__tests__/reverse-generate.test.ts`,
+  `packages/designer/src/__tests__/cli.test.ts`, `packages/designer/src/__tests__/database-tools.db.test.ts`
+
+**Interfaces:**
+- Produces (`simetra/model`): `DATABASE_PROVIDERS = ["supabase"] as const`;
+  `type DatabaseProvider = (typeof DATABASE_PROVIDERS)[number]`;
+  `projectSchema.database: z.strictObject({ provider: z.enum(DATABASE_PROVIDERS) })`
+  — обов'язкове, одразу після `defaultSchema` (порядок `PROJECT_KEY_ORDER`
+  виводиться зі схеми).
+- Produces (`simetra/schema`): `EngineScope.provider: DatabaseProvider`;
+  `engineScope(model)` бере `model.project.database.provider`;
+  `ReverseOptions.project.databaseProvider: DatabaseProvider` — новий
+  `project.meta.json` пише `database: { provider }`.
+- Produces (designer): вхід `introspect` — `project.database.provider`
+  (необов'язковий, `"supabase"` лише тут, для теки без проєкту); прапор CLI
+  `--database-provider` тим самим механізмом, що `--project-name` і
+  `--attribute-case`; у наявному проєкті межа береться з його файлу.
+- Діагностика: файл проєкту без `database` або без `database.provider` —
+  рівно одна помилка `project.database-required` (pointer `/database` або
+  `/database/provider`), en/uk/hint у `messages.ts`, без супутньої
+  `file.schema` на той самий pointer. Невідомий провайдер — звичайна
+  `file.schema` переліку.
+
+- [ ] **Step 1: Failing tests**
+
+`stage-files.test.ts`:
+
+```ts
+it("a project without a database provider is an error with its own code", async () => {
+  const { database: _omit, ...withoutDatabase } = project()
+  const result = await compileWith({ "project.meta.json": withoutDatabase })
+  expect(result.diagnostics.map((d) => [d.code, d.severity, d.pointer])).toEqual([
+    ["project.database-required", "error", "/database"],
+  ])
+})
+it("an unknown database provider is a schema error", async () => {
+  // project({ database: { provider: "mysql" } }) → один file.schema на /database/provider
+})
+```
+
+`engine-desired.test.ts`: `engineScope` повертає `provider` з
+`model.project.database.provider`. `reverse-generate.test.ts`: новий
+`project.meta.json` містить `"database": { "provider": "supabase" }`.
+`cli.test.ts`: `--database-provider supabase` потрапляє у вхід, невідоме
+значення — код 2. `database-tools.db.test.ts`: `introspect` у порожню теку
+без явного провайдера пише файл проєкту з `database.provider = "supabase"`.
+
+- [ ] **Step 2: Run — FAIL**
+
+Run: `pnpm --filter simetra test stage-files engine-desired reverse-generate`,
+`pnpm --filter @simetra/designer test cli`
+Expected: FAIL — поля немає.
+
+- [ ] **Step 3: Implement** за Interfaces. Механізм коду діагностики —
+наявний шлях `params.rule` → `SchemaRule`, якщо Zod 4 дає його для
+відсутнього поля; інакше — перевірка перед `zodDiagnostics` у
+`stages/files.ts`, яка прибирає дубль `file.schema`. Оновити хелпери й
+фікстури (`project()` повертає `database: { provider: "supabase" }`),
+приклад `examples/reference`, скіл споживача (одне речення про
+`--database-provider` / `project.database.provider` і дефолт для нової
+теки; приклади скіла перевіряє `skill-examples.test.ts`). Згенерувати схему:
+`UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`. У §6.9
+платформної спеки після «пресет у конфігурації проєкту» — «(поле
+`database.provider` файлу проєкту)»; текст правки до коміту — на перегляд
+власнику.
+
+- [ ] **Step 4: Run — PASS**
+
+Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`,
+`pnpm --filter @simetra/designer test:db database-tools`, `pnpm metadata:check`,
+`pnpm typecheck`
+Expected: PASS; `metadata:check` зелений на `examples/reference`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A packages/simetra packages/designer examples docs/superpowers/specs/2026-09-24-simetra-platform-design.md
+git commit -m "feat(model): провайдер бази — явний вибір у project.meta.json (§6.9)"
+```
+
+---
+
+### Task 5: Пресет провайдера — базовий стан `public` і розширень, засів тіні (Р-2, Р-5)
 
 **Files:**
 - Modify: `packages/simetra/src/schema/engine/provider/supabase.ts`
@@ -580,8 +687,8 @@ Expected: FAIL — немає експортів; у тіні `public` лише 
 Run: `pnpm --filter @simetra/designer test:db` і `pnpm --filter simetra test:db`
 Expected: PASS. Тест «managed public with declared provider grants plans
 nothing against the stack» на цьому кроці може змінити поведінку — його
-переписує задача 5; якщо він падає тут, позначити `it.todo` НЕ можна —
-виконати задачу 5 до коміту й комітити обидві разом. Запасний шлях
+переписує задача 6; якщо він падає тут, позначити `it.todo` НЕ можна —
+виконати задачу 6 до коміту й комітити обидві разом. Запасний шлях
 рішення 8 — лише за умовою, названою там.
 
 - [ ] **Step 7: Commit**
@@ -593,7 +700,7 @@ git commit -m "feat(schema): пресет провайдера — базови�
 
 ---
 
-### Task 5: Р-2 — ACL `public` цілі порівнюється з пресетом
+### Task 6: Р-2 — ACL `public` цілі порівнюється з пресетом
 
 **Files:**
 - Modify: `packages/designer/src/schema-engine/pg-delta/map-units.ts`
@@ -603,7 +710,7 @@ git commit -m "feat(schema): пресет провайдера — базови�
   `packages/designer/src/schema-engine/__tests__/engine-scope.db.test.ts`
 
 **Interfaces:**
-- Consumes: `SUPABASE_PUBLIC_SCHEMA_GRANTS` (задача 4); `grantTarget`, `aclStatement`.
+- Consumes: `SUPABASE_PUBLIC_SCHEMA_GRANTS` (задача 5); `grantTarget`, `aclStatement`.
 - Produces:
   - `aclStatement(fact, defaults, issues): string[]` (було `string`): пара, у
     якої є і зайві, і відсутні відносно очікуваного привілеї, дає два
@@ -664,7 +771,7 @@ git commit -m "feat(schema): пресет провайдера — базови�
 Друга фікстура — змішана пара (бракує `USAGE`, зайвий `CREATE`): один
 `GRANT` її не виражає.
 
-Ціль фікстур — тінь, засіяна пресетом (задача 4), тож відкликання
+Ціль фікстур — тінь, засіяна пресетом (задача 5), тож відкликання
 `PUBLIC` — саме відмінність від пресету.
 
 - [ ] **Step 2: Переписати тест `engine-scope`**
@@ -704,7 +811,7 @@ git commit -m "fix(designer): ACL схеми public звіряється з пр
 
 ---
 
-### Task 6: Документація й гейти
+### Task 7: Документація й гейти
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-02-simetra-designer-design.md` (§3.2, абзац «Тінь»)
