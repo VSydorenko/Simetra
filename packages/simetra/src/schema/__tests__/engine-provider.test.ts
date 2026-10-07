@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { SUPABASE_SCHEMAS } from "../engine/provider/supabase"
+import {
+  renderProviderSeed,
+  SUPABASE_BASE_EXTENSIONS,
+  SUPABASE_EXTENSIONS,
+  SUPABASE_SCHEMAS,
+} from "../engine/provider/supabase"
 import { UNMANAGED_SCHEMAS } from "../render/desired-state"
 
 /**
@@ -13,5 +18,21 @@ describe("provider preset matches the desired-state render", () => {
     for (const schema of UNMANAGED_SCHEMAS)
       if (schema !== "public")
         expect(SUPABASE_SCHEMAS, `render skips ${schema}`).toContain(schema)
+  })
+})
+
+describe("provider base state", () => {
+  it("base extensions are excluded from the boundary", () => {
+    for (const ext of SUPABASE_BASE_EXTENSIONS)
+      expect(SUPABASE_EXTENSIONS).toContain(ext.name)
+  })
+
+  it("provider seed grants the public preset and creates base extensions", () => {
+    expect(renderProviderSeed()).toBe(
+      "GRANT USAGE ON SCHEMA public TO PUBLIC, postgres, anon, authenticated, service_role;\n" +
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;\n" +
+        'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;\n' +
+        "CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA extensions;\n"
+    )
   })
 })

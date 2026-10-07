@@ -18,6 +18,7 @@ import pg from "pg"
 import { loadSqlParser, localize, type RuleCode } from "simetra/compiler"
 import {
   censusDiagnostics,
+  renderProviderSeed,
   unmodeledClasses,
   type CensusClass,
   type DbConnection,
@@ -400,13 +401,24 @@ async function planAndRun<T>(
   let plan: EnginePlan
   let diagnostics: EngineDiagnostic[]
   try {
+    // Засів провайдера — окремим файлом перед бажаним станом: двигун вантажить
+    // файли в порядку масиву, а засів припущених схем цілі йде ще раніше, тож
+    // `extensions` уже існує. Базовий стан — з пресету, а не з цілі (спека
+    // промоції §9.9): відмінність цілі від пресету має лишитися видимою.
+    // Пересортування вимкнене: без `@supabase/pg-topo` його й так немає, а
+    // бажаний стан уже впорядковано графом створення, тож опція описує
+    // фактичну поведінку замість попередження в каналі діагностик
     const result = await planSchemaFiles(
       targetPool,
       shadowPool,
-      [{ name: "desired.sql", sql: desiredSql }],
+      [
+        { name: "provider-seed.sql", sql: renderProviderSeed() },
+        { name: "desired.sql", sql: desiredSql },
+      ],
       {
         profile: scopeProfile(scope),
         seedAssumedSchemas: true,
+        reorderOnFailure: false,
         renames: "off",
         redactSecrets: REDACT_SECRETS,
         onWarning: (message) => warnings.push(message),

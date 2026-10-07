@@ -7,6 +7,8 @@
  * контрактний тест адаптера.
  */
 
+import { quoteIdent } from "simetra/model"
+
 /** Схеми, які створює й наповнює провайдер; застосунок має в них лише поверхню пресету. */
 export const SUPABASE_SCHEMAS: readonly string[] = [
   "_analytics",
@@ -34,10 +36,11 @@ export const SUPABASE_SCHEMAS: readonly string[] = [
 ]
 
 /**
- * Розширення базового стану: їх ставить провайдер, а не застосунок, тож межа
- * їх не створює й не видаляє. `plpgsql`, `pgcrypto` і `uuid-ossp` пресет
- * двигуна не виключає, але засіяна тінь їх не має: без виключення план
- * «ціль → тінь» видаляв би їх із цілі.
+ * Розширення, якими межа не керує: їх ставить провайдер, а не застосунок, тож
+ * межа їх не створює й не видаляє. Базові з них (`SUPABASE_BASE_EXTENSIONS`)
+ * тінь має із засіву провайдера, але виключення з межі лишається: керування
+ * ними в бажаному стані дало б застосунку право видалити розширення
+ * провайдера з цілі.
  */
 export const SUPABASE_EXTENSIONS: readonly string[] = [
   "pg_graphql",
@@ -49,6 +52,77 @@ export const SUPABASE_EXTENSIONS: readonly string[] = [
   "uuid-ossp",
   "wrappers",
 ]
+
+/**
+ * Гранти самої схеми `public` в образі провайдера (власник схеми — поза
+ * переліком: його права дає володіння). Тінь засівається цим пресетом, а не
+ * копією ACL цілі (спека промоції §9.9): інакше відмінність цілі від образу
+ * провайдера зникла б з обох боків порівняння. Привілеї — у верхньому
+ * регістрі, як у payload двигуна. Рівність образу локального стеку тримає
+ * контрактний тест `provider-preset.db.test.ts`.
+ */
+export const SUPABASE_PUBLIC_SCHEMA_GRANTS: readonly {
+  grantee: string
+  privileges: readonly string[]
+}[] = [
+  { grantee: "PUBLIC", privileges: ["USAGE"] },
+  { grantee: "postgres", privileges: ["USAGE"] },
+  { grantee: "anon", privileges: ["USAGE"] },
+  { grantee: "authenticated", privileges: ["USAGE"] },
+  { grantee: "service_role", privileges: ["USAGE"] },
+]
+
+/**
+ * Розширення базового стану, на які може посилатися бажаний стан (тіло
+ * функції з `extensions.gen_random_bytes`): без них у тіні перевірка тіл
+ * функцій скаржиться на відсутній об'єкт. `plpgsql` є в кожній базі з
+ * `template0`; `supabase_vault` у засів не входить.
+ */
+export const SUPABASE_BASE_EXTENSIONS: readonly {
+  name: string
+  schema: string
+}[] = [
+  { name: "pgcrypto", schema: "extensions" },
+  { name: "uuid-ossp", schema: "extensions" },
+  { name: "pg_stat_statements", schema: "extensions" },
+]
+
+const granteeSql = (role: string) =>
+  role === "PUBLIC" ? "PUBLIC" : quoteIdent(role)
+
+/**
+ * Засів тіні базовим станом провайдера: тінь створюється з `template0`, тож
+ * без засіву `public` має лише `USAGE` для `PUBLIC`, а базових розширень немає.
+ * Робоча база цей стан уже має, тож у `renderDesiredState` засіву немає —
+ * його подає лише адаптер тіні, окремим файлом перед бажаним станом.
+ */
+export function renderProviderSeed(): string {
+  // Один оператор на набір привілеїв: отримувачі з різними наборами не мають
+  // тихо отримати об'єднання
+  const byPrivileges = new Map<string, string[]>()
+  for (const g of SUPABASE_PUBLIC_SCHEMA_GRANTS) {
+    const key = g.privileges.join(", ")
+    byPrivileges.set(key, [
+      ...(byPrivileges.get(key) ?? []),
+      granteeSql(g.grantee),
+    ])
+  }
+  return [
+    ...[...byPrivileges].map(
+      ([privileges, grantees]) =>
+        `GRANT ${privileges} ON SCHEMA public TO ${grantees.join(", ")};`
+    ),
+    ...SUPABASE_BASE_EXTENSIONS.map(
+      (ext) =>
+        `CREATE EXTENSION IF NOT EXISTS ${quoteIdent(ext.name)} WITH SCHEMA ${quoteIdent(ext.schema)};`
+    ),
+  ]
+    .map(
+      (line) => `${line}
+`
+    )
+    .join("")
+}
 
 /** Тригери подій базового стану (LIKE-шаблони). */
 export const SUPABASE_EVENT_TRIGGERS: readonly string[] = [
