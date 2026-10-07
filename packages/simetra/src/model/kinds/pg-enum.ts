@@ -13,6 +13,7 @@ export const pgEnumKind: KindDefinition = {
   referenceable: false,
   writePattern: "none",
   actions: [],
+  sqlModule: "debt",
   materializes: "enumType",
   scope: "absent",
   declared: true,

@@ -6,6 +6,7 @@ import {
 } from "simetra/model"
 import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
+import { closedShellProblem } from "../sql/closed-forms"
 import type { SqlParser } from "../sql/parse"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
@@ -246,9 +247,10 @@ function volatilityProblem(fn: FunctionNode): string | undefined {
 }
 
 /**
- * Обробник підписки — функція без аргументів з `RETURNS trigger` (спека
- * промоції §9.3) будь-де в `.sql` проєкту; тригер на неї генерує П3. Як і
- * функція множини, підпис читається з дерева розбору, а не з тексту.
+ * Обробник підписки — функція без аргументів з `RETURNS trigger` у закритій
+ * оболонці (спека промоції §9.3–§9.4) будь-де в `.sql` проєкту; тригер на неї
+ * генерує П3. Як і функція множини, підпис читається з дерева розбору, а не з
+ * тексту.
  */
 function checkSubscriptionHandlers(
   objects: readonly ParsedObject[],
@@ -279,6 +281,24 @@ function checkSubscriptionHandlers(
           problem: handler,
         })
       )
+    } else {
+      // Обробник не буває боргом (спека промоції §9.4): оболонка перевіряється
+      // тут, хоч би де лежав файл, — у спільному `sql/` теж.
+      const tree = units.find(
+        (u) => u.identity === functionIdentity(schema, name, [])
+      )?.tree
+      const problem =
+        tree === undefined ? undefined : closedShellProblem(tree as Node)
+      if (problem !== undefined) {
+        found.push(
+          diagnostic(
+            "subscription.handler-not-closed",
+            object.file,
+            "/handler",
+            { function: fn, problem }
+          )
+        )
+      }
     }
   }
   return found

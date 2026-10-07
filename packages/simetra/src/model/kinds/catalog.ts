@@ -119,6 +119,7 @@ export const catalogKind: KindDefinition = {
   compositeIndexes: true,
   writePattern: "optimistic",
   actions: ["read", "create", "update", "markDeletion", "delete"],
+  sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
   scope: "required",

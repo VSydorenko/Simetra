@@ -15,6 +15,7 @@ import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
+import { checkSqlModules } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { loadSqlParser } from "./sql/parse"
 import {
@@ -60,7 +61,13 @@ export async function runStages(
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
-  const early = [...upstream, ...sql.diagnostics]
+  // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
+  // `ownerFile`, тож перевірка не чекає моделі стадії 3.
+  const early = [
+    ...upstream,
+    ...sql.diagnostics,
+    ...checkSqlModules(stage1.objects, sql.units),
+  ]
   if (
     hasErrors(early) ||
     stage1.project === undefined ||

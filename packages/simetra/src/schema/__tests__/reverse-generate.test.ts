@@ -128,14 +128,20 @@ const SNAKE_PROJECT = project({
   naming: { attributeCase: "snake_case" },
 })
 
-/** Тека з довідником `Currency` — файлом виду 1С, який генератор не чіпає. */
-function keptCatalog(sql?: string): Map<string, string> {
+const SUBSCRIPTION_FILE =
+  "event-subscriptions/CurrencyTouch/CurrencyTouch.meta.json"
+
+/**
+ * Тека з довідником `Currency` — файлом виду 1С, який генератор не чіпає;
+ * `extra` — інші збережені файли.
+ */
+function keptCatalog(extra: Record<string, unknown> = {}): Map<string, string> {
   return metaFiles({
     "project.meta.json": SNAKE_PROJECT,
     "catalogs/Currency/Currency.meta.json": catalog("Currency", {
       schema: "app",
     }),
-    ...(sql === undefined ? {} : { "catalogs/Currency/Currency.sql": sql }),
+    ...extra,
   })
 }
 
@@ -1000,9 +1006,24 @@ describe("reverseGenerate", () => {
   })
 
   it("a trigger function also called from a kept file is shared", async () => {
-    const kept = keptCatalog(
-      "CREATE TRIGGER currency_touch BEFORE UPDATE ON app.currency FOR EACH ROW EXECUTE FUNCTION app.touch();\n"
+    // Тригер довідника — підписка: модуль виду тригерів не приймає. Обробник
+    // лежить у `sql/app/` попередньої генерації, тож теку можна скомпілювати.
+    const touch = TOUCH.split("\n")[0]!.replace(
+      "LANGUAGE plpgsql",
+      "LANGUAGE plpgsql VOLATILE"
     )
+    const kept = keptCatalog({
+      [SUBSCRIPTION_FILE]: {
+        id: uuid(990_001),
+        kind: "EventSubscription",
+        name: "CurrencyTouch",
+        physicalName: "currency_touch",
+        sources: [{ kind: "Catalog", name: "Currency" }],
+        event: "beforeWrite",
+        handler: { schema: "app", name: "touch" },
+      },
+      "sql/app/touch.sql": `${touch}\n`,
+    })
     const compiled = await compile(kept)
     expect(compiled.diagnostics).toEqual([])
     const result = await reverseGenerate(
@@ -1012,7 +1033,7 @@ describe("reverseGenerate", () => {
           table("app", "note"),
         ],
         units: units(
-          `${TOUCH}\nCREATE TRIGGER currency_touch BEFORE UPDATE ON app.currency FOR EACH ROW EXECUTE FUNCTION app.touch();`
+          `${touch}\nCREATE TRIGGER note_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.touch();`
         ),
       }),
       options(kept)
@@ -1024,9 +1045,9 @@ describe("reverseGenerate", () => {
     expect(result.files.get("custom-tables/Note/Note.sql")).not.toContain(
       "CREATE FUNCTION"
     )
-    expect(
-      [...result.files.values()].filter((t) => t.includes("currency_touch"))
-    ).toEqual([kept.get("catalogs/Currency/Currency.sql")])
+    expect(result.files.get(SUBSCRIPTION_FILE)).toBe(
+      kept.get(SUBSCRIPTION_FILE)
+    )
   })
 
   it("settings and grants of an own trigger function follow it, an overload does not", async () => {

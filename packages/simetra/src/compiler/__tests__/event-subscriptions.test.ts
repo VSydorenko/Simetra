@@ -254,6 +254,37 @@ describe("EventSubscription", () => {
     ])
   })
 
+  it("a handler outside the closed shell is an error even in a shared file", async () => {
+    const found = async (sql: string) =>
+      (
+        await compile(metaFiles(entries({}, { [HANDLER_FILE]: sql })))
+      ).diagnostics.map((d) => [d.code, d.file, d.pointer, d.params?.problem])
+    expect(
+      await found(
+        "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+      )
+    ).toEqual([
+      [
+        "subscription.handler-not-closed",
+        SUBSCRIPTION,
+        "/handler",
+        "volatility",
+      ],
+    ])
+    expect(
+      await found(
+        "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER AS $$ BEGIN RETURN NEW; END $$;"
+      )
+    ).toEqual([
+      [
+        "subscription.handler-not-closed",
+        SUBSCRIPTION,
+        "/handler",
+        "searchPath",
+      ],
+    ])
+  })
+
   it("a subscription on an enumeration is an error", async () => {
     expect(
       await codes(

@@ -13,6 +13,7 @@ export const enumerationKind: KindDefinition = {
   referenceable: true,
   writePattern: "none",
   actions: [],
+  sqlModule: "closed",
   materializes: "none",
   scope: "noneOnly",
   declared: false,

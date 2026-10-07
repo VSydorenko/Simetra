@@ -78,6 +78,8 @@ interface Elsewhere {
   units: Set<string>
   /** Основні таблиці збережених об'єктів — цілі `MetadataRef` для FK. */
   targets: Map<string, TableNames>
+  /** Обробники збережених підписок (`schema.name`): їх кличе збережений файл. */
+  handlers: Set<string>
 }
 
 /**
@@ -93,6 +95,7 @@ async function describedElsewhere(
     relations: new Set(),
     units: new Set(),
     targets: new Map(),
+    handlers: new Set(),
   }
   if (
     ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
@@ -127,6 +130,8 @@ async function describedElsewhere(
   for (const unit of model.sqlUnits)
     if (unit.file === undefined || !isGeneratedPath(unit.file))
       found.units.add(unit.identity)
+  for (const { handler } of model.contracts.eventSubscriptions)
+    found.handlers.add(qualified(handler.schema, handler.name))
   return found
 }
 
@@ -405,13 +410,15 @@ export async function reverseGenerate(
     )
     generated.set(`${pathOf("PgEnum", name)}${META}`, JSON.stringify(data))
   }
-  // Виклики тригерної функції рахуються й серед одиниць збережених файлів:
-  // функція, яку кличе ще й тригер довідника, не належить одній таблиці.
+  // Виклики тригерної функції рахуються й серед одиниць збережених файлів і
+  // збережених підписок: функція, яку кличе ще й тригер чи підписка
+  // довідника, не належить одній таблиці.
   const laid = layoutUnits(model.units, {
     parse: o.parse,
     defaultSchema,
     sidecars,
     described: elsewhere.units,
+    handlers: elsewhere.handlers,
   })
   diagnostics.push(...laid.diagnostics)
   for (const [path, text] of laid.files) generated.set(path, text)

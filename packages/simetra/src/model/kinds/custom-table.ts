@@ -131,6 +131,7 @@ export const customTableKind: KindDefinition = {
   referenceable: true,
   writePattern: "optimistic",
   actions: ["read", "create", "update", "delete"],
+  sqlModule: "debt",
   materializes: "table",
   scope: "required",
   declared: true,

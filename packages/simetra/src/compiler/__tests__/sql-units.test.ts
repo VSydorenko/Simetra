@@ -661,7 +661,7 @@ describe("sql units", () => {
         "project.meta.json": project(),
         ...entries,
         "documents/Sale/Sale.sql":
-          "CREATE FUNCTION sale_total(p uuid) RETURNS numeric LANGUAGE sql AS $$ select 0 $$;\n" +
+          "CREATE FUNCTION sale_total(p uuid) RETURNS numeric LANGUAGE sql STABLE AS $$ select 0 $$;\n" +
           "-- @movements Stock\nSELECT now(), 'Expense', null::uuid, 1 ORDER BY 1\n-- @end\n",
       })
     )

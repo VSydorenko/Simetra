@@ -37,6 +37,7 @@ export const accumulationRegisterKind: KindDefinition = {
   referenceable: false,
   writePattern: "server",
   actions: ["read"],
+  sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
   scope: "required",

@@ -18,6 +18,11 @@ export interface UnitsContext {
    * рахуємо серед викликів тригерних функцій.
    */
   described: ReadonlySet<string>
+  /**
+   * Обробники збережених підписок (`schema.name`): тригер на них генерує П3,
+   * тож у базі виклику ще може не бути, але функцію вже кличе збережений файл.
+   */
+  handlers: ReadonlySet<string>
 }
 
 export interface UnitFiles {
@@ -215,6 +220,8 @@ export function layoutUnits(
   // Тригерна функція без аргументів, яку викликають тригери однієї таблиці.
   const ownFunctions = new Map<string, string>()
   for (const [fn, tables] of users) {
+    // Обробник підписки — виклик із збереженого файлу, як тригер довідника.
+    if (ctx.handlers.has(fn)) continue
     const [table] = tables
     const sidecar = table === undefined ? undefined : ctx.sidecars.get(table)
     if (tables.size === 1 && sidecar !== undefined)

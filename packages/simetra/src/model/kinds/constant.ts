@@ -49,6 +49,7 @@ export const constantKind: KindDefinition = {
   referenceable: false,
   writePattern: "server",
   actions: ["read", "update"],
+  sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
   scope: "required",

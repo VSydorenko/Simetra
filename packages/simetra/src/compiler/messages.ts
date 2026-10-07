@@ -21,6 +21,81 @@ const FIX_PHYSICAL_NAMES = {
   uk: "Виконайте simetra fix, щоб призначити фізичні імена.",
 }
 
+/**
+ * Властивість, що заміщує клас дослівного SQL у модулі виду 1С (спека
+ * промоції §9.4): підказка веде до рамки, а не до обходу через спільний файл.
+ */
+const KIND_MODULE_REPLACEMENT: Readonly<
+  Record<string, { en: string; uk: string }>
+> = {
+  trigger: {
+    en: "Declare an EventSubscription for the table's event and keep its handler as a function in the closed shell.",
+    uk: "Оголосіть EventSubscription на подію таблиці, а обробник залиште функцією в закритій оболонці.",
+  },
+  policy: {
+    en: "Row access is declared, not written: use publicRead on the object; access rights come with access kinds (P3).",
+    uk: "Доступ до рядків оголошується, а не пишеться: використайте publicRead об'єкта; права приходять із видами доступу (П3).",
+  },
+  grant: {
+    en: "Privileges on a kind's tables are derived from the kind.",
+    uk: "Привілеї на таблиці виду виводяться з виду.",
+  },
+  defaultPrivileges: {
+    en: "Privileges on a kind's tables are derived from the kind.",
+    uk: "Привілеї на таблиці виду виводяться з виду.",
+  },
+  comment: {
+    en: "Use the description of the object or its attribute.",
+    uk: "Використайте description об'єкта чи його реквізиту.",
+  },
+  view: {
+    en: "Read models are virtual tables or read RPC functions in the closed shell.",
+    uk: "Моделі читання — віртуальні таблиці або функції читання (RPC) у закритій оболонці.",
+  },
+  materializedView: {
+    en: "Read models are virtual tables or read RPC functions in the closed shell.",
+    uk: "Моделі читання — віртуальні таблиці або функції читання (RPC) у закритій оболонці.",
+  },
+  sequence: {
+    en: "Use the numbering of the kind (number or code).",
+    uk: "Використайте нумерацію виду (номер чи код).",
+  },
+  extension: {
+    en: "Extensions belong to the provider profile of the project.",
+    uk: "Розширення належать профілю провайдера проєкту.",
+  },
+  domain: {
+    en: "Use the logical types of attributes and their properties.",
+    uk: "Використайте логічні типи реквізитів та їхні властивості.",
+  },
+}
+const KIND_MODULE_GENERAL = {
+  en: "The .sql module of a kind object holds only closed forms: functions in the closed shell and movement query blocks. Describe the rest with metadata properties of the object.",
+  uk: "Модуль .sql об'єкта виду містить лише закриті форми: функції в закритій оболонці й блоки запиту рухів. Решту опишіть властивостями метаданих об'єкта.",
+}
+
+/** Тексти проблем закритої оболонки функції (`sql.closed-shell`). */
+const CLOSED_SHELL_PROBLEM: Readonly<
+  Record<string, { en: string; uk: string }>
+> = {
+  language: {
+    en: "its language is not sql or plpgsql",
+    uk: "її мова не sql і не plpgsql",
+  },
+  volatility: {
+    en: "its volatility is not explicit",
+    uk: "її волатильність не явна",
+  },
+  searchPath: {
+    en: "it is SECURITY DEFINER without SET search_path = ''",
+    uk: "вона SECURITY DEFINER без SET search_path = ''",
+  },
+}
+const CLOSED_SHELL_HINT = {
+  en: "A function in the closed shell is LANGUAGE sql or plpgsql, states IMMUTABLE, STABLE or VOLATILE, and a SECURITY DEFINER function sets search_path = '' and qualifies names with their schema.",
+  uk: "Функція в закритій оболонці — LANGUAGE sql чи plpgsql, явно вказує IMMUTABLE, STABLE чи VOLATILE, а функція SECURITY DEFINER задає search_path = '' і кваліфікує імена схемою.",
+}
+
 /** Каталог Postgres простору імен `sql.namespace-conflict`. */
 function catalogOf(space: string | number | undefined): string {
   return space === "proc" ? "pg_proc" : space === "rel" ? "pg_class" : "pg_type"
@@ -291,30 +366,38 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.statement-not-allowed": {
     en: (p) =>
-      p.detail === undefined || p.detail === "allInSchema"
-        ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
-        : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
+      p.detail === "kindModule"
+        ? `${p.statement} (${p.class}) at line ${p.line} is not allowed in the .sql module of a kind object`
+        : p.detail === undefined || p.detail === "allInSchema"
+          ? `${p.statement} at line ${p.line} is not allowed in a .sql file`
+          : `${p.statement} at line ${p.line} is not allowed in a .sql file: ${p.detail}`,
     uk: (p) =>
-      p.detail === undefined || p.detail === "allInSchema"
-        ? `${p.statement} у рядку ${p.line} не дозволений у файлі .sql`
-        : `${p.statement} у рядку ${p.line} не дозволений у файлі .sql: ${p.detail}`,
+      p.detail === "kindModule"
+        ? `${p.statement} (${p.class}) у рядку ${p.line} не дозволений у модулі .sql об'єкта виду`
+        : p.detail === undefined || p.detail === "allInSchema"
+          ? `${p.statement} у рядку ${p.line} не дозволений у файлі .sql`
+          : `${p.statement} у рядку ${p.line} не дозволений у файлі .sql: ${p.detail}`,
     hint: {
       en: (p) =>
-        p.detail === "allInSchema"
-          ? "Grant on each object: ON ALL … IN SCHEMA is a one-off action, not a catalog state."
-          : p.feature === "rowLevelSecurity"
-            ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
-            : p.feature === "publication"
-              ? "The provider creates publications; a .sql file manages only their membership: use ALTER PUBLICATION … ADD/DROP/SET TABLE."
-              : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publication membership (ALTER PUBLICATION), REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
+        p.detail === "kindModule"
+          ? (KIND_MODULE_REPLACEMENT[String(p.class)] ?? KIND_MODULE_GENERAL).en
+          : p.detail === "allInSchema"
+            ? "Grant on each object: ON ALL … IN SCHEMA is a one-off action, not a catalog state."
+            : p.feature === "rowLevelSecurity"
+              ? "Row-level security is a property of the table: set rowLevelSecurity on the table in metadata instead of ALTER TABLE."
+              : p.feature === "publication"
+                ? "The provider creates publications; a .sql file manages only their membership: use ALTER PUBLICATION … ADD/DROP/SET TABLE."
+                : ".sql files hold objects the model does not own: functions, procedures, aggregates, triggers, views, materialized views, policies, grants, default privileges, comments, extensions, sequences, domains, publication membership (ALTER PUBLICATION), REPLICA IDENTITY and function settings. Tables, indexes and enum types are metadata objects; DROP and data changes are not desired state.",
       uk: (p) =>
-        p.detail === "allInSchema"
-          ? "Надавайте гранти на кожен об'єкт: ON ALL … IN SCHEMA — разова дія, а не стан каталогу."
-          : p.feature === "rowLevelSecurity"
-            ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
-            : p.feature === "publication"
-              ? "Публікації створює провайдер; файл .sql керує лише членством у них: використайте ALTER PUBLICATION … ADD/DROP/SET TABLE."
-              : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, членство в публікаціях (ALTER PUBLICATION), REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
+        p.detail === "kindModule"
+          ? (KIND_MODULE_REPLACEMENT[String(p.class)] ?? KIND_MODULE_GENERAL).uk
+          : p.detail === "allInSchema"
+            ? "Надавайте гранти на кожен об'єкт: ON ALL … IN SCHEMA — разова дія, а не стан каталогу."
+            : p.feature === "rowLevelSecurity"
+              ? "Row-level security — властивість таблиці: задайте rowLevelSecurity на таблиці в метаданих замість ALTER TABLE."
+              : p.feature === "publication"
+                ? "Публікації створює провайдер; файл .sql керує лише членством у них: використайте ALTER PUBLICATION … ADD/DROP/SET TABLE."
+                : "Файли .sql містять об'єкти, якими модель не володіє: функції, процедури, агрегати, тригери, представлення, матеріалізовані представлення, політики, гранти, привілеї за замовчуванням, коментарі, розширення, послідовності, домени, членство в публікаціях (ALTER PUBLICATION), REPLICA IDENTITY і налаштування функцій. Таблиці, індекси й енам-типи — об'єкти метаданих; DROP і зміни даних не є бажаним станом.",
     },
   },
   "sql.unit-duplicate": {
@@ -334,6 +417,23 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Postgres keeps functions, procedures and aggregates in one catalog (pg_proc, by name and argument types); tables, views, materialized views, sequences and indexes in another (pg_class); enum types, domains and the row types of tables and views in a third (pg_type). Objects of different classes cannot share a name there: rename one of them or put it in another schema.",
       uk: "Postgres тримає функції, процедури й агрегати в одному каталозі (pg_proc, за іменем і типами аргументів); таблиці, представлення, матеріалізовані представлення, послідовності й індекси — в іншому (pg_class); енам-типи, домени й типи рядків таблиць і представлень — у третьому (pg_type). Об'єкти різних класів не можуть ділити там ім'я: перейменуйте один із них або перенесіть в іншу схему.",
+    },
+  },
+  "sql.closed-shell": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} is outside the closed shell: ${(CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { en: p.problem }).en}`,
+    uk: (p) =>
+      `Функція ${p.function} у рядку ${p.line} поза закритою оболонкою: ${(CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { uk: p.problem }).uk}`,
+    hint: CLOSED_SHELL_HINT,
+  },
+  "sql.function-overload": {
+    en: (p) =>
+      `${p.identity} at line ${p.line} overloads ${p.function}: a function of a kind module has one signature`,
+    uk: (p) =>
+      `${p.identity} у рядку ${p.line} перевантажує ${p.function}: функція модуля виду має одну сигнатуру`,
+    hint: {
+      en: "Give each function of a kind module its own name in the schema: an overload makes a call resolve by argument types, which the frame cannot check.",
+      uk: "Дайте кожній функції модуля виду власне ім'я в схемі: перевантаження робить виклик залежним від типів аргументів, чого рамка не перевіряє.",
     },
   },
   "sql.dependency-cycle": {
@@ -763,6 +863,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "A handler takes no arguments and returns trigger.",
       uk: "Обробник не приймає аргументів і повертає trigger.",
+    },
+  },
+  "subscription.handler-not-closed": {
+    en: (p) =>
+      `Subscription handler ${p.function}() is outside the closed shell: ${(CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { en: p.problem }).en}`,
+    uk: (p) =>
+      `Обробник підписки ${p.function}() поза закритою оболонкою: ${(CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { uk: p.problem }).uk}`,
+    hint: {
+      en: `A handler is never debt, wherever its file is. ${CLOSED_SHELL_HINT.en}`,
+      uk: `Обробник ніколи не буває боргом, хоч би де лежав його файл. ${CLOSED_SHELL_HINT.uk}`,
     },
   },
 

@@ -49,6 +49,7 @@ export const eventSubscriptionKind: KindDefinition = {
   referenceable: false,
   writePattern: "none",
   actions: [],
+  sqlModule: "closed",
   materializes: "none",
   scope: "absent",
   declared: false,

@@ -125,6 +125,7 @@ export const documentKind: KindDefinition = {
     "post",
     "unpost",
   ],
+  sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
   scope: "required",
