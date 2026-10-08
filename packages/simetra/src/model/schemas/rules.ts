@@ -33,6 +33,7 @@ export const SCHEMA_RULES = [
   "type.format-type",
   "type.pattern-invalid",
   "posting.parse",
+  "debt.not-canonical",
 ] as const
 
 export type SchemaRule = (typeof SCHEMA_RULES)[number]

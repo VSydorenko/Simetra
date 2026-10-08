@@ -2,6 +2,7 @@ import {
   changesBetween,
   compile,
   completeFiles,
+  currentDebt,
   diagnostic,
   sortDiagnostics,
   type CompiledModel,
@@ -11,9 +12,11 @@ import {
   type IdSource,
   type SchemaPathResolver,
   type SqlParser,
+  sqlDebtText,
 } from "simetra/compiler"
 import {
   KIND_REGISTRY,
+  SQL_DEBT_FILE,
   formatProjectFile,
   type AttributeCase,
   type CatalogModel,
@@ -456,6 +459,15 @@ export async function reverseGenerate(
     writable
   )
   const files = completed.files
+  // Перелік боргу пише лише зворотна генерація (план промоції 2b, рішення
+  // 12): весь дослівний SQL поза закритою оболонкою, який вона щойно
+  // розклала, — прийнятий стан бази; далі ратчет лише звужується. Пише
+  // завжди, і порожнім: тека після introspect має явний перелік. Борг не
+  // відомий лише на теці з помилками — тоді `changes` і так порожні.
+  files.set(
+    SQL_DEBT_FILE,
+    sqlDebtText((await currentDebt(files)) ?? [], o.schemaPath)
+  )
   const compiled = await compile(files)
   diagnostics.push(...completed.diagnostics, ...compiled.diagnostics)
   if (compiled.model !== undefined)

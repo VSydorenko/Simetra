@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import {
+  acceptDebt,
   attribute,
   customTable,
   metaFiles,
@@ -208,13 +209,16 @@ describe("row rule of a kind module", () => {
 
 describe("kind module overloads count all of pg_proc", () => {
   it("a procedure of the same name in a shared file overloads a module function", async () => {
+    // Процедура — завжди борг, а предмет тут перевантаження, не ратчет.
     const result = await compile(
-      files({
-        [SALE_SQL]:
-          "CREATE FUNCTION public.g(a int) RETURNS int LANGUAGE sql STABLE AS $$ select a $$;",
-        "sql/public/g.sql":
-          "CREATE PROCEDURE public.g(a text) LANGUAGE sql AS $$ select 1 $$;",
-      })
+      await acceptDebt(
+        files({
+          [SALE_SQL]:
+            "CREATE FUNCTION public.g(a int) RETURNS int LANGUAGE sql STABLE AS $$ select a $$;",
+          "sql/public/g.sql":
+            "CREATE PROCEDURE public.g(a text) LANGUAGE sql AS $$ select 1 $$;",
+        })
+      )
     )
     expect(result.diagnostics.map((d) => [d.code, d.file])).toEqual([
       ["sql.function-overload", SALE_SQL],

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
   STOCK_FILE,
+  acceptDebt,
   customTable,
   document,
   metaFiles,
@@ -11,13 +12,19 @@ import {
 
 const MISC = "sql/public/misc.sql"
 
-/** Компілює проєкт з одним спільним `.sql` (плюс додаткові файли). */
+/**
+ * Компілює проєкт з одним спільним `.sql` (плюс додаткові файли). Предмет
+ * тестів — класи й ідентичності одиниць, а не ратчет боргу, тож увесь борг
+ * фікстури прийнято.
+ */
 async function compileSql(
   sql: string,
   extra: Record<string, unknown> = {}
 ): Promise<CompileResult> {
   const result = await compile(
-    metaFiles({ "project.meta.json": project(), [MISC]: sql, ...extra })
+    await acceptDebt(
+      metaFiles({ "project.meta.json": project(), [MISC]: sql, ...extra })
+    )
   )
   return result
 }

@@ -4,6 +4,7 @@ import { KIND_REGISTRY } from "simetra/model"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
 import {
+  acceptDebt,
   catalog,
   customTable,
   metaFiles,
@@ -48,10 +49,13 @@ function column(name: string, overrides: Record<string, unknown>) {
   }
 }
 
+/** Предмет — порядок створення, а не ратчет: увесь борг фікстури прийнято. */
 async function compileWith(
   entries: Record<string, unknown>
 ): Promise<CompileResult> {
-  return compile(metaFiles({ "project.meta.json": project(), ...entries }))
+  return compile(
+    await acceptDebt(metaFiles({ "project.meta.json": project(), ...entries }))
+  )
 }
 
 /** Порядок створення як рядки: таблиці й енам-типи з префіксом, одиниці — ідентичність. */

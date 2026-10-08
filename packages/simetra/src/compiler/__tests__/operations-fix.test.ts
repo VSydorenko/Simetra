@@ -7,7 +7,7 @@ import {
 } from "simetra/compiler"
 import { formatMetaFile, metadataIdSchema } from "simetra/model"
 import { readReferenceDomain } from "./fixtures/reference-domain"
-import { metaFiles, project, uuid } from "./helpers"
+import { customTable, metaFiles, project, uuid } from "./helpers"
 
 /** Детермінований джерело id у формі UUID v4: тести не залежать від випадку. */
 function counter(start = 900_000): () => string {
@@ -443,6 +443,66 @@ describe("fixFiles", () => {
         (d) => d.code === "operation.physical-name-too-long" && d.pointer === ""
       )
     ).toBe(true)
+  })
+})
+
+describe("fixFiles: debt ratchet", () => {
+  const DEBT = "sql-debt.json"
+  const TABLE_SQL = "custom-tables/T/T.sql"
+  const tableFiles = (sql: string, debt?: string[]) =>
+    metaFiles({
+      "project.meta.json": project(),
+      "custom-tables/T/T.meta.json": customTable("T"),
+      [TABLE_SQL]: sql,
+      ...(debt === undefined
+        ? {}
+        : { [DEBT]: JSON.stringify({ units: debt }) }),
+    })
+
+  it("fix drops stale debt entries and never adds new ones", async () => {
+    const files = tableFiles(
+      "CREATE POLICY p ON public.t USING (true);\nCREATE POLICY q ON public.t USING (true);",
+      ["policy:public.t.gone", "policy:public.t.p"]
+    )
+    const result = await fixFiles(files, options())
+    const fixed = applyChanges(files, result.changes)
+    expect(JSON.parse(fixed.get(DEBT)!)).toEqual({
+      $schema: `schemas-of/${DEBT}/sql-debt.schema.json`,
+      units: ["policy:public.t.p"],
+    })
+    // Нова одиниця лишається поза переліком: ратчет далі її звітує.
+    expect(result.ok).toBe(false)
+    expect(result.diagnostics.map((d) => [d.code, d.params?.identity])).toEqual(
+      [["sql.debt-grows", "policy:public.t.q"]]
+    )
+  })
+
+  it("fix sorts and deduplicates the list", async () => {
+    const files = tableFiles(
+      "CREATE POLICY p ON public.t USING (true);\nCREATE POLICY q ON public.t USING (true);",
+      ["policy:public.t.q", "policy:public.t.p", "policy:public.t.q"]
+    )
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    expect(JSON.parse(fixed.get(DEBT)!).units).toEqual([
+      "policy:public.t.p",
+      "policy:public.t.q",
+    ])
+  })
+
+  it("fix does not create sql-debt.json", async () => {
+    const files = tableFiles("CREATE POLICY p ON public.t USING (true);")
+    const result = await fixFiles(files, options())
+    expect(result.changes.map((c) => c.path)).not.toContain(DEBT)
+    expect(result.diagnostics.map((d) => d.code)).toEqual(["sql.debt-grows"])
+  })
+
+  it("fix keeps the list when the debt of the folder is unknown", async () => {
+    // Нерозібраний `.sql` не дає одиниць: звуження за ними стерло б записи.
+    const files = tableFiles("CREATE POLICY p ON", ["policy:public.t.p"])
+    const result = await fixFiles(files, options())
+    expect(result.changes.map((c) => c.path)).not.toContain(DEBT)
   })
 })
 

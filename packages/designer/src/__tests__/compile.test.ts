@@ -149,3 +149,25 @@ describe("simetra compile", () => {
     expect(r.stdout).not.toContain("//")
   })
 })
+
+describe("readMetadataDir", () => {
+  it("reads sql-debt.json at the root: without it the debt ratchet sees an empty list", async () => {
+    const dir = await project()
+    await writeFile(
+      join(dir, "sql/app/debt.sql"),
+      "CREATE VIEW app.v AS SELECT 1 AS one;\n"
+    )
+    await writeFile(join(dir, "README.md"), "not metadata\n")
+    const unlisted = await compile(await readMetadataDir(dir))
+    expect(unlisted.diagnostics.map((d) => d.code)).toEqual(["sql.debt-grows"])
+
+    await writeFile(
+      join(dir, "sql-debt.json"),
+      JSON.stringify({ units: ["view:app.v"] })
+    )
+    const files = await readMetadataDir(dir)
+    expect(files.has("sql-debt.json")).toBe(true)
+    expect(files.has("README.md")).toBe(false)
+    expect((await compile(files)).diagnostics).toEqual([])
+  })
+})

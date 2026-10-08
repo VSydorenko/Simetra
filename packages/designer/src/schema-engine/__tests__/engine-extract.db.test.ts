@@ -18,6 +18,7 @@ import {
   shadowDatabaseCount,
   testDatabaseUrl,
   readReferenceDomain,
+  acceptDebt,
   customTable,
   metaFiles,
   project,
@@ -101,8 +102,12 @@ function withoutExpressionTexts(
   return out as CatalogTable
 }
 
+/**
+ * Предмет — відповідність одиниць extract і моделі, а не ратчет боргу: увесь
+ * борг фікстури прийнято.
+ */
 async function compiled(files: Map<string, string>): Promise<CompiledModel> {
-  const result = await compile(files)
+  const result = await compile(await acceptDebt(files))
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!
 }

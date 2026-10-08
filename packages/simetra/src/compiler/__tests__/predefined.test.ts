@@ -230,7 +230,7 @@ describe("predefined catalog items", () => {
       // Інші типи аргументів — не виправдання: функції платформи RPC кличе за
       // іменем, тож перевантаження їхніх імен заборонені.
       "sql/public/misc.sql":
-        "CREATE FUNCTION warehouse_predefined(a int, b int) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
+        "CREATE FUNCTION warehouse_predefined(a int, b int) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;",
     })
     expect(result.diagnostics).toEqual([
       expect.objectContaining({

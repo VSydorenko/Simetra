@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
+  acceptDebt,
   catalog,
   customTable,
   metaFiles,
@@ -20,12 +21,15 @@ const PG_ENUM = {
   values: ["new", "done"],
 }
 
+/** Предмет — простори імен одиниць, а не ратчет: увесь борг фікстури прийнято. */
 async function compileSql(
   sql: string,
   extra: Record<string, unknown> = {}
 ): Promise<CompileResult> {
   return compile(
-    metaFiles({ "project.meta.json": project(), [MISC]: sql, ...extra })
+    await acceptDebt(
+      metaFiles({ "project.meta.json": project(), [MISC]: sql, ...extra })
+    )
   )
 }
 
@@ -235,7 +239,7 @@ describe("postgres namespaces", () => {
         "CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql AS $$ select 1 $$;",
     }
     const result = await compile(
-      metaFiles({ "project.meta.json": project(), ...files })
+      await acceptDebt(metaFiles({ "project.meta.json": project(), ...files }))
     )
     // Першою вважається одиниця, раніша за шляхом файлу.
     expect(result.diagnostics).toEqual([
@@ -302,7 +306,11 @@ describe("model relation names in pg_class", () => {
   })
 
   async function compileModel(entries: Record<string, unknown>) {
-    return compile(metaFiles({ "project.meta.json": project(), ...entries }))
+    return compile(
+      await acceptDebt(
+        metaFiles({ "project.meta.json": project(), ...entries })
+      )
+    )
   }
 
   function duplicate(

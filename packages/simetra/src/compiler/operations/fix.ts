@@ -1,18 +1,21 @@
 import {
   KIND_REGISTRY,
   MAX_PHYSICAL_NAME_BYTES,
+  SQL_DEBT_FILE,
   assignPhysicalName,
   expectsKindLabel,
   formatMetaFile,
   formatProjectFile,
+  formatSqlDebtFile,
   makeObjectName,
   projectSchema,
   type PhysicalNameRole,
   type StandardColumnDef,
 } from "simetra/model"
-import { compile } from "../compile"
+import { compile, currentDebt } from "../compile"
 import { derivedFunctionLabels } from "../contracts"
 import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
+import { SQL_DEBT_SCHEMA_FILE } from "../json-schema"
 import { withRanges } from "../locate"
 import {
   elementsAt,
@@ -449,7 +452,13 @@ export async function completeAndCompile(
   o: CompletionOptions,
   only?: ReadonlySet<string>
 ): Promise<OperationResult> {
-  const completed = completeFiles(after, o, only)
+  return compileCompletion(before, completeFiles(after, o, only))
+}
+
+async function compileCompletion(
+  before: ReadonlyMap<string, string>,
+  completed: CompletionResult
+): Promise<OperationResult> {
   const compiled = await compile(completed.files)
   return {
     ok: compiled.ok,
@@ -462,13 +471,70 @@ export async function completeAndCompile(
 }
 
 /**
+ * Текст `sql-debt.json` у канонічній формі з підказкою редактору. Перелік
+ * повністю пише лише `introspect`; `fix` пише через цю ж функцію звужений.
+ */
+export function sqlDebtText(
+  units: readonly string[],
+  schemaPath: SchemaPathResolver
+): string {
+  return formatSqlDebtFile({
+    $schema: schemaPath(SQL_DEBT_FILE, SQL_DEBT_SCHEMA_FILE),
+    units: [...units],
+  })
+}
+
+/**
+ * Звуження переліку боргу (план промоції 2b, рішення 12): лишаються записи,
+ * що досі є боргом теки; нового `fix` не додає ніколи — інакше ратчет
+ * обходився б одним запуском `fix`. Файла немає — не створює: відсутній
+ * перелік уже порожній. Перелік не тієї форми чи тека, чий борг не відомий,
+ * лишають файл як є: причину назве компіляція.
+ */
+async function narrowDebt(
+  files: ReadonlyMap<string, string>,
+  schemaPath: SchemaPathResolver
+): Promise<Map<string, string>> {
+  const result = new Map(files)
+  const text = files.get(SQL_DEBT_FILE)
+  if (text === undefined) return result
+  const raw = parseJson(text)
+  const units = raw?.units
+  if (
+    raw === undefined ||
+    Object.keys(raw).some((key) => key !== "$schema" && key !== "units") ||
+    !Array.isArray(units) ||
+    !units.every((u): u is string => typeof u === "string")
+  ) {
+    return result
+  }
+  const current = await currentDebt(files)
+  if (current === undefined) return result
+  const debt = new Set(current)
+  result.set(
+    SQL_DEBT_FILE,
+    sqlDebtText(
+      units.filter((u) => debt.has(u)),
+      schemaPath
+    )
+  )
+  return result
+}
+
+/**
  * `simetra fix` як чиста функція: доповнення плюс компіляція результату.
  * `fix` працює й над входом, що не компілюється (рішення плану 2): його
  * справа — лагодити саме вхід. `changes` — лише файли зі зміненим текстом.
+ * Борг рахується над доповненою текою: типи рядків таблиць, від яких
+ * залежать ідентичності функцій, з'являються лише з id і фізичними іменами.
  */
 export async function fixFiles(
   files: ReadonlyMap<string, string>,
   o: CompletionOptions
 ): Promise<OperationResult> {
-  return completeAndCompile(files, files, o)
+  const completed = completeFiles(files, o)
+  return compileCompletion(files, {
+    ...completed,
+    files: await narrowDebt(completed.files, o.schemaPath),
+  })
 }

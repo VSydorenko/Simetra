@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { engineScope } from "simetra/schema"
 import {
+  acceptDebt,
   customTable,
   metaFiles,
   project,
@@ -14,13 +15,17 @@ import {
  */
 
 async function scopeOf(sql: string, files: Record<string, unknown> = {}) {
+  // Предмет — межа керування за цілями одиниць, а не ратчет: увесь борг
+  // фікстури прийнято.
   const result = await compile(
-    metaFiles({
-      "project.meta.json": project({ defaultSchema: "app" }),
-      "custom-tables/Note/Note.meta.json": customTable("Note"),
-      "sql/app/units.sql": sql,
-      ...files,
-    })
+    await acceptDebt(
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "custom-tables/Note/Note.meta.json": customTable("Note"),
+        "sql/app/units.sql": sql,
+        ...files,
+      })
+    )
   )
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return engineScope(result.model!)

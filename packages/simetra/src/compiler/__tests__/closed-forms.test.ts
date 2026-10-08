@@ -1,19 +1,31 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { customTable, metaFiles, project, salesDocument } from "./helpers"
+import {
+  acceptDebt,
+  customTable,
+  metaFiles,
+  project,
+  salesDocument,
+} from "./helpers"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
 const TABLE_SQL = "custom-tables/T/T.sql"
 
-/** Документ `Sale` (з регістром `Stock`) і прийнята таблиця `T` плюс `.sql`. */
+/**
+ * Документ `Sale` (з регістром `Stock`) і прийнята таблиця `T` плюс `.sql`.
+ * Предмет — класи одиниць модулів, а не ратчет (він — у `sql-debt.test.ts`),
+ * тож увесь борг фікстури прийнято.
+ */
 async function diagnostics(files: Record<string, string>) {
   const result = await compile(
-    metaFiles({
-      "project.meta.json": project(),
-      ...salesDocument(),
-      "custom-tables/T/T.meta.json": customTable("T"),
-      ...files,
-    })
+    await acceptDebt(
+      metaFiles({
+        "project.meta.json": project(),
+        ...salesDocument(),
+        "custom-tables/T/T.meta.json": customTable("T"),
+        ...files,
+      })
+    )
   )
   return result.diagnostics
 }

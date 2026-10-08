@@ -5,6 +5,7 @@ export * from "./kinds/registry"
 export {
   formatMetaFile,
   formatProjectFile,
+  formatSqlDebtFile,
   isRecordKeyAt,
   PROJECT_KEY_ORDER,
 } from "./format"

@@ -251,6 +251,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: () => "Enum label is already declared earlier in values",
     uk: () => "Мітка переліку вже оголошена раніше в values",
   },
+  "debt.not-canonical": {
+    en: () =>
+      "sql-debt.json lists its units sorted by code units and without duplicates",
+    uk: () =>
+      "sql-debt.json перелічує одиниці відсортованими за кодовими одиницями й без дублів",
+    hint: {
+      en: "Run simetra fix: it sorts the list and removes duplicates and entries that are no longer debt.",
+      uk: "Виконайте simetra fix: він відсортує перелік і прибере дублі та записи, що вже не є боргом.",
+    },
+  },
   "scope.name-reserved": {
     en: () => 'Scope kind name "none" is reserved',
     uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
@@ -502,6 +512,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Postgres keeps the constraint names of a table in one namespace, including the checks the kind derives: give the row rule its own name.",
       uk: "Postgres тримає імена обмежень таблиці в одному просторі, разом із перевірками, які виводить вид: дайте правилу рядка власне ім'я.",
+    },
+  },
+  "sql.debt-grows": {
+    en: (p) =>
+      `${p.identity} at line ${p.line} is verbatim SQL debt that sql-debt.json does not list`,
+    uk: (p) =>
+      `${p.identity} у рядку ${p.line} — борг дослівного SQL, якого немає в sql-debt.json`,
+    hint: {
+      en: "Debt only shrinks: introspect alone writes sql-debt.json, fix only removes entries. Express the statement through metadata (a kind property, an EventSubscription) or as a function in the closed shell (LANGUAGE sql or plpgsql, explicit volatility, SECURITY DEFINER only with SET search_path = ''); moving it from a kind module to sql/ does not make it acceptable.",
+      uk: "Борг лише зменшується: sql-debt.json пише тільки introspect, fix лише прибирає записи. Виразіть оператор метаданими (властивість виду, EventSubscription) або функцією в закритій оболонці (LANGUAGE sql чи plpgsql, явна волатильність, SECURITY DEFINER лише з SET search_path = ''); перенесення з модуля виду в sql/ не робить його прийнятним.",
     },
   },
   "sql.dependency-cycle": {

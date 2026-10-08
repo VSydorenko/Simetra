@@ -20,17 +20,20 @@ import {
 
 const MISC = "sql/public/misc.sql"
 
+// Обидві одиниці — функції в закритій оболонці: предмет тут хеш, а не борг.
+// Тіло стандарту SQL (`RETURN …`) — дерево, тож форматування всередині
+// оператора теж перевіряється.
 const SQL = [
-  "CREATE VIEW public.answers AS SELECT 1 AS one;",
+  "CREATE FUNCTION public.one() RETURNS integer LANGUAGE sql IMMUTABLE RETURN 1;",
   "CREATE FUNCTION public.answer() RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT 42 $$;",
 ].join("\n")
 
 /** Той самий SQL: інші пробіли, регістр ключових слів, коментарі, усе на рядок нижче. */
 const SQL_REFORMATTED = [
-  "-- представлення відповідей",
-  "create   view public.answers as",
-  "  select 1 as one -- одиниця",
-  ";",
+  "-- функція одиниці",
+  "create   function public.one() returns integer",
+  "  language sql immutable return -- одиниця",
+  "  1 ;",
   "/* функція */ create function public.answer() returns integer",
   "  language sql immutable as $$ SELECT 42 $$;",
 ].join("\n")

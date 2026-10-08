@@ -2,6 +2,7 @@ import type { z } from "zod"
 import { KIND_REGISTRY } from "./kinds/registry"
 import { projectSchema } from "./schemas/project"
 import type { MetadataKind } from "./schemas/metadata-kind"
+import type { SqlDebt } from "./schemas/sql-debt"
 
 /** Ключі project.meta.json — у порядку оголошення схеми проєкту. */
 export const PROJECT_KEY_ORDER: readonly string[] = Object.keys(
@@ -153,6 +154,21 @@ export function formatMetaFile(data: Record<string, unknown>): string {
 /** Канонічна форма `project.meta.json`. */
 export function formatProjectFile(data: Record<string, unknown>): string {
   return serialize(canonicalize(data, projectSchema, PROJECT_KEY_ORDER))
+}
+
+/**
+ * Канонічна форма `sql-debt.json`: `$schema` першим, перелік відсортований за
+ * кодовими одиницями й без дублів — так його пишуть і `introspect`, і `fix`,
+ * і diff переліку показує лише зміну боргу.
+ */
+export function formatSqlDebtFile(debt: SqlDebt): string {
+  const units = [...new Set(debt.units)].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0
+  )
+  return serialize({
+    ...(debt.$schema === undefined ? {} : { $schema: debt.$schema }),
+    units,
+  })
 }
 
 /** Сегменти JSON Pointer (RFC 6901) без екранування `~1`/`~0`. */

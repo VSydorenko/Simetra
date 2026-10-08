@@ -1,10 +1,18 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import type { FileChange } from "simetra/compiler"
+import { SQL_DEBT_FILE } from "simetra/model"
 import { UsageError } from "./usage-error"
 
-/** Файли, які читає компілятор; усе інше в теці його не стосується. */
+/**
+ * Файли, які читає компілятор; усе інше в теці його не стосується. Перелік
+ * боргу — один файл у корені теки: без нього ратчет бачив би порожній перелік
+ * і звітував кожну одиницю боргу.
+ */
 const METADATA_SUFFIXES = [".meta.json", ".sql", ".module.ts"]
+export const isMetadataFile = (key: string): boolean =>
+  key === SQL_DEBT_FILE ||
+  METADATA_SUFFIXES.some((suffix) => key.endsWith(suffix))
 
 /**
  * Єдине місце читання диска для дверей CLI: компілятор (T1) працює над мапою
@@ -28,12 +36,10 @@ export async function readMetadataDir(
   const files = new Map<string, string>()
   for (const entry of entries) {
     if (!entry.isFile()) continue
-    if (!METADATA_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) {
-      continue
-    }
     const full = join(entry.parentPath, entry.name)
     // Ключ із "/" на будь-якій ОС: так шляхи бачить компілятор.
     const key = relative(dir, full).split(sep).join("/")
+    if (!isMetadataFile(key)) continue
     files.set(key, await readFile(full, "utf8"))
   }
   return files

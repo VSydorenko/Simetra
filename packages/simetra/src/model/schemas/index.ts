@@ -90,6 +90,9 @@ export {
   type SubscriptionEvent,
 } from "./event-subscription"
 
+// Debt ratchet of verbatim SQL
+export { SQL_DEBT_FILE, sqlDebtSchema, type SqlDebt } from "./sql-debt"
+
 // Project
 export {
   projectSchema,

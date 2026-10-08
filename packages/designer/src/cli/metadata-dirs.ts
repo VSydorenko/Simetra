@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
+import { isMetadataFile } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 
 const PROJECT_FILE = "project.meta.json"
@@ -130,9 +131,6 @@ export async function stageMetadataDirs(
   return { root, dirs: dirs.map((d) => join(root, prefix, d)), dispose }
 }
 
-/** Ті самі файли, що й у `readMetadataDir`: решта теки компілятора не стосується. */
-const METADATA_SUFFIXES = [".meta.json", ".sql", ".module.ts"]
-
 /**
  * Один запуск `git cat-file --batch` на всі блоби: формат відповіді —
  * `<sha> blob <size>\n<content>\n`, тож розбираємо за довжиною в байтах.
@@ -218,7 +216,8 @@ export async function readHeadMetadata(
     const path = record.slice(tab + 1)
     if (type !== "blob" || sha === undefined) continue
     const key = prefix === "" ? path : path.slice(prefix.length + 1)
-    if (!METADATA_SUFFIXES.some((suffix) => key.endsWith(suffix))) continue
+    // Ті самі файли, що й у `readMetadataDir`: решта теки компілятора не стосується.
+    if (!isMetadataFile(key)) continue
     entries.push({ key, sha })
   }
   const texts =

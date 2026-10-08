@@ -3,6 +3,7 @@ export { applyChanges, changesBetween } from "./changes"
 export {
   completeFiles,
   fixFiles,
+  sqlDebtText,
   type CompletionOptions,
   type IdSource,
   type SchemaPathResolver,

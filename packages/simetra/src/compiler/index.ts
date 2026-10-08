@@ -19,6 +19,7 @@ export {
 } from "./messages"
 export {
   compile,
+  currentDebt,
   type CompileOptions,
   type CompileResult,
   type CompiledModel,
@@ -63,6 +64,7 @@ export {
   deleteInput,
   elementTarget,
   fixFiles,
+  sqlDebtText,
   renameElement,
   renameInput,
   resolveTarget,

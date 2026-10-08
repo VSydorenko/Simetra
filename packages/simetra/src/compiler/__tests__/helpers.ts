@@ -1,4 +1,12 @@
-import { expectsKindLabel, toSnakeCase, type MetadataKind } from "simetra/model"
+import {
+  SQL_DEBT_FILE,
+  expectsKindLabel,
+  toSnakeCase,
+  type MetadataKind,
+} from "simetra/model"
+import { readFiles, sqlStage } from "../pipeline"
+import { debtUnits } from "../sql/debt"
+import { loadSqlParser } from "../sql/parse"
 
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */
 export function uuid(n: number): string {
@@ -233,4 +241,26 @@ export function salesDocument(
       ],
     },
   }
+}
+
+/**
+ * Копія мапи з `sql-debt.json`, що приймає весь борг її одиниць. Для тестів,
+ * чий предмет — класи, ідентичності, порядок чи простори імен дослівних
+ * одиниць, а не ратчет: так фікстура лишається про свій предмет. Тести
+ * самого ратчета (`sql-debt`, `operations-fix`) його не вживають. На відміну
+ * від `currentDebt`, рахує борг і над зламаною текою — фікстури помилок теж
+ * мають бачити лише свою діагностику.
+ */
+export async function acceptDebt(
+  files: ReadonlyMap<string, string>
+): Promise<Map<string, string>> {
+  const stage1 = readFiles(files)
+  const { sql } = sqlStage(stage1, await loadSqlParser())
+  return new Map([
+    ...files,
+    [
+      SQL_DEBT_FILE,
+      JSON.stringify({ units: debtUnits(sql.units, stage1.objects) }),
+    ],
+  ])
 }

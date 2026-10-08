@@ -80,7 +80,7 @@ describe("stage 1: files", () => {
         "documents/SalesOrder/SalesOrder.meta.json": order,
         "custom-tables/AuditLog/AuditLog.meta.json": table,
         "custom-tables/AuditLog/AuditLog.sql":
-          "COMMENT ON TABLE audit_log IS 'Audit';",
+          "CREATE FUNCTION audit_note() RETURNS text LANGUAGE sql IMMUTABLE AS $$ select 'Audit' $$;",
       })
     )
     expect(result.diagnostics).toEqual([])
@@ -107,7 +107,7 @@ describe("stage 1: files", () => {
       }))
     ).toEqual([
       {
-        identity: "comment:table:public.audit_log",
+        identity: "function:public.audit_note()",
         file: "custom-tables/AuditLog/AuditLog.sql",
         ownerObjectId: table.id,
       },
@@ -194,7 +194,7 @@ describe("stage 1: files", () => {
       metaFiles({
         "project.meta.json": project(),
         "sql/app/scope_sets.sql":
-          "CREATE FUNCTION set_scope() RETURNS void LANGUAGE sql AS $$ select $$;",
+          "CREATE FUNCTION set_scope() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;",
       })
     )
     expect(result.ok).toBe(true)

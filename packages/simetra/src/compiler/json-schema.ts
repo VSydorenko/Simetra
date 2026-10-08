@@ -1,7 +1,8 @@
 import { z } from "zod"
-import { KIND_REGISTRY, projectSchema } from "simetra/model"
+import { KIND_REGISTRY, projectSchema, sqlDebtSchema } from "simetra/model"
 
 const PROJECT_SCHEMA_FILE = "project.schema.json"
+export const SQL_DEBT_SCHEMA_FILE = "sql-debt.schema.json"
 
 /**
  * JSON Schema файлів метаданих для редакторів. Ключ — ім'я файлу в
@@ -25,5 +26,6 @@ export function buildJsonSchemas(): Record<string, object> {
     result[file] = emit(def.schema, file)
   }
   result[PROJECT_SCHEMA_FILE] = emit(projectSchema, PROJECT_SCHEMA_FILE)
+  result[SQL_DEBT_SCHEMA_FILE] = emit(sqlDebtSchema, SQL_DEBT_SCHEMA_FILE)
   return result
 }

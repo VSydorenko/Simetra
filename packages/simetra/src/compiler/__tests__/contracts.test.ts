@@ -50,7 +50,7 @@ function turnoverStock(): Record<string, unknown> {
  */
 const CLASH_SQL = "sql/public/clash.sql"
 function clashFunction(name: string): string {
-  return `CREATE FUNCTION ${name}(a int) RETURNS int LANGUAGE sql AS $$ select 1 $$;`
+  return `CREATE FUNCTION ${name}(a int) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`
 }
 
 const at = { name: "p_at", type: "timestamp with time zone" }

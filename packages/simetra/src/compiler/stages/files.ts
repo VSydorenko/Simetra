@@ -1,7 +1,9 @@
 import { z, type ZodType } from "zod"
 import {
   SCHEMA_RULES,
+  SQL_DEBT_FILE,
   kindByDir,
+  sqlDebtSchema,
   projectSchema,
   type KindDefinition,
   type MetadataKind,
@@ -65,6 +67,12 @@ export interface FilesStageResult {
     schema?: string
   }[]
   moduleFiles: { file: string; ownerFile: string }[]
+  /**
+   * Перелік боргу `sql-debt.json`; файла немає — порожній перелік (рішення
+   * 12 плану промоції 2b). `undefined` — файл зламаний: причину вже названо,
+   * а ратчет над невідомим переліком звітував би кожну одиницю боргу.
+   */
+  sqlDebt: string[] | undefined
   diagnostics: Diagnostic[]
 }
 
@@ -86,6 +94,7 @@ export function readFiles(
     brokenNames: new Set(),
     sqlFiles: [],
     moduleFiles: [],
+    sqlDebt: [],
     diagnostics: [],
   }
   const sidecars: Sidecar[] = []
@@ -98,6 +107,10 @@ export function readFiles(
 
     if (file === PROJECT_FILE) {
       result.project = readProject(text, result.diagnostics)
+      continue
+    }
+    if (file === SQL_DEBT_FILE) {
+      result.sqlDebt = readSqlDebt(text, result.diagnostics)
       continue
     }
     if (
@@ -266,6 +279,22 @@ function readProject(
     )
   }
   return parsed.data
+}
+
+function readSqlDebt(
+  text: string,
+  diagnostics: Diagnostic[]
+): string[] | undefined {
+  const json = parseJson(SQL_DEBT_FILE, text, diagnostics)
+  if (json === undefined) return undefined
+  const parsed = sqlDebtSchema.safeParse(json.value)
+  if (!parsed.success) {
+    diagnostics.push(
+      ...zodDiagnostics(SQL_DEBT_FILE, sqlDebtSchema, json.value)
+    )
+    return undefined
+  }
+  return parsed.data.units
 }
 
 function missingDatabase(

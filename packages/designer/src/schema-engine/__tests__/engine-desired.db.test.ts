@@ -10,6 +10,7 @@ import { createPgDeltaEngine } from ".."
 import {
   shadowDatabaseCount,
   testDatabaseUrl,
+  acceptDebt,
   attribute,
   catalog,
   customTable,
@@ -86,21 +87,24 @@ describe("compareWithDesired", () => {
   it("plan stays inside the scope", async () => {
     // Межа береться з моделі, а бажаний стан — із її рендера: об'єкти
     // застосунку в чужих схемах (політика, тригер) у плані дозволені, а
-    // внутрішні об'єкти провайдера й некеровані схеми — ні
+    // внутрішні об'єкти провайдера й некеровані схеми — ні. Предмет — межа,
+    // а не ратчет: увесь борг фікстури прийнято.
     const compiled = await compile(
-      metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
-        "custom-tables/Note/Note.meta.json": customTable("Note"),
-        "sql/app/units.sql": [
-          "CREATE FUNCTION app.on_user() RETURNS trigger LANGUAGE plpgsql",
-          "  AS $$ BEGIN RETURN NEW; END $$;",
-          "CREATE TRIGGER app_on_user AFTER INSERT ON auth.users",
-          "  FOR EACH ROW EXECUTE FUNCTION app.on_user();",
-          "CREATE POLICY app_read ON storage.objects FOR SELECT TO authenticated",
-          "  USING (bucket_id = 'app');",
-          "",
-        ].join("\n"),
-      })
+      await acceptDebt(
+        metaFiles({
+          "project.meta.json": project({ defaultSchema: "app" }),
+          "custom-tables/Note/Note.meta.json": customTable("Note"),
+          "sql/app/units.sql": [
+            "CREATE FUNCTION app.on_user() RETURNS trigger LANGUAGE plpgsql",
+            "  AS $$ BEGIN RETURN NEW; END $$;",
+            "CREATE TRIGGER app_on_user AFTER INSERT ON auth.users",
+            "  FOR EACH ROW EXECUTE FUNCTION app.on_user();",
+            "CREATE POLICY app_read ON storage.objects FOR SELECT TO authenticated",
+            "  USING (bucket_id = 'app');",
+            "",
+          ].join("\n"),
+        })
+      )
     )
     expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
       []

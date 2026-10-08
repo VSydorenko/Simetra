@@ -17,7 +17,8 @@ import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
-import { loadSqlParser } from "./sql/parse"
+import { checkDebt } from "./sql/debt"
+import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { embedRowRules } from "./sql/row-rule"
 import {
   namespaceConflicts,
@@ -40,28 +41,7 @@ export async function runStages(
   stage1: FilesStageResult
 ): Promise<CompileResult> {
   const parse = await loadSqlParser()
-  const stage2 = checkIdentity(
-    stage1.objects,
-    stage1.brokenNames,
-    stage1.project
-  )
-  const upstream = [...stage1.diagnostics, ...stage2.diagnostics]
-  // Стадії 3–4 спираються на резолвлені посилання й наявні id та
-  // physicalName, тож на зламаній моделі не запускаються. Стадія 3 бігає до
-  // розбору `.sql`: типи рядків таблиць потрібні ідентичності аргументів.
-  const stage3 =
-    stage1.project === undefined || hasErrors(upstream)
-      ? undefined
-      : buildModel(stage1.objects, stage1.project, stage2.references)
-  // Некваліфіковані імена `.sql` беруть схему проєкту, тож без валідного
-  // проєкту одиниць немає: його помилку вже названо.
-  const sql =
-    stage1.project === undefined
-      ? { units: [], rowRules: [], diagnostics: [] }
-      : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse, [
-          ...enumTypes(stage1, stage1.project.defaultSchema),
-          ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
-        ])
+  const { stage2, upstream, stage3, sql } = sqlStage(stage1, parse)
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -86,6 +66,9 @@ export async function runStages(
     ...upstream,
     ...sql.diagnostics,
     ...checkSqlModules(stage1.objects, sql.units, sql.rowRules),
+    ...(stage1.sqlDebt === undefined
+      ? []
+      : checkDebt(sql.units, stage1.objects, stage1.sqlDebt)),
     ...(embedded?.diagnostics ?? []),
   ]
   if (
@@ -243,6 +226,38 @@ export async function runStages(
     ),
   }
   return { ok, diagnostics, model: { ...model, hash: await modelHash(model) } }
+}
+
+/**
+ * Стадії 2–3 і розбір `.sql`: одиниці потребують типів рядків моделі
+ * (ідентичність аргументів), тож це один крок. Окремо від `runStages` — бо
+ * перелік боргу (`fix`, `introspect`) рахується над тими самими одиницями,
+ * що бачить ратчет, без решти стадій.
+ */
+export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
+  const stage2 = checkIdentity(
+    stage1.objects,
+    stage1.brokenNames,
+    stage1.project
+  )
+  const upstream = [...stage1.diagnostics, ...stage2.diagnostics]
+  // Стадії 3–4 спираються на резолвлені посилання й наявні id та
+  // physicalName, тож на зламаній моделі не запускаються. Стадія 3 бігає до
+  // розбору `.sql`: типи рядків таблиць потрібні ідентичності аргументів.
+  const stage3 =
+    stage1.project === undefined || hasErrors(upstream)
+      ? undefined
+      : buildModel(stage1.objects, stage1.project, stage2.references)
+  // Некваліфіковані імена `.sql` беруть схему проєкту, тож без валідного
+  // проєкту одиниць немає: його помилку вже названо.
+  const sql =
+    stage1.project === undefined
+      ? { units: [], rowRules: [], diagnostics: [] }
+      : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse, [
+          ...enumTypes(stage1, stage1.project.defaultSchema),
+          ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
+        ])
+  return { stage2, upstream, stage3, sql }
 }
 
 /**

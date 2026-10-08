@@ -3,6 +3,7 @@ import { compile, type SqlUnit } from "simetra/compiler"
 import type { PhysicalTable } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
+  acceptDebt,
   attribute,
   catalog,
   metaFiles,
@@ -37,8 +38,9 @@ function domain(extraSql = ""): Record<string, unknown> {
   }
 }
 
+/** Предмет — порядок рендера одиниць, а не ратчет: увесь борг фікстури прийнято. */
 async function render(entries: Record<string, unknown>) {
-  const result = await compile(metaFiles(entries))
+  const result = await compile(await acceptDebt(metaFiles(entries)))
   expect(result.diagnostics).toEqual([])
   return renderDesiredState(result.model!)
 }

@@ -244,6 +244,7 @@ describe("reverseGenerate", () => {
     expect(result.changes.map((c) => c.path)).toEqual([
       "custom-tables/ServiceOrder/ServiceOrder.meta.json",
       "project.meta.json",
+      "sql-debt.json",
     ])
   })
 
@@ -680,6 +681,8 @@ describe("reverseGenerate", () => {
       ["custom-tables/Fresh/Fresh.meta.json", false],
       ["custom-tables/Old/Old.meta.json", true],
       ["custom-tables/Old/Old.module.ts", true],
+      // Борг зник разом зі своєю функцією: introspect переписує перелік цілим.
+      ["sql-debt.json", false],
       ["sql/app/f.sql", true],
     ])
     expect(result.files.get("catalogs/Currency/Currency.meta.json")).toBe(
@@ -699,6 +702,7 @@ describe("reverseGenerate", () => {
     expect(result.files.get("project.meta.json")).toBe(text)
     expect(result.changes.map((c) => c.path)).toEqual([
       "custom-tables/Note/Note.meta.json",
+      "sql-debt.json",
     ])
 
     const mismatch = await reverseGenerate(
@@ -1165,5 +1169,41 @@ describe("reverseGenerate", () => {
     expect(
       result.files.get("custom-tables/AppCustomer/AppCustomer.sql")
     ).toContain("OWNED BY app.customer.id")
+  })
+
+  it("introspect writes the full debt list; a function in the shell is not debt", async () => {
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units(
+          [
+            TOUCH,
+            "CREATE POLICY note_read ON app.note USING (true);",
+            "CREATE FUNCTION app.closed() RETURNS int LANGUAGE sql STABLE AS $$ SELECT 1 $$;",
+          ].join("\n")
+        ),
+      }),
+      options()
+    )
+    expect(result.diagnostics).toEqual([])
+    // Обробник без явної волатильності — поза оболонкою, тож теж борг.
+    expect(json(result, "sql-debt.json")).toEqual({
+      $schema: "schemas-of/sql-debt.json/sql-debt.schema.json",
+      units: [
+        "function:app.touch()",
+        "policy:app.note.note_read",
+        "trigger:app.note.note_touch",
+      ],
+    })
+    expect(result.changes.map((c) => c.path)).toContain("sql-debt.json")
+  })
+
+  it("introspect writes an empty debt list too", async () => {
+    const result = await reverseGenerate(
+      model({ tables: [table("app", "note")] }),
+      options()
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(json(result, "sql-debt.json").units).toEqual([])
   })
 })
