@@ -1,0 +1,57 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/information-registers.schema.json",
+  "id": "d985e5f0-ff4a-40af-b8e8-c698a7c075d6",
+  "kind": "InformationRegister",
+  "name": "Rates",
+  "physicalName": "rates",
+  "scope": "org",
+  "title": {
+    "uk": "Ставки"
+  },
+  "periodicity": "Month",
+  "dimensions": [
+    {
+      "id": "c614d369-7d9b-43ee-baff-20df3deb2ba5",
+      "name": "performer",
+      "physicalName": "performer_id",
+      "title": {
+        "uk": "Виконавець"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Counterparty"
+      },
+      "required": true
+    }
+  ],
+  "resources": [
+    {
+      "id": "4c760f0a-3e95-4097-9571-fda6d76b3193",
+      "name": "rate",
+      "physicalName": "rate",
+      "title": {
+        "uk": "Ставка"
+      },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 2,
+      "required": true
+    }
+  ],
+  "attributes": [
+    {
+      "id": "3fa2f71e-92f3-4bb4-9a23-f97146650fec",
+      "name": "currency",
+      "physicalName": "currency_id",
+      "title": {
+        "uk": "Валюта"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Currency"
+      }
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+import { catalogSchema, type Catalog } from "../schemas/catalog"
+import {
+  authorColumns,
+  deletionMarkColumn,
+  keyColumn,
+  keyOrderOf,
+  numberingType,
+  objectFieldReferences,
+  refListReferences,
+  serviceDateColumns,
+  tabularRowColumns,
+  versionColumn,
+  type KindDefinition,
+  type NumberingSpec,
+  type StandardColumnDef,
+} from "./standard"
+
+function standardColumns(obj: unknown): StandardColumnDef[] {
+  const catalog = obj as Catalog
+  // Склад визначають налаштування виду (спека §5, М3): нульова довжина
+  // вимикає код чи найменування, ієрархія й власники додають свої колонки.
+  const columns: StandardColumnDef[] = [keyColumn(false)]
+
+  if (catalog.codeLength > 0) {
+    columns.push({
+      logicalName: "code",
+      physicalName: "code",
+      type: numberingType(catalog.codeType, catalog.codeLength),
+      notNull: false,
+      indexed: true,
+      // Унікальність коду дає NumberingSpec, тож власного `unique` немає.
+      title: { uk: "Код", en: "Code" },
+    })
+  }
+  if (catalog.descriptionLength > 0) {
+    columns.push({
+      logicalName: "description",
+      physicalName: "description",
+      type: { type: "String", length: catalog.descriptionLength },
+      notNull: false,
+      title: { uk: "Найменування", en: "Description" },
+    })
+  }
+
+  columns.push(deletionMarkColumn())
+  // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
+  // єдине місце фактів ролі (див. CATALOG_ROLES).
+  if (catalog.role !== undefined) {
+    columns.push(...(CATALOG_ROLES[catalog.role].columns?.() ?? []))
+  }
+
+  if (catalog.hierarchyType !== "None") {
+    columns.push({
+      logicalName: "parent",
+      physicalName: "parent_id",
+      type: { type: "UUID" },
+      notNull: false,
+      ref: "self",
+      indexed: true,
+      title: { uk: "Батьківський елемент", en: "Parent item" },
+    })
+  }
+  if (catalog.hierarchyType === "FoldersAndItems") {
+    columns.push({
+      logicalName: "isFolder",
+      physicalName: "is_folder",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+      title: { uk: "Це група", en: "Is folder" },
+    })
+  }
+
+  if (catalog.owners.length > 0) {
+    // Кілька власників — поліморфне посилання: фізично пара owner_type + owner_id.
+    const many = catalog.owners.length > 1
+    columns.push({
+      logicalName: "owner",
+      physicalName: many ? "owner" : "owner_id",
+      type: { type: "UUID" },
+      notNull: false,
+      ref: "owners",
+      ...(many ? { polymorphic: "whenMany" as const } : {}),
+      indexed: true,
+      title: { uk: "Власник", en: "Owner" },
+    })
+  }
+
+  columns.push(
+    {
+      logicalName: "predefinedName",
+      physicalName: "predefined_name",
+      type: { type: "Text" },
+      notNull: false,
+      // Фізична мітка предвизначеного елемента (`predefinedItems[].physicalName`)
+      // унікальна в межах скоупу, а звичайні елементи її не мають.
+      partialUnique: "predefined_name IS NOT NULL",
+      title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
+    },
+    versionColumn(),
+    ...serviceDateColumns(),
+    ...(catalog.trackAuthor ? authorColumns() : [])
+  )
+  return columns
+}
+
+/**
+ * Платформні реквізити «Користувачів» (спека користувачів §4): провізія
+ * вставляє рядок лише з ключем і найменуванням, тож обидва мають DEFAULT.
+ * Недійсність не видаляє рядок — на нього можуть посилатися дані застосунку.
+ */
+function userColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "userKind",
+      physicalName: "user_kind",
+      type: { type: "Text" },
+      notNull: true,
+      default: "'human'",
+      check: "user_kind IN ('human', 'agent')",
+      title: { uk: "Вид користувача", en: "User kind" },
+    },
+    {
+      logicalName: "invalid",
+      physicalName: "invalid",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+      title: { uk: "Недійсний", en: "Invalid" },
+    },
+  ]
+}
+
+/** Факти системної ролі довідника: що платформа виводить із ролі. */
+interface CatalogRoleDefinition {
+  /**
+   * Глобальний корінь (спека П2 §6): довідник лишається `scope: "none"`, але
+   * може бути коренем виду скоупу, а посилання на нього з будь-якого виду —
+   * простий FK, не перетин видів. «Користувачі» глобальні за природою: один
+   * обліковий запис належить багатьом тенантам.
+   */
+  globalRoot?: true
+  /**
+   * Стандартні колонки, які роль додає одразу після позначки видалення:
+   * порядок колонок входить у фізичну форму таблиці.
+   */
+  columns?: () => StandardColumnDef[]
+}
+
+/** Ролі довідника — одне місце, звідки компілятор бере їхні факти. */
+const CATALOG_ROLES: Record<
+  NonNullable<Catalog["role"]>,
+  CatalogRoleDefinition
+> = {
+  users: { globalRoot: true, columns: userColumns },
+}
+
+function numbering(obj: unknown): NumberingSpec | undefined {
+  const catalog = obj as Catalog
+  if (catalog.codeLength === 0) return undefined
+  return {
+    column: "code",
+    type: catalog.codeType,
+    length: catalog.codeLength,
+    autonumber: catalog.autonumber,
+    periodicity: "None",
+    unique: catalog.codeUnique,
+  }
+}
+
+export const catalogKind: KindDefinition = {
+  kind: "Catalog",
+  dir: "catalogs",
+  schema: catalogSchema,
+  keyOrder: keyOrderOf(catalogSchema),
+  referenceable: true,
+  compositeIndexes: true,
+  writePattern: "optimistic",
+  actions: ["read", "create", "update", "markDeletion", "delete"],
+  sqlModule: "closed",
+  materializes: "table",
+  rowLevelSecurity: "enabled",
+  authorTracking: true,
+  scope: "required",
+  declared: false,
+  kindLabel: true,
+  columnFields: ["attributes"],
+  valueElements: false,
+  namedElementFields: ["predefinedItems"],
+  ownerKinds: ["Catalog"],
+  standardColumns,
+  globalRoot(obj) {
+    const { role } = obj as Catalog
+    return role !== undefined && CATALOG_ROLES[role].globalRoot === true
+  },
+  numbering,
+  tabularSectionColumns: () => tabularRowColumns(false),
+  references(obj) {
+    const catalog = obj as Catalog
+    return [
+      ...objectFieldReferences(catalog),
+      ...refListReferences(catalog.owners, "/owners", "catalog.owner"),
+    ]
+  },
+}

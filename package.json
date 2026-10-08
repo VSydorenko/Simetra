@@ -1,5 +1,5 @@
 {
-  "name": "simetra",
+  "name": "simetra-monorepo",
   "version": "0.0.1",
   "private": true,
   "description": "Open-source metadata-driven platform for business applications, in the spirit of 1C:Enterprise",
@@ -7,23 +7,27 @@
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
-    "dev:web": "pnpm --filter web dev",
-    "dev:runtime": "pnpm --filter runtime dev",
     "lint": "turbo lint",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetra/designer test:db",
     "format": "turbo format",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
-    "simetra": "node packages/cli/bin/simetra.mjs",
     "format:fix": "prettier --write .",
     "format:check": "prettier --check .",
     "deps:check": "syncpack lint",
     "deps:fix": "syncpack fix",
-    "deps:update": "pnpm update -r && syncpack fix"
+    "deps:update": "pnpm update -r && syncpack fix",
+    "metadata:check": "node packages/designer/bin/simetra.mjs compile --all",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "husky": "9.1.7",
     "@typescript/native": "npm:typescript@^7.0.2",
+    "simetra": "workspace:*",
     "prettier": "^3.9.9",
-    "prettier-plugin-tailwindcss": "^0.8.1",
+    "supabase": "2.118.0",
     "syncpack": "^15.3.3",
     "turbo": "^2.11.4",
     "typescript": "npm:@typescript/typescript6@^6.0.2"

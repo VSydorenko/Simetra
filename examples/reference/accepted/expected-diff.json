@@ -1,0 +1,471 @@
+[
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "income_expenses",
+    "name": "income_expenses_counterparty_id_fkey",
+    "detail": "FOREIGN KEY (counterparty_id) REFERENCES <schema>.counterparty(id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "income_expenses",
+    "name": "income_expenses_org_id_counterparty_id_fkey",
+    "detail": "FOREIGN KEY (org_id, counterparty_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "income_expenses",
+    "name": "income_expenses_pkey",
+    "detail": "PRIMARY KEY (recorder_type, recorder_id, line_number)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "income_expenses",
+    "name": "income_expenses_org_id_counterparty_id_accrual_kind_period__idx",
+    "detail": "CREATE INDEX income_expenses_org_id_counterparty_id_accrual_kind_period__idx ON <schema>.income_expenses USING btree (org_id, counterparty_id, accrual_kind, period, recorder_type, recorder_id)"
+  },
+  {
+    "op": "add",
+    "class": "table",
+    "table": "income_expenses_turnovers_month",
+    "name": "income_expenses_turnovers_month",
+    "detail": "RLS enabled"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "income_expenses_turnovers_month",
+    "name": "accrual_kind",
+    "detail": "text NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "income_expenses_turnovers_month",
+    "name": "counterparty_id",
+    "detail": "uuid NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "income_expenses_turnovers_month",
+    "name": "expense",
+    "detail": "numeric(15,2) NOT NULL DEFAULT 0"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "income_expenses_turnovers_month",
+    "name": "income",
+    "detail": "numeric(15,2) NOT NULL DEFAULT 0"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "income_expenses_turnovers_month",
+    "name": "month",
+    "detail": "date NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "income_expenses_turnovers_month",
+    "name": "org_id",
+    "detail": "uuid NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "income_expenses_turnovers_month",
+    "name": "income_expenses_turnovers_mon_org_id_counterparty_id_accrua_key",
+    "detail": "UNIQUE NULLS NOT DISTINCT (org_id, counterparty_id, accrual_kind, month)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "income_expenses_turnovers_month",
+    "name": "income_expenses_turnovers_month_accrual_kind_check",
+    "detail": "CHECK ((accrual_kind = ANY (ARRAY['regular'::text, 'bonus'::text, 'correction'::text])))"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "income_expenses_turnovers_month",
+    "name": "income_expenses_turnovers_month_org_id_counterparty_id_fkey",
+    "detail": "FOREIGN KEY (org_id, counterparty_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "income_expenses_turnovers_month",
+    "name": "income_expenses_turnovers_month_org_id_fkey",
+    "detail": "FOREIGN KEY (org_id) REFERENCES <schema>.organization(id) ON DELETE RESTRICT"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements",
+    "name": "performer_settlements_org_id_performer_id_fkey",
+    "detail": "FOREIGN KEY (org_id, performer_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "performer_settlements",
+    "name": "performer_settlements_performer_id_fkey",
+    "detail": "FOREIGN KEY (performer_id) REFERENCES <schema>.counterparty(id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements",
+    "name": "performer_settlements_pkey",
+    "detail": "PRIMARY KEY (recorder_type, recorder_id, line_number)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "performer_settlements",
+    "name": "performer_settlements_org_id_performer_id_currency_id_perio_idx",
+    "detail": "CREATE INDEX performer_settlements_org_id_performer_id_currency_id_perio_idx ON <schema>.performer_settlements USING btree (org_id, performer_id, currency_id, period, recorder_type, recorder_id)"
+  },
+  {
+    "op": "add",
+    "class": "table",
+    "table": "performer_settlements_totals",
+    "name": "performer_settlements_totals",
+    "detail": "RLS enabled"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_totals",
+    "name": "amount",
+    "detail": "numeric(15,2) NOT NULL DEFAULT 0"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_totals",
+    "name": "currency_id",
+    "detail": "uuid NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_totals",
+    "name": "org_id",
+    "detail": "uuid NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_totals",
+    "name": "performer_id",
+    "detail": "uuid NULL"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_totals",
+    "name": "performer_settlements_totals_currency_id_fkey",
+    "detail": "FOREIGN KEY (currency_id) REFERENCES <schema>.currency(id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_totals",
+    "name": "performer_settlements_totals_org_id_fkey",
+    "detail": "FOREIGN KEY (org_id) REFERENCES <schema>.organization(id) ON DELETE RESTRICT"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_totals",
+    "name": "performer_settlements_totals_org_id_performer_id_currency_i_key",
+    "detail": "UNIQUE NULLS NOT DISTINCT (org_id, performer_id, currency_id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_totals",
+    "name": "performer_settlements_totals_org_id_performer_id_fkey",
+    "detail": "FOREIGN KEY (org_id, performer_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "performer_settlements_totals",
+    "name": "performer_settlements_totals_currency_id_idx",
+    "detail": "CREATE INDEX performer_settlements_totals_currency_id_idx ON <schema>.performer_settlements_totals USING btree (currency_id)"
+  },
+  {
+    "op": "add",
+    "class": "table",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_settlements_turnovers_month",
+    "detail": "RLS enabled"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_turnovers_month",
+    "name": "amount_expense",
+    "detail": "numeric(15,2) NOT NULL DEFAULT 0"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_turnovers_month",
+    "name": "amount_receipt",
+    "detail": "numeric(15,2) NOT NULL DEFAULT 0"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_turnovers_month",
+    "name": "currency_id",
+    "detail": "uuid NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_turnovers_month",
+    "name": "month",
+    "detail": "date NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_turnovers_month",
+    "name": "org_id",
+    "detail": "uuid NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_id",
+    "detail": "uuid NULL"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_settlements_turnove_org_id_performer_id_currency__key",
+    "detail": "UNIQUE NULLS NOT DISTINCT (org_id, performer_id, currency_id, month)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_settlements_turnovers_month_currency_id_fkey",
+    "detail": "FOREIGN KEY (currency_id) REFERENCES <schema>.currency(id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_settlements_turnovers_month_org_id_fkey",
+    "detail": "FOREIGN KEY (org_id) REFERENCES <schema>.organization(id) ON DELETE RESTRICT"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_settlements_turnovers_month_org_id_performer_id_fkey",
+    "detail": "FOREIGN KEY (org_id, performer_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "performer_settlements_turnovers_month",
+    "name": "performer_settlements_turnovers_month_currency_id_idx",
+    "detail": "CREATE INDEX performer_settlements_turnovers_month_currency_id_idx ON <schema>.performer_settlements_turnovers_month USING btree (currency_id)"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "service_accrual",
+    "name": "number_period",
+    "detail": "date NOT NULL GENERATED ALWAYS AS (date_trunc('year'::text, (date AT TIME ZONE 'Europe/Kyiv'::text)))::date STORED"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "service_accrual",
+    "name": "version",
+    "detail": "bigint NOT NULL DEFAULT 1"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_accrual_kind_required",
+    "detail": "CHECK (((NOT posted) OR (accrual_kind IS NOT NULL)))"
+  },
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_contract_id_fkey",
+    "detail": "FOREIGN KEY (contract_id) REFERENCES <schema>.contract(id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_contract_id_required",
+    "detail": "CHECK (((NOT posted) OR (contract_id IS NOT NULL)))"
+  },
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_counterparty_id_fkey",
+    "detail": "FOREIGN KEY (counterparty_id) REFERENCES <schema>.counterparty(id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_counterparty_id_required",
+    "detail": "CHECK (((NOT posted) OR (counterparty_id IS NOT NULL)))"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_org_id_contract_id_fkey",
+    "detail": "FOREIGN KEY (org_id, contract_id) REFERENCES <schema>.contract(org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_org_id_counterparty_id_fkey",
+    "detail": "FOREIGN KEY (org_id, counterparty_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_org_id_id_key",
+    "detail": "UNIQUE (org_id, id)"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual",
+    "name": "service_accrual_org_id_number_period_number_key",
+    "detail": "UNIQUE (org_id, number_period, number)"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "service_accrual_performers",
+    "name": "org_id",
+    "detail": "uuid NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_org_id_fkey",
+    "detail": "FOREIGN KEY (org_id) REFERENCES <schema>.organization(id) ON DELETE RESTRICT"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_org_id_parent_id_fkey",
+    "detail": "FOREIGN KEY (org_id, parent_id) REFERENCES <schema>.service_accrual(org_id, id) ON DELETE CASCADE"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_org_id_performer_id_fkey",
+    "detail": "FOREIGN KEY (org_id, performer_id) REFERENCES <schema>.counterparty(org_id, id)"
+  },
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_parent_id_fkey",
+    "detail": "FOREIGN KEY (parent_id) REFERENCES <schema>.service_accrual(id) ON DELETE CASCADE"
+  },
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_performer_id_fkey",
+    "detail": "FOREIGN KEY (performer_id) REFERENCES <schema>.counterparty(id)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_org_id_parent_id_idx",
+    "detail": "CREATE INDEX service_accrual_performers_org_id_parent_id_idx ON <schema>.service_accrual_performers USING btree (org_id, parent_id)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_org_id_performer_id_idx",
+    "detail": "CREATE INDEX service_accrual_performers_org_id_performer_id_idx ON <schema>.service_accrual_performers USING btree (org_id, performer_id)"
+  },
+  {
+    "op": "drop",
+    "class": "index",
+    "table": "service_accrual_performers",
+    "name": "service_accrual_performers_parent_id_idx",
+    "detail": "CREATE INDEX service_accrual_performers_parent_id_idx ON <schema>.service_accrual_performers USING btree (parent_id)"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "service_accrual_services",
+    "name": "org_id",
+    "detail": "uuid NOT NULL"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual_services",
+    "name": "service_accrual_services_org_id_fkey",
+    "detail": "FOREIGN KEY (org_id) REFERENCES <schema>.organization(id) ON DELETE RESTRICT"
+  },
+  {
+    "op": "add",
+    "class": "constraint",
+    "table": "service_accrual_services",
+    "name": "service_accrual_services_org_id_parent_id_fkey",
+    "detail": "FOREIGN KEY (org_id, parent_id) REFERENCES <schema>.service_accrual(org_id, id) ON DELETE CASCADE"
+  },
+  {
+    "op": "drop",
+    "class": "constraint",
+    "table": "service_accrual_services",
+    "name": "service_accrual_services_parent_id_fkey",
+    "detail": "FOREIGN KEY (parent_id) REFERENCES <schema>.service_accrual(id) ON DELETE CASCADE"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "service_accrual_services",
+    "name": "service_accrual_services_org_id_parent_id_idx",
+    "detail": "CREATE INDEX service_accrual_services_org_id_parent_id_idx ON <schema>.service_accrual_services USING btree (org_id, parent_id)"
+  },
+  {
+    "op": "drop",
+    "class": "index",
+    "table": "service_accrual_services",
+    "name": "service_accrual_services_parent_id_idx",
+    "detail": "CREATE INDEX service_accrual_services_parent_id_idx ON <schema>.service_accrual_services USING btree (parent_id)"
+  }
+]

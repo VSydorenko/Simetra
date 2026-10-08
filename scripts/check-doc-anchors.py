@@ -84,13 +84,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE_GLOBS = [
     "docs/**/*.md",
     ".agents/skills/**/*.md",
+    "packages/*/skills/**/*.md",
     ".claude/**/*.md",
 ]
 SOURCE_FILES = ["AGENTS.md", "CLAUDE.md", "README.md"]
 # Чому саме ці два — див. докстрінг, абзац «Корпус».
 SOURCE_EXCLUDE = ["docs/research/**", "docs/superpowers/**"]
 
-REPO_ROOTS = ("apps", "packages", "docs", "scripts", ".agents", ".claude", ".github")
+REPO_ROOTS = ("apps", "packages", "docs", "scripts", ".agents", ".claude", ".github", "supabase", "legacy")
 
 # Плейсхолдер або glob — не якір: перевіряти нічого.
 PLACEHOLDER = re.compile(r"[<>{}*|]|\.\.\.|\$\{|\$[A-Za-z_]")
@@ -134,7 +135,9 @@ MAX_REFERENCE_LINES = 100
 CONTENTS_HEAD_LINES = 20
 DUPLICATE_BLOCK = 3
 
-SKILLS_DIR = ROOT / ".agents/skills"
+# Скіли репо (про цей код) і скіли споживача, що їдуть у пакетах: канон один.
+SKILLS_DIRS = [ROOT / ".agents/skills", *sorted(ROOT.glob("packages/*/skills"))]
+
 CONTENTS_MARK = re.compile(r"зміст|contents", re.I)
 # Хвіст «:рядок» у якорі: `:171`, `:148-149`, `:82, 85`.
 LINE_SUFFIX = re.compile(r":\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*$")
@@ -151,6 +154,15 @@ POINTER_ONLY = re.compile(
 )
 LONE_LINK = re.compile(r"^[-*>\s]*\[[^\]]+\]\([^)\s]+\)[.,;:]?$")
 SPACES = re.compile(r"\s+")
+
+
+def skills_root_of(path: Path) -> Path | None:
+    """Тека скілів, якій належить файл, або `None` — файл не скіл."""
+    resolved = path.resolve()
+    for d in SKILLS_DIRS:
+        if resolved.is_relative_to(d.resolve()):
+            return d
+    return None
 
 
 def glob_regex(pattern: str) -> re.Pattern[str]:
@@ -211,7 +223,7 @@ def resolve_doc(name: str, src: Path) -> Path | None:
     # ім'я почервоніють ХИБНО — і виглядатиме це як «гард зламався», а не як
     # «з'явився омонім».
     if stripped.startswith("references/"):
-        hits = list(SKILLS_DIR.glob(f"*/{stripped}"))
+        hits = [h for d in SKILLS_DIRS for h in d.glob(f"*/{stripped}")]
         if len(hits) == 1:
             return hits[0]
     return None
@@ -329,10 +341,10 @@ def check_skill_canon(texts: dict[Path, str]) -> tuple[list[str], int, int, int]
     skills = refs = pointers = 0
 
     for src, text in sorted(texts.items()):
-        try:
-            rel = src.relative_to(SKILLS_DIR)
-        except ValueError:
+        root = skills_root_of(src)
+        if root is None:
             continue
+        rel = src.resolve().relative_to(root.resolve())
         lines = text.splitlines()
 
         if src.name == "SKILL.md" and len(rel.parts) == 2:
@@ -370,10 +382,10 @@ def check_skill_canon(texts: dict[Path, str]) -> tuple[list[str], int, int, int]
             target = resolve_doc(token, src)
             if target is None or target == src:
                 continue
-            try:
-                trel = target.resolve().relative_to(SKILLS_DIR)
-            except ValueError:
+            troot = skills_root_of(target)
+            if troot is None:
                 continue  # док або кореневий канон — легальний вихід із reference
+            trel = target.resolve().relative_to(troot.resolve())
             if len(trel.parts) != 3 or trel.parts[1] != "references":
                 continue  # `SKILL.md` свого чи чужого скіла — легально
             pointers += 1
@@ -491,8 +503,10 @@ def main() -> int:
                 pool, where = headings(path), f"`{target}`"
             else:
                 skill = anchor.group("skill")
-                sdir = SKILLS_DIR / skill
-                if not sdir.is_dir():
+                sdir = next(
+                    (d / skill for d in SKILLS_DIRS if (d / skill).is_dir()), None
+                )
+                if sdir is None:
                     broken.append(f"{rel}: missing skill `{skill}`")
                     continue
                 pool = [h for f in sorted(sdir.rglob("*.md")) for h in headings(f)]

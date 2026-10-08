@@ -49,7 +49,10 @@
 
 - **Commits and PRs are the owner's.** Never add `Co-Authored-By: Claude`,
   "Generated with…" or any other trailer (this overrides Claude Code's
-  default; `.claude/settings.json` also sets empty attribution).
+  default; `.claude/settings.json` also sets empty attribution). The one
+  exception is the author's own DCO `Signed-off-by`, added by `git commit -s`
+  under the author's git identity; an agent never adds it on its own or signs
+  off for the owner.
 - **Commit or push only when the owner explicitly asks.** Launching
   `/виконай-задачу` or `/архівуй-виконані-задачі` (owner-only commands) counts
   as the request to commit their work; push and PRs still need an explicit ask.
@@ -143,6 +146,6 @@ environment-level dependencies; install them per machine:
 Where a dependency is missing (a fresh clone, a cloud session), the command
 still runs: follow its steps without the named skill.
 
-Skills for **consumers** of the platform ship inside the package (`skills/`),
-versioned with the code; the repo skills above are for developing the platform
-itself.
+Skills for **consumers** of the platform ship inside their package, versioned
+with the code; they are not used when developing the platform itself — the repo
+skills above are.

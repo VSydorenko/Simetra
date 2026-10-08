@@ -1,0 +1,192 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/documents.schema.json",
+  "id": "01702ecb-fac0-40bc-9782-303bb4c1a580",
+  "kind": "Document",
+  "name": "ServiceAccrual",
+  "physicalName": "service_accrual",
+  "kindLabel": "service_accrual",
+  "scope": "org",
+  "title": {
+    "uk": "Нарахування за послуги"
+  },
+  "numberPeriodicity": "Year",
+  "posting": {
+    "movements": [
+      {
+        "register": {
+          "kind": "AccumulationRegister",
+          "name": "IncomeExpenses"
+        },
+        "source": {
+          "tabularSection": "services"
+        },
+        "fields": {
+          "counterparty": "doc.counterparty",
+          "accrualKind": "doc.accrualKind",
+          "income": "row.amount",
+          "expense": "0"
+        }
+      },
+      {
+        "register": {
+          "kind": "AccumulationRegister",
+          "name": "IncomeExpenses"
+        },
+        "source": "document",
+        "fields": {
+          "counterparty": "doc.counterparty",
+          "accrualKind": "doc.accrualKind",
+          "income": "0",
+          "expense": "sum(performers.amount)"
+        }
+      }
+    ]
+  },
+  "registerMovements": [
+    {
+      "kind": "AccumulationRegister",
+      "name": "PerformerSettlements"
+    },
+    {
+      "kind": "AccumulationRegister",
+      "name": "IncomeExpenses"
+    }
+  ],
+  "attributes": [
+    {
+      "id": "4cd69e2e-8e04-42cc-b1fd-b48c3f253e6a",
+      "name": "counterparty",
+      "physicalName": "counterparty_id",
+      "title": {
+        "uk": "Замовник"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Counterparty"
+      },
+      "required": true
+    },
+    {
+      "id": "bc131a8e-fd3c-409c-8ee1-505ebbf54419",
+      "name": "contract",
+      "physicalName": "contract_id",
+      "title": {
+        "uk": "Договір"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Contract"
+      },
+      "required": true
+    },
+    {
+      "id": "0f33c4cf-4a60-4fc3-b9b6-6f3b89765dd1",
+      "name": "accrualKind",
+      "physicalName": "accrual_kind",
+      "title": {
+        "uk": "Вид нарахування"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Enumeration",
+        "name": "AccrualKind"
+      },
+      "required": true,
+      "defaultValue": "Regular"
+    },
+    {
+      "id": "8b936755-dc26-42f8-b801-21c60434ea13",
+      "name": "comment",
+      "physicalName": "comment",
+      "title": {
+        "uk": "Коментар"
+      },
+      "type": "String",
+      "length": 200
+    }
+  ],
+  "tabularSections": [
+    {
+      "id": "63a5d782-6e98-43a1-b5a4-e5c554996dd6",
+      "name": "services",
+      "physicalName": "service_accrual_services",
+      "title": {
+        "uk": "Послуги"
+      },
+      "attributes": [
+        {
+          "id": "d89a76ec-737e-4ea8-bff9-7fbaf02643f1",
+          "name": "serviceName",
+          "physicalName": "service_name",
+          "title": {
+            "uk": "Послуга"
+          },
+          "type": "String",
+          "length": 150,
+          "required": true
+        },
+        {
+          "id": "0ee07c7b-cfaa-40d7-931c-260760e1662e",
+          "name": "quantity",
+          "physicalName": "quantity",
+          "title": {
+            "uk": "Кількість"
+          },
+          "type": "Numeric",
+          "precision": 15,
+          "scale": 3
+        },
+        {
+          "id": "e954bab7-a118-4a8d-9b99-99b8f3935172",
+          "name": "amount",
+          "physicalName": "amount",
+          "title": {
+            "uk": "Сума"
+          },
+          "type": "Numeric",
+          "precision": 15,
+          "scale": 2,
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "8599190a-0fb5-432d-a167-5671359529e4",
+      "name": "performers",
+      "physicalName": "service_accrual_performers",
+      "title": {
+        "uk": "Виконавці"
+      },
+      "attributes": [
+        {
+          "id": "6f0b32c7-44e2-4852-bd46-37eabc79ed13",
+          "name": "performer",
+          "physicalName": "performer_id",
+          "title": {
+            "uk": "Виконавець"
+          },
+          "type": "Ref",
+          "ref": {
+            "kind": "Catalog",
+            "name": "Counterparty"
+          },
+          "required": true
+        },
+        {
+          "id": "404012ca-906a-4434-9f18-bf34fad4aa5c",
+          "name": "amount",
+          "physicalName": "amount",
+          "title": {
+            "uk": "Сума"
+          },
+          "type": "Numeric",
+          "precision": 15,
+          "scale": 2,
+          "required": true
+        }
+      ]
+    }
+  ]
+}
