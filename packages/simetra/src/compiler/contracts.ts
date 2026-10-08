@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  PUBLIC_READ_PURPOSES,
   makeObjectName,
   postsMovements,
   truncatedPeriodExpression,
@@ -17,6 +18,7 @@ import {
   type Project,
   type PublicReadRole,
   type RegisterKeySpec,
+  type RequestRolePurpose,
   type ScopeKind,
   type SubscriptionEvent,
   type VirtualTableKind,
@@ -256,8 +258,11 @@ export interface Contracts {
   predefined: PredefinedContract[]
   /** За `objectId`. */
   numbering: NumberingContract[]
-  /** За `objectId`: роль API, якій об'єкт відкриває читання. */
-  publicRead: { objectId: string; role: PublicReadRole }[]
+  /**
+   * За `objectId`: призначення ролі API, якій об'єкт відкриває читання, —
+   * лише роль запиту; ім'я ролі дає `PROVIDER_API_ROLES` провайдера.
+   */
+  publicRead: { objectId: string; purpose: RequestRolePurpose }[]
   /** За `bucket`: вид скоупу вказано id, бо ім'я виду може змінитися. */
   storageBuckets: { bucket: string; scopeKindId: string }[]
   /** За `subscriptionId`. */
@@ -615,7 +620,14 @@ export function buildContracts(
     publicRead: objects
       .flatMap((object) => {
         const role = (object.data as { publicRead?: PublicReadRole }).publicRead
-        return role === undefined ? [] : [{ objectId: object.id ?? "", role }]
+        return role === undefined
+          ? []
+          : [
+              {
+                objectId: object.id ?? "",
+                purpose: PUBLIC_READ_PURPOSES[role],
+              },
+            ]
       })
       .sort((a, b) => compareStrings(a.objectId, b.objectId)),
     storageBuckets: project.storageBuckets

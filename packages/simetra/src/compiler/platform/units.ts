@@ -27,8 +27,8 @@ import { IDENTITIES_TABLE } from "./identities"
  * не відсутність `USAGE`; таблиці схеми закриті відсутністю грантів.
  */
 const SESSION_ROLES: readonly ApiRolePurpose[] = [
-  "authenticated",
-  "anon",
+  "user",
+  "anonymous",
   "service",
 ]
 

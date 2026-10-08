@@ -85,6 +85,7 @@ export {
   type ScopeKind,
 } from "./scope"
 export {
+  PUBLIC_READ_PURPOSES,
   PUBLIC_READ_ROLES,
   publicReadSchema,
   type PublicReadRole,
@@ -115,4 +116,5 @@ export {
   type ProviderApiRoles,
   type ProviderEventSource,
   type Project,
+  type RequestRolePurpose,
 } from "./project"

@@ -15,6 +15,9 @@ import {
   metadataKindSchema,
   METADATA_KINDS,
   eventSubscriptionSchema,
+  PROVIDER_API_ROLES,
+  PUBLIC_READ_PURPOSES,
+  PUBLIC_READ_ROLES,
 } from "../schemas"
 import { KIND_REGISTRY } from "../kinds/registry"
 import { unwrap } from "../format"
@@ -776,6 +779,16 @@ describe("kindLabel", () => {
 })
 
 describe("publicRead", () => {
+  it("every publicRead value maps to a request role, never to the service role", () => {
+    for (const value of PUBLIC_READ_ROLES) {
+      const purpose = PUBLIC_READ_PURPOSES[value]
+      expect(purpose, value).not.toBe("service")
+      for (const roles of Object.values(PROVIDER_API_ROLES)) {
+        expect(roles[purpose], value).not.toBe(roles.service)
+      }
+    }
+  })
+
   it("publicRead is a field exactly of kinds with row level security", () => {
     for (const kind of METADATA_KINDS) {
       const def = KIND_REGISTRY[kind]

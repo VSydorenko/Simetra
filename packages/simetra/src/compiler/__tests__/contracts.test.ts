@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { PROVIDER_API_ROLES } from "simetra/model"
 import {
   SALE_FILE,
   STOCK_FILE,
@@ -76,13 +77,35 @@ describe("publicRead and storage buckets contracts", () => {
     expect(model.contracts.publicRead).toEqual([
       {
         objectId: model.objects.find((o) => o.name === "Counterparty")!.id,
-        role: "anon",
+        purpose: "anonymous",
       },
     ])
     expect(model.contracts.storageBuckets).toEqual([
       { bucket: "a-files", scopeKindId: id("org") },
       { bucket: "b-files", scopeKindId: id("user") },
     ])
+  })
+})
+
+describe("publicRead grantees", () => {
+  it("public read reaches only request roles, never the service role", async () => {
+    const entries = scopedProject2()
+    entries["catalogs/Counterparty/Counterparty.meta.json"] = catalog(
+      "Counterparty",
+      { scope: "org", publicRead: "authenticated" }
+    )
+    entries["catalogs/Region/Region.meta.json"] = catalog("Region", {
+      scope: "none",
+      publicRead: "anon",
+    })
+    const result = await compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const roles = PROVIDER_API_ROLES.supabase
+    const grantees = result
+      .model!.contracts.publicRead.map(({ purpose }) => roles[purpose])
+      .sort()
+    expect(grantees).toEqual(["anon", "authenticated"])
+    expect(grantees).not.toContain(roles.service)
   })
 })
 

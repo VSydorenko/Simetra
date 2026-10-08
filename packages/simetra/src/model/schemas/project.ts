@@ -97,10 +97,13 @@ export const PROVIDER_EVENT_SOURCES: Readonly<
 }
 
 /**
- * Ролі API провайдера за призначенням (спека користувачів §3): від них
- * виконуються запити API — із сесією користувача, без сесії й із сервісним
- * ключем. Імена ролей генератори беруть лише звідси, за
- * `project.database.provider`. Типовими привілеями своїх схем провайдер дає
+ * Ролі API провайдера за призначенням (платформна спека §6.7, спека
+ * користувачів §3): від них виконуються запити API — із сесією користувача,
+ * без сесії й із сервісним ключем. Імена ролей генератори беруть лише звідси,
+ * за `project.database.provider`, і обирають роль за призначенням: гранти
+ * таблиць застосунку — лише ролям запиту (`RequestRolePurpose`), увесь запис
+ * перебирає тільки відкликання від кожної неназваної ролі. Типовими
+ * привілеями своїх схем провайдер дає
  * кожній із них `EXECUTE` на кожну нову функцію (на Supabase — `ALTER DEFAULT
  * PRIVILEGES … IN SCHEMA public`); `REVOKE … FROM PUBLIC` такий грант не
  * знімає, тож функція з обмеженим `EXECUTE` відкликає його в кожної
@@ -108,20 +111,26 @@ export const PROVIDER_EVENT_SOURCES: Readonly<
  */
 export interface ProviderApiRoles {
   /** Запит із сесією користувача. */
-  authenticated: string
+  user: string
   /** Запит без сесії. */
-  anon: string
+  anonymous: string
   /** Сервісний ключ: сесії немає, RLS обходиться. */
   service: string
 }
 export type ApiRolePurpose = keyof ProviderApiRoles
+/**
+ * Призначення ролей запиту: лише їм відкриваються таблиці й віртуальні
+ * таблиці застосунку. Сервісний ключ обходить RLS, тож грант таблиці йому
+ * означав би доступ повз модель прав.
+ */
+export type RequestRolePurpose = Exclude<ApiRolePurpose, "service">
 
 export const PROVIDER_API_ROLES: Readonly<
   Record<DatabaseProvider, ProviderApiRoles>
 > = {
   supabase: {
-    authenticated: "authenticated",
-    anon: "anon",
+    user: "authenticated",
+    anonymous: "anon",
     service: "service_role",
   },
 }

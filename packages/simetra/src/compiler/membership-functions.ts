@@ -34,7 +34,7 @@ const MEMBER_SCOPES_LABEL = "member_scopes"
  * сервісна сесії не має й отримує порожній результат замість помилки доступу;
  * анонімна — помилку.
  */
-const MEMBER_ROLES: readonly ApiRolePurpose[] = ["authenticated", "service"]
+const MEMBER_ROLES: readonly ApiRolePurpose[] = ["user", "service"]
 
 /**
  * Імена функцій членства — спільні для генератора, контракту й перевірки
