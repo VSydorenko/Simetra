@@ -9,7 +9,6 @@ import type {
   TypeName,
 } from "libpg-query"
 import {
-  PLATFORM_SCHEMA,
   type PhysicalSnapshot,
   type PhysicalTable,
   type SqlUnitClass,
@@ -18,7 +17,6 @@ import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { extractMovementBlocks } from "../movement-blocks"
 import type { CreationNode } from "./dependencies"
 import type { ParsedStatement, SqlParser } from "./parse"
-import { statementTargets } from "./unit-target"
 
 /**
  * SQL-одиниця скомпільованої моделі (спека П2 §8.3): оператор верхнього рівня
@@ -220,16 +218,6 @@ export function readSqlUnits(
               ? {}
               : { feature: classified.feature }),
           })
-        )
-        continue
-      }
-      // Схема платформи зайнята системним шаром незалежно від теки файлу:
-      // кваліфіковане ім'я в спільному чи об'єктному `.sql` поклало б об'єкт
-      // застосунку туди ж. Виклик функції платформи в тілі — не ціль, його
-      // дерево розбору тут не читається.
-      if (reservesPlatformSchema(classified, statement.stmt, source.schema)) {
-        diagnostics.push(
-          diagnostic("schema.reserved", source.file, "", { line })
         )
         continue
       }
@@ -586,23 +574,6 @@ type Classified =
       detail?: string
       feature?: "rowLevelSecurity" | "publication"
     }
-
-/**
- * Одиниця чи правило рядка діє в схемі платформи: її власний об'єкт (функція,
- * в'юха, тригер чи політика на таблиці, `ALTER` таблиці чи функції) або ціль
- * гранту, коментаря, publication, типових привілеїв лежить у `simetra`.
- */
-function reservesPlatformSchema(
-  classified: Exclude<Classified, { notAllowed: string }>,
-  stmt: Node,
-  schema: string
-): boolean {
-  const own = "rowRule" in classified ? classified.rowRule : classified
-  return (
-    own.schema === PLATFORM_SCHEMA ||
-    statementTargets(stmt, schema).some((t) => t.schema === PLATFORM_SCHEMA)
-  )
-}
 
 const ROW_SECURITY: ReadonlySet<string> = new Set([
   "AT_EnableRowSecurity",

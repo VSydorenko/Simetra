@@ -26,6 +26,7 @@ import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { embedRowRules } from "./sql/row-rule"
+import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
   namespaceConflicts,
   readSqlUnits,
@@ -307,11 +308,31 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
   const sql =
     stage1.project === undefined
       ? { units: [], rowRules: [], diagnostics: [] }
-      : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse, [
+      : readAppSql(stage1, stage1.project.defaultSchema, parse, [
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
   return { stage2, upstream, stage3, sql }
+}
+
+/**
+ * `.sql` застосунку: мова одиниць (`readSqlUnits`, спільна зі зворотним
+ * читанням двигуна) і правило файлів метаданих — схема платформи зайнята.
+ */
+function readAppSql(
+  stage1: FilesStageResult,
+  defaultSchema: string,
+  parse: SqlParser,
+  known: readonly { schema: string; name: string }[]
+) {
+  const sources = sqlSources(stage1, defaultSchema)
+  const read = readSqlUnits(sources, parse, known)
+  const kept = withoutPlatformSchema(read, sources)
+  return {
+    units: kept.units,
+    rowRules: kept.rowRules,
+    diagnostics: [...read.diagnostics, ...kept.diagnostics],
+  }
 }
 
 /**
