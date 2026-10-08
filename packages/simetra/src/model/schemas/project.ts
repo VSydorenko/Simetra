@@ -97,16 +97,33 @@ export const PROVIDER_EVENT_SOURCES: Readonly<
 }
 
 /**
- * Ролі, яким провайдер типовими привілеями своїх схем дає `EXECUTE` на кожну
- * нову функцію (на Supabase — `ALTER DEFAULT PRIVILEGES … IN SCHEMA public`).
- * `REVOKE … FROM PUBLIC` такий грант не знімає, тож функція, яку виконують
- * лише названі ролі, відкликає його в кожної з цих ролей поштучно. Збіг зі
- * стеком перевіряє DB-тест членства.
+ * Ролі API провайдера за призначенням (спека користувачів §3): від них
+ * виконуються запити API — із сесією користувача, без сесії й із сервісним
+ * ключем. Імена ролей генератори беруть лише звідси, за
+ * `project.database.provider`. Типовими привілеями своїх схем провайдер дає
+ * кожній із них `EXECUTE` на кожну нову функцію (на Supabase — `ALTER DEFAULT
+ * PRIVILEGES … IN SCHEMA public`); `REVOKE … FROM PUBLIC` такий грант не
+ * знімає, тож функція з обмеженим `EXECUTE` відкликає його в кожної
+ * неназваної ролі поштучно. Збіг зі стеком перевіряє DB-тест членства.
  */
-export const PROVIDER_FUNCTION_GRANTEES: Readonly<
-  Record<DatabaseProvider, readonly string[]>
+export interface ProviderApiRoles {
+  /** Запит із сесією користувача. */
+  authenticated: string
+  /** Запит без сесії. */
+  anon: string
+  /** Сервісний ключ: сесії немає, RLS обходиться. */
+  service: string
+}
+export type ApiRolePurpose = keyof ProviderApiRoles
+
+export const PROVIDER_API_ROLES: Readonly<
+  Record<DatabaseProvider, ProviderApiRoles>
 > = {
-  supabase: ["anon", "authenticated", "service_role"],
+  supabase: {
+    authenticated: "authenticated",
+    anon: "anon",
+    service: "service_role",
+  },
 }
 
 /**
@@ -140,6 +157,17 @@ export interface IdentitySource {
  * Факти провайдера ідентичності за пресетом бази. Колонки — факт образу
  * провайдера: їх наявність на стеку перевіряє DB-тест, а лежання таблиці на
  * поверхні тригерів пресету — тест T2 (T0 його не імпортує).
+ *
+ * Чого `IdentitySource` не виражає — межа, яку другий провайдер перевіряє
+ * першою, бо платформний шар вважає це спільним для всіх:
+ * - контракт сесії: `current_setting('request.jwt.claims')` і claim `sub`
+ *   у ньому (функція поточного користувача);
+ * - правило С8: ключ облікового запису — uuid, він же `id` користувача, а
+ *   `subject` — цей ключ як `::text`;
+ * - імена ролей API — окремий факт T0, `PROVIDER_API_ROLES` вище;
+ * - фіксовані імена функцій і тригерів шару (`simetra.current_user_id`,
+ *   `simetra.provision_user`, `simetra_provision_user` тощо) — у генераторі
+ *   T1, не в даних провайдера.
  */
 export const PROVIDER_IDENTITY_SOURCES: Readonly<
   Record<DatabaseProvider, IdentitySource>

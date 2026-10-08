@@ -3,6 +3,7 @@ import {
   PLATFORM_SCHEMA,
   makeObjectName,
   quoteIdent,
+  type ApiRolePurpose,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
@@ -33,7 +34,7 @@ const MEMBER_SCOPES_LABEL = "member_scopes"
  * сервісна сесії не має й отримує порожній результат замість помилки доступу;
  * анонімна — помилку.
  */
-const MEMBER_ROLES = ["authenticated", "service_role"] as const
+const MEMBER_ROLES: readonly ApiRolePurpose[] = ["authenticated", "service"]
 
 /**
  * Імена функцій членства — спільні для генератора, контракту й перевірки

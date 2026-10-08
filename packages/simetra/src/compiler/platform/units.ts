@@ -1,6 +1,8 @@
 import {
   PLATFORM_SCHEMA,
+  PROVIDER_API_ROLES,
   quoteIdent,
+  type ApiRolePurpose,
   type IdentityNameSource,
   type IdentitySource,
   type PhysicalSnapshot,
@@ -18,13 +20,17 @@ import { kindLabelOf, sqlLiteral } from "../stages/model"
 import { IDENTITIES_TABLE } from "./identities"
 
 /**
- * Ролі запитів API: функцію сесії в політиці виконує роль запиту, тож їм
- * потрібні `USAGE` схеми й `EXECUTE` функції поточного користувача (спека
- * користувачів §3). Сервісна роль сесії не має й отримує `NULL`, а не помилку
- * доступу. Схему від PostgREST ховає конфіг провайдера, а не відсутність
- * `USAGE`; таблиці схеми закриті відсутністю грантів.
+ * Призначення ролей запитів API: функцію сесії в політиці виконує роль
+ * запиту, тож їм потрібні `USAGE` схеми й `EXECUTE` функції поточного
+ * користувача (спека користувачів §3). Сервісна роль сесії не має й отримує
+ * `NULL`, а не помилку доступу. Схему від PostgREST ховає конфіг провайдера, а
+ * не відсутність `USAGE`; таблиці схеми закриті відсутністю грантів.
  */
-const SESSION_ROLES = ["authenticated", "anon", "service_role"] as const
+const SESSION_ROLES: readonly ApiRolePurpose[] = [
+  "authenticated",
+  "anon",
+  "service",
+]
 
 const IDENTITIES: QualifiedName = {
   schema: PLATFORM_SCHEMA,
@@ -102,6 +108,8 @@ export function buildPlatformUnits(
   // бере ідентичність самої одиниці, а не другий запис сигнатури.
   const provision = unit(provisionFunction(users), tables)
   const schema = quoteIdent(PLATFORM_SCHEMA)
+  const { provider } = input.project.database
+  const apiRoles = PROVIDER_API_ROLES[provider]
   const functions = [
     {
       signature: `${qualified(CURRENT_USER)}()`,
@@ -130,14 +138,14 @@ export function buildPlatformUnits(
     unit(`REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC;`),
     // Гранти поштучно на отримувача — та сама форма, в якій їх читає
     // extract, тож зворотна генерація впізнає їх як описані.
-    ...SESSION_ROLES.map((role) =>
-      unit(`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(role)};`)
+    ...SESSION_ROLES.map((purpose) =>
+      unit(
+        `GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(apiRoles[purpose])};`
+      )
     ),
     ...functions.flatMap(({ signature, fn, roles }) => [
       fn,
-      ...executeGrants(signature, roles, input.project.database.provider).map(
-        (grant) => unit(grant)
-      ),
+      ...executeGrants(signature, roles, provider).map((grant) => unit(grant)),
     ]),
     ...triggers(source).map((sql) => unit(sql)),
     unit(kindLabelsView(input.objects, input.physical)),

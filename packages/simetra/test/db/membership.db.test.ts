@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile } from "simetra/compiler"
-import { PROVIDER_FUNCTION_GRANTEES } from "simetra/model"
+import { PROVIDER_API_ROLES } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   attribute,
@@ -156,7 +156,7 @@ describe("membership in Postgres", () => {
     })
   })
 
-  it("the provider function grantees match the default privileges of the stack", async () => {
+  it("the provider API roles are exactly the default EXECUTE grantees of the stack", async () => {
     // Факт провайдера в T0: розходження зі стеком дало б функцію, яку
     // виконує роль, що її не названо.
     await withRollback(async (client) => {
@@ -171,7 +171,7 @@ describe("membership in Postgres", () => {
          ORDER BY 1`
       )
       expect(rows.map((r) => r.grantee)).toEqual(
-        [...PROVIDER_FUNCTION_GRANTEES.supabase].sort()
+        Object.values(PROVIDER_API_ROLES.supabase).sort()
       )
     })
   })

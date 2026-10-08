@@ -105,12 +105,14 @@ export { SQL_DEBT_FILE, sqlDebtSchema, type SqlDebt } from "./sql-debt"
 export {
   projectSchema,
   DATABASE_PROVIDERS,
+  PROVIDER_API_ROLES,
   PROVIDER_EVENT_SOURCES,
-  PROVIDER_FUNCTION_GRANTEES,
   PROVIDER_IDENTITY_SOURCES,
+  type ApiRolePurpose,
   type DatabaseProvider,
   type IdentityNameSource,
   type IdentitySource,
+  type ProviderApiRoles,
   type ProviderEventSource,
   type Project,
 } from "./project"
