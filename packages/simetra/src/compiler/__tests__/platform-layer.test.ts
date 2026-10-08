@@ -236,10 +236,19 @@ describe("platform layer", () => {
   })
 
   it("provision truncates the display name to descriptionLength and never yields NULL", async () => {
-    const model = await withUsers()
+    // Довжина, відмінна від типової: інакше вшита в генератор константа
+    // пройшла б тест.
+    const model = await compileOk({
+      [USERS_FILE]: catalog("Users", {
+        id: USERS_ID,
+        role: "users",
+        scope: "none",
+        descriptionLength: 60,
+      }),
+    })
     const provision = unit(model, PROVISION).sql
     expect(provision).toContain("ON CONFLICT DO NOTHING")
-    expect(provision).toContain("left(p_display_name, 150)")
+    expect(provision).toContain("left(p_display_name, 60)")
     expect(provision).toContain("ON CONFLICT (id) DO NOTHING")
     const created = unit(model, ON_CREATED).sql
     expect(created).toContain("NEW.is_anonymous IS TRUE")
@@ -290,8 +299,13 @@ describe("platform layer", () => {
       source
     )
     const text = units.map((u) => u.sql).join("\n")
+    const sqlOf = (identity: string) =>
+      units.find((u) => u.identity === identity)!.sql
     expect(text).toContain("ON idp.accounts")
-    expect(text).toContain("NEW.account_id")
+    // Ключ облікового запису — subject, id користувача й нейтральне ім'я: усі
+    // три місця беруть підставлену колонку.
+    expect(sqlOf(ON_CREATED).match(/NEW\.account_id\b/g)).toHaveLength(3)
+    expect(sqlOf(ON_REMOVED)).toContain("OLD.account_id::text")
     expect(text).toContain("nullif(btrim(NEW.nickname::text), '')")
     expect(text).toContain("'other-idp'")
     for (const supabase of [
