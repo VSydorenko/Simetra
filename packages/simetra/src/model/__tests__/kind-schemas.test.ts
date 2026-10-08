@@ -309,6 +309,32 @@ describe("informationRegisterSchema", () => {
   })
 })
 
+describe("personalData on register fields", () => {
+  const personal = { name: "phone", type: "Integer", personalData: true }
+  const keys = (res: { error?: z.ZodError }) =>
+    (res.error?.issues ?? []).flatMap((i) =>
+      i.code === "unrecognized_keys" ? i.keys : []
+    )
+
+  it.each([
+    ["InformationRegister", "dimensions", informationRegisterSchema],
+    ["InformationRegister", "resources", informationRegisterSchema],
+    ["AccumulationRegister", "dimensions", accumulationRegisterSchema],
+    ["AccumulationRegister", "resources", accumulationRegisterSchema],
+  ] as const)("%s %s have no personalData", (kind, field, schema) => {
+    const res = schema.safeParse({ kind, name: "R", [field]: [personal] })
+    expect(keys(res)).toEqual(["personalData"])
+  })
+
+  it.each([
+    ["InformationRegister", informationRegisterSchema],
+    ["AccumulationRegister", accumulationRegisterSchema],
+  ] as const)("%s attributes accept personalData", (kind, schema) => {
+    const res = schema.safeParse({ kind, name: "R", attributes: [personal] })
+    expect(res.success).toBe(true)
+  })
+})
+
 describe("accumulationRegisterSchema", () => {
   it("parses a register with numeric resources", () => {
     const r = accumulationRegisterSchema.parse({

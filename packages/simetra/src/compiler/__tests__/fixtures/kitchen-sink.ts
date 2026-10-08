@@ -123,6 +123,18 @@ function attributes(prefix: string) {
   ]
 }
 
+/**
+ * Поля виміру чи ресурсу регістра: набір реквізиту без `personalData` — на
+ * вимірах і ресурсах цієї властивості немає.
+ */
+function registerFields(prefix: string) {
+  return attributes(prefix).map((field) =>
+    Object.fromEntries(
+      Object.entries(field).filter(([key]) => key !== "personalData")
+    )
+  )
+}
+
 /** Перевизначення стандартного реквізиту: ключ — ім'я стандартного реквізиту. */
 const overrides = (name: string) => ({
   [name]: { title: text(name), description: text(name) },
@@ -349,7 +361,7 @@ export function kitchenSink(): Map<string, string> {
         type: "Ref",
         ref: ref("Catalog", "Item"),
       },
-      ...attributes("dim"),
+      ...registerFields("dim"),
     ],
     resources: [
       {
@@ -360,7 +372,7 @@ export function kitchenSink(): Map<string, string> {
         precision: 15,
         scale: 2,
       },
-      ...attributes("res"),
+      ...registerFields("res"),
     ],
     attributes: attributes("info"),
   }
@@ -380,7 +392,7 @@ export function kitchenSink(): Map<string, string> {
         type: "Ref",
         ref: ref("Catalog", "Item"),
       },
-      ...attributes("place"),
+      ...registerFields("place"),
     ],
     resources: [
       {
