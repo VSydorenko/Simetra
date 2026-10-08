@@ -265,6 +265,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: () => 'Scope kind name "none" is reserved',
     uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
   },
+  "schema.reserved": {
+    en: () => "Schema simetra belongs to the platform",
+    uk: () => "Схема simetra належить платформі",
+    hint: {
+      en: "Choose another schema; the platform keeps its own objects in simetra.",
+      uk: "Оберіть іншу схему: платформа тримає власні об'єкти в simetra.",
+    },
+  },
   "project.database-required": {
     en: (p) =>
       p.field === "provider"

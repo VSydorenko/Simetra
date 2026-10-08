@@ -14,6 +14,7 @@ import {
   metadataRefSchema,
   metadataKindSchema,
   METADATA_KINDS,
+  eventSubscriptionSchema,
 } from "../schemas"
 import { KIND_REGISTRY } from "../kinds/registry"
 import { unwrap } from "../format"
@@ -176,6 +177,35 @@ describe("catalogSchema", () => {
     expect(() =>
       catalogSchema.parse({ kind: "Catalog", name: "product" })
     ).toThrow()
+  })
+
+  it("schema simetra is reserved for the platform", () => {
+    const res = catalogSchema.safeParse({
+      kind: "Catalog",
+      name: "Contract",
+      schema: "simetra",
+    })
+    expect(res.success).toBe(false)
+    expect(
+      res.error?.issues.map(
+        (i) => (i as { params?: { rule?: string } }).params?.rule
+      )
+    ).toEqual(["schema.reserved"])
+  })
+
+  it("an event handler in schema simetra is reserved", () => {
+    const res = eventSubscriptionSchema.safeParse({
+      kind: "EventSubscription",
+      name: "OnSave",
+      sources: [{ kind: "Catalog", name: "Contract" }],
+      event: "onWrite",
+      handler: { schema: "simetra", name: "on_save" },
+    })
+    expect(
+      res.error?.issues.map(
+        (i) => (i as { params?: { rule?: string } }).params?.rule
+      )
+    ).toEqual(["schema.reserved"])
   })
 
   it("rejects a malformed id", () => {

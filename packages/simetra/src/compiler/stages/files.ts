@@ -1,5 +1,6 @@
 import { z, type ZodType } from "zod"
 import {
+  PLATFORM_SCHEMA,
   SCHEMA_RULES,
   SQL_DEBT_FILE,
   kindByDir,
@@ -118,6 +119,12 @@ export function readFiles(
       segments[0] === "sql" &&
       hasBase(segments[2]!, SQL_SUFFIX)
     ) {
+      // Тека `sql/simetra/` — схема платформи: файл застосунку там зіткнувся б
+      // із системним шаром, тож його вміст далі не розбирається.
+      if (segments[1] === PLATFORM_SCHEMA) {
+        result.diagnostics.push(diagnostic("schema.reserved", file, ""))
+        continue
+      }
       result.sqlFiles.push({ file, text, schema: segments[1]! })
       readMovementBlocks(file, text, undefined, result.diagnostics)
       continue

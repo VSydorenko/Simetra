@@ -12,6 +12,7 @@ export {
   type Attribute,
   type CatalogAttribute,
 } from "./attribute"
+export { PLATFORM_SCHEMA, appSchemaNameSchema } from "./pg-schema"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export {
   compositeIndexesSchema,

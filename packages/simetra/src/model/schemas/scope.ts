@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appSchemaNameSchema } from "./pg-schema"
 import {
   elementNameSchema,
   metadataIdSchema,
@@ -33,7 +34,7 @@ export const scopeKindSchema = z
         z.strictObject({
           external: z
             .strictObject({
-              schema: z.string().min(1).meta({
+              schema: appSchemaNameSchema.min(1).meta({
                 description: "PostgreSQL schema of the external root table.",
               }),
               table: z.string().min(1).meta({
@@ -53,7 +54,7 @@ export const scopeKindSchema = z
     // Схема функції за відсутності — `defaultSchema` проєкту; підставляє стадія 3.
     setFunction: z
       .strictObject({
-        schema: z.string().min(1).optional().meta({
+        schema: appSchemaNameSchema.min(1).optional().meta({
           description:
             "PostgreSQL schema of the function; defaultSchema when absent.",
         }),

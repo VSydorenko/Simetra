@@ -17,6 +17,7 @@ export const SCHEMA_RULES = [
   "customTable.identity-type",
   "pgEnum.value-duplicate",
   "scope.name-reserved",
+  "schema.reserved",
   "scope.not-allowed",
   "type.cross-scope-not-allowed",
   "type.default-not-allowed",

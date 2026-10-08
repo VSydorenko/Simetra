@@ -174,6 +174,23 @@ describe("stage 1: files", () => {
     ])
   })
 
+  it("an sql file under sql/simetra is reserved", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/simetra/own.sql":
+          "CREATE FUNCTION f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;",
+      })
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "schema.reserved",
+        file: "sql/simetra/own.sql",
+        severity: "error",
+      }),
+    ])
+  })
+
   it("orphan sql", async () => {
     const result = await compile(
       metaFiles({

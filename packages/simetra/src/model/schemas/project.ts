@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appSchemaNameSchema } from "./pg-schema"
 import { localizedStringSchema } from "./localized-string"
 import type { SchemaRule } from "./rules"
 import { ATTRIBUTE_CASES, elementNameSchema } from "./identity"
@@ -109,7 +110,7 @@ export const projectSchema = z
       .enum(["uk", "en"])
       .default("uk")
       .meta({ description: "Locale used when none is requested." }),
-    defaultSchema: z.string().default("public").meta({
+    defaultSchema: appSchemaNameSchema.default("public").meta({
       description: "PostgreSQL schema for objects that declare none.",
     }),
     // Без дефолту Zod: тихий дефолт сховав би від застосунку рішення, на якому
