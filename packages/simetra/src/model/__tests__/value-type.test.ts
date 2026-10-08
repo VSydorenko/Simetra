@@ -279,6 +279,29 @@ describe("attribute uniqueness", () => {
     expect(issues({ type: "Integer", unique: true })).toEqual([])
   })
 
+  it("personalData with required is an error", () => {
+    const issues = (input: Record<string, unknown>) =>
+      (
+        attributeSchema.safeParse({ name: "a", type: "Boolean", ...input })
+          .error?.issues ?? []
+      ).map((i) => (i as { params?: { rule?: string } }).params?.rule)
+    expect(issues({ personalData: true, required: true })).toEqual([
+      "attribute.personal-data-required",
+    ])
+    expect(issues({ personalData: true })).toEqual([])
+    expect(issues({ required: true })).toEqual([])
+    expect(
+      (
+        catalogAttributeSchema.safeParse({
+          name: "a",
+          type: "Boolean",
+          personalData: true,
+          required: true,
+        }).error?.issues ?? []
+      ).map((i) => (i as { params?: { rule?: string } }).params?.rule)
+    ).toEqual(["attribute.personal-data-required"])
+  })
+
   it("uniqueWithin requires unique and exists only on catalog attributes", () => {
     const own = (input: Record<string, unknown>) =>
       (

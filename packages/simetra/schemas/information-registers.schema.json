@@ -69,22 +69,13 @@
       "default": "NonPeriodic",
       "description": "Period granularity of the register records.",
       "type": "string",
-      "enum": [
-        "NonPeriodic",
-        "Day",
-        "Month",
-        "Quarter",
-        "Year"
-      ]
+      "enum": ["NonPeriodic", "Day", "Month", "Quarter", "Year"]
     },
     "writeMode": {
       "default": "Independent",
       "description": "Whether records are written independently or by a recorder document.",
       "type": "string",
-      "enum": [
-        "Independent",
-        "RecorderSubordinate"
-      ]
+      "enum": ["Independent", "RecorderSubordinate"]
     },
     "recorderTypes": {
       "default": [],
@@ -114,10 +105,7 @@
             "description": "Logical name of the referenced object."
           }
         },
-        "required": [
-          "kind",
-          "name"
-        ],
+        "required": ["kind", "name"],
         "additionalProperties": false,
         "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
       }
@@ -125,10 +113,7 @@
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
       "type": "string",
-      "enum": [
-        "authenticated",
-        "anon"
-      ]
+      "enum": ["authenticated", "anon"]
     },
     "standardAttributeOverrides": {
       "default": {},
@@ -289,10 +274,7 @@
                 "description": "Logical name of the referenced object."
               }
             },
-            "required": [
-              "kind",
-              "name"
-            ],
+            "required": ["kind", "name"],
             "additionalProperties": false
           },
           "allowedTypes": {
@@ -323,10 +305,7 @@
                   "description": "Logical name of the referenced object."
                 }
               },
-              "required": [
-                "kind",
-                "name"
-              ],
+              "required": ["kind", "name"],
               "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
@@ -380,17 +359,11 @@
                 "properties": {
                   "fill": {
                     "type": "string",
-                    "enum": [
-                      "now",
-                      "today",
-                      "newUuid"
-                    ],
+                    "enum": ["now", "today", "newUuid"],
                     "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                   }
                 },
-                "required": [
-                  "fill"
-                ],
+                "required": ["fill"],
                 "additionalProperties": false
               },
               {
@@ -404,18 +377,13 @@
                       },
                       {
                         "type": "string",
-                        "enum": [
-                          "object",
-                          "array"
-                        ]
+                        "enum": ["object", "array"]
                       }
                     ],
                     "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                   }
                 },
-                "required": [
-                  "empty"
-                ],
+                "required": ["empty"],
                 "additionalProperties": false
               }
             ]
@@ -432,17 +400,11 @@
           },
           "minValue": {
             "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "maxValue": {
             "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "pattern": {
             "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -454,12 +416,14 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
           }
         },
-        "required": [
-          "name",
-          "type"
-        ],
+        "required": ["name", "type"],
         "additionalProperties": false
       }
     },
@@ -578,10 +542,7 @@
                 "description": "Logical name of the referenced object."
               }
             },
-            "required": [
-              "kind",
-              "name"
-            ],
+            "required": ["kind", "name"],
             "additionalProperties": false
           },
           "allowedTypes": {
@@ -612,10 +573,7 @@
                   "description": "Logical name of the referenced object."
                 }
               },
-              "required": [
-                "kind",
-                "name"
-              ],
+              "required": ["kind", "name"],
               "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
@@ -669,17 +627,11 @@
                 "properties": {
                   "fill": {
                     "type": "string",
-                    "enum": [
-                      "now",
-                      "today",
-                      "newUuid"
-                    ],
+                    "enum": ["now", "today", "newUuid"],
                     "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                   }
                 },
-                "required": [
-                  "fill"
-                ],
+                "required": ["fill"],
                 "additionalProperties": false
               },
               {
@@ -693,18 +645,13 @@
                       },
                       {
                         "type": "string",
-                        "enum": [
-                          "object",
-                          "array"
-                        ]
+                        "enum": ["object", "array"]
                       }
                     ],
                     "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                   }
                 },
-                "required": [
-                  "empty"
-                ],
+                "required": ["empty"],
                 "additionalProperties": false
               }
             ]
@@ -721,17 +668,11 @@
           },
           "minValue": {
             "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "maxValue": {
             "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "pattern": {
             "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -743,12 +684,14 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
           }
         },
-        "required": [
-          "name",
-          "type"
-        ],
+        "required": ["name", "type"],
         "additionalProperties": false
       }
     },
@@ -867,10 +810,7 @@
                 "description": "Logical name of the referenced object."
               }
             },
-            "required": [
-              "kind",
-              "name"
-            ],
+            "required": ["kind", "name"],
             "additionalProperties": false
           },
           "allowedTypes": {
@@ -901,10 +841,7 @@
                   "description": "Logical name of the referenced object."
                 }
               },
-              "required": [
-                "kind",
-                "name"
-              ],
+              "required": ["kind", "name"],
               "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
@@ -958,17 +895,11 @@
                 "properties": {
                   "fill": {
                     "type": "string",
-                    "enum": [
-                      "now",
-                      "today",
-                      "newUuid"
-                    ],
+                    "enum": ["now", "today", "newUuid"],
                     "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                   }
                 },
-                "required": [
-                  "fill"
-                ],
+                "required": ["fill"],
                 "additionalProperties": false
               },
               {
@@ -982,18 +913,13 @@
                       },
                       {
                         "type": "string",
-                        "enum": [
-                          "object",
-                          "array"
-                        ]
+                        "enum": ["object", "array"]
                       }
                     ],
                     "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                   }
                 },
-                "required": [
-                  "empty"
-                ],
+                "required": ["empty"],
                 "additionalProperties": false
               }
             ]
@@ -1010,17 +936,11 @@
           },
           "minValue": {
             "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "maxValue": {
             "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "pattern": {
             "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -1032,20 +952,19 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
           }
         },
-        "required": [
-          "name",
-          "type"
-        ],
+        "required": ["name", "type"],
         "additionalProperties": false
       }
     }
   },
-  "required": [
-    "name",
-    "kind"
-  ],
+  "required": ["name", "kind"],
   "additionalProperties": false,
   "$id": "information-registers.schema.json"
 }

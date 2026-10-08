@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
+import type { SchemaRule } from "./rules"
 import {
   elementNameSchema,
   metadataIdSchema,
@@ -71,6 +72,28 @@ const attributeShape = {
     description:
       "Minimum number of characters (CHECK); scalar String or Text only.",
   }),
+  personalData: z.literal(true).optional().meta({
+    description:
+      "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+  }),
+}
+
+/**
+ * Знеособлення ставить колонку в `NULL`, тож обов'язковий персональний
+ * реквізит зробив би його неможливим — відхиляємо на схемі.
+ */
+function refinePersonalData(
+  value: { personalData?: true; required: boolean },
+  ctx: z.RefinementCtx
+): void {
+  if (value.personalData === true && value.required) {
+    ctx.addIssue({
+      code: "custom",
+      message: "A personalData attribute cannot be required",
+      path: ["personalData"],
+      params: { rule: "attribute.personal-data-required" satisfies SchemaRule },
+    })
+  }
 }
 
 export const attributeSchema = z
@@ -79,6 +102,7 @@ export const attributeSchema = z
     refineValueType(value, ctx)
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
+    refinePersonalData(value, ctx)
   })
 
 /**
@@ -98,6 +122,7 @@ export const catalogAttributeSchema = z
     refineValueType(value, ctx)
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
+    refinePersonalData(value, ctx)
     refineUniqueWithin(value, ctx)
   })
 

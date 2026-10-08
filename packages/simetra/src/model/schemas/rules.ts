@@ -27,6 +27,7 @@ export const SCHEMA_RULES = [
   "type.default-empty-mismatch",
   "type.unique-ignore-case-type",
   "attribute.unique-within-requires-unique",
+  "attribute.personal-data-required",
   "type.bound-type",
   "type.bound-conflict",
   "type.bound-order",

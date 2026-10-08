@@ -81,10 +81,7 @@
       "default": "String",
       "description": "Value type of the document number.",
       "type": "string",
-      "enum": [
-        "String",
-        "Number"
-      ]
+      "enum": ["String", "Number"]
     },
     "autonumber": {
       "default": true,
@@ -95,13 +92,7 @@
       "default": "Year",
       "description": "Period after which automatic numbering restarts.",
       "type": "string",
-      "enum": [
-        "None",
-        "Year",
-        "Quarter",
-        "Month",
-        "Day"
-      ]
+      "enum": ["None", "Year", "Quarter", "Month", "Day"]
     },
     "posting": {
       "description": "Posting declaration of the document.",
@@ -138,10 +129,7 @@
                     "description": "Logical name of the referenced object."
                   }
                 },
-                "required": [
-                  "kind",
-                  "name"
-                ],
+                "required": ["kind", "name"],
                 "additionalProperties": false,
                 "description": "Register that receives the movement."
               },
@@ -160,9 +148,7 @@
                         "description": "Name of the tabular section that produces the rows."
                       }
                     },
-                    "required": [
-                      "tabularSection"
-                    ],
+                    "required": ["tabularSection"],
                     "additionalProperties": false
                   }
                 ],
@@ -196,11 +182,7 @@
                 "description": "Register field name to expression; the register defines each field role."
               }
             },
-            "required": [
-              "register",
-              "source",
-              "fields"
-            ],
+            "required": ["register", "source", "fields"],
             "additionalProperties": false,
             "description": "One movement of the document into a register."
           }
@@ -236,10 +218,7 @@
             "description": "Logical name of the referenced object."
           }
         },
-        "required": [
-          "kind",
-          "name"
-        ],
+        "required": ["kind", "name"],
         "additionalProperties": false,
         "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
       }
@@ -247,10 +226,7 @@
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
       "type": "string",
-      "enum": [
-        "authenticated",
-        "anon"
-      ]
+      "enum": ["authenticated", "anon"]
     },
     "standardAttributeOverrides": {
       "default": {},
@@ -411,10 +387,7 @@
                 "description": "Logical name of the referenced object."
               }
             },
-            "required": [
-              "kind",
-              "name"
-            ],
+            "required": ["kind", "name"],
             "additionalProperties": false
           },
           "allowedTypes": {
@@ -445,10 +418,7 @@
                   "description": "Logical name of the referenced object."
                 }
               },
-              "required": [
-                "kind",
-                "name"
-              ],
+              "required": ["kind", "name"],
               "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
@@ -502,17 +472,11 @@
                 "properties": {
                   "fill": {
                     "type": "string",
-                    "enum": [
-                      "now",
-                      "today",
-                      "newUuid"
-                    ],
+                    "enum": ["now", "today", "newUuid"],
                     "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                   }
                 },
-                "required": [
-                  "fill"
-                ],
+                "required": ["fill"],
                 "additionalProperties": false
               },
               {
@@ -526,18 +490,13 @@
                       },
                       {
                         "type": "string",
-                        "enum": [
-                          "object",
-                          "array"
-                        ]
+                        "enum": ["object", "array"]
                       }
                     ],
                     "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                   }
                 },
-                "required": [
-                  "empty"
-                ],
+                "required": ["empty"],
                 "additionalProperties": false
               }
             ]
@@ -554,17 +513,11 @@
           },
           "minValue": {
             "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "maxValue": {
             "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-            "type": [
-              "number",
-              "string"
-            ]
+            "type": ["number", "string"]
           },
           "pattern": {
             "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -576,12 +529,14 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
           }
         },
-        "required": [
-          "name",
-          "type"
-        ],
+        "required": ["name", "type"],
         "additionalProperties": false
       }
     },
@@ -782,10 +737,7 @@
                       "description": "Logical name of the referenced object."
                     }
                   },
-                  "required": [
-                    "kind",
-                    "name"
-                  ],
+                  "required": ["kind", "name"],
                   "additionalProperties": false
                 },
                 "allowedTypes": {
@@ -816,10 +768,7 @@
                         "description": "Logical name of the referenced object."
                       }
                     },
-                    "required": [
-                      "kind",
-                      "name"
-                    ],
+                    "required": ["kind", "name"],
                     "additionalProperties": false,
                     "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
                   }
@@ -873,17 +822,11 @@
                       "properties": {
                         "fill": {
                           "type": "string",
-                          "enum": [
-                            "now",
-                            "today",
-                            "newUuid"
-                          ],
+                          "enum": ["now", "today", "newUuid"],
                           "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                         }
                       },
-                      "required": [
-                        "fill"
-                      ],
+                      "required": ["fill"],
                       "additionalProperties": false
                     },
                     {
@@ -897,18 +840,13 @@
                             },
                             {
                               "type": "string",
-                              "enum": [
-                                "object",
-                                "array"
-                              ]
+                              "enum": ["object", "array"]
                             }
                           ],
                           "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                         }
                       },
-                      "required": [
-                        "empty"
-                      ],
+                      "required": ["empty"],
                       "additionalProperties": false
                     }
                   ]
@@ -925,17 +863,11 @@
                 },
                 "minValue": {
                   "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-                  "type": [
-                    "number",
-                    "string"
-                  ]
+                  "type": ["number", "string"]
                 },
                 "maxValue": {
                   "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-                  "type": [
-                    "number",
-                    "string"
-                  ]
+                  "type": ["number", "string"]
                 },
                 "pattern": {
                   "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -947,12 +879,14 @@
                   "type": "integer",
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991
+                },
+                "personalData": {
+                  "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+                  "type": "boolean",
+                  "const": true
                 }
               },
-              "required": [
-                "name",
-                "type"
-              ],
+              "required": ["name", "type"],
               "additionalProperties": false
             }
           },
@@ -986,10 +920,7 @@
                             "description": "Descending order of this key part."
                           }
                         },
-                        "required": [
-                          "name",
-                          "order"
-                        ],
+                        "required": ["name", "order"],
                         "additionalProperties": false
                       }
                     ]
@@ -997,17 +928,13 @@
                   "description": "Attributes and standard attributes of the same table in key order; a name, or { name, order: desc } for a descending part."
                 }
               },
-              "required": [
-                "attributes"
-              ],
+              "required": ["attributes"],
               "additionalProperties": false,
               "description": "Non-unique btree index over attributes of the same table; the scope carrier is added first automatically."
             }
           }
         },
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "additionalProperties": false,
         "description": "Tabular section: a list of rows owned by an object."
       }
@@ -1042,10 +969,7 @@
                       "description": "Descending order of this key part."
                     }
                   },
-                  "required": [
-                    "name",
-                    "order"
-                  ],
+                  "required": ["name", "order"],
                   "additionalProperties": false
                 }
               ]
@@ -1053,18 +977,13 @@
             "description": "Attributes and standard attributes of the same table in key order; a name, or { name, order: desc } for a descending part."
           }
         },
-        "required": [
-          "attributes"
-        ],
+        "required": ["attributes"],
         "additionalProperties": false,
         "description": "Non-unique btree index over attributes of the same table; the scope carrier is added first automatically."
       }
     }
   },
-  "required": [
-    "name",
-    "kind"
-  ],
+  "required": ["name", "kind"],
   "additionalProperties": false,
   "$id": "documents.schema.json"
 }

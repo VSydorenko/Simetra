@@ -136,6 +136,68 @@ describe("numbering contract", () => {
   })
 })
 
+describe("personalData contract", () => {
+  it("contracts list personal columns per table", async () => {
+    const section = {
+      id: "00000000-0000-4000-8000-000000000c02",
+      name: "contacts",
+      physicalName: "person_contacts",
+      attributes: [
+        attribute("email", {
+          type: "String",
+          length: 50,
+          personalData: true,
+        }),
+        attribute("kind", { type: "String", length: 10 }),
+      ],
+    }
+    const { personalData } = await contracts({
+      "project.meta.json": project(),
+      "catalogs/Service/Service.meta.json": catalog("Service"),
+      "catalogs/Person/Person.meta.json": catalog("Person", {
+        id: "00000000-0000-4000-8000-000000000c01",
+        attributes: [
+          attribute("phone", {
+            type: "String",
+            length: 20,
+            personalData: true,
+          }),
+          attribute("origin", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "Catalog", name: "Service" },
+              { kind: "Catalog", name: "Person" },
+            ],
+            personalData: true,
+          }),
+          attribute("note", { type: "String", length: 20 }),
+        ],
+        tabularSections: [section],
+      }),
+    })
+    expect(personalData).toEqual([
+      {
+        objectId: "00000000-0000-4000-8000-000000000c01",
+        table: { schema: "public", name: "person" },
+        columns: ["phone", "origin_type", "origin_id"],
+      },
+      {
+        objectId: "00000000-0000-4000-8000-000000000c01",
+        table: { schema: "public", name: "person_contacts" },
+        columns: ["email"],
+      },
+    ])
+  })
+
+  it("no personal attributes give an empty contract", async () => {
+    const { personalData } = await contracts({
+      "project.meta.json": project(),
+      "catalogs/A/A.meta.json": catalog("A"),
+    })
+    expect(personalData).toEqual([])
+  })
+})
+
 describe("predefined contract", () => {
   it("predefined contract lists items with labels in file order", async () => {
     const { predefined } = await contracts({

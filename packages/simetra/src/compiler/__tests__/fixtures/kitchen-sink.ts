@@ -51,6 +51,7 @@ function attributes(prefix: string) {
       length: 12,
       pattern: "^[A-Z]{2,}\\d*$",
       minLength: 2,
+      personalData: true,
     },
     {
       ...common(`${prefix}Note`, `${prefix}_note`),

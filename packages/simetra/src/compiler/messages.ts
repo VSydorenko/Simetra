@@ -176,6 +176,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: 'Задайте unique: true чи "ignoreCase" або приберіть uniqueWithin.',
     },
   },
+  "attribute.personal-data-required": {
+    en: () => "A personalData attribute cannot be required",
+    uk: () => "Атрибут personalData не може бути обов'язковим",
+    hint: {
+      en: "Anonymization sets the column to NULL: remove required or personalData.",
+      uk: "Знеособлення ставить колонку в NULL: приберіть required або personalData.",
+    },
+  },
   "type.bound-type": {
     en: () =>
       "Numeric bounds apply only to a scalar Integer, SmallInt, BigInt or Numeric",

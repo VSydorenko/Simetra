@@ -196,6 +196,16 @@ export interface EventSubscriptionContract {
   description?: LocalizedString
 }
 
+/**
+ * Персональні колонки таблиці (спека промоції §9.10): команда знеособлення
+ * (П4) ставить їх у `NULL`. Поліморфна пара дає обидві фізичні колонки.
+ */
+export interface PersonalDataContract {
+  objectId: string
+  table: QualifiedName
+  columns: string[]
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -211,6 +221,8 @@ export interface Contracts {
   storageBuckets: { bucket: string; scopeKindId: string }[]
   /** За `subscriptionId`. */
   eventSubscriptions: EventSubscriptionContract[]
+  /** За `objectId`, далі за таблицею: основна й кожна ТЧ — окремі записи. */
+  personalData: PersonalDataContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -547,7 +559,73 @@ export function buildContracts(
       }))
       .sort((a, b) => compareStrings(a.bucket, b.bucket)),
     eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
+    personalData: personalDataContracts(objects, physical),
   }
+}
+
+/**
+ * Лише таблиці, де є персональні реквізити. Колонки беремо за `elementId`
+ * реквізиту, а не за іменем: фізичні імена призначені раз і не збігаються
+ * з логічними.
+ */
+function personalDataContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot
+): PersonalDataContract[] {
+  const personal = (attributes: readonly Attribute[] | undefined) =>
+    (attributes ?? []).filter((a) => a.personalData === true)
+  const record = (
+    objectId: string,
+    table: PhysicalTable | undefined,
+    attributes: readonly Attribute[]
+  ): PersonalDataContract[] => {
+    if (table === undefined || attributes.length === 0) return []
+    const ids = new Set(attributes.map((a) => a.id))
+    const columns = table.columns
+      .filter(
+        (c) => c.origin.elementId !== undefined && ids.has(c.origin.elementId)
+      )
+      .map((c) => c.name)
+    return columns.length === 0
+      ? []
+      : [
+          {
+            objectId,
+            table: { schema: table.schema, name: table.name },
+            columns,
+          },
+        ]
+  }
+  return objects
+    .flatMap((object): PersonalDataContract[] => {
+      const objectId = object.id ?? ""
+      const data = object.data as Record<string, unknown>
+      const own = KIND_REGISTRY[object.kind].columnFields.flatMap((field) =>
+        personal(data[field] as Attribute[] | undefined)
+      )
+      const sections = (
+        (data.tabularSections ?? []) as {
+          id?: string
+          attributes: Attribute[]
+        }[]
+      ).flatMap((section) =>
+        record(
+          objectId,
+          physical.tables.find((t) => t.origin.tabularSectionId === section.id),
+          personal(section.attributes)
+        )
+      )
+      return [
+        ...record(objectId, mainTableOf(physical, objectId), own),
+        ...sections,
+      ]
+    })
+    .sort(
+      (a, b) =>
+        compareStrings(a.objectId, b.objectId) ||
+        compareStrings(a.table.schema, b.table.schema) ||
+        compareStrings(a.table.name, b.table.name)
+    )
 }
 
 /** Таблиця-джерело підписки: основна таблиця об'єкта чи таблиця провайдера. */
