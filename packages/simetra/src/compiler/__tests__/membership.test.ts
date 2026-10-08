@@ -94,10 +94,44 @@ describe("membership", () => {
       expect(sql).toContain("SET search_path = ''")
       expect(sql).toContain("(SELECT simetra.current_user_id())")
     }
-    const body = unit(MY_MEMBER).sql
-    expect(body).toContain("RETURNS uuid")
-    expect(body).toContain("IS NOT NULL")
-    expect(unit(MEMBER_SCOPES).sql).toContain("RETURNS SETOF uuid")
+  })
+
+  it("generated membership functions have the exact expected text", async () => {
+    const model = await compileOk(files())
+    const sqlOf = (identity: string) =>
+      model.sqlUnits.find((u) => u.identity === identity)!.sql
+    // Точний текст, а не фрагменти: фільтр за скоупом, колонка результату й
+    // фільтр користувача — те, що підміна на «WHERE true» чи не ту колонку
+    // зламала б мовчки.
+    expect(sqlOf(MY_MEMBER)).toBe(
+      [
+        "CREATE OR REPLACE FUNCTION app.org_member_my_member(p_scope uuid)",
+        "RETURNS uuid",
+        "LANGUAGE sql STABLE SECURITY DEFINER",
+        "SET search_path = ''",
+        "AS $simetra$",
+        "SELECT m.id",
+        "FROM app.org_member m",
+        "WHERE m.org_id = org_member_my_member.p_scope",
+        "  AND m.user_id IS NOT NULL",
+        "  AND m.user_id = (SELECT simetra.current_user_id())",
+        "$simetra$;",
+      ].join("\n")
+    )
+    expect(sqlOf(MEMBER_SCOPES)).toBe(
+      [
+        "CREATE OR REPLACE FUNCTION app.org_member_member_scopes()",
+        "RETURNS SETOF uuid",
+        "LANGUAGE sql STABLE SECURITY DEFINER",
+        "SET search_path = ''",
+        "AS $simetra$",
+        "SELECT m.org_id",
+        "FROM app.org_member m",
+        "WHERE m.user_id IS NOT NULL",
+        "  AND m.user_id = (SELECT simetra.current_user_id())",
+        "$simetra$;",
+      ].join("\n")
+    )
   })
 
   it("generated membership functions revoke PUBLIC and grant only authenticated", async () => {
@@ -173,6 +207,77 @@ describe("membership", () => {
       from: { file: MEMBER_FILE, pointer: "/membership/user" },
       to: { kind: "Element" },
     })
+  })
+
+  it("a unique user attribute does not duplicate the membership key", async () => {
+    // `unique: true` реквізиту вже дає ключ (скоуп, користувач): другий такий
+    // самий ключ був би зайвим індексом.
+    const model = await compileOk(
+      files({
+        [MEMBER_FILE]: member("OrgMember", {
+          attributes: [userAttribute({ unique: true })],
+        }),
+      })
+    )
+    const keys = tableOf(model.physical, "org_member").uniques.filter(
+      (u) => u.columns.join() === "org_id,user_id"
+    )
+    expect(keys).toHaveLength(1)
+  })
+
+  it("setFunction membership looks for a membership catalog of its own scope kind only", async () => {
+    // Членство чужого виду не може задовольнити вид, що його не має: перевірка
+    // `scope === kind.name` відрізняє «є членство десь» від «є членство виду».
+    const result = await compile(
+      metaFiles(
+        files({
+          "project.meta.json": project({
+            defaultSchema: "app",
+            scopeKinds: [
+              {
+                id: uuid(80),
+                name: "org",
+                physicalName: "org_id",
+                root: { object: { kind: "Catalog", name: "Organization" } },
+                setFunction: "membership",
+              },
+              {
+                id: uuid(83),
+                name: "team",
+                physicalName: "team_id",
+                root: { object: { kind: "Catalog", name: "Team" } },
+                setFunction: { name: "team_ids" },
+              },
+            ],
+          }),
+          "catalogs/Team/Team.meta.json": catalog("Team", { scope: "team" }),
+          [MEMBER_FILE]: member("OrgMember", { scope: "team" }),
+        })
+      )
+    )
+    const found = result.diagnostics.filter(
+      (d) => d.code === "scope.membership-missing"
+    )
+    expect(found.map((d) => `${d.file} ${d.pointer}`)).toEqual([
+      "project.meta.json /scopeKinds/0/setFunction",
+    ])
+  })
+
+  it("membership.user resolves to the named attribute, not the first one", async () => {
+    const model = await compileOk(
+      files({
+        [MEMBER_FILE]: member("OrgMember", {
+          attributes: [
+            attribute("note", { id: uuid(90), type: "Text" }),
+            userAttribute({ id: uuid(91) }),
+          ],
+        }),
+      })
+    )
+    const [membershipUser] = model.references.filter(
+      (r) => r.role === "catalog.membershipUser"
+    )
+    expect(membershipUser!.to).toEqual({ kind: "Element", id: uuid(91) })
   })
 
   it("a verbatim function named like a generated one is an error", async () => {

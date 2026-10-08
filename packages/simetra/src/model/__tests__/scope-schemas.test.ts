@@ -43,6 +43,27 @@ describe("scope declarations", () => {
     ).toEqual([])
   })
 
+  it("setFunction accepts the literal membership and nothing else as a string", () => {
+    const project = (setFunction: unknown) => ({
+      name: "app",
+      database: { provider: "supabase" },
+      scopeKinds: [
+        {
+          name: "org",
+          root: { object: { kind: "Catalog", name: "Organization" } },
+          setFunction,
+        },
+      ],
+    })
+    const parsed = projectSchema.safeParse(project("membership"))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.scopeKinds[0]?.setFunction).toBe("membership")
+    }
+    expect(projectSchema.safeParse(project("set_org")).success).toBe(false)
+    expect(projectSchema.safeParse(project("Membership")).success).toBe(false)
+  })
+
   it("scope kind named none is rejected", () => {
     expect(
       rules(projectSchema, {

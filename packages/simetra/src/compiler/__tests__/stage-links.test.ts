@@ -588,6 +588,7 @@ describe("stage 5: bare current user in a policy", () => {
     ["limited", "(select simetra.current_user_id() limit 1)"],
     ["union", "(select simetra.current_user_id() union select owner_id)"],
     ["any sublink", "ANY (select simetra.current_user_id())"],
+    ["aliased", "(select simetra.current_user_id() AS uid)"],
   ])("a %s subquery is an error", async (_name, call) => {
     const result = await policy(
       `CREATE POLICY p ON public.t USING (owner_id = ${call});`

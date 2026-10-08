@@ -135,6 +135,23 @@ describe("catalogSchema", () => {
     ])
   })
 
+  it("membership names the user attribute and is a strict object", () => {
+    const base = { kind: "Catalog", name: "OrgMember" }
+    expect(
+      catalogSchema.parse({ ...base, membership: { user: "user" } }).membership
+    ).toEqual({ user: "user" })
+    expect(catalogSchema.parse(base).membership).toBeUndefined()
+    expect(catalogSchema.safeParse({ ...base, membership: {} }).success).toBe(
+      false
+    )
+    expect(
+      catalogSchema.safeParse({
+        ...base,
+        membership: { user: "user", extra: true },
+      }).success
+    ).toBe(false)
+  })
+
   it("parses a minimal catalog with defaults", () => {
     const r = catalogSchema.parse({ kind: "Catalog", name: "Product" })
     expect(r.codeLength).toBe(9)
