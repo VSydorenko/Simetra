@@ -30,6 +30,7 @@ import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
   namespaceConflicts,
   readSqlUnits,
+  unitDuplicates,
   type SqlSource,
   type SqlUnit,
   type UnitGenerator,
@@ -331,7 +332,11 @@ function readAppSql(
   return {
     units: kept.units,
     rowRules: kept.rowRules,
-    diagnostics: [...read.diagnostics, ...kept.diagnostics],
+    diagnostics: [
+      ...read.diagnostics,
+      ...kept.diagnostics,
+      ...unitDuplicates(kept.units),
+    ],
   }
 }
 

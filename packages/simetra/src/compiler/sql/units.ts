@@ -139,8 +139,10 @@ export const FUNCTION_CLASSES: ReadonlySet<SqlUnitClass> = new Set([
 
 /**
  * Розбирає дослівні `.sql` на одиниці (платформна спека §6.3): гейт дозволених
- * операторів, ідентичність за класом і дублікати між файлами. Блоки запиту
- * рухів вирізано заздалегідь — це не оператори бажаного стану.
+ * операторів та ідентичність за класом. Блоки запиту рухів вирізано
+ * заздалегідь — це не оператори бажаного стану. Дублікати — окремий крок
+ * (`unitDuplicates`): компілятор шукає їх лише серед одиниць, що пройшли
+ * правила файлів застосунку, інакше відкинута одиниця дала б ще й дубль.
  */
 export function readSqlUnits(
   sources: readonly SqlSource[],
@@ -244,6 +246,15 @@ export function readSqlUnits(
       })
     }
   }
+  return { units, rowRules, diagnostics }
+}
+
+/**
+ * Дослівні одиниці з тотожною ідентичністю: першою вважається та, що раніше
+ * за файлом (порядок `readSqlUnits`) і рядком, помилку отримує кожна наступна.
+ */
+export function unitDuplicates(units: readonly VerbatimUnit[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
   const first = new Map<string, VerbatimUnit>()
   for (const unit of units) {
     const earlier = first.get(unit.identity)
@@ -253,7 +264,7 @@ export function readSqlUnits(
       diagnostics.push(duplicate(unit, `${earlier.file}:${earlier.line}`))
     }
   }
-  return { units, rowRules, diagnostics }
+  return diagnostics
 }
 
 /**

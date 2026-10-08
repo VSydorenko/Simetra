@@ -142,6 +142,10 @@ export function statementTargets(stmt: Node, schema: string): UnitTarget[] {
   if ("GrantStmt" in stmt) {
     const node = stmt.GrantStmt
     const objects = node.objects ?? []
+    // `ON ALL … IN SCHEMA s` перелічує схеми, а не об'єкти: ціль — сама
+    // схема, як у типових привілеїв `IN SCHEMA`.
+    if (node.targtype === "ACL_TARGET_ALL_IN_SCHEMA")
+      return objects.map((o) => schemaTarget(strings([o])[0]!))
     return objects.map((o) => objectTarget(o, node.objtype, schema))
   }
   if ("CommentStmt" in stmt) {

@@ -248,6 +248,37 @@ describe("stage 1: files", () => {
     ])
   })
 
+  it("two identical platform functions in two files are reserved, not duplicates", async () => {
+    const fn =
+      "CREATE FUNCTION simetra.f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;"
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/a.sql": fn,
+        "sql/public/b.sql": fn,
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["schema.reserved", "sql/public/a.sql", 1],
+      ["schema.reserved", "sql/public/b.sql", 1],
+    ])
+  })
+
+  it("ordinary duplicates are still reported", async () => {
+    const fn =
+      "CREATE FUNCTION public.f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;"
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/a.sql": fn,
+        "sql/public/b.sql": fn,
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["sql.unit-duplicate", "sql/public/b.sql", 1],
+    ])
+  })
+
   it("a row rule on a platform table is reserved", async () => {
     const result = await compile(
       metaFiles({

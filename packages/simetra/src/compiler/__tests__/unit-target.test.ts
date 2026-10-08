@@ -143,6 +143,22 @@ describe("unitTarget", () => {
     ).toEqual([])
   })
 
+  it("a grant on all objects in a schema targets the schema", () => {
+    for (const objects of ["TABLES", "FUNCTIONS", "SEQUENCES"]) {
+      expect(
+        targets(
+          "grant",
+          `GRANT SELECT ON ALL ${objects} IN SCHEMA simetra, app TO anon`,
+          "public"
+        ),
+        objects
+      ).toEqual([
+        { schema: "simetra", object: "simetra", kind: "schema" },
+        { schema: "app", object: "app", kind: "schema" },
+      ])
+    }
+  })
+
   it("a unit that is its own object has no target", () => {
     expect(
       target("view", "CREATE VIEW app.v AS SELECT 1", "app")
