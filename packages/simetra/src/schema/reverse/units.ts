@@ -1,11 +1,12 @@
 import {
   diagnostic,
+  unitPlacement,
+  unitTarget,
   type Diagnostic,
   type Node,
   type SqlParser,
 } from "simetra/compiler"
 import type { CatalogUnit, SqlUnitClass } from "simetra/model"
-import { unitPlacement, unitTarget } from "../engine/unit-target"
 import { terminate } from "../render/desired-state"
 
 export interface UnitsContext {

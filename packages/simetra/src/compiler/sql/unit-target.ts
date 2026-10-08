@@ -1,5 +1,6 @@
-import type { Node, RangeVar, SqlParser } from "simetra/compiler"
+import type { Node, RangeVar } from "libpg-query"
 import type { CatalogUnit } from "simetra/model"
+import type { SqlParser } from "./parse"
 
 /**
  * Ціль одиниці — об'єкт, на який діє оператор без власного об'єкта в схемі
@@ -56,7 +57,9 @@ export function unitTarget(
  */
 export function unitTargets(unit: TargetUnit, parse: SqlParser): UnitTarget[] {
   if (!TARGETED.has(unit.class)) return []
-  return statements(unit, parse).flatMap((stmt) => targetsOf(stmt, unit.schema))
+  return statements(unit, parse).flatMap((stmt) =>
+    statementTargets(stmt, unit.schema)
+  )
 }
 
 /**
@@ -126,7 +129,12 @@ const TABLE_MEMBERS: ReadonlyMap<string, UnitTarget["kind"]> = new Map([
   ["OBJECT_TABCONSTRAINT", "other"],
 ])
 
-function targetsOf(stmt: Node, schema: string): UnitTarget[] {
+/**
+ * Цілі одного оператора з уже розібраного дерева: компілятор читає їх під час
+ * розбору `.sql` (резервування схеми платформи), не розбираючи текст удруге.
+ * `schema` — схема некваліфікованих імен; оператор без цілі дає порожній список.
+ */
+export function statementTargets(stmt: Node, schema: string): UnitTarget[] {
   if ("CreatePolicyStmt" in stmt)
     return [table(stmt.CreatePolicyStmt.table, schema)]
   if ("CreateTrigStmt" in stmt)

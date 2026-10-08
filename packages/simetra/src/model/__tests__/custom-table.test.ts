@@ -73,6 +73,29 @@ describe("customTableSchema", () => {
     expect(res.success).toBe(true)
   })
 
+  it("an external foreign key into schema simetra is reserved", () => {
+    expect(
+      rules(
+        customTableSchema,
+        table({
+          columns: [{ name: "userId", type: "UUID" }],
+          foreignKeys: [
+            {
+              columns: ["userId"],
+              references: {
+                external: {
+                  schema: "simetra",
+                  table: "identities",
+                  columns: ["id"],
+                },
+              },
+            },
+          ],
+        })
+      )
+    ).toEqual(["schema.reserved"])
+  })
+
   it("accepts partial, expression and nulls-not-distinct indexes", () => {
     const res = customTableSchema.parse(
       table({

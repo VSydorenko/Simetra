@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { loadSqlParser, type SqlParser } from "simetra/compiler"
+import {
+  loadSqlParser,
+  unitTarget,
+  unitTargets,
+  type SqlParser,
+} from "simetra/compiler"
 import type { SqlUnitClass } from "simetra/model"
-import { unitTarget, unitTargets } from "simetra/schema"
 
 /**
  * Структурована ціль одиниці (план E2b, рішення 9): схема й об'єкт, на які
