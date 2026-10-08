@@ -5,6 +5,7 @@ import {
   readSqlUnits,
   type SchemaPathResolver,
   type SqlParser,
+  withoutLocations,
 } from "simetra/compiler"
 import {
   catalogFromSnapshot,
@@ -1156,6 +1157,37 @@ describe("reverseGenerate", () => {
         "CREATE FUNCTION app.s() RETURNS integer STABLE LANGUAGE sql AS $$ SELECT 1 $$;\n"
       )
     })
+
+    // Тіло SQL-стандарту друкується після опцій: вставка слова зсуває його
+    // позиції, а зміст лишається тим самим
+    it.each([
+      ["r", "CREATE FUNCTION app.r() RETURNS integer LANGUAGE sql RETURN 1;"],
+      [
+        "atomic",
+        "CREATE FUNCTION app.atomic() RETURNS integer LANGUAGE sql BEGIN ATOMIC SELECT 1; END;",
+      ],
+    ])(
+      "a SQL-standard body (app.%s) gets VOLATILE and keeps its body",
+      async (name, sql) => {
+        const [unit] = units(sql)
+        const result = await reverseGenerate(
+          model({ units: [{ ...unit!, volatility: "volatile" }] }),
+          options()
+        )
+        expect(result.diagnostics).toEqual([])
+        const text = result.files.get(`sql/app/${name}.sql`)
+        expect(text).toContain(" VOLATILE LANGUAGE sql ")
+        const body = (source: string) => {
+          const parsed = parse(source)
+          const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+          return stmt !== undefined && "CreateFunctionStmt" in stmt
+            ? withoutLocations(stmt.CreateFunctionStmt.sql_body)
+            : undefined
+        }
+        expect(body(text!)).toBeDefined()
+        expect(body(text!)).toEqual(body(sql))
+      }
+    )
 
     it("a procedure is untouched", async () => {
       const procedure =

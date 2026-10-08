@@ -95,10 +95,19 @@ export function mapModel(
           detail: `${encodeId(earlier)} maps to the same unit ${mapped.identity}`,
         })
       sources.set(mapped.identity, fact.id)
-      const volatility =
-        mapped.class === "function"
-          ? ctx.volatility.get(encodeId(fact.id))
-          : undefined
+      if (mapped.class !== "function") {
+        units.push(mapped)
+        continue
+      }
+      // Без факту текст лишився б без явної волатильності — боргом закритої
+      // оболонки; мовчазний пропуск сховав би розбіжність ключів із двигуном
+      const volatility = ctx.volatility.get(encodeId(fact.id))
+      if (volatility === undefined)
+        issues.push({
+          object: fact.id,
+          property: "volatility",
+          detail: "pg_proc has no volatility under the engine identity",
+        })
       units.push(volatility === undefined ? mapped : { ...mapped, volatility })
     }
   }

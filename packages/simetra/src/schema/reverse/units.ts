@@ -6,6 +6,7 @@ import {
   type Diagnostic,
   type Node,
   type SqlParser,
+  withoutLocations,
 } from "simetra/compiler"
 import type { CatalogUnit, SqlUnitClass } from "simetra/model"
 import { terminate } from "../render/desired-state"
@@ -118,12 +119,16 @@ function explicitVolatility(unit: CatalogUnit, parse: SqlParser): string {
   const bytes = encoder.encode(unit.sql)
   const sql = `${decoder.decode(bytes.subarray(0, at))}${unit.volatility.toUpperCase()} ${decoder.decode(bytes.subarray(at))}`
   // Вставка змінює лише волатильність: тіло й ідентичність — ті самі.
+  // Тіло SQL-стандарту стоїть після опцій, тож його позиції зсуваються —
+  // порівнюємо зміст без них.
   const after = createFunction(sql, parse)
   const body = (f: NonNullable<typeof before>) =>
-    JSON.stringify([
-      f.options.find((o) => o.defname === "as")?.arg,
-      f.fn.sql_body,
-    ])
+    JSON.stringify(
+      withoutLocations([
+        f.options.find((o) => o.defname === "as")?.arg,
+        f.fn.sql_body,
+      ])
+    )
   const [identity] = readSqlUnits(
     [{ file: unit.identity, text: sql, schema: "" }],
     parse,

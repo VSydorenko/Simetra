@@ -508,3 +508,58 @@ describe("what the round trip cannot carry is loud", () => {
     ).toEqual([expect.stringMatching(/^1 object\(s\) of class cast /)])
   })
 })
+
+describe("function volatility is read under the extraction search_path", () => {
+  // Ідентичність двигуна кваліфікує типи аргументів, бо витяг іде під
+  // `search_path = pg_catalog`; факт волатильності під типовим шляхом сесії
+  // дав би некваліфікований тип зі схеми на шляху, і функція мовчки лишилася б
+  // без явної VOLATILE — тобто боргом закритої оболонки
+  it.each([
+    [
+      "public",
+      `CREATE TYPE public.mood AS ENUM ('ok', 'bad');
+       CREATE FUNCTION app.rate(a public.mood) RETURNS integer
+         LANGUAGE sql VOLATILE AS $$ SELECT 1 $$;`,
+    ],
+    [
+      "extensions",
+      // Рядковий тип представлення розширення стеку: без DDL у `extensions`
+      `CREATE FUNCTION app.rate(a extensions.pg_stat_statements_info)
+         RETURNS integer LANGUAGE sql VOLATILE AS $$ SELECT 1 $$;`,
+    ],
+  ])(
+    "a VOLATILE function over a type in %s gets explicit VOLATILE and is not debt",
+    async (_schema, sql) => {
+      const scope = scopeOf(["app", "public"])
+      await inTarget(`CREATE SCHEMA app;\n${sql}`, scope, async (target) => {
+        const extracted = await engine.extract(target, scope)
+        expect(errors(extracted.diagnostics)).toEqual([])
+        const unit = extracted.model.units.find(
+          (u) => u.class === "function" && u.name === "rate"
+        )
+        expect(unit?.volatility).toBe("volatile")
+        const reversed = await reverseGenerate(extracted.model, {
+          project: {
+            name: "RoundTrip",
+            defaultSchema: "app",
+            attributeCase: "snake_case",
+            databaseProvider: "supabase",
+          },
+          existing: new Map(),
+          newId: () => randomUUID(),
+          schemaPath,
+          parse,
+        })
+        expect(errors(reversed.diagnostics)).toEqual([])
+        const text = [...reversed.files].find(([path]) =>
+          path.includes("/rate")
+        )?.[1]
+        expect(text).toMatch(/\bVOLATILE\b/)
+        const debt = JSON.parse(
+          reversed.files.get("sql-debt.json") ?? "{}"
+        ) as { units?: string[] }
+        expect(debt.units ?? []).not.toContain(unit!.identity)
+      })
+    }
+  )
+})

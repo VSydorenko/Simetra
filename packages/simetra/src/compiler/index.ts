@@ -28,7 +28,12 @@ export {
 } from "./compile"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
-export { readSqlUnits, type SqlSource, type SqlUnit } from "./sql/units"
+export {
+  readSqlUnits,
+  withoutLocations,
+  type SqlSource,
+  type SqlUnit,
+} from "./sql/units"
 export { loadSqlParser, type SqlParser } from "./sql/parse"
 export {
   triggerFunctionSchema,
