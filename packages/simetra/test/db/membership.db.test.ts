@@ -10,7 +10,7 @@ import {
   project,
   uuid,
 } from "../../src/compiler/__tests__/helpers"
-import { withRollback } from "./connection"
+import { queryAs, withRollback } from "./connection"
 
 /**
  * Членство на справжньому Postgres (спека користувачів §8): унікальність
@@ -85,32 +85,6 @@ async function member(
   return rows[0]!.id
 }
 
-/**
- * Запит від ролі API з claims, як їх ставить PostgREST; роль і claims діють
- * до кінця точки збереження, тож наступний запит тесту — знову від власника.
- */
-async function asRole<T>(
-  client: pg.Client,
-  role: "authenticated" | "anon",
-  claims: Record<string, unknown>,
-  sql: string,
-  params: unknown[] = []
-): Promise<{ rows: T[] } | { code: string }> {
-  await client.query("SAVEPOINT as_role")
-  try {
-    await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
-      JSON.stringify(claims),
-    ])
-    await client.query(`SET LOCAL ROLE ${role}`)
-    const { rows } = await client.query<T & pg.QueryResultRow>(sql, params)
-    return { rows }
-  } catch (error) {
-    return { code: (error as { code: string }).code }
-  } finally {
-    await client.query("ROLLBACK TO SAVEPOINT as_role")
-  }
-}
-
 const user = (sub: string) => ({ sub, role: "authenticated" })
 
 describe("membership in Postgres", () => {
@@ -143,7 +117,7 @@ describe("membership in Postgres", () => {
       await member(client, other, bob)
       await member(client, invitedOnly, null)
       const myMember = (sub: string, org: string) =>
-        asRole<{ m: string | null }>(
+        queryAs<{ m: string | null }>(
           client,
           "authenticated",
           user(sub),
@@ -171,7 +145,7 @@ describe("membership in Postgres", () => {
       await member(client, b, bob)
       await member(client, b, null)
       const scopes = (sub: string) =>
-        asRole<{ s: string }>(
+        queryAs<{ s: string }>(
           client,
           "authenticated",
           user(sub),
@@ -212,7 +186,7 @@ describe("membership in Postgres", () => {
       ]) {
         const params = sql.includes("$1") ? [org] : []
         expect(
-          await asRole(client, "anon", { role: "anon" }, sql, params),
+          await queryAs(client, "anon", { role: "anon" }, sql, params),
           sql
         ).toEqual({ code: "42501" })
       }

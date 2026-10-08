@@ -197,6 +197,79 @@ describe("compareWithDesired", () => {
     expect(result.empty).toBe(true)
   })
 
+  it("a deployed platform layer reconciles with no difference", async () => {
+    // Шар `simetra` — частина моделі з «Користувачами» (спека користувачів
+    // §3): межа звірки бачить схему сама, а розгорнутий шар — функції,
+    // тригери на `auth.users`, гранти, відкладений FK — не дає дрейфу
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Users/Users.meta.json": catalog("Users", {
+          role: "users",
+          scope: "none",
+          attributes: [
+            attribute("locale", {
+              type: "String",
+              length: 5,
+              required: true,
+              defaultValue: "uk",
+            }),
+          ],
+        }),
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const model = compiled.model!
+    const { scope, diagnostics } = await engineScope(model)
+    expect(diagnostics).toEqual([])
+    expect(scope.schemas).toContain("simetra")
+    const desired = renderDesiredState(model).sql
+    const outcome = await engine.withDesiredShadow(
+      { target: stack },
+      desired,
+      scope,
+      (target) =>
+        compareWithDesired(engine, { target }, desired, scope, diagnostics)
+    )
+    expect(outcome.status).toBe("loaded")
+    if (outcome.status !== "loaded") return
+    const result = outcome.value
+    expect(result.status).toBe("compared")
+    if (result.status !== "compared") return
+    expect(
+      result.desired.model.tables
+        .filter((t) => t.schema === "simetra")
+        .map((t) => t.name)
+    ).toEqual(["identities"])
+    // Одиниці шару справді порівняно, а не відкинуто з обох боків: кожна
+    // згенерована одиниця є в моделі тіні й жодна не «нерепрезентовна».
+    // `REVOKE` — відсутність привілею, тож у каталозі одиницею не читається
+    const layer = model.sqlUnits
+      .filter((u) => u.generator === "platformLayer")
+      .map((u) => u.identity)
+      .filter((identity) => !identity.startsWith("grant:revoke:"))
+    expect(layer.length).toBeGreaterThan(0)
+    const read = new Set(result.desired.model.units.map((u) => u.identity))
+    expect(layer.filter((identity) => !read.has(identity))).toEqual([])
+    expect(result.diagnostics).toEqual([])
+    expect(result.differences).toEqual([])
+    expect(result.plan.empty).toBe(true)
+    expect(result.empty).toBe(true)
+  })
+
+  it("a model without the users catalog leaves simetra outside the boundary", async () => {
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Party/Party.meta.json": catalog("Party"),
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const { scope, diagnostics } = await engineScope(compiled.model!)
+    expect(diagnostics).toEqual([])
+    expect(scope.schemas).not.toContain("simetra")
+  })
+
   it("an empty comparison is empty only without differences", async () => {
     const result = await compareWithDesired(
       engine,

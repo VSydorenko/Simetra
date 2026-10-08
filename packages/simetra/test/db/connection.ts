@@ -60,3 +60,46 @@ export async function withRollback<T>(
     await client.end()
   }
 }
+
+/** Роль запиту API: від неї PostgREST виконує запит користувача. */
+export type ApiRole = "authenticated" | "anon"
+
+/**
+ * Перемикає транзакцію на роль API з claims запиту, як це робить PostgREST:
+ * `SET LOCAL` і `set_config(…, true)` діють до кінця транзакції чи до відкату
+ * точки збереження, тож повернення до власника — справа того, хто кличе.
+ * Claims ставляться до ролі: роль API не мала б права їх змінити.
+ */
+export async function asRole(
+  client: pg.Client,
+  role: ApiRole,
+  claims: Record<string, unknown>
+): Promise<void> {
+  await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+    JSON.stringify(claims),
+  ])
+  await client.query(`SET LOCAL ROLE ${role}`)
+}
+
+/**
+ * Один запит від ролі API в точці збереження: наступний запит тесту — знову
+ * від власника, а помилка доступу повертається кодом, не зриваючи транзакції.
+ */
+export async function queryAs<T extends pg.QueryResultRow>(
+  client: pg.Client,
+  role: ApiRole,
+  claims: Record<string, unknown>,
+  sql: string,
+  params: unknown[] = []
+): Promise<{ rows: T[] } | { code: string }> {
+  await client.query("SAVEPOINT as_role")
+  try {
+    await asRole(client, role, claims)
+    const { rows } = await client.query<T>(sql, params)
+    return { rows }
+  } catch (error) {
+    return { code: (error as { code: string }).code }
+  } finally {
+    await client.query("ROLLBACK TO SAVEPOINT as_role")
+  }
+}
