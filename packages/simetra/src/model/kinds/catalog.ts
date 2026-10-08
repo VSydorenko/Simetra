@@ -127,6 +127,25 @@ function userColumns(): StandardColumnDef[] {
   ]
 }
 
+/** Факти системної ролі довідника: що платформа виводить із ролі. */
+interface CatalogRoleDefinition {
+  /**
+   * Глобальний корінь (спека П2 §6): довідник лишається `scope: "none"`, але
+   * може бути коренем виду скоупу, а посилання на нього з будь-якого виду —
+   * простий FK, не перетин видів. «Користувачі» глобальні за природою: один
+   * обліковий запис належить багатьом тенантам.
+   */
+  globalRoot?: true
+}
+
+/** Ролі довідника — одне місце, звідки компілятор бере їхні факти. */
+const CATALOG_ROLES: Record<
+  NonNullable<Catalog["role"]>,
+  CatalogRoleDefinition
+> = {
+  users: { globalRoot: true },
+}
+
 function numbering(obj: unknown): NumberingSpec | undefined {
   const catalog = obj as Catalog
   if (catalog.codeLength === 0) return undefined
@@ -161,6 +180,10 @@ export const catalogKind: KindDefinition = {
   namedElementFields: ["predefinedItems"],
   ownerKinds: ["Catalog"],
   standardColumns,
+  globalRoot(obj) {
+    const { role } = obj as Catalog
+    return role !== undefined && CATALOG_ROLES[role].globalRoot === true
+  },
   numbering,
   tabularSectionColumns: () => tabularRowColumns(false),
   references(obj) {

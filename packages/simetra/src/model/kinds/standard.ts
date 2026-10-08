@@ -324,6 +324,12 @@ export interface KindDefinition {
   elementReferences?(obj: unknown): FoundElementReference[]
   /** Ключі таблиць регістра; є лише у видів-регістрів. */
   registerKeys?(obj: unknown): RegisterKeySpec
+  /**
+   * Об'єкт — глобальний корінь виду скоупу (спека П2 §6): сам без скоупу, а
+   * посилання на нього не перетинають видів. Немає — таких об'єктів у виду
+   * немає.
+   */
+  globalRoot?(obj: unknown): boolean
   /** Нумерація; `undefined` — об'єкт номера чи коду не має. */
   numbering?(obj: unknown): NumberingSpec | undefined
   /** Підписка на подію; є лише у виду підписок. */

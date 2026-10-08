@@ -404,3 +404,112 @@ describe("trackAuthor", () => {
     expect(found[0]!.severity).toBe("error")
   })
 })
+
+describe("users as the root of a scope kind", () => {
+  const ORG = "catalogs/Organization/Organization.meta.json"
+  const MEMBER = "catalogs/OrgMember/OrgMember.meta.json"
+  const CP = "catalogs/Counterparty/Counterparty.meta.json"
+  const SALE = "documents/Sale/Sale.meta.json"
+  const PREFS = "catalogs/UserPrefs/UserPrefs.meta.json"
+  const usersRef = { type: "Ref", ref: { kind: "Catalog", name: "Users" } }
+
+  /** Види `org` (корінь — «Організація») і `user` (корінь — «Користувачі»). */
+  function usersRootProject() {
+    return project({
+      scopeKinds: [
+        {
+          id: uuid(80),
+          name: "org",
+          physicalName: "org_id",
+          root: { object: { kind: "Catalog", name: "Organization" } },
+          setFunction: "membership",
+        },
+        {
+          id: uuid(82),
+          name: "user",
+          physicalName: "user_id",
+          root: { object: { kind: "Catalog", name: "Users" } },
+          setFunction: { name: "user_ids" },
+        },
+      ],
+    })
+  }
+
+  function files(overrides: Record<string, unknown> = {}) {
+    return {
+      "project.meta.json": usersRootProject(),
+      [ORG]: organization(),
+      [USERS_FILE]: usersCatalog({ scope: "none" }),
+      [MEMBER]: catalog("OrgMember", {
+        scope: "org",
+        membership: { user: "user" },
+        attributes: [
+          attribute("user", { physicalName: "user_id", ...usersRef }),
+        ],
+      }),
+      [CP]: catalog("Counterparty", {
+        scope: "org",
+        attributes: [attribute("manager", usersRef)],
+      }),
+      [SALE]: document("Sale", { scope: "org", trackAuthor: true }),
+      [PREFS]: catalog("UserPrefs", {
+        scope: "user",
+        attributes: [attribute("delegate", usersRef)],
+      }),
+      ...overrides,
+    }
+  }
+
+  it("compiles with no scope diagnostics: references to users are plain FKs", async () => {
+    const result = await compile(metaFiles(files()))
+    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual(
+      []
+    )
+    const { physical } = result.model!
+    const plainFk = (table: string, column: string) =>
+      expect(tableOf(physical, table).foreignKeys).toContainEqual(
+        expect.objectContaining({
+          columns: [column],
+          references: { schema: "public", table: "users", columns: ["id"] },
+          onDelete: "noAction",
+        })
+      )
+    plainFk("org_member", "user_id")
+    plainFk("counterparty", "manager")
+    plainFk("sale", "created_by_id")
+    plainFk("user_prefs", "delegate")
+  })
+
+  it("a user-scoped record carries the carrier column with FK to users and UNIQUE (carrier, id)", async () => {
+    const result = await compile(metaFiles(files()))
+    const { physical } = result.model!
+    const prefs = tableOf(physical, "user_prefs")
+    expect(prefs.columns).toContainEqual(
+      expect.objectContaining({ name: "user_id", type: "uuid", notNull: true })
+    )
+    expect(prefs.foreignKeys).toContainEqual(
+      expect.objectContaining({
+        columns: ["user_id"],
+        references: { schema: "public", table: "users", columns: ["id"] },
+      })
+    )
+    expect(prefs.uniques).toContainEqual(
+      expect.objectContaining({ columns: ["user_id", "id"] })
+    )
+    const users = tableOf(physical, "users")
+    expect(users.columns.map((c) => c.name)).not.toContain("user_id")
+  })
+
+  it("an ordinary unscoped catalog as root still must declare its kind", async () => {
+    const result = await compile(
+      metaFiles(files({ [USERS_FILE]: catalog("Users", { scope: "none" }) }))
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code.startsWith("scope."))
+        .map((d) => [d.code, d.file, d.pointer])
+    ).toEqual(
+      expect.arrayContaining([["scope.root-declaration", USERS_FILE, "/scope"]])
+    )
+  })
+})

@@ -1106,6 +1106,8 @@ function checkScope(
 
   // Корінь-об'єкт: вид, який на нього вказує. Два види на одному корені
   // стадія 2 відкидає (`scope.root-duplicate`), тож перезапису тут не буде.
+  // Глобальний корінь сюди не входить: він без скоупу, і посилання на нього
+  // (й від нього) — як на будь-який глобальний об'єкт.
   const rootKindOf = new Map<string, ScopeKind>()
   scopeKinds.forEach((kind, index) => {
     if (!("object" in kind.root)) return
@@ -1113,7 +1115,9 @@ function checkScope(
     const key = objectKey(root.object.kind, root.object.name)
     const rootObject = byKey.get(key)
     if (rootObject === undefined) return
-    rootKindOf.set(key, kind)
+    const globalRoot =
+      KIND_REGISTRY[rootObject.kind].globalRoot?.(rootObject.data) === true
+    if (!globalRoot) rootKindOf.set(key, kind)
     const at = {
       kind: rootObject.kind,
       name: rootObject.name,
@@ -1145,7 +1149,9 @@ function checkScope(
       )
       return
     }
-    if (scopeOf(rootObject) !== kind) {
+    // Глобальний корінь лишається `none`: інше оголошення звітує правило
+    // його ролі, а не кореня.
+    if (!globalRoot && scopeOf(rootObject) !== kind) {
       const { scope } = rootObject.data as { scope?: string }
       found.push(
         diagnostic(
