@@ -127,6 +127,93 @@ offending field (for example `target.kind`); nothing is written.
 - Never pass an `id` to `create` or `add`: ids are assigned by the operation, and
   an input carrying one gets `operation.input-invalid` (exit 1, nothing written).
 
+## Declare, don't write SQL
+
+A rule the platform can derive is a property in the metadata, not a statement
+in a `.sql` file. The schemas in `node_modules/simetra/schemas/` list every
+property; these are the ones that replace hand-written SQL.
+
+Attribute properties (an element of `attributes`; scalar attributes only):
+
+- `defaultValue`: `{ "fill": "now" | "today" | "newUuid" }` or
+  `{ "empty": true | "object" | "array" }`.
+- `unique`: `true` or `"ignoreCase"`. `uniqueWithin`: `"owner"` or `"parent"`,
+  only on a catalog's own attributes and only when the catalog has owners or a
+  hierarchy.
+- Numbers: `nonNegative`, `positive`, `minValue`, `maxValue`.
+- Strings and text: `minLength`, `pattern`. The pattern must stay in the
+  POSIX-compatible subset: no named groups, `\p{}`, `\k<>` or `\b`.
+
+Object properties:
+
+- `indexes` on a Catalog, a Document and their tabular sections: a list of
+  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`.
+- `publicRead`: `"authenticated"` or `"anon"`, on kinds that have row-level
+  security.
+- Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
+
+An attribute with properties, added through the tool:
+
+```json simetra:add
+{
+  "target": { "kind": "Catalog", "name": "Currency" },
+  "collection": "attributes",
+  "element": {
+    "name": "code",
+    "type": "String",
+    "length": 3,
+    "unique": "ignoreCase",
+    "minLength": 3
+  }
+}
+```
+
+An event subscription is a file per subscription in `event-subscriptions/`,
+created with `create` like any object (kind `EventSubscription`):
+
+- `sources`: one or more metadata refs `{ kind, name }` or
+  `{ "providerTable": "<schema>.<table>" }`.
+- `event`: `beforeWrite`, `onWrite`, `beforeDelete` or `onDelete`.
+- `whenChanged` (optional, write events only): attribute names.
+- `handler`: `{ schema?, name }`, a function without arguments that
+  `RETURNS trigger`, declared in the closed shell below.
+
+## The SQL module: closed forms only
+
+The `.sql` module of an object of a 1C kind accepts only:
+
+- Functions in the closed shell: `LANGUAGE sql` or `plpgsql`, an explicit
+  volatility, and `SET search_path = ''` for every `SECURITY DEFINER`. No
+  overloads.
+- Row rules: `ALTER TABLE <own table> ADD CONSTRAINT <name> CHECK (<rule>)`
+  within a small grammar. The constraint needs a name and must target the
+  object's own table.
+
+Any other statement is rejected (`sql.statement-not-allowed`, `sql.closed-shell`,
+`sql.row-rule-grammar`, …) with a hint that names the property that replaces it.
+Follow the hint instead of rewording the statement. `CustomTable` and `PgEnum`
+modules and the shared `metadata/sql/` folder are not closed: their content is
+debt (below).
+
+A row rule shape:
+
+```sql
+ALTER TABLE <schema>.<own_table> ADD CONSTRAINT <rule_name> CHECK (<rule>);
+```
+
+## SQL debt
+
+`metadata/sql-debt.json` lists the verbatim SQL units that the compiler still
+tolerates. It only shrinks:
+
+- Only `introspect` writes it, from the database. Never add an entry by hand.
+- `fix` only removes entries that no longer match anything.
+- A debt unit that is not in the list fails `compile` with `sql.debt-grows`.
+  Express the statement as a property, an `EventSubscription` or a closed-shell
+  function; moving it to another file does not make it acceptable.
+- A project with an existing `sql/` folder and no list is seeded by running
+  `introspect` again (see `simetra-adoption`).
+
 ## The database: introspect and diff
 
 `introspect` and `diff` read a live database and never write to it. The

@@ -90,6 +90,22 @@ pnpm exec simetra diff --tables app.orders,app.order_lines --format json
 pnpm exec simetra diff --database-url-env STAGING_DATABASE_URL --shadow-url-env SHADOW_DATABASE_URL
 ```
 
+## SQL debt
+
+`introspect` also writes `metadata/sql-debt.json`: the verbatim SQL it could
+not express through metadata (CustomTable and PgEnum modules, shared
+`metadata/sql/`, statements a closed form does not accept).
+
+- The list is a ratchet and only shrinks. `introspect` is the only writer and
+  derives it from the database; `fix` only removes stale entries; `compile`
+  fails with `sql.debt-grows` on a debt unit that is not listed. Without that,
+  verbatim SQL would grow back unnoticed.
+- Never edit the list by hand to get a green compile. Replace the statement
+  with a property, an `EventSubscription` or a closed-shell function (see
+  `simetra-metadata`); the entry disappears on the next `fix`.
+- A project that already has a `sql/` folder but no list is seeded by running
+  `introspect` again on the same directory.
+
 ## Exit codes
 
 | Code | `introspect`                          | `diff`                            |
