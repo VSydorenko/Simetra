@@ -477,6 +477,24 @@ describe("fixFiles: debt ratchet", () => {
     )
   })
 
+  it("fix clears sql.debt-stale of a deleted debt unit", async () => {
+    // Оператор боргу видалено: компіляція називає запис застарілим, а `fix`
+    // прибирає рівно його.
+    const files = tableFiles("CREATE POLICY p ON public.t USING (true);", [
+      "policy:public.t.gone",
+      "policy:public.t.p",
+    ])
+    const before = await compile(files)
+    expect(before.diagnostics.map((d) => [d.code, d.params?.identity])).toEqual(
+      [["sql.debt-stale", "policy:public.t.gone"]]
+    )
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(true)
+    expect(result.diagnostics).toEqual([])
+    const fixed = applyChanges(files, result.changes)
+    expect(JSON.parse(fixed.get(DEBT)!).units).toEqual(["policy:public.t.p"])
+  })
+
   it("fix sorts and deduplicates the list", async () => {
     const files = tableFiles(
       "CREATE POLICY p ON public.t USING (true);\nCREATE POLICY q ON public.t USING (true);",

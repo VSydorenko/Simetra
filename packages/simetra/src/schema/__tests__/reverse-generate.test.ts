@@ -1247,6 +1247,29 @@ describe("reverseGenerate", () => {
       expect((await compile(result.files)).diagnostics).toEqual([])
     })
 
+    it("introspect rewrites a stale list instead of refusing the folder", async () => {
+      const { db, existing } = await withoutList()
+      existing.set(
+        "sql-debt.json",
+        JSON.stringify({
+          units: [
+            "function:app.touch()",
+            "policy:app.note.gone",
+            "trigger:app.note.note_touch",
+          ],
+        })
+      )
+      expect((await compile(existing)).diagnostics.map((d) => d.code)).toEqual([
+        "sql.debt-stale",
+      ])
+      const result = await reverseGenerate(db, options(existing))
+      expect(result.diagnostics).toEqual([])
+      expect(json(result, "sql-debt.json").units).toEqual([
+        "function:app.touch()",
+        "trigger:app.note.note_touch",
+      ])
+    })
+
     it("a trigger only in the folder never enters the list", async () => {
       const { db, existing } = await withoutList()
       const listed = await reverseGenerate(db, options(existing))

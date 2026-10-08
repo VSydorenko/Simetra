@@ -60,15 +60,26 @@ export async function runStages(
           ),
           (ownerFile) => idByFile.get(ownerFile)
         )
+  // Ратчет боргу судить лише повні одиниці: без стадії 3 ідентичності
+  // функцій (типи рядків) неповні, і `sql.debt-grows` на вже зламаній
+  // компіляції був би шумом.
+  const debt =
+    stage1.sqlDebt === undefined || stage3 === undefined
+      ? { grows: [], stale: [] }
+      : checkDebt(
+          sql.units,
+          stage1.objects,
+          stage1.project,
+          stage1.sqlDebt,
+          !sql.diagnostics.some((d) => d.code === "sql.parse")
+        )
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
     ...upstream,
     ...sql.diagnostics,
     ...checkSqlModules(stage1.objects, sql.units, sql.rowRules),
-    ...(stage1.sqlDebt === undefined
-      ? []
-      : checkDebt(sql.units, stage1.objects, stage1.project, stage1.sqlDebt)),
+    ...debt.grows,
     ...(embedded?.diagnostics ?? []),
   ]
   if (
@@ -77,12 +88,16 @@ export async function runStages(
     stage3 === undefined ||
     embedded === undefined
   ) {
-    return { ok: false, diagnostics: sortDiagnostics(early) }
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...early, ...debt.stale]),
+    }
   }
   const physical = embedded.physical
 
   const diagnostics = sortDiagnostics([
     ...early,
+    ...debt.stale,
     ...checkIntegrity(
       stage1.objects,
       stage2.references,

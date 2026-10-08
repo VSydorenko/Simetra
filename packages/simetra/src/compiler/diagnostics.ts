@@ -29,6 +29,7 @@ export const COMPILER_RULES = [
   "sql.row-rule-outside-module",
   "sql.row-rule-name-taken",
   "sql.debt-grows",
+  "sql.debt-stale",
   "identity.id-missing",
   "identity.id-duplicate",
   "identity.physical-name-missing",

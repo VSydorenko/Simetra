@@ -1,5 +1,5 @@
 import type { Node } from "libpg-query"
-import { KIND_REGISTRY, type Project } from "simetra/model"
+import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem } from "./closed-forms"
@@ -71,25 +71,45 @@ function ruledFunctions(
 }
 
 /**
- * Ратчет боргу: одиниця боргу, якої немає в `sql-debt.json`, — помилка в
- * місці самої одиниці. Перелік пише лише `introspect`, тож новий борг не
- * з'являється мовчки: ні новим оператором у спільному файлі, ні переносом
- * оператора з модуля виду в `sql/`.
+ * Ратчет боргу в обидва боки. Одиниця боргу, якої немає в `sql-debt.json`, —
+ * `sql.debt-grows` у місці самої одиниці: перелік пише лише `introspect`, тож
+ * новий борг не з'являється мовчки ні новим оператором у спільному файлі, ні
+ * переносом оператора з модуля виду в `sql/`. Запис, що вже не є боргом
+ * (одиниці немає або вона тепер у закритій формі), — `sql.debt-stale` у місці
+ * запису: інакше перелік лишався б білим списком імен, під який згодом можна
+ * повернути будь-яке тіло. Застарілий — рівно те, що прибирає `fix`. Коли
+ * `.sql` не розібрано, одиниці неповні, і застарілість не судиться: інакше
+ * справжні записи виглядали б застарілими. Дві групи окремо: застарілий запис
+ * описує лише перелік, тож не мусить закривати подальші стадії.
  */
 export function checkDebt(
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
   project: Project | undefined,
-  listed: readonly string[]
-): Diagnostic[] {
+  listed: readonly string[],
+  unitsComplete: boolean
+): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
   const isDebt = debtPredicate(objects, project)
-  return units
-    .filter((unit) => isDebt(unit) && !accepted.has(unit.identity))
+  const debt = units.filter(isDebt)
+  const grows = debt
+    .filter((unit) => !accepted.has(unit.identity))
     .map((unit) =>
       diagnostic("sql.debt-grows", unit.file, "", {
         identity: unit.identity,
         line: unit.line,
       })
     )
+  if (!unitsComplete) return { grows, stale: [] }
+  const current = new Set(debt.map((unit) => unit.identity))
+  const stale = listed.flatMap((identity, index) =>
+    current.has(identity)
+      ? []
+      : [
+          diagnostic("sql.debt-stale", SQL_DEBT_FILE, `/units/${index}`, {
+            identity,
+          }),
+        ]
+  )
+  return { grows, stale }
 }

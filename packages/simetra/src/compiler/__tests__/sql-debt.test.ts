@@ -101,7 +101,68 @@ describe("debt ratchet: sql-debt.json", () => {
       [SALE_SQL]: "CREATE POLICY p ON public.sale USING (true);",
       [DEBT]: debt(["policy:public.sale.p"]),
     })
-    expect(found.map((d) => d.code)).toEqual(["sql.statement-not-allowed"])
+    // Запис про одиницю модуля виду боргом не є, тож і він застарілий.
+    expect(found.map((d) => d.code)).toEqual([
+      "sql.statement-not-allowed",
+      "sql.debt-stale",
+    ])
+  })
+
+  it("a listed identity without a unit is stale", async () => {
+    const found = await diagnostics({
+      [TABLE_SQL]: POLICY,
+      [DEBT]: debt(["policy:public.t.gone", "policy:public.t.p"]),
+    })
+    expect(found.map((d) => [d.code, d.file, d.pointer, d.params])).toEqual([
+      [
+        "sql.debt-stale",
+        DEBT,
+        "/units/0",
+        { identity: "policy:public.t.gone" },
+      ],
+    ])
+  })
+
+  it("a listed function now in the closed shell is stale", async () => {
+    const found = await diagnostics({
+      [SHARED_SQL]: HANDLER,
+      [DEBT]: debt(["function:public.f()"]),
+    })
+    expect(found.map((d) => [d.code, d.params?.identity])).toEqual([
+      ["sql.debt-stale", "function:public.f()"],
+    ])
+  })
+
+  it("paid-off debt cannot come back without introspect", async () => {
+    // Оператор боргу видалено (виражено властивістю): запис застарів, `fix`
+    // його прибирає, а повернута одиниця з тим самим ім'ям — знову ріст.
+    const listed = debt(["policy:public.t.p"])
+    expect((await diagnostics({ [DEBT]: listed })).map((d) => d.code)).toEqual([
+      "sql.debt-stale",
+    ])
+    expect(await diagnostics({ [DEBT]: debt([]) })).toEqual([])
+    const back = await diagnostics({ [TABLE_SQL]: POLICY, [DEBT]: debt([]) })
+    expect(back.map((d) => [d.code, d.params?.identity])).toEqual([
+      ["sql.debt-grows", "policy:public.t.p"],
+    ])
+  })
+
+  it("a compile failing before stage 3 does not judge the debt", async () => {
+    // Без моделі ідентичності неповні: ріст боргу тут був би шумом.
+    const found = await diagnostics({
+      [TABLE_SQL]: POLICY,
+      "catalogs/Broken/Broken.meta.json": "{",
+    })
+    expect(found.map((d) => d.code)).not.toContain("sql.debt-grows")
+    expect(found.map((d) => d.code)).toContain("file.invalid-json")
+  })
+
+  it("an unparsed .sql leaves debt unknown: no stale entries", async () => {
+    const found = await diagnostics({
+      [TABLE_SQL]: "CREATE POLICY",
+      [DEBT]: debt(["policy:public.t.p"]),
+    })
+    expect(found.map((d) => d.code)).toEqual(["sql.parse"])
   })
 
   it.each([
@@ -152,8 +213,10 @@ describe("debt ratchet: sql-debt.json", () => {
       })
     for (const extra of [{}, { [DEBT]: debt(["function:public.stamp()"]) }]) {
       const found = (await compile(files(extra))).diagnostics
+      // Обробник боргом не буває, тож запис про нього — застарілий.
       expect(found.map((d) => [d.code, d.params?.problem])).toEqual([
         ["subscription.handler-not-closed", "volatility"],
+        ...(DEBT in extra ? [["sql.debt-stale", undefined]] : []),
       ])
     }
   })

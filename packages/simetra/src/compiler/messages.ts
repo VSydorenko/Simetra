@@ -37,8 +37,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
     uk: "Доступ до рядків оголошується, а не пишеться: використайте publicRead об'єкта; права приходять із видами доступу (П3).",
   },
   grant: {
-    en: "Privileges on a kind's tables are derived from the kind.",
-    uk: "Привілеї на таблиці виду виводяться з виду.",
+    en: "Privileges are derived, not written: on a kind's tables they come from the kind, and EXECUTE on a function comes from its TypeScript declaration (P4).",
+    uk: "Привілеї виводяться, а не пишуться: на таблиці виду — з виду, а EXECUTE на функцію — з її оголошення в TypeScript (П4).",
   },
   defaultPrivileges: {
     en: "Privileges on a kind's tables are derived from the kind.",
@@ -257,8 +257,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: () =>
       "sql-debt.json перелічує одиниці відсортованими за кодовими одиницями й без дублів",
     hint: {
-      en: "Run simetra fix: it sorts the list and removes duplicates and entries that are no longer debt.",
-      uk: "Виконайте simetra fix: він відсортує перелік і прибере дублі та записи, що вже не є боргом.",
+      en: "Run simetra fix once the metadata files are valid and every .sql parses: it sorts the list and removes duplicates and entries that are no longer debt.",
+      uk: "Виконайте simetra fix, коли файли метаданих коректні й кожен .sql розбирається: він відсортує перелік і прибере дублі та записи, що вже не є боргом.",
     },
   },
   "scope.name-reserved": {
@@ -522,6 +522,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Debt only shrinks: introspect alone writes sql-debt.json, fix only removes entries. Express the statement through metadata (a kind property, an EventSubscription) or as a function in the closed shell (LANGUAGE sql or plpgsql, explicit volatility, SECURITY DEFINER only with SET search_path = ''); moving it from a kind module to sql/ does not make it acceptable.",
       uk: "Борг лише зменшується: sql-debt.json пише тільки introspect, fix лише прибирає записи. Виразіть оператор метаданими (властивість виду, EventSubscription) або функцією в закритій оболонці (LANGUAGE sql чи plpgsql, явна волатильність, SECURITY DEFINER лише з SET search_path = ''); перенесення з модуля виду в sql/ не робить його прийнятним.",
+    },
+  },
+  "sql.debt-stale": {
+    en: (p) =>
+      `sql-debt.json lists ${p.identity}, which is no longer verbatim SQL debt`,
+    uk: (p) =>
+      `sql-debt.json перелічує ${p.identity}, що вже не є боргом дослівного SQL`,
+    hint: {
+      en: "The unit is gone or now has a closed form. Run simetra fix: it removes exactly such entries. Debt only shrinks: a removed entry comes back only through introspect.",
+      uk: "Одиниці вже немає або вона тепер у закритій формі. Виконайте simetra fix: він прибирає саме такі записи. Борг лише зменшується: прибраний запис повертає тільки introspect.",
     },
   },
   "sql.dependency-cycle": {

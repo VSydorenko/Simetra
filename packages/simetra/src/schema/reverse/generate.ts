@@ -143,15 +143,20 @@ async function describedElsewhere(
  * застарілим переліком — саме та, яку introspect має розкласти й описати
  * переліком; будь-яка інша помилка, як і досі, робить теку такою, що не
  * компілюється. Компіляція з прийнятим боргом не ховає інших помилок: вплив
- * переліку — тільки `sql.debt-grows`.
+ * переліку — тільки `sql.debt-grows` і `sql.debt-stale`.
  */
+const DEBT_RATCHET: ReadonlySet<string> = new Set([
+  "sql.debt-grows",
+  "sql.debt-stale",
+])
+
 async function compiledExisting(
   existing: ReadonlyMap<string, string>
 ): Promise<CompiledModel | undefined> {
   const compiled = await compile(existing)
   if (compiled.model !== undefined) return compiled.model
   const errors = compiled.diagnostics.filter((d) => d.severity === "error")
-  if (!errors.every((d) => d.code === "sql.debt-grows")) return undefined
+  if (!errors.every((d) => DEBT_RATCHET.has(d.code))) return undefined
   const debt = await currentDebt(existing)
   if (debt === undefined) return undefined
   const accepted = new Map(existing)
