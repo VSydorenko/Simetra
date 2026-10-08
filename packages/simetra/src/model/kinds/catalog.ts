@@ -43,7 +43,11 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   }
 
   columns.push(deletionMarkColumn())
-  if (catalog.role === "users") columns.push(...userColumns())
+  // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
+  // єдине місце фактів ролі (див. CATALOG_ROLES).
+  if (catalog.role !== undefined) {
+    columns.push(...(CATALOG_ROLES[catalog.role].columns?.() ?? []))
+  }
 
   if (catalog.hierarchyType !== "None") {
     columns.push({
@@ -136,6 +140,11 @@ interface CatalogRoleDefinition {
    * обліковий запис належить багатьом тенантам.
    */
   globalRoot?: true
+  /**
+   * Стандартні колонки, які роль додає одразу після позначки видалення:
+   * порядок колонок входить у фізичну форму таблиці.
+   */
+  columns?: () => StandardColumnDef[]
 }
 
 /** Ролі довідника — одне місце, звідки компілятор бере їхні факти. */
@@ -143,7 +152,7 @@ const CATALOG_ROLES: Record<
   NonNullable<Catalog["role"]>,
   CatalogRoleDefinition
 > = {
-  users: { globalRoot: true },
+  users: { globalRoot: true, columns: userColumns },
 }
 
 function numbering(obj: unknown): NumberingSpec | undefined {
