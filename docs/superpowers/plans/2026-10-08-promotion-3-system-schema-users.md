@@ -13,11 +13,14 @@ Supabase, довідник міток виду), а метамодель — р�
 "users"` і правило зарезервованої схеми. T1 резолвить «Користувачі»,
 виводить колонки авторства й унікальність членства, генерує SQL-одиниці
 членства (як обгортки рухів) і будує контракти `users`, `membership`,
-`personalData`. T2 отримує чисту функцію `renderPlatformState(model)`:
-«голова» (схема, таблиця, функції, тригери, в'юха, гранти) і «хвіст» (FK
-ідентичностей), які `renderDesiredState` ставить до й після об'єктів
-застосунку; `engineScope` керує схемою `simetra`, коли шар не порожній.
-Вимикач шару — наявність довідника з роллю «користувачі».
+`personalData`. Платформний шар теж генерує T1 як частину скомпільованої
+моделі: `simetra.identities` — похідна таблиця довідника «Користувачі»
+(`origin.part: "identities"`, як таблиці підсумків регістра), а функції,
+тригери, в'юха міток і гранти — згенеровані `SqlUnit` з явними ребрами
+графа порядку. SQL провізії загальний, а факти провайдера ідентичності —
+дані T0. Рендер, адаптер тіні й `engineScope` не змінюються: шар іде тим
+самим графом, хешем, `explain` і межею звірки, що й модель. Вимикач шару —
+наявність довідника з роллю «користувачі».
 
 **Технології:** TypeScript 7, Zod 4, Vitest, libpg-query 17.7.4, локальний
 стек Supabase (Postgres 17), `@supabase/pg-delta` (без зміни версії).
@@ -79,15 +82,21 @@ Realtime) — П3; адаптери інших провайдерів ідент
 Рішення ухвалив архітектор задачі (сесія `consumer-reconciliation`)
 2026-10-08; рішення 12 — автор плану з технічної причини, названої в ньому.
 
-1. **Платформний шар — окремий рендер T2** `renderPlatformState(model)`,
-   чиста функція версії пакета й контрактів моделі; таблиці знімка й T0
-   `PhysicalOrigin` не змінюються. `engineScope` додає `simetra` до
-   керованих схем, коли шар не порожній, — дрейф шару видно в звичайному
-   `diff`.
+1. **Платформний шар генерує T1 як частину моделі** (змінено з «окремий
+   рендер T2» за умовою архітектора: один граф порядку, один хеш, один
+   `explain`). `simetra.identities` — похідна таблиця довідника
+   «Користувачі»: `PhysicalTable` у схемі `simetra` з `origin { objectId:
+   <«Користувачі»>, part: "identities" }` (T0 `PhysicalOrigin.part` отримує
+   значення `"identities"`). Функції, тригери, в'юха `kind_labels`, гранти й
+   `REVOKE` схеми — згенеровані `SqlUnit` без `file` (як обгортки рухів).
+   Усе проходить `namespaceConflicts`, `creationOrder`, хеш і `explain`;
+   `engineScope` бачить `simetra` сам — зі схем таблиць і одиниць; зворотна
+   генерація вважає згенеровані одиниці описаними (`describedElsewhere`), тож
+   `introspect` не розкладає їх у метадані.
 2. **Вимикач шару** — наявність довідника з `role: "users"`. Без нього шар
    порожній: прийом наявної бази (`introspect → diff`) і round-trip-тести не
    змінюються (Пр19 — перехідний стан §10 спеки користувачів).
-3. **Довідник міток** — `VIEW simetra.kind_labels (label, kind, object_id,
+3. **Довідник міток** — згенерована одиниця `VIEW simetra.kind_labels (label, kind, object_id,
    name, schema, table_name)` над `VALUES` з моделі (лише об'єкти з
    `kindLabel`; без них — `SELECT … WHERE false` з типізованими колонками);
    `label` — `text COLLATE "C"`. Грантів ролям застосунку немає.
@@ -118,7 +127,16 @@ Realtime) — П3; адаптери інших провайдерів ідент
 8. **`personalData: true`** — властивість реквізиту будь-якого виду;
    разом із `required` — помилка (знеособлення ставить `NULL`). Контракт
    `contracts.personalData`; команда знеособлення — П4.
-9. **Платформний шар Supabase:**
+9. **Платформний шар (факти Supabase — дані T0, SQL — загальний у T1).**
+   Факти провайдера ідентичності — константа T0 поряд із
+   `PROVIDER_EVENT_SOURCES`: `PROVIDER_IDENTITY_SOURCES: Readonly<Record<DatabaseProvider, IdentitySource>>`,
+   для `supabase` — таблиця `auth.users`, колонка ключа `id` (subject =
+   `id::text`, `id` користувача = `id`, С8), джерела найменування за
+   порядком (`raw_user_meta_data ->> 'full_name'`, `raw_user_meta_data ->>
+   'name'`, колонка `email`), колонка анонімності `is_anonymous`, колонка
+   м'якого видалення `deleted_at`, ключ провайдера `'supabase'`. T1 генерує з
+   цих даних один загальний SQL; новий провайдер — новий запис даних. Вміст
+   шару:
    - `CREATE SCHEMA simetra`; `REVOKE ALL ON SCHEMA simetra FROM PUBLIC`;
      `GRANT USAGE ON SCHEMA simetra TO authenticated, anon` (виклик функції
      в політиці виконується від ролі запиту; схему від PostgREST ховає
@@ -161,16 +179,22 @@ Realtime) — П3; адаптери інших провайдерів ідент
     `schema.reserved`; `introspect` відмовляє на `simetra`, як на схемі
     провайдера. Приклад переходить на нову модель (закриває §11.2 спеки
     користувачів).
-12. **Голова й хвіст шару.** `renderPlatformState` повертає `{ head; tail }`:
-    голова — схема, `identities` без FK, функції (plpgsql — тіла не
-    перевіряються на існування таблиць при створенні), тригери на
-    `auth.users`, в'юха, гранти; хвіст — FK `identities` → «Користувачі».
-    `renderDesiredState` ставить голову одразу після `CREATE SCHEMA`, хвіст —
-    після FK застосунку. *Чому не окремий файл `platform.sql` у тіні:* FK на
-    таблицю «Користувачі», яку створює `desired.sql`, у файлі перед ним
-    неможливий, а згенеровані функції членства й функції множини застосунку
-    викликають `simetra.current_user_id()` і мусять іти після голови. Так
-    тінь і ціль отримують шар тим самим SQL без зміни адаптера.
+12. **Порядок шару — граф порядку створення, а не склейка.** Функції шару —
+    plpgsql (тіла не перевіряються на існування таблиць при створенні;
+    `SECURITY DEFINER` і так не інлайниться, а `plpgsql_check` у тіні П3 їх
+    перевірить). Граф не аналізує тіла plpgsql, тож згенерована одиниця
+    несе явні ребра `requires?: CreationNode[]` — новий необов'язковий вхід
+    `compiler/sql/dependencies.ts`, лише для згенерованих одиниць: функції
+    провізії й поточного користувача → таблиця «Користувачі» й
+    `identities`; тригери на `auth.users` → їхні функції (а через них — після
+    «Користувачів», умова архітектора). FK `identities` → «Користувачі»
+    (deferrable) рендериться разом з усіма FK наприкінці. Згенеровані функції
+    членства й функції множини застосунку, що кличуть
+    `simetra.current_user_id()`, отримують ребро до неї з наявного аналізу
+    тіл `LANGUAGE sql`. *Чому не окремий файл чи рендер T2:* FK на таблицю
+    «Користувачі» й виклики з тіл застосунку вимагають спільного графа, а
+    другий порядок у T2 розійшовся б із тим, що бачать двигун і зворотна
+    генерація.
 
 ## Review Focus
 
@@ -222,17 +246,19 @@ Expected: зелено.
    стандартна ціль `ref: "users"`; фізичні імена `created_by_id`,
    `updated_by_id`; правило `required` без значення заповнення в
    «Користувачах».
-3. Спека П2 §8.3: платформний шар — чиста функція T2 над контрактами
-   (голова й хвіст навколо бажаного стану застосунку, рішення 12); вимикач
-   — довідник «Користувачі»; `engineScope` керує `simetra`, коли шар не
-   порожній.
+3. Спека П2 §8.3: платформний шар генерує компілятор як частину знімка й
+   одиниць (рішення 1, 9, 12): похідна таблиця `identities` довідника
+   «Користувачі», згенеровані одиниці з явними ребрами графа порядку, факти
+   провайдера ідентичності — дані T0; вимикач — довідник «Користувачі».
 4. Спека користувачів §3: одне речення — ролі API мають `USAGE ON SCHEMA
    simetra` (виклик функції в політиці виконується від ролі запиту);
    невидимість для PostgREST тримає конфіг `db-schemas` провайдера. Пункт
    «`USAGE` — лише ролям, яким потрібні функції сесії» узгодити з цим.
 5. Спека користувачів §12, рядок «Як платформа рендерить вміст `simetra`»:
-   відповідь — рішення 1, 2, 12 (з посиланням на спеку П2 §8.3); marker і
-   перше застосування — П3. Рядок «Склад `userKind`»: анонімні входи в П2 не
+   відповідь — рішення 1, 2, 9, 12 (з посиланням на спеку П2 §8.3); marker і
+   перше застосування — П3. §5 «Інтерфейс адаптера»: факти провайдера
+   ідентичності — дані платформи (`PROVIDER_IDENTITY_SOURCES`), SQL
+   провізії — один загальний. Рядок «Склад `userKind`»: анонімні входи в П2 не
    провізуються, решта — П3.
 6. Спека промоції Пр19: порожній план прийому — для проєкту без довідника
    «Користувачі»; з ним план містить платформний шар.
@@ -259,7 +285,7 @@ git commit -m "docs(spec): системна схема й користувачі
 ### Task 2: Резервування схеми `simetra`
 
 **Files:**
-- Create: `packages/simetra/src/model/schemas/pg-schema.ts` (`RESERVED_SCHEMA = "simetra"`, `appSchemaNameSchema`)
+- Create: `packages/simetra/src/model/schemas/pg-schema.ts` (`PLATFORM_SCHEMA = "simetra"`, `appSchemaNameSchema`)
 - Modify: `packages/simetra/src/model/schemas/object-header.ts`, `project.ts`, `scope.ts`, `custom-table.ts`, `event-subscription.ts` (поля з рішення 11 — через `appSchemaNameSchema`)
 - Modify: `packages/simetra/src/model/schemas/rules.ts` (`schema.reserved`)
 - Modify: `packages/simetra/src/compiler/stages/files.ts` (тека `sql/simetra/`)
@@ -269,7 +295,7 @@ git commit -m "docs(spec): системна схема й користувачі
 
 **Interfaces:**
 - Produces: `appSchemaNameSchema: z.ZodString` (рядок, не `"simetra"`,
-  правило `schema.reserved`); `RESERVED_SCHEMA`.
+  правило `schema.reserved`); `PLATFORM_SCHEMA = "simetra"` — єдина константа імені схеми, її бере й задача 8.
 
 - [ ] **Step 1: Failing tests**
 
@@ -555,52 +581,79 @@ git commit -m "feat(compiler): голий виклик simetra.current_user_id()
 
 ---
 
-### Task 8: Платформний шар — `renderPlatformState`
+### Task 8: Платформний шар — генерація в T1
 
 **Files:**
-- Create: `packages/simetra/src/schema/render/platform-state.ts`
-- Modify: `packages/simetra/src/schema/render/desired-state.ts` (голова після `CREATE SCHEMA`, хвіст після FK)
-- Modify: `packages/simetra/src/schema/render/index.ts`, `packages/simetra/src/schema/index.ts` (експорт)
-- Modify: `packages/simetra/src/schema/engine/desired.ts` (`engineScope` — `simetra`, коли шар не порожній; `Pick` моделі з `contracts`)
-- Test: `packages/simetra/src/schema/__tests__/platform-state.test.ts` (Create), `desired-state.test.ts`, `out-of-scope.test.ts`
+- Modify: `packages/simetra/src/model/physical/snapshot.ts` (`PhysicalOrigin.part` + `"identities"`)
+- Modify: `packages/simetra/src/model/schemas/project.ts` (`PROVIDER_IDENTITY_SOURCES`, `IdentitySource`)
+- Create: `packages/simetra/src/compiler/platform/identities.ts` (похідна таблиця `identities`)
+- Create: `packages/simetra/src/compiler/platform/units.ts` (згенеровані одиниці шару)
+- Modify: `packages/simetra/src/compiler/sql/units.ts` (`SqlUnit.requires?`)
+- Modify: `packages/simetra/src/compiler/sql/dependencies.ts` (ребра з `requires`)
+- Modify: `packages/simetra/src/compiler/stages/model.ts` (додати таблицю `identities` до знімка, коли є «Користувачі»)
+- Modify: `packages/simetra/src/compiler/pipeline.ts` (злиття одиниць шару з `sqlUnits`, як обгорток рухів)
+- Modify: `packages/simetra/src/compiler/explain.ts` (`part: "identities"`; одиниці шару — у поясненні довідника «Користувачі»)
+- Test: `packages/simetra/src/compiler/__tests__/platform-layer.test.ts` (Create), `creation-order.test.ts`, `packages/simetra/src/schema/__tests__/provider-event-sources.test.ts`, `out-of-scope.test.ts`, `desired-state.test.ts`, `reverse-generate.test.ts`
 
 **Interfaces:**
-- Consumes: `contracts.users` (задача 4), мітки об'єктів (`CompiledModel.objects`), `project.database.provider`.
+- Consumes: `usersCatalogOf`, `contracts.users` (задача 4); мітки об'єктів.
 - Produces:
-  - `renderPlatformState(model: Pick<CompiledModel, "project" | "objects" | "contracts">): { head: RenderedStatement[]; tail: RenderedStatement[] }`
-    — обидва порожні без `contracts.users`.
-  - `PLATFORM_SCHEMA = "simetra"`.
+  - `interface IdentitySource { table: { schema: string; name: string }; keyColumn: string; nameSources: readonly ({ column: string } | { json: string; key: string })[]; anonymousColumn?: string; deletedAtColumn?: string; providerKey: string }`
+    і `PROVIDER_IDENTITY_SOURCES: Readonly<Record<DatabaseProvider, IdentitySource>>`
+    (значення для `supabase` — рішення 9; тест T2 звіряє таблицю з
+    поверхнею тригерів `SUPABASE_SURFACES`, DB-тест — колонки зі стеком).
+  - Ім'я схеми — `PLATFORM_SCHEMA` із задачі 2 (без дубля).
+  - `identitiesTable(users: ParsedObject, usersTable: PhysicalTable): PhysicalTable`
+    — схема `simetra`, колонки й ключі за рішенням 9, FK на «Користувачі»
+    deferrable, `origin { objectId, part: "identities" }`.
+  - `buildPlatformUnits(model: { objects; physical; contracts; project }): SqlUnit[]`
+    — порожньо без `contracts.users`; одиниці класів `grant` (`REVOKE ALL ON
+    SCHEMA`, `GRANT USAGE`, `REVOKE EXECUTE … FROM PUBLIC`, `GRANT EXECUTE`),
+    `function`, `trigger`, `view`; кожна з `requires`, де тіло plpgsql
+    посилається на таблиці.
+  - `SqlUnit.requires?: readonly CreationNode[]` — лише для згенерованих
+    одиниць; `dependencies.ts` додає ребро до кожного вузла.
 
 - [ ] **Step 1: Failing tests**
 
-`platform-state.test.ts`:
+`platform-layer.test.ts`:
 
 ```ts
-it("no users catalog — empty platform layer", () => expect(renderPlatformState(modelWithoutUsers)).toEqual({ head: [], tail: [] }))
-it("head creates the schema with USAGE for API roles only", () => {
-  const sql = renderPlatformState(model).head.map((s) => s.sql).join("\n")
-  expect(sql).toContain("REVOKE ALL ON SCHEMA simetra FROM PUBLIC")
-  expect(sql).toContain("GRANT USAGE ON SCHEMA simetra TO authenticated, anon")
+it("no users catalog — no platform layer", …)        // ні таблиці в simetra, ні одиниць зі схемою simetra
+it("identities is a derived table of the users catalog", () => {
+  const t = model.physical.tables.find((t) => t.schema === "simetra" && t.name === "identities")!
+  expect(t.origin).toEqual({ objectId: usersId, part: "identities" })
+  expect(t.primaryKey!.columns).toEqual(["provider", "subject"])
+  expect(t.uniques.map((u) => u.columns)).toContainEqual(["user_id", "provider"])
+  expect(t.foreignKeys).toEqual([expect.objectContaining({ columns: ["user_id"], deferrable: "initiallyDeferred" })])
 })
-it("every platform function is SECURITY DEFINER with an empty search_path and no PUBLIC execute", …)
+it("schema grants: REVOKE ALL FROM PUBLIC, USAGE for API roles only", …)
+it("every platform function is SECURITY DEFINER, empty search_path, no PUBLIC execute", …)
 it("current_user_id is executable by authenticated and anon only", …)
 it("kind_labels lists every labelled object in C collation", …)
-it("the identities FK is in the tail, deferred", () => {
-  expect(renderPlatformState(model).tail.map((s) => s.sql)).toEqual([expect.stringContaining("DEFERRABLE INITIALLY DEFERRED")])
-})
-it("provision truncates the display name to descriptionLength", …)  // текст містить left(…, 150) для descriptionLength 150
+it("provision truncates the display name to descriptionLength and never yields NULL", …)  // left(…, 150); останнє джерело — 'user ' || left(…, 8)
+it("the provision SQL is generated from PROVIDER_IDENTITY_SOURCES, not hard-coded", …)    // підмінена запис-фікстура IdentitySource → інша таблиця й колонки в тексті
 ```
 
-`desired-state.test.ts`: голова йде після `CREATE SCHEMA` застосунку й до
-першої таблиці; хвіст — останній. `out-of-scope.test.ts`: модель із
-«Користувачами» дає `simetra` у `scope.schemas`, без них — ні.
+`creation-order.test.ts`: тригер провізії на `auth.users` іде після таблиці
+«Користувачі» й `identities` і після своєї функції; згенерована функція
+членства — після `simetra.current_user_id()`.
+`provider-event-sources.test.ts` (T2): таблиця `PROVIDER_IDENTITY_SOURCES.supabase`
+лежить на поверхні тригерів `SUPABASE_SURFACES`.
+`out-of-scope.test.ts`: модель із «Користувачами» дає `simetra` у
+`scope.schemas` без окремої логіки; без них — ні.
+`desired-state.test.ts`: FK `identities` — серед FK наприкінці.
+`reverse-generate.test.ts`: `introspect` над базою з розгорнутим шаром не
+розкладає жодної одиниці `simetra` у метадані.
 
-Run: `pnpm --filter simetra test platform-state desired-state out-of-scope`
+Run: `pnpm --filter simetra test platform-layer creation-order out-of-scope desired-state reverse-generate`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація** — за рішеннями 3, 9, 12; кожен оператор —
-окремий `RenderedStatement`; тіла функцій — plpgsql, імена таблиці й колонок
-«Користувачів» — з `contracts.users` через `quoteIdent`.
+- [ ] **Step 2: Реалізація** — за рішеннями 1, 3, 9, 12; тексти — через
+`quoteIdent`/`sqlLiteral`, як у `movement-functions.ts`; SQL провізії й
+недійсності — один загальний над `IdentitySource`. Якщо якийсь фрагмент
+неможливо виразити даними `IdentitySource` — лишити його мінімальним і
+назвати у звіті задачі (архітекторові).
 
 - [ ] **Step 3: Зелено**
 
@@ -623,7 +676,7 @@ Expected: PASS.
 
 ```bash
 git add packages/simetra
-git commit -m "feat(schema): платформний шар simetra — ідентичності, поточний користувач, провізія Supabase, довідник міток"
+git commit -m "feat(compiler): платформний шар simetra — похідна таблиця identities, згенеровані функції й тригери провізії з фактів провайдера"
 ```
 
 ---
@@ -660,6 +713,7 @@ it("authenticated sees rows through a wrapped policy and cannot read identities"
   // SELECT FROM simetra.identities → помилка 42501 permission denied
 })
 it("an invalid user with a valid token sees nothing", …)
+it("identity source columns exist in the stack", …)          // кожна колонка PROVIDER_IDENTITY_SOURCES.supabase є в auth.users (information_schema)
 ```
 
 `engine-desired.db.test.ts`: розгорнутий бажаний стан моделі з
@@ -672,7 +726,7 @@ Expected: FAIL до реалізації, якої бракує; якщо зад
 проти специфікації, а не проти коду).
 
 - [ ] **Step 2: Виправлення за червоними тестами** — лише в
-`platform-state.ts`; зміна рішень 9 чи 12 — стоп і до архітектора.
+`packages/simetra/src/compiler/platform/`; зміна рішень 9 чи 12 — стоп і до архітектора.
 
 - [ ] **Step 3: Зелено, коміт**
 
@@ -680,7 +734,7 @@ Run: `pnpm test:db`
 Expected: PASS.
 
 ```bash
-git add packages/simetra/test packages/designer/src/schema-engine/__tests__ packages/simetra/src/schema
+git add packages/simetra/test packages/designer/src/schema-engine/__tests__ packages/simetra/src/compiler/platform
 git commit -m "test(schema): платформний шар на стеку — провізія, недійсність, поточний користувач під ролями API"
 ```
 
