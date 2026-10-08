@@ -72,8 +72,11 @@ export interface StandardColumnDef {
    * ім'я предвизначеного елемента) унікальності не підлягають.
    */
   partialUnique?: string
-  /** Ціль посилання; сама колонка має тип UUID. */
-  ref?: "self" | "owningObject" | "owners" | "recorders"
+  /**
+   * Ціль посилання; сама колонка має тип UUID. `users` — системний довідник
+   * «Користувачі»: ціль — роль, а не ім'я, її резолвить компілятор.
+   */
+  ref?: "self" | "owningObject" | "owners" | "recorders" | "users"
   /** Дія FK при видаленні цілі — лише там, де вона не типова. */
   onDelete?: FkAction
   /**
@@ -293,6 +296,12 @@ export interface KindDefinition {
    */
   compositeIndexes?: true
   /**
+   * Вид приймає `trackAuthor` (авторство `createdBy`/`updatedBy` на
+   * «Користувачі»): поле є в схемі лише там, де є цей факт, а компілятор
+   * читає його звідси.
+   */
+  authorTracking?: true
+  /**
    * RLS таблиць виду 1С (спека П2 §8.3): дані застосунку за замовчуванням
    * закриті, доступ відкривають політики. Немає — без RLS; прийнята таблиця
    * задає його полем файлу, бо описана фізично повністю.
@@ -417,6 +426,34 @@ export function serviceDateColumns(): StandardColumnDef[] {
       notNull: true,
       default: "now()",
       title: { uk: "Дата оновлення", en: "Updated at" },
+    },
+  ]
+}
+
+/**
+ * Авторство (спека П2 §5): посилання на «Користувачі», а не на учасника —
+ * автор лишається автором і після виходу з тенанта. Nullable, бо рядок може
+ * записати й не користувач (міграція, провізія); заповнює їх `runCommand`.
+ */
+export function authorColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "createdBy",
+      physicalName: "created_by_id",
+      type: { type: "UUID" },
+      notNull: false,
+      ref: "users",
+      indexed: true,
+      title: { uk: "Автор", en: "Created by" },
+    },
+    {
+      logicalName: "updatedBy",
+      physicalName: "updated_by_id",
+      type: { type: "UUID" },
+      notNull: false,
+      ref: "users",
+      indexed: true,
+      title: { uk: "Автор зміни", en: "Updated by" },
     },
   ]
 }

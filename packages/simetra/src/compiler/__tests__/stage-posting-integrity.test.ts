@@ -203,6 +203,30 @@ describe("stage 4: movement constructor semantics", () => {
     expect(result.diagnostics).toEqual([])
   })
 
+  it("document author is a Ref to the users catalog", async () => {
+    const withAuthor = (target: string) =>
+      build(
+        {
+          fields: { item: "row.item", qty: "row.qty", author: "doc.createdBy" },
+        },
+        ({ files, sale, stock }) => {
+          files["catalogs/Users/Users.meta.json"] = catalog("Users", {
+            role: "users",
+          })
+          sale.trackAuthor = true
+          stock.attributes.push(attribute("author", ref(target)))
+        }
+      )
+    expect((await withAuthor("Users")).diagnostics).toEqual([])
+    expect(codes(await withAuthor("Item"))).toEqual([
+      [
+        "posting.type-mismatch",
+        SALE_FILE,
+        "/posting/movements/0/fields/author",
+      ],
+    ])
+  })
+
   /** `warehouse` — обов'язковий вимір, `item` (з фікстури) — необов'язковий. */
   const withWarehouse = ({ stock }: Pick<Fixture, "stock">) => {
     stock.dimensions.push(

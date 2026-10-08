@@ -319,6 +319,8 @@ describe("CustomTable physics round-trip", () => {
     // Далі додано складені індекси `indexes` довідника, документа і їхніх ТЧ.
     // Далі додано довідник «Користувачі» (`role: "users"`) — нова таблиця
     // `users`, решта знімка та сама.
+    // Далі `Item` і `Sale` отримали `trackAuthor` — колонки `created_by_id`,
+    // `updated_by_id` з FK на `users` та їхні індекси лише в цих двох таблицях.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -329,7 +331,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "cb6ecc6b3797dd1a3daba7b88c7d54cd2a9f0128b0ad709fe7e218208f699766"
+      "91d3ddc00f88b8c8293c80b8695936baa9aea0bfb5a03fc86198e85e82a2779c"
     )
   })
 })

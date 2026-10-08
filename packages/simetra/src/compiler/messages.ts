@@ -1051,6 +1051,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Провізія вставляє рядок користувача лише з ключем і найменуванням, а помилка в ній зриває реєстрацію: кожна інша колонка мусить прийняти такий рядок.",
     },
   },
+  "users.catalog-missing": {
+    en: (p) =>
+      `${p.kind} "${p.name}" has ${p.feature}, which references the users catalog, but no catalog has role users`,
+    uk: (p) =>
+      `${p.kind} "${p.name}" має ${p.feature}, що посилається на довідник користувачів, але жоден довідник не має ролі users`,
+    hint: {
+      en: "Add a catalog with role users, or remove the field.",
+      uk: "Додайте довідник із роллю users або приберіть поле.",
+    },
+  },
 
   "reference.not-referenceable": {
     en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,

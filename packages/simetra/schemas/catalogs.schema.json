@@ -208,6 +208,11 @@
         "additionalProperties": false
       }
     },
+    "trackAuthor": {
+      "default": false,
+      "description": "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
+      "type": "boolean"
+    },
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
       "type": "string",

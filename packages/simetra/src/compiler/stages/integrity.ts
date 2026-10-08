@@ -215,6 +215,7 @@ export function checkIntegrity(
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider))
   diagnostics.push(...checkUsersCatalogs(objects, model))
+  diagnostics.push(...checkAuthorTracking(objects))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -303,6 +304,28 @@ function checkUsersCatalogs(
     }
   }
   return found
+}
+
+/**
+ * Авторство посилається на «Користувачі» за роллю, а не за іменем: без
+ * довідника з роллю стадія 3 лишає колонки без FK, і помилка — тут. Чи вид
+ * приймає `trackAuthor`, каже факт реєстру, а не перелік видів.
+ */
+function checkAuthorTracking(objects: readonly ParsedObject[]): Diagnostic[] {
+  if (usersCatalogOf(objects) !== undefined) return []
+  return objects
+    .filter(
+      (object) =>
+        KIND_REGISTRY[object.kind].authorTracking === true &&
+        (object.data as { trackAuthor?: boolean }).trackAuthor === true
+    )
+    .map((object) =>
+      diagnostic("users.catalog-missing", object.file, "/trackAuthor", {
+        kind: object.kind,
+        name: object.name,
+        feature: "trackAuthor",
+      })
+    )
 }
 
 /** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */
@@ -1220,6 +1243,8 @@ function checkPosting(
   }
   const idOf = (ref: MetadataRef) =>
     byKey.get(objectKey(ref.kind, ref.name))?.id
+  // Ціль авторства — «Користувачі» за роллю (стандартний `ref: "users"`).
+  const usersId = usersCatalogOf(objects)?.id
   const typeOfField = (field: ValueType): InferredType => {
     const refs =
       field.ref !== undefined ? [field.ref] : (field.allowedTypes ?? [])
@@ -1288,6 +1313,11 @@ function checkPosting(
       }
       if (column.ref === "owningObject") {
         return { kind: "ref", targets: [ownerId] }
+      }
+      if (column.ref === "users") {
+        return usersId === undefined
+          ? UNKNOWN
+          : { kind: "ref", targets: [usersId] }
       }
       // Власник і реєстратор — поліморфні пари без цілі у виразі.
       if (column.ref !== undefined) return UNKNOWN

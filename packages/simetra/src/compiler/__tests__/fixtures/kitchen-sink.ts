@@ -188,6 +188,7 @@ export function kitchenSink(): Map<string, string> {
 
   const item = {
     ...header("Catalog", "Item", "item"),
+    trackAuthor: true,
     publicRead: "anon",
     codeLength: 12,
     codeType: "Number",
@@ -253,6 +254,7 @@ export function kitchenSink(): Map<string, string> {
 
   const sale = {
     ...header("Document", "Sale", "sale"),
+    trackAuthor: true,
     publicRead: "authenticated",
     numberLength: 9,
     numberType: "Number",

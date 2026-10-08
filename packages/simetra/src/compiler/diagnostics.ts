@@ -79,6 +79,7 @@ export const COMPILER_RULES = [
   "users.scope-not-none",
   "users.description-required",
   "users.provision-unsafe",
+  "users.catalog-missing",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",

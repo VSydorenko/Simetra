@@ -1,5 +1,6 @@
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import {
+  authorColumns,
   deletionMarkColumn,
   keyColumn,
   keyOrderOf,
@@ -93,7 +94,8 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
     },
     versionColumn(),
-    ...serviceDateColumns()
+    ...serviceDateColumns(),
+    ...(catalog.trackAuthor ? authorColumns() : [])
   )
   return columns
 }
@@ -150,6 +152,7 @@ export const catalogKind: KindDefinition = {
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
+  authorTracking: true,
   scope: "required",
   declared: false,
   kindLabel: true,

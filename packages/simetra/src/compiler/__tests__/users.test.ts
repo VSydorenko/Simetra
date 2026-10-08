@@ -4,6 +4,7 @@ import type { PhysicalTable } from "simetra/model"
 import {
   attribute,
   catalog,
+  document,
   metaFiles,
   organization,
   project,
@@ -254,5 +255,68 @@ describe("users catalog role", () => {
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
     expect(contracts.users).toBeUndefined()
+  })
+})
+
+describe("trackAuthor", () => {
+  const SALE = "documents/Sale/Sale.meta.json"
+
+  it("trackAuthor adds created_by_id and updated_by_id referencing users", async () => {
+    const { physical } = await compileOk({
+      [USERS_FILE]: usersCatalog(),
+      [SALE]: document("Sale", { trackAuthor: true }),
+    })
+    const sale = tableOf(physical, "sale")
+    expect(
+      sale.columns
+        .filter((c) => c.name.endsWith("_by_id"))
+        .map((c) => [c.name, c.type, c.notNull])
+    ).toEqual([
+      ["created_by_id", "uuid", false],
+      ["updated_by_id", "uuid", false],
+    ])
+    for (const column of ["created_by_id", "updated_by_id"]) {
+      expect(sale.foreignKeys).toContainEqual(
+        expect.objectContaining({
+          columns: [column],
+          references: { schema: "public", table: "users", columns: ["id"] },
+          onDelete: "noAction",
+        })
+      )
+      expect(sale.indexes).toContainEqual(
+        expect.objectContaining({ keys: [{ column }] })
+      )
+    }
+  })
+
+  it("a catalog tracks authorship too, and without the flag there are no author columns", async () => {
+    const { physical } = await compileOk({
+      [USERS_FILE]: usersCatalog(),
+      "catalogs/Item/Item.meta.json": catalog("Item", { trackAuthor: true }),
+      [SALE]: document("Sale"),
+    })
+    const names = (table: string) =>
+      tableOf(physical, table).columns.map((c) => c.name)
+    expect(names("item")).toEqual(
+      expect.arrayContaining(["created_by_id", "updated_by_id"])
+    )
+    expect(names("sale")).not.toContain("created_by_id")
+    expect(names("users")).not.toContain("created_by_id")
+  })
+
+  it("trackAuthor without a users catalog is an error", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        [SALE]: document("Sale", { trackAuthor: true }),
+      })
+    )
+    const found = result.diagnostics.filter(
+      (d) => d.code === "users.catalog-missing"
+    )
+    expect(found.map((d) => `${d.file} ${d.pointer}`)).toEqual([
+      `${SALE} /trackAuthor`,
+    ])
+    expect(found[0]!.severity).toBe("error")
   })
 })

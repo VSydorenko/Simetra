@@ -12,7 +12,11 @@ import {
 } from "simetra/model"
 import type { CompiledModel } from "./compile"
 import { compareStrings } from "./diagnostics"
-import { registerSingletonOf, standardTargetRefs } from "./stages/model"
+import {
+  registerSingletonOf,
+  standardTargetRefs,
+  usersRefOf,
+} from "./stages/model"
 
 /**
  * Типи значення колонки: логічні плюс дві форми `CustomTable`. Закритий
@@ -95,6 +99,7 @@ export function emitEntityTypes(model: CompiledModel): string {
     model.objects.map((object) => [`${object.kind}.${object.name}`, object])
   )
   const lookup = (ref: MetadataRef) => byRef.get(`${ref.kind}.${ref.name}`)
+  const users = usersRefOf(model.objects)
   const scopeNames = new Map(model.scopeKinds.map((k) => [k.id, k.name]))
   // Заголовок виду скоупу живе лише в проєкті, а не в знімку скоупів.
   const scopeTitles = new Map(
@@ -439,7 +444,7 @@ export function emitEntityTypes(model: CompiledModel): string {
       }
 
       const targetsOf = (column: StandardColumnDef) =>
-        standardTargetRefs(column, object.data)
+        standardTargetRefs(column, object.data, users)
       const block = model.presentation.objects.find(
         (p) => p.objectId === object.id
       )

@@ -1,6 +1,7 @@
 import type { PeriodUnit } from "../physical/period"
 import { documentSchema, type Document } from "../schemas/document"
 import {
+  authorColumns,
   deletionMarkColumn,
   keyColumn,
   keyOrderOf,
@@ -94,6 +95,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
     deletionMarkColumn(),
     versionColumn(),
     ...serviceDateColumns(),
+    ...(document.trackAuthor ? authorColumns() : []),
   ]
 }
 
@@ -128,6 +130,7 @@ export const documentKind: KindDefinition = {
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
+  authorTracking: true,
   scope: "required",
   declared: false,
   kindLabel: true,

@@ -281,6 +281,8 @@ class SnapshotBuilder {
    * стадія 2; тут — лише id → мітка, без другого читання імені.
    */
   private readonly enumDefaultLabels: Map<string, string>
+  /** Ціль стандартного `ref: "users"`; немає — авторство без FK (стадія 4). */
+  private readonly users: MetadataRef | undefined
 
   constructor(
     objects: readonly ParsedObject[],
@@ -288,6 +290,7 @@ class SnapshotBuilder {
     references: readonly ResolvedReference[]
   ) {
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
+    this.users = usersRefOf(objects)
     this.style = project.naming.attributeCase
     this.scopeKinds = new Map(project.scopeKinds.map((k) => [k.name, k]))
     this.rootKinds = new Map(
@@ -1020,7 +1023,7 @@ class SnapshotBuilder {
     column: StandardColumnDef,
     object: ParsedObject
   ): ParsedObject[] {
-    return standardTargetRefs(column, object.data).map((ref) =>
+    return standardTargetRefs(column, object.data, this.users).map((ref) =>
       this.lookup(ref)
     )
   }
@@ -1502,13 +1505,17 @@ export function registerSingletonOf(
 }
 
 /**
- * Цілі стандартного посилання (власники довідника, реєстратори регістра) за
- * налаштуваннями виду. Спільний для стадії 3 і кодогену типів.
+ * Цілі стандартного посилання (власники довідника, реєстратори регістра,
+ * «Користувачі» авторства) за налаштуваннями виду. Спільний для стадії 3 і
+ * кодогену типів. `users` — довідник із роллю «користувачі» (`usersRefOf`):
+ * без нього ціль порожня, а помилку `users.catalog-missing` дає стадія 4.
  */
 export function standardTargetRefs(
   column: StandardColumnDef,
-  data: unknown
+  data: unknown,
+  users: MetadataRef | undefined
 ): MetadataRef[] {
+  if (column.ref === "users") return users === undefined ? [] : [users]
   const { owners, recorderTypes } = data as Element
   const refs =
     column.ref === "owners"
@@ -1613,6 +1620,16 @@ export function usersCatalogOf(
   return objects
     .filter((o) => (o.data as { role?: string }).role === "users")
     .sort((a, b) => compareStrings(a.file, b.file))[0]
+}
+
+/** Посилання на «Користувачі» — ціль стандартного `ref: "users"`. */
+export function usersRefOf(
+  objects: readonly ParsedObject[]
+): MetadataRef | undefined {
+  const users = usersCatalogOf(objects)
+  return users === undefined
+    ? undefined
+    : { kind: users.kind, name: users.name }
 }
 
 /**
