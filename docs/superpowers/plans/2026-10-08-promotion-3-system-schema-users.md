@@ -105,9 +105,16 @@ Realtime) — П3; адаптери інших провайдерів ідент
    стандартні `userKind` (`user_kind text NOT NULL DEFAULT 'human'`, CHECK
    `IN ('human', 'agent')`) і `invalid` (`invalid boolean NOT NULL DEFAULT
    false`). Правила: щонайбільше один на проєкт; `scope: "none"`;
-   `descriptionLength > 0` (найменування — відображуване ім'я). Власний
-   реквізит з `required` без `defaultValue` — помилка: провізія вставляє
-   рядок без даних застосунку, і `NOT NULL` без значення зірвав би реєстрацію.
+   `descriptionLength > 0` (найменування — відображуване ім'я). Провізія
+   вставляє рядок лише з ключем і найменуванням, тож власні реквізити
+   «Користувачів» не можуть мати обмеження, яке така вставка порушить:
+   правило `users.provision-unsafe` з `params.reason` — `requiredWithoutDefault`
+   (`required` без `defaultValue`), `uniqueWithDefault` (`unique` чи
+   `uniqueWithin` разом із `defaultValue`: друга реєстрація дала б дубль),
+   `defaultViolatesCheck` (`defaultValue`, який не проходить власну перевірку
+   реквізиту — непорожність `required`-рядка, `pattern`, `minLength`, межі
+   числа; перевірка статична, над скалярним значенням), `rowRule` (правило
+   рядка в модулі «Користувачів» — статично не доводиться).
 6. **`trackAuthor: true`** — на видах із фактом реєстру `authorTracking`
    (Catalog, Document). Стандартні `createdBy` ↔ `created_by_id`, `updatedBy`
    ↔ `updated_by_id` — `ref: "users"` (нова ціль `StandardColumnDef.ref`), FK
@@ -244,8 +251,8 @@ Expected: зелено.
    П2» і «Пізніше» прибрати; форма `setFunction: "membership"`.
 2. Спека П2 §5 «Користувачі й авторство»: `role: "users"` на довіднику;
    стандартна ціль `ref: "users"`; фізичні імена `created_by_id`,
-   `updated_by_id`; правило `required` без значення заповнення в
-   «Користувачах».
+   `updated_by_id`; правило `users.provision-unsafe` — власні реквізити
+   «Користувачів» не мають обмежень, які порушить вставка провізії.
 3. Спека П2 §8.3: платформний шар генерує компілятор як частину знімка й
    одиниць (рішення 1, 9, 12): похідна таблиця `identities` довідника
    «Користувачі», згенеровані одиниці з явними ребрами графа порядку, факти
@@ -386,7 +393,7 @@ git commit -m "feat(model): властивість personalData і контра�
   - Стандартні колонки за рішенням 5 (логічні `userKind`, `invalid`; власний
     реквізит із цим іменем — наявне `identity.name-reserved`).
   - Правила: `users.catalog-duplicate`, `users.scope-not-none`,
-    `users.description-required`, `users.required-without-default`.
+    `users.description-required`, `users.provision-unsafe` (`params.reason` — рішення 5).
   - `Contracts.users?: { objectId: string; table: QualifiedName; keyColumn:
     "id"; descriptionColumn: string; descriptionLength: number;
     invalidColumn: "invalid"; userKindColumn: "user_kind" }`.
@@ -406,7 +413,11 @@ it.each([
   ["two users catalogs", "users.catalog-duplicate"],
   ["scoped users catalog", "users.scope-not-none"],
   ["descriptionLength 0", "users.description-required"],
-  ["own required attribute without defaultValue", "users.required-without-default"],
+  ["own required attribute without defaultValue", "users.provision-unsafe", "requiredWithoutDefault"],
+  ["own unique attribute with defaultValue", "users.provision-unsafe", "uniqueWithDefault"],
+  ["required string with defaultValue \"\"", "users.provision-unsafe", "defaultViolatesCheck"],
+  ["defaultValue not matching pattern", "users.provision-unsafe", "defaultViolatesCheck"],
+  ["row rule in the users module", "users.provision-unsafe", "rowRule"],
 ])("%s is an error", …)
 it("contracts.users describes the table", …)
 it("no users catalog — no contracts.users", …)
@@ -496,9 +507,13 @@ git commit -m "feat(model): авторство trackAuthor — createdBy і upda
 - Produces:
   - `membership?: { user: string }` у схемі довідника; `setFunction:
     { schema?: string; name: string } | "membership"`.
-  - `buildMembershipFunctions(objects: readonly ParsedObject[], physical: PhysicalSnapshot, project: Project): SqlUnit[]`
-    — одиниці класу `function` без `file`, з `ownerObjectId` довідника
-    членства; тексти за рішенням 7.
+  - `buildMembershipFunctions(objects: readonly ParsedObject[], physical: PhysicalSnapshot, project: Project, parse: SqlParser): SqlUnit[]`
+    — одиниці без `file`, з `ownerObjectId` довідника членства; тексти за
+    рішенням 7; кожна одиниця розбирається `parse` у `tree` (обов'язкове
+    поле `SqlUnit`, як у `buildMovementFunctions`). Окрім двох функцій —
+    одиниці `grant`: `REVOKE EXECUTE … FROM PUBLIC` на обидві й `GRANT EXECUTE
+    … TO authenticated` (платформна спека §6.7: дефолт — `REVOKE ALL`;
+    функцію множини викликає політика від ролі запиту).
   - `Contracts.membership: { objectId; scopeKindId; table: QualifiedName; scopeColumn; userColumn; myMemberFunction: QualifiedName; setFunction?: QualifiedName }[]`.
   - Правила: `membership.not-scoped`, `membership.user-not-users-ref`
     (реквізит відсутній, масив, поліморфний чи не на «Користувачі»),
@@ -519,6 +534,7 @@ it("membership derives a NULLS DISTINCT unique key and two generated functions",
   expect(body).toContain("(SELECT simetra.current_user_id())")
   expect(body).toContain("IS NOT NULL")
 })
+it("generated membership functions revoke PUBLIC and grant only authenticated", …)   // одиниці grant з REVOKE … FROM PUBLIC і GRANT … TO authenticated
 it("scope kind with setFunction membership uses the generated set function", …)   // CompiledScopeKind.setFunction = app.org_member_member_scopes
 it.each([["unscoped", "membership.not-scoped"], ["user attribute is an array", "membership.user-not-users-ref"],
          ["two membership catalogs of one scope kind", "membership.duplicate"],
@@ -557,6 +573,7 @@ git commit -m "feat(model): членство membership — унікальніс
 it("a bare simetra.current_user_id() in a policy is an error", …)   // USING (owner_id = simetra.current_user_id()) → sql.bare-current-user
 it("the wrapped call passes", …)                                    // USING (owner_id = (select simetra.current_user_id()))
 it("WITH CHECK is checked too", …)
+it("a correlated or filtered subquery is an error", …)   // (select simetra.current_user_id() from app.t where t.id = id) → sql.bare-current-user
 ```
 
 (Дослівна політика — у модулі `CustomTable` з переліком боргу через
@@ -566,8 +583,11 @@ Run: `pnpm --filter simetra test stage-links`
 Expected: FAIL.
 
 - [ ] **Step 2: Реалізація** — обхід дерева `CreatePolicyStmt.qual` і
-`with_check`: `FuncCall` з іменем `simetra.current_user_id`, предки якого не
-містять `SubLink`.
+`with_check`: кожен `FuncCall` з іменем `simetra.current_user_id` дозволений
+лише як єдиний вираз цілі `SubLink` типу `EXPR_SUBLINK`, чий `SelectStmt` не
+має `FROM`, `WHERE`, `GROUP BY`, `HAVING` та інших частин — рівно
+`(select simetra.current_user_id())` (некорельована форма С9). Будь-яке інше
+розташування — помилка.
 
 - [ ] **Step 3: Зелено, коміт**
 
@@ -606,7 +626,8 @@ git commit -m "feat(compiler): голий виклик simetra.current_user_id()
   - `identitiesTable(users: ParsedObject, usersTable: PhysicalTable): PhysicalTable`
     — схема `simetra`, колонки й ключі за рішенням 9, FK на «Користувачі»
     deferrable, `origin { objectId, part: "identities" }`.
-  - `buildPlatformUnits(model: { objects; physical; contracts; project }): SqlUnit[]`
+  - `buildPlatformUnits(model: { objects; physical; contracts; project }, parse: SqlParser): SqlUnit[]`
+    (кожна одиниця розбирається `parse` у `tree`, як у `buildMovementFunctions`)
     — порожньо без `contracts.users`; одиниці класів `grant` (`REVOKE ALL ON
     SCHEMA`, `GRANT USAGE`, `REVOKE EXECUTE … FROM PUBLIC`, `GRANT EXECUTE`),
     `function`, `trigger`, `view`; кожна з `requires`, де тіло plpgsql
@@ -667,7 +688,8 @@ Create `packages/simetra/test/db/membership.db.test.ts` (розгортання
 `reference-domain.db.test.ts`): два учасники без користувача в одному
 тенанті — вставка проходить; той самий користувач двічі — `unique_violation`;
 `<схема>.org_member_my_member(<org>)` під claims користувача повертає його
-учасника, а для учасника без користувача — нікого.
+учасника, а для учасника без користувача — нікого; під `anon` виклик обох
+функцій — `permission denied` (42501).
 
 Run: `pnpm --filter simetra test:db membership`
 Expected: PASS.
@@ -750,6 +772,9 @@ git commit -m "test(schema): платформний шар на стеку — �
 - Modify: `examples/reference/metadata/custom-tables/UserSettings/UserSettings.meta.json` (FK на `Users`)
 - Modify: `examples/reference/metadata/sql/app/accessible_user_ids.sql` (`simetra.current_user_id()` в обгортці)
 - Modify: `examples/reference/accepted/*` (лише якщо паперовий тест вимагає)
+- Modify: `packages/simetra/src/compiler/__tests__/operations-rename.test.ts` (зараз читає `custom-tables/OrgMember` прикладу: перевести на `UserSettings` або власну фікстуру `CustomTable` — предмет тесту каскад перейменування в `CustomTable`, а не членство)
+- Modify: `packages/simetra/src/schema/__tests__/reference-domain.db.test.ts` (викликає `app.accessible_org_ids()` і вставляє в `app.org_member (org_id, user_id)`: перейти на згенеровану `app.org_member_member_scopes()` і форму довідника `OrgMember`; claims — через `asRole` задачі 9)
+- Перевірити пошуком `OrgMember|org_member|accessible_org_ids` у `packages/` інші тести, що читають приклад, і перевести їх у цій самій задачі
 - Modify: `packages/designer/skills/simetra-metadata/SKILL.md` («Користувачі», `trackAuthor`, `membership`, `personalData`, зарезервована `simetra`)
 - Modify: `docs/superpowers/specs/2026-10-07-system-schema-users-design.md` §11.2 — лише якщо архітектор просить прибрати закриті прогалини в docs-коміті задачі 1 (інакше не чіпати)
 
