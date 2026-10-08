@@ -33,6 +33,9 @@ export function renderExplanation(e: Explanation): string {
   for (const q of e.movementQueries) {
     lines.push("", `movement query ${q.identity}`, q.sql)
   }
+  for (const u of e.generatedUnits) {
+    lines.push("", `generated ${u.identity}`, u.sql)
+  }
   if (e.contracts.length > 0) {
     lines.push("", "contracts:", JSON.stringify(e.contracts, null, 2))
   }

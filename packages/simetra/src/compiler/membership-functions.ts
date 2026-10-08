@@ -11,6 +11,7 @@ import {
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
+import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import type { ParsedObject } from "./stages/files"
@@ -123,7 +124,8 @@ export function membershipsOf(
  * STABLE SECURITY DEFINER SET search_path = ''`: функцію множини викликає
  * політика RLS над таблицею з RLS, тож виклик від імені запиту зациклив би
  * політику, а порожній `search_path` не лишає простору для підміни імен.
- * Виконання — лише `authenticated`: дефолт Postgres дає його `PUBLIC`.
+ * Виконання — лише `authenticated`: дефолт Postgres дає його `PUBLIC`, а
+ * провайдер — своїм ролям типовими привілеями схеми (`executeGrants`).
  */
 export function buildMembershipFunctions(
   objects: readonly ParsedObject[],
@@ -137,6 +139,7 @@ export function buildMembershipFunctions(
       ...generatedUnit(sql, schema, parse),
       ownerObjectId: membership.object.id ?? "",
       module: project.name,
+      generator: "membership",
     })
     const functions = [
       {
@@ -157,14 +160,11 @@ export function buildMembershipFunctions(
     for (const { fn, signature, sql } of functions) {
       units.push(
         owned(sql, fn.schema),
-        owned(
-          `REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC;`,
-          fn.schema
-        ),
-        owned(
-          `GRANT EXECUTE ON FUNCTION ${signature} TO ${MEMBER_ROLE};`,
-          fn.schema
-        )
+        ...executeGrants(
+          signature,
+          [MEMBER_ROLE],
+          project.database.provider
+        ).map((grant) => owned(grant, fn.schema))
       )
     }
   }

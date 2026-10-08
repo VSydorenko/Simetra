@@ -102,6 +102,9 @@ const UNIT_COMMENTS: Readonly<Record<string, SqlUnitClass>> = {
  * видимості (після визначення, у рекурсивному — і в тілі) — не відношення моделі. Тіла plpgsql не аналізуються — Postgres
  * не перевіряє їх при створенні.
  *
+ * Згенерована одиниця несе явні ребра `requires` до вузлів, яких вимагає її
+ * тіло plpgsql: генератор знає тіло, а граф його не читає.
+ *
  * Обмеження FK поза порядком створення (спека П2 §8.3): рендер виводить їх
  * окремими `ALTER TABLE … ADD CONSTRAINT` після всіх таблиць, тож взаємні
  * посилання таблиць циклом не є. Будь-який цикл решти ребер —
@@ -153,6 +156,7 @@ class Graph {
     for (const table of physical.tables) this.tableEdges(table)
     for (const unit of units) this.collectRevokes(unit)
     for (const unit of units) this.unitEdges(unit)
+    for (const unit of units) this.requiredEdges(unit)
     for (const unit of units)
       if (unit.class === "defaultPrivileges") this.defaultPrivilegeEdges(unit)
   }
@@ -183,6 +187,20 @@ class Graph {
       if (cls === "defaultPrivileges" || cls === "extension") continue
       if (schemas.size === 0 || schemas.has(node.schema))
         this.edge(node.label, unit.identity)
+    }
+  }
+
+  /**
+   * Явні ребра згенерованої одиниці. Вузол, якого немає в моделі, — дефект
+   * генератора: ребро в нікуди тихо зламало б сортування.
+   */
+  private requiredEdges(unit: SqlUnit): void {
+    for (const node of unit.requires ?? []) {
+      const label = labelOf(node)
+      if (!this.nodes.has(label)) {
+        throw new Error(`internal: ${unit.identity} requires unknown ${label}`)
+      }
+      this.edge(unit.identity, label)
     }
   }
 

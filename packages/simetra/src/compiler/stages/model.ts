@@ -46,6 +46,7 @@ import {
   type ValueType,
 } from "simetra/model"
 import { compareStrings, valueAt } from "../diagnostics"
+import { identitiesTable } from "../platform/identities"
 import { objectKey, type ParsedObject } from "./files"
 import {
   COLUMN_NAME_ROLES,
@@ -256,7 +257,41 @@ export function buildModel(
 ): ModelStageResult {
   const builder = new SnapshotBuilder(objects, project, references)
   for (const object of objects) builder.add(object)
-  return builder.finish()
+  return withIdentities(builder.finish(), objects)
+}
+
+/**
+ * Довідник «Користувачі» вмикає платформний шар (спека П2 §8.3): його похідна
+ * таблиця `simetra.identities` — частина знімка, тож граф порядку, хеш,
+ * `explain` і межа звірки бачать її разом із моделлю. Таблиця в
+ * зарезервованій схемі імен застосунку не займає, тож додається після
+ * призначення імен.
+ */
+function withIdentities(
+  result: ModelStageResult,
+  objects: readonly ParsedObject[]
+): ModelStageResult {
+  const users = usersCatalogOf(objects)
+  const usersTable =
+    users === undefined
+      ? undefined
+      : result.physical.tables.find(
+          (t) =>
+            t.origin.objectId === users.id &&
+            t.origin.tabularSectionId === undefined &&
+            t.origin.part === undefined
+        )
+  if (users === undefined || usersTable === undefined) return result
+  return {
+    ...result,
+    physical: {
+      ...result.physical,
+      tables: [
+        ...result.physical.tables,
+        identitiesTable(users, usersTable),
+      ].sort(bySchemaAndName),
+    },
+  }
 }
 
 class SnapshotBuilder {
@@ -2065,7 +2100,7 @@ function enumDefaultLabels(
 }
 
 /** Значення за замовчуванням реквізиту як SQL-літерал. */
-function sqlLiteral(value: string | number | boolean): string {
+export function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === "string") return `'${value.replaceAll("'", "''")}'`
   return String(value)
 }

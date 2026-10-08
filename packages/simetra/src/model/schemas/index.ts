@@ -106,7 +106,11 @@ export {
   projectSchema,
   DATABASE_PROVIDERS,
   PROVIDER_EVENT_SOURCES,
+  PROVIDER_FUNCTION_GRANTEES,
+  PROVIDER_IDENTITY_SOURCES,
   type DatabaseProvider,
+  type IdentityNameSource,
+  type IdentitySource,
   type ProviderEventSource,
   type Project,
 } from "./project"

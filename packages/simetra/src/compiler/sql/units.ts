@@ -16,6 +16,7 @@ import {
 } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { extractMovementBlocks } from "../movement-blocks"
+import type { CreationNode } from "./dependencies"
 import type { ParsedStatement, SqlParser } from "./parse"
 import { statementTargets } from "./unit-target"
 
@@ -35,7 +36,7 @@ export interface SqlUnit {
    */
   schema: string
   name: string
-  /** Немає — згенерована одиниця (запит рухів). */
+  /** Немає — згенерована одиниця (запит рухів, членство, платформний шар). */
   file?: string
   /**
    * 1-базний рядок першого токена оператора у `file` — для діагностик;
@@ -59,11 +60,26 @@ export interface SqlUnit {
   registerId?: string
   documentId?: string
   source?: "query" | "constructor"
+  /**
+   * Лише згенерована одиниця: її генератор. Файлу й рядка вона не має, тож
+   * діагностика про збіг з дослівною одиницею називає її за походженням.
+   */
+  generator?: UnitGenerator
+  /**
+   * Лише згенерована одиниця: вузли, яких вимагає її тіло plpgsql. Граф
+   * порядку тіл plpgsql не читає (Postgres не перевіряє їх при створенні),
+   * тож ці ребра називає генератор, що знає тіло (спека П2 §8.3).
+   */
+  requires?: readonly CreationNode[]
 }
+
+/** Хто згенерував одиницю. */
+export type UnitGenerator = "movementQuery" | "membership" | "platformLayer"
 
 /** Обгортка запиту рухів: поля рухів обов'язкові. */
 export interface MovementQueryUnit extends SqlUnit {
   class: "movementQuery"
+  generator: "movementQuery"
   ownerObjectId: string
   queryTree: unknown
   registerId: string
@@ -373,10 +389,10 @@ export function pgNamespaceKeys(object: PgObject): PgName[] {
 
 /**
  * Конфлікти імен у просторах Postgres (спека П2 §8.3) над таблицями й
- * енам-типами моделі, обгортками рухів і дослівними одиницями. Тотожна
- * ідентичність — `sql.unit-duplicate`, різні класи з одним ключем —
- * `sql.namespace-conflict`. Першим вважається об'єкт моделі чи обгортка
- * (їх породжує модель), далі одиниці за файлом і рядком; помилку отримує
+ * енам-типами моделі, згенерованими й дослівними одиницями. Тотожна
+ * ідентичність будь-якого класу — `sql.unit-duplicate`, різні класи з одним
+ * ключем — `sql.namespace-conflict`. Першим вважається об'єкт моделі чи
+ * згенерована одиниця (їх породжує модель), далі одиниці за файлом і рядком; помилку отримує
  * дослівна одиниця. Збіги лише між об'єктами моделі тут не звітуються: до
  * цієї перевірки їх уже відсіяла стадія 4 (`physical.table-duplicate` для
  * таблиць і енам-типів, `physical.relation-duplicate` для явних імен
@@ -429,8 +445,19 @@ export function namespaceConflicts(
   const diagnostics: Diagnostic[] = []
   for (const holder of [...generated, ...verbatim]) {
     const reported = new Set<Holder>()
-    for (const name of holder.names) {
-      const slot = `${name.space}\0${name.key}`
+    // Тотожна ідентичність — дублікат і для класів без простору імен
+    // (тригер, грант, політика): інакше дослівна копія згенерованої одиниці
+    // мовчки стала б другим вузлом з тим самим ключем.
+    const slots = [
+      ...holder.names.map((name) => ({
+        slot: `${name.space}\0${name.key}`,
+        name,
+      })),
+      ...(holder.unit === undefined
+        ? []
+        : [{ slot: `unit\0${holder.unit.identity}`, name: undefined }]),
+    ]
+    for (const { slot, name } of slots) {
       const earlier = first.get(slot)
       if (earlier === undefined) {
         first.set(slot, holder)
@@ -440,24 +467,30 @@ export function namespaceConflicts(
       if (unit?.file === undefined || earlier === holder) continue
       if (reported.has(earlier)) continue
       reported.add(earlier)
-      diagnostics.push(
-        earlier.unit?.identity === unit.identity
-          ? diagnostic("sql.unit-duplicate", unit.file, "", {
-              identity: unit.identity,
-              line: unit.line ?? 0,
-              first:
-                earlier.unit.file === undefined
-                  ? describe(earlier.unit)
-                  : `${earlier.unit.file}:${earlier.unit.line ?? 0}`,
-            })
-          : diagnostic("sql.namespace-conflict", unit.file, "", {
-              identity: unit.identity,
-              line: unit.line ?? 0,
-              space: name.space,
-              key: name.key,
-              other: earlier.label,
-            })
-      )
+      if (earlier.unit?.identity === unit.identity) {
+        diagnostics.push(
+          diagnostic("sql.unit-duplicate", unit.file, "", {
+            identity: unit.identity,
+            line: unit.line ?? 0,
+            first:
+              earlier.unit.file === undefined
+                ? describe(earlier.unit)
+                : `${earlier.unit.file}:${earlier.unit.line ?? 0}`,
+          })
+        )
+      } else if (name !== undefined) {
+        // Слот ідентичності збігається лише за тотожної ідентичності, тож
+        // різні класи в одному просторі — завжди слот імені.
+        diagnostics.push(
+          diagnostic("sql.namespace-conflict", unit.file, "", {
+            identity: unit.identity,
+            line: unit.line ?? 0,
+            space: name.space,
+            key: name.key,
+            other: earlier.label,
+          })
+        )
+      }
     }
   }
   return diagnostics

@@ -96,6 +96,68 @@ export const PROVIDER_EVENT_SOURCES: Readonly<
   ],
 }
 
+/**
+ * Ролі, яким провайдер типовими привілеями своїх схем дає `EXECUTE` на кожну
+ * нову функцію (на Supabase — `ALTER DEFAULT PRIVILEGES … IN SCHEMA public`).
+ * `REVOKE … FROM PUBLIC` такий грант не знімає, тож функція, яку виконують
+ * лише названі ролі, відкликає його в кожної з цих ролей поштучно. Збіг зі
+ * стеком перевіряє DB-тест членства.
+ */
+export const PROVIDER_FUNCTION_GRANTEES: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: ["anon", "authenticated", "service_role"],
+}
+
+/**
+ * Звідки береться відображуване ім'я нового користувача: колонка таблиці
+ * облікових записів або ключ JSON-колонки метаданих.
+ */
+export type IdentityNameSource =
+  { column: string } | { json: string; key: string }
+
+/**
+ * Таблиця облікових записів провайдера ідентичності для тригерної провізії
+ * (спека користувачів §5): SQL провізії й недійсності платформа генерує один
+ * загальний над цими фактами, тож новий провайдер — новий запис даних, а не
+ * новий SQL. Ключ облікового запису — uuid: він і `subject` (як текст), і
+ * `id` рядка «Користувачі» (С8).
+ */
+export interface IdentitySource {
+  table: { schema: string; name: string }
+  keyColumn: string
+  /** Джерела найменування за пріоритетом; порожні значення пропускаються. */
+  nameSources: readonly IdentityNameSource[]
+  /** Ознака анонімного входу: такі облікові записи не провізуються. */
+  anonymousColumn?: string
+  /** М'яке видалення облікового запису: ненульове значення — недійсність. */
+  deletedAtColumn?: string
+  /** Значення `simetra.identities.provider` для цього провайдера. */
+  providerKey: string
+}
+
+/**
+ * Факти провайдера ідентичності за пресетом бази. Колонки — факт образу
+ * провайдера: їх наявність на стеку перевіряє DB-тест, а лежання таблиці на
+ * поверхні тригерів пресету — тест T2 (T0 його не імпортує).
+ */
+export const PROVIDER_IDENTITY_SOURCES: Readonly<
+  Record<DatabaseProvider, IdentitySource>
+> = {
+  supabase: {
+    table: { schema: "auth", name: "users" },
+    keyColumn: "id",
+    nameSources: [
+      { json: "raw_user_meta_data", key: "full_name" },
+      { json: "raw_user_meta_data", key: "name" },
+      { column: "email" },
+    ],
+    anonymousColumn: "is_anonymous",
+    deletedAtColumn: "deleted_at",
+    providerKey: "supabase",
+  },
+}
+
 /** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */
 export const projectSchema = z
   .strictObject({

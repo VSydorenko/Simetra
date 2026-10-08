@@ -1,4 +1,8 @@
-import { KIND_REGISTRY, METADATA_KINDS } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  METADATA_KINDS,
+  PROVIDER_IDENTITY_SOURCES,
+} from "simetra/model"
 import type {
   CompileResult,
   CompiledModel,
@@ -7,7 +11,7 @@ import type {
 } from "./compile"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { modelHash } from "./canonical"
-import { buildContracts } from "./contracts"
+import { buildContracts, usersContractOf } from "./contracts"
 import { buildPresentation } from "./presentation"
 import { readFiles, type FilesStageResult } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
@@ -16,17 +20,18 @@ import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
+import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { embedRowRules } from "./sql/row-rule"
 import {
-  isMovementQuery,
   namespaceConflicts,
   readSqlUnits,
   type SqlSource,
   type SqlUnit,
+  type UnitGenerator,
   type VerbatimUnit,
 } from "./sql/units"
 
@@ -192,12 +197,31 @@ export async function runStages(
       stage1.project,
       parse
     ),
+    ...buildPlatformUnits(
+      {
+        objects: stage1.objects,
+        physical,
+        contracts: { users: usersContractOf(stage1.objects, physical) },
+        project: stage1.project,
+      },
+      parse,
+      // Ключ провайдера ідентичності — тимчасово пресет бази: окрема вісь
+      // провайдера ідентичності з'явиться з другим таким провайдером.
+      PROVIDER_IDENTITY_SOURCES[stage1.project.database.provider]
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
+  const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
+  // Згенерована одиниця файлу не має: збіг із нею називає її походження.
+  const describeGenerated: Record<UnitGenerator, (unit: SqlUnit) => string> = {
+    movementQuery: (unit) =>
+      `the movement query of ${name(unit.documentId)} into ${name(unit.registerId)}`,
+    membership: (unit) => `the membership SQL of ${name(unit.ownerObjectId)}`,
+    platformLayer: (unit) =>
+      `the platform layer of ${name(unit.ownerObjectId)}`,
+  }
   const collisions = namespaceConflicts(physical, sqlUnits, (unit) =>
-    isMovementQuery(unit)
-      ? `the movement query of ${nameById.get(unit.documentId)} into ${nameById.get(unit.registerId)}`
-      : `the membership SQL of ${nameById.get(unit.ownerObjectId ?? "")}`
+    describeGenerated[must(unit.generator)](unit)
   )
   if (collisions.length > 0) {
     return {

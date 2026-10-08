@@ -157,6 +157,7 @@ class Context {
     if (!query.ok) throw new Error(`movement query ${name} does not parse`)
     return {
       class: "movementQuery",
+      generator: "movementQuery",
       // Ідентичність — з розібраної обгортки, як у функцій користувача.
       identity: functionIdentity(
         documentTable.schema,

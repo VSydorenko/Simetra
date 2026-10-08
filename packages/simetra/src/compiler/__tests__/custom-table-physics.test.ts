@@ -323,6 +323,8 @@ describe("CustomTable physics round-trip", () => {
     // `updated_by_id` з FK на `users` та їхні індекси лише в цих двох таблицях.
     // Далі додано довідник членства `Member` — нова таблиця `member` з
     // унікальністю (`org_id`, `account_id`), решта знімка та сама.
+    // Далі «Користувачі» ввімкнули платформний шар — нова таблиця
+    // `simetra.identities`; без неї хеш той самий, що до шару.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -333,7 +335,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "88e054ab72a8d0cd968a4bf21ee10ba331790989ddf7ba7aade91cc95433ffd8"
+      "581d7661d8f4417d8b5da3456fe6040fde85db64b380ca36664e68e4f4ba50c6"
     )
   })
 })

@@ -630,7 +630,7 @@ export function buildContracts(
       .sort((a, b) => compareStrings(a.bucket, b.bucket)),
     eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
     personalData: personalDataContracts(objects, physical),
-    ...usersContract(objects, physical),
+    ...withUsers(usersContractOf(objects, physical)),
     membership: membershipsOf(objects, physical, project).map(
       (m): MembershipContract => ({
         objectId: m.object.id ?? "",
@@ -645,12 +645,22 @@ export function buildContracts(
   }
 }
 
-function usersContract(
+function withUsers(users: UsersContract | undefined): {
+  users?: UsersContract
+} {
+  return users === undefined ? {} : { users }
+}
+
+/**
+ * Контракт «Користувачів» — і для блоку контрактів, і для платформного шару,
+ * що генерує провізію над тими самими колонками (одне джерело).
+ */
+export function usersContractOf(
   objects: readonly ParsedObject[],
   physical: PhysicalSnapshot
-): { users?: UsersContract } {
+): UsersContract | undefined {
   const users = usersCatalogOf(objects)
-  if (users === undefined) return {}
+  if (users === undefined) return undefined
   const objectId = users.id ?? ""
   const table = must(mainTableOf(physical, objectId))
   // Фізичне ім'я найменування дає реєстр виду, а не літерал тут.
@@ -658,15 +668,13 @@ function usersContract(
     .standardColumns(users.data)
     .find((c) => c.logicalName === "description")!
   return {
-    users: {
-      objectId,
-      table: { schema: table.schema, name: table.name },
-      keyColumn: "id",
-      descriptionColumn: description.physicalName,
-      descriptionLength: (users.data as Catalog).descriptionLength,
-      invalidColumn: "invalid",
-      userKindColumn: "user_kind",
-    },
+    objectId,
+    table: { schema: table.schema, name: table.name },
+    keyColumn: "id",
+    descriptionColumn: description.physicalName,
+    descriptionLength: (users.data as Catalog).descriptionLength,
+    invalidColumn: "invalid",
+    userKindColumn: "user_kind",
   }
 }
 

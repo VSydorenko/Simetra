@@ -12,7 +12,8 @@ export interface Explanation {
   tables: {
     schema: string
     name: string
-    part?: "main" | "tabularSection" | "totals" | "turnoversMonth"
+    part?:
+      "main" | "tabularSection" | "totals" | "turnoversMonth" | "identities"
     columns: {
       name: string
       type: string
@@ -32,6 +33,11 @@ export interface Explanation {
   }[]
   /** Одиниці `movementQuery`, власник яких — цей об'єкт. */
   movementQueries: { identity: string; sql: string }[]
+  /**
+   * Інші згенеровані одиниці об'єкта: функції членства довідника учасників,
+   * платформний шар довідника «Користувачі».
+   */
+  generatedUnits: { identity: string; sql: string }[]
   /** Блоки `contracts` цього об'єкта як є. */
   contracts: unknown[]
   /** Посилання з інших об'єктів на цей об'єкт чи його вкладені елементи. */
@@ -124,6 +130,8 @@ export function explainObject(
     ...contracts.eventSubscriptions.filter(
       (c) => c.subscriptionId === object.id
     ),
+    ...(contracts.users?.objectId === object.id ? [contracts.users] : []),
+    ...contracts.membership.filter((c) => c.objectId === object.id),
   ]
 
   const ownIds = new Set([object.id, ...elements.keys()])
@@ -139,6 +147,14 @@ export function explainObject(
     movementQueries: model.sqlUnits
       .filter(
         (u) => u.class === "movementQuery" && u.ownerObjectId === object.id
+      )
+      .map((u) => ({ identity: u.identity, sql: u.sql })),
+    generatedUnits: model.sqlUnits
+      .filter(
+        (u) =>
+          u.file === undefined &&
+          u.class !== "movementQuery" &&
+          u.ownerObjectId === object.id
       )
       .map((u) => ({ identity: u.identity, sql: u.sql })),
     contracts: blocks,

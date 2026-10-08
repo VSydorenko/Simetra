@@ -134,20 +134,24 @@ describe("membership", () => {
     )
   })
 
-  it("generated membership functions revoke PUBLIC and grant only authenticated", async () => {
+  it("generated membership functions revoke PUBLIC and provider roles and grant only authenticated", async () => {
     const model = await compileOk(files())
+    // Гранти самого членства: платформний шар «Користувачів» має власні.
     const grants = model.sqlUnits
-      .filter((u) => u.class === "grant")
+      .filter((u) => u.class === "grant" && u.ownerObjectId === uuid(81))
       .map((u) => u.sql)
-    expect(grants).toEqual(
-      expect.arrayContaining([
-        "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM PUBLIC;",
-        "GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO authenticated;",
-        "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM PUBLIC;",
-        "GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO authenticated;",
-      ])
-    )
-    expect(grants).toHaveLength(4)
+    // `PUBLIC` — дефолт Postgres, `anon` і `service_role` — типові привілеї
+    // схеми провайдера: `REVOKE … FROM PUBLIC` їх не знімає.
+    expect(grants.sort()).toEqual([
+      "GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO authenticated;",
+      "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM PUBLIC;",
+      "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM anon;",
+      "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM service_role;",
+      "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM PUBLIC;",
+      "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM anon;",
+      "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM service_role;",
+    ])
     // REVOKE раніше за GRANT, функція — раніше за обидва, таблиця — раніше за функцію.
     const order = model.creationOrder.map((n) =>
       n.type === "unit" ? n.identity : `${n.type}:${n.schema}.${n.name}`

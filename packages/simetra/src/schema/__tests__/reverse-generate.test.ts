@@ -1109,6 +1109,41 @@ describe("reverseGenerate", () => {
     expect(result.changes).toEqual([])
   })
 
+  it("introspect over a deployed platform layer writes nothing for simetra", async () => {
+    // Шар — частина моделі «Користувачів»: його таблиця й одиниці описані
+    // збереженим файлом довідника, тож генератор їх не розкладає вдруге.
+    const kept = metaFiles({
+      "project.meta.json": SNAKE_PROJECT,
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        schema: "app",
+        role: "users",
+        scope: "none",
+      }),
+    })
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const layer = compiled.model!
+    expect(layer.sqlUnits.some((u) => u.schema === "simetra")).toBe(true)
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(layer.physical).tables,
+        units: layer.sqlUnits.map((u) => ({
+          class: u.class,
+          identity: u.identity,
+          schema: u.schema,
+          name: u.name,
+          sql: u.sql,
+        })),
+      }),
+      options(kept)
+    )
+    expect(result.diagnostics).toEqual([])
+    // Лише перелік боргу (теки без нього introspect пише завжди) — і він
+    // порожній: жодна одиниця шару не стала дослівним SQL.
+    expect(result.changes.map((c) => c.path)).toEqual(["sql-debt.json"])
+    expect(json(result, "sql-debt.json").units).toEqual([])
+  })
+
   it("final map compiles", async () => {
     const result = await reverseGenerate(
       model({
