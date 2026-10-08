@@ -1,5 +1,6 @@
 import {
   diagnostic,
+  readSqlUnits,
   unitPlacement,
   unitTarget,
   type Diagnostic,
@@ -77,6 +78,67 @@ function strings(nodes: readonly Node[] | undefined): string[] {
 function statement(unit: CatalogUnit, parse: SqlParser): Node | undefined {
   const parsed = parse(unit.sql)
   return parsed.ok ? parsed.statements[0]?.stmt : undefined
+}
+
+const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+
+type DefElemNode = Extract<Node, { DefElem: unknown }>
+
+function createFunction(sql: string, parse: SqlParser) {
+  const parsed = parse(sql)
+  const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+  if (stmt === undefined || !("CreateFunctionStmt" in stmt)) return undefined
+  const fn = stmt.CreateFunctionStmt
+  const options = (fn.options ?? []).filter(
+    (o): o is DefElemNode => "DefElem" in o
+  )
+  return { fn, options: options.map((o) => o.DefElem) }
+}
+
+/**
+ * Текст функції з волатильністю з факту каталогу (спека П2 §9).
+ * `pg_get_functiondef` типової VOLATILE не друкує, а закрита оболонка вимагає
+ * волатильність явно: без неї обробник підписки після повторного introspect
+ * став би боргом. Слово стає перед першою опцією списку `options` розбору;
+ * решта тексту не змінюється. Позиції розбору — у байтах UTF-8.
+ */
+function explicitVolatility(unit: CatalogUnit, parse: SqlParser): string {
+  if (unit.class !== "function" || unit.volatility === undefined)
+    return unit.sql
+  const before = createFunction(unit.sql, parse)
+  if (before === undefined) return unit.sql
+  if (before.options.some((o) => o.defname === "volatility")) return unit.sql
+  const at = Math.min(
+    ...before.options.flatMap((o) =>
+      o.location === undefined ? [] : [o.location]
+    )
+  )
+  if (!Number.isFinite(at)) return unit.sql
+  const bytes = encoder.encode(unit.sql)
+  const sql = `${decoder.decode(bytes.subarray(0, at))}${unit.volatility.toUpperCase()} ${decoder.decode(bytes.subarray(at))}`
+  // Вставка змінює лише волатильність: тіло й ідентичність — ті самі.
+  const after = createFunction(sql, parse)
+  const body = (f: NonNullable<typeof before>) =>
+    JSON.stringify([
+      f.options.find((o) => o.defname === "as")?.arg,
+      f.fn.sql_body,
+    ])
+  const [identity] = readSqlUnits(
+    [{ file: unit.identity, text: sql, schema: "" }],
+    parse,
+    []
+  ).units
+  const arg = after?.options.find((o) => o.defname === "volatility")?.arg
+  const volatility = arg !== undefined && "String" in arg ? arg.String.sval : ""
+  if (
+    after === undefined ||
+    body(after) !== body(before) ||
+    identity?.identity !== unit.identity ||
+    volatility !== unit.volatility
+  )
+    throw new Error(`volatility insertion changed ${unit.identity}`)
+  return sql
 }
 
 /** Функція, яку викликає тригер; некваліфіковане ім'я — схема проєкту (R3). */
@@ -298,7 +360,10 @@ export function layoutUnits(
       continue
     }
     folded.set(path.toLowerCase(), ordered[0]!.identity)
-    files.set(path, `${ordered.map((u) => terminate(u.sql)).join("\n\n")}\n`)
+    files.set(
+      path,
+      `${ordered.map((u) => terminate(explicitVolatility(u, ctx.parse))).join("\n\n")}\n`
+    )
   }
   return { files, diagnostics }
 }

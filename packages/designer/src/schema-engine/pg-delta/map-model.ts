@@ -10,6 +10,7 @@ import type {
   CatalogModel,
   CatalogTable,
   CatalogUnit,
+  FunctionVolatility,
 } from "simetra/model"
 import { mapEnumType, mapTable, type MappingIssue } from "./map-tables"
 import {
@@ -28,6 +29,8 @@ export interface MapContext {
   defaults: AclDefaults
   /** Коментар control-файлу встановленого розширення (`extension-comments`). */
   extensionComments: ReadonlyMap<string, string>
+  /** Волатильність функцій за `encodeId` (`routine-volatility`). */
+  volatility: ReadonlyMap<string, FunctionVolatility>
 }
 
 /** Дочірні факти таблиці, які мапить сама таблиця (`mapTable`). */
@@ -92,7 +95,11 @@ export function mapModel(
           detail: `${encodeId(earlier)} maps to the same unit ${mapped.identity}`,
         })
       sources.set(mapped.identity, fact.id)
-      units.push(mapped)
+      const volatility =
+        mapped.class === "function"
+          ? ctx.volatility.get(encodeId(fact.id))
+          : undefined
+      units.push(volatility === undefined ? mapped : { ...mapped, volatility })
     }
   }
   const statements = (fact: Fact) => [
