@@ -42,6 +42,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   }
 
   columns.push(deletionMarkColumn())
+  if (catalog.role === "users") columns.push(...userColumns())
 
   if (catalog.hierarchyType !== "None") {
     columns.push({
@@ -95,6 +96,33 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
     ...serviceDateColumns()
   )
   return columns
+}
+
+/**
+ * Платформні реквізити «Користувачів» (спека користувачів §4): провізія
+ * вставляє рядок лише з ключем і найменуванням, тож обидва мають DEFAULT.
+ * Недійсність не видаляє рядок — на нього можуть посилатися дані застосунку.
+ */
+function userColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "userKind",
+      physicalName: "user_kind",
+      type: { type: "Text" },
+      notNull: true,
+      default: "'human'",
+      check: "user_kind IN ('human', 'agent')",
+      title: { uk: "Вид користувача", en: "User kind" },
+    },
+    {
+      logicalName: "invalid",
+      physicalName: "invalid",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+      title: { uk: "Недійсний", en: "Invalid" },
+    },
+  ]
 }
 
 function numbering(obj: unknown): NumberingSpec | undefined {

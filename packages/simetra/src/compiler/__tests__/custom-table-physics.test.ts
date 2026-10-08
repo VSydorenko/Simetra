@@ -317,6 +317,8 @@ describe("CustomTable physics round-trip", () => {
     // Далі в спільні реквізити фікстури додано межі числа й формат рядка — нові
     // CHECK `bounds` і `format` та колонки `Item`.
     // Далі додано складені індекси `indexes` довідника, документа і їхніх ТЧ.
+    // Далі додано довідник «Користувачі» (`role: "users"`) — нова таблиця
+    // `users`, решта знімка та сама.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -327,7 +329,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "e95b2d2ef4c65c728ef62c0737d4bf065cdf67d42672e22a48e3f391021537db"
+      "cb6ecc6b3797dd1a3daba7b88c7d54cd2a9f0128b0ad709fe7e218208f699766"
     )
   })
 })

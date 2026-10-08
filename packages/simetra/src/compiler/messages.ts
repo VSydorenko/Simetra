@@ -12,6 +12,26 @@ export interface MessageEntry {
   hint?: { en: Hint; uk: Hint }
 }
 
+/** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
+const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
+  requiredWithoutDefault: {
+    en: "it is required and has no defaultValue",
+    uk: "він обов'язковий і не має defaultValue",
+  },
+  uniqueWithDefault: {
+    en: "it is unique and has a defaultValue, so the second sign-up would duplicate it",
+    uk: "він унікальний і має defaultValue, тож друга реєстрація дала б дубль",
+  },
+  defaultViolatesCheck: {
+    en: "its defaultValue fails the attribute's own check",
+    uk: "його defaultValue не проходить власну перевірку реквізиту",
+  },
+  rowRule: {
+    en: "a row rule cannot be proven statically to accept the provisioned row",
+    uk: "правило рядка статично не доводить, що прийме рядок провізії",
+  },
+}
+
 const FIX_IDS = {
   en: "Run simetra fix to assign ids.",
   uk: "Виконайте simetra fix, щоб призначити id.",
@@ -995,6 +1015,43 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
 
   // --- Стадія 4: цілісність ---
+  "users.catalog-duplicate": {
+    en: (p) =>
+      `Catalog "${p.name}" is a second users catalog: "${p.firstFile}" already has role users`,
+    uk: (p) =>
+      `Довідник "${p.name}" — другий довідник користувачів: "${p.firstFile}" уже має роль users`,
+    hint: {
+      en: "A project has one users catalog, the one the platform layer provisions accounts into: remove role from the other one.",
+      uk: "У проєкті один довідник користувачів — той, у який платформний шар провізує облікові записи: приберіть role з іншого.",
+    },
+  },
+  "users.scope-not-none": {
+    en: (p) => `Users catalog "${p.name}" must have scope "none"`,
+    uk: (p) => `Довідник користувачів "${p.name}" мусить мати scope "none"`,
+    hint: {
+      en: "A user exists before and across tenants; membership in a tenant is a separate scoped catalog.",
+      uk: "Користувач існує раніше за тенант і поза ним; членство в тенанті — окремий скоуплений довідник.",
+    },
+  },
+  "users.description-required": {
+    en: (p) => `Users catalog "${p.name}" must have a description`,
+    uk: (p) => `Довідник користувачів "${p.name}" мусить мати найменування`,
+    hint: {
+      en: "The description is the user's display name, filled from the account at provisioning: set descriptionLength above 0.",
+      uk: "Найменування — відображуване ім'я користувача, його заповнює провізія з облікового запису: задайте descriptionLength більше 0.",
+    },
+  },
+  "users.provision-unsafe": {
+    en: (p) =>
+      `${p.reason === "rowRule" ? `Row rule "${p.element}"` : `Attribute "${p.element}"`} of users catalog "${p.name}" would break provisioning: ${(PROVISION_HAZARD[String(p.reason)] ?? { en: p.reason }).en}`,
+    uk: (p) =>
+      `${p.reason === "rowRule" ? `Правило рядка "${p.element}"` : `Реквізит "${p.element}"`} довідника користувачів "${p.name}" зірвав би провізію: ${(PROVISION_HAZARD[String(p.reason)] ?? { uk: p.reason }).uk}`,
+    hint: {
+      en: "Provisioning inserts a user row with only the key and the description, and a failure there aborts sign-up: every other column must accept that row.",
+      uk: "Провізія вставляє рядок користувача лише з ключем і найменуванням, а помилка в ній зриває реєстрацію: кожна інша колонка мусить прийняти такий рядок.",
+    },
+  },
+
   "reference.not-referenceable": {
     en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
     uk: (p) => `На ${p.kind} "${p.name}" тут не можна посилатися`,

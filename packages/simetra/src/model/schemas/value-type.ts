@@ -620,3 +620,54 @@ export function refineValueChecks(
     }
   }
 }
+
+/**
+ * Чи скалярне типове значення порушує власний CHECK реквізиту: непорожність
+ * обов'язкового рядка, формат і межі числа (ті самі умови, що стадія 3 кладе
+ * в CHECK колонки). Статично й лише над скаляром: вираз заповнення (`fill`,
+ * `empty`) обчислює БД, і такі значення тут не судяться.
+ */
+export function defaultViolatesValueChecks(
+  value: ValueType &
+    ValueCheckProps & { required?: boolean; defaultValue?: DefaultValue }
+): boolean {
+  const { defaultValue } = value
+  if (defaultValue === undefined || !isScalarDefault(defaultValue)) return false
+  if (typeof defaultValue === "string" && value.array !== true) {
+    const textual = value.type === "String" || value.type === "Text"
+    // POSIX `\s` CHECK-а непорожності й JS `\s` збігаються на ASCII-пробілах.
+    if (textual && value.required === true && /^\s*$/.test(defaultValue))
+      return true
+    if (
+      textual &&
+      value.pattern !== undefined &&
+      !new RegExp(value.pattern, "u").test(defaultValue)
+    )
+      return true
+    // `char_length` рахує символи, а не кодові одиниці UTF-16.
+    if (
+      textual &&
+      value.minLength !== undefined &&
+      [...defaultValue].length < value.minLength
+    )
+      return true
+  }
+  if (
+    value.array !== true &&
+    NUMERIC_BOUND_TYPES.includes(value.type) &&
+    typeof defaultValue !== "boolean"
+  ) {
+    const below = (bound: number | string) =>
+      compareDecimals(defaultValue, bound) < 0
+    if (value.nonNegative === true && below(0)) return true
+    if (value.positive === true && compareDecimals(defaultValue, 0) <= 0)
+      return true
+    if (value.minValue !== undefined && below(value.minValue)) return true
+    if (
+      value.maxValue !== undefined &&
+      compareDecimals(defaultValue, value.maxValue) > 0
+    )
+      return true
+  }
+  return false
+}

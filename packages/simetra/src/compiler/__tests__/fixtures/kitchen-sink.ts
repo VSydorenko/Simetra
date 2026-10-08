@@ -678,11 +678,20 @@ export function kitchenSink(): Map<string, string> {
     )
     .join("\n")
 
+  // Системний довідник «Користувачі»: існує поза тенантами. Оголошено
+  // останнім, щоб лічильник id не зсунув id решти фікстури.
+  const users = {
+    ...header("Catalog", "Users", "users"),
+    scope: "none",
+    role: "users",
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
     "catalogs/Partner/Partner.meta.json": partner,
     "catalogs/Item/Item.meta.json": item,
+    "catalogs/Users/Users.meta.json": users,
     "documents/Sale/Sale.meta.json": sale,
     "enumerations/Color/Color.meta.json": color,
     "information-registers/Prices/Prices.meta.json": prices,

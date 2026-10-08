@@ -10,6 +10,7 @@ import {
   type LocalizedString,
   type NumberingSpec,
   type AttributeCase,
+  type Catalog,
   type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
@@ -20,7 +21,11 @@ import {
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
-import { kindLabelOf, type ModelStageResult } from "./stages/model"
+import {
+  kindLabelOf,
+  usersCatalogOf,
+  type ModelStageResult,
+} from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
 import { objectKey, type ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
@@ -206,6 +211,21 @@ export interface PersonalDataContract {
   columns: string[]
 }
 
+/**
+ * Системний довідник «Користувачі» (спека користувачів §4): з цього контракту
+ * платформний шар будує провізію й поточного користувача. Найменування —
+ * відображуване ім'я, провізія обрізає його до `descriptionLength`.
+ */
+export interface UsersContract {
+  objectId: string
+  table: QualifiedName
+  keyColumn: "id"
+  descriptionColumn: string
+  descriptionLength: number
+  invalidColumn: "invalid"
+  userKindColumn: "user_kind"
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -223,6 +243,8 @@ export interface Contracts {
   eventSubscriptions: EventSubscriptionContract[]
   /** За `objectId`, далі за таблицею: основна й кожна ТЧ — окремі записи. */
   personalData: PersonalDataContract[]
+  /** Немає — у проєкті немає «Користувачів», а з ними й платформного шару. */
+  users?: UsersContract
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -560,6 +582,32 @@ export function buildContracts(
       .sort((a, b) => compareStrings(a.bucket, b.bucket)),
     eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
     personalData: personalDataContracts(objects, physical),
+    ...usersContract(objects, physical),
+  }
+}
+
+function usersContract(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot
+): { users?: UsersContract } {
+  const users = usersCatalogOf(objects)
+  if (users === undefined) return {}
+  const objectId = users.id ?? ""
+  const table = must(mainTableOf(physical, objectId))
+  // Фізичне ім'я найменування дає реєстр виду, а не літерал тут.
+  const description = KIND_REGISTRY[users.kind]
+    .standardColumns(users.data)
+    .find((c) => c.logicalName === "description")!
+  return {
+    users: {
+      objectId,
+      table: { schema: table.schema, name: table.name },
+      keyColumn: "id",
+      descriptionColumn: description.physicalName,
+      descriptionLength: (users.data as Catalog).descriptionLength,
+      invalidColumn: "invalid",
+      userKindColumn: "user_kind",
+    },
   }
 }
 

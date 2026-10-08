@@ -1603,6 +1603,19 @@ function labelsOf(object: ParsedObject): string[] {
 }
 
 /**
+ * Системний довідник «Користувачі» — за роллю, а не за іменем (спека
+ * користувачів §4). Кілька таких — помилка стадії 4; споживачі беруть
+ * перший за шляхом файлу, як і правило про дубль.
+ */
+export function usersCatalogOf(
+  objects: readonly ParsedObject[]
+): ParsedObject | undefined {
+  return objects
+    .filter((o) => (o.data as { role?: string }).role === "users")
+    .sort((a, b) => compareStrings(a.file, b.file))[0]
+}
+
+/**
  * Прийнята таблиця: вид дає таблицю, але її форму описує файл (спека §4).
  * Одного `declared` замало — прийнятий енам-тип теж описаний як є, а стадія 3
  * бачить цілі посилань ще до того, як стадія 4 відкине невідповідні.

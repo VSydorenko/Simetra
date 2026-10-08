@@ -69,7 +69,10 @@
       "default": "Balance",
       "description": "Balance keeps running totals; Turnover only accumulates.",
       "type": "string",
-      "enum": ["Balance", "Turnover"]
+      "enum": [
+        "Balance",
+        "Turnover"
+      ]
     },
     "recorderTypes": {
       "default": [],
@@ -99,7 +102,10 @@
             "description": "Logical name of the referenced object."
           }
         },
-        "required": ["kind", "name"],
+        "required": [
+          "kind",
+          "name"
+        ],
         "additionalProperties": false,
         "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
       }
@@ -116,13 +122,18 @@
           "description": "Logical names of resources whose balance is controlled."
         }
       },
-      "required": ["resources"],
+      "required": [
+        "resources"
+      ],
       "additionalProperties": false
     },
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
       "type": "string",
-      "enum": ["authenticated", "anon"]
+      "enum": [
+        "authenticated",
+        "anon"
+      ]
     },
     "standardAttributeOverrides": {
       "default": {},
@@ -283,7 +294,10 @@
                 "description": "Logical name of the referenced object."
               }
             },
-            "required": ["kind", "name"],
+            "required": [
+              "kind",
+              "name"
+            ],
             "additionalProperties": false
           },
           "allowedTypes": {
@@ -314,7 +328,10 @@
                   "description": "Logical name of the referenced object."
                 }
               },
-              "required": ["kind", "name"],
+              "required": [
+                "kind",
+                "name"
+              ],
               "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
@@ -368,11 +385,17 @@
                 "properties": {
                   "fill": {
                     "type": "string",
-                    "enum": ["now", "today", "newUuid"],
+                    "enum": [
+                      "now",
+                      "today",
+                      "newUuid"
+                    ],
                     "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                   }
                 },
-                "required": ["fill"],
+                "required": [
+                  "fill"
+                ],
                 "additionalProperties": false
               },
               {
@@ -386,13 +409,18 @@
                       },
                       {
                         "type": "string",
-                        "enum": ["object", "array"]
+                        "enum": [
+                          "object",
+                          "array"
+                        ]
                       }
                     ],
                     "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                   }
                 },
-                "required": ["empty"],
+                "required": [
+                  "empty"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -409,11 +437,17 @@
           },
           "minValue": {
             "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-            "type": ["number", "string"]
+            "type": [
+              "number",
+              "string"
+            ]
           },
           "maxValue": {
             "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-            "type": ["number", "string"]
+            "type": [
+              "number",
+              "string"
+            ]
           },
           "pattern": {
             "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -432,7 +466,10 @@
             "const": true
           }
         },
-        "required": ["name", "type"],
+        "required": [
+          "name",
+          "type"
+        ],
         "additionalProperties": false
       }
     },
@@ -491,7 +528,10 @@
           },
           "type": {
             "type": "string",
-            "enum": ["Integer", "Numeric"],
+            "enum": [
+              "Integer",
+              "Numeric"
+            ],
             "description": "Logical value type; Integer or Numeric only."
           },
           "precision": {
@@ -507,7 +547,10 @@
             "maximum": 9007199254740991
           }
         },
-        "required": ["name", "type"],
+        "required": [
+          "name",
+          "type"
+        ],
         "additionalProperties": false,
         "description": "Resource of an accumulation register: a summed number."
       }
@@ -627,7 +670,10 @@
                 "description": "Logical name of the referenced object."
               }
             },
-            "required": ["kind", "name"],
+            "required": [
+              "kind",
+              "name"
+            ],
             "additionalProperties": false
           },
           "allowedTypes": {
@@ -658,7 +704,10 @@
                   "description": "Logical name of the referenced object."
                 }
               },
-              "required": ["kind", "name"],
+              "required": [
+                "kind",
+                "name"
+              ],
               "additionalProperties": false,
               "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
             }
@@ -712,11 +761,17 @@
                 "properties": {
                   "fill": {
                     "type": "string",
-                    "enum": ["now", "today", "newUuid"],
+                    "enum": [
+                      "now",
+                      "today",
+                      "newUuid"
+                    ],
                     "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
                   }
                 },
-                "required": ["fill"],
+                "required": [
+                  "fill"
+                ],
                 "additionalProperties": false
               },
               {
@@ -730,13 +785,18 @@
                       },
                       {
                         "type": "string",
-                        "enum": ["object", "array"]
+                        "enum": [
+                          "object",
+                          "array"
+                        ]
                       }
                     ],
                     "description": "Empty value: true for an array of any type, object or array for a scalar Json."
                   }
                 },
-                "required": ["empty"],
+                "required": [
+                  "empty"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -753,11 +813,17 @@
           },
           "minValue": {
             "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
-            "type": ["number", "string"]
+            "type": [
+              "number",
+              "string"
+            ]
           },
           "maxValue": {
             "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
-            "type": ["number", "string"]
+            "type": [
+              "number",
+              "string"
+            ]
           },
           "pattern": {
             "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
@@ -776,12 +842,18 @@
             "const": true
           }
         },
-        "required": ["name", "type"],
+        "required": [
+          "name",
+          "type"
+        ],
         "additionalProperties": false
       }
     }
   },
-  "required": ["name", "kind"],
+  "required": [
+    "name",
+    "kind"
+  ],
   "additionalProperties": false,
   "$id": "accumulation-registers.schema.json"
 }

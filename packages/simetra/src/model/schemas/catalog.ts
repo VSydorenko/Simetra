@@ -28,6 +28,14 @@ export const catalogSchema = z.strictObject({
       "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
   }),
 
+  // Роль, а не ім'я, позначає системний довідник: платформний шар (провізія,
+  // поточний користувач, авторство) знаходить «Користувачів» за нею, тож
+  // перейменування довідника шар не ламає.
+  role: z.literal("users").optional().meta({
+    description:
+      "System role of the catalog: users marks the users catalog that the platform layer provisions and references; at most one per project, unscoped.",
+  }),
+
   // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
   codeLength: z.number().int().nonnegative().default(9).meta({
     description:

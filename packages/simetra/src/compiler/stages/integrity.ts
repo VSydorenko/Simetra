@@ -7,8 +7,11 @@ import {
   isSqlReservedWord,
   parseExpression,
   walkExpr,
+  defaultViolatesValueChecks,
   type Attribute,
   type AttributeCase,
+  type Catalog,
+  type CatalogAttribute,
   type CustomTable,
   type DatabaseProvider,
   type Expr,
@@ -51,7 +54,12 @@ import {
   standardElementId,
   type ResolvedReference,
 } from "./identity"
-import { isDeclaredTable, keyColumnOf, type ModelStageResult } from "./model"
+import {
+  isDeclaredTable,
+  keyColumnOf,
+  usersCatalogOf,
+  type ModelStageResult,
+} from "./model"
 
 /** NAMEDATALEN Postgres мінус завершальний нуль: довше ім'я БД мовчки обріже. */
 const MAX_IDENT_BYTES = 63
@@ -206,6 +214,7 @@ export function checkIntegrity(
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider))
+  diagnostics.push(...checkUsersCatalogs(objects, model))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -215,6 +224,95 @@ export function checkIntegrity(
     }
   }
   return diagnostics
+}
+
+/**
+ * Роль «користувачі» (спека користувачів §4, §5). Провізія вставляє рядок
+ * лише з ключем і найменуванням, тож власна колонка «Користувачів» мусить
+ * прийняти такий рядок — інакше помилка в тригері зірвала б реєстрацію (С3).
+ * Перевірка статична, над оголошеннями реквізитів; правило рядка статично
+ * не доводиться, тож у модулі «Користувачів» його немає взагалі.
+ */
+function checkUsersCatalogs(
+  objects: readonly ParsedObject[],
+  model: ModelStageResult
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const first = usersCatalogOf(objects)
+  for (const object of objects) {
+    const data = object.data as Catalog
+    if (data.role !== "users") continue
+    const name = object.name
+    if (object !== first) {
+      found.push(
+        diagnostic("users.catalog-duplicate", object.file, "/role", {
+          name,
+          firstFile: first!.file,
+        })
+      )
+    }
+    if (data.scope !== undefined && data.scope !== NO_SCOPE) {
+      found.push(
+        diagnostic("users.scope-not-none", object.file, "/scope", { name })
+      )
+    }
+    if (data.descriptionLength === 0) {
+      found.push(
+        diagnostic(
+          "users.description-required",
+          object.file,
+          "/descriptionLength",
+          {
+            name,
+          }
+        )
+      )
+    }
+    for (const field of KIND_REGISTRY[object.kind].columnFields) {
+      const attributes = (object.data as Record<string, unknown>)[field] as
+        CatalogAttribute[] | undefined
+      attributes?.forEach((attribute, index) => {
+        const reason = provisionHazard(attribute)
+        if (reason === undefined) return
+        found.push(
+          diagnostic(
+            "users.provision-unsafe",
+            object.file,
+            `/${field}/${index}`,
+            {
+              name,
+              reason,
+              element: attribute.name,
+            }
+          )
+        )
+      })
+    }
+    for (const table of model.physical.tables) {
+      if (table.origin.objectId !== object.id) continue
+      for (const check of table.checks) {
+        if (check.origin === undefined) continue
+        found.push(
+          diagnostic("users.provision-unsafe", check.origin.rowRule.file, "", {
+            name,
+            reason: "rowRule",
+            element: check.name,
+          })
+        )
+      }
+    }
+  }
+  return found
+}
+
+/** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */
+function provisionHazard(attribute: CatalogAttribute): string | undefined {
+  const filled = attribute.defaultValue !== undefined
+  if (attribute.required && !filled) return "requiredWithoutDefault"
+  // Типове значення однакове для кожного рядка: друга реєстрація дала б дубль.
+  if (attribute.unique !== false && filled) return "uniqueWithDefault"
+  if (defaultViolatesValueChecks(attribute)) return "defaultViolatesCheck"
+  return undefined
 }
 
 /**
