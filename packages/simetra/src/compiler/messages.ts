@@ -19,8 +19,8 @@ const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
     uk: "він обов'язковий і не має defaultValue",
   },
   uniqueWithDefault: {
-    en: "it is unique and has a defaultValue, so the second sign-up would duplicate it",
-    uk: "він унікальний і має defaultValue, тож друга реєстрація дала б дубль",
+    en: "it is unique and its defaultValue can be the same for different rows, so the second sign-up would duplicate it",
+    uk: "він унікальний, а його defaultValue може бути однаковим для різних рядків, тож друга реєстрація дала б дубль",
   },
   defaultViolatesCheck: {
     en: "its defaultValue fails the attribute's own check",

@@ -7,6 +7,7 @@ import {
   isSqlReservedWord,
   parseExpression,
   walkExpr,
+  defaultMayRepeat,
   defaultViolatesValueChecks,
   type Attribute,
   type AttributeCase,
@@ -330,10 +331,17 @@ function checkAuthorTracking(objects: readonly ParsedObject[]): Diagnostic[] {
 
 /** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */
 function provisionHazard(attribute: CatalogAttribute): string | undefined {
-  const filled = attribute.defaultValue !== undefined
-  if (attribute.required && !filled) return "requiredWithoutDefault"
-  // Типове значення однакове для кожного рядка: друга реєстрація дала б дубль.
-  if (attribute.unique !== false && filled) return "uniqueWithDefault"
+  const { defaultValue } = attribute
+  if (attribute.required && defaultValue === undefined)
+    return "requiredWithoutDefault"
+  // Значення, однакове для різних рядків, дало б дубль на другій реєстрації;
+  // `newUuid` кожному рядку дає власне.
+  if (
+    attribute.unique !== false &&
+    defaultValue !== undefined &&
+    defaultMayRepeat(defaultValue)
+  )
+    return "uniqueWithDefault"
   if (defaultViolatesValueChecks(attribute)) return "defaultViolatesCheck"
   return undefined
 }

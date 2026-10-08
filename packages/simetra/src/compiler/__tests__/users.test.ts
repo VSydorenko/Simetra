@@ -133,6 +133,30 @@ describe("users catalog role", () => {
       "uniqueWithDefault",
     ],
     [
+      'unique "ignoreCase" attribute with defaultValue',
+      { [USERS_FILE]: own({ unique: "ignoreCase", defaultValue: "anon" }) },
+      "users.provision-unsafe",
+      `${USERS_FILE} /attributes/0`,
+      "uniqueWithDefault",
+    ],
+    [
+      "unique attribute filled with now",
+      {
+        [USERS_FILE]: usersCatalog({
+          attributes: [
+            attribute("joined", {
+              type: "DateTime",
+              unique: true,
+              defaultValue: { fill: "now" },
+            }),
+          ],
+        }),
+      },
+      "users.provision-unsafe",
+      `${USERS_FILE} /attributes/0`,
+      "uniqueWithDefault",
+    ],
+    [
       'required string with defaultValue ""',
       { [USERS_FILE]: own({ required: true, defaultValue: "" }) },
       "users.provision-unsafe",
@@ -190,6 +214,40 @@ describe("users catalog role", () => {
       "defaultViolatesCheck",
     ],
     [
+      "nonNegative attribute with defaultValue -1",
+      {
+        [USERS_FILE]: usersCatalog({
+          attributes: [
+            attribute("level", {
+              type: "Integer",
+              nonNegative: true,
+              defaultValue: -1,
+            }),
+          ],
+        }),
+      },
+      "users.provision-unsafe",
+      `${USERS_FILE} /attributes/0`,
+      "defaultViolatesCheck",
+    ],
+    [
+      "defaultValue above maxValue",
+      {
+        [USERS_FILE]: usersCatalog({
+          attributes: [
+            attribute("level", {
+              type: "Integer",
+              maxValue: 10,
+              defaultValue: 11,
+            }),
+          ],
+        }),
+      },
+      "users.provision-unsafe",
+      `${USERS_FILE} /attributes/0`,
+      "defaultViolatesCheck",
+    ],
+    [
       "row rule in the users module",
       {
         [USERS_FILE]: usersCatalog(),
@@ -233,6 +291,32 @@ describe("users catalog role", () => {
         ],
       }),
     })
+  })
+
+  it("a unique attribute filled with newUuid passes: every row gets its own value", async () => {
+    await compileOk({
+      [USERS_FILE]: usersCatalog({
+        attributes: [
+          attribute("token", {
+            type: "UUID",
+            unique: true,
+            defaultValue: { fill: "newUuid" },
+          }),
+        ],
+      }),
+    })
+  })
+
+  it("a row rule in another catalog's module is not a provisioning hazard", async () => {
+    const model = await compileOk({
+      [USERS_FILE]: usersCatalog(),
+      "catalogs/Item/Item.meta.json": catalog("Item"),
+      "catalogs/Item/Item.sql":
+        "ALTER TABLE public.item ADD CONSTRAINT item_named CHECK (description IS NOT NULL);",
+    })
+    expect(tableOf(model.physical, "item").checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "item_named" })])
+    )
   })
 
   it("contracts.users describes the table", async () => {

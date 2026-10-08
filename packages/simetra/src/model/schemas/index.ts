@@ -41,6 +41,7 @@ export {
   valueTypeShape,
   refineValueType,
   isScalarDefault,
+  defaultMayRepeat,
   defaultViolatesValueChecks,
   type DefaultValue,
   type LogicalType,

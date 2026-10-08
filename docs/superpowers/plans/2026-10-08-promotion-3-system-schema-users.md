@@ -114,7 +114,8 @@ Realtime) — П3; адаптери інших провайдерів ідент
    «Користувачів» не можуть мати обмеження, яке така вставка порушить:
    правило `users.provision-unsafe` з `params.reason` — `requiredWithoutDefault`
    (`required` без `defaultValue`), `uniqueWithDefault` (`unique` чи
-   `uniqueWithin` разом із `defaultValue`: друга реєстрація дала б дубль),
+   `uniqueWithin` разом із `defaultValue`, однаковим для різних рядків — усі
+   форми, крім `{ "fill": "newUuid" }`: друга реєстрація дала б дубль),
    `defaultViolatesCheck` (`defaultValue`, який не проходить власну перевірку
    реквізиту — непорожність `required`-рядка, `pattern`, `minLength`, межі
    числа; перевірка статична, над скалярним значенням), `rowRule` (правило

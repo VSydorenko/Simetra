@@ -66,6 +66,19 @@ const FILL_TYPES: Record<(typeof FILL_VALUES)[number], LogicalType> = {
 }
 
 /**
+ * Чи заповнення дає кожному рядку власне значення. `today` однакове для рядків
+ * одного дня, `now` — для рядків однієї транзакції, тож унікальна колонка з
+ * ними, як і зі скаляром чи порожнім значенням, може отримати дубль від другої
+ * вставки без значення; `newUuid` — ні. `Record` змушує нове заповнення назвати
+ * цей факт.
+ */
+const FILL_DISTINCT_PER_ROW: Record<(typeof FILL_VALUES)[number], boolean> = {
+  now: false,
+  today: false,
+  newUuid: true,
+}
+
+/**
  * Типове значення реквізиту й константи: скаляр (спека П2 §5) або об'єктна
  * форма `fill` / `empty` — вираз колонки без літерала в метаданих.
  */
@@ -100,6 +113,18 @@ export function isScalarDefault(
   value: DefaultValue
 ): value is string | number | boolean {
   return typeof value !== "object"
+}
+
+/**
+ * Чи типове значення може збігтися у двох рядків, вставлених без значення:
+ * скаляр, порожнє значення й заповнення, однакове для різних рядків.
+ */
+export function defaultMayRepeat(value: DefaultValue): boolean {
+  return !(
+    typeof value === "object" &&
+    "fill" in value &&
+    FILL_DISTINCT_PER_ROW[value.fill]
+  )
 }
 
 /** Межі цілих типів Postgres; `BigInt`-число — у межах точного числа JSON. */
