@@ -26,7 +26,7 @@ Supabase, довідник міток виду), а метамодель — р�
 стек Supabase (Postgres 17), `@supabase/pg-delta` (без зміни версії).
 
 **Спека:** [спека системної схеми й користувачів](../specs/2026-10-07-system-schema-users-design.md)
-С1–С10, §3–§8, §10, §11.2; [спека промоції](../specs/2026-10-06-promotion-design.md)
+С1–С10, §3–§8, §10, §11; [спека промоції](../specs/2026-10-06-promotion-design.md)
 §9.10, §9.11, Пр19, §16 п.7; [спека П2](../specs/2026-09-28-p2-metamodel-compiler-design.md)
 §3, §5, §6, §8.3, §10.1, §13; [платформна спека](../specs/2026-09-24-simetra-platform-design.md)
 §6.1, §6.7, §6.8, §6.9.
@@ -51,7 +51,8 @@ Realtime) — П3; адаптери інших провайдерів ідент
 модулі «Користувачів» заборонене, бо статично не доводиться; пізніше можна
 дозволити правило, що стосується лише колонок застосунку з безпечними
 значеннями заповнення); прийом з нуля бази, яку розгорнула Simetra — див.
-спеку користувачів §12.
+спеку користувачів §12; правила ролі «користувачі» (`users.*`) поки
+окрема гілка компілятора, а не хук опису ролі.
 
 ## Global Constraints
 
@@ -97,7 +98,8 @@ Realtime) — П3; адаптери інших провайдерів ідент
    Усе проходить `namespaceConflicts`, `creationOrder`, хеш і `explain`;
    `engineScope` бачить `simetra` сам — зі схем таблиць і одиниць; зворотна
    генерація вважає згенеровані одиниці описаними (`describedElsewhere`), тож
-   `introspect` не розкладає їх у метадані.
+   `introspect` у наявну теку не розкладає їх у метадані (прийом з нуля бази
+   з шаром — спека користувачів §12).
 2. **Вимикач шару** — наявність довідника з `role: "users"`. Без нього шар
    порожній: прийом наявної бази (`introspect → diff`) і round-trip-тести не
    змінюються (Пр19 — перехідний стан §10 спеки користувачів).
@@ -109,7 +111,9 @@ Realtime) — П3; адаптери інших провайдерів ідент
 5. **«Користувачі» — файл довідника з `role: "users"`.** Реєстр додає
    стандартні `userKind` (`user_kind text NOT NULL DEFAULT 'human'`, CHECK
    `IN ('human', 'agent')`) і `invalid` (`invalid boolean NOT NULL DEFAULT
-   false`). Правила: щонайбільше один на проєкт; `scope: "none"`;
+   false`). Правила: щонайбільше один на проєкт; `scope: "none"` (корінь із глобальною роллю
+   (`globalRoot`) лишається `scope: "none"` і може бути коренем виду `user`,
+   спека П2 §6);
    `descriptionLength > 0` (найменування — відображуване ім'я). Провізія
    вставляє рядок лише з ключем і найменуванням, тож власні реквізити
    «Користувачів» не можуть мати обмеження, яке така вставка порушить:
@@ -176,6 +180,10 @@ Realtime) — П3; адаптери інших провайдерів ідент
      (анонімні входи не провізуються); найменування —
      `coalesce(full_name, name, email, 'user ' || left(NEW.id::text, 8))` з
      `raw_user_meta_data` і `email` — ніколи не `NULL`;
+   - тригер конвертації `AFTER UPDATE OF <колонка анонімності> ON auth.users
+     … WHEN (OLD.<колонка> IS TRUE AND NEW.<колонка> IS NOT TRUE)` →
+     `simetra.on_auth_user_created()` (перехід анонімного входу в постійний
+     провізує користувача);
    - тригери недійсності `AFTER DELETE ON auth.users` і `AFTER UPDATE OF
      deleted_at ON auth.users` (лише коли `deleted_at` став ненульовим) →
      `simetra.on_auth_user_removed()`: видаляє рядок `identities`, ставить
@@ -189,10 +197,12 @@ Realtime) — П3; адаптери інших провайдерів ідент
 11. **Резервування `simetra`:** схема об'єкта, `project.defaultSchema`,
     `scopeKinds[].setFunction.schema`, `scopeKinds[].root.external.schema`,
     `CustomTable.foreignKeys[].references.external.schema`,
-    `EventSubscription.handler.schema` і тека `sql/simetra/` —
+    `EventSubscription.handler.schema`, тека `sql/simetra/` і кожна SQL-одиниця
+    файлу застосунку, чий об'єкт чи ціль (грант, коментар, політика, тригер,
+    publication, типові привілеї, правило рядка) у `simetra` —
     `schema.reserved`; `introspect` відмовляє на `simetra`, як на схемі
-    провайдера. Приклад переходить на нову модель (закриває §11.2 спеки
-    користувачів).
+    провайдера. Приклад переходить на нову модель (закриває поправку про
+    приклад у §11 спеки користувачів).
 12. **Порядок шару — граф порядку створення, а не склейка.** Функції шару —
     plpgsql (тіла не перевіряються на існування таблиць при створенні;
     `SECURITY DEFINER` і так не інлайниться, а `plpgsql_check` у тіні П3 їх
@@ -232,12 +242,12 @@ Realtime) — П3; адаптери інших провайдерів ідент
 
 **Files:** — (лише читання)
 
-- [ ] **Step 1: Якори**
+- [X] **Step 1: Якори**
 
 Run: `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-08-promotion-3-system-schema-users.md`
 Expected: якори існують, крім позначених `Create`. Інакше — стоп і звіт.
 
-- [ ] **Step 2: Базова лінія**
+- [X] **Step 2: Базова лінія**
 
 Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`,
 `pnpm metadata:check`, `pnpm db:start && pnpm test:db`
@@ -252,7 +262,7 @@ Expected: зелено.
 - Modify: `docs/superpowers/specs/2026-10-07-system-schema-users-design.md` (§3, §12)
 - Modify: `docs/superpowers/specs/2026-10-06-promotion-design.md` (Пр19)
 
-- [ ] **Step 1: Написати правки**
+- [X] **Step 1: Написати правки**
 
 1. Спека П2 §6 і §13: `membership` — уже в П2 (рішення 7), з переліку «Не в
    П2» і «Пізніше» прибрати; форма `setFunction: "membership"`.
@@ -277,17 +287,17 @@ Expected: зелено.
 6. Спека промоції Пр19: порожній план прийому — для проєкту без довідника
    «Користувачі»; з ним план містить платформний шар.
 
-- [ ] **Step 2: Якори**
+- [X] **Step 2: Якори**
 
 Run: `python3 scripts/check-doc-anchors.py`
 Expected: чисто.
 
-- [ ] **Step 3: Перегляд архітектора**
+- [X] **Step 3: Перегляд архітектора**
 
 Надіслати `git diff` сесії `consumer-reconciliation`; правки за відповіддю —
 до коміту.
 
-- [ ] **Step 4: Коміт**
+- [X] **Step 4: Коміт**
 
 ```bash
 git add docs/superpowers/specs/
@@ -311,7 +321,7 @@ git commit -m "docs(spec): системна схема й користувачі
 - Produces: `appSchemaNameSchema: z.ZodString` (рядок, не `"simetra"`,
   правило `schema.reserved`); `PLATFORM_SCHEMA = "simetra"` — єдина константа імені схеми, її бере й задача 8.
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 ```ts
 it.each([
@@ -326,15 +336,15 @@ it("introspect refuses schema simetra", …)            // designer: відмо�
 Run: `pnpm --filter simetra test kind-schemas scope-schemas stage-files` і `pnpm --filter @simetra/designer test catalog`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація** — за рішенням 11; повідомлення en «Schema
+- [X] **Step 2: Реалізація** — за рішенням 11; повідомлення en «Schema
 simetra belongs to the platform», uk — відповідник.
 
-- [ ] **Step 3: Зелено, JSON Schema**
+- [X] **Step 3: Зелено, JSON Schema**
 
 Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`
 Expected: PASS.
 
-- [ ] **Step 4: Коміт**
+- [X] **Step 4: Коміт**
 
 ```bash
 git add packages/simetra packages/designer
@@ -356,7 +366,7 @@ git commit -m "feat(model): схема simetra зарезервована за �
   string; table: QualifiedName; columns: string[] }[]` (фізичні колонки,
   обидві для поліморфної пари; ТЧ — окремий запис зі своєю таблицею).
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 ```ts
 it("personalData with required is an error", …)                  // attribute.personal-data-required
@@ -372,12 +382,12 @@ it("contracts list personal columns per table", async () => {
 Run: `pnpm --filter simetra test value-type contracts`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація; kitchen-sink; JSON Schema.**
+- [X] **Step 2: Реалізація; kitchen-sink; JSON Schema.**
 
 Run: `pnpm --filter simetra test`
 Expected: PASS.
 
-- [ ] **Step 3: Коміт**
+- [X] **Step 3: Коміт**
 
 ```bash
 git add packages/simetra
@@ -407,7 +417,7 @@ git commit -m "feat(model): властивість personalData і контра�
   - `usersCatalogOf(objects: readonly ParsedObject[]): ParsedObject | undefined`
     у `compiler/stages/model.ts` (споживають задачі 5–8).
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 ```ts
 it("a users catalog gets user_kind and invalid", async () => {
@@ -436,12 +446,12 @@ it("no users catalog — no contracts.users", …)
 Run: `pnpm --filter simetra test users stage-model`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація; kitchen-sink (довідник «Користувачі»); JSON Schema.**
+- [X] **Step 2: Реалізація; kitchen-sink (довідник «Користувачі»); JSON Schema.**
 
 Run: `pnpm --filter simetra test`
 Expected: PASS.
 
-- [ ] **Step 3: Коміт**
+- [X] **Step 3: Коміт**
 
 ```bash
 git add packages/simetra
@@ -467,7 +477,7 @@ git commit -m "feat(model): системний довідник «Користу
   `users.catalog-missing` (pointer — `/trackAuthor`, `/membership` чи
   `scopeKinds[].root`).
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 ```ts
 it("trackAuthor adds created_by_id and updated_by_id referencing users", async () => {
@@ -486,12 +496,12 @@ it("trackAuthor without a users catalog is an error", …)   // users.catalog-mi
 Run: `pnpm --filter simetra test users`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація; kitchen-sink; JSON Schema.**
+- [X] **Step 2: Реалізація; kitchen-sink; JSON Schema.**
 
 Run: `pnpm --filter simetra test`, `pnpm test:db`
 Expected: PASS.
 
-- [ ] **Step 3: Коміт**
+- [X] **Step 3: Коміт**
 
 ```bash
 git add packages/simetra
@@ -518,7 +528,7 @@ git commit -m "feat(model): авторство trackAuthor — createdBy і upda
     — одиниці без `file`, з `ownerObjectId` довідника членства; тексти за
     рішенням 7; кожна одиниця розбирається `parse` у `tree` (обов'язкове
     поле `SqlUnit`, як у `buildMovementFunctions`). Окрім двох функцій —
-    одиниці `grant`: `REVOKE EXECUTE … FROM PUBLIC` на обидві й `GRANT EXECUTE
+    одиниці `grant`: `REVOKE EXECUTE` від `PUBLIC` і від неназваних ролей API провайдера (`executeGrants`) на обидві й `GRANT EXECUTE
     … TO authenticated, service_role` (платформна спека §6.7: дефолт — `REVOKE ALL`;
     функцію множини викликає політика від ролі запиту).
   - `Contracts.membership: { objectId; scopeKindId; table: QualifiedName; scopeColumn; userColumn; myMemberFunction: QualifiedName; setFunction?: QualifiedName }[]`.
@@ -528,7 +538,7 @@ git commit -m "feat(model): авторство trackAuthor — createdBy і upda
     `scope.membership-missing` (`setFunction: "membership"` без довідника
     членства).
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 `membership.test.ts`:
 
@@ -551,15 +561,15 @@ it.each([["unscoped", "membership.not-scoped"], ["user attribute is an array", "
 Run: `pnpm --filter simetra test membership`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація** — за рішенням 7; тексти функцій — через
+- [X] **Step 2: Реалізація** — за рішенням 7; тексти функцій — через
 `quoteIdent`/`sqlLiteral`, як у `movement-functions.ts`.
 
-- [ ] **Step 3: Зелено**
+- [X] **Step 3: Зелено**
 
 Run: `pnpm --filter simetra test`
 Expected: PASS.
 
-- [ ] **Step 4: Коміт**
+- [X] **Step 4: Коміт**
 
 ```bash
 git add packages/simetra
@@ -574,7 +584,7 @@ git commit -m "feat(model): членство membership — унікальніс
 - Modify: `packages/simetra/src/compiler/stages/links.ts`, `diagnostics.ts`, `messages.ts`
 - Test: `packages/simetra/src/compiler/__tests__/stage-links.test.ts`
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 ```ts
 it("a bare simetra.current_user_id() in a policy is an error", …)   // USING (owner_id = simetra.current_user_id()) → sql.bare-current-user
@@ -589,14 +599,14 @@ it("a correlated or filtered subquery is an error", …)   // (select simetra.cu
 Run: `pnpm --filter simetra test stage-links`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація** — обхід дерева `CreatePolicyStmt.qual` і
+- [X] **Step 2: Реалізація** — обхід дерева `CreatePolicyStmt.qual` і
 `with_check`: кожен `FuncCall` з іменем `simetra.current_user_id` дозволений
 лише як єдиний вираз цілі `SubLink` типу `EXPR_SUBLINK`, чий `SelectStmt` не
 має `FROM`, `WHERE`, `GROUP BY`, `HAVING` та інших частин — рівно
 `(select simetra.current_user_id())` (некорельована форма С9). Будь-яке інше
 розташування — помилка.
 
-- [ ] **Step 3: Зелено, коміт**
+- [X] **Step 3: Зелено, коміт**
 
 Run: `pnpm --filter simetra test`
 Expected: PASS.
@@ -642,7 +652,7 @@ git commit -m "feat(compiler): голий виклик simetra.current_user_id()
   - `SqlUnit.requires?: readonly CreationNode[]` — лише для згенерованих
     одиниць; `dependencies.ts` додає ребро до кожного вузла.
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 `platform-layer.test.ts`:
 
@@ -657,7 +667,7 @@ it("identities is a derived table of the users catalog", () => {
 })
 it("schema grants: REVOKE ALL FROM PUBLIC, USAGE for API roles only", …)
 it("every platform function is SECURITY DEFINER, empty search_path, no PUBLIC execute", …)
-it("current_user_id is executable by authenticated and anon only", …)
+it("current_user_id is executable by every API role", …)
 it("kind_labels lists every labelled object in C collation", …)
 it("provision truncates the display name to descriptionLength and never yields NULL", …)  // left(…, 150); останнє джерело — 'user ' || left(…, 8)
 it("the provision SQL is generated from PROVIDER_IDENTITY_SOURCES, not hard-coded", …)    // підмінена запис-фікстура IdentitySource → інша таблиця й колонки в тексті
@@ -677,18 +687,18 @@ it("the provision SQL is generated from PROVIDER_IDENTITY_SOURCES, not hard-code
 Run: `pnpm --filter simetra test platform-layer creation-order out-of-scope desired-state reverse-generate`
 Expected: FAIL.
 
-- [ ] **Step 2: Реалізація** — за рішеннями 1, 3, 9, 12; тексти — через
+- [X] **Step 2: Реалізація** — за рішеннями 1, 3, 9, 12; тексти — через
 `quoteIdent`/`sqlLiteral`, як у `movement-functions.ts`; SQL провізії й
 недійсності — один загальний над `IdentitySource`. Якщо якийсь фрагмент
 неможливо виразити даними `IdentitySource` — лишити його мінімальним і
 назвати у звіті задачі (архітекторові).
 
-- [ ] **Step 3: Зелено**
+- [X] **Step 3: Зелено**
 
 Run: `pnpm --filter simetra test`, `pnpm --filter @simetra/designer test`
 Expected: PASS.
 
-- [ ] **Step 4: DB-тест членства (поведінка задачі 6)**
+- [X] **Step 4: DB-тест членства (поведінка задачі 6)**
 
 Create `packages/simetra/test/db/membership.db.test.ts` (розгортання
 `renderDesiredState(model).sql` у `withRollback`, як
@@ -701,7 +711,7 @@ Create `packages/simetra/test/db/membership.db.test.ts` (розгортання
 Run: `pnpm --filter simetra test:db membership`
 Expected: PASS.
 
-- [ ] **Step 5: Коміт**
+- [X] **Step 5: Коміт**
 
 ```bash
 git add packages/simetra
@@ -720,7 +730,7 @@ git commit -m "feat(compiler): платформний шар simetra — пох�
 **Interfaces:**
 - Produces: `asRole(client: pg.Client, role: "authenticated" | "anon", claims: Record<string, unknown>): Promise<void>`.
 
-- [ ] **Step 1: Failing tests**
+- [X] **Step 1: Failing tests**
 
 `platform-users.db.test.ts` (у `withRollback`: розгорнути
 `renderDesiredState(model).sql` моделі з «Користувачами» з власним
@@ -754,10 +764,10 @@ Expected: FAIL до реалізації, якої бракує; якщо зад
 тести проходять одразу, і це треба явно записати у звіт (тести писано
 проти специфікації, а не проти коду).
 
-- [ ] **Step 2: Виправлення за червоними тестами** — лише в
+- [X] **Step 2: Виправлення за червоними тестами** — лише в
 `packages/simetra/src/compiler/platform/`; зміна рішень 9 чи 12 — стоп і до архітектора.
 
-- [ ] **Step 3: Зелено, коміт**
+- [X] **Step 3: Зелено, коміт**
 
 Run: `pnpm test:db`
 Expected: PASS.
@@ -772,7 +782,7 @@ git commit -m "test(schema): платформний шар на стеку — �
 ### Task 10: Приклад, скіли, гейти
 
 **Files:**
-- Create: `examples/reference/metadata/catalogs/Users/Users.meta.json` (`role: "users"`, `scope: "none"`, власний реквізит `locale` зі значенням заповнення)
+- Create: `examples/reference/metadata/catalogs/Users/Users.meta.json` (`role: "users"`, `scope: "none"` — корінь виду `user` із глобальною роллю, власний реквізит `locale` зі значенням заповнення)
 - Modify: `examples/reference/metadata/project.meta.json` (корінь `user` → `{ object: { kind: "Catalog", name: "Users" } }`; `org` — `setFunction: "membership"`)
 - Delete: `examples/reference/metadata/custom-tables/OrgMember/` і `examples/reference/metadata/sql/app/accessible_org_ids.sql`
 - Create: `examples/reference/metadata/catalogs/OrgMember/OrgMember.meta.json` (скоуп `org`, реквізит `user` — `Ref` на `Users`, `membership: { user: "user" }`)
@@ -783,11 +793,10 @@ git commit -m "test(schema): платформний шар на стеку — �
 - Modify: `packages/simetra/src/schema/__tests__/reference-domain.db.test.ts` (викликає `app.accessible_org_ids()` і вставляє в `app.org_member (org_id, user_id)`: перейти на згенеровану `app.org_member_member_scopes()` і форму довідника `OrgMember`; claims — через `asRole` задачі 9)
 - Перевірити пошуком `OrgMember|org_member|accessible_org_ids` у `packages/` інші тести, що читають приклад, і перевести їх у цій самій задачі
 - Modify: `packages/designer/skills/simetra-metadata/SKILL.md` («Користувачі», `trackAuthor`, `membership`, `personalData`, зарезервована `simetra`)
-- Modify: `docs/superpowers/specs/2026-10-07-system-schema-users-design.md` §11.2 — лише якщо архітектор просить прибрати закриті прогалини в docs-коміті задачі 1 (інакше не чіпати)
 
-- [ ] **Step 1: Перевести приклад** — `node packages/designer/bin/simetra.mjs fix examples/reference/metadata` після правок файлів.
+- [X] **Step 1: Перевести приклад** — `node packages/designer/bin/simetra.mjs fix examples/reference/metadata` після правок файлів.
 
-- [ ] **Step 2: Повні гейти**
+- [X] **Step 2: Повні гейти**
 
 Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`,
 `pnpm metadata:check`, `pnpm test:db`, `python3 scripts/check-doc-anchors.py`
@@ -795,7 +804,7 @@ Expected: усе зелене; паперовий тест і reference-domain D
 різниці, крім очікуваної (платформний шар і нові об'єкти прикладу);
 неочікувана різниця — стоп і звіт.
 
-- [ ] **Step 3: Коміт**
+- [X] **Step 3: Коміт**
 
 ```bash
 git add examples/reference packages/designer/skills
