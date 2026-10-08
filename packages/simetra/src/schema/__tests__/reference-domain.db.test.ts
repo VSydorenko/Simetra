@@ -71,44 +71,64 @@ describe("reference domain in Postgres", () => {
       await client.query("SET LOCAL TimeZone = 'UTC'")
 
       // Обліковий запис провайдера: провізія платформного шару створює рядок
-      // «Користувачів» з тим самим id.
-      const user = await insert(
-        client,
-        "INSERT INTO auth.users (id) VALUES (gen_random_uuid())",
-        []
-      )
-      const org = await insert(
-        client,
-        "INSERT INTO app.organization (id, description) VALUES (gen_random_uuid(), 'Org')",
-        []
-      )
-      await insert(
-        client,
-        "INSERT INTO app.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2)",
-        [org, user]
-      )
+      // «Користувачів» з тим самим id. Другий користувач із власною
+      // організацією — інакше функція, що віддає всі скоупи, теж пройшла б.
+      const account = () =>
+        insert(
+          client,
+          "INSERT INTO auth.users (id) VALUES (gen_random_uuid())",
+          []
+        )
+      const organization = (description: string) =>
+        insert(
+          client,
+          "INSERT INTO app.organization (id, description) VALUES (gen_random_uuid(), $1)",
+          [description]
+        )
+      const member = (org: string, user: string) =>
+        insert(
+          client,
+          "INSERT INTO app.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2)",
+          [org, user]
+        )
+      const user = await account()
+      const other = await account()
+      const org = await organization("Org")
+      const otherOrg = await organization("Other org")
+      await member(org, user)
+      await member(otherOrg, other)
       // Функції множини обох видів скоупу бачать рівно скоупи користувача під
       // claims запиту: контракт скоупу, на який спиратимуться RLS-політики П3.
       // Гранти схем застосунку ролям API — П3 (платформна спека §6.7); тут
       // лише `USAGE`, без якого роль запиту не дістане до функцій схеми.
       await client.query("GRANT USAGE ON SCHEMA app TO authenticated")
-      const claims = { sub: user, role: "authenticated" }
-      expect(
-        await queryAs(
+      const scopes = async (claims: Record<string, unknown>) => ({
+        orgs: await queryAs(
           client,
           "authenticated",
           claims,
           "SELECT id FROM app.org_member_member_scopes() AS id"
-        )
-      ).toEqual({ rows: [{ id: org }] })
-      expect(
-        await queryAs(
+        ),
+        users: await queryAs(
           client,
           "authenticated",
           claims,
           "SELECT id FROM app.accessible_user_ids() AS id"
-        )
-      ).toEqual({ rows: [{ id: user }] })
+        ),
+      })
+      expect(await scopes({ sub: user, role: "authenticated" })).toEqual({
+        orgs: { rows: [{ id: org }] },
+        users: { rows: [{ id: user }] },
+      })
+      expect(await scopes({ sub: other, role: "authenticated" })).toEqual({
+        orgs: { rows: [{ id: otherOrg }] },
+        users: { rows: [{ id: other }] },
+      })
+      // Без `sub` користувача немає — і скоупів теж
+      expect(await scopes({ role: "authenticated" })).toEqual({
+        orgs: { rows: [] },
+        users: { rows: [] },
+      })
 
       const uah = await insert(
         client,
