@@ -149,8 +149,9 @@ Realtime) — П3; адаптери інших провайдерів ідент
    м'якого видалення `deleted_at`, ключ провайдера `'supabase'`. T1 генерує з
    цих даних один загальний SQL; новий провайдер — новий запис даних. Вміст
    шару:
-   - `CREATE SCHEMA simetra`; `REVOKE ALL ON SCHEMA simetra FROM PUBLIC`;
-     `GRANT USAGE ON SCHEMA simetra TO authenticated, anon` (виклик функції
+   - `CREATE SCHEMA simetra` — від рендера, як інші схеми моделі, лише коли
+     шар є; `REVOKE ALL ON SCHEMA simetra FROM PUBLIC`;
+     `GRANT USAGE ON SCHEMA simetra TO authenticated, anon, service_role` (виклик функції
      в політиці виконується від ролі запиту; схему від PostgREST ховає
      конфіг `db-schemas` провайдера, а не відсутність `USAGE`);
    - `simetra.identities (provider text, subject text, user_id uuid NOT NULL,
@@ -162,7 +163,7 @@ Realtime) — П3; адаптери інших провайдерів ідент
      `nullif(current_setting('request.jwt.claims', true), '')::jsonb`,
      пошук у `identities` за ключем провайдера, `user_id` лише коли рядок
      «Користувачі» не `invalid`; інакше `NULL` (нечисловий `sub` — `NULL`
-     без помилки). `GRANT EXECUTE … TO authenticated, anon`;
+     без помилки). `GRANT EXECUTE … TO authenticated, anon, service_role`;
    - `simetra.provision_user(p_provider text, p_subject text, p_user_id
      uuid, p_display_name text) RETURNS uuid` — вставка ідентичності `ON
      CONFLICT DO NOTHING`; наявна ідентичність → наявний `user_id`; інакше
