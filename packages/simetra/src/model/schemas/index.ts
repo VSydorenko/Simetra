@@ -78,7 +78,12 @@ export {
   type PgQualifiedName,
   type RowLevelSecurity,
 } from "./custom-table"
-export { NO_SCOPE, scopeKindSchema, type ScopeKind } from "./scope"
+export {
+  MEMBERSHIP_SET_FUNCTION,
+  NO_SCOPE,
+  scopeKindSchema,
+  type ScopeKind,
+} from "./scope"
 export {
   PUBLIC_READ_ROLES,
   publicReadSchema,

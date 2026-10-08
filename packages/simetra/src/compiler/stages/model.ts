@@ -504,6 +504,7 @@ class SnapshotBuilder {
         nullsNotDistinct: false,
       })
     }
+    this.addMembershipKey(main, object, scope)
 
     const sections =
       def.tabularSectionColumns === undefined
@@ -982,6 +983,35 @@ class SnapshotBuilder {
     }
     // Корінь скоуп-колонки не має: FK на нього лише одноколонковий.
     return this.tableTarget(this.lookup(kind.root.object), undefined, false)
+  }
+
+  /**
+   * Один учасник на користувача в межах значення скоупу (спека користувачів
+   * §8). `NULLS DISTINCT`: запрошених без облікового запису в одному тенанті
+   * може бути кілька. Хибне членство (без власної скоуп-колонки, без
+   * реквізиту, поліморфна пара замість однієї колонки) звітує стадія 4 — тут
+   * ключ просто не виводиться; той самий ключ від `unique` реквізиту не
+   * дублюється.
+   */
+  private addMembershipKey(
+    table: PendingTable,
+    object: ParsedObject,
+    scope: TableScope | undefined
+  ): void {
+    const user = membershipUserOf(object)
+    if (
+      user === undefined ||
+      user.allowedTypes !== undefined ||
+      scope?.own !== true
+    ) {
+      return
+    }
+    const columns = [scope.carrier!, user.physicalName!]
+    const same = (other: readonly string[]) =>
+      other.length === columns.length &&
+      other.every((column, i) => column === columns[i])
+    if (table.uniques.some((unique) => same(unique.columns))) return
+    table.uniques.push({ columns, nullsNotDistinct: false })
   }
 
   /** Вид скоупу, який об'єкт оголошує; `none` і відсутнє поле — без скоупу. */
@@ -1620,6 +1650,20 @@ export function usersCatalogOf(
   return objects
     .filter((o) => (o.data as { role?: string }).role === "users")
     .sort((a, b) => compareStrings(a.file, b.file))[0]
+}
+
+/**
+ * Реквізит, який `membership.user` довідника членства називає: власний
+ * реквізит за логічним іменем; немає членства чи реквізиту — `undefined`
+ * (помилку дає стадія 4).
+ */
+export function membershipUserOf(object: ParsedObject): Attribute | undefined {
+  const { membership } = object.data as { membership?: { user: string } }
+  if (membership === undefined) return undefined
+  const data = object.data as Record<string, unknown>
+  return KIND_REGISTRY[object.kind].columnFields
+    .flatMap((field) => (data[field] as Attribute[] | undefined) ?? [])
+    .find((attribute) => attribute.name === membership.user)
 }
 
 /** Посилання на «Користувачі» — ціль стандартного `ref: "users"`. */

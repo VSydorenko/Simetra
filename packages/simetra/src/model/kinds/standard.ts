@@ -100,6 +100,8 @@ export type ReferenceRole =
   | "constant.allowedType"
   | "constant.enumDefault"
   | "catalog.owner"
+  /** Реквізит довідника в `membership.user`. */
+  | "catalog.membershipUser"
   | "register.recorder"
   | "register.balanceControl"
   | "document.registerMovement"

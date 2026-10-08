@@ -15,12 +15,14 @@ import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
+import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { embedRowRules } from "./sql/row-rule"
 import {
+  isMovementQuery,
   namespaceConflicts,
   readSqlUnits,
   type SqlSource,
@@ -125,6 +127,7 @@ export async function runStages(
     if (role === "scopeKind.root") rootIdByPointer.set(from.pointer, to.id)
   }
   const { defaultSchema } = stage1.project
+  const memberships = membershipsOf(stage1.objects, physical, stage1.project)
   const scopeKinds = stage1.project.scopeKinds
     .map((kind, index): CompiledScopeKind => ({
       id: kind.id ?? "",
@@ -137,10 +140,17 @@ export async function runStages(
                 rootIdByPointer.get(`/scopeKinds/${index}/root/object`) ?? "",
             }
           : { external: kind.root.external },
-      setFunction: {
-        schema: kind.setFunction.schema ?? defaultSchema,
-        name: kind.setFunction.name,
-      },
+      // `membership` — функція, згенерована з довідника членства виду;
+      // стадія 5 гарантує, що він є.
+      setFunction:
+        typeof kind.setFunction === "string"
+          ? must(
+              memberships.find((m) => m.scopeKind.id === kind.id)?.setFunction
+            )
+          : {
+              schema: kind.setFunction.schema ?? defaultSchema,
+              name: kind.setFunction.name,
+            },
       onRootDelete: kind.onRootDelete,
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
@@ -176,13 +186,18 @@ export async function runStages(
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
+    ...buildMembershipFunctions(
+      stage1.objects,
+      physical,
+      stage1.project,
+      parse
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
-  const collisions = namespaceConflicts(
-    physical,
-    sqlUnits,
-    (unit) =>
-      `the movement query of ${nameById.get(unit.documentId ?? "")} into ${nameById.get(unit.registerId ?? "")}`
+  const collisions = namespaceConflicts(physical, sqlUnits, (unit) =>
+    isMovementQuery(unit)
+      ? `the movement query of ${nameById.get(unit.documentId)} into ${nameById.get(unit.registerId)}`
+      : `the membership SQL of ${nameById.get(unit.ownerObjectId ?? "")}`
   )
   if (collisions.length > 0) {
     return {
@@ -195,7 +210,7 @@ export async function runStages(
     physical,
     sqlUnits,
     parse,
-    // Обгортка рухів файлу не має: цикл через неї названо в документі.
+    // Згенерована одиниця файлу не має: цикл через неї названо в об'єкті-власнику.
     (unit) => unit.file ?? fileById.get(unit.ownerObjectId ?? "") ?? ""
   )
   if (ordered.diagnostics.length > 0) {
@@ -333,6 +348,12 @@ function verbatimUnit(
     sql: unit.sql,
     tree: unit.tree,
   }
+}
+
+/** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */
+function must<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("internal: missing value")
+  return value
 }
 
 function hasErrors(diagnostics: readonly Diagnostic[]): boolean {

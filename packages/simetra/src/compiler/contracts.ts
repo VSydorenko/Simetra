@@ -17,10 +17,16 @@ import {
   type Project,
   type PublicReadRole,
   type RegisterKeySpec,
+  type ScopeKind,
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
+import {
+  choosesMembership,
+  membershipFunctionNames,
+  membershipsOf,
+} from "./membership-functions"
 import {
   kindLabelOf,
   usersCatalogOf,
@@ -226,6 +232,21 @@ export interface UsersContract {
   userKindColumn: "user_kind"
 }
 
+/**
+ * Довідник членства виду скоупу (спека користувачів §8): П3 будує з нього
+ * політики, а функції вже згенеровано одиницями моделі.
+ */
+export interface MembershipContract {
+  objectId: string
+  scopeKindId: string
+  table: QualifiedName
+  scopeColumn: string
+  userColumn: string
+  myMemberFunction: QualifiedName
+  /** Лише коли вид скоупу обирає `setFunction: "membership"`. */
+  setFunction?: QualifiedName
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -245,6 +266,8 @@ export interface Contracts {
   personalData: PersonalDataContract[]
   /** Немає — у проєкті немає «Користувачів», а з ними й платформного шару. */
   users?: UsersContract
+  /** За `objectId`. */
+  membership: MembershipContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -464,7 +487,8 @@ export function derivedFunctions(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
-  wrapperName: (document: PhysicalTable, register: PhysicalTable) => string
+  wrapperName: (document: PhysicalTable, register: PhysicalTable) => string,
+  scopeKinds: readonly ScopeKind[]
 ): DerivedFunction[] {
   const result: DerivedFunction[] = []
   const add = (
@@ -480,6 +504,30 @@ export function derivedFunctions(
     if (table === undefined) continue
     for (const { label, description } of derivedFunctionLabels(object)) {
       add(object, derived(table, label), `${description} of ${object.name}`)
+    }
+    // Функції членства — згенеровані одиниці, але RPC кличе їх за іменем,
+    // тож і для них дослівна функція з тим самим іменем — колізія.
+    const { membership, scope } = object.data as {
+      membership?: unknown
+      scope?: string
+    }
+    if (membership !== undefined) {
+      const names = membershipFunctionNames(table)
+      add(
+        object,
+        names.myMember,
+        `member lookup of ${object.name}`,
+        "/membership"
+      )
+      const kind = scopeKinds.find((k) => k.name === scope)
+      if (kind !== undefined && choosesMembership(kind)) {
+        add(
+          object,
+          names.memberScopes,
+          `membership set function of ${object.name}`,
+          "/membership"
+        )
+      }
     }
   }
 
@@ -583,6 +631,17 @@ export function buildContracts(
     eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
     personalData: personalDataContracts(objects, physical),
     ...usersContract(objects, physical),
+    membership: membershipsOf(objects, physical, project).map(
+      (m): MembershipContract => ({
+        objectId: m.object.id ?? "",
+        scopeKindId: m.scopeKind.id ?? "",
+        table: { schema: m.table.schema, name: m.table.name },
+        scopeColumn: m.scopeColumn,
+        userColumn: m.userColumn,
+        myMemberFunction: m.myMember,
+        ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
+      })
+    ),
   }
 }
 

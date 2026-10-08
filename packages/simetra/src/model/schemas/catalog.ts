@@ -5,6 +5,7 @@ import { catalogAttributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
 import {
+  elementNameSchema,
   metadataIdSchema,
   objectNameSchema,
   physicalNameSchema,
@@ -105,6 +106,22 @@ export const catalogSchema = z.strictObject({
     description:
       "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
   }),
+
+  // Учасник тенанта — довідник застосунку з власними реквізитами, а не
+  // таблиця платформи (спека користувачів §8): прапорець лише називає
+  // реквізит-посилання на «Користувачі», решту виводить компілятор.
+  membership: z
+    .strictObject({
+      user: elementNameSchema.meta({
+        description:
+          "Logical name of the scalar Ref attribute to the users catalog; nullable for an invited member without an account.",
+      }),
+    })
+    .optional()
+    .meta({
+      description:
+        "Marks a scoped catalog as the membership of its scope kind: one member per user and scope value, a generated member lookup and an optional generated scope set function.",
+    }),
 
   publicRead: publicReadSchema,
 

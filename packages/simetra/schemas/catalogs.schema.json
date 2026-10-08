@@ -213,6 +213,21 @@
       "description": "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
       "type": "boolean"
     },
+    "membership": {
+      "description": "Marks a scoped catalog as the membership of its scope kind: one member per user and scope value, a generated member lookup and an optional generated scope set function.",
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "description": "Logical name of the scalar Ref attribute to the users catalog; nullable for an invited member without an account."
+        }
+      },
+      "required": [
+        "user"
+      ],
+      "additionalProperties": false
+    },
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
       "type": "string",

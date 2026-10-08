@@ -58,6 +58,7 @@ import {
 import {
   isDeclaredTable,
   keyColumnOf,
+  membershipUserOf,
   usersCatalogOf,
   type ModelStageResult,
 } from "./model"
@@ -145,7 +146,8 @@ export function checkIntegrity(
         objects,
         references,
         model.physical,
-        movementWrapperName
+        movementWrapperName,
+        scopeKinds
       ),
       sqlUnits
     )
@@ -217,6 +219,7 @@ export function checkIntegrity(
   diagnostics.push(...checkSubscriptions(objects, model, provider))
   diagnostics.push(...checkUsersCatalogs(objects, model))
   diagnostics.push(...checkAuthorTracking(objects))
+  diagnostics.push(...checkMembership(objects, scopeKinds))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -327,6 +330,82 @@ function checkAuthorTracking(objects: readonly ParsedObject[]): Diagnostic[] {
         feature: "trackAuthor",
       })
     )
+}
+
+/**
+ * Членство (спека користувачів §8): довідник учасників — скоуплений
+ * довідник із власною скоуп-колонкою (корінь її не має: його рядки і є
+ * значеннями скоупу), один на вид скоупу, а `membership.user` — скалярний
+ * `Ref` на «Користувачі». Перший довідник виду — раніший за шляхом файлу.
+ */
+function checkMembership(
+  objects: readonly ParsedObject[],
+  scopeKinds: readonly ScopeKind[]
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const users = usersCatalogOf(objects)
+  const firstByKind = new Map<string, ParsedObject>()
+  const ordered = [...objects].sort((a, b) => compareStrings(a.file, b.file))
+  for (const object of ordered) {
+    const { membership, scope } = object.data as {
+      membership?: { user: string }
+      scope?: string
+    }
+    if (membership === undefined) continue
+    const { file, name } = object
+    const kind = scopeKinds.find((k) => k.name === scope)
+    const root =
+      kind !== undefined &&
+      "object" in kind.root &&
+      objectKey(kind.root.object.kind, kind.root.object.name) ===
+        objectKey(object.kind, object.name)
+    if (kind === undefined || root) {
+      found.push(
+        diagnostic("membership.not-scoped", file, "/membership", { name })
+      )
+    } else {
+      const first = firstByKind.get(kind.name)
+      if (first === undefined) {
+        firstByKind.set(kind.name, object)
+      } else {
+        found.push(
+          diagnostic("membership.duplicate", file, "/membership", {
+            name,
+            scopeKind: kind.name,
+            firstFile: first.file,
+          })
+        )
+      }
+    }
+    if (users === undefined) {
+      found.push(
+        diagnostic("users.catalog-missing", file, "/membership", {
+          kind: object.kind,
+          name,
+          feature: "membership",
+        })
+      )
+      continue
+    }
+    const user = membershipUserOf(object)
+    const usersRef =
+      user !== undefined &&
+      user.type === "Ref" &&
+      user.array !== true &&
+      user.allowedTypes === undefined &&
+      user.ref !== undefined &&
+      objectKey(user.ref.kind, user.ref.name) ===
+        objectKey(users.kind, users.name)
+    if (!usersRef) {
+      found.push(
+        diagnostic("membership.user-not-users-ref", file, "/membership/user", {
+          name,
+          attribute: membership.user,
+        })
+      )
+    }
+  }
+  return found
 }
 
 /** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */

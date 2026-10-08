@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  MEMBERSHIP_SET_FUNCTION,
   type MetadataRef,
   type MovementDecl,
   type Project,
@@ -27,7 +28,7 @@ export function checkLinks(
   return [
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
-    ...checkSetFunctions(project, units, parse),
+    ...checkSetFunctions(objects, project, units, parse),
     ...checkSubscriptionHandlers(objects, project, units),
   ]
 }
@@ -126,20 +127,41 @@ function lineOf(text: string, offset: number): number {
 }
 
 /**
- * Функція множини скоупу має бути в SQL-одиницях проєкту: компілятор не
- * створює її сам, бо вона залежить від того, як застосунок визначає доступні
- * значення. Підпис перевіряється за деревом розбору, а не за текстом.
+ * Функція множини скоупу має бути в SQL-одиницях проєкту: як застосунок
+ * визначає доступні значення, знає лише він. Підпис перевіряється за деревом
+ * розбору, а не за текстом. Виняток — `setFunction: "membership"`: функцію
+ * генерує компілятор з довідника членства виду, тож перевіряється лише
+ * наявність такого довідника.
  */
 function checkSetFunctions(
+  objects: readonly ParsedObject[],
   project: Project,
   units: readonly VerbatimUnit[],
   parse: SqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   project.scopeKinds.forEach((kind, index) => {
-    const schema = kind.setFunction.schema ?? project.defaultSchema
-    const name = kind.setFunction.name
     const pointer = toPointer(["scopeKinds", index, "setFunction"])
+    const declared = kind.setFunction
+    if (declared === MEMBERSHIP_SET_FUNCTION) {
+      const catalog = objects.some((object) => {
+        const { membership, scope } = object.data as {
+          membership?: unknown
+          scope?: string
+        }
+        return membership !== undefined && scope === kind.name
+      })
+      if (!catalog) {
+        found.push(
+          diagnostic("scope.membership-missing", "project.meta.json", pointer, {
+            kind: kind.name,
+          })
+        )
+      }
+      return
+    }
+    const schema = declared.schema ?? project.defaultSchema
+    const name = declared.name
     const fn = nullaryFunction(units, schema, name, {
       type: "uuid",
       setof: true,

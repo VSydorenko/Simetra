@@ -177,7 +177,9 @@ export function kitchenSink(): Map<string, string> {
         physicalName: "org_id",
         title: text("org"),
         root: { object: ref("Catalog", "Organization") },
-        setFunction: { schema: "public", name: "org_ids" },
+        // Обидві гілки `setFunction`: тут — згенерована з членства, у виду
+        // `user` — дослівна функція.
+        setFunction: "membership",
         onRootDelete: "cascade",
       },
       {
@@ -700,12 +702,29 @@ export function kitchenSink(): Map<string, string> {
     role: "users",
   }
 
+  // Довідник членства виду `org`: учасник посилається на «Користувачі».
+  // Оголошено після «Користувачів» з тієї ж причини — id решти не зсуваються.
+  const member = {
+    ...header("Catalog", "Member", "member"),
+    membership: { user: "account" },
+    attributes: [
+      {
+        id: id(),
+        name: "account",
+        physicalName: "account_id",
+        type: "Ref",
+        ref: ref("Catalog", "Users"),
+      },
+    ],
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
     "catalogs/Partner/Partner.meta.json": partner,
     "catalogs/Item/Item.meta.json": item,
     "catalogs/Users/Users.meta.json": users,
+    "catalogs/Member/Member.meta.json": member,
     "documents/Sale/Sale.meta.json": sale,
     "enumerations/Color/Color.meta.json": color,
     "information-registers/Prices/Prices.meta.json": prices,

@@ -912,6 +912,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' до файлу .sql.",
     },
   },
+  "scope.membership-missing": {
+    en: (p) =>
+      `Scope kind "${p.kind}" takes its set function from membership, but no catalog of this scope kind has membership`,
+    uk: (p) =>
+      `Вид скоупу "${p.kind}" бере функцію множини з членства, але жоден довідник цього виду не має membership`,
+    hint: {
+      en: "Add membership to a catalog scoped by this kind, or name a set function from a .sql file.",
+      uk: "Додайте membership довіднику цього виду скоупу або назвіть функцію множини з файлу .sql.",
+    },
+  },
   "scope.set-function-signature": {
     en: (p) =>
       p.reason === undefined
@@ -1059,6 +1069,37 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Add a catalog with role users, or remove the field.",
       uk: "Додайте довідник із роллю users або приберіть поле.",
+    },
+  },
+
+  "membership.not-scoped": {
+    en: (p) =>
+      `Catalog "${p.name}" has membership but no scope column of its own: it is unscoped or the root of its scope kind`,
+    uk: (p) =>
+      `Довідник "${p.name}" має membership, але не має власної скоуп-колонки: він без скоупу або корінь свого виду скоупу`,
+    hint: {
+      en: "Membership belongs to a catalog scoped by a scope kind it is not the root of; set its scope or remove membership.",
+      uk: "Членство має довідник, скоуплений видом, коренем якого він не є; задайте йому scope або приберіть membership.",
+    },
+  },
+  "membership.user-not-users-ref": {
+    en: (p) =>
+      `membership.user of catalog "${p.name}" names "${p.attribute}", which is not a scalar Ref attribute to the users catalog`,
+    uk: (p) =>
+      `membership.user довідника "${p.name}" називає "${p.attribute}", а це не скалярний реквізит Ref на довідник користувачів`,
+    hint: {
+      en: "Name an own attribute of type Ref with ref to the catalog with role users, without array or allowedTypes.",
+      uk: "Назвіть власний реквізит типу Ref з ref на довідник із роллю users, без array і allowedTypes.",
+    },
+  },
+  "membership.duplicate": {
+    en: (p) =>
+      `Catalog "${p.name}" is a second membership catalog of scope kind "${p.scopeKind}"; the first is in ${p.firstFile}`,
+    uk: (p) =>
+      `Довідник "${p.name}" — другий довідник членства виду скоупу "${p.scopeKind}"; перший — у ${p.firstFile}`,
+    hint: {
+      en: "A scope kind has at most one membership catalog; remove membership from one of them.",
+      uk: "Вид скоупу має щонайбільше один довідник членства; приберіть membership з одного з них.",
     },
   },
 

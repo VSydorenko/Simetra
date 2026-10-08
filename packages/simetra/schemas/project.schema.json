@@ -201,23 +201,33 @@
             "description": "Root of the scope: a metadata object or an external table."
           },
           "setFunction": {
-            "type": "object",
-            "properties": {
-              "schema": {
-                "description": "PostgreSQL schema of the function; defaultSchema when absent.",
-                "type": "string",
-                "minLength": 1
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "description": "PostgreSQL schema of the function; defaultSchema when absent.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Physical name of the function."
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "description": "SQL function defined in a .sql file."
               },
-              "name": {
+              {
                 "type": "string",
-                "minLength": 1,
-                "description": "Physical name of the function."
+                "const": "membership",
+                "description": "Generated from the membership catalog of this scope kind: the scope values where the current user is a member."
               }
-            },
-            "required": [
-              "name"
             ],
-            "additionalProperties": false,
             "description": "SQL function that returns the set of scope values visible to the current user."
           },
           "onRootDelete": {

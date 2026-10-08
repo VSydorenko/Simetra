@@ -252,6 +252,44 @@ export function readSqlUnits(
   return { units, rowRules, diagnostics }
 }
 
+/**
+ * Згенерована одиниця з тексту одного оператора: клас, ідентичність і дерево
+ * дає той самий `classify`, що й дослівним одиницям, тож простір
+ * ідентичностей у них спільний і дослівна копія не перекриє згенеровану
+ * мовчки. Текст будує компілятор, тож збій розбору чи недозволений оператор —
+ * дефект генератора, а не метаданих. Типи аргументів — лише вбудовані.
+ */
+export function generatedUnit(
+  sql: string,
+  schema: string,
+  parse: SqlParser
+): Pick<SqlUnit, "class" | "identity" | "schema" | "name" | "sql" | "tree"> {
+  const parsed = parse(sql)
+  const statement =
+    parsed.ok && parsed.statements.length === 1
+      ? parsed.statements[0]!.stmt
+      : undefined
+  const classified =
+    statement === undefined
+      ? undefined
+      : classify(statement, { schema, types: new Map() })
+  if (
+    statement === undefined ||
+    classified === undefined ||
+    !("class" in classified)
+  ) {
+    throw new Error(`internal: generated SQL does not form a unit: ${sql}`)
+  }
+  return {
+    class: classified.class,
+    identity: classified.identity,
+    schema: classified.schema,
+    name: classified.name,
+    sql,
+    tree: withoutLocations(statement),
+  }
+}
+
 /** Простір імен каталогу Postgres: `pg_proc`, `pg_class`, `pg_type`. */
 export type PgSpace = "proc" | "rel" | "type"
 

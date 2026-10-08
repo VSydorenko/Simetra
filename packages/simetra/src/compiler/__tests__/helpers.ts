@@ -57,13 +57,19 @@ export function metaFiles(
     }
   }
   const { scopeKinds, defaultSchema } = (projectData ?? {}) as {
-    scopeKinds?: { setFunction: { name: string; schema?: string } }[]
+    scopeKinds?: {
+      setFunction: { name: string; schema?: string } | "membership"
+    }[]
     defaultSchema?: string
   }
   if (!files.has(SCOPE_FUNCTIONS_FILE) && Array.isArray(scopeKinds)) {
-    const names = scopeKinds.map(
-      (kind) =>
-        `${kind.setFunction.schema ?? defaultSchema ?? "public"}.${kind.setFunction.name}`
+    // Функцію множини з членства генерує компілятор — `.sql` їй не потрібен.
+    const names = scopeKinds.flatMap(({ setFunction }) =>
+      typeof setFunction === "string"
+        ? []
+        : [
+            `${setFunction.schema ?? defaultSchema ?? "public"}.${setFunction.name}`,
+          ]
     )
     // Два види можуть ділити одну функцію множини.
     const sql = [...new Set(names)]

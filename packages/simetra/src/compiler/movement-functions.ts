@@ -608,7 +608,7 @@ function ref(column: PhysicalColumn): string {
  * раніше й стали б ін'єкцією. Один механізм для будь-якого джерела тіла, тож
  * жодне джерело не потребує власної заборони.
  */
-function dollarTag(body: string): string {
+export function dollarTag(body: string): string {
   let tag = "$simetra$"
   for (let n = 1; body.includes(tag); n += 1) tag = `$simetra_${n}$`
   return tag
