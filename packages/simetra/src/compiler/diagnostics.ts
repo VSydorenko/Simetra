@@ -28,6 +28,7 @@ export const COMPILER_RULES = [
   "sql.row-rule-foreign-table",
   "sql.row-rule-outside-module",
   "sql.row-rule-name-taken",
+  "sql.bare-current-user",
   "sql.debt-grows",
   "sql.debt-stale",
   "identity.id-missing",

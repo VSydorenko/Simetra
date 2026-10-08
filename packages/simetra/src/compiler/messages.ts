@@ -550,6 +550,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Postgres тримає імена обмежень таблиці в одному просторі, разом із перевірками, які виводить вид: дайте правилу рядка власне ім'я.",
     },
   },
+  "sql.bare-current-user": {
+    en: (p) =>
+      `${p.clause} of ${p.policy} at line ${p.line} calls simetra.current_user_id() outside the uncorrelated subquery (select simetra.current_user_id())`,
+    uk: (p) =>
+      `${p.clause} у ${p.policy} у рядку ${p.line} кличе simetra.current_user_id() поза некорельованим підзапитом (select simetra.current_user_id())`,
+    hint: {
+      en: "Write the call exactly as (select simetra.current_user_id()): a bare call runs once per row, while the uncorrelated subquery is evaluated once per statement as an init plan.",
+      uk: "Пишіть виклик рівно як (select simetra.current_user_id()): голий виклик виконується для кожного рядка, а некорельований підзапит обчислюється один раз на оператор як init plan.",
+    },
+  },
   "sql.debt-grows": {
     en: (p) =>
       `${p.identity} at line ${p.line} is verbatim SQL debt that sql-debt.json does not list`,
