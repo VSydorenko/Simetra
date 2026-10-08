@@ -104,8 +104,7 @@ async function describedElsewhere(
     ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
   )
     return found
-  const compiled = await compile(existing)
-  const model: CompiledModel | undefined = compiled.model
+  const model = await compiledExisting(existing)
   if (model === undefined) return found
   const kept = new Map(
     model.objects
@@ -136,6 +135,28 @@ async function describedElsewhere(
   for (const { handler } of model.contracts.eventSubscriptions)
     found.handlers.add(qualified(handler.schema, handler.name))
   return found
+}
+
+/**
+ * Модель наявної теки для `describedElsewhere`. Ігнорується лише ратчет боргу
+ * (рішення консультанта до плану промоції 2b): тека без `sql-debt.json` чи з
+ * застарілим переліком — саме та, яку introspect має розкласти й описати
+ * переліком; будь-яка інша помилка, як і досі, робить теку такою, що не
+ * компілюється. Компіляція з прийнятим боргом не ховає інших помилок: вплив
+ * переліку — тільки `sql.debt-grows`.
+ */
+async function compiledExisting(
+  existing: ReadonlyMap<string, string>
+): Promise<CompiledModel | undefined> {
+  const compiled = await compile(existing)
+  if (compiled.model !== undefined) return compiled.model
+  const errors = compiled.diagnostics.filter((d) => d.severity === "error")
+  if (!errors.every((d) => d.code === "sql.debt-grows")) return undefined
+  const debt = await currentDebt(existing)
+  if (debt === undefined) return undefined
+  const accepted = new Map(existing)
+  accepted.set(SQL_DEBT_FILE, JSON.stringify({ units: debt }))
+  return (await compile(accepted)).model
 }
 
 /**
@@ -463,11 +484,20 @@ export async function reverseGenerate(
   // 12): весь дослівний SQL поза закритою оболонкою, який вона щойно
   // розклала, — прийнятий стан бази; далі ратчет лише звужується. Пише
   // завжди, і порожнім: тека після introspect має явний перелік. Борг не
-  // відомий лише на теці з помилками — тоді `changes` і так порожні.
-  files.set(
-    SQL_DEBT_FILE,
-    sqlDebtText((await currentDebt(files)) ?? [], o.schemaPath)
-  )
+  // відомий лише на теці з помилками — тоді переліку не пише, а `changes` і
+  // так порожні. До переліку йдуть лише одиниці каталогу бази: одиниця,
+  // додана в теку, але відсутня в базі, в нього не потрапляє й далі валить
+  // компіляцію.
+  const fromDatabase = new Set(model.units.map((u) => u.identity))
+  const debt = await currentDebt(files)
+  if (debt !== undefined)
+    files.set(
+      SQL_DEBT_FILE,
+      sqlDebtText(
+        debt.filter((identity) => fromDatabase.has(identity)),
+        o.schemaPath
+      )
+    )
   const compiled = await compile(files)
   diagnostics.push(...completed.diagnostics, ...compiled.diagnostics)
   if (compiled.model !== undefined)

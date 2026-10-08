@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import {
-  acceptDebt,
-  attribute,
-  catalog,
-  metaFiles,
-  project,
-  uuid,
-} from "./helpers"
+import { attribute, catalog, metaFiles, project, uuid } from "./helpers"
 
 const SUBSCRIPTION = "event-subscriptions/StampContract/StampContract.meta.json"
 const HANDLER_FILE = "sql/app/stamp.sql"
@@ -262,13 +255,11 @@ describe("EventSubscription", () => {
   })
 
   it("a handler outside the closed shell is an error even in a shared file", async () => {
-    // Борг прийнято цілим: обробник не стає боргом і тоді, коли його
-    // ідентичність є в `sql-debt.json` (рішення 8 плану промоції 2b).
+    // Обробник не буває боргом (рішення 8 плану промоції 2b): без переліку
+    // боргу звітує саме його правило, а не `sql.debt-grows`.
     const found = async (sql: string) =>
       (
-        await compile(
-          await acceptDebt(metaFiles(entries({}, { [HANDLER_FILE]: sql })))
-        )
+        await compile(metaFiles(entries({}, { [HANDLER_FILE]: sql })))
       ).diagnostics.map((d) => [d.code, d.file, d.pointer, d.params?.problem])
     expect(
       await found(

@@ -260,7 +260,9 @@ export async function acceptDebt(
     ...files,
     [
       SQL_DEBT_FILE,
-      JSON.stringify({ units: debtUnits(sql.units, stage1.objects) }),
+      JSON.stringify({
+        units: debtUnits(sql.units, stage1.objects, stage1.project),
+      }),
     ],
   ])
 }

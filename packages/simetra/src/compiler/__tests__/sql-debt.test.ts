@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { customTable, metaFiles, project, salesDocument } from "./helpers"
+import {
+  attribute,
+  catalog,
+  customTable,
+  metaFiles,
+  project,
+  salesDocument,
+  uuid,
+} from "./helpers"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
 const TABLE_SQL = "custom-tables/T/T.sql"
@@ -117,5 +125,36 @@ describe("debt ratchet: sql-debt.json", () => {
     expect(found.map((d) => [d.code, d.file, d.pointer])).toEqual([
       ["file.unknown-key", DEBT, "/extra"],
     ])
+  })
+
+  it("a subscription handler is never debt, listed or not", async () => {
+    // Рішення 8: обробник поза оболонкою — `subscription.handler-not-closed`,
+    // а не `sql.debt-grows`, і перелік боргу цього не змінює.
+    const handlerFile = "sql/public/stamp.sql"
+    const files = (extra: Record<string, unknown>) =>
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+          attributes: [attribute("number", { type: "String", length: 20 })],
+        }),
+        "event-subscriptions/Stamp/Stamp.meta.json": {
+          id: uuid(7101),
+          kind: "EventSubscription",
+          name: "Stamp",
+          physicalName: "stamp",
+          sources: [{ kind: "Catalog", name: "Contract" }],
+          event: "beforeWrite",
+          handler: { name: "stamp" },
+        },
+        [handlerFile]:
+          "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+        ...extra,
+      })
+    for (const extra of [{}, { [DEBT]: debt(["function:public.stamp()"]) }]) {
+      const found = (await compile(files(extra))).diagnostics
+      expect(found.map((d) => [d.code, d.params?.problem])).toEqual([
+        ["subscription.handler-not-closed", "volatility"],
+      ])
+    }
   })
 })

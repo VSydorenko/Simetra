@@ -1206,4 +1206,80 @@ describe("reverseGenerate", () => {
     expect(result.diagnostics).toEqual([])
     expect(json(result, "sql-debt.json").units).toEqual([])
   })
+
+  describe("bootstrap of the debt list", () => {
+    /** Тека з довідником і таблицею `Note`, чий тригер є і в базі, — без переліку боргу. */
+    async function withoutList() {
+      const kept = keptCatalog()
+      const catalogTables = catalogFromSnapshot(
+        (await compile(kept)).model!.physical
+      ).tables
+      const db = model({
+        tables: [...catalogTables, table("app", "note")],
+        units: units(TOUCH),
+      })
+      const first = await reverseGenerate(db, options(kept))
+      expect(first.diagnostics).toEqual([])
+      const existing = new Map(first.files)
+      existing.delete("sql-debt.json")
+      return { db, existing }
+    }
+
+    it("introspect lists the debt of a folder without sql-debt.json", async () => {
+      const { db, existing } = await withoutList()
+      expect((await compile(existing)).diagnostics.map((d) => d.code)).toEqual([
+        "sql.debt-grows",
+        "sql.debt-grows",
+      ])
+      const result = await reverseGenerate(db, options(existing))
+      expect(result.diagnostics).toEqual([])
+      // Довідник описано його файлом: тека з лише ратчетом — компілюється.
+      expect(
+        [...result.files.keys()].filter((k) => k.startsWith("custom-tables/"))
+      ).toEqual([
+        "custom-tables/Note/Note.meta.json",
+        "custom-tables/Note/Note.sql",
+      ])
+      expect(json(result, "sql-debt.json").units).toEqual([
+        "function:app.touch()",
+        "trigger:app.note.note_touch",
+      ])
+      expect((await compile(result.files)).diagnostics).toEqual([])
+    })
+
+    it("a trigger only in the folder never enters the list", async () => {
+      const { db, existing } = await withoutList()
+      const listed = await reverseGenerate(db, options(existing))
+      const folder = new Map(listed.files)
+      const sql = "custom-tables/Note/Note.sql"
+      folder.set(
+        sql,
+        `${folder.get(sql)!}\nCREATE TRIGGER note_extra BEFORE INSERT ON app.note FOR EACH ROW EXECUTE FUNCTION app.touch();\n`
+      )
+      expect(
+        (await compile(folder)).diagnostics.map((d) => [
+          d.code,
+          d.params?.identity,
+        ])
+      ).toEqual([["sql.debt-grows", "trigger:app.note.note_extra"]])
+      const again = await reverseGenerate(db, options(folder))
+      expect(json(again, "sql-debt.json").units).not.toContain(
+        "trigger:app.note.note_extra"
+      )
+    })
+
+    it("a folder with another error stays uncompilable", async () => {
+      const { db, existing } = await withoutList()
+      existing.set("catalogs/Broken/Broken.meta.json", "{")
+      const result = await reverseGenerate(db, options(existing))
+      // Як і досі: тека не каже, що описує, тож таблицю довідника описано вдруге.
+      expect(errors(result).map((d) => d.code)).toContain("file.invalid-json")
+      expect(
+        [...result.files.keys()].some((k) =>
+          k.startsWith("custom-tables/Currency/")
+        )
+      ).toBe(true)
+      expect(result.changes).toEqual([])
+    })
+  })
 })

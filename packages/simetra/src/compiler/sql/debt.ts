@@ -1,9 +1,9 @@
 import type { Node } from "libpg-query"
-import { KIND_REGISTRY } from "simetra/model"
+import { KIND_REGISTRY, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem } from "./closed-forms"
-import type { VerbatimUnit } from "./units"
+import { functionIdentity, type VerbatimUnit } from "./units"
 
 /**
  * Ідентичності одиниць боргу (план промоції 2b, рішення 12), відсортовані:
@@ -12,32 +12,62 @@ import type { VerbatimUnit } from "./units"
  * є ніде: це цільова форма, а не виняток. Модуль виду 1С сюди не входить — у
  * ньому решта класів уже помилка, а не борг. Одиниця зламаного власника (його
  * немає серед об'єктів) вид не має, тож і боргом не рахується: причину
- * назвав сам власник.
+ * назвав сам власник. Обробник підписки й функція множини скоупу боргом не
+ * бувають теж (рішення 8): їхню оболонку перевіряють власні правила стадії 5,
+ * і `sql.debt-grows` лише сховав би конкретнішу діагностику.
  */
 export function debtUnits(
   units: readonly VerbatimUnit[],
-  objects: readonly ParsedObject[]
+  objects: readonly ParsedObject[],
+  project: Project | undefined
 ): string[] {
-  const isDebt = debtPredicate(objects)
+  const isDebt = debtPredicate(objects, project)
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
   )
 }
 
 function debtPredicate(
-  objects: readonly ParsedObject[]
+  objects: readonly ParsedObject[],
+  project: Project | undefined
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
       .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "debt")
       .map((o) => o.file)
   )
+  const ruled = ruledFunctions(objects, project)
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
+    !(unit.class === "function" && ruled.has(unit.identity)) &&
     !(
       unit.class === "function" &&
       closedShellProblem(unit.tree as Node) === undefined
     )
+}
+
+/**
+ * Ідентичності функцій без аргументів, які оголошують метадані: обробники
+ * підписок і функції множини видів скоупу. Обидві мають власні правила
+ * оболонки (стадія 5), тож не є ні боргом, ні винятком із ратчета.
+ */
+function ruledFunctions(
+  objects: readonly ParsedObject[],
+  project: Project | undefined
+): ReadonlySet<string> {
+  if (project === undefined) return new Set()
+  const declared = [
+    ...objects.flatMap((o) => {
+      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
+      return spec === undefined ? [] : [spec.handler]
+    }),
+    ...project.scopeKinds.map((kind) => kind.setFunction),
+  ]
+  return new Set(
+    declared.map((fn) =>
+      functionIdentity(fn.schema ?? project.defaultSchema, fn.name, [])
+    )
+  )
 }
 
 /**
@@ -49,10 +79,11 @@ function debtPredicate(
 export function checkDebt(
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
+  project: Project | undefined,
   listed: readonly string[]
 ): Diagnostic[] {
   const accepted = new Set(listed)
-  const isDebt = debtPredicate(objects)
+  const isDebt = debtPredicate(objects, project)
   return units
     .filter((unit) => isDebt(unit) && !accepted.has(unit.identity))
     .map((unit) =>

@@ -139,5 +139,5 @@ export async function currentDebt(
   ) {
     return undefined
   }
-  return debtUnits(sql.units, stage1.objects)
+  return debtUnits(sql.units, stage1.objects, stage1.project)
 }

@@ -3,7 +3,6 @@ import { compile, type CompileResult } from "simetra/compiler"
 import {
   SALE_FILE,
   SCOPE_FUNCTIONS_FILE,
-  acceptDebt,
   attribute,
   metaFiles,
   organization,
@@ -343,17 +342,15 @@ describe("stage 5: scope set functions", () => {
     body = "SELECT NULL::uuid"
   ) => `CREATE FUNCTION public.${name}${tail} AS $$ ${body} $$;\n`
   const good = (name: string) => create(`${name}()`)
-  // Предмет — форма самої функції множини (частина форм — поза закритою
-  // оболонкою), а не ратчет: увесь борг фікстури прийнято.
+  // Без переліку боргу: функція множини боргом не буває (рішення 8 плану
+  // промоції 2b), тож її форму звітує саме `scope.set-function-signature`.
   const buildScoped = async (sql?: string) =>
     await compile(
-      await acceptDebt(
-        metaFiles({
-          "project.meta.json": scopedProject(),
-          "catalogs/Organization/Organization.meta.json": organization(),
-          [FUNCTIONS]: sql ?? create("unrelated()"),
-        })
-      )
+      metaFiles({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        [FUNCTIONS]: sql ?? create("unrelated()"),
+      })
     )
 
   it("missing set functions", async () => {

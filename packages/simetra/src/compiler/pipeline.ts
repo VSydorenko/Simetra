@@ -68,7 +68,7 @@ export async function runStages(
     ...checkSqlModules(stage1.objects, sql.units, sql.rowRules),
     ...(stage1.sqlDebt === undefined
       ? []
-      : checkDebt(sql.units, stage1.objects, stage1.sqlDebt)),
+      : checkDebt(sql.units, stage1.objects, stage1.project, stage1.sqlDebt)),
     ...(embedded?.diagnostics ?? []),
   ]
   if (
