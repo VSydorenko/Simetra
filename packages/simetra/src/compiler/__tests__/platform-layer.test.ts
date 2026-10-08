@@ -115,6 +115,7 @@ describe("platform layer", () => {
     expect(schemaGrants).toEqual([
       "GRANT USAGE ON SCHEMA simetra TO anon;",
       "GRANT USAGE ON SCHEMA simetra TO authenticated;",
+      "GRANT USAGE ON SCHEMA simetra TO service_role;",
       "REVOKE ALL ON SCHEMA simetra FROM PUBLIC;",
     ])
   })
@@ -150,9 +151,10 @@ describe("platform layer", () => {
     expect(executable).toEqual([
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO anon;",
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO service_role;",
     ])
     // Типові привілеї провайдера теж відкликано: провізію не виконує жодна
-    // роль API, функцію сесії — лише ролі запитів.
+    // роль API, функцію сесії — кожна роль API (сервісна отримує `NULL`).
     const revokedFrom = (identity: string) =>
       platformUnits(model)
         .filter(
@@ -171,7 +173,7 @@ describe("platform layer", () => {
       "authenticated",
       "service_role",
     ])
-    expect(revokedFrom(CURRENT_USER)).toEqual(["PUBLIC", "service_role"])
+    expect(revokedFrom(CURRENT_USER)).toEqual(["PUBLIC"])
   })
 
   it("current_user_id reads sub of the claims and skips invalid users", async () => {
@@ -254,7 +256,7 @@ describe("platform layer", () => {
     expect(removed).toContain("SET invalid = true")
   })
 
-  it("triggers on the account table: signup, delete and soft delete", async () => {
+  it("triggers on the account table: signup, anonymous conversion, delete and soft delete", async () => {
     const model = await withUsers()
     const triggers = platformUnits(model)
       .filter((u) => u.class === "trigger")
@@ -263,6 +265,7 @@ describe("platform layer", () => {
     expect(triggers).toEqual([
       "CREATE TRIGGER simetra_invalidate_user AFTER DELETE ON auth.users FOR EACH ROW EXECUTE FUNCTION simetra.on_auth_user_removed();",
       "CREATE TRIGGER simetra_invalidate_user_soft_delete AFTER UPDATE OF deleted_at ON auth.users FOR EACH ROW WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL) EXECUTE FUNCTION simetra.on_auth_user_removed();",
+      "CREATE TRIGGER simetra_provision_converted_user AFTER UPDATE OF is_anonymous ON auth.users FOR EACH ROW WHEN (OLD.is_anonymous IS TRUE AND NEW.is_anonymous IS NOT TRUE) EXECUTE FUNCTION simetra.on_auth_user_created();",
       "CREATE TRIGGER simetra_provision_user AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION simetra.on_auth_user_created();",
     ])
   })
@@ -303,6 +306,36 @@ describe("platform layer", () => {
     }
     // Без ознак анонімності й м'якого видалення — немає ні перевірки, ні тригера.
     expect(units.filter((u) => u.class === "trigger")).toHaveLength(2)
+  })
+
+  it("anonymous conversion trigger comes from the anonymity column of the source", async () => {
+    // Конвертація анонімного входу — UPDATE того самого рядка, а не INSERT:
+    // без цього тригера постійний користувач лишився б без провізії.
+    const parse = await loadSqlParser()
+    const model = await withUsers()
+    const units = buildPlatformUnits(
+      {
+        objects: model.objects,
+        physical: model.physical,
+        contracts: model.contracts,
+        project: model.project,
+      },
+      parse,
+      {
+        table: { schema: "idp", name: "accounts" },
+        keyColumn: "account_id",
+        nameSources: [{ column: "nickname" }],
+        anonymousColumn: "guest",
+        providerKey: "other-idp",
+      }
+    )
+    expect(
+      units
+        .filter((u) => u.class === "trigger" && u.sql.includes("AFTER UPDATE"))
+        .map((u) => u.sql)
+    ).toEqual([
+      "CREATE TRIGGER simetra_provision_converted_user AFTER UPDATE OF guest ON idp.accounts FOR EACH ROW WHEN (OLD.guest IS TRUE AND NEW.guest IS NOT TRUE) EXECUTE FUNCTION simetra.on_auth_user_created();",
+    ])
   })
 
   it("the users catalog explains the layer", async () => {

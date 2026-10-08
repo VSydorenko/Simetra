@@ -176,6 +176,33 @@ describe("membership in Postgres", () => {
     })
   })
 
+  it("service_role gets no member instead of a permission error", async () => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const alice = await signUp(client)
+      const org = await organization(client)
+      await member(client, org, alice)
+      const service = { role: "service_role" }
+      expect(
+        await queryAs<{ m: string | null }>(
+          client,
+          "service_role",
+          service,
+          "SELECT public.org_member_my_member($1) AS m",
+          [org]
+        )
+      ).toEqual({ rows: [{ m: null }] })
+      expect(
+        await queryAs(
+          client,
+          "service_role",
+          service,
+          "SELECT s FROM public.org_member_member_scopes() AS s"
+        )
+      ).toEqual({ rows: [] })
+    })
+  })
+
   it("anon may execute neither function", async () => {
     await withRollback(async (client) => {
       await deploy(client)

@@ -61,8 +61,11 @@ export async function withRollback<T>(
   }
 }
 
-/** Роль запиту API: від неї PostgREST виконує запит користувача. */
-export type ApiRole = "authenticated" | "anon"
+/**
+ * Роль запиту API: від неї PostgREST виконує запит користувача чи сервісного
+ * ключа.
+ */
+export type ApiRole = "authenticated" | "anon" | "service_role"
 
 /**
  * Перемикає транзакцію на роль API з claims запиту, як це робить PostgREST:

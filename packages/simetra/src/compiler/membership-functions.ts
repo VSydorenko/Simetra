@@ -28,8 +28,12 @@ const CURRENT_USER = `(SELECT ${quoteIdent(PLATFORM_SCHEMA)}.current_user_id())`
 const MY_MEMBER_LABEL = "my_member"
 const MEMBER_SCOPES_LABEL = "member_scopes"
 
-/** Роль API, якій відкрито виконання функцій членства (спека користувачів §8). */
-const MEMBER_ROLE = "authenticated"
+/**
+ * Ролі API, яким відкрито виконання функцій членства (спека користувачів §8):
+ * сервісна сесії не має й отримує порожній результат замість помилки доступу;
+ * анонімна — помилку.
+ */
+const MEMBER_ROLES = ["authenticated", "service_role"] as const
 
 /**
  * Імена функцій членства — спільні для генератора, контракту й перевірки
@@ -124,7 +128,7 @@ export function membershipsOf(
  * STABLE SECURITY DEFINER SET search_path = ''`: функцію множини викликає
  * політика RLS над таблицею з RLS, тож виклик від імені запиту зациклив би
  * політику, а порожній `search_path` не лишає простору для підміни імен.
- * Виконання — лише `authenticated`: дефолт Postgres дає його `PUBLIC`, а
+ * Виконання — лише `authenticated` і сервісній ролі: дефолт Postgres дає його `PUBLIC`, а
  * провайдер — своїм ролям типовими привілеями схеми (`executeGrants`).
  */
 export function buildMembershipFunctions(
@@ -162,7 +166,7 @@ export function buildMembershipFunctions(
         owned(sql, fn.schema),
         ...executeGrants(
           signature,
-          [MEMBER_ROLE],
+          MEMBER_ROLES,
           project.database.provider
         ).map((grant) => owned(grant, fn.schema))
       )

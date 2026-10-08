@@ -20,10 +20,11 @@ import { IDENTITIES_TABLE } from "./identities"
 /**
  * Ролі запитів API: функцію сесії в політиці виконує роль запиту, тож їм
  * потрібні `USAGE` схеми й `EXECUTE` функції поточного користувача (спека
- * користувачів §3). Схему від PostgREST ховає конфіг провайдера, а не
- * відсутність `USAGE`.
+ * користувачів §3). Сервісна роль сесії не має й отримує `NULL`, а не помилку
+ * доступу. Схему від PostgREST ховає конфіг провайдера, а не відсутність
+ * `USAGE`; таблиці схеми закриті відсутністю грантів.
  */
-const SESSION_ROLES = ["authenticated", "anon"] as const
+const SESSION_ROLES = ["authenticated", "anon", "service_role"] as const
 
 const IDENTITIES: QualifiedName = {
   schema: PLATFORM_SCHEMA,
@@ -39,6 +40,7 @@ const ON_REMOVED = fn("on_auth_user_removed")
 /** Тригери шару на таблиці облікових записів провайдера. */
 const TRIGGERS = {
   provision: "simetra_provision_user",
+  provisionConverted: "simetra_provision_converted_user",
   invalidate: "simetra_invalidate_user",
   invalidateSoftDelete: "simetra_invalidate_user_soft_delete",
 } as const
@@ -71,7 +73,7 @@ export interface PlatformLayerInput {
  * кваліфікованими іменами: тригер провайдера спрацьовує від ролі сервісу
  * автентифікації без прав на `simetra` і схеми застосунку, а функцію сесії
  * кличе роль запиту. `EXECUTE` від `PUBLIC` і ролей провайдера відкликано на
- * кожній; явно його має лише функція поточного користувача. Функції —
+ * кожній; явно його має лише функція поточного користувача — кожна роль API. Функції —
  * plpgsql: тіла Postgres при створенні не перевіряє, а порядок дають явні
  * ребра `requires`.
  *
@@ -205,7 +207,7 @@ function provisionFunction(users: UsersContract): string {
 }
 
 /**
- * Тригерна функція реєстрації: анонімний вхід не провізується, а
+ * Тригерна функція реєстрації й конвертації: анонімний вхід не провізується, а
  * найменування — перше непорожнє джерело провайдера або нейтральне
  * `user <початок ключа>`, тож ніколи не `NULL` і не порожнє.
  */
@@ -262,17 +264,33 @@ function onRemovedFunction(
   ])
 }
 
-/** Реєстрація, видалення й м'яке видалення облікового запису. */
+/**
+ * Реєстрація, конвертація анонімного входу, видалення й м'яке видалення
+ * облікового запису. Конвертація — UPDATE того самого рядка, тож провізує її
+ * окремий тригер тією самою ідемпотентною функцією: джерела найменування
+ * читаються на момент конвертації.
+ */
 function triggers(source: IdentitySource): string[] {
   const table = qualified(source.table)
   const execute = (name: QualifiedName) =>
     `FOR EACH ROW EXECUTE FUNCTION ${qualified(name)}();`
+  const anonymous =
+    source.anonymousColumn === undefined
+      ? undefined
+      : quoteIdent(source.anonymousColumn)
   const deletedAt =
     source.deletedAtColumn === undefined
       ? undefined
       : quoteIdent(source.deletedAtColumn)
   return [
     `CREATE TRIGGER ${TRIGGERS.provision} AFTER INSERT ON ${table} ${execute(ON_CREATED)}`,
+    ...(anonymous === undefined
+      ? []
+      : [
+          `CREATE TRIGGER ${TRIGGERS.provisionConverted} AFTER UPDATE OF ${anonymous} ON ${table} ` +
+            `FOR EACH ROW WHEN (OLD.${anonymous} IS TRUE AND NEW.${anonymous} IS NOT TRUE) ` +
+            `EXECUTE FUNCTION ${qualified(ON_CREATED)}();`,
+        ]),
     `CREATE TRIGGER ${TRIGGERS.invalidate} AFTER DELETE ON ${table} ${execute(ON_REMOVED)}`,
     ...(deletedAt === undefined
       ? []

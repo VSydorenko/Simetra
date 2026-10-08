@@ -134,23 +134,24 @@ describe("membership", () => {
     )
   })
 
-  it("generated membership functions revoke PUBLIC and provider roles and grant only authenticated", async () => {
+  it("generated membership functions revoke PUBLIC and anon and grant authenticated and service_role", async () => {
     const model = await compileOk(files())
     // Гранти самого членства: платформний шар «Користувачів» має власні.
     const grants = model.sqlUnits
       .filter((u) => u.class === "grant" && u.ownerObjectId === uuid(81))
       .map((u) => u.sql)
-    // `PUBLIC` — дефолт Postgres, `anon` і `service_role` — типові привілеї
-    // схеми провайдера: `REVOKE … FROM PUBLIC` їх не знімає.
+    // `PUBLIC` — дефолт Postgres, `anon` — типові привілеї схеми
+    // провайдера: `REVOKE … FROM PUBLIC` їх не знімає. Сервісна роль виконує
+    // функції й отримує порожній результат замість помилки доступу.
     expect(grants.sort()).toEqual([
       "GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO service_role;",
       "GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO service_role;",
       "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM PUBLIC;",
       "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM anon;",
-      "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM service_role;",
       "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM PUBLIC;",
       "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM anon;",
-      "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM service_role;",
     ])
     // REVOKE раніше за GRANT, функція — раніше за обидва, таблиця — раніше за функцію.
     const order = model.creationOrder.map((n) =>

@@ -177,6 +177,48 @@ describe("platform users layer in Postgres", () => {
     })
   })
 
+  it("converting an anonymous account provisions the user once", async () => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const id = await signUp(client, { email: null, anonymous: true })
+      const currentUser = () =>
+        queryAs<{ u: string | null }>(
+          client,
+          "authenticated",
+          authenticated(id),
+          "SELECT simetra.current_user_id() AS u"
+        )
+      expect(await users(client, id)).toEqual([])
+      expect(await currentUser()).toEqual({ rows: [{ u: null }] })
+      // Конвертація — UPDATE того самого рядка: сервіс автентифікації не
+      // вставляє новий обліковий запис.
+      await client.query(
+        "UPDATE auth.users SET is_anonymous = false, email = 'kit@example.test' WHERE id = $1",
+        [id]
+      )
+      expect(await identities(client, id)).toEqual([
+        { provider: "supabase", subject: id, user_id: id },
+      ])
+      expect((await users(client, id)).map((u) => u.description)).toEqual([
+        "kit@example.test",
+      ])
+      expect(await currentUser()).toEqual({ rows: [{ u: id }] })
+      const before = [
+        await count(client, "public.users"),
+        await count(client, "simetra.identities"),
+      ]
+      await client.query(
+        "UPDATE auth.users SET is_anonymous = false, email = 'kit2@example.test' WHERE id = $1",
+        [id]
+      )
+      expect([
+        await count(client, "public.users"),
+        await count(client, "simetra.identities"),
+      ]).toEqual(before)
+      expect(await identities(client, id)).toHaveLength(1)
+    })
+  })
+
   it("phone signup gets a neutral display name", async () => {
     await withRollback(async (client) => {
       await deploy(client)
@@ -255,6 +297,32 @@ describe("platform users layer in Postgres", () => {
         "SELECT simetra.current_user_id() AS u"
       )
       expect(result).toEqual({ rows: [{ u: expected === "id" ? id : null }] })
+    })
+  })
+
+  it("service_role gets NULL from current_user_id and cannot read identities", async () => {
+    // Сервісний ключ сесії не має: функція сесії в політиці чи RPC дає `NULL`,
+    // а не помилку доступу, але таблиці схеми лишаються закритими.
+    await withRollback(async (client) => {
+      await deploy(client)
+      await signUp(client)
+      const service = { role: "service_role" }
+      expect(
+        await queryAs<{ u: string | null }>(
+          client,
+          "service_role",
+          service,
+          "SELECT simetra.current_user_id() AS u"
+        )
+      ).toEqual({ rows: [{ u: null }] })
+      expect(
+        await queryAs(
+          client,
+          "service_role",
+          service,
+          "SELECT * FROM simetra.identities"
+        )
+      ).toEqual({ code: "42501" })
     })
   })
 
