@@ -851,7 +851,7 @@ function predefinedContracts(
           )
         })
       ).keys.map((key) => must("column" in key ? key.column : undefined))
-      // Ключ — щонайбільше носій скоупу й мітка (`uniqueWithin`, стадія 3).
+      // Ключ — щонайбільше носій скоупу й мітка (`uniqueCarrier`, стадія 3).
       const scopeColumn = keys.length > 1 ? keys[0] : undefined
       return [
         {

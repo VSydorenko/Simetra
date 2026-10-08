@@ -567,7 +567,7 @@
             ]
           },
           "pattern": {
-            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
             "type": "string",
             "minLength": 1
           },
@@ -938,7 +938,7 @@
                   ]
                 },
                 "pattern": {
-                  "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+                  "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
                   "type": "string",
                   "minLength": 1
                 },

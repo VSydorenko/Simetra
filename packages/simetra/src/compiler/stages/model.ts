@@ -1687,6 +1687,11 @@ function withinColumnsOf(
 function addField(table: PendingTable, field: Field): string[] {
   const suffix = field.array ? "[]" : ""
   const { target } = field
+  // Пара отримує типове значення лише як `{ "empty": true }` масиву ('{}'),
+  // а воно однаково годиться обом колонкам: порожній масив міток і порожній
+  // масив id (спека промоції §9.2: `empty` — для масиву будь-якого типу).
+  const pairDefault =
+    field.default !== undefined ? { default: field.default } : {}
   const columns: PhysicalColumn[] =
     target.form === "pair"
       ? [
@@ -1697,12 +1702,14 @@ function addField(table: PendingTable, field: Field): string[] {
             // колляції бази (момент проведення порівнює `recorder_type`).
             collation: { name: "C" },
             notNull: field.notNull,
+            ...pairDefault,
             origin: field.origin,
           },
           {
             name: `${field.name}_id`,
             type: `uuid${suffix}`,
             notNull: field.notNull,
+            ...pairDefault,
             origin: field.origin,
           },
         ]

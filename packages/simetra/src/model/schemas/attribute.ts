@@ -65,7 +65,7 @@ const attributeShape = {
   }),
   pattern: z.string().min(1).optional().meta({
     description:
-      "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b or \\B; scalar String or Text only.",
+      "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
   }),
   minLength: z.number().int().positive().optional().meta({
     description:

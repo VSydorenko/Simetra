@@ -842,6 +842,31 @@ describe("stage 3: physical snapshot", () => {
     ).toBe("(now() AT TIME ZONE 'Europe/Kyiv')::date")
   })
 
+  it("empty default on a polymorphic Ref array gives '{}' on both pair columns", async () => {
+    const physical = await compileWith({
+      "catalogs/Contract/Contract.meta.json": catalog("Contract"),
+      "catalogs/Counterparty/Counterparty.meta.json": catalog("Counterparty"),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        attributes: [
+          attribute("links", {
+            type: "Ref",
+            array: true,
+            allowedTypes: [
+              { kind: "Catalog", name: "Contract" },
+              { kind: "Catalog", name: "Counterparty" },
+            ],
+            defaultValue: { empty: true },
+          }),
+        ],
+      }),
+    })
+    const item = tableOf(physical, "item")
+    expect(item.columns.filter((c) => c.name.startsWith("links_"))).toEqual([
+      expect.objectContaining({ name: "links_type", default: "'{}'" }),
+      expect.objectContaining({ name: "links_id", default: "'{}'" }),
+    ])
+  })
+
   it("enumeration default becomes its label in DEFAULT for attributes and constants", async () => {
     const status = { kind: "Enumeration", name: "Status" }
     const physical = await compileWith({

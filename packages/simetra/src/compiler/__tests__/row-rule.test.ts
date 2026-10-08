@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { canonicalSnapshot, compile } from "simetra/compiler"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import {
   acceptDebt,
@@ -63,6 +63,29 @@ describe("row rule of a kind module", () => {
       origin: { rowRule: { file: SALE_SQL } },
     })
     expect(model.sqlUnits.filter((u) => u.file === SALE_SQL)).toEqual([])
+  })
+
+  it("the hash snapshot keeps the row-rule origin without the file path", async () => {
+    // Спека П2 §8.3: канонічна форма без шляхів файлів; шлях лишається в
+    // знімку для `explain`.
+    const result = await compile(
+      files({ [SALE_SQL]: rule("num_nonnulls(buyer_id, seller_id) <= 1") })
+    )
+    const { physical } = canonicalSnapshot(result.model!) as {
+      physical: PhysicalSnapshot
+    }
+    expect(
+      tableOf(physical, "sale").checks.find((c) => c.name === "sale_rule")
+    ).toEqual({
+      name: "sale_rule",
+      expression: "num_nonnulls(buyer_id, seller_id) <= 1",
+      origin: { rowRule: {} },
+    })
+    expect(
+      tableOf(result.model!.physical, "sale").checks.find(
+        (c) => c.name === "sale_rule"
+      )?.origin
+    ).toEqual({ rowRule: { file: SALE_SQL } })
   })
 
   it("the whole grammar is accepted in its canonical text", async () => {

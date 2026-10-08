@@ -95,7 +95,8 @@ type FileReferences = ReadonlyMap<string, readonly ResolvedReference[]>
 /**
  * Знімок моделі для хешу (спека П2 §8.3): усе, що визначає БД і контракти
  * наступних шарів, і нічого, що залежить від розкладки файлів чи
- * форматування. Поза знімком: шляхи файлів (`file`, `moduleFiles`, `$schema`),
+ * форматування. Поза знімком: шляхи файлів (`file`, `moduleFiles`, `$schema`,
+ * файл правила рядка в `origin` CHECK-а),
  * діагностики, сирий текст і рядки SQL-одиниць (хешується дерево розбору без
  * позицій; межу хешу див. `withoutLocations`),
  * індекс посилань (його зміст уже в `data` як id). Посилання — і MetadataRef,
@@ -164,7 +165,7 @@ export function canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown {
         onRootDelete: kind.onRootDelete,
       }
     }),
-    physical: model.physical,
+    physical: withoutRowRuleFiles(model.physical),
     sqlUnits: model.sqlUnits.map((unit) => ({
       class: unit.class,
       identity: unit.identity,
@@ -178,6 +179,23 @@ export function canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown {
     actions: model.actions,
     presentation: model.presentation,
     modules: model.modules,
+  }
+}
+
+/**
+ * Фізичний знімок без файлу правила рядка: сам факт «це правило рядка»
+ * лишається, бо `explain` відрізняє його від похідного CHECK, а шлях — ні,
+ * бо хеш не залежить від розкладки файлів.
+ */
+function withoutRowRuleFiles(physical: CompiledModel["physical"]): unknown {
+  return {
+    ...physical,
+    tables: physical.tables.map((table) => ({
+      ...table,
+      checks: table.checks.map(({ origin, ...check }) =>
+        origin === undefined ? check : { ...check, origin: { rowRule: {} } }
+      ),
+    })),
   }
 }
 

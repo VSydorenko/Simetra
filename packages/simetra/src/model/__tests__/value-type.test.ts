@@ -413,6 +413,13 @@ describe("attribute value checks", () => {
     ["\\k<a>", "named backreference"],
     ["\\bword\\b", "word boundary"],
     ["[a-z]+(?<n>x)", "named group after a class"],
+    ["(?i:a)", "inline modifier group"],
+    ["(?-i:a)", "inline modifier removal"],
+    ["(?i)a", "embedded option"],
+    ["\\u{41}", "code-point escape"],
+    ["[\\u{41}]", "code-point escape in a class"],
+    ["\\x41", "hex escape"],
+    ["[\\x41-\\x5A]", "hex escape in a class"],
   ])("pattern %s is rejected (%s)", (pattern) => {
     expect(issues({ type: "String", length: 5, pattern })).toEqual([
       "type.pattern-invalid",
@@ -422,5 +429,12 @@ describe("attribute value checks", () => {
   it("an escaped backslash or a class does not trip the divergence scan", () => {
     expect(issues({ type: "Text", pattern: "^\\\\p\\d$" })).toEqual([])
     expect(issues({ type: "Text", pattern: "[(?<a]" })).toEqual([])
+    expect(issues({ type: "Text", pattern: "[(?i]" })).toEqual([])
+    expect(issues({ type: "Text", pattern: "\\\\x\\\\u" })).toEqual([])
+  })
+
+  it("lookaround and non-capturing groups pass the divergence scan", () => {
+    expect(issues({ type: "Text", pattern: "(?:a)(?=b)(?!c)" })).toEqual([])
+    expect(issues({ type: "Text", pattern: "\\u0041" })).toEqual([])
   })
 })

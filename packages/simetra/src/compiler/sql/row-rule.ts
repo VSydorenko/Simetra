@@ -30,7 +30,7 @@ type AConst = Extract<Node, { A_Const: unknown }>["A_Const"]
  * рамка не перевіряє. `columns` — фізичне ім'я колонки → її тип знімка;
  * повертає назву забороненої конструкції.
  */
-export function rowRuleProblem(
+function rowRuleProblem(
   expr: Node,
   columns: ReadonlyMap<string, string>
 ): string | undefined {

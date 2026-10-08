@@ -472,9 +472,12 @@ const NUMERIC_BOUND_TYPES: readonly LogicalType[] = [
  * Конструкції JS-виразу, яких регулярні вирази Postgres (POSIX ARE) не знають
  * або читають інакше: іменовані групи, `\p{…}`/`\P{…}`, `\k<…>`, а також
  * `\b`/`\B` (в ARE це символ повернення й синонім скісної риски, межа слова
- * — `\y`). Ці вирази `new RegExp` приймає, а CHECK на розгортанні впав би.
- * Розбір по символах, щоб екранована скісна риска й клас `[...]` не давали
- * хибних спрацювань.
+ * — `\y`), групи-модифікатори `(?i:…)`/`(?-i:…)` (ARE їх не знає),
+ * `\u{…}` (в ARE `\u` — рівно чотири цифри) і `\xHH` (ARE поглинає всі
+ * наступні шістнадцяткові цифри, тож `\x41B` там — інший символ, ніж у JS).
+ * Ці вирази `new RegExp` приймає, а CHECK на розгортанні впав би або
+ * перевіряв би інше. Розбір по символах, щоб екранована скісна риска й клас
+ * `[...]` не давали хибних спрацювань.
  */
 function usesJsOnlyRegexSyntax(pattern: string): boolean {
   let inClass = false
@@ -482,21 +485,22 @@ function usesJsOnlyRegexSyntax(pattern: string): boolean {
     const char = pattern[i]!
     if (char === "\\") {
       const next = pattern[i + 1]
-      if (next === "p" || next === "P" || next === "k") return true
+      if (next === "p" || next === "P" || next === "k" || next === "x")
+        return true
+      if (next === "u" && pattern[i + 2] === "{") return true
       if (!inClass && (next === "b" || next === "B")) return true
       i++
     } else if (inClass) {
       if (char === "]") inClass = false
     } else if (char === "[") {
       inClass = true
-    } else if (
-      char === "(" &&
-      pattern[i + 1] === "?" &&
-      pattern[i + 2] === "<" &&
-      pattern[i + 3] !== "=" &&
-      pattern[i + 3] !== "!"
-    ) {
-      return true
+    } else if (char === "(" && pattern[i + 1] === "?") {
+      const mark = pattern[i + 2]
+      // Іменована група `(?<name>`, але не огляд назад `(?<=`/`(?<!`.
+      if (mark === "<" && pattern[i + 3] !== "=" && pattern[i + 3] !== "!")
+        return true
+      // Модифікатор: `(?` з літерою прапорця або `-`.
+      if (mark !== undefined && /[a-zA-Z-]/.test(mark)) return true
     }
   }
   return false
