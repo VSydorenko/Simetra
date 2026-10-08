@@ -50,7 +50,8 @@ Realtime) — П3; адаптери інших провайдерів ідент
 `users.provision-unsafe` для правил рядка (зараз будь-яке правило рядка в
 модулі «Користувачів» заборонене, бо статично не доводиться; пізніше можна
 дозволити правило, що стосується лише колонок застосунку з безпечними
-значеннями заповнення).
+значеннями заповнення); прийом з нуля бази, яку розгорнула Simetra — див.
+спеку користувачів §12.
 
 ## Global Constraints
 
@@ -518,7 +519,7 @@ git commit -m "feat(model): авторство trackAuthor — createdBy і upda
     рішенням 7; кожна одиниця розбирається `parse` у `tree` (обов'язкове
     поле `SqlUnit`, як у `buildMovementFunctions`). Окрім двох функцій —
     одиниці `grant`: `REVOKE EXECUTE … FROM PUBLIC` на обидві й `GRANT EXECUTE
-    … TO authenticated` (платформна спека §6.7: дефолт — `REVOKE ALL`;
+    … TO authenticated, service_role` (платформна спека §6.7: дефолт — `REVOKE ALL`;
     функцію множини викликає політика від ролі запиту).
   - `Contracts.membership: { objectId; scopeKindId; table: QualifiedName; scopeColumn; userColumn; myMemberFunction: QualifiedName; setFunction?: QualifiedName }[]`.
   - Правила: `membership.not-scoped`, `membership.user-not-users-ref`
@@ -540,7 +541,7 @@ it("membership derives a NULLS DISTINCT unique key and two generated functions",
   expect(body).toContain("(SELECT simetra.current_user_id())")
   expect(body).toContain("IS NOT NULL")
 })
-it("generated membership functions revoke PUBLIC and grant only authenticated", …)   // одиниці grant з REVOKE … FROM PUBLIC і GRANT … TO authenticated
+it("generated membership functions revoke PUBLIC and grant authenticated and service_role", …)   // одиниці grant з REVOKE … FROM PUBLIC і GRANT … TO authenticated, service_role
 it("scope kind with setFunction membership uses the generated set function", …)   // CompiledScopeKind.setFunction = app.org_member_member_scopes
 it.each([["unscoped", "membership.not-scoped"], ["user attribute is an array", "membership.user-not-users-ref"],
          ["two membership catalogs of one scope kind", "membership.duplicate"],

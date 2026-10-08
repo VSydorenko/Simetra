@@ -36,7 +36,7 @@ are served by `simetra mcp` with the same input.
    `--schemas` (MCP: `schemas`); the first schema becomes the project's default
    schema. In an existing project the scope is the schemas of its metadata plus
    any named with `--schemas`. Provider schemas (`auth`, `storage`, …) are not
-   introspected. The project file is never rewritten: a `--project-name` or
+   introspected, and naming the platform's own schema `simetra` is refused. The project file is never rewritten: a `--project-name` or
    `--attribute-case` that differs from it is an error, not a silent override.
    A new project records its database provider explicitly (MCP:
    `project.database.provider`, CLI: `--database-provider`; the default is

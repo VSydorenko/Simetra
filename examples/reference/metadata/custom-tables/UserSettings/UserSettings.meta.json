@@ -62,15 +62,14 @@
         "userId"
       ],
       "references": {
-        "external": {
-          "schema": "auth",
-          "table": "users",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "onDelete": "cascade"
+        "object": {
+          "kind": "Catalog",
+          "name": "Users"
+        },
+        "columns": [
+          "ref"
+        ]
+      }
     }
   ],
   "scopeColumn": "userId",
