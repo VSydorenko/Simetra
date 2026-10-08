@@ -98,11 +98,12 @@ not express through metadata (CustomTable and PgEnum modules, shared
 
 - The list is a ratchet and only shrinks. `introspect` is the only writer and
   derives it from the database; `fix` only removes stale entries; `compile`
-  fails with `sql.debt-grows` on a debt unit that is not listed. Without that,
-  verbatim SQL would grow back unnoticed.
+  fails with `sql.debt-grows` on a debt unit that is not listed and with
+  `sql.debt-stale` on an entry that is no longer debt. Without that, verbatim
+  SQL would grow back unnoticed.
 - Never edit the list by hand to get a green compile. Replace the statement
   with a property, an `EventSubscription` or a closed-shell function (see
-  `simetra-metadata`); the entry disappears on the next `fix`.
+  `simetra-metadata`), then run `fix`: it removes the entry that became stale.
 - A project that already has a `sql/` folder but no list is seeded by running
   `introspect` again on the same directory.
 

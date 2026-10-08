@@ -2,6 +2,13 @@ import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import {
+  addElement,
+  addElementInput,
+  applyChanges,
+  createObject,
+  createObjectInput,
+} from "simetra/compiler"
 import { mcpInputSchema } from "../mcp/tools"
 import { TOOLS, toolByName } from "../tools/catalog"
 
@@ -54,6 +61,42 @@ describe("simetra-adoption skill", () => {
 describe("simetra-metadata skill", () => {
   it("every tool of the catalog is routed in the skill", () => {
     for (const t of TOOLS) expect(skill).toContain(`\`${t.name}\``)
+  })
+
+  it("the create example and the add examples on it compile", async () => {
+    // Приклад копіюють агенти-споживачі: розбору входу замало, результат
+    // мусить пройти компіляцію (зарезервоване ім'я, тип, властивість).
+    const examples = (tool: string) =>
+      [
+        ...skill.matchAll(
+          new RegExp(`\`\`\`json simetra:${tool}\n([\\s\\S]*?)\`\`\``, "g")
+        ),
+      ].map(([, body]) => JSON.parse(body!) as unknown)
+    const o = {
+      schemaPath: () => "schema.json",
+      newId: () => crypto.randomUUID(),
+    }
+    let files = new Map([
+      [
+        "project.meta.json",
+        JSON.stringify({ name: "Demo", database: { provider: "supabase" } }),
+      ],
+    ])
+    const [create] = examples("create")
+    const created = await createObject(
+      files,
+      createObjectInput.parse(create),
+      o
+    )
+    expect(created.diagnostics).toEqual([])
+    files = applyChanges(files, created.changes)
+    const adds = examples("add")
+    expect(adds.length).toBeGreaterThan(0)
+    for (const add of adds) {
+      const result = await addElement(files, addElementInput.parse(add), o)
+      expect(result.diagnostics, JSON.stringify(add)).toEqual([])
+      files = applyChanges(files, result.changes)
+    }
   })
 
   it("the package ships the skills folder", () => {

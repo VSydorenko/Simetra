@@ -130,19 +130,22 @@ offending field (for example `target.kind`); nothing is written.
 ## Declare, don't write SQL
 
 A rule the platform can derive is a property in the metadata, not a statement
-in a `.sql` file. The schemas in `node_modules/simetra/schemas/` list every
-property; these are the ones that replace hand-written SQL.
+in a `.sql` file. The schemas in `node_modules/simetra/schemas/` describe each
+property; some that replace hand-written SQL are listed below.
 
-Attribute properties (an element of `attributes`; scalar attributes only):
+Attribute properties (an element of `attributes`):
 
-- `defaultValue`: `{ "fill": "now" | "today" | "newUuid" }` or
-  `{ "empty": true | "object" | "array" }`.
-- `unique`: `true` or `"ignoreCase"`. `uniqueWithin`: `"owner"` or `"parent"`,
+- `defaultValue`: `{ "fill": "now" | "today" | "newUuid" }` on a scalar of the
+  matching type, `{ "empty": true }` on an array (`"array": true`), or
+  `{ "empty": "object" | "array" }` on a scalar `Json`.
+- `unique`: `true`, or `"ignoreCase"` on a scalar String or Text. `uniqueWithin`: `"owner"` or `"parent"`,
   only on a catalog's own attributes and only when the catalog has owners or a
   hierarchy.
-- Numbers: `nonNegative`, `positive`, `minValue`, `maxValue`.
-- Strings and text: `minLength`, `pattern`. The pattern must stay in the
-  POSIX-compatible subset: no named groups, `\p{}`, `\k<>` or `\b`.
+- Numbers (scalar only): `nonNegative`, `positive`, `minValue`, `maxValue`.
+- Strings and text (scalar only): `minLength`, `pattern`. The pattern must
+  mean the same in JavaScript and Postgres: no named groups, `\p{}`, `\k<>`,
+  `\b`, `\B`, `\x`, `\u{}` or inline flag groups such as `(?i:…)`. Write a
+  character as itself or as `\uXXXX`.
 
 Object properties:
 
@@ -159,7 +162,7 @@ An attribute with properties, added through the tool:
   "target": { "kind": "Catalog", "name": "Currency" },
   "collection": "attributes",
   "element": {
-    "name": "code",
+    "name": "isoCode",
     "type": "String",
     "length": 3,
     "unique": "ignoreCase",
@@ -187,7 +190,8 @@ The `.sql` module of an object of a 1C kind accepts only:
   overloads.
 - Row rules: `ALTER TABLE <own table> ADD CONSTRAINT <name> CHECK (<rule>)`
   within a small grammar. The constraint needs a name and must target the
-  object's own table.
+  object's own table or one of its own tabular-section tables.
+- Movement query blocks in a document module.
 
 Any other statement is rejected (`sql.statement-not-allowed`, `sql.closed-shell`,
 `sql.row-rule-grammar`, …) with a hint that names the property that replaces it.
@@ -207,7 +211,9 @@ ALTER TABLE <schema>.<own_table> ADD CONSTRAINT <rule_name> CHECK (<rule>);
 tolerates. It only shrinks:
 
 - Only `introspect` writes it, from the database. Never add an entry by hand.
-- `fix` only removes entries that no longer match anything.
+- An entry that is no longer debt (its unit is gone or now has a closed form)
+  fails `compile` with `sql.debt-stale`; `fix` removes exactly such entries
+  and never adds one. A removed entry comes back only through `introspect`.
 - A debt unit that is not in the list fails `compile` with `sql.debt-grows`.
   Express the statement as a property, an `EventSubscription` or a closed-shell
   function; moving it to another file does not make it acceptable.
