@@ -95,6 +95,8 @@ async function inTarget<T>(
 }
 
 interface Project {
+  /** Ім'я наявного проєкту; без нього — ім'я нового. */
+  name?: string
   defaultSchema: string
   attributeCase: CompiledModel["project"]["naming"]["attributeCase"]
   databaseProvider: CompiledModel["project"]["database"]["provider"]
@@ -155,14 +157,15 @@ async function expectKindLabelsKept(
 async function roundTripOf(
   target: DbConnection,
   extractScope: EngineScope,
-  project: Project
+  project: Project,
+  existing: ReadonlyMap<string, string> = new Map()
 ): Promise<RoundTrip> {
   const extracted = await engine.extract(target, extractScope)
   expect(errors(extracted.diagnostics)).toEqual([])
 
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
-    existing: new Map(),
+    existing,
     newId: () => randomUUID(),
     schemaPath,
     parse,
@@ -358,37 +361,68 @@ describe("a role of the application's own", () => {
 const tableKeys = (model: CompiledModel) =>
   model.physical.tables.map((t) => `${t.schema}.${t.name}`).sort()
 
-async function corpusRoundTrip(files: Map<string, string>) {
+/** Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. */
+async function deployedRoundTrip(
+  files: Map<string, string>,
+  existing: ReadonlyMap<string, string>
+): Promise<{ source: CompiledModel; result: RoundTrip }> {
   const original = await compile(files)
   expect(errors(original.diagnostics)).toEqual([])
   const source = original.model!
   const { scope } = await engineScope(source)
-  await inTarget(renderDesiredState(source).sql, scope, async (target) => {
-    const result = await roundTripOf(target, scope, {
-      defaultSchema: source.project.defaultSchema,
-      attributeCase: source.project.naming.attributeCase,
-      databaseProvider: source.project.database.provider,
-    })
-    // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
-    expect(tableKeys(result.model)).toEqual(tableKeys(source))
-    expect(
-      [...new Set(result.model.objects.map((o) => o.kind))].filter(
-        (kind) => kind !== "CustomTable" && kind !== "PgEnum"
+  const result = await inTarget(
+    renderDesiredState(source).sql,
+    scope,
+    (target) =>
+      roundTripOf(
+        target,
+        scope,
+        {
+          name: source.project.name,
+          defaultSchema: source.project.defaultSchema,
+          attributeCase: source.project.naming.attributeCase,
+          databaseProvider: source.project.database.provider,
+        },
+        existing
       )
-    ).toEqual([])
-    expect(result.shadow).toEqual(result.target)
-  })
+  )
+  expect(result.shadow).toEqual(result.target)
+  return { source, result }
 }
 
-describe("the E1 corpus and the reference domain survive the round trip", () => {
+const kindsOf = (model: CompiledModel) =>
+  [...new Set(model.objects.map((o) => o.kind))].sort()
+
+describe("adoption from scratch: the E1 corpus survives the round trip", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      await corpusRoundTrip(fixture())
+      const { source, result } = await deployedRoundTrip(fixture(), new Map())
+      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
+      expect(tableKeys(result.model)).toEqual(tableKeys(source))
+      expect(
+        kindsOf(result.model).filter(
+          (kind) => kind !== "CustomTable" && kind !== "PgEnum"
+        )
+      ).toEqual([])
     })
   }
+})
 
+// Референсний домен має довідник «Користувачі», тож база несе платформний
+// шар у схемі `simetra`. Прийом такої бази з нуля не визначений (спека
+// користувачів §12): свіжий introspect розклав би `simetra` у метадані
+// застосунку, а схема зарезервована. Тому домен проходить round-trip поверх
+// власної теки: шар і види 1С описані в ній, генератор їх не дублює.
+describe("over existing metadata: the reference domain survives the round trip", () => {
   it("reference domain", async () => {
-    await corpusRoundTrip(readReferenceDomain())
+    const files = readReferenceDomain()
+    const { source, result } = await deployedRoundTrip(files, files)
+    // Види 1С і платформний шар лишаються описаними власною текою
+    expect(tableKeys(result.model)).toEqual(tableKeys(source))
+    expect(kindsOf(result.model)).toEqual(kindsOf(source))
+    expect(result.model.sqlUnits.map((u) => u.identity).sort()).toEqual(
+      source.sqlUnits.map((u) => u.identity).sort()
+    )
   })
 })
 
