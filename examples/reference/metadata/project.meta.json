@@ -26,9 +26,7 @@
           "name": "Organization"
         }
       },
-      "setFunction": {
-        "name": "accessible_org_ids"
-      }
+      "setFunction": "membership"
     },
     {
       "id": "9383aa59-d1ff-4dbd-ac5f-fa115590a74a",
@@ -38,10 +36,9 @@
         "uk": "Користувач"
       },
       "root": {
-        "external": {
-          "schema": "auth",
-          "table": "users",
-          "column": "id"
+        "object": {
+          "kind": "Catalog",
+          "name": "Users"
         }
       },
       "setFunction": {

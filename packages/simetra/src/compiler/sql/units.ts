@@ -8,13 +8,14 @@ import type {
   RoleSpec,
   TypeName,
 } from "libpg-query"
-import type {
-  PhysicalSnapshot,
-  PhysicalTable,
-  SqlUnitClass,
+import {
+  type PhysicalSnapshot,
+  type PhysicalTable,
+  type SqlUnitClass,
 } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { extractMovementBlocks } from "../movement-blocks"
+import type { CreationNode } from "./dependencies"
 import type { ParsedStatement, SqlParser } from "./parse"
 
 /**
@@ -33,7 +34,7 @@ export interface SqlUnit {
    */
   schema: string
   name: string
-  /** Немає — згенерована одиниця (запит рухів). */
+  /** Немає — згенерована одиниця (запит рухів, членство, платформний шар). */
   file?: string
   /**
    * 1-базний рядок першого токена оператора у `file` — для діагностик;
@@ -57,11 +58,26 @@ export interface SqlUnit {
   registerId?: string
   documentId?: string
   source?: "query" | "constructor"
+  /**
+   * Лише згенерована одиниця: її генератор. Файлу й рядка вона не має, тож
+   * діагностика про збіг з дослівною одиницею називає її за походженням.
+   */
+  generator?: UnitGenerator
+  /**
+   * Лише згенерована одиниця: вузли, яких вимагає її тіло plpgsql. Граф
+   * порядку тіл plpgsql не читає (Postgres не перевіряє їх при створенні),
+   * тож ці ребра називає генератор, що знає тіло (спека П2 §8.3).
+   */
+  requires?: readonly CreationNode[]
 }
+
+/** Хто згенерував одиницю. */
+export type UnitGenerator = "movementQuery" | "membership" | "platformLayer"
 
 /** Обгортка запиту рухів: поля рухів обов'язкові. */
 export interface MovementQueryUnit extends SqlUnit {
   class: "movementQuery"
+  generator: "movementQuery"
   ownerObjectId: string
   queryTree: unknown
   registerId: string
@@ -123,8 +139,10 @@ export const FUNCTION_CLASSES: ReadonlySet<SqlUnitClass> = new Set([
 
 /**
  * Розбирає дослівні `.sql` на одиниці (платформна спека §6.3): гейт дозволених
- * операторів, ідентичність за класом і дублікати між файлами. Блоки запиту
- * рухів вирізано заздалегідь — це не оператори бажаного стану.
+ * операторів та ідентичність за класом. Блоки запиту рухів вирізано
+ * заздалегідь — це не оператори бажаного стану. Дублікати — окремий крок
+ * (`unitDuplicates`): компілятор шукає їх лише серед одиниць, що пройшли
+ * правила файлів застосунку, інакше відкинута одиниця дала б ще й дубль.
  */
 export function readSqlUnits(
   sources: readonly SqlSource[],
@@ -228,6 +246,15 @@ export function readSqlUnits(
       })
     }
   }
+  return { units, rowRules, diagnostics }
+}
+
+/**
+ * Дослівні одиниці з тотожною ідентичністю: першою вважається та, що раніше
+ * за файлом (порядок `readSqlUnits`) і рядком, помилку отримує кожна наступна.
+ */
+export function unitDuplicates(units: readonly VerbatimUnit[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
   const first = new Map<string, VerbatimUnit>()
   for (const unit of units) {
     const earlier = first.get(unit.identity)
@@ -237,7 +264,45 @@ export function readSqlUnits(
       diagnostics.push(duplicate(unit, `${earlier.file}:${earlier.line}`))
     }
   }
-  return { units, rowRules, diagnostics }
+  return diagnostics
+}
+
+/**
+ * Згенерована одиниця з тексту одного оператора: клас, ідентичність і дерево
+ * дає той самий `classify`, що й дослівним одиницям, тож простір
+ * ідентичностей у них спільний і дослівна копія не перекриє згенеровану
+ * мовчки. Текст будує компілятор, тож збій розбору чи недозволений оператор —
+ * дефект генератора, а не метаданих. Типи аргументів — лише вбудовані.
+ */
+export function generatedUnit(
+  sql: string,
+  schema: string,
+  parse: SqlParser
+): Pick<SqlUnit, "class" | "identity" | "schema" | "name" | "sql" | "tree"> {
+  const parsed = parse(sql)
+  const statement =
+    parsed.ok && parsed.statements.length === 1
+      ? parsed.statements[0]!.stmt
+      : undefined
+  const classified =
+    statement === undefined
+      ? undefined
+      : classify(statement, { schema, types: new Map() })
+  if (
+    statement === undefined ||
+    classified === undefined ||
+    !("class" in classified)
+  ) {
+    throw new Error(`internal: generated SQL does not form a unit: ${sql}`)
+  }
+  return {
+    class: classified.class,
+    identity: classified.identity,
+    schema: classified.schema,
+    name: classified.name,
+    sql,
+    tree: withoutLocations(statement),
+  }
 }
 
 /** Простір імен каталогу Postgres: `pg_proc`, `pg_class`, `pg_type`. */
@@ -323,10 +388,10 @@ export function pgNamespaceKeys(object: PgObject): PgName[] {
 
 /**
  * Конфлікти імен у просторах Postgres (спека П2 §8.3) над таблицями й
- * енам-типами моделі, обгортками рухів і дослівними одиницями. Тотожна
- * ідентичність — `sql.unit-duplicate`, різні класи з одним ключем —
- * `sql.namespace-conflict`. Першим вважається об'єкт моделі чи обгортка
- * (їх породжує модель), далі одиниці за файлом і рядком; помилку отримує
+ * енам-типами моделі, згенерованими й дослівними одиницями. Тотожна
+ * ідентичність будь-якого класу — `sql.unit-duplicate`, різні класи з одним
+ * ключем — `sql.namespace-conflict`. Першим вважається об'єкт моделі чи
+ * згенерована одиниця (їх породжує модель), далі одиниці за файлом і рядком; помилку отримує
  * дослівна одиниця. Збіги лише між об'єктами моделі тут не звітуються: до
  * цієї перевірки їх уже відсіяла стадія 4 (`physical.table-duplicate` для
  * таблиць і енам-типів, `physical.relation-duplicate` для явних імен
@@ -379,8 +444,19 @@ export function namespaceConflicts(
   const diagnostics: Diagnostic[] = []
   for (const holder of [...generated, ...verbatim]) {
     const reported = new Set<Holder>()
-    for (const name of holder.names) {
-      const slot = `${name.space}\0${name.key}`
+    // Тотожна ідентичність — дублікат і для класів без простору імен
+    // (тригер, грант, політика): інакше дослівна копія згенерованої одиниці
+    // мовчки стала б другим вузлом з тим самим ключем.
+    const slots = [
+      ...holder.names.map((name) => ({
+        slot: `${name.space}\0${name.key}`,
+        name,
+      })),
+      ...(holder.unit === undefined
+        ? []
+        : [{ slot: `unit\0${holder.unit.identity}`, name: undefined }]),
+    ]
+    for (const { slot, name } of slots) {
       const earlier = first.get(slot)
       if (earlier === undefined) {
         first.set(slot, holder)
@@ -390,24 +466,30 @@ export function namespaceConflicts(
       if (unit?.file === undefined || earlier === holder) continue
       if (reported.has(earlier)) continue
       reported.add(earlier)
-      diagnostics.push(
-        earlier.unit?.identity === unit.identity
-          ? diagnostic("sql.unit-duplicate", unit.file, "", {
-              identity: unit.identity,
-              line: unit.line ?? 0,
-              first:
-                earlier.unit.file === undefined
-                  ? describe(earlier.unit)
-                  : `${earlier.unit.file}:${earlier.unit.line ?? 0}`,
-            })
-          : diagnostic("sql.namespace-conflict", unit.file, "", {
-              identity: unit.identity,
-              line: unit.line ?? 0,
-              space: name.space,
-              key: name.key,
-              other: earlier.label,
-            })
-      )
+      if (earlier.unit?.identity === unit.identity) {
+        diagnostics.push(
+          diagnostic("sql.unit-duplicate", unit.file, "", {
+            identity: unit.identity,
+            line: unit.line ?? 0,
+            first:
+              earlier.unit.file === undefined
+                ? describe(earlier.unit)
+                : `${earlier.unit.file}:${earlier.unit.line ?? 0}`,
+          })
+        )
+      } else if (name !== undefined) {
+        // Слот ідентичності збігається лише за тотожної ідентичності, тож
+        // різні класи в одному просторі — завжди слот імені.
+        diagnostics.push(
+          diagnostic("sql.namespace-conflict", unit.file, "", {
+            identity: unit.identity,
+            line: unit.line ?? 0,
+            space: name.space,
+            key: name.key,
+            other: earlier.label,
+          })
+        )
+      }
     }
   }
   return diagnostics

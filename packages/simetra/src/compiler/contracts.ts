@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  PUBLIC_READ_PURPOSES,
   makeObjectName,
   postsMovements,
   truncatedPeriodExpression,
@@ -10,17 +11,29 @@ import {
   type LocalizedString,
   type NumberingSpec,
   type AttributeCase,
+  type Catalog,
   type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
   type PublicReadRole,
   type RegisterKeySpec,
+  type RequestRolePurpose,
+  type ScopeKind,
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
 import { compareStrings } from "./diagnostics"
-import { kindLabelOf, type ModelStageResult } from "./stages/model"
+import {
+  choosesMembership,
+  membershipFunctionNames,
+  membershipsOf,
+} from "./membership-functions"
+import {
+  kindLabelOf,
+  usersCatalogOf,
+  type ModelStageResult,
+} from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
 import { objectKey, type ParsedObject } from "./stages/files"
 import type { ResolvedReference } from "./stages/identity"
@@ -196,6 +209,46 @@ export interface EventSubscriptionContract {
   description?: LocalizedString
 }
 
+/**
+ * Персональні колонки таблиці (спека промоції §9.10): команда знеособлення
+ * (П4) ставить їх у `NULL`. Поліморфна пара дає обидві фізичні колонки.
+ */
+export interface PersonalDataContract {
+  objectId: string
+  table: QualifiedName
+  columns: string[]
+}
+
+/**
+ * Системний довідник «Користувачі» (спека користувачів §4): з цього контракту
+ * платформний шар будує провізію й поточного користувача. Найменування —
+ * відображуване ім'я, провізія обрізає його до `descriptionLength`.
+ */
+export interface UsersContract {
+  objectId: string
+  table: QualifiedName
+  keyColumn: "id"
+  descriptionColumn: string
+  descriptionLength: number
+  invalidColumn: "invalid"
+  userKindColumn: "user_kind"
+}
+
+/**
+ * Довідник членства виду скоупу (спека користувачів §8): П3 будує з нього
+ * політики, а функції вже згенеровано одиницями моделі.
+ */
+export interface MembershipContract {
+  objectId: string
+  scopeKindId: string
+  table: QualifiedName
+  scopeColumn: string
+  userColumn: string
+  myMemberFunction: QualifiedName
+  /** Лише коли вид скоупу обирає `setFunction: "membership"`. */
+  setFunction?: QualifiedName
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -205,12 +258,21 @@ export interface Contracts {
   predefined: PredefinedContract[]
   /** За `objectId`. */
   numbering: NumberingContract[]
-  /** За `objectId`: роль API, якій об'єкт відкриває читання. */
-  publicRead: { objectId: string; role: PublicReadRole }[]
+  /**
+   * За `objectId`: призначення ролі API, якій об'єкт відкриває читання, —
+   * лише роль запиту; ім'я ролі дає `PROVIDER_API_ROLES` провайдера.
+   */
+  publicRead: { objectId: string; purpose: RequestRolePurpose }[]
   /** За `bucket`: вид скоупу вказано id, бо ім'я виду може змінитися. */
   storageBuckets: { bucket: string; scopeKindId: string }[]
   /** За `subscriptionId`. */
   eventSubscriptions: EventSubscriptionContract[]
+  /** За `objectId`, далі за таблицею: основна й кожна ТЧ — окремі записи. */
+  personalData: PersonalDataContract[]
+  /** Немає — у проєкті немає «Користувачів», а з ними й платформного шару. */
+  users?: UsersContract
+  /** За `objectId`. */
+  membership: MembershipContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -430,7 +492,8 @@ export function derivedFunctions(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
-  wrapperName: (document: PhysicalTable, register: PhysicalTable) => string
+  wrapperName: (document: PhysicalTable, register: PhysicalTable) => string,
+  scopeKinds: readonly ScopeKind[]
 ): DerivedFunction[] {
   const result: DerivedFunction[] = []
   const add = (
@@ -446,6 +509,30 @@ export function derivedFunctions(
     if (table === undefined) continue
     for (const { label, description } of derivedFunctionLabels(object)) {
       add(object, derived(table, label), `${description} of ${object.name}`)
+    }
+    // Функції членства — згенеровані одиниці, але RPC кличе їх за іменем,
+    // тож і для них дослівна функція з тим самим іменем — колізія.
+    const { membership, scope } = object.data as {
+      membership?: unknown
+      scope?: string
+    }
+    if (membership !== undefined) {
+      const names = membershipFunctionNames(table)
+      add(
+        object,
+        names.myMember,
+        `member lookup of ${object.name}`,
+        "/membership"
+      )
+      const kind = scopeKinds.find((k) => k.name === scope)
+      if (kind !== undefined && choosesMembership(kind)) {
+        add(
+          object,
+          names.memberScopes,
+          `membership set function of ${object.name}`,
+          "/membership"
+        )
+      }
     }
   }
 
@@ -533,7 +620,14 @@ export function buildContracts(
     publicRead: objects
       .flatMap((object) => {
         const role = (object.data as { publicRead?: PublicReadRole }).publicRead
-        return role === undefined ? [] : [{ objectId: object.id ?? "", role }]
+        return role === undefined
+          ? []
+          : [
+              {
+                objectId: object.id ?? "",
+                purpose: PUBLIC_READ_PURPOSES[role],
+              },
+            ]
       })
       .sort((a, b) => compareStrings(a.objectId, b.objectId)),
     storageBuckets: project.storageBuckets
@@ -547,7 +641,118 @@ export function buildContracts(
       }))
       .sort((a, b) => compareStrings(a.bucket, b.bucket)),
     eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
+    personalData: personalDataContracts(objects, physical),
+    ...withUsers(usersContractOf(objects, physical)),
+    membership: membershipsOf(objects, physical, project).map(
+      (m): MembershipContract => ({
+        objectId: m.object.id ?? "",
+        scopeKindId: m.scopeKind.id ?? "",
+        table: { schema: m.table.schema, name: m.table.name },
+        scopeColumn: m.scopeColumn,
+        userColumn: m.userColumn,
+        myMemberFunction: m.myMember,
+        ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
+      })
+    ),
   }
+}
+
+function withUsers(users: UsersContract | undefined): {
+  users?: UsersContract
+} {
+  return users === undefined ? {} : { users }
+}
+
+/**
+ * Контракт «Користувачів» — і для блоку контрактів, і для платформного шару,
+ * що генерує провізію над тими самими колонками (одне джерело).
+ */
+export function usersContractOf(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot
+): UsersContract | undefined {
+  const users = usersCatalogOf(objects)
+  if (users === undefined) return undefined
+  const objectId = users.id ?? ""
+  const table = must(mainTableOf(physical, objectId))
+  // Фізичне ім'я найменування дає реєстр виду, а не літерал тут.
+  const description = KIND_REGISTRY[users.kind]
+    .standardColumns(users.data)
+    .find((c) => c.logicalName === "description")!
+  return {
+    objectId,
+    table: { schema: table.schema, name: table.name },
+    keyColumn: "id",
+    descriptionColumn: description.physicalName,
+    descriptionLength: (users.data as Catalog).descriptionLength,
+    invalidColumn: "invalid",
+    userKindColumn: "user_kind",
+  }
+}
+
+/**
+ * Лише таблиці, де є персональні реквізити. Колонки беремо за `elementId`
+ * реквізиту, а не за іменем: фізичні імена призначені раз і не збігаються
+ * з логічними.
+ */
+function personalDataContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot
+): PersonalDataContract[] {
+  const personal = (attributes: readonly Attribute[] | undefined) =>
+    (attributes ?? []).filter((a) => a.personalData === true)
+  const record = (
+    objectId: string,
+    table: PhysicalTable | undefined,
+    attributes: readonly Attribute[]
+  ): PersonalDataContract[] => {
+    if (table === undefined || attributes.length === 0) return []
+    const ids = new Set(attributes.map((a) => a.id))
+    const columns = table.columns
+      .filter(
+        (c) => c.origin.elementId !== undefined && ids.has(c.origin.elementId)
+      )
+      .map((c) => c.name)
+    return columns.length === 0
+      ? []
+      : [
+          {
+            objectId,
+            table: { schema: table.schema, name: table.name },
+            columns,
+          },
+        ]
+  }
+  return objects
+    .flatMap((object): PersonalDataContract[] => {
+      const objectId = object.id ?? ""
+      const data = object.data as Record<string, unknown>
+      const own = KIND_REGISTRY[object.kind].columnFields.flatMap((field) =>
+        personal(data[field] as Attribute[] | undefined)
+      )
+      const sections = (
+        (data.tabularSections ?? []) as {
+          id?: string
+          attributes: Attribute[]
+        }[]
+      ).flatMap((section) =>
+        record(
+          objectId,
+          physical.tables.find((t) => t.origin.tabularSectionId === section.id),
+          personal(section.attributes)
+        )
+      )
+      return [
+        ...record(objectId, mainTableOf(physical, objectId), own),
+        ...sections,
+      ]
+    })
+    .sort(
+      (a, b) =>
+        compareStrings(a.objectId, b.objectId) ||
+        compareStrings(a.table.schema, b.table.schema) ||
+        compareStrings(a.table.name, b.table.name)
+    )
 }
 
 /** Таблиця-джерело підписки: основна таблиця об'єкта чи таблиця провайдера. */

@@ -1,0 +1,43 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "3d077f4c-1b2d-4743-8fe7-eadd389f4e33",
+  "kind": "Catalog",
+  "name": "OrgMember",
+  "physicalName": "org_member",
+  "kindLabel": "org_member",
+  "scope": "org",
+  "title": {
+    "uk": "Учасники організацій"
+  },
+  "membership": {
+    "user": "user"
+  },
+  "attributes": [
+    {
+      "id": "82a7bd20-fca4-4843-8967-96e2c954bd30",
+      "name": "user",
+      "physicalName": "user_id",
+      "title": {
+        "uk": "Користувач"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Users"
+      }
+    },
+    {
+      "id": "2836a5f7-157c-4efc-a33f-c98186f49e8a",
+      "name": "joinedAt",
+      "physicalName": "joined_at",
+      "title": {
+        "uk": "Дата вступу"
+      },
+      "type": "DateTime",
+      "required": true,
+      "defaultValue": {
+        "fill": "now"
+      }
+    }
+  ]
+}

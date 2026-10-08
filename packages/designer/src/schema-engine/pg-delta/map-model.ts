@@ -10,6 +10,7 @@ import type {
   CatalogModel,
   CatalogTable,
   CatalogUnit,
+  FunctionVolatility,
 } from "simetra/model"
 import { mapEnumType, mapTable, type MappingIssue } from "./map-tables"
 import {
@@ -28,6 +29,8 @@ export interface MapContext {
   defaults: AclDefaults
   /** Коментар control-файлу встановленого розширення (`extension-comments`). */
   extensionComments: ReadonlyMap<string, string>
+  /** Волатильність функцій за `encodeId` (`routine-volatility`). */
+  volatility: ReadonlyMap<string, FunctionVolatility>
 }
 
 /** Дочірні факти таблиці, які мапить сама таблиця (`mapTable`). */
@@ -92,7 +95,20 @@ export function mapModel(
           detail: `${encodeId(earlier)} maps to the same unit ${mapped.identity}`,
         })
       sources.set(mapped.identity, fact.id)
-      units.push(mapped)
+      if (mapped.class !== "function") {
+        units.push(mapped)
+        continue
+      }
+      // Без факту текст лишився б без явної волатильності — боргом закритої
+      // оболонки; мовчазний пропуск сховав би розбіжність ключів із двигуном
+      const volatility = ctx.volatility.get(encodeId(fact.id))
+      if (volatility === undefined)
+        issues.push({
+          object: fact.id,
+          property: "volatility",
+          detail: "pg_proc has no volatility under the engine identity",
+        })
+      units.push(volatility === undefined ? mapped : { ...mapped, volatility })
     }
   }
   const statements = (fact: Fact) => [

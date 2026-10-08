@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appSchemaNameSchema } from "./pg-schema"
 import {
   elementNameSchema,
   metadataIdSchema,
@@ -6,6 +7,9 @@ import {
 } from "./identity"
 import { localizedStringSchema } from "./localized-string"
 import { metadataRefSchema } from "./metadata-ref"
+
+/** Значення `setFunction` виду скоупу: функцію множини генерує компілятор з членства. */
+export const MEMBERSHIP_SET_FUNCTION = "membership"
 
 /** Значення `scope` об'єкта, що явно виводить його зі скоупу. */
 export const NO_SCOPE = "none"
@@ -33,7 +37,7 @@ export const scopeKindSchema = z
         z.strictObject({
           external: z
             .strictObject({
-              schema: z.string().min(1).meta({
+              schema: appSchemaNameSchema.min(1).meta({
                 description: "PostgreSQL schema of the external root table.",
               }),
               table: z.string().min(1).meta({
@@ -51,17 +55,27 @@ export const scopeKindSchema = z
           "Root of the scope: a metadata object or an external table.",
       }),
     // Схема функції за відсутності — `defaultSchema` проєкту; підставляє стадія 3.
+    // `membership` — функція, яку компілятор генерує з довідника членства
+    // виду (спека користувачів §8): типовий випадок не вимагає дослівного SQL.
     setFunction: z
-      .strictObject({
-        schema: z.string().min(1).optional().meta({
+      .union([
+        z
+          .strictObject({
+            schema: appSchemaNameSchema.min(1).optional().meta({
+              description:
+                "PostgreSQL schema of the function; defaultSchema when absent.",
+            }),
+            name: z
+              .string()
+              .min(1)
+              .meta({ description: "Physical name of the function." }),
+          })
+          .meta({ description: "SQL function defined in a .sql file." }),
+        z.literal(MEMBERSHIP_SET_FUNCTION).meta({
           description:
-            "PostgreSQL schema of the function; defaultSchema when absent.",
+            "Generated from the membership catalog of this scope kind: the scope values where the current user is a member.",
         }),
-        name: z
-          .string()
-          .min(1)
-          .meta({ description: "Physical name of the function." }),
-      })
+      ])
       .meta({
         description:
           "SQL function that returns the set of scope values visible to the current user.",

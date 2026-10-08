@@ -123,6 +123,70 @@ describe("creation order", () => {
     ])
   })
 
+  it("the platform layer follows users and identities; membership follows current_user_id", async () => {
+    // Тіла plpgsql граф не читає: функції шару несуть явні ребра, тригер на
+    // таблиці провайдера йде після своєї функції, а sql-функція членства —
+    // після `simetra.current_user_id()` з аналізу свого тіла.
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            {
+              id: uuid(9300),
+              name: "org",
+              physicalName: "org_id",
+              root: { object: { kind: "Catalog", name: "Organization" } },
+              setFunction: "membership",
+            },
+          ],
+        }),
+        "catalogs/Organization/Organization.meta.json": catalog(
+          "Organization",
+          { scope: "org" }
+        ),
+        "catalogs/Users/Users.meta.json": catalog("Users", {
+          role: "users",
+          scope: "none",
+        }),
+        "catalogs/OrgMember/OrgMember.meta.json": catalog("OrgMember", {
+          scope: "org",
+          membership: { user: "user" },
+          attributes: [
+            {
+              id: uuid(9301),
+              name: "user",
+              physicalName: "user_id",
+              type: "Ref",
+              ref: { kind: "Catalog", name: "Users" },
+            },
+          ],
+        }),
+      })
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const currentUser = "function:simetra.current_user_id()"
+    const provision = "function:simetra.provision_user(text,text,uuid,text)"
+    const onCreated = "function:simetra.on_auth_user_created()"
+    const trigger = "trigger:auth.users.simetra_provision_user"
+    expectBefore(list, [
+      ["table:public.users", currentUser],
+      ["table:simetra.identities", currentUser],
+      ["table:public.users", provision],
+      ["table:simetra.identities", provision],
+      [provision, onCreated],
+      [onCreated, trigger],
+      ["table:public.users", trigger],
+      ["table:simetra.identities", trigger],
+      [currentUser, "function:public.org_member_member_scopes()"],
+      [currentUser, "function:public.org_member_my_member(uuid)"],
+    ])
+  })
+
   it("extensions come before everything", async () => {
     const list = await order({
       "pg-enums/Status/Status.meta.json": {

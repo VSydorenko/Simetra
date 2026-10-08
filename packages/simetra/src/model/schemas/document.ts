@@ -125,6 +125,13 @@ export const documentSchema = z.strictObject({
     description: "Registers the document writes movements into.",
   }),
 
+  // Авторство посилається на «Користувачі», тож без довідника з роллю users
+  // компілятор його відхиляє (`users.catalog-missing`).
+  trackAuthor: z.boolean().default(false).meta({
+    description:
+      "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
+  }),
+
   publicRead: publicReadSchema,
 
   standardAttributeOverrides: standardAttributeOverridesSchema,

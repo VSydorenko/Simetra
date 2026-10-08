@@ -5,6 +5,7 @@ import { catalogAttributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
 import {
+  elementNameSchema,
   metadataIdSchema,
   objectNameSchema,
   physicalNameSchema,
@@ -26,6 +27,14 @@ export const catalogSchema = z.strictObject({
   kindLabel: physicalNameSchema.optional().meta({
     description:
       "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+  }),
+
+  // Роль, а не ім'я, позначає системний довідник: платформний шар (провізія,
+  // поточний користувач, авторство) знаходить «Користувачів» за нею, тож
+  // перейменування довідника шар не ламає.
+  role: z.literal("users").optional().meta({
+    description:
+      "System role of the catalog: users marks the users catalog that the platform layer provisions and references; at most one per project, unscoped.",
   }),
 
   // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
@@ -89,6 +98,29 @@ export const catalogSchema = z.strictObject({
     .meta({
       description:
         "Items that exist in every deployment and are referenced by name.",
+    }),
+
+  // Авторство посилається на «Користувачі», тож без довідника з роллю users
+  // компілятор його відхиляє (`users.catalog-missing`).
+  trackAuthor: z.boolean().default(false).meta({
+    description:
+      "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
+  }),
+
+  // Учасник тенанта — довідник застосунку з власними реквізитами, а не
+  // таблиця платформи (спека користувачів §8): прапорець лише називає
+  // реквізит-посилання на «Користувачі», решту виводить компілятор.
+  membership: z
+    .strictObject({
+      user: elementNameSchema.meta({
+        description:
+          "Logical name of the scalar Ref attribute to the users catalog; nullable for an invited member without an account.",
+      }),
+    })
+    .optional()
+    .meta({
+      description:
+        "Marks a scoped catalog as the membership of its scope kind: one member per user and scope value, a generated member lookup and an optional generated scope set function.",
     }),
 
   publicRead: publicReadSchema,

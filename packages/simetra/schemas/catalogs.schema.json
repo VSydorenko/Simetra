@@ -70,6 +70,11 @@
       "type": "string",
       "minLength": 1
     },
+    "role": {
+      "description": "System role of the catalog: users marks the users catalog that the platform layer provisions and references; at most one per project, unscoped.",
+      "type": "string",
+      "const": "users"
+    },
     "codeLength": {
       "default": 9,
       "description": "Length of the code attribute; 0 means the catalog has no code.",
@@ -202,6 +207,26 @@
         ],
         "additionalProperties": false
       }
+    },
+    "trackAuthor": {
+      "default": false,
+      "description": "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
+      "type": "boolean"
+    },
+    "membership": {
+      "description": "Marks a scoped catalog as the membership of its scope kind: one member per user and scope value, a generated member lookup and an optional generated scope set function.",
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "description": "Logical name of the scalar Ref attribute to the users catalog; nullable for an invited member without an account."
+        }
+      },
+      "required": [
+        "user"
+      ],
+      "additionalProperties": false
     },
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
@@ -535,6 +560,11 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
           },
           "uniqueWithin": {
             "description": "Narrows uniqueness to the owner or the parent of the object (needs unique; own attributes of an object whose kind has that standard attribute).",
@@ -914,6 +944,11 @@
                   "type": "integer",
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991
+                },
+                "personalData": {
+                  "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+                  "type": "boolean",
+                  "const": true
                 }
               },
               "required": [

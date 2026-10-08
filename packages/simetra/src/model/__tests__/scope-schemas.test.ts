@@ -43,6 +43,27 @@ describe("scope declarations", () => {
     ).toEqual([])
   })
 
+  it("setFunction accepts the literal membership and nothing else as a string", () => {
+    const project = (setFunction: unknown) => ({
+      name: "app",
+      database: { provider: "supabase" },
+      scopeKinds: [
+        {
+          name: "org",
+          root: { object: { kind: "Catalog", name: "Organization" } },
+          setFunction,
+        },
+      ],
+    })
+    const parsed = projectSchema.safeParse(project("membership"))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.scopeKinds[0]?.setFunction).toBe("membership")
+    }
+    expect(projectSchema.safeParse(project("set_org")).success).toBe(false)
+    expect(projectSchema.safeParse(project("Membership")).success).toBe(false)
+  })
+
   it("scope kind named none is rejected", () => {
     expect(
       rules(projectSchema, {
@@ -57,6 +78,45 @@ describe("scope declarations", () => {
         ],
       })
     ).toContain("scope.name-reserved")
+  })
+
+  it("schema simetra is reserved for the platform", () => {
+    const external = {
+      schema: "simetra",
+      table: "t",
+      column: "id",
+    }
+    const project = {
+      name: "app",
+      database: { provider: "supabase" },
+      scopeKinds: [
+        {
+          name: "org",
+          root: { external },
+          setFunction: { name: "set_org" },
+        },
+      ],
+    }
+    expect(rules(projectSchema, project)).toEqual(["schema.reserved"])
+    expect(
+      rules(projectSchema, {
+        ...project,
+        scopeKinds: [
+          {
+            ...project.scopeKinds[0],
+            root: { external: { ...external, schema: "app" } },
+            setFunction: { schema: "simetra", name: "set_org" },
+          },
+        ],
+      })
+    ).toEqual(["schema.reserved"])
+    expect(
+      rules(projectSchema, {
+        name: "app",
+        database: { provider: "supabase" },
+        defaultSchema: "simetra",
+      })
+    ).toEqual(["schema.reserved"])
   })
 
   it("enumeration accepts only none", () => {

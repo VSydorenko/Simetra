@@ -1,9 +1,13 @@
 import {
   loadSqlParser,
   localize,
+  triggerFunctionSchema,
+  unitPlacement,
+  unitTargets,
   type CompiledModel,
   type OutOfScopeReason,
   type SqlParser,
+  type UnitTarget,
 } from "simetra/compiler"
 import { diffCatalogModels, type CatalogDifference } from "simetra/model"
 import {
@@ -11,12 +15,6 @@ import {
   SUPABASE_SCHEMAS,
   SUPABASE_SURFACES,
 } from "./provider/supabase"
-import {
-  triggerFunctionSchema,
-  unitPlacement,
-  unitTargets,
-  type UnitTarget,
-} from "./unit-target"
 import type {
   EngineDiagnostic,
   EnginePlan,

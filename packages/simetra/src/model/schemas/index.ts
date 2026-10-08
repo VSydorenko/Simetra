@@ -12,6 +12,7 @@ export {
   type Attribute,
   type CatalogAttribute,
 } from "./attribute"
+export { PLATFORM_SCHEMA, appSchemaNameSchema } from "./pg-schema"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export {
   compositeIndexesSchema,
@@ -40,6 +41,8 @@ export {
   valueTypeShape,
   refineValueType,
   isScalarDefault,
+  defaultMayRepeat,
+  defaultViolatesValueChecks,
   type DefaultValue,
   type LogicalType,
   type ValueType,
@@ -75,8 +78,14 @@ export {
   type PgQualifiedName,
   type RowLevelSecurity,
 } from "./custom-table"
-export { NO_SCOPE, scopeKindSchema, type ScopeKind } from "./scope"
 export {
+  MEMBERSHIP_SET_FUNCTION,
+  NO_SCOPE,
+  scopeKindSchema,
+  type ScopeKind,
+} from "./scope"
+export {
+  PUBLIC_READ_PURPOSES,
   PUBLIC_READ_ROLES,
   publicReadSchema,
   type PublicReadRole,
@@ -97,8 +106,15 @@ export { SQL_DEBT_FILE, sqlDebtSchema, type SqlDebt } from "./sql-debt"
 export {
   projectSchema,
   DATABASE_PROVIDERS,
+  PROVIDER_API_ROLES,
   PROVIDER_EVENT_SOURCES,
+  PROVIDER_IDENTITY_SOURCES,
+  type ApiRolePurpose,
   type DatabaseProvider,
+  type IdentityNameSource,
+  type IdentitySource,
+  type ProviderApiRoles,
   type ProviderEventSource,
   type Project,
+  type RequestRolePurpose,
 } from "./project"

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { PROVIDER_API_ROLES } from "simetra/model"
 import {
   SALE_FILE,
   STOCK_FILE,
@@ -76,13 +77,35 @@ describe("publicRead and storage buckets contracts", () => {
     expect(model.contracts.publicRead).toEqual([
       {
         objectId: model.objects.find((o) => o.name === "Counterparty")!.id,
-        role: "anon",
+        purpose: "anonymous",
       },
     ])
     expect(model.contracts.storageBuckets).toEqual([
       { bucket: "a-files", scopeKindId: id("org") },
       { bucket: "b-files", scopeKindId: id("user") },
     ])
+  })
+})
+
+describe("publicRead grantees", () => {
+  it("public read reaches only request roles, never the service role", async () => {
+    const entries = scopedProject2()
+    entries["catalogs/Counterparty/Counterparty.meta.json"] = catalog(
+      "Counterparty",
+      { scope: "org", publicRead: "authenticated" }
+    )
+    entries["catalogs/Region/Region.meta.json"] = catalog("Region", {
+      scope: "none",
+      publicRead: "anon",
+    })
+    const result = await compile(metaFiles(entries))
+    expect(result.diagnostics).toEqual([])
+    const roles = PROVIDER_API_ROLES.supabase
+    const grantees = result
+      .model!.contracts.publicRead.map(({ purpose }) => roles[purpose])
+      .sort()
+    expect(grantees).toEqual(["anon", "authenticated"])
+    expect(grantees).not.toContain(roles.service)
   })
 })
 
@@ -133,6 +156,68 @@ describe("numbering contract", () => {
         assignedAt: "firstWrite",
       },
     ])
+  })
+})
+
+describe("personalData contract", () => {
+  it("contracts list personal columns per table", async () => {
+    const section = {
+      id: "00000000-0000-4000-8000-000000000c02",
+      name: "contacts",
+      physicalName: "person_contacts",
+      attributes: [
+        attribute("email", {
+          type: "String",
+          length: 50,
+          personalData: true,
+        }),
+        attribute("kind", { type: "String", length: 10 }),
+      ],
+    }
+    const { personalData } = await contracts({
+      "project.meta.json": project(),
+      "catalogs/Service/Service.meta.json": catalog("Service"),
+      "catalogs/Person/Person.meta.json": catalog("Person", {
+        id: "00000000-0000-4000-8000-000000000c01",
+        attributes: [
+          attribute("phone", {
+            type: "String",
+            length: 20,
+            personalData: true,
+          }),
+          attribute("origin", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "Catalog", name: "Service" },
+              { kind: "Catalog", name: "Person" },
+            ],
+            personalData: true,
+          }),
+          attribute("note", { type: "String", length: 20 }),
+        ],
+        tabularSections: [section],
+      }),
+    })
+    expect(personalData).toEqual([
+      {
+        objectId: "00000000-0000-4000-8000-000000000c01",
+        table: { schema: "public", name: "person" },
+        columns: ["phone", "origin_type", "origin_id"],
+      },
+      {
+        objectId: "00000000-0000-4000-8000-000000000c01",
+        table: { schema: "public", name: "person_contacts" },
+        columns: ["email"],
+      },
+    ])
+  })
+
+  it("no personal attributes give an empty contract", async () => {
+    const { personalData } = await contracts({
+      "project.meta.json": project(),
+      "catalogs/A/A.meta.json": catalog("A"),
+    })
+    expect(personalData).toEqual([])
   })
 })
 

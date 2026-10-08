@@ -157,6 +157,37 @@ describe("renderDesiredState", () => {
     expect(tableIndexes.length).toBeGreaterThan(1)
   })
 
+  it("the platform layer: schema first, the identities foreign key among the last", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "catalogs/Users/Users.meta.json": catalog("Users", {
+          role: "users",
+          scope: "none",
+        }),
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    const state = renderDesiredState(result.model!)
+    const all = labels(state)
+    // Схему `simetra` створює той самий шар — першим оператором, до будь-якого
+    // її об'єкта.
+    const schema = all.indexOf("schema simetra")
+    expect(schema).toBeGreaterThan(-1)
+    expect(
+      state.statements.findIndex(
+        (s) => s.kind !== "schema" && s.sql.includes("simetra")
+      )
+    ).toBeGreaterThan(schema)
+    const kinds = state.statements.map((s) => s.kind)
+    const identitiesFk = all.indexOf("foreignKey simetra.identities")
+    expect(identitiesFk).toBeGreaterThan(kinds.lastIndexOf("unit"))
+    expect(identitiesFk).toBeGreaterThan(kinds.lastIndexOf("table"))
+    expect(state.statements[identitiesFk]!.sql.replace(/\s+/g, " ")).toContain(
+      "DEFERRABLE INITIALLY DEFERRED"
+    )
+  })
+
   it("a unit ending with a line comment still terminates", () => {
     const unit = (name: string, sql: string) =>
       ({

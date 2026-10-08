@@ -46,6 +46,7 @@ import {
   type ValueType,
 } from "simetra/model"
 import { compareStrings, valueAt } from "../diagnostics"
+import { identitiesTable } from "../platform/identities"
 import { objectKey, type ParsedObject } from "./files"
 import {
   COLUMN_NAME_ROLES,
@@ -256,7 +257,41 @@ export function buildModel(
 ): ModelStageResult {
   const builder = new SnapshotBuilder(objects, project, references)
   for (const object of objects) builder.add(object)
-  return builder.finish()
+  return withIdentities(builder.finish(), objects)
+}
+
+/**
+ * Довідник «Користувачі» вмикає платформний шар (спека П2 §8.3): його похідна
+ * таблиця `simetra.identities` — частина знімка, тож граф порядку, хеш,
+ * `explain` і межа звірки бачать її разом із моделлю. Таблиця в
+ * зарезервованій схемі імен застосунку не займає, тож додається після
+ * призначення імен.
+ */
+function withIdentities(
+  result: ModelStageResult,
+  objects: readonly ParsedObject[]
+): ModelStageResult {
+  const users = usersCatalogOf(objects)
+  const usersTable =
+    users === undefined
+      ? undefined
+      : result.physical.tables.find(
+          (t) =>
+            t.origin.objectId === users.id &&
+            t.origin.tabularSectionId === undefined &&
+            t.origin.part === undefined
+        )
+  if (users === undefined || usersTable === undefined) return result
+  return {
+    ...result,
+    physical: {
+      ...result.physical,
+      tables: [
+        ...result.physical.tables,
+        identitiesTable(users, usersTable),
+      ].sort(bySchemaAndName),
+    },
+  }
 }
 
 class SnapshotBuilder {
@@ -281,6 +316,8 @@ class SnapshotBuilder {
    * стадія 2; тут — лише id → мітка, без другого читання імені.
    */
   private readonly enumDefaultLabels: Map<string, string>
+  /** Ціль стандартного `ref: "users"`; немає — авторство без FK (стадія 4). */
+  private readonly users: MetadataRef | undefined
 
   constructor(
     objects: readonly ParsedObject[],
@@ -288,6 +325,7 @@ class SnapshotBuilder {
     references: readonly ResolvedReference[]
   ) {
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
+    this.users = usersRefOf(objects)
     this.style = project.naming.attributeCase
     this.scopeKinds = new Map(project.scopeKinds.map((k) => [k.name, k]))
     this.rootKinds = new Map(
@@ -501,6 +539,7 @@ class SnapshotBuilder {
         nullsNotDistinct: false,
       })
     }
+    this.addMembershipKey(main, object, scope)
 
     const sections =
       def.tabularSectionColumns === undefined
@@ -981,6 +1020,35 @@ class SnapshotBuilder {
     return this.tableTarget(this.lookup(kind.root.object), undefined, false)
   }
 
+  /**
+   * Один учасник на користувача в межах значення скоупу (спека користувачів
+   * §8). `NULLS DISTINCT`: запрошених без облікового запису в одному тенанті
+   * може бути кілька. Хибне членство (без власної скоуп-колонки, без
+   * реквізиту, поліморфна пара замість однієї колонки) звітує стадія 4 — тут
+   * ключ просто не виводиться; той самий ключ від `unique` реквізиту не
+   * дублюється.
+   */
+  private addMembershipKey(
+    table: PendingTable,
+    object: ParsedObject,
+    scope: TableScope | undefined
+  ): void {
+    const user = membershipUserOf(object)
+    if (
+      user === undefined ||
+      user.allowedTypes !== undefined ||
+      scope?.own !== true
+    ) {
+      return
+    }
+    const columns = [scope.carrier!, user.physicalName!]
+    const same = (other: readonly string[]) =>
+      other.length === columns.length &&
+      other.every((column, i) => column === columns[i])
+    if (table.uniques.some((unique) => same(unique.columns))) return
+    table.uniques.push({ columns, nullsNotDistinct: false })
+  }
+
   /** Вид скоупу, який об'єкт оголошує; `none` і відсутнє поле — без скоупу. */
   private scopeKindOf(object: ParsedObject): ScopeKind | undefined {
     const { scope } = object.data as { scope?: string }
@@ -1020,7 +1088,7 @@ class SnapshotBuilder {
     column: StandardColumnDef,
     object: ParsedObject
   ): ParsedObject[] {
-    return standardTargetRefs(column, object.data).map((ref) =>
+    return standardTargetRefs(column, object.data, this.users).map((ref) =>
       this.lookup(ref)
     )
   }
@@ -1502,13 +1570,17 @@ export function registerSingletonOf(
 }
 
 /**
- * Цілі стандартного посилання (власники довідника, реєстратори регістра) за
- * налаштуваннями виду. Спільний для стадії 3 і кодогену типів.
+ * Цілі стандартного посилання (власники довідника, реєстратори регістра,
+ * «Користувачі» авторства) за налаштуваннями виду. Спільний для стадії 3 і
+ * кодогену типів. `users` — довідник із роллю «користувачі» (`usersRefOf`):
+ * без нього ціль порожня, а помилку `users.catalog-missing` дає стадія 4.
  */
 export function standardTargetRefs(
   column: StandardColumnDef,
-  data: unknown
+  data: unknown,
+  users: MetadataRef | undefined
 ): MetadataRef[] {
+  if (column.ref === "users") return users === undefined ? [] : [users]
   const { owners, recorderTypes } = data as Element
   const refs =
     column.ref === "owners"
@@ -1600,6 +1672,43 @@ export function kindLabelOf(object: ParsedObject): string | undefined {
 function labelsOf(object: ParsedObject): string[] {
   const label = kindLabelOf(object)
   return label === undefined ? [] : [label]
+}
+
+/**
+ * Системний довідник «Користувачі» — за роллю, а не за іменем (спека
+ * користувачів §4). Кілька таких — помилка стадії 4; споживачі беруть
+ * перший за шляхом файлу, як і правило про дубль.
+ */
+export function usersCatalogOf(
+  objects: readonly ParsedObject[]
+): ParsedObject | undefined {
+  return objects
+    .filter((o) => (o.data as { role?: string }).role === "users")
+    .sort((a, b) => compareStrings(a.file, b.file))[0]
+}
+
+/**
+ * Реквізит, який `membership.user` довідника членства називає: власний
+ * реквізит за логічним іменем; немає членства чи реквізиту — `undefined`
+ * (помилку дає стадія 4).
+ */
+export function membershipUserOf(object: ParsedObject): Attribute | undefined {
+  const { membership } = object.data as { membership?: { user: string } }
+  if (membership === undefined) return undefined
+  const data = object.data as Record<string, unknown>
+  return KIND_REGISTRY[object.kind].columnFields
+    .flatMap((field) => (data[field] as Attribute[] | undefined) ?? [])
+    .find((attribute) => attribute.name === membership.user)
+}
+
+/** Посилання на «Користувачі» — ціль стандартного `ref: "users"`. */
+export function usersRefOf(
+  objects: readonly ParsedObject[]
+): MetadataRef | undefined {
+  const users = usersCatalogOf(objects)
+  return users === undefined
+    ? undefined
+    : { kind: users.kind, name: users.name }
 }
 
 /**
@@ -1991,7 +2100,7 @@ function enumDefaultLabels(
 }
 
 /** Значення за замовчуванням реквізиту як SQL-літерал. */
-function sqlLiteral(value: string | number | boolean): string {
+export function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === "string") return `'${value.replaceAll("'", "''")}'`
   return String(value)
 }

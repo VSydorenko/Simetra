@@ -187,6 +187,15 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
       // всіх операторів пари, а ALL — повним переліком прав класу
       case "grant": {
         const [, verb, type, objects, roles, privileges] = parts
+        // extract бачить відкликання лише як різницю з типовим ACL об'єкта:
+        // у функції це вбудований EXECUTE для PUBLIC. Відкликання в ролі, що
+        // права не мала, у каталозі нічого не лишає
+        if (verb === "revoke") {
+          if (type === "function" && roles!.toLowerCase() === "public")
+            for (const object of splitList(objects!))
+              out.add(`grant:revoke:${type}:${object}:public:${privileges}`)
+          break
+        }
         if (verb !== "grant")
           throw new Error(`fixture form not expanded: ${unit.identity}`)
         for (const object of splitList(objects!))

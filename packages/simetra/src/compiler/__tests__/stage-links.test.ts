@@ -3,7 +3,9 @@ import { compile, type CompileResult } from "simetra/compiler"
 import {
   SALE_FILE,
   SCOPE_FUNCTIONS_FILE,
+  acceptDebt,
   attribute,
+  customTable,
   metaFiles,
   organization,
   project,
@@ -507,5 +509,124 @@ describe("stage 5: modules and actions", () => {
     expect(codes(result)).toEqual([
       ["file.orphan", "documents/Ghost/Ghost.module.ts", ""],
     ])
+  })
+})
+
+describe("stage 5: bare current user in a policy", () => {
+  const TABLE_SQL = "custom-tables/T/T.sql"
+  // Дослівна політика — борг модуля прийнятої таблиці; предмет тут — форма
+  // виклику, а не ратчет, тож борг фікстури прийнято.
+  const policy = async (sql: string) =>
+    await compile(
+      await acceptDebt(
+        metaFiles({
+          "project.meta.json": project(),
+          "custom-tables/T/T.meta.json": customTable("T", {
+            columns: [
+              attribute("id", { physicalName: "id", type: "UUID" }),
+              attribute("ownerId", { physicalName: "owner_id", type: "UUID" }),
+            ],
+          }),
+          [TABLE_SQL]: `-- політика\n${sql}`,
+        })
+      )
+    )
+  const WRAPPED = "(select simetra.current_user_id())"
+
+  it("a bare simetra.current_user_id() in a policy is an error", async () => {
+    const result = await policy(
+      "CREATE POLICY p ON public.t USING (owner_id = simetra.current_user_id());"
+    )
+    expect(codes(result)).toEqual([["sql.bare-current-user", TABLE_SQL, ""]])
+    expect(result.diagnostics[0]!.severity).toBe("error")
+    expect(result.diagnostics[0]!.params).toEqual({
+      policy: "policy:public.t.p",
+      clause: "USING",
+      line: 2,
+    })
+  })
+
+  it("the wrapped call passes", async () => {
+    const result = await policy(
+      `CREATE POLICY p ON public.t USING (owner_id = ${WRAPPED}) WITH CHECK (${WRAPPED} IS NOT NULL AND owner_id = ${WRAPPED});`
+    )
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("WITH CHECK is checked too", async () => {
+    const result = await policy(
+      `CREATE POLICY p ON public.t FOR INSERT WITH CHECK (owner_id = simetra.current_user_id());`
+    )
+    expect(codes(result)).toEqual([["sql.bare-current-user", TABLE_SQL, ""]])
+    expect(result.diagnostics[0]!.params).toMatchObject({
+      clause: "WITH CHECK",
+    })
+  })
+
+  it("each clause is reported once", async () => {
+    const result = await policy(
+      "CREATE POLICY p ON public.t USING (owner_id = simetra.current_user_id() OR simetra.current_user_id() IS NULL) WITH CHECK (owner_id = simetra.current_user_id());"
+    )
+    expect(result.diagnostics.map((d) => d.params?.clause)).toEqual([
+      "USING",
+      "WITH CHECK",
+    ])
+  })
+
+  it.each([
+    [
+      "correlated",
+      "(select simetra.current_user_id() from public.t s where s.id = id)",
+    ],
+    [
+      "filtered",
+      "(select simetra.current_user_id() where owner_id is not null)",
+    ],
+    ["with another target", "(select simetra.current_user_id(), 1)"],
+    ["cast inside", "(select simetra.current_user_id()::uuid)"],
+    ["nested call", "(select coalesce(simetra.current_user_id(), owner_id))"],
+    ["limited", "(select simetra.current_user_id() limit 1)"],
+    ["union", "(select simetra.current_user_id() union select owner_id)"],
+    ["any sublink", "ANY (select simetra.current_user_id())"],
+    ["aliased", "(select simetra.current_user_id() AS uid)"],
+  ])("a %s subquery is an error", async (_name, call) => {
+    const result = await policy(
+      `CREATE POLICY p ON public.t USING (owner_id = ${call});`
+    )
+    expect(codes(result)).toEqual([["sql.bare-current-user", TABLE_SQL, ""]])
+  })
+
+  it("an EXISTS subquery is an error", async () => {
+    const result = await policy(
+      "CREATE POLICY p ON public.t USING (EXISTS (select simetra.current_user_id()));"
+    )
+    expect(codes(result)).toEqual([["sql.bare-current-user", TABLE_SQL, ""]])
+  })
+
+  it("names follow the parser: case-folded and quoted forms are the same function", async () => {
+    // Postgres зводить неквотовані імена до нижнього регістру, а квотовані
+    // імена в нижньому регістрі — ті самі імена: це один і той самий виклик.
+    for (const call of [
+      "SIMETRA.Current_User_Id()",
+      '"simetra"."current_user_id"()',
+    ]) {
+      const result = await policy(
+        `CREATE POLICY p ON public.t USING (owner_id = ${call});`
+      )
+      expect(codes(result), call).toEqual([
+        ["sql.bare-current-user", TABLE_SQL, ""],
+      ])
+      const wrapped = await policy(
+        `CREATE POLICY p ON public.t USING (owner_id = (select ${call}));`
+      )
+      expect(wrapped.diagnostics, call).toEqual([])
+    }
+  })
+
+  it("a quoted name in another case is another function", async () => {
+    const result = await policy(
+      'CREATE POLICY p ON public.t USING (owner_id = "Simetra".current_user_id());'
+    )
+    expect(result.diagnostics).toEqual([])
   })
 })

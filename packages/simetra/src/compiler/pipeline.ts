@@ -1,4 +1,8 @@
-import { KIND_REGISTRY, METADATA_KINDS } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  METADATA_KINDS,
+  PROVIDER_IDENTITY_SOURCES,
+} from "simetra/model"
 import type {
   CompileResult,
   CompiledModel,
@@ -7,7 +11,7 @@ import type {
 } from "./compile"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { modelHash } from "./canonical"
-import { buildContracts } from "./contracts"
+import { buildContracts, usersContractOf } from "./contracts"
 import { buildPresentation } from "./presentation"
 import { readFiles, type FilesStageResult } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
@@ -15,16 +19,21 @@ import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
+import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
+import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { embedRowRules } from "./sql/row-rule"
+import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
   namespaceConflicts,
   readSqlUnits,
+  unitDuplicates,
   type SqlSource,
   type SqlUnit,
+  type UnitGenerator,
   type VerbatimUnit,
 } from "./sql/units"
 
@@ -125,6 +134,7 @@ export async function runStages(
     if (role === "scopeKind.root") rootIdByPointer.set(from.pointer, to.id)
   }
   const { defaultSchema } = stage1.project
+  const memberships = membershipsOf(stage1.objects, physical, stage1.project)
   const scopeKinds = stage1.project.scopeKinds
     .map((kind, index): CompiledScopeKind => ({
       id: kind.id ?? "",
@@ -137,10 +147,17 @@ export async function runStages(
                 rootIdByPointer.get(`/scopeKinds/${index}/root/object`) ?? "",
             }
           : { external: kind.root.external },
-      setFunction: {
-        schema: kind.setFunction.schema ?? defaultSchema,
-        name: kind.setFunction.name,
-      },
+      // `membership` — функція, згенерована з довідника членства виду;
+      // стадія 5 гарантує, що він є.
+      setFunction:
+        typeof kind.setFunction === "string"
+          ? must(
+              memberships.find((m) => m.scopeKind.id === kind.id)?.setFunction
+            )
+          : {
+              schema: kind.setFunction.schema ?? defaultSchema,
+              name: kind.setFunction.name,
+            },
       onRootDelete: kind.onRootDelete,
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
@@ -176,13 +193,37 @@ export async function runStages(
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
+    ...buildMembershipFunctions(
+      stage1.objects,
+      physical,
+      stage1.project,
+      parse
+    ),
+    ...buildPlatformUnits(
+      {
+        objects: stage1.objects,
+        physical,
+        contracts: { users: usersContractOf(stage1.objects, physical) },
+        project: stage1.project,
+      },
+      parse,
+      // Ключ провайдера ідентичності — тимчасово пресет бази: окрема вісь
+      // провайдера ідентичності з'явиться з другим таким провайдером.
+      PROVIDER_IDENTITY_SOURCES[stage1.project.database.provider]
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
-  const collisions = namespaceConflicts(
-    physical,
-    sqlUnits,
-    (unit) =>
-      `the movement query of ${nameById.get(unit.documentId ?? "")} into ${nameById.get(unit.registerId ?? "")}`
+  const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
+  // Згенерована одиниця файлу не має: збіг із нею називає її походження.
+  const describeGenerated: Record<UnitGenerator, (unit: SqlUnit) => string> = {
+    movementQuery: (unit) =>
+      `the movement query of ${name(unit.documentId)} into ${name(unit.registerId)}`,
+    membership: (unit) => `the membership SQL of ${name(unit.ownerObjectId)}`,
+    platformLayer: (unit) =>
+      `the platform layer of ${name(unit.ownerObjectId)}`,
+  }
+  const collisions = namespaceConflicts(physical, sqlUnits, (unit) =>
+    describeGenerated[must(unit.generator)](unit)
   )
   if (collisions.length > 0) {
     return {
@@ -195,7 +236,7 @@ export async function runStages(
     physical,
     sqlUnits,
     parse,
-    // Обгортка рухів файлу не має: цикл через неї названо в документі.
+    // Згенерована одиниця файлу не має: цикл через неї названо в об'єкті-власнику.
     (unit) => unit.file ?? fileById.get(unit.ownerObjectId ?? "") ?? ""
   )
   if (ordered.diagnostics.length > 0) {
@@ -268,11 +309,35 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
   const sql =
     stage1.project === undefined
       ? { units: [], rowRules: [], diagnostics: [] }
-      : readSqlUnits(sqlSources(stage1, stage1.project.defaultSchema), parse, [
+      : readAppSql(stage1, stage1.project.defaultSchema, parse, [
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
   return { stage2, upstream, stage3, sql }
+}
+
+/**
+ * `.sql` застосунку: мова одиниць (`readSqlUnits`, спільна зі зворотним
+ * читанням двигуна) і правило файлів метаданих — схема платформи зайнята.
+ */
+function readAppSql(
+  stage1: FilesStageResult,
+  defaultSchema: string,
+  parse: SqlParser,
+  known: readonly { schema: string; name: string }[]
+) {
+  const sources = sqlSources(stage1, defaultSchema)
+  const read = readSqlUnits(sources, parse, known)
+  const kept = withoutPlatformSchema(read, sources)
+  return {
+    units: kept.units,
+    rowRules: kept.rowRules,
+    diagnostics: [
+      ...read.diagnostics,
+      ...kept.diagnostics,
+      ...unitDuplicates(kept.units),
+    ],
+  }
 }
 
 /**
@@ -333,6 +398,12 @@ function verbatimUnit(
     sql: unit.sql,
     tree: unit.tree,
   }
+}
+
+/** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */
+function must<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("internal: missing value")
+  return value
 }
 
 function hasErrors(diagnostics: readonly Diagnostic[]): boolean {

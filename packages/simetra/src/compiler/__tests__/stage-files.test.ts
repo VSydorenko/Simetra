@@ -174,6 +174,136 @@ describe("stage 1: files", () => {
     ])
   })
 
+  it("an sql file under sql/simetra is reserved", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/simetra/own.sql":
+          "CREATE FUNCTION f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;",
+      })
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "schema.reserved",
+        file: "sql/simetra/own.sql",
+        severity: "error",
+      }),
+    ])
+  })
+
+  it("a comments-only file under sql/simetra is still reserved", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/simetra/own.sql": "-- лише коментар\n",
+      })
+    )
+    expect(codes(result.diagnostics)).toEqual(["schema.reserved"])
+  })
+
+  const reserved = (result: { diagnostics: Diagnostic[] }) =>
+    result.diagnostics.map((d) => [d.code, d.file, d.params?.line])
+
+  it.each([
+    [
+      "a function",
+      "CREATE FUNCTION simetra.f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;",
+    ],
+    ["a view", "CREATE VIEW simetra.v AS SELECT 1 AS x;"],
+    [
+      "a grant on a platform object",
+      "GRANT SELECT ON simetra.identities TO authenticated;",
+    ],
+    [
+      "a comment on a platform function",
+      "COMMENT ON FUNCTION simetra.current_user_id() IS 'x';",
+    ],
+    [
+      "a policy on a platform table",
+      "CREATE POLICY p ON simetra.identities FOR SELECT USING (true);",
+    ],
+  ])("%s in schema simetra from a shared file is reserved", async (_, sql) => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/own.sql": `-- спільний файл\n${sql}`,
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["schema.reserved", "sql/public/own.sql", 2],
+    ])
+  })
+
+  it("an object created in schema simetra from a sidecar is reserved", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract"),
+        "catalogs/Contract/Contract.sql":
+          "CREATE FUNCTION simetra.f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;",
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["schema.reserved", "catalogs/Contract/Contract.sql", 1],
+    ])
+  })
+
+  it("two identical platform functions in two files are reserved, not duplicates", async () => {
+    const fn =
+      "CREATE FUNCTION simetra.f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;"
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/a.sql": fn,
+        "sql/public/b.sql": fn,
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["schema.reserved", "sql/public/a.sql", 1],
+      ["schema.reserved", "sql/public/b.sql", 1],
+    ])
+  })
+
+  it("ordinary duplicates are still reported", async () => {
+    const fn =
+      "CREATE FUNCTION public.f() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;"
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/a.sql": fn,
+        "sql/public/b.sql": fn,
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["sql.unit-duplicate", "sql/public/b.sql", 1],
+    ])
+  })
+
+  it("a row rule on a platform table is reserved", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Contract/Contract.meta.json": catalog("Contract"),
+        "catalogs/Contract/Contract.sql":
+          "ALTER TABLE simetra.identities ADD CONSTRAINT c CHECK (true);",
+      })
+    )
+    expect(reserved(result)).toEqual([
+      ["schema.reserved", "catalogs/Contract/Contract.sql", 1],
+    ])
+  })
+
+  it("a call to a platform function inside a body is not a reservation", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/own.sql":
+          "CREATE FUNCTION public.me() RETURNS uuid LANGUAGE sql STABLE AS $$ select (select simetra.current_user_id()) $$;",
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+  })
+
   it("orphan sql", async () => {
     const result = await compile(
       metaFiles({

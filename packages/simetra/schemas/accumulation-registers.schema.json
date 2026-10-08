@@ -830,6 +830,11 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
           }
         },
         "required": [

@@ -468,6 +468,7 @@ export function checkIdentity(
       diagnostics
     )
     checkBalanceControl(object, references, diagnostics)
+    resolveMembershipUser(object, references)
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
       resolveIndexAttributes(object, style, references)
@@ -933,6 +934,35 @@ function resolveIndexAttributes(
       ),
       `/tabularSections/${index}`
     )
+  })
+}
+
+/**
+ * `membership.user` називає власний реквізит довідника: посилання в індексі
+ * дає перейменуванню переписати поле, а видаленню — побачити залежність.
+ * Стандартні реквізити не кандидати — членство тримається на власному
+ * посиланні на «Користувачі». Невідоме ім'я тут мовчить: звітує стадія 4
+ * (`membership.user-not-users-ref`).
+ */
+function resolveMembershipUser(
+  object: ParsedObject,
+  references: ResolvedReference[]
+) {
+  const { membership } = object.data as { membership?: { user: string } }
+  if (membership === undefined || object.id === undefined) return
+  const data = object.data as Element
+  const id = KIND_REGISTRY[object.kind].columnFields
+    .flatMap((field) => (data[field] as Element[] | undefined) ?? [])
+    .find((element) => element.name === membership.user)?.id
+  if (typeof id !== "string") return
+  references.push({
+    from: {
+      file: object.file,
+      pointer: "/membership/user",
+      objectId: object.id,
+    },
+    to: { kind: "Element", id },
+    role: "catalog.membershipUser",
   })
 }
 

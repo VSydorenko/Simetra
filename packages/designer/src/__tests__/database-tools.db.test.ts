@@ -527,6 +527,14 @@ describe("pools", () => {
       )
       expect(failed.refusal).toBeDefined()
       expect(await settled(url, before)).toBe(before)
+      // Схема платформи теж не читається
+      const platform = await call(
+        "introspect",
+        { schemas: ["simetra"] },
+        options(dir, env)
+      )
+      expect(platform.refusal?.message).toContain("belongs to the platform")
+      expect(await settled(url, before)).toBe(before)
     })
   })
 

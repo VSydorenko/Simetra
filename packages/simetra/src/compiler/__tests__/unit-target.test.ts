@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { loadSqlParser, type SqlParser } from "simetra/compiler"
+import {
+  loadSqlParser,
+  unitTarget,
+  unitTargets,
+  type SqlParser,
+} from "simetra/compiler"
 import type { SqlUnitClass } from "simetra/model"
-import { unitTarget, unitTargets } from "simetra/schema"
 
 /**
  * Структурована ціль одиниці (план E2b, рішення 9): схема й об'єкт, на які
@@ -137,6 +141,22 @@ describe("unitTarget", () => {
         "ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO anon"
       )
     ).toEqual([])
+  })
+
+  it("a grant on all objects in a schema targets the schema", () => {
+    for (const objects of ["TABLES", "FUNCTIONS", "SEQUENCES"]) {
+      expect(
+        targets(
+          "grant",
+          `GRANT SELECT ON ALL ${objects} IN SCHEMA simetra, app TO anon`,
+          "public"
+        ),
+        objects
+      ).toEqual([
+        { schema: "simetra", object: "simetra", kind: "schema" },
+        { schema: "app", object: "app", kind: "schema" },
+      ])
+    }
   })
 
   it("a unit that is its own object has no target", () => {

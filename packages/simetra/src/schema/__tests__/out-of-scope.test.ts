@@ -3,6 +3,7 @@ import { compile } from "simetra/compiler"
 import { engineScope } from "simetra/schema"
 import {
   acceptDebt,
+  catalog,
   customTable,
   metaFiles,
   project,
@@ -176,5 +177,38 @@ describe("engine.out-of-scope", () => {
     ).toEqual([
       `extension:pg_graphql ${OUTSIDE}: the provider installs this extension itself`,
     ])
+  })
+})
+
+describe("the platform layer joins the boundary by its own schemas", () => {
+  async function scopeWith(files: Record<string, unknown>) {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        ...files,
+      })
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    return engineScope(result.model!)
+  }
+
+  it("a model with users has simetra in scope and no out-of-scope object", async () => {
+    // Межа бачить `simetra` зі схем таблиці й одиниць шару, а тригери на
+    // `auth.users` лежать на поверхні пресету — окремої логіки шару немає.
+    const { scope, diagnostics } = await scopeWith({
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        role: "users",
+        scope: "none",
+      }),
+    })
+    expect(diagnostics).toEqual([])
+    expect(scope.schemas).toEqual(["app", "simetra"])
+  })
+
+  it("a model without users has no simetra in scope", async () => {
+    const { scope } = await scopeWith({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency"),
+    })
+    expect(scope.schemas).toEqual(["app"])
   })
 })

@@ -12,6 +12,26 @@ export interface MessageEntry {
   hint?: { en: Hint; uk: Hint }
 }
 
+/** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
+const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
+  requiredWithoutDefault: {
+    en: "it is required and has no defaultValue",
+    uk: "він обов'язковий і не має defaultValue",
+  },
+  uniqueWithDefault: {
+    en: "it is unique and its defaultValue can be the same for different rows, so the second sign-up would duplicate it",
+    uk: "він унікальний, а його defaultValue може бути однаковим для різних рядків, тож друга реєстрація дала б дубль",
+  },
+  defaultViolatesCheck: {
+    en: "its defaultValue fails the attribute's own check",
+    uk: "його defaultValue не проходить власну перевірку реквізиту",
+  },
+  rowRule: {
+    en: "a row rule cannot be proven statically to accept the provisioned row",
+    uk: "правило рядка статично не доводить, що прийме рядок провізії",
+  },
+}
+
 const FIX_IDS = {
   en: "Run simetra fix to assign ids.",
   uk: "Виконайте simetra fix, щоб призначити id.",
@@ -176,6 +196,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: 'Задайте unique: true чи "ignoreCase" або приберіть uniqueWithin.',
     },
   },
+  "attribute.personal-data-required": {
+    en: () => "A personalData attribute cannot be required",
+    uk: () => "Атрибут personalData не може бути обов'язковим",
+    hint: {
+      en: "Anonymization sets the column to NULL: remove required or personalData.",
+      uk: "Знеособлення ставить колонку в NULL: приберіть required або personalData.",
+    },
+  },
   "type.bound-type": {
     en: () =>
       "Numeric bounds apply only to a scalar Integer, SmallInt, BigInt or Numeric",
@@ -264,6 +292,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "scope.name-reserved": {
     en: () => 'Scope kind name "none" is reserved',
     uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
+  },
+  "schema.reserved": {
+    en: () => "Schema simetra belongs to the platform",
+    uk: () => "Схема simetra належить платформі",
+    hint: {
+      en: "Choose another schema; the platform keeps its own objects in simetra.",
+      uk: "Оберіть іншу схему: платформа тримає власні об'єкти в simetra.",
+    },
   },
   "project.database-required": {
     en: (p) =>
@@ -512,6 +548,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Postgres keeps the constraint names of a table in one namespace, including the checks the kind derives: give the row rule its own name.",
       uk: "Postgres тримає імена обмежень таблиці в одному просторі, разом із перевірками, які виводить вид: дайте правилу рядка власне ім'я.",
+    },
+  },
+  "sql.bare-current-user": {
+    en: (p) =>
+      `${p.clause} of ${p.policy} at line ${p.line} calls simetra.current_user_id() outside the uncorrelated subquery (select simetra.current_user_id())`,
+    uk: (p) =>
+      `${p.clause} у ${p.policy} у рядку ${p.line} кличе simetra.current_user_id() поза некорельованим підзапитом (select simetra.current_user_id())`,
+    hint: {
+      en: "Write the call exactly as (select simetra.current_user_id()): a bare call runs once per row, while the uncorrelated subquery is evaluated once per statement as an init plan.",
+      uk: "Пишіть виклик рівно як (select simetra.current_user_id()): голий виклик виконується для кожного рядка, а некорельований підзапит обчислюється один раз на оператор як init plan.",
     },
   },
   "sql.debt-grows": {
@@ -876,6 +922,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' до файлу .sql.",
     },
   },
+  "scope.membership-missing": {
+    en: (p) =>
+      `Scope kind "${p.kind}" takes its set function from membership, but no catalog of this scope kind has membership`,
+    uk: (p) =>
+      `Вид скоупу "${p.kind}" бере функцію множини з членства, але жоден довідник цього виду не має membership`,
+    hint: {
+      en: "Add membership to a catalog scoped by this kind, or name a set function from a .sql file.",
+      uk: "Додайте membership довіднику цього виду скоупу або назвіть функцію множини з файлу .sql.",
+    },
+  },
   "scope.set-function-signature": {
     en: (p) =>
       p.reason === undefined
@@ -979,6 +1035,84 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
 
   // --- Стадія 4: цілісність ---
+  "users.catalog-duplicate": {
+    en: (p) =>
+      `Catalog "${p.name}" is a second users catalog: "${p.firstFile}" already has role users`,
+    uk: (p) =>
+      `Довідник "${p.name}" — другий довідник користувачів: "${p.firstFile}" уже має роль users`,
+    hint: {
+      en: "A project has one users catalog, the one the platform layer provisions accounts into: remove role from the other one.",
+      uk: "У проєкті один довідник користувачів — той, у який платформний шар провізує облікові записи: приберіть role з іншого.",
+    },
+  },
+  "users.scope-not-none": {
+    en: (p) => `Users catalog "${p.name}" must have scope "none"`,
+    uk: (p) => `Довідник користувачів "${p.name}" мусить мати scope "none"`,
+    hint: {
+      en: "A user exists before and across tenants; membership in a tenant is a separate scoped catalog.",
+      uk: "Користувач існує раніше за тенант і поза ним; членство в тенанті — окремий скоуплений довідник.",
+    },
+  },
+  "users.description-required": {
+    en: (p) => `Users catalog "${p.name}" must have a description`,
+    uk: (p) => `Довідник користувачів "${p.name}" мусить мати найменування`,
+    hint: {
+      en: "The description is the user's display name, filled from the account at provisioning: set descriptionLength above 0.",
+      uk: "Найменування — відображуване ім'я користувача, його заповнює провізія з облікового запису: задайте descriptionLength більше 0.",
+    },
+  },
+  "users.provision-unsafe": {
+    en: (p) =>
+      `${p.reason === "rowRule" ? `Row rule "${p.element}"` : `Attribute "${p.element}"`} of users catalog "${p.name}" would break provisioning: ${(PROVISION_HAZARD[String(p.reason)] ?? { en: p.reason }).en}`,
+    uk: (p) =>
+      `${p.reason === "rowRule" ? `Правило рядка "${p.element}"` : `Реквізит "${p.element}"`} довідника користувачів "${p.name}" зірвав би провізію: ${(PROVISION_HAZARD[String(p.reason)] ?? { uk: p.reason }).uk}`,
+    hint: {
+      en: "Provisioning inserts a user row with only the key and the description, and a failure there aborts sign-up: every other column must accept that row.",
+      uk: "Провізія вставляє рядок користувача лише з ключем і найменуванням, а помилка в ній зриває реєстрацію: кожна інша колонка мусить прийняти такий рядок.",
+    },
+  },
+  "users.catalog-missing": {
+    en: (p) =>
+      `${p.kind} "${p.name}" has ${p.feature}, which references the users catalog, but no catalog has role users`,
+    uk: (p) =>
+      `${p.kind} "${p.name}" має ${p.feature}, що посилається на довідник користувачів, але жоден довідник не має ролі users`,
+    hint: {
+      en: "Add a catalog with role users, or remove the field.",
+      uk: "Додайте довідник із роллю users або приберіть поле.",
+    },
+  },
+
+  "membership.not-scoped": {
+    en: (p) =>
+      `Catalog "${p.name}" has membership but no scope column of its own: it is unscoped or the root of its scope kind`,
+    uk: (p) =>
+      `Довідник "${p.name}" має membership, але не має власної скоуп-колонки: він без скоупу або корінь свого виду скоупу`,
+    hint: {
+      en: "Membership belongs to a catalog scoped by a scope kind it is not the root of; set its scope or remove membership.",
+      uk: "Членство має довідник, скоуплений видом, коренем якого він не є; задайте йому scope або приберіть membership.",
+    },
+  },
+  "membership.user-not-users-ref": {
+    en: (p) =>
+      `membership.user of catalog "${p.name}" names "${p.attribute}", which is not a scalar Ref attribute to the users catalog`,
+    uk: (p) =>
+      `membership.user довідника "${p.name}" називає "${p.attribute}", а це не скалярний реквізит Ref на довідник користувачів`,
+    hint: {
+      en: "Name an own attribute of type Ref with ref to the catalog with role users, without array or allowedTypes.",
+      uk: "Назвіть власний реквізит типу Ref з ref на довідник із роллю users, без array і allowedTypes.",
+    },
+  },
+  "membership.duplicate": {
+    en: (p) =>
+      `Catalog "${p.name}" is a second membership catalog of scope kind "${p.scopeKind}"; the first is in ${p.firstFile}`,
+    uk: (p) =>
+      `Довідник "${p.name}" — другий довідник членства виду скоупу "${p.scopeKind}"; перший — у ${p.firstFile}`,
+    hint: {
+      en: "A scope kind has at most one membership catalog; remove membership from one of them.",
+      uk: "Вид скоупу має щонайбільше один довідник членства; приберіть membership з одного з них.",
+    },
+  },
+
   "reference.not-referenceable": {
     en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
     uk: (p) => `На ${p.kind} "${p.name}" тут не можна посилатися`,

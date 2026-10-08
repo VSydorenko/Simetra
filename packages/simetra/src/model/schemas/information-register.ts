@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
-import { attributeSchema } from "./attribute"
+import { attributeSchema, registerFieldSchema } from "./attribute"
 import { metadataRefSchema } from "./metadata-ref"
 import {
   objectHeaderShape,
@@ -35,11 +35,11 @@ export const informationRegisterSchema = z.strictObject({
 
   // Ролі полів
   dimensions: z
-    .array(attributeSchema)
+    .array(registerFieldSchema)
     .default([])
     .meta({ description: "Dimensions: the key fields of a record." }),
   resources: z
-    .array(attributeSchema)
+    .array(registerFieldSchema)
     .default([])
     .meta({ description: "Resources: the value fields of a record." }),
   attributes: z

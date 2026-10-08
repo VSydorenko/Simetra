@@ -4,7 +4,7 @@ import { compile, type CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
-import { withRollback } from "../../../test/db/connection"
+import { queryAs, withRollback } from "../../../test/db/connection"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 
 /**
@@ -48,12 +48,14 @@ describe("reference domain in Postgres", () => {
     await withRollback(async (client) => {
       const catalog = await readCatalog(client, await deploy(client, model))
       expectCatalogMatchesSnapshot(catalog, model.physical)
-      // Функції множини скоупу й обгортки рухів створені там, де їх чекає модель.
+      // Функції множини скоупу, згенеровані функції членства й обгортки рухів
+      // створені там, де їх чекає модель.
       const functions = catalog.functions.map((f) => `${f.schema}.${f.name}`)
       expect(functions).toEqual(
         expect.arrayContaining([
-          "app.accessible_org_ids",
           "app.accessible_user_ids",
+          "app.org_member_member_scopes",
+          "app.org_member_my_member",
           "app.service_accrual_income_expenses_movements",
           "app.service_accrual_performer_settlements_movements",
         ])
@@ -68,29 +70,65 @@ describe("reference domain in Postgres", () => {
       // Текст `timestamptz` залежить від поясу сесії — фіксуємо його.
       await client.query("SET LOCAL TimeZone = 'UTC'")
 
-      const user = await insert(
-        client,
-        "INSERT INTO auth.users (id) VALUES (gen_random_uuid())",
-        []
-      )
-      const org = await insert(
-        client,
-        "INSERT INTO app.organization (id, description) VALUES (gen_random_uuid(), 'Org')",
-        []
-      )
-      await client.query(
-        "INSERT INTO app.org_member (org_id, user_id) VALUES ($1, $2)",
-        [org, user]
-      )
-      // Функція множини `org` бачить організацію учасника: контракт скоупу, на
-      // який спиратимуться RLS-політики П3.
-      await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
-        JSON.stringify({ sub: user, role: "authenticated" }),
-      ])
-      const { rows: visible } = await client.query(
-        "SELECT id FROM app.accessible_org_ids() AS id"
-      )
-      expect(visible).toEqual([{ id: org }])
+      // Обліковий запис провайдера: провізія платформного шару створює рядок
+      // «Користувачів» з тим самим id. Другий користувач із власною
+      // організацією — інакше функція, що віддає всі скоупи, теж пройшла б.
+      const account = () =>
+        insert(
+          client,
+          "INSERT INTO auth.users (id) VALUES (gen_random_uuid())",
+          []
+        )
+      const organization = (description: string) =>
+        insert(
+          client,
+          "INSERT INTO app.organization (id, description) VALUES (gen_random_uuid(), $1)",
+          [description]
+        )
+      const member = (org: string, user: string) =>
+        insert(
+          client,
+          "INSERT INTO app.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2)",
+          [org, user]
+        )
+      const user = await account()
+      const other = await account()
+      const org = await organization("Org")
+      const otherOrg = await organization("Other org")
+      await member(org, user)
+      await member(otherOrg, other)
+      // Функції множини обох видів скоупу бачать рівно скоупи користувача під
+      // claims запиту: контракт скоупу, на який спиратимуться RLS-політики П3.
+      // Гранти схем застосунку ролям API — П3 (платформна спека §6.7); тут
+      // лише `USAGE`, без якого роль запиту не дістане до функцій схеми.
+      await client.query("GRANT USAGE ON SCHEMA app TO authenticated")
+      const scopes = async (claims: Record<string, unknown>) => ({
+        orgs: await queryAs(
+          client,
+          "authenticated",
+          claims,
+          "SELECT id FROM app.org_member_member_scopes() AS id"
+        ),
+        users: await queryAs(
+          client,
+          "authenticated",
+          claims,
+          "SELECT id FROM app.accessible_user_ids() AS id"
+        ),
+      })
+      expect(await scopes({ sub: user, role: "authenticated" })).toEqual({
+        orgs: { rows: [{ id: org }] },
+        users: { rows: [{ id: user }] },
+      })
+      expect(await scopes({ sub: other, role: "authenticated" })).toEqual({
+        orgs: { rows: [{ id: otherOrg }] },
+        users: { rows: [{ id: other }] },
+      })
+      // Без `sub` користувача немає — і скоупів теж
+      expect(await scopes({ role: "authenticated" })).toEqual({
+        orgs: { rows: [] },
+        users: { rows: [] },
+      })
 
       const uah = await insert(
         client,

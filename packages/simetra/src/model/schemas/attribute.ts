@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { localizedStringSchema } from "./localized-string"
+import type { SchemaRule } from "./rules"
 import {
   elementNameSchema,
   metadataIdSchema,
@@ -15,10 +16,11 @@ import {
 } from "./value-type"
 
 /**
- * Реквізит (а також вимір чи ресурс регістра). Унікальність імен у масиві й
- * стиль написання імені перевіряють пізніші стадії — схема лише описує форму.
+ * Поле значення: реквізит, вимір чи ресурс регістра. Унікальність імен у
+ * масиві й стиль написання імені перевіряють пізніші стадії — схема лише
+ * описує форму.
  */
-const attributeShape = {
+const fieldShape = {
   id: metadataIdSchema.optional(),
   name: elementNameSchema,
   physicalName: physicalNameSchema.optional(),
@@ -73,12 +75,40 @@ const attributeShape = {
   }),
 }
 
+/** Реквізит: поле значення, яке може бути персональним. */
+const attributeShape = {
+  ...fieldShape,
+  personalData: z.literal(true).optional().meta({
+    description:
+      "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+  }),
+}
+
+/**
+ * Знеособлення ставить колонку в `NULL`, тож обов'язковий персональний
+ * реквізит зробив би його неможливим — відхиляємо на схемі.
+ */
+function refinePersonalData(
+  value: { personalData?: true; required: boolean },
+  ctx: z.RefinementCtx
+): void {
+  if (value.personalData === true && value.required) {
+    ctx.addIssue({
+      code: "custom",
+      message: "A personalData attribute cannot be required",
+      path: ["personalData"],
+      params: { rule: "attribute.personal-data-required" satisfies SchemaRule },
+    })
+  }
+}
+
 export const attributeSchema = z
   .strictObject(attributeShape)
   .superRefine((value, ctx) => {
     refineValueType(value, ctx)
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
+    refinePersonalData(value, ctx)
   })
 
 /**
@@ -98,7 +128,22 @@ export const catalogAttributeSchema = z
     refineValueType(value, ctx)
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
+    refinePersonalData(value, ctx)
     refineUniqueWithin(value, ctx)
+  })
+
+/**
+ * Вимір регістра чи ресурс регістра відомостей: форма реквізиту без
+ * `personalData`. Персональне в розрізі обліку — посилання на довідник, і
+ * знеособлюється рядок довідника, а не ключ чи значення запису регістра;
+ * строга схема відкидає поле як невідомий ключ.
+ */
+export const registerFieldSchema = z
+  .strictObject(fieldShape)
+  .superRefine((value, ctx) => {
+    refineValueType(value, ctx)
+    refineUnique(value, ctx)
+    refineValueChecks(value, ctx)
   })
 
 export type Attribute = z.infer<typeof attributeSchema>

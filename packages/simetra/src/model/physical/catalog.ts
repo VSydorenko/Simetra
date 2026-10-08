@@ -44,12 +44,20 @@ export type CatalogTable = Omit<
 }
 export type CatalogEnumType = Omit<PhysicalEnumType, "origin">
 
+/** Волатильність функції — факт каталогу (`pg_proc.provolatile`). */
+export type FunctionVolatility = "volatile" | "stable" | "immutable"
+
 export interface CatalogUnit {
   class: SqlUnitClass
   identity: string
   schema: string
   name: string
   sql: string
+  /**
+   * Лише функція, витягнута з бази: текст каталогу типової `VOLATILE` не
+   * друкує, тож зворотна генерація бере волатильність із факту.
+   */
+  volatility?: FunctionVolatility
 }
 
 /** Порядок як у знімку: `tables`/`enumTypes` за `(schema, name)`, `units` за `identity`. */

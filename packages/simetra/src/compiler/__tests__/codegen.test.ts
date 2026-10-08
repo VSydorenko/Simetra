@@ -131,7 +131,10 @@ function diagnosticsOf(code: string, consumer = ANY_CONSUMER): string[] {
     .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"))
 }
 
-describe("emitEntityTypes", () => {
+// Кожен тест перевіряє типи згенерованих оголошень справжньою програмою
+// TypeScript — секунди навіть із кешем lib; під паралельним навантаженням
+// повного набору в CI типові 5 с вичерпуються, хоча тест не повільнішає.
+describe("emitEntityTypes", { timeout: 30_000 }, () => {
   // Холодний розбір lib — у хуку з власним таймаутом, а не в першому тесті.
   beforeAll(() => {
     diagnosticsOf("export {}")

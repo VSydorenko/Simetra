@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appSchemaNameSchema } from "./pg-schema"
 import {
   elementNameSchema,
   objectNameSchema,
@@ -244,7 +245,7 @@ const foreignKeySchema = z
         z.strictObject({
           external: z
             .strictObject({
-              schema: z.string().min(1).meta({
+              schema: appSchemaNameSchema.min(1).meta({
                 description: "PostgreSQL schema of the external table.",
               }),
               table: z.string().min(1).meta({

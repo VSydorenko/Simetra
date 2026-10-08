@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  MEMBERSHIP_SET_FUNCTION,
   type MetadataRef,
   type MovementDecl,
   type Project,
@@ -27,9 +28,114 @@ export function checkLinks(
   return [
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
-    ...checkSetFunctions(project, units, parse),
+    ...checkSetFunctions(objects, project, units, parse),
     ...checkSubscriptionHandlers(objects, project, units),
+    ...checkPolicyCurrentUser(units),
   ]
+}
+
+/** Ім'я функції поточного користувача в дереві розбору (С9). */
+const CURRENT_USER_FUNCTION = ["simetra", "current_user_id"] as const
+
+/**
+ * Поточний користувач у `USING` і `WITH CHECK` дослівної політики — лише
+ * некорельований підзапит `(select simetra.current_user_id())` (С9): голий
+ * виклик рахується на кожен рядок, бо `SECURITY DEFINER` не інлайниться, а
+ * підзапит без жодної іншої частини стає init plan і рахується раз на запит.
+ * Лінтер провайдера цієї функції не знає, тож перевіряє платформа. Ім'я
+ * порівнюється з деревом розбору: парсер уже звів неквотовані імена до
+ * нижнього регістру, тож `SIMETRA.Current_User_Id()` і
+ * `"simetra"."current_user_id"()` — той самий виклик, а `"Simetra"` — інша
+ * схема. Лише одиниці з файлів: згенерованих політик ще немає (П3), а
+ * генератор писатиме обгортку сам.
+ */
+function checkPolicyCurrentUser(units: readonly VerbatimUnit[]): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const unit of units) {
+    if (unit.class !== "policy") continue
+    const policy = (unit.tree as { CreatePolicyStmt?: Record<string, unknown> })
+      .CreatePolicyStmt
+    if (policy === undefined) continue
+    for (const [key, clause] of [
+      ["qual", "USING"],
+      ["with_check", "WITH CHECK"],
+    ] as const) {
+      if (hasBareCurrentUser(policy[key], new Set())) {
+        found.push(
+          diagnostic("sql.bare-current-user", unit.file, "", {
+            policy: unit.identity,
+            clause,
+            line: unit.line,
+          })
+        )
+      }
+    }
+  }
+  return found
+}
+
+function isCurrentUserCall(node: unknown): boolean {
+  const call = (node as { FuncCall?: { funcname?: unknown[] } } | null)
+    ?.FuncCall
+  const names = (call?.funcname ?? []).map(
+    (n) => (n as { String?: { sval?: string } }).String?.sval
+  )
+  return (
+    names.length === CURRENT_USER_FUNCTION.length &&
+    names.every((name, i) => name === CURRENT_USER_FUNCTION[i])
+  )
+}
+
+/**
+ * Виклик у дозволеній обгортці: `EXPR_SUBLINK`, чий `SelectStmt` має лише
+ * одну ціль без псевдоніма — сам виклик. Будь-яка інша частина (`FROM`,
+ * `WHERE`, `LIMIT`, `UNION`…) робить підзапит іншим, ніж форма С9.
+ */
+function wrappedCall(node: Record<string, unknown>): unknown {
+  const sublink = node.SubLink as
+    { subLinkType?: string; subselect?: { SelectStmt?: object } } | undefined
+  if (sublink?.subLinkType !== "EXPR_SUBLINK") return undefined
+  const select = sublink.subselect?.SelectStmt as
+    Record<string, unknown> | undefined
+  if (select === undefined) return undefined
+  const { targetList, limitOption, op, ...rest } = select
+  if (
+    Object.keys(rest).length > 0 ||
+    limitOption !== "LIMIT_OPTION_DEFAULT" ||
+    op !== "SETOP_NONE" ||
+    !Array.isArray(targetList) ||
+    targetList.length !== 1
+  ) {
+    return undefined
+  }
+  const target = (targetList[0] as { ResTarget?: Record<string, unknown> })
+    .ResTarget
+  // Позиція — не частина форми; псевдонім (`name`) чи індексація — вже інша.
+  if (
+    target === undefined ||
+    Object.keys(target).some((k) => k !== "val" && k !== "location")
+  ) {
+    return undefined
+  }
+  return isCurrentUserCall(target.val) ? target.val : undefined
+}
+
+/**
+ * Чи є в дереві виклик поточного користувача поза обгорткою. Обгорнутий
+ * виклик запам'ятовується за вузлом, а обхід іде далі: решта дерева
+ * перевіряється так само. Аргументів у виклику немає — функція їх не бере,
+ * тож у коректному SQL перевіряти нічого.
+ */
+function hasBareCurrentUser(value: unknown, wrapped: Set<unknown>): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasBareCurrentUser(item, wrapped))
+  }
+  if (typeof value !== "object" || value === null) return false
+  if (isCurrentUserCall(value) && !wrapped.has(value)) return true
+  const node = value as Record<string, unknown>
+  const call = wrappedCall(node)
+  if (call !== undefined) wrapped.add(call)
+  return Object.values(node).some((child) => hasBareCurrentUser(child, wrapped))
 }
 
 /**
@@ -126,20 +232,41 @@ function lineOf(text: string, offset: number): number {
 }
 
 /**
- * Функція множини скоупу має бути в SQL-одиницях проєкту: компілятор не
- * створює її сам, бо вона залежить від того, як застосунок визначає доступні
- * значення. Підпис перевіряється за деревом розбору, а не за текстом.
+ * Функція множини скоупу має бути в SQL-одиницях проєкту: як застосунок
+ * визначає доступні значення, знає лише він. Підпис перевіряється за деревом
+ * розбору, а не за текстом. Виняток — `setFunction: "membership"`: функцію
+ * генерує компілятор з довідника членства виду, тож перевіряється лише
+ * наявність такого довідника.
  */
 function checkSetFunctions(
+  objects: readonly ParsedObject[],
   project: Project,
   units: readonly VerbatimUnit[],
   parse: SqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   project.scopeKinds.forEach((kind, index) => {
-    const schema = kind.setFunction.schema ?? project.defaultSchema
-    const name = kind.setFunction.name
     const pointer = toPointer(["scopeKinds", index, "setFunction"])
+    const declared = kind.setFunction
+    if (declared === MEMBERSHIP_SET_FUNCTION) {
+      const catalog = objects.some((object) => {
+        const { membership, scope } = object.data as {
+          membership?: unknown
+          scope?: string
+        }
+        return membership !== undefined && scope === kind.name
+      })
+      if (!catalog) {
+        found.push(
+          diagnostic("scope.membership-missing", "project.meta.json", pointer, {
+            kind: kind.name,
+          })
+        )
+      }
+      return
+    }
+    const schema = declared.schema ?? project.defaultSchema
+    const name = declared.name
     const fn = nullaryFunction(units, schema, name, {
       type: "uuid",
       setof: true,

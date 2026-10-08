@@ -317,6 +317,14 @@ describe("CustomTable physics round-trip", () => {
     // Далі в спільні реквізити фікстури додано межі числа й формат рядка — нові
     // CHECK `bounds` і `format` та колонки `Item`.
     // Далі додано складені індекси `indexes` довідника, документа і їхніх ТЧ.
+    // Далі додано довідник «Користувачі» (`role: "users"`) — нова таблиця
+    // `users`, решта знімка та сама.
+    // Далі `Item` і `Sale` отримали `trackAuthor` — колонки `created_by_id`,
+    // `updated_by_id` з FK на `users` та їхні індекси лише в цих двох таблицях.
+    // Далі додано довідник членства `Member` — нова таблиця `member` з
+    // унікальністю (`org_id`, `account_id`), решта знімка та сама.
+    // Далі «Користувачі» ввімкнули платформний шар — нова таблиця
+    // `simetra.identities`; без неї хеш той самий, що до шару.
     const derived = {
       tables: physical.tables.filter(
         (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
@@ -327,7 +335,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "e95b2d2ef4c65c728ef62c0737d4bf065cdf67d42672e22a48e3f391021537db"
+      "581d7661d8f4417d8b5da3456fe6040fde85db64b380ca36664e68e4f4ba50c6"
     )
   })
 })

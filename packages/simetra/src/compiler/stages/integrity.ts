@@ -7,8 +7,12 @@ import {
   isSqlReservedWord,
   parseExpression,
   walkExpr,
+  defaultMayRepeat,
+  defaultViolatesValueChecks,
   type Attribute,
   type AttributeCase,
+  type Catalog,
+  type CatalogAttribute,
   type CustomTable,
   type DatabaseProvider,
   type Expr,
@@ -51,7 +55,13 @@ import {
   standardElementId,
   type ResolvedReference,
 } from "./identity"
-import { isDeclaredTable, keyColumnOf, type ModelStageResult } from "./model"
+import {
+  isDeclaredTable,
+  keyColumnOf,
+  membershipUserOf,
+  usersCatalogOf,
+  type ModelStageResult,
+} from "./model"
 
 /** NAMEDATALEN Postgres мінус завершальний нуль: довше ім'я БД мовчки обріже. */
 const MAX_IDENT_BYTES = 63
@@ -136,7 +146,8 @@ export function checkIntegrity(
         objects,
         references,
         model.physical,
-        movementWrapperName
+        movementWrapperName,
+        scopeKinds
       ),
       sqlUnits
     )
@@ -206,6 +217,9 @@ export function checkIntegrity(
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider))
+  diagnostics.push(...checkUsersCatalogs(objects, model))
+  diagnostics.push(...checkAuthorTracking(objects))
+  diagnostics.push(...checkMembership(objects, scopeKinds))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -215,6 +229,200 @@ export function checkIntegrity(
     }
   }
   return diagnostics
+}
+
+/**
+ * Роль «користувачі» (спека користувачів §4, §5). Провізія вставляє рядок
+ * лише з ключем і найменуванням, тож власна колонка «Користувачів» мусить
+ * прийняти такий рядок — інакше помилка в тригері зірвала б реєстрацію (С3).
+ * Перевірка статична, над оголошеннями реквізитів; правило рядка статично
+ * не доводиться, тож у модулі «Користувачів» його немає взагалі.
+ */
+function checkUsersCatalogs(
+  objects: readonly ParsedObject[],
+  model: ModelStageResult
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const first = usersCatalogOf(objects)
+  for (const object of objects) {
+    const data = object.data as Catalog
+    if (data.role !== "users") continue
+    const name = object.name
+    if (object !== first) {
+      found.push(
+        diagnostic("users.catalog-duplicate", object.file, "/role", {
+          name,
+          firstFile: first!.file,
+        })
+      )
+    }
+    if (data.scope !== undefined && data.scope !== NO_SCOPE) {
+      found.push(
+        diagnostic("users.scope-not-none", object.file, "/scope", { name })
+      )
+    }
+    if (data.descriptionLength === 0) {
+      found.push(
+        diagnostic(
+          "users.description-required",
+          object.file,
+          "/descriptionLength",
+          {
+            name,
+          }
+        )
+      )
+    }
+    for (const field of KIND_REGISTRY[object.kind].columnFields) {
+      const attributes = (object.data as Record<string, unknown>)[field] as
+        CatalogAttribute[] | undefined
+      attributes?.forEach((attribute, index) => {
+        const reason = provisionHazard(attribute)
+        if (reason === undefined) return
+        found.push(
+          diagnostic(
+            "users.provision-unsafe",
+            object.file,
+            `/${field}/${index}`,
+            {
+              name,
+              reason,
+              element: attribute.name,
+            }
+          )
+        )
+      })
+    }
+    for (const table of model.physical.tables) {
+      if (table.origin.objectId !== object.id) continue
+      for (const check of table.checks) {
+        if (check.origin === undefined) continue
+        found.push(
+          diagnostic("users.provision-unsafe", check.origin.rowRule.file, "", {
+            name,
+            reason: "rowRule",
+            element: check.name,
+          })
+        )
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * Авторство посилається на «Користувачі» за роллю, а не за іменем: без
+ * довідника з роллю стадія 3 лишає колонки без FK, і помилка — тут. Чи вид
+ * приймає `trackAuthor`, каже факт реєстру, а не перелік видів.
+ */
+function checkAuthorTracking(objects: readonly ParsedObject[]): Diagnostic[] {
+  if (usersCatalogOf(objects) !== undefined) return []
+  return objects
+    .filter(
+      (object) =>
+        KIND_REGISTRY[object.kind].authorTracking === true &&
+        (object.data as { trackAuthor?: boolean }).trackAuthor === true
+    )
+    .map((object) =>
+      diagnostic("users.catalog-missing", object.file, "/trackAuthor", {
+        kind: object.kind,
+        name: object.name,
+        feature: "trackAuthor",
+      })
+    )
+}
+
+/**
+ * Членство (спека користувачів §8): довідник учасників — скоуплений
+ * довідник із власною скоуп-колонкою (корінь її не має: його рядки і є
+ * значеннями скоупу), один на вид скоупу, а `membership.user` — скалярний
+ * `Ref` на «Користувачі». Перший довідник виду — раніший за шляхом файлу.
+ */
+function checkMembership(
+  objects: readonly ParsedObject[],
+  scopeKinds: readonly ScopeKind[]
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  const users = usersCatalogOf(objects)
+  const firstByKind = new Map<string, ParsedObject>()
+  const ordered = [...objects].sort((a, b) => compareStrings(a.file, b.file))
+  for (const object of ordered) {
+    const { membership, scope } = object.data as {
+      membership?: { user: string }
+      scope?: string
+    }
+    if (membership === undefined) continue
+    const { file, name } = object
+    const kind = scopeKinds.find((k) => k.name === scope)
+    const root =
+      kind !== undefined &&
+      "object" in kind.root &&
+      objectKey(kind.root.object.kind, kind.root.object.name) ===
+        objectKey(object.kind, object.name)
+    if (kind === undefined || root) {
+      found.push(
+        diagnostic("membership.not-scoped", file, "/membership", { name })
+      )
+    } else {
+      const first = firstByKind.get(kind.name)
+      if (first === undefined) {
+        firstByKind.set(kind.name, object)
+      } else {
+        found.push(
+          diagnostic("membership.duplicate", file, "/membership", {
+            name,
+            scopeKind: kind.name,
+            firstFile: first.file,
+          })
+        )
+      }
+    }
+    if (users === undefined) {
+      found.push(
+        diagnostic("users.catalog-missing", file, "/membership", {
+          kind: object.kind,
+          name,
+          feature: "membership",
+        })
+      )
+      continue
+    }
+    const user = membershipUserOf(object)
+    const usersRef =
+      user !== undefined &&
+      user.type === "Ref" &&
+      user.array !== true &&
+      user.allowedTypes === undefined &&
+      user.ref !== undefined &&
+      objectKey(user.ref.kind, user.ref.name) ===
+        objectKey(users.kind, users.name)
+    if (!usersRef) {
+      found.push(
+        diagnostic("membership.user-not-users-ref", file, "/membership/user", {
+          name,
+          attribute: membership.user,
+        })
+      )
+    }
+  }
+  return found
+}
+
+/** Перша причина, з якої вставка провізії порушила б обмеження реквізиту. */
+function provisionHazard(attribute: CatalogAttribute): string | undefined {
+  const { defaultValue } = attribute
+  if (attribute.required && defaultValue === undefined)
+    return "requiredWithoutDefault"
+  // Значення, однакове для різних рядків, дало б дубль на другій реєстрації;
+  // `newUuid` кожному рядку дає власне.
+  if (
+    attribute.unique !== false &&
+    defaultValue !== undefined &&
+    defaultMayRepeat(defaultValue)
+  )
+    return "uniqueWithDefault"
+  if (defaultViolatesValueChecks(attribute)) return "defaultViolatesCheck"
+  return undefined
 }
 
 /**
@@ -898,6 +1106,8 @@ function checkScope(
 
   // Корінь-об'єкт: вид, який на нього вказує. Два види на одному корені
   // стадія 2 відкидає (`scope.root-duplicate`), тож перезапису тут не буде.
+  // Глобальний корінь сюди не входить: він без скоупу, і посилання на нього
+  // (й від нього) — як на будь-який глобальний об'єкт.
   const rootKindOf = new Map<string, ScopeKind>()
   scopeKinds.forEach((kind, index) => {
     if (!("object" in kind.root)) return
@@ -905,7 +1115,9 @@ function checkScope(
     const key = objectKey(root.object.kind, root.object.name)
     const rootObject = byKey.get(key)
     if (rootObject === undefined) return
-    rootKindOf.set(key, kind)
+    const globalRoot =
+      KIND_REGISTRY[rootObject.kind].globalRoot?.(rootObject.data) === true
+    if (!globalRoot) rootKindOf.set(key, kind)
     const at = {
       kind: rootObject.kind,
       name: rootObject.name,
@@ -937,7 +1149,9 @@ function checkScope(
       )
       return
     }
-    if (scopeOf(rootObject) !== kind) {
+    // Глобальний корінь лишається `none`: інше оголошення звітує правило
+    // його ролі, а не кореня.
+    if (!globalRoot && scopeOf(rootObject) !== kind) {
       const { scope } = rootObject.data as { scope?: string }
       found.push(
         diagnostic(
@@ -1122,6 +1336,8 @@ function checkPosting(
   }
   const idOf = (ref: MetadataRef) =>
     byKey.get(objectKey(ref.kind, ref.name))?.id
+  // Ціль авторства — «Користувачі» за роллю (стандартний `ref: "users"`).
+  const usersId = usersCatalogOf(objects)?.id
   const typeOfField = (field: ValueType): InferredType => {
     const refs =
       field.ref !== undefined ? [field.ref] : (field.allowedTypes ?? [])
@@ -1190,6 +1406,11 @@ function checkPosting(
       }
       if (column.ref === "owningObject") {
         return { kind: "ref", targets: [ownerId] }
+      }
+      if (column.ref === "users") {
+        return usersId === undefined
+          ? UNKNOWN
+          : { kind: "ref", targets: [usersId] }
       }
       // Власник і реєстратор — поліморфні пари без цілі у виразі.
       if (column.ref !== undefined) return UNKNOWN

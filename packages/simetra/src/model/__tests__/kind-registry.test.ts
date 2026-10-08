@@ -80,6 +80,30 @@ describe("KIND_REGISTRY", () => {
     }
   })
 
+  it("the trackAuthor field exists exactly in kinds with the authorTracking fact", () => {
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      const shape = (def.schema as z.ZodObject).shape
+      expect("trackAuthor" in shape, kind).toBe(def.authorTracking === true)
+    }
+    const doc = (trackAuthor: boolean) =>
+      KIND_REGISTRY.Document.standardColumns(
+        documentSchema.parse({ kind: "Document", name: "Invoice", trackAuthor })
+      )
+    expect(column(doc(true), "createdBy")).toMatchObject({
+      physicalName: "created_by_id",
+      type: { type: "UUID" },
+      notNull: false,
+      ref: "users",
+      indexed: true,
+    })
+    expect(column(doc(true), "updatedBy")?.physicalName).toBe("updated_by_id")
+    expect(column(doc(false), "createdBy")).toBeUndefined()
+    expect(
+      column(catalogColumns({ trackAuthor: true }), "updatedBy")
+    ).toBeDefined()
+  })
+
   it("materialization and write pattern follow the kind", () => {
     expect(KIND_REGISTRY.Catalog.writePattern).toBe("optimistic")
     expect(KIND_REGISTRY.Document.writePattern).toBe("server")

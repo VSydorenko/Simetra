@@ -61,7 +61,10 @@ function ruledFunctions(
       const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
       return spec === undefined ? [] : [spec.handler]
     }),
-    ...project.scopeKinds.map((kind) => kind.setFunction),
+    // Згенерована функція множини (`membership`) — не дослівна одиниця.
+    ...project.scopeKinds.flatMap((kind) =>
+      typeof kind.setFunction === "string" ? [] : [kind.setFunction]
+    ),
   ]
   return new Set(
     declared.map((fn) =>

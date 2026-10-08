@@ -146,6 +146,9 @@ Attribute properties (an element of `attributes`):
   mean the same in JavaScript and Postgres: no named groups, `\p{}`, `\k<>`,
   `\b`, `\B`, `\x`, `\u{}` or inline flag groups such as `(?i:…)`. Write a
   character as itself or as `\uXXXX`.
+- `personalData: true` marks personal data (a name, a phone, an address):
+  anonymization sets the attribute to `NULL`, so it cannot also be
+  `required`.
 
 Object properties:
 
@@ -180,6 +183,45 @@ created with `create` like any object (kind `EventSubscription`):
 - `whenChanged` (optional, write events only): attribute names.
 - `handler`: `{ schema?, name }`, a function without arguments that
   `RETURNS trigger`, declared in the closed shell below.
+
+## Users, authorship and membership
+
+People are platform data, not tables you write yourself:
+
+- **Users catalog.** A Catalog with `"role": "users"` is the project's users
+  catalog: at most one per project, `scope: "none"`, a description (the
+  display name filled from the account). The compiler adds the standard
+  `userKind` and `invalid` attributes. Every account of the identity provider
+  gets a row through the platform's provisioning, which inserts only the key
+  and the description, so the catalog's own attributes must accept that
+  insert: a `required` attribute needs a `defaultValue` that passes the
+  attribute's own checks, a unique attribute takes no default other than
+  `{ "fill": "newUuid" }`, and its module has no row rule
+  (`users.provision-unsafe` names the reason).
+- **Scope root.** The users catalog may be the `root` of a scope kind
+  (`{ "object": { "kind": "Catalog", "name": "<users catalog>" } }`) while
+  staying `scope: "none"`; references to it from any scope kind are plain
+  references, without `crossScope`. Do not point a root or a foreign key at
+  the provider's account table.
+- **Authorship.** `trackAuthor: true` on a Catalog or a Document adds the
+  standard `createdBy` and `updatedBy` references to the users catalog;
+  without a users catalog it is an error (`users.catalog-missing`).
+- **Membership.** A scoped catalog with `membership: { "user": "<attribute>" }`
+  is the membership of its scope kind: the attribute is a scalar `Ref` to the
+  users catalog, nullable for an invited member without an account. The
+  compiler derives one member per user and scope value and generates a
+  "my member" function; a scope kind with `"setFunction": "membership"` gets
+  its scope set function from that catalog. Use it instead of a hand-written
+  member table and set function. One membership catalog per scope kind.
+
+The platform layer (identities, the current user, provisioning) lives in the
+PG schema `simetra`, generated when a users catalog exists. The schema is
+reserved: no object, `defaultSchema`, set function, external reference,
+event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
+folder (`schema.reserved`). In SQL, the
+current user is `(select simetra.current_user_id())`, written exactly so in a
+policy (`sql.bare-current-user` rejects a bare call there); it is `NULL` for
+an anonymous or service session and for an invalid user.
 
 ## The SQL module: closed forms only
 

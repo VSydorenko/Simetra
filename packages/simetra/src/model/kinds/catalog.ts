@@ -1,5 +1,6 @@
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import {
+  authorColumns,
   deletionMarkColumn,
   keyColumn,
   keyOrderOf,
@@ -42,6 +43,11 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   }
 
   columns.push(deletionMarkColumn())
+  // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
+  // єдине місце фактів ролі (див. CATALOG_ROLES).
+  if (catalog.role !== undefined) {
+    columns.push(...(CATALOG_ROLES[catalog.role].columns?.() ?? []))
+  }
 
   if (catalog.hierarchyType !== "None") {
     columns.push({
@@ -92,9 +98,61 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
     },
     versionColumn(),
-    ...serviceDateColumns()
+    ...serviceDateColumns(),
+    ...(catalog.trackAuthor ? authorColumns() : [])
   )
   return columns
+}
+
+/**
+ * Платформні реквізити «Користувачів» (спека користувачів §4): провізія
+ * вставляє рядок лише з ключем і найменуванням, тож обидва мають DEFAULT.
+ * Недійсність не видаляє рядок — на нього можуть посилатися дані застосунку.
+ */
+function userColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "userKind",
+      physicalName: "user_kind",
+      type: { type: "Text" },
+      notNull: true,
+      default: "'human'",
+      check: "user_kind IN ('human', 'agent')",
+      title: { uk: "Вид користувача", en: "User kind" },
+    },
+    {
+      logicalName: "invalid",
+      physicalName: "invalid",
+      type: { type: "Boolean" },
+      notNull: true,
+      default: "false",
+      title: { uk: "Недійсний", en: "Invalid" },
+    },
+  ]
+}
+
+/** Факти системної ролі довідника: що платформа виводить із ролі. */
+interface CatalogRoleDefinition {
+  /**
+   * Глобальний корінь (спека П2 §6): довідник лишається `scope: "none"`, але
+   * може бути коренем виду скоупу, а посилання на нього з будь-якого виду —
+   * простий FK, не перетин видів. «Користувачі» глобальні за природою: один
+   * обліковий запис належить багатьом тенантам.
+   */
+  globalRoot?: true
+  /**
+   * Стандартні колонки, які роль додає одразу після позначки видалення:
+   * порядок колонок входить у фізичну форму таблиці.
+   */
+  columns?: () => StandardColumnDef[]
+}
+
+/** Ролі довідника — одне місце, звідки компілятор бере їхні факти. */
+const CATALOG_ROLES: Record<
+  NonNullable<Catalog["role"]>,
+  CatalogRoleDefinition
+> = {
+  users: { globalRoot: true, columns: userColumns },
 }
 
 function numbering(obj: unknown): NumberingSpec | undefined {
@@ -122,6 +180,7 @@ export const catalogKind: KindDefinition = {
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
+  authorTracking: true,
   scope: "required",
   declared: false,
   kindLabel: true,
@@ -130,6 +189,10 @@ export const catalogKind: KindDefinition = {
   namedElementFields: ["predefinedItems"],
   ownerKinds: ["Catalog"],
   standardColumns,
+  globalRoot(obj) {
+    const { role } = obj as Catalog
+    return role !== undefined && CATALOG_ROLES[role].globalRoot === true
+  },
   numbering,
   tabularSectionColumns: () => tabularRowColumns(false),
   references(obj) {

@@ -5,6 +5,7 @@ import {
   readSqlUnits,
   type SchemaPathResolver,
   type SqlParser,
+  withoutLocations,
 } from "simetra/compiler"
 import {
   catalogFromSnapshot,
@@ -15,6 +16,7 @@ import {
   type CatalogModel,
   type CatalogTable,
   type CatalogUnit,
+  type FunctionVolatility,
 } from "simetra/model"
 import { reverseGenerate, type ReverseResult } from "simetra/schema"
 import {
@@ -84,6 +86,27 @@ function table(
 }
 
 /** Одиниці з тексту — тим самим класифікатором, що й extract. */
+/**
+ * Волатильність функції, як її дає extract: факт каталогу, а текст без
+ * волатильності — типова VOLATILE.
+ */
+function volatilityOf(sql: string): FunctionVolatility {
+  const parsed = parse(sql)
+  const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+  const options =
+    stmt !== undefined && "CreateFunctionStmt" in stmt
+      ? (stmt.CreateFunctionStmt.options ?? [])
+      : []
+  for (const option of options) {
+    if (!("DefElem" in option) || option.DefElem.defname !== "volatility")
+      continue
+    const arg = option.DefElem.arg
+    if (arg !== undefined && "String" in arg)
+      return arg.String.sval as FunctionVolatility
+  }
+  return "volatile"
+}
+
 function units(sql: string): CatalogUnit[] {
   const read = readSqlUnits(
     [{ file: "x.sql", text: sql, schema: "" }],
@@ -97,6 +120,7 @@ function units(sql: string): CatalogUnit[] {
     schema: u.schema,
     name: u.name,
     sql: u.sql,
+    ...(u.class === "function" ? { volatility: volatilityOf(u.sql) } : {}),
   }))
 }
 
@@ -149,6 +173,15 @@ const TOUCH = [
   "CREATE FUNCTION app.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
   "CREATE TRIGGER note_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.touch();",
 ].join("\n")
+
+/**
+ * Тригерна функція, що лишається боргом за будь-якої волатильності:
+ * SECURITY DEFINER без `search_path` поза закритою оболонкою.
+ */
+const DEBT_TOUCH = TOUCH.replace(
+  "LANGUAGE plpgsql",
+  "LANGUAGE plpgsql SECURITY DEFINER"
+)
 
 describe("reverseGenerate", () => {
   it("table becomes a CustomTable with explicit names", async () => {
@@ -409,7 +442,7 @@ describe("reverseGenerate", () => {
     )
     expect(result.diagnostics).toEqual([])
     expect(result.files.get("sql/reports/add__int4_int4.sql")).toBe(
-      "CREATE FUNCTION reports.add(a integer, b integer) RETURNS integer LANGUAGE sql AS $$ SELECT a + b $$;\n"
+      "CREATE FUNCTION reports.add(a integer, b integer) RETURNS integer VOLATILE LANGUAGE sql AS $$ SELECT a + b $$;\n"
     )
   })
 
@@ -657,7 +690,7 @@ describe("reverseGenerate", () => {
       model({
         tables: [table("app", "old")],
         units: units(
-          "CREATE FUNCTION app.f() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;"
+          "CREATE FUNCTION app.f() RETURNS integer LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;"
         ),
       }),
       options(kept)
@@ -1054,6 +1087,120 @@ describe("reverseGenerate", () => {
     )
   })
 
+  it("a subscription handler re-introspected from catalog text stays closed and is not debt", async () => {
+    // Текст каталогу (`pg_get_functiondef`) типової VOLATILE не друкує;
+    // волатильність — факт, тож обробник після introspect лишається закритим.
+    const handler = TOUCH.split("\n")[0]!.replace(
+      "LANGUAGE plpgsql",
+      "LANGUAGE plpgsql VOLATILE"
+    )
+    const kept = keptCatalog({
+      [SUBSCRIPTION_FILE]: {
+        id: uuid(990_001),
+        kind: "EventSubscription",
+        name: "CurrencyTouch",
+        physicalName: "currency_touch",
+        sources: [{ kind: "Catalog", name: "Currency" }],
+        event: "beforeWrite",
+        handler: { schema: "app", name: "touch" },
+      },
+      "sql/app/touch.sql": `${handler}\n`,
+    })
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(compiled.model!.physical).tables,
+        units: units(TOUCH.split("\n")[0]!),
+      }),
+      options(kept)
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(result.files.get("sql/app/touch.sql")).toBe(
+      "CREATE FUNCTION app.touch() RETURNS trigger VOLATILE LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n"
+    )
+    expect(json(result, "sql-debt.json").units).toEqual([])
+    expect((await compile(result.files)).diagnostics).toEqual([])
+  })
+
+  describe("volatility comes from the catalog fact", () => {
+    const fn = (name: string, volatility = "") =>
+      `CREATE FUNCTION app.${name}() RETURNS integer LANGUAGE sql${volatility} AS $$ SELECT 1 $$;`
+
+    it("a function without a volatility clause gets VOLATILE; STABLE and IMMUTABLE stay", async () => {
+      const result = await reverseGenerate(
+        model({
+          units: units(
+            [fn("v"), fn("s", " STABLE"), fn("i", " IMMUTABLE")].join("\n")
+          ),
+        }),
+        options()
+      )
+      expect(result.diagnostics).toEqual([])
+      expect(result.files.get("sql/app/v.sql")).toBe(
+        "CREATE FUNCTION app.v() RETURNS integer VOLATILE LANGUAGE sql AS $$ SELECT 1 $$;\n"
+      )
+      expect(result.files.get("sql/app/s.sql")).toBe(`${fn("s", " STABLE")}\n`)
+      expect(result.files.get("sql/app/i.sql")).toBe(
+        `${fn("i", " IMMUTABLE")}\n`
+      )
+    })
+
+    it("the keyword is the fact, not a default", async () => {
+      const [unit] = units(fn("s"))
+      const result = await reverseGenerate(
+        model({ units: [{ ...unit!, volatility: "stable" }] }),
+        options()
+      )
+      expect(result.diagnostics).toEqual([])
+      expect(result.files.get("sql/app/s.sql")).toBe(
+        "CREATE FUNCTION app.s() RETURNS integer STABLE LANGUAGE sql AS $$ SELECT 1 $$;\n"
+      )
+    })
+
+    // Тіло SQL-стандарту друкується після опцій: вставка слова зсуває його
+    // позиції, а зміст лишається тим самим
+    it.each([
+      ["r", "CREATE FUNCTION app.r() RETURNS integer LANGUAGE sql RETURN 1;"],
+      [
+        "atomic",
+        "CREATE FUNCTION app.atomic() RETURNS integer LANGUAGE sql BEGIN ATOMIC SELECT 1; END;",
+      ],
+    ])(
+      "a SQL-standard body (app.%s) gets VOLATILE and keeps its body",
+      async (name, sql) => {
+        const [unit] = units(sql)
+        const result = await reverseGenerate(
+          model({ units: [{ ...unit!, volatility: "volatile" }] }),
+          options()
+        )
+        expect(result.diagnostics).toEqual([])
+        const text = result.files.get(`sql/app/${name}.sql`)
+        expect(text).toContain(" VOLATILE LANGUAGE sql ")
+        const body = (source: string) => {
+          const parsed = parse(source)
+          const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+          return stmt !== undefined && "CreateFunctionStmt" in stmt
+            ? withoutLocations(stmt.CreateFunctionStmt.sql_body)
+            : undefined
+        }
+        expect(body(text!)).toBeDefined()
+        expect(body(text!)).toEqual(body(sql))
+      }
+    )
+
+    it("a procedure is untouched", async () => {
+      const procedure =
+        "CREATE PROCEDURE app.p() LANGUAGE sql AS $$ SELECT 1 $$;"
+      const result = await reverseGenerate(
+        model({ units: units(procedure) }),
+        options()
+      )
+      expect(result.diagnostics).toEqual([])
+      expect(result.files.get("sql/app/p.sql")).toBe(`${procedure}\n`)
+    })
+  })
+
   it("settings and grants of an own trigger function follow it, an overload does not", async () => {
     const result = await reverseGenerate(
       model({
@@ -1107,6 +1254,41 @@ describe("reverseGenerate", () => {
       ["identity.physical-name-missing", "custom-tables/Note/Note.meta.json"],
     ])
     expect(result.changes).toEqual([])
+  })
+
+  it("introspect over a deployed platform layer writes nothing for simetra", async () => {
+    // Шар — частина моделі «Користувачів»: його таблиця й одиниці описані
+    // збереженим файлом довідника, тож генератор їх не розкладає вдруге.
+    const kept = metaFiles({
+      "project.meta.json": SNAKE_PROJECT,
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        schema: "app",
+        role: "users",
+        scope: "none",
+      }),
+    })
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const layer = compiled.model!
+    expect(layer.sqlUnits.some((u) => u.schema === "simetra")).toBe(true)
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(layer.physical).tables,
+        units: layer.sqlUnits.map((u) => ({
+          class: u.class,
+          identity: u.identity,
+          schema: u.schema,
+          name: u.name,
+          sql: u.sql,
+        })),
+      }),
+      options(kept)
+    )
+    expect(result.diagnostics).toEqual([])
+    // Лише перелік боргу (теки без нього introspect пише завжди) — і він
+    // порожній: жодна одиниця шару не стала дослівним SQL.
+    expect(result.changes.map((c) => c.path)).toEqual(["sql-debt.json"])
+    expect(json(result, "sql-debt.json").units).toEqual([])
   })
 
   it("final map compiles", async () => {
@@ -1177,7 +1359,7 @@ describe("reverseGenerate", () => {
         tables: [table("app", "note")],
         units: units(
           [
-            TOUCH,
+            DEBT_TOUCH,
             "CREATE POLICY note_read ON app.note USING (true);",
             "CREATE FUNCTION app.closed() RETURNS int LANGUAGE sql STABLE AS $$ SELECT 1 $$;",
           ].join("\n")
@@ -1186,7 +1368,7 @@ describe("reverseGenerate", () => {
       options()
     )
     expect(result.diagnostics).toEqual([])
-    // Обробник без явної волатильності — поза оболонкою, тож теж борг.
+    // SECURITY DEFINER без search_path — поза оболонкою, тож теж борг.
     expect(json(result, "sql-debt.json")).toEqual({
       $schema: "schemas-of/sql-debt.json/sql-debt.schema.json",
       units: [
@@ -1216,7 +1398,7 @@ describe("reverseGenerate", () => {
       ).tables
       const db = model({
         tables: [...catalogTables, table("app", "note")],
-        units: units(TOUCH),
+        units: units(DEBT_TOUCH),
       })
       const first = await reverseGenerate(db, options(kept))
       expect(first.diagnostics).toEqual([])

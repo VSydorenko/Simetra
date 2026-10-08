@@ -23,7 +23,7 @@ const SETTLEMENTS =
 const COUNTERPARTY = "catalogs/Counterparty/Counterparty.meta.json"
 const COUNTERPARTY_MODULE = "catalogs/Counterparty/Counterparty.module.ts"
 const CONTRACT = "catalogs/Contract/Contract.meta.json"
-const ORG_MEMBER = "custom-tables/OrgMember/OrgMember.meta.json"
+const USER_SETTINGS = "custom-tables/UserSettings/UserSettings.meta.json"
 const ACCRUAL_KIND = "enumerations/AccrualKind/AccrualKind.meta.json"
 const PROJECT = "project.meta.json"
 
@@ -234,21 +234,16 @@ describe("renameElement", () => {
     const files = readReferenceDomain()
     const { after } = await renamed(
       files,
-      { kind: "CustomTable", name: "OrgMember", element: ["orgId"] },
-      "organizationId"
+      { kind: "CustomTable", name: "UserSettings", element: ["userId"] },
+      "ownerId"
     )
-    const table = json(after, ORG_MEMBER)
-    expect(table.scopeColumn).toBe("organizationId")
-    expect((table.primaryKey as Json).columns).toEqual([
-      "organizationId",
-      "userId",
-    ])
-    expect((table.foreignKeys as Json[])[0]!.columns).toEqual([
-      "organizationId",
-    ])
+    const table = json(after, USER_SETTINGS)
+    expect(table.scopeColumn).toBe("ownerId")
+    expect((table.primaryKey as Json).columns).toEqual(["ownerId"])
+    expect((table.foreignKeys as Json[])[0]!.columns).toEqual(["ownerId"])
     expect((table.columns as Json[])[0]).toMatchObject({
-      name: "organizationId",
-      physicalName: "org_id",
+      name: "ownerId",
+      physicalName: "user_id",
     })
   })
 

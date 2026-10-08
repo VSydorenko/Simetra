@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appSchemaNameSchema } from "./pg-schema"
 import { metadataRefSchema } from "./metadata-ref"
 import { objectHeaderShape } from "./object-header"
 
@@ -61,7 +62,7 @@ export const eventSubscriptionSchema = z.strictObject({
   }),
   handler: z
     .strictObject({
-      schema: z.string().optional().meta({
+      schema: appSchemaNameSchema.optional().meta({
         description:
           "PostgreSQL schema of the handler; the project defaultSchema applies when absent.",
       }),

@@ -14,6 +14,7 @@ import {
   type CatalogColumn,
   type CatalogDifference,
   type CatalogUnit,
+  PLATFORM_SCHEMA,
 } from "simetra/model"
 import {
   SUPABASE_SCHEMAS,
@@ -118,6 +119,12 @@ export const introspectTool = defineTool({
     if (foreign.length > 0)
       throw new UsageError(
         `Provider schemas are not introspected: ${foreign.join(", ")}. Nothing changed.`
+      )
+    // Системний шар платформи не метадані застосунку: його вміст породжує
+    // компілятор, тож зворотна генерація не має його «усиновлювати».
+    if ((input.schemas ?? []).includes(PLATFORM_SCHEMA))
+      throw new UsageError(
+        `Schema ${PLATFORM_SCHEMA} belongs to the platform and is not introspected. Nothing changed.`
       )
 
     let project: {

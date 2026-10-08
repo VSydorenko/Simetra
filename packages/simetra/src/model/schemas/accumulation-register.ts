@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
-import { attributeSchema } from "./attribute"
+import { attributeSchema, registerFieldSchema } from "./attribute"
 import {
   elementNameSchema,
   metadataIdSchema,
@@ -82,7 +82,7 @@ export const accumulationRegisterSchema = z
 
     // Ролі полів
     dimensions: z
-      .array(attributeSchema)
+      .array(registerFieldSchema)
       .default([])
       .meta({ description: "Dimensions: the key fields of a record." }),
     resources: z.array(resourceSchema).default([]).meta({

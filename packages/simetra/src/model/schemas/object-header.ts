@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appSchemaNameSchema } from "./pg-schema"
 import { localizedStringSchema } from "./localized-string"
 import {
   metadataIdSchema,
@@ -24,7 +25,7 @@ export const objectHeaderShape = {
   }),
   physicalName: physicalNameSchema.optional(),
   /** PG-схема об'єкта; за відсутності діє `defaultSchema` проєкту. */
-  schema: z.string().optional().meta({
+  schema: appSchemaNameSchema.optional().meta({
     description:
       "PostgreSQL schema of the object; the project defaultSchema applies when absent.",
   }),

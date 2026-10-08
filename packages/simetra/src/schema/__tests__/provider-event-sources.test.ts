@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { PROVIDER_EVENT_SOURCES } from "simetra/model"
+import {
+  PROVIDER_EVENT_SOURCES,
+  PROVIDER_IDENTITY_SOURCES,
+} from "simetra/model"
 import { onSurface } from "../engine/desired"
 
 /**
@@ -16,5 +19,14 @@ describe("provider event sources", () => {
         `${source.schema}.${source.table}`
       ).toBe(true)
     }
+  })
+
+  it("the supabase identity source lies on the trigger surface", () => {
+    // Провізія — тригер на таблиці облікових записів: поза поверхнею межа
+    // керування вважала б його чужим.
+    const { table } = PROVIDER_IDENTITY_SOURCES.supabase
+    expect(
+      onSurface("trigger", { schema: table.schema, object: table.name })
+    ).toBe(true)
   })
 })

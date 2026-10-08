@@ -14,6 +14,10 @@ import {
   metadataRefSchema,
   metadataKindSchema,
   METADATA_KINDS,
+  eventSubscriptionSchema,
+  PROVIDER_API_ROLES,
+  PUBLIC_READ_PURPOSES,
+  PUBLIC_READ_ROLES,
 } from "../schemas"
 import { KIND_REGISTRY } from "../kinds/registry"
 import { unwrap } from "../format"
@@ -134,6 +138,23 @@ describe("catalogSchema", () => {
     ])
   })
 
+  it("membership names the user attribute and is a strict object", () => {
+    const base = { kind: "Catalog", name: "OrgMember" }
+    expect(
+      catalogSchema.parse({ ...base, membership: { user: "user" } }).membership
+    ).toEqual({ user: "user" })
+    expect(catalogSchema.parse(base).membership).toBeUndefined()
+    expect(catalogSchema.safeParse({ ...base, membership: {} }).success).toBe(
+      false
+    )
+    expect(
+      catalogSchema.safeParse({
+        ...base,
+        membership: { user: "user", extra: true },
+      }).success
+    ).toBe(false)
+  })
+
   it("parses a minimal catalog with defaults", () => {
     const r = catalogSchema.parse({ kind: "Catalog", name: "Product" })
     expect(r.codeLength).toBe(9)
@@ -176,6 +197,35 @@ describe("catalogSchema", () => {
     expect(() =>
       catalogSchema.parse({ kind: "Catalog", name: "product" })
     ).toThrow()
+  })
+
+  it("schema simetra is reserved for the platform", () => {
+    const res = catalogSchema.safeParse({
+      kind: "Catalog",
+      name: "Contract",
+      schema: "simetra",
+    })
+    expect(res.success).toBe(false)
+    expect(
+      res.error?.issues.map(
+        (i) => (i as { params?: { rule?: string } }).params?.rule
+      )
+    ).toEqual(["schema.reserved"])
+  })
+
+  it("an event handler in schema simetra is reserved", () => {
+    const res = eventSubscriptionSchema.safeParse({
+      kind: "EventSubscription",
+      name: "OnSave",
+      sources: [{ kind: "Catalog", name: "Contract" }],
+      event: "onWrite",
+      handler: { schema: "simetra", name: "on_save" },
+    })
+    expect(
+      res.error?.issues.map(
+        (i) => (i as { params?: { rule?: string } }).params?.rule
+      )
+    ).toEqual(["schema.reserved"])
   })
 
   it("rejects a malformed id", () => {
@@ -276,6 +326,32 @@ describe("informationRegisterSchema", () => {
         resources: [{ name: "note", type: "Text" }],
       })
     ).not.toThrow()
+  })
+})
+
+describe("personalData on register fields", () => {
+  const personal = { name: "phone", type: "Integer", personalData: true }
+  const keys = (res: { error?: z.ZodError }) =>
+    (res.error?.issues ?? []).flatMap((i) =>
+      i.code === "unrecognized_keys" ? i.keys : []
+    )
+
+  it.each([
+    ["InformationRegister", "dimensions", informationRegisterSchema],
+    ["InformationRegister", "resources", informationRegisterSchema],
+    ["AccumulationRegister", "dimensions", accumulationRegisterSchema],
+    ["AccumulationRegister", "resources", accumulationRegisterSchema],
+  ] as const)("%s %s have no personalData", (kind, field, schema) => {
+    const res = schema.safeParse({ kind, name: "R", [field]: [personal] })
+    expect(keys(res)).toEqual(["personalData"])
+  })
+
+  it.each([
+    ["InformationRegister", informationRegisterSchema],
+    ["AccumulationRegister", accumulationRegisterSchema],
+  ] as const)("%s attributes accept personalData", (kind, schema) => {
+    const res = schema.safeParse({ kind, name: "R", attributes: [personal] })
+    expect(res.success).toBe(true)
   })
 })
 
@@ -703,6 +779,16 @@ describe("kindLabel", () => {
 })
 
 describe("publicRead", () => {
+  it("every publicRead value maps to a request role, never to the service role", () => {
+    for (const value of PUBLIC_READ_ROLES) {
+      const purpose = PUBLIC_READ_PURPOSES[value]
+      expect(purpose, value).not.toBe("service")
+      for (const roles of Object.values(PROVIDER_API_ROLES)) {
+        expect(roles[purpose], value).not.toBe(roles.service)
+      }
+    }
+  })
+
   it("publicRead is a field exactly of kinds with row level security", () => {
     for (const kind of METADATA_KINDS) {
       const def = KIND_REGISTRY[kind]

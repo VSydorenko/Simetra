@@ -51,6 +51,7 @@ function attributes(prefix: string) {
       length: 12,
       pattern: "^[A-Z]{2,}\\d*$",
       minLength: 2,
+      personalData: true,
     },
     {
       ...common(`${prefix}Note`, `${prefix}_note`),
@@ -122,6 +123,18 @@ function attributes(prefix: string) {
   ]
 }
 
+/**
+ * Поля виміру чи ресурсу регістра: набір реквізиту без `personalData` — на
+ * вимірах і ресурсах цієї властивості немає.
+ */
+function registerFields(prefix: string) {
+  return attributes(prefix).map((field) =>
+    Object.fromEntries(
+      Object.entries(field).filter(([key]) => key !== "personalData")
+    )
+  )
+}
+
 /** Перевизначення стандартного реквізиту: ключ — ім'я стандартного реквізиту. */
 const overrides = (name: string) => ({
   [name]: { title: text(name), description: text(name) },
@@ -164,7 +177,9 @@ export function kitchenSink(): Map<string, string> {
         physicalName: "org_id",
         title: text("org"),
         root: { object: ref("Catalog", "Organization") },
-        setFunction: { schema: "public", name: "org_ids" },
+        // Обидві гілки `setFunction`: тут — згенерована з членства, у виду
+        // `user` — дослівна функція.
+        setFunction: "membership",
         onRootDelete: "cascade",
       },
       {
@@ -187,6 +202,7 @@ export function kitchenSink(): Map<string, string> {
 
   const item = {
     ...header("Catalog", "Item", "item"),
+    trackAuthor: true,
     publicRead: "anon",
     codeLength: 12,
     codeType: "Number",
@@ -252,6 +268,7 @@ export function kitchenSink(): Map<string, string> {
 
   const sale = {
     ...header("Document", "Sale", "sale"),
+    trackAuthor: true,
     publicRead: "authenticated",
     numberLength: 9,
     numberType: "Number",
@@ -346,7 +363,7 @@ export function kitchenSink(): Map<string, string> {
         type: "Ref",
         ref: ref("Catalog", "Item"),
       },
-      ...attributes("dim"),
+      ...registerFields("dim"),
     ],
     resources: [
       {
@@ -357,7 +374,7 @@ export function kitchenSink(): Map<string, string> {
         precision: 15,
         scale: 2,
       },
-      ...attributes("res"),
+      ...registerFields("res"),
     ],
     attributes: attributes("info"),
   }
@@ -377,7 +394,7 @@ export function kitchenSink(): Map<string, string> {
         type: "Ref",
         ref: ref("Catalog", "Item"),
       },
-      ...attributes("place"),
+      ...registerFields("place"),
     ],
     resources: [
       {
@@ -677,11 +694,37 @@ export function kitchenSink(): Map<string, string> {
     )
     .join("\n")
 
+  // Системний довідник «Користувачі»: існує поза тенантами. Оголошено
+  // останнім, щоб лічильник id не зсунув id решти фікстури.
+  const users = {
+    ...header("Catalog", "Users", "users"),
+    scope: "none",
+    role: "users",
+  }
+
+  // Довідник членства виду `org`: учасник посилається на «Користувачі».
+  // Оголошено після «Користувачів» з тієї ж причини — id решти не зсуваються.
+  const member = {
+    ...header("Catalog", "Member", "member"),
+    membership: { user: "account" },
+    attributes: [
+      {
+        id: id(),
+        name: "account",
+        physicalName: "account_id",
+        type: "Ref",
+        ref: ref("Catalog", "Users"),
+      },
+    ],
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
     "catalogs/Partner/Partner.meta.json": partner,
     "catalogs/Item/Item.meta.json": item,
+    "catalogs/Users/Users.meta.json": users,
+    "catalogs/Member/Member.meta.json": member,
     "documents/Sale/Sale.meta.json": sale,
     "enumerations/Color/Color.meta.json": color,
     "information-registers/Prices/Prices.meta.json": prices,

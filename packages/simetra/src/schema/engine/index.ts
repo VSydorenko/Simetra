@@ -40,4 +40,3 @@ export {
   SUPABASE_SURFACES,
   type ProviderSurface,
 } from "./provider/supabase"
-export { unitTarget, unitTargets, type UnitTarget } from "./unit-target"

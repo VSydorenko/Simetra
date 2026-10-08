@@ -43,6 +43,7 @@ import {
   censusClassOfUnmodeledKind,
 } from "./census-facts"
 import { readExtensionComments } from "../extension-comments"
+import { readRoutineVolatility } from "../routine-volatility"
 import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
 import { aclDefaultsOf, producedBy } from "./map-units"
@@ -330,6 +331,7 @@ async function extractFrom(
     parse: await loadSqlParser(),
     defaults: aclDefaultsOf(view, await currentRole(pool)),
     extensionComments: await readExtensionComments(pool),
+    volatility: await readRoutineVolatility(pool),
   })
   const census = await readCensus(pool, scope)
   return {

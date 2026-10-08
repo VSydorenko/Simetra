@@ -22,10 +22,11 @@ export interface PhysicalOrigin {
   objectId: string
   tabularSectionId?: string
   /**
-   * Похідна таблиця об'єкта поруч з основною: поточні підсумки регістра або
-   * його місячні обороти.
+   * Похідна таблиця об'єкта поруч з основною: поточні підсумки регістра, його
+   * місячні обороти або зв'язок ідентичностей довідника «Користувачі» в схемі
+   * платформи.
    */
-  part?: "totals" | "turnoversMonth"
+  part?: "totals" | "turnoversMonth" | "identities"
 }
 
 export interface PhysicalEnumType {
