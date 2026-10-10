@@ -1073,6 +1073,10 @@ it("refuses a column default without an element defaultValue or a conversion", a
 it("records a relaxed NOT NULL and a retired column", async () => {})
 it("refuses a PgEnum column whose labels the Enumeration lacks", async () => { /* promote.enum-labels */ })
 it("refuses an id anywhere in the input", async () => { /* operation.input-invalid */ })
+it("refuses a nullable source of a notNull target without fill", async () => { /* createdAt nullable → стандартний notNull: promote.fill-missing, params.reason "nullable-source" (рішення 15) */ })
+it("records RLS mode changes off and forced, not enabled", async () => { /* record.rowLevelSecurity: off → enabled, forced → enabled; таблиця enabled відсутня */ })
+it("classifies a standard-attribute column comment only as removed", async () => { /* "#comment/name": "removed" → ok; "metadata" → promote.unclassified; без ключа → promote.unclassified */ })
+it("moves the CustomTable module byte for byte", async () => { /* .module.ts у теці виду, старого файлу немає */ })
 it("compiles the result with the baseline: no assigned-once diagnostics", async () => {
   expect((await compile(after, { baseline: files })).diagnostics.filter((d) => d.code === "identity.assigned-once-changed")).toEqual([])
 })
@@ -1157,6 +1161,7 @@ it("records steps in old names before renames", async () => {
   // record.dataSteps[0]: { names: "beforeRenames", table: "invoices", key: "id", column: "posted", expression: "status = 'posted'" }
 })
 it("refuses a missing fill for a NOT NULL standard column without default", async () => { /* Document без number → promote.fill-missing */ })
+it("records a repair and a tightened column for a nullable source", async () => { /* createdAt nullable + fill coalesce(created_at, updated_at) → dataSteps repair + tightened (рішення 15) */ })
 it.each([
   ["(select 1)", "subquery"],
   ["count(*)", "aggregate"],
