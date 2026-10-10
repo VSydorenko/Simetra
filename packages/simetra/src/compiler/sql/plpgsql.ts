@@ -40,6 +40,11 @@ export interface PlpgsqlStatement {
   readonly depth: number
   /** Лише прямі вирази оператора, без вкладених операторів. */
   readonly expressions: readonly PlpgsqlExpression[]
+  /**
+   * Імена, що їх оператор записує (ціль присвоювання, `INTO`, змінна циклу,
+   * цілі `GET DIAGNOSTICS`); кілька — через `", "`. Ціль, записану через
+   * `ALIAS`, парсер дає ім'ям справжньої змінної.
+   */
   readonly target?: { readonly variable: string }
 }
 
@@ -255,6 +260,18 @@ function datumName(datum: Datum, datums: Datum[]): string | undefined {
 
 /** Імена, що їх оператор записує: цілі присвоювання, `INTO`, змінна циклу. */
 function targetOf(body: Json, datums: Datum[]) {
+  if (Array.isArray(body.diag_items)) {
+    // `GET DIAGNOSTICS a = ROW_COUNT, NEW.x = …`: цілі лежать в елементах.
+    const names = body.diag_items
+      .map((item) => {
+        const target = nodeOf(item)?.body.target
+        return typeof target === "number"
+          ? datumName(datums[target], datums)
+          : undefined
+      })
+      .filter((name): name is string => name !== undefined)
+    return names.length === 0 ? undefined : { variable: names.join(", ") }
+  }
   const direct = nodeOf(body.target) ?? nodeOf(body.var)
   const datum =
     direct ?? (typeof body.varno === "number" ? datums[body.varno] : undefined)

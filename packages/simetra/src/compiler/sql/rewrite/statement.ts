@@ -1181,6 +1181,21 @@ class StatementRewriter {
         if (inner?.result !== undefined) {
           return { old: names.at(-1)!, end: inner.result.end }
         }
+        // Кваліфікатор — ні джерело, ні запис, ні колонка: мітка блоку, ім'я
+        // функції чи ALIAS PL/pgSQL. Запис за ним невідомий, тож змінене
+        // поле не переписати й не пропустити мовчки.
+        const offset = this.at(ref.location)
+        const field = names.slice(1).find((n) => this.relevantColumn(n))
+        const reported = [...this.problems.values()].some(
+          (p) => p.offset === offset
+        )
+        if (inner === undefined && field !== undefined && !reported) {
+          this.problem(
+            "rewrite.unsupported",
+            offset,
+            `"${names.join(".")}": "${names[0]}" is neither a source in FROM nor a known record (a block label, the function name or an ALIAS), and "${field}" is a column that the promotion changes`
+          )
+        }
       }
       return undefined
     }

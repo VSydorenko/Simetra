@@ -6,7 +6,7 @@ import type {
   PlpgsqlStatement,
   PlpgsqlVariable,
 } from "../plpgsql"
-import { lexChain, skipTrivia } from "./lex"
+import { lexChain, plainWords, skipTrivia, type Token } from "./lex"
 import {
   applyEdits,
   type ContractChange,
@@ -36,6 +36,8 @@ export interface PlpgsqlBodyContext {
   triggerTables: readonly TableRename[] | undefined
   /** Параметри сигнатури рядкового типу промотованої таблиці. */
   params: ReadonlyMap<string, TableRename>
+  /** Сигнатура називає промотовану таблицю (зокрема безіменним параметром). */
+  signatureTouches: boolean
 }
 
 export interface PlpgsqlBodyRewrite {
@@ -136,13 +138,36 @@ export function rewritePlpgsqlBody(
   for (const v of declared) {
     const lexed = lexTypeRef(v.typeText!, 0)
     if (lexed === undefined) continue
-    const { rowOf } = rewriteTypeRef(lexed.tokens, lexed.suffix, typeContext())
+    const { rowOf } = rewriteTypeRef(
+      lexed.tokens,
+      lexed.suffix,
+      typeContext(),
+      lexed.array
+    )
     if (rowOf !== undefined && lexed.suffix !== "type") {
       records.set(v.name, { table: rowOf })
     }
   }
 
-  const unknown = inferRecords(fn, records, ctx)
+  // Ім'я, оголошене двічі (параметр і змінна, зовнішній і вкладений блок),
+  // за самим ім'ям не каже, який запис стоїть за посиланням: прив'язки немає,
+  // а змінене поле через нього — відмова.
+  const counts = new Map<string, number>()
+  for (const name of fn.variables
+    .filter((v) => v.kind !== "recfield")
+    .map((v) => v.name)) {
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  const unknown = new Map<string, string>()
+  for (const [name, count] of counts) {
+    if (count < 2) continue
+    records.delete(name)
+    unknown.set(
+      name,
+      `"${name}" is declared more than once (shadowed), so the record behind the reference is not proven`
+    )
+  }
+  inferRecords(fn, records, unknown, ctx)
   const fields = changedFields(ctx.map)
   const scope: RewriteScope = {
     ...(ctx.searchPath === undefined ? {} : { searchPath: ctx.searchPath }),
@@ -235,6 +260,29 @@ export function rewritePlpgsqlBody(
     else expectedTypes.set(item.key.variable, expected)
   }
 
+  // `ALIAS FOR` дерево не показує: ім'я псевдоніма не видно ні як змінну
+  // (захоплення колонкою), ні як запис. Функцію, що торкається промоції
+  // (правки, параметр чи прив'язка промотованої таблиці, її ім'я в тілі),
+  // з ним не доведено.
+  const alias = aliasDeclaration(unitSql, body)
+  const touches =
+    edits.length > 0 ||
+    ctx.signatureTouches ||
+    (ctx.triggerTables ?? []).some((t) =>
+      ctx.map.tables.some((p) => p.schema === t.schema && p.from === t.from)
+    ) ||
+    [...plainWords(unitSql, body.start, body.end)].some((w) =>
+      ctx.map.tables.some((t) => t.from === w.value)
+    )
+  if (alias !== undefined && touches) {
+    problems.push({
+      code: "rewrite.unsupported",
+      offset: alias,
+      detail:
+        "the body declares an ALIAS FOR, which the parse tree does not expose, so names through it cannot be proven; replace the alias with the variable or parameter it names",
+    })
+  }
+
   const verify = (rewritten: PlpgsqlFunction): BodyFinding | undefined => {
     const fail = (lineno: number, detail: string): BodyFinding => ({
       code: "rewrite.verification-failed",
@@ -287,11 +335,11 @@ export function rewritePlpgsqlBody(
 function inferRecords(
   fn: PlpgsqlFunction,
   records: Map<string, RecordBinding>,
+  unknown: Map<string, string>,
   ctx: PlpgsqlBodyContext
-): Set<string> {
-  const unknown = new Set<string>()
+): void {
   for (const v of fn.variables) {
-    if (records.has(v.name)) continue
+    if (records.has(v.name) || unknown.has(v.name)) continue
     if (v.kind !== "rec" && v.typeText?.toLowerCase() !== "record") continue
     const fills = fn.statements.filter(
       (s) => s.type !== "declare" && s.target?.variable === v.name
@@ -306,9 +354,8 @@ function inferRecords(
     const first = tables[0]
     if (first !== undefined && tables.every((t) => t === first)) {
       records.set(v.name, { table: first })
-    } else unknown.add(v.name)
+    } else unknown.set(v.name, `record "${v.name}" has no proven row shape`)
   }
-  return unknown
 }
 
 /** `SELECT *` (чи `<джерело>.*`) з однієї промотованої таблиці без псевдонімів колонок. */
@@ -377,7 +424,7 @@ function typeItem(
   const result =
     lexed === undefined
       ? { edits: [], problems: [] }
-      : rewriteTypeRef(lexed.tokens, lexed.suffix, ctx)
+      : rewriteTypeRef(lexed.tokens, lexed.suffix, ctx, lexed.array)
   return {
     lineno: v.lineno!,
     text,
@@ -401,7 +448,7 @@ function expressionItem(
   s: PlpgsqlStatement,
   e: PlpgsqlExpression,
   scope: RewriteScope,
-  unknown: ReadonlySet<string>,
+  unknown: ReadonlyMap<string, string>,
   fields: ReadonlySet<string>,
   ctx: PlpgsqlBodyContext
 ): Item {
@@ -513,21 +560,23 @@ function expressionItem(
 }
 
 /**
- * Цілі `INTO`/`FETCH … INTO`: Postgres витирає їх із тексту запиту, тож
- * правка поля запису тут зламала б вирівнювання з повторним розбором — поле,
- * яке треба перейменувати, відмовляє.
+ * Цілі, яких немає в тексті виразу: `INTO`/`FETCH … INTO` (Postgres витирає
+ * їх із тексту запиту, тож правку не звірити повторним розбором) і
+ * `GET DIAGNOSTICS`. Ціль присвоєння лежить у тексті й переписується з ним,
+ * окрім цілі через `ALIAS`: парсер дає її ім'ям справжньої змінної, а текст
+ * — псевдонімом. Ціль, яку треба перейменувати чи не доведено, відмовляє.
  */
 function targetProblems(
   s: PlpgsqlStatement,
   scope: RewriteScope,
-  unknown: ReadonlySet<string>,
+  unknown: ReadonlyMap<string, string>,
   fields: ReadonlySet<string>,
   ctx: PlpgsqlBodyContext,
   offset: number
 ): BodyFinding[] {
-  if (s.target === undefined || s.type === "assign" || s.type === "declare") {
-    return []
-  }
+  if (s.target === undefined || s.type === "declare") return []
+  const assign = s.type === "assign"
+  if (assign && writtenTarget(s) === s.target.variable) return []
   const found: BodyFinding[] = []
   for (const name of s.target.variable.split(", ")) {
     if (!name.includes(".")) continue
@@ -548,11 +597,41 @@ function targetProblems(
       found.push({
         code: "rewrite.unsupported",
         offset,
-        detail: `the INTO target ${name} names a renamed column and is not rewritten in place`,
+        detail: assign
+          ? `the assignment target is written through an ALIAS of ${name}, which names a renamed column`
+          : `the target ${name} names a renamed column and is not rewritten in place`,
       })
     }
   }
   return found
+}
+
+/** Позиція `ALIAS FOR` у тілі (поза коментарями й рядками). */
+function aliasDeclaration(
+  text: string,
+  body: { start: number; end: number }
+): number | undefined {
+  let previous: Token | undefined
+  for (const word of plainWords(text, body.start, body.end)) {
+    if (
+      word.value === "for" &&
+      !word.separated &&
+      previous?.value === "alias"
+    ) {
+      return previous.start
+    }
+    previous = word
+  }
+  return undefined
+}
+
+/** Ціль присвоєння, як її написано в тексті: `ім'я.ім'я` у нижньому регістрі. */
+function writtenTarget(s: PlpgsqlStatement): string | undefined {
+  const e = s.expressions[0]
+  if (e === undefined || e.parseMode < 3) return undefined
+  return lexChain(e.query, skipTrivia(e.query, 0), e.parseMode - 2)
+    ?.map((t) => t.value)
+    .join(".")
 }
 
 /**
@@ -563,7 +642,7 @@ function targetProblems(
 function unknownRecordFields(
   text: string,
   parse: SqlParser,
-  unknown: ReadonlySet<string>,
+  unknown: ReadonlyMap<string, string>,
   fields: ReadonlySet<string>
 ): { offset: number; detail: string }[] {
   if (unknown.size === 0) return []
@@ -592,7 +671,7 @@ function unknownRecordFields(
         ) {
           found.push({
             offset: ref.location === undefined ? 0 : toIndex(ref.location),
-            detail: `record "${record}" has no proven row shape, and "${field}" is a column that the promotion renames or removes`,
+            detail: `${unknown.get(record)}, and "${field}" is a column that the promotion renames or removes`,
           })
         }
       }

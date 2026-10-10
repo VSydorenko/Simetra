@@ -2,7 +2,14 @@ import type { DefElem, Node, TypeName } from "libpg-query"
 import type { RuleCode } from "../../diagnostics"
 import { byteOffsets, type SqlParser } from "../parse"
 import type { PlpgsqlParser } from "../plpgsql"
-import { lexChain, readIdent, skipTrivia } from "./lex"
+import {
+  dollarTag,
+  lexChain,
+  plainWords,
+  readIdent,
+  skipTrivia,
+  type Token,
+} from "./lex"
 import { rewritePlpgsqlBody, type BodyFinding } from "./plpgsql-body"
 import {
   applyEdits,
@@ -162,6 +169,7 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
   }
   // Сигнатура: тип рядка промотованої таблиці перейменовується, а форма
   // результату чи аргументу змінюється — це зміна контракту, не відмова.
+  let signatureTouches = false
   const signatureType = (tn: TypeName): TableRename | undefined => {
     const names = (tn.names ?? []).map((n) =>
       "String" in n ? (n.String.sval ?? "") : ""
@@ -185,11 +193,14 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
     const r = rewriteTypeRef(
       tokens,
       tn.pct_type === true ? "type" : undefined,
-      typeContext
+      typeContext,
+      (tn.arrayBounds?.length ?? 0) > 0
     )
     result.edits.push(...r.edits)
     result.problems.push(...r.problems.map(atCreation))
-    if (r.rowOf === undefined) return undefined
+    if (r.edits.length > 0 || r.problems.length > 0) signatureTouches = true
+    if (r.rowOf === undefined && r.arrayOf === undefined) return undefined
+    signatureTouches = true
     result.changes.push({
       offset: tokens[0]!.start,
       reason: "signature",
@@ -322,6 +333,23 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
       ),
       body.start
     )
+    // Правка, що зламала б тіло, не видна розбору самої одиниці: тіло для
+    // нього — лише рядок. Тож розбирається й переписане тіло.
+    result.verify = (rewritten) => {
+      const core = reparse(rewritten, o.parse)
+      if (core !== undefined) return core
+      const after = dollarBodyText(rewritten, o.parse)
+      const parsedBody = after === undefined ? undefined : o.parse(after)
+      if (parsedBody?.ok === true) return undefined
+      return {
+        code: "rewrite.verification-failed",
+        offset: body.start,
+        detail:
+          parsedBody === undefined
+            ? "the rewritten function has no body"
+            : `the rewritten body does not parse: ${parsedBody.message}`,
+      }
+    }
     return result
   }
 
@@ -342,6 +370,7 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
     searchPath,
     triggerTables: o.triggerTables,
     params,
+    signatureTouches,
   })
   result.edits.push(...rewrite.edits)
   result.problems.push(...rewrite.problems)
@@ -371,6 +400,22 @@ function reparse(rewritten: string, parse: SqlParser): BodyFinding | undefined {
     offset: Math.min(parsed.offset, rewritten.length),
     detail: `the rewritten function does not parse: ${parsed.message}`,
   }
+}
+
+/** Рядок тіла з опції `AS` переписаної одиниці. */
+function dollarBodyText(text: string, parse: SqlParser): string | undefined {
+  const parsed = parse(text)
+  const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+  if (stmt === undefined || !("CreateFunctionStmt" in stmt)) return undefined
+  const as = (stmt.CreateFunctionStmt.options ?? [])
+    .flatMap((n) => ("DefElem" in n ? [n.DefElem] : []))
+    .filter((d) => d.defname === "as")
+    .at(-1)
+  const item =
+    as?.arg !== undefined && "List" in as.arg
+      ? as.arg.List.items?.[0]
+      : undefined
+  return item !== undefined && "String" in item ? item.String.sval : undefined
 }
 
 /**
@@ -443,13 +488,6 @@ function dollarBody(
   return { start, end }
 }
 
-/** `$тег$` на позиції `i` (правило тегу — як у `scan.l`). */
-function dollarTag(text: string, i: number): string | undefined {
-  const pattern = /\$(?:[A-Za-z_\u0080-￿][A-Za-z_0-9\u0080-￿]*)?\$/y
-  pattern.lastIndex = i
-  return pattern.exec(text)?.[0]
-}
-
 /**
  * Початок тіла стандарту SQL після опцій: `BEGIN ATOMIC` чи `RETURN`.
  * Рядки й лапковані імена опцій (`SET x = 'return'`) пропускаються цілими,
@@ -462,56 +500,19 @@ function routineBody(
   | { kind: "atomic"; end: number }
   | { kind: "return"; start: number }
   | undefined {
-  let i = from
-  while (i < text.length) {
-    i = skipTrivia(text, i)
-    const c = text[i]
-    if (c === undefined) return undefined
-    if (c === "'") {
-      i = stringEnd(text, i, false)
-      continue
+  let previous: Token | undefined
+  for (const word of plainWords(text, from, text.length)) {
+    if (word.value === "return") return { kind: "return", start: word.start }
+    if (
+      word.value === "atomic" &&
+      !word.separated &&
+      previous?.value === "begin"
+    ) {
+      return { kind: "atomic", end: word.end }
     }
-    if (c === "$") {
-      const tag = dollarTag(text, i)
-      if (tag === undefined) i++
-      else {
-        const close = text.indexOf(tag, i + tag.length)
-        i = close < 0 ? text.length : close + tag.length
-      }
-      continue
-    }
-    const word = readIdent(text, i)
-    if (word === undefined) {
-      i++
-      continue
-    }
-    const plain = c !== '"'
-    if (plain && word.value === "return") {
-      return { kind: "return", start: word.start }
-    }
-    if (plain && word.value === "begin") {
-      const next = readIdent(text, skipTrivia(text, word.end))
-      if (next?.value === "atomic") return { kind: "atomic", end: next.end }
-    }
-    if (plain && word.value === "e" && text[word.end] === "'") {
-      i = stringEnd(text, word.end, true)
-      continue
-    }
-    i = word.end
+    previous = word
   }
   return undefined
-}
-
-/** Кінець рядкового літерала від відкривної `'`; `escapes` — `E'…'` з `\`. */
-function stringEnd(text: string, quote: number, escapes: boolean): number {
-  for (let j = quote + 1; j < text.length; j++) {
-    if (escapes && text[j] === "\\") j++
-    else if (text[j] === "'") {
-      if (text[j + 1] === "'") j++
-      else return j + 1
-    }
-  }
-  return text.length
 }
 
 /** Індекс UTF-16 → 1-базні рядок і колонка. */

@@ -119,6 +119,17 @@ describe("loadPlpgsqlParser", () => {
     ).toEqual([{ variable: "n" }, { variable: "new.total" }])
   })
 
+  it("records GET DIAGNOSTICS targets", () => {
+    const f = parsed(
+      fn(
+        `DECLARE n int;\nBEGIN\n  GET DIAGNOSTICS n = ROW_COUNT, NEW.total = ROW_COUNT;\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(
+      f.statements.filter((s) => s.type === "getdiag").map((s) => s.target)
+    ).toEqual([{ variable: "n, new.total" }])
+  })
+
   it.each([
     ["EXECUTE format('select 1 from %I', 'sale');", "RETURNS trigger"],
     ["RETURN QUERY EXECUTE 'select 1';", "RETURNS SETOF int"],

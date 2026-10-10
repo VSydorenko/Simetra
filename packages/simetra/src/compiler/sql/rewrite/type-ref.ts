@@ -22,6 +22,8 @@ export interface TypeRefResult {
   problems: TypeRefProblem[]
   /** Тип — рядок цієї промотованої таблиці (`%ROWTYPE` чи ім'я таблиці як тип). */
   rowOf?: TableRename
+  /** Тип — масив рядків цієї промотованої таблиці: форма змінюється, запису немає. */
+  arrayOf?: TableRename
 }
 
 /** Відмова за посиланням на тип; `offset` — індекс першого токена в тексті. */
@@ -39,7 +41,8 @@ export interface TypeRefProblem {
 export function lexTypeRef(
   text: string,
   start: number
-): { tokens: Token[]; suffix?: "type" | "rowtype" } | undefined {
+):
+  { tokens: Token[]; suffix?: "type" | "rowtype"; array: boolean } | undefined {
   const first = readIdent(text, skipTrivia(text, start))
   if (first === undefined) return undefined
   const tokens = [first]
@@ -52,11 +55,19 @@ export function lexTypeRef(
     tokens.push(next)
     i = next.end
   }
+  let suffix: "type" | "rowtype" | undefined
   const percent = skipTrivia(text, i)
-  if (text[percent] !== "%") return { tokens }
-  const word = readIdent(text, skipTrivia(text, percent + 1))?.value
-  if (word === "type" || word === "rowtype") return { tokens, suffix: word }
-  return { tokens }
+  if (text[percent] === "%") {
+    const word = readIdent(text, skipTrivia(text, percent + 1))
+    if (word?.value === "type" || word?.value === "rowtype") {
+      suffix = word.value
+      i = word.end
+    }
+  }
+  // `t[]` чи `t ARRAY` — масив рядків, а не запис: полів у нього немає.
+  const after = skipTrivia(text, i)
+  const array = text[after] === "[" || readIdent(text, after)?.value === "array"
+  return suffix === undefined ? { tokens, array } : { tokens, suffix, array }
 }
 
 /**
@@ -68,7 +79,8 @@ export function lexTypeRef(
 export function rewriteTypeRef(
   tokens: readonly Token[],
   suffix: "type" | "rowtype" | undefined,
-  ctx: TypeRefContext
+  ctx: TypeRefContext,
+  array = false
 ): TypeRefResult {
   const result: TypeRefResult = { edits: [], problems: [] }
   const names = tokens.map((t) => t.value)
@@ -115,7 +127,8 @@ export function rewriteTypeRef(
     })
   }
   if (column === undefined) {
-    result.rowOf = table
+    if (array) result.arrayOf = table
+    else result.rowOf = table
     return result
   }
   const before = ctx.map.knownTables.get(`${table.schema}.${table.from}`) ?? []

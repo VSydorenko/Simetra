@@ -104,3 +104,72 @@ export function skipTrivia(text: string, start: number): number {
     return i
   }
 }
+
+/** `$тег$` на позиції `i` (правило тегу — як у `scan.l`). */
+export function dollarTag(text: string, i: number): string | undefined {
+  const pattern = /\$(?:[A-Za-z_\u0080-\uffff][A-Za-z_0-9\u0080-\uffff]*)?\$/y
+  pattern.lastIndex = i
+  return pattern.exec(text)?.[0]
+}
+
+/**
+ * Нелапковані слова тексту `[from, to)` підряд, як їх бачить граматика:
+ * коментарі, рядки (`'…'`, `E'…'`, доларові лапки) і лапковані імена
+ * пропускаються цілими, щоб слово в них не прийняти за ключове. Між двома
+ * сусідніми словами генератора може стояти пунктуація — її видно за
+ * `separated`.
+ */
+export function* plainWords(
+  text: string,
+  from: number,
+  to: number
+): Generator<Token & { separated: boolean }> {
+  let i = from
+  let separated = false
+  while (i < to) {
+    i = skipTrivia(text, i)
+    const c = text[i]
+    if (c === undefined || i >= to) return
+    if (c === "'") {
+      i = stringEnd(text, i, false)
+      separated = true
+      continue
+    }
+    if (c === "$") {
+      const tag = dollarTag(text, i)
+      if (tag === undefined) i++
+      else {
+        const close = text.indexOf(tag, i + tag.length)
+        i = close < 0 ? text.length : close + tag.length
+      }
+      separated = true
+      continue
+    }
+    const word = readIdent(text, i)
+    if (word === undefined) {
+      i++
+      separated = true
+      continue
+    }
+    if (c !== '"' && word.value === "e" && text[word.end] === "'") {
+      i = stringEnd(text, word.end, true)
+      separated = true
+      continue
+    }
+    if (c !== '"') yield { ...word, separated }
+    separated = c === '"'
+    i = word.end
+  }
+}
+
+/** Кінець рядкового літерала від відкривної `'`; `escapes` — `E'…'` з `\`. */
+function stringEnd(text: string, quote: number, escapes: boolean): number {
+  for (let j = quote + 1; j < text.length; j++) {
+    if (escapes && text[j] === "\\") j++
+    else if (text[j] === "'") {
+      if (text[j + 1] === "'") j++
+      else return j + 1
+    }
+  }
+  return text.length
+}

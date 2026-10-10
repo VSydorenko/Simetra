@@ -452,4 +452,17 @@ describe("applyEdits", () => {
       ])
     ).toThrow()
   })
+
+  it("refuses a changed field behind a qualifier that is no source or record", () => {
+    // Мітка блоку, ім'я функції чи ALIAS PL/pgSQL: запис за ними невідомий.
+    expect(details("SELECT blk.r.inn")).toEqual([
+      'rewrite.unsupported "blk.r.inn": "blk" is neither a source in FROM nor a known record (a block label, the function name or an ALIAS), and "inn" is a column that the promotion changes',
+    ])
+    expect(rw("SELECT n.inn").problems).toEqual(["rewrite.unsupported"])
+    // Незмінене поле нічого не ламає; скаляр-змінна — поза промоцією.
+    expect(rw("SELECT n.id").problems).toEqual([])
+    expect(rw("SELECT v.inn", { variables: new Set(["v"]) }).problems).toEqual(
+      []
+    )
+  })
 })

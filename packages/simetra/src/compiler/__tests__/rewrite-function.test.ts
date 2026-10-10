@@ -385,4 +385,137 @@ describe("rewriteFunction", () => {
     expect(codes(r)).toEqual(["rewrite.unsupported"])
     expect(r.sql).toBe(sql)
   })
+
+  // Повтори рецензента (раунд 1): кожне посилання або резолвиться точно,
+  // або відмовляє — мовчки пропущене чи хибно переписане ім'я заборонене.
+  describe("references the parse tree does not model", () => {
+    const refused = (
+      sql: string,
+      code: string,
+      detail: string,
+      triggerTables?: TableRename[]
+    ) => {
+      const r = rewriteFunction(sql, { ...ctx, triggerTables })
+      expect(r.sql).toBe(sql)
+      expect(
+        r.problems.filter((p) => p.code === code).map((p) => p.detail)
+      ).toEqual(expect.arrayContaining([expect.stringContaining(detail)]))
+    }
+
+    it.each([
+      [
+        "an outer ROWTYPE and an inner ROWTYPE",
+        "CREATE FUNCTION app.f() RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE r app.counterparties%ROWTYPE;\nBEGIN\n  SELECT * INTO r FROM app.counterparties LIMIT 1;\n  DECLARE r app.invoice%ROWTYPE;\n  BEGIN\n    SELECT * INTO r FROM app.invoice LIMIT 1;\n    RETURN r.name;\n  END;\nEND $fn$",
+      ],
+      [
+        "two record variables",
+        "CREATE FUNCTION app.f() RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE q record;\nBEGIN\n  FOR q IN SELECT * FROM app.counterparties LOOP END LOOP;\n  DECLARE q record;\n  BEGIN\n    SELECT i.name, i.id INTO q FROM app.invoice i;\n    RETURN q.name;\n  END;\nEND $fn$",
+      ],
+      [
+        "a parameter and an inner ROWTYPE",
+        "CREATE FUNCTION app.f(r app.counterparties) RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE r2 int;\nBEGIN\n  DECLARE r app.invoice%ROWTYPE;\n  BEGIN\n    RETURN r.name;\n  END;\nEND $fn$",
+      ],
+    ])("refuses a shadowed record name: %s", (_, sql) => {
+      refused(sql, "rewrite.ambiguous-name", "shadowed")
+    })
+
+    it.each([
+      [
+        "a block label",
+        "CREATE FUNCTION app.f() RETURNS text LANGUAGE plpgsql AS $fn$\n<<blk>>\nDECLARE r app.counterparties%ROWTYPE;\nBEGIN\n  SELECT * INTO r FROM app.counterparties c;\n  RETURN blk.r.inn;\nEND $fn$",
+        '"blk.r.inn"',
+      ],
+      [
+        "a block label on a record of unknown shape",
+        "CREATE FUNCTION app.f() RETURNS text LANGUAGE plpgsql AS $fn$\n<<blk>>\nDECLARE q record;\nBEGIN\n  SELECT c.*, 1 AS z INTO q FROM app.counterparties c;\n  RETURN blk.q.inn;\nEND $fn$",
+        '"blk.q.inn"',
+      ],
+      [
+        "the function name",
+        "CREATE FUNCTION app.f(c app.counterparties) RETURNS text LANGUAGE plpgsql AS $fn$\nBEGIN\n  RETURN f.c.inn;\nEND $fn$",
+        '"f.c.inn"',
+      ],
+      [
+        "an ALIAS of a parameter",
+        "CREATE FUNCTION app.f(app.counterparties) RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE\n  c ALIAS FOR $1;\nBEGIN\n  RETURN c.inn;\nEND $fn$",
+        '"c.inn"',
+      ],
+      [
+        "a positional parameter",
+        "CREATE FUNCTION app.f(app.counterparties) RETURNS text LANGUAGE plpgsql AS $fn$\nBEGIN\n  RETURN $1.inn;\nEND $fn$",
+        "parenthesized row value",
+      ],
+      [
+        "a positional parameter of LANGUAGE sql",
+        "CREATE FUNCTION app.f(app.counterparties) RETURNS text LANGUAGE sql AS $fn$\n  SELECT $1.inn\n$fn$",
+        "parenthesized row value",
+      ],
+    ])("refuses a changed field qualified by %s", (_, sql, detail) => {
+      refused(sql, "rewrite.unsupported", detail)
+    })
+
+    it("refuses an ALIAS in a function whose signature names the promoted table", () => {
+      const sql =
+        "CREATE FUNCTION app.f(app.counterparties) RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE\n  c ALIAS FOR $1;\nBEGIN\n  RETURN c.inn;\nEND $fn$"
+      refused(sql, "rewrite.unsupported", "ALIAS FOR")
+      refused(sql, "rewrite.unsupported", '"c.inn"')
+    })
+
+    it("refuses an ALIAS of NEW, as a target and in an expression", () => {
+      const sql =
+        "CREATE FUNCTION app.t() RETURNS trigger LANGUAGE plpgsql AS $fn$\nDECLARE\n  n ALIAS FOR NEW;\nBEGIN\n  n.inn := upper(n.inn);\n  RETURN NEW;\nEND $fn$"
+      refused(sql, "rewrite.unsupported", "ALIAS of new.inn", [COUNTERPARTIES])
+      refused(sql, "rewrite.unsupported", '"n.inn"', [COUNTERPARTIES])
+    })
+
+    it("refuses an ALIAS whose name the promotion could capture", () => {
+      // Без жодної правки: після промоції `tax_id` — колонка таблиці.
+      const sql =
+        "CREATE FUNCTION app.f(text) RETURNS bigint LANGUAGE plpgsql STABLE AS $fn$\nDECLARE\n  tax_id ALIAS FOR $1;\nBEGIN\n  RETURN (SELECT count(*) FROM app.counterparties c WHERE c.id::text = tax_id);\nEND $fn$"
+      refused(sql, "rewrite.unsupported", "ALIAS FOR")
+    })
+
+    it.each([
+      [
+        "GET DIAGNOSTICS",
+        "CREATE FUNCTION app.t() RETURNS trigger LANGUAGE plpgsql AS $fn$\nBEGIN\n  UPDATE app.invoice SET name = 'x';\n  GET DIAGNOSTICS NEW.inn = ROW_COUNT;\n  RETURN NEW;\nEND $fn$",
+        "the target new.inn",
+      ],
+      [
+        "FETCH INTO",
+        "CREATE FUNCTION app.t() RETURNS trigger LANGUAGE plpgsql AS $fn$\nDECLARE c CURSOR FOR SELECT name FROM app.invoice;\nBEGIN\n  OPEN c;\n  FETCH c INTO NEW.name;\n  RETURN NEW;\nEND $fn$",
+        "the target new.name",
+      ],
+    ])("refuses a renamed field as a %s target", (_, sql, detail) => {
+      refused(sql, "rewrite.unsupported", detail, [COUNTERPARTIES])
+    })
+
+    it.each([
+      "CREATE FUNCTION app.t() RETURNS trigger LANGUAGE plpgsql AS $fn$\nBEGIN\n  t.new.inn := upper(t.new.inn);\n  RETURN NEW;\nEND $fn$",
+      "CREATE FUNCTION app.f() RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE r app.counterparties%ROWTYPE;\nBEGIN\n  GET DIAGNOSTICS r.inn = ROW_COUNT;\n  RETURN r.inn;\nEND $fn$",
+    ])("refuses a body the PL/pgSQL parser rejects", (sql) => {
+      refused(sql, "rewrite.unsupported", "does not compile", [COUNTERPARTIES])
+    })
+
+    it("rewrites FOREACH and FOR bounds", () => {
+      const sql =
+        "CREATE FUNCTION app.f() RETURNS text LANGUAGE plpgsql AS $fn$\nDECLARE r app.counterparties%ROWTYPE; i int;\nBEGIN\n  FOREACH i IN ARRAY ARRAY[1] LOOP END LOOP;\n  FOR i IN 1..r.inn::int LOOP END LOOP;\n  RETURN r.name;\nEND $fn$"
+      const r = rewriteFunction(sql, ctx)
+      expect(r.problems).toEqual([])
+      expect(r.sql).toBe(
+        sql
+          .replace("app.counterparties%ROWTYPE", "app.counterparty%ROWTYPE")
+          .replace("r.inn::int", "r.tax_id::int")
+          .replace("RETURN r.name", "RETURN r.description")
+      )
+    })
+
+    it("does not bind an array of the promoted row type as a record", () => {
+      const sql =
+        "CREATE FUNCTION app.f(a app.counterparties[]) RETURNS text LANGUAGE plpgsql STABLE AS $fn$\nBEGIN\n  RETURN a[1].inn;\nEND $fn$"
+      const r = rewriteFunction(sql, ctx)
+      expect(r.contractChanges.map((c) => c.reason)).toEqual(["signature"])
+      refused(sql, "rewrite.unsupported", "parenthesized row value")
+    })
+  })
 })
