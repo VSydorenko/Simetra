@@ -1,5 +1,6 @@
 import type { DefElem, Node, TypeName } from "libpg-query"
 import type { RuleCode } from "../../diagnostics"
+import { routineLanguage } from "../closed-forms"
 import { byteOffsets, type SqlParser } from "../parse"
 import type { PlpgsqlParser } from "../plpgsql"
 import {
@@ -10,7 +11,12 @@ import {
   skipTrivia,
   type Token,
 } from "./lex"
-import { rewritePlpgsqlBody, type BodyFinding } from "./plpgsql-body"
+import {
+  isPolymorphic,
+  rewritePlpgsqlBody,
+  unknownRecordFields,
+  type BodyFinding,
+} from "./plpgsql-body"
 import {
   applyEdits,
   type ContractChange,
@@ -21,7 +27,7 @@ import {
   type TextEdit,
 } from "./renames"
 import { rewriteStatementText } from "./statement"
-import { rewriteTypeRef } from "./type-ref"
+import { changedFields, rewriteTypeRef } from "./type-ref"
 
 /**
  * Вхід переписувача функції. `triggerTables` — таблиці, до яких функцію
@@ -142,12 +148,7 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
   )
   const option = (name: string) =>
     options.filter((d) => d.defname === name).at(-1)
-  const languageArg = option("language")?.arg
-  // Тіло стандарту SQL (`RETURN …`, `BEGIN ATOMIC`) без LANGUAGE — це `sql`.
-  const language =
-    (languageArg !== undefined && "String" in languageArg
-      ? languageArg.String.sval?.toLowerCase()
-      : undefined) ?? (fn.sql_body === undefined ? undefined : "sql")
+  const language = routineLanguage(stmt)
   const searchPath = functionSearchPath(options)
 
   // Імена сигнатури й тіла стандарту SQL Postgres резолвить під час
@@ -211,6 +212,12 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
   const params = new Map<string, TableRename>()
   /** Імена вхідних параметрів: лише їх бачить тіло `LANGUAGE sql`. */
   const inputs = new Set<string>()
+  /**
+   * Вхідні параметри невідомої форми рядка (`record`, поліморфні): тіло
+   * `LANGUAGE sql` бачить їх як змінні поза `records`, тож змінене поле через
+   * них відмовляє тут, а не мовчки лишається.
+   */
+  const unprovenParams = new Map<string, string>()
   for (const node of fn.parameters ?? []) {
     if (!("FunctionParameter" in node)) continue
     const param = node.FunctionParameter
@@ -218,6 +225,20 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
       param.argType === undefined ? undefined : signatureType(param.argType)
     if (param.name === undefined) continue
     if (row !== undefined) params.set(param.name, row)
+    const type = (param.argType?.names ?? [])
+      .map((n) => ("String" in n ? (n.String.sval ?? "") : ""))
+      .at(-1)
+    if (
+      type !== undefined &&
+      (type === "record" || isPolymorphic(type)) &&
+      param.mode !== "FUNC_PARAM_OUT" &&
+      param.mode !== "FUNC_PARAM_TABLE"
+    ) {
+      unprovenParams.set(
+        param.name,
+        `"${param.name}" has the type ${type}, so the row behind it is not proven`
+      )
+    }
     if (param.mode !== "FUNC_PARAM_OUT" && param.mode !== "FUNC_PARAM_TABLE") {
       inputs.add(param.name)
     }
@@ -240,6 +261,28 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
         .map(([name, table]) => [name, { table }])
     ),
     labels: o.labels,
+  }
+  const fields = changedFields(o.map)
+  /** Тіло `LANGUAGE sql`: переписаний текст і поля параметрів невідомої форми. */
+  const sqlText = (
+    text: string,
+    shift: number,
+    sqlScope: RewriteScope,
+    problem: (p: BodyFinding) => BodyFinding = (p) => p
+  ) => {
+    merge(rewriteStatementText(text, o.parse, o.map, sqlScope), shift, problem)
+    for (const p of unknownRecordFields(
+      text,
+      o.parse,
+      unprovenParams,
+      fields
+    )) {
+      result.problems.push({
+        code: "rewrite.ambiguous-name",
+        offset: p.offset + shift,
+        detail: p.detail,
+      })
+    }
   }
   const merge = (
     r: ReturnType<typeof rewriteStatementText>,
@@ -286,14 +329,10 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
     }
     const blank = (end: number) => unitSql.slice(0, end).replace(/[^\n]/g, " ")
     if (body.kind === "atomic") {
-      merge(
-        rewriteStatementText(
-          blank(body.end) + unitSql.slice(body.end),
-          o.parse,
-          o.map,
-          standard
-        ),
+      sqlText(
+        blank(body.end) + unitSql.slice(body.end),
         0,
+        standard,
         atCreation
       )
     } else {
@@ -302,14 +341,7 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
         blank(body.start) +
         "SELECT" +
         unitSql.slice(body.start + "RETURN".length)
-      merge(
-        rewriteStatementText(text, o.parse, o.map, {
-          ...standard,
-          topLevelOutput: "ignore",
-        }),
-        0,
-        atCreation
-      )
+      sqlText(text, 0, { ...standard, topLevelOutput: "ignore" }, atCreation)
     }
     return result
   }
@@ -324,15 +356,7 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
     )
   }
   if (language === "sql") {
-    merge(
-      rewriteStatementText(
-        unitSql.slice(body.start, body.end),
-        o.parse,
-        o.map,
-        scope
-      ),
-      body.start
-    )
+    sqlText(unitSql.slice(body.start, body.end), body.start, scope)
     // Правка, що зламала б тіло, не видна розбору самої одиниці: тіло для
     // нього — лише рядок. Тож розбирається й переписане тіло.
     result.verify = (rewritten) => {
@@ -354,7 +378,7 @@ function rewriteUnit(unitSql: string, o: FunctionRewriteContext): UnitRewrite {
   }
 
   // PL/pgSQL-парсер кличеться лише для `LANGUAGE plpgsql`: на тілі
-  // стандарту SQL він аварійно завершується (задача 2).
+  // стандарту SQL він аварійно завершується.
   const pl = o.plpgsql(unitSql)
   if (!pl.ok || pl.fn === undefined) {
     return refuse(

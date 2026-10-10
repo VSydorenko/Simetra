@@ -702,3 +702,94 @@ describe("rewriteFunction", () => {
     })
   })
 })
+
+describe("names and shapes the promotion changes outside the column map", () => {
+  const details = (r: ReturnType<typeof rewriteFunction>) =>
+    r.problems.map((p) => `${p.code} ${p.detail}`)
+
+  it("refuses a table name in a string literal of a trigger function", () => {
+    const sql = trigger(
+      "BEGIN\n  IF TG_TABLE_NAME = 'counterparties' THEN\n    PERFORM pg_notify('x', 'y');\n  END IF;\n  PERFORM pg_relation_size('app.counterparties');\n  RETURN NEW;\nEND"
+    )
+    const r = rewriteFunction(sql, { ...ctx, triggerTables: [COUNTERPARTIES] })
+    expect(r.sql).toBe(sql)
+    expect(r.problems.map((p) => [p.code, p.line])).toEqual([
+      ["rewrite.unsupported", 3],
+      ["rewrite.unsupported", 6],
+    ])
+    expect(details(r)[0]).toContain("table name in a string literal")
+  })
+
+  it("refuses ON CONFLICT ON CONSTRAINT of the promoted table", () => {
+    const sql = plpgsql(
+      "BEGIN\n  INSERT INTO app.counterparties (id, inn) VALUES (p_id, 'x') ON CONFLICT ON CONSTRAINT counterparties_pkey DO NOTHING;\n  RETURN NULL;\nEND"
+    )
+    expect(codes(rewriteFunction(sql, ctx))).toEqual(["rewrite.unsupported"])
+  })
+
+  it("refuses a positional fill of a record of the promoted row type", () => {
+    for (const statement of [
+      "SELECT c.id, NULL, c.inn INTO r FROM app.counterparties c LIMIT 1;",
+      "FOR r IN SELECT c.id, NULL, c.inn FROM app.counterparties c LOOP\n    RAISE NOTICE '%', r.inn;\n  END LOOP;",
+      "r := ROW(1, 'n', 'i');",
+      "SELECT * INTO r FROM app.counterparties c JOIN app.invoice i ON i.counterparty_id = c.id LIMIT 1;",
+    ]) {
+      const sql = plpgsql(
+        `DECLARE\n  r app.counterparties%ROWTYPE;\nBEGIN\n  ${statement}\n  RETURN NULL;\nEND`
+      )
+      const r = rewriteFunction(sql, ctx)
+      expect(details(r), statement).toContainEqual(
+        expect.stringContaining(
+          "positional fill of a row of the promoted table"
+        )
+      )
+      expect(r.sql).toBe(sql)
+    }
+    for (const statement of [
+      "SELECT * INTO r FROM app.counterparties WHERE id = p_id;",
+      "SELECT c.* INTO r FROM app.counterparties c WHERE c.id = p_id;",
+      "UPDATE app.counterparties SET inn = 'x' WHERE id = p_id RETURNING * INTO r;",
+      "r := NULL;",
+    ]) {
+      const sql = plpgsql(
+        `DECLARE\n  r app.counterparties%ROWTYPE;\nBEGIN\n  ${statement}\n  RETURN NULL;\nEND`
+      )
+      expect(rewriteFunction(sql, ctx).problems, statement).toEqual([])
+    }
+  })
+
+  it("refuses a changed field through a polymorphic parameter", () => {
+    for (const sql of [
+      plpgsql(
+        "BEGIN\n  PERFORM 1 FROM app.counterparties;\n  RETURN p.inn;\nEND",
+        "app.g3(p anyelement) RETURNS text LANGUAGE plpgsql STABLE"
+      ),
+      plpgsql(
+        "BEGIN\n  PERFORM 1 FROM app.counterparties;\n  RETURN inn(p);\nEND",
+        "app.g3(p anycompatible) RETURNS text LANGUAGE plpgsql STABLE"
+      ),
+      "CREATE FUNCTION app.h3(p anyelement) RETURNS text LANGUAGE sql STABLE AS $$\n  SELECT p.inn FROM app.counterparties c LIMIT 1\n$$",
+    ]) {
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r), sql).toContain("rewrite.ambiguous-name")
+      expect(r.sql).toBe(sql)
+    }
+  })
+
+  it("refuses functional notation over a label- or function-qualified record", () => {
+    for (const sql of [
+      plpgsql(
+        "BEGIN\n  RETURN inn(app.f6.r);\nEND",
+        "app.f6(r app.counterparties) RETURNS text LANGUAGE plpgsql STABLE"
+      ),
+      plpgsql(
+        "<<blk>>\nBEGIN\n  RETURN inn(blk.r) || inn(g4.r);\nEND",
+        "app.g4(r app.counterparties) RETURNS text LANGUAGE plpgsql STABLE"
+      ),
+    ]) {
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r), sql).toContain("rewrite.unsupported")
+      expect(r.sql).toBe(sql)
+    }
+  })
+})

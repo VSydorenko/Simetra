@@ -21,7 +21,7 @@ import type {
   UpdateStmt,
 } from "libpg-query"
 import { quoteIdent } from "simetra/model"
-import { byteOffsets, type SqlParser } from "../parse"
+import { byteOffsets, relationNameText, type SqlParser } from "../parse"
 import { lexChain, type Token } from "./lex"
 import { resolveTableName, type TableResolution } from "./tables"
 import type {
@@ -538,6 +538,15 @@ class StatementRewriter {
       coalesced: false,
     })
     const infer = clause.infer
+    if (infer?.conname !== undefined && target.table !== undefined) {
+      // Промоція перейменовує таблицю, а її обмеження й індекси — окремими
+      // перейменуваннями плану: ім'я обмеження тут не доводиться.
+      this.problem(
+        "rewrite.unsupported",
+        this.at(infer.location ?? clause.location),
+        `ON CONFLICT ON CONSTRAINT ${infer.conname} names a constraint of promoted table "${target.table.from}", which the promotion renames separately; write ON CONFLICT (<columns>) instead`
+      )
+    }
     if (infer !== undefined) {
       for (const element of infer.indexElems ?? []) {
         if (!("IndexElem" in element)) continue
@@ -876,6 +885,18 @@ class StatementRewriter {
     )
     if (resolved.failed) return { refname, aliased, ...REPORTED }
     const { schema, table, known } = resolved
+    if (
+      table !== undefined &&
+      table.from !== table.to &&
+      rv.schemaname === undefined &&
+      rv.catalogname === undefined &&
+      env.ctes.has(table.to)
+    ) {
+      // Нове ім'я некваліфікованої таблиці вже займає видимий CTE: після
+      // перейменування посилання читало б CTE, а не таблицю.
+      this.problem("rewrite.ambiguous-name", this.at(rv.location), "capture")
+      return { refname, aliased, schema, relname, table, ...REPORTED }
+    }
     if (table !== undefined) {
       this.renameRelation(rv, table)
       if (rv.alias?.colnames !== undefined) {
@@ -1121,6 +1142,16 @@ class StatementRewriter {
       !levelHas(level, name) &&
       outputs.pre.includes(name)
     ) {
+      // Вхідна колонка в `GROUP BY` переважає ім'я виводу: колонка з цим
+      // ім'ям, яку додає чи дає перейменування промоція, перехопила б його.
+      if (levelHasAfter(level, name)) {
+        this.problem(
+          "rewrite.ambiguous-name",
+          this.at(firstLocation(node)),
+          "capture"
+        )
+        return
+      }
       this.outputNameOrExpr(node, env, outputs)
       return
     }
@@ -1193,6 +1224,7 @@ class StatementRewriter {
           break
         case "FuncCall":
           this.functionalNotation(child as FuncCall, env)
+          this.sequenceName(child as FuncCall)
           this.walk(child, env, results)
           break
         case "SelectStmt":
@@ -1276,21 +1308,50 @@ class StatementRewriter {
     this.select(query.SelectStmt, env, mode)
   }
 
-  /** Рядковий літерал, рівний мітці споживача (рішення 4): дані кодують об'єкт старою міткою. */
+  /**
+   * Рядковий літерал, рівний мітці споживача: дані кодують об'єкт старою
+   * міткою. Літерал, що читається як ім'я промотованої таблиці
+   * (`to_regclass('app.t')`, неявний `regclass`-аргумент, `TG_TABLE_NAME =
+   * 't'`), Postgres резолвить лише під час виконання, а нове ім'я в рядок не
+   * підставити, не правлячи його вмісту: мовчки лишений рядок повернув би
+   * `NULL` чи хибну гілку вже після промоції.
+   */
   private literal(constant: A_Const): void {
     const value = constant.sval?.sval
-    if (value === undefined || !this.labels.has(value)) return
-    this.problem(
-      "rewrite.label-literal",
-      this.at(constant.location),
-      `string literal '${value}' equals a consumer label of the promoted object`
+    if (value === undefined) return
+    if (this.labels.has(value)) {
+      this.problem(
+        "rewrite.label-literal",
+        this.at(constant.location),
+        `string literal '${value}' equals a consumer label of the promoted object`
+      )
+    }
+    const table = this.textTable(value)
+    if (table !== undefined) {
+      this.problem(
+        "rewrite.unsupported",
+        this.at(constant.location),
+        `table name in a string literal: '${value}' names promoted table "${table.schema}.${table.from}", which the promotion renames; the rewrite does not edit the contents of a string`
+      )
+    }
+  }
+
+  /** Промотована таблиця, яку називає текст; кваліфікований — лише в її схемі. */
+  private textTable(value: string): TableRename | undefined {
+    const names = relationNameText(value)
+    if (names === undefined || names.length > 3) return undefined
+    const relname = names.at(-1)!
+    const schema = names.length >= 2 ? names.at(-2) : undefined
+    return this.map.tables.find(
+      (t) => t.from === relname && (schema === undefined || t.schema === schema)
     )
   }
 
   /**
-   * Рядок, приведений до `regclass`, називає таблицю текстом: Postgres
-   * резолвить його під час створення, і нове ім'я тут не підставити, не
-   * правлячи вміст літерала. Промотована таблиця в такому рядку — відмова.
+   * Рядок, приведений до `regclass`, називає відношення текстом. Ім'я, якого
+   * немає серед таблиць моделі, може бути послідовністю, індексом чи іншим
+   * відношенням промотованої таблиці — їх промоція перейменовує окремо, тож
+   * таке ім'я не доведене. Промотовану таблицю судить `literal`.
    */
   private regclassLiteral(cast: TypeCast): void {
     const type = strings(cast.typeName?.names ?? [])
@@ -1301,19 +1362,51 @@ class StatementRewriter {
     ) {
       return
     }
-    let arg = cast.arg
-    while (arg !== undefined && ("TypeCast" in arg || "CollateClause" in arg)) {
-      arg = "TypeCast" in arg ? arg.TypeCast.arg : arg.CollateClause.arg
-    }
-    const value =
-      arg !== undefined && "A_Const" in arg ? arg.A_Const.sval?.sval : undefined
-    if (value === undefined) return
-    const relname = regclassNames(value)?.at(-1)
-    if (relname === undefined || !this.promotedNames.has(relname)) return
+    const value = stringLiteral(cast.arg)
+    if (value === undefined || this.textTable(value) !== undefined) return
+    const names = relationNameText(value)
+    if (names !== undefined && this.knownRelation(names)) return
     this.problem(
       "rewrite.unsupported",
       this.at(cast.location),
-      `regclass literal '${value}' names promoted table "${relname}" as text`
+      `regclass literal '${value}' names no table of the model: it may name a sequence, an index or another relation of a promoted table, which the promotion renames separately`
+    )
+  }
+
+  /** Таблиця моделі за іменем з тексту; некваліфіковане — у будь-якій схемі. */
+  private knownRelation(names: readonly string[]): boolean {
+    if (names.length === 0 || names.length > 3) return false
+    const relname = names.at(-1)!
+    if (names.length === 1) {
+      return [...this.map.knownTables.keys()].some((k) =>
+        k.endsWith(`.${relname}`)
+      )
+    }
+    return this.map.knownTables.has(`${names.at(-2)}.${relname}`)
+  }
+
+  /**
+   * Ім'я послідовності рядком (`nextval('…')`, `setval`, `currval`,
+   * `pg_get_serial_sequence`): послідовності промотованої таблиці план
+   * перейменовує окремо, а які саме вони, переписувач не знає — рядок не
+   * доведено чужим.
+   */
+  private sequenceName(call: FuncCall): void {
+    const names = strings(call.funcname ?? [])
+    const name = names?.at(-1)
+    if (
+      names === undefined ||
+      name === undefined ||
+      !SEQUENCE_FUNCTIONS.has(name) ||
+      !(names.length === 1 || (names.length === 2 && names[0] === "pg_catalog"))
+    ) {
+      return
+    }
+    if (!(call.args ?? []).some((a) => stringLiteral(a) !== undefined)) return
+    this.problem(
+      "rewrite.unsupported",
+      this.at(call.location),
+      `${name}() takes a sequence or table name as a string: the promotion renames the sequences of a promoted table separately, and the rewrite does not prove which sequence the string names; let the column default draw the value or rewrite the call by hand after the promotion`
     )
   }
 
@@ -1557,20 +1650,61 @@ class StatementRewriter {
     )
   }
 
-  /** Аргумент доведено не цілим рядком: константа, оператор, колонка чи змінна. */
+  /**
+   * Аргумент доведено не цілим рядком: константа, приведення до вбудованого
+   * скалярного типу, колонка таблиці моделі (поле запису промотованої
+   * таблиці — теж її колонка) чи змінна поза `records`. Колонку підзапиту чи
+   * CTE, вираз (`NULLIF(r, …)`) чи кваліфікатор, що не є джерелом (мітка
+   * блоку, ім'я функції), не доведено: вони можуть нести цілий рядок.
+   */
   private scalarArgument(node: Node, env: Env): boolean {
-    if ("A_Const" in node || "A_Expr" in node) return true
+    if ("A_Const" in node || isConstant(node, this.tableNames)) return true
     if ("TypeCast" in node) {
       return isBuiltinType(node.TypeCast.typeName, this.tableNames)
     }
     if (!("ColumnRef" in node) || isStar(node.ColumnRef)) return false
     const names = strings(node.ColumnRef.fields ?? [])
-    if (names === undefined) return false
-    if (names.length > 1) return true
-    const name = names[0]!
-    const at = locate(name, [...env.levels].reverse(), false)
-    if (at !== undefined) return "leaf" in at || "merged" in at
-    return this.scope.variables.has(name) && !this.scope.records.has(name)
+    if (names === undefined || names.length === 0 || names.length > 3) {
+      return false
+    }
+    const levels = [...env.levels].reverse()
+    if (names.length === 1) {
+      const name = names[0]!
+      const at = locate(name, levels, false)
+      if (at !== undefined) {
+        if ("leaf" in at) return isRelation(at.leaf)
+        if ("merged" in at)
+          return at.merged.items.flatMap(leavesOf).every(isRelation)
+        return false
+      }
+      return this.scope.variables.has(name) && !this.scope.records.has(name)
+    }
+    const column = names.at(-1)!
+    if (names.length === 3) {
+      const [schema, relname] = names as [string, string]
+      for (const level of levels) {
+        const leaf = level.items
+          .flatMap((i) => ("leaf" in i ? [i.leaf] : []))
+          .find(
+            (l) => !l.aliased && l.schema === schema && l.relname === relname
+          )
+        if (leaf !== undefined) {
+          return isRelation(leaf) && leaf.columns!.includes(column)
+        }
+      }
+      return false
+    }
+    const qualifier = names[0]!
+    const item = findByRefname(env.levels, qualifier, false)
+    if (item !== undefined) {
+      if (this.scope.variables.has(qualifier)) return false
+      return (
+        leavesOf(item).some(
+          (l) => isRelation(l) && l.columns!.includes(column)
+        ) && leavesOf(item).every(isRelation)
+      )
+    }
+    return this.scope.records.has(qualifier)
   }
 
   /** Колонки запису PL/pgSQL для `r.*` у списку виводу. */
@@ -1826,7 +1960,20 @@ class StatementRewriter {
       }
       return undefined
     }
-    if ("merged" in before || "failed" in before) return { result: undefined }
+    if ("failed" in before) return { result: undefined }
+    if ("merged" in before) {
+      // Злите `USING` ім'я — колонка свого рівня; ближча область, що після
+      // промоції отримує таку колонку, перехопила б його.
+      const after = locate(name, levels, true)
+      if (
+        after === undefined ||
+        "failed" in after ||
+        ("merged" in after && after.merged === before.merged)
+      ) {
+        return { result: undefined }
+      }
+      return capture()
+    }
     if ("hits" in before) {
       const open = before.unknown[0]
       if (
@@ -2099,7 +2246,7 @@ function columnsAfter(leaf: Leaf): readonly string[] | undefined {
 /** Де резолвиться некваліфікована колонка (як `colNameToVar`). */
 type Located =
   | { leaf: Leaf }
-  | { merged: true }
+  | { merged: Level }
   | { failed: true }
   | { hits: Leaf[]; unknown: Leaf[] }
 
@@ -2121,7 +2268,7 @@ function locate(
       level.merged.has(name) &&
       leaves.every((l) => (after ? columnsAfter(l) : l.columns) !== undefined)
     ) {
-      return { merged: true }
+      return { merged: level }
     }
     if (leaves.some((l) => l.unproven?.reported === true)) {
       return { failed: true }
@@ -2144,6 +2291,37 @@ function levelHas(level: Level, name: string): boolean {
       .some((l) => l.columns === undefined || l.columns.includes(name))
   )
 }
+
+/** Колонка рівня після промоції: додана чи нове ім'я перейменованої. */
+function levelHasAfter(level: Level, name: string): boolean {
+  return level.items
+    .flatMap(leavesOf)
+    .some((l) => columnsAfter(l)?.includes(name) ?? false)
+}
+
+/** Відношення моделі в `FROM` з доведеними колонками, а не підзапит, CTE чи функція. */
+function isRelation(leaf: Leaf): boolean {
+  return leaf.relname !== undefined && leaf.columns !== undefined
+}
+
+/** Рядковий літерал під приведеннями й `COLLATE`; інший вузол — `undefined`. */
+function stringLiteral(node: Node | undefined): string | undefined {
+  let arg = node
+  while (arg !== undefined && ("TypeCast" in arg || "CollateClause" in arg)) {
+    arg = "TypeCast" in arg ? arg.TypeCast.arg : arg.CollateClause.arg
+  }
+  return arg !== undefined && "A_Const" in arg
+    ? arg.A_Const.sval?.sval
+    : undefined
+}
+
+/** Функції каталогу, що беруть ім'я послідовності (чи таблиці) рядком. */
+const SEQUENCE_FUNCTIONS: ReadonlySet<string> = new Set([
+  "nextval",
+  "currval",
+  "setval",
+  "pg_get_serial_sequence",
+])
 
 function sameTable(a: TableRename, b: TableRename | undefined): boolean {
   return b !== undefined && a.schema === b.schema && a.from === b.from
@@ -2535,43 +2713,4 @@ function mentions(value: unknown, names: ReadonlySet<string>): boolean {
 
 function statementKind(stmt: Node): string {
   return Object.keys(stmt)[0] ?? "statement"
-}
-
-/**
- * Частини імені з тексту `regclass` за правилами ідентифікаторів Postgres:
- * без лапок — у нижній регістр, у лапках — як є з `""` → `"`. Нерозбірний
- * текст — `undefined`.
- */
-function regclassNames(text: string): string[] | undefined {
-  const names: string[] = []
-  let i = 0
-  const value = text.trim()
-  for (;;) {
-    if (value[i] === '"') {
-      let name = ""
-      i++
-      for (;;) {
-        if (i >= value.length) return undefined
-        if (value[i] === '"') {
-          if (value[i + 1] === '"') {
-            name += '"'
-            i += 2
-            continue
-          }
-          i++
-          break
-        }
-        name += value[i++]
-      }
-      names.push(name)
-    } else {
-      const match = /^[^."\s]+/.exec(value.slice(i))
-      if (match === null) return undefined
-      names.push(match[0].toLowerCase())
-      i += match[0].length
-    }
-    if (i >= value.length) return names
-    if (value[i] !== ".") return undefined
-    i++
-  }
 }

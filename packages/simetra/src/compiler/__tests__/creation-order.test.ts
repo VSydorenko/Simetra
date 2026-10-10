@@ -910,6 +910,9 @@ describe("unit references", () => {
       "'app.counterparties'::regclass",
       "CAST('app.counterparties' AS pg_catalog.regclass)",
       "regclass 'app.counterparties'",
+      "'app . counterparties'::regclass",
+      `'"app"."counterparties"'::regclass`,
+      "'db.app.counterparties'::regclass",
     ]) {
       const { parse, unit } = await unitOf(
         `CREATE VIEW app.v AS SELECT ${expression} AS r`

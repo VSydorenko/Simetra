@@ -167,6 +167,19 @@ export function rewritePlpgsqlBody(
       `"${name}" is declared more than once (shadowed), so the record behind the reference is not proven`
     )
   }
+  // Параметр поліморфного типу може нести рядок промотованої таблиці, а
+  // форму його переписувач не знає.
+  for (const v of fn.variables) {
+    if (v.kind !== "var" || v.typeText === undefined || records.has(v.name)) {
+      continue
+    }
+    if (isPolymorphic(v.typeText) && !unknown.has(v.name)) {
+      unknown.set(
+        v.name,
+        `"${v.name}" has the polymorphic type ${v.typeText}, so the row behind it is not proven`
+      )
+    }
+  }
   inferRecords(fn, records, unknown, ctx)
   const fields = changedFields(ctx.map)
   const scope: RewriteScope = {
@@ -400,6 +413,113 @@ function singleTableStar(
   return resolved.failed ? undefined : resolved.table
 }
 
+/**
+ * Позиційне заповнення запису рядкового типу промотованої таблиці: промоція
+ * знімає колонки й дописує нові в кінець, тож значення за позицією мовчки
+ * лягли б не в ті поля.
+ */
+function positionalFill(offset: number): BodyFinding {
+  return {
+    code: "rewrite.unsupported",
+    offset,
+    detail:
+      "positional fill of a row of the promoted table: the promotion removes and appends columns, so values by position would land in other fields; fill the record with SELECT * of that table or assign its fields by name",
+  }
+}
+
+/**
+ * Запит, що заповнює запис цілим рядком тієї самої таблиці: `SELECT *` (чи
+ * `<джерело>.*`) однієї таблиці або `RETURNING *` зміни лише цієї таблиці.
+ */
+function fillsWholeRow(
+  query: string,
+  table: TableRename,
+  ctx: PlpgsqlBodyContext
+): boolean {
+  const star = singleTableStar(query, ctx)
+  if (star !== undefined) return sameTable(star, table)
+  const parsed = ctx.parse(query)
+  if (!parsed.ok || parsed.statements.length !== 1) return false
+  const stmt = parsed.statements[0]!.stmt
+  const change =
+    "InsertStmt" in stmt
+      ? { ...stmt.InsertStmt, extra: undefined }
+      : "UpdateStmt" in stmt
+        ? { ...stmt.UpdateStmt, extra: stmt.UpdateStmt.fromClause }
+        : "DeleteStmt" in stmt
+          ? { ...stmt.DeleteStmt, extra: stmt.DeleteStmt.usingClause }
+          : undefined
+  const rv = change?.relation
+  if (change === undefined || rv?.relname === undefined) return false
+  if (change.withClause !== undefined) return false
+  const resolved = resolveTableName(
+    ctx.map,
+    ctx.searchPath,
+    rv.catalogname,
+    rv.schemaname,
+    rv.relname
+  )
+  if (resolved.failed || resolved.table === undefined) return false
+  if (!sameTable(resolved.table, table)) return false
+  const list = change.returningList ?? []
+  const only = list.length === 1 ? list[0] : undefined
+  const value =
+    only !== undefined && "ResTarget" in only ? only.ResTarget.val : undefined
+  if (value === undefined || !("ColumnRef" in value)) return false
+  const fields = value.ColumnRef.fields ?? []
+  if (fields.length === 0 || !("A_Star" in fields.at(-1)!)) return false
+  if (fields.length === 1) return (change.extra?.length ?? 0) === 0
+  const qualifier = fields.length === 2 ? fields[0]! : undefined
+  const name =
+    qualifier !== undefined && "String" in qualifier
+      ? qualifier.String.sval
+      : undefined
+  return name !== undefined && name === (rv.alias?.aliasname ?? rv.relname)
+}
+
+/** Значення присвоєння — конструктор рядка (`ROW(…)` чи `(a, b)`). */
+function rowConstructor(value: string, parse: SqlParser): boolean {
+  const parsed = parse(`${SELECT}${value}`)
+  if (!parsed.ok || parsed.statements.length !== 1) return false
+  const stmt = parsed.statements[0]!.stmt
+  const target =
+    "SelectStmt" in stmt ? stmt.SelectStmt.targetList?.[0] : undefined
+  const node =
+    target !== undefined && "ResTarget" in target
+      ? target.ResTarget.val
+      : undefined
+  return node !== undefined && "RowExpr" in node
+}
+
+function sameTable(a: TableRename, b: TableRename): boolean {
+  return a.schema === b.schema && a.from === b.from
+}
+
+/** Поліморфні псевдотипи: тип аргументу обирає викликач. */
+const POLYMORPHIC_TYPES: ReadonlySet<string> = new Set([
+  "anyelement",
+  "anyarray",
+  "anynonarray",
+  "anyenum",
+  "anyrange",
+  "anymultirange",
+  "anycompatible",
+  "anycompatiblearray",
+  "anycompatiblenonarray",
+  "anycompatiblerange",
+  "anycompatiblemultirange",
+])
+
+/** Тип — поліморфний псевдотип (з `pg_catalog.` чи без, у лапках чи без). */
+export function isPolymorphic(type: string): boolean {
+  const name = type
+    .trim()
+    .replace(/^"?pg_catalog"?\./i, "")
+    .replace(/^"(.*)"$/, "$1")
+    .toLowerCase()
+  return POLYMORPHIC_TYPES.has(name)
+}
+
 /** `RETURN NEW`/`RETURN OLD` тригера віддає сам рядок таблиці: форма за визначенням її. */
 function skipped(
   s: PlpgsqlStatement,
@@ -522,6 +642,9 @@ function expressionItem(
       0,
       intoRow === undefined ? scope : { ...scope, intoRowtypeOf: intoRow }
     )
+    if (intoRow !== undefined && !fillsWholeRow(e.query, intoRow, ctx)) {
+      item.problems.push(positionalFill(0))
+    }
     return item
   }
   if (e.parseMode < 3) {
@@ -541,6 +664,16 @@ function expressionItem(
       detail: `the assignment target in "${short(e.query)}" is not recognized`,
     })
     return item
+  }
+  const target = s.target?.variable
+  const binding = target === undefined ? undefined : scope.records.get(target)
+  if (
+    s.type === "assign" &&
+    binding !== undefined &&
+    "table" in binding &&
+    rowConstructor(e.query.slice(split.valueStart), ctx.parse)
+  ) {
+    item.problems.push(positionalFill(split.valueStart))
   }
   // Ціль — не значення: її форма ніде не спостерігається, звіт лише про імена.
   part(
@@ -639,7 +772,7 @@ function writtenTarget(s: PlpgsqlStatement): string | undefined {
  * оператора їх не бачить (змінна поза `records`), а мовчки лишене ім'я
  * зламало б функцію, якщо запис несе рядок промотованої таблиці.
  */
-function unknownRecordFields(
+export function unknownRecordFields(
   text: string,
   parse: SqlParser,
   unknown: ReadonlyMap<string, string>,
@@ -657,6 +790,35 @@ function unknownRecordFields(
     }
     if (typeof value !== "object" || value === null) return
     for (const [key, inner] of Object.entries(value)) {
+      if (key === "FuncCall") {
+        // `inn(p)` — функціональний запис поля `p.inn` запису невідомої форми.
+        const call = inner as {
+          funcname?: unknown[]
+          args?: unknown[]
+          location?: number
+        }
+        const name = (call.funcname ?? []).map(
+          (f) => (f as { String?: { sval?: string } }).String?.sval
+        )
+        const arg = (call.args?.length === 1 ? call.args[0] : undefined) as
+          { ColumnRef?: { fields?: unknown[] } } | undefined
+        const ref = (arg?.ColumnRef?.fields ?? []).map(
+          (f) => (f as { String?: { sval?: string } }).String?.sval
+        )
+        const field = name.length === 1 ? name[0] : undefined
+        const record = ref.length === 1 ? ref[0] : undefined
+        if (
+          field !== undefined &&
+          record !== undefined &&
+          unknown.has(record) &&
+          fields.has(field)
+        ) {
+          found.push({
+            offset: call.location === undefined ? 0 : toIndex(call.location),
+            detail: `${unknown.get(record)}, and "${field}(${record})" may be functional notation for its field "${field}", a column that the promotion renames or removes`,
+          })
+        }
+      }
       if (key === "ColumnRef") {
         const ref = inner as { fields?: unknown[]; location?: number }
         const names = (ref.fields ?? []).map(

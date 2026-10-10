@@ -61,6 +61,16 @@ function functionLanguage(fn: FunctionNode): string | undefined {
 }
 
 /**
+ * Мова `CREATE FUNCTION`/`CREATE PROCEDURE` у нижньому регістрі; інший
+ * оператор чи мова без імені — `undefined`. Одне правило для оболонки й
+ * переписувача, щоб вони не розходились у тому, яке тіло перед ними.
+ */
+export function routineLanguage(tree: Node): string | undefined {
+  const fn = (tree as { CreateFunctionStmt?: FunctionNode }).CreateFunctionStmt
+  return fn === undefined ? undefined : functionLanguage(fn)
+}
+
+/**
  * Закрита оболонка функції (спека П2 §3, «Дослівний SQL»): мова `sql` чи
  * `plpgsql`, явна волатильність, `SECURITY DEFINER` лише з `SET search_path
  * = ''`. Оболонка — те, що компілятор може перевірити статично: тіло лишається

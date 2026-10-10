@@ -121,3 +121,50 @@ export function byteOffsets(text: string): (byte: number) => number {
     return found
   }
 }
+
+/**
+ * Частини імені відношення з тексту, як їх читають `regclass`, `to_regclass`
+ * і функції з аргументом-іменем (`stringToQualifiedNameList` Postgres):
+ * пробіли навколо частин допустимі, без лапок — нижній регістр ASCII, у
+ * лапках — як є з `""` → `"`. Одне правило для всіх, хто судить ім'я в
+ * рядку, щоб двоє читачів не розходились у тому, що рядок називає.
+ * Нерозбірний текст чи порожня частина — `undefined`.
+ */
+export function relationNameText(text: string): string[] | undefined {
+  const names: string[] = []
+  const space = (c: string | undefined) =>
+    c === " " ||
+    c === "\t" ||
+    c === "\n" ||
+    c === "\r" ||
+    c === "\f" ||
+    c === "\v"
+  let i = 0
+  for (;;) {
+    while (space(text[i])) i++
+    if (text[i] === '"') {
+      let name = ""
+      i++
+      for (;;) {
+        if (i >= text.length) return undefined
+        if (text[i] === '"') {
+          if (text[i + 1] !== '"') break
+          i++
+        }
+        name += text[i++]
+      }
+      i++
+      if (name === "") return undefined
+      names.push(name)
+    } else {
+      const start = i
+      while (i < text.length && text[i] !== "." && !space(text[i])) i++
+      if (i === start) return undefined
+      names.push(text.slice(start, i).replace(/[A-Z]/g, (c) => c.toLowerCase()))
+    }
+    while (space(text[i])) i++
+    if (i >= text.length) return names
+    if (text[i] !== ".") return undefined
+    i++
+  }
+}

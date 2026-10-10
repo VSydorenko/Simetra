@@ -1,7 +1,7 @@
 import type { Node } from "libpg-query"
 import type { PhysicalSnapshot, SqlUnitClass } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
-import type { SqlParser } from "./parse"
+import { relationNameText, type SqlParser } from "./parse"
 import {
   pgNamespaceKeys,
   targetParts,
@@ -679,10 +679,7 @@ class ReferenceCollector {
     }
     const literal = arg?.A_Const?.sval as { sval?: string } | undefined
     if (literal?.sval === undefined) return undefined
-    const [named] = this.typeReferences(literal.sval)
-    return named === undefined
-      ? undefined
-      : { space: "rel", names: named.names }
+    return relationText(literal.sval)
   }
 
   /** `nextval('s')` чи `nextval('s'::regclass)`: ім'я послідовності — рядок. */
@@ -694,10 +691,15 @@ class ReferenceCollector {
     }
     const literal = arg?.A_Const?.sval as { sval?: string } | undefined
     if (literal?.sval === undefined) return undefined
-    // Текст `regclass` — те саме ім'я, що в SQL: розбір дає регістр і лапки.
-    const [type] = this.typeReferences(literal.sval)
-    return type === undefined ? undefined : { space: "rel", names: type.names }
+    return relationText(literal.sval)
   }
+}
+
+/** Посилання на відношення, назване текстом `regclass`; каталог відкидається. */
+function relationText(text: string): Reference | undefined {
+  const names = relationNameText(text)
+  if (names === undefined || names.length > 3) return undefined
+  return { space: "rel", names: names.slice(-2) }
 }
 
 function cycleDiagnostic(

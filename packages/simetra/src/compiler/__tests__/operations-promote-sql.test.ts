@@ -958,7 +958,31 @@ ALTER PUBLICATION supabase_realtime ADD TABLE app.counterparties;
         params: expect.objectContaining({
           function: "function:app.counterparties_oid()",
           line: 2,
-          detail: expect.stringContaining("regclass literal"),
+          detail: expect.stringContaining("table name in a string literal"),
+        }),
+      },
+    ])
+  })
+
+  it("refuses a candidate that names the promoted table in a text argument", async () => {
+    const files = await project({
+      "sql/app/probe.sql": `CREATE FUNCTION app.has_cp() RETURNS boolean LANGUAGE plpgsql STABLE AS $fn$
+BEGIN
+  RETURN to_regclass('app.counterparties') IS NOT NULL;
+END
+$fn$;
+`,
+    })
+    const { result, after } = await promoted(files)
+    expect(after).toEqual(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "rewrite.unsupported",
+        file: "sql/app/probe.sql",
+        params: expect.objectContaining({
+          function: "function:app.has_cp()",
+          line: 3,
+          detail: expect.stringContaining("table name in a string literal"),
         }),
       },
     ])

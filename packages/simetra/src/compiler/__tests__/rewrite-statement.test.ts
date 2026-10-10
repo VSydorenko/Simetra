@@ -32,6 +32,7 @@ const MAP: RenameMap = {
     ["app.counterparties", ["id", "name", "inn", "legacy"]],
     ["app.invoice", ["id", "counterparty_id", "name"]],
     ["app.notes", ["id", "description", "deletion_mark", "legacy"]],
+    ["app.notes2", ["id", "description", "body"]],
   ]),
 }
 
@@ -209,8 +210,7 @@ describe("rewriteStatementText", () => {
     ]) {
       expect(rw(sql).problems, sql).toEqual(["rewrite.unsupported"])
     }
-    expect(rw("SELECT 'app.invoices'::regclass").problems).toEqual([])
-    expect(rw("SELECT 'app.counterparties'::text").problems).toEqual([])
+    expect(rw("SELECT 'app.invoice'::regclass").problems).toEqual([])
   })
 
   // Нижче — межі, яких бриф не перелічує, але які випливають з рішення 13.
@@ -698,5 +698,127 @@ describe("USING and NATURAL over a promoted table", () => {
     )
     expect(r.problems.map((p) => p.code)).toEqual(["rewrite.unsupported"])
     expect(r.problems[0]!.detail).toContain("NATURAL JOIN")
+  })
+})
+
+describe("names the promotion changes outside the column map", () => {
+  const refused = (sql: string, scope: Partial<RewriteScope> = {}) =>
+    details(sql, scope)
+
+  it("refuses a promoted table named in a string literal", () => {
+    for (const sql of [
+      "SELECT to_regclass('app.counterparties')",
+      "SELECT pg_relation_size('app.counterparties')",
+      "SELECT has_table_privilege('app.counterparties', 'select')",
+      "SELECT 'app . counterparties'::regclass",
+      'SELECT \'"app"."counterparties"\'::text',
+      "SELECT 1 WHERE 'counterparties' = 'x'",
+      "SELECT 'app.counterparties'::regclass",
+    ]) {
+      expect(refused(sql), sql).toEqual([
+        expect.stringMatching(
+          /^rewrite\.unsupported table name in a string literal: .*counterparties/
+        ),
+      ])
+    }
+    for (const sql of [
+      "SELECT to_regclass('app.invoice')",
+      "SELECT 'other.counterparties'",
+      "SELECT 'counterparties are many'",
+      "SELECT 'app.invoice'::regclass",
+    ]) {
+      expect(refused(sql), sql).toEqual([])
+    }
+  })
+
+  it("refuses constraint and sequence names a promotion renames separately", () => {
+    expect(
+      refused(
+        "INSERT INTO app.counterparties (id, inn) VALUES (1, 'x') ON CONFLICT ON CONSTRAINT counterparties_pkey DO NOTHING"
+      )
+    ).toEqual([
+      expect.stringMatching(
+        /^rewrite\.unsupported ON CONFLICT ON CONSTRAINT counterparties_pkey.*ON CONFLICT \(<columns>\)/
+      ),
+    ])
+    for (const sql of [
+      "SELECT nextval('app.counterparties_id_seq')",
+      "SELECT currval('app.counterparties_id_seq'::regclass)",
+      "SELECT setval('app.counterparties_id_seq', 1)",
+      "SELECT pg_get_serial_sequence('app.invoice', 'id')",
+      "SELECT 'app.counterparties_id_seq'::regclass",
+    ]) {
+      const problems = rw(sql).problems
+      expect(problems.length, sql).toBeGreaterThan(0)
+      expect(new Set(problems), sql).toEqual(new Set(["rewrite.unsupported"]))
+    }
+    expect(
+      refused(
+        "INSERT INTO app.invoice (id) VALUES (1) ON CONFLICT ON CONSTRAINT invoice_pkey DO NOTHING"
+      )
+    ).toEqual([])
+  })
+
+  it("refuses a USING-merged name that an inner promoted table captures", () => {
+    for (const sql of [
+      "SELECT n.id FROM app.notes n JOIN app.notes2 m USING (description) WHERE EXISTS (SELECT 1 FROM app.counterparties c WHERE description = 'x')",
+      "SELECT (SELECT description FROM app.counterparties c LIMIT 1) FROM app.notes n JOIN app.notes2 m USING (description)",
+    ]) {
+      expect(refused(sql), sql).toEqual(["rewrite.ambiguous-name capture"])
+    }
+    expect(
+      refused(
+        "SELECT n.id FROM app.notes n JOIN app.notes2 m USING (description) WHERE description = 'x'"
+      )
+    ).toEqual([])
+  })
+
+  it("refuses a CTE named like the new table name", () => {
+    for (const sql of [
+      "WITH counterparty AS (SELECT 1 AS id) SELECT c.inn FROM counterparties c JOIN counterparty x ON x.id = c.id",
+      "WITH counterparty AS (SELECT 1 AS id) SELECT 1 FROM counterparty x WHERE EXISTS (SELECT 1 FROM counterparties c WHERE c.id = x.id)",
+    ]) {
+      expect(refused(sql, { searchPath: ["app"] }), sql).toContain(
+        "rewrite.ambiguous-name capture"
+      )
+    }
+    expect(
+      rw("SELECT 1 FROM counterparties c WHERE c.id = 1", {
+        searchPath: ["app"],
+      })
+    ).toEqual({
+      sql: "SELECT 1 FROM counterparty c WHERE c.id = 1",
+      problems: [],
+      changes: [],
+    })
+  })
+
+  it("refuses a GROUP BY output name that a column of the promotion captures", () => {
+    for (const sql of [
+      "SELECT c.inn AS description, count(*) FROM app.counterparties c GROUP BY description",
+      "SELECT lower(c.inn) AS deletion_mark FROM app.counterparties c GROUP BY deletion_mark",
+    ]) {
+      expect(refused(sql), sql).toEqual(["rewrite.ambiguous-name capture"])
+    }
+    expect(
+      refused("SELECT c.inn AS x FROM app.counterparties c GROUP BY x")
+    ).toEqual([])
+  })
+
+  it("refuses functional notation over an argument not proven scalar", () => {
+    for (const sql of [
+      "SELECT 1 FROM (SELECT c AS x FROM app.counterparties c) s WHERE inn(s.x) = '1'",
+      "SELECT inn(NULLIF(c, NULL)) FROM app.counterparties c",
+      "SELECT inn(blk.r)",
+    ]) {
+      expect(rw(sql).problems, sql).toContain("rewrite.unsupported")
+    }
+    for (const sql of [
+      "SELECT inn(c.id) FROM app.counterparties c",
+      "SELECT inn(1 + 2)",
+      "SELECT inn(n.legacy) FROM app.notes n",
+    ]) {
+      expect(rw(sql).problems, sql).toEqual([])
+    }
   })
 })
