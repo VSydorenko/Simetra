@@ -314,6 +314,26 @@
     - вирази розміщуються в порядку тексту (стабільне сортування за
       `lineno`), кожен — після попереднього збігу й не раніше початку свого
       рядка.
+14. **Захоплення імен** (архітектор, 2026-10-10, за знахідкою задачі 5).
+    Некваліфіковане ім'я резолвиться двічі — за каталогом до промоції
+    (`knownTables`) і після (`TableRename.columnsAfter`). Якщо цілі різні з
+    точністю до мапи перейменувань — `rewrite.ambiguous-name` з
+    `detail: "capture"`, без правки. Захоплення дають:
+    - додані колонки виду;
+    - цілі перейменувань, яких до промоції не було (`name → description` у
+      внутрішній таблиці захоплює некваліфіковане `description` зовнішньої
+      області);
+    - зняті колонки: ім'я, що резолвилось у внутрішню таблицю, після зняття
+      мовчки падає в зовнішню.
+
+    Те саме для імені, що було змінною чи параметром PL/pgSQL і після
+    промоції збігається з колонкою таблиці в області. Посилання на зняту
+    колонку (без нового імені) — відмова. `topLevelOutput: "ignore"`
+    (зокрема й гасіння звіту `star`) — лише для `PERFORM` і синтетичної
+    обгортки виразу; `RETURN QUERY`, `SELECT … INTO` запису, `FOR … IN
+    SELECT` лишають звіт. `INSERT` без списку колонок у промотовану таблицю —
+    `contract-change` (`star`): позиційну вставку ламають додані й зняті
+    колонки, а не перейменування.
 
 ## Review Focus
 
@@ -656,7 +676,7 @@ git commit -m "feat(compiler): «призначене раз» розпізна�
 **Interfaces:**
 - Consumes: `SqlParser` (`sql/parse.ts`), `byteOffsets` (задача 2), `quoteIdent` (`simetra/model`).
 - Produces:
-  - `interface TableRename { schema: string; from: string; to: string; columns: ReadonlyMap<string, string> }` — фізичні імена; `columns` — лише перейменовані (`старе → нове`).
+  - `interface TableRename { schema: string; from: string; to: string; columns: ReadonlyMap<string, string>; columnsAfter: ReadonlySet<string> }` — фізичні імена; `columns` — лише перейменовані (`старе → нове`); `columnsAfter` — повна множина фізичних імен колонок таблиці після промоції (рішення 14); для непромотованої таблиці — її колонки без змін.
   - `interface RenameMap { tables: readonly TableRename[]; knownTables: ReadonlyMap<string, readonly string[]> }` — `knownTables`: `"<схема>.<таблиця>"` → колонки кожної таблиці моделі до промоції (для резолву некваліфікованих колонок).
   - `interface TextEdit { start: number; end: number; text: string }` — індекси UTF-16; `applyEdits(text: string, edits: readonly TextEdit[]): string` — від кінця, перетин країв — `Error`.
   - `interface RewriteScope { searchPath?: readonly string[]; variables: ReadonlySet<string>; records: ReadonlyMap<string, RecordBinding>; labels: readonly string[]; topLevelOutput?: "keep" | "ignore"; intoRowtypeOf?: TableRename }` — `topLevelOutput: "ignore"` вимикає ` AS <старе>` лише у верхньому списку виводу (синтетична обгортка виразу, `PERFORM`; рішення 13); типово `"keep"`. `intoRowtypeOf` — ціль `INTO` оператора — запис `%ROWTYPE` цієї таблиці: `*` тієї самої таблиці у верхньому списку не є зміною контракту. `type RecordBinding = { table: TableRename } | { trigger: TableRename[] }` — `variables` у нижньому регістрі; `NEW`/`OLD` — `records` з `trigger`.
@@ -735,6 +755,11 @@ it("flags consumer label literals", () => {
   expect(rw("SELECT 1 WHERE 'cp' = 'cp'", { labels: ["cp"] }).problems).toEqual(["rewrite.label-literal", "rewrite.label-literal"])
 })
 ```
+
+Захоплення імен (рішення 14), кожне — `rewrite.ambiguous-name` з
+`detail: "capture"` через `EXISTS` з корельованим підзапитом: додана колонка
+виду; ціль перейменування, якої до промоції не було; знята колонка; змінна
+PL/pgSQL проти доданої колонки. Посилання на зняту колонку — відмова.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -828,6 +853,7 @@ it("refuses an unresolved %TYPE", () => { /* app.counterparties.missing%TYPE →
 it("rewrites next to a 2000-char literal", () => {})
 it("reports a RETURNS SETOF promoted table as a contract change", () => {})
 it("returns the text unchanged when nothing references the map", () => {})
+it("reports a star in RETURN QUERY", () => { /* RETURN QUERY SELECT * FROM app.counterparties → contract-change star (рішення 14) */ })
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1224,7 +1250,9 @@ Expected: FAIL.
 
 Прив'язки тригерів (`triggerTables`) — з одиниць `CREATE TRIGGER` і джерел
 `EventSubscription` **до** промоції. `RenameMap.knownTables` — з
-`model.physical` до промоції.
+`model.physical` до промоції; `TableRename.columnsAfter` — з моделі після
+промоції: стандартні колонки `KIND_REGISTRY[kind].standardColumns(data)`,
+реквізити й зв'язки ТЧ (рішення 14).
 
 Правки текстів одиниць:
 - рядок на початку одиниці у файлі (`unit.line`) + рядок діагностики переписувача;
