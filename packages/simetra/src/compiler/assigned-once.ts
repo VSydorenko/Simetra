@@ -193,6 +193,15 @@ function polymorphicTargets(
 }
 
 /**
+ * Вид 1С, що матеріалізується таблицею: не прийнята таблиця й не службовий
+ * тип (`PgEnum` теж `declared`, але таблиці не дає) — ціль промоції.
+ */
+const isTableKind = (holder: Holder) =>
+  holder.def !== undefined &&
+  !holder.def.declared &&
+  holder.def.materializes === "table"
+
+/**
  * Промоція (спека промоції Пр18, §9.11): об'єкт, що в базовому стані був
  * прийнятою таблицею, а в поточному має вид 1С з тим самим `id`. Розпізнається
  * з ідентичності, окремої декларації немає; звільняє рівно те, що канонізація
@@ -207,6 +216,8 @@ interface Promotion {
    * частиною.
    */
   releasedFiles: ReadonlySet<string>
+  /** Файли поточного стану промотованих об'єктів: тут живуть їхні елементи. */
+  files: ReadonlySet<string>
 }
 
 function promotionOf(before: State, after: State): Promotion {
@@ -215,12 +226,7 @@ function promotionOf(before: State, after: State): Promotion {
   const releasedFiles = new Set<string>()
   for (const [id, was] of before.holders.object) {
     const now = after.holders.object.get(id)
-    if (
-      now?.def === undefined ||
-      !isAcceptedTable(was) ||
-      isAcceptedTable(now) ||
-      now.def.materializes === "none"
-    ) {
+    if (now?.def === undefined || !isAcceptedTable(was) || !isTableKind(now)) {
       continue
     }
     objects.set(id, now.def)
@@ -239,26 +245,33 @@ function promotionOf(before: State, after: State): Promotion {
       releasedFiles.add(was.file)
     }
   }
-  return { objects, releasedFiles }
+  return { objects, releasedFiles, files: promotedFiles }
+}
+
+/** Одна зміна поля, призначеного раз, яку розглядає промоція. */
+interface Change {
+  record: AssignedOnceField
+  id: string
+  was: Holder
+  now: Holder
+  /** Нове ефективне значення; немає — поле зникло. */
+  value: string | undefined
 }
 
 /**
- * Зміна, яку промоція дозволяє: `physicalName` об'єкта й елементів з
- * звільнених файлів, а також зникнення мітки виду.
+ * Зміна, яку промоція дозволяє: `physicalName` об'єкта й елементів, що були у
+ * звільненому файлі й тепер живуть у промотованому об'єкті, а також зникнення
+ * мітки виду.
  */
 function releasedByPromotion(
   promotion: Promotion,
-  record: AssignedOnceField,
-  id: string,
-  was: Holder,
-  now: Holder,
-  value: string | undefined,
+  { record, id, was, now, value }: Change,
   polymorphic: () => ReadonlySet<string>
 ): boolean {
   if (record.field === "physicalName") {
     return record.on === "object"
       ? promotion.objects.has(id)
-      : promotion.releasedFiles.has(was.file)
+      : promotion.releasedFiles.has(was.file) && promotion.files.has(now.file)
   }
   const kind = promotion.objects.get(id)
   if (record.on !== "object" || record.field !== "kindLabel") return false
@@ -301,11 +314,7 @@ export function assignedOnceDiagnostics(
       if (
         releasedByPromotion(
           promotion,
-          record,
-          id,
-          was,
-          now,
-          value,
+          { record, id, was, now, value },
           polymorphicOf
         )
       ) {

@@ -326,6 +326,7 @@ describe("assigned-once fields on a promotion", () => {
   const PROMOTED = "catalogs/Counterparty/Counterparty.meta.json"
   const REGISTER = "information-registers/Counterparty/Counterparty.meta.json"
   const USER = "documents/Order/Order.meta.json"
+  const PG_ENUM = "pg-enums/Counterparty/Counterparty.meta.json"
 
   const column = (id: number, physicalName: string) => ({
     id: uuid(id),
@@ -531,6 +532,64 @@ describe("assigned-once fields on a promotion", () => {
       }),
     }
     expect(run(current)).toEqual([])
+  })
+
+  it("a single catalog owner is no polymorphic pair and keeps no label alive", () => {
+    const current = {
+      [PROJECT]: project(),
+      [REGISTER]: register(),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        owners: [{ kind: "InformationRegister", name: "Counterparty" }],
+      }),
+    }
+    expect(run(current)).toEqual([])
+  })
+
+  it("does not treat a custom table turning into a PgEnum as a promotion", () => {
+    const current = {
+      [PROJECT]: project(),
+      [PG_ENUM]: {
+        id: uuid(1),
+        kind: "PgEnum",
+        name: "Counterparty",
+        physicalName: "counterparty",
+        values: [{ id: uuid(2), name: "a", physicalName: "a" }],
+      },
+    }
+    expect(run(current)).toEqual([
+      [
+        PG_ENUM,
+        "/physicalName",
+        {
+          field: "physicalName",
+          before: "counterparties",
+          after: "counterparty",
+        },
+      ],
+      [
+        PG_ENUM,
+        "/kindLabel",
+        { field: "kindLabel", before: "counterparty", after: "(removed)" },
+      ],
+    ])
+  })
+
+  it("keeps an element protected after it moved out of the promoted object", () => {
+    const current: Record<string, unknown> = {
+      ...promoted({ attributes: [] }),
+      "catalogs/Other/Other.meta.json": catalog("Other", {
+        attributes: [
+          { id: uuid(2), name: "taxId", physicalName: "tax_id", type: "Text" },
+        ],
+      }),
+    }
+    expect(run(current)).toEqual([
+      [
+        "catalogs/Other/Other.meta.json",
+        "/attributes/0/physicalName",
+        { field: "physicalName", before: "inn", after: "tax_id" },
+      ],
+    ])
   })
 
   it("still refuses a schema change on a promoted object", () => {
