@@ -79,6 +79,26 @@ describe("debt ratchet: sql-debt.json", () => {
     ])
   })
 
+  it("a function with dynamic SQL is debt: unlisted grows, listed compiles", async () => {
+    const dynamic = HANDLER.replace(
+      "RETURN NEW;",
+      "EXECUTE 'select 1'; RETURN NEW;"
+    )
+    const unlisted = await diagnostics({
+      [TABLE_SQL]: dynamic,
+      [DEBT]: debt([]),
+    })
+    expect(unlisted.map((d) => [d.code, d.params?.identity])).toEqual([
+      ["sql.debt-grows", "function:public.f()"],
+    ])
+    expect(
+      await diagnostics({
+        [TABLE_SQL]: dynamic,
+        [DEBT]: debt(["function:public.f()"]),
+      })
+    ).toEqual([])
+  })
+
   it("functions in the closed shell are never debt", async () => {
     // Функція в оболонці проходить і в модулі боргу, і в спільному файлі;
     // функція поза оболонкою там — борг.

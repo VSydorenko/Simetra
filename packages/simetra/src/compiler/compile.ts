@@ -15,6 +15,7 @@ import type { SqlUnit } from "./sql/units"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
 import { loadSqlParser } from "./sql/parse"
+import { loadPlpgsqlParser } from "./sql/plpgsql"
 
 export interface SourceObject {
   id: string
@@ -132,12 +133,16 @@ export async function currentDebt(
   const stage1 = readFiles(
     new Map([...files].filter(([path]) => path !== SQL_DEBT_FILE))
   )
-  const { stage3, sql } = sqlStage(stage1, await loadSqlParser())
+  const [parse, plpgsql] = await Promise.all([
+    loadSqlParser(),
+    loadPlpgsqlParser(),
+  ])
+  const { stage3, sql } = sqlStage(stage1, parse)
   if (
     stage3 === undefined ||
     sql.diagnostics.some((d) => d.code === "sql.parse")
   ) {
     return undefined
   }
-  return debtUnits(sql.units, stage1.objects, stage1.project)
+  return debtUnits(sql.units, stage1.objects, stage1.project, plpgsql)
 }

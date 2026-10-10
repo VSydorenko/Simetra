@@ -110,6 +110,14 @@ const CLOSED_SHELL_PROBLEM: Readonly<
     en: "it is SECURITY DEFINER without SET search_path = ''",
     uk: "вона SECURITY DEFINER без SET search_path = ''",
   },
+  dynamicSql: {
+    en: "its body runs dynamic SQL (EXECUTE, a dynamic cursor or RETURN QUERY EXECUTE)",
+    uk: "її тіло виконує динамічний SQL (EXECUTE, динамічний курсор чи RETURN QUERY EXECUTE)",
+  },
+  body: {
+    en: "its plpgsql body does not parse",
+    uk: "її тіло plpgsql не розбирається",
+  },
 }
 /** Причини виходу функції множини скоупу за закриту форму. */
 const SET_FUNCTION_REASON: Readonly<
@@ -135,8 +143,8 @@ const ROW_RULE_GRAMMAR = {
 }
 
 const CLOSED_SHELL_HINT = {
-  en: "A function in the closed shell is LANGUAGE sql or plpgsql, states IMMUTABLE, STABLE or VOLATILE, and a SECURITY DEFINER function sets search_path = '' and qualifies names with their schema.",
-  uk: "Функція в закритій оболонці — LANGUAGE sql чи plpgsql, явно вказує IMMUTABLE, STABLE чи VOLATILE, а функція SECURITY DEFINER задає search_path = '' і кваліфікує імена схемою.",
+  en: "A function in the closed shell is LANGUAGE sql or plpgsql, states IMMUTABLE, STABLE or VOLATILE, and a SECURITY DEFINER function sets search_path = '' and qualifies names with their schema. A plpgsql body parses and runs no dynamic SQL.",
+  uk: "Функція в закритій оболонці — LANGUAGE sql чи plpgsql, явно вказує IMMUTABLE, STABLE чи VOLATILE, а функція SECURITY DEFINER задає search_path = '' і кваліфікує імена схемою. Тіло plpgsql розбирається і не виконує динамічний SQL.",
 }
 
 /** Каталог Postgres простору імен `sql.namespace-conflict`. */

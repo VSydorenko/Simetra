@@ -3,13 +3,15 @@ import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem } from "./closed-forms"
+import type { PlpgsqlParser } from "./plpgsql"
 import { functionIdentity, type VerbatimUnit } from "./units"
 
 /**
  * Ідентичності одиниць боргу (план промоції 2b, рішення 12), відсортовані:
  * дослівна одиниця модуля виду з фактом `sqlModule: "debt"` чи спільного
  * `sql/`, що не є функцією в закритій оболонці. Функція в оболонці боргом не
- * є ніде: це цільова форма, а не виняток. Модуль виду 1С сюди не входить — у
+ * є ніде: це цільова форма, а не виняток. Динамічний SQL чи нерозбірне тіло
+ * plpgsql виводить функцію з оболонки, тож вона стає боргом. Модуль виду 1С сюди не входить — у
  * ньому решта класів уже помилка, а не борг. Одиниця зламаного власника (його
  * немає серед об'єктів) вид не має, тож і боргом не рахується: причину
  * назвав сам власник. Обробник підписки й функція множини скоупу боргом не
@@ -19,9 +21,10 @@ import { functionIdentity, type VerbatimUnit } from "./units"
 export function debtUnits(
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
-  project: Project | undefined
+  project: Project | undefined,
+  plpgsql: PlpgsqlParser
 ): string[] {
-  const isDebt = debtPredicate(objects, project)
+  const isDebt = debtPredicate(objects, project, plpgsql)
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
   )
@@ -29,7 +32,8 @@ export function debtUnits(
 
 function debtPredicate(
   objects: readonly ParsedObject[],
-  project: Project | undefined
+  project: Project | undefined,
+  plpgsql: PlpgsqlParser
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
@@ -42,7 +46,10 @@ function debtPredicate(
     !(unit.class === "function" && ruled.has(unit.identity)) &&
     !(
       unit.class === "function" &&
-      closedShellProblem(unit.tree as Node) === undefined
+      closedShellProblem(
+        { tree: unit.tree as Node, sql: unit.sql },
+        plpgsql
+      ) === undefined
     )
 }
 
@@ -90,10 +97,11 @@ export function checkDebt(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   listed: readonly string[],
-  unitsComplete: boolean
+  unitsComplete: boolean,
+  plpgsql: PlpgsqlParser
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
-  const isDebt = debtPredicate(objects, project)
+  const isDebt = debtPredicate(objects, project, plpgsql)
   const debt = units.filter(isDebt)
   const grows = debt
     .filter((unit) => !accepted.has(unit.identity))

@@ -1380,6 +1380,22 @@ describe("reverseGenerate", () => {
     expect(result.changes.map((c) => c.path)).toContain("sql-debt.json")
   })
 
+  it("introspect lists an accepted function with dynamic SQL as debt", async () => {
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units(
+          TOUCH.replace("RETURN NEW;", "EXECUTE 'select 1'; RETURN NEW;")
+        ),
+      }),
+      options()
+    )
+    expect(json(result, "sql-debt.json").units).toEqual([
+      "function:app.touch()",
+      "trigger:app.note.note_touch",
+    ])
+  })
+
   it("introspect writes an empty debt list too", async () => {
     const result = await reverseGenerate(
       model({ tables: [table("app", "note")] }),

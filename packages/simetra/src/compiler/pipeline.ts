@@ -25,6 +25,7 @@ import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
+import { loadPlpgsqlParser } from "./sql/plpgsql"
 import { embedRowRules } from "./sql/row-rule"
 import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
@@ -49,7 +50,10 @@ export { readFiles }
 export async function runStages(
   stage1: FilesStageResult
 ): Promise<CompileResult> {
-  const parse = await loadSqlParser()
+  const [parse, plpgsql] = await Promise.all([
+    loadSqlParser(),
+    loadPlpgsqlParser(),
+  ])
   const { stage2, upstream, stage3, sql } = sqlStage(stage1, parse)
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
@@ -80,14 +84,15 @@ export async function runStages(
           stage1.objects,
           stage1.project,
           stage1.sqlDebt,
-          !sql.diagnostics.some((d) => d.code === "sql.parse")
+          !sql.diagnostics.some((d) => d.code === "sql.parse"),
+          plpgsql
         )
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
     ...upstream,
     ...sql.diagnostics,
-    ...checkSqlModules(stage1.objects, sql.units, sql.rowRules),
+    ...checkSqlModules(stage1.objects, sql.units, sql.rowRules, plpgsql),
     ...debt.grows,
     ...(embedded?.diagnostics ?? []),
   ]
@@ -121,7 +126,8 @@ export async function runStages(
       stage2.references,
       stage1.project,
       sql.units,
-      parse
+      parse,
+      plpgsql
     ),
   ])
   const ok = !hasErrors(diagnostics)

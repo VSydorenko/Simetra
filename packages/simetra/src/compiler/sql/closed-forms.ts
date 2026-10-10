@@ -2,16 +2,25 @@ import type { Node } from "libpg-query"
 import { KIND_REGISTRY } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
+import type { PlpgsqlParser } from "./plpgsql"
 import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
 /** Чим функція виходить за закриту оболонку (спека промоції §9.4). */
-export type ClosedShellProblem = "language" | "volatility" | "searchPath"
+export type ClosedShellProblem =
+  "language" | "volatility" | "searchPath" | "dynamicSql" | "body"
+
+/** Одиниця, чию оболонку судять: дерево `CREATE FUNCTION` і його текст. */
+export interface ShellUnit {
+  tree: Node
+  sql: string
+}
 
 interface DefElem {
   defname?: string
   arg?: {
     String?: { sval?: string }
     Boolean?: { boolval?: boolean }
+    List?: { items?: { String?: { sval?: string } }[] }
     VariableSetStmt?: {
       kind?: string
       name?: string
@@ -20,34 +29,57 @@ interface DefElem {
   }
 }
 
+interface FunctionNode {
+  is_procedure?: boolean
+  options?: { DefElem?: DefElem }[]
+  sql_body?: unknown
+}
+
+/** `CREATE FUNCTION` дерева; інший оператор чи процедура — `undefined`. */
+function createFunction(tree: Node): FunctionNode | undefined {
+  const fn = (tree as { CreateFunctionStmt?: FunctionNode }).CreateFunctionStmt
+  return fn === undefined || fn.is_procedure === true ? undefined : fn
+}
+
+function functionOptions(fn: FunctionNode) {
+  const options = (fn.options ?? []).flatMap((o) =>
+    o.DefElem === undefined ? [] : [o.DefElem]
+  )
+  return {
+    options,
+    option: (name: string) =>
+      options.filter((o) => o.defname === name).at(-1)?.arg,
+  }
+}
+
+function functionLanguage(fn: FunctionNode): string | undefined {
+  // Тіло стандарту SQL (`RETURN …`, `BEGIN ATOMIC`) без LANGUAGE — це `sql`.
+  return (
+    functionOptions(fn).option("language")?.String?.sval?.toLowerCase() ??
+    (fn.sql_body === undefined ? undefined : "sql")
+  )
+}
+
 /**
  * Закрита оболонка функції (спека П2 §3, «Дослівний SQL»): мова `sql` чи
  * `plpgsql`, явна волатильність, `SECURITY DEFINER` лише з `SET search_path
  * = ''`. Оболонка — те, що компілятор може перевірити статично: тіло лишається
  * кодом застосунку, а мова C чи неявна `VOLATILE` ховали б від рамки те, що
- * функція робить. Не функція (процедура, інший оператор) — `undefined`:
- * оболонка описує лише `CREATE FUNCTION`.
+ * функція робить. Тіло plpgsql має розбиратися і не виконувати динамічний
+ * SQL: рядок, зібраний під час виконання, не бачить ні граф залежностей, ні
+ * рамка. Парсер plpgsql кличеться лише для `LANGUAGE plpgsql`: на тілі
+ * `LANGUAGE sql … BEGIN ATOMIC` він аварійно завершується, і кожне тіло
+ * стандарту SQL хибно вважалося б нерозбірним. Не функція (процедура, інший
+ * оператор) — `undefined`: оболонка описує лише `CREATE FUNCTION`.
  */
-export function closedShellProblem(tree: Node): ClosedShellProblem | undefined {
-  const fn = (
-    tree as {
-      CreateFunctionStmt?: {
-        is_procedure?: boolean
-        options?: { DefElem?: DefElem }[]
-        sql_body?: unknown
-      }
-    }
-  ).CreateFunctionStmt
-  if (fn === undefined || fn.is_procedure === true) return undefined
-  const options = (fn.options ?? []).flatMap((o) =>
-    o.DefElem === undefined ? [] : [o.DefElem]
-  )
-  const option = (name: string) =>
-    options.filter((o) => o.defname === name).at(-1)?.arg
-  // Тіло стандарту SQL (`RETURN …`, `BEGIN ATOMIC`) без LANGUAGE — це `sql`.
-  const language =
-    option("language")?.String?.sval?.toLowerCase() ??
-    (fn.sql_body === undefined ? undefined : "sql")
+export function closedShellProblem(
+  unit: ShellUnit,
+  plpgsql: PlpgsqlParser
+): ClosedShellProblem | undefined {
+  const fn = createFunction(unit.tree)
+  if (fn === undefined) return undefined
+  const { options, option } = functionOptions(fn)
+  const language = functionLanguage(fn)
   if (language !== "sql" && language !== "plpgsql") return "language"
   if (option("volatility") === undefined) return "volatility"
   if (option("security")?.Boolean?.boolval === true) {
@@ -65,7 +97,36 @@ export function closedShellProblem(tree: Node): ClosedShellProblem | undefined {
       args[0]!.A_Const?.sval?.sval === ""
     if (!empty) return "searchPath"
   }
+  if (language !== "plpgsql") return undefined
+  const body = plpgsql(unit.sql)
+  if (!body.ok) return "body"
+  if (body.fn !== undefined && body.fn.dynamicSqlLines.length > 0) {
+    return "dynamicSql"
+  }
   return undefined
+}
+
+/**
+ * Рядок у файлі першого динамічного оператора тіла plpgsql: `unitLine` —
+ * рядок першого токена оператора у файлі. Парсер рахує від рядка з
+ * відкривним `$тег$`, тож додається зсув тіла в тексті оператора. Тіло в
+ * лапках з подвоєнням `''` у тексті не знаходиться — тоді лічба від рядка
+ * початку оператора, що лише раніша за істинний.
+ */
+export function firstDynamicSqlLine(
+  unit: ShellUnit,
+  unitLine: number,
+  plpgsql: PlpgsqlParser
+): number | undefined {
+  const fn = createFunction(unit.tree)
+  if (fn === undefined || functionLanguage(fn) !== "plpgsql") return undefined
+  const parsed = plpgsql(unit.sql)
+  const first = parsed.ok ? parsed.fn?.dynamicSqlLines[0] : undefined
+  if (first === undefined) return undefined
+  const body = functionOptions(fn).option("as")?.List?.items?.[0]?.String?.sval
+  const at = body === undefined ? -1 : unit.sql.indexOf(body)
+  const before = at < 0 ? 0 : unit.sql.slice(0, at).split("\n").length - 1
+  return unitLine + before + first - 1
 }
 
 /**
@@ -95,7 +156,8 @@ export function closedModuleOwners(
 export function checkSqlModules(
   objects: readonly ParsedObject[],
   units: readonly VerbatimUnit[],
-  rowRules: readonly RowRule[]
+  rowRules: readonly RowRule[],
+  plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const owners = closedModuleOwners(objects)
   const closed = (unit: { ownerFile?: string }) =>
@@ -132,12 +194,19 @@ export function checkSqlModules(
       )
       continue
     }
-    const problem = closedShellProblem(unit.tree as Node)
+    const shellUnit = { tree: unit.tree as Node, sql: unit.sql }
+    const problem = closedShellProblem(shellUnit, plpgsql)
     if (problem !== undefined) {
+      // Для динамічного SQL автору потрібен рядок самого оператора, а не
+      // початку функції: тіло буває на сотню рядків.
+      const line =
+        problem === "dynamicSql"
+          ? (firstDynamicSqlLine(shellUnit, unit.line, plpgsql) ?? unit.line)
+          : unit.line
       found.push(
         diagnostic("sql.closed-shell", unit.file, "", {
           function: `${unit.schema}.${unit.name}`,
-          line: unit.line,
+          line,
           problem,
         })
       )

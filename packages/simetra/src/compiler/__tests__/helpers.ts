@@ -7,6 +7,7 @@ import {
 import { readFiles, sqlStage } from "../pipeline"
 import { debtUnits } from "../sql/debt"
 import { loadSqlParser } from "../sql/parse"
+import { loadPlpgsqlParser } from "../sql/plpgsql"
 
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */
 export function uuid(n: number): string {
@@ -267,7 +268,12 @@ export async function acceptDebt(
     [
       SQL_DEBT_FILE,
       JSON.stringify({
-        units: debtUnits(sql.units, stage1.objects, stage1.project),
+        units: debtUnits(
+          sql.units,
+          stage1.objects,
+          stage1.project,
+          await loadPlpgsqlParser()
+        ),
       }),
     ],
   ])

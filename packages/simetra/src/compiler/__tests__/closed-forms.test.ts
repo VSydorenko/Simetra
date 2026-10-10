@@ -79,7 +79,7 @@ describe("kind module: closed forms only", () => {
       await diagnostics({
         [SALE_SQL]: shell(
           "LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = ''"
-        ),
+        ).replace("select 1", "BEGIN RETURN 1; END"),
       })
     ).toEqual([])
     // Тіло стандарту SQL (`RETURN …`) — теж `LANGUAGE sql`.
@@ -89,6 +89,77 @@ describe("kind module: closed forms only", () => {
           "CREATE FUNCTION public.sale_total() RETURNS int STABLE RETURN 1;",
       })
     ).toEqual([])
+  })
+
+  describe("plpgsql body", () => {
+    const plpgsql = (body: string) =>
+      `CREATE FUNCTION public.sale_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
+    const problems = async (files: Record<string, string>) =>
+      (await diagnostics(files)).map((d) => [d.code, d.params?.problem])
+
+    it("refuses dynamic SQL in a kind module", async () => {
+      expect(
+        await problems({
+          [SALE_SQL]: plpgsql("BEGIN EXECUTE 'select 1'; RETURN NEW; END"),
+        })
+      ).toEqual([["sql.closed-shell", "dynamicSql"]])
+    })
+
+    it("names the file line of the first dynamic statement", async () => {
+      // Рядок рахується від `$$` функції, а функція стоїть не з першого рядка файлу.
+      const found = await diagnostics({
+        [SALE_SQL]: [
+          "-- коментар",
+          "CREATE FUNCTION public.sale_touch()",
+          "RETURNS trigger LANGUAGE plpgsql VOLATILE AS $body$",
+          "BEGIN",
+          "  PERFORM 1;",
+          "  EXECUTE 'select 1';",
+          "  EXECUTE 'select 2';",
+          "  RETURN NEW;",
+          "END",
+          "$body$;",
+        ].join("\n"),
+      })
+      expect(
+        found.map((d) => [d.code, d.params?.problem, d.params?.line])
+      ).toEqual([["sql.closed-shell", "dynamicSql", 6]])
+    })
+
+    it("refuses a plpgsql body that does not parse", async () => {
+      expect(
+        await problems({
+          [SALE_SQL]: plpgsql("BEGIN SELEKT 1; RETURN NEW; END"),
+        })
+      ).toEqual([["sql.closed-shell", "body"]])
+    })
+
+    it("accepts static plpgsql", async () => {
+      expect(
+        await diagnostics({
+          [SALE_SQL]: plpgsql("BEGIN PERFORM 1; RETURN NEW; END"),
+        })
+      ).toEqual([])
+    })
+
+    it("accepts a LANGUAGE sql BEGIN ATOMIC body", async () => {
+      // Розбирач plpgsql на такому тілі падає: його не можна кликати для sql.
+      expect(
+        await diagnostics({
+          [SALE_SQL]:
+            "CREATE FUNCTION public.sale_total() RETURNS int LANGUAGE sql STABLE BEGIN ATOMIC SELECT 1; END;",
+        })
+      ).toEqual([])
+    })
+
+    it("keeps the order: shell problems come before the body", async () => {
+      expect(
+        await problems({
+          [SALE_SQL]:
+            "CREATE FUNCTION public.sale_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'select 1'; RETURN NEW; END $$;",
+        })
+      ).toEqual([["sql.closed-shell", "volatility"]])
+    })
   })
 
   it("overload in a kind module is an error, in a custom table module is not", async () => {

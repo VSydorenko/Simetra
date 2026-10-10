@@ -10,6 +10,7 @@ import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
 import type { SqlParser } from "../sql/parse"
+import type { PlpgsqlParser } from "../sql/plpgsql"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -24,13 +25,14 @@ export function checkLinks(
   references: readonly ResolvedReference[],
   project: Project,
   units: readonly VerbatimUnit[],
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   return [
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
-    ...checkSetFunctions(objects, project, units, parse),
-    ...checkSubscriptionHandlers(objects, project, units),
+    ...checkSetFunctions(objects, project, units, parse, plpgsql),
+    ...checkSubscriptionHandlers(objects, project, units, plpgsql),
     ...checkPolicyCurrentUser(units),
   ]
 }
@@ -241,7 +243,8 @@ function checkSetFunctions(
   objects: readonly ParsedObject[],
   project: Project,
   units: readonly VerbatimUnit[],
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   project.scopeKinds.forEach((kind, index) => {
@@ -282,7 +285,7 @@ function checkSetFunctions(
     const reason =
       problem !== undefined || typeof fn === "string"
         ? undefined
-        : setFunctionClosedProblem(fn, units, schema, name, parse)
+        : setFunctionClosedProblem(fn, units, schema, name, parse, plpgsql)
     if (reason !== undefined) {
       found.push(
         diagnostic(
@@ -401,17 +404,24 @@ function setFunctionClosedProblem(
   units: readonly VerbatimUnit[],
   schema: string,
   name: string,
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): SetFunctionReason | undefined {
   const option = (key: string) =>
     (fn.options ?? []).map((o) => o.DefElem).filter((o) => o?.defname === key)
   const language = option("language")[0]?.arg?.String?.sval?.toLowerCase()
   if (language !== "sql") return "language"
   if (option("security")[0]?.arg?.Boolean?.boolval !== true) return "security"
-  const tree = units.find(
+  const unit = units.find(
     (u) => u.identity === functionIdentity(schema, name, [])
-  )?.tree
-  if (tree !== undefined && closedShellProblem(tree as Node) === "searchPath") {
+  )
+  // Мова тут уже `sql`, тож динамічного SQL не буває: `plpgsql` лише проходить
+  // у спільну сигнатуру оболонки.
+  if (
+    unit !== undefined &&
+    closedShellProblem({ tree: unit.tree as Node, sql: unit.sql }, plpgsql) ===
+      "searchPath"
+  ) {
     return "searchPath"
   }
   // `AS` — список рядків; для `LANGUAGE sql` перший і є тілом.
@@ -483,7 +493,8 @@ function volatilityProblem(fn: FunctionNode): string | undefined {
 function checkSubscriptionHandlers(
   objects: readonly ParsedObject[],
   project: Project,
-  units: readonly VerbatimUnit[]
+  units: readonly VerbatimUnit[],
+  plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   for (const object of objects) {
@@ -512,11 +523,16 @@ function checkSubscriptionHandlers(
     } else {
       // Обробник не буває боргом (спека промоції §9.4): оболонка перевіряється
       // тут, хоч би де лежав файл, — у спільному `sql/` теж.
-      const tree = units.find(
+      const unit = units.find(
         (u) => u.identity === functionIdentity(schema, name, [])
-      )?.tree
+      )
       const problem =
-        tree === undefined ? undefined : closedShellProblem(tree as Node)
+        unit === undefined
+          ? undefined
+          : closedShellProblem(
+              { tree: unit.tree as Node, sql: unit.sql },
+              plpgsql
+            )
       if (problem !== undefined) {
         found.push(
           diagnostic(

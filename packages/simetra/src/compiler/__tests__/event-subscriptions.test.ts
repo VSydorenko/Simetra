@@ -287,6 +287,28 @@ describe("EventSubscription", () => {
     ])
   })
 
+  it("a handler with dynamic SQL or an unparsable body is not closed", async () => {
+    const found = async (body: string) =>
+      (
+        await compile(
+          metaFiles(
+            entries(
+              {},
+              {
+                [HANDLER_FILE]: `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`,
+              }
+            )
+          )
+        )
+      ).diagnostics.map((d) => [d.code, d.pointer, d.params?.problem])
+    expect(await found("BEGIN EXECUTE 'select 1'; RETURN NEW; END")).toEqual([
+      ["subscription.handler-not-closed", "/handler", "dynamicSql"],
+    ])
+    expect(await found("BEGIN SELEKT 1; RETURN NEW; END")).toEqual([
+      ["subscription.handler-not-closed", "/handler", "body"],
+    ])
+  })
+
   it("a subscription on an enumeration is an error", async () => {
     expect(
       await codes(
