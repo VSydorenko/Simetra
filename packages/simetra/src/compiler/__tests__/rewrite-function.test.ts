@@ -792,4 +792,49 @@ describe("names and shapes the promotion changes outside the column map", () => 
       expect(r.sql).toBe(sql)
     }
   })
+
+  it("refuses the sibling forms of a positional fill", () => {
+    const DECLARE =
+      "DECLARE\n  r app.counterparties%ROWTYPE;\n  cur CURSOR FOR SELECT c.id, NULL, c.inn FROM app.counterparties c;\n  ref refcursor;\n"
+    for (const sql of [
+      plpgsql(
+        `${DECLARE}BEGIN\n  OPEN cur;\n  FETCH cur INTO r;\n  RETURN NULL;\nEND`
+      ),
+      plpgsql(
+        `${DECLARE}BEGIN\n  OPEN ref FOR SELECT * FROM app.counterparties;\n  FETCH ref INTO r;\n  RETURN NULL;\nEND`
+      ),
+      plpgsql(
+        `${DECLARE}BEGIN\n  FOR r IN cur LOOP\n    RAISE NOTICE '%', r.id;\n  END LOOP;\n  RETURN NULL;\nEND`
+      ),
+      plpgsql(
+        `${DECLARE}BEGIN\n  r := (SELECT ROW(1, 'n', 'i'));\n  RETURN NULL;\nEND`
+      ),
+      plpgsql(
+        `${DECLARE}BEGIN\n  r := (1, 'n', 'i')::app.counterparties;\n  RETURN NULL;\nEND`
+      ),
+      trigger("BEGIN\n  NEW := ROW(1, 'n', 'i');\n  RETURN NEW;\nEND"),
+      trigger(
+        "BEGIN\n  SELECT c.id, NULL, c.inn INTO NEW FROM app.counterparties c LIMIT 1;\n  RETURN NEW;\nEND"
+      ),
+    ]) {
+      const r = rewriteFunction(sql, {
+        ...ctx,
+        triggerTables: [COUNTERPARTIES],
+      })
+      expect(details(r), sql).toContainEqual(
+        expect.stringMatching(/positional fill|shadows/)
+      )
+      expect(r.sql).toBe(sql)
+    }
+    const whole =
+      "DECLARE\n  r app.counterparties%ROWTYPE;\n  cur CURSOR FOR SELECT * FROM app.counterparties;\nBEGIN\n  OPEN cur;\n  FETCH cur INTO r;\n  RETURN NULL;\nEND"
+    expect(rewriteFunction(plpgsql(whole), ctx).problems).toEqual([])
+    const star = trigger(
+      "BEGIN\n  SELECT * INTO NEW FROM app.counterparties WHERE id = NEW.id;\n  RETURN NEW;\nEND"
+    )
+    expect(
+      rewriteFunction(star, { ...ctx, triggerTables: [COUNTERPARTIES] })
+        .problems
+    ).toEqual([])
+  })
 })

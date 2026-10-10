@@ -345,7 +345,7 @@ CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authentica
   it("finds debt text references by dependency resolution, not by word", async () => {
     const literal = await project({
       "sql/app/views.sql":
-        "CREATE VIEW app.labels AS SELECT 'counterparties' AS name;\n",
+        "CREATE VIEW app.labels AS SELECT 'all counterparties' AS name, 1 AS counterparties;\n",
     })
     await passes(literal)
     const reading = await project({
@@ -962,6 +962,32 @@ ALTER PUBLICATION supabase_realtime ADD TABLE app.counterparties;
         }),
       },
     ])
+  })
+
+  it("refuses verbatim debt that names the promoted table in a string literal", async () => {
+    for (const expression of [
+      "to_regclass('app.counterparties')",
+      "pg_relation_size('app.counterparties')",
+      "has_table_privilege('app.counterparties', 'select')",
+    ]) {
+      const files = await project({
+        "sql/app/v.sql": `CREATE VIEW app.v AS SELECT ${expression} AS r;\n`,
+      })
+      const { result, after } = await promoted(files)
+      expect(after, expression).toEqual(files)
+      expect(brief(result), expression).toEqual([
+        {
+          code: "promote.debt-text-reference",
+          file: "sql/app/v.sql",
+          params: { identity: "view:app.v", line: 1 },
+        },
+      ])
+    }
+    const other = await project({
+      "sql/app/v.sql":
+        "CREATE VIEW app.v AS SELECT to_regclass('app.invoices') AS r, 'counterparties are many' AS t;\n",
+    })
+    await passes(other)
   })
 
   it("refuses a candidate that names the promoted table in a text argument", async () => {

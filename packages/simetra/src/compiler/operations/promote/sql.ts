@@ -20,7 +20,7 @@ import {
   unitTypes,
   type ReferencedName,
 } from "../../sql/dependencies"
-import type { SqlParser } from "../../sql/parse"
+import { relationNameText, type SqlParser } from "../../sql/parse"
 import type { PlpgsqlParser } from "../../sql/plpgsql"
 import { rewriteFunction } from "../../sql/rewrite/function"
 import {
@@ -198,7 +198,8 @@ export function planUnits(
     }
     if (
       !REWRITTEN_CLASSES.has(unit.class) &&
-      reads([...unitRelations(unit, o.parse), ...unitTypes(unit, o.parse)])
+      (reads([...unitRelations(unit, o.parse), ...unitTypes(unit, o.parse)]) ||
+        namesInText(unit.tree, tables))
     ) {
       debtText(unit)
     }
@@ -240,6 +241,45 @@ export function planUnits(
     if (line !== undefined) plan.unscoped.push({ unit, line })
   }
   return plan
+}
+
+/**
+ * Рядок одиниці називає промотовану таблицю (`to_regclass('app.t')`,
+ * неявний `regclass`-аргумент, аргумент тригера). Postgres резолвить таке
+ * ім'я під час виконання, а текст боргу за промоцією не йде: мовчки
+ * лишений, він повернув би `NULL` чи впав би вже після перейменування.
+ * Ребра порядку створення такий рядок не дає, тож це окремий прохід, а не
+ * посилання `dependencies.ts`.
+ */
+function namesInText(
+  tree: unknown,
+  tables: readonly QualifiedTable[]
+): boolean {
+  const names = (text: string) => {
+    const parts = relationNameText(text)
+    if (parts === undefined || parts.length > 3) return false
+    const relname = parts.at(-1)
+    const schema = parts.length >= 2 ? parts.at(-2) : undefined
+    return tables.some(
+      (t) => t.name === relname && (schema === undefined || t.schema === schema)
+    )
+  }
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit)
+    if (typeof value !== "object" || value === null) return false
+    const node = value as Record<string, unknown>
+    const constant = node.A_Const as { sval?: { sval?: unknown } } | undefined
+    const text = constant?.sval?.sval
+    if (typeof text === "string" && names(text)) return true
+    // Аргументи тригера — рядки без `A_Const`: функція читає їх як `TG_ARGV`.
+    const trigger = node.CreateTrigStmt as { args?: unknown[] } | undefined
+    for (const arg of trigger?.args ?? []) {
+      const sval = (arg as { String?: { sval?: unknown } }).String?.sval
+      if (typeof sval === "string" && names(sval)) return true
+    }
+    return Object.values(node).some(visit)
+  }
+  return visit(tree)
 }
 
 /** Цілі одиниці; `REPLICA IDENTITY` — ціль-таблиця самої одиниці. */

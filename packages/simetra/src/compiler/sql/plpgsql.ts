@@ -46,6 +46,8 @@ export interface PlpgsqlStatement {
    * `ALIAS`, парсер дає ім'ям справжньої змінної.
    */
   readonly target?: { readonly variable: string }
+  /** Курсор `OPEN`/`FETCH`/`MOVE`/`FOR … IN <курсор>`: ім'я його змінної. */
+  readonly cursor?: string
 }
 
 export interface PlpgsqlExpression {
@@ -299,6 +301,10 @@ function walkStatement(
   const statement: StatementDraft = { type, lineno, depth, expressions: [] }
   const target = targetOf(body, datums)
   if (target !== undefined) statement.target = target
+  if (typeof body.curvar === "number") {
+    const cursor = datumName(datums[body.curvar], datums)
+    if (cursor !== undefined) statement.cursor = cursor
+  }
   out.push(statement)
 
   const visit = (

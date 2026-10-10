@@ -149,6 +149,13 @@ export function rewritePlpgsqlBody(
     }
   }
 
+  // Записи рядка промотованої таблиці до зняття затінених: цикл `FOR r IN
+  // <курсор>` оголошує власний `r`, і такий збіг імен треба побачити.
+  const rowNames = new Set(
+    [...records].flatMap(([name, binding]) =>
+      promotedRow(binding, ctx) === undefined ? [] : [name]
+    )
+  )
   // Ім'я, оголошене двічі (параметр і змінна, зовнішній і вкладений блок),
   // за самим ім'ям не каже, який запис стоїть за посиланням: прив'язки немає,
   // а змінене поле через нього — відмова.
@@ -190,6 +197,11 @@ export function rewritePlpgsqlBody(
   }
 
   const problems: BodyFinding[] = []
+  problems.push(
+    ...cursorFills(fn, records, rowNames, ctx, (lineno) =>
+      lineFirstToken(lineno)
+    )
+  )
   for (const line of fn.dynamicSqlLines) {
     problems.push({
       code: "rewrite.dynamic-sql",
@@ -484,11 +496,105 @@ function rowConstructor(value: string, parse: SqlParser): boolean {
   const stmt = parsed.statements[0]!.stmt
   const target =
     "SelectStmt" in stmt ? stmt.SelectStmt.targetList?.[0] : undefined
-  const node =
+  let node =
     target !== undefined && "ResTarget" in target
       ? target.ResTarget.val
       : undefined
-  return node !== undefined && "RowExpr" in node
+  // Конструктор під приведенням (`(…)::t`) чи в скалярному підзапиті
+  // (`(SELECT ROW(…))`) — той самий позиційний рядок.
+  for (;;) {
+    if (node === undefined) return false
+    if ("RowExpr" in node) return true
+    if ("TypeCast" in node) {
+      node = node.TypeCast.arg
+      continue
+    }
+    const select =
+      "SubLink" in node &&
+      node.SubLink.subLinkType === "EXPR_SUBLINK" &&
+      node.SubLink.subselect !== undefined &&
+      "SelectStmt" in node.SubLink.subselect
+        ? node.SubLink.subselect.SelectStmt
+        : undefined
+    const only =
+      select?.targetList?.length === 1 ? select.targetList[0] : undefined
+    if (only === undefined || !("ResTarget" in only)) return false
+    node = only.ResTarget.val
+  }
+}
+
+/**
+ * Таблиця, чий рядок несе запис: `%ROWTYPE` чи параметр промотованої таблиці
+ * або `NEW`/`OLD`, прив'язані до неї. `null` — прив'язка до кількох таблиць,
+ * серед яких промотована: цілого рядка однієї таблиці там не довести.
+ * `undefined` — запис не несе рядка промотованої таблиці.
+ */
+function promotedRow(
+  binding: RecordBinding | undefined,
+  ctx: PlpgsqlBodyContext
+): TableRename | null | undefined {
+  if (binding === undefined) return undefined
+  if ("table" in binding) return binding.table
+  const promoted = binding.trigger.some((t) =>
+    ctx.map.tables.some((p) => sameTable(p, t))
+  )
+  if (!promoted) return undefined
+  return binding.trigger.length === 1 ? binding.trigger[0]! : null
+}
+
+/**
+ * Заповнення запису рядка промотованої таблиці з курсора: `FETCH … INTO r`
+ * доводиться лише запитом зв'язаного курсора — `SELECT *` тієї самої
+ * таблиці; курсор без запиту в оголошенні (`refcursor`) чи оголошений двічі
+ * — не доведений. `FOR r IN <курсор>` оголошує власний запис `r` і ховає
+ * однойменний запис рядка промотованої таблиці: за самим ім'ям тіло не
+ * каже, яку форму читає.
+ */
+function cursorFills(
+  fn: PlpgsqlFunction,
+  records: ReadonlyMap<string, RecordBinding>,
+  rowNames: ReadonlySet<string>,
+  ctx: PlpgsqlBodyContext,
+  offsetOf: (lineno: number) => number
+): BodyFinding[] {
+  const declared = new Map<string, number>()
+  for (const v of fn.variables) {
+    declared.set(v.name, (declared.get(v.name) ?? 0) + 1)
+  }
+  const queries = new Map<string, string>()
+  for (const s of fn.statements) {
+    if (s.type !== "declare" || s.target === undefined) continue
+    const query = s.expressions.find((e) => e.role === "statement")
+    if (query !== undefined) queries.set(s.target.variable, query.query)
+  }
+  const found: BodyFinding[] = []
+  for (const s of fn.statements) {
+    const target = s.target?.variable
+    if (target === undefined || s.cursor === undefined) continue
+    if (s.type === "forc") {
+      if (rowNames.has(target)) {
+        found.push({
+          code: "rewrite.unsupported",
+          offset: offsetOf(s.lineno),
+          detail: `the loop record "${target}" of FOR … IN ${s.cursor} shadows the variable "${target}" that holds a row of the promoted table, so the row shape behind the name is not proven; rename the loop record`,
+        })
+      }
+      continue
+    }
+    if (s.type !== "fetch") continue
+    const row = promotedRow(records.get(target), ctx)
+    if (row === undefined) continue
+    const query =
+      (declared.get(s.cursor) ?? 0) === 1 ? queries.get(s.cursor) : undefined
+    if (
+      row === null ||
+      query === undefined ||
+      !fillsWholeRow(query, row, ctx)
+    ) {
+      found.push({ ...positionalFill(0), offset: offsetOf(s.lineno) })
+    }
+  }
+  return found
 }
 
 function sameTable(a: TableRename, b: TableRename): boolean {
@@ -642,7 +748,14 @@ function expressionItem(
       0,
       intoRow === undefined ? scope : { ...scope, intoRowtypeOf: intoRow }
     )
-    if (intoRow !== undefined && !fillsWholeRow(e.query, intoRow, ctx)) {
+    const row =
+      e.into === true || s.type === "fors"
+        ? promotedRow(binding, ctx)
+        : undefined
+    if (
+      row !== undefined &&
+      (row === null || !fillsWholeRow(e.query, row, ctx))
+    ) {
       item.problems.push(positionalFill(0))
     }
     return item
@@ -669,8 +782,7 @@ function expressionItem(
   const binding = target === undefined ? undefined : scope.records.get(target)
   if (
     s.type === "assign" &&
-    binding !== undefined &&
-    "table" in binding &&
+    promotedRow(binding, ctx) !== undefined &&
     rowConstructor(e.query.slice(split.valueStart), ctx.parse)
   ) {
     item.problems.push(positionalFill(split.valueStart))
