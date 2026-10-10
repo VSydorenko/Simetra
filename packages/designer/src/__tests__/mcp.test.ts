@@ -3,7 +3,9 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
+import { elementNameSchema, objectNameSchema } from "simetra/model"
 import { afterEach, describe, expect, it } from "vitest"
+import { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { createMcpServer } from "../mcp/server"
@@ -196,6 +198,26 @@ describe("simetra mcp", () => {
     const fix = tools.find((t) => t.name === "fix")
     expect(fix?.inputSchema.properties).toHaveProperty("dryRun")
     expect(fix?.annotations?.readOnlyHint).toBe(false)
+  })
+
+  it("promote drops the name descriptions without touching the shared name schemas", async () => {
+    // `.meta({ description: undefined })` у `promoteInput` мусить створювати
+    // нові схеми, а не міняти спільні в глобальному реєстрі Zod.
+    const objectDescription = z.toJSONSchema(objectNameSchema).description
+    const elementDescription = z.toJSONSchema(elementNameSchema).description
+    expect(objectDescription).toBeTruthy()
+    expect(elementDescription).toBeTruthy()
+    const { tools } = await (await connect(await project(), true)).listTools()
+    const schemaOf = (n: string) =>
+      JSON.stringify(tools.find((t) => t.name === n)!.inputSchema)
+    // Ті самі описи, що були до `promote`, лишаються у `rename` і `add`.
+    expect(schemaOf("rename")).toContain(JSON.stringify(objectDescription))
+    expect(schemaOf("create")).toContain(JSON.stringify(objectDescription))
+    expect(schemaOf("add")).toContain(JSON.stringify(objectDescription))
+    expect(schemaOf("rename")).toContain(JSON.stringify(elementDescription))
+    const promote = schemaOf("promote")
+    expect(promote).not.toContain(JSON.stringify(objectDescription))
+    expect(promote).not.toContain(JSON.stringify(elementDescription))
   })
 
   it("keeps tools/list within the size budget", async () => {
