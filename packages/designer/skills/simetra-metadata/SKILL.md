@@ -98,15 +98,28 @@ says why a mapping is wrong, so read its diagnostics):
   schema, scope, ids and physical names come from the table and the operation
   and are refused in the input. `tabularSections` lists further adopted tables
   with their own `columns`.
-- `fill` computes a column that no column carries as is. Its `expression` is
-  written in the old physical names and runs before the renames.
+- `fill` computes a target column: one that no column carries, or a mapped
+  target whose existing values need a repair (a nullable source of a NOT NULL
+  target; step kind `repair`). Its `expression` is written in the old physical
+  names and runs before the renames; a model function is called
+  schema-qualified.
 - `conversions` gives a class (`platform`, `property`, `rowRule`, `metadata`,
-  `applicationCode`, `removed`) to every adopted element no column carries: a
-  SQL unit identity, `<CustomTable>#uniques|checks|indexes/<name or index>` or
-  `<CustomTable>#default/<column>`.
-- `sharedFunctions` lists module-function identities that move to
-  `sql/<schema>/`; `consumerLabels` the values by which the consumer's data
-  encodes the object (the record carries their translation to the kind label).
+  `applicationCode`, `removed`) to each adopted element the kind does not take
+  over: the identity of every SQL unit of the adopted tables' modules except a
+  function in the closed shell, and of every unit elsewhere whose target is a
+  promoted table; `<CustomTable>#uniques|checks|indexes/<name or index>`;
+  `<CustomTable>#default/<column>` (the default of a column mapped to an own
+  attribute without `defaultValue`); `<CustomTable>#comment` and
+  `<CustomTable>#comment/<column>` (a comment the kind has no place for; only
+  `removed`). A refusal names each element still missing a class.
+- Functions in the closed shell move to the kind's module, and functions that
+  read the promoted tables are rewritten in place. Other verbatim SQL that
+  reads them is refused: rewrite or drop it first.
+- `sharedFunctions` lists identities of those module functions that move to
+  `sql/<schema>/<function>.sql` instead; `consumerLabels` the values by which
+  the consumer's data encodes the object (the record's `labelTranslation`
+  maps them to the kind label and lists the polymorphic `_type` columns that
+  hold them).
 
 The same calls from a shell. A mutation takes its JSON as an argument, as
 `--input`, or as `-` for stdin:

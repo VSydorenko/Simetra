@@ -250,11 +250,11 @@ export const promoteInput = z.strictObject({
     )
     .default([]),
   fill: z.array(fillStep).default([]),
-  // Ключ — ідентичність SQL-одиниці або "<CustomTable>#<collection>/<name|index>"
-  // чи "<CustomTable>#default/<колонка>".
+  // Ключ — ідентичність SQL-одиниці, "<CustomTable>#<collection>/<name|index>",
+  // "<CustomTable>#default/<колонка>" чи "<CustomTable>#comment[/<колонка>]".
   conversions: z.record(z.string().min(1), conversionClass).default({}).meta({
     description:
-      'Key: a SQL unit identity, "<CustomTable>#uniques|checks|indexes/<name or index>" or "<CustomTable>#default/<column>".',
+      'Key: a SQL unit identity, "<CustomTable>#uniques|checks|indexes/<name or index>", "<CustomTable>#default/<column>" or "<CustomTable>#comment[/<column>]" (only removed).',
   }),
   sharedFunctions: z.array(z.string().min(1)).default([]),
   consumerLabels: z.array(z.string().min(1)).default([]),

@@ -11,6 +11,7 @@ import type { CompiledModel } from "../../compile"
 import { diagnostic, type Diagnostic } from "../../diagnostics"
 import { isRecord, type Json } from "../../object-files"
 import type { PromoteInput } from "../inputs"
+import { referencesProviderUsers } from "./gates"
 import type { PlacedColumn, PromotedTable, PromotionTarget } from "./mapping"
 
 /** Поля типу, які колонка логічного типу ділить із реквізитом. */
@@ -238,6 +239,11 @@ class References {
         return
       }
       if (!("object" in references)) {
+        // FK на користувачів провайдера судить гейт (`promote.provider-user-reference`).
+        if (referencesProviderUsers(this.ctx.model, references)) {
+          found = null
+          return
+        }
         this.unsupported(
           placed,
           `its foreign key references ${references.external.schema}.${references.external.table} outside the metadata`

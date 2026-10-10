@@ -144,17 +144,15 @@ const isAcceptedTable = (holder: Holder) =>
  * Ролі, у яких `Ref` завжди будує поліморфну пару `_type`/`_id`: перелік
  * цілей (`allowedTypes`) реквізиту, константи чи колонки прийнятої таблиці.
  */
-const ALLOWED_TYPE_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
-  "attribute.allowedType",
-  "constant.allowedType",
-])
+export const ALLOWED_TYPE_ROLES: ReadonlySet<ReferenceRole> =
+  new Set<ReferenceRole>(["attribute.allowedType", "constant.allowedType"])
 
 /**
  * Ролі цілей стандартної колонки-пари виду (власники довідника, реєстратори):
  * чи є пара, каже сама стандартна колонка (`polymorphic`) — одного власника
  * пари немає, а реєстратор її має завжди.
  */
-const STANDARD_PAIR_ROLES: Readonly<
+export const STANDARD_PAIR_ROLES: Readonly<
   Record<NonNullable<StandardColumnDef["ref"]>, ReferenceRole | undefined>
 > = {
   self: undefined,

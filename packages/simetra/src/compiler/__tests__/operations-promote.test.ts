@@ -41,7 +41,8 @@ const schemaPath: SchemaPathResolver = (file, schemaFile) =>
 
 const COMPLETION = { schemaPath, newId: counter() }
 
-// Задача 7 ще не класифікує SQL-одиниць і не промотує ТЧ.
+// Мапінг колонок — без SQL-модуля й ТЧ: їх перевіряють окремі блоки й
+// `operations-promote-sql.test.ts`.
 const PARTS = { module: false, contacts: false }
 
 const json = (files: ReadonlyMap<string, string>, path: string) =>

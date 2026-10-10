@@ -120,6 +120,74 @@ export function creationOrder(
   return graph.sort(fileOf)
 }
 
+/** Ім'я з посилання: схема — лише коли текст її пише. */
+export interface ReferencedName {
+  schema?: string
+  name: string
+}
+
+/**
+ * Посилання одиниці на відношення (простір `rel`) тим самим збиранням, що
+ * будує порядок створення: текст, що згадує ім'я в літералі чи коментарі,
+ * посиланням не є. Ім'я, яке одиниця створює, — не посилання; цілі гранту й
+ * коментаря — посилання. Тіла plpgsql не читаються (див. `creationOrder`).
+ */
+export function unitRelations(
+  unit: Pick<SqlUnit, "tree">,
+  parse: SqlParser
+): ReferencedName[] {
+  return names(unitReferences(unit, parse), "rel")
+}
+
+/**
+ * Виклики функцій одиниці (простір `proc`): `FuncCall` дерева, функція
+ * тригера й тіло `LANGUAGE sql`. Тіла plpgsql не читаються — їхні вирази
+ * передає `textCalls`.
+ */
+export function unitCalls(
+  unit: Pick<SqlUnit, "tree">,
+  parse: SqlParser
+): ReferencedName[] {
+  return names(unitReferences(unit, parse), "proc")
+}
+
+/** Виклики функцій у тексті оператора; нерозбірний текст викликів не має. */
+export function textCalls(text: string, parse: SqlParser): ReferencedName[] {
+  return names(new ReferenceCollector(parse).statementReferences(text), "proc")
+}
+
+function unitReferences(
+  unit: Pick<SqlUnit, "tree">,
+  parse: SqlParser
+): Reference[] {
+  const tree = unit.tree as Record<string, Record<string, unknown>>
+  const refs: Reference[] = []
+  new ReferenceCollector(parse).collect(
+    unit.tree,
+    refs,
+    NO_CTES,
+    createdName(tree)
+  )
+  const comment = tree.CommentStmt
+  if (comment !== undefined) {
+    refs.push(...targetReferences(String(comment.objtype), [comment.object]))
+  }
+  const grant = tree.GrantStmt
+  if (grant?.targtype === "ACL_TARGET_OBJECT") {
+    refs.push(...targetReferences(String(grant.objtype), grant.objects))
+  }
+  return refs
+}
+
+function names(refs: readonly Reference[], space: PgSpace): ReferencedName[] {
+  return refs.flatMap((ref) => {
+    const name = ref.names.at(-1)
+    if (ref.space !== space || name === undefined || name === "") return []
+    const schema = ref.names.at(-2)
+    return [schema === undefined ? { name } : { schema, name }]
+  })
+}
+
 class Graph {
   private readonly nodes = new Map<string, GraphNode>()
   /** Залежний → залежності. */
@@ -131,12 +199,14 @@ class Graph {
   ])
   /** Одиниці `REVOKE` за ціллю: `<objtype>|<ім'я об'єкта>`. */
   private readonly revokes = new Map<string, string[]>()
+  private readonly collector: ReferenceCollector
 
   constructor(
     physical: PhysicalSnapshot,
     private readonly units: readonly SqlUnit[],
-    private readonly parse: SqlParser
+    parse: SqlParser
   ) {
+    this.collector = new ReferenceCollector(parse)
     for (const type of physical.enumTypes) {
       const label = this.add({ type: "enumType", ...pick(type) }, type.name)
       this.registerAll(
@@ -274,7 +344,7 @@ class Graph {
     const label = labelOf({ type: "table", ...pick(table) })
     const expressions: string[] = []
     for (const column of table.columns) {
-      this.edges(label, this.typeReferences(column.type))
+      this.edges(label, this.collector.typeReferences(column.type))
       if (column.default !== undefined) expressions.push(column.default)
       if (column.generated !== undefined) {
         expressions.push(column.generated.expression)
@@ -288,24 +358,11 @@ class Graph {
       }
     }
     for (const expression of expressions) {
-      this.edges(label, this.statementReferences(`SELECT (${expression})`))
+      this.edges(
+        label,
+        this.collector.statementReferences(`SELECT (${expression})`)
+      )
     }
-  }
-
-  /** Тип колонки у формі `format_type()`: імена дає той самий парсер. */
-  private typeReferences(type: string): Reference[] {
-    return this.statementReferences(`SELECT NULL::${type}`)
-  }
-
-  private statementReferences(text: string): Reference[] {
-    const parsed = this.parse(text)
-    // Невалідний вираз — не справа порядку: його не створить і Postgres.
-    if (!parsed.ok) return []
-    const refs: Reference[] = []
-    for (const statement of parsed.statements) {
-      this.collect(statement.stmt, refs, NO_CTES)
-    }
-    return refs
   }
 
   // --- Ребра одиниць -------------------------------------------------------
@@ -316,7 +373,7 @@ class Graph {
     const label = unit.identity
     const tree = unit.tree as Record<string, Record<string, unknown>>
     const refs: Reference[] = []
-    this.collect(unit.tree, refs, NO_CTES, createdName(tree))
+    this.collector.collect(unit.tree, refs, NO_CTES, createdName(tree))
     this.edges(label, refs)
 
     const comment = tree.CommentStmt
@@ -355,6 +412,112 @@ class Graph {
     }
   }
 
+  // --- Сортування ----------------------------------------------------------
+
+  sort(fileOf: (unit: SqlUnit) => string): {
+    order: CreationNode[]
+    diagnostics: Diagnostic[]
+  } {
+    const all = [...this.nodes.values()].sort(compareNodes)
+    const extensions = all.filter((n) => n.unit?.class === "extension")
+    const order: CreationNode[] = extensions.map((n) => n.node)
+    const diagnostics: Diagnostic[] = []
+
+    const rest = all.filter((n) => n.unit?.class !== "extension")
+    const emitted = new Set(extensions.map((n) => n.label))
+    const dependents = new Map<string, string[]>()
+    const pending = new Map<string, number>()
+    for (const node of rest) {
+      let count = 0
+      for (const dependency of this.deps.get(node.label)!) {
+        if (emitted.has(dependency)) continue
+        count++
+        const list = dependents.get(dependency) ?? []
+        list.push(node.label)
+        dependents.set(dependency, list)
+      }
+      pending.set(node.label, count)
+    }
+    const ready = rest.filter((n) => pending.get(n.label) === 0)
+
+    const emit = (node: GraphNode) => {
+      emitted.add(node.label)
+      order.push(node.node)
+      for (const dependent of dependents.get(node.label) ?? []) {
+        const left = pending.get(dependent)! - 1
+        pending.set(dependent, left)
+        if (left === 0 && !emitted.has(dependent)) {
+          insertSorted(ready, this.nodes.get(dependent)!)
+        }
+      }
+    }
+
+    while (emitted.size < this.nodes.size) {
+      const next = ready.shift()
+      if (next !== undefined) {
+        if (!emitted.has(next.label)) emit(next)
+        continue
+      }
+      const remaining = rest.find((n) => !emitted.has(n.label))!
+      const cycle = this.findCycle(remaining, emitted)
+      diagnostics.push(cycleDiagnostic(cycle, fileOf))
+      // Цикл названо; розриваємо його на першій одиниці, щоб знайти решту.
+      emit(cycle[0]!)
+    }
+    return { order, diagnostics }
+  }
+
+  /**
+   * Цикл серед невипущених вузлів: готових немає, тож у кожного з них є
+   * невипущена залежність, і хода назад замикається. Повертає вузли від
+   * першої одиниці циклу за порядком.
+   */
+  private findCycle(
+    start: GraphNode,
+    emitted: ReadonlySet<string>
+  ): GraphNode[] {
+    const path: GraphNode[] = []
+    const seen = new Map<string, number>()
+    let current = start
+    while (!seen.has(current.label)) {
+      seen.set(current.label, path.length)
+      path.push(current)
+      current = [...this.deps.get(current.label)!]
+        .filter((dependency) => !emitted.has(dependency))
+        .map((dependency) => this.nodes.get(dependency)!)
+        .sort(compareNodes)[0]!
+    }
+    const cycle = path.slice(seen.get(current.label))
+    const units = cycle.filter((n) => n.unit !== undefined).sort(compareNodes)
+    const first = cycle.indexOf(units[0] ?? cycle[0]!)
+    return [...cycle.slice(first), ...cycle.slice(0, first)]
+  }
+}
+
+/**
+ * Збирач посилань з дерева розбору: ним будуються ребра порядку створення, і
+ * ним же операції (промоція) читають, на які відношення й функції посилається
+ * одиниця, — одне правило резолву, а не друге прочитання тексту.
+ */
+class ReferenceCollector {
+  constructor(private readonly parse: SqlParser) {}
+
+  /** Тип колонки у формі `format_type()`: імена дає той самий парсер. */
+  typeReferences(type: string): Reference[] {
+    return this.statementReferences(`SELECT NULL::${type}`)
+  }
+
+  statementReferences(text: string): Reference[] {
+    const parsed = this.parse(text)
+    // Невалідний вираз — не справа порядку: його не створить і Postgres.
+    if (!parsed.ok) return []
+    const refs: Reference[] = []
+    for (const statement of parsed.statements) {
+      this.collect(statement.stmt, refs, NO_CTES)
+    }
+    return refs
+  }
+
   /**
    * Посилання з дерева розбору. Форма вузла, а не шлях до нього: `RangeVar`
    * і `TypeName` бувають і обгорнутими вузлами, і прямими полями
@@ -362,7 +525,7 @@ class Graph {
    * області видимості: некваліфіковане таке ім'я — CTE, а не відношення.
    * `created` — вузол імені, яке оператор створює: це не посилання.
    */
-  private collect(
+  collect(
     value: unknown,
     refs: Reference[],
     ctes: ReadonlySet<string>,
@@ -488,87 +651,6 @@ class Graph {
     // Текст `regclass` — те саме ім'я, що в SQL: розбір дає регістр і лапки.
     const [type] = this.typeReferences(literal.sval)
     return type === undefined ? undefined : { space: "rel", names: type.names }
-  }
-
-  // --- Сортування ----------------------------------------------------------
-
-  sort(fileOf: (unit: SqlUnit) => string): {
-    order: CreationNode[]
-    diagnostics: Diagnostic[]
-  } {
-    const all = [...this.nodes.values()].sort(compareNodes)
-    const extensions = all.filter((n) => n.unit?.class === "extension")
-    const order: CreationNode[] = extensions.map((n) => n.node)
-    const diagnostics: Diagnostic[] = []
-
-    const rest = all.filter((n) => n.unit?.class !== "extension")
-    const emitted = new Set(extensions.map((n) => n.label))
-    const dependents = new Map<string, string[]>()
-    const pending = new Map<string, number>()
-    for (const node of rest) {
-      let count = 0
-      for (const dependency of this.deps.get(node.label)!) {
-        if (emitted.has(dependency)) continue
-        count++
-        const list = dependents.get(dependency) ?? []
-        list.push(node.label)
-        dependents.set(dependency, list)
-      }
-      pending.set(node.label, count)
-    }
-    const ready = rest.filter((n) => pending.get(n.label) === 0)
-
-    const emit = (node: GraphNode) => {
-      emitted.add(node.label)
-      order.push(node.node)
-      for (const dependent of dependents.get(node.label) ?? []) {
-        const left = pending.get(dependent)! - 1
-        pending.set(dependent, left)
-        if (left === 0 && !emitted.has(dependent)) {
-          insertSorted(ready, this.nodes.get(dependent)!)
-        }
-      }
-    }
-
-    while (emitted.size < this.nodes.size) {
-      const next = ready.shift()
-      if (next !== undefined) {
-        if (!emitted.has(next.label)) emit(next)
-        continue
-      }
-      const remaining = rest.find((n) => !emitted.has(n.label))!
-      const cycle = this.findCycle(remaining, emitted)
-      diagnostics.push(cycleDiagnostic(cycle, fileOf))
-      // Цикл названо; розриваємо його на першій одиниці, щоб знайти решту.
-      emit(cycle[0]!)
-    }
-    return { order, diagnostics }
-  }
-
-  /**
-   * Цикл серед невипущених вузлів: готових немає, тож у кожного з них є
-   * невипущена залежність, і хода назад замикається. Повертає вузли від
-   * першої одиниці циклу за порядком.
-   */
-  private findCycle(
-    start: GraphNode,
-    emitted: ReadonlySet<string>
-  ): GraphNode[] {
-    const path: GraphNode[] = []
-    const seen = new Map<string, number>()
-    let current = start
-    while (!seen.has(current.label)) {
-      seen.set(current.label, path.length)
-      path.push(current)
-      current = [...this.deps.get(current.label)!]
-        .filter((dependency) => !emitted.has(dependency))
-        .map((dependency) => this.nodes.get(dependency)!)
-        .sort(compareNodes)[0]!
-    }
-    const cycle = path.slice(seen.get(current.label))
-    const units = cycle.filter((n) => n.unit !== undefined).sort(compareNodes)
-    const first = cycle.indexOf(units[0] ?? cycle[0]!)
-    return [...cycle.slice(first), ...cycle.slice(0, first)]
   }
 }
 

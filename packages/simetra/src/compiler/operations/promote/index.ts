@@ -1,21 +1,36 @@
 import {
   KIND_REGISTRY,
   postsMovements,
+  SQL_DEBT_FILE,
   standardLogicalName,
   type MetadataRef,
   type PhysicalTable,
 } from "simetra/model"
 import { polymorphicTargets } from "../../assigned-once"
 import type { CompiledModel, SourceObject } from "../../compile"
-import { diagnostic, toPointer, type Diagnostic } from "../../diagnostics"
-import { loadSqlParser } from "../../sql/parse"
-import { completeNarrowAndCompile, type CompletionOptions } from "../fix"
+import {
+  compareStrings,
+  diagnostic,
+  sortDiagnostics,
+  toPointer,
+  type Diagnostic,
+} from "../../diagnostics"
+import { withRanges } from "../../locate"
+import { loadSqlParser, type SqlParser } from "../../sql/parse"
+import { loadPlpgsqlParser } from "../../sql/plpgsql"
+import { applyChanges } from "../changes"
+import {
+  completeNarrowAndCompile,
+  sqlDebtText,
+  type CompletionOptions,
+} from "../fix"
 import type { PromoteInput } from "../inputs"
 import { compileInput, refused, refuseSuppliedId } from "../refuse"
 import { objectFiles } from "../target"
 import type { OperationResult } from "../types"
 import { cascadeReferences, type PromotedReferences } from "./cascade"
 import { fillStepKind, fillTargetKey, modelFunctions } from "./fill"
+import { providerUserProblems, writePathProblems } from "./gates"
 import { kindFile, type PromotedSection } from "./kind-file"
 import {
   missingFills,
@@ -31,6 +46,17 @@ import {
   type PlannedTarget,
   type PromoteResult,
 } from "./record"
+import {
+  callerChanges,
+  labelConsumers,
+  planUnits,
+  renameMap,
+  rewriteCandidates,
+  rewrittenIdentity,
+  sqlFileTexts,
+  type FileUnit,
+  type UnitPlan,
+} from "./sql"
 
 const MODULE_SUFFIX = ".module.ts"
 
@@ -142,15 +168,15 @@ interface UnitTable {
  * кроку виводиться з того, що читає вираз; порушення форми —
  * `promote.expression-invalid`.
  */
-async function planSteps(
+function planSteps(
   model: CompiledModel,
   input: PromoteInput,
-  tables: readonly UnitTable[]
-): Promise<{ steps: PlannedStep[]; problems: Diagnostic[] }> {
+  tables: readonly UnitTable[],
+  parse: SqlParser
+): { steps: PlannedStep[]; problems: Diagnostic[] } {
   const steps: PlannedStep[] = []
   const problems: Diagnostic[] = []
   if (input.fill.length === 0) return { steps, problems }
-  const parse = await loadSqlParser()
   const functions = modelFunctions(model)
   const unknown = (path: (string | number)[], detail: string) =>
     problems.push(
@@ -363,8 +389,8 @@ export async function promoteObject(
     collections: def.columnFields,
   }
 
-  // 3. Повнота й гейти. Задача 9 додає сюди класифікацію SQL-одиниць і
-  // гейти шляху запису та користувачів провайдера.
+  // 3. Повнота й гейти: розміщення колонок, ТЧ, SQL-одиниці, шлях запису й
+  // користувачі провайдера — усе у файлах, до будь-яких змін.
   const problems: Diagnostic[] = []
   const placement = placeColumns(
     model,
@@ -396,13 +422,52 @@ export async function promoteObject(
     })
   }
 
-  const subjects: ConversionSubject[] = tables.flatMap((t) =>
-    structuralSubjects(
-      t.promoted,
-      t.section === undefined ? into.data?.description : null,
-      model.project.defaultLocale
+  const parse = await loadSqlParser()
+  const plpgsql = await loadPlpgsqlParser()
+  const unitTables = tables.map((t) => {
+    const physical = adoptedTable(model, t.promoted.object)
+    if (physical === undefined) {
+      throw new Error(`adopted table ${t.promoted.object.name} has no table`)
+    }
+    return {
+      objectId: t.promoted.object.id,
+      schema: physical.schema,
+      name: physical.name,
+    }
+  })
+  problems.push(...writePathProblems(model, unitTables, parse))
+  problems.push(
+    ...providerUserProblems(
+      model,
+      tables.map((t) => t.promoted)
     )
   )
+  const sql = planUnits(model, input, unitTables, {
+    parse,
+    plpgsql,
+    kindModule: `${dir}${into.name}.sql`,
+  })
+  problems.push(...sql.problems)
+  // Мітки споживача перекладаються в мітку виду; виду без мітки нема куди.
+  if (input.consumerLabels.length > 0 && def.kindLabel !== true) {
+    problems.push(
+      diagnostic("promote.mapping-unknown", "", "", {
+        at: toPointer(["consumerLabels"]),
+        detail: `${into.kind} has no kind label to translate the consumer labels to`,
+      })
+    )
+  }
+
+  const subjects: (ConversionSubject & { line?: number })[] = [
+    ...tables.flatMap((t) =>
+      structuralSubjects(
+        t.promoted,
+        t.section === undefined ? into.data?.description : null,
+        model.project.defaultLocale
+      )
+    ),
+    ...sql.subjects,
+  ]
   for (const s of subjects) {
     const given = input.conversions[s.subject]
     if (given === undefined) {
@@ -410,6 +475,7 @@ export async function promoteObject(
         problems.push(
           diagnostic("promote.unclassified", s.file, s.pointer, {
             subject: s.subject,
+            ...(s.line === undefined ? {} : { line: s.line }),
           })
         )
       }
@@ -446,7 +512,7 @@ export async function promoteObject(
       )
     )
   }
-  const planned = await planSteps(model, input, tables)
+  const planned = await planSteps(model, input, tables, parse)
   problems.push(...planned.problems)
 
   // 4. Файл виду.
@@ -502,36 +568,35 @@ export async function promoteObject(
   // Модуль `.module.ts` — код застосунку, а не опис таблиці: він переїжджає
   // до файлу виду, як при перейменуванні, а не зникає мовчки.
   const after = new Map(files)
+  const deleted = new Set<string>()
   for (const file of objectFiles(files, object)) {
     if (file.endsWith(MODULE_SUFFIX)) {
       after.set(`${dir}${into.name}${MODULE_SUFFIX}`, files.get(file)!)
     }
-    after.delete(file)
+    deleted.add(file)
   }
   for (const { sectionObject } of sections) {
-    for (const file of objectFiles(files, sectionObject)) after.delete(file)
+    for (const file of objectFiles(files, sectionObject)) deleted.add(file)
   }
+  for (const file of deleted) after.delete(file)
   after.set(path, JSON.stringify(built.raw))
   for (const [file, text] of cascade.files) after.set(file, text)
+  // SQL: класифіковане вирізано, функції модуля переїхали — ще в старих
+  // іменах: нові фізичні імена дає лише доповнення нижче.
+  setTexts(after, sqlFileTexts(files, sql, new Map(), deleted).files)
 
   // 7–8. Доповнення (канонічні фізичні імена, рішення 10), звуження боргу й
   // компіляція результату.
-  const completed = await completeNarrowAndCompile(
-    files,
-    after,
-    o,
-    new Set([path, ...cascade.files.keys()])
-  )
+  const only = new Set([path, ...cascade.files.keys()])
+  let completed = await completeNarrowAndCompile(files, after, o, only)
   if (!completed.result.ok || completed.model === undefined) {
     return completed.result
   }
-  // 9. Запис — з моделі результату.
-  return {
-    ...completed.result,
-    record: promotionRecord(
+  const record = (m: NonNullable<typeof completed.model>) =>
+    promotionRecord(
       input,
       model,
-      completed.model,
+      m,
       main,
       tables.flatMap((t) =>
         t.section === undefined
@@ -539,8 +604,182 @@ export async function promoteObject(
           : [{ promoted: t.promoted, section: t.promoted.object.id }]
       ),
       planned.steps
+    )
+
+  // 8a. Переписування функцій в обсязі (рішення 13, 14) — над іменами, які
+  // дала модель результату. Будь-яка відмова переписувача — нічого не пишеться.
+  const map = renameMap(model, completed.model, record(completed.model))
+  const rewrite = rewriteCandidates(
+    sql,
+    map,
+    input.consumerLabels,
+    parse,
+    plpgsql
+  )
+  if (rewrite.problems.length > 0) return refused(files, rewrite.problems)
+  const changed = sql.candidates.filter((u) => rewrite.texts.has(u.identity))
+  const signature = [
+    ...new Set(
+      rewrite.changes
+        .filter((c) => c.reason === "signature")
+        .map((c) => c.unit.identity)
     ),
+  ]
+  const removed = new Set(sql.removed.map((u) => u.identity))
+  const remaining = model.sqlUnits.filter(
+    (u): u is FileUnit =>
+      u.file !== undefined && u.line !== undefined && !removed.has(u.identity)
+  )
+  const callers = callerChanges(remaining, signature, parse, plpgsql)
+  const final = sqlFileTexts(files, sql, rewrite.texts, deleted, [
+    ...sql.candidates,
+    ...callers.map((c) => c.unit),
+    ...sql.unscoped.map((u) => u.unit),
+  ])
+  if (changed.length > 0) {
+    const next = applyChanges(files, completed.result.changes)
+    setTexts(next, final.files)
+    renameDebt(next, sql, changed, rewrite.texts, parse, completed.model, o)
+    completed = await completeNarrowAndCompile(files, next, o, new Set())
+    if (!completed.result.ok || completed.model === undefined) {
+      return completed.result
+    }
   }
+
+  // 9. Запис — з моделі результату; SQL-частину дає план одиниць.
+  const result = record(completed.model)
+  const placed = (unit: FileUnit) =>
+    final.placements.get(unit.identity) ?? { file: unit.file, line: unit.line }
+  result.movedUnits = sql.moved.map(({ unit, to }) => ({
+    identity: unit.identity,
+    from: unit.file,
+    to,
+  }))
+  result.rewrittenUnits = changed.map((unit) => ({
+    identity: unit.identity,
+    file: placed(unit).file,
+  }))
+  const warnings: Diagnostic[] = []
+  const contract = (
+    unit: FileUnit,
+    line: number,
+    column: number,
+    reason: string,
+    detail: string,
+    via?: string[]
+  ) => {
+    const at = placed(unit)
+    const absolute = at.line + line - 1
+    result.contractChanges.push({
+      identity: unit.identity,
+      file: at.file,
+      line: absolute,
+      reason,
+      ...(detail === "" ? {} : { detail }),
+      ...(via === undefined ? {} : { via }),
+    })
+    warnings.push(
+      diagnostic("rewrite.contract-change", at.file, "", {
+        function: unit.identity,
+        line: absolute,
+        column,
+        reason,
+        detail,
+        ...(via === undefined ? {} : { via: via.join(" -> ") }),
+      })
+    )
+  }
+  for (const c of rewrite.changes) {
+    contract(c.unit, c.line, c.column, c.reason, c.detail)
+  }
+  for (const { unit, via } of callers) {
+    contract(
+      unit,
+      1,
+      1,
+      "caller",
+      `it calls ${via.join(" -> ")}, and the result shape of ${via.at(-1)} changes`,
+      via
+    )
+  }
+  for (const { unit, line } of sql.unscoped) {
+    const at = placed(unit)
+    warnings.push(
+      diagnostic("rewrite.dynamic-sql-unscoped", at.file, "", {
+        function: unit.identity,
+        line: at.line + line - unit.line,
+        column: 1,
+        detail: `it runs dynamic SQL and is outside the rewrite scope of ${unitTables.map((t) => `${t.schema}.${t.name}`).join(", ")}`,
+      })
+    )
+  }
+  if (input.consumerLabels.length > 0 && result.kindLabel !== undefined) {
+    result.labelTranslation = {
+      from: [...input.consumerLabels],
+      to: result.kindLabel,
+      columns: labelConsumers(completed.model, becomes),
+    }
+  }
+  const finalFiles = applyChanges(files, completed.result.changes)
+  return {
+    ...completed.result,
+    diagnostics: sortDiagnostics([
+      ...completed.result.diagnostics,
+      ...withRanges(warnings, finalFiles),
+    ]),
+    record: result,
+  }
+}
+
+/** Пише тексти SQL-файлів у мапу: `undefined` — файл зник. */
+function setTexts(
+  files: Map<string, string>,
+  texts: ReadonlyMap<string, string | undefined>
+): void {
+  for (const [file, text] of texts) {
+    if (text === undefined) files.delete(file)
+    else files.set(file, text)
+  }
+}
+
+/**
+ * Переписаний тип рядка в аргументах змінює ідентичність функції боргу: її
+ * запис у `sql-debt.json` іде за нею, інакше ратчет побачив би новий борг.
+ */
+function renameDebt(
+  files: Map<string, string>,
+  plan: UnitPlan,
+  changed: readonly FileUnit[],
+  texts: ReadonlyMap<string, string>,
+  parse: SqlParser,
+  after: { physical: { tables: readonly { schema: string; name: string }[] } },
+  o: CompletionOptions
+): void {
+  const text = files.get(SQL_DEBT_FILE)
+  if (text === undefined) return
+  const raw = JSON.parse(text) as { units?: unknown }
+  if (!Array.isArray(raw.units)) return
+  const moved = new Set(plan.moved.map((m) => m.unit.identity))
+  const renamed = new Map<string, string>()
+  for (const unit of changed) {
+    if (moved.has(unit.identity)) continue
+    const identity = rewrittenIdentity(
+      unit,
+      texts.get(unit.identity)!,
+      parse,
+      after.physical.tables
+    )
+    if (identity !== unit.identity) renamed.set(unit.identity, identity)
+  }
+  if (renamed.size === 0) return
+  const units = (raw.units as unknown[]).map((u) =>
+    typeof u === "string" ? (renamed.get(u) ?? u) : u
+  )
+  if (units.some((u) => typeof u !== "string")) return
+  files.set(
+    SQL_DEBT_FILE,
+    sqlDebtText([...(units as string[])].sort(compareStrings), o.schemaPath)
+  )
 }
 
 /**

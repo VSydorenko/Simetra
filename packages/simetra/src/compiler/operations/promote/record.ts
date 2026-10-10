@@ -106,13 +106,18 @@ export interface PromotionRecord {
   conversions: { subject: string; class: ConversionClass }[]
   movedUnits: { identity: string; from: string; to: string }[]
   rewrittenUnits: { identity: string; file: string }[]
+  /**
+   * Місця — після промоції (файл і рядок, де функція лежить тепер); `via` —
+   * ланцюжок від викликача до функції, чия сигнатура змінилась (рішення 13).
+   */
   contractChanges: {
     identity: string
     file: string
     line: number
     reason: string
+    detail?: string
     via?: string[]
-  }[] // via — ланцюжок викликачів
+  }[]
 }
 
 export interface PromoteResult extends OperationResult {
@@ -218,7 +223,7 @@ const WIDENING: ReadonlySet<string> = new Set([
 /**
  * Запис з моделей до й після (крок 9): фізичні імена після — ті, що
  * призначило доповнення, тож запис не повторює правила імен. SQL-одиниці й
- * переклад міток додає задача 9.
+ * переклад міток дописує `promoteObject` з плану одиниць (`sql.ts`).
  */
 export function promotionRecord(
   input: PromoteInput,

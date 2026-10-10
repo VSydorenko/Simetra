@@ -1,0 +1,639 @@
+import { describe, expect, it } from "vitest"
+import {
+  applyChanges,
+  compile,
+  promoteObject,
+  type PromoteInput,
+  type SchemaPathResolver,
+} from "simetra/compiler"
+import { SQL_DEBT_FILE } from "simetra/model"
+import {
+  CATALOG_FILE,
+  COUNTERPARTY_FILE,
+  COUNTERPARTY_SQL,
+  COUNTERPARTY_UNITS,
+  SHARED_SQL,
+  counterpartyMapping,
+  promotionProject,
+} from "./fixtures/promotion"
+import { acceptDebt, attribute, customTable, document, uuid } from "./helpers"
+
+type Json = Record<string, unknown>
+
+function counter(start = 950_000): () => string {
+  let n = start
+  return () => uuid(++n)
+}
+
+const schemaPath: SchemaPathResolver = (file, schemaFile) =>
+  `schemas-of/${file}/${schemaFile}`
+
+const COMPLETION = { schemaPath, newId: counter() }
+
+const KIND_MODULE = "catalogs/Counterparty/Counterparty.sql"
+const TOUCH = "function:app.counterparty_touch()"
+const NAMES = "function:app.counterparty_names()"
+
+const errors = (result: { diagnostics: { severity: string }[] }) =>
+  result.diagnostics.filter((d) => d.severity === "error")
+
+const brief = (result: {
+  diagnostics: {
+    code: string
+    file: string
+    params?: Record<string, unknown>
+  }[]
+}) =>
+  result.diagnostics.map((d) => ({
+    code: d.code,
+    file: d.file,
+    params: d.params,
+  }))
+
+function mapping(edit: (input: PromoteInput) => void = () => {}): PromoteInput {
+  const input = structuredClone(counterpartyMapping())
+  edit(input)
+  return input
+}
+
+/** Повна фікстура з додатковими SQL-файлами; борг приймається як є. */
+async function project(
+  sql: Record<string, string> = {},
+  edit: (files: Map<string, string>) => void = () => {}
+): Promise<Map<string, string>> {
+  const files = promotionProject()
+  for (const [path, text] of Object.entries(sql)) files.set(path, text)
+  edit(files)
+  const accepted = await acceptDebt(files)
+  expect(errors(await compile(accepted))).toEqual([])
+  return accepted
+}
+
+async function promoted(
+  files: ReadonlyMap<string, string>,
+  input: PromoteInput = mapping()
+) {
+  const result = await promoteObject(files, input, COMPLETION)
+  return { result, after: applyChanges(files, result.changes) }
+}
+
+/** Промоція, що мусить пройти, і чиста компіляція результату. */
+async function passes(
+  files: ReadonlyMap<string, string>,
+  input: PromoteInput = mapping()
+) {
+  const out = await promoted(files, input)
+  expect(errors(out.result)).toEqual([])
+  expect(out.result.ok).toBe(true)
+  expect(
+    errors(await compile(out.after, { baseline: files })),
+    "the result compiles"
+  ).toEqual([])
+  return out
+}
+
+const fn = (name: string, body: string, returns = "integer") =>
+  `CREATE FUNCTION app.${name}() RETURNS ${returns} LANGUAGE sql STABLE AS $fn$\n  ${body}\n$fn$;\n`
+
+describe("promoteObject: SQL units", () => {
+  it("moves the closed trigger function into the kind module and rewrites it", async () => {
+    const files = await project()
+    const { result, after } = await passes(files)
+    expect(after.has(COUNTERPARTY_SQL)).toBe(false)
+    expect(after.get(KIND_MODULE)).toBe(
+      `CREATE FUNCTION app.counterparty_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $fn$
+BEGIN
+  NEW.description := btrim(NEW.description);
+  RETURN NEW;
+END
+$fn$;
+`
+    )
+    expect(result.record?.movedUnits).toEqual([
+      { identity: TOUCH, from: COUNTERPARTY_SQL, to: KIND_MODULE },
+    ])
+    expect(result.record?.conversions).toEqual(
+      expect.arrayContaining([
+        { subject: COUNTERPARTY_UNITS.trigger, class: "platform" },
+        { subject: COUNTERPARTY_UNITS.policy, class: "platform" },
+        { subject: COUNTERPARTY_UNITS.grant, class: "platform" },
+      ])
+    )
+    const debt = after.get(SQL_DEBT_FILE)
+    for (const identity of Object.values(COUNTERPARTY_UNITS)) {
+      expect(debt ?? "").not.toContain(identity)
+    }
+  })
+
+  it("moves a function named in sharedFunctions to sql/<schema>/", async () => {
+    const files = await project()
+    const { result, after } = await passes(
+      files,
+      mapping((m) => {
+        m.sharedFunctions = [TOUCH]
+      })
+    )
+    expect(after.has(KIND_MODULE)).toBe(false)
+    expect(after.get("sql/app/counterparty_touch.sql")).toContain(
+      "NEW.description := btrim(NEW.description);"
+    )
+    expect(result.record?.movedUnits).toEqual([
+      {
+        identity: TOUCH,
+        from: COUNTERPARTY_SQL,
+        to: "sql/app/counterparty_touch.sql",
+      },
+    ])
+  })
+
+  it("refuses a sharedFunctions entry that names no moved function", async () => {
+    const files = await project()
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.sharedFunctions = [NAMES]
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.mapping-unknown",
+        file: "",
+        params: expect.objectContaining({ at: "/sharedFunctions/0" }),
+      },
+    ])
+  })
+
+  it("rewrites a shared function that reads the promoted table", async () => {
+    const files = await project()
+    const { result, after } = await passes(files)
+    expect(after.get(SHARED_SQL)).toBe(
+      `CREATE FUNCTION app.counterparty_names() RETURNS TABLE (name text, inn text) LANGUAGE sql STABLE AS $fn$
+  SELECT c.description AS name, c.tax_id AS inn FROM app.counterparty c
+$fn$;
+`
+    )
+    expect(result.record?.rewrittenUnits).toEqual(
+      expect.arrayContaining([{ identity: NAMES, file: SHARED_SQL }])
+    )
+  })
+
+  it("refuses an unclassified policy and a non-closed module function", async () => {
+    const files = await project({}, (f) => {
+      f.set(
+        COUNTERPARTY_SQL,
+        `${f.get(COUNTERPARTY_SQL)!}
+CREATE POLICY counterparties_audit ON app.counterparties FOR SELECT TO anon USING (false);
+
+CREATE FUNCTION app.counterparty_raw() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
+`
+      )
+    })
+    const { result, after } = await promoted(files)
+    expect(result.ok).toBe(false)
+    expect(after).toEqual(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.unclassified",
+        file: COUNTERPARTY_SQL,
+        params: {
+          subject: "function:app.counterparty_raw()",
+          line: 17,
+        },
+      },
+      {
+        code: "promote.unclassified",
+        file: COUNTERPARTY_SQL,
+        params: {
+          subject: "policy:app.counterparties.counterparties_audit",
+          line: 15,
+        },
+      },
+    ])
+    // Класифіковані знімаються разом з модулем.
+    const classified = await passes(
+      files,
+      mapping((m) => {
+        m.conversions["function:app.counterparty_raw()"] = "applicationCode"
+        m.conversions["policy:app.counterparties.counterparties_audit"] =
+          "removed"
+      })
+    )
+    expect(classified.after.get(KIND_MODULE)).not.toContain("counterparty_raw")
+  })
+
+  it("refuses a view of another table that reads a promoted column", async () => {
+    const files = await project({
+      "sql/app/views.sql": `CREATE VIEW app.invoice_parties AS
+  SELECT i.id, c.name FROM app.invoices i JOIN app.counterparties c ON c.id = i.counterparty_id;
+`,
+    })
+    const { result } = await promoted(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.debt-text-reference",
+        file: "sql/app/views.sql",
+        params: { identity: "view:app.invoice_parties", line: 1 },
+      },
+    ])
+  })
+
+  it("classifies and cuts a unit elsewhere whose target is the promoted table", async () => {
+    const comment =
+      "COMMENT ON POLICY counterparties_read ON app.counterparties IS 'read';"
+    const files = await project({
+      "sql/app/comments.sql": `-- keep this line\n${comment}\n\nCOMMENT ON SCHEMA app IS 'application';\n`,
+    })
+    const identity = "comment:policy:app.counterparties.counterparties_read"
+    const refused = await promoted(files)
+    expect(brief(refused.result)).toEqual([
+      {
+        code: "promote.unclassified",
+        file: "sql/app/comments.sql",
+        params: { subject: identity, line: 2 },
+      },
+    ])
+    const { after } = await passes(
+      files,
+      mapping((m) => {
+        m.conversions[identity] = "platform"
+      })
+    )
+    expect(after.get("sql/app/comments.sql")).toBe(
+      "-- keep this line\nCOMMENT ON SCHEMA app IS 'application';\n"
+    )
+  })
+
+  it("refuses write grants and write policies", async () => {
+    const files = await project({}, (f) => {
+      f.set(
+        COUNTERPARTY_SQL,
+        `${f.get(COUNTERPARTY_SQL)!}
+GRANT INSERT, UPDATE ON app.counterparties TO authenticated;
+
+CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authenticated USING (true);
+`
+      )
+    })
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.conversions[
+          "grant:grant:table:app.counterparties:authenticated:insert"
+        ] = "platform"
+        m.conversions[
+          "grant:grant:table:app.counterparties:authenticated:update"
+        ] = "platform"
+        m.conversions["policy:app.counterparties.counterparties_edit"] =
+          "platform"
+      })
+    )
+    const write = result.diagnostics.filter(
+      (d) => d.code === "promote.write-path"
+    )
+    expect(write.map((d) => d.file)).toEqual([
+      COUNTERPARTY_SQL,
+      COUNTERPARTY_SQL,
+    ])
+    expect(write.map((d) => d.params?.line)).toEqual([15, 17])
+    for (const d of write) {
+      expect(d.message).toContain("write path after promotion")
+    }
+    expect(result.ok).toBe(false)
+  })
+
+  it("refuses a write privilege that comes from the schema's default privileges", async () => {
+    const files = await project({
+      "sql/app/default-privileges.sql":
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO authenticated;\n",
+    })
+    const { result } = await promoted(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.write-path",
+        file: "sql/app/default-privileges.sql",
+        params: expect.objectContaining({ table: "app.counterparties" }),
+      },
+    ])
+    expect(result.diagnostics[0]!.message).toContain(
+      "write path after promotion"
+    )
+  })
+
+  it("ignores default privileges of another schema and read-only ones", async () => {
+    const files = await project({
+      "sql/public/default-privileges.sql":
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated;\n",
+      "sql/app/default-privileges.sql":
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO authenticated;\n",
+    })
+    await passes(files)
+  })
+
+  it("leaves a candidate untouched when resolution finds no reference", async () => {
+    const text = fn(
+      "other_counts",
+      "-- counts rows of counterparties elsewhere\n  SELECT count(*)::integer FROM other.counterparties"
+    )
+    const files = await project({ "sql/app/other_counts.sql": text })
+    const { result, after } = await passes(files)
+    expect(after.get("sql/app/other_counts.sql")).toBe(text)
+    expect(result.record?.rewrittenUnits.map((u) => u.identity)).not.toContain(
+      "function:app.other_counts()"
+    )
+  })
+
+  it("finds debt text references by dependency resolution, not by word", async () => {
+    const literal = await project({
+      "sql/app/views.sql":
+        "CREATE VIEW app.labels AS SELECT 'counterparties' AS name;\n",
+    })
+    await passes(literal)
+    const reading = await project({
+      "sql/app/views.sql":
+        "CREATE VIEW app.labels AS SELECT count(*) AS n FROM app.counterparties;\n",
+    })
+    const { result } = await promoted(reading)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.debt-text-reference",
+        file: "sql/app/views.sql",
+        params: { identity: "view:app.labels", line: 1 },
+      },
+    ])
+  })
+
+  it("warns about out-of-scope debt functions with dynamic SQL", async () => {
+    const files = await project({
+      "sql/app/dyn.sql": `CREATE FUNCTION app.dyn(t text) RETURNS void LANGUAGE plpgsql VOLATILE AS $fn$
+BEGIN
+  EXECUTE format('delete from app.%I', t);
+END
+$fn$;
+`,
+    })
+    const { result } = await passes(files)
+    expect(
+      brief(result).filter((d) => d.code === "rewrite.dynamic-sql-unscoped")
+    ).toEqual([
+      {
+        code: "rewrite.dynamic-sql-unscoped",
+        file: "sql/app/dyn.sql",
+        params: expect.objectContaining({
+          function: "function:app.dyn(text)",
+          line: 3,
+        }),
+      },
+    ])
+  })
+
+  it("propagates a contract change to callers transitively", async () => {
+    const files = await project({
+      "sql/app/f.sql": fn(
+        "f",
+        "SELECT * FROM app.counterparties",
+        "SETOF app.counterparties"
+      ),
+      "sql/app/g.sql": fn("g", "SELECT count(*)::integer FROM app.f()"),
+      "sql/app/h.sql": fn("h", "SELECT app.g()"),
+    })
+    const { result, after } = await passes(files)
+    expect(after.get("sql/app/f.sql")).toContain(
+      "RETURNS SETOF app.counterparty"
+    )
+    const callers = result.record?.contractChanges.filter(
+      (c) => c.via !== undefined
+    )
+    expect(callers).toEqual([
+      {
+        identity: "function:app.g()",
+        file: "sql/app/g.sql",
+        line: 1,
+        reason: "caller",
+        detail: expect.stringContaining("function:app.f()"),
+        via: ["function:app.f()"],
+      },
+      {
+        identity: "function:app.h()",
+        file: "sql/app/h.sql",
+        line: 1,
+        reason: "caller",
+        detail: expect.stringContaining("function:app.g()"),
+        via: ["function:app.g()", "function:app.f()"],
+      },
+    ])
+    const warnings = result.diagnostics.filter(
+      (d) => d.code === "rewrite.contract-change" && d.params?.via !== undefined
+    )
+    expect(warnings.map((d) => d.severity)).toEqual(["warning", "warning"])
+  })
+
+  it("records the label translation and the polymorphic consumer columns", async () => {
+    const sale = document("Sale", {
+      attributes: [
+        attribute("party", {
+          type: "Ref",
+          allowedTypes: [
+            { kind: "CustomTable", name: "Counterparty" },
+            { kind: "Document", name: "Sale" },
+          ],
+        }),
+      ],
+    })
+    const files = await project({}, (f) => {
+      f.set("documents/Sale/Sale.meta.json", JSON.stringify(sale))
+    })
+    const { result } = await passes(
+      files,
+      mapping((m) => {
+        m.consumerLabels = ["cp"]
+      })
+    )
+    expect(result.record?.labelTranslation).toEqual({
+      from: ["cp"],
+      to: "counterparty",
+      columns: [{ schema: "public", table: "sale", column: "party_type" }],
+    })
+  })
+
+  it("refuses a provider user reference that is not the user scope carrier", async () => {
+    const files = await project({}, (f) => {
+      const raw = JSON.parse(f.get(COUNTERPARTY_FILE)!) as Json
+      ;(raw.columns as Json[]).push({
+        id: uuid(7009),
+        name: "authorId",
+        physicalName: "author_id",
+        type: "UUID",
+      })
+      raw.foreignKeys = [
+        {
+          name: "counterparties_author_id_fkey",
+          columns: ["authorId"],
+          references: {
+            external: { schema: "auth", table: "users", columns: ["id"] },
+          },
+        },
+      ]
+      f.set(COUNTERPARTY_FILE, JSON.stringify(raw))
+    })
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.columns.authorId = {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "author" },
+        }
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.provider-user-reference",
+        file: COUNTERPARTY_FILE,
+        params: { table: "Counterparty", column: "authorId" },
+      },
+    ])
+  })
+
+  it("refuses NEW fields of a function bound also to a table the promotion keeps", async () => {
+    const partner = customTable("Partner", {
+      schema: "app",
+      physicalName: "partners",
+      columns: [
+        {
+          id: uuid(7401),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+        { id: uuid(7402), name: "name", physicalName: "name", type: "Text" },
+      ],
+      primaryKey: { name: "partners_pkey", columns: ["id"] },
+    })
+    const files = await project(
+      {
+        "sql/app/touch_name.sql": `CREATE FUNCTION app.touch_name() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $fn$
+BEGIN
+  NEW.name := btrim(NEW.name);
+  RETURN NEW;
+END
+$fn$;
+
+CREATE TRIGGER touch_name BEFORE INSERT ON app.counterparties
+  FOR EACH ROW EXECUTE FUNCTION app.touch_name();
+
+CREATE TRIGGER touch_name BEFORE INSERT ON app.partners
+  FOR EACH ROW EXECUTE FUNCTION app.touch_name();
+`,
+      },
+      (f) => {
+        f.set(
+          "custom-tables/Partner/Partner.meta.json",
+          JSON.stringify(partner)
+        )
+      }
+    )
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.conversions["trigger:app.counterparties.touch_name"] = "property"
+      })
+    )
+    expect(brief(result).map((d) => [d.code, d.file, d.params?.line])).toEqual([
+      ["rewrite.trigger-binding", "sql/app/touch_name.sql", 3],
+      ["rewrite.trigger-binding", "sql/app/touch_name.sql", 3],
+    ])
+  })
+
+  it("aggregates rewriter refusals and writes nothing", async () => {
+    const dynamic = `CREATE FUNCTION app.purge() RETURNS void LANGUAGE plpgsql VOLATILE AS $fn$
+BEGIN
+  EXECUTE 'delete from app.counterparties';
+END
+$fn$;
+`
+    const files = await project({
+      "sql/app/purge.sql": dynamic,
+      "sql/app/unqualified.sql": fn(
+        "unqualified",
+        "SELECT count(*)::integer FROM counterparties"
+      ),
+    })
+    const { result, after } = await promoted(files)
+    expect(result.ok).toBe(false)
+    expect(result.changes).toEqual([])
+    expect(after).toEqual(files)
+    expect(
+      brief(result).map((d) => [
+        d.code,
+        d.file,
+        d.params?.line,
+        d.params?.function,
+      ])
+    ).toEqual([
+      ["rewrite.dynamic-sql", "sql/app/purge.sql", 3, "function:app.purge()"],
+      [
+        "rewrite.unqualified-table",
+        "sql/app/unqualified.sql",
+        2,
+        "function:app.unqualified()",
+      ],
+    ])
+  })
+
+  it("flags consumer label literals", async () => {
+    const files = await project({
+      "sql/app/kinds.sql": fn(
+        "kinds",
+        "SELECT count(*)::integer FROM app.counterparties c WHERE 'cp' = c.inn"
+      ),
+    })
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.consumerLabels = ["cp"]
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "rewrite.label-literal",
+        file: "sql/app/kinds.sql",
+        params: expect.objectContaining({
+          function: "function:app.kinds()",
+          line: 2,
+        }),
+      },
+    ])
+  })
+
+  it("passes contract changes through as warnings and into the record", async () => {
+    const files = await project({
+      "sql/app/rows.sql": fn(
+        "rows",
+        "SELECT * FROM app.counterparties",
+        "SETOF app.counterparties"
+      ),
+    })
+    const { result } = await passes(files)
+    const changes = result.record?.contractChanges ?? []
+    expect(changes.length).toBeGreaterThan(0)
+    for (const c of changes) {
+      expect(c).toMatchObject({
+        identity: "function:app.rows()",
+        file: "sql/app/rows.sql",
+      })
+      expect(c.detail).toEqual(expect.any(String))
+    }
+    const warnings = result.diagnostics.filter(
+      (d) => d.code === "rewrite.contract-change"
+    )
+    expect(warnings).toHaveLength(changes.length)
+    expect(warnings.every((d) => d.severity === "warning")).toBe(true)
+  })
+
+  it("keeps the catalog file next to the moved module", async () => {
+    const files = await project()
+    const { after } = await passes(files)
+    expect(after.has(CATALOG_FILE)).toBe(true)
+  })
+})

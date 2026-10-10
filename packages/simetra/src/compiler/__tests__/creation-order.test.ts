@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import { KIND_REGISTRY } from "simetra/model"
+import { textCalls, unitCalls, unitRelations } from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
 import {
@@ -846,5 +847,53 @@ describe("parse tree shapes", () => {
         comment: "x",
       },
     })
+  })
+})
+
+describe("unit references", () => {
+  const unitOf = async (sql: string) => {
+    const parse = await loadSqlParser()
+    const parsed = parse(sql)
+    if (!parsed.ok) throw new Error(parsed.message)
+    return {
+      parse,
+      unit: { tree: withoutLocations(parsed.statements[0]!.stmt) },
+    }
+  }
+
+  it("lists relations a unit reads, not names in literals or the created name", async () => {
+    const { parse, unit } = await unitOf(
+      "CREATE VIEW app.v AS SELECT 'app.counterparties' AS t, c.id FROM app.counterparties c JOIN invoices i ON true"
+    )
+    expect(unitRelations(unit, parse)).toEqual([
+      { schema: "app", name: "counterparties" },
+      { name: "invoices" },
+    ])
+  })
+
+  it("lists the targets of a grant and a comment as relations", async () => {
+    const grant = await unitOf("GRANT SELECT ON app.counterparties TO anon")
+    expect(unitRelations(grant.unit, grant.parse)).toEqual([
+      { schema: "app", name: "counterparties" },
+    ])
+    const comment = await unitOf("COMMENT ON COLUMN app.t.c IS 'x'")
+    expect(unitRelations(comment.unit, comment.parse)).toContainEqual({
+      schema: "app",
+      name: "t",
+    })
+  })
+
+  it("lists calls of a sql body and of a statement text", async () => {
+    const { parse, unit } = await unitOf(
+      "CREATE FUNCTION app.g() RETURNS int LANGUAGE sql STABLE AS $$ SELECT count(*)::int FROM app.f() $$"
+    )
+    expect(unitCalls(unit, parse)).toEqual([
+      { name: "count" },
+      { schema: "app", name: "f" },
+    ])
+    expect(textCalls("SELECT app.h(1) + k()", parse)).toEqual([
+      { schema: "app", name: "h" },
+      { name: "k" },
+    ])
   })
 })
