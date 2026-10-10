@@ -1702,16 +1702,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "promote.unclassified": {
     en: (p) =>
-      p.line === undefined
-        ? `${p.subject} has no conversion class in the promotion input`
-        : `${p.subject} at line ${p.line} has no conversion class in the promotion input`,
+      p.allowed !== undefined
+        ? `${p.subject} has conversion class ${p.class}, and only ${p.allowed} is allowed for it`
+        : p.line === undefined
+          ? `${p.subject} has no conversion class in the promotion input`
+          : `${p.subject} at line ${p.line} has no conversion class in the promotion input`,
     uk: (p) =>
-      p.line === undefined
-        ? `${p.subject} не має класу конверсії у вході промоції`
-        : `${p.subject} у рядку ${p.line} не має класу конверсії у вході промоції`,
+      p.allowed !== undefined
+        ? `${p.subject} має клас конверсії ${p.class}, а для нього допустимий лише ${p.allowed}`
+        : p.line === undefined
+          ? `${p.subject} не має класу конверсії у вході промоції`
+          : `${p.subject} у рядку ${p.line} не має класу конверсії у вході промоції`,
     hint: {
-      en: "Name it in conversions with a class: platform, property, rowRule, metadata, applicationCode or removed. The promotion removes it from the files and records the class.",
-      uk: "Назвіть його в conversions із класом: platform, property, rowRule, metadata, applicationCode чи removed. Промоція знімає його з файлів і пише клас у запис.",
+      en: "Name it in conversions with a class: platform, property, rowRule, metadata, applicationCode or removed. The promotion removes it from the files and records the class. A comment that the kind has no place for is only removed: the kind describes its standard attributes itself.",
+      uk: "Назвіть його в conversions із класом: platform, property, rowRule, metadata, applicationCode чи removed. Промоція знімає його з файлів і пише клас у запис. Коментар, якому у виді немає місця, лише знімається: стандартні реквізити описує сам вид.",
     },
   },
   "promote.write-path": {
@@ -1778,12 +1782,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "promote.fill-missing": {
     en: (p) =>
-      `Standard attribute ${p.column} of ${p.kind} ${p.name} is required and has no default, and nothing fills it`,
+      p.reason === "nullable-source"
+        ? `${p.column} of ${p.kind} ${p.name} is NOT NULL, its source column ${p.source} allows NULL, and nothing fills it`
+        : `Standard attribute ${p.column} of ${p.kind} ${p.name} is NOT NULL without a default, and nothing fills it`,
     uk: (p) =>
-      `Стандартний реквізит ${p.column} виду ${p.kind} ${p.name} обов'язковий і без значення за замовчуванням, а заповнити його нічим`,
+      p.reason === "nullable-source"
+        ? `${p.column} виду ${p.kind} ${p.name} — NOT NULL, його колонка-джерело ${p.source} допускає NULL, а заповнити його нічим`
+        : `Стандартний реквізит ${p.column} виду ${p.kind} ${p.name} — NOT NULL без значення за замовчуванням, а заповнити його нічим`,
     hint: {
-      en: "Map a column of the adopted table to it, or add a fill step that computes it.",
-      uk: "Змапте на нього колонку прийнятої таблиці або додайте крок fill, що його обчислює.",
+      en: "Map a column of the adopted table to it or add a fill step that computes it. A default does not fill existing NULLs, so a nullable source needs a fill step even when the kind gives the column a default.",
+      uk: "Змапте на нього колонку прийнятої таблиці або додайте крок fill, що його обчислює. Значення за замовчуванням не заповнює наявних NULL, тож джерело з NULL потребує кроку fill, навіть коли вид дає колонці значення за замовчуванням.",
     },
   },
   "promote.expression-invalid": {

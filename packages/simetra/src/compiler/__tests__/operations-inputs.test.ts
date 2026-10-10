@@ -117,6 +117,38 @@ describe("promoteInput", () => {
     ])
   })
 
+  it("refuses assigned fields and physical names in into.data", () => {
+    const data = (value: Record<string, unknown>) =>
+      pathOf(
+        promoteInput.safeParse({
+          ...base,
+          into: { ...base.into, data: value },
+        })
+      )
+    for (const key of ["physicalName", "schema", "scope", "kindLabel"]) {
+      expect(data({ [key]: "x" }), key).toEqual(["into", "data", key])
+    }
+    expect(
+      data({ attributes: [{ name: "extra", type: "Text", physicalName: "x" }] })
+    ).toEqual(["into", "data", "attributes", 0, "physicalName"])
+    expect(data({ codeLength: 0, descriptionLength: 150 })).toBeUndefined()
+  })
+
+  it("refuses a physical name in tabular section data", () => {
+    const r = promoteInput.safeParse({
+      ...base,
+      tabularSections: [
+        {
+          table: "Contact",
+          name: "contacts",
+          data: { physicalName: "x" },
+          columns: {},
+        },
+      ],
+    })
+    expect(pathOf(r)).toEqual(["tabularSections", 0, "data", "physicalName"])
+  })
+
   it("accepts only the supported conversion classes", () => {
     expect(
       pathOf(

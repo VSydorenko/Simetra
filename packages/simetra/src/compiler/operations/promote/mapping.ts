@@ -8,7 +8,7 @@ import {
 import type { CompiledModel, SourceObject } from "../../compile"
 import { diagnostic, toPointer, type Diagnostic } from "../../diagnostics"
 import { isRecord, type Json } from "../../object-files"
-import type { PromoteInput } from "../inputs"
+import type { ConversionClass, PromoteInput } from "../inputs"
 
 export type TableColumn = CustomTable["columns"][number]
 type ColumnMappings = PromoteInput["columns"]
@@ -38,12 +38,24 @@ export interface PromotedTable {
 export interface PromotionTarget {
   kind: MetadataKind
   name: string
+  /** Розібрані налаштування виду (`into.data` зі значеннями за замовчуванням). */
+  data: unknown
   standard: readonly StandardColumnDef[]
 }
 
 /** Ключ `conversions` для значення за замовчуванням колонки (рішення 5). */
 export const defaultSubject = (table: string, column: string) =>
   `${table}#default/${column}`
+
+/** Ключ `conversions` для коментаря колонки, що його вид не несе (рішення 15). */
+export const commentSubject = (table: string, column?: string) =>
+  column === undefined ? `${table}#comment` : `${table}#comment/${column}`
+
+/**
+ * Коментар без місця у виді лише знімається: опис стандартного реквізиту дає
+ * вид, тож іншої долі в нього немає (рішення 15).
+ */
+const COMMENT_CLASSES: readonly ConversionClass[] = ["removed"]
 
 /** Структурні елементи, що потребують класу конверсії (рішення 5). */
 const CLASSIFIED_COLLECTIONS = ["uniques", "checks", "indexes"] as const
@@ -53,11 +65,24 @@ const CLASSIFIED_COLLECTIONS = ["uniques", "checks", "indexes"] as const
  * identity-колонка та явна колляція не мають відповідника в реквізиті виду:
  * перенесення мовчки змінило б фізику, тож лишається лише вивести з ужитку.
  */
-function unsupportedType(column: TableColumn): string | undefined {
-  if (column.type === "Raw") return `raw type ${column.pgType ?? ""}`.trim()
-  if (column.generated !== undefined) return "a generated column"
-  if (column.identity !== undefined) return "an identity column"
-  if (column.collation !== undefined) return "an explicit collation"
+function unsupportedType(
+  column: TableColumn
+): { reason: string; detail: string } | undefined {
+  if (column.type === "Raw") {
+    return {
+      reason: "raw",
+      detail: `raw type ${column.pgType ?? ""}`.trim(),
+    }
+  }
+  if (column.generated !== undefined) {
+    return { reason: "generated", detail: "a generated column" }
+  }
+  if (column.identity !== undefined) {
+    return { reason: "identity", detail: "an identity column" }
+  }
+  if (column.collation !== undefined) {
+    return { reason: "collation", detail: "an explicit collation" }
+  }
   return undefined
 }
 
@@ -72,19 +97,17 @@ function missingEnumLabels(
   column: TableColumn,
   fate: ColumnFate
 ): { enum: string; labels: string[] } | undefined {
-  if (column.type !== "PgEnum" || column.enum === undefined) return undefined
+  const enumRef = column.enum
+  if (enumRef === undefined) return undefined
+  // Об'єкт енаму шукається за посиланням колонки, а не за іменем виду.
   const pgEnum = model.objects.find(
-    (o) => o.kind === "PgEnum" && o.name === column.enum!.name
+    (o) => o.kind === enumRef.kind && o.name === enumRef.name
   )
-  const labels = (pgEnum?.data as { values?: string[] } | undefined)?.values
-  const all = labels ?? []
-  const missing = (have: ReadonlySet<string>) => {
-    const lacking = all.filter((label) => !have.has(label))
-    return lacking.length === 0
-      ? undefined
-      : { enum: column.enum!.name, labels: lacking }
-  }
-  if (fate.to !== "attribute") return missing(new Set())
+  const all = (pgEnum?.data as { values?: string[] } | undefined)?.values ?? []
+  const refused = (labels: string[]) => ({ enum: enumRef.name, labels })
+  // Не `Ref` до виду зі значеннями-елементами — відмова за будь-якого набору
+  // міток: інакше енам без значень пройшов би з будь-яким мапінгом.
+  if (fate.to !== "attribute") return refused(all)
   const { element } = fate
   const ref = element.ref
   if (
@@ -94,19 +117,20 @@ function missingEnumLabels(
     !Object.hasOwn(KIND_REGISTRY, ref.kind) ||
     !KIND_REGISTRY[ref.kind as MetadataKind].valueElements
   ) {
-    return missing(new Set())
+    return refused(all)
   }
   const target = model.objects.find(
     (o) => o.kind === ref.kind && o.name === ref.name
   )
-  const values = (target?.data as { values?: Json[] } | undefined)?.values
-  return missing(
-    new Set(
-      (values ?? []).flatMap((v) =>
-        typeof v.physicalName === "string" ? [v.physicalName] : []
-      )
+  if (target === undefined) return refused(all)
+  const values = (target.data as { values?: Json[] }).values ?? []
+  const have = new Set(
+    values.flatMap((v) =>
+      typeof v.physicalName === "string" ? [v.physicalName] : []
     )
   )
+  const lacking = all.filter((label) => !have.has(label))
+  return lacking.length === 0 ? undefined : refused(lacking)
 }
 
 /**
@@ -233,9 +257,9 @@ export function placeColumns(
     }
 
     if (fate.to !== "retire") {
-      const reason = unsupportedType(column)
-      if (reason !== undefined) {
-        onColumn("promote.type-unsupported", index, { detail: reason })
+      const unsupported = unsupportedType(column)
+      if (unsupported !== undefined) {
+        onColumn("promote.type-unsupported", index, unsupported)
       }
       const enumLabels = missingEnumLabels(model, column, fate)
       if (enumLabels !== undefined) {
@@ -273,74 +297,155 @@ export function placeColumns(
   return { table: { object, table, columns: placed }, problems }
 }
 
+/** Предмет класу конверсії з місцем у файлі прийнятої таблиці. */
+export interface ConversionSubject {
+  subject: string
+  file: string
+  pointer: string
+  /** Відсутній клас — відмова `promote.unclassified`. */
+  required: boolean
+  /** Допустимі класи; немає — будь-який. */
+  allowed?: readonly ConversionClass[]
+}
+
+/** Опис за мовою проєкту, як його з коментаря пише файл виду. */
+const describes = (description: unknown, locale: string, comment: string) =>
+  isRecord(description) && description[locale] === comment
+
 /**
- * Предмети класу конверсії таблиці (рішення 5) з місцем у файлі: прийняті
- * `uniques`/`checks`/`indexes` (ім'я, а без нього — індекс) і значення за
- * замовчуванням колонок, змаплених на власний реквізит. Задача 9 додає до
- * них SQL-одиниці.
+ * Предмети класу конверсії таблиці (рішення 5, 15) з місцем у файлі:
+ * прийняті `uniques`/`checks`/`indexes` (ім'я, а без нього — індекс),
+ * значення за замовчуванням колонок, змаплених на власний реквізит, і
+ * коментарі, яким у виді немає місця. Задача 9 додає до них SQL-одиниці.
  */
 export function structuralSubjects(
-  promoted: PromotedTable
-): { subject: string; file: string; pointer: string; required: boolean }[] {
+  promoted: PromotedTable,
+  into: PromoteInput["into"],
+  locale: string
+): ConversionSubject[] {
   const { object, table } = promoted
-  const found = CLASSIFIED_COLLECTIONS.flatMap((collection) =>
-    table[collection].map((element, index) => ({
-      subject: `${object.name}#${collection}/${element.name ?? index}`,
-      file: object.file,
-      pointer: `/${collection}/${index}`,
-      required: true,
-    }))
+  const found: ConversionSubject[] = CLASSIFIED_COLLECTIONS.flatMap(
+    (collection) =>
+      table[collection].map((element, index) => ({
+        subject: `${object.name}#${collection}/${element.name ?? index}`,
+        file: object.file,
+        pointer: `/${collection}/${index}`,
+        required: true,
+      }))
   )
-  for (const { index, column, fate } of promoted.columns) {
-    if (column.default === undefined || fate.to !== "attribute") continue
-    // Обов'язковий клас перевіряє `placeColumns` разом із `defaultValue`.
+  // Коментар таблиці стає описом виду, якщо `into.data` не задає іншого.
+  const description = into.data?.description
+  if (
+    table.comment !== undefined &&
+    description !== undefined &&
+    !describes(description, locale, table.comment)
+  ) {
     found.push({
-      subject: defaultSubject(object.name, column.name),
+      subject: commentSubject(object.name),
       file: object.file,
-      pointer: `/columns/${index}`,
-      required: false,
+      pointer: "/comment",
+      required: true,
+      allowed: COMMENT_CLASSES,
+    })
+  }
+  for (const { index, column, fate } of promoted.columns) {
+    const pointer = `/columns/${index}`
+    if (column.default !== undefined && fate.to === "attribute") {
+      // Обов'язковий клас перевіряє `placeColumns` разом із `defaultValue`.
+      found.push({
+        subject: defaultSubject(object.name, column.name),
+        file: object.file,
+        pointer,
+        required: false,
+      })
+    }
+    // Коментар виведеної колонки йде разом із нею; коментар реквізиту стає
+    // його описом, якщо елемент не задає іншого.
+    const comment = column.comment
+    if (comment === undefined || fate.to === "retire") continue
+    if (
+      fate.to === "attribute" &&
+      (fate.element.description === undefined ||
+        describes(fate.element.description, locale, comment))
+    ) {
+      continue
+    }
+    found.push({
+      subject: commentSubject(object.name, column.name),
+      file: object.file,
+      pointer: `${pointer}/comment`,
+      required: true,
+      allowed: COMMENT_CLASSES,
     })
   }
   return found
 }
 
 /**
- * Стандартні колонки, яких без мапінгу чи кроку `fill` на непорожній
- * таблиці не створити: `NOT NULL` без значення за замовчуванням і без
- * генерації (рішення 12).
+ * Колонки виду `NOT NULL`, яких не створити без кроку `fill` (рішення 12,
+ * 15): незмаплена стандартна колонка без значення за замовчуванням і без
+ * генерації (`unmapped`) та ціль, джерело якої допускає `NULL`
+ * (`nullable-source`). `DEFAULT` наявних `NULL` не заповнює, тож для
+ * змапленої колонки значення виду не звільняє від кроку.
  */
 export function missingFills(
   promoted: PromotedTable,
   target: PromotionTarget,
   fill: PromoteInput["fill"]
 ): Diagnostic[] {
-  const mapped = new Set(
-    promoted.columns.flatMap(({ fate }) =>
-      fate.to === "standard" ? [fate.def.logicalName] : []
-    )
-  )
+  const { object } = promoted
   const filled = new Set(
     fill
       .filter((step) => step.table === undefined)
-      .flatMap((step) =>
-        step.target.to === "standard" ? [step.target.name] : []
-      )
+      .map((step) => `${step.target.to} ${step.target.name}`)
   )
-  return target.standard
-    .filter(
-      (column) =>
-        column.notNull &&
-        column.default === undefined &&
-        column.defaultValue === undefined &&
-        column.generated === undefined &&
-        !mapped.has(column.logicalName) &&
-        !filled.has(column.logicalName)
-    )
-    .map((column) =>
-      diagnostic("promote.fill-missing", promoted.object.file, "", {
-        column: column.logicalName,
+  const problems: Diagnostic[] = []
+  const mapped = new Set<string>()
+  for (const { index, column, fate } of promoted.columns) {
+    let required: { to: string; name: string } | undefined
+    if (fate.to === "standard") {
+      mapped.add(fate.def.logicalName)
+      if (fate.def.notNull) {
+        required = { to: "standard", name: fate.def.logicalName }
+      }
+    } else if (fate.to === "attribute" && fate.element.required === true) {
+      required = { to: "attribute", name: String(fate.element.name) }
+    }
+    if (
+      required === undefined ||
+      column.notNull ||
+      filled.has(`${required.to} ${required.name}`)
+    ) {
+      continue
+    }
+    problems.push(
+      diagnostic("promote.fill-missing", object.file, `/columns/${index}`, {
+        column: required.name,
         kind: target.kind,
         name: target.name,
+        reason: "nullable-source",
+        source: column.name,
       })
     )
+  }
+  for (const column of target.standard) {
+    if (
+      column.notNull &&
+      column.default === undefined &&
+      column.defaultValue === undefined &&
+      column.generated === undefined &&
+      !mapped.has(column.logicalName) &&
+      !filled.has(`standard ${column.logicalName}`)
+    ) {
+      problems.push(
+        diagnostic("promote.fill-missing", object.file, "", {
+          column: column.logicalName,
+          kind: target.kind,
+          name: target.name,
+          reason: "unmapped",
+        })
+      )
+    }
+  }
+  return problems
 }

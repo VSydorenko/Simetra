@@ -134,6 +134,52 @@ const promotedElement = z
       "The attribute the column becomes: name is required; the column's type, required flag, title and comment are carried over unless set here; no id or physicalName.",
   })
 
+/** Шлях до першого `physicalName` на будь-якій глибині значення. */
+function physicalNamePath(
+  value: unknown,
+  path: (string | number)[]
+): (string | number)[] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  for (const [key, item] of Object.entries(value)) {
+    const at = [...path, Array.isArray(value) ? Number(key) : key]
+    if (key === "physicalName" && !Array.isArray(value)) return at
+    const found = physicalNamePath(item, at)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+/**
+ * Дані нового об'єкта чи ТЧ промоції. Фізичні імена призначає операція
+ * (рішення 10), а `assigned` — поля, які дає прийнята таблиця чи сама
+ * операція: ідентичність, схема, скоуп і мітка призначені раз (Пр18). Мовчки
+ * відкинуте поле сховало б від автора, що його не застосовано.
+ */
+const promotedData = (assigned: readonly string[], description: string) =>
+  z
+    .record(z.string(), z.unknown())
+    .superRefine((data, ctx) => {
+      for (const key of assigned) {
+        if (Object.hasOwn(data, key)) {
+          ctx.addIssue({
+            code: "custom",
+            message: `${key} is set by the promotion, not by the input`,
+            path: [key],
+          })
+        }
+      }
+      const at = physicalNamePath(data, [])
+      if (at !== undefined && !assigned.includes(String(at[0]))) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Physical names are assigned by the operation",
+          path: at,
+        })
+      }
+    })
+    .optional()
+    .meta({ description })
+
 /**
  * Куди йде одна колонка прийнятої таблиці (спека промоції §4): рівно одна
  * доля на колонку, без евристик — нерозміщена колонка є відмовою.
@@ -217,10 +263,10 @@ export const promoteInput = z.strictObject({
     name: objectNameSchema.meta({
       description: "Logical name of the new object.",
     }),
-    data: z.record(z.string(), z.unknown()).optional().meta({
-      description:
-        "Settings and declarative properties of the kind (e.g. codeLength, descriptionLength); no ids or physical names.",
-    }),
+    data: promotedData(
+      ["kind", "name", "physicalName", "schema", "scope", "kindLabel"],
+      "Settings and declarative properties of the kind (e.g. codeLength, descriptionLength); no ids or physical names. Kind, name, schema, scope and kind label come from the target and the adopted table."
+    ),
   }),
   columns: columnMappings,
   tabularSections: z
@@ -233,9 +279,10 @@ export const promoteInput = z.strictObject({
         name: elementNameSchema.meta({
           description: "Logical name of the tabular section.",
         }),
-        data: z.record(z.string(), z.unknown()).optional().meta({
-          description: "Other fields of the tabular section; no ids.",
-        }),
+        data: promotedData(
+          ["name", "physicalName"],
+          "Other fields of the tabular section; no ids or physical names."
+        ),
         columns: columnMappings,
       })
     )

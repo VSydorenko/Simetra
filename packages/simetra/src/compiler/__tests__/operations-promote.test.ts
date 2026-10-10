@@ -15,7 +15,7 @@ import {
   counterpartyMapping,
   promotionProject,
 } from "./fixtures/promotion"
-import { uuid } from "./helpers"
+import { metaFiles, scopedProject, uuid } from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -279,12 +279,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
       mapping((m) => {
         m.columns.id = { to: "retire" }
         m.columns.inn = { to: "standard", name: "ref" }
-        m.fill = [
-          {
-            target: { to: "standard", name: "ref" },
-            expression: "gen_random_uuid()",
-          },
-        ]
+        m.fill.push({
+          target: { to: "standard", name: "ref" },
+          expression: "gen_random_uuid()",
+        })
       })
     )
     expect(result.diagnostics.map((d) => [d.code, d.params?.at])).toEqual([
@@ -437,12 +435,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
       mapping((m) => {
         m.columns.id = { to: "retire" }
         // Ключ виду без колонки — його заповнює крок даних (задача 8).
-        m.fill = [
-          {
-            target: { to: "standard", name: "ref" },
-            expression: "gen_random_uuid()",
-          },
-        ]
+        m.fill.push({
+          target: { to: "standard", name: "ref" },
+          expression: "gen_random_uuid()",
+        })
       })
     )
     expect(brief(result)).toEqual([
@@ -472,7 +468,12 @@ describe("promoteObject: catalog from one CustomTable", () => {
         code: "promote.fill-missing",
         file: COUNTERPARTY_FILE,
         pointer: "",
-        params: { column: "ref", kind: "Catalog", name: "Counterparty" },
+        params: {
+          column: "ref",
+          kind: "Catalog",
+          name: "Counterparty",
+          reason: "unmapped",
+        },
       },
     ])
   })
@@ -586,6 +587,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         params: {
           table: "Counterparty",
           column: "point",
+          reason: "raw",
           detail: "raw type point",
         },
       },
@@ -624,7 +626,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
       [
         "promote.reference-not-promoted",
         "custom-tables/CounterpartyContact/CounterpartyContact.meta.json",
-        "/foreignKeys/0/references/object",
+        "/columns/1",
       ],
     ])
     expect(after).toEqual(files)
@@ -709,9 +711,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
     ])
   })
 
-  it("moves the TypeScript module of the table next to the kind file", async () => {
+  it("moves the CustomTable module byte for byte", async () => {
     const files = promotionProject(PARTS)
-    const module = "export const touched = true\n"
+    // CRLF, хвостові пробіли й табуляція без кінцевого переводу рядка.
+    const module = "export const touched = true \r\n\t// ї\u00a0end"
     files.set("custom-tables/Counterparty/Counterparty.module.ts", module)
     const { result, after } = await promoted(files)
     expect(errors(result)).toEqual([])
@@ -734,5 +737,465 @@ describe("promoteObject: catalog from one CustomTable", () => {
       )
     ).toEqual([])
     expect(compiled.ok).toBe(true)
+  })
+})
+
+describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
+  it("refuses a nullable source of a notNull target without fill", async () => {
+    const files = promotionProject(PARTS)
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.fill = []
+      })
+    )
+    // `DEFAULT now()` стандартної колонки наявних NULL не заповнює.
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.fill-missing",
+        file: COUNTERPARTY_FILE,
+        pointer: "/columns/4",
+        params: {
+          column: "createdAt",
+          kind: "Catalog",
+          name: "Counterparty",
+          reason: "nullable-source",
+          source: "createdAt",
+        },
+      },
+    ])
+    const required = (m: PromoteInput) => {
+      m.columns.inn = {
+        to: "attribute",
+        collection: "attributes",
+        element: { name: "taxId", required: true },
+      }
+    }
+    const attribute = await promoted(files, mapping(required))
+    expect(attribute.result.diagnostics.map((d) => d.params?.reason)).toEqual([
+      "nullable-source",
+    ])
+    const filled = await promoted(
+      files,
+      mapping((m) => {
+        required(m)
+        m.fill.push({
+          target: { to: "attribute", name: "taxId" },
+          expression: "coalesce(inn, '')",
+        })
+      })
+    )
+    expect(errors(filled.result)).toEqual([])
+    expect(filled.result.record?.tightened).toEqual([
+      {
+        schema: "app",
+        table: "counterparty",
+        column: "tax_id",
+        constraint: "notNull",
+      },
+      {
+        schema: "app",
+        table: "counterparty",
+        column: "created_at",
+        constraint: "notNull",
+      },
+    ])
+  })
+
+  it("records RLS mode changes off and forced, not enabled", async () => {
+    const enabled = await promoted(promotionProject(PARTS))
+    expect(enabled.result.record?.rowLevelSecurity).toEqual([])
+    for (const mode of ["off", "forced"] as const) {
+      const files = withCounterparty((raw) => {
+        raw.rowLevelSecurity = mode
+      })
+      const { result, after } = await promoted(files)
+      expect(errors(result)).toEqual([])
+      expect(result.record?.rowLevelSecurity).toEqual([
+        { schema: "app", table: "counterparties", from: mode, to: "enabled" },
+      ])
+      expect(json(after, CATALOG_FILE)).not.toHaveProperty("rowLevelSecurity")
+    }
+  })
+
+  it("classifies a standard-attribute column comment only as removed", async () => {
+    const files = withCounterparty((raw) => {
+      ;(raw.columns as Json[])[1]!.comment = "Legal name"
+    })
+    const subject = "Counterparty#comment/name"
+    const missing = await promoted(files)
+    expect(brief(missing.result)).toEqual([
+      {
+        code: "promote.unclassified",
+        file: COUNTERPARTY_FILE,
+        pointer: "/columns/1/comment",
+        params: { subject },
+      },
+    ])
+    const metadata = await promoted(
+      files,
+      mapping((m) => {
+        m.conversions[subject] = "metadata"
+      })
+    )
+    expect(metadata.result.diagnostics.map((d) => d.params)).toEqual([
+      { subject, class: "metadata", allowed: "removed" },
+    ])
+    const removed = await promoted(
+      files,
+      mapping((m) => {
+        m.conversions[subject] = "removed"
+      })
+    )
+    expect(errors(removed.result)).toEqual([])
+    expect(removed.result.record?.conversions).toContainEqual({
+      subject,
+      class: "removed",
+    })
+  })
+
+  it("classifies a table comment that into.data replaces", async () => {
+    const files = promotionProject(PARTS)
+    const replaced = (m: PromoteInput) => {
+      m.into.data = { ...m.into.data, description: { en: "Partners" } }
+    }
+    const { result } = await promoted(files, mapping(replaced))
+    expect(
+      result.diagnostics.map((d) => [d.code, d.pointer, d.params?.subject])
+    ).toEqual([["promote.unclassified", "/comment", "Counterparty#comment"]])
+    const same = await promoted(
+      files,
+      mapping((m) => {
+        m.into.data = {
+          ...m.into.data,
+          description: { uk: "Counterparties of the company", en: "Partners" },
+        }
+      })
+    )
+    expect(errors(same.result)).toEqual([])
+    const removed = await promoted(
+      files,
+      mapping((m) => {
+        replaced(m)
+        m.conversions["Counterparty#comment"] = "removed"
+      })
+    )
+    expect(errors(removed.result)).toEqual([])
+    expect(json(removed.after, CATALOG_FILE).description).toEqual({
+      en: "Partners",
+    })
+  })
+
+  it("carries the column title and comment into the attribute", async () => {
+    const files = withCounterparty((raw) => {
+      Object.assign((raw.columns as Json[])[2]!, {
+        title: { en: "Tax id" },
+        comment: "Taxpayer number",
+      })
+    })
+    const { result, after } = await promoted(files)
+    expect(errors(result)).toEqual([])
+    expect(json(after, CATALOG_FILE).attributes).toEqual([
+      expect.objectContaining({
+        title: { en: "Tax id" },
+        description: { uk: "Taxpayer number" },
+      }),
+    ])
+  })
+})
+
+describe("promoteObject: foreign keys and references", () => {
+  const CONTACT_MAPPING = (
+    counterpartyId: PromoteInput["columns"][string]
+  ): PromoteInput => ({
+    ...mapping(),
+    target: { name: "CounterpartyContact" },
+    into: { kind: "Catalog", name: "Contact", data: { codeLength: 0 } },
+    columns: {
+      id: { to: "standard", name: "ref" },
+      counterpartyId,
+      phone: { to: "standard", name: "description" },
+    },
+    fill: [],
+    conversions: {},
+  })
+  const attributeOf = (element: Json): PromoteInput["columns"][string] => ({
+    to: "attribute",
+    collection: "attributes",
+    element,
+  })
+
+  /** Тека, де `Counterparty` уже довідник, а контакти — ще прийнята таблиця. */
+  async function counterpartyPromoted() {
+    const files = promotionProject({ ...PARTS, contacts: true })
+    const first = await promoted(files, counterpartyMapping(PARTS))
+    expect(errors(first.result)).toEqual([])
+    return first.after
+  }
+
+  it("refuses a foreign key column whose element sets a non-Ref type", async () => {
+    const files = await counterpartyPromoted()
+    const { result } = await promoted(
+      files,
+      CONTACT_MAPPING(
+        attributeOf({ name: "counterparty", type: "String", length: 36 })
+      )
+    )
+    expect(
+      result.diagnostics.map((d) => [d.code, d.pointer, d.params?.reason])
+    ).toEqual([["promote.type-unsupported", "/columns/1", "foreignKey"]])
+  })
+
+  it("accepts an element Ref to the same target and refuses another target", async () => {
+    const files = await counterpartyPromoted()
+    const same = await promoted(
+      files,
+      CONTACT_MAPPING(
+        attributeOf({
+          name: "counterparty",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Counterparty" },
+        })
+      )
+    )
+    expect(errors(same.result)).toEqual([])
+    const other = await promoted(
+      files,
+      CONTACT_MAPPING(
+        attributeOf({
+          name: "counterparty",
+          type: "Ref",
+          ref: { kind: "Catalog", name: "Contact" },
+        })
+      )
+    )
+    expect(other.result.diagnostics.map((d) => d.params?.reason)).toEqual([
+      "foreignKey",
+    ])
+  })
+
+  it("refuses an element Ref to a CustomTable outside the unit", async () => {
+    const files = promotionProject(PARTS)
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.columns.inn = attributeOf({
+          name: "invoice",
+          type: "Ref",
+          ref: { kind: "CustomTable", name: "Invoice" },
+        })
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.reference-not-promoted",
+        file: COUNTERPARTY_FILE,
+        pointer: "/columns/2",
+        params: { table: "Counterparty", target: "CustomTable Invoice" },
+      },
+    ])
+  })
+
+  it("refuses a standard attribute whose target differs from the foreign key", async () => {
+    const files = await counterpartyPromoted()
+    const input = CONTACT_MAPPING({ to: "standard", name: "parent" })
+    input.into.data = { codeLength: 0, hierarchyType: "ItemsOnly" }
+    const { result } = await promoted(files, input)
+    expect(
+      result.diagnostics.map((d) => [d.code, d.pointer, d.params?.reason])
+    ).toEqual([["promote.type-unsupported", "/columns/1", "foreignKey"]])
+  })
+
+  it("retargets a self foreign key to the new kind", async () => {
+    const files = withCounterparty((raw) => {
+      ;(raw.columns as Json[]).push({
+        id: uuid(7009),
+        name: "parentId",
+        physicalName: "parent_id",
+        type: "UUID",
+      })
+      raw.foreignKeys = [
+        {
+          name: "counterparties_parent_id_fkey",
+          columns: ["parentId"],
+          references: {
+            object: { kind: "CustomTable", name: "Counterparty" },
+            columns: ["id"],
+          },
+        },
+      ]
+    })
+    const asAttribute = await promoted(
+      files,
+      mapping((m) => {
+        m.columns.parentId = attributeOf({ name: "headOffice" })
+      })
+    )
+    expect(errors(asAttribute.result)).toEqual([])
+    expect(json(asAttribute.after, CATALOG_FILE).attributes).toContainEqual(
+      expect.objectContaining({
+        name: "headOffice",
+        type: "Ref",
+        ref: { kind: "Catalog", name: "Counterparty" },
+      })
+    )
+    const asParent = await promoted(
+      files,
+      mapping((m) => {
+        m.into.data = { ...m.into.data, hierarchyType: "ItemsOnly" }
+        m.columns.parentId = { to: "standard", name: "parent" }
+      })
+    )
+    expect(errors(asParent.result)).toEqual([])
+    expect(asParent.result.record?.columns).toContainEqual({
+      id: `${COUNTERPARTY_ID}#parent`,
+      schema: "app",
+      table: "counterparty",
+      from: "parent_id",
+      to: "parent_id",
+    })
+  })
+})
+
+describe("promoteObject: cascade through subscriptions and scope kinds", () => {
+  const SUBSCRIPTION =
+    "event-subscriptions/OnCounterparty/OnCounterparty.meta.json"
+  const subscription = (whenChanged: string[]) => ({
+    id: uuid(7401),
+    kind: "EventSubscription",
+    name: "OnCounterparty",
+    physicalName: "on_counterparty",
+    sources: [{ kind: "CustomTable", name: "Counterparty" }],
+    event: "onWrite",
+    whenChanged,
+    handler: { schema: "app", name: "on_counterparty" },
+  })
+  const HANDLER = {
+    "sql/app/on-counterparty.sql":
+      "CREATE FUNCTION app.on_counterparty() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+  }
+
+  it("rewrites a subscription source and its whenChanged columns", async () => {
+    const files = promotionProject(PARTS)
+    files.set(SUBSCRIPTION, JSON.stringify(subscription(["inn", "name"])))
+    for (const [path, text] of Object.entries(HANDLER)) files.set(path, text)
+    const { result, after } = await promoted(files)
+    expect(errors(result)).toEqual([])
+    expect(json(after, SUBSCRIPTION)).toMatchObject({
+      sources: [{ kind: "Catalog", name: "Counterparty" }],
+      whenChanged: ["taxId", "description"],
+    })
+  })
+
+  /** Проєкт зі скоупом `org`, корінь якого — прийнята таблиця `Organization`. */
+  function scoped(counterparty: Record<string, unknown> = {}) {
+    const base = scopedProject()
+    const org = base.scopeKinds[0]!
+    return metaFiles({
+      "project.meta.json": {
+        ...base,
+        scopeKinds: [
+          {
+            ...org,
+            root: { object: { kind: "CustomTable", name: "Organization" } },
+          },
+        ],
+      },
+      "custom-tables/Organization/Organization.meta.json": {
+        id: uuid(7501),
+        kind: "CustomTable",
+        name: "Organization",
+        physicalName: "organizations",
+        kindLabel: "organization",
+        scope: "org",
+        columns: [
+          {
+            id: uuid(7502),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
+          {
+            id: uuid(7503),
+            name: "title",
+            physicalName: "title",
+            type: "Text",
+            notNull: true,
+          },
+        ],
+        primaryKey: { columns: ["id"] },
+      },
+      ...counterparty,
+    })
+  }
+
+  it("rewrites the root of a scope kind", async () => {
+    const files = scoped()
+    expect((await compile(files)).diagnostics).toEqual([])
+    const { result, after } = await promoted(files, {
+      ...mapping(),
+      target: { name: "Organization" },
+      into: { kind: "Catalog", name: "Organization", data: { codeLength: 0 } },
+      columns: {
+        id: { to: "standard", name: "ref" },
+        title: { to: "standard", name: "description" },
+      },
+      fill: [],
+      conversions: {},
+    })
+    expect(errors(result)).toEqual([])
+    expect(
+      (json(after, "project.meta.json").scopeKinds as Json[])[0]!.root
+    ).toEqual({ object: { kind: "Catalog", name: "Organization" } })
+  })
+
+  it("refuses a reference to the scope column and records the scope carrier", async () => {
+    const counterparty = withCounterparty((raw) => {
+      raw.scope = "org"
+      raw.scopeColumn = "orgId"
+      ;(raw.columns as Json[]).push({
+        id: uuid(7010),
+        name: "orgId",
+        physicalName: "org_ref",
+        type: "UUID",
+        notNull: true,
+      })
+    })
+    const files = scoped({
+      [COUNTERPARTY_FILE]: json(counterparty, COUNTERPARTY_FILE),
+      [SUBSCRIPTION]: subscription(["orgId"]),
+      ...HANDLER,
+    })
+    expect((await compile(files)).diagnostics).toEqual([])
+    const scope = (m: PromoteInput) => {
+      m.columns.orgId = { to: "scope" }
+    }
+    const { result } = await promoted(files, mapping(scope))
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.retired-referenced",
+        file: SUBSCRIPTION,
+        pointer: "/whenChanged/0",
+        params: {
+          table: "Counterparty",
+          column: "orgId",
+          role: "eventSubscription.whenChanged",
+        },
+      },
+    ])
+    files.set(SUBSCRIPTION, JSON.stringify(subscription(["inn"])))
+    const ok = await promoted(files, mapping(scope))
+    expect(errors(ok.result)).toEqual([])
+    const orgKindId = (
+      json(files, "project.meta.json").scopeKinds as Json[]
+    )[0]!.id
+    expect(ok.result.record?.columns).toContainEqual({
+      id: orgKindId,
+      schema: "app",
+      table: "counterparty",
+      from: "org_ref",
+      to: "org_id",
+    })
   })
 })

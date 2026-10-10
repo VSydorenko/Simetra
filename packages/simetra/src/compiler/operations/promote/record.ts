@@ -63,6 +63,27 @@ export interface PromotionRecord {
     column: string
     constraint: "notNull"
   }[]
+  /**
+   * Імена — нові (рішення 15). Посилення можливе лише з кроком `fill` на цю
+   * колонку: інакше операція відмовляє (`promote.fill-missing`).
+   */
+  tightened: {
+    schema: string
+    table: string
+    column: string
+    constraint: "notNull"
+  }[]
+  /**
+   * Старі імена; рішення 15. Кожна таблиця об'єкта, чий режим RLS не
+   * `enabled`: `off → enabled` звужує читання, `forced → enabled` розширює
+   * доступ власника. Зміну доступу дозволяє П3 (гейт еквівалентності).
+   */
+  rowLevelSecurity: {
+    schema: string
+    table: string
+    from: "off" | "forced"
+    to: "enabled"
+  }[]
   // Будь-який бік (§9.5, Пр8); для "incoming" дія не змінюється (to === from), але потребує дозволу.
   deleteSemantics: {
     direction: "own" | "incoming"
@@ -172,6 +193,8 @@ export function promotionRecord(
     dataSteps: [],
     retired: [],
     relaxed: [],
+    tightened: [],
+    rowLevelSecurity: [],
     deleteSemantics: [],
     conversions: Object.entries(input.conversions)
       .sort(([a], [b]) => compareStrings(a, b))
@@ -195,6 +218,22 @@ export function promotionRecord(
   }
   const { schema } = now
   record.tables.push({ id: objectId, schema, from: was.name, to: now.name })
+  if (was.rowLevelSecurity !== now.rowLevelSecurity) {
+    // Вид 1С має RLS увімкненим завжди (реєстр видів): інший режим після
+    // промоції — розбіжність, а не стан, який запис уміє назвати.
+    if (
+      was.rowLevelSecurity === "enabled" ||
+      now.rowLevelSecurity !== "enabled"
+    ) {
+      throw new Error(`unexpected RLS change on ${schema}.${was.name}`)
+    }
+    record.rowLevelSecurity.push({
+      schema,
+      table: was.name,
+      from: was.rowLevelSecurity,
+      to: now.rowLevelSecurity,
+    })
+  }
   for (const placed of main.columns) {
     const old = was.columns.find((c) => c.origin.elementId === placed.column.id)
     if (old === undefined) {
@@ -218,6 +257,9 @@ export function promotionRecord(
     }
     if (old.notNull && !next.column.notNull) {
       record.relaxed.push({ ...at, constraint: "notNull" })
+    }
+    if (!old.notNull && next.column.notNull) {
+      record.tightened.push({ ...at, constraint: "notNull" })
     }
   }
   return record

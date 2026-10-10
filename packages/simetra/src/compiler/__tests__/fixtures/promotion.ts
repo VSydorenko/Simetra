@@ -195,8 +195,14 @@ export function promotionProject(o: PromotionParts = {}): Map<string, string> {
 
 /**
  * Мапінг-зразок: `Counterparty` → довідник без коду. Без модуля вхід не
- * класифікує його одиниць: ключ, що нічого не називає, — відмова.
+ * класифікує його одиниць: ключ, що нічого не називає, — відмова. Колонка
+ * `createdAt` допускає `NULL`, а стандартна `createdAt` — ні, тож крок
+ * ремонту заповнює наявні `NULL` (рішення 15); ремонт детермінований, тож
+ * без `now()`.
  */
+export const CREATED_AT_REPAIR =
+  "coalesce(created_at, '2000-01-01 00:00:00+00'::timestamptz)"
+
 export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
   const { module = true } = o
   return promoteInput.parse({
@@ -213,6 +219,12 @@ export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
       isDeleted: { to: "standard", name: "deletionMark" },
       createdAt: { to: "standard", name: "createdAt" },
     },
+    fill: [
+      {
+        target: { to: "standard", name: "createdAt" },
+        expression: CREATED_AT_REPAIR,
+      },
+    ],
     conversions: {
       "Counterparty#uniques/counterparties_inn_key": "property",
       ...(module

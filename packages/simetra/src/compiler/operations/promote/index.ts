@@ -123,6 +123,7 @@ export async function promoteObject(
   const target: PromotionTarget = {
     kind: into.kind,
     name: into.name,
+    data: settings.data,
     standard: def.standardColumns(settings.data),
   }
 
@@ -139,12 +140,23 @@ export async function promoteObject(
   )
   problems.push(...placement.problems)
   const main: PromotedTable = placement.table
-  const subjects = structuralSubjects(main)
+  const subjects = structuralSubjects(main, into, model.project.defaultLocale)
   for (const s of subjects) {
-    if (s.required && input.conversions[s.subject] === undefined) {
+    const given = input.conversions[s.subject]
+    if (given === undefined) {
+      if (s.required) {
+        problems.push(
+          diagnostic("promote.unclassified", s.file, s.pointer, {
+            subject: s.subject,
+          })
+        )
+      }
+    } else if (s.allowed !== undefined && !s.allowed.includes(given)) {
       problems.push(
         diagnostic("promote.unclassified", s.file, s.pointer, {
           subject: s.subject,
+          class: given,
+          allowed: s.allowed.join(", "),
         })
       )
     }
@@ -166,7 +178,7 @@ export async function promoteObject(
   // 4. Файл виду.
   const becomes = { kind: into.kind, name: into.name }
   const built = kindFile(
-    { model, into, unit: new Map([[object.name, becomes]]) },
+    { model, into, target, unit: new Map([[object.name, becomes]]) },
     main
   )
   problems.push(...built.problems)
