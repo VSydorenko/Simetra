@@ -227,11 +227,10 @@ export interface PersonalDataContract {
 export interface UsersContract {
   objectId: string
   table: QualifiedName
-  keyColumn: "id"
+  keyColumn: string
   descriptionColumn: string
   descriptionLength: number
-  invalidColumn: "invalid"
-  userKindColumn: "user_kind"
+  invalidColumn: string
 }
 
 /**
@@ -675,18 +674,18 @@ export function usersContractOf(
   if (users === undefined) return undefined
   const objectId = users.id ?? ""
   const table = must(mainTableOf(physical, objectId))
-  // Фізичне ім'я найменування дає реєстр виду, а не літерал тут.
-  const description = KIND_REGISTRY[users.kind]
-    .standardColumns(users.data)
-    .find((c) => c.logicalName === "description")!
+  // Фізичні імена колонок дає реєстр виду, а не літерали тут: генератор шару
+  // будує з них тіла plpgsql, які Postgres при створенні не перевіряє.
+  const columns = KIND_REGISTRY[users.kind].standardColumns(users.data)
+  const columnOf = (match: (c: (typeof columns)[number]) => boolean) =>
+    must(columns.find(match)).physicalName
   return {
     objectId,
     table: { schema: table.schema, name: table.name },
-    keyColumn: "id",
-    descriptionColumn: description.physicalName,
+    keyColumn: columnOf((c) => c.primaryKey === true),
+    descriptionColumn: columnOf((c) => c.logicalName === "description"),
     descriptionLength: (users.data as Catalog).descriptionLength,
-    invalidColumn: "invalid",
-    userKindColumn: "user_kind",
+    invalidColumn: columnOf((c) => c.logicalName === "invalid"),
   }
 }
 

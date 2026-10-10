@@ -330,7 +330,6 @@ describe("users catalog role", () => {
       descriptionColumn: "description",
       descriptionLength: 80,
       invalidColumn: "invalid",
-      userKindColumn: "user_kind",
     })
   })
 

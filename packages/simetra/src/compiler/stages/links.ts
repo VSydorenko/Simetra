@@ -7,6 +7,7 @@ import {
 } from "simetra/model"
 import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
+import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
 import type { SqlParser } from "../sql/parse"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
@@ -33,9 +34,6 @@ export function checkLinks(
     ...checkPolicyCurrentUser(units),
   ]
 }
-
-/** Ім'я функції поточного користувача в дереві розбору (С9). */
-const CURRENT_USER_FUNCTION = ["simetra", "current_user_id"] as const
 
 /**
  * Поточний користувач у `USING` і `WITH CHECK` дослівної політики — лише
@@ -81,8 +79,9 @@ function isCurrentUserCall(node: unknown): boolean {
     (n) => (n as { String?: { sval?: string } }).String?.sval
   )
   return (
-    names.length === CURRENT_USER_FUNCTION.length &&
-    names.every((name, i) => name === CURRENT_USER_FUNCTION[i])
+    names.length === 2 &&
+    names[0] === CURRENT_USER_FUNCTION.schema &&
+    names[1] === CURRENT_USER_FUNCTION.name
   )
 }
 

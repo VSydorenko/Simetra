@@ -18,6 +18,7 @@ import { generatedUnit, type SqlUnit } from "../sql/units"
 import type { ParsedObject } from "../stages/files"
 import { kindLabelOf, sqlLiteral } from "../stages/model"
 import { IDENTITIES_TABLE } from "./identities"
+import { CURRENT_USER_FUNCTION } from "./names"
 
 /**
  * Призначення ролей запитів API: функцію сесії в політиці виконує роль
@@ -38,7 +39,7 @@ const IDENTITIES: QualifiedName = {
 }
 
 const fn = (name: string): QualifiedName => ({ schema: PLATFORM_SCHEMA, name })
-const CURRENT_USER = fn("current_user_id")
+const CURRENT_USER = CURRENT_USER_FUNCTION
 const PROVISION = fn("provision_user")
 const ON_CREATED = fn("on_auth_user_created")
 const ON_REMOVED = fn("on_auth_user_removed")

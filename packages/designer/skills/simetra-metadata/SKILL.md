@@ -191,8 +191,10 @@ People are platform data, not tables you write yourself:
 - **Users catalog.** A Catalog with `"role": "users"` is the project's users
   catalog: at most one per project, `scope: "none"`, a description (the
   display name filled from the account). The compiler adds the standard
-  `userKind` and `invalid` attributes. Every account of the identity provider
-  gets a row through the platform's provisioning, which inserts only the key
+  `userKind` and `invalid` attributes. Every non-anonymous account of the
+  identity provider gets a row through the platform's provisioning; an
+  anonymous sign-in gets one when it is converted to a permanent account.
+  Provisioning inserts only the key
   and the description, so the catalog's own attributes must accept that
   insert: a `required` attribute needs a `defaultValue` that passes the
   attribute's own checks, a unique attribute takes no default other than
@@ -221,7 +223,8 @@ event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
 folder (`schema.reserved`). In SQL, the
 current user is `(select simetra.current_user_id())`, written exactly so in a
 policy (`sql.bare-current-user` rejects a bare call there); it is `NULL` for
-an anonymous or service session and for an invalid user.
+an anonymous session or an anonymous sign-in of the provider, a service
+session and an invalid user.
 
 ## The SQL module: closed forms only
 

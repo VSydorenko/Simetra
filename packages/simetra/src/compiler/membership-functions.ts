@@ -1,6 +1,5 @@
 import {
   MEMBERSHIP_SET_FUNCTION,
-  PLATFORM_SCHEMA,
   makeObjectName,
   quoteIdent,
   type ApiRolePurpose,
@@ -12,6 +11,7 @@ import {
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
+import { CURRENT_USER_FUNCTION } from "./platform/names"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
@@ -23,7 +23,7 @@ import { keyColumnOf, membershipUserOf } from "./stages/model"
  * (спека користувачів С9): планувальник обчислює його раз на запит, а не на
  * рядок.
  */
-const CURRENT_USER = `(SELECT ${quoteIdent(PLATFORM_SCHEMA)}.current_user_id())`
+const CURRENT_USER = `(SELECT ${quoteIdent(CURRENT_USER_FUNCTION.schema)}.${quoteIdent(CURRENT_USER_FUNCTION.name)}())`
 
 /** Мітки імен функцій членства — алгоритм імен Postgres від таблиці довідника. */
 const MY_MEMBER_LABEL = "my_member"
