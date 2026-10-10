@@ -164,6 +164,50 @@ describe("loadPlpgsqlParser", () => {
     ).toEqual([[2, ["(SELECT count(*) FROM app.sale)"]]])
   })
 
+  it("exposes a declared cursor query as a declare statement", () => {
+    const f = parsed(
+      fn(
+        `DECLARE c CURSOR FOR SELECT id FROM app.sale;\nBEGIN\n  RETURN NEW;\nEND`
+      )
+    )
+    const declared = f.statements.filter((s) => s.type === "declare")
+    expect(
+      declared.map((s) => [
+        s.lineno,
+        s.depth,
+        s.expressions.map((e) => [e.role, e.query]),
+      ])
+    ).toEqual([[2, 0, [["statement", "SELECT id FROM app.sale"]]]])
+    // `declare` стоїть після обходу дерева, тож блок лишається першим.
+    expect(f.statements[0]?.type).toBe("block")
+  })
+
+  it("does not list unnamed INTO rows as variables", () => {
+    const f = parsed(
+      fn(
+        `DECLARE a int; b int;\nBEGIN\n  SELECT 1, 2 INTO a, b;\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(f.variables.map((v) => v.name)).not.toContain("(unnamed row)")
+    expect(f.statements.find((s) => s.type === "execsql")?.target).toEqual({
+      variable: "a, b",
+    })
+  })
+
+  it("turns a SQL-standard body into ok:false without leaking WASM text, and keeps parsing", () => {
+    // `BEGIN ATOMIC` валить WASM-виклик; мову перевіряє виклик, не цей парсер.
+    const r = parse(
+      "CREATE FUNCTION app.s() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; END;"
+    )
+    expect(r).toEqual({ ok: false, message: "PL/pgSQL body does not compile" })
+    expect(parse(fn("BEGIN RETURN NEW; END")).ok).toBe(true)
+  })
+
+  it("keeps the Postgres text of a syntax error", () => {
+    const r = parse(fn("BEGIN selec 1; END"))
+    expect(!r.ok && r.message).toContain("syntax error")
+  })
+
   it("returns fn undefined for LANGUAGE sql", () => {
     const r = parse(
       "CREATE FUNCTION app.s() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;"

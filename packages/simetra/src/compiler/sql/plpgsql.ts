@@ -3,51 +3,69 @@ import { loadModule, parsePlPgSQLSync } from "@libpg-query/parser"
 /**
  * Тіло функції PL/pgSQL, розібране компілятором plpgsql самого Postgres.
  * Це порт Simetra: решта компілятора бачить лише ці типи, а форма вузлів
- * `PLpgSQL_*` з `@libpg-query/parser` лишається в цьому файлі.
+ * `PLpgSQL_*` з `@libpg-query/parser` лишається в цьому файлі. Типи лише для
+ * читання: розбір кешується за текстом і віддається за посиланням.
  */
 export interface PlpgsqlFunction {
-  variables: PlpgsqlVariable[]
-  /** Обхід дерева вглиб; кожен вираз належить найближчому оператору. */
-  statements: PlpgsqlStatement[]
+  readonly variables: readonly PlpgsqlVariable[]
+  /**
+   * Спершу оператори в порядку обходу дерева вглиб, потім службові оператори
+   * `declare` (значення за замовчуванням і запити курсорів). Вони стоять поза
+   * порядком дерева, тож порядок тексту дає лише сортування за `lineno`.
+   */
+  readonly statements: readonly PlpgsqlStatement[]
   /** Рядки (від `$тег$`) операторів, що виконують динамічний SQL. */
-  dynamicSqlLines: number[]
+  readonly dynamicSqlLines: readonly number[]
 }
 
 export interface PlpgsqlVariable {
-  name: string
+  /** Ім'я, на яке може послатися автор; безіменних службових рядків тут немає. */
+  readonly name: string
   /** Параметри функції і службові змінні рядка не мають. */
-  lineno?: number
+  readonly lineno?: number
   /** Тип у тому вигляді, як його записав автор: `app.sale.amount%TYPE`. */
-  typeText?: string
-  kind: "var" | "rec" | "row" | "recfield"
+  readonly typeText?: string
+  readonly kind: "var" | "rec" | "row" | "recfield"
 }
 
 export interface PlpgsqlStatement {
-  /** Суфікс назви вузла без `PLpgSQL_stmt_`; `declare` — див. `statementsOf`. */
-  type: string
-  lineno: number
-  depth: number
+  /**
+   * Суфікс назви вузла без `PLpgSQL_stmt_`. Додатково `declare` — службовий
+   * оператор, що несе вирази оголошень змінної (`default_val` і запит
+   * курсора); у дереві його немає.
+   */
+  readonly type: string
+  readonly lineno: number
+  /** Глибина в дереві; у `declare` 0, бо він не вкладений в оператор. */
+  readonly depth: number
   /** Лише прямі вирази оператора, без вкладених операторів. */
-  expressions: PlpgsqlExpression[]
-  target?: { variable: string }
+  readonly expressions: readonly PlpgsqlExpression[]
+  readonly target?: { readonly variable: string }
 }
 
 export interface PlpgsqlExpression {
-  query: string
-  parseMode: number
-  role: "condition" | "value" | "statement" | "assign" | "dynamic"
+  readonly query: string
+  readonly parseMode: number
+  readonly role: "condition" | "value" | "statement" | "assign" | "dynamic"
   /** `SELECT … INTO` і `EXECUTE … INTO`: запит без `INTO`, на його місці пробіли. */
-  into?: boolean
-  perform?: boolean
-  lineno: number
+  readonly into?: boolean
+  readonly perform?: boolean
+  readonly lineno: number
 }
 
+/**
+ * Результат розбору. Парсер викликають лише для `LANGUAGE plpgsql`: рядкове
+ * тіло іншої мови дає `fn: undefined`, але SQL-стандартне тіло
+ * (`LANGUAGE sql … BEGIN ATOMIC`) валить WASM-виклик, і це `ok: false`. Мову
+ * перевіряє виклик за деревом `CREATE FUNCTION`, а не за текстом помилки.
+ */
 export type PlpgsqlParse =
-  | { ok: true; fn: PlpgsqlFunction }
-  | { ok: false; message: string }
+  | { readonly ok: true; readonly fn: PlpgsqlFunction }
+  | { readonly ok: false; readonly message: string }
   /** Мова не plpgsql: тіла немає, нічого розбирати. */
-  | { ok: true; fn: undefined }
+  | { readonly ok: true; readonly fn: undefined }
 
+/** Приймає `CREATE FUNCTION` лише з `LANGUAGE plpgsql`, див. `PlpgsqlParse`. */
 export type PlpgsqlParser = (createFunctionSql: string) => PlpgsqlParse
 
 let parser: Promise<PlpgsqlParser> | undefined
@@ -85,16 +103,18 @@ function parseFunction(sql: string): PlpgsqlParse {
     raw = parsePlPgSQLSync(sql)
   } catch (error) {
     if (!(error instanceof Error)) throw error
-    // Семантичну помилку (`RETURN QUERY` у не-SETOF функції) обгортка
-    // віддає простим текстом, який сама ж марно розбирає як JSON, тож
-    // `SyntaxError` не несе справжнього повідомлення. Текст помилки автора
-    // тут не відновити, а компілятор не кидає на користувацькому вводі.
+    // Правдивий текст є лише в синтаксичній помилці Postgres: обгортка кидає її
+    // звичайним `Error`. Семантичну помилку вона віддає простим текстом, який
+    // сама ж марно розбирає як JSON, тож `SyntaxError` справжнього
+    // повідомлення не несе, а збій WASM (`RuntimeError`) — внутрішній текст
+    // рушія, незрозумілий авторові. Компілятор не кидає на користувацькому
+    // вводі.
     return {
       ok: false,
       message:
-        error instanceof SyntaxError
-          ? "PL/pgSQL body does not compile"
-          : `PL/pgSQL body does not compile: ${error.message}`,
+        error.constructor === Error
+          ? `PL/pgSQL body does not compile: ${error.message}`
+          : "PL/pgSQL body does not compile",
     }
   }
   const funcs = asArray(asRecord(raw)?.plpgsql_funcs)
@@ -108,6 +128,18 @@ function parseFunction(sql: string): PlpgsqlParse {
 }
 
 type Json = Record<string, unknown>
+/** Розбір збирає результат змінюваним, а назовні віддає лише для читання. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+type StatementDraft = Mutable<Omit<PlpgsqlStatement, "expressions">> & {
+  expressions: Mutable<PlpgsqlExpression>[]
+}
+/** Вузол розбору: ключ `PLpgSQL_*` і тіло. */
+interface ParseNode {
+  kind: string
+  body: Json
+}
+/** Елемент списку змінних; порожній, якщо вузол не розпізнано. */
+type Datum = ParseNode | undefined
 
 function asRecord(value: unknown): Json | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -120,7 +152,7 @@ function asArray(value: unknown): unknown[] {
 }
 
 /** Вузол розбору — об'єкт з єдиним ключем `PLpgSQL_*` і тілом вузла. */
-function nodeOf(value: unknown): { kind: string; body: Json } | undefined {
+function nodeOf(value: unknown): ParseNode | undefined {
   const record = asRecord(value)
   if (record === undefined) return undefined
   const kind = Object.keys(record)[0]
@@ -148,7 +180,7 @@ function linenoOf(body: Json, fallback = 0): number {
 
 function readFunction(body: Json, action: Json): PlpgsqlFunction {
   const datums = asArray(body.datums).map(nodeOf)
-  const statements: PlpgsqlStatement[] = []
+  const statements: StatementDraft[] = []
   const dynamicLines = new Set<number>()
 
   const root = nodeOf(action)
@@ -166,11 +198,10 @@ function readFunction(body: Json, action: Json): PlpgsqlFunction {
   }
 }
 
-function variableOf(
-  datum: ReturnType<typeof nodeOf>,
-  datums: ReturnType<typeof nodeOf>[]
-): PlpgsqlVariable[] {
-  if (datum === undefined) return []
+function variableOf(datum: Datum, datums: Datum[]): PlpgsqlVariable[] {
+  // Безіменний рядок (ціль `INTO a, b`, аргументи курсора) — службовий:
+  // послатися на нього з тексту не можна, тож змінною він не є.
+  if (datum === undefined || datum.body.refname === UNNAMED_ROW) return []
   const lineno =
     typeof datum.body.lineno === "number" ? datum.body.lineno : undefined
   const withLine = (v: PlpgsqlVariable): PlpgsqlVariable[] => [
@@ -203,13 +234,11 @@ function variableOf(
 const UNNAMED_ROW = "(unnamed row)"
 
 /**
- * Ім'я змінної, як його бачить автор. Безіменний рядок (ціль `INTO a, b`,
- * аргументи курсора) — службовий, імені не має, тож його назва — імена полів.
+ * Ім'я змінної, як його бачить автор: `refname`, а для поля запису —
+ * `запис.поле`. Для безіменного рядка повертає службову назву `(unnamed row)`;
+ * `variableOf` такі рядки відкидає, а `targetOf` підставляє імена полів.
  */
-function datumName(
-  datum: ReturnType<typeof nodeOf>,
-  datums: ReturnType<typeof nodeOf>[]
-): string | undefined {
+function datumName(datum: Datum, datums: Datum[]): string | undefined {
   if (datum === undefined) return undefined
   const { kind, body } = datum
   if (kind === "PLpgSQL_recfield") {
@@ -225,7 +254,7 @@ function datumName(
 }
 
 /** Імена, що їх оператор записує: цілі присвоювання, `INTO`, змінна циклу. */
-function targetOf(body: Json, datums: ReturnType<typeof nodeOf>[]) {
+function targetOf(body: Json, datums: Datum[]) {
   const direct = nodeOf(body.target) ?? nodeOf(body.var)
   const datum =
     direct ?? (typeof body.varno === "number" ? datums[body.varno] : undefined)
@@ -244,13 +273,13 @@ function walkStatement(
   kind: string,
   body: Json,
   depth: number,
-  datums: ReturnType<typeof nodeOf>[],
-  out: PlpgsqlStatement[],
+  datums: Datum[],
+  out: StatementDraft[],
   dynamicLines: Set<number>
 ): void {
   const type = kind.slice(STATEMENT_PREFIX.length)
   const lineno = linenoOf(body)
-  const statement: PlpgsqlStatement = { type, lineno, depth, expressions: [] }
+  const statement: StatementDraft = { type, lineno, depth, expressions: [] }
   const target = targetOf(body, datums)
   if (target !== undefined) statement.target = target
   out.push(statement)
@@ -305,7 +334,7 @@ function expressionOf(
   field: string,
   statementType: string,
   lineno: number
-): PlpgsqlExpression | undefined {
+): Mutable<PlpgsqlExpression> | undefined {
   if (typeof body.query !== "string") return undefined
   const parseMode = typeof body.parseMode === "number" ? body.parseMode : 0
   return {
@@ -347,15 +376,13 @@ function roleOf(
  * таблиці так само. Вони повертаються службовими операторами `declare`
  * наприкінці списку, щоб споживачі виразів не пропустили їх.
  */
-function declarationStatements(
-  datums: ReturnType<typeof nodeOf>[]
-): PlpgsqlStatement[] {
-  const out: PlpgsqlStatement[] = []
+function declarationStatements(datums: Datum[]): StatementDraft[] {
+  const out: StatementDraft[] = []
   for (const datum of datums) {
     if (datum === undefined || datum.kind !== "PLpgSQL_var") continue
     const lineno = linenoOf(datum.body)
     const name = datumName(datum, datums)
-    const expressions: PlpgsqlExpression[] = []
+    const expressions: Mutable<PlpgsqlExpression>[] = []
     for (const field of ["default_val", "cursor_explicit_expr"]) {
       const node = nodeOf(datum.body[field])
       if (node === undefined) continue
@@ -372,7 +399,7 @@ function declarationStatements(
     out.push({
       type: "declare",
       lineno,
-      depth: 1,
+      depth: 0,
       expressions,
       ...(name === undefined ? {} : { target: { variable: name } }),
     })
