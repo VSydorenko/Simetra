@@ -654,3 +654,37 @@ describe("merged names, functional notation and whole rows (round 5)", () => {
     expect(rw("SELECT g FROM generate_series(1, 2) g").changes).toEqual([])
   })
 })
+
+describe("USING and NATURAL over a promoted table", () => {
+  it("refuses a removed or added column in a USING list", () => {
+    for (const sql of [
+      "SELECT 1 FROM app.counterparties c1 JOIN app.counterparties c2 USING (legacy)",
+      "SELECT 1 FROM app.notes n JOIN app.counterparties c USING (deletion_mark)",
+    ]) {
+      expect(details(sql), sql).toEqual([
+        `rewrite.unsupported column "${sql.includes("legacy") ? "legacy" : "deletion_mark"}" in a JOIN USING list is a column that the promotion adds, removes or renames`,
+      ])
+    }
+    expect(
+      rw(
+        "SELECT legacy FROM app.counterparties c1 JOIN app.counterparties c2 USING (legacy)"
+      ).problems
+    ).toContain("rewrite.unsupported")
+  })
+
+  it("refuses a NATURAL JOIN with a promoted table even without renamed columns", () => {
+    // Додана колонка `deletion_mark` змінює спільні імена сторін.
+    const UNRENAMED: RenameMap = {
+      tables: [{ ...COUNTERPARTIES, columns: new Map() }],
+      knownTables: MAP.knownTables,
+    }
+    const r = rewriteStatementText(
+      "SELECT 1 FROM app.notes n NATURAL JOIN app.counterparties c",
+      parse,
+      UNRENAMED,
+      { variables: new Set(), records: new Map(), labels: [] }
+    )
+    expect(r.problems.map((p) => p.code)).toEqual(["rewrite.unsupported"])
+    expect(r.problems[0]!.detail).toContain("NATURAL JOIN")
+  })
+})

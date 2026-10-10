@@ -724,6 +724,16 @@ class StatementRewriter {
           offset,
           `renamed column "${name}" in a JOIN USING list has no position in the parse tree`
         )
+      } else if (
+        this.relevantColumn(name) &&
+        leaves.some((l) => l.table !== undefined)
+      ) {
+        // Знята чи додана колонка змінює, з чим злиття зіставляє рядки.
+        this.problem(
+          "rewrite.unsupported",
+          offset,
+          `column "${name}" in a JOIN USING list is a column that the promotion adds, removes or renames`
+        )
       } else if (open !== undefined && this.relevantColumn(name)) {
         this.problem(
           "rewrite.unsupported",
@@ -734,13 +744,13 @@ class StatementRewriter {
       ownMerged.add(name)
     }
     if (join.isNatural === true) {
-      if (
-        leaves.some((l) => l.table !== undefined && l.table.columns.size > 0)
-      ) {
+      // Промоція додає, знімає й перейменовує колонки: спільні імена сторін
+      // змінюються, навіть коли жодна колонка не перейменована.
+      if (leaves.some((l) => l.table !== undefined)) {
         this.problem(
           "rewrite.unsupported",
           offset,
-          "a NATURAL JOIN matches columns by name, and the promotion renames columns of one side"
+          "a NATURAL JOIN matches columns by name, and the promotion changes the columns of one side"
         )
       } else if (open !== undefined) {
         this.problem(
