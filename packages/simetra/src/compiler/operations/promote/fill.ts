@@ -21,6 +21,7 @@ export type FillProblem =
   | "unknownFunction"
   | "unqualifiedFunction"
   | "castToTime"
+  | "specialTimeLiteral"
   | "nondeterministicWindow"
   | "unknownColumn"
 
@@ -55,8 +56,9 @@ const CATALOG_KINDS: ReadonlyMap<string, FunctionKind> = new Map(
 
 /**
  * Час транзакції — єдиний виняток з IMMUTABLE: стабільний у межах кроку,
- * тож дозаповнення нової колонки ним допустиме, а ремонт наявних даних — ні,
- * він мусить бути детермінованим (рішення 15).
+ * тож значення, яких ще немає (нова колонка, `NULL` змапленої), ним
+ * заповнювати допустимо, а ремонт наявних даних — ні: перезапис збереженого
+ * значення мусить бути детермінованим.
  */
 const NOW_FUNCTIONS: ReadonlySet<string> = new Set([
   "now",
@@ -209,14 +211,19 @@ export function modelFunctions(model: CompiledModel): ModelFunctions {
  * Вираз розбирається як `SELECT <вираз> FROM <схема>.<таблиця>` у старих
  * іменах — саме так П3 виконує його в `UPDATE … FROM (SELECT <ключ>, <вираз>
  * …)` до перейменувань, тож форма, яку парсер приймає тут, — та, що
- * виконається там. `mapped` — ключі цілей, змаплених з колонок
- * (`fillTargetKey`), `retired` — старі імена виведених колонок, `key` —
- * одноколонковий первинний ключ таблиці (немає — кроку не адресувати рядки),
- * `functions` — функції моделі.
+ * виконається там. `mapped` — цілі, змаплені з колонок (`fillTargetKey`), зі
+ * старим ім'ям колонки-джерела; `retired` — старі імена виведених колонок,
+ * `key` — одноколонковий первинний ключ таблиці (немає — кроку не адресувати
+ * рядки), `functions` — функції моделі.
+ *
+ * Змаплена ціль у формі рівно `coalesce(<своє джерело>, <e>)` наявних значень
+ * не змінює, лише заповнює `NULL`: вид кроку дає `<e>`, як для незмапленої
+ * цілі, і час транзакції в ньому допустимий. Будь-який інший вираз змапленої
+ * цілі переписує збережені значення — це ремонт, і він детермінований.
  */
 export function fillStepKind(
   step: FillStep,
-  mapped: ReadonlySet<string>,
+  mapped: ReadonlyMap<string, string | undefined>,
   retired: ReadonlySet<string>,
   parse: SqlParser,
   table: {
@@ -274,18 +281,55 @@ export function fillStepKind(
   const problem = walker.walk(target.val)
   if (problem !== undefined) return { reason: problem }
   const columns = [...walker.columns]
-  const kind: StepKind = mapped.has(fillTargetKey(step.target))
-    ? "repair"
-    : columns.some((c) => retired.has(c))
-      ? "conversion"
-      : columns.length > 0
-        ? "split"
-        : "backfill"
-  if (kind === "repair" && walker.readsNow) return { reason: "volatile" }
-  // Приведення не-літерала до дати чи часу може прочитати час транзакції
-  // (`lower('now')::timestamptz`), а без виводу типів цього не довести.
-  if (kind === "repair" && walker.castsToTime) return { reason: "castToTime" }
+  const targetKey = fillTargetKey(step.target)
+  const fillsNulls = mapped.has(targetKey)
+    ? nullFallback(target.val, mapped.get(targetKey), table)
+    : target.val
+  if (fillsNulls === undefined) {
+    if (walker.readsNow) return { reason: "volatile" }
+    if (walker.readsTimeString) return { reason: "specialTimeLiteral" }
+    // Приведення не-літерала до дати чи часу може прочитати час транзакції
+    // (`lower('now')::timestamptz`), а без виводу типів цього не довести.
+    if (walker.castsToTime) return { reason: "castToTime" }
+    return { kind: "repair", columns }
+  }
+  // Вид задають колонки, які читає значення для нових рядків; вираз
+  // перевірено цілим вище, тож обхід його частини нових відмов не дає.
+  const value = new ExpressionWalker(table, functions)
+  value.walk(fillsNulls)
+  const read = [...value.columns]
+  const kind: StepKind = read.some((c) => retired.has(c))
+    ? "conversion"
+    : read.length > 0
+      ? "split"
+      : "backfill"
   return { kind, columns }
+}
+
+/**
+ * `<e>` виразу `coalesce(<source>, <e>)`, де `<source>` — колонка-джерело
+ * цілі (гола чи кваліфікована своєю таблицею); інша форма — `undefined`.
+ */
+function nullFallback(
+  value: unknown,
+  source: string | undefined,
+  table: { schema: string; name: string }
+): unknown {
+  if (source === undefined || !isRecordNode(value)) return undefined
+  const coalesce = value.CoalesceExpr as { args?: unknown[] } | undefined
+  const args = coalesce?.args
+  if (args?.length !== 2) return undefined
+  const first = args[0] as { ColumnRef?: { fields?: unknown[] } }
+  const names = strings(first.ColumnRef?.fields)
+  if (names === undefined || names.at(-1) !== source) return undefined
+  const qualifier = names.slice(0, -1)
+  const own =
+    qualifier.length === 0 ||
+    (qualifier.length === 1 && qualifier[0] === table.name) ||
+    (qualifier.length === 2 &&
+      qualifier[0] === table.schema &&
+      qualifier[1] === table.name)
+  return own ? args[1] : undefined
 }
 
 /**
@@ -299,6 +343,8 @@ export function fillStepKind(
 class ExpressionWalker {
   readonly columns = new Set<string>()
   readsNow = false
+  /** Рядок `'now'`, `'today'`, … — час транзакції, коли стає датою чи часом. */
+  readsTimeString = false
   /** Вираз приводить не рядковий літерал до типу дати чи часу. */
   castsToTime = false
   /** Глибина всередині визначення вікна. */
@@ -357,7 +403,7 @@ class ExpressionWalker {
         return undefined
       case "A_Const":
         if (nowString(value as { sval?: { sval?: string } })) {
-          this.readsNow = true
+          this.readsTimeString = true
         }
         break
       case "TypeCast":

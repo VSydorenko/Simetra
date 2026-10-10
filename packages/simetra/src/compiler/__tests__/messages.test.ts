@@ -93,4 +93,41 @@ describe("messages catalog", () => {
       message: 'Ім\'я "X" уже оголошене в Y',
     })
   })
+
+  it("renders every fill problem of promote.expression-invalid as a sentence", () => {
+    const reasons = [
+      "noKey",
+      "syntax",
+      "subquery",
+      "aggregate",
+      "foreignTable",
+      "multipleTargets",
+      "multipleStatements",
+      "setReturning",
+      "volatile",
+      "unknownFunction",
+      "unqualifiedFunction",
+      "castToTime",
+      "specialTimeLiteral",
+      "nondeterministicWindow",
+      "unknownColumn",
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      const messages = reasons.map((reason) => {
+        const { message } = localize(
+          diagnostic("promote.expression-invalid", "", "", {
+            at: "/fill/0/expression",
+            expression: "x",
+            reason,
+          }),
+          locale
+        )
+        expect(message, `${reason} ${locale}`).not.toMatch(
+          new RegExp(`: ${reason}$`)
+        )
+        return message
+      })
+      expect(new Set(messages).size, locale).toBe(reasons.length)
+    }
+  })
 })

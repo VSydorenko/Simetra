@@ -1,4 +1,5 @@
 import type { Diagnostic, DiagnosticParams, RuleCode } from "./diagnostics"
+import type { FillProblem } from "./operations/promote/fill"
 
 export type Locale = "en" | "uk"
 
@@ -31,6 +32,76 @@ const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
     uk: "правило рядка статично не доводить, що прийме рядок провізії",
   },
 }
+
+/** Причини `promote.expression-invalid`: чому вираз не стає кроком даних. */
+const FILL_PROBLEM: Readonly<Record<FillProblem, { en: string; uk: string }>> =
+  {
+    noKey: {
+      en: "its table has no single-column primary key, so the step cannot address rows",
+      uk: "його таблиця не має одноколонкового первинного ключа, тож крок не адресує рядки",
+    },
+    syntax: {
+      en: "it is not one plain scalar expression: it does not parse, names its output, takes a parameter or uses a form the step does not run",
+      uk: "це не один простий скалярний вираз: він не розбирається, називає свій вивід, бере параметр чи має форму, якої крок не виконує",
+    },
+    subquery: {
+      en: "it contains a subquery, a set operation or a CTE",
+      uk: "він містить підзапит, операцію над множинами чи CTE",
+    },
+    aggregate: {
+      en: "it calls an aggregate without OVER",
+      uk: "він викликає агрегат без OVER",
+    },
+    foreignTable: {
+      en: "it reads a table other than its own",
+      uk: "він читає іншу таблицю, ніж свою",
+    },
+    multipleTargets: {
+      en: "it has more than one value",
+      uk: "він має більше одного значення",
+    },
+    multipleStatements: {
+      en: "it contains more than one statement",
+      uk: "він містить більше одного оператора",
+    },
+    setReturning: {
+      en: "it calls a function that returns a set of rows",
+      uk: "він викликає функцію, що повертає множину рядків",
+    },
+    volatile: {
+      en: "it calls a function whose result changes from call to call, or reads transaction time in a repair of existing values",
+      uk: "він викликає функцію, результат якої змінюється від виклику до виклику, або читає час транзакції в ремонті наявних значень",
+    },
+    unknownFunction: {
+      en: "it calls a function that is not proven deterministic",
+      uk: "він викликає функцію, детермінованість якої не доведено",
+    },
+    unqualifiedFunction: {
+      en: "it calls a model function without its schema, and the step runs with search_path = pg_catalog, pg_temp",
+      uk: "він викликає функцію моделі без схеми, а крок виконується з search_path = pg_catalog, pg_temp",
+    },
+    castToTime: {
+      en: "a repair of existing values casts a computed value to a date or time type, which may read transaction time",
+      uk: "ремонт наявних значень приводить обчислене значення до типу дати чи часу, а це може прочитати час транзакції",
+    },
+    specialTimeLiteral: {
+      en: "a repair of existing values contains a string such as 'now' or 'today', which reads transaction time once it becomes a date or time",
+      uk: "ремонт наявних значень містить рядок на кшталт 'now' чи 'today', який читає час транзакції, щойно стає датою чи часом",
+    },
+    nondeterministicWindow: {
+      en: "its window is not ordered by the table key, so the order of rows is not deterministic",
+      uk: "його вікно не впорядковане ключем таблиці, тож порядок рядків не детермінований",
+    },
+    unknownColumn: {
+      en: "it names a column its table does not have",
+      uk: "він називає колонку, якої в таблиці немає",
+    },
+  }
+
+const fillProblem = (reason: unknown, locale: "en" | "uk"): string =>
+  Object.hasOwn(FILL_PROBLEM, String(reason))
+    ? FILL_PROBLEM[reason as FillProblem][locale]
+    : String(reason)
 
 const FIX_IDS = {
   en: "Run simetra fix to assign ids.",
@@ -1809,11 +1880,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   "promote.expression-invalid": {
-    en: (p) => `Fill expression ${p.expression} is not allowed: ${p.reason}`,
-    uk: (p) => `Вираз заповнення ${p.expression} не дозволено: ${p.reason}`,
+    en: (p) =>
+      `Fill expression ${p.expression} is not allowed: ${fillProblem(p.reason, "en")}`,
+    uk: (p) =>
+      `Вираз заповнення ${p.expression} не дозволено: ${fillProblem(p.reason, "uk")}`,
     hint: {
-      en: "A fill expression is one deterministic scalar expression over the columns of its own table, in old names: no subqueries, aggregates without OVER, or other tables, and a window ordered by the table key; the table needs a single-column key. It calls only IMMUTABLE functions of pg_catalog and functions of the model declared IMMUTABLE, the latter qualified with their schema: the step runs with search_path = pg_catalog, pg_temp. Transaction time (now(), current_timestamp, 'now'::timestamptz) is allowed except in a repair, and a repair casts to a date or time type only a plain string literal.",
-      uk: "Вираз заповнення — один детермінований скалярний вираз над колонками своєї таблиці в старих іменах: без підзапитів, агрегатів без OVER чи інших таблиць, а вікно впорядковане ключем таблиці; таблиця потребує одноколонкового ключа. Він викликає лише IMMUTABLE-функції pg_catalog і функції моделі, явно оголошені IMMUTABLE, — останні кваліфікованими схемою: крок виконується з search_path = pg_catalog, pg_temp. Час транзакції (now(), current_timestamp, 'now'::timestamptz) дозволено всюди, крім ремонту, а ремонт приводить до типу дати чи часу лише звичайний рядковий літерал.",
+      en: "A fill expression is one deterministic scalar expression over the columns of its own table, in old names: no subqueries, aggregates without OVER, or other tables, and a window ordered by the table key; the table needs a single-column key. It calls only IMMUTABLE functions of pg_catalog and functions of the model declared IMMUTABLE, the latter qualified with their schema: the step runs with search_path = pg_catalog, pg_temp. Transaction time (now(), current_timestamp, 'now'::timestamptz) is allowed except in a repair, that is, a mapped target written other than coalesce(<its column>, <value>), and a repair casts to a date or time type only a plain string literal.",
+      uk: "Вираз заповнення — один детермінований скалярний вираз над колонками своєї таблиці в старих іменах: без підзапитів, агрегатів без OVER чи інших таблиць, а вікно впорядковане ключем таблиці; таблиця потребує одноколонкового ключа. Він викликає лише IMMUTABLE-функції pg_catalog і функції моделі, явно оголошені IMMUTABLE, — останні кваліфікованими схемою: крок виконується з search_path = pg_catalog, pg_temp. Час транзакції (now(), current_timestamp, 'now'::timestamptz) дозволено всюди, крім ремонту — змапленої цілі, записаної інакше, ніж coalesce(<своя колонка>, <значення>), — а ремонт приводить до типу дати чи часу лише звичайний рядковий літерал.",
     },
   },
   "promote.debt-text-reference": {

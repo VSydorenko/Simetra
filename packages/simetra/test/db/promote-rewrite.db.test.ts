@@ -8,14 +8,13 @@ import {
   promotionProject,
 } from "../../src/compiler/__tests__/fixtures/promotion"
 import { acceptDebt, uuid } from "../../src/compiler/__tests__/helpers"
-import { testSuperuserUrl } from "./connection"
+import { testSuperuserUrl, withRollback } from "./connection"
 
 /**
- * Переписані промоцією тіла функцій (план «Промоція-4», задача 11) проти
- * живого Postgres: на схемі після перейменувань із запису вони проходять
- * `plpgsql_check` і зберігають форму результату, а вихідні — ні. Без
- * негативного контролю зелений тест не відрізнив би переписування від
- * схеми, яку перейменування не зачепили.
+ * Переписані промоцією тіла функцій проти живого Postgres: на схемі після
+ * перейменувань із запису вони проходять `plpgsql_check` і зберігають форму
+ * результату, а вихідні — ні. Без негативного контролю зелений тест не
+ * відрізнив би переписування від схеми, яку перейменування не зачепили.
  */
 
 // Прийнята таблиця фікстури (`Counterparty.meta.json`) — у фізичних іменах до промоції
@@ -37,27 +36,6 @@ const TOUCH = "app.counterparty_touch()"
 const NAMES = "app.counterparty_names()"
 
 const ident = (name: string) => `"${name.replaceAll('"', '""')}"`
-
-/**
- * Як `withRollback`, але від суперкористувача стеку: `CREATE EXTENSION
- * plpgsql_check` роль застосунку не виконає.
- */
-async function withSuperuserRollback(
-  fn: (db: pg.Client) => Promise<void>
-): Promise<void> {
-  const db = new pg.Client({ connectionString: testSuperuserUrl() })
-  await db.connect()
-  try {
-    await db.query("BEGIN")
-    try {
-      await fn(db)
-    } finally {
-      await db.query("ROLLBACK").catch(() => undefined)
-    }
-  } finally {
-    await db.end()
-  }
-}
 
 /** Повідомлення рівня `error` від `plpgsql_check` для функції на таблиці тригера. */
 async function checkErrors(
@@ -117,7 +95,8 @@ describe("promote: rewritten function bodies on the renamed schema", () => {
       `function:${TOUCH}`,
     ])
 
-    await withSuperuserRollback(async (db) => {
+    // `CREATE EXTENSION plpgsql_check` роль застосунку не виконає.
+    await withRollback(async (db) => {
       // 1. Прийнята схема: таблиця, вихідні функції, тригер — з файлів фікстури
       await db.query(ADOPTED_TABLE)
       await db.query(before.get(COUNTERPARTY_SQL)!)
@@ -172,6 +151,6 @@ describe("promote: rewritten function bodies on the renamed schema", () => {
          RETURNING description`
       )
       expect(inserted.rows).toEqual([{ description: "Globex" }])
-    })
+    }, testSuperuserUrl())
   })
 })

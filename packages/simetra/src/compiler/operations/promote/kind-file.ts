@@ -36,6 +36,11 @@ export interface KindFileContext {
    */
   unit: ReadonlyMap<string, MetadataRef>
   /**
+   * Прийняті таблиці одиниці, що стають табличними частинами: ТЧ не є
+   * об'єктом, тож посилання на неї — відмова одиниці, а не «поза одиницею».
+   */
+  sections: ReadonlySet<string>
+  /**
    * Об'єкт-власник рядка: ціль стандартного зв'язку рядка ТЧ з власником.
    * Немає — таблиця основна.
    */
@@ -370,6 +375,16 @@ class References {
       if (!isAdoptedTable(ref.kind)) return ref
       const promotedRef = this.ctx.unit.get(ref.name)
       if (promotedRef !== undefined) return promotedRef
+      if (this.ctx.sections.has(ref.name)) {
+        this.problems.push(
+          diagnostic("promote.unit-unsupported", object.file, pointer, {
+            kind: ref.kind,
+            name: ref.name,
+            detail: `it becomes a tabular section, and a column of ${object.name} references it as an object`,
+          })
+        )
+        return ref
+      }
       this.problems.push(
         diagnostic("promote.reference-not-promoted", object.file, pointer, {
           table: object.name,

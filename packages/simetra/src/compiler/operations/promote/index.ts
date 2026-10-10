@@ -233,14 +233,16 @@ function planSteps(
     }
     const columnName = (id: string | undefined) =>
       physical.columns.find((c) => c.origin.elementId === id)?.name
-    const mapped = new Set<string>()
+    const mapped = new Map<string, string | undefined>()
     const retired = new Set<string>()
     for (const { column, fate } of promoted.columns) {
-      if (fate.to === "standard") mapped.add(`standard ${fate.def.logicalName}`)
-      if (fate.to === "attribute") {
-        mapped.add(`attribute ${String(fate.element.name)}`)
-      }
       const name = columnName(column.id)
+      if (fate.to === "standard") {
+        mapped.set(`standard ${fate.def.logicalName}`, name)
+      }
+      if (fate.to === "attribute") {
+        mapped.set(`attribute ${String(fate.element.name)}`, name)
+      }
       if (fate.to === "retire" && name !== undefined) retired.add(name)
     }
     const keyColumns = physical.primaryKey?.columns ?? []
@@ -532,7 +534,13 @@ export async function promoteObject(
         ]
   )
   const built = kindFile(
-    { model, into, target, unit: new Map([[object.name, becomes]]) },
+    {
+      model,
+      into,
+      target,
+      unit: new Map([[object.name, becomes]]),
+      sections: new Set(promotedSections.map((s) => s.promoted.object.name)),
+    },
     main,
     promotedSections
   )

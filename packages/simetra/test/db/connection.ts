@@ -39,13 +39,14 @@ export async function shadowDatabaseCount(): Promise<number> {
 /**
  * Виконує `fn` у транзакції, яку завжди відкочує: DDL тесту не лишає слідів у
  * базі стеку. Відсутня база — виняток із `connect` (тест червоний, не пропуск).
+ * `url` — інша роль стеку (`testSuperuserUrl()` для того, чого роль
+ * застосунку не виконає, як `CREATE EXTENSION`).
  */
 export async function withRollback<T>(
-  fn: (client: pg.Client) => Promise<T>
+  fn: (client: pg.Client) => Promise<T>,
+  url: string = testDatabaseUrl()
 ): Promise<T> {
-  const client = new pg.Client({
-    connectionString: testDatabaseUrl(),
-  })
+  const client = new pg.Client({ connectionString: url })
   await client.connect()
   try {
     await client.query("BEGIN")

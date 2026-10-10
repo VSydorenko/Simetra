@@ -13,7 +13,7 @@ import {
   CONTACT_ID,
   COUNTERPARTY_FILE,
   COUNTERPARTY_ID,
-  CREATED_AT_REPAIR,
+  CREATED_AT_FILL,
   INN_ID,
   INVOICE_FILE,
   counterpartyMapping,
@@ -1546,10 +1546,16 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
   }
   it.each([
     [
-      "mapped target that reads a retired column",
+      "mapped target that rewrites its values",
+      "description",
+      "coalesce(inn, name)",
+      "repair",
+    ],
+    [
+      "mapped target that keeps its values and falls back to a retired column",
       "description",
       "coalesce(name, inn)",
-      "repair",
+      "conversion",
     ],
     ["reads a retired and a kept column", "label", "name || inn", "conversion"],
     ["reads only a kept column", "label", "upper(name)", "split"],
@@ -1578,6 +1584,52 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       ).toMatchObject({ column: target, kind })
     }
   )
+
+  it("refuses a reference to a tabular section table from inside the unit as unit-unsupported", async () => {
+    const files = edited(
+      promotionProject(WITH_CONTACTS),
+      CONTACT_FILE,
+      (raw) => {
+        ;(raw.columns as Json[]).push({
+          id: uuid(7602),
+          name: "altId",
+          physicalName: "alt_id",
+          type: "UUID",
+        })
+        ;(raw.foreignKeys as Json[]).push({
+          name: "alt_fk",
+          columns: ["altId"],
+          references: {
+            object: { kind: "CustomTable", name: "CounterpartyContact" },
+            columns: ["id"],
+          },
+        })
+      }
+    )
+    const { result, after } = await promoted(
+      files,
+      withContacts((m) => {
+        m.tabularSections[0]!.columns.altId = {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "alt" },
+        }
+      })
+    )
+    expect(after).toEqual(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.unit-unsupported",
+        file: CONTACT_FILE,
+        pointer: expect.any(String),
+        params: {
+          kind: "CustomTable",
+          name: "CounterpartyContact",
+          detail: expect.stringContaining("becomes a tabular section"),
+        },
+      },
+    ])
+  })
 
   it("records steps in old names before renames", async () => {
     const { result } = await promoted(invoiceFiles(), invoiceMapping())
@@ -1615,7 +1667,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     ])
   })
 
-  it("records a repair and a tightened column for a nullable source", async () => {
+  it("records a NULL fill and a tightened column for a nullable source", async () => {
     const { result } = await promoted(promotionProject(PARTS))
     expect(errors(result)).toEqual([])
     expect(result.record?.dataSteps).toEqual([
@@ -1625,8 +1677,8 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         table: "counterparties",
         key: "id",
         column: "created_at",
-        expression: CREATED_AT_REPAIR,
-        kind: "repair",
+        expression: CREATED_AT_FILL,
+        kind: "backfill",
       },
     ])
     expect(result.record?.tightened).toEqual([
@@ -1775,32 +1827,72 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     )
   })
 
-  it("refuses now() in a repair but allows it in a backfill", async () => {
-    const files = promotionProject(PARTS)
-    const repair = await promoted(
-      files,
-      mapping((m) => {
-        m.fill[0]!.expression = "coalesce(created_at, now())"
+  it.each([
+    ["coalesce(created_at, now())", "backfill"],
+    ["coalesce(created_at, current_timestamp)", "backfill"],
+    ["coalesce(counterparties.created_at, 'now')", "backfill"],
+    [
+      "coalesce(app.counterparties.created_at, lower('now')::timestamptz)",
+      "backfill",
+    ],
+    ["coalesce(created_at, updated_at)", "split"],
+    ["coalesce(created_at, inn::timestamptz)", "conversion"],
+  ])(
+    "derives the kind of %s on a mapped target from the NULL fallback",
+    async (expression, kind) => {
+      const files = withCounterparty((raw) => {
+        ;(raw.columns as Json[]).push({
+          id: uuid(7601),
+          name: "updatedAt",
+          physicalName: "updated_at",
+          type: "DateTime",
+        })
       })
-    )
-    expect(repair.result.diagnostics.map((d) => d.params?.reason)).toEqual([
-      "volatile",
-    ])
-    for (const expression of [
-      "coalesce(created_at, current_timestamp)",
-      "coalesce(created_at, 'now'::timestamptz)",
-      "coalesce(created_at, CAST(' Today ' AS date))",
-    ]) {
-      const keyword = await promoted(
+      const { result } = await promoted(
         files,
         mapping((m) => {
+          m.columns.inn = { to: "retire" }
+          ;(m.columns as Json).updatedAt = {
+            to: "attribute",
+            collection: "attributes",
+            element: { name: "lastChange" },
+          }
           m.fill[0]!.expression = expression
         })
       )
+      expect(errors(result)).toEqual([])
       expect(
-        keyword.result.diagnostics.map((d) => d.params?.reason),
-        expression
-      ).toEqual(["volatile"])
+        result.record?.dataSteps.find((s) => s.column === "created_at")?.kind
+      ).toBe(kind)
+    }
+  )
+
+  it("refuses transaction time in a repair but allows it in a backfill", async () => {
+    const files = promotionProject(PARTS)
+    const reason = async (expression: string) =>
+      (
+        await promoted(
+          files,
+          mapping((m) => {
+            m.fill[0]!.expression = expression
+          })
+        )
+      ).result.diagnostics.map((d) => d.params?.reason)
+    for (const expression of [
+      "coalesce(now(), created_at)",
+      "coalesce(created_at + interval '0', now())",
+      "coalesce(current_timestamp, created_at)",
+      "coalesce(created_at, created_at, now())",
+    ]) {
+      expect(await reason(expression), expression).toEqual(["volatile"])
+    }
+    for (const expression of [
+      "coalesce('now'::timestamptz, created_at)",
+      "coalesce(CAST(' Today ' AS date), created_at)",
+    ]) {
+      expect(await reason(expression), expression).toEqual([
+        "specialTimeLiteral",
+      ])
     }
     const backfill = await promoted(
       files,
@@ -1830,27 +1922,29 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         )
       ).result.diagnostics.map((d) => d.params?.reason)
     for (const expression of [
-      "coalesce(created_at, ('n' || 'ow')::timestamptz)",
-      `coalesce(created_at, json_value(name, '$' returning timestamptz))`,
-      "coalesce(created_at, CAST(created_at::text AS timestamptz))",
+      "coalesce(('n' || 'ow')::timestamptz, created_at)",
+      `coalesce(json_value(name, '$' returning timestamptz), created_at)`,
+      "coalesce(CAST(created_at::text AS timestamptz), created_at)",
     ]) {
       expect(await reason(expression), expression).toEqual(["castToTime"])
     }
     // Рядок `'now'` будь-де у виразі — час транзакції, навіть без явного
     // приведення: невідомий літерал бере тип колонки.
     for (const expression of [
-      "coalesce(created_at, lower('now')::timestamptz)",
-      `coalesce(created_at, json_value('"now"', '$' returning timestamptz))`,
-      "coalesce(created_at, 'now')",
-      "coalesce(created_at, 'Yesterday 10:00')",
+      "coalesce(lower('now')::timestamptz, created_at)",
+      `coalesce(json_value('"now"', '$' returning timestamptz), created_at)`,
+      "coalesce('now', created_at)",
+      "coalesce('Yesterday 10:00', created_at)",
     ]) {
-      expect(await reason(expression), expression).toEqual(["volatile"])
+      expect(await reason(expression), expression).toEqual([
+        "specialTimeLiteral",
+      ])
     }
     for (const expression of [
-      "coalesce(created_at, '2024-01-01'::timestamptz)",
-      "coalesce(created_at, timestamptz '2024-01-01')",
-      "coalesce(created_at, '2024-01-01'::text::timestamptz)",
-      "coalesce(created_at, NULL::timestamptz)",
+      "coalesce('2024-01-01'::timestamptz, created_at)",
+      "coalesce(timestamptz '2024-01-01', created_at)",
+      "coalesce('2024-01-01'::text::timestamptz, created_at)",
+      "coalesce(NULL::timestamptz, created_at)",
     ]) {
       expect(await reason(expression), expression).toEqual([])
     }
