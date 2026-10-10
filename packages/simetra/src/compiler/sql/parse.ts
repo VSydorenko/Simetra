@@ -51,18 +51,18 @@ function parseText(text: string): SqlParseResult {
       offset: codePointToIndex(text, details.cursorPosition),
     }
   }
-  const offsets = new ByteOffsets(text)
+  const toIndex = byteOffsets(text)
   const statements: ParsedStatement[] = []
   for (const raw of result.stmts ?? []) {
     if (raw.stmt === undefined) continue
     // `stmt_location` і `stmt_len` — байти UTF-8; відсутні означають початок
     // тексту й «до кінця» відповідно.
     const startByte = raw.stmt_location ?? 0
-    const start = offsets.toIndex(startByte)
+    const start = toIndex(startByte)
     const end =
       raw.stmt_len === undefined || raw.stmt_len === 0
         ? text.length
-        : offsets.toIndex(startByte + raw.stmt_len)
+        : toIndex(startByte + raw.stmt_len)
     statements.push({ stmt: raw.stmt, start, end })
   }
   return { ok: true, statements }
@@ -93,34 +93,31 @@ function codePointToIndex(text: string, codePoints: number): number {
   return index
 }
 
-/** Переклад байтових зміщень UTF-8 в індекси UTF-16 за один прохід тексту. */
-class ByteOffsets {
-  private readonly indexByByte = new Map<number, number>()
-
-  constructor(text: string) {
-    let byte = 0
-    let index = 0
-    while (index < text.length) {
-      this.indexByByte.set(byte, index)
-      const codePoint = text.codePointAt(index) ?? 0
-      byte +=
-        codePoint < 0x80
-          ? 1
-          : codePoint < 0x800
-            ? 2
-            : codePoint < 0x10000
-              ? 3
-              : 4
-      index += codePoint > 0xffff ? 2 : 1
-    }
-    this.indexByByte.set(byte, index)
+/**
+ * Переклад байтових зміщень UTF-8 в індекси UTF-16 за один прохід тексту.
+ * libpg-query повертає позиції в байтах, а текст редагують у рядках JS; байт не
+ * на межі символу означає, що позиція не з цього тексту, — це помилка, а не
+ * округлення.
+ */
+export function byteOffsets(text: string): (byte: number) => number {
+  const indexByByte = new Map<number, number>()
+  let byte = 0
+  let index = 0
+  while (index < text.length) {
+    indexByByte.set(byte, index)
+    const codePoint = text.codePointAt(index) ?? 0
+    byte +=
+      codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4
+    index += codePoint > 0xffff ? 2 : 1
   }
-
-  toIndex(byte: number): number {
-    const index = this.indexByByte.get(byte)
-    if (index === undefined) {
-      throw new Error(`libpg-query offset ${byte} is not a character boundary`)
+  indexByByte.set(byte, index)
+  return (target) => {
+    const found = indexByByte.get(target)
+    if (found === undefined) {
+      throw new Error(
+        `libpg-query offset ${target} is not a character boundary`
+      )
     }
-    return index
+    return found
   }
 }

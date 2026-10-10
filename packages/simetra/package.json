@@ -14,6 +14,7 @@
     "test:db": "vitest run --project db"
   },
   "dependencies": {
+    "@libpg-query/parser": "17.8.0",
     "jsonc-parser": "3.3.1",
     "libpg-query": "17.7.4",
     "zod": "^4.6.5"

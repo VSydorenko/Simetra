@@ -87,6 +87,9 @@ importers:
 
   packages/simetra:
     dependencies:
+      '@libpg-query/parser':
+        specifier: 17.8.0
+        version: 17.8.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -372,6 +375,9 @@ packages:
 
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
+
+  '@libpg-query/parser@17.8.0':
+    resolution: {integrity: sha512-et34pvQ2SPX6uD5JmbBh/gZjIVr0bTt582odIaWJAUZM2UM8p2CZtdvWL6glkCs5D7Dg5h/4pfQo7eHuo5mWcQ==}
 
   '@modelcontextprotocol/client@2.2.0':
     resolution: {integrity: sha512-LxCou/CSYQ6dwEnjhLZY0KnEuc8V4UJ3IEQCl/uR2yHobSQIEdJKUlKLRYRF5i5FqRGHy1eK7une3aAWDHLtig==}
@@ -1637,6 +1643,10 @@ snapshots:
       keyv: 5.6.0
 
   '@keyv/serialize@1.1.1': {}
+
+  '@libpg-query/parser@17.8.0':
+    dependencies:
+      '@pgsql/types': 17.6.2
 
   '@modelcontextprotocol/client@2.2.0':
     dependencies:
