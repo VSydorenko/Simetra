@@ -2,6 +2,9 @@ import {
   ASSIGNED_ONCE,
   projectSchema,
   type AssignedOnceField,
+  type KindDefinition,
+  type ReferenceRole,
+  type StandardColumnDef,
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "./diagnostics"
 import {
@@ -20,6 +23,8 @@ interface Holder {
   file: string
   pointer: string
   element: Json
+  /** Вид файлу-носія; немає — носій лежить у `project.meta.json`. */
+  def?: KindDefinition
   /**
    * Немає — проєкт мапи відсутній чи невалідний: `defaultSchema` невідома, і
    * ефективне значення, що від неї залежить, не обчислюється.
@@ -59,10 +64,16 @@ function stateOf(files: ReadonlyMap<string, string>): State {
   }
   for (const file of readObjectFiles(files)) {
     const ctx = contextOf(file.def.materializes !== "none")
-    add("object", { file: file.path, pointer: "", element: file.raw, ctx })
+    add("object", {
+      file: file.path,
+      pointer: "",
+      element: file.raw,
+      def: file.def,
+      ctx,
+    })
     // Корінь файлу — сам об'єкт: його поля тримають записи `on: "object"`.
     for (const at of namedElementsOf(file).filter((a) => a.pointer !== "")) {
-      add("element", { file: file.path, ...at, ctx })
+      add("element", { file: file.path, ...at, def: file.def, ctx })
     }
   }
   if (project !== undefined) {
@@ -123,6 +134,144 @@ function changed(
   })
 }
 
+/** Прийнята таблиця: вид, що описує фізику сам і матеріалізується таблицею. */
+const isAcceptedTable = (holder: Holder) =>
+  holder.def !== undefined &&
+  holder.def.declared &&
+  holder.def.materializes === "table"
+
+/**
+ * Ролі, у яких `Ref` завжди будує поліморфну пару `_type`/`_id`: перелік
+ * цілей (`allowedTypes`) реквізиту, константи чи колонки прийнятої таблиці.
+ */
+const ALLOWED_TYPE_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "attribute.allowedType",
+  "constant.allowedType",
+])
+
+/**
+ * Ролі цілей стандартної колонки-пари виду (власники довідника, реєстратори):
+ * чи є пара, каже сама стандартна колонка (`polymorphic`) — одного власника
+ * пари немає, а реєстратор її має завжди.
+ */
+const STANDARD_PAIR_ROLES: Readonly<
+  Record<NonNullable<StandardColumnDef["ref"]>, ReferenceRole | undefined>
+> = {
+  self: undefined,
+  owningObject: undefined,
+  users: undefined,
+  owners: "catalog.owner",
+  recorders: "register.recorder",
+}
+
+/**
+ * Об'єкти (`"<Вид>:<Ім'я>"`), що є ціллю поліморфної пари хоча б в одному
+ * файлі: їхня мітка виду лежить у даних пар, тож зникнути не може.
+ */
+function polymorphicTargets(
+  files: ReadonlyMap<string, string>
+): ReadonlySet<string> {
+  const targets = new Set<string>()
+  for (const file of readObjectFiles(files)) {
+    if (file.data === undefined) continue
+    const pairRoles = new Set(
+      file.def
+        .standardColumns(file.data)
+        .flatMap((column) =>
+          column.polymorphic !== undefined && column.ref !== undefined
+            ? [STANDARD_PAIR_ROLES[column.ref]]
+            : []
+        )
+    )
+    for (const { ref, role } of file.def.references(file.data)) {
+      if (ALLOWED_TYPE_ROLES.has(role) || pairRoles.has(role)) {
+        targets.add(`${ref.kind}:${ref.name}`)
+      }
+    }
+  }
+  return targets
+}
+
+/**
+ * Промоція (спека промоції Пр18, §9.11): об'єкт, що в базовому стані був
+ * прийнятою таблицею, а в поточному має вид 1С з тим самим `id`. Розпізнається
+ * з ідентичності, окремої декларації немає; звільняє рівно те, що канонізація
+ * переназначає. Решта змін `physicalName`, `kindLabel`, `schema` — як завжди.
+ */
+interface Promotion {
+  /** `id` промотованих об'єктів і вид, у який кожен перейшов. */
+  objects: ReadonlyMap<string, KindDefinition>
+  /**
+   * Файли базового стану, чиї елементи канонізація перейменовує: файл самого
+   * промотованого об'єкта й файл прийнятої таблиці, що стала його табличною
+   * частиною.
+   */
+  releasedFiles: ReadonlySet<string>
+}
+
+function promotionOf(before: State, after: State): Promotion {
+  const objects = new Map<string, KindDefinition>()
+  const promotedFiles = new Set<string>()
+  const releasedFiles = new Set<string>()
+  for (const [id, was] of before.holders.object) {
+    const now = after.holders.object.get(id)
+    if (
+      now?.def === undefined ||
+      !isAcceptedTable(was) ||
+      isAcceptedTable(now) ||
+      now.def.materializes === "none"
+    ) {
+      continue
+    }
+    objects.set(id, now.def)
+    promotedFiles.add(now.file)
+    releasedFiles.add(was.file)
+  }
+  // Таблиця ТЧ — окрема прийнята таблиця в базі, а тепер елемент (ТЧ)
+  // промотованого об'єкта з тим самим id.
+  for (const [id, now] of after.holders.element) {
+    const was = before.holders.object.get(id)
+    if (
+      was !== undefined &&
+      isAcceptedTable(was) &&
+      promotedFiles.has(now.file)
+    ) {
+      releasedFiles.add(was.file)
+    }
+  }
+  return { objects, releasedFiles }
+}
+
+/**
+ * Зміна, яку промоція дозволяє: `physicalName` об'єкта й елементів з
+ * звільнених файлів, а також зникнення мітки виду.
+ */
+function releasedByPromotion(
+  promotion: Promotion,
+  record: AssignedOnceField,
+  id: string,
+  was: Holder,
+  now: Holder,
+  value: string | undefined,
+  polymorphic: () => ReadonlySet<string>
+): boolean {
+  if (record.field === "physicalName") {
+    return record.on === "object"
+      ? promotion.objects.has(id)
+      : promotion.releasedFiles.has(was.file)
+  }
+  const kind = promotion.objects.get(id)
+  if (record.on !== "object" || record.field !== "kindLabel") return false
+  if (kind === undefined || value !== undefined) return false
+  // Мітку виду не відновити, тож вона зникає лише там, де нового виду її не
+  // очікує, і лише якщо жодна поліморфна пара не веде на об'єкт: значення
+  // може лежати в даних; повторне вживання — борг П3.
+  return (
+    kind.kindLabel !== true &&
+    !polymorphic().has(`${now.def?.kind}:${String(now.element.name)}`)
+  )
+}
+
 /**
  * Поля, призначені раз (спека П2 §3, «Призначене раз — правило
  * компілятора»), проти базового стану. Перелік полів — лише `ASSIGNED_ONCE`
@@ -137,6 +286,9 @@ export function assignedOnceDiagnostics(
 ): Diagnostic[] {
   const before = stateOf(baseline)
   const after = stateOf(current)
+  const promotion = promotionOf(before, after)
+  let polymorphic: ReadonlySet<string> | undefined
+  const polymorphicOf = () => (polymorphic ??= polymorphicTargets(current))
   const result: Diagnostic[] = []
   for (const record of ASSIGNED_ONCE) {
     for (const [id, now] of after.holders[record.on]) {
@@ -146,6 +298,19 @@ export function assignedOnceDiagnostics(
       const value = valueOf(record, now)
       if (old === null || value === null) continue
       if (old === undefined || old === value) continue
+      if (
+        releasedByPromotion(
+          promotion,
+          record,
+          id,
+          was,
+          now,
+          value,
+          polymorphicOf
+        )
+      ) {
+        continue
+      }
       result.push(
         changed(record, was, now, after, {
           field: record.field,

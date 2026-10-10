@@ -5,9 +5,12 @@ import {
   renameElement,
   type CompileResult,
 } from "simetra/compiler"
+import { assignedOnceDiagnostics } from "../assigned-once"
 import {
   attribute,
   catalog,
+  customTable,
+  document,
   metaFiles,
   organization,
   project,
@@ -313,5 +316,257 @@ describe("assigned-once fields against the baseline", () => {
     const result = await compile(metaFiles(current))
     expect(result.diagnostics).toEqual([])
     expect(result.ok).toBe(true)
+  })
+})
+
+describe("assigned-once fields on a promotion", () => {
+  const TABLE = "custom-tables/Counterparty/Counterparty.meta.json"
+  const SECTION_TABLE =
+    "custom-tables/CounterpartyContact/CounterpartyContact.meta.json"
+  const PROMOTED = "catalogs/Counterparty/Counterparty.meta.json"
+  const REGISTER = "information-registers/Counterparty/Counterparty.meta.json"
+  const USER = "documents/Order/Order.meta.json"
+
+  const column = (id: number, physicalName: string) => ({
+    id: uuid(id),
+    name: physicalName,
+    physicalName,
+    type: "Text",
+  })
+
+  /** Базовий стан: прийнята таблиця й таблиця її рядків. */
+  const baseline = () =>
+    metaFiles({
+      [PROJECT]: project(),
+      [TABLE]: customTable("Counterparty", {
+        id: uuid(1),
+        physicalName: "counterparties",
+        kindLabel: "counterparty",
+        columns: [
+          { ...column(10, "id"), id: uuid(9), type: "UUID" },
+          { ...column(2, "inn"), name: "inn" },
+        ],
+      }),
+      [SECTION_TABLE]: customTable("CounterpartyContact", {
+        id: uuid(3),
+        physicalName: "counterparty_contacts",
+        columns: [{ ...column(4, "tel"), name: "tel" }],
+      }),
+    })
+
+  /** Поточний стан: каталог з тими самими id та канонічними іменами. */
+  const promoted = (overrides: Record<string, unknown> = {}) => ({
+    [PROJECT]: project(),
+    [PROMOTED]: {
+      id: uuid(1),
+      kind: "Catalog",
+      name: "Counterparty",
+      physicalName: "counterparty",
+      kindLabel: "counterparty",
+      attributes: [
+        { id: uuid(2), name: "taxId", physicalName: "tax_id", type: "Text" },
+      ],
+      tabularSections: [
+        {
+          id: uuid(3),
+          name: "contacts",
+          physicalName: "contacts",
+          attributes: [
+            {
+              id: uuid(4),
+              name: "phone",
+              physicalName: "phone",
+              type: "Text",
+            },
+          ],
+        },
+      ],
+      ...overrides,
+    },
+  })
+
+  const run = (current: Record<string, unknown>) =>
+    assignedOnceDiagnostics(baseline(), metaFiles(current)).map((d) => [
+      d.file,
+      d.pointer,
+      d.params,
+    ])
+
+  it("allows canonical physical names of a promoted object and its sections", () => {
+    expect(run(promoted())).toEqual([])
+  })
+
+  it("still refuses a physical name change without a kind change", () => {
+    const current = {
+      [PROJECT]: project(),
+      [TABLE]: customTable("Counterparty", {
+        id: uuid(1),
+        physicalName: "counterparty",
+        kindLabel: "counterparty",
+        columns: [{ ...column(9, "id"), type: "UUID" }],
+      }),
+      [SECTION_TABLE]: customTable("CounterpartyContact", {
+        id: uuid(3),
+        physicalName: "counterparty_contacts",
+      }),
+    }
+    expect(run(current)).toEqual([
+      [
+        TABLE,
+        "/physicalName",
+        {
+          field: "physicalName",
+          before: "counterparties",
+          after: "counterparty",
+        },
+      ],
+    ])
+  })
+
+  it("still refuses a changed kind label on a promoted object", () => {
+    expect(run(promoted({ kindLabel: "cp" }))).toEqual([
+      [
+        PROMOTED,
+        "/kindLabel",
+        { field: "kindLabel", before: "counterparty", after: "cp" },
+      ],
+    ])
+  })
+
+  it("still refuses a removed kind label when the new kind has labels", () => {
+    const current = promoted()
+    delete (current[PROMOTED] as Json).kindLabel
+    expect(run(current)).toEqual([
+      [
+        PROMOTED,
+        "/kindLabel",
+        { field: "kindLabel", before: "counterparty", after: "(removed)" },
+      ],
+    ])
+  })
+
+  const register = () => ({
+    id: uuid(1),
+    kind: "InformationRegister",
+    name: "Counterparty",
+    physicalName: "counterparty",
+    writeMode: "Independent",
+    periodicity: "NonPeriodic",
+    dimensions: [
+      { id: uuid(2), name: "taxId", physicalName: "tax_id", type: "Text" },
+    ],
+  })
+
+  it("lets the label vanish when the new kind has none", () => {
+    expect(run({ [PROJECT]: project(), [REGISTER]: register() })).toEqual([])
+  })
+
+  it.each([
+    [
+      "allowedTypes of an attribute",
+      USER,
+      document("Order", {
+        attributes: [
+          attribute("party", {
+            type: "Ref",
+            allowedTypes: [
+              { kind: "InformationRegister", name: "Counterparty" },
+            ],
+          }),
+        ],
+      }),
+    ],
+    [
+      "recorderTypes",
+      "information-registers/Other/Other.meta.json",
+      {
+        ...register(),
+        id: uuid(50),
+        name: "Other",
+        physicalName: "other",
+        writeMode: "RecorderSubordinate",
+        recorderTypes: [{ kind: "InformationRegister", name: "Counterparty" }],
+      },
+    ],
+  ])("refuses the vanished label of a target of %s", (_, path, user) => {
+    const current = {
+      [PROJECT]: project(),
+      [REGISTER]: register(),
+      [path]: user,
+    }
+    expect(run(current)).toEqual([
+      [
+        REGISTER,
+        "/kindLabel",
+        { field: "kindLabel", before: "counterparty", after: "(removed)" },
+      ],
+    ])
+  })
+
+  it("refuses the vanished label of one of several catalog owners", () => {
+    const current = {
+      [PROJECT]: project(),
+      [REGISTER]: register(),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        owners: [
+          { kind: "InformationRegister", name: "Counterparty" },
+          { kind: "Catalog", name: "Item" },
+        ],
+      }),
+    }
+    expect(run(current).map(([file]) => file)).toEqual([REGISTER])
+  })
+
+  it("a single reference to the promoted object keeps no label alive", () => {
+    const current = {
+      [PROJECT]: project(),
+      [REGISTER]: register(),
+      [USER]: document("Order", {
+        attributes: [
+          attribute("party", {
+            type: "Ref",
+            ref: { kind: "InformationRegister", name: "Counterparty" },
+          }),
+        ],
+      }),
+    }
+    expect(run(current)).toEqual([])
+  })
+
+  it("still refuses a schema change on a promoted object", () => {
+    expect(run(promoted({ schema: "billing" }))).toEqual([
+      [
+        PROMOTED,
+        "/schema",
+        { field: "schema", before: "public", after: "billing" },
+      ],
+    ])
+  })
+
+  it("does not free elements of an object that stays a custom table", () => {
+    const current = {
+      [PROJECT]: project(),
+      [TABLE]: customTable("Counterparty", {
+        id: uuid(1),
+        physicalName: "counterparties",
+        kindLabel: "counterparty",
+        columns: [
+          { ...column(10, "id"), id: uuid(9), type: "UUID" },
+          { ...column(2, "tax_id"), name: "inn" },
+        ],
+      }),
+      [SECTION_TABLE]: customTable("CounterpartyContact", {
+        id: uuid(3),
+        physicalName: "counterparty_contacts",
+        columns: [{ ...column(4, "tel"), name: "tel" }],
+      }),
+    }
+    expect(run(current)).toEqual([
+      [
+        TABLE,
+        "/columns/1/physicalName",
+        { field: "physicalName", before: "inn", after: "tax_id" },
+      ],
+    ])
   })
 })
