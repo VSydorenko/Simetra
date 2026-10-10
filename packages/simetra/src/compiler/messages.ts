@@ -1760,12 +1760,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "promote.type-unsupported": {
     en: (p) =>
-      `Column ${p.column} of ${p.table} cannot become an attribute of the kind: ${p.detail}`,
+      p.reason === "nullable-scope"
+        ? `Column ${p.column} of ${p.table} allows NULL, and the scope column of the kind is NOT NULL`
+        : `Column ${p.column} of ${p.table} cannot become an attribute of the kind: ${p.detail}`,
     uk: (p) =>
-      `Колонка ${p.column} таблиці ${p.table} не може стати реквізитом виду: ${p.detail}`,
+      p.reason === "nullable-scope"
+        ? `Колонка ${p.column} таблиці ${p.table} допускає NULL, а колонка скоупу виду — NOT NULL`
+        : `Колонка ${p.column} таблиці ${p.table} не може стати реквізитом виду: ${p.detail}`,
     hint: {
-      en: "Retire the column or change it in the adopted table first: a raw type, a generated or identity column and an explicit collation have no attribute counterpart, and a foreign key becomes a Ref only as a single column referencing the key of a metadata object.",
-      uk: "Виведіть колонку з ужитку або спершу змініть її в прийнятій таблиці: сирий тип, генерована чи identity-колонка й явна колляція не мають відповідника в реквізиті, а FK стає Ref лише однією колонкою на ключ об'єкта метаданих.",
+      en: (p) =>
+        p.reason === "nullable-scope"
+          ? "A fill step does not assign tenants: mark the column notNull in the CustomTable, apply it through the normal pipeline (it fails on existing NULLs, so fix that data first), then promote."
+          : "Retire the column or change it in the adopted table first: a raw type, a generated or identity column and an explicit collation have no attribute counterpart, and a foreign key becomes a Ref only as a single column referencing the key of a metadata object.",
+      uk: (p) =>
+        p.reason === "nullable-scope"
+          ? "Крок fill тенантів не призначає: позначте колонку notNull у CustomTable, застосуйте це звичайним конвеєром (він впаде на наявних NULL, тож спершу виправте ці дані), потім промотуйте."
+          : "Виведіть колонку з ужитку або спершу змініть її в прийнятій таблиці: сирий тип, генерована чи identity-колонка й явна колляція не мають відповідника в реквізиті, а FK стає Ref лише однією колонкою на ключ об'єкта метаданих.",
     },
   },
   "promote.default-unplaced": {

@@ -218,6 +218,15 @@ export function placeColumns(
           )
           return
         }
+        // Колонка скоупу виду — NOT NULL, а `fill` скоуп не адресує:
+        // призначення тенанта — рішення про належність даних, тож його
+        // приймає звичайний конвеєр до промоції, а не крок даних.
+        if (!column.notNull) {
+          onColumn("promote.type-unsupported", index, {
+            reason: "nullable-scope",
+            detail: "the scope column allows NULL",
+          })
+        }
         fate = { to: "scope" }
         targetKey = "scope"
         break

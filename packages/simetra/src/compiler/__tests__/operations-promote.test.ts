@@ -886,6 +886,44 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
     })
   })
 
+  it("classifies an attribute column comment only when the element replaces it", async () => {
+    const files = withCounterparty((raw) => {
+      ;(raw.columns as Json[])[2]!.comment = "Taxpayer number"
+    })
+    const described = (description: Json) => (m: PromoteInput) => {
+      m.columns.inn = {
+        to: "attribute",
+        collection: "attributes",
+        element: { name: "taxId", description },
+      }
+    }
+    const subject = "Counterparty#comment/inn"
+    const replaced = await promoted(files, mapping(described({ en: "Tax id" })))
+    expect(brief(replaced.result)).toEqual([
+      {
+        code: "promote.unclassified",
+        file: COUNTERPARTY_FILE,
+        pointer: "/columns/2/comment",
+        params: { subject },
+      },
+    ])
+    const removed = await promoted(
+      files,
+      mapping((m) => {
+        described({ en: "Tax id" })(m)
+        m.conversions[subject] = "removed"
+      })
+    )
+    expect(errors(removed.result)).toEqual([])
+    // Опис, що збігається з коментарем, ключа не потребує.
+    const same = await promoted(
+      files,
+      mapping(described({ uk: "Taxpayer number", en: "Tax id" }))
+    )
+    expect(errors(same.result)).toEqual([])
+    // Без опису коментар сам стає описом (наступний тест).
+  })
+
   it("carries the column title and comment into the attribute", async () => {
     const files = withCounterparty((raw) => {
       Object.assign((raw.columns as Json[])[2]!, {
@@ -1148,6 +1186,47 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     expect(
       (json(after, "project.meta.json").scopeKinds as Json[])[0]!.root
     ).toEqual({ object: { kind: "Catalog", name: "Organization" } })
+  })
+
+  it("refuses a nullable scope column and accepts it marked notNull", async () => {
+    const files = (notNull: boolean) => {
+      const counterparty = withCounterparty((raw) => {
+        raw.scope = "org"
+        raw.scopeColumn = "orgId"
+        ;(raw.columns as Json[]).push({
+          id: uuid(7010),
+          name: "orgId",
+          physicalName: "org_ref",
+          type: "UUID",
+          notNull,
+        })
+      })
+      return scoped({
+        [COUNTERPARTY_FILE]: json(counterparty, COUNTERPARTY_FILE),
+      })
+    }
+    const scope = mapping((m) => {
+      m.columns.orgId = { to: "scope" }
+    })
+    const nullable = files(false)
+    expect((await compile(nullable)).diagnostics).toEqual([])
+    const { result } = await promoted(nullable, scope)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.type-unsupported",
+        file: COUNTERPARTY_FILE,
+        pointer: "/columns/5",
+        params: {
+          table: "Counterparty",
+          column: "orgId",
+          reason: "nullable-scope",
+          detail: "the scope column allows NULL",
+        },
+      },
+    ])
+    expect(result.diagnostics[0]!.hint).toMatch(/notNull/)
+    const ok = await promoted(files(true), scope)
+    expect(errors(ok.result)).toEqual([])
   })
 
   it("refuses a reference to the scope column and records the scope carrier", async () => {
