@@ -492,5 +492,29 @@ describe("applyEdits", () => {
     expect(
       rw("SELECT x.inn FROM app.rows() AS x(id int, inn text)").problems
     ).toEqual([])
+    expect(
+      rw("SELECT inn FROM app.counterparties c, unnest(ARRAY[1]) u")
+    ).toEqual({
+      sql: "SELECT tax_id AS inn FROM app.counterparty c, unnest(ARRAY[1]) u",
+      problems: [],
+      changes: [],
+    })
+  })
+
+  it("carries an unproven row shape through stars of derived sources", () => {
+    for (const sql of [
+      "SELECT s.inn FROM (SELECT * FROM unnest($1)) s",
+      "WITH s AS (SELECT * FROM unnest($1)) SELECT s.inn FROM s",
+      "SELECT s.inn FROM (SELECT x.* FROM unnest($1) x) s",
+      "SELECT t.inn FROM (SELECT * FROM (SELECT * FROM unnest($1)) s) t",
+      // Перевантаження застосунку обирається за типом неконстантного аргументу.
+      "SELECT g.inn FROM generate_series($1) g",
+    ]) {
+      expect(rw(sql).problems, sql).toEqual(["rewrite.unsupported"])
+    }
+    // Явний список колонок підзапиту доводить форму.
+    expect(
+      rw("SELECT s.inn FROM (SELECT x.id AS inn FROM unnest($1) x) s").problems
+    ).toEqual([])
   })
 })

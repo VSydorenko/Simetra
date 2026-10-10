@@ -50,11 +50,12 @@ interface Leaf {
   /** Індекс UTF-16 відношення в тексті — для відмови за ім'ям джерела. */
   location?: number
   /**
-   * Виклик функції в `FROM` з недоведеною формою рядка: `unnest` масиву
+   * Джерело з недоведеною формою рядка: виклик функції (`unnest` масиву
    * рядків чи функція, що повертає рядок промотованої таблиці, віддає її
-   * колонки. Ім'я — для відмови.
+   * колонки) або похідне джерело, вивід якого розгортає `*` над таким.
+   * Значення — опис першопричини для відмови.
    */
-  functionSource?: string
+  unproven?: string
 }
 
 /** `JOIN` з псевдонімом: внутрішні імена сховані, колонки — їхнє об'єднання. */
@@ -75,7 +76,7 @@ interface Env {
   /** Від зовнішнього рівня до внутрішнього. */
   levels: readonly Level[]
   /** Видимі CTE: ім'я → колонки виводу (`undefined` — невідомі). */
-  ctes: ReadonlyMap<string, readonly string[] | undefined>
+  ctes: ReadonlyMap<string, CteShape>
 }
 
 /** Як обробляється список виводу. */
@@ -104,6 +105,14 @@ interface RefResult {
 interface Outputs {
   pre: (string | undefined)[]
   post: (string | undefined)[]
+  /** Вивід розгортає `*` над джерелом з недоведеною формою (`Leaf.unproven`). */
+  unproven?: string
+}
+
+/** Колонки CTE; `unproven` — як у `Leaf`. */
+interface CteShape {
+  columns: readonly string[] | undefined
+  unproven?: string
 }
 
 const KEEP: OutputMode = { alias: true, names: true, stars: true, top: false }
@@ -534,32 +543,38 @@ class StatementRewriter {
       // Колонки рекурсивного CTE — з його нерекурсивної частини, але тіло
       // бачить себе; невідомі колонки під час обходу тіла лише гучніші.
       for (const def of defs)
-        if (def.ctename !== undefined) visible.set(def.ctename, undefined)
+        if (def.ctename !== undefined) {
+          visible.set(def.ctename, { columns: undefined })
+        }
     }
     for (const def of defs) {
-      const columns = this.cte(def, {
+      const shape = this.cte(def, {
         levels: outer.levels,
         ctes: new Map(visible),
       })
-      if (def.ctename !== undefined) visible.set(def.ctename, columns)
+      if (def.ctename !== undefined) visible.set(def.ctename, shape)
     }
     return { levels: outer.levels, ctes: visible }
   }
 
-  private cte(def: CommonTableExpr, env: Env): readonly string[] | undefined {
+  private cte(def: CommonTableExpr, env: Env): CteShape {
     const query = def.ctequery
     let outputs: (string | undefined)[] | undefined
+    let unproven: string | undefined
     if (query !== undefined) {
-      if ("SelectStmt" in query)
-        outputs = this.select(query.SelectStmt, env, KEEP)?.pre
-      else if ("InsertStmt" in query) this.insert(query.InsertStmt, env, KEEP)
+      if ("SelectStmt" in query) {
+        const selected = this.select(query.SelectStmt, env, KEEP)
+        outputs = selected?.pre
+        unproven = selected?.unproven
+      } else if ("InsertStmt" in query) this.insert(query.InsertStmt, env, KEEP)
       else if ("UpdateStmt" in query) this.update(query.UpdateStmt, env, KEEP)
       else if ("DeleteStmt" in query) this.delete(query.DeleteStmt, env, KEEP)
       else this.walk(query, env)
       if (outputs === undefined) outputs = this.dmlOutputs(query)
     }
     const aliases = stringList(def.aliascolnames)
-    return completeNames(outputs, aliases)
+    const columns = completeNames(outputs, aliases)
+    return unproven === undefined ? { columns } : { columns, unproven }
   }
 
   /** Імена `RETURNING` оператора зміни даних у CTE. */
@@ -684,13 +699,15 @@ class StatementRewriter {
             query.SelectStmt,
             sub.lateral === true ? lateral() : env,
             KEEP
-          )?.pre
+          )
         : undefined
-    return {
+    const leaf: Leaf = {
       refname: sub.alias?.aliasname,
       aliased: true,
-      columns: completeNames(outputs, stringList(sub.alias?.colnames)),
+      columns: completeNames(outputs?.pre, stringList(sub.alias?.colnames)),
     }
+    if (outputs?.unproven !== undefined) leaf.unproven = outputs.unproven
+    return leaf
   }
 
   /**
@@ -727,7 +744,7 @@ class StatementRewriter {
       refname,
       aliased: true,
       columns: undefined,
-      functionSource: name?.name ?? "a function",
+      unproven: `the function-call source ${name?.name ?? "(unnamed)"}()`,
     }
   }
 
@@ -741,14 +758,14 @@ class StatementRewriter {
       rv.catalogname === undefined &&
       env.ctes.has(relname)
     ) {
-      return {
+      const shape = env.ctes.get(relname)!
+      const leaf: Leaf = {
         refname,
         aliased,
-        columns: completeNames(
-          env.ctes.get(relname),
-          stringList(rv.alias?.colnames)
-        ),
+        columns: completeNames(shape.columns, stringList(rv.alias?.colnames)),
       }
+      if (shape.unproven !== undefined) leaf.unproven = shape.unproven
+      return leaf
     }
     const resolved = this.resolveTable(
       rv.catalogname,
@@ -905,6 +922,7 @@ class StatementRewriter {
   ): Outputs {
     const pre: (string | undefined)[] = []
     const post: (string | undefined)[] = []
+    let unproven: string | undefined
     for (const t of targets) {
       const name = outputName(t)
       pre.push(name)
@@ -915,6 +933,7 @@ class StatementRewriter {
         isStar(value.ColumnRef)
       ) {
         this.starRef(value.ColumnRef, env, { level, mode })
+        unproven ??= starUnproven(value.ColumnRef, env, level)
         post.push(name)
         continue
       }
@@ -947,7 +966,7 @@ class StatementRewriter {
       }
       post.push(undefined)
     }
-    return { pre, post }
+    return unproven === undefined ? { pre, post } : { pre, post, unproven }
   }
 
   /** `GROUP BY <ім'я>`: спершу вхідна колонка свого рівня, потім ім'я виводу. */
@@ -1316,15 +1335,10 @@ class StatementRewriter {
       // Псевдонім `JOIN`: колонку дає одне з внутрішніх джерел.
       const hits = leaves.filter((l) => l.columns?.includes(field) ?? false)
       const unknown = leaves.filter((l) => l.columns === undefined)
-      const fn = unknown.find((l) => l.functionSource !== undefined)
+      const fn = unknown.find((l) => l.unproven !== undefined)
       if (hits.length === 1 && unknown.length === 0) leaf = hits[0]
       else if (fn !== undefined && this.relevantColumn(field)) {
-        this.functionSourceProblem(
-          ref,
-          names.join("."),
-          fn.functionSource!,
-          field
-        )
+        this.unprovenProblem(ref, names.join("."), fn.unproven!, field)
         return undefined
       } else if (leaves.some((l) => l.table?.columns.has(field))) {
         this.problem(
@@ -1336,18 +1350,13 @@ class StatementRewriter {
       }
     }
     if (
-      leaf?.functionSource !== undefined &&
+      leaf?.unproven !== undefined &&
       leaf.columns === undefined &&
       this.relevantColumn(field)
     ) {
       // Оператор може не згадувати таблицю (`unnest(a)` параметра-масиву),
       // а функція — віддавати її рядки: мовчки лишене ім'я зламалося б.
-      this.functionSourceProblem(
-        ref,
-        names.join("."),
-        leaf.functionSource,
-        field
-      )
+      this.unprovenProblem(ref, names.join("."), leaf.unproven, field)
       return undefined
     }
     if (
@@ -1525,9 +1534,9 @@ class StatementRewriter {
     }
     if ("merged" in before || "failed" in before) return { result: undefined }
     if ("hits" in before) {
-      const fn = before.unknown.find((l) => l.functionSource !== undefined)
+      const fn = before.unknown.find((l) => l.unproven !== undefined)
       if (fn !== undefined && this.relevantColumn(name)) {
-        this.functionSourceProblem(ref, name, fn.functionSource!, name)
+        this.unprovenProblem(ref, name, fn.unproven!, name)
         return { result: undefined }
       }
       if (
@@ -1588,7 +1597,7 @@ class StatementRewriter {
     }
   }
 
-  private functionSourceProblem(
+  private unprovenProblem(
     ref: ColumnRef,
     text: string,
     source: string,
@@ -1597,7 +1606,7 @@ class StatementRewriter {
     this.problem(
       "rewrite.unsupported",
       this.at(ref.location),
-      `"${text}" may come from the function-call source ${source}() in FROM, whose row shape is not proven, and "${field}" is a column that the promotion changes; give the call a column definition list or select the columns explicitly`
+      `"${text}" may come from ${source} in FROM, whose row shape is not proven, and "${field}" is a column that the promotion changes; give the call a column definition list or select the columns explicitly`
     )
   }
 
@@ -1952,6 +1961,7 @@ const SCALAR_SET_FUNCTIONS: ReadonlySet<string> = new Set([
   "generate_subscripts",
   "regexp_split_to_table",
   "string_to_table",
+  "unnest",
 ])
 
 /** Ім'я першої функції в `FROM`; `scalar` — відома скалярна функція каталогу. */
@@ -1967,8 +1977,58 @@ function functionName(
   )
   const name = names.at(-1)
   if (name === undefined) return undefined
-  const catalog = names.length === 1 || names[0] === "pg_catalog"
-  return { name, scalar: catalog && SCALAR_SET_FUNCTIONS.has(name) }
+  // Функція каталогу доводить форму лише над константами: перевантаження
+  // застосунку (`app.generate_series(app.t[])` за `search_path`) Postgres
+  // обирає за типом аргументу, а тип константи — завжди тип каталогу.
+  const args = call.FuncCall.args ?? []
+  const scalar =
+    (names.length === 1 || names[0] === "pg_catalog") &&
+    SCALAR_SET_FUNCTIONS.has(name) &&
+    (name !== "unnest" || args.length === 1) &&
+    call.FuncCall.agg_star !== true &&
+    call.FuncCall.func_variadic !== true &&
+    args.every(isConstant)
+  return { name, scalar }
+}
+
+/** Константний вираз: літерал, його приведення, `ARRAY[…]` і арифметика над ними. */
+function isConstant(node: Node): boolean {
+  if ("A_Const" in node) return true
+  if ("TypeCast" in node) {
+    return node.TypeCast.arg !== undefined && isConstant(node.TypeCast.arg)
+  }
+  if ("A_ArrayExpr" in node) {
+    return (node.A_ArrayExpr.elements ?? []).every(isConstant)
+  }
+  if ("A_Expr" in node && node.A_Expr.kind === "AEXPR_OP") {
+    const { lexpr, rexpr } = node.A_Expr
+    return (
+      (lexpr === undefined || isConstant(lexpr)) &&
+      rexpr !== undefined &&
+      isConstant(rexpr)
+    )
+  }
+  return false
+}
+
+/**
+ * Перше джерело з недоведеною формою, над яким розгортається `*`
+ * (усі джерела рівня) чи `x.*` (джерело `x`; невідоме — усі джерела рівня).
+ */
+function starUnproven(
+  ref: ColumnRef,
+  env: Env,
+  level: Level
+): string | undefined {
+  const names = strings((ref.fields ?? []).slice(0, -1)) ?? []
+  const qualifier = names.at(-1)
+  const item =
+    qualifier === undefined
+      ? undefined
+      : findByRefname(env.levels, qualifier, false)
+  const leaves =
+    item === undefined ? level.items.flatMap(leavesOf) : leavesOf(item)
+  return leaves.find((l) => l.unproven !== undefined)?.unproven
 }
 
 function firstLocation(value: unknown): number | undefined {

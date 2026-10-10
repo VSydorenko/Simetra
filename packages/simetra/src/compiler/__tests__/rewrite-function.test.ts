@@ -541,6 +541,48 @@ describe("rewriteFunction", () => {
       expect(r.sql).toBe(sql)
     })
 
+    /** Функція над масивом рядків промотованої таблиці з тілом `LANGUAGE sql`. */
+    const overArray = (body: string, options = "") =>
+      `CREATE FUNCTION app.f(a app.counterparties[]) RETURNS SETOF text LANGUAGE sql STABLE ${options} AS $$ ${body} $$`
+
+    it.each([
+      ["a subquery star", "SELECT s.inn FROM (SELECT * FROM unnest(a)) s"],
+      ["a CTE star", "WITH s AS (SELECT * FROM unnest(a)) SELECT s.inn FROM s"],
+      ["a qualified star", "SELECT s.inn FROM (SELECT x.* FROM unnest(a) x) s"],
+      [
+        "two nested stars",
+        "SELECT t.inn FROM (SELECT * FROM (SELECT * FROM unnest(a)) s) t",
+      ],
+      ["an unqualified name", "SELECT inn FROM (SELECT * FROM unnest(a)) s"],
+    ])("refuses a function-call source wrapped in %s", (_, body) => {
+      const sql = overArray(body)
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.problems[0]!.detail).toContain("unnest()")
+      expect(r.sql).toBe(sql)
+    })
+
+    it("refuses a catalog set function over a non-constant argument", () => {
+      // За `search_path = app` Postgres обирає перевантаження застосунку
+      // `app.generate_series(app.counterparties[])`.
+      const sql = overArray(
+        "SELECT g.inn FROM generate_series(a) g",
+        "SET search_path = app"
+      )
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.problems[0]!.detail).toContain("generate_series()")
+    })
+
+    it("does not refuse unnest over a constant array", () => {
+      const sql = overArray("SELECT u FROM unnest(ARRAY[1, 2]) u")
+      const r = rewriteFunction(sql, ctx)
+      expect(r.problems).toEqual([])
+      expect(r.sql).toBe(
+        sql.replace("app.counterparties[]", "app.counterparty[]")
+      )
+    })
+
     it("does not refuse a scalar set function", () => {
       const sql =
         "CREATE FUNCTION app.f() RETURNS SETOF int LANGUAGE sql STABLE AS $$ SELECT g FROM generate_series(1, 2) g $$"
