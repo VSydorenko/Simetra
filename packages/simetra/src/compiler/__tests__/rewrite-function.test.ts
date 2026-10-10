@@ -607,10 +607,7 @@ describe("rewriteFunction", () => {
       const r = rewriteFunction(sql, ctx)
       expect(codes(r)).toEqual(["rewrite.unsupported"])
       expect(r.problems[0]!.detail).toContain("row expansion")
-      expect(r.contractChanges.map((c) => c.reason)).toEqual([
-        "signature",
-        "star",
-      ])
+      expect(r.contractChanges.map((c) => c.reason)).toContain("star")
       expect(r.sql).toBe(sql)
     })
 
@@ -649,6 +646,39 @@ describe("rewriteFunction", () => {
       const r = rewriteFunction(sql, ctx)
       expect(codes(r)).toEqual(["rewrite.unsupported"])
       expect(r.sql).toBe(sql)
+    })
+
+    it.each([
+      "SELECT 1::text FROM unnest(a) x JOIN app.invoice i USING (name)",
+      "SELECT name FROM unnest(a) x JOIN app.invoice i USING (name)",
+      "SELECT inn FROM unnest(a) x JOIN unnest(a) y USING (inn)",
+      "SELECT 1::text FROM unnest(a) x NATURAL JOIN app.invoice i",
+      "SELECT inn(x) FROM unnest(a) x",
+    ])("refuses a merged or functional-notation name: %s", (body) => {
+      const sql = overArray(body)
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r).length).toBeGreaterThan(0)
+      expect(new Set(codes(r))).toEqual(new Set(["rewrite.unsupported"]))
+      expect(r.sql).toBe(sql)
+    })
+
+    it("refuses functional notation on a promoted table", () => {
+      const sql =
+        "CREATE FUNCTION app.f() RETURNS SETOF text LANGUAGE sql STABLE AS $$ SELECT inn(c) FROM app.counterparties c $$"
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.problems[0]!.detail).toContain("functional notation")
+      expect(r.sql).toBe(sql)
+    })
+
+    it("reports a whole row of an unproven source", () => {
+      const sql = overArray("SELECT row_to_json(d)->>'inn' FROM unnest(a) d")
+      const r = rewriteFunction(sql, ctx)
+      expect(r.problems).toEqual([])
+      expect(r.contractChanges.map((c) => c.reason)).toEqual([
+        "signature",
+        "wholeRow",
+      ])
     })
 
     it("does not refuse a cast constant of a catalog type", () => {

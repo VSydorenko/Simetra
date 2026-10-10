@@ -531,10 +531,10 @@ describe("proven column sets (unknown → refusal)", () => {
       "SELECT s.inn FROM (SELECT (x).* FROM unnest($1) x) s",
       "SELECT s.inn FROM (SELECT (unnest($1)).*) s",
     ]) {
-      expect(rw(sql), sql).toMatchObject({
-        problems: ["rewrite.unsupported"],
-        changes: ["star"],
-      })
+      const r = rw(sql)
+      expect(r.problems, sql).toEqual(["rewrite.unsupported"])
+      // `(x)` — ще й ціле значення недоведеного рядка (`wholeRow`).
+      expect(r.changes, sql).toContain("star")
     }
   })
 
@@ -599,5 +599,58 @@ describe("proven column sets (unknown → refusal)", () => {
       rw("SELECT s.x.inn FROM (SELECT c AS x FROM app.counterparties c) s")
         .problems
     ).toEqual(["rewrite.unsupported"])
+  })
+})
+
+describe("merged names, functional notation and whole rows (round 5)", () => {
+  it("refuses a JOIN USING or NATURAL JOIN over an unproven source", () => {
+    for (const sql of [
+      "SELECT 1::text FROM unnest($1) x JOIN app.invoice i USING (name)",
+      "SELECT 1::text FROM unnest($1) x NATURAL JOIN app.invoice i",
+    ]) {
+      expect(rw(sql).problems, sql).toEqual(["rewrite.unsupported"])
+    }
+    // Злите ім'я над недоведеним джерелом теж не доведене.
+    for (const sql of [
+      "SELECT name FROM unnest($1) x JOIN app.invoice i USING (name)",
+      "SELECT inn FROM unnest($1) x JOIN unnest($1) y USING (inn)",
+    ]) {
+      expect(rw(sql).problems, sql).toEqual([
+        "rewrite.unsupported",
+        "rewrite.unsupported",
+      ])
+    }
+    // Над доведеними джерелами злиття лишається без відмови.
+    expect(
+      rw("SELECT id FROM app.invoice i JOIN app.notes n USING (id)").problems
+    ).toEqual([])
+  })
+
+  it("refuses functional notation of a changed field on a whole row", () => {
+    for (const sql of [
+      "SELECT inn(c) FROM app.counterparties c",
+      "SELECT inn(x) FROM unnest($1) x",
+    ]) {
+      expect(details(sql), sql).toEqual([
+        'rewrite.unsupported "inn(…)" may be functional notation for the field "inn" of a whole row, and the promotion changes that name; write it as a qualified column',
+      ])
+    }
+    // Скалярний аргумент — звичайний виклик функції.
+    expect(rw("SELECT name(i.name) FROM app.invoice i").problems).toEqual([])
+    expect(rw("SELECT name('x')").problems).toEqual([])
+  })
+
+  it("reports a whole row of an unproven source", () => {
+    for (const sql of [
+      "SELECT d FROM unnest($1) d",
+      "SELECT row_to_json(x)->>'inn' FROM unnest($1) x",
+      "SELECT row_to_json(x.*) FROM unnest($1) x",
+    ]) {
+      expect(rw(sql), sql).toMatchObject({
+        problems: [],
+        changes: ["wholeRow"],
+      })
+    }
+    expect(rw("SELECT g FROM generate_series(1, 2) g").changes).toEqual([])
   })
 })

@@ -5,6 +5,7 @@ import type {
   ColumnRef,
   CommonTableExpr,
   DeleteStmt,
+  FuncCall,
   InsertStmt,
   JoinExpr,
   Node,
@@ -712,6 +713,10 @@ class StatementRewriter {
     const leaves = own.flatMap(leavesOf)
     const using = stringList(join.usingClause) ?? []
     const offset = this.at(firstLocation(join.rarg) ?? firstLocation(join.larg))
+    // Джерело з недоведеними колонками могло б дати змінене ім'я злиттю.
+    const open = leaves.find(
+      (l) => l.columns === undefined && l.unproven.reported !== true
+    )?.unproven
     for (const name of using) {
       if (leaves.some((l) => l.table?.columns.has(name))) {
         this.problem(
@@ -719,18 +724,31 @@ class StatementRewriter {
           offset,
           `renamed column "${name}" in a JOIN USING list has no position in the parse tree`
         )
+      } else if (open !== undefined && this.relevantColumn(name)) {
+        this.problem(
+          "rewrite.unsupported",
+          offset,
+          `column "${name}" in a JOIN USING list may come from ${open.source}: its columns are not proven, and the promotion changes that name`
+        )
       }
       ownMerged.add(name)
     }
-    if (
-      join.isNatural === true &&
-      leaves.some((l) => l.table !== undefined && l.table.columns.size > 0)
-    ) {
-      this.problem(
-        "rewrite.unsupported",
-        offset,
-        "a NATURAL JOIN matches columns by name, and the promotion renames columns of one side"
-      )
+    if (join.isNatural === true) {
+      if (
+        leaves.some((l) => l.table !== undefined && l.table.columns.size > 0)
+      ) {
+        this.problem(
+          "rewrite.unsupported",
+          offset,
+          "a NATURAL JOIN matches columns by name, and the promotion renames columns of one side"
+        )
+      } else if (open !== undefined) {
+        this.problem(
+          "rewrite.unsupported",
+          offset,
+          `a NATURAL JOIN matches columns by name, and ${open.source} has columns that are not proven`
+        )
+      }
     }
     // `ON` бачить лише джерела свого з'єднання і зовнішні рівні.
     this.walk(
@@ -1158,6 +1176,10 @@ class StatementRewriter {
         case "A_Indirection":
           this.indirection(child as A_Indirection, env, results)
           break
+        case "FuncCall":
+          this.functionalNotation(child as FuncCall, env)
+          this.walk(child, env, results)
+          break
         case "SelectStmt":
           this.select(child as SelectStmt, env, KEEP)
           break
@@ -1431,6 +1453,10 @@ class StatementRewriter {
       return { shape: this.recordShape(found.record, found.name), arity: false }
     }
     report(found.leaves)
+    const expansion = starShape(found.leaves, found.coalesced)
+    if (output === undefined && expansion.arity) {
+      for (const leaf of found.leaves) this.unprovenWholeRow(leaf, offset)
+    }
     // `<таблиця>.*` без аліасу: кваліфікатор іде за перейменуванням таблиці.
     const table = found.renameQualifier ? found.leaves[0]?.table : undefined
     if (table !== undefined && table.from !== table.to) {
@@ -1440,7 +1466,66 @@ class StatementRewriter {
         this.edit(token.start, token.end, quoteIdent(table.to))
       }
     }
-    return starShape(found.leaves, found.coalesced)
+    return expansion
+  }
+
+  /** Ціле значення рядка джерела з недоведеними колонками — як рядок промотованої таблиці. */
+  private unprovenWholeRow(leaf: Leaf, offset: number): void {
+    const why = leaf.unproven
+    if (why === undefined || why.reported === true) return
+    this.change(
+      "wholeRow",
+      offset,
+      `a whole row of ${why.source}: its columns are not proven, so the promotion may change its fields`
+    )
+  }
+
+  /**
+   * `inn(c)` — функціональний запис поля `c.inn`: Postgres читає виклик
+   * без схеми з одним аргументом складеного типу як поле. Аргумент, який не
+   * доведено скалярним, із зміненим промоцією ім'ям функції — відмова.
+   */
+  private functionalNotation(call: FuncCall, env: Env): void {
+    const names = strings(call.funcname ?? [])
+    const args = call.args ?? []
+    const arg = args[0]
+    if (
+      names?.length !== 1 ||
+      args.length !== 1 ||
+      arg === undefined ||
+      "NamedArgExpr" in arg ||
+      call.agg_star === true ||
+      call.agg_distinct === true ||
+      call.func_variadic === true ||
+      call.agg_order !== undefined ||
+      call.agg_filter !== undefined ||
+      call.over !== undefined
+    ) {
+      return
+    }
+    const field = names[0]!
+    if (!this.relevantColumn(field) || this.scalarArgument(arg, env)) return
+    this.problem(
+      "rewrite.unsupported",
+      this.at(call.location),
+      `"${field}(…)" may be functional notation for the field "${field}" of a whole row, and the promotion changes that name; write it as a qualified column`
+    )
+  }
+
+  /** Аргумент доведено не цілим рядком: константа, оператор, колонка чи змінна. */
+  private scalarArgument(node: Node, env: Env): boolean {
+    if ("A_Const" in node || "A_Expr" in node) return true
+    if ("TypeCast" in node) {
+      return isBuiltinType(node.TypeCast.typeName, this.tableNames)
+    }
+    if (!("ColumnRef" in node) || isStar(node.ColumnRef)) return false
+    const names = strings(node.ColumnRef.fields ?? [])
+    if (names === undefined) return false
+    if (names.length > 1) return true
+    const name = names[0]!
+    const at = locate(name, [...env.levels].reverse(), false)
+    if (at !== undefined) return "leaf" in at || "merged" in at
+    return this.scope.variables.has(name) && !this.scope.records.has(name)
   }
 
   /** Колонки запису PL/pgSQL для `r.*` у списку виводу. */
@@ -1699,6 +1784,16 @@ class StatementRewriter {
     if ("merged" in before || "failed" in before) return { result: undefined }
     if ("hits" in before) {
       const open = before.unknown[0]
+      if (
+        open !== undefined &&
+        before.hits.length === 0 &&
+        names.length === 1
+      ) {
+        // Ім'я джерела з недоведеними колонками — ціле значення його рядка.
+        const item = findByRefname(env.levels, name, false)
+        const whole = item === undefined ? undefined : leavesOf(item)[0]
+        if (whole !== undefined) this.unprovenWholeRow(whole, offset)
+      }
       if (open !== undefined) {
         this.unprovenProblem(ref, name, open, name)
         return { result: undefined }
@@ -1974,8 +2069,15 @@ function locate(
   after: boolean
 ): Located | undefined {
   for (const level of innermostFirst) {
-    if (level.merged.has(name)) return { merged: true }
     const leaves = level.items.flatMap(leavesOf)
+    // Злите `USING` ім'я доведене, лише коли доведені всі джерела рівня;
+    // інакше резолв іде далі й упирається в недоведене джерело.
+    if (
+      level.merged.has(name) &&
+      leaves.every((l) => (after ? columnsAfter(l) : l.columns) !== undefined)
+    ) {
+      return { merged: true }
+    }
     if (leaves.some((l) => l.unproven?.reported === true)) {
       return { failed: true }
     }
