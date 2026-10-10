@@ -11,6 +11,7 @@ export const TOOL_NAMES = [
   "add",
   "rename",
   "delete",
+  "promote",
   "introspect",
   "diff",
 ] as const

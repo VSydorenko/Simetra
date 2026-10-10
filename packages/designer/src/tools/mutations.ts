@@ -5,10 +5,14 @@ import {
   createObjectInput,
   deleteElement,
   deleteInput,
+  promoteInput,
+  promoteObject,
   renameElement,
   renameInput,
   type CompletionOptions,
   type OperationResult,
+  type PromotionRecord,
+  type PromoteResult,
 } from "simetra/compiler"
 import { readMetadataDir } from "../io/metadata-dir"
 import { schemaPathResolver } from "../io/schema-path"
@@ -33,6 +37,20 @@ async function apply(
     ok: result.ok,
     changes: result.changes,
     diagnostics: result.diagnostics,
+  }
+}
+
+/** Те саме для `promote`: запис промоції їде в `data`, а не губиться. */
+async function applyPromotion(
+  dir: string,
+  operation: (files: Map<string, string>) => Promise<PromoteResult>
+): Promise<RunOutcome<PromotionRecord>> {
+  const result = await operation(await readMetadataDir(dir))
+  return {
+    ok: result.ok,
+    changes: result.changes,
+    diagnostics: result.diagnostics,
+    ...(result.record === undefined ? {} : { data: result.record }),
   }
 }
 
@@ -80,4 +98,20 @@ export const deleteTool = defineTool({
   database: "none",
   destructive: true,
   run: ({ dir }, input) => apply(dir, (files) => deleteElement(files, input)),
+})
+
+// Вхід сюди приходить уже розібраним `promoteInput` (це робить `invoke`):
+// `promoteObject` сам не вилучає призначених полів, а покладається на схему.
+export const promoteTool = defineTool<typeof promoteInput, PromotionRecord>({
+  name: "promote",
+  description:
+    "Promote an adopted CustomTable (with its tabular-section tables) into a Catalog, a Document without movements or an independent InformationRegister from a complete one-off mapping; ids carry over, names become canonical, dependent function bodies are rewritten. Writes only when the result compiles; returns the promotion record for the database plan.",
+  input: promoteInput,
+  files: "write",
+  database: "none",
+  destructive: false,
+  run: ({ dir }, input) =>
+    applyPromotion(dir, (files) =>
+      promoteObject(files, input, completion(dir))
+    ),
 })

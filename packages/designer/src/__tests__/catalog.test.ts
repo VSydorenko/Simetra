@@ -53,6 +53,7 @@ describe("tool catalog", () => {
       "explain",
       "fix",
       "introspect",
+      "promote",
       "rename",
     ])
   })

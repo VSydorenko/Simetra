@@ -5,7 +5,14 @@ import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { TOOLS, toolByName } from "../tools/catalog"
 import { TOOL_NAMES } from "../tools/types"
-import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
+import {
+  addAdoptedTag,
+  project,
+  snapshotOf,
+  TAG_FILE,
+  tagMapping,
+  useTmpProjects,
+} from "./helpers/catalog"
 
 useTmpProjects()
 
@@ -273,5 +280,38 @@ describe("cli adapter", () => {
       env
     )
     expect(r.exitCode).toBe(0)
+  })
+
+  it("promote reads the mapping from stdin, writes and prints the record summary", async () => {
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const r = await runTool(tool("promote"), { _: ["-", dir] }, async () =>
+      JSON.stringify(tagMapping)
+    )
+    expect(r.exitCode).toBe(0)
+    expect(existsSync(join(dir, TAG_FILE))).toBe(false)
+    expect(existsSync(join(dir, "catalogs/Tag/Tag.meta.json"))).toBe(true)
+    expect(r.stdout).toContain("written")
+    expect(r.stdout).toContain("into Catalog")
+  })
+
+  it("promote --format json carries the record", async () => {
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("promote"), {
+      _: [JSON.stringify(tagMapping), dir],
+      "dry-run": true,
+      format: "json",
+    })
+    expect(r.exitCode).toBe(0)
+    const out = JSON.parse(r.stdout) as {
+      written: boolean
+      record: { kind: string; tables: unknown[] }
+    }
+    expect(out.written).toBe(false)
+    expect(out.record.kind).toBe("Catalog")
+    expect(out.record.tables.length).toBeGreaterThan(0)
+    expect(await snapshotOf(dir)).toEqual(before)
   })
 })

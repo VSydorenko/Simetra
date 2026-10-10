@@ -4,10 +4,13 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { toolByName } from "../tools/catalog"
 import {
+  addAdoptedTag,
   opts,
   project,
   run,
   snapshotOf,
+  TAG_FILE,
+  tagMapping,
   useTmpProjects,
 } from "./helpers/catalog"
 
@@ -22,7 +25,7 @@ const rename = {
 
 describe("mutation tools", () => {
   it("only delete is destructive; every mutation writes files", () => {
-    for (const name of ["create", "add", "rename", "delete"]) {
+    for (const name of ["create", "add", "rename", "delete", "promote"]) {
       const t = toolByName(name)!
       expect(t.files).toBe("write")
       expect(t.database).toBe("none")
@@ -151,5 +154,68 @@ describe("mutation tools", () => {
     expect(text).toContain('"flagOne"')
     expect(text).toContain('"flagTwo"')
     expect((await run("compile", dir, {})).ok).toBe(true)
+  })
+
+  describe("promote", () => {
+    it("writes on ok and returns the record", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const r = await run("promote", dir, tagMapping)
+      expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+      expect(r.ok).toBe(true)
+      expect(r.written).toBe(true)
+      expect(existsSync(join(dir, TAG_FILE))).toBe(false)
+      expect(existsSync(join(dir, "catalogs/Tag/Tag.meta.json"))).toBe(true)
+      expect(r.data).toMatchObject({
+        kind: "Catalog",
+        objectId: "00000000-0000-4000-8000-00000000a000",
+      })
+      expect((await run("compile", dir, {})).ok).toBe(true)
+    })
+
+    it("dry run writes nothing but still returns the record", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const before = await snapshotOf(dir)
+      const r = await run("promote", dir, tagMapping, {
+        ...opts(dir),
+        dryRun: true,
+      })
+      expect(r.ok).toBe(true)
+      expect(r.written).toBe(false)
+      expect(r.changes.length).toBeGreaterThan(0)
+      expect(r.data).toBeDefined()
+      expect(await snapshotOf(dir)).toEqual(before)
+    })
+
+    it("a refused mapping writes nothing and has no record", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const before = await snapshotOf(dir)
+      const r = await run("promote", dir, {
+        ...tagMapping,
+        columns: { id: { to: "standard", name: "ref" } },
+      })
+      expect(r.ok).toBe(false)
+      expect(r.written).toBe(false)
+      expect(r.data).toBeUndefined()
+      expect(await snapshotOf(dir)).toEqual(before)
+    })
+
+    it("refuses assigned fields in the mapping before the operation runs", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const before = await snapshotOf(dir)
+      const r = await run("promote", dir, {
+        ...tagMapping,
+        into: {
+          ...tagMapping.into,
+          data: { ...tagMapping.into.data, physicalName: "hijacked" },
+        },
+      })
+      expect(r.refusal?.reason).toBe("invalid-input")
+      expect(r.refusal?.message).toContain("physicalName")
+      expect(await snapshotOf(dir)).toEqual(before)
+    })
   })
 })

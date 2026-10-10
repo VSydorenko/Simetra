@@ -1,5 +1,11 @@
 import { diffTool, introspectTool } from "./database-tools"
-import { addTool, createTool, deleteTool, renameTool } from "./mutations"
+import {
+  addTool,
+  createTool,
+  deleteTool,
+  promoteTool,
+  renameTool,
+} from "./mutations"
 import { compileTool, explainTool, fixTool } from "./read"
 import type { Tool } from "./types"
 
@@ -26,6 +32,7 @@ export const TOOLS: readonly Tool[] = [
   addTool,
   renameTool,
   deleteTool,
+  promoteTool,
   introspectTool,
   diffTool,
 ]

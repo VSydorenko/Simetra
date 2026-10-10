@@ -1,4 +1,4 @@
-import type { Explanation, Locale } from "simetra/compiler"
+import type { Explanation, Locale, PromotionRecord } from "simetra/compiler"
 import { formatDiagnostics, renderDiff } from "../io/report"
 import type { Tool, ToolResult } from "../tools/catalog"
 import type { DiffData } from "../tools/database-tools"
@@ -46,6 +46,34 @@ export function renderExplanation(e: Explanation): string {
     }
   }
   return `${lines.join("\n")}\n`
+}
+
+/**
+ * Підсумок запису промоції для терміналу: що на що перетворилось і що
+ * лишається плану бази. Повний запис — у `--format json`.
+ */
+export function renderPromotion(r: PromotionRecord): string {
+  const lines = [`promoted ${r.objectId} into ${r.kind}`]
+  for (const t of r.tables) {
+    lines.push(`  table ${t.schema}.${t.from} -> ${t.to}`)
+  }
+  const counts: [string, number][] = [
+    ["columns renamed or moved", r.columns.length],
+    ["type changes", r.typeChanges.length],
+    ["data steps", r.dataSteps.length],
+    ["columns retired", r.retired.length],
+    ["constraints relaxed", r.relaxed.length],
+    ["constraints tightened", r.tightened.length],
+    ["row level security changes", r.rowLevelSecurity.length],
+    ["delete semantics changes", r.deleteSemantics.length],
+    ["conversions", r.conversions.length],
+    ["units moved", r.movedUnits.length],
+    ["units rewritten", r.rewrittenUnits.length],
+    ["contract changes", r.contractChanges.length],
+  ]
+  for (const [label, n] of counts) if (n > 0) lines.push(`  ${label}: ${n}`)
+  if (r.labelDropped) lines.push("  kind label dropped")
+  return lines.join("\n")
 }
 
 /** Кінцевий результат одного виклику в тексті/JSON для терміналу. */
@@ -98,6 +126,9 @@ export function renderResult(
           written: r.written,
           changed,
           diagnostics: JSON.parse(report) as unknown,
+          ...(tool.name === "promote" && r.data !== undefined
+            ? { record: r.data }
+            : {}),
         },
         null,
         2
@@ -117,6 +148,9 @@ export function renderResult(
       ...r.changes.map((c) => `${verb(c.deleted)} ${o.dir}/${c.path}`),
       ...(r.ok ? [] : ["nothing written: the result has errors"]),
       report,
+      ...(tool.name === "promote" && r.data !== undefined
+        ? [renderPromotion(r.data as PromotionRecord)]
+        : []),
     ].join("\n"),
   }
 }

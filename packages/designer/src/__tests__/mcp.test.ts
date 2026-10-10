@@ -9,11 +9,18 @@ import { UsageError } from "../io/usage-error"
 import { createMcpServer } from "../mcp/server"
 import { READ_ONLY_FLAG, readOnlyHint } from "../tools/hints"
 import type { DatabaseResource } from "../tools/types"
-import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
+import {
+  addAdoptedTag,
+  project,
+  snapshotOf,
+  tagMapping,
+  useTmpProjects,
+} from "./helpers/catalog"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // перевиміряно в E2b: 10055 символів JSON усіх інструментів (+introspect, diff)
-const TOOLS_LIST_MEASURED = 10055
+// перевиміряно в промоції-4: вхід `promote` (мапінг)
+const TOOLS_LIST_MEASURED = 18176
 const TOOLS_LIST_BUDGET = Math.ceil(TOOLS_LIST_MEASURED * 1.2)
 const clients: Client[] = []
 
@@ -76,6 +83,7 @@ describe("simetra mcp", () => {
       "explain",
       "fix",
       "introspect",
+      "promote",
       "rename",
     ])
   })
@@ -283,6 +291,51 @@ describe("simetra mcp", () => {
     })
     expect(r.isError).toBe(true)
     expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  describe("promote", () => {
+    it("returns the record as structured content and as a JSON block", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const client = await connect(dir, false)
+      const r = await client.callTool({
+        name: "promote",
+        arguments: tagMapping,
+      })
+      expect(r.isError).toBeFalsy()
+      const out = r.structuredContent as {
+        written: boolean
+        record: { kind: string; objectId: string }
+      }
+      expect(out.written).toBe(true)
+      expect(out.record.kind).toBe("Catalog")
+      const text = (r.content as { text: string }[])[0]!.text
+      expect(text).toContain("written catalogs/Tag/Tag.meta.json")
+      expect(text).toContain("promotion record:")
+      expect(text).toContain(`"objectId": "${out.record.objectId}"`)
+    })
+
+    it("dry run reports the record and writes nothing", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const before = await snapshotOf(dir)
+      const client = await connect(dir, false)
+      const r = await call(client, "promote", { ...tagMapping, dryRun: true })
+      expect(r.isError).toBe(false)
+      expect(r.out.written).toBe(false)
+      expect(r.text).toContain("would write catalogs/Tag/Tag.meta.json")
+      expect(r.text).toContain("promotion record:")
+      expect(await snapshotOf(dir)).toEqual(before)
+    })
+
+    it("is refused in read-only mode", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const before = await snapshotOf(dir)
+      const r = await call(await connect(dir, true), "promote", tagMapping)
+      expect(r.isError).toBe(true)
+      expect(await snapshotOf(dir)).toEqual(before)
+    })
   })
 
   describe("delete", () => {

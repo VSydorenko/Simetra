@@ -1,9 +1,9 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements through checked operations, compare a database with the metadata (`diff`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename delete elements or promote an adopted table through checked operations, compare a database with the metadata (`diff`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
 ---
 
-# Simetra metadata — compile, explain, fix, create, add, rename, delete, introspect, diff
+# Simetra metadata — compile, explain, fix, create, add, rename, delete, promote, introspect, diff
 
 The tools are one catalog served by the command line and by the MCP server,
 with the same tool names and the same input in both. Run the CLI
@@ -16,20 +16,21 @@ diagnostics themselves.
 
 ## Which tool when
 
-| Task                                                                           | Tool         | CLI                                      | MCP call                                   |
-| ------------------------------------------------------------------------------ | ------------ | ---------------------------------------- | ------------------------------------------ |
-| Is the metadata accepted by the compiler?                                      | `compile`    | `simetra compile [dirs...]`              | `compile` with `{}`                        |
-| What does the compiler derive for one object (tables, columns, keys, queries)? | `explain`    | `simetra explain <Kind>.<Name> [dir]`    | `explain` with `{kind, name}`              |
-| New elements miss `id` / `physicalName` / `kindLabel`, or files are not canonical | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                            |
-| New object                                                                     | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`        |
-| New element in a collection of an object or of the project root                | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}` |
-| Rename an object or a nested element                                           | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`          |
-| Remove an object or a nested element                                           | `delete`     | `simetra delete '<json>' [dir] --yes`    | `delete` with `{target, confirm}`          |
-| Read a live database into metadata                                             | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}`   |
-| Does the database match the metadata?                                          | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                    |
+| Task                                                                              | Tool         | CLI                                      | MCP call                                    |
+| --------------------------------------------------------------------------------- | ------------ | ---------------------------------------- | ------------------------------------------- |
+| Is the metadata accepted by the compiler?                                         | `compile`    | `simetra compile [dirs...]`              | `compile` with `{}`                         |
+| What does the compiler derive for one object (tables, columns, keys, queries)?    | `explain`    | `simetra explain <Kind>.<Name> [dir]`    | `explain` with `{kind, name}`               |
+| New elements miss `id` / `physicalName` / `kindLabel`, or files are not canonical | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                             |
+| New object                                                                        | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`         |
+| New element in a collection of an object or of the project root                   | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}`  |
+| Rename an object or a nested element                                              | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`           |
+| Remove an object or a nested element                                              | `delete`     | `simetra delete '<json>' [dir] --yes`    | `delete` with `{target, confirm}`           |
+| Turn an adopted `CustomTable` into a Catalog, Document or InformationRegister     | `promote`    | `simetra promote <json\|-> [dir]`        | `promote` with `{target, into, columns, …}` |
+| Read a live database into metadata                                                | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}`    |
+| Does the database match the metadata?                                             | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                     |
 
 `compile`, `explain`, `diff` only read files. `fix`, `create`, `add`,
-`rename`, `delete`, `introspect` change files. `introspect` and `diff` read
+`rename`, `delete`, `promote`, `introspect` change files. `introspect` and `diff` read
 the database; neither ever writes to it.
 
 ## Examples
@@ -65,6 +66,21 @@ Preview a deletion without writing and without confirmation:
 {
   "target": { "kind": "Catalog", "name": "Currency", "element": ["sign"] },
   "dryRun": true
+}
+```
+
+Promote an adopted `CustomTable` into a Catalog from a complete one-off
+mapping (every column of the table is named; the call is dry-runnable like any
+mutation, and its response carries the promotion record):
+
+```json simetra:promote
+{
+  "target": { "name": "Tag" },
+  "into": { "kind": "Catalog", "name": "Tag", "data": { "codeLength": 0 } },
+  "columns": {
+    "id": { "to": "standard", "name": "ref" },
+    "name": { "to": "standard", "name": "description" }
+  }
 }
 ```
 

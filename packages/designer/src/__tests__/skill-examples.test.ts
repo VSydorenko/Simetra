@@ -11,6 +11,7 @@ import {
 } from "simetra/compiler"
 import { mcpInputSchema } from "../mcp/tools"
 import { TOOLS, toolByName } from "../tools/catalog"
+import { addAdoptedTag, project, run, useTmpProjects } from "./helpers/catalog"
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const read = (name: string) =>
@@ -59,6 +60,18 @@ describe("simetra-adoption skill", () => {
 })
 
 describe("simetra-metadata skill", () => {
+  useTmpProjects()
+
+  it("the promote example promotes an adopted table", async () => {
+    // Приклад копіюють агенти: розбору входу замало, мапінг мусить пройти.
+    const [, body] = /```json simetra:promote\n([\s\S]*?)```/.exec(skill)!
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const r = await run("promote", dir, JSON.parse(body!))
+    expect(r.diagnostics, JSON.stringify(r.diagnostics)).toEqual([])
+    expect(r.written).toBe(true)
+  })
+
   it("every tool of the catalog is routed in the skill", () => {
     for (const t of TOOLS) expect(skill).toContain(`\`${t.name}\``)
   })

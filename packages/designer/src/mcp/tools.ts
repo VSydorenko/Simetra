@@ -1,4 +1,5 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server"
+import type { PromotionRecord } from "simetra/compiler"
 import { z } from "zod"
 import { formatDiagnostics, renderDiff } from "../io/report"
 import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
@@ -83,6 +84,12 @@ function toResponse(
       content: [{ type: "text", text: renderDiff(data, report) }],
     }
   }
+  // Запис промоції — вхід плану бази: повністю в `structuredContent`, а в
+  // тексті JSON-блоком, бо агент без нього не побачить, що саме перейменовано.
+  const record =
+    tool.name === "promote"
+      ? (result.data as PromotionRecord | undefined)
+      : undefined
   // Збій роботи з базою — не помилка метаданих: зведення не має слати
   // викликача правити теку, коли виправляти треба базу чи підключення
   const databaseFailed = diagnostics.some((d) => d.code === "database.failed")
@@ -111,8 +118,20 @@ function toResponse(
       ...(tool.name === "introspect" && result.data !== undefined
         ? (result.data as Record<string, unknown>)
         : {}),
+      ...(record === undefined ? {} : { record }),
     },
-    content: [{ type: "text", text: [...lines, report].join("\n") }],
+    content: [
+      {
+        type: "text",
+        text: [
+          ...lines,
+          report,
+          ...(record === undefined
+            ? []
+            : ["promotion record:", JSON.stringify(record, null, 2)]),
+        ].join("\n"),
+      },
+    ],
   }
 }
 
