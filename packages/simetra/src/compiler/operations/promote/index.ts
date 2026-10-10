@@ -15,7 +15,7 @@ import { compileInput, refused, refuseSuppliedId } from "../refuse"
 import { objectFiles } from "../target"
 import type { OperationResult } from "../types"
 import { cascadeReferences, type PromotedReferences } from "./cascade"
-import { fillStepKind, fillTargetKey, modelVolatileFunctions } from "./fill"
+import { fillStepKind, fillTargetKey, modelFunctions } from "./fill"
 import { kindFile, type PromotedSection } from "./kind-file"
 import {
   missingFills,
@@ -151,7 +151,7 @@ async function planSteps(
   const problems: Diagnostic[] = []
   if (input.fill.length === 0) return { steps, problems }
   const parse = await loadSqlParser()
-  const volatile = modelVolatileFunctions(model)
+  const functions = modelFunctions(model)
   const unknown = (path: (string | number)[], detail: string) =>
     problems.push(
       diagnostic("promote.mapping-unknown", "", "", {
@@ -180,6 +180,20 @@ async function planSteps(
     }
     taken.add(key)
     const target = plannedTarget(table, step.target)
+    // Ключ — ідентичність рядка: його не обчислюють, а переносять колонкою.
+    if (
+      target !== undefined &&
+      ("placed" in target
+        ? target.placed.fate.to === "standard" &&
+          target.placed.fate.def.primaryKey === true
+        : "standard" in target && target.standard.primaryKey === true)
+    ) {
+      unknown(
+        [i, "target", "name"],
+        `${step.target.name} is the key of the row: it carries the row's identity, and a step cannot compute it`
+      )
+      continue
+    }
     if (target === undefined) {
       unknown(
         [i, "target", "name"],
@@ -210,10 +224,11 @@ async function planSteps(
       ...(keyColumns.length === 1 ? { key: keyColumns[0] } : {}),
       columns: physical.columns.map((c) => c.name),
     }
-    const kind = fillStepKind(step, mapped, retired, parse, shape, volatile)
+    const kind = fillStepKind(step, mapped, retired, parse, shape, functions)
     if ("reason" in kind) {
       problems.push(
         diagnostic("promote.expression-invalid", "", "", {
+          at: toPointer(["fill", String(i), "expression"]),
           expression: step.expression,
           reason: kind.reason,
         })
@@ -422,7 +437,13 @@ export async function promoteObject(
   }
   for (const t of tables) {
     problems.push(
-      ...missingFills(t.promoted, t.target, input.fill, t.section?.input.table)
+      ...missingFills(
+        t.promoted,
+        t.target,
+        input.fill,
+        t.section?.input.table,
+        t.data
+      )
     )
   }
   const planned = await planSteps(model, input, tables)
@@ -524,8 +545,9 @@ export async function promoteObject(
 
 /**
  * Таблиці ТЧ одиниці (§11): прийняті таблиці, що стають табличними
- * частинами нового об'єкта. Таблиця ТЧ лежить у схемі об'єкта, а модуль
- * `.module.ts` у ТЧ місця не має — це відмова, а не мовчазне зняття.
+ * частинами нового об'єкта. Таблиця ТЧ лежить у схемі об'єкта й має його
+ * скоуп, а модуль `.module.ts` у ТЧ місця не має — це відмова, а не мовчазне
+ * зняття.
  */
 function unitSections(
   files: ReadonlyMap<string, string>,
@@ -577,6 +599,15 @@ function unitSections(
     if (table?.schema !== objectTable?.schema) {
       unsupported(
         `a tabular section lives in schema ${objectTable?.schema ?? ""} of its object, not in ${table?.schema ?? ""}`
+      )
+    }
+    // Рядок ТЧ несе скоуп власника (носій скоупу входить у FK рядка): інший
+    // скоуп таблиці ТЧ дав би рядкам тенант, який не з чого обчислити.
+    const scopeOf = (o: SourceObject) =>
+      (o.data as { scope?: string }).scope ?? "none"
+    if (scopeOf(sectionObject) !== scopeOf(object)) {
+      unsupported(
+        `its scope ${scopeOf(sectionObject)} differs from scope ${scopeOf(object)} of the object, and tabular section rows take the object's scope`
       )
     }
     const module = objectFiles(files, sectionObject).find((file) =>

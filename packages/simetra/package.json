@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
-    "test:db": "vitest run --project db"
+    "test:db": "vitest run --project db",
+    "catalog-functions": "node scripts/catalog-functions.ts"
   },
   "dependencies": {
     "@libpg-query/parser": "17.8.0",

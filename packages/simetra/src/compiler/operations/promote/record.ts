@@ -394,7 +394,7 @@ function targetColumn(
  * Зміни семантики видалення (рішення 5, §9.5) з двох знімків. Власні FK:
  * дія FK на ті самі колонки до й після, якщо вона змінилась, або новий FK з
  * каскадом, якого не було. Вхідні: FK з `CASCADE`/`SET NULL` таблиці поза
- * одиницею в таблицю одиниці — дія та сама, але контроль посилань П3 мусить
+ * одиницею в сам об'єкт — дія та сама, але контроль посилань П3 мусить
  * її бачити.
  */
 function deleteSemantics(
@@ -429,7 +429,11 @@ function deleteSemantics(
       })
     }
   }
-  const unit = new Set(pairs.map(({ now }) => `${now.schema}.${now.name}`))
+  // Вхідне посилання ззовні — лише на сам об'єкт: на таблицю ТЧ воно
+  // відмовляє ще в каскаді (рішення 5).
+  const unit = new Set(
+    pairs.slice(0, 1).map(({ now }) => `${now.schema}.${now.name}`)
+  )
   for (const table of after.physical.tables) {
     if (table.origin.objectId === objectId) continue
     for (const fk of table.foreignKeys) {

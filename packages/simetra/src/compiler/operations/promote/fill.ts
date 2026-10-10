@@ -1,6 +1,7 @@
 import type { CompiledModel } from "../../compile"
 import type { SqlParser } from "../../sql/parse"
 import type { PromoteInput } from "../inputs"
+import { CATALOG_FUNCTIONS } from "./catalog-functions"
 import type { PromotionRecord } from "./record"
 
 type FillStep = PromoteInput["fill"][number]
@@ -17,6 +18,7 @@ export type FillProblem =
   | "multipleStatements"
   | "setReturning"
   | "volatile"
+  | "unknownFunction"
   | "nondeterministicWindow"
   | "unknownColumn"
 
@@ -25,24 +27,33 @@ export const fillTargetKey = (target: FillStep["target"]) =>
   `${target.to} ${target.name}`
 
 /**
- * Волатильні функції каталогу (рішення 12): крок виконується один раз над
- * наявними рядками, і повтор плану мусить дати ті самі дані.
+ * Функції моделі для виразу (рішення 12): `immutable` — імена (голі й
+ * кваліфіковані), усі визначення яких явно IMMUTABLE і не повертають множину;
+ * `other` — імена решти функцій і агрегатів моделі.
  */
-const VOLATILE_FUNCTIONS: ReadonlySet<string> = new Set([
-  "random",
-  "random_normal",
-  "gen_random_uuid",
-  "uuid_generate_v4",
-  "clock_timestamp",
-  "timeofday",
-  "nextval",
-  "setval",
-])
+export interface ModelFunctions {
+  immutable: ReadonlySet<string>
+  other: ReadonlySet<string>
+}
+
+type FunctionKind = "f" | "a" | "w"
 
 /**
- * Час транзакції: стабільний у межах кроку, тож дозаповнення нової колонки
- * ним допустиме, а ремонт наявних даних — ні: він мусить бути
- * детермінованим (рішення 15).
+ * Доведено детерміновані функції каталогу — знімок живого `pg_catalog`
+ * (`catalog-functions.ts`). Решта каталогу — не доведена: STABLE залежить від
+ * сеансу, VOLATILE — від виклику, а розширення — від версії, яку видно лише
+ * в базі.
+ */
+const CATALOG_KINDS: ReadonlyMap<string, FunctionKind> = new Map(
+  (
+    Object.entries(CATALOG_FUNCTIONS) as [FunctionKind, readonly string[]][]
+  ).flatMap(([kind, names]) => names.map((name) => [name, kind] as const))
+)
+
+/**
+ * Час транзакції — єдиний виняток з IMMUTABLE: стабільний у межах кроку,
+ * тож дозаповнення нової колонки ним допустиме, а ремонт наявних даних — ні,
+ * він мусить бути детермінованим (рішення 15).
  */
 const NOW_FUNCTIONS: ReadonlySet<string> = new Set([
   "now",
@@ -50,10 +61,7 @@ const NOW_FUNCTIONS: ReadonlySet<string> = new Set([
   "statement_timestamp",
 ])
 
-/**
- * Ключові слова часу (`current_timestamp`, `localtimestamp`, …) парсер дає
- * окремим вузлом; `current_time` і `localtime` — той самий час транзакції.
- */
+/** Ключові слова часу транзакції (`current_timestamp`, `localtime`, …). */
 const NOW_VALUE_FUNCTIONS: ReadonlySet<string> = new Set([
   "SVFOP_CURRENT_DATE",
   "SVFOP_CURRENT_TIME",
@@ -67,98 +75,44 @@ const NOW_VALUE_FUNCTIONS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Агрегати каталогу. Агрегат без `OVER` згортає таблицю в один рядок, а крок
- * задає значення кожного рядка; з `OVER` він — віконна функція.
+ * Типи дати й часу: рядки `'now'`, `'today'`, `'tomorrow'`, `'yesterday'`
+ * при приведенні до них — той самий час транзакції, що й `now()`.
  */
-const AGGREGATE_FUNCTIONS: ReadonlySet<string> = new Set([
-  "any_value",
-  "array_agg",
-  "avg",
-  "bit_and",
-  "bit_or",
-  "bit_xor",
-  "bool_and",
-  "bool_or",
-  "corr",
-  "count",
-  "covar_pop",
-  "covar_samp",
-  "every",
-  "json_agg",
-  "json_agg_strict",
-  "json_object_agg",
-  "json_object_agg_strict",
-  "json_object_agg_unique",
-  "json_object_agg_unique_strict",
-  "jsonb_agg",
-  "jsonb_agg_strict",
-  "jsonb_object_agg",
-  "jsonb_object_agg_strict",
-  "jsonb_object_agg_unique",
-  "jsonb_object_agg_unique_strict",
-  "max",
-  "min",
-  "mode",
-  "percentile_cont",
-  "percentile_disc",
-  "range_agg",
-  "range_intersect_agg",
-  "regr_avgx",
-  "regr_avgy",
-  "regr_count",
-  "regr_intercept",
-  "regr_r2",
-  "regr_slope",
-  "regr_sxx",
-  "regr_sxy",
-  "regr_syy",
-  "stddev",
-  "stddev_pop",
-  "stddev_samp",
-  "string_agg",
-  "sum",
-  "var_pop",
-  "var_samp",
-  "variance",
-  "xmlagg",
+const DATETIME_TYPES: ReadonlySet<string> = new Set([
+  "date",
+  "time",
+  "timetz",
+  "timestamp",
+  "timestamptz",
+])
+const NOW_STRINGS: ReadonlySet<string> = new Set([
+  "now",
+  "today",
+  "tomorrow",
+  "yesterday",
 ])
 
-/** Функції, що існують лише з `OVER`: без нього Postgres їх відхиляє. */
-const WINDOW_FUNCTIONS: ReadonlySet<string> = new Set([
-  "cume_dist",
-  "dense_rank",
-  "first_value",
-  "lag",
-  "last_value",
-  "lead",
-  "nth_value",
-  "ntile",
-  "percent_rank",
-  "rank",
-  "row_number",
+/**
+ * Відомі причини відмови лише для повідомлення: недоведене відхиляє знімок,
+ * а ці назви кажуть автору, чому саме.
+ */
+const VOLATILE_NAMES: ReadonlySet<string> = new Set([
+  "random",
+  "random_normal",
+  "gen_random_uuid",
+  "uuid_generate_v4",
+  "clock_timestamp",
+  "timeofday",
+  "nextval",
+  "setval",
 ])
-
-/** Функції каталогу, що повертають множину: крок задає одне значення рядка. */
-const SET_RETURNING_FUNCTIONS: ReadonlySet<string> = new Set([
-  "aclexplode",
+const SET_RETURNING_NAMES: ReadonlySet<string> = new Set([
   "generate_series",
   "generate_subscripts",
   "json_array_elements",
-  "json_array_elements_text",
-  "json_each",
-  "json_each_text",
-  "json_object_keys",
-  "json_populate_recordset",
-  "json_to_recordset",
   "jsonb_array_elements",
-  "jsonb_array_elements_text",
+  "json_each",
   "jsonb_each",
-  "jsonb_each_text",
-  "jsonb_object_keys",
-  "jsonb_path_query",
-  "jsonb_populate_recordset",
-  "jsonb_to_recordset",
-  "pg_options_to_table",
   "regexp_matches",
   "regexp_split_to_table",
   "string_to_table",
@@ -197,31 +151,50 @@ const strings = (nodes: unknown): string[] | undefined => {
 const isRecordNode = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+interface FunctionNode {
+  returnType?: { setof?: boolean }
+  parameters?: { FunctionParameter?: { mode?: string } }[]
+  is_procedure?: boolean
+  options?: {
+    DefElem?: { defname?: string; arg?: { String?: { sval?: string } } }
+  }[]
+}
+
 /**
- * Функції моделі з явною `VOLATILE` (рішення 12): кваліфіковане ім'я й голе
- * — некваліфікований виклик може резолвитись у будь-яку схему `search_path`,
- * тож голе ім'я відмовляє консервативно.
+ * Функції моделі (рішення 12): доведено детермінована лише явно IMMUTABLE
+ * функція без `SETOF`/`TABLE`. Ім'я, яке має хоч одне інше визначення чи
+ * агрегат, — недоведене: перевантаження Postgres обирає за типами, яких
+ * компілятор не виводить.
  */
-export function modelVolatileFunctions(model: CompiledModel): Set<string> {
-  const names = new Set<string>()
+export function modelFunctions(model: CompiledModel): ModelFunctions {
+  const immutable = new Set<string>()
+  const other = new Set<string>()
   for (const unit of model.sqlUnits) {
-    const fn = (
-      unit.tree as {
-        CreateFunctionStmt?: {
-          options?: {
-            DefElem?: { defname?: string; arg?: { String?: { sval?: string } } }
-          }[]
-        }
-      }
-    ).CreateFunctionStmt
+    const tree = unit.tree as {
+      CreateFunctionStmt?: FunctionNode
+      DefineStmt?: { kind?: string }
+    }
+    const fn = tree.CreateFunctionStmt
+    if (fn === undefined && tree.DefineStmt?.kind !== "OBJECT_AGGREGATE") {
+      continue
+    }
     const volatility = fn?.options
       ?.map((o) => o.DefElem)
       .find((o) => o?.defname === "volatility")?.arg?.String?.sval
-    if (volatility !== "volatile") continue
-    names.add(unit.name)
-    names.add(`${unit.schema}.${unit.name}`)
+    const proven =
+      fn !== undefined &&
+      fn.is_procedure !== true &&
+      volatility === "immutable" &&
+      fn.returnType?.setof !== true &&
+      !(fn.parameters ?? []).some(
+        (p) => p.FunctionParameter?.mode === "FUNC_PARAM_TABLE"
+      )
+    const into = proven ? immutable : other
+    into.add(unit.name)
+    into.add(`${unit.schema}.${unit.name}`)
   }
-  return names
+  for (const name of other) immutable.delete(name)
+  return { immutable, other }
 }
 
 /**
@@ -232,7 +205,7 @@ export function modelVolatileFunctions(model: CompiledModel): Set<string> {
  * виконається там. `mapped` — ключі цілей, змаплених з колонок
  * (`fillTargetKey`), `retired` — старі імена виведених колонок, `key` —
  * одноколонковий первинний ключ таблиці (немає — кроку не адресувати рядки),
- * `volatileFunctions` — функції моделі з явною `VOLATILE`.
+ * `functions` — функції моделі.
  */
 export function fillStepKind(
   step: FillStep,
@@ -245,7 +218,7 @@ export function fillStepKind(
     key?: string
     columns: readonly string[]
   },
-  volatileFunctions: ReadonlySet<string>
+  functions: ModelFunctions
 ): { kind: StepKind; columns: string[] } | { reason: FillProblem } {
   if (table.key === undefined) return { reason: "noKey" }
   // Перевод рядка перед FROM: коментар `--` у виразі не ковтає таблицю.
@@ -290,7 +263,7 @@ export function fillStepKind(
     return { reason: "syntax" }
   }
 
-  const walker = new ExpressionWalker(table, volatileFunctions)
+  const walker = new ExpressionWalker(table, functions)
   const problem = walker.walk(target.val)
   if (problem !== undefined) return { reason: problem }
   const columns = [...walker.columns]
@@ -308,8 +281,10 @@ export function fillStepKind(
 /**
  * Обхід дерева виразу: колонки, значення яких він читає, і перша заборонена
  * форма. Колонки визначення вікна (`PARTITION BY`, `ORDER BY`) лише
- * впорядковують рядки: нумерація рядків ТЧ за власником — дозаповнення, а не
- * розщеплення власника.
+ * впорядковують рядки: вони перевіряються, але виду кроку не задають —
+ * нумерація рядків ТЧ за власником є дозаповненням, а не розщепленням
+ * власника. Аргументи віконної функції — прочитані значення. Приведення й
+ * оператори волатильністю не перевіряються: це вимагало б виводу типів.
  */
 class ExpressionWalker {
   readonly columns = new Set<string>()
@@ -325,7 +300,7 @@ class ExpressionWalker {
       key?: string
       columns: readonly string[]
     },
-    private readonly volatileFunctions: ReadonlySet<string>
+    private readonly functions: ModelFunctions
   ) {
     this.known = new Set(table.columns)
   }
@@ -361,26 +336,55 @@ class ExpressionWalker {
       case "ColumnRef":
         return this.column(value as { fields?: unknown[] })
       case "SQLValueFunction":
-        if (NOW_VALUE_FUNCTIONS.has(String((value as { op?: string }).op))) {
-          this.readsNow = true
+        // Решта ключових слів (`current_user`, `current_schema`, …) —
+        // STABLE: залежить від сеансу, а не від рядка.
+        if (!NOW_VALUE_FUNCTIONS.has(String((value as { op?: string }).op))) {
+          return "unknownFunction"
         }
+        this.readsNow = true
         return undefined
+      case "TypeCast":
+        if (nowString(value as TypeCastNode)) this.readsNow = true
+        break
       case "FuncCall": {
         const call = value as Record<string, unknown>
         const problem = this.call(call)
         if (problem !== undefined) return problem
-        const { over, ...rest } = call
+        return this.withWindow(call, call.over)
+      }
+      case "JsonArrayAgg":
+      case "JsonObjectAgg": {
+        // Агрегат SQL/JSON — агрегат без імені функції: ті самі правила вікна.
+        const node = value as { constructor?: Record<string, unknown> }
+        const over = node.constructor?.over
+        if (over === undefined) return "aggregate"
+        const problem = this.windowOrder(over)
+        if (problem !== undefined) return problem
+        const { constructor, ...rest } = node
         const inner = this.walk(rest)
         if (inner !== undefined) return inner
-        this.window += 1
-        try {
-          return this.walk(over)
-        } finally {
-          this.window -= 1
-        }
+        return this.withWindow(constructor ?? {}, over)
       }
     }
     return this.walk(value)
+  }
+
+  /** Обхід вузла з вікном: поза вікном — читання, у вікні — лише порядок. */
+  private withWindow(
+    node: Record<string, unknown>,
+    over: unknown
+  ): FillProblem | undefined {
+    const rest = Object.fromEntries(
+      Object.entries(node).filter(([key]) => key !== "over")
+    )
+    const inner = this.walk(rest)
+    if (inner !== undefined) return inner
+    this.window += 1
+    try {
+      return this.walk(over)
+    } finally {
+      this.window -= 1
+    }
   }
 
   private read(name: string): void {
@@ -421,37 +425,57 @@ class ExpressionWalker {
     )
   }
 
+  /**
+   * Вид функції, якщо вона доведено детермінована: знімок каталогу для
+   * некваліфікованої чи `pg_catalog`-функції, явно IMMUTABLE функція моделі.
+   * Некваліфіковане ім'я, яке модель визначає інакше, — недоведене:
+   * `search_path` виконання П3 і вибір перевантаження статично не видно.
+   */
+  private kindOf(names: readonly string[]): FunctionKind | undefined {
+    const name = names.at(-1)!
+    const qualified = names.join(".")
+    if (names.length > 2) return undefined
+    if (names.length === 2 && names[0] !== "pg_catalog") {
+      return this.functions.immutable.has(qualified) ? "f" : undefined
+    }
+    if (names.length === 1 && this.functions.other.has(name)) return undefined
+    if (NOW_FUNCTIONS.has(name)) {
+      this.readsNow = true
+      return "f"
+    }
+    const catalog = CATALOG_KINDS.get(name)
+    if (catalog !== undefined || names.length === 2) return catalog
+    return this.functions.immutable.has(name) ? "f" : undefined
+  }
+
   private call(fn: Record<string, unknown>): FillProblem | undefined {
     const names = strings(fn.funcname)
     if (names === undefined) return "syntax"
-    const name = names.at(-1)!
-    // Функція каталогу — некваліфікована чи з `pg_catalog`; інша схема —
-    // функція застосунку з тим самим ім'ям.
-    const builtin =
-      names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")
-    const qualified = names.join(".")
-    if (
-      (builtin && VOLATILE_FUNCTIONS.has(name)) ||
-      this.volatileFunctions.has(qualified)
-    ) {
-      return "volatile"
+    const kind = this.kindOf(names)
+    if (kind === undefined) {
+      const name = names.at(-1)!
+      return VOLATILE_NAMES.has(name)
+        ? "volatile"
+        : SET_RETURNING_NAMES.has(name)
+          ? "setReturning"
+          : "unknownFunction"
     }
-    if (builtin && NOW_FUNCTIONS.has(name)) this.readsNow = true
-    if (builtin && SET_RETURNING_FUNCTIONS.has(name)) return "setReturning"
-    const over = fn.over as
-      { orderClause?: unknown[]; refname?: string } | undefined
-    if (over === undefined) {
-      if (
-        AGGREGATE_MARKERS.some((m) => fn[m] !== undefined) ||
-        (builtin && AGGREGATE_FUNCTIONS.has(name))
-      ) {
-        return "aggregate"
-      }
-      if (builtin && WINDOW_FUNCTIONS.has(name)) return "syntax"
-      return undefined
+    const aggregate =
+      kind === "a" || AGGREGATE_MARKERS.some((m) => fn[m] !== undefined)
+    if (fn.over === undefined) {
+      if (aggregate) return "aggregate"
+      // Віконна функція без `OVER` Postgres не виконає.
+      return kind === "w" ? "syntax" : undefined
     }
-    // Унікальний ключ у порядку вікна робить порядок рядків повним.
-    const ordered = (over.orderClause ?? []).some((sort) => {
+    // `OVER` у звичайної функції Postgres відхиляє.
+    if (kind === "f" && !aggregate) return "syntax"
+    return this.windowOrder(fn.over)
+  }
+
+  /** Унікальний ключ у порядку вікна робить порядок рядків повним. */
+  private windowOrder(over: unknown): FillProblem | undefined {
+    const orderClause = (over as { orderClause?: unknown[] }).orderClause ?? []
+    const ordered = orderClause.some((sort) => {
       const node = (sort as { SortBy?: { node?: unknown } }).SortBy?.node
       const fields = (node as { ColumnRef?: { fields?: unknown[] } })?.ColumnRef
         ?.fields
@@ -463,5 +487,38 @@ class ExpressionWalker {
       )
     })
     return ordered ? undefined : "nondeterministicWindow"
+  }
+}
+
+interface TypeCastNode {
+  arg?: unknown
+  typeName?: { names?: unknown[] }
+}
+
+/**
+ * Приведення рядка `'now'`, `'today'`, … до типу дати чи часу в будь-якій
+ * формі (`::`, `CAST`, `timestamptz '…'`, через проміжні приведення).
+ */
+function nowString(cast: TypeCastNode): boolean {
+  const type = strings(cast.typeName?.names)?.at(-1)
+  if (type === undefined || !DATETIME_TYPES.has(type)) return false
+  let arg = cast.arg
+  for (;;) {
+    if (!isRecordNode(arg)) return false
+    if ("TypeCast" in arg) {
+      arg = (arg.TypeCast as TypeCastNode).arg
+      continue
+    }
+    if ("CollateClause" in arg) {
+      arg = (arg.CollateClause as { arg?: unknown }).arg
+      continue
+    }
+    const sval = (arg as { A_Const?: { sval?: { sval?: string } } }).A_Const
+      ?.sval?.sval
+    if (sval === undefined) return false
+    return sval
+      .toLowerCase()
+      .split(/\s+/)
+      .some((word) => NOW_STRINGS.has(word))
   }
 }

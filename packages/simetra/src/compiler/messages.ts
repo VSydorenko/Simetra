@@ -1794,22 +1794,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.reason === "nullable-source"
         ? `${p.column} of ${p.kind} ${p.name} is NOT NULL, its source column ${p.source} allows NULL, and nothing fills it`
-        : `Standard attribute ${p.column} of ${p.kind} ${p.name} is NOT NULL without a default, and nothing fills it`,
+        : p.reason === "new-attribute"
+          ? `Attribute ${p.column} of ${p.kind} ${p.name} is required without a defaultValue, no column carries it, and nothing fills it`
+          : `Standard attribute ${p.column} of ${p.kind} ${p.name} is NOT NULL without a default, and nothing fills it`,
     uk: (p) =>
       p.reason === "nullable-source"
         ? `${p.column} виду ${p.kind} ${p.name} — NOT NULL, його колонка-джерело ${p.source} допускає NULL, а заповнити його нічим`
-        : `Стандартний реквізит ${p.column} виду ${p.kind} ${p.name} — NOT NULL без значення за замовчуванням, а заповнити його нічим`,
+        : p.reason === "new-attribute"
+          ? `Реквізит ${p.column} виду ${p.kind} ${p.name} обов'язковий без defaultValue, жодна колонка його не несе, а заповнити його нічим`
+          : `Стандартний реквізит ${p.column} виду ${p.kind} ${p.name} — NOT NULL без значення за замовчуванням, а заповнити його нічим`,
     hint: {
-      en: "Map a column of the adopted table to it or add a fill step that computes it. A default does not fill existing NULLs, so a nullable source needs a fill step even when the kind gives the column a default.",
-      uk: "Змапте на нього колонку прийнятої таблиці або додайте крок fill, що його обчислює. Значення за замовчуванням не заповнює наявних NULL, тож джерело з NULL потребує кроку fill, навіть коли вид дає колонці значення за замовчуванням.",
+      en: "Map a column of the adopted table to it, give a new attribute a defaultValue, or add a fill step that computes it. A default does not fill existing NULLs, so a nullable source needs a fill step even when the kind gives the column a default. The key is never filled: it carries the row's identity, so map the table's key column to it.",
+      uk: "Змапте на нього колонку прийнятої таблиці, дайте новому реквізиту defaultValue або додайте крок fill, що його обчислює. Значення за замовчуванням не заповнює наявних NULL, тож джерело з NULL потребує кроку fill, навіть коли вид дає колонці значення за замовчуванням. Ключ не заповнюється ніколи: він несе ідентичність рядка, тож змапте на нього ключову колонку таблиці.",
     },
   },
   "promote.expression-invalid": {
     en: (p) => `Fill expression ${p.expression} is not allowed: ${p.reason}`,
     uk: (p) => `Вираз заповнення ${p.expression} не дозволено: ${p.reason}`,
     hint: {
-      en: "A fill expression is one deterministic scalar expression over the columns of its own table, in old names: no subqueries, aggregates without OVER, other tables, set-returning or volatile functions, and a window ordered by the table key; the table needs a single-column key.",
-      uk: "Вираз заповнення — один детермінований скалярний вираз над колонками своєї таблиці в старих іменах: без підзапитів, агрегатів без OVER, інших таблиць, функцій, що повертають множину, чи волатильних функцій, а вікно впорядковане ключем таблиці; таблиця потребує одноколонкового ключа.",
+      en: "A fill expression is one deterministic scalar expression over the columns of its own table, in old names: no subqueries, aggregates without OVER, or other tables, and a window ordered by the table key; the table needs a single-column key. It calls only IMMUTABLE functions of pg_catalog and functions of the model declared IMMUTABLE; transaction time (now(), current_timestamp, 'now'::timestamptz) is allowed except in a repair.",
+      uk: "Вираз заповнення — один детермінований скалярний вираз над колонками своєї таблиці в старих іменах: без підзапитів, агрегатів без OVER чи інших таблиць, а вікно впорядковане ключем таблиці; таблиця потребує одноколонкового ключа. Він викликає лише IMMUTABLE-функції pg_catalog і функції моделі, явно оголошені IMMUTABLE; час транзакції (now(), current_timestamp, 'now'::timestamptz) дозволено всюди, крім ремонту.",
     },
   },
   "promote.debt-text-reference": {

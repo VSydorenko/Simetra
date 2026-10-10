@@ -296,8 +296,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
         })
       })
     )
+    // Ключ несе ідентичність рядка: крок його не обчислює.
     expect(result.diagnostics.map((d) => [d.code, d.params?.at])).toEqual([
       ["promote.mapping-unknown", "/columns/inn/name"],
+      ["promote.mapping-unknown", "/fill/1/target/name"],
     ])
   })
 
@@ -445,14 +447,21 @@ describe("promoteObject: catalog from one CustomTable", () => {
       files,
       mapping((m) => {
         m.columns.id = { to: "retire" }
-        // Ключ виду без колонки — його заповнює детермінований крок даних.
-        m.fill.push({
-          target: { to: "standard", name: "ref" },
-          expression: "md5(name)::uuid",
-        })
       })
     )
+    // Ключ без колонки нічим не заповнити: крок ключа не обчислює.
     expect(brief(result)).toEqual([
+      {
+        code: "promote.fill-missing",
+        file: COUNTERPARTY_FILE,
+        pointer: "",
+        params: {
+          column: "ref",
+          kind: "Catalog",
+          name: "Counterparty",
+          reason: "unmapped",
+        },
+      },
       {
         code: "promote.retired-referenced",
         file: INVOICE_FILE,
@@ -1633,6 +1642,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     ["(select 1)", "subquery"],
     ["1 union select 2", "subquery"],
     ["count(*)", "aggregate"],
+    ["json_arrayagg(phone)", "aggregate"],
     ["other.x", "foreignTable"],
     ["1, 2", "multipleTargets"],
     ["1; select 2", "multipleStatements"],
@@ -1642,9 +1652,30 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       "row_number() over (partition by counterparty_id)",
       "nondeterministicWindow",
     ],
+    [
+      "json_arrayagg(phone) over (partition by counterparty_id)",
+      "nondeterministicWindow",
+    ],
     ["missing_column", "unknownColumn"],
     ["1 as n", "syntax"],
     ["(1", "syntax"],
+    // Недоведене детерміноване: поза знімком IMMUTABLE-функцій каталогу
+    // (`length` теж — перевантаження `length(bytea, name)` STABLE).
+    ["length(phone)", "unknownFunction"],
+    ["uuid_generate_v1()", "unknownFunction"],
+    ["extensions.uuid_generate_v4()", "volatile"],
+    ["txid_current()", "unknownFunction"],
+    ["currval('s')", "unknownFunction"],
+    ["setseed(0.1)", "unknownFunction"],
+    ["pg_sleep(1)", "unknownFunction"],
+    ["pg_ls_dir('.')", "unknownFunction"],
+    ["query_to_xml('select 1', true, true, '')", "unknownFunction"],
+    [
+      "table_to_xml('app.counterparty_contacts', true, true, '')",
+      "unknownFunction",
+    ],
+    ["age(phone::timestamptz)", "unknownFunction"],
+    ["current_user", "unknownFunction"],
   ])("refuses fill expression %s", async (expression, reason) => {
     const files = promotionProject(WITH_CONTACTS)
     const { result, after } = await promoted(
@@ -1658,27 +1689,84 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         code: "promote.expression-invalid",
         file: "",
         pointer: "",
-        params: { expression, reason },
+        params: { at: "/fill/1/expression", expression, reason },
       },
     ])
     expect(after).toEqual(files)
   })
 
-  it("refuses a volatile function of the model", async () => {
+  it.each([
+    "char_length(left(phone, 3))",
+    "coalesce(char_length(phone), 0)",
+    "row_number() over (order by id)",
+    "sum(char_length(phone)) over (order by id)",
+    "'2024-01-01'::timestamptz",
+    "now()",
+  ])("accepts fill expression %s", async (expression) => {
     const files = promotionProject(WITH_CONTACTS)
-    files.set(
-      "sql/app/next_line.sql",
-      "CREATE FUNCTION app.next_line() RETURNS integer LANGUAGE sql VOLATILE AS $$ SELECT 1 $$;"
-    )
     const { result } = await promoted(
       files,
       withContacts((m) => {
-        m.fill.at(-1)!.expression = "app.next_line()"
+        m.fill.at(-1)!.expression = expression
       })
     )
-    expect(result.diagnostics.map((d) => d.params?.reason)).toEqual([
-      "volatile",
-    ])
+    expect(errors(result)).toEqual([])
+  })
+
+  it("calls only model functions declared IMMUTABLE", async () => {
+    const reasons = async (declaration: string) => {
+      const files = promotionProject(WITH_CONTACTS)
+      files.set(
+        "sql/app/next_line.sql",
+        `CREATE FUNCTION app.next_line(p text) RETURNS integer LANGUAGE sql ${declaration} AS $$ SELECT char_length(p) $$;`
+      )
+      // Функція без позначки — не закрита оболонка, лише борг.
+      if (declaration === "") {
+        files.set(
+          "sql-debt.json",
+          JSON.stringify({ units: ["function:app.next_line(text)"] })
+        )
+      }
+      const { result } = await promoted(
+        files,
+        withContacts((m) => {
+          m.fill.at(-1)!.expression = "app.next_line(phone)"
+        })
+      )
+      return result.diagnostics.map((d) => d.params?.reason ?? d.code)
+    }
+    expect(await reasons("IMMUTABLE")).toEqual([])
+    for (const declaration of ["STABLE", "VOLATILE", ""]) {
+      expect(await reasons(declaration), declaration).toEqual([
+        "unknownFunction",
+      ])
+    }
+  })
+
+  it("orders by the window key without reading it, and reads window arguments", async () => {
+    const kindOf = async (expression: string, retirePhone = false) => {
+      const files = promotionProject(WITH_CONTACTS)
+      const { result } = await promoted(
+        files,
+        withContacts((m) => {
+          if (retirePhone)
+            m.tabularSections[0]!.columns.phone = { to: "retire" }
+          m.fill.at(-1)!.expression = expression
+        })
+      )
+      expect(errors(result)).toEqual([])
+      return result.record?.dataSteps.at(-1)?.kind
+    }
+    expect(
+      await kindOf("row_number() over (partition by phone order by id)")
+    ).toBe("backfill")
+    // Виведена колонка в ключі вікна лише впорядковує рядки.
+    expect(
+      await kindOf("row_number() over (partition by phone order by id)", true)
+    ).toBe("backfill")
+    expect(await kindOf("char_length(lag(phone) over (order by id))")).toBe(
+      "split"
+    )
   })
 
   it("refuses now() in a repair but allows it in a backfill", async () => {
@@ -1692,15 +1780,22 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(repair.result.diagnostics.map((d) => d.params?.reason)).toEqual([
       "volatile",
     ])
-    const keyword = await promoted(
-      files,
-      mapping((m) => {
-        m.fill[0]!.expression = "coalesce(created_at, current_timestamp)"
-      })
-    )
-    expect(keyword.result.diagnostics.map((d) => d.params?.reason)).toEqual([
-      "volatile",
-    ])
+    for (const expression of [
+      "coalesce(created_at, current_timestamp)",
+      "coalesce(created_at, 'now'::timestamptz)",
+      "coalesce(created_at, CAST(' Today ' AS date))",
+    ]) {
+      const keyword = await promoted(
+        files,
+        mapping((m) => {
+          m.fill[0]!.expression = expression
+        })
+      )
+      expect(
+        keyword.result.diagnostics.map((d) => d.params?.reason),
+        expression
+      ).toEqual(["volatile"])
+    }
     const backfill = await promoted(
       files,
       mapping((m) => {
@@ -1992,6 +2087,147 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(result.diagnostics.map((d) => [d.code, d.params?.at])).toEqual([
       ["promote.mapping-unknown", "/fill/2/table"],
       ["promote.mapping-unknown", "/fill/3/target/name"],
+    ])
+  })
+
+  it("refuses a fill step on the key, mapped or not", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    const { result } = await promoted(
+      files,
+      withContacts((m) => {
+        m.fill.push(
+          { target: { to: "standard", name: "ref" }, expression: "id" },
+          {
+            table: "CounterpartyContact",
+            target: { to: "standard", name: "ref" },
+            expression: "id",
+          }
+        )
+      })
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.params?.at])).toEqual([
+      ["promote.mapping-unknown", "/fill/2/target/name"],
+      ["promote.mapping-unknown", "/fill/3/target/name"],
+    ])
+  })
+
+  it("refuses a new required attribute without defaultValue or fill", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    const required = { name: "rank", type: "Integer", required: true }
+    const input = (edit: (m: PromoteInput) => void) =>
+      withContacts((m) => {
+        m.into.data = { ...m.into.data, attributes: [required] }
+        m.tabularSections[0]!.data = { attributes: [required] }
+        edit(m)
+      })
+    const missing = await promoted(
+      files,
+      input(() => {})
+    )
+    expect(brief(missing.result)).toEqual(
+      [COUNTERPARTY_FILE, CONTACT_FILE].map((file) => ({
+        code: "promote.fill-missing",
+        file,
+        pointer: "",
+        params: {
+          column: "rank",
+          kind: "Catalog",
+          name: "Counterparty",
+          reason: "new-attribute",
+        },
+      }))
+    )
+    const supplied = await promoted(
+      files,
+      input((m) => {
+        m.into.data = {
+          ...m.into.data,
+          attributes: [{ ...required, defaultValue: 0 }],
+        }
+        m.fill.push({
+          table: "CounterpartyContact",
+          target: { to: "attribute", name: "rank" },
+          expression: "0",
+        })
+      })
+    )
+    expect(errors(supplied.result)).toEqual([])
+    expect(supplied.result.record?.dataSteps.at(-1)).toMatchObject({
+      table: "counterparty_contacts",
+      column: "rank",
+      kind: "backfill",
+    })
+  })
+
+  it("refuses a section table whose scope differs from the object's", async () => {
+    // Колонка власника без FK: скоуп рядка нічим не пов'язаний з власником.
+    const base = promotionProject(WITH_CONTACTS)
+    const counterparty = json(base, COUNTERPARTY_FILE)
+    counterparty.scope = "org"
+    counterparty.scopeColumn = "orgId"
+    ;(counterparty.columns as Json[]).push({
+      id: uuid(7010),
+      name: "orgId",
+      physicalName: "org_ref",
+      type: "UUID",
+      notNull: true,
+    })
+    const contact = json(base, CONTACT_FILE)
+    contact.foreignKeys = []
+    contact.scope = "none"
+    const files = metaFiles({
+      "project.meta.json": scopedProject(),
+      "catalogs/Organization/Organization.meta.json": catalog("Organization", {
+        scope: "org",
+      }),
+      [COUNTERPARTY_FILE]: counterparty,
+      [CONTACT_FILE]: contact,
+    })
+    expect((await compile(files)).diagnostics).toEqual([])
+    const input = withContacts((m) => {
+      m.columns.orgId = { to: "scope" }
+    })
+    const { result } = await promoted(files, input)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.unit-unsupported",
+        file: CONTACT_FILE,
+        pointer: "",
+        params: {
+          kind: "CustomTable",
+          name: "CounterpartyContact",
+          detail:
+            "its scope none differs from scope org of the object, and tabular section rows take the object's scope",
+        },
+      },
+    ])
+    // Той самий скоуп з колонкою скоупу ТЧ: рядок отримує FK на власника.
+    contact.scope = "org"
+    contact.scopeColumn = "orgId"
+    ;(contact.columns as Json[]).push({
+      id: uuid(7110),
+      name: "orgId",
+      physicalName: "org_ref",
+      type: "UUID",
+      notNull: true,
+    })
+    files.set(CONTACT_FILE, JSON.stringify(contact))
+    const same = await promoted(
+      files,
+      withContacts((m) => {
+        m.columns.orgId = { to: "scope" }
+        m.tabularSections[0]!.columns.orgId = { to: "scope" }
+      })
+    )
+    expect(errors(same.result)).toEqual([])
+    expect(same.result.record?.deleteSemantics).toEqual([
+      expect.objectContaining({
+        direction: "own",
+        table: "counterparty_contacts",
+        columns: ["org_id", "parent_id"],
+        from: "none",
+        to: "cascade",
+      }),
     ])
   })
 

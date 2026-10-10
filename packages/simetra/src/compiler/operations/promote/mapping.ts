@@ -401,14 +401,17 @@ export function structuralSubjects(
  * 15): незмаплена стандартна колонка без значення за замовчуванням і без
  * генерації (`unmapped`) та ціль, джерело якої допускає `NULL`
  * (`nullable-source`). `DEFAULT` наявних `NULL` не заповнює, тож для
- * змапленої колонки значення виду не звільняє від кроку. `section` — ім'я
+ * змапленої колонки значення виду не звільняє від кроку. Так само новий
+ * обов'язковий реквізит, який задає лише вхід (`data`), без `defaultValue`
+ * (`new-attribute`): наявні рядки отримують `NULL`. `section` — ім'я
  * прийнятої таблиці ТЧ: крок `fill` адресує її полем `table`.
  */
 export function missingFills(
   promoted: PromotedTable,
   target: PromotionTarget,
   fill: PromoteInput["fill"],
-  section?: string
+  section?: string,
+  data?: Record<string, unknown>
 ): Diagnostic[] {
   const { object } = promoted
   const filled = new Set(
@@ -444,6 +447,28 @@ export function missingFills(
         source: column.name,
       })
     )
+  }
+  for (const collection of target.collections) {
+    const items = data?.[collection]
+    if (!Array.isArray(items)) continue
+    for (const item of items as Json[]) {
+      const name = String(item.name)
+      if (
+        item.required !== true ||
+        item.defaultValue !== undefined ||
+        filled.has(`attribute ${name}`)
+      ) {
+        continue
+      }
+      problems.push(
+        diagnostic("promote.fill-missing", object.file, "", {
+          column: name,
+          kind: target.kind,
+          name: target.name,
+          reason: "new-attribute",
+        })
+      )
+    }
   }
   for (const column of target.standard) {
     if (
