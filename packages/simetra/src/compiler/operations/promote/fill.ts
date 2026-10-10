@@ -19,6 +19,8 @@ export type FillProblem =
   | "setReturning"
   | "volatile"
   | "unknownFunction"
+  | "unqualifiedFunction"
+  | "castToTime"
   | "nondeterministicWindow"
   | "unknownColumn"
 
@@ -27,13 +29,14 @@ export const fillTargetKey = (target: FillStep["target"]) =>
   `${target.to} ${target.name}`
 
 /**
- * Функції моделі для виразу (рішення 12): `immutable` — імена (голі й
- * кваліфіковані), усі визначення яких явно IMMUTABLE і не повертають множину;
- * `other` — імена решти функцій і агрегатів моделі.
+ * Функції моделі для виразу (рішення 12): `immutable` — кваліфіковані імена,
+ * усі визначення яких явно IMMUTABLE і не повертають множину; `bare` — голі
+ * імена всіх функцій і агрегатів моделі: лише щоб назвати причину відмови
+ * некваліфікованого виклику.
  */
 export interface ModelFunctions {
   immutable: ReadonlySet<string>
-  other: ReadonlySet<string>
+  bare: ReadonlySet<string>
 }
 
 type FunctionKind = "f" | "a" | "w"
@@ -164,11 +167,13 @@ interface FunctionNode {
  * Функції моделі (рішення 12): доведено детермінована лише явно IMMUTABLE
  * функція без `SETOF`/`TABLE`. Ім'я, яке має хоч одне інше визначення чи
  * агрегат, — недоведене: перевантаження Postgres обирає за типами, яких
- * компілятор не виводить.
+ * компілятор не виводить. Крок даних П3 виконує з `search_path = pg_catalog,
+ * pg_temp`, тож функцію моделі вираз кличе лише кваліфікованою.
  */
 export function modelFunctions(model: CompiledModel): ModelFunctions {
   const immutable = new Set<string>()
   const other = new Set<string>()
+  const bare = new Set<string>()
   for (const unit of model.sqlUnits) {
     const tree = unit.tree as {
       CreateFunctionStmt?: FunctionNode
@@ -189,12 +194,11 @@ export function modelFunctions(model: CompiledModel): ModelFunctions {
       !(fn.parameters ?? []).some(
         (p) => p.FunctionParameter?.mode === "FUNC_PARAM_TABLE"
       )
-    const into = proven ? immutable : other
-    into.add(unit.name)
-    into.add(`${unit.schema}.${unit.name}`)
+    ;(proven ? immutable : other).add(`${unit.schema}.${unit.name}`)
+    bare.add(unit.name)
   }
   for (const name of other) immutable.delete(name)
-  return { immutable, other }
+  return { immutable, bare }
 }
 
 /**
@@ -275,6 +279,9 @@ export function fillStepKind(
         ? "split"
         : "backfill"
   if (kind === "repair" && walker.readsNow) return { reason: "volatile" }
+  // Приведення не-літерала до дати чи часу може прочитати час транзакції
+  // (`lower('now')::timestamptz`), а без виводу типів цього не довести.
+  if (kind === "repair" && walker.castsToTime) return { reason: "castToTime" }
   return { kind, columns }
 }
 
@@ -289,6 +296,8 @@ export function fillStepKind(
 class ExpressionWalker {
   readonly columns = new Set<string>()
   readsNow = false
+  /** Вираз приводить не рядковий літерал до типу дати чи часу. */
+  castsToTime = false
   /** Глибина всередині визначення вікна. */
   private window = 0
   private readonly known: ReadonlySet<string>
@@ -343,9 +352,20 @@ class ExpressionWalker {
         }
         this.readsNow = true
         return undefined
-      case "TypeCast":
-        if (nowString(value as TypeCastNode)) this.readsNow = true
+      case "TypeCast": {
+        const cast = timeCast(value as TypeCastNode)
+        if (cast === "now") this.readsNow = true
+        if (cast === "expression") this.castsToTime = true
         break
+      }
+      case "JsonFuncExpr": {
+        // `json_value(… RETURNING timestamptz)` — приведення результату функції.
+        const output = (
+          value as { output?: { typeName?: { names?: unknown } } }
+        ).output
+        if (isTimeType(output?.typeName?.names)) this.castsToTime = true
+        break
+      }
       case "FuncCall": {
         const call = value as Record<string, unknown>
         const problem = this.call(call)
@@ -427,25 +447,21 @@ class ExpressionWalker {
 
   /**
    * Вид функції, якщо вона доведено детермінована: знімок каталогу для
-   * некваліфікованої чи `pg_catalog`-функції, явно IMMUTABLE функція моделі.
-   * Некваліфіковане ім'я, яке модель визначає інакше, — недоведене:
-   * `search_path` виконання П3 і вибір перевантаження статично не видно.
+   * некваліфікованої чи `pg_catalog`-функції, явно IMMUTABLE функція моделі
+   * за кваліфікованим ім'ям. П3 виконує крок з `search_path = pg_catalog,
+   * pg_temp`, тож некваліфіковане ім'я — завжди функція каталогу, а не моделі.
    */
   private kindOf(names: readonly string[]): FunctionKind | undefined {
     const name = names.at(-1)!
-    const qualified = names.join(".")
     if (names.length > 2) return undefined
     if (names.length === 2 && names[0] !== "pg_catalog") {
-      return this.functions.immutable.has(qualified) ? "f" : undefined
+      return this.functions.immutable.has(names.join(".")) ? "f" : undefined
     }
-    if (names.length === 1 && this.functions.other.has(name)) return undefined
     if (NOW_FUNCTIONS.has(name)) {
       this.readsNow = true
       return "f"
     }
-    const catalog = CATALOG_KINDS.get(name)
-    if (catalog !== undefined || names.length === 2) return catalog
-    return this.functions.immutable.has(name) ? "f" : undefined
+    return CATALOG_KINDS.get(name)
   }
 
   private call(fn: Record<string, unknown>): FillProblem | undefined {
@@ -458,7 +474,9 @@ class ExpressionWalker {
         ? "volatile"
         : SET_RETURNING_NAMES.has(name)
           ? "setReturning"
-          : "unknownFunction"
+          : names.length === 1 && this.functions.bare.has(name)
+            ? "unqualifiedFunction"
+            : "unknownFunction"
     }
     const aggregate =
       kind === "a" || AGGREGATE_MARKERS.some((m) => fn[m] !== undefined)
@@ -495,16 +513,23 @@ interface TypeCastNode {
   typeName?: { names?: unknown[] }
 }
 
+const isTimeType = (names: unknown) => {
+  const type = strings(names)?.at(-1)
+  return type !== undefined && DATETIME_TYPES.has(type)
+}
+
 /**
- * Приведення рядка `'now'`, `'today'`, … до типу дати чи часу в будь-якій
- * формі (`::`, `CAST`, `timestamptz '…'`, через проміжні приведення).
+ * Приведення до типу дати чи часу в будь-якій формі (`::`, `CAST`,
+ * `timestamptz '…'`, через проміжні приведення й `COLLATE`): `"now"` —
+ * рядка `'now'`, `'today'`, …, `"expression"` — не літерала (значення, яке
+ * без виводу типів не довести не рядком `'now'`), `undefined` — звичайного
+ * літерала чи до іншого типу.
  */
-function nowString(cast: TypeCastNode): boolean {
-  const type = strings(cast.typeName?.names)?.at(-1)
-  if (type === undefined || !DATETIME_TYPES.has(type)) return false
+function timeCast(cast: TypeCastNode): "now" | "expression" | undefined {
+  if (!isTimeType(cast.typeName?.names)) return undefined
   let arg = cast.arg
   for (;;) {
-    if (!isRecordNode(arg)) return false
+    if (!isRecordNode(arg)) return "expression"
     if ("TypeCast" in arg) {
       arg = (arg.TypeCast as TypeCastNode).arg
       continue
@@ -513,12 +538,15 @@ function nowString(cast: TypeCastNode): boolean {
       arg = (arg.CollateClause as { arg?: unknown }).arg
       continue
     }
+    if (!("A_Const" in arg)) return "expression"
     const sval = (arg as { A_Const?: { sval?: { sval?: string } } }).A_Const
       ?.sval?.sval
-    if (sval === undefined) return false
+    if (sval === undefined) return undefined
     return sval
       .toLowerCase()
       .split(/\s+/)
       .some((word) => NOW_STRINGS.has(word))
+      ? "now"
+      : undefined
   }
 }

@@ -1714,7 +1714,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
   })
 
   it("calls only model functions declared IMMUTABLE", async () => {
-    const reasons = async (declaration: string) => {
+    const reasons = async (declaration: string, call = "app.next_line") => {
       const files = promotionProject(WITH_CONTACTS)
       files.set(
         "sql/app/next_line.sql",
@@ -1730,12 +1730,17 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       const { result } = await promoted(
         files,
         withContacts((m) => {
-          m.fill.at(-1)!.expression = "app.next_line(phone)"
+          m.fill.at(-1)!.expression = `${call}(phone)`
         })
       )
       return result.diagnostics.map((d) => d.params?.reason ?? d.code)
     }
     expect(await reasons("IMMUTABLE")).toEqual([])
+    // Крок даних іде з `search_path = pg_catalog, pg_temp`: голе ім'я —
+    // функція каталогу, тож функцію моделі кличуть кваліфікованою.
+    expect(await reasons("IMMUTABLE", "next_line")).toEqual([
+      "unqualifiedFunction",
+    ])
     for (const declaration of ["STABLE", "VOLATILE", ""]) {
       expect(await reasons(declaration), declaration).toEqual([
         "unknownFunction",
@@ -1810,6 +1815,35 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(
       backfill.result.record?.dataSteps.find((s) => s.column === "label")?.kind
     ).toBe("backfill")
+  })
+
+  it("refuses a cast of a non-literal to a date or time type in a repair", async () => {
+    const files = promotionProject(PARTS)
+    const reason = async (expression: string) =>
+      (
+        await promoted(
+          files,
+          mapping((m) => {
+            m.fill[0]!.expression = expression
+          })
+        )
+      ).result.diagnostics.map((d) => d.params?.reason)
+    for (const expression of [
+      "coalesce(created_at, lower('now')::timestamptz)",
+      "coalesce(created_at, ('n' || 'ow')::timestamptz)",
+      `coalesce(created_at, json_value('"now"', '$' returning timestamptz))`,
+      "coalesce(created_at, CAST(created_at::text AS timestamptz))",
+    ]) {
+      expect(await reason(expression), expression).toEqual(["castToTime"])
+    }
+    for (const expression of [
+      "coalesce(created_at, '2024-01-01'::timestamptz)",
+      "coalesce(created_at, timestamptz '2024-01-01')",
+      "coalesce(created_at, '2024-01-01'::text::timestamptz)",
+      "coalesce(created_at, NULL::timestamptz)",
+    ]) {
+      expect(await reason(expression), expression).toEqual([])
+    }
   })
 
   it("refuses a fill on a table without a single-column key", async () => {
