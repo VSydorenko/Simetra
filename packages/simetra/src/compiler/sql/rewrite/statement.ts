@@ -20,6 +20,8 @@ import type {
 } from "libpg-query"
 import { quoteIdent } from "simetra/model"
 import { byteOffsets, type SqlParser } from "../parse"
+import { lexChain, type Token } from "./lex"
+import { resolveTableName, type TableResolution } from "./tables"
 import type {
   ContractChange,
   RecordBinding,
@@ -98,13 +100,6 @@ interface Outputs {
   post: (string | undefined)[]
 }
 
-interface Token {
-  start: number
-  end: number
-  /** Ім'я, як його бачить Postgres: без лапок, некваліфіковане — в нижньому регістрі. */
-  value: string
-}
-
 const KEEP: OutputMode = { alias: true, names: true, stars: true, top: false }
 
 const CHANGE_DETAILS: Readonly<Record<ContractChange["reason"], string>> = {
@@ -165,8 +160,6 @@ class StatementRewriter {
    * перейменувань, додані й зняті колонки.
    */
   private readonly changedColumns = new Set<string>()
-  /** Схеми моделі: решта `search_path` (провайдер, розширення) невідома. */
-  private readonly modelSchemas = new Set<string>()
   private readonly labels: ReadonlySet<string>
   /** Оператор згадує промотовану таблицю: невизначеність імені тут важить. */
   private touches = false
@@ -177,11 +170,7 @@ class StatementRewriter {
     private readonly scope: RewriteScope
   ) {
     this.toIndex = byteOffsets(text)
-    for (const key of map.knownTables.keys()) {
-      this.modelSchemas.add(key.slice(0, key.indexOf(".")))
-    }
     for (const table of map.tables) {
-      this.modelSchemas.add(table.schema)
       this.promotedNames.add(table.from)
       const before = map.knownTables.get(`${table.schema}.${table.from}`) ?? []
       for (const [old, renamed] of table.columns) {
@@ -831,59 +820,24 @@ class StatementRewriter {
     return this.rangeVar(rv, { levels: env.levels, ctes: new Map() })
   }
 
-  /**
-   * Ім'я таблиці за схемою; некваліфіковане — за `search_path` функції, а без
-   * нього промотоване ім'я — відмова: таблицю обирає `search_path` викликача.
-   */
+  /** Ім'я таблиці за правилом `resolveTableName`; відмову записано як проблему. */
   private resolveTable(
     catalog: string | undefined,
     schema: string | undefined,
     relname: string,
     location: number | undefined
-  ):
-    | { failed: true }
-    | {
-        failed: false
-        schema?: string
-        table?: TableRename
-        known?: readonly string[]
-      } {
-    if (catalog !== undefined) {
-      if (!this.promotedNames.has(relname)) return { failed: false }
-      this.problem(
-        "rewrite.unsupported",
-        this.at(location),
-        `a catalog-qualified name of promoted table "${relname}" is not rewritten`
-      )
-      return { failed: true }
+  ): TableResolution {
+    const resolved = resolveTableName(
+      this.map,
+      this.scope.searchPath,
+      catalog,
+      schema,
+      relname
+    )
+    if (resolved.failed) {
+      this.problem(resolved.code, this.at(location), resolved.detail)
     }
-    const lookup = (s: string) => ({
-      failed: false as const,
-      schema: s,
-      table: this.map.tables.find((t) => t.schema === s && t.from === relname),
-      known: this.map.knownTables.get(`${s}.${relname}`),
-    })
-    if (schema !== undefined) return lookup(schema)
-    if (this.scope.searchPath === undefined) {
-      if (!this.promotedNames.has(relname)) return { failed: false }
-      this.problem(
-        "rewrite.unqualified-table",
-        this.at(location),
-        `table "${relname}" is not schema-qualified and the function sets no search_path`
-      )
-      return { failed: true }
-    }
-    for (const s of this.scope.searchPath) {
-      const found = lookup(s)
-      if (found.table !== undefined || found.known !== undefined) return found
-      // Схема поза моделлю раніше за схему таблиці: відношення з тим самим
-      // ім'ям там статично не виключити (рішення 14).
-      if (!this.modelSchemas.has(s) && this.promotedNames.has(relname)) {
-        this.problem("rewrite.ambiguous-name", this.at(location), "search-path")
-        return { failed: true }
-      }
-    }
-    return { failed: false }
+    return resolved
   }
 
   private renameRelation(rv: RangeVar, table: TableRename): void {
@@ -1961,101 +1915,4 @@ function mentions(value: unknown, names: ReadonlySet<string>): boolean {
 
 function statementKind(stmt: Node): string {
   return Object.keys(stmt)[0] ?? "statement"
-}
-
-// --- Лексика імен ------------------------------------------------------------
-
-/**
- * Ланцюжок ідентифікаторів `a . b . c` від `start`. Між частинами дозволені
- * пробіли й коментарі — так їх допускає граматика. Сканер libpg-query тут не
- * вживається: у збірці PG17 він переповнює буфер на довгому токені.
- */
-function lexChain(
-  text: string,
-  start: number,
-  count: number
-): Token[] | undefined {
-  const tokens: Token[] = []
-  let i = start
-  for (let k = 0; k < count; k++) {
-    if (k > 0) {
-      i = skipTrivia(text, i)
-      if (text[i] !== ".") return undefined
-      i = skipTrivia(text, i + 1)
-    }
-    const token = readIdent(text, i)
-    if (token === undefined) return undefined
-    tokens.push(token)
-    i = token.end
-  }
-  return tokens
-}
-
-/**
- * Один ідентифікатор: лапкований — до закривальних лапок з урахуванням `""`;
- * звичайний — символи ідентифікатора, значення в нижньому регістрі ASCII (як
- * `downcase_identifier` для багатобайтового кодування). `U&"…"` не
- * розбирається: його значення залежить від екранування.
- */
-function readIdent(text: string, start: number): Token | undefined {
-  const first = text[start]
-  if (first === undefined) return undefined
-  if (first === '"') {
-    let value = ""
-    let j = start + 1
-    for (;;) {
-      const close = text.indexOf('"', j)
-      if (close < 0) return undefined
-      value += text.slice(j, close)
-      if (text[close + 1] === '"') {
-        value += '"'
-        j = close + 2
-        continue
-      }
-      return { start, end: close + 1, value }
-    }
-  }
-  if ((first === "U" || first === "u") && text[start + 1] === "&")
-    return undefined
-  if (!identStart(first)) return undefined
-  let end = start + 1
-  while (end < text.length && identCont(text[end]!)) end++
-  const raw = text.slice(start, end)
-  return { start, end, value: raw.replace(/[A-Z]/g, (c) => c.toLowerCase()) }
-}
-
-/** Символ ідентифікатора за `scan.l`: будь-який не-ASCII символ теж його частина. */
-function identStart(c: string): boolean {
-  return /[A-Za-z_]/.test(c) || c.charCodeAt(0) >= 0x80
-}
-
-function identCont(c: string): boolean {
-  return /[A-Za-z0-9_$]/.test(c) || c.charCodeAt(0) >= 0x80
-}
-
-function skipTrivia(text: string, start: number): number {
-  let i = start
-  for (;;) {
-    while (i < text.length && /\s/.test(text[i]!)) i++
-    if (text.startsWith("--", i)) {
-      const eol = text.indexOf("\n", i)
-      i = eol < 0 ? text.length : eol + 1
-      continue
-    }
-    if (text.startsWith("/*", i)) {
-      let depth = 1
-      i += 2
-      while (i < text.length && depth > 0) {
-        if (text.startsWith("/*", i)) {
-          depth++
-          i += 2
-        } else if (text.startsWith("*/", i)) {
-          depth--
-          i += 2
-        } else i++
-      }
-      continue
-    }
-    return i
-  }
 }
