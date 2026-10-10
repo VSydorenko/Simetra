@@ -19,8 +19,9 @@ import {
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // перевиміряно в E2b: 10055 символів JSON усіх інструментів (+introspect, diff)
-// перевиміряно в промоції-4: вхід `promote` (мапінг)
-const TOOLS_LIST_MEASURED = 18176
+// перевиміряно в промоції-4: вхід `promote` — 4728 символів із 15120; його визначає
+// структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
+const TOOLS_LIST_MEASURED = 15120
 const TOOLS_LIST_BUDGET = Math.ceil(TOOLS_LIST_MEASURED * 1.2)
 const clients: Client[] = []
 

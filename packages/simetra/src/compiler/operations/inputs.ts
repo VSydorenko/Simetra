@@ -94,24 +94,25 @@ export const deleteInput = z.strictObject({
 })
 export type DeleteInput = z.infer<typeof deleteInput>
 
+// Схеми імен у T0 несуть опис для `rename`/`add`; у вході `promote` вони
+// повторюються понад десять разів, і кожен повтор лягає в `tools/list`. Ім'я
+// поля тут уже каже, що це ім'я, а правило стилю — у відмові компіляції.
+const promoteObjectName = objectNameSchema.meta({ description: undefined })
+const promoteElementName = elementNameSchema.meta({ description: undefined })
+
 /**
  * Клас конверсії прийнятого елемента, що не мапиться колонкою (спека
  * промоції §8, §9.1): клас іде в запис промоції, а сам елемент знімається з
  * файлів.
  */
-export const conversionClass = z
-  .enum([
-    "platform",
-    "property",
-    "rowRule",
-    "metadata",
-    "applicationCode",
-    "removed",
-  ])
-  .meta({
-    description:
-      "Conversion class of an adopted element that no column carries: platform, property, rowRule, metadata, applicationCode or removed.",
-  })
+export const conversionClass = z.enum([
+  "platform",
+  "property",
+  "rowRule",
+  "metadata",
+  "applicationCode",
+  "removed",
+])
 export type ConversionClass = z.infer<typeof conversionClass>
 
 /**
@@ -121,17 +122,13 @@ export type ConversionClass = z.infer<typeof conversionClass>
  */
 const promotedElement = z
   .record(z.string(), z.unknown())
-  .refine((element) => elementNameSchema.safeParse(element.name).success, {
+  .refine((element) => promoteElementName.safeParse(element.name).success, {
     message: "The element needs a logical name",
     path: ["name"],
   })
   .refine((element) => !Object.hasOwn(element, "physicalName"), {
     message: "Physical names are assigned by the operation",
     path: ["physicalName"],
-  })
-  .meta({
-    description:
-      "The attribute the column becomes: name is required; the column's type, required flag, title and comment are carried over unless set here; no id or physicalName.",
   })
 
 /** Шлях до першого `physicalName` на будь-якій глибині значення. */
@@ -155,7 +152,7 @@ function physicalNamePath(
  * операція: ідентичність, схема, скоуп і мітка призначені раз (Пр18). Мовчки
  * відкинуте поле сховало б від автора, що його не застосовано.
  */
-const promotedData = (assigned: readonly string[], description: string) =>
+const promotedData = (assigned: readonly string[]) =>
   z
     .record(z.string(), z.unknown())
     .superRefine((data, ctx) => {
@@ -178,7 +175,6 @@ const promotedData = (assigned: readonly string[], description: string) =>
       }
     })
     .optional()
-    .meta({ description })
 
 /**
  * Куди йде одна колонка прийнятої таблиці (спека промоції §4): рівно одна
@@ -189,125 +185,78 @@ const columnMapping = z
     z.strictObject({
       to: z.literal("standard"),
       // Канонічне camelCase-ім'я незалежно від стилю проєкту (рішення 11).
-      name: z.string().min(1).meta({
-        description:
-          "Canonical camelCase name of the standard attribute of the kind (ref, description, deletionMark, parent, owner, number, date, …), whatever the project's attribute case.",
-      }),
+      name: z.string().min(1),
     }),
     z.strictObject({ to: z.literal("scope") }),
     z.strictObject({
       to: z.literal("attribute"),
       collection: z
         .enum(["attributes", "dimensions", "resources"])
-        .default("attributes")
-        .meta({
-          description:
-            "Collection of the kind the attribute goes to; dimensions and resources exist only in registers.",
-        }),
+        .default("attributes"),
       element: promotedElement,
     }),
     z.strictObject({ to: z.literal("retire") }),
   ])
   .meta({
     description:
-      "Fate of one column: a standard attribute of the kind, the scope carrier, an own attribute, or retired explicitly.",
+      "Where one column goes: a standard attribute of the kind, the scope carrier, an own attribute or retired.",
   })
 
-// Ключ — логічне ім'я колонки прийнятої таблиці.
-const columnMappings = z.record(elementNameSchema, columnMapping).meta({
-  description:
-    "Mapping of every column of the adopted table, keyed by the column's logical name.",
+// Ключ — логічне ім'я колонки прийнятої таблиці. Опис не тут: схема розгортається
+// і в корені, і в кожній ТЧ, тож опис ліг би в `tools/list` двічі.
+const columnMappings = z.record(promoteElementName, columnMapping)
+
+const fillStep = z.strictObject({
+  table: promoteObjectName.optional(),
+  target: z.discriminatedUnion("to", [
+    z.strictObject({
+      to: z.literal("standard"),
+      name: z.string().min(1),
+    }),
+    z.strictObject({
+      to: z.literal("attribute"),
+      name: promoteElementName,
+    }),
+  ]),
+  expression: z.string().min(1).meta({
+    description:
+      "SQL expression in the old physical names; runs before the renames.",
+  }),
 })
 
-const fillStep = z
-  .strictObject({
-    table: objectNameSchema.optional().meta({
-      description:
-        "Adopted table of a tabular section the step fills; absent means the main table.",
-    }),
-    target: z.discriminatedUnion("to", [
-      z.strictObject({
-        to: z.literal("standard"),
-        name: z.string().min(1).meta({
-          description:
-            "Canonical camelCase name of the standard attribute to fill.",
-        }),
-      }),
-      z.strictObject({
-        to: z.literal("attribute"),
-        name: elementNameSchema.meta({
-          description: "Logical name of the attribute to fill.",
-        }),
-      }),
-    ]),
-    expression: z.string().min(1).meta({
-      description:
-        "One scalar SQL expression over the columns of its own table, written in the old physical names; it runs before the renames.",
-    }),
-  })
-  .meta({
-    description:
-      "Data step: computes a column of the kind from a row of the adopted table (conversion, split, backfill or repair).",
-  })
-
 export const promoteInput = z.strictObject({
-  target: z.strictObject({
-    name: objectNameSchema.meta({
-      description: "Logical name of the adopted CustomTable to promote.",
-    }),
-  }),
+  target: z.strictObject({ name: promoteObjectName }),
   into: z.strictObject({
-    kind: z
-      .enum(["Catalog", "Document", "InformationRegister"])
-      .meta({ description: "Kind the table is promoted into." }),
-    name: objectNameSchema.meta({
-      description: "Logical name of the new object.",
-    }),
-    data: promotedData(
-      ["kind", "name", "physicalName", "schema", "scope", "kindLabel"],
-      "Settings and declarative properties of the kind (e.g. codeLength, descriptionLength); no ids or physical names. Kind, name, schema, scope and kind label come from the target and the adopted table."
-    ),
+    kind: z.enum(["Catalog", "Document", "InformationRegister"]),
+    name: promoteObjectName,
+    data: promotedData([
+      "kind",
+      "name",
+      "physicalName",
+      "schema",
+      "scope",
+      "kindLabel",
+    ]),
   }),
   columns: columnMappings,
   tabularSections: z
     .array(
       z.strictObject({
-        table: objectNameSchema.meta({
-          description:
-            "Logical name of the adopted CustomTable that becomes the tabular section.",
-        }),
-        name: elementNameSchema.meta({
-          description: "Logical name of the tabular section.",
-        }),
-        data: promotedData(
-          ["name", "physicalName"],
-          "Other fields of the tabular section; no ids or physical names."
-        ),
+        table: promoteObjectName,
+        name: promoteElementName,
+        data: promotedData(["name", "physicalName"]),
         columns: columnMappings,
       })
     )
-    .default([])
-    .meta({
-      description:
-        "Adopted tables promoted together as tabular sections of the new object.",
-    }),
-  fill: z.array(fillStep).default([]).meta({
-    description:
-      "Data steps for columns of the kind that no column carries as is.",
-  }),
+    .default([]),
+  fill: z.array(fillStep).default([]),
   // Ключ — ідентичність SQL-одиниці або "<CustomTable>#<collection>/<name|index>"
   // чи "<CustomTable>#default/<колонка>".
   conversions: z.record(z.string().min(1), conversionClass).default({}).meta({
     description:
-      'Class of every adopted element that no column carries: a SQL unit identity, "<CustomTable>#uniques|checks|indexes/<name, or index when unnamed>" or "<CustomTable>#default/<column>".',
+      'Key: a SQL unit identity, "<CustomTable>#uniques|checks|indexes/<name or index>" or "<CustomTable>#default/<column>".',
   }),
-  sharedFunctions: z.array(z.string().min(1)).default([]).meta({
-    description:
-      "Identities of module functions that move to sql/<schema>/ instead of the kind module.",
-  }),
-  consumerLabels: z.array(z.string().min(1)).default([]).meta({
-    description:
-      "Values by which the consumer's data encodes this object; the promotion record carries their translation to the kind label.",
-  }),
+  sharedFunctions: z.array(z.string().min(1)).default([]),
+  consumerLabels: z.array(z.string().min(1)).default([]),
 })
 export type PromoteInput = z.infer<typeof promoteInput>

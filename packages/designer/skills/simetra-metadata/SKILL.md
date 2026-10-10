@@ -1,6 +1,6 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename delete elements or promote an adopted table through checked operations, compare a database with the metadata (`diff`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements, or promote an adopted table, through checked operations, compare a database with the metadata (`diff`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
 ---
 
 # Simetra metadata — compile, explain, fix, create, add, rename, delete, promote, introspect, diff
@@ -83,6 +83,30 @@ mutation, and its response carries the promotion record):
   }
 }
 ```
+
+Filling a `promote` mapping (the schema says what the fields are; a refusal
+says why a mapping is wrong, so read its diagnostics):
+
+- `columns` names every column of the adopted table by its logical name, with
+  one fate: `{to: "standard", name}` (canonical camelCase name of a standard
+  attribute: `ref`, `description`, `deletionMark`, `parent`, `owner`, `number`,
+  `date`, ... whatever the project's attribute case), `{to: "scope"}` (the
+  scope carrier), `{to: "attribute", element: {name, ...}}` (an own attribute;
+  `collection` is `dimensions` or `resources` only in registers) or
+  `{to: "retire"}`. An element carries no `id` or `physicalName`.
+- `into.data` holds the kind's settings (for example `codeLength`); name, kind,
+  schema, scope, ids and physical names come from the table and the operation
+  and are refused in the input. `tabularSections` lists further adopted tables
+  with their own `columns`.
+- `fill` computes a column that no column carries as is. Its `expression` is
+  written in the old physical names and runs before the renames.
+- `conversions` gives a class (`platform`, `property`, `rowRule`, `metadata`,
+  `applicationCode`, `removed`) to every adopted element no column carries: a
+  SQL unit identity, `<CustomTable>#uniques|checks|indexes/<name or index>` or
+  `<CustomTable>#default/<column>`.
+- `sharedFunctions` lists module-function identities that move to
+  `sql/<schema>/`; `consumerLabels` the values by which the consumer's data
+  encodes the object (the record carries their translation to the kind label).
 
 The same calls from a shell. A mutation takes its JSON as an argument, as
 `--input`, or as `-` for stdin:
