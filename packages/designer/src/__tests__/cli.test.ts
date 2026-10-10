@@ -292,7 +292,22 @@ describe("cli adapter", () => {
     expect(existsSync(join(dir, TAG_FILE))).toBe(false)
     expect(existsSync(join(dir, "catalogs/Tag/Tag.meta.json"))).toBe(true)
     expect(r.stdout).toContain("written")
-    expect(r.stdout).toContain("into Catalog")
+    expect(r.stdout).toMatch(/^promoted \S+ into Catalog$/m)
+  })
+
+  it("promote --dry-run says the summary would promote", async () => {
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("promote"), {
+      _: [JSON.stringify(tagMapping), dir],
+      "dry-run": true,
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("would write")
+    expect(r.stdout).toMatch(/^would promote \S+ into Catalog$/m)
+    expect(r.stdout).not.toMatch(/^promoted /m)
+    expect(await snapshotOf(dir)).toEqual(before)
   })
 
   it("promote --format json carries the record", async () => {

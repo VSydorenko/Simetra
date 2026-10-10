@@ -99,9 +99,13 @@ says why a mapping is wrong, so read its diagnostics):
   and are refused in the input. `tabularSections` lists further adopted tables
   with their own `columns`.
 - `fill` computes a target column: one that no column carries, or a mapped
-  target whose existing values need a repair (a nullable source of a NOT NULL
-  target; step kind `repair`). Its `expression` is written in the old physical
-  names and runs before the renames; a model function is called
+  target whose source allows NULL while the target is NOT NULL. On a mapped
+  target, `coalesce(<its source column>, <value>)` keeps the existing values
+  and fills only the NULLs (transaction time such as `now()` is allowed in
+  `<value>`); any other expression rewrites the existing values (step kind
+  `repair`), which must be deterministic. A `fill` step addresses a tabular
+  section table through `table`. Its `expression` is written in the old
+  physical names and runs before the renames; a model function is called
   schema-qualified.
 - `conversions` gives a class (`platform`, `property`, `rowRule`, `metadata`,
   `applicationCode`, `removed`) to each adopted element the kind does not take

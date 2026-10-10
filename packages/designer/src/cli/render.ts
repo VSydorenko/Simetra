@@ -52,8 +52,11 @@ export function renderExplanation(e: Explanation): string {
  * Підсумок запису промоції для терміналу: що на що перетворилось і що
  * лишається плану бази. Повний запис — у `--format json`.
  */
-export function renderPromotion(r: PromotionRecord): string {
-  const lines = [`promoted ${r.objectId} into ${r.kind}`]
+export function renderPromotion(r: PromotionRecord, written: boolean): string {
+  // Дієслово йде за записом, як рядки змін над підсумком: прогін без запису
+  // нічого не промотував.
+  const verb = written ? "promoted" : "would promote"
+  const lines = [`${verb} ${r.objectId} into ${r.kind}`]
   for (const t of r.tables) {
     lines.push(`  table ${t.schema}.${t.from} -> ${t.to}`)
   }
@@ -149,7 +152,7 @@ export function renderResult(
       ...(r.ok ? [] : ["nothing written: the result has errors"]),
       report,
       ...(tool.name === "promote" && r.data !== undefined
-        ? [renderPromotion(r.data as PromotionRecord)]
+        ? [renderPromotion(r.data as PromotionRecord, r.written)]
         : []),
     ].join("\n"),
   }
