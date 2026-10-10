@@ -335,6 +335,32 @@
     `contract-change` (`star`): позиційну вставку ламають додані й зняті
     колонки, а не перейменування.
     Захоплення буває й через ім'я відношення: видиме ім'я елемента `FROM` після перейменування таблиці без аліасу та аліас `JOIN` — теж `rewrite.ambiguous-name`; некваліфікована промотована таблиця переписується, лише коли в `search_path` перед її схемою немає схеми поза моделлю (`detail: "search-path"`).
+15. **Посилення й режим RLS у записі** (архітектор, 2026-10-10, за знахідками
+    задачі 7).
+    - `tightened: { schema; table; column; constraint: "notNull" }[]` (нові
+      фізичні імена). Ціль `notNull` (стандартний реквізит виду чи власний з
+      `required: true`), джерело якої nullable, вимагає кроку `fill` на цю
+      ціль, інакше `promote.fill-missing` з `params.reason: "nullable-source"`.
+      `default` стандартної колонки від кроку не звільняє: `DEFAULT` не
+      заповнює наявні `NULL`. Звільнення за `default` — лише для незмапленої
+      колонки (рішення 12). Виведений вид кроку — `repair`, тож `now()` у ньому
+      заборонено й далі: ремонт наявних даних детермінований.
+    - `rowLevelSecurity: { schema; table; from: "off" | "forced"; to:
+      "enabled" }[]` — для кожної таблиці об'єкта, зокрема ТЧ, у старих
+      іменах. `off → enabled` звужує читання, `forced → enabled` розширює
+      доступ (власник і `SECURITY DEFINER` перестають підпадати під
+      політики). Гейта й ключа в `conversions` немає: `conversions`
+      класифікує видалення, а зміну доступу ловить гейт еквівалентності «роль ×
+      дія × рядок» П3 окремим дозволеним кроком; запис дає П3 явний перелік.
+    - Коментар колонки, змапленої на стандартний реквізит чи `scope`, —
+      ключ `"<CT>#comment/<колонка>"` у `conversions`; коментар таблиці, коли
+      `into.data` задає інший `description`, — `"<CT>#comment"`. Допустимий
+      клас — лише `removed` (опис стандартного реквізиту бере вид), інший —
+      `promote.unclassified` з причиною; некласифікований —
+      `promote.unclassified`. Коментар виведеної з ужитку колонки йде разом із
+      колонкою.
+    - `.module.ts` прийнятої таблиці переїжджає в теку виду байт у байт (як
+      у `rename`); у запис не йде — переїзд видно в мапі файлів результату.
 
 ## Review Focus
 
@@ -962,7 +988,7 @@ export const promoteInput = z.strictObject({
     data: z.record(z.string(), z.unknown()).optional(), columns: columnMappings,
   })).default([]),
   fill: z.array(fillStep).default([]),
-  conversions: z.record(z.string().min(1), conversionClass).default({}), // ключ — ідентичність одиниці або "<CustomTable>#<collection>/<name|index>" чи "<CustomTable>#default/<column>"
+  conversions: z.record(z.string().min(1), conversionClass).default({}), // ключ — ідентичність одиниці або "<CustomTable>#<collection>/<name|index>", "<CustomTable>#default/<column>", "<CustomTable>#comment/<column>" чи "<CustomTable>#comment" (рішення 15)
   sharedFunctions: z.array(z.string().min(1)).default([]), // ідентичності функцій → sql/<схема>/
   consumerLabels: z.array(z.string().min(1)).default([]),
 })
@@ -986,6 +1012,9 @@ export interface PromotionRecord {
   dataSteps: { names: "beforeRenames"; schema: string; table: string; key: string; column: string; expression: string; kind: "repair" | "conversion" | "split" | "backfill" }[]
   retired: { schema: string; table: string; column: string }[] // старі імена
   relaxed: { schema: string; table: string; column: string; constraint: "notNull" }[]
+  tightened: { schema: string; table: string; column: string; constraint: "notNull" }[] // рішення 15
+  // Старі імена; рішення 15. Зміну доступу дозволяє П3 (гейт еквівалентності).
+  rowLevelSecurity: { schema: string; table: string; from: "off" | "forced"; to: "enabled" }[]
   // Будь-який бік (§9.5, Пр8); для "incoming" дія не змінюється (to === from), але потребує дозволу.
   deleteSemantics: { direction: "own" | "incoming"; schema: string; table: string; constraint?: string; columns: string[]; target: string; from: string; to: string }[]
   conversions: { subject: string; class: z.infer<typeof conversionClass> }[]
