@@ -512,9 +512,92 @@ describe("applyEdits", () => {
     ]) {
       expect(rw(sql).problems, sql).toEqual(["rewrite.unsupported"])
     }
+    // `*` гілки операції над множинами — теж рядки виводу.
+    expect(
+      rw(
+        "SELECT s.inn FROM (SELECT * FROM app.invoice WHERE false UNION ALL SELECT * FROM unnest($1)) s"
+      ).problems
+    ).toEqual(["rewrite.unsupported"])
     // Явний список колонок підзапиту доводить форму.
     expect(
       rw("SELECT s.inn FROM (SELECT x.id AS inn FROM unnest($1) x) s").problems
     ).toEqual([])
+  })
+})
+
+describe("proven column sets (unknown → refusal)", () => {
+  it("refuses a changed name behind a row expansion (expr).*", () => {
+    for (const sql of [
+      "SELECT s.inn FROM (SELECT (x).* FROM unnest($1) x) s",
+      "SELECT s.inn FROM (SELECT (unnest($1)).*) s",
+    ]) {
+      expect(rw(sql), sql).toMatchObject({
+        problems: ["rewrite.unsupported"],
+        changes: ["star"],
+      })
+    }
+  })
+
+  it("does not take a cast to a model row type for a catalog constant", () => {
+    for (const sql of [
+      "SELECT u.inn FROM unnest('{}'::app.counterparties[]) u",
+      "SELECT u.inn FROM unnest(ARRAY[]::app.counterparties[]) u",
+      "SELECT inn FROM unnest('{}'::app.counterparties[])",
+      // Літерал без типу: перевантаження обирає Postgres.
+      "SELECT r.inn FROM regexp_split_to_table('a', ',') r",
+    ]) {
+      expect(rw(sql).problems, sql).toEqual(["rewrite.unsupported"])
+    }
+    for (const sql of [
+      "SELECT u.inn FROM unnest(ARRAY[1, 2]) u",
+      "SELECT g.inn FROM generate_series(1, 2) g",
+      "SELECT u.inn FROM unnest('{a}'::text[]) u",
+      "SELECT u.inn FROM unnest(ARRAY['a', 'b']) u",
+    ]) {
+      expect(rw(sql), sql).toMatchObject({ problems: [], changes: [] })
+    }
+  })
+
+  it("reports an unproven star, also in a set-operation arm", () => {
+    expect(rw("SELECT * FROM unnest($1)").changes).toEqual(["star"])
+    expect(
+      rw("SELECT 1, 'a', 'b' UNION ALL SELECT * FROM unnest($1)")
+    ).toMatchObject({ problems: [], changes: ["star"] })
+    // Колонки каталожної функції над константою доведені.
+    expect(rw("SELECT * FROM generate_series(1, 2)").changes).toEqual([])
+  })
+
+  it("refuses a changed name of a relation outside the model", () => {
+    expect(details("SELECT o.name FROM storage.objects o")).toEqual([
+      'rewrite.unsupported "o.name" may come from the relation "storage.objects", which is not a table of the model: its columns are not proven, and "name" is a column that the promotion changes; select the columns explicitly or give a function call a column definition list',
+    ])
+    expect(rw("SELECT name FROM storage.objects").problems).toEqual([
+      "rewrite.unsupported",
+    ])
+    expect(rw("SELECT o.id FROM storage.objects o").problems).toEqual([])
+  })
+
+  it("proves a star over model tables and refuses the rest", () => {
+    // Колонки `app.invoice` не змінюються: `*` над нею доведена.
+    expect(
+      rw("SELECT s.name FROM (SELECT * FROM app.invoice) s").problems
+    ).toEqual([])
+    expect(
+      rw(
+        "SELECT s.inn FROM (SELECT * FROM app.invoice i JOIN app.notes n USING (id)) s"
+      ).problems
+    ).toEqual(["rewrite.unsupported"])
+    expect(
+      rw(
+        "WITH d AS (UPDATE app.counterparties SET inn = '1' RETURNING *) SELECT d.inn FROM d"
+      ).problems
+    ).toEqual(["rewrite.ambiguous-name"])
+  })
+
+  it("refuses a changed field of a column whose type is unknown", () => {
+    expect(
+      rw("SELECT s.x.inn FROM (SELECT c AS x FROM app.counterparties c) s")
+        .problems
+    ).toEqual(["rewrite.unsupported"])
   })
 })

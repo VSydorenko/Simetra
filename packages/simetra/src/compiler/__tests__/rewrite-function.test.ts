@@ -593,6 +593,74 @@ describe("rewriteFunction", () => {
       })
     })
 
+    it.each([
+      [
+        "a row expansion of a source",
+        "SELECT s.inn FROM (SELECT (x).* FROM unnest(a) x) s",
+      ],
+      [
+        "a row expansion of a call",
+        "SELECT s.inn FROM (SELECT (unnest(a)).*) s",
+      ],
+    ])("refuses a field behind %s and reports the star", (_, body) => {
+      const sql = overArray(body)
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.problems[0]!.detail).toContain("row expansion")
+      expect(r.contractChanges.map((c) => c.reason)).toEqual([
+        "signature",
+        "star",
+      ])
+      expect(r.sql).toBe(sql)
+    })
+
+    it.each([
+      "SELECT u.inn FROM unnest('{}'::app.counterparties[]) u",
+      "SELECT u.inn FROM unnest(ARRAY[]::app.counterparties[]) u",
+      "SELECT inn FROM unnest('{}'::app.counterparties[])",
+    ])("refuses a constant cast to the promoted row type: %s", (body) => {
+      // Приведення до типу таблиці моделі — не константа каталогу: рядки
+      // `unnest` мають колонки промотованої таблиці.
+      const sql = overArray(body)
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.problems[0]!.detail).toContain("unnest()")
+      expect(r.sql).toBe(sql)
+    })
+
+    it("reports an unproven star in a set-operation arm", () => {
+      // Промоція змінює кількість колонок `unnest(a)`, і гілки розійдуться.
+      const sql = overArray(
+        "SELECT s.id FROM (SELECT 1, 'a', 'b' UNION ALL SELECT * FROM unnest(a)) s(id, n, t)"
+      )
+      const r = rewriteFunction(sql, ctx)
+      expect(r.problems).toEqual([])
+      expect(r.contractChanges.map((c) => c.reason)).toEqual([
+        "signature",
+        "star",
+      ])
+      expect(r.contractChanges[1]!.detail).toContain("unnest()")
+    })
+
+    it("refuses a changed name when one set-operation arm is unproven", () => {
+      const sql = overArray(
+        "SELECT s.inn FROM (SELECT * FROM app.invoice WHERE false UNION ALL SELECT * FROM unnest(a)) s"
+      )
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.sql).toBe(sql)
+    })
+
+    it("does not refuse a cast constant of a catalog type", () => {
+      const sql =
+        "CREATE FUNCTION app.f() RETURNS SETOF text LANGUAGE sql STABLE AS $$ SELECT r.inn FROM regexp_split_to_table('a,b'::text, ','::text) r(inn) $$"
+      expect(rewriteFunction(sql, ctx)).toEqual({
+        sql,
+        problems: [],
+        contractChanges: [],
+      })
+    })
+
     it("does not refuse a call with a column definition list", () => {
       const sql =
         "CREATE FUNCTION app.f() RETURNS SETOF text LANGUAGE sql STABLE AS $$ SELECT x.name FROM app.rows() AS x(id int, name text) $$"
