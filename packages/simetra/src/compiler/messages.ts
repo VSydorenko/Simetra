@@ -588,6 +588,112 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Одиниці вже немає або вона тепер у закритій формі. Виконайте simetra fix: він прибирає саме такі записи. Борг лише зменшується: прибраний запис повертає тільки introspect.",
     },
   },
+  "rewrite.ambiguous-name": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: a name cannot be resolved for the rename: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: ім'я не резолвиться для перейменування: ${p.detail}`,
+    hint: {
+      en: "Qualify the column with its table alias (c.name) or rename the PL/pgSQL variable, then promote again.",
+      uk: "Кваліфікуйте колонку псевдонімом таблиці (c.name) або перейменуйте змінну PL/pgSQL і повторіть промоцію.",
+    },
+  },
+  "rewrite.unqualified-table": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: an unqualified table name depends on the caller's search_path: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: некваліфіковане ім'я таблиці залежить від search_path викликача: ${p.detail}`,
+    hint: {
+      en: "Qualify the table with its schema or give the function SET search_path.",
+      uk: "Кваліфікуйте таблицю схемою або задайте функції SET search_path.",
+    },
+  },
+  "rewrite.unsupported": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: this reference cannot be rewritten in place: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: це посилання не переписується на місці: ${p.detail}`,
+    hint: {
+      en: "Rewrite the construct by hand so that each renamed name is written out (an ON clause instead of USING, an explicit column list, an alias for an output column), then promote again.",
+      uk: "Перепишіть конструкцію вручну, щоб кожне перейменоване ім'я було написане явно (ON замість USING, явний список колонок, псевдонім колонки виводу), і повторіть промоцію.",
+    },
+  },
+  "rewrite.trigger-binding": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: a NEW/OLD field cannot be rewritten: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: поле NEW/OLD не переписується: ${p.detail}`,
+    hint: {
+      en: "One function body serves every table it is bound to: split the function per table or promote the tables together so they rename the column the same way.",
+      uk: "Одне тіло функції обслуговує всі таблиці, до яких її прив'язано: розділіть функцію за таблицями або промотуйте таблиці разом, щоб вони однаково перейменовували колонку.",
+    },
+  },
+  "rewrite.label-literal": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: a string literal equals a consumer label that the promotion replaces: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: рядковий літерал дорівнює мітці споживача, яку промоція замінює: ${p.detail}`,
+    hint: {
+      en: "After the promotion the data carries the kind label: compare with the kind label instead of the old value.",
+      uk: "Після промоції дані несуть мітку виду: порівнюйте з міткою виду замість старого значення.",
+    },
+  },
+  "rewrite.dynamic-sql": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: dynamic SQL cannot be rewritten statically: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: динамічний SQL не переписується статично: ${p.detail}`,
+    hint: {
+      en: "Replace EXECUTE with static SQL, or rewrite the function by hand before the promotion.",
+      uk: "Замініть EXECUTE статичним SQL або перепишіть функцію вручну до промоції.",
+    },
+  },
+  "rewrite.unresolved-type": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: a %TYPE reference does not resolve: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: посилання %TYPE не резолвиться: ${p.detail}`,
+    hint: {
+      en: "Write the type as schema.table.column%TYPE of a table of the model, or use the column's type directly.",
+      uk: "Запишіть тип як схема.таблиця.колонка%TYPE таблиці моделі або вкажіть тип колонки прямо.",
+    },
+  },
+  "rewrite.body-quoting": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: the body is not in dollar quotes, so positions in it cannot be mapped: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: тіло не в доларових лапках, тож позиції в ньому не відображаються: ${p.detail}`,
+    hint: {
+      en: "Put the function body in dollar quotes ($fn$ … $fn$).",
+      uk: "Візьміть тіло функції в доларові лапки ($fn$ … $fn$).",
+    },
+  },
+  "rewrite.verification-failed": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: the rewritten body does not match the expected statements: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: переписане тіло не збігається з очікуваними операторами: ${p.detail}`,
+    hint: {
+      en: "The rewriter refused instead of guessing; put the statements on separate lines or rewrite the function by hand.",
+      uk: "Переписувач відмовився, а не вгадував; розмістіть оператори на окремих рядках або перепишіть функцію вручну.",
+    },
+  },
+  "rewrite.contract-change": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: the promotion changes the shape of a result: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: промоція змінює форму результату: ${p.detail}`,
+    hint: {
+      en: "A star, a whole row or a table row type follows the new columns of the kind; list the columns explicitly where callers depend on the old shape.",
+      uk: "Зірочка, цілий рядок чи тип рядка таблиці йдуть за новими колонками виду; перелічіть колонки явно там, де викликачі залежать від старої форми.",
+    },
+  },
+  "rewrite.dynamic-sql-unscoped": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line}, column ${p.column}: dynamic SQL may reach the promoted table, and static analysis cannot see it: ${p.detail}`,
+    uk: (p) =>
+      `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: динамічний SQL може звертатися до промотованої таблиці, а статичний аналіз цього не бачить: ${p.detail}`,
+  },
   "sql.dependency-cycle": {
     en: (p) =>
       p.line === undefined

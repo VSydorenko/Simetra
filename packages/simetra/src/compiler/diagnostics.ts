@@ -31,6 +31,17 @@ export const COMPILER_RULES = [
   "sql.bare-current-user",
   "sql.debt-grows",
   "sql.debt-stale",
+  "rewrite.ambiguous-name",
+  "rewrite.unqualified-table",
+  "rewrite.unsupported",
+  "rewrite.trigger-binding",
+  "rewrite.label-literal",
+  "rewrite.dynamic-sql",
+  "rewrite.unresolved-type",
+  "rewrite.body-quoting",
+  "rewrite.verification-failed",
+  "rewrite.contract-change",
+  "rewrite.dynamic-sql-unscoped",
   "identity.id-missing",
   "identity.id-duplicate",
   "identity.physical-name-missing",
@@ -191,7 +202,11 @@ export interface Diagnostic {
  * помилки `identity.physical-name-missing`, а не друга помилка. Мітка
  * прийнятої таблиці, що втратила uuid-ключ, — зарезервоване значення: вона
  * могла лягти в збережені поліморфні пари й права, тож лишається, а ціллю
- * поліморфних посилань таблицю не робить.
+ * поліморфних посилань таблицю не робить. Зміна контракту функції після
+ * промоції (`*`, ціле значення рядка, сигнатура) переписана коректно, але
+ * змінює форму результату для викликачів — це рішення скіла конверсії, а не
+ * помилка переписування. Динамічний SQL поза кандидатами промоції статично
+ * не видно: попередження називає межу, а не порушення.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -200,6 +215,8 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "posting.query-order-missing",
   "operation.physical-name-too-long",
   "identity.kind-label-retained",
+  "rewrite.contract-change",
+  "rewrite.dynamic-sql-unscoped",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */
