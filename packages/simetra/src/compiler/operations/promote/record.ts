@@ -1,4 +1,8 @@
-import type { PhysicalColumn, PhysicalTable } from "simetra/model"
+import type {
+  PhysicalColumn,
+  PhysicalTable,
+  StandardColumnDef,
+} from "simetra/model"
 import type { CompiledModel } from "../../compile"
 import { compareStrings } from "../../diagnostics"
 import { standardElementId } from "../../stages/identity"
@@ -84,7 +88,11 @@ export interface PromotionRecord {
     from: "off" | "forced"
     to: "enabled"
   }[]
-  // Будь-який бік (§9.5, Пр8); для "incoming" дія не змінюється (to === from), але потребує дозволу.
+  /**
+   * Будь-який бік (§9.5, Пр8); для "incoming" дія не змінюється (to === from),
+   * але потребує дозволу. Імена — нові; `from: "none"` — FK у прийнятій
+   * таблиці не було, а вид додає його з каскадом.
+   */
   deleteSemantics: {
     direction: "own" | "incoming"
     schema: string
@@ -111,15 +119,16 @@ export interface PromoteResult extends OperationResult {
   record?: PromotionRecord // record — лише коли ok
 }
 
-/** Основна таблиця об'єкта у фізичному знімку (без ТЧ і похідних таблиць). */
-function mainTable(
+/** Таблиця об'єкта в знімку: основна (без `section`) чи таблиця ТЧ. */
+function tableOf(
   model: CompiledModel,
-  objectId: string
+  objectId: string,
+  section?: string
 ): PhysicalTable | undefined {
   return model.physical.tables.find(
     ({ origin }) =>
       origin.objectId === objectId &&
-      origin.tabularSectionId === undefined &&
+      origin.tabularSectionId === section &&
       origin.part === undefined
   )
 }
@@ -127,10 +136,11 @@ function mainTable(
 /**
  * Колонка виду, якою стала прийнята колонка, разом з id, що його бачить
  * планувальник: так перейменування розпізнається з ідентичності (§5).
+ * `ownerId` — власник стандартних реквізитів: об'єкт чи ТЧ.
  */
 function successor(
   table: PhysicalTable,
-  objectId: string,
+  ownerId: string,
   { column, fate }: PlacedColumn
 ): { id: string; column: PhysicalColumn } | undefined {
   const found = (
@@ -146,7 +156,7 @@ function successor(
     case "standard":
       return found(
         (c) => c.name === fate.def.physicalName,
-        () => standardElementId(objectId, fate.def)
+        () => standardElementId(ownerId, fate.def)
       )
     case "attribute":
       return found(
@@ -171,16 +181,52 @@ function successor(
   }
 }
 
+/** Ціль кроку `fill`, розв'язана до запису. */
+export type PlannedTarget =
+  | { placed: PlacedColumn }
+  | { standard: StandardColumnDef }
+  | { attribute: string }
+
+/**
+ * Крок `fill`, перевірений до запису (рішення 12): вид виведено, таблиця й
+ * ключ — у старих іменах. Нове ім'я колонки-цілі дає модель результату.
+ */
+export interface PlannedStep {
+  promoted: PromotedTable
+  /** id ТЧ; немає — основна таблиця. */
+  section?: string
+  target: PlannedTarget
+  expression: string
+  kind: PromotionRecord["dataSteps"][number]["kind"]
+  schema: string
+  table: string
+  key: string
+}
+
+/** Таблиця одиниці: прийнята таблиця й, для ТЧ, id табличної частини. */
+export interface RecordedTable {
+  promoted: PromotedTable
+  section?: string
+}
+
+const WIDENING: ReadonlySet<string> = new Set([
+  "cascade",
+  "setNull",
+  "setDefault",
+])
+
 /**
  * Запис з моделей до й після (крок 9): фізичні імена після — ті, що
- * призначило доповнення, тож запис не повторює правила імен. Кроки даних,
- * семантику видалення, SQL-одиниці й переклад міток додають задачі 8–9.
+ * призначило доповнення, тож запис не повторює правила імен. SQL-одиниці й
+ * переклад міток додає задача 9.
  */
 export function promotionRecord(
   input: PromoteInput,
   before: CompiledModel,
   after: CompiledModel,
-  main: PromotedTable
+  main: PromotedTable,
+  sections: readonly RecordedTable[] = [],
+  steps: readonly PlannedStep[] = []
 ): PromotionRecord {
   const objectId = main.object.id
   const record: PromotionRecord = {
@@ -203,24 +249,64 @@ export function promotionRecord(
     rewrittenUnits: [],
     contractChanges: [],
   }
-  const kindLabel = (
-    after.objects.find((o) => o.id === objectId)?.data as
-      { kindLabel?: string } | undefined
-  )?.kindLabel
+  const promotedObject = after.objects.find((o) => o.id === objectId)
+  const kindLabel = (promotedObject?.data as { kindLabel?: string } | undefined)
+    ?.kindLabel
   if (kindLabel !== undefined) record.kindLabel = kindLabel
   record.labelDropped =
     main.table.kindLabel !== undefined && kindLabel === undefined
 
-  const was = mainTable(before, objectId)
-  const now = mainTable(after, objectId)
-  if (was === undefined || now === undefined) {
-    throw new Error(`promoted object ${objectId} has no table`)
+  // Старі й нові таблиці одиниці, з мапою «стара колонка → нова».
+  const pairs: {
+    was: PhysicalTable
+    now: PhysicalTable
+    renames: Map<string, string>
+  }[] = []
+  for (const { promoted, section } of [{ promoted: main }, ...sections]) {
+    const was = tableOf(before, promoted.object.id)
+    const now = tableOf(after, objectId, section)
+    if (was === undefined || now === undefined) {
+      throw new Error(`promoted table ${promoted.object.id} has no table`)
+    }
+    const renames = new Map<string, string>()
+    pairs.push({ was, now, renames })
+    recordTable(record, promoted, section ?? objectId, was, now, renames)
   }
+
+  for (const step of steps) {
+    const pair = pairs.find(
+      (p) => p.now === tableOf(after, objectId, step.section)
+    )!
+    record.dataSteps.push({
+      names: "beforeRenames",
+      schema: step.schema,
+      table: step.table,
+      key: step.key,
+      column: targetColumn(step, pair.now, promotedObject?.data),
+      expression: step.expression,
+      kind: step.kind,
+    })
+  }
+
+  record.deleteSemantics = deleteSemantics(after, objectId, pairs)
+  return record
+}
+
+/** Таблиця одиниці в записі: перейменування, колонки, обмеження, RLS. */
+function recordTable(
+  record: PromotionRecord,
+  promoted: PromotedTable,
+  ownerId: string,
+  was: PhysicalTable,
+  now: PhysicalTable,
+  renames: Map<string, string>
+): void {
   const { schema } = now
-  record.tables.push({ id: objectId, schema, from: was.name, to: now.name })
+  record.tables.push({ id: ownerId, schema, from: was.name, to: now.name })
   if (was.rowLevelSecurity !== now.rowLevelSecurity) {
-    // Вид 1С має RLS увімкненим завжди (реєстр видів): інший режим після
-    // промоції — розбіжність, а не стан, який запис уміє назвати.
+    // Вид 1С має RLS увімкненим завжди (реєстр видів), рядки ТЧ — RLS
+    // власника: інший режим після промоції — розбіжність, а не стан, який
+    // запис уміє назвати.
     if (
       was.rowLevelSecurity === "enabled" ||
       now.rowLevelSecurity !== "enabled"
@@ -228,22 +314,27 @@ export function promotionRecord(
       throw new Error(`unexpected RLS change on ${schema}.${was.name}`)
     }
     record.rowLevelSecurity.push({
-      schema,
+      schema: was.schema,
       table: was.name,
       from: was.rowLevelSecurity,
       to: now.rowLevelSecurity,
     })
   }
-  for (const placed of main.columns) {
+  for (const placed of promoted.columns) {
     const old = was.columns.find((c) => c.origin.elementId === placed.column.id)
     if (old === undefined) {
       throw new Error(`column ${placed.column.name} is missing in the snapshot`)
     }
-    const next = successor(now, objectId, placed)
+    const next = successor(now, ownerId, placed)
     if (next === undefined) {
-      record.retired.push({ schema, table: was.name, column: old.name })
+      record.retired.push({
+        schema: was.schema,
+        table: was.name,
+        column: old.name,
+      })
       continue
     }
+    renames.set(old.name, next.column.name)
     const at = { schema, table: now.name, column: next.column.name }
     record.columns.push({
       id: next.id,
@@ -262,5 +353,99 @@ export function promotionRecord(
       record.tightened.push({ ...at, constraint: "notNull" })
     }
   }
-  return record
+}
+
+/** Нове фізичне ім'я колонки-цілі кроку. */
+function targetColumn(
+  step: PlannedStep,
+  now: PhysicalTable,
+  data: unknown
+): string {
+  const { target } = step
+  if ("placed" in target) {
+    return successor(
+      now,
+      step.section ?? step.promoted.object.id,
+      target.placed
+    )!.column.name
+  }
+  if ("standard" in target) return target.standard.physicalName
+  // Реквізит, якого колонки не несли, — з файлу виду: ім'я дало доповнення.
+  const elements = (owner: unknown): unknown[] =>
+    Object.values(owner as Record<string, unknown>).flatMap((v) =>
+      Array.isArray(v) ? v : []
+    )
+  const holder =
+    step.section === undefined
+      ? data
+      : (data as { tabularSections: { id?: string }[] }).tabularSections.find(
+          (s) => s.id === step.section
+        )
+  const found = elements(holder).find(
+    (e) => (e as { name?: unknown }).name === target.attribute
+  ) as { physicalName?: string } | undefined
+  if (found?.physicalName === undefined) {
+    throw new Error(`fill target ${target.attribute} has no column`)
+  }
+  return found.physicalName
+}
+
+/**
+ * Зміни семантики видалення (рішення 5, §9.5) з двох знімків. Власні FK:
+ * дія FK на ті самі колонки до й після, якщо вона змінилась, або новий FK з
+ * каскадом, якого не було. Вхідні: FK з `CASCADE`/`SET NULL` таблиці поза
+ * одиницею в таблицю одиниці — дія та сама, але контроль посилань П3 мусить
+ * її бачити.
+ */
+function deleteSemantics(
+  after: CompiledModel,
+  objectId: string,
+  pairs: readonly {
+    was: PhysicalTable
+    now: PhysicalTable
+    renames: ReadonlyMap<string, string>
+  }[]
+): PromotionRecord["deleteSemantics"] {
+  const found: PromotionRecord["deleteSemantics"] = []
+  for (const { was, now, renames } of pairs) {
+    for (const fk of now.foreignKeys) {
+      const old = was.foreignKeys.find(
+        (o) =>
+          o.columns.length === fk.columns.length &&
+          o.columns.every((c, i) => renames.get(c) === fk.columns[i])
+      )
+      const from = old?.onDelete ?? "none"
+      if (from === fk.onDelete) continue
+      if (old === undefined && !WIDENING.has(fk.onDelete)) continue
+      found.push({
+        direction: "own",
+        schema: now.schema,
+        table: now.name,
+        constraint: fk.name,
+        columns: fk.columns,
+        target: fk.references.table,
+        from,
+        to: fk.onDelete,
+      })
+    }
+  }
+  const unit = new Set(pairs.map(({ now }) => `${now.schema}.${now.name}`))
+  for (const table of after.physical.tables) {
+    if (table.origin.objectId === objectId) continue
+    for (const fk of table.foreignKeys) {
+      const target = `${fk.references.schema}.${fk.references.table}`
+      if (!unit.has(target) || !WIDENING.has(fk.onDelete)) continue
+      found.push({
+        direction: "incoming",
+        schema: table.schema,
+        table: table.name,
+        constraint: fk.name,
+        columns: fk.columns,
+        target: fk.references.table,
+        from: fk.onDelete,
+        to: fk.onDelete,
+      })
+    }
+  }
+  return found
 }

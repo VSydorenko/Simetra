@@ -2,20 +2,31 @@ import { describe, expect, it } from "vitest"
 import {
   applyChanges,
   compile,
+  promoteInput,
   promoteObject,
   type PromoteInput,
   type SchemaPathResolver,
 } from "simetra/compiler"
 import {
   CATALOG_FILE,
+  CONTACT_FILE,
+  CONTACT_ID,
   COUNTERPARTY_FILE,
   COUNTERPARTY_ID,
+  CREATED_AT_REPAIR,
   INN_ID,
   INVOICE_FILE,
   counterpartyMapping,
   promotionProject,
 } from "./fixtures/promotion"
-import { metaFiles, scopedProject, uuid } from "./helpers"
+import {
+  attribute,
+  catalog,
+  metaFiles,
+  project,
+  scopedProject,
+  uuid,
+} from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -281,7 +292,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         m.columns.inn = { to: "standard", name: "ref" }
         m.fill.push({
           target: { to: "standard", name: "ref" },
-          expression: "gen_random_uuid()",
+          expression: "md5(name)::uuid",
         })
       })
     )
@@ -434,10 +445,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
       files,
       mapping((m) => {
         m.columns.id = { to: "retire" }
-        // Ключ виду без колонки — його заповнює крок даних (задача 8).
+        // Ключ виду без колонки — його заповнює детермінований крок даних.
         m.fill.push({
           target: { to: "standard", name: "ref" },
-          expression: "gen_random_uuid()",
+          expression: "md5(name)::uuid",
         })
       })
     )
@@ -621,6 +632,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         phone: { to: "standard", name: "description" },
       },
       conversions: {},
+      fill: [],
     })
     expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
       [
@@ -648,6 +660,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         phone: { to: "standard", name: "description" },
       },
       conversions: {},
+      fill: [],
     })
     expect(errors(second.result)).toEqual([])
     expect(
@@ -1276,5 +1289,786 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
       from: "org_ref",
       to: "org_id",
     })
+  })
+})
+
+describe("promoteObject: tabular sections, documents, registers, data steps", () => {
+  const WITH_CONTACTS = { module: false, contacts: true, invoice: false }
+  const LINE_NUMBER =
+    "row_number() over (partition by counterparty_id order by id)"
+
+  /** Мапінг-зразок разом з ТЧ `contacts` з таблиці контактів. */
+  const withContacts = (edit: (m: PromoteInput) => void = () => {}) =>
+    mapping((m) => {
+      m.tabularSections = [
+        {
+          table: "CounterpartyContact",
+          name: "contacts",
+          columns: {
+            id: { to: "standard", name: "ref" },
+            counterpartyId: { to: "standard", name: "parent" },
+            phone: {
+              to: "attribute",
+              collection: "attributes",
+              element: { name: "phone" },
+            },
+          },
+        },
+      ]
+      m.fill.push({
+        table: "CounterpartyContact",
+        target: { to: "standard", name: "lineNumber" },
+        expression: LINE_NUMBER,
+      })
+      edit(m)
+    })
+
+  /** Фікстура з правкою сирого файлу. */
+  const edited = (
+    files: Map<string, string>,
+    path: string,
+    edit: (raw: Json) => void
+  ) => {
+    const raw = json(files, path)
+    edit(raw)
+    files.set(path, JSON.stringify(raw))
+    return files
+  }
+
+  /** Рахунок як документ без рухів; дата рахунку — обов'язкова. */
+  const invoiceFiles = () =>
+    edited(
+      promotionProject({ module: false, contacts: false, invoice: true }),
+      INVOICE_FILE,
+      (raw) => {
+        ;(raw.columns as Json[])[2]!.notNull = true
+      }
+    )
+  const invoiceMapping = (edit: (m: Json) => void = () => {}) => {
+    const raw: Json = {
+      target: { name: "Invoice" },
+      into: { kind: "Document", name: "Invoice" },
+      columns: {
+        id: { to: "standard", name: "ref" },
+        number: { to: "standard", name: "number" },
+        docDate: { to: "standard", name: "date" },
+        status: { to: "attribute", element: { name: "status" } },
+        amount: { to: "attribute", element: { name: "amount" } },
+        counterpartyId: { to: "retire" },
+      },
+      fill: [
+        {
+          target: { to: "standard", name: "posted" },
+          expression: "status = 'posted'",
+        },
+      ],
+      conversions: { "Invoice#checks/invoices_status_check": "rowRule" },
+    }
+    edit(raw)
+    return promoteInput.parse(raw)
+  }
+
+  /** Прийнята таблиця, що стає регістром відомостей. */
+  const PRICE_FILE = "custom-tables/Price/Price.meta.json"
+  const price = (overrides: Json = {}) => ({
+    id: uuid(7301),
+    kind: "CustomTable",
+    name: "Price",
+    physicalName: "prices",
+    kindLabel: "price",
+    schema: "app",
+    columns: [
+      {
+        id: uuid(7302),
+        name: "id",
+        physicalName: "id",
+        type: "UUID",
+        notNull: true,
+      },
+      {
+        id: uuid(7303),
+        name: "item",
+        physicalName: "item",
+        type: "Text",
+        notNull: true,
+      },
+      {
+        id: uuid(7304),
+        name: "price",
+        physicalName: "price",
+        type: "Numeric",
+        precision: 15,
+        scale: 2,
+      },
+    ],
+    primaryKey: { name: "prices_pkey", columns: ["id"] },
+    ...overrides,
+  })
+  const priceMapping = (data: Json = {}) =>
+    promoteInput.parse({
+      target: { name: "Price" },
+      into: { kind: "InformationRegister", name: "Price", data },
+      columns: {
+        id: { to: "retire" },
+        item: {
+          to: "attribute",
+          collection: "dimensions",
+          element: { name: "item" },
+        },
+        price: {
+          to: "attribute",
+          collection: "resources",
+          element: { name: "price" },
+        },
+      },
+    })
+
+  it("promotes a catalog with a tabular section from its CustomTable", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    const { result, after } = await promoted(files, withContacts())
+    expect(errors(result)).toEqual([])
+    expect(after.has(CONTACT_FILE)).toBe(false)
+    expect(json(after, CATALOG_FILE).tabularSections).toEqual([
+      expect.objectContaining({
+        id: CONTACT_ID,
+        name: "contacts",
+        physicalName: "counterparty_contacts",
+        attributes: [
+          expect.objectContaining({
+            id: uuid(7104),
+            name: "phone",
+            physicalName: "phone",
+          }),
+        ],
+      }),
+    ])
+    const record = result.record!
+    expect(record.tables).toContainEqual({
+      id: CONTACT_ID,
+      schema: "app",
+      from: "counterparty_contacts",
+      to: "counterparty_contacts",
+    })
+    expect(record.columns).toContainEqual({
+      id: `${CONTACT_ID}#parent`,
+      schema: "app",
+      table: "counterparty_contacts",
+      from: "counterparty_id",
+      to: "parent_id",
+    })
+    // Нумерація рядків за власником лише впорядковує рядки: дозаповнення.
+    expect(record.dataSteps.at(-1)).toEqual({
+      names: "beforeRenames",
+      schema: "app",
+      table: "counterparty_contacts",
+      key: "id",
+      column: "line_number",
+      expression: LINE_NUMBER,
+      kind: "backfill",
+    })
+    // Таблиця контактів без RLS — рядки ТЧ беруть RLS власника (рішення 15).
+    expect(record.rowLevelSecurity).toEqual([
+      {
+        schema: "app",
+        table: "counterparty_contacts",
+        from: "off",
+        to: "enabled",
+      },
+    ])
+    // Каскад рядка ТЧ на власника — частина виду.
+    expect(record.deleteSemantics).toEqual([])
+    const compiled = await compile(after, { baseline: files })
+    expect(compiled.diagnostics).toEqual([])
+  })
+
+  it("promotes a document: status split into posted and an attribute", async () => {
+    const { result, after } = await promoted(invoiceFiles(), invoiceMapping())
+    expect(errors(result)).toEqual([])
+    const document = json(after, "documents/Invoice/Invoice.meta.json")
+    expect(document).toMatchObject({ id: uuid(7201), kindLabel: "invoice" })
+    expect(document.attributes).toEqual([
+      expect.objectContaining({ name: "status", physicalName: "status" }),
+      expect.objectContaining({ name: "amount", physicalName: "amount" }),
+    ])
+    expect(
+      result.record?.dataSteps.map(({ column, kind }) => ({ column, kind }))
+    ).toEqual([{ column: "posted", kind: "split" }])
+  })
+
+  it("records a conversion when the source column is retired", async () => {
+    const { result } = await promoted(
+      invoiceFiles(),
+      invoiceMapping((m) => {
+        ;(m.columns as Json).status = { to: "retire" }
+      })
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.record?.dataSteps.map((s) => s.kind)).toEqual(["conversion"])
+    expect(result.record?.retired).toContainEqual({
+      schema: "app",
+      table: "invoices",
+      column: "status",
+    })
+  })
+
+  it("records a repair on a mapped column", async () => {
+    const files = promotionProject(PARTS)
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.fill.push({
+          target: { to: "standard", name: "description" },
+          expression: "left(name, 150)",
+        })
+      })
+    )
+    expect(errors(result)).toEqual([])
+    expect(
+      result.record?.dataSteps.find((s) => s.column === "description")?.kind
+    ).toBe("repair")
+  })
+
+  const label = (m: PromoteInput) => {
+    m.into.data = {
+      ...m.into.data,
+      attributes: [{ name: "label", type: "Text" }],
+    }
+  }
+  it.each([
+    [
+      "mapped target that reads a retired column",
+      "description",
+      "coalesce(name, inn)",
+      "repair",
+    ],
+    ["reads a retired and a kept column", "label", "name || inn", "conversion"],
+    ["reads only a kept column", "label", "upper(name)", "split"],
+    ["reads no column", "label", "'unnamed'", "backfill"],
+  ])(
+    "orders step kinds by priority: %s",
+    async (_, target, expression, kind) => {
+      const files = promotionProject(PARTS)
+      const { result } = await promoted(
+        files,
+        mapping((m) => {
+          label(m)
+          m.columns.inn = { to: "retire" }
+          m.fill.push({
+            target:
+              target === "label"
+                ? { to: "attribute", name: target }
+                : { to: "standard", name: target },
+            expression,
+          })
+        })
+      )
+      expect(errors(result)).toEqual([])
+      expect(
+        result.record?.dataSteps.find((s) => s.expression === expression)
+      ).toMatchObject({ column: target, kind })
+    }
+  )
+
+  it("records steps in old names before renames", async () => {
+    const { result } = await promoted(invoiceFiles(), invoiceMapping())
+    expect(result.record?.dataSteps[0]).toEqual({
+      names: "beforeRenames",
+      schema: "app",
+      table: "invoices",
+      key: "id",
+      column: "posted",
+      expression: "status = 'posted'",
+      kind: "split",
+    })
+  })
+
+  it("refuses a missing fill for a NOT NULL standard column without default", async () => {
+    // Номер документа nullable (реєстр видів); NOT NULL без значення — дата.
+    const { result } = await promoted(
+      invoiceFiles(),
+      invoiceMapping((m) => {
+        ;(m.columns as Json).docDate = { to: "retire" }
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.fill-missing",
+        file: INVOICE_FILE,
+        pointer: "",
+        params: {
+          column: "date",
+          kind: "Document",
+          name: "Invoice",
+          reason: "unmapped",
+        },
+      },
+    ])
+  })
+
+  it("records a repair and a tightened column for a nullable source", async () => {
+    const { result } = await promoted(promotionProject(PARTS))
+    expect(errors(result)).toEqual([])
+    expect(result.record?.dataSteps).toEqual([
+      {
+        names: "beforeRenames",
+        schema: "app",
+        table: "counterparties",
+        key: "id",
+        column: "created_at",
+        expression: CREATED_AT_REPAIR,
+        kind: "repair",
+      },
+    ])
+    expect(result.record?.tightened).toEqual([
+      {
+        schema: "app",
+        table: "counterparty",
+        column: "created_at",
+        constraint: "notNull",
+      },
+    ])
+  })
+
+  it.each([
+    ["(select 1)", "subquery"],
+    ["1 union select 2", "subquery"],
+    ["count(*)", "aggregate"],
+    ["other.x", "foreignTable"],
+    ["1, 2", "multipleTargets"],
+    ["1; select 2", "multipleStatements"],
+    ["generate_series(1, 2)", "setReturning"],
+    ["random()", "volatile"],
+    [
+      "row_number() over (partition by counterparty_id)",
+      "nondeterministicWindow",
+    ],
+    ["missing_column", "unknownColumn"],
+    ["1 as n", "syntax"],
+    ["(1", "syntax"],
+  ])("refuses fill expression %s", async (expression, reason) => {
+    const files = promotionProject(WITH_CONTACTS)
+    const { result, after } = await promoted(
+      files,
+      withContacts((m) => {
+        m.fill.at(-1)!.expression = expression
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.expression-invalid",
+        file: "",
+        pointer: "",
+        params: { expression, reason },
+      },
+    ])
+    expect(after).toEqual(files)
+  })
+
+  it("refuses a volatile function of the model", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    files.set(
+      "sql/app/next_line.sql",
+      "CREATE FUNCTION app.next_line() RETURNS integer LANGUAGE sql VOLATILE AS $$ SELECT 1 $$;"
+    )
+    const { result } = await promoted(
+      files,
+      withContacts((m) => {
+        m.fill.at(-1)!.expression = "app.next_line()"
+      })
+    )
+    expect(result.diagnostics.map((d) => d.params?.reason)).toEqual([
+      "volatile",
+    ])
+  })
+
+  it("refuses now() in a repair but allows it in a backfill", async () => {
+    const files = promotionProject(PARTS)
+    const repair = await promoted(
+      files,
+      mapping((m) => {
+        m.fill[0]!.expression = "coalesce(created_at, now())"
+      })
+    )
+    expect(repair.result.diagnostics.map((d) => d.params?.reason)).toEqual([
+      "volatile",
+    ])
+    const keyword = await promoted(
+      files,
+      mapping((m) => {
+        m.fill[0]!.expression = "coalesce(created_at, current_timestamp)"
+      })
+    )
+    expect(keyword.result.diagnostics.map((d) => d.params?.reason)).toEqual([
+      "volatile",
+    ])
+    const backfill = await promoted(
+      files,
+      mapping((m) => {
+        label(m)
+        m.fill.push({
+          target: { to: "attribute", name: "label" },
+          expression: "now()::text",
+        })
+      })
+    )
+    expect(errors(backfill.result)).toEqual([])
+    expect(
+      backfill.result.record?.dataSteps.find((s) => s.column === "label")?.kind
+    ).toBe("backfill")
+  })
+
+  it("refuses a fill on a table without a single-column key", async () => {
+    const files = metaFiles({
+      "project.meta.json": project(),
+      "custom-tables/Rate/Rate.meta.json": {
+        id: uuid(7311),
+        kind: "CustomTable",
+        name: "Rate",
+        physicalName: "rates",
+        schema: "app",
+        columns: [
+          {
+            id: uuid(7312),
+            name: "currency",
+            physicalName: "currency",
+            type: "Text",
+            notNull: true,
+          },
+          {
+            id: uuid(7313),
+            name: "day",
+            physicalName: "day",
+            type: "Date",
+            notNull: true,
+          },
+          {
+            id: uuid(7314),
+            name: "rate",
+            physicalName: "rate",
+            type: "Numeric",
+            precision: 15,
+            scale: 4,
+          },
+        ],
+        primaryKey: { name: "rates_pkey", columns: ["currency", "day"] },
+      },
+    })
+    const { result } = await promoted(
+      files,
+      promoteInput.parse({
+        target: { name: "Rate" },
+        into: { kind: "InformationRegister", name: "Rate" },
+        columns: {
+          currency: {
+            to: "attribute",
+            collection: "dimensions",
+            element: { name: "currency" },
+          },
+          day: {
+            to: "attribute",
+            collection: "dimensions",
+            element: { name: "day" },
+          },
+          rate: {
+            to: "attribute",
+            collection: "resources",
+            element: { name: "rate", required: true },
+          },
+        },
+        fill: [
+          {
+            target: { to: "attribute", name: "rate" },
+            expression: "coalesce(rate, 0)",
+          },
+        ],
+      })
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.params?.reason])).toEqual([
+      ["promote.expression-invalid", "noKey"],
+    ])
+  })
+
+  it("promotes an independent information register and drops the label", async () => {
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [PRICE_FILE]: price(),
+    })
+    const { result, after } = await promoted(files, priceMapping())
+    expect(errors(result)).toEqual([])
+    const register = json(after, "information-registers/Price/Price.meta.json")
+    expect(register).not.toHaveProperty("kindLabel")
+    expect(register).toMatchObject({
+      id: uuid(7301),
+      dimensions: [
+        expect.objectContaining({ id: uuid(7303), name: "item", type: "Text" }),
+      ],
+      resources: [
+        expect.objectContaining({
+          id: uuid(7304),
+          name: "price",
+          type: "Numeric",
+        }),
+      ],
+    })
+    expect(result.record).toMatchObject({
+      kind: "InformationRegister",
+      labelDropped: true,
+      retired: [{ schema: "app", table: "prices", column: "id" }],
+    })
+    expect(result.record).not.toHaveProperty("kindLabel")
+    const compiled = await compile(after, { baseline: files })
+    expect(compiled.diagnostics).toEqual([])
+  })
+
+  it("refuses an information register target that a polymorphic Ref points to", async () => {
+    const holder = catalog("Holder", {
+      attributes: [
+        attribute("subject", {
+          type: "Ref",
+          allowedTypes: [
+            { kind: "CustomTable", name: "Price" },
+            { kind: "Catalog", name: "Holder" },
+          ],
+        }),
+      ],
+    })
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [PRICE_FILE]: price(),
+      "catalogs/Holder/Holder.meta.json": holder,
+    })
+    expect((await compile(files)).diagnostics).toEqual([])
+    const { result, after } = await promoted(files, priceMapping())
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.label-target",
+        file: PRICE_FILE,
+        pointer: "",
+        params: { kind: "InformationRegister", name: "Price" },
+      },
+    ])
+    expect(after).toEqual(files)
+  })
+
+  it("refuses a document with posting, a recorder-subordinate register and an accumulation register", async () => {
+    const posting = await promoted(
+      invoiceFiles(),
+      invoiceMapping((m) => {
+        ;(m.into as Json).data = { posting: { movements: [] } }
+      })
+    )
+    const priceFiles = metaFiles({
+      "project.meta.json": project(),
+      [PRICE_FILE]: price(),
+    })
+    const subordinate = await promoted(
+      priceFiles,
+      priceMapping({ writeMode: "RecorderSubordinate" })
+    )
+    const accumulation = priceMapping()
+    // Схема входу не пропускає регістр накопичення; гейт тримає реєстр видів.
+    ;(accumulation.into as { kind: string }).kind = "AccumulationRegister"
+    const balance = await promoted(priceFiles, accumulation)
+    for (const { result } of [posting, subordinate, balance]) {
+      expect(result.diagnostics.map((d) => d.code)).toEqual([
+        "promote.unit-unsupported",
+      ])
+      expect(result.changes).toEqual([])
+    }
+    expect(posting.result.diagnostics[0]!.params).toMatchObject({
+      detail: "it writes register movements",
+    })
+    expect(subordinate.result.diagnostics[0]!.params).toMatchObject({
+      detail: "its records are written by a recorder",
+    })
+  })
+
+  it("refuses tabular sections for a kind without them", async () => {
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [PRICE_FILE]: price(),
+    })
+    const input = priceMapping()
+    input.tabularSections = [{ table: "Price", name: "rows", columns: {} }]
+    const { result } = await promoted(files, input)
+    expect(result.diagnostics.map((d) => [d.code, d.params?.detail])).toEqual([
+      ["promote.unit-unsupported", "the kind has no tabular sections"],
+    ])
+  })
+
+  it("refuses a reference to a CustomTable outside the unit", async () => {
+    const { result } = await promoted(
+      invoiceFiles(),
+      invoiceMapping((m) => {
+        ;(m.columns as Json).counterpartyId = {
+          to: "attribute",
+          element: { name: "counterparty" },
+        }
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.reference-not-promoted",
+        file: INVOICE_FILE,
+        pointer: "/columns/5",
+        params: { table: "Invoice", target: "CustomTable Counterparty" },
+      },
+    ])
+  })
+
+  it("refuses a reference to a tabular section table from outside the unit", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    files.set(
+      "custom-tables/Call/Call.meta.json",
+      JSON.stringify({
+        id: uuid(7501),
+        kind: "CustomTable",
+        name: "Call",
+        physicalName: "calls",
+        kindLabel: "call",
+        schema: "app",
+        columns: [
+          {
+            id: uuid(7502),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
+          {
+            id: uuid(7503),
+            name: "contactId",
+            physicalName: "contact_id",
+            type: "UUID",
+          },
+        ],
+        primaryKey: { name: "calls_pkey", columns: ["id"] },
+        foreignKeys: [
+          {
+            name: "calls_contact_id_fkey",
+            columns: ["contactId"],
+            references: {
+              object: { kind: "CustomTable", name: "CounterpartyContact" },
+              columns: ["id"],
+            },
+          },
+        ],
+      })
+    )
+    const { result } = await promoted(files, withContacts())
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.unit-unsupported",
+        file: "custom-tables/Call/Call.meta.json",
+        pointer: "/foreignKeys/0/references/object",
+        params: {
+          kind: "CustomTable",
+          name: "CounterpartyContact",
+          detail:
+            "it becomes a tabular section, and this customTable.foreignKey references it as an object",
+        },
+      },
+    ])
+  })
+
+  it("refuses a fill step naming a table or a target outside the unit", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    const { result } = await promoted(
+      files,
+      withContacts((m) => {
+        m.fill.push(
+          {
+            table: "Invoice",
+            target: { to: "standard", name: "lineNumber" },
+            expression: "1",
+          },
+          {
+            target: { to: "attribute", name: "nothing" },
+            expression: "1",
+          }
+        )
+      })
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.params?.at])).toEqual([
+      ["promote.mapping-unknown", "/fill/2/table"],
+      ["promote.mapping-unknown", "/fill/3/target/name"],
+    ])
+  })
+
+  it("records a CASCADE foreign key changed to restrict", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    const first = await promoted(files, counterpartyMapping(PARTS))
+    expect(errors(first.result)).toEqual([])
+    const { result } = await promoted(first.after, {
+      ...mapping(),
+      target: { name: "CounterpartyContact" },
+      into: { kind: "Catalog", name: "Contact", data: { codeLength: 0 } },
+      columns: {
+        id: { to: "standard", name: "ref" },
+        counterpartyId: {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "counterparty" },
+        },
+        phone: { to: "standard", name: "description" },
+      },
+      conversions: {},
+      fill: [],
+    })
+    expect(errors(result)).toEqual([])
+    expect(result.record?.deleteSemantics).toEqual([
+      {
+        direction: "own",
+        schema: "app",
+        table: "contact",
+        constraint: expect.any(String),
+        columns: ["counterparty_id"],
+        target: "counterparty",
+        from: "cascade",
+        to: "noAction",
+      },
+    ])
+  })
+
+  it("records a tabular section adopted with NO ACTION gaining the kind's cascade", async () => {
+    const files = edited(
+      promotionProject(WITH_CONTACTS),
+      CONTACT_FILE,
+      (raw) => {
+        delete (raw.foreignKeys as Json[])[0]!.onDelete
+      }
+    )
+    const { result } = await promoted(files, withContacts())
+    expect(errors(result)).toEqual([])
+    expect(result.record?.deleteSemantics).toEqual([
+      {
+        direction: "own",
+        schema: "app",
+        table: "counterparty_contacts",
+        constraint: expect.any(String),
+        columns: ["parent_id"],
+        target: "counterparty",
+        from: "noAction",
+        to: "cascade",
+      },
+    ])
+  })
+
+  it("records an incoming CASCADE from a table that stays CustomTable", async () => {
+    const files = promotionProject(WITH_CONTACTS)
+    const { result } = await promoted(files, counterpartyMapping(PARTS))
+    expect(errors(result)).toEqual([])
+    expect(result.record?.deleteSemantics).toEqual([
+      {
+        direction: "incoming",
+        schema: "app",
+        table: "counterparty_contacts",
+        constraint: "counterparty_contacts_counterparty_id_fkey",
+        columns: ["counterparty_id"],
+        target: "counterparty",
+        from: "cascade",
+        to: "cascade",
+      },
+    ])
   })
 })

@@ -41,6 +41,11 @@ export interface PromotionTarget {
   /** Розібрані налаштування виду (`into.data` зі значеннями за замовчуванням). */
   data: unknown
   standard: readonly StandardColumnDef[]
+  /**
+   * Колекції елементів, що стають колонками таблиці: поля виду з реєстру для
+   * основної таблиці, реквізити — для рядка ТЧ.
+   */
+  collections: readonly string[]
 }
 
 /** Ключ `conversions` для значення за замовчуванням колонки (рішення 5). */
@@ -173,7 +178,6 @@ export function placeColumns(
     if (!names.has(key)) unknown([key], `${object.name} has no column ${key}`)
   }
 
-  const def = KIND_REGISTRY[target.kind]
   const key = singleUuidKeyColumn(table)
   const targets = new Map<string, string>()
   const placed: PlacedColumn[] = []
@@ -231,7 +235,7 @@ export function placeColumns(
         targetKey = "scope"
         break
       case "attribute":
-        if (!def.columnFields.includes(mapping.collection)) {
+        if (!target.collections.includes(mapping.collection)) {
           unknown(
             [column.name, "collection"],
             `${target.kind} has no collection ${mapping.collection}`
@@ -326,10 +330,12 @@ const describes = (description: unknown, locale: string, comment: string) =>
  * прийняті `uniques`/`checks`/`indexes` (ім'я, а без нього — індекс),
  * значення за замовчуванням колонок, змаплених на власний реквізит, і
  * коментарі, яким у виді немає місця. Задача 9 додає до них SQL-одиниці.
+ * `description` — опис, який вхід задає елементу таблиці: `undefined` —
+ * описом стає коментар, `null` — опису в елемента немає (таблична частина).
  */
 export function structuralSubjects(
   promoted: PromotedTable,
-  into: PromoteInput["into"],
+  description: unknown,
   locale: string
 ): ConversionSubject[] {
   const { object, table } = promoted
@@ -342,12 +348,12 @@ export function structuralSubjects(
         required: true,
       }))
   )
-  // Коментар таблиці стає описом виду, якщо `into.data` не задає іншого.
-  const description = into.data?.description
+  // Коментар таблиці стає описом виду, якщо вхід не задає іншого; у ТЧ
+  // опису немає, тож коментар її таблиці лише знімається.
   if (
     table.comment !== undefined &&
     description !== undefined &&
-    !describes(description, locale, table.comment)
+    (description === null || !describes(description, locale, table.comment))
   ) {
     found.push({
       subject: commentSubject(object.name),
@@ -395,17 +401,19 @@ export function structuralSubjects(
  * 15): незмаплена стандартна колонка без значення за замовчуванням і без
  * генерації (`unmapped`) та ціль, джерело якої допускає `NULL`
  * (`nullable-source`). `DEFAULT` наявних `NULL` не заповнює, тож для
- * змапленої колонки значення виду не звільняє від кроку.
+ * змапленої колонки значення виду не звільняє від кроку. `section` — ім'я
+ * прийнятої таблиці ТЧ: крок `fill` адресує її полем `table`.
  */
 export function missingFills(
   promoted: PromotedTable,
   target: PromotionTarget,
-  fill: PromoteInput["fill"]
+  fill: PromoteInput["fill"],
+  section?: string
 ): Diagnostic[] {
   const { object } = promoted
   const filled = new Set(
     fill
-      .filter((step) => step.table === undefined)
+      .filter((step) => step.table === section)
       .map((step) => `${step.target.to} ${step.target.name}`)
   )
   const problems: Diagnostic[] = []

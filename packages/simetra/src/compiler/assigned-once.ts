@@ -166,9 +166,10 @@ const STANDARD_PAIR_ROLES: Readonly<
 
 /**
  * Об'єкти (`"<Вид>:<Ім'я>"`), що є ціллю поліморфної пари хоча б в одному
- * файлі: їхня мітка виду лежить у даних пар, тож зникнути не може.
+ * файлі: їхня мітка виду лежить у даних пар, тож зникнути не може. Те саме
+ * правило — гейт промоції в регістр відомостей (`promote.label-target`).
  */
-function polymorphicTargets(
+export function polymorphicTargets(
   files: ReadonlyMap<string, string>
 ): ReadonlySet<string> {
   const targets = new Set<string>()

@@ -36,7 +36,7 @@ export interface KindFileContext {
   unit: ReadonlyMap<string, MetadataRef>
   /**
    * Об'єкт-власник рядка: ціль стандартного зв'язку рядка ТЧ з власником.
-   * Немає — таблиця основна (задача 8 передає його для таблиць ТЧ).
+   * Немає — таблиця основна.
    */
   owner?: MetadataRef
 }
@@ -48,15 +48,27 @@ const isAdoptedTable = (kind: MetadataKind) =>
 const sameRef = (a: MetadataRef, b: MetadataRef) =>
   a.kind === b.kind && a.name === b.name
 
+/** Прийнята таблиця, що стає табличною частиною нового об'єкта. */
+export interface PromotedSection {
+  /** Логічне ім'я ТЧ. */
+  name: string
+  /** Інші поля ТЧ із входу. */
+  data?: Record<string, unknown>
+  promoted: PromotedTable
+  target: PromotionTarget
+}
+
 /**
  * Файл виду з прийнятої таблиці (спека промоції §7.1): шапка й `into.data`,
- * реквізити з колонок у порядку колонок із перенесеними id. Фізичних імен
- * немає — їх дає доповнення (рішення 10). Ідентичність, схему, скоуп і мітку
- * `into.data` не задає — це відхиляє схема входу.
+ * реквізити з колонок у порядку колонок із перенесеними id, табличні частини
+ * з таблиць ТЧ одиниці. Фізичних імен немає — їх дає доповнення (рішення 10).
+ * Ідентичність, схему, скоуп і мітку `into.data` не задає — це відхиляє схема
+ * входу.
  */
 export function kindFile(
   ctx: KindFileContext,
-  promoted: PromotedTable
+  promoted: PromotedTable,
+  sections: readonly PromotedSection[] = []
 ): { raw: Json; problems: Diagnostic[] } {
   const { model, into } = ctx
   const { object, table } = promoted
@@ -84,7 +96,53 @@ export function kindFile(
   if (raw.description === undefined && table.comment !== undefined) {
     raw.description = { [locale]: table.comment }
   }
+  appendElements(raw, columnElements(ctx, promoted, problems))
 
+  if (sections.length > 0) {
+    // Рядок ТЧ належить новому об'єкту: стандартний зв'язок з власником веде
+    // на нього (§11), а каскад рядка — дія виду, не запис (§9.5).
+    const owner = { kind: into.kind, name: into.name }
+    const built = sections.map((section) => {
+      const element: Json = {
+        ...section.data,
+        id: section.promoted.object.id,
+        name: section.name,
+      }
+      const title = section.promoted.table.title
+      if (element.title === undefined && title !== undefined) {
+        element.title = title
+      }
+      appendElements(
+        element,
+        columnElements(
+          { ...ctx, target: section.target, owner },
+          section.promoted,
+          problems
+        )
+      )
+      return element
+    })
+    const extra = raw.tabularSections
+    raw.tabularSections = [...built, ...(Array.isArray(extra) ? extra : [])]
+  }
+  return { raw, problems }
+}
+
+/** Реквізити з колонок — перед елементами, які задає сам вхід. */
+function appendElements(raw: Json, collections: Map<string, Json[]>): void {
+  for (const [collection, items] of collections) {
+    const extra = raw[collection]
+    raw[collection] = [...items, ...(Array.isArray(extra) ? extra : [])]
+  }
+}
+
+/** Елементи колекцій з колонок таблиці, у порядку колонок. */
+function columnElements(
+  ctx: KindFileContext,
+  promoted: PromotedTable,
+  problems: Diagnostic[]
+): Map<string, Json[]> {
+  const locale = ctx.model.project.defaultLocale
   const references = new References(ctx, promoted, problems)
   const collections = new Map<string, Json[]>()
   for (const placed of promoted.columns) {
@@ -113,11 +171,7 @@ export function kindFile(
     items.push(attribute)
     collections.set(fate.collection, items)
   }
-  for (const [collection, items] of collections) {
-    const extra = raw[collection]
-    raw[collection] = [...items, ...(Array.isArray(extra) ? extra : [])]
-  }
-  return { raw, problems }
+  return collections
 }
 
 /** Поля логічного типу колонки як є; посилання переводить `retarget`. */

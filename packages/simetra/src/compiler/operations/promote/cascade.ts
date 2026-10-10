@@ -17,8 +17,11 @@ export interface PromotedReferences {
   objectId: string
   /** Ім'я прийнятої таблиці — для діагностик. */
   table: string
-  /** Новий об'єкт: посилання на таблицю переходять на нього. */
-  becomes: MetadataRef
+  /**
+   * Новий об'єкт: посилання на таблицю переходять на нього. Немає — таблиця
+   * стає табличною частиною, а ТЧ не є об'єктом, на який посилаються.
+   */
+  becomes: MetadataRef | undefined
   /**
    * id колонки → нове логічне ім'я, `undefined` — колонка не стає реквізитом
    * (виведена з ужитку чи носій скоупу), і посилання на неї — відмова.
@@ -89,7 +92,23 @@ export function cascadeReferences(
     const file = ref.from.file
     const place = placeOf(ref, rawOf(file), schemaOf(file))
     if (object !== undefined) {
-      add(file, place, object.becomes.name, object.becomes.kind)
+      if (object.becomes !== undefined) {
+        add(file, place, object.becomes.name, object.becomes.kind)
+      } else {
+        problems.push(
+          diagnostic("promote.unit-unsupported", file, ref.from.pointer, {
+            kind: String(
+              model.objects.find((o) => o.id === object.objectId)?.kind
+            ),
+            name: object.table,
+            detail: `it becomes a tabular section, and this ${ref.role} references it as an object`,
+          })
+        )
+      }
+    } else if (column!.table.becomes === undefined) {
+      // Колонку таблиці ТЧ ззовні називають лише поруч із самою таблицею:
+      // відмову дає посилання на об'єкт.
+      continue
     } else if (column!.column.becomes !== undefined) {
       add(file, place, column!.column.becomes)
     } else {
