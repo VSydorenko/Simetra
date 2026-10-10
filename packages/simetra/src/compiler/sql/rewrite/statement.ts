@@ -16,6 +16,7 @@ import type {
   ResTarget,
   SelectStmt,
   SubLink,
+  TypeCast,
   TypeName,
   UpdateStmt,
 } from "libpg-query"
@@ -1180,6 +1181,10 @@ class StatementRewriter {
         case "A_Const":
           this.literal(child as A_Const)
           break
+        case "TypeCast":
+          this.regclassLiteral(child as TypeCast)
+          this.walk(child, env, results)
+          break
         case "SubLink":
           this.subLink(child as SubLink, env)
           break
@@ -1279,6 +1284,36 @@ class StatementRewriter {
       "rewrite.label-literal",
       this.at(constant.location),
       `string literal '${value}' equals a consumer label of the promoted object`
+    )
+  }
+
+  /**
+   * Рядок, приведений до `regclass`, називає таблицю текстом: Postgres
+   * резолвить його під час створення, і нове ім'я тут не підставити, не
+   * правлячи вміст літерала. Промотована таблиця в такому рядку — відмова.
+   */
+  private regclassLiteral(cast: TypeCast): void {
+    const type = strings(cast.typeName?.names ?? [])
+    if (
+      type === undefined ||
+      type.at(-1) !== "regclass" ||
+      !(type.length === 1 || (type.length === 2 && type[0] === "pg_catalog"))
+    ) {
+      return
+    }
+    let arg = cast.arg
+    while (arg !== undefined && ("TypeCast" in arg || "CollateClause" in arg)) {
+      arg = "TypeCast" in arg ? arg.TypeCast.arg : arg.CollateClause.arg
+    }
+    const value =
+      arg !== undefined && "A_Const" in arg ? arg.A_Const.sval?.sval : undefined
+    if (value === undefined) return
+    const relname = regclassNames(value)?.at(-1)
+    if (relname === undefined || !this.promotedNames.has(relname)) return
+    this.problem(
+      "rewrite.unsupported",
+      this.at(cast.location),
+      `regclass literal '${value}' names promoted table "${relname}" as text`
     )
   }
 
@@ -2500,4 +2535,43 @@ function mentions(value: unknown, names: ReadonlySet<string>): boolean {
 
 function statementKind(stmt: Node): string {
   return Object.keys(stmt)[0] ?? "statement"
+}
+
+/**
+ * Частини імені з тексту `regclass` за правилами ідентифікаторів Postgres:
+ * без лапок — у нижній регістр, у лапках — як є з `""` → `"`. Нерозбірний
+ * текст — `undefined`.
+ */
+function regclassNames(text: string): string[] | undefined {
+  const names: string[] = []
+  let i = 0
+  const value = text.trim()
+  for (;;) {
+    if (value[i] === '"') {
+      let name = ""
+      i++
+      for (;;) {
+        if (i >= value.length) return undefined
+        if (value[i] === '"') {
+          if (value[i + 1] === '"') {
+            name += '"'
+            i += 2
+            continue
+          }
+          i++
+          break
+        }
+        name += value[i++]
+      }
+      names.push(name)
+    } else {
+      const match = /^[^."\s]+/.exec(value.slice(i))
+      if (match === null) return undefined
+      names.push(match[0].toLowerCase())
+      i += match[0].length
+    }
+    if (i >= value.length) return names
+    if (value[i] !== ".") return undefined
+    i++
+  }
 }

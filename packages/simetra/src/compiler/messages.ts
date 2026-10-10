@@ -1826,6 +1826,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Переписуються лише функції: перепишіть чи зніміть цю одиницю вручну до промоції.",
     },
   },
+  "promote.text-conflict": {
+    en: (p) =>
+      `The SQL units of ${p.file} cannot be cut or rewritten one by one: ${p.detail}`,
+    uk: (p) =>
+      `SQL-одиниці ${p.file} не вирізати й не переписати поодинці: ${p.detail}`,
+    hint: {
+      en: "Put each statement of the file on its own line and promote again.",
+      uk: "Розмістіть кожен оператор файлу в окремому рядку й повторіть промоцію.",
+    },
+  },
   "engine.diagnostic": {
     en: (p) => `Schema engine reported ${p.engineCode}: ${p.detail}`,
     uk: (p) => `Рушій схеми повідомив ${p.engineCode}: ${p.detail}`,

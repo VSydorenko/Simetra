@@ -154,6 +154,7 @@ export const COMPILER_RULES = [
   "promote.fill-missing",
   "promote.expression-invalid",
   "promote.debt-text-reference",
+  "promote.text-conflict",
   "engine.diagnostic",
   "engine.unmodeled-drift",
   "engine.shadow-load-failed",

@@ -201,6 +201,18 @@ describe("rewriteStatementText", () => {
     ).toEqual(["rewrite.label-literal", "rewrite.label-literal"])
   })
 
+  it("refuses a regclass literal that names a promoted table", () => {
+    for (const sql of [
+      "SELECT 'app.counterparties'::regclass",
+      "SELECT CAST('\"counterparties\"' AS pg_catalog.regclass)",
+      "SELECT regclass 'app.counterparties'",
+    ]) {
+      expect(rw(sql).problems, sql).toEqual(["rewrite.unsupported"])
+    }
+    expect(rw("SELECT 'app.invoices'::regclass").problems).toEqual([])
+    expect(rw("SELECT 'app.counterparties'::text").problems).toEqual([])
+  })
+
   // Нижче — межі, яких бриф не перелічує, але які випливають з рішення 13.
 
   it("renames a table name used as a column qualifier", () => {

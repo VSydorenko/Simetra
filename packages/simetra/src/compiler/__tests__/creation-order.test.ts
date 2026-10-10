@@ -905,6 +905,22 @@ describe("unit references", () => {
     })
   })
 
+  it("lists a string cast to regclass as a relation", async () => {
+    for (const expression of [
+      "'app.counterparties'::regclass",
+      "CAST('app.counterparties' AS pg_catalog.regclass)",
+      "regclass 'app.counterparties'",
+    ]) {
+      const { parse, unit } = await unitOf(
+        `CREATE VIEW app.v AS SELECT ${expression} AS r`
+      )
+      expect(unitRelations(unit, parse), expression).toContainEqual({
+        schema: "app",
+        name: "counterparties",
+      })
+    }
+  })
+
   it("lists calls of a sql body and of a statement text", async () => {
     const { parse, unit } = await unitOf(
       "CREATE FUNCTION app.g() RETURNS int LANGUAGE sql STABLE AS $$ SELECT count(*)::int FROM app.f() $$"

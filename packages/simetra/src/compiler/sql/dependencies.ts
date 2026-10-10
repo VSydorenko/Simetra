@@ -602,6 +602,11 @@ class ReferenceCollector {
         if (sequence !== undefined) refs.push(sequence)
       }
     }
+    const cast = node.TypeCast as Record<string, unknown> | undefined
+    if (cast !== undefined) {
+      const relation = this.regclassArgument(cast)
+      if (relation !== undefined) refs.push(relation)
+    }
     const trigger = node.CreateTrigStmt as Record<string, unknown> | undefined
     if (trigger !== undefined) {
       refs.push({ space: "proc", names: strings(trigger.funcname) })
@@ -649,6 +654,35 @@ class ReferenceCollector {
     const [body] = strings(as?.List?.items)
     if (body === undefined) return
     refs.push(...this.statementReferences(body))
+  }
+
+  /**
+   * Рядок, приведений до `regclass` (`'app.t'::regclass`, `CAST(… AS
+   * regclass)`, `regclass '…'`): Postgres резолвить ім'я під час створення й
+   * тримає залежність від відношення, тож це посилання на нього.
+   */
+  private regclassArgument(
+    cast: Record<string, unknown>
+  ): Reference | undefined {
+    const typeName = cast.typeName as { names?: unknown } | undefined
+    const type = strings(typeName?.names)
+    if (
+      type.at(-1) !== "regclass" ||
+      !(type.length === 1 || (type.length === 2 && type[0] === "pg_catalog"))
+    ) {
+      return undefined
+    }
+    let arg = cast.arg as Record<string, Record<string, unknown>> | undefined
+    while (arg?.TypeCast !== undefined || arg?.CollateClause !== undefined) {
+      arg = (arg.TypeCast ?? arg.CollateClause)!.arg as
+        Record<string, Record<string, unknown>> | undefined
+    }
+    const literal = arg?.A_Const?.sval as { sval?: string } | undefined
+    if (literal?.sval === undefined) return undefined
+    const [named] = this.typeReferences(literal.sval)
+    return named === undefined
+      ? undefined
+      : { space: "rel", names: named.names }
   }
 
   /** `nextval('s')` чи `nextval('s'::regclass)`: ім'я послідовності — рядок. */

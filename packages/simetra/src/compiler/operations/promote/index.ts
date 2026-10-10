@@ -583,7 +583,9 @@ export async function promoteObject(
   for (const [file, text] of cascade.files) after.set(file, text)
   // SQL: класифіковане вирізано, функції модуля переїхали — ще в старих
   // іменах: нові фізичні імена дає лише доповнення нижче.
-  setTexts(after, sqlFileTexts(files, sql, new Map(), deleted, parse).files)
+  const moved = sqlFileTexts(files, sql, new Map(), deleted, parse)
+  if (moved.problems.length > 0) return refused(files, moved.problems)
+  setTexts(after, moved.files)
 
   // 7–8. Доповнення (канонічні фізичні імена, рішення 10), звуження боргу й
   // компіляція результату.
@@ -636,6 +638,7 @@ export async function promoteObject(
     ...callers.map((c) => c.unit),
     ...sql.unscoped.map((u) => u.unit),
   ])
+  if (final.problems.length > 0) return refused(files, final.problems)
   if (changed.length > 0) {
     const next = applyChanges(files, completed.result.changes)
     setTexts(next, final.files)

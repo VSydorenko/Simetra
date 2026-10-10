@@ -465,10 +465,16 @@ export function sqlFileTexts(
 ): {
   files: Map<string, string | undefined>
   placements: Map<string, Placement>
+  problems: Diagnostic[]
 } {
   const textOf = (unit: FileUnit) => texts.get(unit.identity) ?? unit.sql
+  const problems: Diagnostic[] = []
+  const conflict = (file: string, detail: string) =>
+    problems.push(
+      diagnostic("promote.text-conflict", file, "", { file, detail })
+    )
   const positions = new Map<string, ReturnType<typeof statementPositions>>()
-  const unitStart = (text: string, unit: FileUnit) => {
+  const unitStart = (text: string, unit: FileUnit): number | undefined => {
     let list = positions.get(unit.file)
     if (list === undefined) {
       list = statementPositions(text, parse)
@@ -477,11 +483,12 @@ export function sqlFileTexts(
     const found = list.find(
       (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
     )
-    // Одиницю дав розбір цього ж тексту: розбіжність — порушений інваріант.
+    // Одиницю дав розбір цього ж тексту: розбіжність — гучна відмова, а не
+    // виняток на вводі автора.
     if (found === undefined) {
-      throw new Error(`${unit.identity} is not found in ${unit.file}`)
+      conflict(unit.file, `${unit.identity} is not found at line ${unit.line}`)
     }
-    return found.start
+    return found?.start
   }
   const edits = new Map<string, TextEdit[]>()
   const edit = (file: string, e: TextEdit) =>
@@ -491,6 +498,7 @@ export function sqlFileTexts(
     if (deleted.has(unit.file)) continue
     const text = files.get(unit.file)!
     const start = unitStart(text, unit)
+    if (start === undefined) continue
     edit(unit.file, cut(text, start, start + unit.sql.length))
   }
   for (const unit of plan.candidates) {
@@ -499,12 +507,25 @@ export function sqlFileTexts(
     if (movedIds.has(unit.identity) || deleted.has(unit.file)) continue
     const text = files.get(unit.file)!
     const start = unitStart(text, unit)
+    if (start === undefined) continue
     edit(unit.file, { start, end: start + unit.sql.length, text: replaced })
   }
 
   const result = new Map<string, string | undefined>()
   for (const [file, list] of edits) {
-    const text = applyEdits(files.get(file)!, list)
+    const merged = mergeDeletions(files.get(file)!, list)
+    const overlap = merged.findIndex(
+      (e, i) => i > 0 && e.start < merged[i - 1]!.end
+    )
+    if (overlap > 0) {
+      conflict(
+        file,
+        `edits [${merged[overlap - 1]!.start}, ${merged[overlap - 1]!.end}) and [${merged[overlap]!.start}, ${merged[overlap]!.end}) overlap`
+      )
+      continue
+    }
+    edits.set(file, merged)
+    const text = applyEdits(files.get(file)!, merged)
     result.set(file, text.trim() === "" ? undefined : text)
   }
   const placements = new Map<string, Placement>()
@@ -512,6 +533,7 @@ export function sqlFileTexts(
     if (movedIds.has(unit.identity) || deleted.has(unit.file)) continue
     const list = edits.get(unit.file) ?? []
     const start = unitStart(files.get(unit.file)!, unit)
+    if (start === undefined) continue
     // Правки до початку одиниці зсувають її на різницю довжин.
     const shift = list
       .filter((e) => e.end <= start)
@@ -543,7 +565,53 @@ export function sqlFileTexts(
     })
     result.set(to, out)
   }
-  return { files: result, placements }
+  return { files: result, placements, problems }
+}
+
+/**
+ * Сусідні чи перекриті вирізи зливаються: виріз першого оператора рядка
+ * забирає пробіли до наступного, а виріз останнього — пробіли перед собою,
+ * тож двоє класифікованих поруч діляться пробілами. Об'єднання вирізів —
+ * той самий виріз; заміни не зливаються ніколи. Злитий виріз, що дійшов до
+ * кінця рядка, забирає й пробіли перед собою, а якщо спорожнив рядок — і сам
+ * рядок, як виріз одиниці, що займала його сама.
+ */
+function mergeDeletions(text: string, list: readonly TextEdit[]): TextEdit[] {
+  const sorted = [...list].sort((a, b) => a.start - b.start || a.end - b.end)
+  const merged: { edit: TextEdit; joined: boolean }[] = []
+  for (const e of sorted) {
+    const last = merged.at(-1)
+    if (
+      last !== undefined &&
+      last.edit.text === "" &&
+      e.text === "" &&
+      e.start <= last.edit.end
+    ) {
+      last.edit = { ...last.edit, end: Math.max(last.edit.end, e.end) }
+      last.joined = true
+    } else {
+      merged.push({ edit: e, joined: false })
+    }
+  }
+  return merged.map(({ edit, joined }) =>
+    joined ? lineAware(text, edit) : edit
+  )
+}
+
+function lineAware(text: string, edit: TextEdit): TextEdit {
+  const blank = (c: string | undefined) => c === " " || c === "\t"
+  let end = edit.end
+  while (blank(text[end])) end++
+  const crlf = text[end] === "\r" && text[end + 1] === "\n"
+  if (end < text.length && text[end] !== "\n" && !crlf) return edit
+  let start = edit.start
+  while (start > 0 && blank(text[start - 1])) start--
+  // Перед вирізом лишився інший оператор: кінець рядка лишається.
+  if (start > 0 && text[start - 1] !== "\n") return { ...edit, start, end }
+  end = Math.min(text.length, end + (crlf ? 2 : 1))
+  let next = end
+  while (blank(text[next]) || text[next] === "\r") next++
+  return { ...edit, start, end: text[next] === "\n" ? next + 1 : end }
 }
 
 /**

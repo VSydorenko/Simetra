@@ -886,4 +886,81 @@ ALTER PUBLICATION supabase_realtime ADD TABLE app.counterparties;
       "COMMENT ON SCHEMA app IS 'a';\nCOMMENT ON SCHEMA public IS 'p';\n"
     )
   })
+
+  it.each([
+    [
+      "two classified statements sharing a line",
+      "COMMENT ON TABLE app.counterparties IS 'x'; COMMENT ON COLUMN app.counterparties.inn IS 'y';\nCOMMENT ON SCHEMA public IS 'p';\n",
+      "COMMENT ON SCHEMA public IS 'p';\n",
+    ],
+    [
+      "the last two of three statements on a line",
+      "COMMENT ON SCHEMA app IS 'a'; COMMENT ON TABLE app.counterparties IS 'x'; COMMENT ON COLUMN app.counterparties.inn IS 'y';\nCOMMENT ON SCHEMA public IS 'p';\n",
+      "COMMENT ON SCHEMA app IS 'a';\nCOMMENT ON SCHEMA public IS 'p';\n",
+    ],
+    [
+      "the first two of three statements on a line",
+      "COMMENT ON TABLE app.counterparties IS 'x'; COMMENT ON COLUMN app.counterparties.inn IS 'y'; COMMENT ON SCHEMA app IS 'a';\r\nCOMMENT ON SCHEMA public IS 'p';\r\n",
+      "COMMENT ON SCHEMA app IS 'a';\r\nCOMMENT ON SCHEMA public IS 'p';\r\n",
+    ],
+  ])("cuts %s", async (_, text, expected) => {
+    const files = await project({ "sql/app/c.sql": text })
+    const { after } = await passes(
+      files,
+      mapping((m) => {
+        m.conversions["comment:table:app.counterparties"] = "removed"
+        m.conversions["comment:column:app.counterparties.inn"] = "removed"
+      })
+    )
+    expect(after.get("sql/app/c.sql")).toBe(expected)
+  })
+
+  it("refuses a regclass literal of the promoted table in verbatim debt", async () => {
+    for (const expression of [
+      "'app.counterparties'::regclass",
+      "CAST('app.counterparties' AS regclass)",
+      "regclass 'counterparties'",
+      `'"app"."counterparties"'::pg_catalog.regclass`,
+    ]) {
+      const files = await project({
+        "sql/app/v.sql": `CREATE VIEW app.v AS SELECT ${expression} AS r;\n`,
+      })
+      const { result } = await promoted(files)
+      expect(brief(result), expression).toEqual([
+        {
+          code: "promote.debt-text-reference",
+          file: "sql/app/v.sql",
+          params: { identity: "view:app.v", line: 1 },
+        },
+      ])
+    }
+    const other = await project({
+      "sql/app/v.sql":
+        "CREATE VIEW app.v AS SELECT 'app.invoices'::regclass AS r;\n",
+    })
+    await passes(other)
+  })
+
+  it("refuses a regclass literal of the promoted table in a candidate function", async () => {
+    const files = await project({
+      "sql/app/oid.sql": fn(
+        "counterparties_oid",
+        "SELECT 'app.counterparties'::regclass::oid",
+        "oid"
+      ),
+    })
+    const { result, after } = await promoted(files)
+    expect(after).toEqual(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "rewrite.unsupported",
+        file: "sql/app/oid.sql",
+        params: expect.objectContaining({
+          function: "function:app.counterparties_oid()",
+          line: 2,
+          detail: expect.stringContaining("regclass literal"),
+        }),
+      },
+    ])
+  })
 })
