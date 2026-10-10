@@ -465,4 +465,32 @@ describe("applyEdits", () => {
       []
     )
   })
+
+  it("refuses changed names that may come from a function-call source", () => {
+    // Оператор не згадує таблицю, а функція може віддавати її рядки.
+    expect(rw("SELECT x.inn FROM unnest($1) x").problems).toEqual([
+      "rewrite.unsupported",
+    ])
+    expect(rw("SELECT name FROM app.list_counterparties()").problems).toEqual([
+      "rewrite.unsupported",
+    ])
+    // Список псевдонімів перейменовує лише перші колонки складеного рядка.
+    expect(rw("SELECT x.inn FROM app.rows() AS x(a, b)").problems).toEqual([
+      "rewrite.unsupported",
+    ])
+    expect(rw("SELECT x.id FROM unnest($1) x").problems).toEqual([])
+  })
+
+  it("knows the shape of scalar set functions and column definition lists", () => {
+    expect(
+      rw("SELECT g, inn FROM generate_series(1, 2) g, app.counterparties")
+    ).toEqual({
+      sql: "SELECT g, tax_id AS inn FROM generate_series(1, 2) g, app.counterparty",
+      problems: [],
+      changes: [],
+    })
+    expect(
+      rw("SELECT x.inn FROM app.rows() AS x(id int, inn text)").problems
+    ).toEqual([])
+  })
 })

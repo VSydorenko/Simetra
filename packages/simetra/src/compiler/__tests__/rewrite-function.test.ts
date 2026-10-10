@@ -518,4 +518,47 @@ describe("rewriteFunction", () => {
       refused(sql, "rewrite.unsupported", "parenthesized row value")
     })
   })
+
+  describe("function-call sources in FROM", () => {
+    it("refuses a field of unnest over an array of the promoted row type", () => {
+      const sql =
+        "CREATE FUNCTION app.f(a app.counterparties[]) RETURNS SETOF text LANGUAGE sql STABLE AS $$ SELECT x.inn FROM unnest(a) x $$"
+      const r = rewriteFunction(sql, ctx)
+      expect(r.sql).toBe(sql)
+      expect(r.problems.map((p) => [p.code, p.column])).toEqual([
+        ["rewrite.unsupported", 99],
+      ])
+      expect(r.problems[0]!.detail).toContain("unnest()")
+    })
+
+    it("refuses a field of a function returning the promoted rows", () => {
+      const sql = plpgsql(
+        "BEGIN\n  RETURN (SELECT s.name FROM app.list_counterparties() s LIMIT 1);\nEND"
+      )
+      const r = rewriteFunction(sql, ctx)
+      expect(codes(r)).toEqual(["rewrite.unsupported"])
+      expect(r.problems[0]!.detail).toContain("list_counterparties()")
+      expect(r.sql).toBe(sql)
+    })
+
+    it("does not refuse a scalar set function", () => {
+      const sql =
+        "CREATE FUNCTION app.f() RETURNS SETOF int LANGUAGE sql STABLE AS $$ SELECT g FROM generate_series(1, 2) g $$"
+      expect(rewriteFunction(sql, ctx)).toEqual({
+        sql,
+        problems: [],
+        contractChanges: [],
+      })
+    })
+
+    it("does not refuse a call with a column definition list", () => {
+      const sql =
+        "CREATE FUNCTION app.f() RETURNS SETOF text LANGUAGE sql STABLE AS $$ SELECT x.name FROM app.rows() AS x(id int, name text) $$"
+      expect(rewriteFunction(sql, ctx)).toEqual({
+        sql,
+        problems: [],
+        contractChanges: [],
+      })
+    })
+  })
 })

@@ -49,6 +49,12 @@ interface Leaf {
   failed?: boolean
   /** Індекс UTF-16 відношення в тексті — для відмови за ім'ям джерела. */
   location?: number
+  /**
+   * Виклик функції в `FROM` з недоведеною формою рядка: `unnest` масиву
+   * рядків чи функція, що повертає рядок промотованої таблиці, віддає її
+   * колонки. Ім'я — для відмови.
+   */
+  functionSource?: string
 }
 
 /** `JOIN` з псевдонімом: внутрішні імена сховані, колонки — їхнє об'єднання. */
@@ -687,25 +693,41 @@ class StatementRewriter {
     }
   }
 
+  /**
+   * Виклик функції в `FROM`. Форму рядка доводять лише список визначень
+   * колонок (`AS x(a int, …)`) і відома скалярна функція каталогу; список
+   * псевдонімів (`AS x(a, b)`) перейменовує лише перші колонки складеного
+   * результату, тож форми не доводить.
+   */
   private rangeFunction(fn: RangeFunction, env: Env): Leaf {
     this.walk(fn.functions, env)
     this.walk(fn.coldeflist, env)
-    const aliases = stringList(fn.alias?.colnames)
-    const defined = (fn.coldeflist ?? []).flatMap((c) =>
-      "ColumnDef" in c && c.ColumnDef.colname !== undefined
-        ? [c.ColumnDef.colname]
-        : []
-    )
-    const columns =
-      fn.coldeflist !== undefined
-        ? defined
-        : aliases !== undefined && fn.ordinality !== true
-          ? aliases
-          : undefined
+    const name = functionName(fn)
+    const refname = fn.alias?.aliasname ?? name?.name
+    const ordinality = fn.ordinality === true ? ["ordinality"] : []
+    if (fn.coldeflist !== undefined) {
+      const defined = fn.coldeflist.flatMap((c) =>
+        "ColumnDef" in c && c.ColumnDef.colname !== undefined
+          ? [c.ColumnDef.colname]
+          : []
+      )
+      return { refname, aliased: true, columns: [...defined, ...ordinality] }
+    }
+    if (
+      name !== undefined &&
+      (fn.functions?.length ?? 0) === 1 &&
+      name.scalar
+    ) {
+      // Скалярний результат — одна колонка з ім'ям псевдоніма чи функції.
+      const column =
+        stringList(fn.alias?.colnames)?.[0] ?? fn.alias?.aliasname ?? name.name
+      return { refname, aliased: true, columns: [column, ...ordinality] }
+    }
     return {
-      refname: fn.alias?.aliasname ?? functionName(fn),
+      refname,
       aliased: true,
-      columns,
+      columns: undefined,
+      functionSource: name?.name ?? "a function",
     }
   }
 
@@ -1294,8 +1316,17 @@ class StatementRewriter {
       // Псевдонім `JOIN`: колонку дає одне з внутрішніх джерел.
       const hits = leaves.filter((l) => l.columns?.includes(field) ?? false)
       const unknown = leaves.filter((l) => l.columns === undefined)
+      const fn = unknown.find((l) => l.functionSource !== undefined)
       if (hits.length === 1 && unknown.length === 0) leaf = hits[0]
-      else if (leaves.some((l) => l.table?.columns.has(field))) {
+      else if (fn !== undefined && this.relevantColumn(field)) {
+        this.functionSourceProblem(
+          ref,
+          names.join("."),
+          fn.functionSource!,
+          field
+        )
+        return undefined
+      } else if (leaves.some((l) => l.table?.columns.has(field))) {
         this.problem(
           "rewrite.ambiguous-name",
           this.at(ref.location),
@@ -1303,6 +1334,21 @@ class StatementRewriter {
         )
         return undefined
       }
+    }
+    if (
+      leaf?.functionSource !== undefined &&
+      leaf.columns === undefined &&
+      this.relevantColumn(field)
+    ) {
+      // Оператор може не згадувати таблицю (`unnest(a)` параметра-масиву),
+      // а функція — віддавати її рядки: мовчки лишене ім'я зламалося б.
+      this.functionSourceProblem(
+        ref,
+        names.join("."),
+        leaf.functionSource,
+        field
+      )
+      return undefined
     }
     if (
       leaf !== undefined &&
@@ -1479,6 +1525,11 @@ class StatementRewriter {
     }
     if ("merged" in before || "failed" in before) return { result: undefined }
     if ("hits" in before) {
+      const fn = before.unknown.find((l) => l.functionSource !== undefined)
+      if (fn !== undefined && this.relevantColumn(name)) {
+        this.functionSourceProblem(ref, name, fn.functionSource!, name)
+        return { result: undefined }
+      }
       if (
         this.relevantColumn(name) &&
         (this.touches || before.hits.some((h) => h.table !== undefined))
@@ -1535,6 +1586,19 @@ class StatementRewriter {
           ? { old: name, to: renamed, end }
           : { old: names.at(-1)!, end },
     }
+  }
+
+  private functionSourceProblem(
+    ref: ColumnRef,
+    text: string,
+    source: string,
+    field: string
+  ): void {
+    this.problem(
+      "rewrite.unsupported",
+      this.at(ref.location),
+      `"${text}" may come from the function-call source ${source}() in FROM, whose row shape is not proven, and "${field}" is a column that the promotion changes; give the call a column definition list or select the columns explicitly`
+    )
   }
 
   /** Ім'я, резолв якого промоція може змінити. */
@@ -1879,14 +1943,32 @@ function aliasOf(node: Node): string | undefined {
   return inner?.alias?.aliasname
 }
 
-function functionName(fn: RangeFunction): string | undefined {
+/**
+ * Функції каталогу, що повертають множину скалярів: їхній рядок — одна
+ * колонка, промотованої таблиці в ньому немає.
+ */
+const SCALAR_SET_FUNCTIONS: ReadonlySet<string> = new Set([
+  "generate_series",
+  "generate_subscripts",
+  "regexp_split_to_table",
+  "string_to_table",
+])
+
+/** Ім'я першої функції в `FROM`; `scalar` — відома скалярна функція каталогу. */
+function functionName(
+  fn: RangeFunction
+): { name: string; scalar: boolean } | undefined {
   const first = fn.functions?.[0]
   if (first === undefined || !("List" in first)) return undefined
   const call = first.List.items?.[0]
   if (call === undefined || !("FuncCall" in call)) return undefined
-  return (call.FuncCall.funcname ?? [])
-    .flatMap((n) => ("String" in n ? [n.String.sval] : []))
-    .at(-1)
+  const names = (call.FuncCall.funcname ?? []).flatMap((n) =>
+    "String" in n && n.String.sval !== undefined ? [n.String.sval] : []
+  )
+  const name = names.at(-1)
+  if (name === undefined) return undefined
+  const catalog = names.length === 1 || names[0] === "pg_catalog"
+  return { name, scalar: catalog && SCALAR_SET_FUNCTIONS.has(name) }
 }
 
 function firstLocation(value: unknown): number | undefined {
