@@ -70,12 +70,14 @@ function slotOf(root: Json, pointer: string): { owner: Json; key: string } {
  * Переписує JSON-місця одного файлу на нове ім'я (мутує `root`). Токени
  * одного виразу — від кінця до початку, щоб зсув попередньої заміни не
  * зсунув межі наступної; ключі — останніми, бо заміна ключа змінює pointer
- * усього, що під ним.
+ * усього, що під ним. `newKind` — ціль змінила й вид (промоція): він пишеться
+ * лише в `MetadataRef`, бо голе ім'я виду не несе.
  */
 export function renameJsonPlaces(
   root: Json,
   places: readonly Place[],
-  newName: string
+  newName: string,
+  newKind?: string
 ): void {
   const tokens = new Map<string, { start: number; end: number }[]>()
   const keys: string[] = []
@@ -84,8 +86,10 @@ export function renameJsonPlaces(
       case "value": {
         const { owner, key } = slotOf(root, place.pointer)
         const node = owner[key]
-        if (isRecord(node)) node.name = newName
-        else owner[key] = newName
+        if (isRecord(node)) {
+          node.name = newName
+          if (newKind !== undefined) node.kind = newKind
+        } else owner[key] = newName
         break
       }
       case "token": {

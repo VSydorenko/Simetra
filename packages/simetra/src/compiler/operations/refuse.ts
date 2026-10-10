@@ -37,9 +37,11 @@ export function refused(
 export function refuseSuppliedId(
   files: ReadonlyMap<string, string>,
   value: unknown,
-  root: string
+  root: string | readonly string[]
 ): OperationResult | undefined {
-  const path = findId(value, [root])
+  // Корінь-шлях — для значення глибоко у вході (`columns/<колонка>/element`):
+  // ключ запису там — ім'я колонки, і колонка `id` не є id.
+  const path = findId(value, typeof root === "string" ? [root] : [...root])
   return path === undefined
     ? undefined
     : refused(files, [

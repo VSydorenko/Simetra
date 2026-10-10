@@ -1651,6 +1651,159 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть або перенаправте кожне зазначене посилання й повторіть видалення.",
     },
   },
+  // Промоція (спека промоції §4, §7.1): вхід — повний мапінг, тож кожна
+  // відмова називає місце входу (`at`) чи елемент прийнятої таблиці.
+  "promote.column-unplaced": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} has no place in the promotion mapping`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} не має місця в мапінгу промоції`,
+    hint: {
+      en: "Map every column of the adopted table: to a standard attribute of the kind, to an attribute, to the scope, or retire it explicitly.",
+      uk: "Розмістіть кожну колонку прийнятої таблиці: у стандартний реквізит виду, у реквізит, у скоуп або явно виведіть її з ужитку.",
+    },
+  },
+  "promote.mapping-unknown": {
+    en: (p) =>
+      `The promotion input at ${p.at} does not fit the model: ${p.detail}`,
+    uk: (p) => `Вхід промоції в ${p.at} не відповідає моделі: ${p.detail}`,
+    hint: {
+      en: "Name columns of the adopted table, standard attributes that the target kind has with its settings (canonical camelCase names), each target once, and conversion keys that name a SQL unit or a structural element of the promoted tables.",
+      uk: "Називайте колонки прийнятої таблиці, стандартні реквізити, які цільовий вид має з його налаштуваннями (канонічні camelCase-імена), кожну ціль один раз і ключі конверсій, що називають SQL-одиницю чи структурний елемент промотованих таблиць.",
+    },
+  },
+  "promote.unit-unsupported": {
+    en: (p) => `${p.kind} ${p.name} cannot be a promotion target: ${p.detail}`,
+    uk: (p) => `${p.kind} ${p.name} не може бути ціллю промоції: ${p.detail}`,
+    hint: {
+      en: "Promotion takes a catalog, a document without posting or an independent information register, together with their tabular sections; a posting document and its registers are promoted by the registers plan.",
+      uk: "Промоція приймає довідник, документ без проведення або незалежний регістр відомостей разом із їхніми табличними частинами; документ із проведенням і його регістри промотує план регістрів.",
+    },
+  },
+  "promote.reference-not-promoted": {
+    en: (p) =>
+      `${p.table} references ${p.target}, an adopted table outside the promotion unit`,
+    uk: (p) =>
+      `${p.table} посилається на ${p.target} — прийняту таблицю поза одиницею промоції`,
+    hint: {
+      en: "Promote the referenced table first, promote it in the same unit, or retire the referencing column.",
+      uk: "Спершу промотуйте таблицю-ціль, промотуйте її в тій самій одиниці або виведіть колонку-посилання з ужитку.",
+    },
+  },
+  "promote.retired-referenced": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} is referenced here (${p.role}), but the promotion leaves no attribute for it`,
+    uk: (p) =>
+      `На колонку ${p.column} таблиці ${p.table} тут посилаються (${p.role}), а промоція не лишає для неї реквізиту`,
+    hint: {
+      en: "A retired column and the scope carrier are not attributes of the kind: repoint or remove the reference, or map the column to an attribute or a standard attribute.",
+      uk: "Виведена з ужитку колонка й носій скоупу не є реквізитами виду: перенаправте чи приберіть посилання або змапте колонку на реквізит чи стандартний реквізит.",
+    },
+  },
+  "promote.unclassified": {
+    en: (p) =>
+      p.line === undefined
+        ? `${p.subject} has no conversion class in the promotion input`
+        : `${p.subject} at line ${p.line} has no conversion class in the promotion input`,
+    uk: (p) =>
+      p.line === undefined
+        ? `${p.subject} не має класу конверсії у вході промоції`
+        : `${p.subject} у рядку ${p.line} не має класу конверсії у вході промоції`,
+    hint: {
+      en: "Name it in conversions with a class: platform, property, rowRule, metadata, applicationCode or removed. The promotion removes it from the files and records the class.",
+      uk: "Назвіть його в conversions із класом: platform, property, rowRule, metadata, applicationCode чи removed. Промоція знімає його з файлів і пише клас у запис.",
+    },
+  },
+  "promote.write-path": {
+    en: (p) =>
+      `${p.table} is writable through the API (${p.detail}), and the write path after promotion is an open question`,
+    uk: (p) =>
+      `${p.table} доступна на запис через API (${p.detail}), а шлях запису після промоції — відкрите питання`,
+    hint: {
+      en: 'Revoke the write privilege or drop the write policy before promoting; see the open question "Write path after promotion" in the promotion spec.',
+      uk: "Відкличте привілей запису чи зніміть політику запису перед промоцією; див. відкрите питання «Шлях запису після промоції» у спеці промоції.",
+    },
+  },
+  "promote.provider-user-reference": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} references the users table of the database provider`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} посилається на таблицю користувачів провайдера бази`,
+    hint: {
+      en: 'Such a column is promoted only as { "to": "scope" } of a scope kind whose root is that table.',
+      uk: 'Таку колонку промотують лише як { "to": "scope" } виду скоупу, корінь якого — ця таблиця.',
+    },
+  },
+  "promote.label-target": {
+    en: (p) =>
+      `${p.name} would lose its kind label in ${p.kind}, but a polymorphic reference of the project targets it`,
+    uk: (p) =>
+      `${p.name} втратив би мітку виду в ${p.kind}, а на нього вказує поліморфне посилання проєкту`,
+    hint: {
+      en: "The label is the discriminator of the polymorphic pair: promote into a kind with a label, or remove the object from the allowed types first.",
+      uk: "Мітка — дискримінатор поліморфної пари: промотуйте у вид із міткою або спершу приберіть об'єкт із допустимих типів.",
+    },
+  },
+  "promote.enum-labels": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} has enum type ${p.enum}: it maps only to a Ref to an Enumeration whose value labels include ${p.labels}`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} має енам-тип ${p.enum}: її мапять лише на Ref до перерахування, мітки значень якого включають ${p.labels}`,
+    hint: {
+      en: "Create the Enumeration with these value labels (physicalName of the values) or map the column to a Ref to an existing one.",
+      uk: "Створіть перерахування з цими мітками значень (physicalName значень) або змапте колонку на Ref до наявного.",
+    },
+  },
+  "promote.type-unsupported": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} cannot become an attribute of the kind: ${p.detail}`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} не може стати реквізитом виду: ${p.detail}`,
+    hint: {
+      en: "Retire the column or change it in the adopted table first: a raw type, a generated or identity column and an explicit collation have no attribute counterpart, and a foreign key becomes a Ref only as a single column referencing the key of a metadata object.",
+      uk: "Виведіть колонку з ужитку або спершу змініть її в прийнятій таблиці: сирий тип, генерована чи identity-колонка й явна колляція не мають відповідника в реквізиті, а FK стає Ref лише однією колонкою на ключ об'єкта метаданих.",
+    },
+  },
+  "promote.default-unplaced": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} has a default, and the attribute it maps to has none`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} має значення за замовчуванням, а реквізит, на який її змаплено, — ні`,
+    hint: {
+      en: (p) =>
+        `Give the element a defaultValue, or classify the default in conversions as "${p.subject}".`,
+      uk: (p) =>
+        `Задайте елементу defaultValue або класифікуйте значення в conversions як "${p.subject}".`,
+    },
+  },
+  "promote.fill-missing": {
+    en: (p) =>
+      `Standard attribute ${p.column} of ${p.kind} ${p.name} is required and has no default, and nothing fills it`,
+    uk: (p) =>
+      `Стандартний реквізит ${p.column} виду ${p.kind} ${p.name} обов'язковий і без значення за замовчуванням, а заповнити його нічим`,
+    hint: {
+      en: "Map a column of the adopted table to it, or add a fill step that computes it.",
+      uk: "Змапте на нього колонку прийнятої таблиці або додайте крок fill, що його обчислює.",
+    },
+  },
+  "promote.expression-invalid": {
+    en: (p) => `Fill expression ${p.expression} is not allowed: ${p.reason}`,
+    uk: (p) => `Вираз заповнення ${p.expression} не дозволено: ${p.reason}`,
+    hint: {
+      en: "A fill expression is one deterministic scalar expression over the columns of its own table, in old names: no subqueries, aggregates without OVER, other tables, set-returning or volatile functions, and a window ordered by the table key; the table needs a single-column key.",
+      uk: "Вираз заповнення — один детермінований скалярний вираз над колонками своєї таблиці в старих іменах: без підзапитів, агрегатів без OVER, інших таблиць, функцій, що повертають множину, чи волатильних функцій, а вікно впорядковане ключем таблиці; таблиця потребує одноколонкового ключа.",
+    },
+  },
+  "promote.debt-text-reference": {
+    en: (p) =>
+      `${p.identity} at line ${p.line} is verbatim SQL that reads a promoted table, and its text does not follow the promotion`,
+    uk: (p) =>
+      `${p.identity} у рядку ${p.line} — дослівний SQL, що читає промотовану таблицю, і його текст не йде за промоцією`,
+    hint: {
+      en: "Only functions are rewritten: rewrite or drop this unit by hand before promoting.",
+      uk: "Переписуються лише функції: перепишіть чи зніміть цю одиницю вручну до промоції.",
+    },
+  },
   "engine.diagnostic": {
     en: (p) => `Schema engine reported ${p.engineCode}: ${p.detail}`,
     uk: (p) => `Рушій схеми повідомив ${p.engineCode}: ${p.detail}`,

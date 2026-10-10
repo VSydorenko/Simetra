@@ -16,14 +16,20 @@ export { resolveTarget, type ResolvedTarget } from "./target"
 export {
   addElementInput,
   containerTarget,
+  conversionClass,
   createObjectInput,
   deleteInput,
   elementTarget,
+  promoteInput,
   renameInput,
   type AddElementInput,
   type ContainerTarget,
+  type ConversionClass,
   type CreateObjectInput,
   type DeleteInput,
   type ElementTarget,
+  type PromoteInput,
   type RenameInput,
 } from "./inputs"
+export { promoteObject } from "./promote"
+export type { PromoteResult, PromotionRecord } from "./promote/record"

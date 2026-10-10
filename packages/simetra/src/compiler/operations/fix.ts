@@ -12,7 +12,7 @@ import {
   type PhysicalNameRole,
   type StandardColumnDef,
 } from "simetra/model"
-import { compile, currentDebt } from "../compile"
+import { compile, currentDebt, type CompiledModel } from "../compile"
 import { derivedFunctionLabels } from "../contracts"
 import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
 import { SQL_DEBT_SCHEMA_FILE } from "../json-schema"
@@ -452,21 +452,51 @@ export async function completeAndCompile(
   o: CompletionOptions,
   only?: ReadonlySet<string>
 ): Promise<OperationResult> {
-  return compileCompletion(before, completeFiles(after, o, only))
+  return (await compileCompletion(before, completeFiles(after, o, only))).result
+}
+
+/** Результат хвоста мутації разом із моделлю, з якої операція будує свій запис. */
+export interface CompiledCompletion {
+  result: OperationResult
+  /** Лише коли результат компілюється без помилок. */
+  model?: CompiledModel
+}
+
+/**
+ * Хвіст мутації, що знімає дослівні одиниці (промоція): доповнення, звуження
+ * переліку боргу й компіляція. Борг рахується над доповненою текою, як у
+ * `fixFiles`: без фізичних імен нового об'єкта стадія 3 не будується, і
+ * перелік лишився б нерухомим. Модель повертається, бо запис промоції
+ * читає фізичні імена результату.
+ */
+export async function completeNarrowAndCompile(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+  o: CompletionOptions,
+  only?: ReadonlySet<string>
+): Promise<CompiledCompletion> {
+  const completed = completeFiles(after, o, only)
+  return compileCompletion(before, {
+    ...completed,
+    files: await narrowDebt(completed.files, o.schemaPath),
+  })
 }
 
 async function compileCompletion(
   before: ReadonlyMap<string, string>,
   completed: CompletionResult
-): Promise<OperationResult> {
+): Promise<CompiledCompletion> {
   const compiled = await compile(completed.files)
   return {
-    ok: compiled.ok,
-    changes: changesBetween(before, completed.files),
-    diagnostics: sortDiagnostics([
-      ...compiled.diagnostics,
-      ...withRanges(completed.diagnostics, completed.files),
-    ]),
+    result: {
+      ok: compiled.ok,
+      changes: changesBetween(before, completed.files),
+      diagnostics: sortDiagnostics([
+        ...compiled.diagnostics,
+        ...withRanges(completed.diagnostics, completed.files),
+      ]),
+    },
+    ...(compiled.model === undefined ? {} : { model: compiled.model }),
   }
 }
 
@@ -533,8 +563,9 @@ export async function fixFiles(
   o: CompletionOptions
 ): Promise<OperationResult> {
   const completed = completeFiles(files, o)
-  return compileCompletion(files, {
+  const { result } = await compileCompletion(files, {
     ...completed,
     files: await narrowDebt(completed.files, o.schemaPath),
   })
+  return result
 }
