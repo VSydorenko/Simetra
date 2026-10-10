@@ -1,12 +1,16 @@
 /**
  * Перейменування однієї промотованої таблиці у фізичних іменах (спека
- * промоції §6): `columns` — лише колонки, що змінюють ім'я (`старе → нове`).
+ * промоції §6): `columns` — лише колонки, що змінюють ім'я (`старе → нове`);
+ * `columnsAfter` — усі колонки таблиці після промоції (рішення 14 плану), для
+ * непромотованої — її колонки без змін. Без повного «після» додана колонка
+ * виду чи знята колонка мовчки перехопили б некваліфіковане ім'я.
  */
 export interface TableRename {
   schema: string
   from: string
   to: string
   columns: ReadonlyMap<string, string>
+  columnsAfter: ReadonlySet<string>
 }
 
 /**
@@ -33,11 +37,21 @@ export interface TextEdit {
 export type RecordBinding = { table: TableRename } | { trigger: TableRename[] }
 
 /**
- * Контекст оператора у функції. `variables` — імена змінних і параметрів у
- * нижньому регістрі; `topLevelOutput: "ignore"` — верхній список виводу
- * синтетичний (обгортка виразу PL/pgSQL, `PERFORM`), його імена ніде не
- * спостерігаються; `intoRowtypeOf` — оператор пише в запис `%ROWTYPE` цієї
- * таблиці, тож її `*` у верхньому списку не змінює контракту.
+ * Контекст оператора у функції.
+ *
+ * - `variables` — імена всіх змінних і параметрів у нижньому регістрі.
+ *   Змінна, якої немає в `records`, вважається не пов'язаною з промоцією
+ *   (скаляр чи складене значення чужого типу): `r.inn` такої змінної не
+ *   переписується й не відмовляє. Тож викликач зобов'язаний покласти в
+ *   `records` кожен запис, форма якого може бути рядком промотованої
+ *   таблиці, або сам відмовити.
+ * - `records` — записи з відомою формою; `NEW`/`OLD` — з `trigger`.
+ * - `topLevelOutput: "ignore"` — лише для `PERFORM` і синтетичної обгортки
+ *   виразу PL/pgSQL (рішення 14): імена й `*` їхнього верхнього списку ніде
+ *   не спостерігаються, тож тут немає ні ` AS <старе>`, ні звіту `star`.
+ *   `RETURN QUERY`, `SELECT … INTO` запису, `FOR … IN SELECT` лишають `"keep"`.
+ * - `intoRowtypeOf` — оператор пише в запис `%ROWTYPE` цієї таблиці, тож її
+ *   `*` у верхньому списку не змінює контракту.
  */
 export interface RewriteScope {
   searchPath?: readonly string[]
@@ -64,6 +78,8 @@ export interface RewriteProblem {
 export interface ContractChange {
   offset: number
   reason: "wholeRow" | "star" | "signature"
+  /** Пояснення для повідомлення `rewrite.contract-change` (англійською). */
+  detail?: string
 }
 
 /**

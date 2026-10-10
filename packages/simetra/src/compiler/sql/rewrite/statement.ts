@@ -45,6 +45,8 @@ interface Leaf {
   table?: TableRename
   columns: readonly string[] | undefined
   failed?: boolean
+  /** Індекс UTF-16 відношення в тексті — для відмови за ім'ям джерела. */
+  location?: number
 }
 
 /** `JOIN` з псевдонімом: внутрішні імена сховані, колонки — їхнє об'єднання. */
@@ -105,6 +107,13 @@ interface Token {
 
 const KEEP: OutputMode = { alias: true, names: true, stars: true, top: false }
 
+const CHANGE_DETAILS: Readonly<Record<ContractChange["reason"], string>> = {
+  star: "a star expands the columns of the promoted table, which the promotion adds, removes and renames",
+  wholeRow:
+    "a whole row of the promoted table changes its fields with the promotion",
+  signature: "the signature names the row type of the promoted table",
+}
+
 /**
  * Переписує текст SQL (один чи кілька операторів) під нові фізичні імена
  * промотованих таблиць (спека промоції §6, рішення 13 плану).
@@ -151,6 +160,13 @@ class StatementRewriter {
   /** Старі імена перейменованих колонок усіх промотованих таблиць. */
   private readonly renamedColumns = new Set<string>()
   private readonly promotedNames = new Set<string>()
+  /**
+   * Імена, резолв яких промоція може змінити: старі й нові імена
+   * перейменувань, додані й зняті колонки.
+   */
+  private readonly changedColumns = new Set<string>()
+  /** Схеми моделі: решта `search_path` (провайдер, розширення) невідома. */
+  private readonly modelSchemas = new Set<string>()
   private readonly labels: ReadonlySet<string>
   /** Оператор згадує промотовану таблицю: невизначеність імені тут важить. */
   private touches = false
@@ -161,9 +177,25 @@ class StatementRewriter {
     private readonly scope: RewriteScope
   ) {
     this.toIndex = byteOffsets(text)
+    for (const key of map.knownTables.keys()) {
+      this.modelSchemas.add(key.slice(0, key.indexOf(".")))
+    }
     for (const table of map.tables) {
+      this.modelSchemas.add(table.schema)
       this.promotedNames.add(table.from)
-      for (const old of table.columns.keys()) this.renamedColumns.add(old)
+      const before = map.knownTables.get(`${table.schema}.${table.from}`) ?? []
+      for (const [old, renamed] of table.columns) {
+        this.renamedColumns.add(old)
+        this.changedColumns.add(old).add(renamed)
+      }
+      for (const column of table.columnsAfter) {
+        if (!before.includes(column)) this.changedColumns.add(column)
+      }
+      for (const column of before) {
+        if (!table.columnsAfter.has(table.columns.get(column) ?? column)) {
+          this.changedColumns.add(column)
+        }
+      }
     }
     this.labels = new Set(scope.labels)
   }
@@ -188,8 +220,12 @@ class StatementRewriter {
     this.problems.set(`${code}@${offset}@${detail}`, { code, offset, detail })
   }
 
-  private change(reason: ContractChange["reason"], offset: number): void {
-    this.changes.set(`${reason}@${offset}`, { offset, reason })
+  private change(
+    reason: ContractChange["reason"],
+    offset: number,
+    detail: string = CHANGE_DETAILS[reason]
+  ): void {
+    this.changes.set(`${reason}@${offset}`, { offset, reason, detail })
   }
 
   private edit(start: number, end: number, text: string): void {
@@ -287,6 +323,7 @@ class StatementRewriter {
     }
 
     const level = this.fromLevel(stmt.fromClause ?? [], env)
+    this.checkNames(level.items)
     const inner = pushLevel(env, level)
     const targets = (stmt.targetList ?? []).map((t) => resTarget(t))
     const outputs = this.outputList(targets, inner, level, mode)
@@ -342,7 +379,11 @@ class StatementRewriter {
       // Вставка без списку колонок — позиційна: промоція додає й перейменовує
       // колонки, тож відповідність значень колонкам змінюється.
       if (target.table !== undefined && stmt.selectStmt !== undefined) {
-        this.change("star", this.at(stmt.relation?.location))
+        this.change(
+          "star",
+          this.at(stmt.relation?.location),
+          "an INSERT without a column list is positional, and the promotion adds or removes columns of the table"
+        )
       }
     }
     for (const col of stmt.cols ?? []) {
@@ -370,6 +411,7 @@ class StatementRewriter {
       ...fromLevel.items,
     ]
     const level: Level = { items, merged: fromLevel.merged }
+    this.checkNames(items)
     const inner = pushLevel(env, level)
     for (const node of stmt.targetList ?? []) {
       if (!("ResTarget" in node)) continue
@@ -396,6 +438,7 @@ class StatementRewriter {
       ...(target === undefined ? [] : [{ leaf: target }]),
       ...using.items,
     ]
+    this.checkNames(items)
     this.walk(stmt.whereClause, pushLevel(env, { items, merged: using.merged }))
     this.returning(stmt.returningList, target, using.items, env, mode)
   }
@@ -731,7 +774,56 @@ class StatementRewriter {
         : aliases === undefined
           ? known
           : [...aliases, ...known.slice(aliases.length)]
-    return { refname, aliased, schema, relname, table, columns }
+    return {
+      refname,
+      aliased,
+      schema,
+      relname,
+      table,
+      columns,
+      location: this.at(rv.location),
+    }
+  }
+
+  /**
+   * Перейменована таблиця без аліасу змінює видиме ім'я свого елемента
+   * `FROM`; ім'я, яке вже займає інший елемент того самого рівня, — помилка
+   * Postgres після промоції.
+   */
+  private checkNames(items: readonly Item[]): void {
+    for (const item of items) {
+      if (!("leaf" in item)) continue
+      const { leaf } = item
+      const table = leaf.table
+      if (table === undefined || leaf.aliased || table.from === table.to)
+        continue
+      if (items.some((o) => o !== item && postRefname(o) === table.to)) {
+        this.problem("rewrite.ambiguous-name", leaf.location ?? 0, "capture")
+      }
+    }
+  }
+
+  /**
+   * Джерело за видимим ім'ям, резолвлене двічі — до промоції й після (рішення
+   * 14). Різні відповіді чи нове ім'я, яке вже займає змінна або запис, —
+   * захоплення: `null` (відмову записано). `undefined` — такого джерела немає.
+   */
+  private source(
+    name: string,
+    env: Env,
+    ref: ColumnRef
+  ): Item | undefined | null {
+    const before = findByRefname(env.levels, name, false)
+    const renamed = (before === undefined ? name : postRefname(before)) ?? name
+    const after = findByRefname(env.levels, renamed, true)
+    const shadowed =
+      renamed !== name &&
+      (this.scope.variables.has(renamed) || this.scope.records.has(renamed))
+    if (before !== after || shadowed) {
+      this.problem("rewrite.ambiguous-name", this.at(ref.location), "capture")
+      return null
+    }
+    return before
   }
 
   /** Ціль `INSERT`/`UPDATE`/`DELETE`: CTE тут не відношення. */
@@ -784,6 +876,12 @@ class StatementRewriter {
     for (const s of this.scope.searchPath) {
       const found = lookup(s)
       if (found.table !== undefined || found.known !== undefined) return found
+      // Схема поза моделлю раніше за схему таблиці: відношення з тим самим
+      // ім'ям там статично не виключити (рішення 14).
+      if (!this.modelSchemas.has(s) && this.promotedNames.has(relname)) {
+        this.problem("rewrite.ambiguous-name", this.at(location), "search-path")
+        return { failed: true }
+      }
     }
     return { failed: false }
   }
@@ -801,7 +899,7 @@ class StatementRewriter {
 
   /** `FOR UPDATE OF <ім'я>`: ім'я таблиці без псевдоніма слідує за її перейменуванням. */
   private lockedRel(rv: RangeVar, level: Level): void {
-    const item = findByRefname([level], rv.relname ?? "")
+    const item = findByRefname([level], rv.relname ?? "", false)
     const leaf = item !== undefined && "leaf" in item ? item.leaf : undefined
     const table = leaf?.table
     if (
@@ -1054,24 +1152,51 @@ class StatementRewriter {
     if (names === undefined) return
     const relation = tn.pct_type === true ? names.slice(0, -1) : names
     const relname = relation.at(-1)
-    if (relname === undefined || relation.length > 2) return
-    if (!this.promotedNames.has(relname)) return
-    const schema = relation.length === 2 ? relation[0] : undefined
-    const resolved = this.resolveTable(undefined, schema, relname, tn.location)
+    if (relname === undefined || !this.promotedNames.has(relname)) return
+    if (relation.length > 3) {
+      this.problem(
+        "rewrite.unsupported",
+        this.at(tn.location),
+        `a ${relation.length}-part name of promoted table "${relname}" is not rewritten`
+      )
+      return
+    }
+    const catalog = relation.length === 3 ? relation[0] : undefined
+    const schema = relation.length >= 2 ? relation.at(-2) : undefined
+    const resolved = this.resolveTable(catalog, schema, relname, tn.location)
     if (resolved.failed || resolved.table === undefined) return
     const table = resolved.table
+    const column = tn.pct_type === true ? names.at(-1)! : undefined
+    const renamed = column === undefined ? undefined : table.columns.get(column)
+    if (column !== undefined && !table.columnsAfter.has(renamed ?? column)) {
+      this.removed(column, table, tn.location)
+      return
+    }
     const tokens = this.tokens(tn.location, names)
     if (tokens === undefined) return
     const relToken = tokens[relation.length - 1]!
     if (table.from !== table.to) {
       this.edit(relToken.start, relToken.end, quoteIdent(table.to))
     }
-    const column =
-      tn.pct_type === true ? table.columns.get(names.at(-1)!) : undefined
     const colToken = tokens.at(-1)!
-    if (column !== undefined) {
-      this.edit(colToken.start, colToken.end, quoteIdent(column))
+    if (renamed !== undefined) {
+      this.edit(colToken.start, colToken.end, quoteIdent(renamed))
     }
+    // Значення типу рядка промотованої таблиці отримує поля виду.
+    if (column === undefined) this.change("wholeRow", this.at(tn.location))
+  }
+
+  /** Посилання на зняту колонку (без нового імені): правити нема на що. */
+  private removed(
+    column: string,
+    table: TableRename,
+    location: number | undefined
+  ): void {
+    this.problem(
+      "rewrite.unsupported",
+      this.at(location),
+      `column "${column}" of promoted table "${table.from}" is removed by the promotion`
+    )
   }
 
   /** Посилання на колонку чи запис (рішення 13: резолв за областями `FROM`). */
@@ -1158,6 +1283,14 @@ class StatementRewriter {
       return
     }
     report(found.leaves)
+    // `<таблиця>.*` без аліасу: кваліфікатор іде за перейменуванням таблиці.
+    const table = found.renameQualifier ? found.leaves[0]?.table : undefined
+    if (table === undefined || table.from === table.to) return
+    const tokens = this.tokens(ref.location, names)
+    const token = tokens?.[found.depth - 1]
+    if (token !== undefined) {
+      this.edit(token.start, token.end, quoteIdent(table.to))
+    }
   }
 
   /** Поле запису PL/pgSQL (`NEW.x`, `r.x`). */
@@ -1220,6 +1353,21 @@ class StatementRewriter {
       return undefined
     }
     const renamed = leaf?.table?.columns.get(field)
+    const target = renamed ?? field
+    if (leaf?.table !== undefined && !leaf.table.columnsAfter.has(target)) {
+      this.removed(field, leaf.table, ref.location)
+      return undefined
+    }
+    if (leaf !== undefined && leaves.length > 1) {
+      // Псевдонім `JOIN`: після промоції ім'я має давати те саме джерело.
+      const after = leaves.filter(
+        (l) => columnsAfter(l)?.includes(target) ?? true
+      )
+      if (after.length !== 1 || after[0] !== leaf) {
+        this.problem("rewrite.ambiguous-name", this.at(ref.location), "capture")
+        return undefined
+      }
+    }
     const qualifier = found.renameQualifier ? leaves[0]?.table : undefined
     const renameQualifier =
       qualifier !== undefined && qualifier.from !== qualifier.to
@@ -1271,7 +1419,8 @@ class StatementRewriter {
       }
     }
     const first = names[0]!
-    const item = findByRefname(env.levels, first)
+    const item = this.source(first, env, ref)
+    if (item === null) return undefined
     const record = this.scope.records.get(first)
     if (item !== undefined) {
       if (record !== undefined || this.scope.variables.has(first)) {
@@ -1305,7 +1454,8 @@ class StatementRewriter {
     if (resolved !== undefined) return resolved.result
     // Не колонка жодного рівня: ціле значення джерела чи запису.
     const offset = this.at(ref.location)
-    const item = findByRefname(env.levels, name)
+    const item = this.source(name, env, ref)
+    if (item === null) return undefined
     if (item !== undefined) {
       if (leavesOf(item).some((l) => l.table !== undefined)) {
         this.change("wholeRow", offset)
@@ -1339,102 +1489,92 @@ class StatementRewriter {
   ): { result: RefResult | undefined } | undefined {
     const offset = this.at(ref.location)
     const levels = [...env.levels].reverse()
-    for (let depth = 0; depth < levels.length; depth++) {
-      const level = levels[depth]!
-      if (level.merged.has(name)) return { result: undefined }
-      const leaves = level.items.flatMap(leavesOf)
-      // Про таке джерело вже є відмова: невизначеність через нього її не множить.
-      if (leaves.some((l) => l.failed)) return { result: undefined }
-      const hits = leaves.filter((l) => l.columns?.includes(name) ?? false)
-      const unknown = leaves.filter((l) => l.columns === undefined)
-      if (hits.length === 0 && unknown.length === 0) continue
-      if (hits.length !== 1 || unknown.length > 0) {
-        if (
-          this.relevantColumn(name) &&
-          (this.touches || hits.some((h) => h.table !== undefined))
-        ) {
-          this.problem(
-            "rewrite.ambiguous-name",
-            offset,
-            hits.length > 1
-              ? `column "${name}" exists in more than one table in FROM`
-              : `column "${name}" may come from a source whose columns are unknown`
-          )
-        }
-        return { result: undefined }
-      }
-      const leaf = hits[0]!
-      const renamed = leaf.table?.columns.get(name)
-      const after = renamed ?? name
-      if (
-        this.scope.variables.has(name) &&
-        (renamed !== undefined || this.isNewName(name))
-      ) {
-        this.problem(
-          "rewrite.ambiguous-name",
-          offset,
-          `"${name}" is both a column and a PL/pgSQL variable or parameter`
-        )
-        return { result: undefined }
-      }
-      // Ім'я після перейменування, яке дасть інше джерело ближчого чи того
-      // самого рівня, перехопило б посилання або зробило б його неоднозначним.
-      const captured = levels
-        .slice(0, depth + 1)
-        .flatMap((l) => l.items.flatMap(leavesOf))
-        .some((l) => l !== leaf && hasAfterRename(l, after))
-      if (
-        captured ||
-        (renamed !== undefined && this.scope.variables.has(renamed))
-      ) {
-        this.problem(
-          "rewrite.ambiguous-name",
-          offset,
-          `after the rename, "${after}" would also name another column or a PL/pgSQL variable in scope`
-        )
-        return { result: undefined }
-      }
-      if (renamed === undefined) return { result: undefined }
-      const tokens = this.tokens(ref.location, names)
-      if (tokens === undefined) return { result: undefined }
-      const token = tokens[0]!
-      this.edit(token.start, token.end, quoteIdent(renamed))
-      const end = tokens.at(-1)!.end
-      return {
-        result:
-          names.length === 1
-            ? { old: name, to: renamed, end }
-            : { old: names.at(-1)!, end },
-      }
+    const capture = () => {
+      this.problem("rewrite.ambiguous-name", offset, "capture")
+      return { result: undefined }
     }
-    // Не колонка: нова колонка промотованої таблиці з цим ім'ям перехопила б
-    // змінну чи ціле значення.
-    if (
-      levels.some((l) =>
-        l.items.flatMap(leavesOf).some((leaf) => hasAfterRename(leaf, name))
-      )
-    ) {
+    // Резолв двічі — за каталогом до промоції й після (рішення 14): ім'я, що
+    // після промоції веде в інше джерело, — захоплення, а не правка.
+    const before = locate(name, levels, false)
+    if (before === undefined) {
+      // Не колонка: змінна, ціле значення чи невідоме. Колонка з цим ім'ям,
+      // що з'являється після промоції, перехопила б посилання.
+      const after = locate(name, levels, true)
+      if (
+        after !== undefined &&
+        ("leaf" in after || ("hits" in after && after.hits.length > 0))
+      ) {
+        return capture()
+      }
+      return undefined
+    }
+    if ("merged" in before || "failed" in before) return { result: undefined }
+    if ("hits" in before) {
+      if (
+        this.relevantColumn(name) &&
+        (this.touches || before.hits.some((h) => h.table !== undefined))
+      ) {
+        this.problem(
+          "rewrite.ambiguous-name",
+          offset,
+          before.hits.length > 1
+            ? `column "${name}" exists in more than one table in FROM`
+            : `column "${name}" may come from a source whose columns are unknown`
+        )
+      }
+      return { result: undefined }
+    }
+    const leaf = before.leaf
+    const renamed = leaf.table?.columns.get(name)
+    const target = renamed ?? name
+    if (this.scope.variables.has(name) && this.relevantColumn(name)) {
       this.problem(
         "rewrite.ambiguous-name",
         offset,
-        `after the rename, "${name}" would become a column of a promoted table in scope`
+        `"${name}" is both a column and a PL/pgSQL variable or parameter`
       )
       return { result: undefined }
     }
-    return undefined
+    const after = locate(target, levels, true)
+    if (after !== undefined && "failed" in after) return { result: undefined }
+    if (leaf.table !== undefined && !leaf.table.columnsAfter.has(target)) {
+      // Знята колонка: без іншого джерела з цим ім'ям — відмова, з ним —
+      // ім'я мовчки впало б у зовнішню область.
+      if (after === undefined) {
+        this.removed(name, leaf.table, ref.location)
+        return { result: undefined }
+      }
+      return capture()
+    }
+    if (
+      after === undefined ||
+      !("leaf" in after) ||
+      after.leaf !== leaf ||
+      (target !== name && this.scope.variables.has(target))
+    ) {
+      return capture()
+    }
+    if (renamed === undefined) return { result: undefined }
+    const tokens = this.tokens(ref.location, names)
+    if (tokens === undefined) return { result: undefined }
+    const token = tokens[0]!
+    this.edit(token.start, token.end, quoteIdent(renamed))
+    const end = tokens.at(-1)!.end
+    return {
+      result:
+        names.length === 1
+          ? { old: name, to: renamed, end }
+          : { old: names.at(-1)!, end },
+    }
   }
 
-  /** Ім'я, що може зачепити промоцію: старе чи нове ім'я перейменованої колонки. */
+  /** Ім'я, резолв якого промоція може змінити. */
   private relevantColumn(name: string): boolean {
-    return this.renamedColumns.has(name) || this.isNewName(name)
+    return this.changedColumns.has(name)
   }
 
   private relevantName(name: string): boolean {
     return this.promotedNames.has(name) || this.relevantColumn(name)
-  }
-
-  private isNewName(name: string): boolean {
-    return this.map.tables.some((t) => [...t.columns.values()].includes(name))
   }
 
   /** Нове ім'я поля запису; `undefined` — поле не змінюється чи прив'язка не доведена. */
@@ -1444,7 +1584,15 @@ class StatementRewriter {
     field: string,
     ref: ColumnRef
   ): string | undefined {
-    if ("table" in record) return record.table.columns.get(field)
+    if ("table" in record) {
+      const { table } = record
+      const target = table.columns.get(field) ?? field
+      if (this.isPromoted(table) && !table.columnsAfter.has(target)) {
+        this.removed(field, table, ref.location)
+        return undefined
+      }
+      return target === field ? undefined : target
+    }
     // `NEW.x` переписується, лише коли всі таблиці прив'язки однаково
     // перейменовують поле: одне тіло обслуговує їх усі.
     const targets = new Set(
@@ -1461,6 +1609,13 @@ class StatementRewriter {
       return undefined
     }
     const target = [...targets][0]!
+    const gone = record.trigger.find(
+      (t) => this.isPromoted(t) && !t.columnsAfter.has(target)
+    )
+    if (gone !== undefined) {
+      this.removed(field, gone, ref.location)
+      return undefined
+    }
     return target === field ? undefined : target
   }
 
@@ -1540,16 +1695,68 @@ function leavesOf(item: Item): Leaf[] {
   return "leaf" in item ? [item.leaf] : item.group.leaves
 }
 
-/** Джерело за ім'ям, від внутрішнього рівня до зовнішнього. */
+/**
+ * Джерело за видимим ім'ям, від внутрішнього рівня до зовнішнього; `after` —
+ * за іменами після промоції (таблиця без аліасу бачиться під новим ім'ям).
+ */
 function findByRefname(
   levels: readonly Level[],
-  name: string
+  name: string,
+  after: boolean
 ): Item | undefined {
   for (const level of [...levels].reverse()) {
-    const found = level.items.find((i) =>
-      "leaf" in i ? i.leaf.refname === name : i.group.refname === name
+    const found = level.items.find(
+      (i) => (after ? postRefname(i) : preRefname(i)) === name
     )
     if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function preRefname(item: Item): string | undefined {
+  return "leaf" in item ? item.leaf.refname : item.group.refname
+}
+
+function postRefname(item: Item): string | undefined {
+  if (!("leaf" in item)) return item.group.refname
+  const { leaf } = item
+  return !leaf.aliased && leaf.table !== undefined
+    ? leaf.table.to
+    : leaf.refname
+}
+
+/** Колонки джерела після промоції; `undefined` — невідомі. */
+function columnsAfter(leaf: Leaf): readonly string[] | undefined {
+  return leaf.table !== undefined ? [...leaf.table.columnsAfter] : leaf.columns
+}
+
+/** Де резолвиться некваліфікована колонка (як `colNameToVar`). */
+type Located =
+  | { leaf: Leaf }
+  | { merged: true }
+  | { failed: true }
+  | { hits: Leaf[]; unknown: Leaf[] }
+
+/**
+ * Перший рівень (від внутрішнього), де ім'я — колонка; `after` — за колонками
+ * після промоції. Джерело, про яке вже є відмова, зупиняє пошук: невизначеність
+ * через нього відмов не множить.
+ */
+function locate(
+  name: string,
+  innermostFirst: readonly Level[],
+  after: boolean
+): Located | undefined {
+  for (const level of innermostFirst) {
+    if (level.merged.has(name)) return { merged: true }
+    const leaves = level.items.flatMap(leavesOf)
+    if (leaves.some((l) => l.failed)) return { failed: true }
+    const columns = (l: Leaf) => (after ? columnsAfter(l) : l.columns)
+    const hits = leaves.filter((l) => columns(l)?.includes(name) ?? false)
+    const unknown = leaves.filter((l) => columns(l) === undefined)
+    if (hits.length === 0 && unknown.length === 0) continue
+    if (hits.length === 1 && unknown.length === 0) return { leaf: hits[0]! }
+    return { hits, unknown }
   }
   return undefined
 }
@@ -1561,15 +1768,6 @@ function levelHas(level: Level, name: string): boolean {
       .flatMap(leavesOf)
       .some((l) => l.columns === undefined || l.columns.includes(name))
   )
-}
-
-/** Колонка джерела після перейменувань його таблиці. */
-function hasAfterRename(leaf: Leaf, name: string): boolean {
-  const table = leaf.table
-  if (leaf.columns !== undefined) {
-    return leaf.columns.some((c) => (table?.columns.get(c) ?? c) === name)
-  }
-  return table !== undefined && [...table.columns.values()].includes(name)
 }
 
 function sameTable(a: TableRename, b: TableRename | undefined): boolean {

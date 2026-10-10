@@ -22,13 +22,16 @@ const COUNTERPARTIES: TableRename = {
     ["name", "description"],
     ["inn", "tax_id"],
   ]),
+  // Промоція додає колонку виду `deletion_mark` і знімає `legacy`.
+  columnsAfter: new Set(["id", "description", "tax_id", "deletion_mark"]),
 }
 
 const MAP: RenameMap = {
   tables: [COUNTERPARTIES],
   knownTables: new Map([
-    ["app.counterparties", ["id", "name", "inn"]],
+    ["app.counterparties", ["id", "name", "inn", "legacy"]],
     ["app.invoice", ["id", "counterparty_id", "name"]],
+    ["app.notes", ["id", "description", "deletion_mark", "legacy"]],
   ]),
 }
 
@@ -45,6 +48,15 @@ const rw = (sql: string, scope: Partial<RewriteScope> = {}) => {
     changes: r.contractChanges.map((c) => c.reason),
   }
 }
+
+/** Проблеми з деталями — для відмов, де важить причина. */
+const details = (sql: string, scope: Partial<RewriteScope> = {}) =>
+  rewriteStatementText(sql, parse, MAP, {
+    variables: new Set(),
+    records: new Map(),
+    labels: [],
+    ...scope,
+  }).problems.map((p) => `${p.code} ${p.detail}`)
 
 describe("rewriteStatementText", () => {
   it("renames qualified table and columns, keeping output names", () => {
@@ -246,23 +258,133 @@ describe("rewriteStatementText", () => {
     ).toEqual(["rewrite.unsupported"])
   })
 
-  it("refuses a rename that would capture another source", () => {
-    // Після перейменування name → description некваліфіковане description
-    // зовнішньої таблиці потрапило б у внутрішню промотовану.
-    const map: RenameMap = {
-      tables: [COUNTERPARTIES],
-      knownTables: new Map([
-        ["app.counterparties", ["id", "name", "inn"]],
-        ["app.notes", ["description"]],
-      ]),
-    }
+  describe("captures (decision 14)", () => {
+    const CAPTURE = ["rewrite.ambiguous-name capture"]
+
+    it("refuses an added kind column that captures an outer name", () => {
+      expect(
+        details(
+          "SELECT 1 FROM app.notes n WHERE EXISTS (SELECT 1 FROM app.counterparties c WHERE deletion_mark)"
+        )
+      ).toEqual(CAPTURE)
+    })
+
+    it("refuses a rename target that did not exist before", () => {
+      expect(
+        details(
+          "SELECT 1 FROM app.notes WHERE EXISTS (SELECT 1 FROM app.counterparties WHERE description = 'x')"
+        )
+      ).toEqual(CAPTURE)
+    })
+
+    it("refuses a removed column whose name falls through to an outer source", () => {
+      expect(
+        details(
+          "SELECT 1 FROM app.notes WHERE EXISTS (SELECT 1 FROM app.counterparties c WHERE legacy)"
+        )
+      ).toEqual(CAPTURE)
+    })
+
+    it("refuses a PL/pgSQL variable that becomes an added column", () => {
+      expect(
+        details(
+          "SELECT 1 FROM app.invoice i WHERE EXISTS (SELECT 1 FROM app.counterparties c WHERE c.id = i.id AND deletion_mark)",
+          { variables: new Set(["deletion_mark"]) }
+        )
+      ).toEqual(CAPTURE)
+    })
+
+    it("refuses a reference to a removed column", () => {
+      expect(rw("SELECT legacy FROM app.counterparties").problems).toEqual([
+        "rewrite.unsupported",
+      ])
+      expect(rw("SELECT c.legacy FROM app.counterparties c").problems).toEqual([
+        "rewrite.unsupported",
+      ])
+      expect(
+        rw("SELECT NEW.legacy", {
+          records: new Map([["new", { trigger: [COUNTERPARTIES] }]]),
+        }).problems
+      ).toEqual(["rewrite.unsupported"])
+    })
+
+    it("refuses a join alias column that a rename makes ambiguous", () => {
+      expect(
+        details(
+          "SELECT j.description FROM (app.notes n JOIN app.counterparties c ON true) j"
+        )
+      ).toEqual(CAPTURE)
+    })
+
+    it("refuses a renamed table name that another FROM name or variable already takes", () => {
+      for (const sql of [
+        // Кваліфікатор перейменованої таблиці потрапив би у внутрішній аліас.
+        "SELECT 1 FROM app.counterparties WHERE EXISTS (SELECT 1 FROM app.invoice counterparty WHERE counterparties.id = counterparty.counterparty_id)",
+        // Аліас зовнішнього рівня затінила б внутрішня перейменована таблиця.
+        "SELECT 1 FROM app.invoice counterparty WHERE EXISTS (SELECT 1 FROM app.counterparties WHERE counterparty.id = 1)",
+        "SELECT 1 FROM app.invoice counterparty WHERE EXISTS (SELECT counterparty FROM app.counterparties)",
+        "SELECT 1 FROM app.invoice counterparty, app.counterparties",
+      ]) {
+        expect(details(sql), sql).toEqual(CAPTURE)
+      }
+      expect(
+        details("SELECT counterparty.id FROM app.counterparties", {
+          records: new Map([["counterparty", { table: COUNTERPARTIES }]]),
+        })
+      ).toEqual(CAPTURE)
+    })
+
+    it("renames the qualifier of a star of an unaliased promoted table", () => {
+      expect(rw("SELECT counterparties.* FROM app.counterparties").sql).toBe(
+        "SELECT counterparty.* FROM app.counterparty"
+      )
+      expect(
+        rw("SELECT row_to_json(counterparties.*) FROM app.counterparties").sql
+      ).toBe("SELECT row_to_json(counterparty.*) FROM app.counterparty")
+      expect(
+        rw("SELECT app.counterparties.* FROM app.counterparties").sql
+      ).toBe("SELECT app.counterparty.* FROM app.counterparty")
+    })
+  })
+
+  describe("search_path (decision 14)", () => {
+    it("refuses when a schema outside the model precedes the promoted table", () => {
+      expect(
+        details("SELECT 1 FROM counterparties", {
+          searchPath: ["extensions", "app"],
+        })
+      ).toEqual(["rewrite.ambiguous-name search-path"])
+    })
+
+    it("rewrites when the model schema comes first", () => {
+      expect(
+        rw("SELECT 1 FROM counterparties", {
+          searchPath: ["app", "extensions"],
+        }).sql
+      ).toBe("SELECT 1 FROM counterparty")
+    })
+  })
+
+  it("renames a cast to a promoted row type and reports the row shape", () => {
+    expect(rw("SELECT '(1)'::app.counterparties")).toEqual({
+      sql: "SELECT '(1)'::app.counterparty",
+      problems: [],
+      changes: ["wholeRow"],
+    })
+    expect(rw("SELECT NULL::db.app.counterparties").problems).toEqual([
+      "rewrite.unsupported",
+    ])
+  })
+
+  it("explains a positional INSERT by added and removed columns", () => {
     const r = rewriteStatementText(
-      "SELECT 1 FROM app.notes WHERE EXISTS (SELECT 1 FROM app.counterparties WHERE description = 'x')",
+      "INSERT INTO app.counterparties VALUES (1)",
       parse,
-      map,
+      MAP,
       { variables: new Set(), records: new Map(), labels: [] }
     )
-    expect(r.problems.map((p) => p.code)).toEqual(["rewrite.ambiguous-name"])
+    expect(r.contractChanges.map((c) => c.reason)).toEqual(["star"])
+    expect(r.contractChanges[0]?.detail).toMatch(/adds or removes columns/)
   })
 
   it("refuses an output name hidden inside an expression", () => {

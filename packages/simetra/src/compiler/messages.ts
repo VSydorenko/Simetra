@@ -594,8 +594,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: ім'я не резолвиться для перейменування: ${p.detail}`,
     hint: {
-      en: "Qualify the column with its table alias (c.name) or rename the PL/pgSQL variable, then promote again.",
-      uk: "Кваліфікуйте колонку псевдонімом таблиці (c.name) або перейменуйте змінну PL/pgSQL і повторіть промоцію.",
+      en: 'Qualify the column with its table alias (c.name), give the promoted table an alias, rename the PL/pgSQL variable or schema-qualify the table, then promote again. "capture" means the name would lead to another source after the promotion; "search-path" means a schema outside the model precedes the table in search_path.',
+      uk: "Кваліфікуйте колонку псевдонімом таблиці (c.name), дайте промотованій таблиці псевдонім, перейменуйте змінну PL/pgSQL або кваліфікуйте таблицю схемою і повторіть промоцію. «capture» — після промоції ім'я вело б в інше джерело; «search-path» — у search_path перед таблицею стоїть схема поза моделлю.",
     },
   },
   "rewrite.unqualified-table": {
@@ -684,8 +684,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція ${p.function}, рядок ${p.line}, колонка ${p.column}: промоція змінює форму результату: ${p.detail}`,
     hint: {
-      en: "A star, a whole row or a table row type follows the new columns of the kind; list the columns explicitly where callers depend on the old shape.",
-      uk: "Зірочка, цілий рядок чи тип рядка таблиці йдуть за новими колонками виду; перелічіть колонки явно там, де викликачі залежать від старої форми.",
+      en: "A star, a whole row or a table row type follows the new columns of the kind; list the columns explicitly where callers depend on the old shape. An INSERT without a column list breaks because the promotion adds and removes columns: list the columns.",
+      uk: "Зірочка, цілий рядок чи тип рядка таблиці йдуть за новими колонками виду; перелічіть колонки явно там, де викликачі залежать від старої форми. INSERT без списку колонок ламається, бо промоція додає й знімає колонки: перелічіть колонки.",
     },
   },
   "rewrite.dynamic-sql-unscoped": {
