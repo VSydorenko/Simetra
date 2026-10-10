@@ -143,7 +143,11 @@
      прийнятої таблиці до її першого коміту.
    - Інакше вхід називає `consumerLabels` — значення, якими дані споживача
      кодують цей об'єкт. Тоді:
-     - поліморфні колонки отримують вираз конверсії (`fill`);
+     - запис несе `labelTranslation`: мапу «стара мітка → `kindLabel`» і
+       перелік поліморфних колонок-споживачів (`_type`-колонки пар
+       `allowedTypes`/`owners`/`recorderTypes`, ціллю яких є цей об'єкт),
+       знайдених статично. Ці колонки лежать в інших таблицях, тож `fill` їх не
+       торкається: кроки перекладу міток **виводить П3** із запису;
      - рядковий літерал, рівний одному з `consumerLabels`, у тілі
        переписуваної функції — гучна діагностика `rewrite.label-literal`.
    - Ціль `InformationRegister` (мітки не має):
@@ -174,19 +178,27 @@
      `promote.debt-text-reference` зі списком місць. Зворотне читання з тіні —
      П3 п.5.
    - FK не класифікуються: колонка з FK стає `Ref` чи стандартним
-     реквізитом, а зміна дії при видаленні йде в запис
-     (`deleteSemantics`) для дозволу П3.
+     реквізитом, а зміна семантики видалення в будь-який бік (§9.5, Пр8) іде
+     в запис (`deleteSemantics`) для дозволу П3:
+     - власний FK з `CASCADE`/`SET NULL` стає restrict (`direction: "own"`);
+     - ТЧ, прийнята з `NO ACTION` на власника, отримує каскад виду (`direction: "own"`, `to: "cascade"`) — розширення;
+     - вхідний FK з `CASCADE`/`SET NULL` з таблиці, що лишається `CustomTable`,
+       у промотований об'єкт чи його ТЧ (`direction: "incoming"`, дія не
+       змінюється, але потребує дозволу).
 6. **Одиниця й гейти.**
    - Ціль — `Catalog`, `Document` без `posting` або `InformationRegister` з
      `writeMode: "Independent"`, разом із таблицями ТЧ. Інше —
      `promote.unit-unsupported`.
    - Посилання (FK, `Ref`) таблиці одиниці на `CustomTable` поза одиницею —
      `promote.reference-not-promoted` (§11).
-   - Гейт шляху запису (Пр21) — у файлах, до будь-яких змін: `GRANT` з
-     `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE`/`ALL` на таблицю одиниці ролі API
-     провайдера (`PROVIDER_API_ROLES`, `PUBLIC`), або політика команди
-     `INSERT`/`UPDATE`/`DELETE`/`ALL` на ній — `promote.write-path`. Повідомлення
-     називає відкрите питання «Шлях запису після промоції» (§17).
+   - Гейт шляху запису (Пр21) — у файлах, до будь-яких змін. Спрацьовує, якщо:
+     - `GRANT` з `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE`/`ALL` на таблицю одиниці
+       ролі API провайдера (`PROVIDER_API_ROLES`, `PUBLIC`);
+     - одиниця типових привілеїв (`ALTER DEFAULT PRIVILEGES … GRANT … ON TABLES`) схеми таблиці надає такий привілей тим самим ролям. Зворотна генерація не пише явного `GRANT`, коли ACL таблиці дорівнює типовим привілеям схеми (`expectedPrivileges` у `packages/designer/src/schema-engine/pg-delta/map-units.ts`), тож саме так виглядає типова схема Supabase;
+     - політика команди `INSERT`/`UPDATE`/`DELETE`/`ALL` на таблиці.
+
+     Тоді — `promote.write-path`. Повідомлення називає відкрите питання «Шлях
+     запису після промоції» (§17).
    - Зовнішній FK колонки на таблицю користувачів провайдера (§9.10) —
      дозволено лише як `{ "to": "scope" }` виду скоупу із зовнішнім коренем на
      цю таблицю; інакше `promote.provider-user-reference`.
@@ -218,19 +230,35 @@
     них пишуться в стилі проєкту (`standardLogicalName`).
 12. **`fill` — одна форма для конверсії, розщеплення, дозаповнення й
     ремонту.** Крок `{ table?, target, expression }` задає значення колонки
-    цілі виразом над рядком прийнятої таблиці (старі фізичні імена колонок).
-    Вид кроку операція виводить сама:
-    - `repair` — ціль змаплена з колонки;
-    - `conversion` — вираз читає виведену з ужитку колонку;
-    - `split` — вираз читає колонку, що лишилась реквізитом;
-    - `backfill` — вираз колонок не читає.
+    цілі виразом над рядком прийнятої таблиці.
 
-    Вираз дозволено такий:
-    - один скалярний вираз над колонками своєї таблиці;
-    - функції й віконні функції дозволено, бо П3 виконує крок як
-      `UPDATE … FROM (SELECT id, <вираз> …)`;
-    - без підзапитів, агрегатів без `OVER` і посилань на інші таблиці;
-    - інакше — `promote.expression-invalid`.
+    **Стан імен:** вираз пишеться й виконується над **старими** фізичними
+    іменами, до перейменувань. Запис каже це явно
+    (`dataSteps[].names: "beforeRenames"`, `table` — старе ім'я), і П3 виконує
+    крок у транзакції до `RENAME`.
+
+    **Вид кроку** операція виводить сама, у такому пріоритеті:
+    1. `repair` — ціль змаплена з колонки;
+    2. `conversion` — вираз читає хоча б одну виведену з ужитку колонку;
+    3. `split` — вираз читає колонку, що лишилась реквізитом;
+    4. `backfill` — вираз колонок не читає.
+
+    **Вираз** — рівно один скалярний вираз над колонками своєї таблиці. П3
+    виконує крок як `UPDATE … FROM (SELECT id, <вираз> …)`, тому віконні
+    функції дозволено. Таблиця має мати одноколонковий первинний ключ — це
+    гейт для регістрів відомостей зі складеним ключем. Заборонено:
+    - підзапити, агрегати без `OVER`, посилання на інші таблиці;
+    - кілька операторів чи кілька цілей у списку виводу;
+    - функції, що повертають множину;
+    - волатильні функції: `random`, `random_normal`, `gen_random_uuid`,
+      `uuid_generate_v4`, `clock_timestamp`, `timeofday`, `nextval`, `setval`
+      і функції моделі з явною `VOLATILE`; у `repair` — ще й `now`,
+      `current_timestamp`, `current_date`, `transaction_timestamp`,
+      `statement_timestamp`, `localtimestamp`;
+    - віконна функція, `ORDER BY` вікна якої не містить ключа таблиці
+      (порядок недетермінований).
+
+    Порушення — `promote.expression-invalid` з `params.reason`.
 
     Стандартна колонка виду з `notNull` без `default`/`defaultValue`/
     `generated`, не змаплена й без `fill`, — `promote.fill-missing`.
@@ -257,18 +285,35 @@
       нерезольвний — `rewrite.unresolved-type`;
     - посилання на перейменоване ім'я у вузлі без `location` (список `USING`,
       `ON CONFLICT (…)`) — `rewrite.unsupported`;
+    - ` AS <старе>` діє й у списках `RETURNING`;
     - ціле `NEW`/`OLD` як значення, `*` промотованої таблиці у списку виводу,
       `RETURNS SETOF`/`%ROWTYPE` промотованої таблиці в сигнатурі —
-      попередження `rewrite.contract-change` без правки;
-    - функція «в обсязі» переписування, тобто:
-      - її текст містить старе фізичне ім'я промотованої таблиці як слово (без
-        урахування регістру);
-      - вона прив'язана до промотованої таблиці;
-      - або вона переходить з модуля одиниці.
-
-      Функція в обсязі з динамічним SQL — `rewrite.dynamic-sql`. Динамічний
-      SQL, що збирає ім'я таблиці з частин, статичний аналіз не бачить — це
-      межа, названа в спеці.
+      попередження `rewrite.contract-change` без правки. `SELECT * INTO r`,
+      де `r` — `%ROWTYPE` тієї самої таблиці, — не зміна контракту;
+    - зміна контракту функції (`RETURNS SETOF`/`RETURNS <таблиця>`/`%ROWTYPE`)
+      транзитивно поширюється на функції-викликачі проєкту — попередження
+      `rewrite.contract-change` (`reason: "caller"`) зі списком ланцюжка;
+      рішення — скіл конверсії;
+    - **обсяг** переписування визначає резолв, а не слово. Слово — це лише
+      надмножинний **відбір кандидатів**: функція, текст якої містить старе
+      фізичне ім'я промотованої таблиці як слово (без урахування регістру),
+      прив'язана до промотованої таблиці чи переходить з модуля одиниці.
+      Кандидат, у якому резолв не знайшов посилань, лишається без змін і не
+      йде в запис;
+    - кандидат із динамічним SQL — `rewrite.dynamic-sql`. Функція боргу
+      проєкту з динамічним SQL поза кандидатами — попередження
+      `rewrite.dynamic-sql-unscoped` зі списком: SQL, що збирає ім'я таблиці
+      з частин, статичний аналіз не бачить, і це межа, названа в спеці;
+    - дослівна не-функція деінде (рішення 5) потрапляє під відмову
+      `promote.debt-text-reference` за резолвом залежностей
+      (`compiler/sql/dependencies.ts`: посилання на відношення промотованої
+      таблиці), а не за словом;
+    - `lineno` PL/pgSQL рахується від початку тіла: рядок 1 — рядок
+      відкривального `$тег$`. Абсолютний рядок у тексті одиниці = рядок
+      `$тег$` + `lineno` − 1;
+    - вирази розміщуються в порядку тексту (стабільне сортування за
+      `lineno`), кожен — після попереднього збігу й не раніше початку свого
+      рядка.
 
 ## Review Focus
 
@@ -309,7 +354,7 @@ Expected: зелено.
 ### Task 1: Правки спек (один docs-коміт, перегляд архітектора)
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-10-06-promotion-design.md` (§6, §7.1, §9.11, Пр4, Пр18)
+- Modify: `docs/superpowers/specs/2026-10-06-promotion-design.md` (§4, §6, §7.1, §9.11, Пр4, Пр18)
 - Modify: `docs/superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md` (§3 «Дослівний SQL», §3 «Призначене раз — правило компілятора», §8.6)
 - Modify: `docs/superpowers/specs/2026-10-02-simetra-designer-design.md` (§3.1, перелік мутацій)
 
@@ -328,8 +373,11 @@ Expected: зелено.
    Речення про «нове рішення про залежність» замінити фактом: `@libpg-query/parser`
    17.8.0, точний пін, лише парсер PL/pgSQL. Правила переписувача доповнити
    рішенням 13 (області `FROM`, `AS <старе>` для кожного голого посилання у
-   списку виводу, записи `%ROWTYPE`/`SELECT * INTO`, вузли без позиції →
-   відмова).
+   списку виводу й `RETURNING`, записи `%ROWTYPE`/`SELECT * INTO`, вузли без
+   позиції → відмова, транзитивна зміна контракту викликачів). Явно: обсяг
+   переписування визначає резолв; пошук старого імені як слова — лише
+   надмножинний відбір кандидатів, а не гейт (узгоджено з «пошук залишків —
+   за резолвом, а не за словом»); не-функції боргу — за резолвом залежностей.
 2. **Спека промоції §7.1.** Мутація чисто файлова; результат несе запис
    промоції (рішення 2); вхід, крім мапінгу, класифікує одиниці й структурні
    елементи (рішення 5); гейти у файлах (рішення 6); функції переходять у
@@ -338,15 +386,21 @@ Expected: зелено.
 3. **Спека промоції §9.11 і Пр18.** Виняток «призначене раз» розпізнається з
    ідентичності (рішення 3) — без декларації. Мітка при цілі без мітки
    (регістр відомостей) зникає лише тоді, коли об'єкт не є ціллю поліморфного
-   `Ref` (рішення 4).
-4. **Спека П2 §3 «Дослівний SQL».** Речення «заборона динамічного SQL
+   `Ref` (рішення 4). Абзац «Промоція» §9.11: переписування даних поліморфних
+   колонок інших таблиць виводить П3 із запису промоції (мапа «стара мітка →
+   мітка виду» й колонки-споживачі, знайдені статично), а не вираз мапінгу
+   (рішення 4); §4 «Мітка виду» узгодити з цим.
+4. **Спека промоції §4.** Вираз конверсії, розщеплення й дозаповнення
+   пишеться над старими фізичними іменами й виконується до перейменувань;
+   вимагає одноколонкового ключа таблиці (рішення 12).
+5. **Спека П2 §3 «Дослівний SQL».** Речення «заборона динамічного SQL
    приходить із парсером PL/pgSQL (план переписувача)…» → закрита оболонка
    забороняє динамічний SQL і нерозбірне тіло plpgsql (рішення 7);
    `plpgsql_check` у тіні — П3.
-5. **Спека П2 §3 «Призначене раз — правило компілятора».** Фразу «виняток
+6. **Спека П2 §3 «Призначене раз — правило компілятора».** Фразу «виняток
    промоції — ledger П3, не цей механізм» замінити рішенням 3: у файлах
    виняток розпізнається з ідентичності, а ledger П3 захищає базу.
-6. **Спека П2 §8.6 і спека designer §3.1.** У переліку мутацій — `promote`
+7. **Спека П2 §8.6 і спека designer §3.1.** У переліку мутацій — `promote`
    (вхід — мапінг, результат — зміни файлів і запис промоції; не руйнівна).
 
 - [ ] **Step 2: Якори**
@@ -383,7 +437,8 @@ git commit -m "docs(spec): промоція-4 — переписувач без 
   - `type PlpgsqlParse = { ok: true; fn: PlpgsqlFunction } | { ok: false; message: string } | { ok: true; fn: undefined }` — `fn: undefined` для мови не plpgsql.
   - `interface PlpgsqlFunction { variables: PlpgsqlVariable[]; statements: PlpgsqlStatement[]; dynamicSqlLines: number[] }`
   - `interface PlpgsqlVariable { name: string; lineno?: number; typeText?: string; kind: "var" | "rec" | "row" | "recfield" }` — `NEW`/`OLD` — `rec` з іменами `new`/`old`.
-  - `interface PlpgsqlStatement { type: string; lineno: number; depth: number; expressions: PlpgsqlExpression[]; target?: { variable: string } }` — у порядку тексту (обхід дерева в глибину); `expressions` — лише прямі вирази оператора, без вкладених операторів.
+  - `interface PlpgsqlStatement { type: string; lineno: number; depth: number; expressions: PlpgsqlExpression[]; target?: { variable: string } }` — обхід дерева в глибину; `expressions` — лише прямі вирази оператора, без вкладених операторів. Порядок тексту для розміщення дає стабільне сортування всіх виразів за `lineno` (умова `ELSIF` стоїть у тексті після тіла `THEN`, хоча в дереві — раніше).
+  - `lineno` — від початку тіла: рядок 1 — рядок відкривального `$тег$`.
   - `interface PlpgsqlExpression { query: string; parseMode: number; role: "condition" | "value" | "statement" | "assign" | "dynamic"; into?: boolean; perform?: boolean; lineno: number }` — `lineno` — найближчого предка з `lineno` (зокрема `PLpgSQL_if_elsif`, `PLpgSQL_case_when`).
   - `loadPlpgsqlParser(): Promise<PlpgsqlParser>` — один `loadModule()` на процес, як `loadSqlParser`; кеш результатів за текстом (`Map<string, PlpgsqlParse>`), бо оболонку перевіряють кілька стадій.
 
@@ -430,9 +485,9 @@ it("parses a body with a 2000-char literal", () => {
 })
 ```
 
-`parse.test.ts` (наявний або новий): `byteOffsets("'Привіт', abc")` → байт
-`23`… для `abc` дає індекс `text.indexOf("abc")`; байт посеред символу —
-кидає.
+`parse.test.ts` (наявний або новий): для тексту `'Привіт', abc` байт `16`
+(початок `abc`: лапка 1 + кирилиця 12 + лапка, кома, пробіл 3) дає індекс
+`text.indexOf("abc")` = `10`; байт посеред кириличного символу — кидає.
 
 - [ ] **Step 3: Run tests to verify they fail**
 
@@ -468,8 +523,8 @@ git commit -m "feat(compiler): розбір тіл PL/pgSQL — @libpg-query/par
 
 **Files:**
 - Modify: `packages/simetra/src/compiler/sql/closed-forms.ts` (`ClosedShellProblem`, `closedShellProblem`, `checkSqlModules`)
-- Modify: `packages/simetra/src/compiler/sql/debt.ts`, `packages/simetra/src/compiler/stages/links.ts`, `packages/simetra/src/compiler/pipeline.ts`, `packages/simetra/src/compiler/compile.ts` (прокинути `PlpgsqlParser`)
-- Modify: `packages/simetra/src/schema/reverse/generate.ts` (`ReverseOptions.plpgsql`), `packages/designer/src/tools/database-tools.ts` (передати `await loadPlpgsqlParser()`)
+- Modify: `packages/simetra/src/compiler/sql/debt.ts`, `packages/simetra/src/compiler/stages/links.ts`, `packages/simetra/src/compiler/pipeline.ts`, `packages/simetra/src/compiler/compile.ts` (прокинути `PlpgsqlParser`; `runStages` і `currentDebt` вантажать його самі — `loadPlpgsqlParser()` поряд із `loadSqlParser()`)
+- Modify: `packages/simetra/src/compiler/__tests__/helpers.ts` (виклик `debtUnits` в `acceptDebt`)
 - Modify: `packages/simetra/src/compiler/messages.ts` (`CLOSED_SHELL_PROBLEM.dynamicSql`, `.body`)
 - Modify: `packages/simetra/src/compiler/index.ts` (експорт `loadPlpgsqlParser`, `type PlpgsqlParser`)
 - Test: `packages/simetra/src/compiler/__tests__/closed-forms.test.ts`, `sql-debt.test.ts`, `event-subscriptions.test.ts`, `packages/simetra/src/schema/__tests__/reverse-generate.test.ts`
@@ -480,7 +535,7 @@ git commit -m "feat(compiler): розбір тіл PL/pgSQL — @libpg-query/par
   - `type ClosedShellProblem = "language" | "volatility" | "searchPath" | "dynamicSql" | "body"`
   - `closedShellProblem(unit: { tree: Node; sql: string }, plpgsql: PlpgsqlParser): ClosedShellProblem | undefined` — порядок перевірок: наявні три, потім `body`, потім `dynamicSql`; `params.line` діагностики `sql.closed-shell` для `dynamicSql` — рядок першого динамічного оператора у файлі.
   - `checkSqlModules(objects, units, rowRules, plpgsql)`, `debtUnits(units, objects, project, plpgsql)`, `checkDebt(…, plpgsql)` — новий останній параметр.
-  - `ReverseOptions.plpgsql: PlpgsqlParser`.
+  - Зворотна генерація рахує борг через `currentDebt`, тож `ReverseOptions` і `database-tools.ts` не змінюються.
 
 - [ ] **Step 1: Failing tests**
 
@@ -524,7 +579,7 @@ Expected: PASS; референсний домен без нових діагно
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/simetra/src packages/designer/src
+git add packages/simetra/src
 git commit -m "feat(compiler): закрита оболонка забороняє динамічний SQL і нерозбірне тіло plpgsql"
 ```
 
@@ -537,7 +592,7 @@ git commit -m "feat(compiler): закрита оболонка забороня�
 - Test: `packages/simetra/src/compiler/__tests__/assigned-once.test.ts`
 
 **Interfaces:**
-- Produces: `assignedOnceDiagnostics(baseline, current)` — сигнатура без змін; виняток за рішенням 3. Внутрішня `polymorphicTargets(files): ReadonlySet<string>` (`"<Kind>:<Name>"`): цілі ролей поліморфних пар (`allowedTypes`, `owners` з кількома власниками, `recorderTypes`), перелік ролей — з `ReferenceRole` у `compiler/stages/identity.ts`.
+- Produces: `assignedOnceDiagnostics(baseline, current)` — сигнатура без змін; виняток за рішенням 3. Внутрішня `polymorphicTargets(files): ReadonlySet<string>` (`"<Kind>:<Name>"`): цілі ролей поліморфних пар (`allowedTypes`, `owners` з кількома власниками, `recorderTypes`), перелік ролей — з `ReferenceRole` у `packages/simetra/src/model/kinds/standard.ts`.
 
 - [ ] **Step 1: Failing tests**
 
@@ -604,10 +659,10 @@ git commit -m "feat(compiler): «призначене раз» розпізна�
   - `interface TableRename { schema: string; from: string; to: string; columns: ReadonlyMap<string, string> }` — фізичні імена; `columns` — лише перейменовані (`старе → нове`).
   - `interface RenameMap { tables: readonly TableRename[]; knownTables: ReadonlyMap<string, readonly string[]> }` — `knownTables`: `"<схема>.<таблиця>"` → колонки кожної таблиці моделі до промоції (для резолву некваліфікованих колонок).
   - `interface TextEdit { start: number; end: number; text: string }` — індекси UTF-16; `applyEdits(text: string, edits: readonly TextEdit[]): string` — від кінця, перетин країв — `Error`.
-  - `interface RewriteScope { searchPath?: readonly string[]; variables: ReadonlySet<string>; records: ReadonlyMap<string, RecordBinding>; labels: readonly string[]; topLevelOutput?: "keep" | "ignore" }` — `topLevelOutput: "ignore"` вимикає ` AS <старе>` лише у верхньому списку виводу (синтетична обгортка виразу, `PERFORM`; рішення 13); типово `"keep"`. `type RecordBinding = { table: TableRename } | { trigger: TableRename[] }` — `variables` у нижньому регістрі; `NEW`/`OLD` — `records` з `trigger`.
+  - `interface RewriteScope { searchPath?: readonly string[]; variables: ReadonlySet<string>; records: ReadonlyMap<string, RecordBinding>; labels: readonly string[]; topLevelOutput?: "keep" | "ignore"; intoRowtypeOf?: TableRename }` — `topLevelOutput: "ignore"` вимикає ` AS <старе>` лише у верхньому списку виводу (синтетична обгортка виразу, `PERFORM`; рішення 13); типово `"keep"`. `intoRowtypeOf` — ціль `INTO` оператора — запис `%ROWTYPE` цієї таблиці: `*` тієї самої таблиці у верхньому списку не є зміною контракту. `type RecordBinding = { table: TableRename } | { trigger: TableRename[] }` — `variables` у нижньому регістрі; `NEW`/`OLD` — `records` з `trigger`.
   - `interface RewriteProblem { code: "rewrite.ambiguous-name" | "rewrite.unqualified-table" | "rewrite.unsupported" | "rewrite.trigger-binding" | "rewrite.label-literal"; offset: number; detail: string }`, `interface ContractChange { offset: number; reason: "wholeRow" | "star" | "signature" }`
   - `rewriteStatementText(text: string, parse: SqlParser, map: RenameMap, scope: RewriteScope): { edits: TextEdit[]; problems: RewriteProblem[]; contractChanges: ContractChange[] }` — `text` може містити кілька операторів (тіло `LANGUAGE sql`); `offset`/`start` — відносно `text`.
-  - Нові коди в `COMPILER_RULES`: `rewrite.ambiguous-name`, `rewrite.unqualified-table`, `rewrite.unsupported`, `rewrite.trigger-binding`, `rewrite.label-literal`, `rewrite.dynamic-sql`, `rewrite.unresolved-type`, `rewrite.body-quoting`, `rewrite.verification-failed` і попередження `rewrite.contract-change` (у `WARNING_RULES`). Параметри: `function`, `line`, `column`, `detail`.
+  - Нові коди в `COMPILER_RULES`: `rewrite.ambiguous-name`, `rewrite.unqualified-table`, `rewrite.unsupported`, `rewrite.trigger-binding`, `rewrite.label-literal`, `rewrite.dynamic-sql`, `rewrite.unresolved-type`, `rewrite.body-quoting`, `rewrite.verification-failed` і попередження `rewrite.contract-change`, `rewrite.dynamic-sql-unscoped` (у `WARNING_RULES`). Параметри: `function`, `line`, `column`, `detail`.
 
 - [ ] **Step 1: Failing tests**
 
@@ -633,6 +688,12 @@ it("resolves through nested and correlated scopes", () => {
 it("renames UPDATE SET and INSERT column lists", () => {
   expect(rw("UPDATE app.counterparties SET inn = upper(inn) WHERE name = 'x'").sql).toBe("UPDATE app.counterparty SET tax_id = upper(tax_id) WHERE description = 'x'")
   expect(rw("INSERT INTO app.counterparties (name, inn) VALUES ('a', 'b')").sql).toBe("INSERT INTO app.counterparty (description, tax_id) VALUES ('a', 'b')")
+})
+it("keeps output names in RETURNING", () => {
+  expect(rw("UPDATE app.counterparties SET inn = '1' RETURNING id, inn").sql).toBe("UPDATE app.counterparty SET tax_id = '1' RETURNING id, tax_id AS inn")
+})
+it("does not report a star read into a ROWTYPE record of the same table", () => {
+  expect(rw("SELECT * FROM app.counterparties", { intoRowtypeOf: COUNTERPARTIES }).changes).toEqual([])
 })
 it("leaves comments and literals untouched", () => {
   const sql = "SELECT /* inn */ inn FROM app.counterparties -- name\n WHERE name = 'inn'"
@@ -757,6 +818,9 @@ it("refuses NEW fields when bound to a non-promoted table too", () => {
     .toContain("rewrite.trigger-binding")
 })
 it("keeps the record shape of SELECT INTO with AS <old>", () => { /* SELECT c.name INTO v FROM … → c.description AS name */ })
+it("does not report SELECT * INTO a ROWTYPE record of the same table", () => { /* contractChanges порожній для TRIGGER */ })
+it("places an ELSIF condition after the THEN body in text order", () => { /* IF … THEN x := NEW.inn; ELSIF NEW.name = '' THEN … — обидві правки на своїх місцях */ })
+it("reports absolute lines when the body starts mid-file", () => { /* $fn$ на 3-му рядку одиниці: rewrite.dynamic-sql має line = 3 + lineno − 1 */ })
 it("rewrites a LANGUAGE sql string body and a BEGIN ATOMIC body", () => {})
 it("refuses a single-quoted body", () => { /* rewrite.body-quoting */ })
 it("refuses dynamic SQL in scope", () => { /* EXECUTE … → rewrite.dynamic-sql з рядком */ })
@@ -783,8 +847,8 @@ Expected: FAIL.
 - `BEGIN ATOMIC` — над самим `unitSql`.
 
 **`plpgsql` (`plpgsql-body.ts`):**
-- вирази в порядку `statements` розміщуються в тілі:
-  - пошук від початку рядка `lineno` (і після попереднього збігу того самого оператора);
+- вирази в порядку тексту (стабільне сортування за `lineno`; рядок 1 — рядок відкривального `$тег$`) розміщуються в тілі:
+  - пошук після попереднього збігу й не раніше початку рядка `lineno`;
   - `perform` шукається як `PERFORM` + решта після `SELECT`;
   - для `into` пробіл зразка збігається з будь-яким символом;
 - розбір виразу:
@@ -796,7 +860,7 @@ Expected: FAIL.
 - `%TYPE`/`%ROWTYPE`: текст типу шукається в рядку `lineno` змінної й переписується як таблиця/колонка;
 - `records`:
   - `new`/`old` — `{ trigger: triggerTables ?? [] }`;
-  - `%ROWTYPE` промотованої таблиці — `{ table }`;
+  - `%ROWTYPE` промотованої таблиці — `{ table }`; `SELECT … INTO` у такий запис передає `intoRowtypeOf`;
   - запис, заповнений `SELECT * INTO`/`FOR … IN SELECT * FROM` рівно однієї промотованої таблиці, — `{ table }`;
 - `variables` — усі змінні й параметри.
 
@@ -885,19 +949,22 @@ export interface PromotionRecord {
   objectId: string
   kind: "Catalog" | "Document" | "InformationRegister"
   kindLabel?: string
-  consumerLabels: string[]
   labelDropped: boolean
+  // Лише коли consumerLabels не порожній: кроки перекладу виводить П3 (рішення 4).
+  labelTranslation?: { from: string[]; to: string; columns: { schema: string; table: string; column: string }[] }
   tables: { id: string; schema: string; from: string; to: string }[]
   columns: { id: string; schema: string; table: string; from: string; to: string }[] // table — нове ім'я
   typeChanges: { schema: string; table: string; column: string; from: string; to: string }[]
-  dataSteps: { schema: string; table: string; column: string; expression: string; kind: "backfill" | "conversion" | "split" | "repair" }[]
+  // Вираз і table — у старих іменах, крок виконується до перейменувань (рішення 12); column — нове фізичне ім'я цілі.
+  dataSteps: { names: "beforeRenames"; schema: string; table: string; key: string; column: string; expression: string; kind: "repair" | "conversion" | "split" | "backfill" }[]
   retired: { schema: string; table: string; column: string }[] // старі імена
   relaxed: { schema: string; table: string; column: string; constraint: "notNull" }[]
-  deleteSemantics: { schema: string; table: string; column: string; from: string; to: "noAction" | "cascade" }[]
+  // Будь-який бік (§9.5, Пр8); для "incoming" дія не змінюється (to === from), але потребує дозволу.
+  deleteSemantics: { direction: "own" | "incoming"; schema: string; table: string; constraint?: string; columns: string[]; target: string; from: string; to: string }[]
   conversions: { subject: string; class: z.infer<typeof conversionClass> }[]
   movedUnits: { identity: string; from: string; to: string }[]
   rewrittenUnits: { identity: string; file: string }[]
-  contractChanges: { identity: string; file: string; line: number; reason: string }[]
+  contractChanges: { identity: string; file: string; line: number; reason: string; via?: string[] }[] // via — ланцюжок викликачів
 }
 export interface PromoteResult extends OperationResult { record?: PromotionRecord } // record — лише коли ok
 ```
@@ -1008,7 +1075,7 @@ git commit -m "feat(compiler): мутація promote — мапінг коло�
 
 **Interfaces:**
 - Consumes: задача 7.
-- Produces: `fillStepKind(step, mapped: ReadonlySet<string>, retired: ReadonlySet<string>, parse: SqlParser, table: { schema: string; name: string; columns: readonly string[] }): { kind: PromotionRecord["dataSteps"][number]["kind"]; columns: string[] } | { problem: string }` — розбирає `SELECT <expression> FROM <схема>.<таблиця>`, перевіряє форму за рішенням 12, повертає прочитані колонки (старі фізичні імена).
+- Produces: `fillStepKind(step, mapped: ReadonlySet<string>, retired: ReadonlySet<string>, parse: SqlParser, table: { schema: string; name: string; key?: string; columns: readonly string[] }, volatileFunctions: ReadonlySet<string>): { kind: PromotionRecord["dataSteps"][number]["kind"]; columns: string[] } | { reason: "noKey" | "subquery" | "aggregate" | "foreignTable" | "multipleTargets" | "multipleStatements" | "setReturning" | "volatile" | "nondeterministicWindow" | "unknownColumn" }` — розбирає `SELECT <expression> FROM <схема>.<таблиця>` (старі імена), перевіряє форму за рішенням 12 і повертає прочитані колонки. `key` — одноколонковий первинний ключ таблиці; `volatileFunctions` — функції моделі з явною `VOLATILE`.
 
 - [ ] **Step 1: Failing tests**
 
@@ -1024,17 +1091,38 @@ it("promotes a document: status split into posted and an attribute", async () =>
 })
 it("records a conversion when the source column is retired", async () => {})
 it("records a repair on a mapped column", async () => { /* target attribute name ← left(name, 150) → "repair" */ })
+it.each([
+  ["mapped target that reads a retired column", "repair"],
+  ["reads a retired and a kept column", "conversion"],
+  ["reads only a kept column", "split"],
+  ["reads no column", "backfill"],
+])("orders step kinds by priority: %s", async (_, kind) => { /* record.dataSteps[0].kind */ })
+it("records steps in old names before renames", async () => {
+  // record.dataSteps[0]: { names: "beforeRenames", table: "invoices", key: "id", column: "posted", expression: "status = 'posted'" }
+})
 it("refuses a missing fill for a NOT NULL standard column without default", async () => { /* Document без number → promote.fill-missing */ })
 it.each([
-  ["(select 1)", "subquery"], ["count(*)", "aggregate"], ["other.x", "foreign table"],
-])("refuses fill expression %s", async (expression) => { /* promote.expression-invalid */ })
+  ["(select 1)", "subquery"],
+  ["count(*)", "aggregate"],
+  ["other.x", "foreignTable"],
+  ["1, 2", "multipleTargets"],
+  ["1; select 2", "multipleStatements"],
+  ["generate_series(1, 2)", "setReturning"],
+  ["random()", "volatile"],
+  ["row_number() over (partition by counterparty_id)", "nondeterministicWindow"],
+  ["missing_column", "unknownColumn"],
+])("refuses fill expression %s", async (expression, reason) => { /* promote.expression-invalid з params.reason */ })
+it("refuses now() in a repair but allows it in a backfill", async () => {})
+it("refuses a fill on a table without a single-column key", async () => { /* регістр зі складеним ключем → reason "noKey" */ })
 it("promotes an independent information register and drops the label", async () => {
   // CustomTable з uuid-ключем → InformationRegister: dimensions/resources з columns; record.labelDropped = true
 })
 it("refuses an information register target that a polymorphic Ref points to", async () => { /* promote.label-target */ })
 it("refuses a document with posting, a recorder-subordinate register and an accumulation register", async () => { /* promote.unit-unsupported */ })
 it("refuses a reference to a CustomTable outside the unit", async () => { /* promote.reference-not-promoted */ })
-it("records a CASCADE foreign key changed to restrict", async () => { /* record.deleteSemantics */ })
+it("records a CASCADE foreign key changed to restrict", async () => { /* record.deleteSemantics: direction "own", to "noAction" */ })
+it("records a tabular section adopted with NO ACTION gaining the kind's cascade", async () => { /* direction "own", from "noAction", to "cascade" */ })
+it("records an incoming CASCADE from a table that stays CustomTable", async () => { /* direction "incoming", to === from */ })
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1073,13 +1161,16 @@ git commit -m "feat(compiler): promote — табличні частини, до
 - Create: `packages/simetra/src/compiler/operations/promote/sql.ts`
 - Create: `packages/simetra/src/compiler/operations/promote/gates.ts`
 - Modify: `packages/simetra/src/compiler/operations/promote/index.ts`
-- Test: `packages/simetra/src/compiler/__tests__/operations-promote-sql.test.ts`
+- Modify: `packages/simetra/src/compiler/sql/dependencies.ts` (експорт `unitRelations`)
+- Test: `packages/simetra/src/compiler/__tests__/operations-promote-sql.test.ts`, `creation-order.test.ts` (`unitRelations`)
 
 **Interfaces:**
 - Consumes: `rewriteFunction` (задача 6), `RenameMap` (задача 5), `unitTargets` (`sql/unit-target.ts`), `PROVIDER_API_ROLES` (`simetra/model`), `CompiledModel.sqlUnits`/`VerbatimUnit`.
 - Produces:
   - `writePathProblems(model: CompiledModel, tables: readonly { schema: string; name: string }[], parse: SqlParser): Diagnostic[]` — рішення 6;
-  - `planUnits(model, input, tables, parse): { removed: VerbatimUnit[]; moved: { unit: VerbatimUnit; to: string }[]; inScope: VerbatimUnit[]; problems: Diagnostic[] }` — класифікація за рішенням 5; `inScope` — функції в обсязі за рішенням 13.
+  - `planUnits(model, input, tables, parse): { removed: VerbatimUnit[]; moved: { unit: VerbatimUnit; to: string }[]; candidates: VerbatimUnit[]; problems: Diagnostic[] }` — класифікація за рішенням 5; `candidates` — надмножинний відбір функцій за рішенням 13 (обсяг потім визначає резолв переписувача).
+  - `unitRelations(unit: SqlUnit, parse: SqlParser): { schema?: string; name: string }[]` — новий експорт `compiler/sql/dependencies.ts` над наявним збиранням посилань простору `rel`. Він потрібен для `promote.debt-text-reference` і для пошуку викликачів (простір `proc`).
+  - `dynamicSqlUnscoped` і транзитивні викликачі — попередження й `record.contractChanges[].via`.
 
 - [ ] **Step 1: Failing tests**
 
@@ -1097,6 +1188,24 @@ it("refuses an unclassified policy and a non-closed module function", async () =
 it("refuses a view of another table that reads a promoted column", async () => { /* promote.debt-text-reference з файлом і рядком */ })
 it("refuses write grants and write policies", async () => {
   // GRANT INSERT ON app.counterparties TO authenticated → promote.write-path; повідомлення містить "write path after promotion"
+})
+it("refuses a write privilege that comes from the schema's default privileges", async () => {
+  // sql/app/default-privileges.sql: ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO authenticated
+  // (явного GRANT на таблицю немає, як пише зворотна генерація) → promote.write-path
+})
+it("ignores default privileges of another schema and read-only ones", async () => {})
+it("leaves a candidate untouched when resolution finds no reference", async () => {
+  // функція з 'counterparties' лише в коментарі чи в імені іншої схеми → без змін, не в record.rewrittenUnits
+})
+it("finds debt text references by dependency resolution, not by word", async () => {
+  // в'юха з "counterparties" у літералі — без відмови; в'юха, що читає app.counterparties, — promote.debt-text-reference
+})
+it("warns about out-of-scope debt functions with dynamic SQL", async () => { /* rewrite.dynamic-sql-unscoped зі списком */ })
+it("propagates a contract change to callers transitively", async () => {
+  // f RETURNS SETOF app.counterparties ← g викликає f ← h викликає g → два попередження з via
+})
+it("records the label translation and the polymorphic consumer columns", async () => {
+  // consumerLabels ["cp"]; Document з allowedTypes на Counterparty → record.labelTranslation.columns містить його _type-колонку
 })
 it("refuses a provider user reference that is not the user scope carrier", async () => { /* promote.provider-user-reference */ })
 it("aggregates rewriter refusals and writes nothing", async () => {
