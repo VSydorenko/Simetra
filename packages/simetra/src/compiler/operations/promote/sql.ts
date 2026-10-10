@@ -17,6 +17,7 @@ import {
   textCalls,
   unitCalls,
   unitRelations,
+  unitTypes,
   type ReferencedName,
 } from "../../sql/dependencies"
 import type { SqlParser } from "../../sql/parse"
@@ -29,7 +30,12 @@ import {
   type TextEdit,
 } from "../../sql/rewrite/renames"
 import { unitTargets, type UnitTarget } from "../../sql/unit-target"
-import { functionIdentity, readSqlUnits, type SqlUnit } from "../../sql/units"
+import {
+  functionIdentity,
+  readSqlUnits,
+  statementPositions,
+  type SqlUnit,
+} from "../../sql/units"
 import type { PromoteInput } from "../inputs"
 import type { QualifiedTable } from "./gates"
 import type { ConversionSubject } from "./mapping"
@@ -192,7 +198,7 @@ export function planUnits(
     }
     if (
       !REWRITTEN_CLASSES.has(unit.class) &&
-      reads(unitRelations(unit, o.parse))
+      reads([...unitRelations(unit, o.parse), ...unitTypes(unit, o.parse)])
     ) {
       debtText(unit)
     }
@@ -454,12 +460,29 @@ export function sqlFileTexts(
   plan: UnitPlan,
   texts: ReadonlyMap<string, string>,
   deleted: ReadonlySet<string>,
+  parse: SqlParser,
   track: readonly FileUnit[] = []
 ): {
   files: Map<string, string | undefined>
   placements: Map<string, Placement>
 } {
   const textOf = (unit: FileUnit) => texts.get(unit.identity) ?? unit.sql
+  const positions = new Map<string, ReturnType<typeof statementPositions>>()
+  const unitStart = (text: string, unit: FileUnit) => {
+    let list = positions.get(unit.file)
+    if (list === undefined) {
+      list = statementPositions(text, parse)
+      positions.set(unit.file, list)
+    }
+    const found = list.find(
+      (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
+    )
+    // Одиницю дав розбір цього ж тексту: розбіжність — порушений інваріант.
+    if (found === undefined) {
+      throw new Error(`${unit.identity} is not found in ${unit.file}`)
+    }
+    return found.start
+  }
   const edits = new Map<string, TextEdit[]>()
   const edit = (file: string, e: TextEdit) =>
     edits.set(file, [...(edits.get(file) ?? []), e])
@@ -468,11 +491,7 @@ export function sqlFileTexts(
     if (deleted.has(unit.file)) continue
     const text = files.get(unit.file)!
     const start = unitStart(text, unit)
-    edit(unit.file, {
-      start,
-      end: cutEnd(text, start + unit.sql.length),
-      text: "",
-    })
+    edit(unit.file, cut(text, start, start + unit.sql.length))
   }
   for (const unit of plan.candidates) {
     const replaced = texts.get(unit.identity)
@@ -527,34 +546,43 @@ export function sqlFileTexts(
   return { files: result, placements }
 }
 
-/** Початок одиниці у файлі: перший токен оператора лежить у рядку `unit.line`. */
-function unitStart(text: string, unit: FileUnit): number {
-  let offset = 0
-  for (let line = 1; line < unit.line; line++) {
-    offset = text.indexOf("\n", offset) + 1
-    if (offset === 0) break
-  }
-  const start = text.indexOf(unit.sql, offset)
-  if (start < 0) {
-    throw new Error(`${unit.identity} is not found in ${unit.file}`)
-  }
-  return start
-}
-
-/** Кінець вирізу: `;` після одиниці, решта порожнього рядка й один порожній рядок після. */
-function cutEnd(text: string, end: number): number {
+/**
+ * Виріз одиниці `[start, end)` разом із завершальним `;`. Одиниця, що
+ * займає рядок сама, забирає й перевід рядка та один порожній рядок після.
+ * Поруч з іншим оператором у рядку — лише власний текст: перед наступним
+ * оператором вирізаються пробіли після `;`, а за останнім у рядку — пробіли
+ * перед одиницею, і перевід рядка лишається.
+ */
+function cut(text: string, start: number, end: number): TextEdit {
   const blank = (i: number) => {
     while (text[i] === " " || text[i] === "\t" || text[i] === "\r") i++
     return i
   }
   let i = blank(end)
   if (text[i] === ";") i = blank(i + 1)
-  // Далі в рядку інший оператор: вирізаємо лише `;` і пробіли до нього.
-  if (text[i] !== "\n" && i < text.length) return i
+  const lineEnds = i >= text.length || text[i] === "\n"
+  let lineStart = start
+  while (
+    lineStart > 0 &&
+    (text[lineStart - 1] === " " || text[lineStart - 1] === "\t")
+  ) {
+    lineStart--
+  }
+  const ownLine = lineStart === 0 || text[lineStart - 1] === "\n"
+  if (!lineEnds) return { start, end: i, text: "" }
+  if (!ownLine) {
+    // Кінець рядка лишається: інакше наступний рядок піднявся б до попереднього оператора.
+    let to = i
+    while (to > end && /[ \t\r]/.test(text[to - 1]!)) to--
+    return { start: lineStart, end: to, text: "" }
+  }
   i = i < text.length ? i + 1 : i
   const next = blank(i)
-  if (text[next] === "\n") return next + 1
-  return i
+  return {
+    start: lineStart,
+    end: text[next] === "\n" ? next + 1 : i,
+    text: "",
+  }
 }
 
 function lineAt(text: string, offset: number): number {

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import { KIND_REGISTRY } from "simetra/model"
-import { textCalls, unitCalls, unitRelations } from "../sql/dependencies"
+import {
+  textCalls,
+  unitCalls,
+  unitRelations,
+  unitTypes,
+} from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
 import {
@@ -880,6 +885,23 @@ describe("unit references", () => {
     expect(unitRelations(comment.unit, comment.parse)).toContainEqual({
       schema: "app",
       name: "t",
+    })
+  })
+
+  it("lists the types a unit names, row types of tables among them", async () => {
+    const view = await unitOf(
+      "CREATE VIEW app.v AS SELECT (jsonb_populate_record(NULL::app.counterparties, '{}'::jsonb)).id"
+    )
+    expect(unitTypes(view.unit, view.parse)).toContainEqual({
+      schema: "app",
+      name: "counterparties",
+    })
+    const grant = await unitOf(
+      "GRANT EXECUTE ON FUNCTION app.k(app.counterparties) TO anon"
+    )
+    expect(unitTypes(grant.unit, grant.parse)).toContainEqual({
+      schema: "app",
+      name: "counterparties",
     })
   })
 

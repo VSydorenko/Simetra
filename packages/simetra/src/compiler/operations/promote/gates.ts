@@ -61,7 +61,7 @@ export function writePathProblems(
       problems.push(
         diagnostic("promote.write-path", file, "", {
           table,
-          detail: `${detail}, line ${line}`,
+          detail,
           identity: sqlUnit.identity,
           line,
         })
@@ -148,8 +148,9 @@ function writeGrant(
     privileges.length === 0
       ? ["ALL"]
       : privileges
-          .map((p) => p.priv_name ?? "")
-          .filter((p) => WRITE_PRIVILEGES.has(p))
+          // `ALL (колонки)` — привілей без імені з переліком колонок.
+          .map((p) => p.priv_name ?? "all")
+          .filter((p) => p === "all" || WRITE_PRIVILEGES.has(p))
           .map((p) => p.toUpperCase())
   if (writes.length === 0) return undefined
   return `${writes.join(", ")} TO ${named.join(", ")}`

@@ -637,3 +637,253 @@ $fn$;
     expect(after.has(CATALOG_FILE)).toBe(true)
   })
 })
+
+/** Ідентичності одиниць файлу — з компіляції, а не з тексту тесту. */
+async function identities(
+  files: ReadonlyMap<string, string>,
+  file: string
+): Promise<string[]> {
+  const compiled = await compile(files)
+  return (compiled.model?.sqlUnits ?? [])
+    .filter((u) => u.file === file)
+    .map((u) => u.identity)
+}
+
+/** Мапінг разом з ТЧ `contacts` з таблиці контактів. */
+const withContacts = (edit: (m: PromoteInput) => void = () => {}) =>
+  mapping((m) => {
+    m.tabularSections = [
+      {
+        table: "CounterpartyContact",
+        name: "contacts",
+        columns: {
+          id: { to: "standard", name: "ref" },
+          counterpartyId: { to: "standard", name: "parent" },
+          phone: {
+            to: "attribute",
+            collection: "attributes",
+            element: { name: "phone" },
+          },
+        },
+      },
+    ]
+    m.fill.push({
+      table: "CounterpartyContact",
+      target: { to: "standard", name: "lineNumber" },
+      expression:
+        "row_number() over (partition by counterparty_id order by id)",
+    })
+    edit(m)
+  })
+
+describe("promoteObject: SQL units, review round 1", () => {
+  it("refuses a view that names the promoted row type", async () => {
+    const files = await project({
+      "sql/app/v.sql":
+        "CREATE VIEW app.v AS SELECT (jsonb_populate_record(NULL::app.counterparties, '{}'::jsonb)).id AS id;\n",
+    })
+    const { result } = await promoted(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.debt-text-reference",
+        file: "sql/app/v.sql",
+        params: { identity: "view:app.v", line: 1 },
+      },
+    ])
+  })
+
+  it("refuses a grant on a function whose signature names the promoted row type", async () => {
+    const files = await project({
+      "sql/app/k.sql":
+        "CREATE FUNCTION app.k(c app.counterparties) RETURNS text LANGUAGE sql AS $$ SELECT c.inn $$;\n",
+      "sql/app/grantk.sql":
+        "GRANT EXECUTE ON FUNCTION app.k(app.counterparties) TO authenticated;\n",
+    })
+    const [grant] = await identities(files, "sql/app/grantk.sql")
+    const { result } = await promoted(files)
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.debt-text-reference",
+        file: "sql/app/grantk.sql",
+        params: { identity: grant, line: 1 },
+      },
+    ])
+  })
+
+  it("renames the debt entry of a rewritten function whose identity changes", async () => {
+    const files = await project({
+      "sql/app/k.sql":
+        "CREATE FUNCTION app.k(c app.counterparties) RETURNS text LANGUAGE sql AS $$ SELECT c.inn $$;\n",
+    })
+    expect(files.get(SQL_DEBT_FILE)).toContain(
+      "function:app.k(app.counterparties)"
+    )
+    const { after } = await passes(files)
+    expect(after.get("sql/app/k.sql")).toBe(
+      "CREATE FUNCTION app.k(c app.counterparty) RETURNS text LANGUAGE sql AS $$ SELECT c.tax_id AS inn $$;\n"
+    )
+    const debt = after.get(SQL_DEBT_FILE)!
+    expect(debt).toContain("function:app.k(app.counterparty)")
+    expect(debt).not.toContain("function:app.k(app.counterparties)")
+  })
+
+  it.each([
+    [
+      "a column grant of ALL",
+      "GRANT ALL (name) ON app.counterparties TO authenticated;",
+    ],
+    [
+      "a column grant of UPDATE",
+      "GRANT UPDATE (inn) ON app.counterparties TO anon;",
+    ],
+    [
+      "a policy without FOR",
+      "CREATE POLICY counterparties_any ON app.counterparties TO authenticated USING (true);",
+    ],
+    [
+      "default privileges FOR ROLE",
+      "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT INSERT ON TABLES TO anon;",
+    ],
+  ])("refuses the write path of %s", async (_, statement) => {
+    const files = await project({ "sql/app/write.sql": `${statement}\n` })
+    const { result } = await promoted(files)
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "promote.write-path")
+        .map((d) => [d.file, d.params?.table, d.params?.line])
+    ).toEqual([["sql/app/write.sql", "app.counterparties", 1]])
+    expect(result.ok).toBe(false)
+  })
+
+  it("gates and classifies a grant on a tabular section table", async () => {
+    const write = await project({
+      "sql/app/contacts.sql":
+        "GRANT INSERT ON app.counterparty_contacts TO authenticated;\n",
+    })
+    const refused = await promoted(write, withContacts())
+    expect(
+      refused.result.diagnostics
+        .filter((d) => d.code === "promote.write-path")
+        .map((d) => d.params?.table)
+    ).toEqual(["app.counterparty_contacts"])
+
+    const read = await project({
+      "sql/app/contacts.sql":
+        "GRANT SELECT ON app.counterparty_contacts TO authenticated;\n",
+    })
+    const [grant] = await identities(read, "sql/app/contacts.sql")
+    const unclassified = await promoted(read, withContacts())
+    expect(brief(unclassified.result)).toEqual([
+      {
+        code: "promote.unclassified",
+        file: "sql/app/contacts.sql",
+        params: { subject: grant, line: 1 },
+      },
+    ])
+    const { after } = await passes(
+      read,
+      withContacts((m) => {
+        m.conversions[grant!] = "platform"
+      })
+    )
+    expect(after.has("sql/app/contacts.sql")).toBe(false)
+  })
+
+  it("classifies and moves the units of a tabular section's module", async () => {
+    const module = "custom-tables/CounterpartyContact/CounterpartyContact.sql"
+    const files = await project({
+      [module]: `CREATE FUNCTION app.contact_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $fn$
+BEGIN
+  NEW.phone := btrim(NEW.phone);
+  RETURN NEW;
+END
+$fn$;
+
+CREATE TRIGGER contact_touch BEFORE INSERT ON app.counterparty_contacts
+  FOR EACH ROW EXECUTE FUNCTION app.contact_touch();
+`,
+    })
+    const [, trigger] = await identities(files, module)
+    const unclassified = await promoted(files, withContacts())
+    expect(brief(unclassified.result)).toEqual([
+      {
+        code: "promote.unclassified",
+        file: module,
+        params: { subject: trigger, line: 8 },
+      },
+    ])
+    const { result, after } = await passes(
+      files,
+      withContacts((m) => {
+        m.conversions[trigger!] = "property"
+      })
+    )
+    expect(after.has(module)).toBe(false)
+    const kindModule = after.get(KIND_MODULE)!
+    expect(kindModule).toContain("FUNCTION app.counterparty_touch()")
+    expect(kindModule).toContain("NEW.phone := btrim(NEW.phone);")
+    expect(result.record?.movedUnits.map((u) => [u.identity, u.from])).toEqual([
+      ["function:app.contact_touch()", module],
+      [TOUCH, COUNTERPARTY_SQL],
+    ])
+  })
+
+  it("classifies REPLICA IDENTITY and publication membership of the promoted table", async () => {
+    const realtime = "sql/app/realtime.sql"
+    const files = await project({
+      [realtime]: `ALTER TABLE app.counterparties REPLICA IDENTITY FULL;
+
+ALTER PUBLICATION supabase_realtime ADD TABLE app.counterparties;
+`,
+    })
+    const units = await identities(files, realtime)
+    expect(units).toHaveLength(2)
+    const refused = await promoted(files)
+    expect(
+      brief(refused.result).map((d) => [
+        d.code,
+        d.params?.subject,
+        d.params?.line,
+      ])
+    ).toEqual(
+      expect.arrayContaining([
+        ["promote.unclassified", units[0], expect.any(Number)],
+        ["promote.unclassified", units[1], expect.any(Number)],
+      ])
+    )
+    expect(refused.result.diagnostics).toHaveLength(2)
+    const { after } = await passes(
+      files,
+      mapping((m) => {
+        for (const unit of units) m.conversions[unit] = "platform"
+      })
+    )
+    expect(after.has(realtime)).toBe(false)
+  })
+
+  it.each([
+    [
+      "the last statement of a shared line",
+      "COMMENT ON SCHEMA app IS 'a'; COMMENT ON TABLE app.counterparties IS 'x';\nCOMMENT ON SCHEMA public IS 'p';\n",
+    ],
+    [
+      "the first statement of a shared line",
+      "COMMENT ON TABLE app.counterparties IS 'x'; COMMENT ON SCHEMA app IS 'a';\nCOMMENT ON SCHEMA public IS 'p';\n",
+    ],
+    [
+      "an indented statement on its own line",
+      "COMMENT ON SCHEMA app IS 'a';\n  COMMENT ON TABLE app.counterparties IS 'x';\n\nCOMMENT ON SCHEMA public IS 'p';\n",
+    ],
+  ])("cuts %s and keeps the line structure", async (_, text) => {
+    const files = await project({ "sql/app/c.sql": text })
+    const { after } = await passes(
+      files,
+      mapping((m) => {
+        m.conversions["comment:table:app.counterparties"] = "removed"
+      })
+    )
+    expect(after.get("sql/app/c.sql")).toBe(
+      "COMMENT ON SCHEMA app IS 'a';\nCOMMENT ON SCHEMA public IS 'p';\n"
+    )
+  })
+})

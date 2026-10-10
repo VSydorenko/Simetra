@@ -1830,12 +1830,21 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         )
       ).result.diagnostics.map((d) => d.params?.reason)
     for (const expression of [
-      "coalesce(created_at, lower('now')::timestamptz)",
       "coalesce(created_at, ('n' || 'ow')::timestamptz)",
-      `coalesce(created_at, json_value('"now"', '$' returning timestamptz))`,
+      `coalesce(created_at, json_value(name, '$' returning timestamptz))`,
       "coalesce(created_at, CAST(created_at::text AS timestamptz))",
     ]) {
       expect(await reason(expression), expression).toEqual(["castToTime"])
+    }
+    // Рядок `'now'` будь-де у виразі — час транзакції, навіть без явного
+    // приведення: невідомий літерал бере тип колонки.
+    for (const expression of [
+      "coalesce(created_at, lower('now')::timestamptz)",
+      `coalesce(created_at, json_value('"now"', '$' returning timestamptz))`,
+      "coalesce(created_at, 'now')",
+      "coalesce(created_at, 'Yesterday 10:00')",
+    ]) {
+      expect(await reason(expression), expression).toEqual(["volatile"])
     }
     for (const expression of [
       "coalesce(created_at, '2024-01-01'::timestamptz)",

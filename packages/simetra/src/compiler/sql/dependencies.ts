@@ -140,6 +140,18 @@ export function unitRelations(
 }
 
 /**
+ * Типи, які називає одиниця (простір `type`): приведення, типи аргументів
+ * цілі гранту чи коментаря на функції. Таблиця — ще й складений тип, тож
+ * `NULL::<таблиця>` чи `f(<таблиця>)` посилається на неї саме тут.
+ */
+export function unitTypes(
+  unit: Pick<SqlUnit, "tree">,
+  parse: SqlParser
+): ReferencedName[] {
+  return names(unitReferences(unit, parse), "type")
+}
+
+/**
  * Виклики функцій одиниці (простір `proc`): `FuncCall` дерева, функція
  * тригера й тіло `LANGUAGE sql`. Тіла plpgsql не читаються — їхні вирази
  * передає `textCalls`.

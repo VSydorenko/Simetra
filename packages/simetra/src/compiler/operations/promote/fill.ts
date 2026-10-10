@@ -79,7 +79,10 @@ const NOW_VALUE_FUNCTIONS: ReadonlySet<string> = new Set([
 
 /**
  * Типи дати й часу: рядки `'now'`, `'today'`, `'tomorrow'`, `'yesterday'`
- * при приведенні до них — той самий час транзакції, що й `now()`.
+ * при приведенні до них — той самий час транзакції, що й `now()`. Приведення
+ * буває й неявним (`coalesce(created_at, 'now')`: невідомий літерал бере тип
+ * колонки), а типів компілятор не виводить, тож такий рядок читає час
+ * транзакції будь-де у виразі.
  */
 const DATETIME_TYPES: ReadonlySet<string> = new Set([
   "date",
@@ -352,12 +355,16 @@ class ExpressionWalker {
         }
         this.readsNow = true
         return undefined
-      case "TypeCast": {
-        const cast = timeCast(value as TypeCastNode)
-        if (cast === "now") this.readsNow = true
-        if (cast === "expression") this.castsToTime = true
+      case "A_Const":
+        if (nowString(value as { sval?: { sval?: string } })) {
+          this.readsNow = true
+        }
         break
-      }
+      case "TypeCast":
+        if (castsNonLiteralToTime(value as TypeCastNode)) {
+          this.castsToTime = true
+        }
+        break
       case "JsonFuncExpr": {
         // `json_value(… RETURNING timestamptz)` — приведення результату функції.
         const output = (
@@ -519,17 +526,31 @@ const isTimeType = (names: unknown) => {
 }
 
 /**
- * Приведення до типу дати чи часу в будь-якій формі (`::`, `CAST`,
- * `timestamptz '…'`, через проміжні приведення й `COLLATE`): `"now"` —
- * рядка `'now'`, `'today'`, …, `"expression"` — не літерала (значення, яке
- * без виводу типів не довести не рядком `'now'`), `undefined` — звичайного
- * літерала чи до іншого типу.
+ * Рядок, слово якого — `now`, `today`, `tomorrow` чи `yesterday` (без
+ * урахування регістру, з будь-якими розділювачами: `'yesterday 10:00'`).
  */
-function timeCast(cast: TypeCastNode): "now" | "expression" | undefined {
-  if (!isTimeType(cast.typeName?.names)) return undefined
+function nowString(value: { sval?: { sval?: string } }): boolean {
+  const sval = value.sval?.sval
+  return (
+    sval !== undefined &&
+    sval
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .some((word) => NOW_STRINGS.has(word))
+  )
+}
+
+/**
+ * Приведення не-літерала до типу дати чи часу в будь-якій формі (`::`,
+ * `CAST`, `timestamptz '…'`, через проміжні приведення й `COLLATE`): без
+ * виводу типів не довести, що значення — не рядок `'now'`. Сам літерал
+ * судить `nowString`.
+ */
+function castsNonLiteralToTime(cast: TypeCastNode): boolean {
+  if (!isTimeType(cast.typeName?.names)) return false
   let arg = cast.arg
   for (;;) {
-    if (!isRecordNode(arg)) return "expression"
+    if (!isRecordNode(arg)) return true
     if ("TypeCast" in arg) {
       arg = (arg.TypeCast as TypeCastNode).arg
       continue
@@ -538,15 +559,6 @@ function timeCast(cast: TypeCastNode): "now" | "expression" | undefined {
       arg = (arg.CollateClause as { arg?: unknown }).arg
       continue
     }
-    if (!("A_Const" in arg)) return "expression"
-    const sval = (arg as { A_Const?: { sval?: { sval?: string } } }).A_Const
-      ?.sval?.sval
-    if (sval === undefined) return undefined
-    return sval
-      .toLowerCase()
-      .split(/\s+/)
-      .some((word) => NOW_STRINGS.has(word))
-      ? "now"
-      : undefined
+    return !("A_Const" in arg)
   }
 }

@@ -250,6 +250,30 @@ export function readSqlUnits(
 }
 
 /**
+ * Місця операторів верхнього рівня у тексті `.sql` за тим самим правилом,
+ * що дає `readSqlUnits` (`line` і `sql` одиниці): початок — перший токен,
+ * текст — до кінця оператора без `;` і пробілів. Операції, що правлять
+ * файл, знаходять одиницю за позицією розбору, а не пошуком тексту.
+ */
+export function statementPositions(
+  text: string,
+  parse: SqlParser
+): { start: number; end: number; line: number }[] {
+  const masked = extractMovementBlocks(text).masked
+  const parsed = parse(masked)
+  if (!parsed.ok) return []
+  return parsed.statements.map((statement) => {
+    const start = firstToken(masked, statement.start, statement.end)
+    const sql = masked.slice(start, statement.end).trimEnd()
+    return {
+      start,
+      end: start + sql.length,
+      line: position(masked, start).line,
+    }
+  })
+}
+
+/**
  * Дослівні одиниці з тотожною ідентичністю: першою вважається та, що раніше
  * за файлом (порядок `readSqlUnits`) і рядком, помилку отримує кожна наступна.
  */

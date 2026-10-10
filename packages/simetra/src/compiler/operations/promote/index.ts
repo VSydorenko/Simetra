@@ -512,7 +512,7 @@ export async function promoteObject(
       )
     )
   }
-  const planned = await planSteps(model, input, tables, parse)
+  const planned = planSteps(model, input, tables, parse)
   problems.push(...planned.problems)
 
   // 4. Файл виду.
@@ -583,7 +583,7 @@ export async function promoteObject(
   for (const [file, text] of cascade.files) after.set(file, text)
   // SQL: класифіковане вирізано, функції модуля переїхали — ще в старих
   // іменах: нові фізичні імена дає лише доповнення нижче.
-  setTexts(after, sqlFileTexts(files, sql, new Map(), deleted).files)
+  setTexts(after, sqlFileTexts(files, sql, new Map(), deleted, parse).files)
 
   // 7–8. Доповнення (канонічні фізичні імена, рішення 10), звуження боргу й
   // компіляція результату.
@@ -631,7 +631,7 @@ export async function promoteObject(
       u.file !== undefined && u.line !== undefined && !removed.has(u.identity)
   )
   const callers = callerChanges(remaining, signature, parse, plpgsql)
-  const final = sqlFileTexts(files, sql, rewrite.texts, deleted, [
+  const final = sqlFileTexts(files, sql, rewrite.texts, deleted, parse, [
     ...sql.candidates,
     ...callers.map((c) => c.unit),
     ...sql.unscoped.map((u) => u.unit),
