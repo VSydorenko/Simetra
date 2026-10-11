@@ -320,6 +320,42 @@ describe("rewriteStatementText", () => {
       ).toEqual(["rewrite.unsupported"])
     })
 
+    it("accepts system columns of a promoted table unchanged", () => {
+      // Системні колонки є в кожної таблиці й переживають перейменування.
+      expect(rw("SELECT c.ctid, c.xmin FROM app.counterparties c")).toEqual({
+        sql: "SELECT c.ctid, c.xmin FROM app.counterparty c",
+        problems: [],
+        changes: [],
+      })
+      expect(
+        rw("SELECT tableoid, cmin, cmax, xmax FROM app.counterparties")
+      ).toEqual({
+        sql: "SELECT tableoid, cmin, cmax, xmax FROM app.counterparty",
+        problems: [],
+        changes: [],
+      })
+      expect(
+        rw("SELECT NEW.ctid", {
+          records: new Map([["new", { trigger: [COUNTERPARTIES] }]]),
+        })
+      ).toMatchObject({ sql: "SELECT NEW.ctid", problems: [] })
+      expect(
+        rw("SELECT r.xmin", {
+          variables: new Set(["r"]),
+          records: new Map([["r", { table: COUNTERPARTIES }]]),
+        })
+      ).toMatchObject({ sql: "SELECT r.xmin", problems: [] })
+    })
+
+    it("still refuses a removed column next to a system column", () => {
+      expect(
+        rw("SELECT c.ctid, c.legacy FROM app.counterparties c").problems
+      ).toEqual(["rewrite.unsupported"])
+      expect(
+        rw("SELECT tableoid, legacy FROM app.counterparties").problems
+      ).toEqual(["rewrite.unsupported"])
+    })
+
     it("refuses a join alias column that a rename makes ambiguous", () => {
       expect(
         details(

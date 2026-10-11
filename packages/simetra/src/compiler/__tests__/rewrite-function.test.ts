@@ -225,6 +225,17 @@ describe("rewriteFunction", () => {
     expect(r.sql).toBe(sql)
   })
 
+  it("accepts a system column in %TYPE unchanged", () => {
+    const sql = plpgsql(
+      "DECLARE v app.counterparties.xmin%TYPE;\nBEGIN\n  RETURN v;\nEND"
+    )
+    const r = rewriteFunction(sql, ctx)
+    expect(r.problems).toEqual([])
+    expect(r.sql).toBe(
+      sql.replace("app.counterparties.xmin", "app.counterparty.xmin")
+    )
+  })
+
   it("refuses an unresolved %TYPE", () => {
     const sql = plpgsql(
       "DECLARE v app.counterparties.missing%TYPE;\nBEGIN\n  RETURN v;\nEND"

@@ -14,6 +14,23 @@ export interface TableRename {
 }
 
 /**
+ * Системні колонки Postgres 17: є в кожної таблиці, промоція їх не перейменовує,
+ * не знімає й не додає, тож у `columnsAfter` їх немає навмисно.
+ */
+export const SYSTEM_COLUMNS: ReadonlySet<string> = new Set([
+  "ctid",
+  "xmin",
+  "xmax",
+  "cmin",
+  "cmax",
+  "tableoid",
+])
+
+/** Колонка `name` (нове ім'я) є в таблиці після промоції: звичайна чи системна. */
+export const survivesPromotion = (table: TableRename, name: string): boolean =>
+  table.columnsAfter.has(name) || SYSTEM_COLUMNS.has(name)
+
+/**
  * Вхід переписувача. `knownTables` — колонки кожної таблиці моделі до
  * промоції за ключем `"<схема>.<таблиця>"`: без них некваліфіковану колонку
  * не можна довести належною саме промотованій таблиці.

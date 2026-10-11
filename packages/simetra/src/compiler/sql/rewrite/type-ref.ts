@@ -1,11 +1,13 @@
 import { quoteIdent } from "simetra/model"
 import { readIdent, skipTrivia, type Token } from "./lex"
-import type {
-  RecordBinding,
-  RenameMap,
-  RewriteProblem,
-  TableRename,
-  TextEdit,
+import {
+  SYSTEM_COLUMNS,
+  survivesPromotion,
+  type RecordBinding,
+  type RenameMap,
+  type RewriteProblem,
+  type TableRename,
+  type TextEdit,
 } from "./renames"
 import { resolveTableName } from "./tables"
 
@@ -133,13 +135,17 @@ export function rewriteTypeRef(
   }
   const before = ctx.map.knownTables.get(`${table.schema}.${table.from}`) ?? []
   const renamed = table.columns.get(column)
-  if (renamed === undefined && !before.includes(column)) {
+  if (
+    renamed === undefined &&
+    !before.includes(column) &&
+    !SYSTEM_COLUMNS.has(column)
+  ) {
     return fail(
       "rewrite.unresolved-type",
       `"${column}" is not a column of promoted table "${table.from}"`
     )
   }
-  if (!table.columnsAfter.has(renamed ?? column)) {
+  if (!survivesPromotion(table, renamed ?? column)) {
     return fail(
       "rewrite.unsupported",
       `column "${column}" of promoted table "${table.from}" is removed by the promotion`
@@ -173,7 +179,7 @@ function recordFieldType(
   if (binding !== undefined && "table" in binding) {
     const table = binding.table
     const renamed = table.columns.get(field)
-    if (!table.columnsAfter.has(renamed ?? field)) {
+    if (!survivesPromotion(table, renamed ?? field)) {
       return fail(
         "rewrite.unsupported",
         `column "${field}" of promoted table "${table.from}" is removed by the promotion`
@@ -207,7 +213,7 @@ export function changedFields(map: RenameMap): Set<string> {
     for (const old of table.columns.keys()) names.add(old)
     for (const column of map.knownTables.get(`${table.schema}.${table.from}`) ??
       []) {
-      if (!table.columnsAfter.has(table.columns.get(column) ?? column)) {
+      if (!survivesPromotion(table, table.columns.get(column) ?? column)) {
         names.add(column)
       }
     }

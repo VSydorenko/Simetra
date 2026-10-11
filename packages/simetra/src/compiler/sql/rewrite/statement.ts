@@ -24,14 +24,15 @@ import { quoteIdent } from "simetra/model"
 import { byteOffsets, relationNameText, type SqlParser } from "../parse"
 import { lexChain, type Token } from "./lex"
 import { resolveTableName, type TableResolution } from "./tables"
-import type {
-  ContractChange,
-  RecordBinding,
-  RenameMap,
-  RewriteProblem,
-  RewriteScope,
-  TableRename,
-  TextEdit,
+import {
+  survivesPromotion,
+  type ContractChange,
+  type RecordBinding,
+  type RenameMap,
+  type RewriteProblem,
+  type RewriteScope,
+  type TableRename,
+  type TextEdit,
 } from "./renames"
 
 /**
@@ -1433,7 +1434,7 @@ class StatementRewriter {
     const table = resolved.table
     const column = tn.pct_type === true ? names.at(-1)! : undefined
     const renamed = column === undefined ? undefined : table.columns.get(column)
-    if (column !== undefined && !table.columnsAfter.has(renamed ?? column)) {
+    if (column !== undefined && !survivesPromotion(table, renamed ?? column)) {
       this.removed(column, table, tn.location)
       return
     }
@@ -1786,7 +1787,7 @@ class StatementRewriter {
     }
     const renamed = leaf?.table?.columns.get(field)
     const target = renamed ?? field
-    if (leaf?.table !== undefined && !leaf.table.columnsAfter.has(target)) {
+    if (leaf?.table !== undefined && !survivesPromotion(leaf.table, target)) {
       this.removed(field, leaf.table, ref.location)
       return undefined
     }
@@ -2015,7 +2016,7 @@ class StatementRewriter {
     }
     const after = locate(target, levels, true)
     if (after !== undefined && "failed" in after) return { result: undefined }
-    if (leaf.table !== undefined && !leaf.table.columnsAfter.has(target)) {
+    if (leaf.table !== undefined && !survivesPromotion(leaf.table, target)) {
       // Знята колонка: без іншого джерела з цим ім'ям — відмова, з ним —
       // ім'я мовчки впало б у зовнішню область.
       if (after === undefined) {
@@ -2100,7 +2101,7 @@ class StatementRewriter {
     if ("table" in record) {
       const { table } = record
       const target = table.columns.get(field) ?? field
-      if (this.isPromoted(table) && !table.columnsAfter.has(target)) {
+      if (this.isPromoted(table) && !survivesPromotion(table, target)) {
         this.removed(field, table, ref.location)
         return undefined
       }
@@ -2123,7 +2124,7 @@ class StatementRewriter {
     }
     const target = [...targets][0]!
     const gone = record.trigger.find(
-      (t) => this.isPromoted(t) && !t.columnsAfter.has(target)
+      (t) => this.isPromoted(t) && !survivesPromotion(t, target)
     )
     if (gone !== undefined) {
       this.removed(field, gone, ref.location)
