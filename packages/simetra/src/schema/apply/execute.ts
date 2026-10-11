@@ -84,9 +84,10 @@ export type ExecuteOutcome =
     }
 
 /**
- * Ключ advisory lock застосування: `0x53494D45` («SIME») і `1`. Транзакційний
- * і без очікування: сесійного стану на цілі не лишається (рішення 14), а
- * зайнятий замок — відмова, не черга.
+ * Ключ advisory lock застосування: `0x53494D45` («SIME») і `1`.
+ * Транзакційний, тож сесійного стану на цілі не лишається (рішення 14).
+ * Спроба бере його без очікування: зайнятий замок — відмова, не черга. Пошук
+ * після обриву з'єднання чекає на нього: так він не обганяє `COMMIT`.
  */
 const ADVISORY_LOCK = "1397312837, 1"
 
@@ -143,7 +144,14 @@ export async function executePlan(
   plan: ExecutablePlan,
   o: ExecuteOptions
 ): Promise<ExecuteOutcome> {
-  const timeouts: ApplyTimeouts = { ...DEFAULT_APPLY_TIMEOUTS, ...o.timeouts }
+  // Явний `undefined` у частковому об'єкті не має перекрити типове
+  // значення: інакше вийшов би тайм-аут `undefinedms` чи нескінченні спроби
+  const timeouts: ApplyTimeouts = {
+    ...DEFAULT_APPLY_TIMEOUTS,
+    ...Object.fromEntries(
+      Object.entries(o.timeouts ?? {}).filter(([, v]) => v !== undefined)
+    ),
+  }
   const sleep =
     o.sleep ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
@@ -178,7 +186,14 @@ export async function executePlan(
           diagnostics: error.diagnostics,
         }
       if (error instanceof ApplyConnectionLost)
-        return afterLostConnection(db, target, o.mode, applyId, attempt)
+        return afterLostConnection(
+          db,
+          target,
+          o.mode,
+          timeouts,
+          applyId,
+          attempt
+        )
       // Будь-яка інша помилка (збій читання відбитка чи запису стану,
       // підключення) летить далі як є: транзакцію вже відкочено, а
       // класифікує її межа інструмента
@@ -395,24 +410,56 @@ function backoff(attempt: number, o: { first: number; max: number }): number {
 }
 
 /**
- * Обрив з'єднання: наслідок не вгадується. Нова транзакція шукає в ledger
- * рядок цього `applyId`; репетиція закінчується `ROLLBACK`, тож її шукати
- * нічого. Невдале й це читання — `unknown`: краще чесне «невідомо», ніж
- * вигадана відповідь, а повтор на невідомому результаті міг би застосувати
- * план удруге.
+ * Запас понад `idle_in_transaction_session_timeout` для очікування пошуку:
+ * осиротілий backend, якому `COMMIT` так і не дійшов, живе рівно до цього
+ * тайм-ауту, а сервер ще мусить його завершити й зняти блокування.
+ */
+const LOOKUP_MARGIN_MS = 30_000
+
+/**
+ * Обрив з'єднання: наслідок не вгадується (рішення 14.3). Нова транзакція
+ * шукає в ledger рядок цього `applyId`; репетиція закінчується `ROLLBACK`,
+ * тож її шукати нічого.
+ *
+ * Пошук не може обігнати `COMMIT`, що ще в дорозі: після обриву старий
+ * backend може ще комітити, і знімок, узятий раніше, сказав би «не
+ * застосовано», а коміт ліг би після. Тому спершу блокуюче
+ * `pg_advisory_xact_lock` з тим самим ключем: транзакційні блокування
+ * Postgres знімає лише тоді, коли коміт уже видно. Потім — окремим
+ * оператором — пошук: за `READ COMMITTED` порту знімок береться вже після
+ * блокування. Блокування може тримати й чуже паралельне застосування —
+ * тоді пошук просто чекає, а результат той самий, бо шукаємо свій `applyId`.
+ *
+ * Межа очікування більша за `idleInTransactionMs`: осиротілий backend
+ * без `COMMIT` тримає блокування, доки його не вб'є
+ * `idle_in_transaction_session_timeout`, і коротша межа дала б `unknown`
+ * там, де за хвилину правдою було б «не застосовано». Невдале й це
+ * читання — `unknown`: краще чесне «невідомо», ніж вигадана відповідь, а
+ * повтор на невідомому результаті міг би застосувати план удруге.
  */
 async function afterLostConnection(
   db: ApplyDatabase,
   target: DbConnection,
   mode: ExecuteOptions["mode"],
+  timeouts: ApplyTimeouts,
   applyId: string,
   attempts: number
 ): Promise<ExecuteOutcome> {
+  const bound = `${timeouts.idleInTransactionMs + LOOKUP_MARGIN_MS}ms`
   const outcome =
     mode === "rehearse"
       ? "not-applied"
       : await db
-          .transaction(target, "rollback", (tx) => findApply(tx, applyId))
+          .transaction(target, "rollback", async (tx) => {
+            // `statement_timeout` теж: очікування блокування — частина
+            // оператора, і типовий тайм-аут ролі обірвав би його раніше
+            await tx.query(
+              "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)",
+              [bound]
+            )
+            await tx.query(`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK})`)
+            return findApply(tx, applyId)
+          })
           .catch(() => "unknown" as const)
   const diagnostics = [
     applyDiagnostic(

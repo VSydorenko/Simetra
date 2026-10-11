@@ -7,31 +7,51 @@ import {
 } from "simetra/schema"
 
 /**
- * Помилку з драйвера — у помилку порту. Без SQLSTATE помилка прийшла не від
- * сервера (обрив сокета), а клас `08` і `57P01` (адмін-завершення backend)
- * означають те саме: результат транзакції невідомий, відкочувати нічим.
+ * Збій транспорту без SQLSTATE, який кидає сам драйвер `pg`: сокет закрито,
+ * з'єднання вже непридатне чи протокол розсинхронізовано. Текст лише
+ * розпізнається, ніколи не цитується далі.
  */
-function normalize(error: unknown): ApplyDbError | ApplyConnectionLost {
-  const message = error instanceof Error ? error.message : String(error)
-  const code =
-    typeof error === "object" && error !== null && "code" in error
-      ? (error as { code: unknown }).code
-      : undefined
-  const sqlstate =
-    typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : undefined
+const TRANSPORT_MESSAGE =
+  /^(?:Connection terminated|timeout expired|Query read timeout|Received unexpected )|is not queryable$/
+
+/** Мережеві коди Node (`ECONNRESET`, `EPIPE`); `ERR_*` — помилки програми. */
+const NETWORK_CODE = /^E[A-Z]+$/
+
+/**
+ * Помилку з драйвера — у помилку порту. Втрата з'єднання — лише клас `08`,
+ * `57P01` (адмін-завершення backend) і збій транспорту без SQLSTATE: тоді
+ * результат транзакції невідомий, відкочувати нічим. Інша помилка без
+ * SQLSTATE — помилка програми (`TypeError` від параметра, що не
+ * серіалізується): вона летить як є, а не маскується під обрив, після якого
+ * раннер шукав би застосування в ledger.
+ */
+function normalize(error: unknown): unknown {
+  if (!(error instanceof Error)) return error
+  const code = (error as { code?: unknown }).code
   if (
-    sqlstate === undefined ||
-    sqlstate.startsWith("08") ||
-    sqlstate === "57P01"
+    typeof code === "string" &&
+    /^[0-9A-Z]{5}$/.test(code) &&
+    !NETWORK_CODE.test(code)
   )
-    return new ApplyConnectionLost(message)
-  return new ApplyDbError(message, sqlstate)
+    return code.startsWith("08") || code === "57P01"
+      ? new ApplyConnectionLost(error.message)
+      : new ApplyDbError(error.message, code)
+  const transport =
+    typeof code === "string"
+      ? NETWORK_CODE.test(code)
+      : !(
+          error instanceof TypeError ||
+          error instanceof RangeError ||
+          error instanceof ReferenceError ||
+          error instanceof SyntaxError
+        ) && TRANSPORT_MESSAGE.test(error.message)
+  return transport ? new ApplyConnectionLost(error.message) : error
 }
 
 /**
  * Реалізація порту на `pg`. Гарантії живуть у транзакції, а не в сесії
- * (рішення 14 плану П3-1): жодного сесійного `SET`, режим читання задає
- * `BEGIN READ ONLY`. Пул створюється на виклик і закривається в `finally`.
+ * (рішення 14 плану П3-1): жодного сесійного `SET`, ізоляцію й режим читання
+ * задає `BEGIN`. Пул створюється на виклик і закривається в `finally`.
  */
 export function createApplyDatabase(o: { readOnly: boolean }): ApplyDatabase {
   return {
@@ -68,7 +88,15 @@ export function createApplyDatabase(o: { readOnly: boolean }): ApplyDatabase {
           ) => (await run(sql, params)) as R[],
         }
         try {
-          await run(o.readOnly ? "BEGIN READ ONLY" : "BEGIN")
+          // Ізоляція — явно, не з налаштувань бази: кожен оператор бачить
+          // коміти, зроблені до нього. На цьому стоять читання відбитка
+          // після `LOCK TABLE` і пошук `applyId` після advisory lock: за
+          // `REPEATABLE READ` знімок узяв би перший оператор транзакції
+          await run(
+            o.readOnly
+              ? "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
+              : "BEGIN ISOLATION LEVEL READ COMMITTED"
+          )
           const value = await fn(tx)
           await run(end === "commit" ? "COMMIT" : "ROLLBACK")
           return value

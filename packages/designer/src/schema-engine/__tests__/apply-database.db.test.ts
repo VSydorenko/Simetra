@@ -149,6 +149,54 @@ describe("ApplyDatabase (pg)", () => {
     })
   })
 
+  it("runs at READ COMMITTED whatever the database default", async () => {
+    await inTarget(async (url) => {
+      const database = new URL(url).pathname.slice(1)
+      await other(
+        url,
+        `create table app.x (id int); alter database "${database}" set default_transaction_isolation = 'repeatable read'`
+      )
+      for (const readOnly of [false, true]) {
+        const seen = await createApplyDatabase({ readOnly }).transaction(
+          { url },
+          "rollback",
+          async (tx) => {
+            const [level] = await tx.query<{ level: string }>(
+              "select current_setting('transaction_isolation') as level"
+            )
+            const before = await tx.query<{ n: number }>(
+              "select count(*)::int as n from app.x"
+            )
+            // Коміт іншої сесії між операторами видно наступному оператору:
+            // знімок береться на кожен оператор, а не на першому
+            await other(url, "insert into app.x values (1)")
+            const after = await tx.query<{ n: number }>(
+              "select count(*)::int as n from app.x"
+            )
+            return { level: level!.level, seen: after[0]!.n - before[0]!.n }
+          }
+        )
+        expect(seen).toEqual({ level: "read committed", seen: 1 })
+      }
+    })
+  })
+
+  it("passes a programming error through, not as a lost connection", async () => {
+    await inTarget(async (url) => {
+      const circular: Record<string, unknown> = {}
+      circular.self = circular
+      const error = await createApplyDatabase({ readOnly: false })
+        .transaction({ url }, "commit", async (tx) => {
+          await tx.query("create table app.x()")
+          await tx.query("select $1::jsonb", [circular])
+        })
+        .catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(TypeError)
+      expect(error).not.toBeInstanceOf(ApplyConnectionLost)
+      expect(await tableExists(url)).toBe(false)
+    })
+  })
+
   it("connection loss becomes ApplyConnectionLost", async () => {
     await inTarget(async (url) => {
       const error = await createApplyDatabase({ readOnly: false })

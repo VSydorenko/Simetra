@@ -676,6 +676,140 @@ describe("executePlan", () => {
     })
   })
 
+  /** Чи чекає хтось advisory lock застосування в цій базі. */
+  const waitsOnApplyLock = async (url: string): Promise<boolean> =>
+    (
+      await other<{ waiting: boolean }>(
+        url,
+        "select exists (select from pg_locks where locktype = 'advisory' and classid = 1397312837 and objid = 1 and database = (select oid from pg_database where datname = current_database()) and not granted) as waiting"
+      )
+    )[0]!.waiting
+
+  /**
+   * Порт, чия перша транзакція йде на окремому клієнті й «обривається»
+   * після `fn`: раннер отримує `ApplyConnectionLost`, а backend живе далі
+   * з усіма блокуваннями спроби. Що з ним стане — вирішує `then` (його
+   * результат — `pending`). Решта транзакцій — справжній порт.
+   */
+  function lostWithLiveBackend(
+    then: (client: pg.Client, pid: number) => Promise<void>
+  ): {
+    db: ApplyDatabase
+    pending: () => Promise<void>
+    close: () => Promise<void>
+  } {
+    let pending: Promise<void> = Promise.resolve()
+    let first = true
+    let live: pg.Client | undefined
+    return {
+      pending: () => pending,
+      // Провалений тест не має лишити backend, що тримає базу цілі: інакше
+      // порт не прибере тінь
+      close: async () => {
+        await live?.end().catch(() => {})
+      },
+      db: {
+        async transaction(target, end, fn) {
+          if (!first) return apply.transaction(target, end, fn)
+          first = false
+          const client = new pg.Client({ connectionString: target.url })
+          live = client
+          // Сервер може вбити цей backend: подія не має валити процес тесту
+          client.on("error", () => {})
+          await client.connect()
+          const [row] = (
+            await client.query<{ pid: number }>(
+              "select pg_backend_pid() as pid"
+            )
+          ).rows
+          await client.query("BEGIN ISOLATION LEVEL READ COMMITTED")
+          await fn({
+            query: async <R extends Record<string, unknown>>(
+              sql: string,
+              params?: readonly unknown[]
+            ) => (await client.query(sql, params as unknown[])).rows as R[],
+          })
+          pending = then(client, row!.pid)
+          throw new ApplyConnectionLost("Connection terminated unexpectedly")
+        },
+      },
+    }
+  }
+
+  it("waits for a COMMIT in flight before reading the ledger", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await planFor(url, [CREATE_N])
+      // `COMMIT` доходить до сервера лише тоді, коли пошук уже чекає на
+      // блокування: без очікування пошук сказав би «не застосовано»
+      const port = lostWithLiveBackend(async (client) => {
+        await until("the lookup to wait", () => waitsOnApplyLock(url))
+        await client.query("COMMIT")
+      })
+      const outcome = await executePlan(
+        port.db,
+        { url },
+        plan,
+        options
+      ).finally(async () => {
+        await port.pending().finally(port.close)
+      })
+      expect(outcome).toMatchObject({
+        status: "committed",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.connection-lost",
+            severity: "warning",
+            params: { outcome: "applied" },
+          },
+        ],
+      })
+      expect(await marker(url)).toMatchObject({ plan_hash: PLAN_HASH })
+      expect(await exists(url, "app.n")).toBe(true)
+    })
+  })
+
+  it("waits for an orphaned transaction to be ended by the server", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await planFor(url, [CREATE_N])
+      // `COMMIT` не надіслано, а backend лишився «idle in transaction» з
+      // блокуваннями: його знімає `idle_in_transaction_session_timeout`,
+      // який раннер ставить у спробі. Зменшений тайм-аут — заради часу
+      // тесту; закрити сокет тут не можна: backend помітив би EOF і
+      // відкотився одразу, а не осиротів
+      let orphan = 0
+      const port = lostWithLiveBackend(async (_client, pid) => {
+        orphan = pid
+        await until("the lookup to wait", () => waitsOnApplyLock(url))
+      })
+      const outcome = await executePlan(port.db, { url }, plan, {
+        ...options,
+        timeouts: { idleInTransactionMs: 3000 },
+      }).finally(async () => {
+        await port.pending().finally(port.close)
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.connection-lost",
+            severity: "error",
+            params: { outcome: "not-applied" },
+          },
+        ],
+      })
+      expect(
+        await other(
+          testSuperuserUrl(),
+          `select 1 from pg_stat_activity where pid = ${orphan}`
+        )
+      ).toEqual([])
+      expect(await exists(url, "app.n")).toBe(false)
+      expect(await marker(url)).toBeUndefined()
+    })
+  })
+
   it("does not mistake an earlier apply for this one", async () => {
     await inTarget(BASE, async (url) => {
       const A = H1

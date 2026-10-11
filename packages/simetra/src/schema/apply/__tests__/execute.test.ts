@@ -93,11 +93,18 @@ interface Script {
   fail?: (label: string, attempt: number) => Error | undefined
   /** Ledger після обриву з'єднання: є рядок цього застосування. */
   ledgerHasApply?: boolean
+  /** Форма знайденого рядка ledger; типово поточна. */
+  ledgerFormat?: number
+  /** Секції відбитка цілі до кроків; типово `TARGET`. */
+  targetSections?: CatalogFingerprint["sections"]
 }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
 function labelOf(sql: string): string | undefined {
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
+  if (sql.includes("pg_advisory_xact_lock")) return "lookup-lock"
+  if (sql.includes("set_config('statement_timeout', $1"))
+    return "lookup-timeouts"
   if (sql.includes("set_config('lock_timeout'")) return "timeouts"
   if (sql.includes("current_user")) return "role"
   if (sql.includes("to_regclass") && sql.includes(" AS marker")) return "state"
@@ -150,10 +157,14 @@ function fakeDb(script: Script = {}) {
                     ? [{ exists: true }]
                     : label === "lookup"
                       ? script.ledgerHasApply === true
-                        ? [{ format: 1 }]
+                        ? [{ format: script.ledgerFormat ?? 1 }]
                         : []
                       : sql.includes("encode(sha256")
-                        ? [(stepsRan ? DESIRED : TARGET).sections]
+                        ? [
+                            stepsRan
+                              ? DESIRED.sections
+                              : (script.targetSections ?? TARGET.sections),
+                          ]
                         : []
           return rows as R[]
         },
@@ -467,7 +478,17 @@ describe("executePlan", () => {
       ],
     })
     expect(applied.log.filter((l) => l === "BEGIN")).toHaveLength(2)
-    expect(applied.log.slice(-3)).toEqual(["BEGIN", "lookup", "ROLLBACK"])
+    // Пошук — окремим оператором після блокуючого advisory lock: знімок
+    // береться вже після того, як `COMMIT` у дорозі став видимим
+    expect(applied.log.slice(-5)).toEqual([
+      "BEGIN",
+      "lookup-timeouts",
+      "lookup-lock",
+      "lookup",
+      "ROLLBACK",
+    ])
+    // Межа очікування — `idleInTransactionMs` плюс 30 с
+    expect(applied.params["lookup-timeouts"]).toEqual(["90000ms"])
     if (outcome.status !== "committed") throw new Error("committed expected")
     expect(outcome.diagnostics[0]!.params.applyId).toBe(outcome.applyId)
   })
@@ -507,6 +528,107 @@ describe("executePlan", () => {
     })
   })
 
+  it("bounds the lookup wait by the idle-in-transaction timeout", async () => {
+    const { db, params } = fakeDb({
+      fail: (label, attempt) =>
+        label === "ledger" && attempt === 1
+          ? new ApplyConnectionLost("Connection terminated")
+          : undefined,
+    })
+    await executePlan(db, target, plan, {
+      ...options,
+      timeouts: { idleInTransactionMs: 5000 },
+    })
+    expect(params["lookup-timeouts"]).toEqual(["35000ms"])
+  })
+
+  it("reports an unknown outcome with the apply id when the lookup times out", async () => {
+    const { db } = fakeDb({
+      ledgerHasApply: true,
+      fail: (label) =>
+        label === "ledger"
+          ? new ApplyConnectionLost("Connection terminated")
+          : label === "lookup-lock"
+            ? new ApplyDbError(
+                "canceling statement due to lock timeout",
+                "55P03"
+              )
+            : undefined,
+    })
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      diagnostics: [
+        { code: "apply.connection-lost", params: { outcome: "unknown" } },
+      ],
+    })
+    const [diagnostic] = outcome.diagnostics
+    const applyId = String(diagnostic!.params.applyId)
+    expect(applyId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(diagnostic!.message).toContain(applyId)
+  })
+
+  it("reports an unknown outcome for a ledger row of another format", async () => {
+    const { db } = fakeDb({
+      ledgerHasApply: true,
+      ledgerFormat: 2,
+      fail: (label, attempt) =>
+        label === "ledger" && attempt === 1
+          ? new ApplyConnectionLost("Connection terminated")
+          : undefined,
+    })
+    expect(await executePlan(db, target, plan, options)).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        { code: "apply.connection-lost", params: { outcome: "unknown" } },
+      ],
+    })
+  })
+
+  it("compares the target without owner only in proof mode", async () => {
+    const script = {
+      targetSections: { ...TARGET.sections, owner: "another-owner" },
+    }
+    expect(
+      await executePlan(fakeDb(script).db, target, plan, {
+        ...options,
+        mode: "proof",
+        planHash: "proof",
+      })
+    ).toMatchObject({ status: "committed" })
+    expect(
+      await executePlan(fakeDb(script).db, target, plan, options)
+    ).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        { code: "apply.target-changed", params: { sections: "owner" } },
+      ],
+    })
+  })
+
+  it("ignores timeouts given as undefined", async () => {
+    const { db, params, log } = fakeDb({
+      fail: (label) =>
+        label.startsWith("LOCK TABLE")
+          ? new ApplyDbError("lock timeout", "55P03")
+          : undefined,
+    })
+    const outcome = await executePlan(db, target, plan, {
+      ...options,
+      timeouts: {
+        lockTimeoutMs: undefined,
+        statementTimeoutMs: undefined,
+        idleInTransactionMs: undefined,
+        attempts: undefined,
+        backoffMs: undefined,
+      },
+    })
+    expect(params.timeouts).toEqual(["3000ms", "600000ms", "60000ms"])
+    expect(outcome).toMatchObject({ status: "failed", attempts: 5 })
+    expect(log.filter((l) => l === "BEGIN")).toHaveLength(5)
+  })
+
   it("does not look in the ledger after a lost rehearsal", async () => {
     const { db, log } = fakeDb({
       ledgerHasApply: true,
@@ -524,6 +646,7 @@ describe("executePlan", () => {
       ],
     })
     expect(log).not.toContain("lookup")
+    expect(log).not.toContain("lookup-lock")
   })
 
   it("passes an unexpected database error through", async () => {

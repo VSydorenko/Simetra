@@ -2199,9 +2199,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.lock-timeout": {
     en: (p) =>
-      `The apply could not take its locks in ${p.attempts} attempts: other sessions hold the tables it changes`,
+      `The apply could not take its locks in ${p.attempts} attempts: other sessions hold the tables it changes, or the transaction kept ending in a deadlock`,
     uk: (p) =>
-      `Застосування не змогло взяти блокування за ${p.attempts} спроб: таблиці, які воно змінює, тримають інші сесії`,
+      `Застосування не змогло взяти блокування за ${p.attempts} спроб: таблиці, які воно змінює, тримають інші сесії, або транзакція щоразу закінчувалася взаємним блокуванням`,
     hint: {
       en: "Nothing was written. Apply again when the load is lower, or raise the lock timeout or the number of attempts.",
       uk: "Нічого не записано. Застосуйте знову, коли навантаження менше, або збільште тайм-аут блокування чи кількість спроб.",
