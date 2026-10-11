@@ -2127,6 +2127,114 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати.",
     },
   },
+  "apply.plan-versions": {
+    en: (p) =>
+      `The plan was built with ${p.field} ${p.plan}, but the current one is ${p.current}`,
+    uk: (p) =>
+      `План побудовано з ${p.field} ${p.plan}, а поточне значення — ${p.current}`,
+    hint: {
+      en: "Plan again with the current platform: a plan applies only with the versions that built and proved it.",
+      uk: "Сплануйте знову поточною платформою: план застосовується лише з тими версіями, що його побудували й довели.",
+    },
+  },
+  "apply.busy": {
+    en: () =>
+      "Another apply is running on this database: the apply lock is taken",
+    uk: () =>
+      "На цій базі вже йде інше застосування: блокування застосування зайняте",
+    hint: {
+      en: "Nothing was written. Wait until the other apply finishes and plan again: it may have changed the database.",
+      uk: "Нічого не записано. Дочекайтеся кінця іншого застосування й сплануйте знову: воно могло змінити базу.",
+    },
+  },
+  "apply.api-role": {
+    en: (p) =>
+      `The apply runs as ${p.role}, a role the provider serves API requests with; the schema is never changed under such a role`,
+    uk: (p) =>
+      `Застосування виконується від ролі ${p.role}, якою провайдер обслуговує запити API; схему під такою роллю не змінюють ніколи`,
+    hint: {
+      en: "Nothing was written. Connect as the role that owns the application schema, not as an API role.",
+      uk: "Нічого не записано. Підключіться роллю, що володіє схемою застосунку, а не роллю API.",
+    },
+  },
+  "apply.chain": {
+    en: (p) =>
+      `The plan starts from snapshot ${p.expected}, but the database is at ${p.found}`,
+    uk: (p) =>
+      `План починається від знімка ${p.expected}, а база перебуває на ${p.found}`,
+    hint: {
+      en: "Nothing was written. A plan applies only to the state it was built from; plan again against this database.",
+      uk: "Нічого не записано. План застосовується лише до стану, від якого його побудовано; сплануйте знову проти цієї бази.",
+    },
+  },
+  "apply.target-changed": {
+    en: (p) =>
+      `The database changed after the plan was built; catalog fingerprint sections: ${p.sections}`,
+    uk: (p) =>
+      `База змінилася після побудови плану; секції відбитка каталогу: ${p.sections}`,
+    hint: {
+      en: "Plan again; permissions of the old plan no longer apply.",
+      uk: "Сплануйте знову; дозволи старого плану більше не діють.",
+    },
+  },
+  "apply.verify-failed": {
+    en: (p) =>
+      `After the plan steps the database does not match the desired state; catalog fingerprint sections: ${p.sections}. The transaction was rolled back`,
+    uk: (p) =>
+      `Після кроків плану база не відповідає бажаному стану; секції відбитка каталогу: ${p.sections}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. The proof of the plan did not hold on this database; plan again, and report the plan if the mismatch repeats.",
+      uk: "Нічого не записано. Доказ плану не справдився на цій базі; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",
+    },
+  },
+  "apply.step-failed": {
+    en: (p) =>
+      `Plan step ${p.step} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`,
+    uk: (p) =>
+      `Крок плану ${p.step} завершився помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Fix what the database reports, such as rows that break a new constraint, and apply again.",
+      uk: "Нічого не записано. Виправте те, про що повідомляє база, наприклад рядки, що порушують нове обмеження, і застосуйте знову.",
+    },
+  },
+  "apply.lock-timeout": {
+    en: (p) =>
+      `The apply could not take its locks in ${p.attempts} attempts: other sessions hold the tables it changes`,
+    uk: (p) =>
+      `Застосування не змогло взяти блокування за ${p.attempts} спроб: таблиці, які воно змінює, тримають інші сесії`,
+    hint: {
+      en: "Nothing was written. Apply again when the load is lower, or raise the lock timeout or the number of attempts.",
+      uk: "Нічого не записано. Застосуйте знову, коли навантаження менше, або збільште тайм-аут блокування чи кількість спроб.",
+    },
+  },
+  "apply.connection-lost": {
+    en: (p) =>
+      p.outcome === "applied"
+        ? `The connection was lost at the end of the apply, but the apply ledger records it (apply id ${p.applyId}): it was committed`
+        : p.outcome === "not-applied"
+          ? `The connection was lost during the apply, and the apply ledger has no record of it (apply id ${p.applyId}): it was rolled back`
+          : `The connection was lost during the apply, and the apply ledger could not be read to tell whether it was committed (apply id ${p.applyId})`,
+    uk: (p) =>
+      p.outcome === "applied"
+        ? `З'єднання обірвалося наприкінці застосування, але журнал застосувань його містить (id застосування ${p.applyId}): його закомічено`
+        : p.outcome === "not-applied"
+          ? `З'єднання обірвалося під час застосування, а журнал застосувань не має його запису (id застосування ${p.applyId}): його відкочено`
+          : `З'єднання обірвалося під час застосування, а журнал застосувань не вдалося прочитати, щоб з'ясувати, чи його закомічено (id застосування ${p.applyId})`,
+    hint: {
+      en: (p) =>
+        p.outcome === "unknown"
+          ? "Before applying again, look for this apply id in the apply_id column of simetra.ledger: a row means the apply was committed."
+          : p.outcome === "applied"
+            ? "Nothing to repeat: the database is at the new state."
+            : "Nothing was written; apply again.",
+      uk: (p) =>
+        p.outcome === "unknown"
+          ? "Перед повторним застосуванням знайдіть цей id у колонці apply_id таблиці simetra.ledger: рядок означає, що застосування закомічено."
+          : p.outcome === "applied"
+            ? "Повторювати нічого: база вже в новому стані."
+            : "Нічого не записано; застосуйте знову.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,

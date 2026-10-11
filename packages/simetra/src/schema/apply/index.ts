@@ -15,6 +15,7 @@ export { desiredForApply, type ApplyDesired } from "./desired"
 export {
   APPLY_STATE_FORMAT,
   applyStateOf,
+  findApply,
   readApplyState,
   renderApplyState,
   writeApplyStateStatements,
@@ -24,6 +25,14 @@ export {
   type MarkerRecord,
 } from "./state"
 export { PLATFORM_VERSION } from "./version"
+export {
+  DEFAULT_APPLY_TIMEOUTS,
+  executePlan,
+  type ApplyTimeouts,
+  type ExecutablePlan,
+  type ExecuteOptions,
+  type ExecuteOutcome,
+} from "./execute"
 export {
   checkPermissions,
   classifySteps,

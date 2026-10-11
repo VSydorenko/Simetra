@@ -283,6 +283,31 @@ export function writeApplyStateStatements(
   return [marker, ledger]
 }
 
+/**
+ * Чи записав ledger застосування з цим `applyId` (рішення 14.3 плану П3-1):
+ * відповідь на невідомий результат `COMMIT`. Шукаємо за `applyId`, а не за
+ * `planHash`: артефакт детермінований, тож повторений перехід A→B має той
+ * самий хеш, і рядок давнього застосування дав би хибне «застосовано».
+ * Немає таблиці — не застосовано: перше застосування створює її в тій самій
+ * транзакції. Рядок невідомої форми — `unknown`, а не вгадане «застосовано».
+ */
+export async function findApply(
+  tx: ApplyTransaction,
+  applyId: string
+): Promise<"applied" | "not-applied" | "unknown"> {
+  const [table] = await tx.query<{ exists: boolean }>(
+    "SELECT to_regclass($1) IS NOT NULL AS exists",
+    [LEDGER]
+  )
+  if (table?.exists !== true) return "not-applied"
+  const [row] = await tx.query<{ format: number }>(
+    `SELECT format FROM ${LEDGER} WHERE apply_id = $1::uuid`,
+    [applyId]
+  )
+  if (row === undefined) return "not-applied"
+  return row.format === APPLY_STATE_FORMAT ? "applied" : "unknown"
+}
+
 const STATE_TABLES = ["marker", "ledger"] as const
 
 /** Стан застосування цілі для звірки та розпізнавач його об'єктів. */
