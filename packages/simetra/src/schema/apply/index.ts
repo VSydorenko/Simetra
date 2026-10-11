@@ -43,3 +43,4 @@ export {
   verifyPlanHash,
   type PlanArtifact,
 } from "./artifact"
+export { driftGate, type DriftVerdict } from "./drift"

@@ -2091,6 +2091,42 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану; застарілий id означає, що дозвіл давали іншому плану.",
     },
   },
+  "apply.first-apply": {
+    en: () =>
+      "The database has no apply state: this is the first apply, so there is no recorded state to check for drift",
+    uk: () =>
+      "База не має стану застосування: це перше застосування, тож дрейф немає з чим порівнювати",
+  },
+  "apply.drift": {
+    en: (p) =>
+      `The database differs from the state recorded at the last apply (differences: ${p.count}): ${p.paths}`,
+    uk: (p) =>
+      `База відрізняється від стану, зафіксованого при останньому застосуванні (відмінностей: ${p.count}): ${p.paths}`,
+    hint: {
+      en: "Someone changed the database outside the platform; bring it back or record the change in metadata. Every apply goes through the platform, so the next plan starts from the recorded state.",
+      uk: "Хтось змінив базу повз платформу; поверніть її або запишіть зміну в метадані. Кожне застосування йде через платформу, тож наступний план починається від зафіксованого стану.",
+    },
+  },
+  "apply.drift-fingerprint": {
+    en: (p) =>
+      `The database catalog differs from the fingerprint recorded at the last apply in sections: ${p.sections}`,
+    uk: (p) =>
+      `Каталог бази відрізняється від відбитка, зафіксованого при останньому застосуванні, у секціях: ${p.sections}`,
+    hint: {
+      en: "Someone changed the database outside the platform; bring it back or record the change in metadata. Every apply goes through the platform, so the next plan starts from the recorded state.",
+      uk: "Хтось змінив базу повз платформу; поверніть її або запишіть зміну в метадані. Кожне застосування йде через платформу, тож наступний план починається від зафіксованого стану.",
+    },
+  },
+  "apply.versions-changed": {
+    en: (p) =>
+      `Both the schema engine (${p.engineFrom} → ${p.engineTo}) and the catalog fingerprint (${p.fingerprintFrom} → ${p.fingerprintTo}) changed since the last apply, so drift cannot be checked`,
+    uk: (p) =>
+      `Від останнього застосування змінились і двигун схеми (${p.engineFrom} → ${p.engineTo}), і відбиток каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож дрейф перевірити нічим`,
+    hint: {
+      en: "A release changes at most one of the two versions. Apply with the platform release that changes only one of them first, then with this one.",
+      uk: "Реліз змінює щонайбільше одну з двох версій. Спершу застосуйте релізом платформи, що змінює лише одну з них, потім цим.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,
