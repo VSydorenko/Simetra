@@ -557,7 +557,9 @@ describe("assigned-once fields on a promotion", () => {
     expect(run(current)).toEqual([])
   })
 
-  it("an accepted-table column keeps no label alive: its Ref is a bare uuid", () => {
+  // Колонка прийнятої таблиці пари ще не має, але промоція таблиці зробить її
+  // парою, і тоді знадобиться мітка цілі.
+  it("refuses the vanished label of a target of an accepted-table column", () => {
     const current = {
       [PROJECT]: project(),
       [REGISTER]: register(),
@@ -575,7 +577,7 @@ describe("assigned-once fields on a promotion", () => {
         ],
       }),
     }
-    expect(run(current)).toEqual([])
+    expect(run(current).map(([file]) => file)).toEqual([REGISTER])
   })
 
   it("does not treat a custom table turning into a PgEnum as a promotion", () => {

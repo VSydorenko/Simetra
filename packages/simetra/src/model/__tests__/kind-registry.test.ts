@@ -593,30 +593,35 @@ describe("references()", () => {
         ref: { kind: "Catalog", name: "Customer" },
         role: "attribute.ref",
         pair: false,
+        polymorphic: false,
       },
       {
         pointer: "/tabularSections/0/attributes/1/allowedTypes/0",
         ref: { kind: "Catalog", name: "Product" },
         role: "attribute.allowedType",
         pair: true,
+        polymorphic: true,
       },
       {
         pointer: "/tabularSections/0/attributes/1/allowedTypes/1",
         ref: { kind: "Catalog", name: "Service" },
         role: "attribute.allowedType",
         pair: true,
+        polymorphic: true,
       },
       {
         pointer: "/registerMovements/0",
         ref: { kind: "AccumulationRegister", name: "Stock" },
         role: "document.registerMovement",
         pair: false,
+        polymorphic: false,
       },
       {
         pointer: "/posting/movements/0/register",
         ref: { kind: "AccumulationRegister", name: "Stock" },
         role: "posting.register",
         pair: false,
+        polymorphic: false,
       },
     ])
   })
@@ -633,6 +638,7 @@ describe("references()", () => {
         ref: { kind: "Catalog", name: "Company" },
         role: "catalog.owner",
         pair: false,
+        polymorphic: false,
       },
     ])
 
@@ -655,19 +661,22 @@ describe("references()", () => {
         ref: { kind: "Document", name: "PriceSetup" },
         role: "register.recorder",
         pair: true,
+        polymorphic: true,
       },
       {
         pointer: "/dimensions/0/ref",
         ref: { kind: "Catalog", name: "Product" },
         role: "attribute.ref",
         pair: false,
+        polymorphic: false,
       },
     ])
   })
 
-  it("pair says whether the target sits in a polymorphic _type/_id pair", () => {
-    const pairsOf = (refs: { role: string; pair: boolean }[]) =>
-      refs.map(({ role, pair }) => [role, pair])
+  it("pair (physical _type/_id) and polymorphic (several target kinds)", () => {
+    const pairsOf = (
+      refs: { role: string; pair: boolean; polymorphic: boolean }[]
+    ) => refs.map(({ role, pair, polymorphic }) => [role, pair, polymorphic])
 
     // Перелік цілей реквізиту — пара; одиночний `Ref` — ні.
     const catalog = (owners: string[]) =>
@@ -687,18 +696,18 @@ describe("references()", () => {
     expect(
       pairsOf(KIND_REGISTRY.Catalog.references(catalog(["Company"])))
     ).toEqual([
-      ["attribute.ref", false],
-      ["attribute.allowedType", true],
+      ["attribute.ref", false, false],
+      ["attribute.allowedType", true, true],
       // Один власник — простий FK `owner_id` (`polymorphic` колонки немає).
-      ["catalog.owner", false],
+      ["catalog.owner", false, false],
     ])
     expect(
       pairsOf(KIND_REGISTRY.Catalog.references(catalog(["Company", "Person"])))
     ).toEqual([
-      ["attribute.ref", false],
-      ["attribute.allowedType", true],
-      ["catalog.owner", true],
-      ["catalog.owner", true],
+      ["attribute.ref", false, false],
+      ["attribute.allowedType", true, true],
+      ["catalog.owner", true, true],
+      ["catalog.owner", true, true],
     ])
 
     // Реєстратор — пара за будь-якої кількості цілей.
@@ -709,7 +718,7 @@ describe("references()", () => {
     })
     expect(
       pairsOf(KIND_REGISTRY.AccumulationRegister.references(register))
-    ).toEqual([["register.recorder", true]])
+    ).toEqual([["register.recorder", true, true]])
 
     const constant = (value: Record<string, unknown>) =>
       constantSchema.parse({
@@ -724,16 +733,17 @@ describe("references()", () => {
           constant({ allowedTypes: [{ kind: "Catalog", name: "A" }] })
         )
       )
-    ).toEqual([["constant.allowedType", true]])
+    ).toEqual([["constant.allowedType", true, true]])
     expect(
       pairsOf(
         KIND_REGISTRY.Constant.references(
           constant({ ref: { kind: "Catalog", name: "A" } })
         )
       )
-    ).toEqual([["constant.ref", false]])
+    ).toEqual([["constant.ref", false, false]])
 
-    // Прийнята таблиця пари не будує: її `Ref` — лише тип колонки.
+    // Прийнята таблиця пари не будує (її `Ref` — лише тип колонки), але
+    // посилання поліморфне: промоція таблиці зробить колонку парою.
     const table = customTableSchema.parse({
       kind: "CustomTable",
       name: "Links",
@@ -746,7 +756,7 @@ describe("references()", () => {
       ],
     })
     expect(pairsOf(KIND_REGISTRY.CustomTable.references(table))).toEqual([
-      ["attribute.allowedType", false],
+      ["attribute.allowedType", false, true],
     ])
   })
 
@@ -763,6 +773,7 @@ describe("references()", () => {
         ref: { kind: "Catalog", name: "Person" },
         role: "constant.allowedType",
         pair: true,
+        polymorphic: true,
       },
     ])
 
@@ -798,18 +809,21 @@ describe("references()", () => {
         ref: { kind: "PgEnum", name: "Role" },
         role: "customTable.pgEnum",
         pair: false,
+        polymorphic: false,
       },
       {
         pointer: "/columns/1/ref",
         ref: { kind: "Catalog", name: "User" },
         role: "attribute.ref",
         pair: false,
+        polymorphic: false,
       },
       {
         pointer: "/foreignKeys/0/references/object",
         ref: { kind: "CustomTable", name: "Group" },
         role: "customTable.foreignKey",
         pair: false,
+        polymorphic: false,
       },
     ])
   })

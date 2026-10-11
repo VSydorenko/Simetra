@@ -137,9 +137,16 @@ export interface FoundReference {
    * даних. Обчислюється з того самого джерела, що й фізична пара:
    * `allowedTypes` поля виду 1С чи `polymorphic` стандартної колонки, — тож
    * компілятор читає факт звідси, а не з переліку ролей, і новий вид з парою
-   * не випаде мовчки.
+   * не випаде мовчки. Пара завжди й `polymorphic`.
    */
   pair: boolean
+  /**
+   * Логічний факт: посилання — один із кількох видів цілі (`allowedTypes`,
+   * зокрема колонки прийнятої таблиці, чи активний `polymorphic` стандартної
+   * колонки). Ширший за `pair`: колонка прийнятої таблиці пари ще не має, але
+   * стане нею при промоції таблиці, тож мітка її цілі мусить уціліти.
+   */
+  polymorphic: boolean
 }
 
 /**
@@ -611,6 +618,7 @@ export function valueTypeReferences(
       ref: field.ref,
       role: roles.ref,
       pair: false,
+      polymorphic: false,
     })
   }
   field.allowedTypes?.forEach((ref, index) => {
@@ -619,6 +627,7 @@ export function valueTypeReferences(
       ref,
       role: roles.allowedType,
       pair: allowedTypesPair,
+      polymorphic: true,
     })
   })
   return found
@@ -638,6 +647,11 @@ export function fieldListReferences(
   )
 }
 
+/**
+ * Перелік цілей поза типом поля: або цілі стандартної колонки, що стає парою
+ * саме тоді, коли поліморфна (`standardRefReferences`), або зовсім не
+ * значення-посилання (рухи документа), тож обидва факти тут збігаються.
+ */
 export function refListReferences(
   refs: readonly MetadataRef[],
   pointer: string,
@@ -649,6 +663,7 @@ export function refListReferences(
     ref,
     role,
     pair,
+    polymorphic: pair,
   }))
 }
 

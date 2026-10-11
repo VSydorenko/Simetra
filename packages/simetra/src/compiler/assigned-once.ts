@@ -139,8 +139,9 @@ const isAcceptedTable = (holder: Holder) =>
   holder.def.materializes === "table"
 
 /**
- * Об'єкти (`"<Вид>:<Ім'я>"`), що є ціллю поліморфної пари хоча б в одному
- * файлі: їхня мітка виду лежить у даних пар, тож зникнути не може. Те саме
+ * Об'єкти (`"<Вид>:<Ім'я>"`), що є ціллю поліморфного посилання хоча б в
+ * одному файлі: їхня мітка виду лежить у даних пар або ляже туди, коли
+ * колонку прийнятої таблиці промотують у пару, тож зникнути не може. Те саме
  * правило — гейт промоції в регістр відомостей (`promote.label-target`).
  */
 export function polymorphicTargets(
@@ -149,8 +150,8 @@ export function polymorphicTargets(
   const targets = new Set<string>()
   for (const file of readObjectFiles(files)) {
     if (file.data === undefined) continue
-    for (const { ref, pair } of file.def.references(file.data)) {
-      if (pair) targets.add(`${ref.kind}:${ref.name}`)
+    for (const { ref, polymorphic } of file.def.references(file.data)) {
+      if (polymorphic) targets.add(`${ref.kind}:${ref.name}`)
     }
   }
   return targets

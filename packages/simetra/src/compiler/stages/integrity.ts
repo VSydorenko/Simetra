@@ -81,17 +81,6 @@ const REF_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
   "customTable.foreignKey",
 ])
 
-/**
- * Ролі поліморфної пари `<основа>_type` + `<основа>_id uuid` (спека §5): ціль
- * мусить мати одноколонковий uuid-ключ, тож перерахування з текстовою міткою
- * (М15) сюди не підходить. Реєстратор теж пара, але його ціль звужує власне
- * правило (лише документ), а ключ у документа є завжди.
- */
-const POLYMORPHIC_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
-  "attribute.allowedType",
-  "constant.allowedType",
-])
-
 /** Ролі, чия ціль — регістр, у який документ пише рухи (спека §8.2). */
 const REGISTER_TARGET_ROLES: ReadonlySet<ReferenceRole> =
   new Set<ReferenceRole>(["document.registerMovement", "posting.register"])
@@ -467,7 +456,12 @@ function referenceTargetError(
         : "reference.not-referenceable"
     }
   }
-  const polymorphic = POLYMORPHIC_ROLES.has(role)
+  // Поліморфне посилання (факт реєстру видів) зберігає id цілі в uuid — у
+  // парі `_id` чи в колонці прийнятої таблиці, тож ціль мусить мати
+  // одноколонковий uuid-ключ; перерахування з текстовою міткою (М15) сюди не
+  // підходить. Реєстратор і власник теж поліморфні, але їхню ціль звужують
+  // власні правила вище, а ключ у документа й довідника є завжди.
+  const polymorphic = reference.polymorphic === true
   if (!polymorphic && !REF_ROLES.has(role)) return undefined
   if (keyColumnOf(target) !== undefined) {
     return singleRefBuildsForeignKey(reference, byId) &&

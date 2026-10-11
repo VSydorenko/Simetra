@@ -65,6 +65,7 @@ export const eventSubscriptionKind: KindDefinition = {
               ref: source.ref,
               role: "eventSubscription.source" as const,
               pair: false,
+              polymorphic: false,
             },
           ]
         : []

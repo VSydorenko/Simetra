@@ -5,7 +5,8 @@ import { kitchenSink } from "./fixtures/kitchen-sink"
 
 /**
  * Інваріант пари для кожного виду реєстру: посилання з `pair: true` (шар
- * ідентичності) і пара `_type`/`_id` фізичної моделі — один факт. Тест не
+ * ідентичності) і пара `_type`/`_id` фізичної моделі — один факт, а пара
+ * завжди й поліморфна (`polymorphic` ширший: колонка прийнятої таблиці). Тест не
  * знає ролей: носія пари він бачить за формою місця, а фізичну пару — за
  * сусідством колонок, тож новий вид чи поле, де шари розійшлися, тут
  * червоніє в будь-який бік.
@@ -154,6 +155,21 @@ describe("polymorphic pair invariant", () => {
       expect(normalize(identity)).toEqual(normalize(physicalPairs(model)))
     }
   )
+
+  it.each([
+    ["kitchen sink", kitchenSink],
+    ["many owners", manyOwners],
+  ])("every pair is polymorphic: %s", async (_, files) => {
+    const model = await compiled(files())
+    const found = model.objects.flatMap((object) =>
+      KIND_REGISTRY[object.kind]
+        .references(object.data)
+        .map((r) => ({ file: `${object.kind}:${object.name}`, ...r }))
+    )
+    expect(found.filter((r) => r.pair && !r.polymorphic)).toEqual([])
+    // Не порожньо: поліморфне посилання без пари (колонка прийнятої таблиці).
+    expect(found.some((r) => r.polymorphic && !r.pair)).toBe(true)
+  })
 
   it("many owners add the owner pair, one owner does not", async () => {
     const itemId = (model: CompiledModel) =>

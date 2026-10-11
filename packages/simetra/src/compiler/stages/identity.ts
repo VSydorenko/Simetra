@@ -34,6 +34,11 @@ export interface ResolvedReference {
   to: { kind: MetadataKind | "ScopeKind" | "Element"; id: string }
   role: ReferenceRole
   /**
+   * Посилання — одне з кількох видів цілі (`FoundReference.polymorphic` з
+   * реєстру видів): стадія 4 бере факт звідси, а не з переліку ролей.
+   */
+  polymorphic?: true
+  /**
    * Токен імені у виразі поля, на яке вказує pointer: пів-інтервал
    * [start, end) рівно навколо імені, тож каскад заміняє лише його.
    */
@@ -387,7 +392,11 @@ export function checkIdentity(
   const resolveObjectRef = (
     file: string,
     fromId: string | undefined,
-    found: { pointer: string; ref: { kind: string; name: string } },
+    found: {
+      pointer: string
+      ref: { kind: string; name: string }
+      polymorphic?: boolean
+    },
     role: ReferenceRole
   ): ParsedObject | undefined => {
     const key = objectKey(found.ref.kind, found.ref.name)
@@ -409,6 +418,7 @@ export function checkIdentity(
       from: { file, pointer: found.pointer, objectId: fromId },
       to: { kind: target.kind, id: target.id },
       role,
+      ...(found.polymorphic === true ? { polymorphic: true as const } : {}),
     })
     return target
   }

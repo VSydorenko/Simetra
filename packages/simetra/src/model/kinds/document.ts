@@ -107,6 +107,7 @@ function postingReferences(document: Document): FoundReference[] {
       ref: movement.register,
       role: "posting.register" as const,
       pair: false,
+      polymorphic: false,
     })),
   ]
 }

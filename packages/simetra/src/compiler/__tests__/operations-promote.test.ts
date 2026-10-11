@@ -22,6 +22,7 @@ import {
 import {
   attribute,
   catalog,
+  customTable,
   metaFiles,
   project,
   scopedProject,
@@ -2069,6 +2070,45 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       "project.meta.json": project(),
       [PRICE_FILE]: price(),
       "catalogs/Holder/Holder.meta.json": holder,
+    })
+    expect((await compile(files)).diagnostics).toEqual([])
+    const { result, after } = await promoted(files, priceMapping())
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.label-target",
+        file: PRICE_FILE,
+        pointer: "",
+        params: { kind: "InformationRegister", name: "Price" },
+      },
+    ])
+    expect(after).toEqual(files)
+  })
+
+  // Колонка прийнятої таблиці пари ще не має, але промоція таблиці зробить
+  // її парою — мітка цілі мусить уціліти.
+  it("refuses an information register target that only an accepted-table column points to", async () => {
+    const links = customTable("Links", {
+      columns: [
+        {
+          id: uuid(7350),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+        {
+          id: uuid(7351),
+          name: "target",
+          physicalName: "target",
+          type: "Ref",
+          allowedTypes: [{ kind: "CustomTable", name: "Price" }],
+        },
+      ],
+    })
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [PRICE_FILE]: price(),
+      "custom-tables/Links/Links.meta.json": links,
     })
     expect((await compile(files)).diagnostics).toEqual([])
     const { result, after } = await promoted(files, priceMapping())

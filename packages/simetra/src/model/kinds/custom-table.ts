@@ -18,6 +18,7 @@ function references(obj: unknown): FoundReference[] {
         ref: column.enum,
         role: "customTable.pgEnum",
         pair: false,
+        polymorphic: false,
       })
     }
     // Колонка логічного типу посилається так само, як реквізит, але пари не
@@ -38,6 +39,7 @@ function references(obj: unknown): FoundReference[] {
         ref: foreignKey.references.object,
         role: "customTable.foreignKey",
         pair: false,
+        polymorphic: false,
       })
     }
   })
