@@ -1,7 +1,12 @@
 import { z } from "zod"
 import { canonicalize, sha256Hex } from "simetra/compiler"
 import { DATABASE_PROVIDERS, type CatalogModel } from "simetra/model"
-import type { EngineIdentity, EngineScope } from "../engine"
+import {
+  ENGINE_ACTION_VERBS,
+  ENGINE_TRANSACTIONALITIES,
+  type EngineIdentity,
+  type EngineScope,
+} from "../engine"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
 import { STEP_CLASSES, type PlanStep } from "./steps"
 
@@ -38,14 +43,10 @@ const fingerprintSchema = z.strictObject({
 const stepSchema = z.strictObject({
   id: z.string(),
   sql: z.string(),
-  verb: z.enum(["create", "alter", "drop"]),
+  verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),
   lockClass: z.string(),
-  transactionality: z.enum([
-    "transactional",
-    "nonTransactional",
-    "commitBoundaryAfter",
-  ]),
+  transactionality: z.enum(ENGINE_TRANSACTIONALITIES),
   newSegmentBefore: z.boolean(),
   lockedTables: z.array(
     z.strictObject({ schema: z.string(), name: z.string() })

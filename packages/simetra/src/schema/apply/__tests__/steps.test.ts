@@ -40,6 +40,17 @@ function target(unique: boolean): CatalogModel {
     columns: [
       { name: "c", type: "text", notNull: true },
       { name: "x", type: "integer", notNull: false },
+      // Типи у формі `format_type()`, як їх читає адаптер
+      ...Object.entries({
+        s: "smallint",
+        v: "character varying(100)",
+        vu: "character varying",
+        n: "numeric(12,4)",
+        ts: "timestamp with time zone",
+        ch: "character(5)",
+        d: "app.d",
+        arr: "integer[]",
+      }).map(([name, type]) => ({ name, type, notNull: false })),
     ],
     uniques: [],
     checks: [],
@@ -264,6 +275,92 @@ const CASES: [string, EngineAction[], CatalogModel, StepClass[]][] = [
     ["destructive", "catalogOnly"],
   ],
   [
+    "a dropped then recreated unique index is a replacement",
+    [
+      action("DROP INDEX app.u", { verb: "drop", destroys: ["index:app.u"] }),
+      action("CREATE UNIQUE INDEX u ON app.t (x)", {
+        verb: "create",
+        produces: ["index:app.u"],
+      }),
+    ],
+    UNIQUE,
+    ["catalogOnly", "validationScan"],
+  ],
+  [
+    "ENABLE REPLICA TRIGGER is a relaxation",
+    [action("ALTER TABLE app.t ENABLE REPLICA TRIGGER tr")],
+    UNIQUE,
+    ["relaxation"],
+  ],
+  [
+    "ENABLE ALWAYS TRIGGER is catalogOnly",
+    [action("ALTER TABLE app.t ENABLE ALWAYS TRIGGER tr")],
+    UNIQUE,
+    ["catalogOnly"],
+  ],
+  [
+    "ENABLE TRIGGER is catalogOnly",
+    [action("ALTER TABLE app.t ENABLE TRIGGER tr")],
+    UNIQUE,
+    ["catalogOnly"],
+  ],
+  [
+    "ENABLE REPLICA RULE is a relaxation",
+    [action("ALTER TABLE app.t ENABLE REPLICA RULE r")],
+    UNIQUE,
+    ["relaxation"],
+  ],
+  [
+    "DISABLE RULE is a relaxation",
+    [action("ALTER TABLE app.t DISABLE RULE r")],
+    UNIQUE,
+    ["relaxation"],
+  ],
+  [
+    "a dropped rule that is not recreated is a relaxation",
+    [
+      action("DROP RULE r ON app.t", {
+        verb: "drop",
+        destroys: ["rule:app.t.r"],
+      }),
+    ],
+    UNIQUE,
+    ["relaxation"],
+  ],
+  [
+    "a dropped rule recreated by a later step is a replacement",
+    [
+      action("DROP RULE r ON app.t", {
+        verb: "drop",
+        destroys: ["rule:app.t.r"],
+      }),
+      action("CREATE RULE r AS ON DELETE TO app.t DO INSTEAD NOTHING", {
+        verb: "create",
+        produces: ["rule:app.t.r"],
+      }),
+    ],
+    UNIQUE,
+    ["catalogOnly", "catalogOnly"],
+  ],
+  [
+    "domain DROP NOT NULL is a relaxation",
+    [action("ALTER DOMAIN app.d DROP NOT NULL")],
+    UNIQUE,
+    ["relaxation"],
+  ],
+  [
+    "domain SET NOT NULL scans",
+    [action("ALTER DOMAIN app.d SET NOT NULL")],
+    UNIQUE,
+    ["validationScan"],
+  ],
+  [
+    "domain VALIDATE CONSTRAINT scans",
+    [action("ALTER DOMAIN app.d VALIDATE CONSTRAINT k")],
+    UNIQUE,
+    ["validationScan"],
+  ],
+  [
     "a dropped domain constraint is a relaxation",
     [
       action("ALTER DOMAIN app.d DROP CONSTRAINT k", {
@@ -275,11 +372,107 @@ const CASES: [string, EngineAction[], CatalogModel, StepClass[]][] = [
   ],
 ]
 
+/**
+ * Зміна типу колонки. Двигун позначає її `rewriteRisk`; без втрат лишаються
+ * лише переходи зі списку, решта — `destructive` (рішення 10).
+ */
+const TYPE_CASES: [string, string, StepClass][] = [
+  [
+    "varchar(100) → varchar(10)",
+    "ALTER v TYPE character varying(10)",
+    "destructive",
+  ],
+  [
+    "numeric(12,4) → numeric(12,2)",
+    "ALTER n TYPE numeric(12,2)",
+    "destructive",
+  ],
+  ["timestamptz → date", "ALTER ts TYPE date", "destructive"],
+  ["bpchar → text trims trailing spaces", "ALTER ch TYPE text", "destructive"],
+  ["integer → smallint", "ALTER x TYPE smallint", "destructive"],
+  [
+    "varchar → varchar(10)",
+    "ALTER vu TYPE character varying(10)",
+    "destructive",
+  ],
+  [
+    "numeric(12,4) → numeric(14,2)",
+    "ALTER n TYPE numeric(14,2)",
+    "destructive",
+  ],
+  ["a domain column", "ALTER d TYPE character varying(200)", "destructive"],
+  ["an array column", "ALTER arr TYPE bigint[]", "destructive"],
+  [
+    "a column the source state does not show",
+    "ALTER zz TYPE bigint",
+    "destructive",
+  ],
+  ["int2 → int4", "ALTER s TYPE integer", "tableRewrite"],
+  ["int2 → int8", "ALTER s TYPE bigint", "tableRewrite"],
+  ["int4 → int8", "ALTER x TYPE bigint", "tableRewrite"],
+  [
+    "varchar(100) → varchar(200)",
+    "ALTER v TYPE character varying(200)",
+    "tableRewrite",
+  ],
+  ["varchar(100) → varchar(100)", "ALTER v TYPE varchar(100)", "tableRewrite"],
+  ["varchar(100) → varchar", "ALTER v TYPE character varying", "tableRewrite"],
+  ["varchar(100) → text", "ALTER v TYPE text", "tableRewrite"],
+  ["varchar → text", "ALTER vu TYPE text", "tableRewrite"],
+  [
+    "numeric(12,4) → numeric(14,4)",
+    "ALTER n TYPE numeric(14,4)",
+    "tableRewrite",
+  ],
+  ["numeric(12,4) → numeric", "ALTER n TYPE numeric", "tableRewrite"],
+  [
+    "a cast of the same column in USING",
+    "ALTER s TYPE integer USING s::integer",
+    "tableRewrite",
+  ],
+  [
+    "an expression in USING",
+    "ALTER s TYPE integer USING (s + 1)",
+    "destructive",
+  ],
+  [
+    "a cast of another column in USING",
+    "ALTER s TYPE integer USING x::integer",
+    "destructive",
+  ],
+  [
+    "a cast to another type in USING",
+    "ALTER s TYPE bigint USING s::integer",
+    "destructive",
+  ],
+]
+
 describe("classifySteps", () => {
   it.each(CASES)("%s", (_name, actions, model, classes) => {
     expect(classifySteps(actions, model, parse).map((s) => s.class)).toEqual(
       classes
     )
+  })
+
+  it.each(TYPE_CASES)("type change %s", (_name, change, cls) => {
+    const step = action(`ALTER TABLE app.t ${change}`, { rewriteRisk: true })
+    expect(classifySteps([step], UNIQUE, parse).map((s) => s.class)).toEqual([
+      cls,
+    ])
+  })
+
+  it("classes a typed table attribute type change by the same rule", () => {
+    const step = action(
+      "ALTER TYPE app.ct ALTER ATTRIBUTE a TYPE bigint CASCADE"
+    )
+    expect(classifySteps([step], UNIQUE, parse)[0]?.class).toBe("destructive")
+  })
+
+  it("puts a lossy type change above a relaxation in the same statement", () => {
+    const step = action(
+      "ALTER TABLE app.t ALTER c DROP NOT NULL, ALTER v TYPE character varying(10)"
+    )
+    expect(classifySteps([step], UNIQUE, parse)[0]?.class).toBe("destructive")
   })
 
   it("numbers steps in engine order and keeps the engine fields", () => {
@@ -381,7 +574,11 @@ describe("lintSteps", () => {
         })
       )
     ).toEqual([
-      { code: "apply.cascade", severity: "error", params: { step: "s1" } },
+      {
+        code: "apply.cascade",
+        severity: "error",
+        params: { step: "s1", verb: "DROP TABLE" },
+      },
     ])
   })
 
@@ -394,8 +591,47 @@ describe("lintSteps", () => {
         })
       )
     ).toEqual([
-      { code: "apply.cascade", severity: "error", params: { step: "s2" } },
+      {
+        code: "apply.cascade",
+        severity: "error",
+        params: { step: "s2", verb: "ALTER TABLE … DROP CONSTRAINT" },
+      },
     ])
+  })
+
+  const CASCADE_REFUSED: [string, string][] = [
+    ["ALTER TABLE app.t DROP COLUMN c CASCADE", "ALTER TABLE … DROP COLUMN"],
+    [
+      "ALTER TYPE app.ct DROP ATTRIBUTE a CASCADE",
+      "ALTER TYPE … DROP ATTRIBUTE",
+    ],
+    [
+      "ALTER DOMAIN app.d DROP CONSTRAINT k CASCADE",
+      "ALTER DOMAIN … DROP CONSTRAINT",
+    ],
+    ["DROP OWNED BY r CASCADE", "DROP OWNED"],
+    ["TRUNCATE app.t CASCADE", "TRUNCATE"],
+    ["REVOKE SELECT ON app.t FROM r CASCADE", "REVOKE"],
+  ]
+
+  it.each(CASCADE_REFUSED)("refuses %s", (sql, verb) => {
+    expect(lint(action(sql))).toEqual([
+      {
+        code: "apply.cascade",
+        severity: "error",
+        params: { step: "s1", verb },
+      },
+    ])
+  })
+
+  // CASCADE тут не знищує, а поширює зміну на типізовані таблиці; зміну типу
+  // атрибута класифікує правило зміни типу колонки
+  it.each([
+    "ALTER TYPE app.ct ADD ATTRIBUTE b integer CASCADE",
+    "ALTER TYPE app.ct RENAME ATTRIBUTE a TO b CASCADE",
+    "ALTER TYPE app.ct ALTER ATTRIBUTE a TYPE bigint CASCADE",
+  ])("lets %s through", (sql) => {
+    expect(lint(action(sql))).toEqual([])
   })
 
   it("reads CASCADE from the tree, not the text", () => {
@@ -460,6 +696,7 @@ describe("lintSteps", () => {
       parse
     )
     expect(diagnostic?.message).toMatch(/s1/)
+    expect(diagnostic?.message).toMatch(/DROP TABLE/)
     expect(diagnostic?.message).toMatch(/CASCADE/)
   })
 })
@@ -471,7 +708,7 @@ describe("checkPermissions", () => {
         action("ALTER TABLE app.t DROP COLUMN c", {
           destroys: ["column:app.t.c"],
         }),
-        addCheck,
+        action("ALTER TABLE app.t ENABLE ROW LEVEL SECURITY"),
         dropTrigger,
       ],
       UNIQUE,
@@ -518,7 +755,8 @@ describe("checkPermissions", () => {
     ])
   })
 
-  it("refuses an id of a step that needs no permission", () => {
+  it("refuses an id of a catalogOnly step", () => {
+    expect(steps()[1]?.class).toBe("catalogOnly")
     expect(check(["s1", "s2", "s3"])).toEqual([
       {
         code: "apply.permission-unknown",

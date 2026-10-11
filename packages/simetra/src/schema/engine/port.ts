@@ -79,19 +79,28 @@ export interface Extracted {
   unpopulated: string[]
 }
 
+/** Дієслова дії плану: зі списку їх бере й схема артефакту плану. */
+export const ENGINE_ACTION_VERBS = ["create", "alter", "drop"] as const
+
+/** Тризначна: потоку П3 потрібна межа коміту після дії, а не лише «так/ні». */
+export const ENGINE_TRANSACTIONALITIES = [
+  "transactional",
+  "nonTransactional",
+  "commitBoundaryAfter",
+] as const
+
 /**
  * Дія плану у формі порту. Ціль дії видно лише разом із `consumes`: GRANT,
  * `ENABLE RLS`, `REPLICA IDENTITY` тощо не мають ні `produces`, ні `destroys`.
  */
 export interface EngineAction {
   sql: string
-  verb: "create" | "alter" | "drop"
+  verb: (typeof ENGINE_ACTION_VERBS)[number]
   /** Ідентичності об'єктів у рядковій формі StableId двигуна. */
   produces: string[]
   consumes: string[]
   destroys: string[]
-  /** Тризначна: потоку П3 потрібна межа коміту після дії, а не лише «так/ні». */
-  transactionality: "transactional" | "nonTransactional" | "commitBoundaryAfter"
+  transactionality: (typeof ENGINE_TRANSACTIONALITIES)[number]
   /**
    * Дія вживає результат попередньої `commitBoundaryAfter` (нове значення
    * енаму): між ними потрібен `COMMIT`, тож в одній транзакції її не виконати.

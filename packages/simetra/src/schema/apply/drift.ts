@@ -1,6 +1,7 @@
-import { localize, type RuleCode, type Severity } from "simetra/compiler"
+import type { RuleCode } from "simetra/compiler"
 import { diffCatalogModels, type CatalogModel } from "simetra/model"
 import type { EngineDiagnostic, EngineIdentity } from "../engine"
+import { applyDiagnostic } from "./diagnostic"
 import { compareFingerprints, type CatalogFingerprint } from "./fingerprint"
 import type { ApplyState } from "./state"
 
@@ -11,19 +12,6 @@ export type DriftVerdict =
 
 /** Скільки шляхів дрейфу називає діагностика; решту дає лише `count`. */
 const DRIFT_PATH_LIMIT = 20
-
-function applyDiagnostic(
-  code: RuleCode,
-  severity: Severity,
-  params: Record<string, string | number> = {}
-): EngineDiagnostic {
-  return {
-    code,
-    severity,
-    message: localize({ code, params }, "en").message,
-    params,
-  }
-}
 
 const refuse = (
   code: RuleCode,

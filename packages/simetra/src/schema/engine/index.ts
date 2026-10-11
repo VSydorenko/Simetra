@@ -12,6 +12,7 @@ export type {
   ShadowOptions,
   ShadowOutcome,
 } from "./port"
+export { ENGINE_ACTION_VERBS, ENGINE_TRANSACTIONALITIES } from "./port"
 export {
   compareWithDesired,
   engineScope,

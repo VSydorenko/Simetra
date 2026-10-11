@@ -1,8 +1,4 @@
-import {
-  localize,
-  platformSchemaGrants,
-  type CompiledModel,
-} from "simetra/compiler"
+import { platformSchemaGrants, type CompiledModel } from "simetra/compiler"
 import { PLATFORM_SCHEMA, quoteIdent, type CatalogModel } from "simetra/model"
 import type {
   EngineDiagnostic,
@@ -11,6 +7,7 @@ import type {
   EngineScope,
   Extracted,
 } from "../engine"
+import { applyDiagnostic } from "./diagnostic"
 import type { CatalogFingerprint, FingerprintSection } from "./fingerprint"
 import type { ApplyTransaction } from "./port"
 import { PLATFORM_VERSION } from "./version"
@@ -121,12 +118,7 @@ function corrupt(
 ): ApplyState {
   return {
     status: "corrupt",
-    diagnostic: {
-      code,
-      severity: "error",
-      message: localize({ code, params }, "en").message,
-      params,
-    },
+    diagnostic: applyDiagnostic(code, "error", params),
   }
 }
 

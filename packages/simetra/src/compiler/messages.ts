@@ -2043,12 +2043,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.cascade": {
     en: (p) =>
-      `Plan step ${p.step} uses CASCADE: it would drop dependent objects that the plan does not name`,
+      `Plan step ${p.step} runs ${p.verb} with CASCADE, which extends it to dependent objects that the plan does not name`,
     uk: (p) =>
-      `Крок плану ${p.step} використовує CASCADE: він знищив би залежні об'єкти, яких план не називає`,
+      `Крок плану ${p.step} виконує ${p.verb} з CASCADE, а це поширює його на залежні об'єкти, яких план не називає`,
     hint: {
-      en: "The platform never runs CASCADE, and no permission allows it. Every dropped object must be a step of its own; report the plan as an engine defect.",
-      uk: "Платформа ніколи не виконує CASCADE, і жоден дозвіл цього не змінює. Кожен знищений об'єкт мусить бути окремим кроком; повідомте про план як про дефект двигуна.",
+      en: "The platform never runs DROP, TRUNCATE or REVOKE with CASCADE, and no permission allows it. Every affected object must be a step of its own; report the plan as an engine defect.",
+      uk: "Платформа ніколи не виконує DROP, TRUNCATE чи REVOKE з CASCADE, і жоден дозвіл цього не змінює. Кожен зачеплений об'єкт мусить бути окремим кроком; повідомте про план як про дефект двигуна.",
     },
   },
   "apply.non-transactional": {
