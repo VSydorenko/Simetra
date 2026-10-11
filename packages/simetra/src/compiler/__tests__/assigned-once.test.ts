@@ -478,6 +478,18 @@ describe("assigned-once fields on a promotion", () => {
       }),
     ],
     [
+      "allowedTypes of a constant",
+      "constants/Favorite/Favorite.meta.json",
+      {
+        id: uuid(60),
+        kind: "Constant",
+        name: "Favorite",
+        physicalName: "favorite",
+        type: "Ref",
+        allowedTypes: [{ kind: "InformationRegister", name: "Counterparty" }],
+      },
+    ],
+    [
       "recorderTypes",
       "information-registers/Other/Other.meta.json",
       {
@@ -540,6 +552,27 @@ describe("assigned-once fields on a promotion", () => {
       [REGISTER]: register(),
       "catalogs/Item/Item.meta.json": catalog("Item", {
         owners: [{ kind: "InformationRegister", name: "Counterparty" }],
+      }),
+    }
+    expect(run(current)).toEqual([])
+  })
+
+  it("an accepted-table column keeps no label alive: its Ref is a bare uuid", () => {
+    const current = {
+      [PROJECT]: project(),
+      [REGISTER]: register(),
+      "custom-tables/Links/Links.meta.json": customTable("Links", {
+        columns: [
+          {
+            id: uuid(70),
+            name: "target",
+            physicalName: "target",
+            type: "Ref",
+            allowedTypes: [
+              { kind: "InformationRegister", name: "Counterparty" },
+            ],
+          },
+        ],
       }),
     }
     expect(run(current)).toEqual([])

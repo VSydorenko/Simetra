@@ -7,7 +7,7 @@ import {
   keyOrderOf,
   periodColumn,
   recorderColumns,
-  refListReferences,
+  standardRefReferences,
   type KindDefinition,
   type StandardColumnDef,
 } from "./standard"
@@ -64,7 +64,9 @@ export const accumulationRegisterKind: KindDefinition = {
   references(obj) {
     const register = obj as AccumulationRegister
     return [
-      ...refListReferences(
+      ...standardRefReferences(
+        standardColumns(register),
+        "recorders",
         register.recorderTypes,
         "/recorderTypes",
         "register.recorder"

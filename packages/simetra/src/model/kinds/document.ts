@@ -106,6 +106,7 @@ function postingReferences(document: Document): FoundReference[] {
       pointer: `/posting/movements/${index}/register`,
       ref: movement.register,
       role: "posting.register" as const,
+      pair: false,
     })),
   ]
 }
@@ -147,7 +148,8 @@ export const documentKind: KindDefinition = {
       ...refListReferences(
         document.registerMovements,
         "/registerMovements",
-        "document.registerMovement"
+        "document.registerMovement",
+        false
       ),
       ...postingReferences(document),
     ]

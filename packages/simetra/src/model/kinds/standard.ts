@@ -132,6 +132,14 @@ export interface FoundReference {
   pointer: string
   ref: MetadataRef
   role: ReferenceRole
+  /**
+   * Ціль лежить у поліморфній парі `_type`/`_id`, тож мітка виду цілі живе в
+   * даних. Обчислюється з того самого джерела, що й фізична пара:
+   * `allowedTypes` поля виду 1С чи `polymorphic` стандартної колонки, — тож
+   * компілятор читає факт звідси, а не з переліку ролей, і новий вид з парою
+   * не випаде мовчки.
+   */
+  pair: boolean
 }
 
 /**
@@ -585,21 +593,32 @@ export function tabularRowColumns(keyDefault: boolean): StandardColumnDef[] {
 
 type TypedField = Pick<ValueType, "ref" | "allowedTypes">
 
-/** Посилання одного поля з типом (реквізит, вимір, ресурс, колонка). */
+/**
+ * Посилання одного поля з типом (реквізит, вимір, ресурс, колонка).
+ * `allowedTypesPair` — чи будує перелік цілей фізичну пару: так у видів 1С,
+ * а прийнята таблиця описує фізику як є, і її `Ref` — лише тип колонки.
+ */
 export function valueTypeReferences(
   field: TypedField,
   pointer: string,
-  roles: { ref: ReferenceRole; allowedType: ReferenceRole }
+  roles: { ref: ReferenceRole; allowedType: ReferenceRole },
+  allowedTypesPair: boolean
 ): FoundReference[] {
   const found: FoundReference[] = []
   if (field.ref !== undefined) {
-    found.push({ pointer: `${pointer}/ref`, ref: field.ref, role: roles.ref })
+    found.push({
+      pointer: `${pointer}/ref`,
+      ref: field.ref,
+      role: roles.ref,
+      pair: false,
+    })
   }
   field.allowedTypes?.forEach((ref, index) => {
     found.push({
       pointer: `${pointer}/allowedTypes/${index}`,
       ref,
       role: roles.allowedType,
+      pair: allowedTypesPair,
     })
   })
   return found
@@ -615,20 +634,43 @@ export function fieldListReferences(
   pointer: string
 ): FoundReference[] {
   return fields.flatMap((field, index) =>
-    valueTypeReferences(field, `${pointer}/${index}`, ATTRIBUTE_ROLES)
+    valueTypeReferences(field, `${pointer}/${index}`, ATTRIBUTE_ROLES, true)
   )
 }
 
 export function refListReferences(
   refs: readonly MetadataRef[],
   pointer: string,
-  role: ReferenceRole
+  role: ReferenceRole,
+  pair: boolean
 ): FoundReference[] {
   return refs.map((ref, index) => ({
     pointer: `${pointer}/${index}`,
     ref,
     role,
+    pair,
   }))
+}
+
+/**
+ * Цілі стандартної колонки-посилання виду (власники, реєстратори): чи вони
+ * в парі, каже `polymorphic` самої колонки, — те саме, з чого стадія 3 будує
+ * пару, тож шар ідентичності й фізичний шар не розійдуться.
+ */
+export function standardRefReferences(
+  columns: readonly StandardColumnDef[],
+  ref: NonNullable<StandardColumnDef["ref"]>,
+  refs: readonly MetadataRef[],
+  pointer: string,
+  role: ReferenceRole
+): FoundReference[] {
+  const column = columns.find((c) => c.ref === ref)
+  return refListReferences(
+    refs,
+    pointer,
+    role,
+    column?.polymorphic !== undefined
+  )
 }
 
 /** Реквізити об'єкта й реквізити його табличних частин. */

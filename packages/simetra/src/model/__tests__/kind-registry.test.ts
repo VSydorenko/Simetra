@@ -592,26 +592,31 @@ describe("references()", () => {
         pointer: "/attributes/0/ref",
         ref: { kind: "Catalog", name: "Customer" },
         role: "attribute.ref",
+        pair: false,
       },
       {
         pointer: "/tabularSections/0/attributes/1/allowedTypes/0",
         ref: { kind: "Catalog", name: "Product" },
         role: "attribute.allowedType",
+        pair: true,
       },
       {
         pointer: "/tabularSections/0/attributes/1/allowedTypes/1",
         ref: { kind: "Catalog", name: "Service" },
         role: "attribute.allowedType",
+        pair: true,
       },
       {
         pointer: "/registerMovements/0",
         ref: { kind: "AccumulationRegister", name: "Stock" },
         role: "document.registerMovement",
+        pair: false,
       },
       {
         pointer: "/posting/movements/0/register",
         ref: { kind: "AccumulationRegister", name: "Stock" },
         role: "posting.register",
+        pair: false,
       },
     ])
   })
@@ -627,6 +632,7 @@ describe("references()", () => {
         pointer: "/owners/0",
         ref: { kind: "Catalog", name: "Company" },
         role: "catalog.owner",
+        pair: false,
       },
     ])
 
@@ -648,12 +654,99 @@ describe("references()", () => {
         pointer: "/recorderTypes/0",
         ref: { kind: "Document", name: "PriceSetup" },
         role: "register.recorder",
+        pair: true,
       },
       {
         pointer: "/dimensions/0/ref",
         ref: { kind: "Catalog", name: "Product" },
         role: "attribute.ref",
+        pair: false,
       },
+    ])
+  })
+
+  it("pair says whether the target sits in a polymorphic _type/_id pair", () => {
+    const pairsOf = (refs: { role: string; pair: boolean }[]) =>
+      refs.map(({ role, pair }) => [role, pair])
+
+    // Перелік цілей реквізиту — пара; одиночний `Ref` — ні.
+    const catalog = (owners: string[]) =>
+      catalogSchema.parse({
+        kind: "Catalog",
+        name: "Contract",
+        owners: owners.map((name) => ({ kind: "Catalog", name })),
+        attributes: [
+          { name: "single", type: "Ref", ref: { kind: "Catalog", name: "A" } },
+          {
+            name: "many",
+            type: "Ref",
+            allowedTypes: [{ kind: "Catalog", name: "A" }],
+          },
+        ],
+      })
+    expect(
+      pairsOf(KIND_REGISTRY.Catalog.references(catalog(["Company"])))
+    ).toEqual([
+      ["attribute.ref", false],
+      ["attribute.allowedType", true],
+      // Один власник — простий FK `owner_id` (`polymorphic` колонки немає).
+      ["catalog.owner", false],
+    ])
+    expect(
+      pairsOf(KIND_REGISTRY.Catalog.references(catalog(["Company", "Person"])))
+    ).toEqual([
+      ["attribute.ref", false],
+      ["attribute.allowedType", true],
+      ["catalog.owner", true],
+      ["catalog.owner", true],
+    ])
+
+    // Реєстратор — пара за будь-якої кількості цілей.
+    const register = accumulationRegisterSchema.parse({
+      kind: "AccumulationRegister",
+      name: "Stock",
+      recorderTypes: [{ kind: "Document", name: "Sale" }],
+    })
+    expect(
+      pairsOf(KIND_REGISTRY.AccumulationRegister.references(register))
+    ).toEqual([["register.recorder", true]])
+
+    const constant = (value: Record<string, unknown>) =>
+      constantSchema.parse({
+        kind: "Constant",
+        name: "Main",
+        type: "Ref",
+        ...value,
+      })
+    expect(
+      pairsOf(
+        KIND_REGISTRY.Constant.references(
+          constant({ allowedTypes: [{ kind: "Catalog", name: "A" }] })
+        )
+      )
+    ).toEqual([["constant.allowedType", true]])
+    expect(
+      pairsOf(
+        KIND_REGISTRY.Constant.references(
+          constant({ ref: { kind: "Catalog", name: "A" } })
+        )
+      )
+    ).toEqual([["constant.ref", false]])
+
+    // Прийнята таблиця пари не будує: її `Ref` — лише тип колонки.
+    const table = customTableSchema.parse({
+      kind: "CustomTable",
+      name: "Links",
+      columns: [
+        {
+          name: "target",
+          type: "Ref",
+          allowedTypes: [{ kind: "Catalog", name: "A" }],
+        },
+      ],
+    })
+    expect(pairsOf(KIND_REGISTRY.CustomTable.references(table))).toEqual([
+      ["attribute.allowedType", false],
     ])
   })
 
@@ -669,6 +762,7 @@ describe("references()", () => {
         pointer: "/allowedTypes/0",
         ref: { kind: "Catalog", name: "Person" },
         role: "constant.allowedType",
+        pair: true,
       },
     ])
 
@@ -703,16 +797,19 @@ describe("references()", () => {
         pointer: "/columns/0/enum",
         ref: { kind: "PgEnum", name: "Role" },
         role: "customTable.pgEnum",
+        pair: false,
       },
       {
         pointer: "/columns/1/ref",
         ref: { kind: "Catalog", name: "User" },
         role: "attribute.ref",
+        pair: false,
       },
       {
         pointer: "/foreignKeys/0/references/object",
         ref: { kind: "CustomTable", name: "Group" },
         role: "customTable.foreignKey",
+        pair: false,
       },
     ])
   })

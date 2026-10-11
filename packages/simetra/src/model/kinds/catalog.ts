@@ -6,7 +6,7 @@ import {
   keyOrderOf,
   numberingType,
   objectFieldReferences,
-  refListReferences,
+  standardRefReferences,
   serviceDateColumns,
   tabularRowColumns,
   versionColumn,
@@ -199,7 +199,13 @@ export const catalogKind: KindDefinition = {
     const catalog = obj as Catalog
     return [
       ...objectFieldReferences(catalog),
-      ...refListReferences(catalog.owners, "/owners", "catalog.owner"),
+      ...standardRefReferences(
+        standardColumns(catalog),
+        "owners",
+        catalog.owners,
+        "/owners",
+        "catalog.owner"
+      ),
     ]
   },
 }

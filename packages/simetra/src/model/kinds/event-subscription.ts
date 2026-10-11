@@ -64,6 +64,7 @@ export const eventSubscriptionKind: KindDefinition = {
               pointer: source.pointer,
               ref: source.ref,
               role: "eventSubscription.source" as const,
+              pair: false,
             },
           ]
         : []

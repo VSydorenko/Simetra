@@ -3,9 +3,10 @@ import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
   type MetadataRef,
+  type StandardColumnDef,
 } from "simetra/model"
-import { ALLOWED_TYPE_ROLES, STANDARD_PAIR_ROLES } from "../../assigned-once"
 import type { CompiledModel } from "../../compile"
+import { standardTargetRefs } from "../../stages/model"
 import {
   compareStrings,
   diagnostic,
@@ -825,33 +826,40 @@ export function labelConsumers(
   }
   for (const object of after.objects) {
     const def = KIND_REGISTRY[object.kind]
-    const pairs = def
-      .standardColumns(object.data)
-      .filter((c) => c.polymorphic !== undefined && c.ref !== undefined)
-    for (const { ref, role, pointer } of def.references(object.data)) {
-      if (ref.kind !== target.kind || ref.name !== target.name) continue
-      if (ALLOWED_TYPE_ROLES.has(role)) {
-        const element = at(
-          object.data,
-          pointer.slice(0, pointer.lastIndexOf("/allowedTypes"))
-        ) as { id?: string; physicalName?: string } | undefined
+    const tables = after.physical.tables.filter(
+      (t) => t.origin.objectId === object.id
+    )
+    for (const { ref, pointer, pair } of def.references(object.data)) {
+      if (!pair || ref.kind !== target.kind || ref.name !== target.name) {
+        continue
+      }
+      // Пару несе елемент, чий перелік цілей містить посилання; перелік на
+      // корені об'єкта — це цілі стандартної колонки виду.
+      const carrier = pointer.split("/").slice(0, -2).join("/")
+      if (carrier !== "") {
+        const element = at(object.data, carrier) as
+          { id?: string; physicalName?: string } | undefined
         if (element?.id === undefined) continue
         add(
-          after.physical.tables,
+          tables,
           (c) =>
             c.origin.elementId === element.id &&
             c.name === `${element.physicalName}_type`
         )
         continue
       }
-      const pair = pairs.find((c) => STANDARD_PAIR_ROLES[c.ref!] === role)
-      if (pair === undefined) continue
-      add(
-        after.physical.tables.filter((t) => t.origin.objectId === object.id),
-        (c) =>
-          c.origin.standard === pair.logicalName &&
-          c.name === `${pair.physicalName}_type`
-      )
+      for (const column of def.standardColumns(object.data)) {
+        const targets = standardPairTargets(column, object.data)
+        if (!targets.some((t) => t.kind === ref.kind && t.name === ref.name)) {
+          continue
+        }
+        add(
+          tables,
+          (c) =>
+            c.origin.standard === column.logicalName &&
+            c.name === `${column.physicalName}_type`
+        )
+      }
     }
   }
   return [...found.values()].sort(
@@ -860,6 +868,24 @@ export function labelConsumers(
       compareStrings(a.table, b.table) ||
       compareStrings(a.column, b.column)
   )
+}
+
+/**
+ * Цілі пари стандартної колонки — з того самого джерела, з якого стадія 3
+ * будує пару: перелік цілей типу (значення константи) чи цілі за `ref`
+ * поліморфної колонки (власники, реєстратори). Не пара — цілей немає.
+ */
+function standardPairTargets(
+  column: StandardColumnDef,
+  data: unknown
+): readonly MetadataRef[] {
+  if (!("raw" in column.type) && column.type.allowedTypes !== undefined) {
+    return column.type.allowedTypes
+  }
+  // «Користувачі» парою не бувають, тож їхня ціль тут не потрібна.
+  return column.polymorphic !== undefined
+    ? standardTargetRefs(column, data, undefined)
+    : []
 }
 
 /** Значення за JSON Pointer (RFC 6901). */

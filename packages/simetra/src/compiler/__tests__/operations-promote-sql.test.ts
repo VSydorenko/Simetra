@@ -455,6 +455,34 @@ $fn$;
     })
   })
 
+  it("finds the pair of a standard column: the value of a polymorphic constant", async () => {
+    // Пара константи — стандартна колонка `value`, а не елемент: `value_type`.
+    const favorite = {
+      id: uuid(7100),
+      kind: "Constant",
+      name: "Favorite",
+      physicalName: "favorite",
+      type: "Ref",
+      allowedTypes: [
+        { kind: "CustomTable", name: "Counterparty" },
+        { kind: "Document", name: "Sale" },
+      ],
+    }
+    const files = await project({}, (f) => {
+      f.set("documents/Sale/Sale.meta.json", JSON.stringify(document("Sale")))
+      f.set("constants/Favorite/Favorite.meta.json", JSON.stringify(favorite))
+    })
+    const { result } = await passes(
+      files,
+      mapping((m) => {
+        m.consumerLabels = ["cp"]
+      })
+    )
+    expect(result.record?.labelTranslation?.columns).toEqual([
+      { schema: "public", table: "favorite", column: "value_type" },
+    ])
+  })
+
   it("refuses a provider user reference that is not the user scope carrier", async () => {
     const files = await project({}, (f) => {
       const raw = JSON.parse(f.get(COUNTERPARTY_FILE)!) as Json

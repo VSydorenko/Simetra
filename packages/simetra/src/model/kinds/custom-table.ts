@@ -17,11 +17,18 @@ function references(obj: unknown): FoundReference[] {
         pointer: `/columns/${index}/enum`,
         ref: column.enum,
         role: "customTable.pgEnum",
+        pair: false,
       })
     }
-    // Колонка логічного типу посилається так само, як реквізит.
+    // Колонка логічного типу посилається так само, як реквізит, але пари не
+    // будує: прийнята таблиця нічого не виводить, `Ref` дає лише тип (спека §4).
     found.push(
-      ...valueTypeReferences(column, `/columns/${index}`, ATTRIBUTE_ROLES)
+      ...valueTypeReferences(
+        column,
+        `/columns/${index}`,
+        ATTRIBUTE_ROLES,
+        false
+      )
     )
   })
   table.foreignKeys.forEach((foreignKey, index) => {
@@ -30,6 +37,7 @@ function references(obj: unknown): FoundReference[] {
         pointer: `/foreignKeys/${index}/references/object`,
         ref: foreignKey.references.object,
         role: "customTable.foreignKey",
+        pair: false,
       })
     }
   })

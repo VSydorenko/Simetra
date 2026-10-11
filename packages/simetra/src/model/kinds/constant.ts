@@ -58,8 +58,10 @@ export const constantKind: KindDefinition = {
   valueElements: false,
   standardColumns,
   references: (obj) =>
-    valueTypeReferences(obj as Constant, "", {
-      ref: "constant.ref",
-      allowedType: "constant.allowedType",
-    }),
+    valueTypeReferences(
+      obj as Constant,
+      "",
+      { ref: "constant.ref", allowedType: "constant.allowedType" },
+      true
+    ),
 }

@@ -3,8 +3,6 @@ import {
   projectSchema,
   type AssignedOnceField,
   type KindDefinition,
-  type ReferenceRole,
-  type StandardColumnDef,
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "./diagnostics"
 import {
@@ -141,28 +139,6 @@ const isAcceptedTable = (holder: Holder) =>
   holder.def.materializes === "table"
 
 /**
- * Ролі, у яких `Ref` завжди будує поліморфну пару `_type`/`_id`: перелік
- * цілей (`allowedTypes`) реквізиту, константи чи колонки прийнятої таблиці.
- */
-export const ALLOWED_TYPE_ROLES: ReadonlySet<ReferenceRole> =
-  new Set<ReferenceRole>(["attribute.allowedType", "constant.allowedType"])
-
-/**
- * Ролі цілей стандартної колонки-пари виду (власники довідника, реєстратори):
- * чи є пара, каже сама стандартна колонка (`polymorphic`) — одного власника
- * пари немає, а реєстратор її має завжди.
- */
-export const STANDARD_PAIR_ROLES: Readonly<
-  Record<NonNullable<StandardColumnDef["ref"]>, ReferenceRole | undefined>
-> = {
-  self: undefined,
-  owningObject: undefined,
-  users: undefined,
-  owners: "catalog.owner",
-  recorders: "register.recorder",
-}
-
-/**
  * Об'єкти (`"<Вид>:<Ім'я>"`), що є ціллю поліморфної пари хоча б в одному
  * файлі: їхня мітка виду лежить у даних пар, тож зникнути не може. Те саме
  * правило — гейт промоції в регістр відомостей (`promote.label-target`).
@@ -173,19 +149,8 @@ export function polymorphicTargets(
   const targets = new Set<string>()
   for (const file of readObjectFiles(files)) {
     if (file.data === undefined) continue
-    const pairRoles = new Set(
-      file.def
-        .standardColumns(file.data)
-        .flatMap((column) =>
-          column.polymorphic !== undefined && column.ref !== undefined
-            ? [STANDARD_PAIR_ROLES[column.ref]]
-            : []
-        )
-    )
-    for (const { ref, role } of file.def.references(file.data)) {
-      if (ALLOWED_TYPE_ROLES.has(role) || pairRoles.has(role)) {
-        targets.add(`${ref.kind}:${ref.name}`)
-      }
+    for (const { ref, pair } of file.def.references(file.data)) {
+      if (pair) targets.add(`${ref.kind}:${ref.name}`)
     }
   }
   return targets
