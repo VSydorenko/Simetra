@@ -1,5 +1,9 @@
-import type { Diagnostic, DiagnosticParams, RuleCode } from "./diagnostics"
-import type { FillProblem } from "./operations/promote/fill"
+import type {
+  Diagnostic,
+  DiagnosticParams,
+  FillProblem,
+  RuleCode,
+} from "./diagnostics"
 
 export type Locale = "en" | "uk"
 
@@ -575,11 +579,25 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Postgres тримає функції, процедури й агрегати в одному каталозі (pg_proc, за іменем і типами аргументів); таблиці, представлення, матеріалізовані представлення, послідовності й індекси — в іншому (pg_class); енам-типи, домени й типи рядків таблиць і представлень — у третьому (pg_type). Об'єкти різних класів не можуть ділити там ім'я: перейменуйте один із них або перенесіть в іншу схему.",
     },
   },
+  // Для `dynamicSql` рядок — це оператор у тілі, а не початок функції, тож
+  // текст ставить його до самого оператора; решта проблем — про функцію цілком.
   "sql.closed-shell": {
-    en: (p) =>
-      `Function ${p.function} at line ${p.line} is outside the closed shell: ${(CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { en: p.problem }).en}`,
-    uk: (p) =>
-      `Функція ${p.function} у рядку ${p.line} поза закритою оболонкою: ${(CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { uk: p.problem }).uk}`,
+    en: (p) => {
+      const problem = (
+        CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { en: p.problem }
+      ).en
+      return p.problem === "dynamicSql"
+        ? `Function ${p.function} is outside the closed shell: ${problem} at line ${p.line}`
+        : `Function ${p.function} at line ${p.line} is outside the closed shell: ${problem}`
+    },
+    uk: (p) => {
+      const problem = (
+        CLOSED_SHELL_PROBLEM[String(p.problem)] ?? { uk: p.problem }
+      ).uk
+      return p.problem === "dynamicSql"
+        ? `Функція ${p.function} поза закритою оболонкою: ${problem} у рядку ${p.line}`
+        : `Функція ${p.function} у рядку ${p.line} поза закритою оболонкою: ${problem}`
+    },
     hint: CLOSED_SHELL_HINT,
   },
   "sql.function-overload": {

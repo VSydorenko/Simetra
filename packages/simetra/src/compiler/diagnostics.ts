@@ -177,6 +177,24 @@ export type RuleCode = SchemaRule | CompilerRule
 
 export type DiagnosticParams = Record<string, string | number>
 
+/** Причина, з якої вираз `fill` не стає кроком даних (рішення 12). */
+export type FillProblem =
+  | "noKey"
+  | "syntax"
+  | "subquery"
+  | "aggregate"
+  | "foreignTable"
+  | "multipleTargets"
+  | "multipleStatements"
+  | "setReturning"
+  | "volatile"
+  | "unknownFunction"
+  | "unqualifiedFunction"
+  | "castToTime"
+  | "specialTimeLiteral"
+  | "nondeterministicWindow"
+  | "unknownColumn"
+
 /** Позиція LSP: 0-базні рядок і колонка в кодових одиницях UTF-16. */
 export interface Position {
   line: number

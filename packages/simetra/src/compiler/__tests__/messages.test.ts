@@ -94,6 +94,31 @@ describe("messages catalog", () => {
     })
   })
 
+  it("sql.closed-shell puts the line on the statement only for dynamic SQL", () => {
+    const text = (problem: string, locale: "en" | "uk") =>
+      localize(
+        diagnostic("sql.closed-shell", "a.sql", "", {
+          function: "public.f",
+          line: 7,
+          problem,
+        }),
+        locale
+      ).message
+    expect(text("dynamicSql", "en")).toBe(
+      "Function public.f is outside the closed shell: its body runs dynamic SQL (EXECUTE, a dynamic cursor or RETURN QUERY EXECUTE) at line 7"
+    )
+    expect(text("dynamicSql", "uk")).toBe(
+      "Функція public.f поза закритою оболонкою: її тіло виконує динамічний SQL (EXECUTE, динамічний курсор чи RETURN QUERY EXECUTE) у рядку 7"
+    )
+    // Решта проблем — про функцію цілком: рядок її початку.
+    expect(text("volatility", "en")).toBe(
+      "Function public.f at line 7 is outside the closed shell: its volatility is not explicit"
+    )
+    expect(text("volatility", "uk")).toBe(
+      "Функція public.f у рядку 7 поза закритою оболонкою: її волатильність не явна"
+    )
+  })
+
   it("renders every fill problem of promote.expression-invalid as a sentence", () => {
     const reasons = [
       "noKey",

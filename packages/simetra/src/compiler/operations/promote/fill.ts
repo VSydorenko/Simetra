@@ -1,4 +1,5 @@
 import type { CompiledModel } from "../../compile"
+import type { FillProblem } from "../../diagnostics"
 import type { SqlParser } from "../../sql/parse"
 import type { PromoteInput } from "../inputs"
 import { CATALOG_FUNCTIONS } from "./catalog-functions"
@@ -6,24 +7,6 @@ import type { PromotionRecord } from "./record"
 
 type FillStep = PromoteInput["fill"][number]
 type StepKind = PromotionRecord["dataSteps"][number]["kind"]
-
-/** Причина, з якої вираз `fill` не стає кроком даних (рішення 12). */
-export type FillProblem =
-  | "noKey"
-  | "syntax"
-  | "subquery"
-  | "aggregate"
-  | "foreignTable"
-  | "multipleTargets"
-  | "multipleStatements"
-  | "setReturning"
-  | "volatile"
-  | "unknownFunction"
-  | "unqualifiedFunction"
-  | "castToTime"
-  | "specialTimeLiteral"
-  | "nondeterministicWindow"
-  | "unknownColumn"
 
 /** Ключ цілі кроку в множині змаплених цілей: `"<to> <name>"`. */
 export const fillTargetKey = (target: FillStep["target"]) =>
