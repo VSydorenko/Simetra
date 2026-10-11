@@ -7,6 +7,7 @@ import {
   type EngineIdentity,
   type EngineScope,
 } from "../engine"
+import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
 import { STEP_CLASSES, type PlanStep } from "./steps"
 
@@ -16,7 +17,7 @@ export const PLAN_FORMAT = 1
 /**
  * Незмінний артефакт плану (платформна спека §6.10, рішення 9 плану П3-1):
  * детермінований, без часу й інших мінливих даних. `planHash` покриває все
- * інше, зокрема кроки разом із `lockedTables` і `resultCatalog`.
+ * інше, зокрема кроки разом із `lockedTables`, дрейф і `resultCatalog`.
  */
 export interface PlanArtifact {
   format: number
@@ -30,7 +31,13 @@ export interface PlanArtifact {
   targetFingerprint: CatalogFingerprint
   desiredFingerprint: CatalogFingerprint
   steps: PlanStep[]
+  /** Пункти дозволу: `drift`, коли дрейф є, далі id кроків. */
   requiredPermissions: string[]
+  /**
+   * Дрейф цілі від marker (рішення 2 плану П3-1); `null` — дрейфу немає.
+   * Під хешем: дозвіл `drift` прийняв саме цей дрейф, а не будь-який.
+   */
+  drift: DriftReport | null
   resultCatalog: CatalogModel
   planHash: string
 }
@@ -80,6 +87,13 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
   desiredFingerprint: fingerprintSchema,
   steps: z.array(stepSchema),
   requiredPermissions: z.array(z.string()),
+  drift: z
+    .strictObject({
+      reason: z.enum(DRIFT_REASONS),
+      sections: z.array(z.enum(FINGERPRINT_SECTIONS)),
+      paths: z.array(z.string()),
+    })
+    .nullable(),
   resultCatalog: z
     .record(z.string(), z.unknown())
     .transform((catalog) => catalog as unknown as CatalogModel),

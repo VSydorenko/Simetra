@@ -2073,22 +2073,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.permission-required": {
     en: (p) =>
-      `Plan steps ${p.steps} drop data or relax a guarantee and need explicit permission`,
+      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, or drift, a change made to the database outside the platform`,
     uk: (p) =>
-      `Кроки плану ${p.steps} знищують дані чи знімають гарантію й потребують явного дозволу`,
+      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, або дрейф — зміна бази повз платформу`,
     hint: {
-      en: "Review these steps in the plan and allow each one by its id.",
-      uk: "Перегляньте ці кроки в плані й дозвольте кожен за його id.",
+      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift.",
+      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift.",
     },
   },
   "apply.permission-unknown": {
     en: (p) =>
-      `Allowed step ids ${p.steps} are not in the plan or need no permission`,
+      `Allowed items ${p.items} are not in the plan or need no permission`,
     uk: (p) =>
-      `Дозволені id кроків ${p.steps} відсутні в плані або не потребують дозволу`,
+      `Дозволені пункти ${p.items} відсутні в плані або не потребують дозволу`,
     hint: {
-      en: "Allow only the ids of destructive and relaxation steps of this plan; a stale id means the permission was given for another plan.",
-      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану; застарілий id означає, що дозвіл давали іншому плану.",
+      en: "Allow only the ids of destructive and relaxation steps of this plan, and drift only when the plan reports drift; a stale item means the permission was given for another plan.",
+      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, а drift — лише коли план повідомляє дрейф; застарілий пункт означає, що дозвіл давали іншому плану.",
     },
   },
   "apply.first-apply": {
@@ -2099,32 +2099,32 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.drift": {
     en: (p) =>
-      `The database differs from the state recorded at the last apply (differences: ${p.count}): ${p.paths}`,
+      `The database differs from the state recorded at the last apply${p.sections === "" ? "" : `; catalog fingerprint sections: ${p.sections}`}${p.count === 0 ? "" : `; catalog model differences (${p.count}): ${p.paths}`}`,
     uk: (p) =>
-      `База відрізняється від стану, зафіксованого при останньому застосуванні (відмінностей: ${p.count}): ${p.paths}`,
+      `База відрізняється від стану, зафіксованого при останньому застосуванні${p.sections === "" ? "" : `; секції відбитка каталогу: ${p.sections}`}${p.count === 0 ? "" : `; відмінності моделі каталогу (${p.count}): ${p.paths}`}`,
     hint: {
-      en: "Someone changed the database outside the platform; bring it back or record the change in metadata. Every apply goes through the platform, so the next plan starts from the recorded state.",
-      uk: "Хтось змінив базу повз платформу; поверніть її або запишіть зміну в метадані. Кожне застосування йде через платформу, тож наступний план починається від зафіксованого стану.",
+      en: "Someone changed the database outside the platform. The plan starts from the live database, so its steps show what happens to the drifted objects; review them and allow drift to apply, or bring the database back and plan again.",
+      uk: "Хтось змінив базу повз платформу. План починається від живої бази, тож його кроки показують, що станеться з об'єктами, які дрейфнули; перегляньте їх і дозвольте drift, щоб застосувати, або поверніть базу й сплануйте знову.",
     },
   },
-  "apply.drift-fingerprint": {
+  "apply.drift-partial": {
     en: (p) =>
-      `The database catalog differs from the fingerprint recorded at the last apply in sections: ${p.sections}`,
+      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
     uk: (p) =>
-      `Каталог бази відрізняється від відбитка, зафіксованого при останньому застосуванні, у секціях: ${p.sections}`,
+      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
     hint: {
-      en: "Someone changed the database outside the platform; bring it back or record the change in metadata. Every apply goes through the platform, so the next plan starts from the recorded state.",
-      uk: "Хтось змінив базу повз платформу; поверніть її або запишіть зміну в метадані. Кожне застосування йде через платформу, тож наступний план починається від зафіксованого стану.",
+      en: "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
+      uk: "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
     },
   },
   "apply.versions-changed": {
     en: (p) =>
-      `Both the schema engine (${p.engineFrom} → ${p.engineTo}) and the catalog fingerprint (${p.fingerprintFrom} → ${p.fingerprintTo}) changed since the last apply, so drift cannot be checked`,
+      `Both the schema engine (${p.engineFrom} → ${p.engineTo}) and the catalog fingerprint (${p.fingerprintFrom} → ${p.fingerprintTo}) changed since the last apply, so drift cannot be checked and the plan carries it as drift to accept`,
     uk: (p) =>
-      `Від останнього застосування змінились і двигун схеми (${p.engineFrom} → ${p.engineTo}), і відбиток каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож дрейф перевірити нічим`,
+      `Від останнього застосування змінились і двигун схеми (${p.engineFrom} → ${p.engineTo}), і відбиток каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож дрейф перевірити нічим, і план несе його як дрейф до прийняття`,
     hint: {
-      en: "A release changes at most one of the two versions. Apply with the platform release that changes only one of them first, then with this one.",
-      uk: "Реліз змінює щонайбільше одну з двох версій. Спершу застосуйте релізом платформи, що змінює лише одну з них, потім цим.",
+      en: "Make sure nobody changed the database outside the platform since the last apply, review the plan steps, and allow drift to apply.",
+      uk: "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати.",
     },
   },
   "database.failed": {

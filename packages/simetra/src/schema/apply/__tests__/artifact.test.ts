@@ -49,7 +49,20 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
     },
   ],
   requiredPermissions: ["s1"],
+  drift: null,
   resultCatalog: { tables: [], enumTypes: [], units: [] },
+})
+
+const DRIFT = {
+  reason: "drift",
+  sections: ["owner"],
+  paths: ["tables.app.t.columns.c"],
+} as const satisfies PlanArtifact["drift"]
+
+const withDrift = (): Omit<PlanArtifact, "planHash"> => ({
+  ...draft(),
+  drift: { ...DRIFT, sections: [...DRIFT.sections], paths: [...DRIFT.paths] },
+  requiredPermissions: ["drift", "s1"],
 })
 
 describe("plan artifact", () => {
@@ -75,6 +88,43 @@ describe("plan artifact", () => {
     const changed = draft()
     changed.steps[0]!.lockedTables = []
     expect((await stampPlan(changed)).planHash).not.toBe(stamped.planHash)
+  })
+
+  it("covers the drift with the hash", async () => {
+    const clean = await stampPlan(draft())
+    const drifted = await stampPlan(withDrift())
+    expect(drifted.planHash).not.toBe(clean.planHash)
+    const other = withDrift()
+    other.drift = { ...DRIFT, sections: ["relations"], paths: [] }
+    expect((await stampPlan(other)).planHash).not.toBe(drifted.planHash)
+    const swapped: PlanArtifact = { ...drifted, drift: null }
+    expect(await verifyPlanHash(swapped)).toBe(false)
+  })
+
+  it("round-trips a plan with drift", async () => {
+    const text = serializePlan(await stampPlan(withDrift()))
+    const parsed = parsePlan(text)
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact.drift).toEqual(DRIFT)
+    expect(serializePlan(parsed.artifact)).toBe(text)
+    expect(await verifyPlanHash(parsed.artifact)).toBe(true)
+  })
+
+  it("rejects a drift section of unknown shape", async () => {
+    const artifact = await stampPlan(withDrift())
+    const variants: unknown[] = [
+      { ...DRIFT, note: "x" },
+      { ...DRIFT, reason: "unknown" },
+      { ...DRIFT, sections: ["nowhere"] },
+      { reason: "drift", sections: [] },
+    ]
+    for (const drift of variants)
+      expect(
+        parsePlan(serializePlan({ ...artifact, drift } as PlanArtifact)).ok
+      ).toBe(false)
+    const missing: Record<string, unknown> = { ...artifact }
+    delete missing.drift
+    expect(parsePlan(JSON.stringify(missing)).ok).toBe(false)
   })
 
   it("round-trips the file byte for byte", async () => {

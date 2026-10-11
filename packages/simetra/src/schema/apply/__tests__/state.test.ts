@@ -6,6 +6,7 @@ import {
   renderApplyState,
   writeApplyStateStatements,
   type CatalogFingerprint,
+  type DriftReport,
   type FingerprintSection,
 } from "simetra/schema"
 import {
@@ -94,8 +95,46 @@ describe("writeApplyStateStatements", () => {
         targetFingerprint: fingerprint(1),
         resultFingerprint: fingerprint(2),
         allow: [],
+        drift: null,
         applyId: "00000000-0000-4000-8000-000000000000",
       })
     ).toThrow(/fingerprint versions differ/)
+  })
+
+  /** Значення колонки ledger за її назвою в `INSERT`. */
+  const ledgerValue = (drift: DriftReport | null, column: string): unknown => {
+    const [, ledger] = writeApplyStateStatements({
+      planHash: "p",
+      fromHash: null,
+      toHash: "t",
+      snapshot: {},
+      scope: { schemas: ["app"], provider: "supabase" },
+      catalog: { tables: [], enumTypes: [], units: [] },
+      engine: { name: "e", version: "1" },
+      targetFingerprint: fingerprint(1),
+      resultFingerprint: fingerprint(1),
+      allow: ["drift"],
+      drift,
+      applyId: "00000000-0000-4000-8000-000000000000",
+    })
+    const columns = /\(([^)]*)\)/
+      .exec(ledger!.sql)![1]!
+      .split(",")
+      .map((c) => c.trim())
+    expect(columns).toContain(column)
+    return ledger!.params[columns.indexOf(column)]
+  }
+
+  it("records the accepted drift in the ledger", () => {
+    const drift: DriftReport = {
+      reason: "drift",
+      sections: ["owner"],
+      paths: ["tables.app.t.columns.c"],
+    }
+    expect(ledgerValue(drift, "drift")).toBe(JSON.stringify(drift))
+  })
+
+  it("writes SQL NULL, not JSON null, for a plan without drift", () => {
+    expect(ledgerValue(null, "drift")).toBeNull()
   })
 })

@@ -8,6 +8,7 @@ import type {
   Extracted,
 } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import type { DriftReport } from "./drift"
 import type { CatalogFingerprint, FingerprintSection } from "./fingerprint"
 import type { ApplyTransaction } from "./port"
 import { PLATFORM_VERSION } from "./version"
@@ -69,6 +70,7 @@ export function renderApplyState(
       "  target_fingerprint jsonb NOT NULL,",
       "  result_fingerprint jsonb NOT NULL,",
       "  allowed jsonb NOT NULL,",
+      "  drift jsonb,",
       "  apply_id uuid NOT NULL UNIQUE,",
       "  engine_name text NOT NULL,",
       "  engine_version text NOT NULL,",
@@ -126,8 +128,8 @@ function corrupt(
  * Стан застосування цілі. Відсутня таблиця читається як порожня: перше
  * застосування створює схему разом із таблицями. Marker без таблиці ledger
  * дає `applied` свідомо: межа marker завжди містить `simetra`, тож гейт
- * дрейфу (рішення 2 плану П3-1) відмовить за зниклою таблицею раніше, ніж
- * щось довіриться такому стану. Marker читається одним
+ * дрейфу (рішення 2 плану П3-1) побачить зниклу таблицю як дрейф, і план не
+ * застосується без явного дозволу `drift`. Marker читається одним
  * `to_jsonb`, а форма перевіряється до решти полів — рядок невідомої форми
  * може мати інші колонки, і запит за назвами впав би раніше за відмову.
  * Текстом, а не `jsonb` драйвера: розбір не залежить від налаштувань типів
@@ -191,6 +193,12 @@ export interface ApplyRecord {
   targetFingerprint: CatalogFingerprint
   resultFingerprint: CatalogFingerprint
   allow: readonly string[]
+  /**
+   * Дрейф, прийнятий дозволом `drift` (`artifact.drift`); `null` — дрейфу не
+   * було. Marker після застосування фіксує новий стан, тож дрейф лишається
+   * лише тут, в історії.
+   */
+  drift: DriftReport | null
   /** UUID виклику раннера; не входить в артефакт і хеш (рішення 14.3). */
   applyId: string
 }
@@ -250,8 +258,8 @@ export function writeApplyStateStatements(
   }
   const ledger = {
     sql: [
-      `INSERT INTO ${LEDGER} (format, plan_hash, from_hash, to_hash, scope, snapshot, target_fingerprint, result_fingerprint, allowed, apply_id, engine_name, engine_version, fingerprint_version, platform_version)`,
-      "VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::uuid, $11, $12, $13, $14)",
+      `INSERT INTO ${LEDGER} (format, plan_hash, from_hash, to_hash, scope, snapshot, target_fingerprint, result_fingerprint, allowed, drift, apply_id, engine_name, engine_version, fingerprint_version, platform_version)`,
+      "VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::uuid, $12, $13, $14, $15)",
     ].join("\n"),
     params: [
       APPLY_STATE_FORMAT,
@@ -263,6 +271,8 @@ export function writeApplyStateStatements(
       json(target.sections),
       json(result.sections),
       json(record.allow),
+      // SQL NULL, а не JSON `null`: «дрейфу не було» — відсутність значення
+      record.drift === null ? null : json(record.drift),
       record.applyId,
       record.engine.name,
       record.engine.version,

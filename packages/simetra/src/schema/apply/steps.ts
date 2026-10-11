@@ -3,6 +3,7 @@ import type { SqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
 import type { EngineAction, EngineDiagnostic, LockedTable } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import type { DriftReport } from "./drift"
 
 /**
  * Класи кроків плану (платформна спека §6.6, рішення 10 плану П3-1).
@@ -540,21 +541,40 @@ const NEEDS_PERMISSION: ReadonlySet<StepClass> = new Set<StepClass>([
   "relaxation",
 ])
 
-/** Id кроків, яким потрібен явний дозвіл, у порядку плану. */
-export function requiredPermissions(steps: readonly PlanStep[]): string[] {
-  return steps.filter((s) => NEEDS_PERMISSION.has(s.class)).map((s) => s.id)
+/**
+ * Токен `allow`, що приймає дрейф плану (платформна спека §6.6). Не
+ * збігається з жодним id кроку, бо ті мають форму `s<N>`.
+ */
+export const DRIFT_PERMISSION = "drift"
+
+/** Що в плані дозволяють: кроки й дрейф. */
+export interface PermissionSubject {
+  steps: readonly PlanStep[]
+  drift: DriftReport | null
 }
 
 /**
- * Дозволи `allow` проти плану. Зайвий id — теж відмова: дозвіл на крок,
- * якого немає чи який дозволу не потребує, означає, що автор дозволяв інший
- * план.
+ * Пункти, яким потрібен явний дозвіл: дрейф першим — його переглядають до
+ * кроків, бо кроки показують, що станеться з об'єктами, які дрейфнули, —
+ * далі id кроків у порядку плану.
+ */
+export function requiredPermissions(plan: PermissionSubject): string[] {
+  return [
+    ...(plan.drift === null ? [] : [DRIFT_PERMISSION]),
+    ...plan.steps.filter((s) => NEEDS_PERMISSION.has(s.class)).map((s) => s.id),
+  ]
+}
+
+/**
+ * Дозволи `allow` проти плану. Зайвий пункт — теж відмова: дозвіл на крок,
+ * якого немає чи який дозволу не потребує, або на дрейф, якого план не має,
+ * означає, що автор дозволяв інший план.
  */
 export function checkPermissions(
-  steps: readonly PlanStep[],
+  plan: PermissionSubject,
   allow: readonly string[]
 ): EngineDiagnostic[] {
-  const required = requiredPermissions(steps)
+  const required = requiredPermissions(plan)
   const allowed = new Set(allow)
   const missing = required.filter((id) => !allowed.has(id))
   const unknown = [...allowed].filter((id) => !required.includes(id))
@@ -562,14 +582,14 @@ export function checkPermissions(
     ...(missing.length > 0
       ? [
           applyDiagnostic("apply.permission-required", "error", {
-            steps: missing.join(", "),
+            items: missing.join(", "),
           }),
         ]
       : []),
     ...(unknown.length > 0
       ? [
           applyDiagnostic("apply.permission-unknown", "error", {
-            steps: unknown.join(", "),
+            items: unknown.join(", "),
           }),
         ]
       : []),

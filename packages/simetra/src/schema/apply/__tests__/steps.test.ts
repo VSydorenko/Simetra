@@ -6,6 +6,7 @@ import {
   classifySteps,
   lintSteps,
   requiredPermissions,
+  type DriftReport,
   type EngineAction,
   type StepClass,
 } from "simetra/schema"
@@ -545,15 +546,25 @@ describe("requiredPermissions", () => {
       UNIQUE,
       parse
     )
-    expect(requiredPermissions(steps)).toEqual(["s2", "s3"])
+    expect(requiredPermissions({ steps, drift: null })).toEqual(["s2", "s3"])
   })
 
   it("needs nothing for a replacement", () => {
     expect(
-      requiredPermissions(
-        classifySteps([dropConstraint, addCheck], UNIQUE, parse)
-      )
+      requiredPermissions({
+        steps: classifySteps([dropConstraint, addCheck], UNIQUE, parse),
+        drift: null,
+      })
     ).toEqual([])
+  })
+
+  it("puts drift first: it is reviewed before the steps", () => {
+    expect(
+      requiredPermissions({
+        steps: classifySteps([dropTrigger], UNIQUE, parse),
+        drift: { reason: "drift", sections: ["owner"], paths: [] },
+      })
+    ).toEqual(["drift", "s1"])
   })
 })
 
@@ -714,8 +725,13 @@ describe("checkPermissions", () => {
       UNIQUE,
       parse
     )
-  const check = (allow: string[]) =>
-    checkPermissions(steps(), allow).map((d) => ({
+  const DRIFT: DriftReport = {
+    reason: "drift",
+    sections: ["owner"],
+    paths: [],
+  }
+  const check = (allow: string[], drift: DriftReport | null = null) =>
+    checkPermissions({ steps: steps(), drift }, allow).map((d) => ({
       code: d.code,
       severity: d.severity,
       params: d.params,
@@ -730,7 +746,7 @@ describe("checkPermissions", () => {
       {
         code: "apply.permission-required",
         severity: "error",
-        params: { steps: "s1" },
+        params: { items: "s1" },
       },
     ])
   })
@@ -740,7 +756,7 @@ describe("checkPermissions", () => {
       {
         code: "apply.permission-required",
         severity: "error",
-        params: { steps: "s1, s3" },
+        params: { items: "s1, s3" },
       },
     ])
   })
@@ -750,7 +766,7 @@ describe("checkPermissions", () => {
       {
         code: "apply.permission-unknown",
         severity: "error",
-        params: { steps: "s9" },
+        params: { items: "s9" },
       },
     ])
   })
@@ -761,7 +777,38 @@ describe("checkPermissions", () => {
       {
         code: "apply.permission-unknown",
         severity: "error",
-        params: { steps: "s2" },
+        params: { items: "s2" },
+      },
+    ])
+  })
+
+  it("refuses a plan with drift until drift is allowed", () => {
+    expect(check(["s1", "s3"], DRIFT)).toEqual([
+      {
+        code: "apply.permission-required",
+        severity: "error",
+        params: { items: "drift" },
+      },
+    ])
+    expect(check(["drift", "s1", "s3"], DRIFT)).toEqual([])
+  })
+
+  it("lists drift with the missing steps", () => {
+    expect(check([], DRIFT)).toEqual([
+      {
+        code: "apply.permission-required",
+        severity: "error",
+        params: { items: "drift, s1, s3" },
+      },
+    ])
+  })
+
+  it("refuses allowing drift on a plan without drift", () => {
+    expect(check(["drift", "s1", "s3"])).toEqual([
+      {
+        code: "apply.permission-unknown",
+        severity: "error",
+        params: { items: "drift" },
       },
     ])
   })

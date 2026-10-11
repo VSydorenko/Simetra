@@ -12,6 +12,7 @@ import {
   type ApplyRecord,
   type ApplyState,
   type CatalogFingerprint,
+  type DriftReport,
   type FingerprintSection,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
@@ -115,7 +116,15 @@ const record: ApplyRecord = {
   targetFingerprint: fingerprint("target"),
   resultFingerprint: fingerprint("result"),
   allow: ["drop:table:app.old"],
+  drift: null,
   applyId: "6f1c1e8e-3d7a-4c3e-9f55-0b7f0a2d9c11",
+}
+
+/** Дрейф, прийнятий другим застосуванням тесту ledger. */
+const drift: DriftReport = {
+  reason: "drift",
+  sections: ["owner", "relations"],
+  paths: ["tables.app.party.columns.note"],
 }
 
 async function applied(url: string): Promise<void> {
@@ -189,7 +198,7 @@ describe("readApplyState", () => {
     })
   })
 
-  it("a second apply replaces the marker and appends to the ledger", async () => {
+  it("a second apply replaces the marker and appends to the ledger, with the accepted drift", async () => {
     const rows = await inAppliedTarget(async (url) => {
       await applied(url)
       await createApplyDatabase({ readOnly: false }).transaction(
@@ -200,6 +209,8 @@ describe("readApplyState", () => {
             ...record,
             fromHash: record.toHash,
             toHash: "u".repeat(64),
+            allow: ["drift"],
+            drift,
             applyId: "0d9e3a52-5b8f-4f0e-8a54-2c1f2f7b6a90",
           })
           for (const s of next) await tx.query(s.sql, s.params)
@@ -212,16 +223,28 @@ describe("readApplyState", () => {
           marker: await tx.query<{ snapshot_hash: string }>(
             "SELECT snapshot_hash FROM simetra.marker"
           ),
-          ledger: await tx.query<{ from_hash: string | null }>(
-            "SELECT from_hash FROM simetra.ledger ORDER BY id"
+          // Текстом, як і marker: розбір не залежить від типів адаптера;
+          // SQL NULL лишається `null`, а JSON null дав би рядок "null"
+          ledger: await tx.query<{
+            from_hash: string | null
+            allowed: string
+            drift: string | null
+          }>(
+            "SELECT from_hash, allowed::text AS allowed, drift::text AS drift FROM simetra.ledger ORDER BY id"
           ),
         })
       )
     })
     expect(rows.marker).toEqual([{ snapshot_hash: "u".repeat(64) }])
-    expect(rows.ledger).toEqual([
-      { from_hash: null },
-      { from_hash: record.toHash },
+    expect(
+      rows.ledger.map((r) => ({
+        from_hash: r.from_hash,
+        allowed: JSON.parse(r.allowed) as unknown,
+        drift: r.drift === null ? null : (JSON.parse(r.drift) as unknown),
+      }))
+    ).toEqual([
+      { from_hash: null, allowed: record.allow, drift: null },
+      { from_hash: record.toHash, allowed: ["drift"], drift },
     ])
   })
 

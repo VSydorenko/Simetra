@@ -27,9 +27,11 @@ export { PLATFORM_VERSION } from "./version"
 export {
   checkPermissions,
   classifySteps,
+  DRIFT_PERMISSION,
   lintSteps,
   requiredPermissions,
   STEP_CLASSES,
+  type PermissionSubject,
   type PlanStep,
   type StepClass,
 } from "./steps"
@@ -43,4 +45,9 @@ export {
   verifyPlanHash,
   type PlanArtifact,
 } from "./artifact"
-export { driftGate, type DriftVerdict } from "./drift"
+export {
+  DRIFT_REASONS,
+  driftGate,
+  type DriftReport,
+  type DriftVerdict,
+} from "./drift"

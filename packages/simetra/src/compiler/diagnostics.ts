@@ -174,7 +174,7 @@ export const COMPILER_RULES = [
   "apply.permission-unknown",
   "apply.first-apply",
   "apply.drift",
-  "apply.drift-fingerprint",
+  "apply.drift-partial",
   "apply.versions-changed",
   "database.failed",
   "introspect.unrepresentable",
