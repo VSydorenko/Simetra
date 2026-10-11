@@ -11,7 +11,7 @@ import type { TableRename } from "./renames"
  * відношення поза моделлю чи вузол, якого переписувач не знає, можуть
  * віддавати колонки промотованої таблиці.
  */
-export interface Unproven {
+interface Unproven {
   /**
    * `ambiguous-name` — колонки відомі, але промоція їх змінює (`*` над
    * промотованою таблицею); решта — `unsupported`.
