@@ -135,19 +135,17 @@ describe("ApplyDatabase (pg)", () => {
 
   it("leaves no session state", async () => {
     await inTarget(async (url) => {
-      const db = createApplyDatabase({ readOnly: true })
-      await db.transaction({ url }, "rollback", (tx) => tx.query("select 1"))
-      // Той самий backend: ліміт кластера не дає гарантії, тож перевіряємо
-      // в пулі з max: 1, який під'єднується повторно до тієї ж бази
-      const pool = new pg.Pool({ connectionString: url, max: 1 })
-      try {
-        const { rows } = await pool.query<{ v: string }>(
-          "select current_setting('default_transaction_read_only') as v"
-        )
-        expect(rows[0]?.v).toBe("off")
-      } finally {
-        await pool.end()
-      }
+      // Свіже з'єднання завжди має сесійне `off`, тож доказ — усередині
+      // транзакції: читання лише в неї, сесія лишилась за замовчуванням
+      const rows = await createApplyDatabase({ readOnly: true }).transaction(
+        { url },
+        "rollback",
+        (tx) =>
+          tx.query<{ tx: string; session: string }>(
+            "select current_setting('transaction_read_only') as tx, current_setting('default_transaction_read_only') as session"
+          )
+      )
+      expect(rows).toEqual([{ tx: "on", session: "off" }])
     })
   })
 
