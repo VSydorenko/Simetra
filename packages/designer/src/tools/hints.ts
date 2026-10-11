@@ -1,4 +1,5 @@
 export const READ_ONLY_FLAG = "--read-only"
+export const ALLOW_DATABASE_WRITE_FLAG = "--allow-database-write"
 
 /** Типова змінна середовища з рядком підключення; ім'я фіксується при запуску. */
 export const DEFAULT_DATABASE_URL_ENV = "SIMETRA_DATABASE_URL"
@@ -23,6 +24,25 @@ export function readOnlyHint(
     `This server runs with ${READ_ONLY_FLAG}: tools that write are disabled.`,
     `To enable them, remove ${READ_ONLY_FLAG} from this server's args in the MCP client config and restart it:`,
     `args ending in ${JSON.stringify(before)} become ${JSON.stringify(after)}.`,
+  ].join(" ")
+}
+
+/**
+ * Підказка відмови `apply` без прапорця запису в базу і її ж речення в
+ * `instructions`. Як і `readOnlyHint`, показує лише хвіст `args`: прапорець
+ * додається, а не замінює конфіг. Вмикає його людина, а не агент: запис у
+ * базу поза git, тож рішення — при запуску сервера.
+ */
+export function databaseWriteHint(
+  launchArgs: readonly string[] = ["simetra", "mcp"]
+): string {
+  const before = launchArgs.filter((a) => a !== ALLOW_DATABASE_WRITE_FLAG)
+  const after = [...before, ALLOW_DATABASE_WRITE_FLAG]
+  return [
+    `This server runs without ${ALLOW_DATABASE_WRITE_FLAG}: apply cannot write to the database.`,
+    `Only the owner may enable it: add ${ALLOW_DATABASE_WRITE_FLAG} to this server's args in the MCP client config and restart it:`,
+    `args ending in ${JSON.stringify(before)} become ${JSON.stringify(after)}.`,
+    "Nothing changed.",
   ].join(" ")
 }
 

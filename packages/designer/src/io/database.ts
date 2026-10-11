@@ -1,4 +1,5 @@
 import { diagnostic, localize, type Diagnostic } from "simetra/compiler"
+import { ApplyConnectionLost, ApplyDbError } from "simetra/schema"
 import {
   ShadowCreateRefusedError,
   ShadowServerError,
@@ -82,7 +83,12 @@ const SQLSTATE = /^[0-9A-Z]{5}$/
  */
 const LOST_CONNECTION = /^Connection terminated|^timeout expired/
 
+/**
+ * Код помилки: драйвер і Node кладуть його в `code`, а порт виконання T2 —
+ * SQLSTATE в `sqlstate` (клас T2 не знає драйвера й не імітує його поле).
+ */
 function codeOf(error: Error): string | undefined {
+  if (error instanceof ApplyDbError) return error.sqlstate
   const code = (error as { code?: unknown }).code
   return typeof code === "string" ? code : undefined
 }
@@ -143,6 +149,12 @@ export function classifyDatabaseError(
     return classifyDatabaseError(error.errors[0], names)
   if (!(error instanceof Error))
     return { kind: "failure", params: { database: describe, error: "unknown" } }
+  // Порт виконання вже розпізнав обрив (клас `08`, `57P01`, транспорт): код
+  // драйвера в ньому не зберігся, тож текст не вгадується наново
+  if (error instanceof ApplyConnectionLost)
+    return refusal(
+      `The connection to the database at ${describe} was lost or timed out.`
+    )
   const code = codeOf(error)
   if (code !== undefined && NODE_CODE.test(code)) {
     if (UNREACHABLE.has(code))

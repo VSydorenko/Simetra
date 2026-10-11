@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { compile } from "simetra/compiler"
 import { z } from "zod"
 import { describe, expect, it } from "vitest"
@@ -46,6 +47,7 @@ describe("tool catalog", () => {
   it("names every tool once", () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual([
       "add",
+      "apply",
       "compile",
       "create",
       "delete",
@@ -53,6 +55,7 @@ describe("tool catalog", () => {
       "explain",
       "fix",
       "introspect",
+      "plan",
       "promote",
       "rename",
     ])
@@ -171,16 +174,30 @@ describe("tool catalog", () => {
   it("every (files, database) pair has a permit rule", () => {
     // Повний добуток осей, а не лише пари з TOOLS: правило для нової пари
     // мусить існувати до того, як з'явиться інструмент із нею.
+    // Запис у базу — лише без `--read-only` і з прапорцем запуску
+    // `--allow-database-write`; запис файлів прапорця не потребує.
     for (const files of FILES_ACCESS) {
       for (const database of DATABASE_ACCESS) {
         const t = { ...toolByName("compile")!, files, database }
-        const writes = files === "write" || database === "write"
-        expect(permits(t, { readOnly: false })).toBe(true)
-        expect(permits(t, { readOnly: true })).toBe(!writes)
+        for (const readOnly of [false, true]) {
+          for (const allowDatabaseWrite of [false, true]) {
+            const expected =
+              (files === "read" || !readOnly) &&
+              (database !== "write" || (!readOnly && allowDatabaseWrite))
+            expect(
+              permits(t, { readOnly, allowDatabaseWrite }),
+              `${files}/${database} readOnly=${readOnly} allowDatabaseWrite=${allowDatabaseWrite}`
+            ).toBe(expected)
+          }
+        }
       }
     }
+    // `apply` лише читає файли, але пише в базу: `--read-only` вимикає і його
     for (const t of TOOLS) {
-      expect(permits(t, { readOnly: true })).toBe(t.files === "read")
+      expect(
+        permits(t, { readOnly: true, allowDatabaseWrite: true }),
+        t.name
+      ).toBe(t.files === "read" && t.database !== "write")
     }
   })
 
@@ -386,6 +403,81 @@ describe("database as a launch resource", () => {
       invoke(dbStub, {}, { ...opts(dir), database })
     ).rejects.toThrow("not in a unit test")
     expect(connects).toBe(1)
+  })
+})
+
+/** Заглушка `plan`: артефакт пише `invoke`, а не інструмент. */
+const artifactStub = (path: string) =>
+  defineTool({
+    name: "plan",
+    description: "Artifact stub.",
+    input: z.strictObject({}),
+    files: "write",
+    database: "none",
+    destructive: false,
+    async run(ctx) {
+      return {
+        ok: true,
+        changes: [],
+        diagnostics: [],
+        artifacts: [{ path, content: `${ctx.root}\n` }],
+      }
+    },
+  }) as Tool
+
+describe("plan artifacts", () => {
+  it("are written under plans/ next to the metadata directory", async () => {
+    const dir = await project()
+    const before = await snapshotOf(dir)
+    const r = await invoke(artifactStub("plans/a.plan.json"), {}, opts(dir))
+    expect(r.ok).toBe(true)
+    expect(r.written).toBe(true)
+    expect(r.artifacts).toEqual(["plans/a.plan.json"])
+    const root = dirname(resolve(dir))
+    expect(await readFile(join(root, "plans/a.plan.json"), "utf8")).toBe(
+      `${root}\n`
+    )
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("take the project root from the metadata directory itself", async () => {
+    // Запуск із самої теки метаданих (`dir = "."`) не кладе `plans/` у неї:
+    // `<dir>/.` ламає наївний `dirname` так само, як `.`, без зміни cwd
+    const dir = await project()
+    const r = await invoke(
+      artifactStub("plans/b.plan.json"),
+      {},
+      opts(`${dir}/.`)
+    )
+    expect(r.written).toBe(true)
+    expect(existsSync(join(dir, "plans"))).toBe(false)
+    expect(existsSync(join(dirname(dir), "plans/b.plan.json"))).toBe(true)
+  })
+
+  it("are not written by a dry run", async () => {
+    const dir = await project()
+    const r = await invoke(
+      artifactStub("plans/c.plan.json"),
+      {},
+      {
+        ...opts(dir),
+        dryRun: true,
+      }
+    )
+    expect(r.written).toBe(false)
+    expect(r.artifacts).toEqual(["plans/c.plan.json"])
+    expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
+  })
+
+  it("outside plans/ are refused before touching the disk", async () => {
+    const dir = await project()
+    for (const path of ["metadata/x.plan.json", "plans/../x.plan.json", "x"]) {
+      const r = await invoke(artifactStub(path), {}, opts(dir))
+      expect(r.refusal?.reason, path).toBe("refused")
+      expect(r.written).toBe(false)
+    }
+    expect(existsSync(join(dirname(dir), "x.plan.json"))).toBe(false)
+    expect(existsSync(join(dir, "x.plan.json"))).toBe(false)
   })
 })
 

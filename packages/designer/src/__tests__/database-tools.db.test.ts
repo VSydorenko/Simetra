@@ -114,6 +114,7 @@ const options = (
 ): InvokeOptions => ({
   dir,
   readOnly: false,
+  allowDatabaseWrite: false,
   dryRun: false,
   confirmed: false,
   channel: "cli",
@@ -191,6 +192,7 @@ describe("introspect", () => {
         {
           dir,
           readOnly: false,
+          allowDatabaseWrite: false,
           dryRun: false,
           confirmed: false,
           channel: "cli",

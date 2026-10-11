@@ -41,13 +41,15 @@ const PROJECT_FILE = "project.meta.json"
  * Двигун вантажиться лише викликом інструмента бази: `simetra compile` і
  * MCP-сервер без бази не тягнуть pg-delta.
  */
-async function loadEngine(): Promise<SchemaEngine> {
+export async function loadEngine(): Promise<SchemaEngine> {
   const { createPgDeltaEngine } = await import("../schema-engine")
   return createPgDeltaEngine()
 }
 
 /** Резолвер `invoke` гарантує ресурс для інструмента з віссю бази. */
-function required(database: DatabaseResource | undefined): DatabaseResource {
+export function required(
+  database: DatabaseResource | undefined
+): DatabaseResource {
   if (database === undefined)
     throw new Error("invoke passes the database to a database tool")
   return database
@@ -58,7 +60,7 @@ function required(database: DatabaseResource | undefined): DatabaseResource {
  * теки), з параметрами, з яких звіт будує текст потрібною мовою. Ідентичність
  * об'єкта й код двигуна — у параметрах, щоб JSON-вивід їх ніс.
  */
-function fromEngine(d: EngineDiagnostic): Diagnostic {
+export function fromEngine(d: EngineDiagnostic): Diagnostic {
   return {
     code: d.code,
     severity: d.severity,
@@ -73,7 +75,7 @@ function fromEngine(d: EngineDiagnostic): Diagnostic {
   }
 }
 
-const hasErrors = (diagnostics: readonly { severity: string }[]) =>
+export const hasErrors = (diagnostics: readonly { severity: string }[]) =>
   diagnostics.some((d) => d.severity === "error")
 
 /** Тека, якої ще немає, — порожня тека: `introspect` створює проєкт. */

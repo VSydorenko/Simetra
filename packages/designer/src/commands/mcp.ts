@@ -21,6 +21,12 @@ export default defineCommand({
       default: false,
       description: "Refuse the tools that write",
     },
+    "allow-database-write": {
+      type: "boolean",
+      default: false,
+      description:
+        "Let apply write to the database (it still needs confirm and the plan hash)",
+    },
     "database-url-env": {
       type: "string",
       default: DEFAULT_DATABASE_URL_ENV,
@@ -43,6 +49,7 @@ export default defineCommand({
     await createMcpServer({
       dir,
       readOnly: args["read-only"],
+      allowDatabaseWrite: args["allow-database-write"],
       database: databaseResource(process.env, {
         url: databaseEnv,
         ...(shadow === undefined ? {} : { shadow }),

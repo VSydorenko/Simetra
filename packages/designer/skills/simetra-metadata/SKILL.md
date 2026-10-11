@@ -1,9 +1,9 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements, or promote an adopted table, through checked operations, compare a database with the metadata (`diff`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements, or promote an adopted table, through checked operations, compare a database with the metadata (`diff`), plan and apply the metadata to a database (`plan`, `apply`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
 ---
 
-# Simetra metadata — compile, explain, fix, create, add, rename, delete, promote, introspect, diff
+# Simetra metadata — compile, explain, fix, create, add, rename, delete, promote, introspect, diff, plan, apply
 
 The tools are one catalog served by the command line and by the MCP server,
 with the same tool names and the same input in both. Run the CLI
@@ -28,10 +28,13 @@ diagnostics themselves.
 | Turn an adopted `CustomTable` into a Catalog, Document or InformationRegister     | `promote`    | `simetra promote <json\|-> [dir]`        | `promote` with `{target, into, columns, …}` |
 | Read a live database into metadata                                                | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}`    |
 | Does the database match the metadata?                                             | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                     |
+| Plan bringing the database to the metadata (writes `plans/…plan.json`)            | `plan`       | `simetra plan [dir]`                     | `plan` with `{}`                            |
+| Apply a reviewed plan to the database                                             | `apply`      | `simetra apply <plan> [dir] --plan-hash <hex> --yes` | `apply` with `{plan, planHash, allow?, confirm}` |
 
-`compile`, `explain`, `diff` only read files. `fix`, `create`, `add`,
-`rename`, `delete`, `promote`, `introspect` change files. `introspect` and `diff` read
-the database; neither ever writes to it.
+`compile`, `explain`, `diff`, `apply` only read files. `fix`, `create`, `add`,
+`rename`, `delete`, `promote`, `introspect` change files; `plan` writes only its
+plan file. `introspect`, `diff` and `plan` read the database; only `apply`
+writes to it.
 
 ## Examples
 
@@ -134,6 +137,8 @@ pnpm exec simetra explain Catalog.Currency
 pnpm exec simetra create '{"kind":"Catalog","name":"Currency"}' --dry-run
 pnpm exec simetra delete --input '{"target":{"kind":"Catalog","name":"Currency"}}' --yes
 pnpm exec simetra diff
+pnpm exec simetra plan
+pnpm exec simetra apply plans/initial-3f2a9c1b7d4e.plan.json --plan-hash <hex> --allow s2 --yes
 ```
 
 An input that does not match the tool's schema is refused with the path of the
@@ -330,12 +335,41 @@ variable named with `--database-url-env`); never paste a connection string.
 Scope, the shadow database, exit codes and how to judge a result are in the
 `simetra-adoption` skill.
 
+## The database: plan and apply
+
+`plan` compares the live database with the metadata and writes
+`plans/<from>-<to>.plan.json` next to the metadata directory (the directory
+that holds `metadata/`); the database is only read. Its output shows drift
+first, then each step with its class and lock level, then the `planHash`.
+Show the plan to the owner before applying it.
+
+`apply` applies exactly that file in one transaction. It needs the `planHash`
+of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
+`allow` the id of every step that drops data or relaxes a guarantee and
+`drift` when the plan carries drift; the plan output says which items need
+it. `rehearse` runs the plan and rolls it back, but still takes the same
+`ACCESS EXCLUSIVE` locks. A long apply wants a direct or session connection,
+not a transaction pooler.
+
+```json simetra:apply
+{
+  "plan": "plans/initial-3f2a9c1b7d4e.plan.json",
+  "planHash": "9b1d6e0c4f3a2b8d7e6f5a4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a2918f",
+  "allow": ["drift", "s2"],
+  "confirm": true
+}
+```
+
+A changed plan file, changed metadata or a changed database refuses the
+apply; plan again.
+
 ## Agents over MCP
 
 ```sh
 pnpm exec simetra mcp
 pnpm exec simetra mcp --read-only
 pnpm exec simetra mcp --database-url-env STAGING_DATABASE_URL
+pnpm exec simetra mcp --allow-database-write
 ```
 
 - By default the write tools change files in the served directory, under the
@@ -345,6 +379,12 @@ pnpm exec simetra mcp --database-url-env STAGING_DATABASE_URL
 - With `--read-only` every tool is still listed, but a write tool is refused
   with a hint to remove `--read-only` from the server's args. Ask the owner
   before restarting the server without it.
+- `apply` writes to the database only when the server runs with
+  `--allow-database-write`; without it `apply` is refused with a hint to add
+  the flag. Ask the owner; never add it yourself. `--read-only` refuses
+  `apply` too.
+- `dryRun` does not apply to `apply`: review with `plan`, and check on the
+  database with `rehearse`.
 - The server reads the disk on every call, so edits made by hand between calls
   are seen.
 

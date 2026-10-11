@@ -3,6 +3,8 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
+import { renderResult } from "../cli/render"
+import type { PlanData } from "../tools/apply-tools"
 import { TOOLS, toolByName } from "../tools/catalog"
 import { TOOL_NAMES } from "../tools/types"
 import {
@@ -328,5 +330,158 @@ describe("cli adapter", () => {
     expect(out.record.kind).toBe("Catalog")
     expect(out.record.tables.length).toBeGreaterThan(0)
     expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  describe("plan and apply", () => {
+    const hash = "b".repeat(64)
+    const env = { SIMETRA_DATABASE_URL: "postgres://u:p@db.example.test/app" }
+
+    it("plan takes its directory as a positional, not JSON", async () => {
+      expect(await cliInput(tool("plan"), { _: ["meta/"] }, noStdin)).toEqual({
+        input: {},
+        dirs: ["meta"],
+      })
+      expect(await cliInput(tool("plan"), { _: [] }, noStdin)).toEqual({
+        input: {},
+        dirs: ["./metadata"],
+      })
+    })
+
+    it("maps apply flags onto the catalog input", async () => {
+      expect(
+        await cliInput(
+          tool("apply"),
+          {
+            _: ["plans/initial-0123456789ab.plan.json", "meta"],
+            "plan-hash": hash,
+            allow: "drift,s2",
+            rehearse: true,
+            "lock-timeout-ms": "5000",
+            "statement-timeout-ms": "60000",
+          },
+          noStdin
+        )
+      ).toEqual({
+        input: {
+          plan: "plans/initial-0123456789ab.plan.json",
+          planHash: hash,
+          allow: ["drift", "s2"],
+          rehearse: true,
+          lockTimeoutMs: 5000,
+          statementTimeoutMs: 60000,
+        },
+        dirs: ["meta"],
+      })
+      await expect(
+        cliInput(tool("apply"), { _: [], "plan-hash": hash }, noStdin)
+      ).rejects.toThrow("apply needs the plan file")
+    })
+
+    it("an allow item that is neither a step id nor drift is an input error", async () => {
+      const r = await runTool(
+        tool("apply"),
+        {
+          _: ["plans/initial-0123456789ab.plan.json", await project()],
+          "plan-hash": hash,
+          allow: "drifts",
+          yes: true,
+        },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("allow")
+    })
+
+    it("apply without --yes exits 2 and connects nowhere", async () => {
+      const r = await runTool(
+        tool("apply"),
+        {
+          _: ["plans/initial-0123456789ab.plan.json", await project()],
+          "plan-hash": hash,
+        },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("needs confirmation")
+    })
+
+    it("apply has --yes and no --dry-run; plan has --dry-run", () => {
+      const apply = toolCommand(tool("apply")).args ?? {}
+      for (const flag of [
+        "plan-hash",
+        "allow",
+        "rehearse",
+        "lock-timeout-ms",
+        "statement-timeout-ms",
+        "yes",
+      ])
+        expect(flag in apply, flag).toBe(true)
+      expect("dry-run" in apply).toBe(false)
+      expect("dry-run" in (toolCommand(tool("plan")).args ?? {})).toBe(true)
+    })
+
+    it("the text of a plan shows drift before the first step", () => {
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: {
+          reason: "drift",
+          sections: ["relations"],
+          paths: ["tables.app.party.columns.extra"],
+        },
+        steps: [
+          {
+            id: "s1",
+            class: "destructive",
+            lockClass: "accessExclusive",
+            sql: "ALTER TABLE app.party DROP COLUMN extra;\n-- second line",
+          },
+        ],
+        requiredPermissions: ["drift", "s1"],
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const drift = stdout.indexOf("drift (drift)")
+      const step = stdout.indexOf("s1 destructive")
+      expect(drift).toBeGreaterThan(-1)
+      expect(step).toBeGreaterThan(drift)
+      expect(stdout).toContain(hash)
+      expect(stdout).toContain(data.file)
+      expect(stdout).toContain("needs allow: drift")
+      expect(stdout).toContain("needs allow: s1")
+      expect(stdout).not.toContain("second line")
+    })
+
+    it("the text of a rehearsal warns about ACCESS EXCLUSIVE", () => {
+      const { stdout } = renderResult(
+        tool("apply"),
+        {
+          ok: true,
+          written: false,
+          changes: [],
+          diagnostics: [],
+          data: { status: "rolledBack", attempts: 1 },
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      expect(stdout).toContain("ACCESS EXCLUSIVE")
+      expect(stdout).toContain("rolled back")
+    })
   })
 })

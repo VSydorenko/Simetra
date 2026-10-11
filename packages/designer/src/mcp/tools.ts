@@ -1,15 +1,23 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server"
 import type { PromotionRecord } from "simetra/compiler"
 import { z } from "zod"
-import { formatDiagnostics, renderDiff } from "../io/report"
+import {
+  formatDiagnostics,
+  renderApply,
+  renderDiff,
+  renderPlan,
+} from "../io/report"
 import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
+import type { ApplyData, PlanData } from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 import type { DatabaseResource } from "../tools/types"
 
 export interface McpToolOptions {
   dir: string
   readOnly: boolean
+  /** Прапорець запуску `--allow-database-write`: без нього `apply` відмовляє. */
+  allowDatabaseWrite?: boolean
   /** Ресурс запуску; без нього інструменти бази відмовляють із підказкою. */
   database?: DatabaseResource
   /** Ім'я змінної середовища з рядком підключення: його називає відмова. */
@@ -32,12 +40,19 @@ const confirm = z.boolean().optional().meta({
  * й запис вирішує `invoke`, тож тут лише перелік полів, які він отримує.
  */
 export function mcpInputSchema(tool: Tool): z.ZodType {
-  if (tool.files === "read") return tool.input
+  // `dryRun` — лише запису файлів; `confirm` — кожному руйнівному, зокрема
+  // `apply`, що файлів не пише: інакше підтвердження до нього не дійшло б
+  const previews = tool.files === "write"
+  if (!previews && !tool.destructive) return tool.input
   if (!(tool.input instanceof z.ZodObject)) {
-    throw new Error(`tool ${tool.name} needs an object input to take dryRun`)
+    throw new Error(
+      `tool ${tool.name} needs an object input for dryRun/confirm`
+    )
   }
-  const base = tool.input.extend({ dryRun })
-  return tool.destructive ? base.extend({ confirm }) : base
+  return tool.input.extend({
+    ...(previews ? { dryRun } : {}),
+    ...(tool.destructive ? { confirm } : {}),
+  })
 }
 
 function lineFor(
@@ -82,6 +97,32 @@ function toResponse(
       isError: !ok,
       structuredContent: { ok, written, changes, ...data },
       content: [{ type: "text", text: renderDiff(data, report) }],
+    }
+  }
+  // `planHash` — вхід `apply`: без нього в `structuredContent` агент не
+  // підтвердить показаний план. Текст — той самий, що в CLI: дрейф першим
+  if (tool.name === "plan") {
+    const data = result.data as PlanData | undefined
+    return {
+      isError: !ok,
+      structuredContent: {
+        ok,
+        written,
+        artifacts: result.artifacts ?? [],
+        diagnostics,
+        ...data,
+      },
+      content: [
+        { type: "text", text: renderPlan(data, report, { ok, written, dry }) },
+      ],
+    }
+  }
+  if (tool.name === "apply") {
+    const data = result.data as ApplyData | undefined
+    return {
+      isError: !ok,
+      structuredContent: { ok, diagnostics, ...data },
+      content: [{ type: "text", text: renderApply(data, report) }],
     }
   }
   // Запис промоції — вхід плану бази: повністю в `structuredContent`, а в
@@ -158,6 +199,7 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
         const result = await invoke(tool, input, {
           dir: o.dir,
           readOnly: o.readOnly,
+          allowDatabaseWrite: o.allowDatabaseWrite === true,
           dryRun: dry === true,
           confirmed: confirmed === true,
           channel: "mcp",

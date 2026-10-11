@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server"
-import { readOnlyHint } from "../tools/hints"
+import { databaseWriteHint, readOnlyHint } from "../tools/hints"
 import { registerCatalog, type McpToolOptions } from "./tools"
 
 /**
@@ -10,10 +10,16 @@ import { registerCatalog, type McpToolOptions } from "./tools"
  */
 export function createMcpServer(o: McpToolOptions): McpServer {
   const instructions = [
-    `Metadata tools for the directory ${o.dir}: compile, explain, the editing tools, and introspect and diff against the database named by the server's environment.`,
+    `Metadata tools for the directory ${o.dir}: compile, explain, the editing tools, and introspect, diff, plan and apply against the database named by the server's environment.`,
     o.readOnly
       ? readOnlyHint(o.launchArgs)
-      : "Writing is enabled; destructive tools need confirm: true, and dryRun previews any change.",
+      : "Writing is enabled; destructive tools need confirm: true, and dryRun previews any file change.",
+    // Запис у базу — окреме рішення людини при запуску; `dryRun` його не
+    // переглядає: перегляд дає `plan`, перевірку на цілі — `rehearse`
+    o.allowDatabaseWrite === true && !o.readOnly
+      ? "Database writes are enabled: apply needs confirm: true and the planHash of the plan you showed."
+      : databaseWriteHint(o.launchArgs),
+    "dryRun does not apply to apply: review with plan, and rehearse it before applying.",
   ].join(" ")
   const server = new McpServer(
     { name: "simetra", version: "0.0.1" },

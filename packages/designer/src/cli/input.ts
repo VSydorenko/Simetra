@@ -21,6 +21,11 @@ export interface CliArgs {
   "database-provider"?: string
   "database-url-env"?: string
   "shadow-url-env"?: string
+  "plan-hash"?: string
+  allow?: string
+  rehearse?: boolean
+  "lock-timeout-ms"?: string
+  "statement-timeout-ms"?: string
 }
 
 /**
@@ -33,6 +38,8 @@ const ERGONOMIC = new Set<string>([
   "fix",
   "introspect",
   "diff",
+  "plan",
+  "apply",
 ])
 
 /** `a,b` → `["a", "b"]`; порожні елементи — помилка написання, не фільтр. */
@@ -65,6 +72,11 @@ export async function cliInput(
     | "project-name"
     | "attribute-case"
     | "database-provider"
+    | "plan-hash"
+    | "allow"
+    | "rehearse"
+    | "lock-timeout-ms"
+    | "statement-timeout-ms"
   >,
   stdin: () => Promise<string>
 ): Promise<{ input: unknown; dirs: string[] }> {
@@ -115,6 +127,38 @@ export async function cliInput(
           ? {}
           : { tables: list("tables", args.tables) },
       dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)],
+    }
+  }
+  if (tool.name === "plan") {
+    return { input: {}, dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)] }
+  }
+  if (tool.name === "apply") {
+    const plan = positional[0]
+    if (plan === undefined)
+      throw new UsageError(
+        "apply needs the plan file: simetra apply <plans/….plan.json> [dir] --plan-hash <hex> --yes."
+      )
+    const lockTimeout = args["lock-timeout-ms"]
+    const statementTimeout = args["statement-timeout-ms"]
+    // Перевірку значень (hex, id кроків, додатні цілі) робить схема каталогу
+    return {
+      input: {
+        plan,
+        ...(args["plan-hash"] === undefined
+          ? {}
+          : { planHash: args["plan-hash"] }),
+        ...(args.allow === undefined
+          ? {}
+          : { allow: list("allow", args.allow) }),
+        ...(args.rehearse === true ? { rehearse: true } : {}),
+        ...(lockTimeout === undefined
+          ? {}
+          : { lockTimeoutMs: Number(lockTimeout) }),
+        ...(statementTimeout === undefined
+          ? {}
+          : { statementTimeoutMs: Number(statementTimeout) }),
+      },
+      dirs: [trimSlash(positional[1] ?? DEFAULT_DIR)],
     }
   }
   const fromFlag = args.input !== undefined

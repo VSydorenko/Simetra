@@ -2137,6 +2137,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Сплануйте знову поточною платформою: план застосовується лише з тими версіями, що його побудували й довели.",
     },
   },
+  "apply.plan-hash": {
+    en: (p) =>
+      `The plan file ${p.file} does not carry the confirmed plan hash ${p.planHash}: it is another plan, or it was edited after planning`,
+    uk: (p) =>
+      `Файл плану ${p.file} не має підтвердженого хешу плану ${p.planHash}: це інший план, або його змінено після планування`,
+    hint: {
+      en: "Nothing was written. Apply only the plan that was reviewed: plan again, review the plan and pass its planHash.",
+      uk: "Нічого не записано. Застосовуйте лише переглянутий план: сплануйте знову, перегляньте план і передайте його planHash.",
+    },
+  },
+  "apply.plan-stale": {
+    en: (p) =>
+      `The plan leads to snapshot ${p.plan}, but the metadata now compiles to ${p.current}`,
+    uk: (p) =>
+      `План веде до знімка ${p.plan}, а метадані тепер компілюються в ${p.current}`,
+    hint: {
+      en: "Nothing was written. The metadata changed after planning; plan again and review the new plan.",
+      uk: "Нічого не записано. Метадані змінилися після планування; сплануйте знову й перегляньте новий план.",
+    },
+  },
   "apply.busy": {
     en: () =>
       "Another apply is running on this database: the apply lock is taken",

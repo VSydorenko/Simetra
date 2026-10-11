@@ -1,3 +1,4 @@
+import { applyTool, planTool } from "./apply-tools"
 import { diffTool, introspectTool } from "./database-tools"
 import {
   addTool,
@@ -35,6 +36,8 @@ export const TOOLS: readonly Tool[] = [
   promoteTool,
   introspectTool,
   diffTool,
+  planTool,
+  applyTool,
 ]
 
 export function toolByName(name: string): Tool | undefined {

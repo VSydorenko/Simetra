@@ -72,6 +72,15 @@ describe("simetra-metadata skill", () => {
     expect(r.written).toBe(true)
   })
 
+  it("has an apply example that the MCP schema accepts", () => {
+    const [, body] = /```json simetra:apply\n([\s\S]*?)```/.exec(skill)!
+    const input = JSON.parse(body!) as Record<string, unknown>
+    expect(mcpInputSchema(toolByName("apply")!).safeParse(input).success).toBe(
+      true
+    )
+    expect(input.confirm).toBe(true)
+  })
+
   it("every tool of the catalog is routed in the skill", () => {
     for (const t of TOOLS) expect(skill).toContain(`\`${t.name}\``)
   })

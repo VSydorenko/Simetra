@@ -9,7 +9,15 @@ import { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { createMcpServer } from "../mcp/server"
-import { READ_ONLY_FLAG, readOnlyHint } from "../tools/hints"
+import { mcpInputSchema } from "../mcp/tools"
+import { applyTool, planTool } from "../tools/apply-tools"
+import {
+  ALLOW_DATABASE_WRITE_FLAG,
+  databaseWriteHint,
+  READ_ONLY_FLAG,
+  readOnlyHint,
+} from "../tools/hints"
+import { invoke } from "../tools/invoke"
 import type { DatabaseResource } from "../tools/types"
 import {
   addAdoptedTag,
@@ -23,8 +31,11 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // перевиміряно в E2b: 10055 символів JSON усіх інструментів (+introspect, diff)
 // перевиміряно в промоції-4: вхід `promote` — 4728 символів із 15120; його визначає
 // структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
-const TOOLS_LIST_MEASURED = 15120
-const TOOLS_LIST_BUDGET = Math.ceil(TOOLS_LIST_MEASURED * 1.2)
+// перевиміряно в П3-1: plan і apply — 17013 символів (без них зараз 15283: 15120
+// вище застаріле на 163); reviewed decision архітектора П3-1 — колишній бюджет +
+// приріст × 1,05: 18144 + ceil((17013 − 15120) × 1,05) = 20132; резерв — дубль
+// мапінгу без `$defs`
+const TOOLS_LIST_BUDGET = 20132
 const clients: Client[] = []
 
 useTmpProjects()
@@ -36,9 +47,16 @@ async function connect(
   dir: string,
   readOnly: boolean,
   launchArgs?: string[],
-  database?: DatabaseResource
+  database?: DatabaseResource,
+  allowDatabaseWrite = false
 ): Promise<Client> {
-  const server = createMcpServer({ dir, readOnly, launchArgs, database })
+  const server = createMcpServer({
+    dir,
+    readOnly,
+    allowDatabaseWrite,
+    launchArgs,
+    database,
+  })
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: "test", version: "0.0.0" })
   clients.push(client)
@@ -74,11 +92,104 @@ const rename = {
   newName: "Money",
 }
 
+/** Ресурс бази, що рахує підключення: відмова мусить лишити його нулем. */
+function spyDatabase(): { database: DatabaseResource; connects: () => number } {
+  let connects = 0
+  return {
+    database: {
+      describe: "db.example.test:5432/app",
+      connect: () => {
+        connects++
+        return Promise.reject(new Error("must not connect"))
+      },
+    },
+    connects: () => connects,
+  }
+}
+
+const applyInput = {
+  plan: "plans/initial-0123456789ab.plan.json",
+  planHash: "a".repeat(64),
+}
+
+describe("apply over MCP", () => {
+  it("is refused without --allow-database-write, naming the flag, before connecting", async () => {
+    const dir = await project()
+    const spy = spyDatabase()
+    const direct = await invoke(applyTool, applyInput, {
+      dir,
+      readOnly: false,
+      allowDatabaseWrite: false,
+      dryRun: false,
+      confirmed: true,
+      channel: "mcp",
+      database: spy.database,
+    })
+    expect(direct.refusal?.reason).toBe("database-write-disabled")
+    expect(direct.refusal?.message).toBe(databaseWriteHint())
+    const client = await connect(dir, false, undefined, spy.database)
+    const r = await call(client, "apply", { ...applyInput, confirm: true })
+    expect(r.isError).toBe(true)
+    expect(r.text).toContain(ALLOW_DATABASE_WRITE_FLAG)
+    expect(spy.connects()).toBe(0)
+  })
+
+  it("--read-only wins over --allow-database-write", async () => {
+    const dir = await project()
+    const spy = spyDatabase()
+    const client = await connect(dir, true, undefined, spy.database, true)
+    const r = await call(client, "apply", { ...applyInput, confirm: true })
+    expect(r.isError).toBe(true)
+    expect(r.text).toContain(READ_ONLY_FLAG)
+    expect(spy.connects()).toBe(0)
+  })
+
+  it("takes confirm but not dryRun", () => {
+    const schema = mcpInputSchema(applyTool)
+    expect(schema.safeParse({ ...applyInput, confirm: true }).success).toBe(
+      true
+    )
+    expect(schema.safeParse({ ...applyInput, dryRun: true }).success).toBe(
+      false
+    )
+    // `plan` пише лише файл: `dryRun` є, підтвердження немає
+    const plan = mcpInputSchema(planTool)
+    expect(plan.safeParse({ dryRun: true }).success).toBe(true)
+    expect(plan.safeParse({ confirm: true }).success).toBe(false)
+  })
+
+  it("a dry run does not stand in for confirmation", async () => {
+    // `dryRun`, якого `apply` не знає, інакше обійшов би підтвердження
+    const dir = await project()
+    const spy = spyDatabase()
+    const r = await invoke(applyTool, applyInput, {
+      dir,
+      readOnly: false,
+      allowDatabaseWrite: true,
+      dryRun: true,
+      confirmed: false,
+      channel: "mcp",
+      database: spy.database,
+    })
+    expect(r.refusal?.reason).toBe("unconfirmed")
+    expect(spy.connects()).toBe(0)
+  })
+
+  it("instructions name the database write flag", async () => {
+    const off = await connect(await project(), false)
+    expect(off.getInstructions()).toContain(databaseWriteHint())
+    const on = await connect(await project(), false, undefined, undefined, true)
+    expect(on.getInstructions()).not.toContain(databaseWriteHint())
+    expect(on.getInstructions()).toContain("planHash")
+  })
+})
+
 describe("simetra mcp", () => {
   it("lists every catalog tool in read-only mode", async () => {
     const client = await connect(await project(), true)
     expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([
       "add",
+      "apply",
       "compile",
       "create",
       "delete",
@@ -86,6 +197,7 @@ describe("simetra mcp", () => {
       "explain",
       "fix",
       "introspect",
+      "plan",
       "promote",
       "rename",
     ])
@@ -191,6 +303,9 @@ describe("simetra mcp", () => {
     expect(by("compile")?.annotations?.readOnlyHint).toBe(true)
     expect(by("rename")?.annotations?.readOnlyHint).toBe(false)
     expect(by("delete")?.annotations?.destructiveHint).toBe(true)
+    expect(by("apply")?.annotations?.destructiveHint).toBe(true)
+    expect(by("apply")?.annotations?.readOnlyHint).toBe(false)
+    expect(by("plan")?.annotations?.destructiveHint).toBe(false)
   })
 
   it("fix is a write tool with dryRun", async () => {

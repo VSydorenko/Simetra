@@ -1,0 +1,519 @@
+import { existsSync } from "node:fs"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { Client } from "@modelcontextprotocol/client"
+import { InMemoryTransport } from "@modelcontextprotocol/server"
+import pg from "pg"
+import { compile } from "simetra/compiler"
+import { parsePlan, type EngineScope } from "simetra/schema"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest"
+import { databaseResource } from "../io/database"
+import { readMetadataDir } from "../io/metadata-dir"
+import { createMcpServer } from "../mcp/server"
+import { createPgDeltaEngine } from "../schema-engine"
+import type { ApplyData, PlanData } from "../tools/apply-tools"
+import { toolByName } from "../tools/catalog"
+import { invoke } from "../tools/invoke"
+import type {
+  DatabaseResource,
+  InvokeOptions,
+  ToolResult,
+} from "../tools/types"
+import {
+  acceptDebt,
+  attribute,
+  catalog,
+  metaFiles,
+  project as projectFile,
+  shadowDatabaseCount,
+  testDatabaseUrl,
+  testSuperuserUrl,
+  uuid,
+} from "../../../simetra/test/support"
+import { snapshotOf } from "./helpers/catalog"
+
+/**
+ * Інструменти `plan` і `apply` над живою базою (план П3-1, задача 10):
+ * артефакт пишеться поруч із текою метаданих, `apply` перевіряє хеш, версії
+ * й свіжість ще до підключення, а пише лише за підтвердженням. Ціль кожного
+ * тесту — окрема база від `withDesiredShadow`; база стеку лише читається.
+ */
+
+const engine = createPgDeltaEngine()
+const stack = { url: testDatabaseUrl() }
+const SIMETRA = resolve(__dirname, "../../../simetra")
+const ENV = "SIMETRA_DATABASE_URL"
+const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+
+/** Роль, якій за спиною платформи передають таблицю цілі. */
+const OWNER = "simetra_apply_tools_owner"
+
+async function other(url: string, sql: string): Promise<void> {
+  const client = new pg.Client({ connectionString: url })
+  await client.connect()
+  try {
+    await client.query(sql)
+  } finally {
+    await client.end()
+  }
+}
+
+async function one<R extends Record<string, unknown>>(
+  url: string,
+  sql: string
+): Promise<R | undefined> {
+  const client = new pg.Client({ connectionString: url })
+  await client.connect()
+  try {
+    return (await client.query<R>(sql)).rows[0]
+  } finally {
+    await client.end()
+  }
+}
+
+const dropRole = () =>
+  other(testSuperuserUrl(), `drop role if exists ${OWNER};`)
+
+beforeAll(async () => {
+  // Роль могла лишитися від убитого прогону
+  await dropRole()
+  await other(
+    testSuperuserUrl(),
+    `create role ${OWNER} nologin; grant ${OWNER} to postgres;`
+  )
+})
+afterAll(dropRole)
+
+let shadowsBefore = 0
+const disposers: (() => Promise<void>)[] = []
+const clients: Client[] = []
+beforeEach(async () => {
+  shadowsBefore = await shadowDatabaseCount()
+})
+afterEach(async () => {
+  await Promise.all(clients.splice(0).map((c) => c.close()))
+  await Promise.all(disposers.splice(0).map((d) => d()))
+  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
+})
+
+/** Ціль із `setup`; базу прибирає порт. */
+async function inTarget(
+  setup: string,
+  fn: (url: string) => Promise<void>
+): Promise<void> {
+  const outcome = await engine.withDesiredShadow(
+    { target: stack },
+    setup,
+    scope,
+    (target) => fn(target.url)
+  )
+  if (outcome.status !== "loaded")
+    throw new Error(
+      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
+    )
+}
+
+/** Порожня ціль: лише базовий стан провайдера. */
+const EMPTY = "select 1;"
+
+const PARTY = "catalogs/Party/Party.meta.json"
+const party = (attributes: unknown[] = []) =>
+  catalog("Party", { id: uuid(9101), attributes })
+const note = () => attribute("note", { id: uuid(9102) })
+
+/** Записує метадані в теку; дослівні одиниці — прийнятий борг. */
+async function writeMetadata(
+  dir: string,
+  entries: Record<string, unknown>
+): Promise<void> {
+  const files = await acceptDebt(
+    metaFiles({
+      "project.meta.json": projectFile({ defaultSchema: "app" }),
+      ...entries,
+    })
+  )
+  await rm(dir, { recursive: true, force: true })
+  for (const [path, content] of files) {
+    await mkdir(dirname(join(dir, path)), { recursive: true })
+    await writeFile(join(dir, path), content)
+  }
+}
+
+/** Корінь проєкту з `node_modules/simetra` і текою метаданих. */
+async function projectWith(entries: Record<string, unknown>): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "simetra-apply-tools-"))
+  await mkdir(join(root, "node_modules"))
+  await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
+  disposers.push(() => rm(root, { recursive: true }))
+  const dir = join(root, "metadata")
+  await writeMetadata(dir, entries)
+  return dir
+}
+
+const options = (
+  dir: string,
+  url: string,
+  over: Partial<InvokeOptions> = {}
+): InvokeOptions => ({
+  dir,
+  readOnly: false,
+  allowDatabaseWrite: true,
+  dryRun: false,
+  confirmed: true,
+  channel: "cli",
+  database: databaseResource({ [ENV]: url }, { url: ENV }),
+  ...over,
+})
+
+const call = (
+  name: "plan" | "apply",
+  input: unknown,
+  o: InvokeOptions
+): Promise<ToolResult> => invoke(toolByName(name)!, input, o)
+
+const codes = (r: ToolResult) => r.diagnostics.map((d) => d.code)
+const errors = (r: ToolResult) =>
+  r.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
+
+/** План, що мусить бути `planned`: його дані. */
+async function planned(dir: string, url: string): Promise<PlanData> {
+  const r = await call("plan", {}, options(dir, url))
+  expect(r.refusal).toBeUndefined()
+  expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+  expect(r.written).toBe(true)
+  return r.data as PlanData
+}
+
+async function applied(
+  dir: string,
+  url: string,
+  data: PlanData,
+  allow: string[] = data.requiredPermissions
+): Promise<void> {
+  const r = await call(
+    "apply",
+    { plan: data.file, planHash: data.planHash, allow },
+    options(dir, url)
+  )
+  expect(r.diagnostics, JSON.stringify(r.diagnostics)).toEqual([])
+  expect(r.data).toMatchObject({ status: "committed" })
+}
+
+/** План і застосування поточних метаданих. */
+async function establish(dir: string, url: string): Promise<void> {
+  await applied(dir, url, await planned(dir, url))
+}
+
+const hashOf = async (dir: string): Promise<string> =>
+  (await compile(await readMetadataDir(dir))).model!.hash
+
+const markerExists = async (url: string): Promise<boolean> =>
+  (
+    await one<{ found: string | null }>(
+      url,
+      "select to_regclass('simetra.marker')::text as found"
+    )
+  )?.found != null
+
+/** Ресурс бази, що рахує підключення: відмова до кроку 7 його не чіпає. */
+function spyDatabase(): { database: DatabaseResource; connects: () => number } {
+  let connects = 0
+  return {
+    database: {
+      describe: "db.example.test:5432/app",
+      connect: () => {
+        connects++
+        return Promise.reject(new Error("must not connect"))
+      },
+    },
+    connects: () => connects,
+  }
+}
+
+async function connectMcp(
+  dir: string,
+  url: string,
+  allowDatabaseWrite: boolean
+): Promise<Client> {
+  const server = createMcpServer({
+    dir,
+    readOnly: false,
+    allowDatabaseWrite,
+    database: databaseResource({ [ENV]: url }, { url: ENV }),
+    databaseEnv: ENV,
+  })
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: "test", version: "0.0.0" })
+  clients.push(client)
+  await server.connect(serverEnd)
+  await client.connect(clientEnd)
+  return client
+}
+
+describe("plan", () => {
+  it("plan writes the artifact next to metadata", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const before = await snapshotOf(dir)
+      const root = dirname(dir)
+
+      const dry = await call("plan", {}, options(dir, url, { dryRun: true }))
+      expect(errors(dry)).toEqual([])
+      expect(dry.written).toBe(false)
+      expect(existsSync(join(root, "plans"))).toBe(false)
+
+      const r = await call("plan", {}, options(dir, url))
+      const data = r.data as PlanData
+      const hash = await hashOf(dir)
+      expect(data.file).toBe(`plans/initial-${hash.slice(0, 12)}.plan.json`)
+      expect(r.artifacts).toEqual([data.file])
+      expect(r.written).toBe(true)
+      expect(data.fromHash).toBeNull()
+      expect(data.toHash).toBe(hash)
+      expect(data.drift).toBeNull()
+      expect(codes(r)).toContain("plan.schema-only-proof")
+      const parsed = parsePlan(await readFile(join(root, data.file), "utf8"))
+      expect(parsed.ok && parsed.artifact.planHash).toBe(data.planHash)
+      expect(await snapshotOf(dir)).toEqual(before)
+      // План лише читає ціль
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
+  it("plan writes a drift-only plan", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      await establish(dir, url)
+      await other(
+        url,
+        "update simetra.marker set engine_version = 'other', fingerprint_version = fingerprint_version + 1"
+      )
+      const data = await planned(dir, url)
+      const h12 = (await hashOf(dir)).slice(0, 12)
+      expect(data.file).toBe(`plans/${h12}-${h12}.plan.json`)
+      expect(existsSync(join(dirname(dir), data.file))).toBe(true)
+      expect(data.steps).toEqual([])
+      expect(data.drift?.reason).toBe("versions-changed")
+      expect(data.requiredPermissions).toEqual(["drift"])
+
+      // Нуль кроків не скасовує дозволу
+      const refused = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash },
+        options(dir, url)
+      )
+      expect(errors(refused)).toEqual(["apply.permission-required"])
+      await applied(dir, url, data, ["drift"])
+      const next = await call("plan", {}, options(dir, url))
+      expect(next.ok).toBe(true)
+      expect(next.data).toBeUndefined()
+      expect(next.artifacts).toEqual([])
+    })
+  })
+
+  it("plan refuses an owner swap", async () => {
+    // Прийнята база: таблиця моделі вже є, але належить іншій ролі
+    await inTarget(
+      `create schema app;
+       grant create on schema app to ${OWNER};
+       create table app.party (id uuid primary key);
+       alter table app.party owner to ${OWNER};`,
+      async (url) => {
+        const dir = await projectWith({ [PARTY]: party() })
+        const r = await call("plan", {}, options(dir, url))
+        expect(r.ok).toBe(false)
+        expect(errors(r)).toEqual(["plan.owner-mismatch"])
+        expect(
+          r.diagnostics.find((d) => d.code === "plan.owner-mismatch")?.params
+            ?.objects
+        ).toBe(`relation app.party (owner ${OWNER}, expected postgres)`)
+        expect(r.written).toBe(false)
+        expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
+      }
+    )
+  })
+})
+
+describe("apply", () => {
+  it("apply refuses a foreign planHash", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: "0".repeat(64) },
+        options(dir, url)
+      )
+      expect(r.ok).toBe(false)
+      expect(errors(r)).toEqual(["apply.plan-hash"])
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
+  it("apply refuses a hand-edited plan", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      const file = join(dirname(dir), data.file)
+      const json = JSON.parse(await readFile(file, "utf8")) as {
+        steps: { sql: string }[]
+      }
+      json.steps[0]!.sql = `${json.steps[0]!.sql} -- edited`
+      await writeFile(file, JSON.stringify(json, null, 2))
+      const spy = spyDatabase()
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash },
+        options(dir, url, { database: spy.database })
+      )
+      expect(errors(r)).toEqual(["apply.plan-hash"])
+      expect(spy.connects()).toBe(0)
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
+  it("apply refuses stale metadata", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      await writeMetadata(dir, { [PARTY]: party([note()]) })
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash },
+        options(dir, url)
+      )
+      expect(errors(r)).toEqual(["apply.plan-stale"])
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
+  it("apply refuses a plan file outside plans/", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const r = await call(
+        "apply",
+        { plan: "metadata/project.meta.json", planHash: "0".repeat(64) },
+        options(dir, url)
+      )
+      expect(r.refusal?.reason).toBe("refused")
+      expect(r.refusal?.message).toContain("plans/")
+    })
+  })
+
+  it("apply refuses a destructive step without allow", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party([note()]) })
+      await establish(dir, url)
+      await writeMetadata(dir, { [PARTY]: party() })
+      const data = await planned(dir, url)
+      const drop = data.steps.find((s) => /DROP COLUMN/i.test(s.sql))
+      expect(drop?.class).toBe("destructive")
+      expect(data.requiredPermissions).toEqual([drop!.id])
+
+      const refused = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash },
+        options(dir, url)
+      )
+      expect(errors(refused)).toEqual(["apply.permission-required"])
+      expect(
+        await one(
+          url,
+          "select 1 from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = 'note'"
+        )
+      ).toBeDefined()
+
+      await applied(dir, url, data, [drop!.id])
+      expect(
+        await one(
+          url,
+          "select 1 from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = 'note'"
+        )
+      ).toBeUndefined()
+    })
+  })
+
+  it("apply rehearses without writing", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash, rehearse: true },
+        options(dir, url)
+      )
+      expect(r.diagnostics).toEqual([])
+      expect((r.data as ApplyData).status).toBe("rolledBack")
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+})
+
+describe("over MCP", () => {
+  it("plan shows drift first", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      await establish(dir, url)
+      await other(url, "alter table app.party add column extra int")
+      const client = await connectMcp(dir, url, false)
+      const r = await client.callTool({ name: "plan", arguments: {} })
+      expect(r.isError).toBeFalsy()
+      const out = r.structuredContent as unknown as PlanData
+      expect(out.drift).not.toBeNull()
+      expect(out.requiredPermissions[0]).toBe("drift")
+      const text = (r.content as { text: string }[])[0]!.text
+      const drift = text.indexOf("drift (drift)")
+      const firstStep = text.indexOf(`  ${out.steps[0]!.id} `)
+      expect(drift).toBeGreaterThan(-1)
+      expect(firstStep).toBeGreaterThan(drift)
+      expect(text).toContain(out.planHash)
+      // Рядок підключення в тексті не з'являється
+      expect(text).not.toContain(url)
+    })
+  })
+
+  it("apply needs the launch flag over MCP", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      const args = { plan: data.file, planHash: data.planHash, confirm: true }
+
+      const without = await connectMcp(dir, url, false)
+      const refused = await without.callTool({ name: "apply", arguments: args })
+      expect(refused.isError).toBe(true)
+      expect(await markerExists(url)).toBe(false)
+
+      const client = await connectMcp(dir, url, true)
+      const unconfirmed = await client.callTool({
+        name: "apply",
+        arguments: { plan: data.file, planHash: data.planHash },
+      })
+      expect(unconfirmed.isError).toBe(true)
+      expect(await markerExists(url)).toBe(false)
+
+      const r = await client.callTool({ name: "apply", arguments: args })
+      expect(r.isError).toBeFalsy()
+      expect(r.structuredContent).toMatchObject({
+        status: "committed",
+        attempts: 1,
+      })
+      expect(await markerExists(url)).toBe(true)
+    })
+  })
+})

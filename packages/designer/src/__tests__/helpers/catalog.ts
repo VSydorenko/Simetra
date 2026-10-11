@@ -24,6 +24,7 @@ export async function project(): Promise<string> {
 export const opts = (dir: string): InvokeOptions => ({
   dir,
   readOnly: false,
+  allowDatabaseWrite: false,
   dryRun: false,
   confirmed: false,
   channel: "cli",

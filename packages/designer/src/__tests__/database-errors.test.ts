@@ -1,5 +1,9 @@
 import type { Diagnostic } from "simetra/compiler"
-import type { EngineAction } from "simetra/schema"
+import {
+  ApplyConnectionLost,
+  ApplyDbError,
+  type EngineAction,
+} from "simetra/schema"
 import { describe, expect, it } from "vitest"
 import { narrow } from "../tools/database-tools"
 import { toolByName } from "../tools/catalog"
@@ -180,6 +184,35 @@ describe("classifyDatabaseError", () => {
       expect(leaks(text)).toEqual([])
     })
   }
+
+  it("reads the SQLSTATE of a runner error like a driver code", () => {
+    // Раннер застосування кидає помилку порту T2 з `sqlstate`, а не `code`
+    const privilege = classifyDatabaseError(
+      new ApplyDbError(`permission denied for ${USER}`, "42501"),
+      names
+    )
+    expect(privilege).toEqual(
+      classifyDatabaseError(pgError("42501", "permission denied"), names)
+    )
+    expect(privilege.kind).toBe("refusal")
+    expect(
+      classifyDatabaseError(
+        new ApplyDbError(`boom ${PASSWORD}`, "XX000"),
+        names
+      )
+    ).toEqual({
+      kind: "failure",
+      params: { database: DESCRIBE, error: "ApplyDbError", sqlstate: "XX000" },
+    })
+    const lost = classifyDatabaseError(
+      new ApplyConnectionLost(`connection failure ${URL_}`),
+      names
+    )
+    expect(lost.kind === "refusal" && lost.message).toMatch(
+      /was lost or timed out/
+    )
+    expect(leaks(JSON.stringify(lost))).toEqual([])
+  })
 
   it("names the server that failed to create the shadow", () => {
     const own = classifyDatabaseError(

@@ -1,5 +1,11 @@
 import type { Explanation, Locale, PromotionRecord } from "simetra/compiler"
-import { formatDiagnostics, renderDiff } from "../io/report"
+import {
+  formatDiagnostics,
+  renderApply,
+  renderDiff,
+  renderPlan,
+} from "../io/report"
+import type { ApplyData, PlanData } from "../tools/apply-tools"
 import type { Tool, ToolResult } from "../tools/catalog"
 import type { DiffData } from "../tools/database-tools"
 
@@ -117,6 +123,32 @@ export function renderResult(
               2
             )
           : renderDiff(data, report),
+    }
+  }
+  if (tool.name === "plan" || tool.name === "apply") {
+    if (o.format === "json")
+      return {
+        stdout: JSON.stringify(
+          {
+            ok: r.ok,
+            written: r.written,
+            ...(tool.name === "plan" ? { artifacts: r.artifacts ?? [] } : {}),
+            ...(r.data as Record<string, unknown> | undefined),
+            diagnostics: JSON.parse(report) as unknown,
+          },
+          null,
+          2
+        ),
+      }
+    return {
+      stdout:
+        tool.name === "plan"
+          ? renderPlan(r.data as PlanData | undefined, report, {
+              ok: r.ok,
+              written: r.written,
+              dry: !r.written && (r.artifacts ?? []).length > 0,
+            })
+          : renderApply(r.data as ApplyData | undefined, report),
     }
   }
   if (tool.files === "read") return { stdout: report }

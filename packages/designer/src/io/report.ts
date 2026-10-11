@@ -1,5 +1,6 @@
 import type { Diagnostic, Locale } from "simetra/compiler"
 import { localize } from "simetra/compiler"
+import type { ApplyData, PlanData } from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 
 export interface ReportOptions {
@@ -81,4 +82,63 @@ export function renderDiff(d: DiffData, report: string): string {
   if (d.empty) lines.push("diff: the database matches the metadata")
   lines.push(report)
   return lines.join("\n")
+}
+
+const short = (hash: string | null): string =>
+  hash === null ? "initial" : hash.slice(0, 12)
+
+/**
+ * Зведення плану для людини й агента: звідки й куди, `planHash` і файл,
+ * дрейф — першим блоком, до кроків (рішення 16 плану П3-1): кроки читаються
+ * вже знаючи, що ціль дрейфнула. Повний SQL — у файлі плану; тут перший рядок.
+ */
+export function renderPlan(
+  d: PlanData | undefined,
+  report: string,
+  o: { ok: boolean; written: boolean; dry: boolean }
+): string {
+  if (d === undefined)
+    return [
+      o.ok
+        ? "plan: nothing to apply; the database is at the metadata"
+        : "plan: no plan written: the plan was refused or has errors",
+      report,
+    ].join("\n")
+  const needs = new Set(d.requiredPermissions)
+  const lines = [
+    `plan ${short(d.fromHash)} -> ${short(d.toHash)}`,
+    `${o.written ? "written" : "would write"} ${d.file}${o.dry ? " (dry run)" : ""}`,
+    `planHash: ${d.planHash}`,
+  ]
+  if (d.drift !== null) {
+    lines.push(`drift (${d.drift.reason}): needs allow: drift`)
+    if (d.drift.sections.length > 0)
+      lines.push(`  fingerprint sections: ${d.drift.sections.join(", ")}`)
+    for (const path of d.drift.paths) lines.push(`  ${path}`)
+  }
+  if (d.steps.length === 0) lines.push("steps: none")
+  else {
+    lines.push(`steps (${d.steps.length}):`)
+    for (const s of d.steps) {
+      const tags = [
+        `lock ${s.lockClass}`,
+        ...(needs.has(s.id) ? [`needs allow: ${s.id}`] : []),
+      ]
+      const first = s.sql.trim().split("\n")[0] ?? ""
+      lines.push(`  ${s.id} ${s.class} (${tags.join("; ")}) ${first}`)
+    }
+  }
+  lines.push(report)
+  return lines.join("\n")
+}
+
+/** Підсумок застосування; репетиція нагадує, що блокування були справжні. */
+export function renderApply(d: ApplyData | undefined, report: string): string {
+  const head =
+    d === undefined
+      ? "apply: nothing was written"
+      : d.status === "committed"
+        ? `apply: committed in ${d.attempts} attempt(s)`
+        : `rehearse: rolled back after ${d.attempts} attempt(s); nothing was written. The rehearsal took ACCESS EXCLUSIVE locks on the changed tables, as apply does.`
+  return [head, report].join("\n")
 }

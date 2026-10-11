@@ -154,6 +154,8 @@ export async function runTool(
         const result = await invoke(tool, input, {
           dir,
           readOnly: false,
+          // Людина, що запускає `simetra apply --yes`, і є рішенням про запис
+          allowDatabaseWrite: true,
           dryRun: argv["dry-run"] === true,
           confirmed: argv.yes === true,
           channel: "cli",
@@ -241,6 +243,17 @@ function argsFor(tool: Tool): ArgsDef {
       description: "Metadata directory (default: ./metadata)",
       required: false,
     }
+  } else if (tool.name === "apply") {
+    args.plan = {
+      type: "positional",
+      description: "Plan file written by plan, e.g. plans/initial-….plan.json",
+      required: true,
+    }
+    args.dir = {
+      type: "positional",
+      description: "Metadata directory (default: ./metadata)",
+      required: false,
+    }
   } else if (takesJsonInput(tool)) {
     args.json = {
       type: "positional",
@@ -288,6 +301,32 @@ function argsFor(tool: Tool): ArgsDef {
     args.tables = {
       type: "string",
       description: "Comma-separated tables to compare: schema.table or table",
+    }
+  }
+  if (tool.name === "apply") {
+    args["plan-hash"] = {
+      type: "string",
+      description: "planHash of the reviewed plan (printed by plan)",
+    }
+    args.allow = {
+      type: "string",
+      description:
+        "Comma-separated plan items to permit: step ids (s1,s2) and drift",
+    }
+    args.rehearse = {
+      type: "boolean",
+      default: false,
+      description:
+        "Run the plan and roll back; still takes ACCESS EXCLUSIVE locks",
+    }
+    args["lock-timeout-ms"] = {
+      type: "string",
+      description: "lock_timeout of the apply transaction (default 3000)",
+    }
+    args["statement-timeout-ms"] = {
+      type: "string",
+      description:
+        "statement_timeout of the apply transaction (default 600000)",
     }
   }
   if (tool.database !== "none") {
@@ -352,6 +391,11 @@ function toCliArgs(args: { _: string[] } & Record<string, unknown>): CliArgs {
     "database-provider": str(args["database-provider"]),
     "database-url-env": str(args["database-url-env"]),
     "shadow-url-env": str(args["shadow-url-env"]),
+    "plan-hash": str(args["plan-hash"]),
+    allow: str(args.allow),
+    rehearse: args.rehearse === true,
+    "lock-timeout-ms": str(args["lock-timeout-ms"]),
+    "statement-timeout-ms": str(args["statement-timeout-ms"]),
   }
 }
 
