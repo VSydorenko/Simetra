@@ -67,20 +67,29 @@ export type VettedQuery =
     }
   | { ok: false; reason: string }
 
-/** Режим доступу з опцій `BEGIN`/`SET TRANSACTION`: `undefined` — не заданий. */
+/**
+ * Режим доступу з опцій `BEGIN`/`SET TRANSACTION`: `undefined` — не заданий.
+ * Postgres застосовує опції по черзі й виграє остання, тож переглядаються всі:
+ * `READ ONLY, READ WRITE` відкриває транзакцію на запис. Будь-який `READ WRITE`
+ * серед опцій дає `false`.
+ */
 function readOnlyOption(
   options: readonly Node[] | undefined
 ): boolean | undefined {
+  let mode: boolean | undefined
   for (const option of options ?? []) {
     if (!("DefElem" in option)) continue
     if (option.DefElem.defname !== "transaction_read_only") continue
     const arg = option.DefElem.arg
     // `READ ONLY` — ціле 1, `READ WRITE` — 0 (поле `ival` порожнє)
-    return arg !== undefined && "A_Const" in arg
-      ? arg.A_Const.ival?.ival === 1
-      : false
+    const readOnly =
+      arg !== undefined && "A_Const" in arg
+        ? arg.A_Const.ival?.ival === 1
+        : false
+    if (!readOnly) return false
+    mode = true
   }
-  return undefined
+  return mode
 }
 
 /**
@@ -100,10 +109,12 @@ function readOnlyOption(
  * - `COMMIT`/`ROLLBACK AND CHAIN` — відмова.
  *
  * Модель загрози — випадковий запис нашим кодом чи двигуном, а не зловмисник.
- * Поза досяжністю сторожа свідомо лишаються: `set_config('transaction_read_only',
- * 'off', …)` чи `set_config(…, false)` у виразі `SELECT`, іменовані prepared
- * statements, сесійні advisory lock, `LISTEN`. Такі запити — не випадковість,
- * а обхід, і ловить їх перегляд коду, а не розбір.
+ * Поза досяжністю сторожа свідомо лишається сесійний `set_config(…, false)` у
+ * виразі `SELECT`, іменовані prepared statements, сесійні advisory lock,
+ * `LISTEN`. Такі запити — не випадковість, а обхід, і ловить їх перегляд коду,
+ * а не розбір. `set_config('transaction_read_only', 'off', …)` у `SELECT`
+ * сторожа не потребує: Postgres сам відмовляє (25001), бо `SELECT` уже узяв
+ * знімок.
  */
 export function vetTargetQuery(
   text: string,
@@ -154,7 +165,9 @@ export function vetTargetQuery(
     }
     if ("VariableSetStmt" in stmt) {
       const v = stmt.VariableSetStmt
-      if (READ_ONLY_SETTINGS.has(v.name ?? ""))
+      // Postgres зіставляє імена налаштувань без регістру, а лапки зберігають
+      // його в розборі: `"Transaction_Read_Only"` — те саме налаштування
+      if (READ_ONLY_SETTINGS.has((v.name ?? "").toLowerCase()))
         return { ok: false, reason: READ_WRITE }
       // `SET TRANSACTION …` діє лише на поточну транзакцію, хоч і без `LOCAL`
       const transactionScoped =
@@ -215,18 +228,49 @@ const guarded = new WeakSet<pg.PoolClient>()
  * завантажено в `connect()`, тож перевірка синхронна й не міняє порядку
  * запитів.
  */
-function guard(client: pg.PoolClient, parse: SqlParser): pg.PoolClient {
+export function guard(client: pg.PoolClient, parse: SqlParser): pg.PoolClient {
   if (guarded.has(client)) return client
   guarded.add(client)
   const query = client.query.bind(client) as RawQuery
   let inTransaction = false
+  const refuse = (args: unknown[], error: Error): unknown => {
+    // Форма з колбеком, як у `pg`: помилка йде в колбек, а не відхиленим
+    // промісом, якого ніхто не чекає
+    const callback = args[args.length - 1]
+    if (typeof callback !== "function") return Promise.reject(error)
+    process.nextTick(() => callback(error))
+    return undefined
+  }
   const checked: RawQuery = (...args) => {
     const text = textOf(args[0])
-    if (text === undefined) return Promise.reject(new Error(OUTSIDE))
+    if (text === undefined) return refuse(args, new Error(OUTSIDE))
     const vetted = vetTargetQuery(text, inTransaction, parse)
-    if (!vetted.ok) return Promise.reject(new Error(vetted.reason))
+    if (!vetted.ok) return refuse(args, new Error(vetted.reason))
     inTransaction = vetted.inTransaction
-    return query(...(vetted.text === text ? args : withText(args, vetted.text)))
+    // Стан оновлено до відповіді сервера. Якщо сервер відхилив оператор, який
+    // ми порахували за `BEGIN`, він лишився в autocommit, а ми вважали б
+    // транзакцію відкритою: далі йде суворий бік — «закрита»
+    const close = () => {
+      inTransaction = false
+    }
+    const sent = vetted.text === text ? args : withText(args, vetted.text)
+    const last = sent[sent.length - 1]
+    if (typeof last === "function") {
+      const callback = last as (error: unknown, ...rest: unknown[]) => void
+      sent[sent.length - 1] = (error: unknown, ...rest: unknown[]) => {
+        if (error) close()
+        callback(error, ...rest)
+      }
+    }
+    const result = query(...sent)
+    if (
+      typeof result === "object" &&
+      result !== null &&
+      "then" in result &&
+      typeof result.then === "function"
+    )
+      (result as Promise<unknown>).then(undefined, close)
+    return result
   }
   client.query = checked as pg.PoolClient["query"]
   return client

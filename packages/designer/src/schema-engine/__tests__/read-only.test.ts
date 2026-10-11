@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import { beforeAll, describe, expect, it } from "vitest"
-import { vetTargetQuery } from "../read-only"
+import type pg from "pg"
+import { guard, vetTargetQuery } from "../read-only"
 
 /**
  * Сторож рішення 14.1 плану П3-1: гарантія «лише читання» живе в транзакції,
@@ -52,14 +53,19 @@ describe("target reads carry no session state", () => {
   })
 
   // Пул цілі — лише сторожовий; пул, що пише, — тінь адаптера й раннер
+  // Рахується кількість, а не файли: другий пул у дозволеному файлі теж
+  // мусить провалити перевірку
   it("pools are created only by the guard, the shadow and the apply runner", () => {
-    expect(offenders(SRC, /new pg\.Pool\(/)).toEqual(
-      [
-        join("schema-engine", "apply-database.ts"),
-        join("schema-engine", "pg-delta", "adapter.ts"),
-        join("schema-engine", "read-only.ts"),
-      ].sort()
-    )
+    const counts: Record<string, number> = {}
+    for (const path of sources(SRC)) {
+      const n = readFileSync(path, "utf8").match(/new pg\.Pool\(/g)?.length
+      if (n) counts[relative(SRC, path)] = n
+    }
+    expect(counts).toEqual({
+      [join("schema-engine", "apply-database.ts")]: 1,
+      [join("schema-engine", "pg-delta", "adapter.ts")]: 1,
+      [join("schema-engine", "read-only.ts")]: 1,
+    })
   })
 })
 
@@ -133,6 +139,11 @@ describe("vetTargetQuery", () => {
       "BEGIN READ WRITE",
       "START TRANSACTION READ WRITE",
       "BEGIN; SET TRANSACTION READ WRITE",
+      "BEGIN READ ONLY, READ WRITE",
+      "BEGIN READ ONLY READ WRITE",
+      "START TRANSACTION READ ONLY, ISOLATION LEVEL SERIALIZABLE, READ WRITE",
+      "BEGIN READ ONLY; SET TRANSACTION READ ONLY, READ WRITE",
+      "BEGIN; SET TRANSACTION READ ONLY, READ WRITE",
     ])
       expect(refused(text), text).toMatch(/must stay read-only/)
     for (const text of [
@@ -141,6 +152,11 @@ describe("vetTargetQuery", () => {
       "SET LOCAL transaction_read_only = off",
       "SET LOCAL default_transaction_read_only = off",
       "SET transaction_read_only TO on",
+      'SET LOCAL "Transaction_Read_Only" = off',
+      'SET LOCAL "DEFAULT_Transaction_Read_Only" = off',
+      'SET "Transaction_Read_Only" TO on',
+      'RESET "Transaction_Read_Only"',
+      'RESET "Default_Transaction_Read_Only"',
     ])
       expect(refused(text, true), text).toMatch(/must stay read-only/)
     expect(vet("SET TRANSACTION READ ONLY", true)).toMatchObject({ ok: true })
@@ -170,5 +186,63 @@ describe("vetTargetQuery", () => {
 
   it("refuses what does not parse", () => {
     expect(refused("BEGIN READ ONLY; selec 1")).toMatch(/does not parse/)
+  })
+})
+
+describe("guard", () => {
+  /** Клієнт-пустушка: відповідає за сценарієм, текст запитів запам'ятовує. */
+  function fakeClient(failOn: string[]) {
+    const sent: string[] = []
+    const client = {
+      query(...args: unknown[]) {
+        const text = args[0] as string
+        sent.push(text)
+        const fail = failOn.includes(text)
+        const callback = args[args.length - 1]
+        if (typeof callback === "function") {
+          callback(fail ? new Error("server") : null, { rows: [] })
+          return undefined
+        }
+        return fail ? Promise.reject(new Error("server")) : Promise.resolve({})
+      },
+    }
+    return { client: client as unknown as pg.PoolClient, sent }
+  }
+
+  it("treats the transaction as closed after a failed statement", async () => {
+    const { client, sent } = fakeClient(["BEGIN READ ONLY"])
+    const guarded = guard(client, parse)
+    await expect(guarded.query("BEGIN")).rejects.toThrow("server")
+    await expect(guarded.query("select 1")).rejects.toThrow(
+      /outside a read-only transaction/
+    )
+    expect(sent).toEqual(["BEGIN READ ONLY"])
+  })
+
+  it("treats the transaction as closed after a failed callback statement", async () => {
+    const { client } = fakeClient(["BEGIN READ ONLY"])
+    const guarded = guard(client, parse)
+    const query = guarded.query as unknown as (
+      text: string,
+      callback: (error: Error | null) => void
+    ) => void
+    await new Promise<void>((done) => query("BEGIN", () => done()))
+    await expect(guarded.query("select 1")).rejects.toThrow(/outside/)
+  })
+
+  it("reports a refusal to the callback and returns undefined", async () => {
+    const { client, sent } = fakeClient([])
+    const guarded = guard(client, parse)
+    const query = guarded.query as unknown as (
+      text: string,
+      callback: (error: Error | null) => void
+    ) => unknown
+    let returned: unknown = "unset"
+    const error = await new Promise<Error | null>((done) => {
+      returned = query("select 1", done)
+    })
+    expect(returned).toBeUndefined()
+    expect(error?.message).toMatch(/outside a read-only transaction/)
+    expect(sent).toEqual([])
   })
 })
