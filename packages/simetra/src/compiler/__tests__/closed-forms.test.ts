@@ -30,8 +30,8 @@ async function diagnostics(files: Record<string, string>) {
   return result.diagnostics
 }
 
-const shell = (options: string) =>
-  `CREATE FUNCTION public.sale_total() RETURNS int ${options} AS $$ select 1 $$;`
+const shell = (options: string, body = "select 1") =>
+  `CREATE FUNCTION public.sale_total() RETURNS int ${options} AS $$ ${body} $$;`
 
 describe("kind module: closed forms only", () => {
   it.each([
@@ -78,8 +78,9 @@ describe("kind module: closed forms only", () => {
     expect(
       await diagnostics({
         [SALE_SQL]: shell(
-          "LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = ''"
-        ).replace("select 1", "BEGIN RETURN 1; END"),
+          "LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = ''",
+          "BEGIN RETURN 1; END"
+        ),
       })
     ).toEqual([])
     // Тіло стандарту SQL (`RETURN …`) — теж `LANGUAGE sql`.
@@ -124,6 +125,29 @@ describe("kind module: closed forms only", () => {
       expect(
         found.map((d) => [d.code, d.params?.problem, d.params?.line])
       ).toEqual([["sql.closed-shell", "dynamicSql", 6]])
+    })
+
+    it("falls back to the statement line for a quoted body with doubled quotes", async () => {
+      // `''` у тексті оператора не збігається з розібраним тілом, тож зсув тіла
+      // невідомий і лічба йде від рядка початку оператора (рядок 2), а не від
+      // рядка з відкривною лапкою (3): звіт на один рядок раніший за істинний
+      // (6), але завжди в межах функції.
+      const found = await diagnostics({
+        [SALE_SQL]: [
+          "-- коментар",
+          "CREATE FUNCTION public.sale_touch()",
+          "RETURNS trigger LANGUAGE plpgsql VOLATILE AS '",
+          "BEGIN",
+          "  PERFORM ''x'';",
+          "  EXECUTE ''select 1'';",
+          "  RETURN NEW;",
+          "END",
+          "';",
+        ].join("\n"),
+      })
+      expect(
+        found.map((d) => [d.code, d.params?.problem, d.params?.line])
+      ).toEqual([["sql.closed-shell", "dynamicSql", 5]])
     })
 
     it("refuses a plpgsql body that does not parse", async () => {

@@ -205,6 +205,90 @@ describe("loadPlpgsqlParser", () => {
     })
   })
 
+  it("walks statements inside an EXCEPTION block", () => {
+    // Обробник винятку — обгортка, а не оператор: його оператори мають лишитися
+    // в обході, інакше запит у `EXCEPTION WHEN` ховався б від переписувача.
+    const f = parsed(
+      fn(
+        [
+          "DECLARE n int;",
+          "BEGIN",
+          "  n := 1;",
+          "EXCEPTION WHEN unique_violation THEN",
+          "  n := (SELECT 2 FROM app.t2);",
+          "  RETURN NEW;",
+          "END",
+        ].join("\n")
+      )
+    )
+    const handled = f.statements.find(
+      (s) => s.expressions[0]?.query === "n := (SELECT 2 FROM app.t2)"
+    )
+    expect(handled?.type).toBe("assign")
+    expect(handled?.lineno).toBe(6)
+    expect(handled?.target).toEqual({ variable: "n" })
+    expect(f.statements.map((s) => s.type)).toContain("return")
+  })
+
+  it("reads expressions of RAISE … USING options", () => {
+    const f = parsed(
+      fn(
+        `BEGIN\n  RAISE EXCEPTION 'x %', 1 USING DETAIL = (SELECT count(*) FROM app.t2)::text, HINT = 'h';\nEND`
+      )
+    )
+    const raise = f.statements.find((s) => s.type === "raise")
+    expect(raise?.expressions.map((e) => [e.role, e.query])).toEqual([
+      ["value", "1"],
+      ["value", "(SELECT count(*) FROM app.t2)::text"],
+      ["value", "'h'"],
+    ])
+  })
+
+  it("records the target of integer and query FOR loops", () => {
+    const f = parsed(
+      fn(
+        [
+          "DECLARE n int := 3; r record;",
+          "BEGIN",
+          "  FOR i IN 1..n LOOP",
+          "    PERFORM 1;",
+          "  END LOOP;",
+          "  FOR r IN SELECT id FROM app.t2 LOOP",
+          "    PERFORM 1;",
+          "  END LOOP;",
+          "  RETURN NEW;",
+          "END",
+        ].join("\n")
+      )
+    )
+    const integer = f.statements.find((s) => s.type === "fori")
+    expect(integer?.target).toEqual({ variable: "i" })
+    expect(integer?.expressions.map((e) => e.query)).toEqual(["1", "n"])
+    const query = f.statements.find((s) => s.type === "fors")
+    expect(query?.target).toEqual({ variable: "r" })
+    expect(query?.expressions.map((e) => [e.role, e.query])).toEqual([
+      ["statement", "SELECT id FROM app.t2"],
+    ])
+    // Тіла циклів глибші за сам цикл.
+    expect(
+      f.statements.filter((s) => s.type === "perform").map((s) => s.depth)
+    ).toEqual([2, 2])
+  })
+
+  it("records the INTO target of a dynamic EXECUTE", () => {
+    const f = parsed(
+      fn(
+        `DECLARE v int;\nBEGIN\n  EXECUTE 'select 1' INTO v;\n  RETURN NEW;\nEND`
+      )
+    )
+    const dynamic = f.statements.find((s) => s.type === "dynexecute")
+    expect(dynamic?.target).toEqual({ variable: "v" })
+    expect(dynamic?.expressions.map((e) => [e.role, e.into])).toEqual([
+      ["dynamic", true],
+    ])
+    expect(f.dynamicSqlLines).toEqual([4])
+  })
+
   it("turns a SQL-standard body into ok:false without leaking WASM text, and keeps parsing", () => {
     // `BEGIN ATOMIC` валить WASM-виклик; мову перевіряє виклик, не цей парсер.
     const r = parse(
