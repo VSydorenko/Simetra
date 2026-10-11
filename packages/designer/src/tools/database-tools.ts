@@ -18,9 +18,10 @@ import {
 } from "simetra/model"
 import {
   SUPABASE_SCHEMAS,
+  applyStateOf,
   compareWithDesired,
+  desiredForApply,
   engineScope,
-  renderDesiredState,
   reverseGenerate,
   type EngineAction,
   type EngineDiagnostic,
@@ -152,11 +153,14 @@ export const introspectTool = defineTool({
         databaseProvider: own.database.provider,
       }
       const modelScope = (await engineScope(compiled.model)).scope
+      // Схему платформи межа теки теж не несе: шар у ній породжує
+      // компілятор, а marker і ledger — стан застосування, тож прочитаними
+      // вони стали б `CustomTable` у зарезервованій схемі
       scope = {
         ...modelScope,
-        schemas: [
-          ...new Set([...modelScope.schemas, ...(input.schemas ?? [])]),
-        ].sort(),
+        schemas: [...new Set([...modelScope.schemas, ...(input.schemas ?? [])])]
+          .filter((schema) => schema !== PLATFORM_SCHEMA)
+          .sort(),
       }
     } else {
       if (input.schemas === undefined)
@@ -210,6 +214,12 @@ export interface DiffData {
   plan: EngineAction[]
   differences: CatalogDifference[]
   diagnostics: Diagnostic[]
+  /**
+   * `absent` — у базі немає жодного об'єкта стану застосування (схема
+   * `simetra`, marker, ledger): їх створить перше застосування, тож у плані й
+   * відмінностях їх немає. Частковий стан — `present` і звичайна різниця.
+   */
+  applyState: "absent" | "present"
   /** Немає ні дій, ні відмінностей, ні помилок. */
   empty: boolean
 }
@@ -375,10 +385,10 @@ function attributable(models: readonly NarrowModel[]): (id: string) => boolean {
  * помилка, яку не віднести до таблиці, може стосуватися й названих.
  */
 export function narrow(
-  data: Omit<DiffData, "empty">,
+  data: Omit<DiffData, "empty" | "applyState">,
   tables: readonly Qualified[],
   models: readonly NarrowModel[]
-): Omit<DiffData, "empty"> {
+): Omit<DiffData, "empty" | "applyState"> {
   const keys = new Set(tables.map((t) => `${t.schema}.${t.name}`))
   const indexes = new Set(
     models.flatMap((m) =>
@@ -430,7 +440,7 @@ type NarrowModel = {
 export const diffTool = defineTool({
   name: "diff",
   description:
-    "Compare the live database with the metadata through a throwaway shadow database: the plan from the database to the metadata, catalog differences and diagnostics. The connection comes from the server's environment; the target is only read. `tables` narrows the plan, differences and table-attributed diagnostics to the named tables.",
+    "Compare the live database with the metadata through a throwaway shadow database: the plan from the database to the metadata, catalog differences and diagnostics. The connection comes from the server's environment; the target is only read. `tables` narrows the plan, differences and table-attributed diagnostics to the named tables. While the platform's apply state is absent from the database (`applyState`), creating it is not a difference.",
   input: z.strictObject({
     tables: z
       .array(z.string().min(1))
@@ -446,7 +456,9 @@ export const diffTool = defineTool({
     const model: CompiledModel | undefined = compiled.model
     if (model === undefined)
       return { ok: false, changes: [], diagnostics: compiled.diagnostics }
-    const { scope, diagnostics: scopeDiagnostics } = await engineScope(model)
+    // Той самий бажаний стан і межа, що й у застосування: звірка бачить
+    // стан застосування так само, як `apply`
+    const desired = await desiredForApply(model)
     const engine = await loadEngine()
     const compared = await withDatabase(required(database), "diff", (db) =>
       compareWithDesired(
@@ -455,9 +467,9 @@ export const diffTool = defineTool({
           target: db.target,
           ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
         },
-        renderDesiredState(model).sql,
-        scope,
-        scopeDiagnostics
+        desired.sql,
+        desired.scope,
+        desired.diagnostics
       )
     )
     if (!compared.ok)
@@ -474,11 +486,29 @@ export const diffTool = defineTool({
     if (comparison.status === "shadow-failed")
       return { ok: false, changes: [], diagnostics }
 
-    let data: Omit<DiffData, "empty"> = {
-      plan: comparison.plan.actions,
-      differences: comparison.differences,
-      diagnostics,
+    const state = applyStateOf(comparison.target, comparison.plan, model)
+    // База без жодного застосування збігається з метаданими (критерій
+    // прийому після `introspect`): створення стану — справа першого
+    // застосування, а не відмінність. Роль у `consumes` гранту — отримувач,
+    // а не ціль, тож дію вирішують інші її цілі
+    const ownedAction = (a: EngineAction) => {
+      const targets = targetsOf(a).filter((id) => !id.startsWith("role:"))
+      return targets.length > 0 && targets.every(state.owns)
     }
+    let data: Omit<DiffData, "empty" | "applyState"> =
+      state.state === "absent"
+        ? {
+            plan: comparison.plan.actions.filter((a) => !ownedAction(a)),
+            differences: comparison.differences.filter(
+              (d) => !state.ownsPath(d.path)
+            ),
+            diagnostics,
+          }
+        : {
+            plan: comparison.plan.actions,
+            differences: comparison.differences,
+            diagnostics,
+          }
     if (input.tables !== undefined) {
       const models = [comparison.target.model, comparison.desired.model]
       const { tables, unknown } = resolveTables(
@@ -499,6 +529,7 @@ export const diffTool = defineTool({
       diagnostics: data.diagnostics,
       data: {
         ...data,
+        applyState: state.state,
         empty: ok && data.plan.length === 0 && data.differences.length === 0,
       } satisfies DiffData,
     }

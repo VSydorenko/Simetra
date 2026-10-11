@@ -1,14 +1,28 @@
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import pg from "pg"
-import type { EngineScope } from "simetra/schema"
+import { compile, type CompiledModel } from "simetra/compiler"
+import {
+  desiredForApply,
+  renderApplyState,
+  renderDesiredState,
+  type EngineScope,
+} from "simetra/schema"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { runTool, type CliArgs } from "../cli/command"
 import { databaseResource } from "../io/database"
+import { readMetadataDir } from "../io/metadata-dir"
 import { createMcpServer } from "../mcp/server"
 import { createPgDeltaEngine } from "../schema-engine"
 import { readOnlyPool } from "../schema-engine/pg-delta/adapter"
@@ -17,6 +31,9 @@ import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
 import type { InvokeOptions, ToolResult } from "../tools/types"
 import {
+  catalog,
+  metaFiles,
+  project as projectFile,
   shadowDatabaseCount,
   testDatabaseUrl,
 } from "../../../simetra/test/support"
@@ -351,6 +368,145 @@ describe("diff", () => {
         options(dir, env)
       )
       expect(unknown.refusal?.message).toContain("app.nope")
+    })
+  })
+})
+
+/** Модель теки, як її бачить `diff`. */
+async function modelOf(dir: string): Promise<CompiledModel> {
+  const compiled = await compile(await readMetadataDir(dir))
+  expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  return compiled.model!
+}
+
+const diffData = async (
+  dir: string,
+  env: NodeJS.ProcessEnv
+): Promise<DiffData> =>
+  (await call("diff", {}, options(dir, env))).data as DiffData
+
+/** Тека проєкту з довідником «Користувачі»: модель має платформний шар. */
+async function usersProject(): Promise<{ dir: string; model: CompiledModel }> {
+  const dir = await freshProject()
+  const files = metaFiles({
+    "project.meta.json": projectFile(),
+    "catalogs/Users/Users.meta.json": catalog("Users", {
+      role: "users",
+      scope: "none",
+    }),
+  })
+  for (const [path, content] of files) {
+    await mkdir(dirname(join(dir, path)), { recursive: true })
+    await writeFile(join(dir, path), content)
+  }
+  return { dir, model: await modelOf(dir) }
+}
+
+describe("diff and the apply state", () => {
+  it("a database without the apply state matches its metadata", async () => {
+    await introspected(async (dir, env) => {
+      const data = await diffData(dir, env)
+      expect(data).toMatchObject({
+        plan: [],
+        differences: [],
+        empty: true,
+        applyState: "absent",
+      })
+      const cli = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        env
+      )
+      expect(cli.exitCode).toBe(0)
+    })
+  })
+
+  it("a complete apply state matches, a partial one is a difference", async () => {
+    await introspected(async (dir, env, url) => {
+      await exec(url, renderApplyState(await modelOf(dir)))
+      expect(await diffData(dir, env)).toMatchObject({
+        empty: true,
+        applyState: "present",
+      })
+      await exec(url, "DROP TABLE simetra.ledger")
+      const partial = await diffData(dir, env)
+      expect(partial.empty).toBe(false)
+      expect(partial.applyState).toBe("present")
+      expect(partial.plan.map((a) => a.sql).join("\n")).toContain("ledger")
+    })
+  })
+
+  it("a bare simetra schema is a partial apply state", async () => {
+    // Порожню схему без грантів модель каталогу не несе: відсутність схеми
+    // видно лише з плану, і без цього її поява лишилася б непоміченою
+    await introspected(async (dir, env, url) => {
+      await exec(url, "CREATE SCHEMA simetra")
+      const data = await diffData(dir, env)
+      expect(data.applyState).toBe("present")
+      expect(data.empty).toBe(false)
+    })
+  })
+
+  it("a changed marker table is a difference", async () => {
+    await introspected(async (dir, env, url) => {
+      await exec(url, renderApplyState(await modelOf(dir)))
+      await exec(url, "ALTER TABLE simetra.marker ADD COLUMN x int")
+      const data = await diffData(dir, env)
+      expect(data.empty).toBe(false)
+      expect(data.applyState).toBe("present")
+      expect(
+        data.differences.some((d) => d.path.startsWith("tables.simetra.marker"))
+      ).toBe(true)
+    })
+  })
+
+  it("a deployed platform layer without the apply state matches", async () => {
+    const { dir, model } = await usersProject()
+    const { scope } = await desiredForApply(model)
+    await inTarget(renderDesiredState(model).sql, [...scope.schemas], (url) =>
+      diffData(dir, { [ENV]: url }).then((data) =>
+        expect(data).toMatchObject({
+          plan: [],
+          differences: [],
+          empty: true,
+          applyState: "absent",
+        })
+      )
+    )
+  })
+
+  it("the filter never hides the platform layer", async () => {
+    const { dir, model } = await usersProject()
+    const { scope } = await desiredForApply(model)
+    await inTarget(
+      `${renderDesiredState(model).sql}\n\nDROP TABLE simetra.identities;`,
+      [...scope.schemas],
+      async (url) => {
+        const data = await diffData(dir, { [ENV]: url })
+        expect(data.applyState).toBe("absent")
+        expect(data.empty).toBe(false)
+        const sql = data.plan.map((a) => a.sql).join("\n")
+        expect(sql).toContain("identities")
+        expect(sql).not.toContain("marker")
+        expect(
+          data.differences.some((d) => d.path === "tables.simetra.identities")
+        ).toBe(true)
+      }
+    )
+  })
+})
+
+describe("introspect and the platform schema", () => {
+  it("introspect never reads the apply state into metadata", async () => {
+    const { dir, model } = await usersProject()
+    const desired = await desiredForApply(model)
+    await inTarget(desired.sql, [...desired.scope.schemas], async (url) => {
+      const r = await call("introspect", {}, options(dir, { [ENV]: url }))
+      expect(errors(r)).toEqual([])
+      expect((r.data as { schemas: string[] }).schemas).not.toContain("simetra")
+      expect(r.changes.filter((c) => /marker|ledger/i.test(c.path))).toEqual([])
     })
   })
 })

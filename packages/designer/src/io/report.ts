@@ -72,6 +72,12 @@ export function renderDiff(d: DiffData, report: string): string {
     for (const x of d.differences)
       lines.push(`  ${x.kind} ${x.path}: ${x.detail}`)
   }
+  // Без стану застосування `empty` судить лише про метадані: рядок пояснює,
+  // чому перше застосування все одно щось створить
+  if (d.applyState === "absent")
+    lines.push(
+      "apply state: absent from the database; the first apply creates it"
+    )
   if (d.empty) lines.push("diff: the database matches the metadata")
   lines.push(report)
   return lines.join("\n")

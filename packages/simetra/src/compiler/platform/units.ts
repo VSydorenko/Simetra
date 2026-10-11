@@ -3,6 +3,7 @@ import {
   PROVIDER_API_ROLES,
   quoteIdent,
   type ApiRolePurpose,
+  type DatabaseProvider,
   type IdentityNameSource,
   type IdentitySource,
   type PhysicalSnapshot,
@@ -108,9 +109,7 @@ export function buildPlatformUnits(
   // Тригерна функція реєстрації кличе провізію з тіла plpgsql: ребро до неї
   // бере ідентичність самої одиниці, а не другий запис сигнатури.
   const provision = unit(provisionFunction(users), tables)
-  const schema = quoteIdent(PLATFORM_SCHEMA)
   const { provider } = input.project.database
-  const apiRoles = PROVIDER_API_ROLES[provider]
   const functions = [
     {
       signature: `${qualified(CURRENT_USER)}()`,
@@ -136,14 +135,7 @@ export function buildPlatformUnits(
     },
   ]
   const units: SqlUnit[] = [
-    unit(`REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC;`),
-    // Гранти поштучно на отримувача — та сама форма, в якій їх читає
-    // extract, тож зворотна генерація впізнає їх як описані.
-    ...SESSION_ROLES.map((purpose) =>
-      unit(
-        `GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(apiRoles[purpose])};`
-      )
-    ),
+    ...platformSchemaGrants(provider).map((sql) => unit(sql)),
     ...functions.flatMap(({ signature, fn, roles }) => [
       fn,
       ...executeGrants(signature, roles, provider).map((grant) => unit(grant)),
@@ -152,6 +144,25 @@ export function buildPlatformUnits(
     unit(kindLabelsView(input.objects, input.physical)),
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/**
+ * Безпека самої схеми `simetra` (спека користувачів §3): `REVOKE ALL` від
+ * `PUBLIC` і `USAGE` ролям API. Одна функція на два споживачі — платформний
+ * шар і стан застосування T2 без шару, — щоб правило безпеки схеми не
+ * роздвоїлося. Гранти поштучно на отримувача — та сама форма, в якій їх читає
+ * extract, тож зворотна генерація впізнає їх як описані.
+ */
+export function platformSchemaGrants(provider: DatabaseProvider): string[] {
+  const schema = quoteIdent(PLATFORM_SCHEMA)
+  const apiRoles = PROVIDER_API_ROLES[provider]
+  return [
+    `REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC;`,
+    ...SESSION_ROLES.map(
+      (purpose) =>
+        `GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(apiRoles[purpose])};`
+    ),
+  ]
 }
 
 /**

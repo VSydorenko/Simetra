@@ -2021,6 +2021,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
   },
+  "apply.state-format": {
+    en: (p) =>
+      `The apply state in schema simetra has format ${p.found}, which this platform version cannot read`,
+    uk: (p) =>
+      `Стан застосування в схемі simetra має форму ${p.found}, якої ця версія платформи не читає`,
+    hint: {
+      en: "The state was written by another platform version; apply with the version that wrote it. The format is never guessed, so nothing is planned or applied over it.",
+      uk: "Стан записала інша версія платформи; застосовуйте версією, що його записала. Форму ніколи не вгадуємо, тож поверх неї нічого не плануємо й не застосовуємо.",
+    },
+  },
+  "apply.ledger-without-marker": {
+    en: () =>
+      "The apply ledger in schema simetra has records but the marker row is missing: the apply state is damaged, this is not a first apply",
+    uk: () =>
+      "Журнал застосувань у схемі simetra має записи, а рядка marker немає: стан застосування пошкоджено, це не перше застосування",
+    hint: {
+      en: "Restore the marker from a backup of the database before applying; a first apply would treat a database with history as new.",
+      uk: "Перед застосуванням відновіть marker із резервної копії бази: перше застосування вважало б базу з історією новою.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,

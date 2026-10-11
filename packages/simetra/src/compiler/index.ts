@@ -35,6 +35,7 @@ export {
   type SqlUnit,
 } from "./sql/units"
 export { loadSqlParser, type SqlParser } from "./sql/parse"
+export { platformSchemaGrants } from "./platform/units"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   triggerFunctionSchema,
