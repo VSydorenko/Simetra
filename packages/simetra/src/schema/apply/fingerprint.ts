@@ -185,53 +185,65 @@ const collation = (oid: string): string =>
  * `dependent` — власник іде за об'єктом-господарем, і `ALTER … OWNER TO`
  * Postgres на ньому відхиляє: індекс, рядковий тип відношення й відношення
  * складеного типу, тип масиву, послідовність колонки (`OWNED BY`, identity).
- * Відбиток їх хешує, а перепис власників пропускає.
+ * Відбиток їх хешує, а перепис власників пропускає. `classid`/`objid` —
+ * адреса в `pg_depend`: за нею перепис впізнає членів розширення.
  */
 const OWNED_OBJECTS = `
       select 'schema' as kind, format('%I', n.nspname) as ident, n.nspowner as owner,
-        false as dependent
+        false as dependent, 'pg_namespace'::regclass as classid, n.oid as objid
       from scope_ns n
       union all
       select 'relation', c.oid::regclass::text, c.relowner,
         c.relkind in ('i', 'I', 'c') or (c.relkind = 'S' and exists (
           select from pg_depend d
           where d.classid = 'pg_class'::regclass and d.objid = c.oid
-            and d.refclassid = 'pg_class'::regclass and d.deptype in ('a', 'i')))
+            and d.refclassid = 'pg_class'::regclass and d.deptype in ('a', 'i'))),
+        'pg_class'::regclass, c.oid
       from scope_rel c
       union all
       select 'type', t.oid::regtype::text, t.typowner,
         exists (select from pg_type e where e.typarray = t.oid)
           or (t.typrelid <> 0 and t.typrelid not in (
-            select oid from scope_rel where relkind = 'c'))
+            select oid from scope_rel where relkind = 'c')),
+        'pg_type'::regclass, t.oid
       from pg_type t join scope_ns n on n.oid = t.typnamespace
       union all
-      select 'function', p.oid::regprocedure::text, p.proowner, false
+      select 'function', p.oid::regprocedure::text, p.proowner, false,
+        'pg_proc'::regclass, p.oid
       from pg_proc p join scope_ns n on n.oid = p.pronamespace
       union all
-      select 'operator', o.oid::regoperator::text, o.oprowner, false
+      select 'operator', o.oid::regoperator::text, o.oprowner, false,
+        'pg_operator'::regclass, o.oid
       from pg_operator o join scope_ns n on n.oid = o.oprnamespace
       union all
-      select 'opclass', format('%I.%I %I', n.nspname, c.opcname, am.amname), c.opcowner, false
+      select 'opclass', format('%I.%I %I', n.nspname, c.opcname, am.amname), c.opcowner, false,
+        'pg_opclass'::regclass, c.oid
       from pg_opclass c join scope_ns n on n.oid = c.opcnamespace
         join pg_am am on am.oid = c.opcmethod
       union all
-      select 'opfamily', format('%I.%I %I', n.nspname, f.opfname, am.amname), f.opfowner, false
+      select 'opfamily', format('%I.%I %I', n.nspname, f.opfname, am.amname), f.opfowner, false,
+        'pg_opfamily'::regclass, f.oid
       from pg_opfamily f join scope_ns n on n.oid = f.opfnamespace
         join pg_am am on am.oid = f.opfmethod
       union all
-      select 'collation', format('%I.%I %s', n.nspname, c.collname, c.collencoding), c.collowner, false
+      select 'collation', format('%I.%I %s', n.nspname, c.collname, c.collencoding), c.collowner, false,
+        'pg_collation'::regclass, c.oid
       from pg_collation c join scope_ns n on n.oid = c.collnamespace
       union all
-      select 'tsconfig', format('%I.%I', n.nspname, c.cfgname), c.cfgowner, false
+      select 'tsconfig', format('%I.%I', n.nspname, c.cfgname), c.cfgowner, false,
+        'pg_ts_config'::regclass, c.oid
       from pg_ts_config c join scope_ns n on n.oid = c.cfgnamespace
       union all
-      select 'tsdict', format('%I.%I', n.nspname, d.dictname), d.dictowner, false
+      select 'tsdict', format('%I.%I', n.nspname, d.dictname), d.dictowner, false,
+        'pg_ts_dict'::regclass, d.oid
       from pg_ts_dict d join scope_ns n on n.oid = d.dictnamespace
       union all
-      select 'statistics', format('%I.%I', n.nspname, s.stxname), s.stxowner, false
+      select 'statistics', format('%I.%I', n.nspname, s.stxname), s.stxowner, false,
+        'pg_statistic_ext'::regclass, s.oid
       from pg_statistic_ext s join scope_ns n on n.oid = s.stxnamespace
       union all
-      select 'extension', format('%I', e.extname), e.extowner, false
+      select 'extension', format('%I', e.extname), e.extowner, false,
+        'pg_extension'::regclass, e.oid
       from pg_extension e join scope_ns n on n.oid = e.extnamespace`
 
 /**
@@ -551,6 +563,13 @@ export interface ObjectOwner {
  * сесії потрібна порівнянню: двигун вважає власника, рівного ролі сесії,
  * типовим, тож «власник = своя роль сесії» порівнюється між базами з різними
  * ролями адміністрування.
+ *
+ * Межа перепису — те, що двигун читає й планує, а не більше. Розширення й
+ * його члени (`pg_depend` з `deptype = 'e'`) двигун не планує поодинці, а
+ * власника розширення Postgres не змінює взагалі; на провайдері ними володіє
+ * службова роль, членом якої роль сесії не є, тож перепис без цього винятку
+ * відмовляв би кожній межі з розширенням у ній. Секція `owner` відбитка
+ * хешує їх і далі.
  */
 export async function readOwners(
   tx: ApplyTransaction,
@@ -563,7 +582,10 @@ export async function readOwners(
       pg_get_userbyid(o.owner) as owner,
       pg_has_role(current_user, o.owner, 'MEMBER') as member
     from (${OWNED_OBJECTS}) o
-    where not o.dependent
+    where not o.dependent and o.kind <> 'extension'
+      and not exists (
+        select from pg_depend d
+        where d.classid = o.classid and d.objid = o.objid and d.deptype = 'e')
     order by format('%s %s', o.kind, o.ident) collate "C"`,
     [scope.schemas]
   )

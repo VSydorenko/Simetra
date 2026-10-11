@@ -19,6 +19,7 @@ import {
 import {
   SUPABASE_SCHEMAS,
   applyStateOf,
+  checkOwnerMembership,
   compareWithDesired,
   desiredForApply,
   engineScope,
@@ -462,17 +463,34 @@ export const diffTool = defineTool({
     // стан застосування так само, як `apply`
     const desired = await desiredForApply(model)
     const engine = await loadEngine()
-    const compared = await withDatabase(required(database), "diff", (db) =>
-      compareWithDesired(
-        engine,
-        {
-          target: db.target,
-          ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
-        },
-        desired.sql,
-        desired.scope,
-        desired.diagnostics
-      )
+    const { createApplyDatabase } = await import("../schema-engine")
+    const compared = await withDatabase(
+      required(database),
+      "diff",
+      async (db) => {
+        // Та сама передперевірка власників, що в плані: двигун не будує
+        // витягу цілі з об'єктом ролі, членом якої роль сесії не є
+        const membership = await checkOwnerMembership(
+          createApplyDatabase({ readOnly: true }),
+          db.target,
+          desired.scope,
+          "engine.owner-not-member"
+        )
+        if (membership.refusal !== undefined)
+          return { refusal: membership.refusal }
+        return {
+          comparison: await compareWithDesired(
+            engine,
+            {
+              target: db.target,
+              ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
+            },
+            desired.sql,
+            desired.scope,
+            desired.diagnostics
+          ),
+        }
+      }
     )
     if (!compared.ok)
       return {
@@ -480,7 +498,16 @@ export const diffTool = defineTool({
         changes: [],
         diagnostics: [...compiled.diagnostics, compared.diagnostic],
       }
-    const comparison = compared.value
+    if (compared.value.refusal !== undefined)
+      return {
+        ok: false,
+        changes: [],
+        diagnostics: [
+          ...compiled.diagnostics,
+          fromEngine(compared.value.refusal),
+        ],
+      }
+    const comparison = compared.value.comparison
     const diagnostics = [
       ...compiled.diagnostics,
       ...comparison.diagnostics.map(fromEngine),

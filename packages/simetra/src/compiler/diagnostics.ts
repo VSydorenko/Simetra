@@ -165,6 +165,7 @@ export const COMPILER_RULES = [
   "engine.census-mismatch",
   "engine.unmodeled-property",
   "engine.out-of-scope",
+  "engine.owner-not-member",
   "apply.state-format",
   "apply.ledger-without-marker",
   "apply.cascade",

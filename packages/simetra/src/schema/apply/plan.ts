@@ -171,22 +171,17 @@ export async function buildPlan(
     state.status === "applied" ? state.marker.scope : undefined
   const scope = planScope(desired.scope, markerScope)
 
-  // 2а. Власники цілі — до будь-якого витягу. Об'єкт, членом ролі-власника
-  // якого роль сесії не є, план не зніме й не змінить, а двигун на такій
-  // цілі навіть витяг не будує (відмова «capability»). Тож це відмова з
-  // порадою ще до гейта
-  const targetOwners = await dbs.reader.transaction(
+  // 2а. Власники цілі — до будь-якого витягу: об'єкт ролі, членом якої роль
+  // сесії не є, план не зніме й не змінить, а двигун на такій цілі навіть
+  // витяг не будує. Тож це відмова з порадою ще до гейта
+  const membership = await checkOwnerMembership(
+    dbs.reader,
     o.target,
-    "rollback",
-    (tx) => readOwners(tx, scope)
+    scope,
+    "plan.owner-mismatch"
   )
-  const strangers = targetOwners.owners
-    .filter((owner) => !owner.member)
-    .map(
-      (owner) =>
-        `${owner.object} (owner ${owner.owner}, not a role ${targetOwners.session} is a member of)`
-    )
-  if (strangers.length > 0) return refused([ownerMismatch(strangers)])
+  if (membership.refusal !== undefined) return refused([membership.refusal])
+  const targetOwners = membership.owners
 
   // 3. Гейт дрейфу порівнює ціль, зняту під межею з marker: інакше зміна
   // межі виглядала б дрейфом. Коли межі збігаються, свідок той самий, що й
@@ -244,7 +239,10 @@ export async function buildPlan(
   // відновлення власника немає, це відмова з порадою
   const mismatched = ownerMismatches(targetOwners, target.owners)
   if (mismatched.length > 0)
-    return refused([...diagnostics, ownerMismatch(mismatched)])
+    return refused([
+      ...diagnostics,
+      ownersDiagnostic("plan.owner-mismatch", mismatched),
+    ])
   const { actions } = target.enginePlan
 
   // 6. Нічого застосовувати лише тоді, коли немає ні кроків, ні нового
@@ -314,14 +312,50 @@ export async function buildPlan(
   }
 }
 
-const ownerMismatch = (objects: readonly string[]): EngineDiagnostic =>
-  applyDiagnostic("plan.owner-mismatch", "error", {
+/** Відмови перепису власників: план і звірка (`diff`) — одна порада, різні коди. */
+export type OwnerRefusalCode = "plan.owner-mismatch" | "engine.owner-not-member"
+
+const ownersDiagnostic = (
+  code: OwnerRefusalCode,
+  objects: readonly string[]
+): EngineDiagnostic =>
+  applyDiagnostic(code, "error", {
     count: objects.length,
     objects: objects
       .slice(0, OWNER_LIMIT)
       .concat(objects.length > OWNER_LIMIT ? ["…"] : [])
       .join(", "),
   })
+
+/**
+ * Передперевірка власників межі на цілі — до будь-якого витягу. Двигун не
+ * будує витягу цілі, де роль сесії не є членом ролі-власника об'єкта
+ * (відмова «capability»), тож і план, і звірка (`diff`) питають це наперед і
+ * відмовляють з порадою, а не падають. Межа — та, що читає двигун
+ * (`readOwners`). `owners` — повний перепис цілі для подальшого порівняння.
+ */
+export async function checkOwnerMembership(
+  reader: ApplyDatabase,
+  target: DbConnection,
+  scope: EngineScope,
+  code: OwnerRefusalCode
+): Promise<{
+  owners: { session: string; owners: ObjectOwner[] }
+  refusal?: EngineDiagnostic
+}> {
+  const owners = await reader.transaction(target, "rollback", (tx) =>
+    readOwners(tx, scope)
+  )
+  const strangers = owners.owners
+    .filter((owner) => !owner.member)
+    .map(
+      (owner) =>
+        `${owner.object} (owner ${owner.owner}, not a role ${owners.session} is a member of)`
+    )
+  return strangers.length > 0
+    ? { owners, refusal: ownersDiagnostic(code, strangers) }
+    : { owners }
+}
 
 /**
  * Перепис власників об'єктів, що є і в цілі, і в тіні. Та сама проєкція, що

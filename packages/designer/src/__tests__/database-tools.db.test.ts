@@ -36,6 +36,7 @@ import {
   project as projectFile,
   shadowDatabaseCount,
   testDatabaseUrl,
+  testSuperuserUrl,
 } from "../../../simetra/test/support"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
@@ -150,6 +151,9 @@ async function connectMcp(
   await client.connect(clientEnd)
   return client
 }
+
+/** Роль поза членством ролі сесії: її об'єкт двигун не прочитає. */
+const STRANGER = "simetra_db_tools_stranger"
 
 const SHOP = `
   CREATE SCHEMA app;
@@ -321,6 +325,43 @@ describe("diff", () => {
       )
       expect(r.stdout).toContain("diff: the database matches the metadata")
       expect(r.exitCode).toBe(0)
+    })
+  })
+
+  it("diff refuses an object of a role the session is not a member of", async () => {
+    // Двигун не будує витягу цілі з таким об'єктом (відмова «capability»):
+    // без передперевірки власників `diff` давав би безликий `database.failed`
+    await introspected(async (dir, env, url) => {
+      await exec(
+        testSuperuserUrl(),
+        `DROP ROLE IF EXISTS ${STRANGER}; CREATE ROLE ${STRANGER} NOLOGIN;`
+      )
+      // Роль кластерна: знімається після бази цілі, яку прибирає порт
+      disposers.push(() =>
+        exec(testSuperuserUrl(), `DROP ROLE IF EXISTS ${STRANGER}`)
+      )
+      const su = new URL(testSuperuserUrl())
+      su.pathname = new URL(url).pathname
+      await exec(
+        su.toString(),
+        `CREATE TABLE app.stray (id int);
+         ALTER TABLE app.stray OWNER TO ${STRANGER};`
+      )
+      const r = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(1)
+      expect(r.stdout).toContain("engine.owner-not-member")
+      expect(r.stdout).toContain(
+        `relation app.stray (owner ${STRANGER}, not a role postgres is a member of)`
+      )
+      expect(r.stdout).toContain("ALTER … OWNER TO <role>")
+      expect(`${r.stdout}${r.stderr}`).not.toMatch(/\n\s+at /)
+      expect(r.stdout).not.toContain(url)
     })
   })
 

@@ -134,6 +134,10 @@ function toResponse(
   // Збій роботи з базою — не помилка метаданих: зведення не має слати
   // викликача правити теку, коли виправляти треба базу чи підключення
   const databaseFailed = diagnostics.some((d) => d.code === "database.failed")
+  // Чужий власник у базі — теж справа бази, а не теки
+  const databaseUnreadable = diagnostics.some(
+    (d) => d.code === "engine.owner-not-member"
+  )
   const lines = ok
     ? [
         ...changes.map((c) => lineFor(c, written)),
@@ -144,11 +148,13 @@ function toResponse(
       ? [
           `${tool.files === "write" ? "nothing written" : tool.name}: the database work failed`,
         ]
-      : tool.files === "write"
-        ? [
-            "nothing written: the operation was refused or the result has errors",
-          ]
-        : [`${tool.name}: the metadata has errors`]
+      : databaseUnreadable
+        ? [`${tool.name}: the database has objects the engine cannot read`]
+        : tool.files === "write"
+          ? [
+              "nothing written: the operation was refused or the result has errors",
+            ]
+          : [`${tool.name}: the metadata has errors`]
   return {
     isError: !ok,
     structuredContent: {

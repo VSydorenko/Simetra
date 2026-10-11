@@ -60,4 +60,10 @@ export {
   type DriftReport,
   type DriftVerdict,
 } from "./drift"
-export { buildPlan, type PlanDatabases, type PlanOutcome } from "./plan"
+export {
+  buildPlan,
+  checkOwnerMembership,
+  type OwnerRefusalCode,
+  type PlanDatabases,
+  type PlanOutcome,
+} from "./plan"

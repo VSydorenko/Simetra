@@ -57,6 +57,9 @@ const OWNER = "simetra_build_plan_owner"
 /** Роль, членом якої роль сесії не є: об'єкт такого власника план не зніме. */
 const STRANGER = "simetra_build_plan_stranger"
 
+/** Службова роль провайдера, членом якої роль сесії застосування не є. */
+const SERVICE_ROLE = "supabase_auth_admin"
+
 /** Один запит (чи кілька операторів) з окремого з'єднання. */
 async function other<R extends Record<string, unknown>>(
   url: string,
@@ -331,6 +334,46 @@ describe("buildPlan", () => {
       ).toEqual({
         count: 1,
         objects: `relation app.stray (owner ${STRANGER}, not a role postgres is a member of)`,
+      })
+    })
+  })
+
+  it("checks owners only where the engine reads, not inside extensions", async () => {
+    // Межа з `public` і розширенням у ній: на провайдері розширення й усі
+    // його члени належать службовій ролі, членом якої роль сесії не є.
+    // Двигун членів розширення не планує, тож перепис власників їх не судить
+    const model = await compiled({
+      "project.meta.json": project({ defaultSchema: "public" }),
+      [PARTY]: party(),
+    })
+    await inTarget(EMPTY, async (url) => {
+      await other(url, "create extension pg_trgm schema public")
+      const [extension] = await other<{ owner: string; member: boolean }>(
+        url,
+        `select pg_get_userbyid(extowner) as owner,
+           pg_has_role(current_user, extowner, 'MEMBER') as member
+         from pg_extension where extname = 'pg_trgm'`
+      )
+      // Передумова тесту: власник розширення — чужа роль, як на провайдері
+      expect(extension?.member).toBe(false)
+      expect(errors(await plan(url, model))).not.toContain(
+        "plan.owner-mismatch"
+      )
+
+      // Об'єкт поза розширенням, що належить службовій ролі провайдера
+      await other(
+        asSuperuser(url),
+        `create table public.stray (id int);
+         alter table public.stray owner to ${SERVICE_ROLE};`
+      )
+      const outcome = await plan(url, model)
+      expect(errors(outcome)).toEqual(["plan.owner-mismatch"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.owner-mismatch")
+          ?.params
+      ).toEqual({
+        count: 1,
+        objects: `relation public.stray (owner ${SERVICE_ROLE}, not a role postgres is a member of)`,
       })
     })
   })

@@ -17,6 +17,15 @@ export interface MessageEntry {
   hint?: { en: Hint; uk: Hint }
 }
 
+/**
+ * Порада відмов власників — одна для плану (`plan.owner-mismatch`) і звірки
+ * (`engine.owner-not-member`): виправлення те саме, різниться лише наслідок.
+ */
+const OWNER_RECIPE = {
+  en: "Restore the owner with `ALTER … OWNER TO <role>` for each named object (indexes, row types and column sequences follow their table), or connect as the owning role",
+  uk: "Відновіть власника через `ALTER … OWNER TO <роль>` для кожного названого об'єкта (індекси, рядкові типи й послідовності колонок ідуть за своєю таблицею) або підключайтеся від ролі-власника",
+}
+
 /** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
 const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
   requiredWithoutDefault: {
@@ -2011,6 +2020,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Модель каталогу не виражає фізичних параметрів зберігання (storage, compression, statistics target, опції колонки, метод доступу, CLUSTER); поверніть типові значення або тримайте об'єкт поза межею керування.",
     },
   },
+  "engine.owner-not-member": {
+    en: (p) =>
+      `${p.count} object(s) in the managed boundary are owned by a role the connecting role is not a member of, so the schema engine cannot read the database: ${p.objects}`,
+    uk: (p) =>
+      `Об'єктів у межі керування, якими володіє роль, членом якої роль підключення не є, тож рушій схеми не може прочитати базу: ${p.count}: ${p.objects}`,
+    hint: {
+      en: `Nothing was compared. ${OWNER_RECIPE.en}, and compare again.`,
+      uk: `Нічого не порівняно. ${OWNER_RECIPE.uk} й порівняйте знову.`,
+    },
+  },
   "engine.out-of-scope": {
     en: (p) =>
       `${p.object} lies outside the boundary the schema engine compares, so a comparison would never see it: ${outOfScopeReason(p)?.en(p) ?? p.reason}`,
@@ -2307,8 +2326,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Об'єктів, якими володіє не роль, що застосовує, тож план не може ними керувати: ${p.count}: ${p.objects}`,
     hint: {
-      en: "No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner the applying role is a member of. Restore the owner with `ALTER … OWNER TO <role>` for each named object (indexes, row types and column sequences follow their table), or apply as the owning role, and plan again.",
-      uk: "План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. Відновіть власника через `ALTER … OWNER TO <роль>` для кожного названого об'єкта (індекси, рядкові типи й послідовності колонок ідуть за своєю таблицею) або застосовуйте від ролі-власника й сплануйте знову.",
+      en: `No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner the applying role is a member of. ${OWNER_RECIPE.en}, and plan again.`,
+      uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
     },
   },
   "database.failed": {
