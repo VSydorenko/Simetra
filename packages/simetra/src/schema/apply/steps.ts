@@ -123,8 +123,11 @@ interface ColumnType {
 
 /** Що про вихідний стан знає модель цілі, а оператор — ні. */
 interface Facts {
-  uniqueIndexes: readonly Named[]
+  /** Індекси, які модель цілі знає, з їхньою унікальністю. */
+  indexes: readonly (Named & { unique: boolean })[]
   tables: readonly CatalogTable[]
+  /** Ідентичності `table:<схема>.<ім'я>`, які створює сам план. */
+  createdTables: ReadonlySet<string>
   /** Тип колонки вихідного стану; `undefined` — колонки не видно або тип не розібрано. */
   columnType(table: CatalogTable, column: string): ColumnType | undefined
 }
@@ -305,25 +308,35 @@ function statementEffects(stmt: Node, facts: Facts): Effect[] {
     if (removeType !== undefined && RELAXING_DROPS.has(removeType))
       return ["relaxation"]
     if (removeType !== "OBJECT_INDEX") return []
-    // Унікальність знятого індексу знає лише модель цілі: в операторі її немає
-    const unique = (objects ?? []).some((object) => {
+    // Унікальність знятого індексу знає лише модель цілі: в операторі її
+    // немає. Індекса, якого модель не бачить (опції зберігання, tablespace,
+    // `ON ONLY` модель не несе), класифікатор не вважає неунікальним: краще
+    // зайвий дозвіл, ніж знята без дозволу гарантія унікальності — те саме
+    // правило, що «старого типу колонки не видно — destructive»
+    const relaxing = (objects ?? []).some((object) => {
       const names = "List" in object ? stringsOf(object.List.items) : []
       const name = names.at(-1)
-      return (
-        name !== undefined &&
-        find(facts.uniqueIndexes, names.at(-2), name) !== undefined
-      )
+      const known =
+        name === undefined ? undefined : find(facts.indexes, names.at(-2), name)
+      return known === undefined || known.unique
     })
-    return unique ? ["relaxation"] : []
+    return relaxing ? ["relaxation"] : []
   }
   if ("IndexStmt" in stmt) {
     const { unique, relation } = stmt.IndexStmt
-    // Унікальний індекс на таблиці, яку створює сам план, нічого не сканує
-    return unique === true &&
-      relation?.relname !== undefined &&
-      find(facts.tables, relation.schemaname, relation.relname) !== undefined
-      ? ["validationScan"]
-      : []
+    if (unique !== true || relation?.relname === undefined) return []
+    // Унікальний індекс на таблиці, яку створює сам план, нічого не сканує.
+    // Таблицю, якої модель не знає і план не створює, вважаємо наявною:
+    // невідоме отримує найсуворіший клас
+    const { schemaname, relname } = relation
+    const createdHere =
+      find(facts.tables, schemaname, relname) === undefined &&
+      [...facts.createdTables].some((id) =>
+        schemaname === undefined
+          ? id.endsWith(`.${relname}`)
+          : id === `table:${schemaname}.${relname}`
+      )
+    return createdHere ? [] : ["validationScan"]
   }
   return []
 }
@@ -418,12 +431,17 @@ export function classifySteps(
   parse: SqlParser
 ): PlanStep[] {
   const facts: Facts = {
-    uniqueIndexes: target.tables.flatMap((t) =>
-      t.indexes
-        .filter((i) => i.unique)
-        .map((i) => ({ schema: t.schema, name: i.name }))
+    indexes: target.tables.flatMap((t) =>
+      t.indexes.map((i) => ({
+        schema: t.schema,
+        name: i.name,
+        unique: i.unique,
+      }))
     ),
     tables: target.tables,
+    createdTables: new Set(
+      actions.flatMap((a) => a.produces.filter((id) => id.startsWith("table:")))
+    ),
     columnType: columnTypeReader(parse),
   }
   return actions.map((action, index) => {

@@ -171,6 +171,23 @@ export async function buildPlan(
     state.status === "applied" ? state.marker.scope : undefined
   const scope = planScope(desired.scope, markerScope)
 
+  // 2а. Власники цілі — до будь-якого витягу. Об'єкт, членом ролі-власника
+  // якого роль сесії не є, план не зніме й не змінить, а двигун на такій
+  // цілі навіть витяг не будує (відмова «capability»). Тож це відмова з
+  // порадою ще до гейта
+  const targetOwners = await dbs.reader.transaction(
+    o.target,
+    "rollback",
+    (tx) => readOwners(tx, scope)
+  )
+  const strangers = targetOwners.owners
+    .filter((owner) => !owner.member)
+    .map(
+      (owner) =>
+        `${owner.object} (owner ${owner.owner}, not a role ${targetOwners.session} is a member of)`
+    )
+  if (strangers.length > 0) return refused([ownerMismatch(strangers)])
+
   // 3. Гейт дрейфу порівнює ціль, зняту під межею з marker: інакше зміна
   // межі виглядала б дрейфом. Коли межі збігаються, свідок той самий, що й
   // джерело плану; першому застосуванню свідок гейта не потрібен
@@ -225,27 +242,13 @@ export async function buildPlan(
   // роль, що застосовує. Двигун підміну власника не сходить, а прийняти її
   // базою означало б узаконити чужого власника, що обходить RLS. Доки кроку
   // відновлення власника немає, це відмова з порадою
-  const mismatched = ownerMismatches(
-    await dbs.reader.transaction(o.target, "rollback", (tx) =>
-      readOwners(tx, scope)
-    ),
-    target.owners
-  )
+  const mismatched = ownerMismatches(targetOwners, target.owners)
   if (mismatched.length > 0)
-    return refused([
-      ...diagnostics,
-      applyDiagnostic("plan.owner-mismatch", "error", {
-        count: mismatched.length,
-        objects: mismatched
-          .slice(0, OWNER_LIMIT)
-          .concat(mismatched.length > OWNER_LIMIT ? ["…"] : [])
-          .join(", "),
-      }),
-    ])
+    return refused([...diagnostics, ownerMismatch(mismatched)])
   const { actions } = target.enginePlan
 
   // 6. Нічого застосовувати лише тоді, коли немає ні кроків, ні нового
-  // знімка, ні дрейфу. Дрейф без кроків (власник) — план із нулем кроків:
+  // знімка, ні дрейфу. Дрейф без кроків (зміна версій) — план із нулем кроків:
   // інакше дрейф не було б як прийняти, і кожен наступний план бачив би його
   if (actions.length === 0 && fromHash === model.hash && drift === null)
     return { status: "unchanged", diagnostics }
@@ -311,13 +314,26 @@ export async function buildPlan(
   }
 }
 
+const ownerMismatch = (objects: readonly string[]): EngineDiagnostic =>
+  applyDiagnostic("plan.owner-mismatch", "error", {
+    count: objects.length,
+    objects: objects
+      .slice(0, OWNER_LIMIT)
+      .concat(objects.length > OWNER_LIMIT ? ["…"] : [])
+      .join(", "),
+  })
+
 /**
  * Перепис власників об'єктів, що є і в цілі, і в тіні. Та сама проєкція, що
  * в двигуна: власник, рівний ролі сесії своєї бази, — типовий. Тож об'єкт
  * тіні, яким володіє її роль сесії, в цілі має належати ролі сесії цілі, і
  * різні ролі адміністрування тіні й застосування хибної відмови не дають.
  * Об'єкт пресету провайдера, яким у тіні володіє інша роль (`public` —
- * `pg_database_owner`), порівнюється за іменем ролі.
+ * `pg_database_owner`), порівнюється за іменем ролі. Об'єкт лише цілі план
+ * зніме чи змінить: йому досить, щоб роль сесії була членом ролі-власника,
+ * а це перевірено ще до витягу (крок 2а). Залежні об'єкти (індекс, рядковий
+ * тип, послідовність колонки) `readOwners` уже пропустив: їхній власник іде
+ * за господарем.
  */
 function ownerMismatches(
   target: { session: string; owners: readonly ObjectOwner[] },

@@ -182,42 +182,56 @@ const collation = (oid: string): string =>
 /**
  * Об'єкти межі з власником (`kind`, `ident`, `owner` — OID ролі): їх хешує
  * секція `owner` і з них же перепис власників плану порівнює ціль із тінню.
+ * `dependent` — власник іде за об'єктом-господарем, і `ALTER … OWNER TO`
+ * Postgres на ньому відхиляє: індекс, рядковий тип відношення й відношення
+ * складеного типу, тип масиву, послідовність колонки (`OWNED BY`, identity).
+ * Відбиток їх хешує, а перепис власників пропускає.
  */
 const OWNED_OBJECTS = `
-      select 'schema' as kind, format('%I', n.nspname) as ident, n.nspowner as owner from scope_ns n
+      select 'schema' as kind, format('%I', n.nspname) as ident, n.nspowner as owner,
+        false as dependent
+      from scope_ns n
       union all
-      select 'relation', c.oid::regclass::text, c.relowner from scope_rel c
+      select 'relation', c.oid::regclass::text, c.relowner,
+        c.relkind in ('i', 'I', 'c') or (c.relkind = 'S' and exists (
+          select from pg_depend d
+          where d.classid = 'pg_class'::regclass and d.objid = c.oid
+            and d.refclassid = 'pg_class'::regclass and d.deptype in ('a', 'i')))
+      from scope_rel c
       union all
-      select 'type', t.oid::regtype::text, t.typowner
+      select 'type', t.oid::regtype::text, t.typowner,
+        exists (select from pg_type e where e.typarray = t.oid)
+          or (t.typrelid <> 0 and t.typrelid not in (
+            select oid from scope_rel where relkind = 'c'))
       from pg_type t join scope_ns n on n.oid = t.typnamespace
       union all
-      select 'function', p.oid::regprocedure::text, p.proowner
+      select 'function', p.oid::regprocedure::text, p.proowner, false
       from pg_proc p join scope_ns n on n.oid = p.pronamespace
       union all
-      select 'operator', o.oid::regoperator::text, o.oprowner
+      select 'operator', o.oid::regoperator::text, o.oprowner, false
       from pg_operator o join scope_ns n on n.oid = o.oprnamespace
       union all
-      select 'opclass', format('%I.%I %I', n.nspname, c.opcname, am.amname), c.opcowner
+      select 'opclass', format('%I.%I %I', n.nspname, c.opcname, am.amname), c.opcowner, false
       from pg_opclass c join scope_ns n on n.oid = c.opcnamespace
         join pg_am am on am.oid = c.opcmethod
       union all
-      select 'opfamily', format('%I.%I %I', n.nspname, f.opfname, am.amname), f.opfowner
+      select 'opfamily', format('%I.%I %I', n.nspname, f.opfname, am.amname), f.opfowner, false
       from pg_opfamily f join scope_ns n on n.oid = f.opfnamespace
         join pg_am am on am.oid = f.opfmethod
       union all
-      select 'collation', format('%I.%I %s', n.nspname, c.collname, c.collencoding), c.collowner
+      select 'collation', format('%I.%I %s', n.nspname, c.collname, c.collencoding), c.collowner, false
       from pg_collation c join scope_ns n on n.oid = c.collnamespace
       union all
-      select 'tsconfig', format('%I.%I', n.nspname, c.cfgname), c.cfgowner
+      select 'tsconfig', format('%I.%I', n.nspname, c.cfgname), c.cfgowner, false
       from pg_ts_config c join scope_ns n on n.oid = c.cfgnamespace
       union all
-      select 'tsdict', format('%I.%I', n.nspname, d.dictname), d.dictowner
+      select 'tsdict', format('%I.%I', n.nspname, d.dictname), d.dictowner, false
       from pg_ts_dict d join scope_ns n on n.oid = d.dictnamespace
       union all
-      select 'statistics', format('%I.%I', n.nspname, s.stxname), s.stxowner
+      select 'statistics', format('%I.%I', n.nspname, s.stxname), s.stxowner, false
       from pg_statistic_ext s join scope_ns n on n.oid = s.stxnamespace
       union all
-      select 'extension', format('%I', e.extname), e.extowner
+      select 'extension', format('%I', e.extname), e.extowner, false
       from pg_extension e join scope_ns n on n.oid = e.extnamespace`
 
 /**
@@ -528,6 +542,8 @@ ${FINGERPRINT_SECTIONS.map((s) => `  ${digest(SECTION_ROWS[s])} as "${s}"`).join
 export interface ObjectOwner {
   object: string
   owner: string
+  /** Роль сесії — член ролі-власника (`pg_has_role … MEMBER`): може змінити чи зняти об'єкт. */
+  member: boolean
 }
 
 /**
@@ -544,8 +560,10 @@ export async function readOwners(
     tx,
     `with${SCOPE_CTES}
     select format('%s %s', o.kind, o.ident) as object,
-      pg_get_userbyid(o.owner) as owner
+      pg_get_userbyid(o.owner) as owner,
+      pg_has_role(current_user, o.owner, 'MEMBER') as member
     from (${OWNED_OBJECTS}) o
+    where not o.dependent
     order by format('%s %s', o.kind, o.ident) collate "C"`,
     [scope.schemas]
   )
@@ -558,6 +576,7 @@ export async function readOwners(
     owners: rows.map((r) => ({
       object: String(r.object),
       owner: String(r.owner),
+      member: r.member === true,
     })),
   }
 }

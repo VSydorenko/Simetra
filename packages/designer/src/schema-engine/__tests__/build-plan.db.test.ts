@@ -54,6 +54,8 @@ const targetScope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
 const OWNER = "simetra_build_plan_owner"
+/** Роль, членом якої роль сесії не є: об'єкт такого власника план не зніме. */
+const STRANGER = "simetra_build_plan_stranger"
 
 /** Один запит (чи кілька операторів) з окремого з'єднання. */
 async function other<R extends Record<string, unknown>>(
@@ -69,14 +71,26 @@ async function other<R extends Record<string, unknown>>(
   }
 }
 
-const dropRole = () => other(testSuperuserUrl(), `drop role if exists ${OWNER}`)
+const dropRole = () =>
+  other(
+    testSuperuserUrl(),
+    `drop role if exists ${OWNER}; drop role if exists ${STRANGER};`
+  )
+
+/** Та сама база цілі, але сесією суперкористувача стеку. */
+function asSuperuser(url: string): string {
+  const su = new URL(testSuperuserUrl())
+  su.pathname = new URL(url).pathname
+  return su.toString()
+}
 
 beforeAll(async () => {
   // Роль могла лишитися від убитого прогону
   await dropRole()
   await other(
     testSuperuserUrl(),
-    `create role ${OWNER} nologin; grant ${OWNER} to postgres;`
+    `create role ${OWNER} nologin; grant ${OWNER} to postgres;
+     create role ${STRANGER} nologin;`
   )
 })
 afterAll(dropRole)
@@ -192,6 +206,12 @@ describe("buildPlan", () => {
         )
       ).toBe(true)
       expect(artifact.requiredPermissions).toEqual([])
+      // Унікальний індекс на таблиці, яку створює сам план, нічого не сканує
+      expect(
+        stepMatching(artifact, /CREATE UNIQUE INDEX party_predefined/).map(
+          (s) => s.class
+        )
+      ).toEqual(["catalogOnly"])
       expect(artifact.scope.schemas).toEqual(["app", "simetra"])
     })
   })
@@ -256,9 +276,12 @@ describe("buildPlan", () => {
       const [mismatch] = outcome.diagnostics.filter(
         (d) => d.code === "plan.owner-mismatch"
       )
-      expect(String(mismatch?.params.objects)).toContain(
-        `relation app.party (owner ${OWNER}, expected postgres)`
-      )
+      // Лише сама таблиця: індекс ключа, рядковий тип і тип масиву ідуть
+      // за нею, і `OWNER TO` на них Postgres відхиляє
+      expect(mismatch?.params).toEqual({
+        count: 1,
+        objects: `relation app.party (owner ${OWNER}, expected postgres)`,
+      })
       // Власника повернуто вручну — дрейфу більше немає
       await other(url, "alter table app.party owner to postgres")
       expect((await plan(url, model)).status).toBe("unchanged")
@@ -278,13 +301,128 @@ describe("buildPlan", () => {
         expect(outcome.status).toBe("refused")
         expect(errors(outcome)).toEqual(["plan.owner-mismatch"])
         expect(
-          String(
-            outcome.diagnostics.find((d) => d.code === "plan.owner-mismatch")
-              ?.params.objects
-          )
-        ).toContain(`relation app.party (owner ${OWNER}, expected postgres)`)
+          outcome.diagnostics.find((d) => d.code === "plan.owner-mismatch")
+            ?.params
+        ).toEqual({
+          count: 1,
+          objects: `relation app.party (owner ${OWNER}, expected postgres)`,
+        })
       }
     )
+  })
+
+  it("refuses to drop an object of a role the session cannot act as", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      // Таблиця лише цілі, власник — роль поза членством ролі сесії: план
+      // зніс би її, а `DROP` упав би на застосуванні з 42501
+      await other(
+        asSuperuser(url),
+        `create table app.stray (id int);
+         alter table app.stray owner to ${STRANGER};`
+      )
+      const outcome = await plan(url, model)
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.owner-mismatch"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.owner-mismatch")
+          ?.params
+      ).toEqual({
+        count: 1,
+        objects: `relation app.stray (owner ${STRANGER}, not a role postgres is a member of)`,
+      })
+    })
+  })
+
+  it("asks permission to drop a unique index the model cannot see", async () => {
+    // Прийнята база з унікальним індексом з опціями зберігання: модель
+    // каталогу його не несе, а знімає його план без бажаного стану
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(
+      `create schema app;
+       create table app.party (id uuid primary key);
+       create unique index party_extra_u on app.party (id)
+         with (fillfactor = 90);`,
+      async (url) => {
+        const artifact = planned(await plan(url, model))
+        const [drop] = stepMatching(artifact, /DROP INDEX .*party_extra_u/)
+        expect(drop?.class).toBe("relaxation")
+        expect(artifact.requiredPermissions).toContain(drop!.id)
+      }
+    )
+  })
+
+  it("plans versions-changed drift with zero steps", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      await other(
+        url,
+        "update simetra.marker set engine_version = 'other', fingerprint_version = 0"
+      )
+      const outcome = await plan(url, model)
+      const artifact = planned(outcome)
+      expect(codes(outcome)).toContain("apply.versions-changed")
+      expect(artifact.drift).toEqual({
+        reason: "versions-changed",
+        sections: [],
+        paths: [],
+      })
+      expect(artifact.steps).toEqual([])
+      expect(artifact.fromHash).toBe(artifact.toHash)
+      expect(artifact.requiredPermissions).toEqual(["drift"])
+    })
+  })
+
+  it("refuses an engine step the parser cannot read", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    // Двигун із дією, якої парсер не розбирає: дефект адаптера стає
+    // відмовою з id кроку, а не винятком
+    const garbled: SchemaEngine = {
+      ...engine,
+      withDesiredShadow: (o, sql, scope, fn) =>
+        engine.withDesiredShadow(o, sql, scope, (db, enginePlan) =>
+          fn(db, {
+            empty: false,
+            actions: [
+              ...enginePlan.actions,
+              { ...enginePlan.actions[0]!, sql: "THIS IS NOT SQL" },
+            ],
+          })
+        ),
+    }
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await plan(url, model, garbled)
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.unparsable-step"])
+      const [unparsable] = outcome.diagnostics.filter(
+        (d) => d.code === "plan.unparsable-step"
+      )
+      expect(unparsable?.params.step).toMatch(/^s\d+$/)
+    })
+  })
+
+  it("names a proof that misses the desired fingerprint as a proof refusal", async () => {
+    const withNote = await compiled({
+      [PARTY]: party([attribute("note", { id: uuid(9060) })]),
+    })
+    const without = await compiled({ [PARTY]: party() })
+    // Двигун, що «забуває» кроки: копія після прогону не досягає бажаного
+    // відбитка, і перевірка раннера перед `COMMIT` звучить кодом доказу
+    const forgetful: SchemaEngine = {
+      ...engine,
+      withDesiredShadow: (o, sql, scope, fn) =>
+        engine.withDesiredShadow(o, sql, scope, (db) =>
+          fn(db, { empty: true, actions: [] })
+        ),
+    }
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, without)
+      const outcome = await plan(url, withNote, forgetful)
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.fingerprint-disagrees"])
+    })
   })
 
   it("converges a reloptions change", async () => {

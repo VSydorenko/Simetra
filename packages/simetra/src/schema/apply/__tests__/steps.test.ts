@@ -145,6 +145,17 @@ const CASES: [string, EngineAction[], CatalogModel, StepClass[]][] = [
     ["catalogOnly"],
   ],
   [
+    "dropping an index the target model does not know is a relaxation",
+    [
+      action("DROP INDEX app.unseen", {
+        verb: "drop",
+        destroys: ["index:app.unseen"],
+      }),
+    ],
+    PLAIN,
+    ["relaxation"],
+  ],
+  [
     "NO FORCE ROW LEVEL SECURITY is a relaxation",
     [action("ALTER TABLE app.t NO FORCE ROW LEVEL SECURITY")],
     UNIQUE,
@@ -222,13 +233,28 @@ const CASES: [string, EngineAction[], CatalogModel, StepClass[]][] = [
   [
     "CREATE UNIQUE INDEX on a table the plan creates is catalogOnly",
     [
+      action("CREATE TABLE app.n (x int)", {
+        verb: "create",
+        produces: ["table:app.n"],
+      }),
       action("CREATE UNIQUE INDEX v ON app.n (x)", {
         verb: "create",
         produces: ["index:app.v"],
       }),
     ],
     UNIQUE,
-    ["catalogOnly"],
+    ["catalogOnly", "catalogOnly"],
+  ],
+  [
+    "CREATE UNIQUE INDEX on a table the model does not know scans",
+    [
+      action("CREATE UNIQUE INDEX v ON app.unseen (x)", {
+        verb: "create",
+        produces: ["index:app.v"],
+      }),
+    ],
+    UNIQUE,
+    ["validationScan"],
   ],
   [
     "a dropped constraint recreated later is a replacement",

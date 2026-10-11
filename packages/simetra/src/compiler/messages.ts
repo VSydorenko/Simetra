@@ -2283,12 +2283,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.owner-mismatch": {
     en: (p) =>
-      `${p.count} object(s) in the database are owned by another role than the one the platform manages them with: ${p.objects}`,
+      `${p.count} object(s) are owned by a role other than the one that applies, so the plan cannot manage them: ${p.objects}`,
     uk: (p) =>
-      `Об'єктів у базі, якими володіє не та роль, якою їх веде платформа: ${p.count}: ${p.objects}`,
+      `Об'єктів, якими володіє не роль, що застосовує, тож план не може ними керувати: ${p.count}: ${p.objects}`,
     hint: {
-      en: "No plan was written. The owner of a managed object is the role that applies; another owner can bypass row level security. Restore it with `ALTER … OWNER TO <role>` for each named object, or apply as the owning role, and plan again.",
-      uk: "План не записано. Власник керованого об'єкта — роль, що застосовує; інший власник може обходити захист рядків. Відновіть його через `ALTER … OWNER TO <роль>` для кожного названого об'єкта або застосовуйте від ролі-власника й сплануйте знову.",
+      en: "No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner the applying role is a member of. Restore the owner with `ALTER … OWNER TO <role>` for each named object (indexes, row types and column sequences follow their table), or apply as the owning role, and plan again.",
+      uk: "План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. Відновіть власника через `ALTER … OWNER TO <роль>` для кожного названого об'єкта (індекси, рядкові типи й послідовності колонок ідуть за своєю таблицею) або застосовуйте від ролі-власника й сплануйте знову.",
     },
   },
   "database.failed": {
