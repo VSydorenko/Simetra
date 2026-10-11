@@ -174,4 +174,35 @@ describe("plan artifact", () => {
       "0123456789ab-fedcba987654.plan.json"
     )
   })
+
+  // План лише з дрейфом (рішення 16) не змінює знімок: from = to. Ім'я
+  // лишається звичайним і не збігається ні з першим застосуванням, ні з
+  // планом, що веде до того самого знімка з іншого
+  it("names a drift-only plan with the same hash on both sides", () => {
+    const h = "0123456789abcdef"
+    expect(planFileName(h, h)).toBe("0123456789ab-0123456789ab.plan.json")
+    expect(
+      new Set([
+        planFileName(h, h),
+        planFileName(null, h),
+        planFileName("fedcba9876543210", h),
+      ]).size
+    ).toBe(3)
+  })
+
+  it("round-trips a drift-only plan with an empty step list", async () => {
+    const h = "c".repeat(64)
+    const artifact = await stampPlan({
+      ...draft(),
+      fromHash: h,
+      toHash: h,
+      steps: [],
+      requiredPermissions: ["drift"],
+      drift: { reason: "drift", sections: ["owner"], paths: [] },
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
+    expect(await verifyPlanHash(parsed.artifact)).toBe(true)
+  })
 })

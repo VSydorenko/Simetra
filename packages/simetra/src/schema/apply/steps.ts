@@ -458,9 +458,9 @@ const objectWords = (objtype: string | undefined): string =>
 /**
  * Оператори, у яких `CASCADE` знищує чи відбирає залежне, яке план не
  * називає (платформна спека §6.6): DROP, видалення колонки, атрибута чи
- * обмеження, TRUNCATE, REVOKE. `ADD`/`RENAME ATTRIBUTE … CASCADE` і
- * `ALTER ATTRIBUTE … TYPE … CASCADE` лише поширюють зміну на типізовані
- * таблиці; останню класифікує правило зміни типу.
+ * обмеження, TRUNCATE, REVOKE привілеїв і ролей. `ADD`/`RENAME ATTRIBUTE
+ * … CASCADE` і `ALTER ATTRIBUTE … TYPE … CASCADE` лише поширюють зміну на
+ * типізовані таблиці; останню класифікує правило зміни типу.
  */
 function cascadeVerbs(stmt: Node): string[] {
   if ("DropStmt" in stmt)
@@ -475,6 +475,13 @@ function cascadeVerbs(stmt: Node): string[] {
     return stmt.GrantStmt.is_grant !== true &&
       isCascade(stmt.GrantStmt.behavior)
       ? ["REVOKE"]
+      : []
+  // `REVOKE роль FROM роль … CASCADE` відкликає й членство чи гранти, видані
+  // через цю роль, — так само залежне, якого план не називає
+  if ("GrantRoleStmt" in stmt)
+    return stmt.GrantRoleStmt.is_grant !== true &&
+      isCascade(stmt.GrantRoleStmt.behavior)
+      ? ["REVOKE ROLE"]
       : []
   if ("AlterDomainStmt" in stmt)
     return stmt.AlterDomainStmt.subtype === "X" &&

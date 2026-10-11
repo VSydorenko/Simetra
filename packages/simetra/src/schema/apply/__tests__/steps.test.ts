@@ -623,6 +623,8 @@ describe("lintSteps", () => {
     ["DROP OWNED BY r CASCADE", "DROP OWNED"],
     ["TRUNCATE app.t CASCADE", "TRUNCATE"],
     ["REVOKE SELECT ON app.t FROM r CASCADE", "REVOKE"],
+    ["REVOKE r FROM u CASCADE", "REVOKE ROLE"],
+    ["REVOKE ADMIN OPTION FOR r FROM u CASCADE", "REVOKE ROLE"],
   ]
 
   it.each(CASCADE_REFUSED)("refuses %s", (sql, verb) => {

@@ -84,7 +84,7 @@ export function driftGate(
     return { ok: false, diagnostics: [state.diagnostic] }
   const { marker } = state
   const fromHash = marker.snapshotHash
-  const engine = sameEngine(marker.engine, current.engine)
+  const sameEngineVersion = sameEngine(marker.engine, current.engine)
   const comparison = compareFingerprints(
     marker.fingerprint,
     current.fingerprint,
@@ -94,7 +94,7 @@ export function driftGate(
     fingerprintFrom: marker.fingerprint.version,
     fingerprintTo: current.fingerprint.version,
   }
-  if (!engine && !comparison.comparable)
+  if (!sameEngineVersion && !comparison.comparable)
     return {
       ok: true,
       fromHash,
@@ -113,7 +113,7 @@ export function driftGate(
     ? []
     : [applyDiagnostic("apply.drift-partial", "warning", versions)]
   const sections = comparison.comparable ? comparison.differing : []
-  const differences = engine
+  const differences = sameEngineVersion
     ? diffCatalogModels(marker.catalog, current.model)
     : []
   if (sections.length === 0 && differences.length === 0)
