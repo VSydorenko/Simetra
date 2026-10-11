@@ -112,7 +112,8 @@ describe("SchemaEngine apply port", () => {
 
   it("does not report a domain as a locked table", async () => {
     // Обмеження домену двигун адресує тим самим видом `constraint`, що й
-    // обмеження таблиці, з іменем домену в полі `table`
+    // обмеження таблиці, з іменем домену в полі `table`; таблиці з таким
+    // іменем у вихідному стані немає
     const plan = await planOf(
       "create schema app; create domain app.d as int constraint d_pos check (value > 0);",
       "create schema app; create domain app.d as int constraint d_small check (value < 10);"
@@ -121,6 +122,55 @@ describe("SchemaEngine apply port", () => {
     expect(drop.lockClass).toBe("accessExclusive")
     expect(drop.lockedTables).toEqual([])
     expect(actionMatching(plan, /ADD CONSTRAINT/i).lockedTables).toEqual([])
+  })
+
+  it("does not report a foreign table as a locked table", async () => {
+    // Дія над колонкою сторонньої таблиці не несе батька `foreignTable:`, а
+    // `LOCK TABLE` на сторонній таблиці дає 42809
+    const fdw = [
+      "create extension if not exists postgres_fdw with schema extensions;",
+      "create server app_srv foreign data wrapper postgres_fdw",
+      "  options (host 'localhost', dbname 'none');",
+      "create schema app;",
+    ].join("\n")
+    const plan = await planOf(
+      `${fdw}\ncreate foreign table app.ft (x int default 1, y int not null) server app_srv;`,
+      `${fdw}\ncreate foreign table app.ft (x int default 2, y int) server app_srv;`
+    )
+    const setDefault = actionMatching(plan, /SET DEFAULT/i)
+    expect(setDefault.consumes).toEqual(["default:app.ft.x"])
+    expect(setDefault.lockClass).toBe("accessExclusive")
+    expect(setDefault.lockedTables).toEqual([])
+    const dropNotNull = actionMatching(plan, /DROP NOT NULL/i)
+    expect(dropNotNull.consumes).toEqual(["column:app.ft.y"])
+    expect(dropNotNull.lockedTables).toEqual([])
+  })
+
+  it("does not lock a table the plan creates", async () => {
+    const plan = await planOf(
+      "create schema app;",
+      "create schema app; create table app.n (id int primary key);"
+    )
+    const create = actionMatching(plan, /CREATE TABLE/i)
+    expect(create.consumes).toContain("table:app.n")
+    expect(create.lockedTables).toEqual([])
+  })
+
+  it("locks an existing table the plan drops and recreates, once", async () => {
+    // Перехід до секціонованої таблиці двигун робить через DROP і CREATE;
+    // DROP знищує й `table:`, і `column:` тієї самої таблиці
+    const plan = await planOf(
+      "create schema app; create table app.t (id int, c int);",
+      "create schema app; create table app.t (id int, c int) partition by range (id);"
+    )
+    const drop = actionMatching(plan, /DROP TABLE/i)
+    expect(drop.destroys).toEqual(
+      expect.arrayContaining(["table:app.t", "column:app.t.id"])
+    )
+    expect(drop.lockedTables).toEqual([{ schema: "app", name: "t" }])
+    expect(plan.actions.indexOf(drop)).toBeLessThan(
+      plan.actions.indexOf(actionMatching(plan, /CREATE TABLE/i))
+    )
   })
 
   it("identity matches the installed pg-delta", async () => {
@@ -168,12 +218,9 @@ describe("SchemaEngine apply port", () => {
           `clone failed: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
         )
       const clone = outcome.value
-      expect(
-        engine
-          .plan(clone.catalog, target.catalog, scope)
-          .actions.map((a) => a.sql)
-      ).toEqual([])
-      expect(engine.plan(clone.catalog, target.catalog, scope).empty).toBe(true)
+      const back = engine.plan(clone.catalog, target.catalog, scope)
+      expect(back.actions.map((a) => a.sql)).toEqual([])
+      expect(back.empty).toBe(true)
       expect(diffCatalogModels(target.model, clone.model)).toEqual([])
     })
   })

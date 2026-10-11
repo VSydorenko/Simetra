@@ -97,7 +97,13 @@ export interface EngineAction {
    * енаму): між ними потрібен `COMMIT`, тож в одній транзакції її не виконати.
    */
   newSegmentBefore: boolean
-  /** Таблиці, які дія блокує: виводить адаптер з consumes/destroys виду table. */
+  /**
+   * Наявні таблиці (`relkind` r/p) вихідного стану цього плану, які дія
+   * блокує: сама таблиця чи батьківська таблиця підоб'єкта (column, default,
+   * constraint, trigger, policy, rule). Батько-домен, стороння таблиця й
+   * таблиця, яку створює сам план, сюди не входять. Знання про `relkind` — в
+   * адаптері; раннер блокує список як є.
+   */
   lockedTables: LockedTable[]
   lockClass: string
   dataLoss: boolean

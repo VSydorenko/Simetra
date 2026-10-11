@@ -286,37 +286,48 @@ function tableOf(id: StableId): LockedTable | undefined {
 const tableKey = (schema: string, name: string): string =>
   JSON.stringify([schema, name])
 
-/**
- * Лише `table:` не вистачає: `ALTER COLUMN … SET NOT NULL`/`TYPE`/
- * `SET DEFAULT` споживають лише `column:…`, а блокують усю таблицю.
- *
- * Обмеження домену двигун адресує тим самим видом `constraint` з іменем
- * домену в полі `table`. Дія над підоб'єктом споживає його батька, тож домен
- * є в самій дії; таблиця й домен з одним іменем в одній схемі неможливі (обидва
- * займають ім'я в `pg_type`), тож таке обмеження — не таблиця.
- */
-function lockedTablesOf(action: Action): LockedTable[] {
-  const all = [...action.produces, ...action.consumes, ...action.destroys]
-  const domains = new Set(
-    all.flatMap((id) =>
-      id.kind === "domain" ? [tableKey(id.schema, id.name)] : []
-    )
+/** Наявні таблиці вихідного стану: факти виду `table` — це `relkind` r/p. */
+function existingTables(source: FactBase): ReadonlySet<string> {
+  return new Set(
+    source
+      .facts()
+      .flatMap((f) =>
+        f.id.kind === "table" ? [tableKey(f.id.schema, f.id.name)] : []
+      )
   )
+}
+
+/**
+ * Наявні таблиці вихідного стану плану, які дія блокує. Лише `table:` не
+ * вистачає: `ALTER COLUMN … SET NOT NULL`/`TYPE`/`SET DEFAULT` споживають лише
+ * `column:…` чи `default:…`, а блокують усю таблицю. Поле `table` підоб'єкта
+ * ще не означає таблицю: двигун так само адресує обмеження домену й підоб'єкти
+ * сторонньої таблиці (батька `foreignTable:` дія над колонкою не несе), а
+ * таблицю, яку створює сам план, до плану не заблокувати. Тож одне правило —
+ * таблиця має бути у вихідному стані; знання про `relkind` лишається тут, а
+ * раннер блокує список як є.
+ */
+function lockedTablesOf(
+  action: Action,
+  tables: ReadonlySet<string>
+): LockedTable[] {
   const seen = new Set<string>()
   const out: LockedTable[] = []
   for (const id of [...action.consumes, ...action.destroys]) {
     const table = tableOf(id)
     if (table === undefined) continue
     const key = tableKey(table.schema, table.name)
-    if (id.kind === "constraint" && domains.has(key)) continue
-    if (seen.has(key)) continue
+    if (!tables.has(key) || seen.has(key)) continue
     seen.add(key)
     out.push(table)
   }
   return out
 }
 
-function toEngineAction(action: Action): EngineAction {
+function toEngineAction(
+  action: Action,
+  tables: ReadonlySet<string>
+): EngineAction {
   return {
     sql: action.sql,
     verb: action.verb,
@@ -325,15 +336,17 @@ function toEngineAction(action: Action): EngineAction {
     destroys: action.destroys.map(encodeId),
     transactionality: action.transactionality,
     newSegmentBefore: action.newSegmentBefore,
-    lockedTables: lockedTablesOf(action),
+    lockedTables: lockedTablesOf(action, tables),
     lockClass: action.lockClass,
     dataLoss: action.dataLoss === "destructive",
     rewriteRisk: action.rewriteRisk,
   }
 }
 
-function toEnginePlan(plan: Plan): EnginePlan {
-  const actions = plan.actions.map(toEngineAction)
+/** `source` — вихідний стан саме цього плану: проти нього рахуються `lockedTables`. */
+function toEnginePlan(plan: Plan, source: FactBase): EnginePlan {
+  const tables = existingTables(source)
+  const actions = plan.actions.map((a) => toEngineAction(a, tables))
   return { actions, empty: actions.length === 0 }
 }
 
@@ -493,7 +506,7 @@ async function planAndRun<T>(
         onWarning: (message) => warnings.push(message),
       }
     )
-    plan = toEnginePlan(result.plan)
+    plan = toEnginePlan(result.plan, result.targetFactBase)
     // Той самий фільтр `unmodeled_kind`, що в extract: клас, який перепис
     // бази-джерела діагностики вже назвав у межі, вдруге не звучить
     const counted = async (pool: pg.Pool) =>
@@ -598,7 +611,7 @@ async function cloneAndRun<T>(
         status: "shadow-failed",
         diagnostics: failure.map((d) =>
           cloneFailed(
-            `the provider seed did not load: ${String(d.params.detail)}`,
+            `preparing the copy failed: ${String(d.params.detail)}`,
             d.engineCode,
             d.object
           )
@@ -714,7 +727,8 @@ export function createPgDeltaEngine(): SchemaEngine {
       // Опції — з джерела: план змінює базу-джерело, тож її роль і
       // можливості визначають, що двигун має право планувати
       return toEnginePlan(
-        enginePlan(from.factBase, to.factBase, from.planOptions)
+        enginePlan(from.factBase, to.factBase, from.planOptions),
+        from.factBase
       )
     },
 
