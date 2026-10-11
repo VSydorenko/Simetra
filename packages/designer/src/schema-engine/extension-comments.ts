@@ -1,4 +1,5 @@
 import type pg from "pg"
+import { readOnlyQuery } from "./read-only"
 
 /**
  * Коментар control-файлу кожного встановленого розширення (для його версії).
@@ -10,11 +11,13 @@ import type pg from "pg"
 export async function readExtensionComments(
   pool: pg.Pool
 ): Promise<ReadonlyMap<string, string>> {
-  const { rows } = await pool.query<{ name: string; comment: string | null }>(
-    `select e.extname as name, v.comment
-       from pg_extension e
-       join pg_available_extension_versions v
-         on v.name = e.extname and v.version = e.extversion`
+  const { rows } = await readOnlyQuery(pool, (client) =>
+    client.query<{ name: string; comment: string | null }>(
+      `select e.extname as name, v.comment
+         from pg_extension e
+         join pg_available_extension_versions v
+           on v.name = e.extname and v.version = e.extversion`
+    )
   )
   return new Map(
     rows.flatMap((r) => (r.comment === null ? [] : [[r.name, r.comment]]))

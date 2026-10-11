@@ -25,7 +25,7 @@ import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { createMcpServer } from "../mcp/server"
 import { createPgDeltaEngine } from "../schema-engine"
-import { readOnlyPool } from "../schema-engine/pg-delta/adapter"
+import { readOnlyTransactionPool } from "../schema-engine/read-only"
 import type { DiffData } from "../tools/database-tools"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
@@ -582,7 +582,7 @@ describe("introspect and the platform schema", () => {
 describe("sessions", () => {
   it("target session is read-only", async () => {
     await inTarget(SHOP, ["app"], async (url) => {
-      const pool = readOnlyPool(url)
+      const pool = readOnlyTransactionPool(url)
       try {
         await expect(
           pool.query("CREATE TABLE app.intruder (id int)")

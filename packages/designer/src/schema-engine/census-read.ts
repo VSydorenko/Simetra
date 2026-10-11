@@ -123,15 +123,18 @@ with managed as (
 select class, count(*)::int as count from objects group by class order by class
 `
 
-/** Пул адаптера або клієнт тесту в транзакції — запитам перепису байдуже. */
+/**
+ * Клієнт у транзакції: адаптер кличе через `readOnlyQuery`, тест — зі своєї
+ * транзакції. Пул сюди не йде, щоб читання не обминуло транзакцію.
+ */
 type Queryable = Pick<pg.ClientBase, "query">
 
 /** Лічильники класів у межі керування; класи з нулем об'єктів відсутні. */
 export async function readCensus(
-  pool: Queryable,
+  db: Queryable,
   scope: EngineScope
 ): Promise<CensusCount[]> {
-  const { rows } = await pool.query<CensusCount>(CENSUS_SQL, [
+  const { rows } = await db.query<CensusCount>(CENSUS_SQL, [
     scope.schemas,
     SUPABASE_SCHEMAS,
     SUPABASE_EXTENSIONS,
@@ -175,10 +178,10 @@ select property, count(*)::int as count from objects group by property order by 
 
 /** Лічильники нетипових фізичних властивостей у межі; нульові відсутні. */
 export async function readUnmodeledProperties(
-  pool: Queryable,
+  db: Queryable,
   scope: EngineScope
 ): Promise<PropertyCount[]> {
-  const { rows } = await pool.query<PropertyCount>(UNMODELED_PROPERTIES_SQL, [
+  const { rows } = await db.query<PropertyCount>(UNMODELED_PROPERTIES_SQL, [
     scope.schemas,
   ])
   return rows
@@ -191,10 +194,10 @@ export async function readUnmodeledProperties(
  * вузький запит до каталогу; порівнюється він між базою й тінню.
  */
 export async function readUnpopulatedViews(
-  pool: Queryable,
+  db: Queryable,
   scope: EngineScope
 ): Promise<string[]> {
-  const { rows } = await pool.query<{ schema: string; name: string }>(
+  const { rows } = await db.query<{ schema: string; name: string }>(
     `select n.nspname as schema, c.relname as name
        from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind = 'm' and not c.relispopulated

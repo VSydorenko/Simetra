@@ -47,6 +47,7 @@ import {
   censusClassOfUnmodeledKind,
 } from "./census-facts"
 import { readExtensionComments } from "../extension-comments"
+import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
 import { readRoutineVolatility } from "../routine-volatility"
 import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
@@ -74,31 +75,11 @@ const IDENTITY: EngineIdentity = { name: ENGINE, version: "1.0.0-alpha.56" }
 const REDACT_SECRETS = true
 
 /**
- * Пул сесій цілі: лише читання (спека designer §3.2). Не через `options`
- * конфігу: параметр `options` у рядку підключення перекрив би його, а рядок
- * приходить ззовні. Хук `onConnect` пулу виконується до того, як клієнт
- * отримає перший запит, а його збій закриває клієнт і стає помилкою запиту.
- * Цим самим пулом читається й тінь: extract нічого не пише.
+ * Пул адміністративної сесії тіні: завантаження бажаного стану пише. Читання
+ * з нього — так само транзакціями `readOnlyQuery`.
  */
-export function readOnlyPool(url: string): pg.Pool {
-  return quietPool(url, async (client) => {
-    await client.query("SET default_transaction_read_only = on")
-  })
-}
-
-/** Пул адміністративної сесії тіні: завантаження бажаного стану пише. */
 function writablePool(url: string): pg.Pool {
-  return quietPool(url)
-}
-
-function quietPool(
-  url: string,
-  onConnect?: (client: pg.ClientBase) => Promise<void>
-): pg.Pool {
-  const pool = new pg.Pool({
-    connectionString: url,
-    ...(onConnect === undefined ? {} : { onConnect }),
-  })
+  const pool = new pg.Pool({ connectionString: url })
   // Помилка простого клієнта (рестарт сервера) не має валити процес: пул
   // закривається в `finally` виклику
   pool.on("error", () => {})
@@ -120,16 +101,18 @@ export function shadowServerRefusal(
 }
 
 async function serverMajor(pool: pg.Pool): Promise<number> {
-  const { rows } = await pool.query<{ major: number }>(
-    "select current_setting('server_version_num')::int / 10000 as major"
+  const { rows } = await readOnlyQuery(pool, (client) =>
+    client.query<{ major: number }>(
+      "select current_setting('server_version_num')::int / 10000 as major"
+    )
   )
   return rows[0]!.major
 }
 
 async function assertShadowServer(o: ShadowOptions): Promise<void> {
   if (o.shadowBase === undefined) return
-  const target = readOnlyPool(o.target.url)
-  const shadow = readOnlyPool(o.shadowBase.url)
+  const target = readOnlyTransactionPool(o.target.url)
+  const shadow = readOnlyTransactionPool(o.shadowBase.url)
   try {
     const targetMajor = await serverMajor(target)
     const shadowMajor = await serverMajor(shadow).catch((error: unknown) => {
@@ -393,8 +376,8 @@ function planOptionsOf(resolved: PlanOptions, target: FactBase): PlanOptions {
  * до неї, і саме її ADP дають права новим об'єктам.
  */
 async function currentRole(pool: pg.Pool): Promise<string> {
-  const { rows } = await pool.query<{ role: string }>(
-    "select current_user as role"
+  const { rows } = await readOnlyQuery(pool, (client) =>
+    client.query<{ role: string }>("select current_user as role")
   )
   return rows[0]!.role
 }
@@ -421,7 +404,9 @@ async function extractFrom(
     extensionComments: await readExtensionComments(pool),
     volatility: await readRoutineVolatility(pool),
   })
-  const census = await readCensus(pool, scope)
+  const census = await readOnlyQuery(pool, (client) =>
+    readCensus(client, scope)
+  )
   return {
     model,
     catalog: new PgDeltaCatalog(
@@ -439,10 +424,14 @@ async function extractFrom(
         census,
         factCensus(view),
         CENSUS_COVERAGE,
-        await readUnmodeledProperties(pool, scope)
+        await readOnlyQuery(pool, (client) =>
+          readUnmodeledProperties(client, scope)
+        )
       ),
     ],
-    unpopulated: await readUnpopulatedViews(pool, scope),
+    unpopulated: await readOnlyQuery(pool, (client) =>
+      readUnpopulatedViews(client, scope)
+    ),
   }
 }
 
@@ -486,7 +475,7 @@ async function planAndRun<T>(
   fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
 ): Promise<ShadowOutcome<T>> {
   const warnings: string[] = []
-  const targetPool = readOnlyPool(target.url)
+  const targetPool = readOnlyTransactionPool(target.url)
   const shadowPool = writablePool(shadowUrl)
   let plan: EnginePlan
   let diagnostics: EngineDiagnostic[]
@@ -518,7 +507,10 @@ async function planAndRun<T>(
     // Той самий фільтр `unmodeled_kind`, що в extract: клас, який перепис
     // бази-джерела діагностики вже назвав у межі, вдруге не звучить
     const counted = async (pool: pg.Pool) =>
-      unmodeledClasses(await readCensus(pool, scope), CENSUS_COVERAGE)
+      unmodeledClasses(
+        await readOnlyQuery(pool, (client) => readCensus(client, scope)),
+        CENSUS_COVERAGE
+      )
     const [targetCounted, shadowCounted] = await Promise.all([
       counted(targetPool),
       counted(shadowPool),
@@ -595,7 +587,7 @@ async function cloneAndRun<T>(
   scope: EngineScope,
   fn: (clone: DbConnection) => Promise<T>
 ): Promise<ShadowOutcome<T>> {
-  const targetPool = readOnlyPool(target.url)
+  const targetPool = readOnlyTransactionPool(target.url)
   const clonePool = writablePool(cloneUrl)
   let diagnostics: EngineDiagnostic[]
   try {
@@ -648,7 +640,10 @@ async function cloneAndRun<T>(
       }
     // Той самий фільтр `unmodeled_kind`, що в `planAndRun`
     const counted = async (pool: pg.Pool) =>
-      unmodeledClasses(await readCensus(pool, scope), CENSUS_COVERAGE)
+      unmodeledClasses(
+        await readOnlyQuery(pool, (client) => readCensus(client, scope)),
+        CENSUS_COVERAGE
+      )
     const [targetCounted, cloneCounted] = await Promise.all([
       counted(targetPool),
       counted(clonePool),
@@ -718,7 +713,7 @@ export function createPgDeltaEngine(): SchemaEngine {
     identity: IDENTITY,
 
     async extract(db, scope) {
-      const pool = readOnlyPool(db.url)
+      const pool = readOnlyTransactionPool(db.url)
       try {
         return await extractFrom(pool, scope)
       } finally {

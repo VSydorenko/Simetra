@@ -113,10 +113,18 @@ export type DatabaseErrorClass =
       params: { database: string; error: string; sqlstate?: string }
     }
 
-const refusal = (message: string): DatabaseErrorClass => ({
+const refusal = (message: string, note = ""): DatabaseErrorClass => ({
   kind: "refusal",
-  message: `${message} Nothing changed.`,
+  message: `${message}${note} Nothing changed.`,
 })
+
+/**
+ * Тінь потребує сесійної семантики (`CREATE DATABASE`, підключення до нової
+ * бази за іменем), а детектора режиму пулера немає (рішення 14.4 плану
+ * П3-1): збій створення чи підключення тіні лише підказує про режим.
+ */
+const SHADOW_CONNECTION =
+  " The shadow needs a direct or session-mode connection; a transaction-mode pooler cannot create or reach it."
 
 /**
  * Єдина межа, на якій помилка підключення чи запиту стає текстом для
@@ -129,7 +137,17 @@ export function classifyDatabaseError(
   error: unknown,
   names: DatabaseNames
 ): DatabaseErrorClass {
+  return classify(error, names, "")
+}
+
+/** `note` — речення перед «Nothing changed.» у кожній відмові. */
+function classify(
+  error: unknown,
+  names: DatabaseNames,
+  note: string
+): DatabaseErrorClass {
   const describe = names.target
+  const refused = (message: string) => refusal(message, note)
   if (error instanceof DatabaseRefusal)
     return { kind: "refusal", message: error.message }
   if (error instanceof ShadowServerMismatchError)
@@ -137,32 +155,35 @@ export function classifyDatabaseError(
   if (error instanceof ShadowCreateRefusedError) {
     const where = error.onShadowBase ? (names.shadow ?? describe) : describe
     return refusal(
-      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`
+      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`,
+      SHADOW_CONNECTION
     )
   }
   // Збій окремого сервера тіні — та сама класифікація, але з його адресою
   if (error instanceof ShadowServerError)
-    return classifyDatabaseError(error.cause, {
-      target: names.shadow ?? describe,
-    })
+    return classify(
+      error.cause,
+      { target: names.shadow ?? describe },
+      SHADOW_CONNECTION
+    )
   if (error instanceof AggregateError && error.errors.length > 0)
-    return classifyDatabaseError(error.errors[0], names)
+    return classify(error.errors[0], names, note)
   if (!(error instanceof Error))
     return { kind: "failure", params: { database: describe, error: "unknown" } }
   // Порт виконання вже розпізнав обрив (клас `08`, `57P01`, транспорт): код
   // драйвера в ньому не зберігся, тож текст не вгадується наново
   if (error instanceof ApplyConnectionLost)
-    return refusal(
+    return refused(
       `The connection to the database at ${describe} was lost or timed out.`
     )
   const code = codeOf(error)
   if (code !== undefined && NODE_CODE.test(code)) {
     if (UNREACHABLE.has(code))
-      return refusal(
+      return refused(
         `The database at ${describe} is unreachable (${code}). Check the host and port in the connection string.`
       )
     if (code === "ERR_INVALID_URL")
-      return refusal("The connection string is not a valid URL.")
+      return refused("The connection string is not a valid URL.")
     return {
       kind: "failure",
       params: { database: describe, error: `${error.name} ${code}` },
@@ -170,17 +191,17 @@ export function classifyDatabaseError(
   }
   if (code !== undefined && SQLSTATE.test(code)) {
     if (code.startsWith("28"))
-      return refusal(
+      return refused(
         `Authentication to the database at ${describe} failed. Check the user and password in the connection string.`
       )
     if (code.startsWith("08"))
-      return refusal(
+      return refused(
         `The connection to the database at ${describe} failed (SQLSTATE ${code}).`
       )
     if (code === "3D000")
-      return refusal(`The database at ${describe} does not exist.`)
+      return refused(`The database at ${describe} does not exist.`)
     if (code === "42501")
-      return refusal(
+      return refused(
         `The connecting role lacks a privilege this tool needs on ${describe} (SQLSTATE 42501).`
       )
     return {
@@ -189,7 +210,7 @@ export function classifyDatabaseError(
     }
   }
   if (code === undefined && LOST_CONNECTION.test(error.message))
-    return refusal(
+    return refused(
       `The connection to the database at ${describe} was lost or timed out.`
     )
   return { kind: "failure", params: { database: describe, error: error.name } }

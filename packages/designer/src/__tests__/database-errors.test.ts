@@ -42,6 +42,10 @@ function pgError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code })
 }
 
+/** Підказка про режим з'єднання тіні (рішення 14.4 плану П3-1). */
+const SHADOW_MODE =
+  "The shadow needs a direct or session-mode connection; a transaction-mode pooler cannot create or reach it."
+
 const leaks = (text: string) =>
   [USER, PASSWORD, URL_].filter((secret) => text.includes(secret))
 
@@ -230,6 +234,8 @@ describe("classifyDatabaseError", () => {
     expect(base.kind === "refusal" && base.message).toContain(
       "created on shadow.example.test:5432/postgres: the connecting role lacks CREATEDB."
     )
+    for (const c of [own, base])
+      expect(c.kind === "refusal" && c.message).toContain(SHADOW_MODE)
   })
 
   it("describes a failure on the shadow server by its own address", () => {
@@ -239,6 +245,9 @@ describe("classifyDatabaseError", () => {
     )
     expect(unreachable.kind === "refusal" && unreachable.message).toContain(
       "The database at shadow.example.test:5432/postgres is unreachable"
+    )
+    expect(unreachable.kind === "refusal" && unreachable.message).toContain(
+      `${SHADOW_MODE} Nothing changed.`
     )
     expect(
       classifyDatabaseError(

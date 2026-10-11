@@ -333,7 +333,9 @@ tolerates. It only shrinks:
 connection comes only from the environment (`SIMETRA_DATABASE_URL`, or the
 variable named with `--database-url-env`); never paste a connection string.
 Scope, the shadow database, exit codes and how to judge a result are in the
-`simetra-adoption` skill.
+`simetra-adoption` skill. `diff` output carries `applyState`: `absent` while
+the database holds none of the platform's apply state, which the first `apply`
+creates and `diff` does not count as a difference; `present` otherwise.
 
 ## The database: plan and apply
 
@@ -348,8 +350,18 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 `allow` the id of every step that drops data or relaxes a guarantee and
 `drift` when the plan carries drift; the plan output says which items need
 it. `rehearse` runs the plan and rolls it back, but still takes the same
-`ACCESS EXCLUSIVE` locks. A long apply wants a direct or session connection,
-not a transaction pooler.
+`ACCESS EXCLUSIVE` locks.
+
+Which connection to use:
+
+- Reads of the target (`introspect`, `diff`, `plan`) run in short read-only
+  transactions and work through a transaction-mode pooler.
+- The shadow database of `diff` and `plan` needs a direct or session-mode
+  connection: it is created, reached by name and loaded with session settings
+  that a transaction-mode pooler does not keep. With a pooled target
+  connection, point `--shadow-url-env` at a direct one.
+- A long `apply` wants a direct or session-mode connection too: a pooler may
+  cut the transaction with its own timeouts.
 
 ```json simetra:apply
 {

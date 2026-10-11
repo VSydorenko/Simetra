@@ -1,6 +1,7 @@
 import { encodeId } from "@supabase/pg-delta"
 import type pg from "pg"
 import type { FunctionVolatility } from "simetra/model"
+import { readOnlyQuery } from "./read-only"
 
 /**
  * Той самий оператор, яким витяг pg-delta фіксує шлях у своїй транзакції
@@ -27,10 +28,8 @@ const VOLATILITY: Readonly<Record<string, FunctionVolatility>> = {
 export async function readRoutineVolatility(
   pool: pg.Pool
 ): Promise<ReadonlyMap<string, FunctionVolatility>> {
-  // `SET LOCAL` живе лише в транзакції, тож — окремий клієнт пулу
-  const client = await pool.connect()
-  try {
-    await client.query("BEGIN READ ONLY")
+  // `SET LOCAL` живе лише в транзакції: шлях не переживає читання
+  const rows = await readOnlyQuery(pool, async (client) => {
     await client.query(SEARCH_PATH_STATEMENT)
     const { rows } = await client.query<{
       schema: string
@@ -47,22 +46,17 @@ export async function readRoutineVolatility(
          join pg_namespace n on n.oid = p.pronamespace
         where p.prokind in ('f', 'w')`
     )
-    await client.query("COMMIT")
-    return new Map(
-      rows.map((r) => [
-        encodeId({
-          kind: "function",
-          schema: r.schema,
-          name: r.name,
-          args: r.args,
-        }),
-        VOLATILITY[r.volatility]!,
-      ])
-    )
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined)
-    throw error
-  } finally {
-    client.release()
-  }
+    return rows
+  })
+  return new Map(
+    rows.map((r) => [
+      encodeId({
+        kind: "function",
+        schema: r.schema,
+        name: r.name,
+        args: r.args,
+      }),
+      VOLATILITY[r.volatility]!,
+    ])
+  )
 }

@@ -20,7 +20,8 @@ are served by `simetra mcp` with the same input.
   or the server's environment; never paste a connection string into a command,
   a file or a tool input. Output shows only `host:port/db`.
 - Without the variable the call is refused with its name (exit 2).
-- The target is opened read-only.
+- The target is only read, in short read-only transactions that leave no
+  session state behind.
 - `diff` builds the shadow database on the target's server by default, so the
   connecting role needs `CREATEDB`. Otherwise name a variable with
   `--shadow-url-env <NAME>` pointing at another server of the **same
@@ -123,3 +124,6 @@ not express through metadata (CustomTable and PgEnum modules, shared
   text is withheld because it may carry credentials.
 - `--format json` (MCP `structuredContent`) carries the plan, the differences
   and the diagnostics as data.
+- `diff` also reports `applyState`: `absent` while the database holds none of
+  the platform's apply state (the first `apply` creates it, so it is not a
+  difference), `present` otherwise.
