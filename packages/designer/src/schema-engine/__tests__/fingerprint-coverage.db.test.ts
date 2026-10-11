@@ -77,6 +77,7 @@ const CATALOG = `
   comment on procedure app.pr(int) is 'pr';
   comment on collation app.co is 'co';
   comment on column app.pair.x is 'px';
+  security label for pgsodium on column app.u.c is 'ENCRYPT WITH KEY ID 00000000-0000-0000-0000-000000000000';
   grant select on app.parent to anon;
   grant update (name) on app.parent to authenticated;
   grant usage on sequence app.seq to anon;

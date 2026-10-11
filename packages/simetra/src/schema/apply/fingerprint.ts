@@ -136,6 +136,31 @@ const grantee = (owner: string): string =>
 const sorted = (source: string, expr = "v"): string =>
   `(select string_agg(${expr}, ',' order by ${expr} collate "C") from ${source})`
 
+/**
+ * Чи анотація (коментар, мітка безпеки) рядка `a` з `classoid`/`objoid`
+ * стосується об'єкта межі. Об'єкт ідентифікує `pg_identify_object` (`io`);
+ * у тригера, політики й правила схеми немає, тож межу дає їхня таблиця, а в
+ * розширення — його схема. Спільні об'єкти (`pg_shseclabel`: ролі, бази) —
+ * поза межею схем.
+ */
+const annotatedInScope = (a: string): string => `case ${a}.classoid
+      when 'pg_namespace'::regclass then ${a}.objoid in (select oid from scope_ns)
+      when 'pg_trigger'::regclass then exists (
+        select from pg_trigger t where t.oid = ${a}.objoid
+          and (t.tgrelid in (select oid from scope_rel)
+            or t.tgrelid in (select oid from surface_rel where classes ? 'trigger')))
+      when 'pg_policy'::regclass then exists (
+        select from pg_policy p where p.oid = ${a}.objoid
+          and (p.polrelid in (select oid from scope_rel)
+            or p.polrelid in (select oid from surface_rel where classes ? 'policy')))
+      when 'pg_rewrite'::regclass then exists (
+        select from pg_rewrite r where r.oid = ${a}.objoid
+          and r.ev_class in (select oid from scope_rel))
+      when 'pg_extension'::regclass then exists (
+        select from pg_extension e where e.oid = ${a}.objoid
+          and e.extnamespace in (select oid from scope_ns))
+      else io.schema = any($1::text[]) end`
+
 /** Колляція колонки чи домену за ім'ям, не за OID. */
 const collation = (oid: string): string =>
   `(select format('%I.%I', cn.nspname, co.collname) from pg_collation co join pg_namespace cn on cn.oid = co.collnamespace where co.oid = ${oid})`
@@ -351,30 +376,18 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
       or exists (select from pg_publication_namespace pn
         where pn.pnpubid = p.oid and pn.pnnspid in (select oid from scope_ns))`,
 
-  // Ідентичність коментованого об'єкта — за іменами (`pg_identify_object`);
-  // у тригера, політики й правила схеми немає, тож межу дає їхня таблиця, а
-  // в розширення — його схема
+  // Анотації об'єктів межі: коментарі й мітки безпеки (провайдер і мітка),
+  // ідентичність — за іменами (`pg_identify_object`)
   comments: `
     select format('%s %s %L', io.type, io.identity, d.description)
     from pg_description d
       cross join lateral pg_identify_object(d.classoid, d.objoid, d.objsubid) io
-    where case d.classoid
-      when 'pg_namespace'::regclass then d.objoid in (select oid from scope_ns)
-      when 'pg_trigger'::regclass then exists (
-        select from pg_trigger t where t.oid = d.objoid
-          and (t.tgrelid in (select oid from scope_rel)
-            or t.tgrelid in (select oid from surface_rel where classes ? 'trigger')))
-      when 'pg_policy'::regclass then exists (
-        select from pg_policy p where p.oid = d.objoid
-          and (p.polrelid in (select oid from scope_rel)
-            or p.polrelid in (select oid from surface_rel where classes ? 'policy')))
-      when 'pg_rewrite'::regclass then exists (
-        select from pg_rewrite r where r.oid = d.objoid
-          and r.ev_class in (select oid from scope_rel))
-      when 'pg_extension'::regclass then exists (
-        select from pg_extension e where e.oid = d.objoid
-          and e.extnamespace in (select oid from scope_ns))
-      else io.schema = any($1::text[]) end`,
+    where ${annotatedInScope("d")}
+    union all
+    select format('label %s %s %I %L', io.type, io.identity, l.provider, l.label)
+    from pg_seclabel l
+      cross join lateral pg_identify_object(l.classoid, l.objoid, l.objsubid) io
+    where ${annotatedInScope("l")}`,
 
   owner: `
     select format('%s %s %s', o.kind, o.ident, quote_ident(pg_get_userbyid(o.owner)))

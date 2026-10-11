@@ -159,6 +159,12 @@ describe("readFingerprint", () => {
   // Четвертий елемент — підготовка поверх FIXTURE до першого читання
   it.each<[string, string, FingerprintSection, string?]>([
     ["comment on table", "comment on table app.t is 'x'", "comments"],
+    // Провайдер міток на стеку — `pgsodium` у `shared_preload_libraries`
+    [
+      "security label",
+      "security label for pgsodium on column app.t.name is 'ENCRYPT WITH KEY ID 00000000-0000-0000-0000-000000000000'",
+      "comments",
+    ],
     [
       "comment on rule",
       "comment on rule fr on app.t is 'x'",

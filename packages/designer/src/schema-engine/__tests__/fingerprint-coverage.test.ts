@@ -53,6 +53,20 @@ describe("coverageGaps", () => {
     ).toEqual(["stale edge owner", "stale kind view", "stale table.gone"])
   })
 
+  it("does not require an excepted kind or edge to be observed", () => {
+    expect(
+      coverageGaps(
+        facts,
+        {
+          schema: { "@": "schemas" },
+          table: { "@": "inventory", rowSecurity: "relations" },
+          eventTrigger: { "*": { exception: "outside" } },
+        },
+        { managedBy: { exception: "outside" } }
+      )
+    ).toEqual([])
+  })
+
   it("accepts any property of a kind excepted as a whole", () => {
     expect(
       coverageGaps(
