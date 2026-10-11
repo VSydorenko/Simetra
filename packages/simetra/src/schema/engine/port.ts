@@ -29,6 +29,18 @@ export interface EngineScope {
   provider: DatabaseProvider
 }
 
+/** Двигун і його версія: модель каталогу й план мають сенс лише разом із ними. */
+export interface EngineIdentity {
+  name: string
+  version: string
+}
+
+/** Не плутати з локальним `QualifiedTable` у `compiler/operations/promote/gates.ts`: той не експортується. */
+export interface LockedTable {
+  schema: string
+  name: string
+}
+
 export interface EngineDiagnostic {
   code: RuleCode
   severity: Severity
@@ -80,6 +92,13 @@ export interface EngineAction {
   destroys: string[]
   /** Тризначна: потоку П3 потрібна межа коміту після дії, а не лише «так/ні». */
   transactionality: "transactional" | "nonTransactional" | "commitBoundaryAfter"
+  /**
+   * Дія вживає результат попередньої `commitBoundaryAfter` (нове значення
+   * енаму): між ними потрібен `COMMIT`, тож в одній транзакції її не виконати.
+   */
+  newSegmentBefore: boolean
+  /** Таблиці, які дія блокує: виводить адаптер з consumes/destroys виду table. */
+  lockedTables: LockedTable[]
   lockClass: string
   dataLoss: boolean
   rewriteRisk: boolean
@@ -95,6 +114,7 @@ export type ShadowOutcome<T> =
   | { status: "shadow-failed"; diagnostics: EngineDiagnostic[] }
 
 export interface SchemaEngine {
+  readonly identity: EngineIdentity
   extract(db: DbConnection, scope: EngineScope): Promise<Extracted>
   /** Чисто, без бази: обидва каталоги несуть усе, що потрібно двигуну. */
   plan(
@@ -119,5 +139,16 @@ export interface SchemaEngine {
     desiredSql: string,
     scope: EngineScope,
     fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
+  ): Promise<ShadowOutcome<T>>
+  /**
+   * Жертовна копія поточного стану цілі в межі: друга co-located тінь (або на
+   * shadowBase), засіяна базовим станом провайдера; стан цілі відтворено
+   * планом двигуна. Точність копії перевіряє викликач. Тінь прибирається завжди.
+   */
+  withTargetClone<T>(
+    o: ShadowOptions,
+    target: Extracted,
+    scope: EngineScope,
+    fn: (clone: DbConnection) => Promise<T>
   ): Promise<ShadowOutcome<T>>
 }

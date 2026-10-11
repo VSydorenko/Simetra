@@ -1,4 +1,5 @@
 import {
+  apply,
   encodeId,
   plan as enginePlan,
   planSchemaFiles,
@@ -12,6 +13,7 @@ import {
   type FactBase,
   type Plan,
   type PlanOptions,
+  type StableId,
 } from "@supabase/pg-delta"
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
@@ -25,9 +27,11 @@ import {
   type EngineAction,
   type EngineCatalog,
   type EngineDiagnostic,
+  type EngineIdentity,
   type EnginePlan,
   type EngineScope,
   type Extracted,
+  type LockedTable,
   type SchemaEngine,
   type ShadowOptions,
   type ShadowOutcome,
@@ -55,6 +59,13 @@ import {
 } from "../errors"
 
 const ENGINE = "pg-delta"
+
+/**
+ * Версія встановленого пакета двигуна. Пакет не експортує свій
+ * `package.json`, а його `ENGINE_VERSION` — версія формату плану, не пакета;
+ * рівність встановленому пакету тримає тест адаптера.
+ */
+const IDENTITY: EngineIdentity = { name: ENGINE, version: "1.0.0-alpha.56" }
 
 /**
  * Секрети в дефініціях (наприклад, опції серверів) двигун редагує; той самий
@@ -251,6 +262,60 @@ function unrepresentableDiagnostic(issue: MappingIssue): EngineDiagnostic {
   )
 }
 
+/**
+ * Таблиця, яку адресує ідентичність: сама таблиця чи її підоб'єкт (поле
+ * `table`). Структурно, а не з рядкової форми: та неоднозначна для імен із
+ * крапкою.
+ */
+function tableOf(id: StableId): LockedTable | undefined {
+  switch (id.kind) {
+    case "table":
+      return { schema: id.schema, name: id.name }
+    case "column":
+    case "constraint":
+    case "default":
+    case "policy":
+    case "rule":
+    case "trigger":
+      return { schema: id.schema, name: id.table }
+    default:
+      return undefined
+  }
+}
+
+const tableKey = (schema: string, name: string): string =>
+  JSON.stringify([schema, name])
+
+/**
+ * Лише `table:` не вистачає: `ALTER COLUMN … SET NOT NULL`/`TYPE`/
+ * `SET DEFAULT` споживають лише `column:…`, а блокують усю таблицю.
+ *
+ * Обмеження домену двигун адресує тим самим видом `constraint` з іменем
+ * домену в полі `table`. Дія над підоб'єктом споживає його батька, тож домен
+ * є в самій дії; таблиця й домен з одним іменем в одній схемі неможливі (обидва
+ * займають ім'я в `pg_type`), тож таке обмеження — не таблиця.
+ */
+function lockedTablesOf(action: Action): LockedTable[] {
+  const all = [...action.produces, ...action.consumes, ...action.destroys]
+  const domains = new Set(
+    all.flatMap((id) =>
+      id.kind === "domain" ? [tableKey(id.schema, id.name)] : []
+    )
+  )
+  const seen = new Set<string>()
+  const out: LockedTable[] = []
+  for (const id of [...action.consumes, ...action.destroys]) {
+    const table = tableOf(id)
+    if (table === undefined) continue
+    const key = tableKey(table.schema, table.name)
+    if (id.kind === "constraint" && domains.has(key)) continue
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(table)
+  }
+  return out
+}
+
 function toEngineAction(action: Action): EngineAction {
   return {
     sql: action.sql,
@@ -259,6 +324,8 @@ function toEngineAction(action: Action): EngineAction {
     consumes: action.consumes.map(encodeId),
     destroys: action.destroys.map(encodeId),
     transactionality: action.transactionality,
+    newSegmentBefore: action.newSegmentBefore,
+    lockedTables: lockedTablesOf(action),
     lockClass: action.lockClass,
     dataLoss: action.dataLoss === "destructive",
     rewriteRisk: action.rewriteRisk,
@@ -470,6 +537,120 @@ async function planAndRun<T>(
 }
 
 /**
+ * Тіло копії без її прибирання. Засів — так само, як бажана тінь у
+ * `planAndRun`, і план засіву відкидається: лише `renderProviderSeed()` замало,
+ * бо заглушки `auth.users` і `storage.objects` дає `seedAssumedSchemas`, а без
+ * них тригер чи політика застосунку на поверхні провайдера не відтворилися б.
+ * Стан цілі відтворює план двигуна «копія → ціль» з опціями копії, як `plan`
+ * порту. Гейт відбитка `apply` вимкнено: копія жертовна, а точність її стану
+ * перевіряє викликач.
+ */
+async function cloneAndRun<T>(
+  target: DbConnection,
+  cloneUrl: string,
+  targetCatalog: PgDeltaCatalog,
+  scope: EngineScope,
+  fn: (clone: DbConnection) => Promise<T>
+): Promise<ShadowOutcome<T>> {
+  const targetPool = readOnlyPool(target.url)
+  const clonePool = writablePool(cloneUrl)
+  let diagnostics: EngineDiagnostic[]
+  try {
+    try {
+      await planSchemaFiles(
+        targetPool,
+        clonePool,
+        [{ name: "provider-seed.sql", sql: renderProviderSeed() }],
+        {
+          profile: scopeProfile(scope),
+          seedAssumedSchemas: true,
+          reorderOnFailure: false,
+          renames: "off",
+          redactSecrets: REDACT_SECRETS,
+        }
+      )
+    } catch (error) {
+      const failure = shadowFailure(error)
+      if (failure === undefined) throw error
+      return { status: "shadow-failed", diagnostics: failure }
+    }
+    const seeded = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
+    const plan = enginePlan(
+      seeded.factBase,
+      targetCatalog.factBase,
+      seeded.planOptions
+    )
+    const report = await apply(plan, clonePool, { fingerprintGate: false })
+    if (report.status !== "applied")
+      return {
+        status: "shadow-failed",
+        diagnostics: [
+          engineDiagnostic(
+            "engine.shadow-load-failed",
+            {
+              // Текст помилки оператора стосується об'єкта, а не підключення
+              detail:
+                report.error === undefined
+                  ? "the target state could not be reproduced"
+                  : `the target state could not be reproduced at \`${report.error.sql}\`: ${report.error.message}`,
+            },
+            "error",
+            undefined,
+            "apply_failed"
+          ),
+        ],
+      }
+    // Той самий фільтр `unmodeled_kind`, що в `planAndRun`
+    const counted = async (pool: pg.Pool) =>
+      unmodeledClasses(await readCensus(pool, scope), CENSUS_COVERAGE)
+    const [targetCounted, cloneCounted] = await Promise.all([
+      counted(targetPool),
+      counted(clonePool),
+    ])
+    diagnostics = toEngineDiagnostics(
+      plan.diagnostics ?? [],
+      new Set([...targetCounted, ...cloneCounted])
+    )
+  } finally {
+    await targetPool.end()
+    await clonePool.end()
+  }
+  return {
+    status: "loaded",
+    value: await fn({ url: cloneUrl }),
+    diagnostics,
+  }
+}
+
+/**
+ * Виконує тіло над тінню й прибирає її завжди. Збій прибирання не має
+ * затирати першопричину: вона перша в `errors`, а `cause` — збій прибирання,
+ * який і перервав нормальний шлях.
+ */
+async function dropAfter<T>(
+  shadow: { cleanup: () => Promise<void> },
+  body: () => Promise<T>
+): Promise<T> {
+  let result: T
+  try {
+    result = await body()
+  } catch (error) {
+    try {
+      await shadow.cleanup()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "shadow run failed and the shadow could not be dropped",
+        { cause: cleanupError }
+      )
+    }
+    throw error
+  }
+  await shadow.cleanup()
+  return result
+}
+
+/**
  * Збій провізії називає сервер, на якому він стався: без `CREATEDB` —
  * відмова з адресою того сервера, інший збій окремого сервера тіні — його.
  */
@@ -488,6 +669,8 @@ async function provisionShadow(
 
 export function createPgDeltaEngine(): SchemaEngine {
   return {
+    identity: IDENTITY,
+
     async extract(db, scope) {
       const pool = readOnlyPool(db.url)
       try {
@@ -520,25 +703,26 @@ export function createPgDeltaEngine(): SchemaEngine {
       // Адміністративна сесія тіні — окремий пул двигуна з правом
       // `CREATE DATABASE`; сесія цілі лишається лише для читання
       const shadow = await provisionShadow(o)
-      let outcome: ShadowOutcome<T>
-      try {
-        outcome = await planAndRun(o.target, shadow.url, desiredSql, scope, fn)
-      } catch (error) {
-        // Збій прибирання не має затирати першопричину: вона перша в `errors`,
-        // а `cause` — збій прибирання, який і перервав нормальний шлях
-        try {
-          await shadow.cleanup()
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "shadow run failed and the shadow could not be dropped",
-            { cause: cleanupError }
-          )
-        }
-        throw error
-      }
-      await shadow.cleanup()
-      return outcome
+      return dropAfter(shadow, () =>
+        planAndRun(o.target, shadow.url, desiredSql, scope, fn)
+      )
+    },
+
+    async withTargetClone<T>(
+      o: ShadowOptions,
+      target: Extracted,
+      scope: EngineScope,
+      fn: (clone: DbConnection) => Promise<T>
+    ): Promise<ShadowOutcome<T>> {
+      const catalog = asOwnCatalog(target.catalog)
+      if (catalog.scopeKey !== scopeKeyOf(scope))
+        throw new Error("catalogs were extracted under a different scope")
+      await assertShadowServer(o)
+      // Друга тінь тією самою провізією: копія пише, ціль лише читається
+      const clone = await provisionShadow(o)
+      return dropAfter(clone, () =>
+        cloneAndRun(o.target, clone.url, catalog, scope, fn)
+      )
     },
   }
 }

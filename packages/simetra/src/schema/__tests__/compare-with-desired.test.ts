@@ -61,6 +61,8 @@ const ACTION: EngineAction = {
   consumes: ["schema:app"],
   destroys: [],
   transactionality: "transactional",
+  newSegmentBefore: false,
+  lockedTables: [],
   lockClass: "AccessExclusiveLock",
   dataLoss: false,
   rewriteRisk: false,
@@ -78,6 +80,7 @@ interface Fake {
 
 function fakeEngine(fake: Fake): SchemaEngine {
   return {
+    identity: { name: "fake", version: "0" },
     async extract(db) {
       return db.url === SHADOW.url
         ? (fake.desired ?? extracted())
@@ -100,6 +103,9 @@ function fakeEngine(fake: Fake): SchemaEngine {
         value: await fn(SHADOW, fake.plan ?? EMPTY_PLAN),
         diagnostics: fake.shadowDiagnostics ?? [],
       }
+    },
+    withTargetClone() {
+      throw new Error("compareWithDesired does not clone the target")
     },
   }
 }
