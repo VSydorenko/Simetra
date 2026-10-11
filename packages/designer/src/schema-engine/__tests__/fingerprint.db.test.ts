@@ -156,8 +156,57 @@ describe("readFingerprint", () => {
     })
   })
 
-  it.each<[string, string, FingerprintSection]>([
+  // Четвертий елемент — підготовка поверх FIXTURE до першого читання
+  it.each<[string, string, FingerprintSection, string?]>([
     ["comment on table", "comment on table app.t is 'x'", "comments"],
+    [
+      "comment on rule",
+      "comment on rule fr on app.t is 'x'",
+      "comments",
+      "create rule fr as on update to app.t do also nothing",
+    ],
+    [
+      "comment on extension",
+      "comment on extension citext is 'x'",
+      "comments",
+      "create extension citext with schema app",
+    ],
+    [
+      "attach partition",
+      "alter table app.pt attach partition app.pt1 for values from (0) to (10)",
+      "relations",
+      "create table app.pt (k int) partition by range (k); create table app.pt1 (k int);",
+    ],
+    [
+      "detach partition",
+      "alter table app.pt detach partition app.pt1",
+      "relations",
+      "create table app.pt (k int) partition by range (k); create table app.pt1 partition of app.pt for values from (0) to (10);",
+    ],
+    [
+      "inherit",
+      "alter table app.kid inherit app.base",
+      "relations",
+      "create table app.base (id int); create table app.kid (id int);",
+    ],
+    [
+      "no inherit",
+      "alter table app.kid no inherit app.base",
+      "relations",
+      "create table app.base (id int); create table app.kid () inherits (app.base);",
+    ],
+    [
+      "sequence cache",
+      "alter sequence app.sq cache 5",
+      "sequences",
+      "create sequence app.sq",
+    ],
+    [
+      "sequence owned by",
+      "alter sequence app.sq owned by app.t.id",
+      "sequences",
+      "create sequence app.sq",
+    ],
     [
       "enable row level security",
       "alter table app.t enable row level security",
@@ -197,9 +246,50 @@ describe("readFingerprint", () => {
       "alter default privileges in schema app grant select on tables to anon",
       "defaultPrivileges",
     ],
-  ])("section per mutation: %s", async (_name, sql, section) => {
+  ])("section per mutation: %s", async (_name, sql, section, setup) => {
     await inTarget(FIXTURE, async (url) => {
+      if (setup !== undefined) await other(url, setup)
       expect(await changedBy(url, () => other(url, sql))).toEqual([section])
+    })
+  })
+
+  it("sees an invalid index", async () => {
+    await inTarget(FIXTURE, async (url) => {
+      await other(
+        url,
+        "create table app.d (v int); insert into app.d values (1)"
+      )
+      await other(url, "create unique index d_v on app.d (v)")
+      // Збій `CONCURRENTLY` на дублікатах лишає індекс із тим самим
+      // визначенням, але недійсним; `CONCURRENTLY` не йде в транзакції,
+      // тож окремими операторами повз порт
+      const changed = await changedBy(url, async () => {
+        await other(url, "drop index app.d_v")
+        await other(url, "insert into app.d values (1)")
+        const error = await other(
+          url,
+          "create unique index concurrently d_v on app.d (v)"
+        ).catch((e: unknown) => e)
+        expect((error as { code?: string }).code).toBe("23505")
+      })
+      expect(changed).toEqual(["indexes"])
+    })
+  })
+
+  it("reads defaults independently of the creating session's search_path", async () => {
+    const body = (fn: string): string => `
+      create function app.one() returns int language sql as $$ select 1 $$;
+      create domain app.dd as int default ${fn};
+      create table app.dt (x int default ${fn});
+    `
+    const bare = await inTarget(
+      `set search_path = app, public; ${body("one()")} reset search_path;`,
+      read
+    )
+    const qualified = await inTarget(body("app.one()"), read)
+    expect(compareFingerprints(bare, qualified, { owner: true })).toEqual({
+      comparable: true,
+      differing: [],
     })
   })
 
@@ -208,9 +298,9 @@ describe("readFingerprint", () => {
       const created = await changedBy(url, () =>
         other(url, "create aggregate app.s(int) (sfunc = int4pl, stype = int)")
       )
-      expect(created).toEqual(
-        expect.arrayContaining(["functions", "inventory"])
-      )
+      // Новий об'єкт має власника й типовий ACL (`acldefault`): `EXECUTE`
+      // для власника й `public`
+      expect(created).toEqual(["functions", "acl", "owner", "inventory"])
       expect(
         await changedBy(url, () =>
           other(
@@ -294,9 +384,14 @@ describe("readFingerprint", () => {
           )
         )
       ).toEqual(["policies"])
+      // `storage.app_extra` — на поверхні тригерів, але не політик: політика
+      // на ній не входить у відбиток, хоч схема та сама, що в `objects`
       expect(
         await changedBy(url, () =>
-          other(url, "create table storage.app_extra (id int)")
+          other(
+            url,
+            "create table storage.app_extra (id int); create policy app_x on storage.app_extra for select to authenticated using (true)"
+          )
         )
       ).toEqual([])
     })

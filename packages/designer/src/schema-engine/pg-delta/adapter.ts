@@ -359,6 +359,14 @@ function asOwnCatalog(catalog: EngineCatalog): PgDeltaCatalog {
 }
 
 /**
+ * Сирі факти двигуна з каталогу порту. Лише для контракту покриття відбитка
+ * (`fingerprint-coverage.ts`): ключі моделі двигуна знає тільки адаптер.
+ */
+export function engineFacts(catalog: EngineCatalog): FactBase {
+  return asOwnCatalog(catalog).factBase
+}
+
+/**
  * Опції плану так само, як їх складає `planSchemaFiles`: план тіні й план
  * порту з тих самих каталогів мусять бути одним планом. Ролі цілі —
  * припущені, бо межа бази (scope `database`) ролями не керує.

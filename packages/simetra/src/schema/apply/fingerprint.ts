@@ -81,8 +81,10 @@ function likePattern(glob: string): string {
 /**
  * Відбиток межі `scope`: схеми застосунку цілком плюс політики й тригери на
  * таблицях поверхні провайдера (§6.9). Читається в точці збереження під
- * `search_path = pg_catalog`: так `pg_get_*` і `::regclass` кваліфікують
- * імена схемою, а `search_path` транзакції лишається незмінним.
+ * `search_path = pg_catalog, pg_temp`: так `pg_get_*` і `::regclass`
+ * кваліфікують імена схемою незалежно від сесії, що створила об'єкт, а
+ * `search_path` транзакції лишається незмінним. Що з моделі двигуна покриває
+ * яка секція — контракт `fingerprint-coverage.ts` адаптера в designer.
  */
 export async function readFingerprint(
   tx: ApplyTransaction,
@@ -94,7 +96,9 @@ export async function readFingerprint(
     classes: s.classes,
   }))
   await tx.query("SAVEPOINT simetra_fingerprint")
-  await tx.query("SET LOCAL search_path = pg_catalog")
+  // `pg_temp` явно останнім: неявно він перший для імен відношень і типів, і
+  // тимчасова таблиця сесії могла б затінити `pg_class`
+  await tx.query("SET LOCAL search_path = pg_catalog, pg_temp")
   const rows = await tx.query(FINGERPRINT_SQL, [
     scope.schemas,
     JSON.stringify(surfaces),
@@ -125,6 +129,13 @@ const digest = (rows: string): string =>
 const grantee = (owner: string): string =>
   `case when x.grantee = ${owner} then '=owner' when x.grantee = 0 then 'public' else quote_ident(pg_get_userbyid(x.grantee)) end`
 
+/**
+ * Відсортований (`COLLATE "C"`) список значень `expr` з `source`; NULL, коли
+ * значень немає.
+ */
+const sorted = (source: string, expr = "v"): string =>
+  `(select string_agg(${expr}, ',' order by ${expr} collate "C") from ${source})`
+
 /** Колляція колонки чи домену за ім'ям, не за OID. */
 const collation = (oid: string): string =>
   `(select format('%I.%I', cn.nspname, co.collname) from pg_collation co join pg_namespace cn on cn.oid = co.collnamespace where co.oid = ${oid})`
@@ -138,11 +149,14 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
 
   // Індекси — у своїй секції: інакше одна зміна індексу давала б дві секції
   relations: `
-    select format('%s kind=%s rls=%s force=%s replident=%s options=%L persistence=%s',
+    select format('%s kind=%s rls=%s force=%s replident=%s options=%L persistence=%s partkey=%L bound=%L parents=%L foreign=%L',
       c.oid::regclass, c.relkind, c.relrowsecurity, c.relforcerowsecurity,
-      c.relreplident,
-      (select string_agg(o, ',' order by o collate "C") from unnest(c.reloptions) o),
-      c.relpersistence)
+      c.relreplident, ${sorted("unnest(c.reloptions) v")}, c.relpersistence,
+      pg_get_partkeydef(c.oid), pg_get_expr(c.relpartbound, c.oid),
+      ${sorted("pg_inherits h where h.inhrelid = c.oid", "h.inhparent::regclass::text")},
+      (select format('%I %L', fs.srvname, ${sorted("unnest(ft.ftoptions) v")})
+       from pg_foreign_table ft join pg_foreign_server fs on fs.oid = ft.ftserver
+       where ft.ftrelid = c.oid))
     from pg_class c join scope_ns n on n.oid = c.relnamespace
     where c.relkind not in ('i', 'I')`,
 
@@ -170,17 +184,28 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
       join pg_type t on t.oid = k.contypid
       join scope_ns n on n.oid = t.typnamespace`,
 
-  // `relreplident = 'i'` у `relations` не каже, який саме індекс — це тут
+  // `relreplident = 'i'` у `relations` не каже, який саме індекс — це тут.
+  // Недійсний індекс (збій `CREATE INDEX CONCURRENTLY`) має те саме
+  // визначення, що й дійсний, тож `indisvalid`/`indisready` — окремо
   indexes: `
-    select format('%L replident=%s', pg_get_indexdef(i.indexrelid), i.indisreplident)
+    select format('%L replident=%s valid=%s ready=%s attached=%L',
+      pg_get_indexdef(i.indexrelid), i.indisreplident, i.indisvalid,
+      i.indisready,
+      ${sorted("pg_inherits h where h.inhrelid = i.indexrelid", "h.inhparent::regclass::text")})
     from pg_index i
       join pg_class c on c.oid = i.indrelid
       join scope_ns n on n.oid = c.relnamespace`,
 
+  // Правила — у цій секції: це та сама система переписування, що й подання;
+  // `_RETURN` подання вже описує `pg_get_viewdef`
   views: `
     select format('%s %L', c.oid::regclass, pg_get_viewdef(c.oid))
     from pg_class c join scope_ns n on n.oid = c.relnamespace
-    where c.relkind in ('v', 'm')`,
+    where c.relkind in ('v', 'm')
+    union all
+    select format('rule %L enabled=%s', pg_get_ruledef(r.oid), r.ev_enabled)
+    from pg_rewrite r
+    where r.rulename <> '_RETURN' and r.ev_class in (select oid from scope_rel)`,
 
   triggers: `
     select format('%L enabled=%s', pg_get_triggerdef(t.oid), t.tgenabled)
@@ -207,14 +232,23 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
     from pg_proc p join scope_ns n on n.oid = p.pronamespace
     where p.prokind <> 'a'
     union all
-    select format('aggregate %s trans=%s final=%s combine=%s state=%s init=%L',
-      p.oid::regprocedure, a.aggtransfn::oid::regprocedure,
-      a.aggfinalfn::oid::regprocedure, a.aggcombinefn::oid::regprocedure,
-      format_type(a.aggtranstype, null), a.agginitval)
+    select format('aggregate %s kind=%s direct=%s trans=%s final=%s finalextra=%s finalmodify=%s combine=%s serial=%s deserial=%s state=%s space=%s init=%L mtrans=%s minv=%s mfinal=%s mfinalextra=%s mfinalmodify=%s mstate=%s mspace=%s minit=%L sortop=%s parallel=%s',
+      p.oid::regprocedure, a.aggkind, a.aggnumdirectargs,
+      a.aggtransfn::oid::regprocedure, a.aggfinalfn::oid::regprocedure,
+      a.aggfinalextra, a.aggfinalmodify, a.aggcombinefn::oid::regprocedure,
+      a.aggserialfn::oid::regprocedure, a.aggdeserialfn::oid::regprocedure,
+      format_type(a.aggtranstype, null), a.aggtransspace, a.agginitval,
+      a.aggmtransfn::oid::regprocedure, a.aggminvtransfn::oid::regprocedure,
+      a.aggmfinalfn::oid::regprocedure, a.aggmfinalextra, a.aggmfinalmodify,
+      format_type(nullif(a.aggmtranstype, 0), null), a.aggmtransspace,
+      a.aggminitval, a.aggsortop::regoperator, p.proparallel)
     from pg_aggregate a
       join pg_proc p on p.oid = a.aggfnoid
       join scope_ns n on n.oid = p.pronamespace`,
 
+  // Типове значення домену — з `typdefaultbin` під цим `search_path`:
+  // `typdefault` — текст, розібраний під `search_path` сесії-творця. Колляції
+  // змінити на місці не можна, але перестворення з іншою локаллю — зміна
   types: `
     select format('enum %s %s', t.oid::regtype,
       (select string_agg(quote_literal(e.enumlabel), ',' order by e.enumsortorder)
@@ -224,16 +258,27 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
     union all
     select format('domain %s base=%s notnull=%s default=%L collation=%L',
       t.oid::regtype, format_type(t.typbasetype, t.typtypmod), t.typnotnull,
-      t.typdefault, ${collation("t.typcollation")})
+      pg_get_expr(t.typdefaultbin, 0), ${collation("t.typcollation")})
     from pg_type t join scope_ns n on n.oid = t.typnamespace
-    where t.typtype = 'd'`,
+    where t.typtype = 'd'
+    union all
+    select format('collation %I.%I provider=%s deterministic=%s collate=%L ctype=%L locale=%L rules=%L',
+      n.nspname, c.collname, c.collprovider, c.collisdeterministic,
+      c.collcollate, c.collctype, c.colllocale, c.collicurules)
+    from pg_collation c join scope_ns n on n.oid = c.collnamespace`,
 
   // Без `last_value`/`is_called`: лічильник — дані, і вставка в ledger
-  // інакше давала б хибний дрейф
+  // інакше давала б хибний дрейф. `OWNED BY` — залежність `a` на колонку;
+  // identity-послідовність (`i`) описує колонка
   sequences: `
-    select format('%s type=%s start=%s increment=%s min=%s max=%s cycle=%s',
+    select format('%s type=%s start=%s increment=%s min=%s max=%s cache=%s cycle=%s owned=%L',
       s.seqrelid::regclass, format_type(s.seqtypid, null), s.seqstart,
-      s.seqincrement, s.seqmin, s.seqmax, s.seqcycle)
+      s.seqincrement, s.seqmin, s.seqmax, s.seqcache, s.seqcycle,
+      (select format('%s.%I', d.refobjid::regclass, a.attname)
+       from pg_depend d
+         join pg_attribute a on a.attrelid = d.refobjid and a.attnum = d.refobjsubid
+       where d.classid = 'pg_class'::regclass and d.objid = s.seqrelid
+         and d.refclassid = 'pg_class'::regclass and d.deptype = 'a'))
     from pg_sequence s where s.seqrelid in (select oid from scope_rel)`,
 
   // Без `grantor`. NULL-ACL — це типові привілеї (`acldefault`), а не
@@ -283,13 +328,32 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
     select format('%I schema=%I', e.extname, n.nspname)
     from pg_extension e join scope_ns n on n.oid = e.extnamespace`,
 
-  // `pg_publication_tables` розгортає й `FOR ALL TABLES`, і `TABLES IN SCHEMA`
+  // `pg_publication_tables` розгортає й `FOR ALL TABLES`, і `TABLES IN SCHEMA`;
+  // членство схеми без таблиць видно лише в `pg_publication_namespace`.
+  // Властивості публікації — лише тієї, що публікує щось із межі
   publications: `
-    select format('%I %I.%I', pt.pubname, pt.schemaname, pt.tablename)
-    from pg_publication_tables pt where pt.schemaname = any($1::text[])`,
+    select format('%I %I.%I columns=%L where=%L', pt.pubname, pt.schemaname,
+      pt.tablename, ${sorted("unnest(pt.attnames) v", "v::text")}, pt.rowfilter)
+    from pg_publication_tables pt where pt.schemaname = any($1::text[])
+    union all
+    select format('%I schema %I', p.pubname, n.nspname)
+    from pg_publication_namespace pn
+      join pg_publication p on p.oid = pn.pnpubid
+      join scope_ns n on n.oid = pn.pnnspid
+    union all
+    select format('%I all=%s insert=%s update=%s delete=%s truncate=%s viaroot=%s',
+      p.pubname, p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete,
+      p.pubtruncate, p.pubviaroot)
+    from pg_publication p
+    where p.puballtables
+      or exists (select from pg_publication_rel pr
+        where pr.prpubid = p.oid and pr.prrelid in (select oid from scope_rel))
+      or exists (select from pg_publication_namespace pn
+        where pn.pnpubid = p.oid and pn.pnnspid in (select oid from scope_ns))`,
 
   // Ідентичність коментованого об'єкта — за іменами (`pg_identify_object`);
-  // у тригера й політики схеми немає, тож межу дає їхня таблиця
+  // у тригера, політики й правила схеми немає, тож межу дає їхня таблиця, а
+  // в розширення — його схема
   comments: `
     select format('%s %s %L', io.type, io.identity, d.description)
     from pg_description d
@@ -304,6 +368,12 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
         select from pg_policy p where p.oid = d.objoid
           and (p.polrelid in (select oid from scope_rel)
             or p.polrelid in (select oid from surface_rel where classes ? 'policy')))
+      when 'pg_rewrite'::regclass then exists (
+        select from pg_rewrite r where r.oid = d.objoid
+          and r.ev_class in (select oid from scope_rel))
+      when 'pg_extension'::regclass then exists (
+        select from pg_extension e where e.oid = d.objoid
+          and e.extnamespace in (select oid from scope_ns))
       else io.schema = any($1::text[]) end`,
 
   owner: `
