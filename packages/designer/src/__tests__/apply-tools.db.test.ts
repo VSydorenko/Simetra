@@ -13,7 +13,13 @@ import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import pg from "pg"
 import { compile } from "simetra/compiler"
-import { parsePlan, type EngineScope } from "simetra/schema"
+import {
+  parsePlan,
+  serializePlan,
+  type PlanArtifact,
+  stampPlan,
+  type EngineScope,
+} from "simetra/schema"
 import {
   afterAll,
   afterEach,
@@ -387,6 +393,37 @@ describe("apply", () => {
       expect(await markerExists(url)).toBe(false)
     })
   })
+
+  it.each(["platformVersion", "engine"] as const)(
+    "apply refuses a re-stamped plan with another %s before connecting",
+    async (field) => {
+      await inTarget(EMPTY, async (url) => {
+        const dir = await projectWith({ [PARTY]: party() })
+        const data = await planned(dir, url)
+        const file = join(dirname(dir), data.file)
+        const artifact = parsePlan(await readFile(file, "utf8"))
+        if (!artifact.ok) throw new Error("plan must parse")
+        const draft: Omit<PlanArtifact, "planHash"> = { ...artifact.artifact }
+        Reflect.deleteProperty(draft, "planHash")
+        const altered =
+          field === "platformVersion"
+            ? { ...draft, platformVersion: "0.0.0-other" }
+            : { ...draft, engine: { name: "pg-delta", version: "0.0.0-other" } }
+        // Хеш чинний: відмову дає саме звірка версій, а не хеш
+        const restamped = await stampPlan(altered)
+        await writeFile(file, serializePlan(restamped))
+        const spy = spyDatabase()
+        const r = await call(
+          "apply",
+          { plan: data.file, planHash: restamped.planHash },
+          options(dir, url, { database: spy.database })
+        )
+        expect(errors(r)).toEqual(["apply.plan-versions"])
+        expect(spy.connects()).toBe(0)
+        expect(await markerExists(url)).toBe(false)
+      })
+    }
+  )
 
   it("apply refuses stale metadata", async () => {
     await inTarget(EMPTY, async (url) => {

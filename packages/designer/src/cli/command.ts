@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path"
 import { defineCommand, type ArgsDef, type CommandDef } from "citty"
 import type { CompiledModel, Locale } from "simetra/compiler"
 import { ATTRIBUTE_CASES, DATABASE_PROVIDERS } from "simetra/model"
+import { DEFAULT_APPLY_TIMEOUTS } from "simetra/schema"
 import { databaseResource } from "../io/database"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
@@ -321,12 +322,11 @@ function argsFor(tool: Tool): ArgsDef {
     }
     args["lock-timeout-ms"] = {
       type: "string",
-      description: "lock_timeout of the apply transaction (default 3000)",
+      description: `lock_timeout of the apply transaction (default ${DEFAULT_APPLY_TIMEOUTS.lockTimeoutMs})`,
     }
     args["statement-timeout-ms"] = {
       type: "string",
-      description:
-        "statement_timeout of the apply transaction (default 600000)",
+      description: `statement_timeout of the apply transaction (default ${DEFAULT_APPLY_TIMEOUTS.statementTimeoutMs})`,
     }
   }
   if (tool.database !== "none") {

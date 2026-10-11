@@ -63,11 +63,15 @@ export function permits(
  */
 function checkArtifacts(root: string, artifacts: readonly FileChange[]): void {
   const plans = resolve(root, PLANS_DIR) + sep
-  for (const a of artifacts)
+  for (const a of artifacts) {
+    // Артефакти лише додають файли: видалення через них зняло б плани з диска
+    if (a.content === null)
+      throw new UsageError(`An artifact must never delete a file: ${a.path}`)
     if (!resolve(root, a.path).startsWith(plans))
       throw new UsageError(
         `An artifact must be written under ${PLANS_DIR}/ next to the metadata directory: ${a.path}`
       )
+  }
 }
 
 function refused<D>(reason: RefusalReason, message: string): ToolResult<D> {

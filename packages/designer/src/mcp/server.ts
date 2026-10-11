@@ -16,9 +16,16 @@ export function createMcpServer(o: McpToolOptions): McpServer {
       : "Writing is enabled; destructive tools need confirm: true, and dryRun previews any file change.",
     // Запис у базу — окреме рішення людини при запуску; `dryRun` його не
     // переглядає: перегляд дає `plan`, перевірку на цілі — `rehearse`
-    o.allowDatabaseWrite === true && !o.readOnly
-      ? "Database writes are enabled: apply needs confirm: true and the planHash of the plan you showed."
-      : databaseWriteHint(o.launchArgs),
+    // Під `--read-only` речення про запис у базу пропускаємо: `readOnlyHint`
+    // уже каже, що інструменти запису вимкнено, а порада додати прапорець
+    // була б хибною — спершу треба зняти `--read-only`
+    ...(o.readOnly
+      ? []
+      : [
+          o.allowDatabaseWrite === true
+            ? "Database writes are enabled: apply needs confirm: true and the planHash of the plan you showed."
+            : databaseWriteHint(o.launchArgs, { refusal: false }),
+        ]),
     "dryRun does not apply to apply: review with plan, and rehearse it before applying.",
   ].join(" ")
   const server = new McpServer(

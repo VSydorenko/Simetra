@@ -22,8 +22,8 @@ export interface MessageEntry {
  * (`engine.owner-not-member`): виправлення те саме, різниться лише наслідок.
  */
 const OWNER_RECIPE = {
-  en: "Restore the owner with `ALTER … OWNER TO <role>` for each named object (indexes, row types and column sequences follow their table), or connect as the owning role",
-  uk: "Відновіть власника через `ALTER … OWNER TO <роль>` для кожного названого об'єкта (індекси, рядкові типи й послідовності колонок ідуть за своєю таблицею) або підключайтеся від ролі-власника",
+  en: "Restore the owner with `ALTER … OWNER TO <role>` for each named object (indexes, row types and column sequences follow their table), or connect as the owning role when it is an application role; if the owner is a provider service role, the object belongs to the provider: remove it from the managed scope",
+  uk: "Відновіть власника через `ALTER … OWNER TO <роль>` для кожного названого об'єкта (індекси, рядкові типи й послідовності колонок ідуть за своєю таблицею) або підключайтеся від ролі-власника, якщо вона прикладна; якщо власник — службова роль провайдера, об'єкт належить провайдеру: приберіть його з межі керування",
 }
 
 /** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */

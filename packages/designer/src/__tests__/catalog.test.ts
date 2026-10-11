@@ -345,6 +345,29 @@ const dbStub = defineTool({
   },
 }) as Tool
 
+describe("artifacts", () => {
+  it("an artifact with null content is refused: artifacts never delete files", async () => {
+    const dir = await project()
+    const deleting = defineTool({
+      ...dbStub,
+      database: "none",
+      files: "write",
+      async run() {
+        return {
+          ok: true,
+          changes: [],
+          diagnostics: [],
+          artifacts: [{ path: "plans/old.json", content: null }],
+        }
+      },
+    }) as Tool
+    const r = await invoke(deleting, {}, opts(dir))
+    expect(r.refusal?.reason).toBe("refused")
+    expect(r.refusal?.message).toContain("never delete")
+    expect(r.written).toBe(false)
+  })
+})
+
 describe("database as a launch resource", () => {
   it("a database tool without a connection is refused with the env hint", async () => {
     const dir = await project()

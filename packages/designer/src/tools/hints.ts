@@ -34,7 +34,8 @@ export function readOnlyHint(
  * базу поза git, тож рішення — при запуску сервера.
  */
 export function databaseWriteHint(
-  launchArgs: readonly string[] = ["simetra", "mcp"]
+  launchArgs: readonly string[] = ["simetra", "mcp"],
+  o: { refusal?: boolean } = {}
 ): string {
   const before = launchArgs.filter((a) => a !== ALLOW_DATABASE_WRITE_FLAG)
   const after = [...before, ALLOW_DATABASE_WRITE_FLAG]
@@ -42,7 +43,9 @@ export function databaseWriteHint(
     `This server runs without ${ALLOW_DATABASE_WRITE_FLAG}: apply cannot write to the database.`,
     `Only the owner may enable it: add ${ALLOW_DATABASE_WRITE_FLAG} to this server's args in the MCP client config and restart it:`,
     `args ending in ${JSON.stringify(before)} become ${JSON.stringify(after)}.`,
-    "Nothing changed.",
+    // «Nothing changed.» — фраза відмови; в `instructions` вона хибно
+    // читалася б як підсумок дії, тож туди йде варіант без неї
+    ...(o.refusal === false ? [] : ["Nothing changed."]),
   ].join(" ")
 }
 

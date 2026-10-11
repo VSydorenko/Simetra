@@ -177,10 +177,33 @@ describe("apply over MCP", () => {
 
   it("instructions name the database write flag", async () => {
     const off = await connect(await project(), false)
-    expect(off.getInstructions()).toContain(databaseWriteHint())
+    expect(off.getInstructions()).toContain(
+      databaseWriteHint(undefined, { refusal: false })
+    )
     const on = await connect(await project(), false, undefined, undefined, true)
-    expect(on.getInstructions()).not.toContain(databaseWriteHint())
+    expect(on.getInstructions()).not.toContain(
+      databaseWriteHint(undefined, { refusal: false })
+    )
     expect(on.getInstructions()).toContain("planHash")
+  })
+
+  it("instructions carry the flag advice without the refusal phrase", async () => {
+    const off = await connect(await project(), false)
+    expect(off.getInstructions()).toContain(ALLOW_DATABASE_WRITE_FLAG)
+    expect(off.getInstructions()).not.toContain("Nothing changed.")
+  })
+
+  it("read-only instructions do not advise the database write flag", async () => {
+    const both = await connect(
+      await project(),
+      true,
+      undefined,
+      undefined,
+      true
+    )
+    expect(both.getInstructions()).toContain(readOnlyHint())
+    expect(both.getInstructions()).not.toContain(ALLOW_DATABASE_WRITE_FLAG)
+    expect(both.getInstructions()).not.toContain("Nothing changed.")
   })
 })
 
