@@ -358,7 +358,7 @@ Which connection to use:
   transactions and work through a transaction-mode pooler.
 - The shadow database of `diff` and `plan` needs a direct or session-mode
   connection: it is created, reached by name and loaded with session settings
-  that a transaction-mode pooler does not keep. With a pooled target
+  that a transaction-mode pooler is not guaranteed to keep. With a pooled target
   connection, point `--shadow-url-env` at a direct one.
 - A long `apply` wants a direct or session-mode connection too: a pooler may
   cut the transaction with its own timeouts.

@@ -8,6 +8,21 @@ export function testDatabaseUrl(): string {
 }
 
 /**
+ * Пулер стеку в режимі транзакцій (Supavisor): порт — `[db.pooler] port` у
+ * `supabase/config.toml`, користувач — у форматі тенанта, який створює
+ * Supabase CLI (`<роль>.pooler-dev`). `supabase status` рядка пулера не
+ * друкує, тож значення звірене підключенням до локального стеку. Типове
+ * значення, а не пропуск тесту: CI піднімає стек із того самого конфігу, і
+ * недоступний пулер має валити перевірку.
+ */
+export function testPoolerUrl(): string {
+  return (
+    process.env.SIMETRA_TEST_POOLER_URL ??
+    "postgresql://postgres.pooler-dev:postgres@127.0.0.1:54329/postgres"
+  )
+}
+
+/**
  * Суперкористувач стеку — лише для об'єктів, яких роль застосунку не створить
  * (shell-тип). Локальний стек Supabase має його як `supabase_admin`.
  */

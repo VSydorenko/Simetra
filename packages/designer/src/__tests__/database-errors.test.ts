@@ -44,7 +44,7 @@ function pgError(code: string, message: string): Error {
 
 /** Підказка про режим з'єднання тіні (рішення 14.4 плану П3-1). */
 const SHADOW_MODE =
-  "The shadow needs a direct or session-mode connection; a transaction-mode pooler cannot create or reach it."
+  "The shadow needs a direct or session-mode connection; a transaction-mode pooler is not guaranteed to support it."
 
 const leaks = (text: string) =>
   [USER, PASSWORD, URL_].filter((secret) => text.includes(secret))
@@ -234,8 +234,9 @@ describe("classifyDatabaseError", () => {
     expect(base.kind === "refusal" && base.message).toContain(
       "created on shadow.example.test:5432/postgres: the connecting role lacks CREATEDB."
     )
+    // Причина відома — підказка про режим з'єднання лише відволікала б
     for (const c of [own, base])
-      expect(c.kind === "refusal" && c.message).toContain(SHADOW_MODE)
+      expect(c.kind === "refusal" && c.message).not.toContain(SHADOW_MODE)
   })
 
   it("describes a failure on the shadow server by its own address", () => {

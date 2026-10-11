@@ -1,4 +1,7 @@
-import { probeUnmodeledIdentitiesPinned } from "@supabase/pg-delta"
+import {
+  probeUnmodeledIdentitiesPinned,
+  resolveProfile,
+} from "@supabase/pg-delta"
 import pg from "pg"
 import { compile } from "simetra/compiler"
 import {
@@ -13,6 +16,7 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import { readCensus } from "../census-read"
+import { scopeProfile } from "../pg-delta/policy"
 import { readExtensionComments } from "../extension-comments"
 import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
 import { readRoutineVolatility } from "../routine-volatility"
@@ -22,6 +26,7 @@ import {
   project,
   shadowDatabaseCount,
   testDatabaseUrl,
+  testPoolerUrl,
 } from "../../../../simetra/test/support"
 
 /**
@@ -34,13 +39,6 @@ import {
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
 const OUTSIDE = "target query outside a read-only transaction"
-
-/**
- * Пулер локального стеку в режимі транзакцій (рішення 14.5). Без змінної
- * перевірки через пулер пропускаються: пулер вмикає конфіг стеку, а рядок
- * підключення з обліковими даними в коді не живе.
- */
-const POOLER_URL = process.env.SIMETRA_TEST_POOLER_URL
 
 let desired: ApplyDesired
 
@@ -128,7 +126,7 @@ describe("readOnlyTransactionPool", () => {
         try {
           await expect(client.query("select 1")).rejects.toThrow(OUTSIDE)
           await expect(client.query("BEGIN READ WRITE")).rejects.toThrow(
-            OUTSIDE
+            /must stay read-only/
           )
           // Транзакція без режиму доступу отримує `READ ONLY`, а не
           // відмову: так відкриває свою транзакцію двигун
@@ -142,6 +140,21 @@ describe("readOnlyTransactionPool", () => {
             /session/
           )
           await client.query("SET LOCAL search_path TO app")
+          // Обхід, знайдений рев'ю: транзакцію не перемкнути на запис
+          await expect(
+            client.query("SET LOCAL transaction_read_only = off")
+          ).rejects.toThrow(/must stay read-only/)
+          await expect(
+            client.query("SET TRANSACTION READ WRITE")
+          ).rejects.toThrow(/must stay read-only/)
+          await expect(
+            client.query("create table app.intruder (id int)")
+          ).rejects.toMatchObject({ code: "25006" })
+          await client.query("ROLLBACK")
+          await expect(
+            client.query("COMMIT; create table app.intruder (id int)")
+          ).rejects.toThrow(OUTSIDE)
+          await client.query("BEGIN; SET LOCAL search_path TO app")
           await client.query("COMMIT")
           await expect(client.query("select 1")).rejects.toThrow(OUTSIDE)
         } finally {
@@ -166,21 +179,19 @@ describe("readOnlyTransactionPool", () => {
 
   it("leaves no session state", async () => {
     await inTarget("select 1", async (url) => {
-      // Повний шлях `diff` на цілі: план «ціль → бажаний стан» через тінь
-      const outcome = await engine.withDesiredShadow(
-        { target: { url } },
-        desired.sql,
-        desired.scope,
-        async (_shadow, plan) => plan
-      )
-      expect(outcome.status).toBe("loaded")
-      // Ті самі читання на одному пулі: сесійний стан лишився б на його
-      // backend, а `pid` доводить, що backend той самий
+      // Усі читання адаптера — на одному пулі: сесійний стан лишився б на
+      // його backend, а `pid` доводить, що backend той самий. Витяг двигуна
+      // йде тим самим шляхом, що в адаптері (`resolveProfile` → `extract`)
       const pool = readOnlyTransactionPool(url)
       try {
         const before = await sessionOf(pool)
         expect(before.readOnly).toBe("off")
-        await engine.extract({ url }, desired.scope)
+        const profile = await resolveProfile(
+          pool,
+          scopeProfile(desired.scope),
+          { redactSecrets: true }
+        )
+        await profile.extract(pool, { redactSecrets: true })
         await probeUnmodeledIdentitiesPinned(pool, before.major)
         await readRoutineVolatility(pool)
         await readExtensionComments(pool)
@@ -223,8 +234,12 @@ const CREATE_N: PlanStep = {
   rewriteRisk: false,
 }
 
-describe.skipIf(POOLER_URL === undefined)("transaction-mode pooler", () => {
-  const pooler = POOLER_URL!
+/**
+ * Пулер стеку в режимі транзакцій (рішення 14.5): `[db.pooler]` увімкнено в
+ * `supabase/config.toml`, тож недоступний пулер — червоний тест, не пропуск.
+ */
+describe("transaction-mode pooler", () => {
+  const pooler = testPoolerUrl()
 
   it("apply through a transaction-mode pooler", async () => {
     const desiredFingerprint = await inTarget(`${CREATE_N.sql};`, read)

@@ -120,11 +120,12 @@ const refusal = (message: string, note = ""): DatabaseErrorClass => ({
 
 /**
  * Тінь потребує сесійної семантики (`CREATE DATABASE`, підключення до нової
- * бази за іменем), а детектора режиму пулера немає (рішення 14.4 плану
- * П3-1): збій створення чи підключення тіні лише підказує про режим.
+ * бази за іменем, сесійні `SET` завантажувача), а детектора режиму пулера
+ * немає (рішення 14.4 плану П3-1): збій сервера тіні лише називає вимогу.
+ * Відмова без `CREATEDB` її не отримує — причина там уже відома.
  */
 const SHADOW_CONNECTION =
-  " The shadow needs a direct or session-mode connection; a transaction-mode pooler cannot create or reach it."
+  " The shadow needs a direct or session-mode connection; a transaction-mode pooler is not guaranteed to support it."
 
 /**
  * Єдина межа, на якій помилка підключення чи запиту стає текстом для
@@ -155,8 +156,7 @@ function classify(
   if (error instanceof ShadowCreateRefusedError) {
     const where = error.onShadowBase ? (names.shadow ?? describe) : describe
     return refusal(
-      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`,
-      SHADOW_CONNECTION
+      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`
     )
   }
   // Збій окремого сервера тіні — та сама класифікація, але з його адресою
