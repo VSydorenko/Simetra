@@ -41,7 +41,9 @@ export type DesiredComparison =
  * Одна діагностика може прийти і з цілі, і з тіні (перепис, дрейф): дублікат
  * за всіма полями не несе нової інформації.
  */
-function dedupe(diagnostics: EngineDiagnostic[]): EngineDiagnostic[] {
+export function dedupe(
+  diagnostics: readonly EngineDiagnostic[]
+): EngineDiagnostic[] {
   const seen = new Set<string>()
   return diagnostics.filter((d) => {
     const key = JSON.stringify([

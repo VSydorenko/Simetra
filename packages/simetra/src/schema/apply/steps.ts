@@ -402,6 +402,12 @@ function columnTypeReader(
 }
 
 /**
+ * Id кроку за його позицією в плані двигуна: `s1`, `s2`, … Одне місце для
+ * правила — за цими id дають дозвіл і їх називають діагностики плану.
+ */
+export const stepId = (index: number): string => `s${index + 1}`
+
+/**
  * Класи кроків із прапорів двигуна й дерева розбору. `target` — модель
  * каталогу цілі, тобто вихідного стану плану: лише вона знає, чи знятий
  * індекс унікальний, чи таблиця вже існує і який тип мала колонка.
@@ -421,7 +427,7 @@ export function classifySteps(
     columnType: columnTypeReader(parse),
   }
   return actions.map((action, index) => {
-    const id = `s${index + 1}`
+    const id = stepId(index)
     const base = baseClass(action, parsed(id, action.sql, parse), facts)
     // Виняток не перекриває втрату даних: `destructive` сюди не доходить
     const cls =

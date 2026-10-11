@@ -2235,6 +2235,62 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
             : "Нічого не записано; застосуйте знову.",
     },
   },
+  "plan.unparsable-step": {
+    en: (p) =>
+      `The schema engine produced plan step ${p.step} that the SQL parser cannot read: ${p.message}`,
+    uk: (p) =>
+      `Двигун схеми видав крок плану ${p.step}, який SQL-парсер не читає: ${p.message}`,
+    hint: {
+      en: "No plan was written. Without a parse tree the step cannot be classified or checked for CASCADE; report the step to the platform maintainers.",
+      uk: "План не записано. Без дерева розбору крок не класифікувати й не перевірити на CASCADE; повідомте про крок супровідникам платформи.",
+    },
+  },
+  "plan.clone-mismatch": {
+    en: (p) =>
+      `The copy of the database for the proof does not match the database (${p.how}): ${p.detail}`,
+    uk: (p) =>
+      `Копія бази для доказу не збігається з базою (${p.how}): ${p.detail}`,
+    hint: {
+      en: "No plan was written. The schema engine cannot reproduce part of the current database, so the plan cannot be proved; bring the named objects to a form the engine models, or fix the drift by hand and plan again.",
+      uk: "План не записано. Двигун схеми не відтворює частину поточної бази, тож план не довести; приведіть названі об'єкти до форми, яку двигун моделює, або виправте дрейф вручну й сплануйте знову.",
+    },
+  },
+  "plan.proof-not-empty": {
+    en: (p) =>
+      `After the proof run the copy still differs from the desired state: ${p.count} engine action(s) remain, the first is \`${p.first}\``,
+    uk: (p) =>
+      `Після прогону-доказу копія все ще відрізняється від бажаного стану: лишилось дій двигуна — ${p.count}, перша — \`${p.first}\``,
+    hint: {
+      en: "No plan was written. The plan does not bring the database to the desired state; if the database drifted, fix the drift by hand and plan again, otherwise report the plan.",
+      uk: "План не записано. План не приводить базу до бажаного стану; якщо база дрейфнула, виправте дрейф вручну й сплануйте знову, інакше повідомте про план.",
+    },
+  },
+  "plan.fingerprint-disagrees": {
+    en: (p) =>
+      `After the proof run the catalog fingerprint of the copy differs from the desired state; sections: ${p.sections}`,
+    uk: (p) =>
+      `Після прогону-доказу відбиток каталогу копії відрізняється від бажаного стану; секції: ${p.sections}`,
+    hint: {
+      en: "No plan was written. The plan steps do not reach what the fingerprint sees; if the database drifted in these sections, fix the drift by hand and plan again, otherwise report the plan.",
+      uk: "План не записано. Кроки плану не досягають того, що бачить відбиток; якщо база дрейфнула в цих секціях, виправте дрейф вручну й сплануйте знову, інакше повідомте про план.",
+    },
+  },
+  "plan.schema-only-proof": {
+    en: () =>
+      "The proof ran on a copy without data: it shows the schema converges, not that existing rows satisfy new constraints. Rehearse with `apply --rehearse` or rely on the atomic rollback of apply.",
+    uk: () =>
+      "Доказ виконано на копії без даних: він показує, що схема сходиться, а не що наявні рядки задовольняють нові обмеження. Відрепетируйте через `apply --rehearse` або покладіться на атомарний відкат застосування.",
+  },
+  "plan.owner-mismatch": {
+    en: (p) =>
+      `${p.count} object(s) in the database are owned by another role than the one the platform manages them with: ${p.objects}`,
+    uk: (p) =>
+      `Об'єктів у базі, якими володіє не та роль, якою їх веде платформа: ${p.count}: ${p.objects}`,
+    hint: {
+      en: "No plan was written. The owner of a managed object is the role that applies; another owner can bypass row level security. Restore it with `ALTER … OWNER TO <role>` for each named object, or apply as the owning role, and plan again.",
+      uk: "План не записано. Власник керованого об'єкта — роль, що застосовує; інший власник може обходити захист рядків. Відновіть його через `ALTER … OWNER TO <роль>` для кожного названого об'єкта або застосовуйте від ролі-власника й сплануйте знову.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,

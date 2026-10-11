@@ -259,6 +259,31 @@ describe("introspect", () => {
     )
   })
 
+  it("introspect reports non-default identity options as an error", async () => {
+    // `buildPlan` знижує цей код до попередження (там модель — деталь), а
+    // для `introspect` модель і є результатом, тож це помилка
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.counter (
+         seq bigint GENERATED ALWAYS AS IDENTITY (CACHE 10) PRIMARY KEY
+       );`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const r = await call(
+          "introspect",
+          introspectInput,
+          options(dir, { [ENV]: url })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.written).toBe(false)
+        expect(
+          errors(r).filter((d) => d.code === "engine.unrepresentable")
+        ).not.toEqual([])
+      }
+    )
+  })
+
   it("introspect into a fresh dir without schemas is refused", async () => {
     const dir = await freshProject()
     let connects = 0

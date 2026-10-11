@@ -95,16 +95,10 @@ export async function readFingerprint(
     table: likePattern(s.table),
     classes: s.classes,
   }))
-  await tx.query("SAVEPOINT simetra_fingerprint")
-  // `pg_temp` явно останнім: неявно він перший для імен відношень і типів, і
-  // тимчасова таблиця сесії могла б затінити `pg_class`
-  await tx.query("SET LOCAL search_path = pg_catalog, pg_temp")
-  const rows = await tx.query(FINGERPRINT_SQL, [
+  const rows = await inCatalogPath(tx, FINGERPRINT_SQL, [
     scope.schemas,
     JSON.stringify(surfaces),
   ])
-  await tx.query("ROLLBACK TO SAVEPOINT simetra_fingerprint")
-  await tx.query("RELEASE SAVEPOINT simetra_fingerprint")
   const row = rows[0]
   const sections = {} as Record<FingerprintSection, string>
   for (const section of FINGERPRINT_SECTIONS) {
@@ -114,6 +108,26 @@ export async function readFingerprint(
     sections[section] = hash
   }
   return { version: FINGERPRINT_VERSION, sections }
+}
+
+/**
+ * Запит у точці збереження під `search_path = pg_catalog, pg_temp`: так
+ * `pg_get_*` і `::regclass` кваліфікують імена схемою незалежно від сесії,
+ * а `search_path` транзакції лишається незмінним.
+ */
+async function inCatalogPath(
+  tx: ApplyTransaction,
+  sql: string,
+  params: readonly unknown[]
+): Promise<Record<string, unknown>[]> {
+  await tx.query("SAVEPOINT simetra_fingerprint")
+  // `pg_temp` явно останнім: неявно він перший для імен відношень і типів, і
+  // тимчасова таблиця сесії могла б затінити `pg_class`
+  await tx.query("SET LOCAL search_path = pg_catalog, pg_temp")
+  const rows = await tx.query(sql, params)
+  await tx.query("ROLLBACK TO SAVEPOINT simetra_fingerprint")
+  await tx.query("RELEASE SAVEPOINT simetra_fingerprint")
+  return rows
 }
 
 /**
@@ -164,6 +178,47 @@ const annotatedInScope = (a: string): string => `case ${a}.classoid
 /** Колляція колонки чи домену за ім'ям, не за OID. */
 const collation = (oid: string): string =>
   `(select format('%I.%I', cn.nspname, co.collname) from pg_collation co join pg_namespace cn on cn.oid = co.collnamespace where co.oid = ${oid})`
+
+/**
+ * Об'єкти межі з власником (`kind`, `ident`, `owner` — OID ролі): їх хешує
+ * секція `owner` і з них же перепис власників плану порівнює ціль із тінню.
+ */
+const OWNED_OBJECTS = `
+      select 'schema' as kind, format('%I', n.nspname) as ident, n.nspowner as owner from scope_ns n
+      union all
+      select 'relation', c.oid::regclass::text, c.relowner from scope_rel c
+      union all
+      select 'type', t.oid::regtype::text, t.typowner
+      from pg_type t join scope_ns n on n.oid = t.typnamespace
+      union all
+      select 'function', p.oid::regprocedure::text, p.proowner
+      from pg_proc p join scope_ns n on n.oid = p.pronamespace
+      union all
+      select 'operator', o.oid::regoperator::text, o.oprowner
+      from pg_operator o join scope_ns n on n.oid = o.oprnamespace
+      union all
+      select 'opclass', format('%I.%I %I', n.nspname, c.opcname, am.amname), c.opcowner
+      from pg_opclass c join scope_ns n on n.oid = c.opcnamespace
+        join pg_am am on am.oid = c.opcmethod
+      union all
+      select 'opfamily', format('%I.%I %I', n.nspname, f.opfname, am.amname), f.opfowner
+      from pg_opfamily f join scope_ns n on n.oid = f.opfnamespace
+        join pg_am am on am.oid = f.opfmethod
+      union all
+      select 'collation', format('%I.%I %s', n.nspname, c.collname, c.collencoding), c.collowner
+      from pg_collation c join scope_ns n on n.oid = c.collnamespace
+      union all
+      select 'tsconfig', format('%I.%I', n.nspname, c.cfgname), c.cfgowner
+      from pg_ts_config c join scope_ns n on n.oid = c.cfgnamespace
+      union all
+      select 'tsdict', format('%I.%I', n.nspname, d.dictname), d.dictowner
+      from pg_ts_dict d join scope_ns n on n.oid = d.dictnamespace
+      union all
+      select 'statistics', format('%I.%I', n.nspname, s.stxname), s.stxowner
+      from pg_statistic_ext s join scope_ns n on n.oid = s.stxnamespace
+      union all
+      select 'extension', format('%I', e.extname), e.extowner
+      from pg_extension e join scope_ns n on n.oid = e.extnamespace`
 
 /**
  * Рядки секцій. Жодних OID чи `attnum`: відбиток порівнюється між різними
@@ -391,43 +446,7 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
 
   owner: `
     select format('%s %s %s', o.kind, o.ident, quote_ident(pg_get_userbyid(o.owner)))
-    from (
-      select 'schema' as kind, format('%I', n.nspname) as ident, n.nspowner as owner from scope_ns n
-      union all
-      select 'relation', c.oid::regclass::text, c.relowner from scope_rel c
-      union all
-      select 'type', t.oid::regtype::text, t.typowner
-      from pg_type t join scope_ns n on n.oid = t.typnamespace
-      union all
-      select 'function', p.oid::regprocedure::text, p.proowner
-      from pg_proc p join scope_ns n on n.oid = p.pronamespace
-      union all
-      select 'operator', o.oid::regoperator::text, o.oprowner
-      from pg_operator o join scope_ns n on n.oid = o.oprnamespace
-      union all
-      select 'opclass', format('%I.%I %I', n.nspname, c.opcname, am.amname), c.opcowner
-      from pg_opclass c join scope_ns n on n.oid = c.opcnamespace
-        join pg_am am on am.oid = c.opcmethod
-      union all
-      select 'opfamily', format('%I.%I %I', n.nspname, f.opfname, am.amname), f.opfowner
-      from pg_opfamily f join scope_ns n on n.oid = f.opfnamespace
-        join pg_am am on am.oid = f.opfmethod
-      union all
-      select 'collation', format('%I.%I %s', n.nspname, c.collname, c.collencoding), c.collowner
-      from pg_collation c join scope_ns n on n.oid = c.collnamespace
-      union all
-      select 'tsconfig', format('%I.%I', n.nspname, c.cfgname), c.cfgowner
-      from pg_ts_config c join scope_ns n on n.oid = c.cfgnamespace
-      union all
-      select 'tsdict', format('%I.%I', n.nspname, d.dictname), d.dictowner
-      from pg_ts_dict d join scope_ns n on n.oid = d.dictnamespace
-      union all
-      select 'statistics', format('%I.%I', n.nspname, s.stxname), s.stxowner
-      from pg_statistic_ext s join scope_ns n on n.oid = s.stxnamespace
-      union all
-      select 'extension', format('%I', e.extname), e.extowner
-      from pg_extension e join scope_ns n on n.oid = e.extnamespace
-    ) o`,
+    from (${OWNED_OBJECTS}) o`,
 
   // Лише наявність: класи, яких інші секції не описують, принаймні видно,
   // коли вони з'являються чи зникають
@@ -478,12 +497,8 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
     where r.rulename <> '_RETURN'`,
 }
 
-/**
- * Один запит на всі секції: `$1` — схеми межі, `$2` — JSON поверхонь
- * провайдера з `table` як шаблоном `LIKE`.
- */
-const FINGERPRINT_SQL = `
-with
+/** Схеми межі (`$1`) і їхні відношення: спільні для відбитка й перепису власників. */
+const SCOPE_CTES = `
   scope_ns as (
     select oid, nspname, nspowner, nspacl from pg_namespace
     where nspname = any($1::text[])
@@ -491,7 +506,14 @@ with
   scope_rel as (
     select c.oid, c.relkind, c.relowner, c.relacl from pg_class c
     where c.relnamespace in (select oid from scope_ns)
-  ),
+  )`
+
+/**
+ * Один запит на всі секції: `$1` — схеми межі, `$2` — JSON поверхонь
+ * провайдера з `table` як шаблоном `LIKE`.
+ */
+const FINGERPRINT_SQL = `
+with${SCOPE_CTES},
   surface_rel as (
     select c.oid, s.value -> 'classes' as classes
     from jsonb_array_elements($2::jsonb) s
@@ -501,3 +523,41 @@ with
   )
 select
 ${FINGERPRINT_SECTIONS.map((s) => `  ${digest(SECTION_ROWS[s])} as "${s}"`).join(",\n")}`
+
+/** Власник одного об'єкта межі: `object` — вид і ідентичність, як у секції `owner`. */
+export interface ObjectOwner {
+  object: string
+  owner: string
+}
+
+/**
+ * Власники об'єктів межі й роль сесії, що їх читає (`current_user`). Роль
+ * сесії потрібна порівнянню: двигун вважає власника, рівного ролі сесії,
+ * типовим, тож «власник = своя роль сесії» порівнюється між базами з різними
+ * ролями адміністрування.
+ */
+export async function readOwners(
+  tx: ApplyTransaction,
+  scope: EngineScope
+): Promise<{ session: string; owners: ObjectOwner[] }> {
+  const rows = await inCatalogPath(
+    tx,
+    `with${SCOPE_CTES}
+    select format('%s %s', o.kind, o.ident) as object,
+      pg_get_userbyid(o.owner) as owner
+    from (${OWNED_OBJECTS}) o
+    order by format('%s %s', o.kind, o.ident) collate "C"`,
+    [scope.schemas]
+  )
+  const [who] = await tx.query<{ session: string }>(
+    "SELECT current_user AS session"
+  )
+  if (who === undefined) throw new Error("current_user returned no row")
+  return {
+    session: who.session,
+    owners: rows.map((r) => ({
+      object: String(r.object),
+      owner: String(r.owner),
+    })),
+  }
+}
