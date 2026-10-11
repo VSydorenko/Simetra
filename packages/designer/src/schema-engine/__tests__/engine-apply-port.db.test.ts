@@ -178,6 +178,42 @@ describe("SchemaEngine apply port", () => {
     })
   })
 
+  it("reports a failed reproduction as engine.clone-failed", async () => {
+    // Тип колонки живе в схемі поза межею: засів копії її не відтворює, а план
+    // «копія → ціль» межею не виходить, тож відтворення падає на копії
+    await inTarget(
+      [
+        "create schema other;",
+        "create type other.e as enum ('a');",
+        "create schema app;",
+        "create table app.t (id int, e other.e);",
+      ].join("\n"),
+      async (url) => {
+        const before = await shadowDatabaseCount()
+        const target = await engine.extract({ url }, scope)
+        let called = false
+        const outcome = await engine.withTargetClone(
+          { target: { url } },
+          target,
+          scope,
+          async () => {
+            called = true
+          }
+        )
+        expect(called).toBe(false)
+        expect(outcome.status).toBe("shadow-failed")
+        expect(outcome.diagnostics.map((d) => d.code)).toEqual([
+          "engine.clone-failed",
+        ])
+        expect(outcome.diagnostics[0]!.severity).toBe("error")
+        expect(outcome.diagnostics[0]!.message).toMatch(
+          /^The current target state could not be reproduced in a copy: .*other\.e/
+        )
+        expect(await shadowDatabaseCount()).toBe(before)
+      }
+    )
+  })
+
   it("drops the clone on success and on error", async () => {
     await inTarget(
       "create schema app; create table app.t (id int);",

@@ -159,6 +159,7 @@ export const COMPILER_RULES = [
   "engine.unmodeled-drift",
   "engine.shadow-load-failed",
   "engine.desired-rejected",
+  "engine.clone-failed",
   "engine.unrepresentable",
   "engine.unmodeled-class",
   "engine.census-mismatch",

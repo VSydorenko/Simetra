@@ -1962,6 +1962,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Рушій схеми відмовив бажаному SQL до планування (порожній вхід, кластерний DDL на кшталт ролей, розширення, яке тінь не виконає, або збій засіву провайдера); усуньте причину з повідомлення.",
     },
   },
+  "engine.clone-failed": {
+    en: (p) =>
+      `The current target state could not be reproduced in a copy: ${p.detail}`,
+    uk: (p) => `Поточний стан цілі не відтворився в копії: ${p.detail}`,
+    hint: {
+      en: "The copy is a fresh shadow seeded with the provider's base state, so the cause is in the target or the environment, not in the metadata: an extension the shadow cannot install, the provider seed, or the shadow connection mode (use a direct or session connection). Fix the cause named in the message.",
+      uk: "Копія — свіжа тінь, засіяна базовим станом провайдера, тож причина в цілі чи середовищі, а не в метаданих: розширення, якого тінь не встановить, засів провайдера або режим з'єднання тіні (потрібне пряме чи сесійне з'єднання). Усуньте причину з повідомлення.",
+    },
+  },
   "engine.unrepresentable": {
     en: (p) =>
       `${p.object}: property ${p.property} cannot be represented in the catalog model: ${p.detail}`,

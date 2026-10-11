@@ -537,6 +537,28 @@ async function planAndRun<T>(
 }
 
 /**
+ * Збій копії — окремий код, не `engine.shadow-load-failed`: причина в цілі чи
+ * середовищі (розширення, засів провайдера, режим з'єднання тіні), а не в
+ * метаданих, і порада інша.
+ */
+function cloneFailed(
+  detail: string,
+  engineCode?: string,
+  object?: string
+): EngineDiagnostic {
+  return {
+    ...engineDiagnostic(
+      "engine.clone-failed",
+      { detail },
+      "error",
+      undefined,
+      engineCode
+    ),
+    ...(object === undefined ? {} : { object }),
+  }
+}
+
+/**
  * Тіло копії без її прибирання. Засів — так само, як бажана тінь у
  * `planAndRun`, і план засіву відкидається: лише `renderProviderSeed()` замало,
  * бо заглушки `auth.users` і `storage.objects` дає `seedAssumedSchemas`, а без
@@ -572,7 +594,16 @@ async function cloneAndRun<T>(
     } catch (error) {
       const failure = shadowFailure(error)
       if (failure === undefined) throw error
-      return { status: "shadow-failed", diagnostics: failure }
+      return {
+        status: "shadow-failed",
+        diagnostics: failure.map((d) =>
+          cloneFailed(
+            `the provider seed did not load: ${String(d.params.detail)}`,
+            d.engineCode,
+            d.object
+          )
+        ),
+      }
     }
     const seeded = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
     const plan = enginePlan(
@@ -585,17 +616,11 @@ async function cloneAndRun<T>(
       return {
         status: "shadow-failed",
         diagnostics: [
-          engineDiagnostic(
-            "engine.shadow-load-failed",
-            {
-              // Текст помилки оператора стосується об'єкта, а не підключення
-              detail:
-                report.error === undefined
-                  ? "the target state could not be reproduced"
-                  : `the target state could not be reproduced at \`${report.error.sql}\`: ${report.error.message}`,
-            },
-            "error",
-            undefined,
+          cloneFailed(
+            // Текст помилки оператора стосується об'єкта, а не підключення
+            report.error === undefined
+              ? "the reproduction plan was not applied"
+              : `\`${report.error.sql}\`: ${report.error.message}`,
             "apply_failed"
           ),
         ],
