@@ -17,6 +17,7 @@ import {
   buildPlan,
   executePlan,
   serializePlan,
+  type EngineAction,
   type EngineScope,
   type PlanArtifact,
   type PlanOutcome,
@@ -465,6 +466,47 @@ describe("buildPlan", () => {
       const outcome = await plan(url, withNote, forgetful)
       expect(outcome.status).toBe("refused")
       expect(errors(outcome)).toEqual(["plan.fingerprint-disagrees"])
+    })
+  })
+
+  it("refuses a proof whose clone still differs from the desired state", async () => {
+    const withNote = await compiled({
+      [PARTY]: party([attribute("note", { id: uuid(9061) })]),
+    })
+    const without = await compiled({ [PARTY]: party() })
+    // Справжній двигун, але порівняння «копія → бажана» після прогону бачить
+    // зайву дію: прогін і відбиток збіглися, тож відмовляє саме порожність
+    // плану, а не відбиток. Перший виклик `plan` у доказі — звірка копії із
+    // ціллю, вона лишається чесною
+    let calls = 0
+    const leftover: SchemaEngine = {
+      ...engine,
+      plan: (source, target, scope) => {
+        calls += 1
+        const real = engine.plan(source, target, scope)
+        if (calls < 2) return real
+        const fake: EngineAction = {
+          sql: "select 1",
+          verb: "alter",
+          produces: [],
+          consumes: [],
+          destroys: [],
+          transactionality: "transactional",
+          newSegmentBefore: false,
+          lockedTables: [],
+          lockClass: "none",
+          dataLoss: false,
+          rewriteRisk: false,
+        }
+        return { empty: false, actions: [...real.actions, fake] }
+      },
+    }
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, without)
+      const outcome = await plan(url, withNote, leftover)
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toContain("plan.proof-not-empty")
+      expect(errors(outcome)).not.toContain("plan.fingerprint-disagrees")
     })
   })
 
