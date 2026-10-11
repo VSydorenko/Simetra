@@ -2041,6 +2041,56 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Перед застосуванням відновіть marker із резервної копії бази: перше застосування вважало б базу з історією новою.",
     },
   },
+  "apply.cascade": {
+    en: (p) =>
+      `Plan step ${p.step} uses CASCADE: it would drop dependent objects that the plan does not name`,
+    uk: (p) =>
+      `Крок плану ${p.step} використовує CASCADE: він знищив би залежні об'єкти, яких план не називає`,
+    hint: {
+      en: "The platform never runs CASCADE, and no permission allows it. Every dropped object must be a step of its own; report the plan as an engine defect.",
+      uk: "Платформа ніколи не виконує CASCADE, і жоден дозвіл цього не змінює. Кожен знищений об'єкт мусить бути окремим кроком; повідомте про план як про дефект двигуна.",
+    },
+  },
+  "apply.non-transactional": {
+    en: (p) =>
+      `Plan step ${p.step} cannot run inside a transaction, and a plan is applied in one transaction`,
+    uk: (p) =>
+      `Крок плану ${p.step} не може виконуватися в транзакції, а план застосовується однією транзакцією`,
+    hint: {
+      en: "Running such steps separately is not supported yet; change the metadata so that the plan does not need this step.",
+      uk: "Окреме виконання таких кроків ще не підтримується; змініть метадані так, щоб план не потребував цього кроку.",
+    },
+  },
+  "apply.commit-boundary": {
+    en: (p) =>
+      `Plan step ${p.step} uses the result of an earlier step that must be committed first (such as a new enum value), so the plan cannot run in one transaction`,
+    uk: (p) =>
+      `Крок плану ${p.step} вживає результат попереднього кроку, який треба спершу закомітити (наприклад, нове значення енаму), тож план не виконати однією транзакцією`,
+    hint: {
+      en: "Split the metadata change into two applies: first the change the step depends on, then the rest.",
+      uk: "Розбийте зміну метаданих на два застосування: спершу те, від чого залежить крок, потім решту.",
+    },
+  },
+  "apply.permission-required": {
+    en: (p) =>
+      `Plan steps ${p.steps} drop data or relax a guarantee and need explicit permission`,
+    uk: (p) =>
+      `Кроки плану ${p.steps} знищують дані чи знімають гарантію й потребують явного дозволу`,
+    hint: {
+      en: "Review these steps in the plan and allow each one by its id.",
+      uk: "Перегляньте ці кроки в плані й дозвольте кожен за його id.",
+    },
+  },
+  "apply.permission-unknown": {
+    en: (p) =>
+      `Allowed step ids ${p.steps} are not in the plan or need no permission`,
+    uk: (p) =>
+      `Дозволені id кроків ${p.steps} відсутні в плані або не потребують дозволу`,
+    hint: {
+      en: "Allow only the ids of destructive and relaxation steps of this plan; a stale id means the permission was given for another plan.",
+      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану; застарілий id означає, що дозвіл давали іншому плану.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,

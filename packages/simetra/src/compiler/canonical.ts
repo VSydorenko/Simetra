@@ -200,17 +200,21 @@ function withoutRowRuleFiles(physical: CompiledModel["physical"]): unknown {
 }
 
 /**
- * Hex SHA-256 канонічного знімка. Web Crypto, а не `node:crypto`: T1 не
- * залежить від Node API і має працювати в браузері студії.
+ * Hex SHA-256 тексту в UTF-8. Web Crypto, а не `node:crypto`: T1 не залежить
+ * від Node API і має працювати в браузері студії. Одна функція для хешу
+ * моделі й хешу плану: обидва порівнюються між середовищами.
  */
-export async function modelHash(
-  model: Omit<CompiledModel, "hash">
-): Promise<string> {
-  const bytes = new TextEncoder().encode(canonicalize(canonicalSnapshot(model)))
+export async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text)
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes)
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("")
+}
+
+/** Hex SHA-256 канонічного знімка. */
+export function modelHash(model: Omit<CompiledModel, "hash">): Promise<string> {
+  return sha256Hex(canonicalize(canonicalSnapshot(model)))
 }
 
 interface MovementSource {

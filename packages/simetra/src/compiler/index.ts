@@ -64,7 +64,7 @@ export type {
 } from "./contracts"
 export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
-export { canonicalSnapshot, canonicalize } from "./canonical"
+export { canonicalSnapshot, canonicalize, sha256Hex } from "./canonical"
 export {
   addElement,
   addElementInput,

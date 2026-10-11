@@ -24,3 +24,22 @@ export {
   type MarkerRecord,
 } from "./state"
 export { PLATFORM_VERSION } from "./version"
+export {
+  checkPermissions,
+  classifySteps,
+  lintSteps,
+  requiredPermissions,
+  STEP_CLASSES,
+  type PlanStep,
+  type StepClass,
+} from "./steps"
+export {
+  PLAN_FORMAT,
+  parsePlan,
+  planArtifactSchema,
+  planFileName,
+  serializePlan,
+  stampPlan,
+  verifyPlanHash,
+  type PlanArtifact,
+} from "./artifact"
