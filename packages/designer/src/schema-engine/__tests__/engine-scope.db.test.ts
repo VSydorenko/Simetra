@@ -161,8 +161,16 @@ describe("SchemaEngine on pg-delta", () => {
     )
     expect(outcome.status).toBe("loaded")
     if (outcome.status !== "loaded") return
-    expect(outcome.value.same).toEqual({ actions: [], empty: true })
-    expect(outcome.value.reextracted).toEqual({ actions: [], empty: true })
+    expect(outcome.value.same).toMatchObject({
+      actions: [],
+      empty: true,
+      diagnostics: [],
+    })
+    expect(outcome.value.reextracted).toMatchObject({
+      actions: [],
+      empty: true,
+      diagnostics: [],
+    })
   })
 
   it("scope follows 6.9", async () => {
@@ -267,7 +275,11 @@ describe("SchemaEngine on pg-delta", () => {
     )
     expect(outcome.status).toBe("loaded")
     if (outcome.status !== "loaded") return
-    expect(outcome.value).toEqual({ actions: [], empty: true })
+    expect(outcome.value).toMatchObject({
+      actions: [],
+      empty: true,
+      diagnostics: [],
+    })
   })
 
   it("managed public without declarations keeps the preset grants and drops the default privileges", async () => {
