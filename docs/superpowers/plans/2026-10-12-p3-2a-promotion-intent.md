@@ -335,7 +335,12 @@
      - `pg_get_indexdef(oid)` цілком містить ім'я, тож ключ складено з
        частин.
      - `indnkeyatts` розрізняє `UNIQUE (a) INCLUDE (b)` і `UNIQUE (a, b)`;
-   - **послідовність:** колонка-власник (`pg_depend` `deptype` `a`/`i`).
+   - **послідовність:** колонка-власник (`pg_depend` `deptype` `a`/`i`) і
+     ознака, чи `DEFAULT` цієї колонки посилається саме на цю послідовність.
+     Послідовність зіставляється лише тоді, коли кандидат рівно один: лічильник
+     — дані, і вибір «першого за ім'ям» міг би віддати канонічне ім'я чужому
+     лічильнику. Неоднозначне лишається DROP двигуна (destructive, з
+     дозволом).
 
    Кандидат копії зіставляється, лише коли він дійсний:
    - індекс — `indisvalid AND indisready`;
@@ -349,8 +354,9 @@
      копії тієї самої таблиці з рівним ключем, чиїх імен немає в тіні й які
      ще не зіставлено;
    - кожен кандидат зіставляється не більше одного разу;
-   - береться перший за ім'ям (порівняння кодовими одиницями, як
-     `COLLATE "C"`) → крок:
+   - для обмеження й індексу береться перший за ім'ям (порівняння кодовими
+     одиницями, як `COLLATE "C"`); для послідовності — лише єдиний кандидат →
+     крок:
      - обмеження — `ALTER TABLE … RENAME CONSTRAINT` (індекс-носій іде сам);
      - індекс — `ALTER INDEX … RENAME`;
      - послідовність — `ALTER SEQUENCE … RENAME`. `nextval(regclass)` іде за
@@ -396,7 +402,10 @@
 6. **Збереження рядків і значень змаплених колонок.** Діє для плану з
    промоцією. Форма для кожної таблиці одиниці одним проходом:
    `count(*)` + для кожної змапленої колонки
-   `sum(hashtextextended(<ключ>::text || ':' || coalesce(<вираз>::text, '<null>'), 0)::numeric)`.
+   `sum(hashtextextended(<ключ>::text || ':' || CASE WHEN <вираз> IS NULL THEN 'n' ELSE 'v' || <вираз>::text END, 0)::numeric)`.
+   - `NULL` кодується окремою ознакою: інакше `NULL` і рядок, що виглядає як
+     маркер `NULL`, давали б той самий хеш.
+   - Без `ONLY`, як і сторож: рядки партицій і нащадків теж рахуються.
    - **Ключ** — первинний ключ таблиці зі знімка «до». Складений —
      `ROW(<k1>, …)::text`.
    - **«До»:** після відбитка цілі, до першого кроку, у старих іменах.
@@ -414,10 +423,16 @@
      чи `rows`).
    - Спайк на 1М рядків × 7 колонок: 0,47 с, пам'ять стала.
      `sha256(string_agg)` відхилено: 2,1 с і ≈120 МБ на колонку.
-7. **Класи видалень.** Перевірка — на рівні моделі каталогу, не дій двигуна.
-   `diffCatalogModels(модель копії після наміру, модель бажаної тіні)` дає
-   записи для таблиць одиниці. Імена об'єктів зводяться до початкових через
-   мапу тимчасових імен, таблиці — до старих через `record.tables`.
+7. **Класи видалень.** Перевірка — на рівні моделі каталогу, не дій двигуна:
+   модель копії після наміру проти моделі бажаної тіні. `diffCatalogModels`
+   для цього не вживається: його ключі — рядки `schema.name`, неоднозначні для
+   імен із крапкою, а колонку чи таблицю він порівнює цілим об'єктом.
+   Класифікатор сам порівнює таблиці одиниці структурно (`schema` і `name`
+   окремо), а елементи — за іменем і по властивостях. «`missing`» і
+   «`changed`» нижче — його власні записи; шлях (наприклад,
+   `tables.app.items.columns.code.default`) — лише для повідомлення. Імена
+   об'єктів зводяться до початкових через мапу тимчасових імен, таблиці — до
+   старих через `record.tables`.
 
    Покриття записів:
    - **`missing` колонки:** `retired`;
@@ -461,7 +476,12 @@
      кілька ключів.
    - Порожня схема цілі (`grant`/`comment` компілятора з некваліфікованим
      іменем) бере схему власника, яку передає викликач.
-   - Для `grant`/`comment` — `name: ""`, тобто таблична гранулярність.
+   - Для `grant` `name` — `<grant|revoke>:<ролі>:<привілеї>` з частин
+     ідентичності одиниці. Об'єкти гранту в ключ не входять: вони
+     змінюються з перейменуванням, а таблицю вже дає `table`.
+   - Для `comment` `name` — колонка або `""` для коментаря таблиці.
+   - Два різні гранти на одну таблицю мають різні ключі, тож клас одного не
+     покриває інший.
 8. **Нові пункти дозволу й статичний гейт доступу.**
    - **`access:<таблиця>`** (нове ім'я, кваліфіковане `quoteIdent`, наприклад
      `access:app.items`) — для таблиці одиниці, де змінюється хоч одне:
@@ -491,9 +511,15 @@
        інше). Без токена семантика видалення пройшла б, бо зняття FK покрите
        (рішення 7), а клас кроку дозволу не вимагає.
      - У вхідного елемента кроку немає взагалі.
+   - **`remove:<таблиця>`** — для таблиці одиниці, де є хоч один об'єкт із
+     класом `removed` («видалено з дозволом», §8). Пункт перелічує ці об'єкти.
+     - Без нього видалення з таким класом проходило б без дозволу: крок
+       `DROP INDEX` неунікального індексу, `REVOKE` чи `COMMENT … IS NULL` у
+       класифікації П3-1 — `catalogOnly`.
+     - Один пункт на таблицю, а не на об'єкт: переглядається перелік.
    - **Порядок `requiredPermissions`:** `drift`, потім `access:*`, потім
-     `delete:*` (кожна група за кодовими одиницями), далі `s<N>` у порядку
-     плану.
+     `delete:*`, потім `remove:*` (кожна група за кодовими одиницями), далі
+     `s<N>` у порядку плану.
    - **Перевірка.** `checkPermissions` рахує пункти сам з артефакту (кроків,
      дрейфу й секції `promotion`), не довіряючи полю
      `requiredPermissions`. Прив'язка до `planHash` і відбитка цілі — як у
@@ -586,7 +612,7 @@
 14. **Вивід `plan`.**
     1. Блок дрейфу (П3-1).
     2. Блок «Promotion»: об'єкт, перейменування таблиць і колонок, канонічні
-       імена, пункти `access:*` і `delete:*` з переліками.
+       імена, пункти `access:*`, `delete:*` і `remove:*` з переліками.
     3. Кроки з `origin`. Біля кроку з класом видалення — клас конверсії.
 
     Підтвердження — за designer §3.2 без змін.
@@ -851,7 +877,8 @@ it("round-trips through the strict schema and rejects an unknown key", …)
 
 `unit-target.test.ts`: `unitSubjectKeys` для policy, trigger, grant на
 таблицю, grant на колонку, comment на таблицю й колонку.
-- Для grant і comment `name === ""`, `table` — ціль.
+- Для grant `name` — `<grant|revoke>:<ролі>:<привілеї>`; два різні гранти на
+  одну таблицю дають різні ключі. Для comment `name` — колонка або `""`.
 - Некваліфікований grant компілятора бере `ownerSchema`.
 - Grant на дві таблиці дає два ключі.
 
@@ -1160,6 +1187,8 @@ it("renames the equivalent primary key, unique constraint, foreign key, index an
 it("never matches an invalid index or a NOT VALID constraint", …)       // valid:false → кроку немає
 it("does not match a unique constraint to a standalone unique index", …) // різні kind → кроку немає
 it("matches each candidate once and takes the first by name", …)
+it("renames a sequence only when exactly one candidate matches", …)   // дві послідовності OWNED BY однієї колонки → кроку немає
+it("prefers the sequence the column default uses", …)                 // ключ містить прив'язку DEFAULT
 it("moves an occupying object out of the way", …)                        // simetra_tmp_<n>, tempNames
 ```
 DB (`promotion-equivalence.db.test.ts`, ціль через `inTarget`):
@@ -1309,7 +1338,11 @@ git commit -m "fix(schema): зміна типу колонки з втратою
     tables: readonly { schema: string; name: string; forcedToEnabled: boolean }[]
   ): Promise<Map<string, string[]>>
   export interface PermissionItem { token: string; summary: string[] }
-  export function promotionPermissionItems(access: readonly AccessChange[], deleteSemantics: PromotionRecord["deleteSemantics"]): PermissionItem[]
+  export function promotionPermissionItems(
+    access: readonly AccessChange[],
+    deleteSemantics: PromotionRecord["deleteSemantics"],
+    removed: readonly Removal[]          // покриті класом "removed" → remove:<таблиця>
+  ): PermissionItem[]
   // PermissionSubject: + promotion: { permissionItems: readonly PermissionItem[] } | null
   ```
 - Коди: `plan.rename-not-realized` (`objects`), `plan.removal-unclassified` (`paths`).
@@ -1324,6 +1357,9 @@ it("covers a dropped retired column through its temporary name", …)
 it("covers a foreign key dropped with a retired column and one replaced by own delete semantics", …)
 it("covers a lost default of an attribute column by its class and of a standard column by the mapping", …)
 it("covers a removed column comment by its class", …)
+it("does not let one grant's class cover another grant on the same table", …) // другий грант без класу → plan.removal-unclassified
+it("compares tables structurally despite dots in names", …)  // a."b.c" одиниці й "a.b".c стороння: зникле обмеження одиниці помічено
+it("tells a lost default, a lost comment and an RLS change apart", …)  // окремі записи changed з координатами
 it("refuses a removal that no class covers", …)    // plan.removal-unclassified з шляхом tables.app.<t>.indexes.<n>
 it("refuses a changed primary key and an identity change", …)
 it("keeps a same-name redefinition of an adopted index a relaxation", …)
@@ -1334,10 +1370,12 @@ it("refuses data loss on a renamed column", …)      // dataLoss: true на д�
 it("lists an access change for RLS off → enabled and a dropped read policy", …)
 it("lists an access change for a changed grant", …)
 it("emits delete tokens for own and incoming delete semantics", …) // delete:app.<t>.<fk>
+it("requires remove: for objects classed removed", …)
+  // неунікальний індекс із класом removed → DROP INDEX catalogOnly, але remove:app.<t> у requiredPermissions; без нього → apply.permission-required
 ```
 `steps.test.ts`:
 ```ts
-it("orders permissions drift, access, delete, then steps", …)
+it("orders permissions drift, access, delete, remove, then steps", …)
 it("refuses an access token the plan does not need", …) // apply.permission-unknown
 it("requires every access and delete token", …)        // apply.permission-required з items
 ```
@@ -1346,8 +1384,8 @@ it("requires every access and delete token", …)        // apply.permission-req
   `security_invoker` потрапляють у `readAccessDependents`;
 - звичайна в'юха — лише коли `forcedToEnabled: true`.
 
-`mcp.test.ts`: вхід `apply` приймає `access:app.items` і
-`delete:app.items.items_group_fkey`; бюджет `tools/list` перевиміряно за
+`mcp.test.ts`: вхід `apply` приймає `access:app.items`,
+`delete:app.items.items_group_fkey` і `remove:app.items`; бюджет `tools/list` перевиміряно за
 правилом рішення 12 П3-1, числа — в коментарі.
 
 - [ ] **Step 2: Запустити — падають**
@@ -1357,7 +1395,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Реалізація** — за рішеннями 3, 7 і 8. `checkPermissions` рахує
   пункти з `PermissionSubject` сам. `allow` в `apply-tools.ts` приймає
-  `s<N>`, `drift`, `access:<…>`, `delete:<…>`.
+  `s<N>`, `drift`, `access:<…>`, `delete:<…>`, `remove:<…>`.
 
 - [ ] **Step 4: Запустити — проходять**
 
@@ -1368,7 +1406,7 @@ Expected: PASS.
 
 ```bash
 git add packages/simetra/src packages/designer/src
-git commit -m "feat(schema): кожне видалення промоції має клас; статичний гейт доступу й дозволи access/delete; нереалізоване перейменування — відмова"
+git commit -m "feat(schema): кожне видалення промоції має клас; статичний гейт доступу й дозволи access/delete/remove; нереалізоване перейменування — відмова"
 ```
 
 ---
@@ -1524,7 +1562,7 @@ git commit -m "feat(schema): ledger несе запис промоції; сек
     typeChangeSteps: ReadonlyMap<string, string> // tableKey(нове)+колонка → id кроку зміни типу
   ): PreservedTable[]
   export function preservationQuery(t: PreservedTable, side: "before" | "after"): string
-  // SELECT count(*) AS rows, sum(hashtextextended(<key>::text||':'||coalesce((<col>)::text,'<null>'),0)::numeric) AS c0, … FROM ONLY <таблиця>
+  // SELECT count(*) AS rows, sum(hashtextextended(<key>::text||':'||CASE WHEN (<col>) IS NULL THEN 'n' ELSE 'v'||(<col>)::text END,0)::numeric) AS c0, … FROM <таблиця>
   ```
 - Код: `apply.preservation-failed` (`table`, `column` | `rows`).
 
@@ -1533,11 +1571,15 @@ git commit -m "feat(schema): ledger несе запис промоції; сек
 Чисті:
 - запит «до» для колонки з `typeChanges` містить `("<стара>"::<новий тип>)`;
 - `retired` не входять;
-- складений ключ — `ROW("k1", "k2")::text`.
+- складений ключ — `ROW("k1", "k2")::text`;
+- `NULL` кодується ознакою `'n'`, значення — `'v' || текст`; запит без
+  `ONLY`.
 
 `execute-plan.db.test.ts`:
 ```ts
 it("proves rows and mapped values survive the renames", …) // rehearse: rolledBack без діагностик
+it("tells NULL from a text that looks like the null marker", …)
+  // штучний крок UPDATE … SET c = NULL WHERE c = '<null>' → apply.preservation-failed з колонкою
 it("catches a step that changes a mapped value", …)
   // план, де після наміру штучний крок UPDATE змінює одне значення → failed, apply.preservation-failed з колонкою
 it("catches a lost row", …)                                 // штучний DELETE → apply.preservation-failed, rows
@@ -1611,7 +1653,7 @@ git commit -m "feat(schema): доказ збереження рядків і з�
    - `typeGuards` кожного кроку, `lintSteps` усіх кроків;
    - `unrealizedRenames`, `classifyRemovals`;
    - `readAccessDependents` (ціль), `accessChanges`,
-     `promotionPermissionItems`;
+     `promotionPermissionItems` (з `classifyRemovals` для `remove:*`);
    - перепис власників через `tablesNewToOld`;
    - `planLocks`, `preservationPlan`.
 6. `prove` П3-1 на копії №2 з повним планом.
@@ -1676,7 +1718,7 @@ git commit -m "feat(schema): план промоції — намір на ко�
 - Produces:
   ```ts
   // PlanData: + promotion: { objectId: string; recordHash: string; tables: {from: string; to: string}[];
-  //   permissionItems: PermissionItem[] } | null
+  //   permissionItems: PermissionItem[] } | null   // access, delete, remove
   //   steps[]: + origin, + conversion?: ConversionClass
   export async function readPromotionRecords(root: string): Promise<{ ok: true; records: PromotionInput[] } | { ok: false; diagnostic: Diagnostic }>
   // невалідний файл → plan.promotion-record-invalid (file, message)
@@ -1774,7 +1816,7 @@ Expected: зелено.
 
 ```bash
 git add docs/
-git commit -m "docs(designer): записи промоції, токени access/delete, межа П3-2a; ROADMAP"
+git commit -m "docs(designer): записи промоції, токени access/delete/remove, межа П3-2a; ROADMAP"
 ```
 
 - [ ] **Step 4: Звіт архітекторові** — SHA комітів, відхилення від плану (якщо
