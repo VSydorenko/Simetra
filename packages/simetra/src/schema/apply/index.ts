@@ -34,6 +34,8 @@ export {
   canonicalRenames,
   classifyRemovals,
   promotionPermissionItems,
+  preservationPlan,
+  preservationQuery,
   promotionTransition,
   readAccessDependents,
   readEquivalenceObjects,

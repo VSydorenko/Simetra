@@ -8,8 +8,8 @@ import {
   expect,
   it,
 } from "vitest"
-import { compile, loadSqlParser } from "simetra/compiler"
-import type { CatalogModel } from "simetra/model"
+import { compile, loadSqlParser, type PromotionRecord } from "simetra/compiler"
+import type { CatalogModel, PhysicalTable } from "simetra/model"
 import {
   ApplyConnectionLost,
   desiredForApply,
@@ -24,6 +24,7 @@ import {
   type ExecuteOutcome,
   intentStep,
   planLocks,
+  preservationPlan,
   tableKey,
   type PlanStep,
   typeGuards,
@@ -796,6 +797,225 @@ describe("executePlan", () => {
       ])
       expect(rows.engine).toMatchObject({ path: "pg_catalog", bodies: "on" })
       expect(rows.state!.bodies).toBe("on")
+    })
+  })
+
+  describe("preservation proof", () => {
+    /**
+     * Промоція `app.pt` → `app.pu` з перейменуванням `c` → `d` і зміною типу
+     * `x` (рішення 6 плану П3-2a). Артефакт зібрано вручну, як у
+     * `renamePlan`: конвеєр плану з промоцією з'являється пізніше.
+     */
+    const OBJECT_ID = "00000000-0000-4000-8000-000000000001"
+    const SETUP = `${BASE};
+      create table app.pt (id int primary key, c text, x bigint);
+      insert into app.pt values (1, 'a', 10), (2, null, 20), (3, 'n', 30);`
+
+    const RECORD: PromotionRecord = {
+      format: 1,
+      base: "0".repeat(64),
+      result: "1".repeat(64),
+      objectId: OBJECT_ID,
+      kind: "Catalog",
+      labelDropped: false,
+      tables: [{ id: OBJECT_ID, schema: "app", from: "pt", to: "pu" }],
+      columns: [
+        ["id", "id"],
+        ["c", "d"],
+        ["x", "x"],
+      ].map(([from, to], n) => ({
+        id: `00000000-0000-4000-8000-00000000010${n}`,
+        sourceId: `00000000-0000-4000-8000-00000000020${n}`,
+        schema: "app",
+        table: "pu",
+        from: from!,
+        to: to!,
+      })),
+      typeChanges: [
+        {
+          schema: "app",
+          table: "pu",
+          column: "x",
+          from: "bigint",
+          to: "integer",
+        },
+      ],
+      dataSteps: [],
+      retired: [],
+      relaxed: [],
+      tightened: [],
+      rowLevelSecurity: [],
+      deleteSemantics: [],
+      conversions: [],
+      movedUnits: [],
+      rewrittenUnits: [],
+      contractChanges: [],
+    }
+
+    /** Таблиця вихідного стану: заміри беруть із неї первинний ключ. */
+    const source: PhysicalTable = {
+      schema: "app",
+      name: "pt",
+      origin: { objectId: OBJECT_ID },
+      rowLevelSecurity: "off",
+      columns: [],
+      primaryKey: { name: "pt_pkey", columns: ["id"] },
+      uniques: [],
+      checks: [],
+      foreignKeys: [],
+      indexes: [],
+    }
+
+    const TYPE_STEP = "s3"
+
+    /** Намір, крок зміни типу `x` і, за потреби, штучний крок після них. */
+    async function promotionPlan(
+      url: string,
+      over: { extra?: string; stops?: boolean } = {}
+    ): Promise<ExecutablePlan> {
+      const newToOld = new Map([[tableKey("app", "pu"), tableKey("app", "pt")]])
+      const old = [{ schema: "app", name: "pt" }]
+      const steps: PlanStep[] = [
+        { ...intentStep("ALTER TABLE app.pt RENAME TO pu", old), id: "s1" },
+        {
+          ...intentStep("ALTER TABLE app.pu RENAME COLUMN c TO d", old),
+          id: "s2",
+        },
+        step(TYPE_STEP, "ALTER TABLE app.pu ALTER COLUMN x TYPE integer", {
+          verb: "alter",
+          lockClass: "accessExclusive",
+          lockedTables: [{ schema: "app", name: "pu" }],
+        }),
+        ...(over.extra === undefined
+          ? []
+          : [step("s4", over.extra, { verb: "alter" })]),
+      ]
+      const preservation = preservationPlan(
+        RECORD,
+        { steps: [], tablesNewToOld: newToOld, tempNames: new Map() },
+        { tables: [source] },
+        new Map([[JSON.stringify(["app", "pu", "x"]), TYPE_STEP]])
+      )
+      return planFor(url, steps, {
+        locks: planLocks({ steps, newToOld, foreignKeyTargets: [] }),
+        promotion: {
+          recordHash: "d".repeat(64),
+          record: RECORD,
+          permissionItems: [],
+          preservation,
+          columns: [{ table: "app.pu", from: "c", to: "d" }],
+          canonicalNames: [],
+          conversions: [],
+        },
+        // Розбіжність зупиняє спробу до звірки з бажаним відбитком
+        desiredFingerprint:
+          over.extra === undefined && over.stops !== true
+            ? await desiredFingerprint(SETUP, steps)
+            : await read(url),
+      })
+    }
+
+    const rehearse = { ...options, mode: "rehearse" } as const
+
+    /** Ціль не змінилася: таблиця під старим іменем зі старими даними. */
+    const untouched = async (url: string) =>
+      expect(
+        await other(url, "select id, c, x::text from app.pt order by id")
+      ).toEqual([
+        { id: 1, c: "a", x: "10" },
+        { id: 2, c: null, x: "20" },
+        { id: 3, c: "n", x: "30" },
+      ])
+
+    it("proves rows and mapped values survive the renames", async () => {
+      await inTarget(SETUP, async (url) => {
+        const plan = await promotionPlan(url)
+        const outcome = await executePlan(apply, { url }, plan, rehearse)
+        expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+        await untouched(url)
+      })
+    })
+
+    it("tells NULL from a text that looks like the null marker", async () => {
+      await inTarget(SETUP, async (url) => {
+        const plan = await promotionPlan(url, {
+          extra: "UPDATE app.pu SET d = NULL WHERE d = 'n'",
+        })
+        const outcome = await executePlan(apply, { url }, plan, rehearse)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.preservation-failed",
+              params: { table: "app.pu", column: "d" },
+            },
+          ],
+        })
+        await untouched(url)
+      })
+    })
+
+    it("catches a step that changes a mapped value", async () => {
+      await inTarget(SETUP, async (url) => {
+        const plan = await promotionPlan(url, {
+          extra: "UPDATE app.pu SET x = 21 WHERE id = 2",
+        })
+        const outcome = await executePlan(apply, { url }, plan, rehearse)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.preservation-failed",
+              params: { table: "app.pu", column: "x" },
+            },
+          ],
+        })
+        expect(outcome.diagnostics[0]!.params).not.toHaveProperty("rows")
+        await untouched(url)
+      })
+    })
+
+    it("catches a lost row", async () => {
+      await inTarget(SETUP, async (url) => {
+        const plan = await promotionPlan(url, {
+          extra: "DELETE FROM app.pu WHERE id = 3",
+        })
+        const outcome = await executePlan(apply, { url }, plan, rehearse)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.preservation-failed",
+              params: { table: "app.pu", rows: "3 → 2" },
+            },
+          ],
+        })
+        expect(outcome.diagnostics[0]!.params).not.toHaveProperty("column")
+        await untouched(url)
+      })
+    })
+
+    it("reports a failing cast in the before measurement as narrowing", async () => {
+      const setup = `${SETUP}; insert into app.pt values (4, 'b', 1099511627776);`
+      await inTarget(setup, async (url) => {
+        const plan = await promotionPlan(url, { stops: true })
+        const outcome = await executePlan(apply, { url }, plan, rehearse)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-narrowing",
+              params: {
+                step: TYPE_STEP,
+                table: "app.pu",
+                column: "x",
+                sqlstate: "22003",
+              },
+            },
+          ],
+        })
+        expect(await exists(url, "app.pt")).toBe(true)
+      })
     })
   })
 

@@ -2318,6 +2318,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Перевірка порівнює кожне значення з ним самим після приведення до нового типу й назад; тип без рівності (як-от json) не порівняти, тож таку колонку змінюйте кроком даних.",
     },
   },
+  "apply.preservation-failed": {
+    en: (p) =>
+      p.rows !== undefined
+        ? `The plan changed the number of rows of ${p.table} (${p.rows}). The transaction was rolled back`
+        : `The plan changed values of column ${p.column} of ${p.table}: the column no longer holds the same value in the same row. The transaction was rolled back`,
+    uk: (p) =>
+      p.rows !== undefined
+        ? `План змінив кількість рядків таблиці ${p.table} (${p.rows}). Транзакцію відкочено`
+        : `План змінив значення колонки ${p.column} таблиці ${p.table}: у тому самому рядку вже не те саме значення. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. A promotion renames and retypes the tables of the object but keeps every row and every mapped value; a step that changes them is a defect of the plan, so report it to the platform maintainers.",
+      uk: "Нічого не записано. Промоція перейменовує таблиці об'єкта й змінює їхні типи, але зберігає кожен рядок і кожне змаплене значення; крок, що їх змінює, — дефект плану, тож повідомте про нього супровідникам платформи.",
+    },
+  },
   "apply.promotion-checks-pending": {
     en: () =>
       "The plan carries a promotion, and applying a promotion with COMMIT is refused until the full promotion checks are in place (function bodies, revalidation and constraint validity after the steps)",

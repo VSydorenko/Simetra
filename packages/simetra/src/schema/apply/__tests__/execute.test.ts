@@ -167,6 +167,10 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("current_setting('search_path')")) return "save-path"
   if (sql.includes("set_config('search_path'")) return "set-path"
   if (sql.includes("check_function_bodies")) return "function-bodies"
+  if (sql.includes("hashtextextended"))
+    return `measure ${sql.slice(sql.lastIndexOf(" FROM ") + 6)}`
+  if (sql.includes(" AS probe"))
+    return `probe ${sql.slice("SELECT count(".length, sql.indexOf(") AS probe"))}`
   // Решта операторів відбитка й стану — частини вже позначених кроків
   if (
     sql.includes("search_path") ||
@@ -202,27 +206,29 @@ function fakeDb(script: Script = {}) {
           if (error !== undefined) throw error
           if (plan.steps.some((s) => s.sql === sql)) stepsRan = true
           const rows: Record<string, unknown>[] =
-            label === "try-lock"
-              ? [{ locked: script.locked ?? true }]
-              : label === "role"
-                ? [{ role: script.role ?? "postgres" }]
-                : sql.includes(" AS marker")
-                  ? [{ marker: false, ledger: false }]
-                  : sql.includes("to_regclass")
-                    ? [{ exists: true }]
-                    : label === "lookup"
-                      ? script.ledgerHasApply === true
-                        ? [{ format: script.ledgerFormat ?? 1 }]
-                        : []
-                      : label === "save-path"
-                        ? [{ path: SESSION_PATH }]
-                        : sql.includes("encode(sha256")
-                          ? [
-                              stepsRan
-                                ? DESIRED.sections
-                                : (script.targetSections ?? TARGET.sections),
-                            ]
+            label?.startsWith("measure") === true
+              ? [{ rows: "1", c0: "5" }]
+              : label === "try-lock"
+                ? [{ locked: script.locked ?? true }]
+                : label === "role"
+                  ? [{ role: script.role ?? "postgres" }]
+                  : sql.includes(" AS marker")
+                    ? [{ marker: false, ledger: false }]
+                    : sql.includes("to_regclass")
+                      ? [{ exists: true }]
+                      : label === "lookup"
+                        ? script.ledgerHasApply === true
+                          ? [{ format: script.ledgerFormat ?? 1 }]
                           : []
+                        : label === "save-path"
+                          ? [{ path: SESSION_PATH }]
+                          : sql.includes("encode(sha256")
+                            ? [
+                                stepsRan
+                                  ? DESIRED.sections
+                                  : (script.targetSections ?? TARGET.sections),
+                              ]
+                            : []
           return rows as R[]
         },
       }
@@ -486,6 +492,129 @@ describe("executePlan", () => {
       )
     }
   )
+
+  it("measures preservation before the steps and after the restored search path", async () => {
+    const { db, log } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...promoted,
+        promotion: {
+          ...promoted.promotion!,
+          permissionItems: [],
+          preservation: [
+            {
+              before: { schema: "app", table: "t" },
+              after: { schema: "app", table: "u" },
+              key: { before: "id", after: "id" },
+              columns: [{ before: "c", after: "d" }],
+            },
+          ],
+        },
+      },
+      { ...options, mode: "rehearse" }
+    )
+    expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+    expect(
+      log.slice(
+        log.indexOf(
+          'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE'
+        ) + 1
+      )
+    ).toEqual([
+      "fingerprint",
+      "measure app.t",
+      "save-path",
+      "set-path",
+      "ALTER TABLE app.t ADD COLUMN d int",
+      "CREATE INDEX i ON app.u (id)",
+      'ALTER TABLE app."x.y" ADD COLUMN e int',
+      "set-path",
+      "measure app.u",
+      "fingerprint",
+      "marker",
+      "ledger",
+      "ROLLBACK",
+    ])
+  })
+
+  it("blames a failing key cast on the key, not on another cast column", async () => {
+    // Ключ `id` і колонка `x` обидві міняють тип; падає лише приведення
+    // ключа. Проба з ключем у виразі впала б і для `x`
+    const overflow = new ApplyDbError("integer out of range", "22003")
+    const { db, log } = fakeDb({
+      fail: (label) =>
+        label === "measure app.t" || label === "probe (id::integer)"
+          ? overflow
+          : undefined,
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...promoted,
+        promotion: {
+          ...promoted.promotion!,
+          permissionItems: [],
+          preservation: [
+            {
+              before: { schema: "app", table: "t" },
+              after: { schema: "app", table: "u" },
+              key: { before: "(id::integer)", after: "id" },
+              columns: [
+                { before: "(x::integer)", after: "x", typeChangeStep: "s7" },
+                { before: "(id::integer)", after: "id", typeChangeStep: "s9" },
+              ],
+            },
+          ],
+        },
+      },
+      { ...options, mode: "rehearse" }
+    )
+    expect(outcome).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.type-narrowing",
+          params: { step: "s9", table: "app.u", column: "id" },
+        },
+      ],
+    })
+    expect(log).toContain("probe (x::integer)")
+    expect(log).not.toContain("ALTER TABLE app.t ADD COLUMN d int")
+  })
+
+  it("rethrows a before measurement failure that no single cast explains", async () => {
+    const overflow = new ApplyDbError("integer out of range", "22003")
+    const { db } = fakeDb({
+      fail: (label) => (label === "measure app.t" ? overflow : undefined),
+    })
+    await expect(
+      executePlan(
+        db,
+        target,
+        {
+          ...promoted,
+          promotion: {
+            ...promoted.promotion!,
+            permissionItems: [],
+            preservation: [
+              {
+                before: { schema: "app", table: "t" },
+                after: { schema: "app", table: "u" },
+                key: { before: "id", after: "id" },
+                columns: [
+                  { before: "(x::integer)", after: "x", typeChangeStep: "s7" },
+                ],
+              },
+            ],
+          },
+        },
+        { ...options, mode: "rehearse" }
+      )
+    ).rejects.toBe(overflow)
+  })
 
   it("records no promotion for a plan without one", async () => {
     const { db, calls } = spied()

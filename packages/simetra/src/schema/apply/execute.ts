@@ -1,7 +1,11 @@
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import type { DbConnection, EngineDiagnostic, EngineSetting } from "../engine"
-import { isAllowedSetting, type PlanArtifact } from "./artifact"
+import {
+  isAllowedSetting,
+  type PlanArtifact,
+  type PreservedTable,
+} from "./artifact"
 import { applyDiagnostic } from "./diagnostic"
 import {
   compareFingerprints,
@@ -16,6 +20,11 @@ import {
   type ApplyDatabase,
   type ApplyTransaction,
 } from "./port"
+import {
+  castProbeQuery,
+  preservationQuery,
+  preservedColumnName,
+} from "./promotion/preservation"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
 import type { TableLock } from "./locks"
 import { checkPermissions, lintSteps } from "./steps"
@@ -291,6 +300,11 @@ async function runAttempt(
       sections: changed.join(", "),
     })
 
+  // 6a. Заміри збереження «до» — у старих іменах, до першого кроку, під
+  // налаштуваннями транзакції (рішення 6 плану П3-2a)
+  const preserved = plan.promotion?.preservation ?? []
+  const before = await measureBefore(tx, preserved, parse)
+
   // 7. Кроки по черзі, кожен після своїх сторожів; конфлікт блокувань
   // летить далі на повтор спроби. Кроки двигуна — під `search_path`
   // преамбули (рішення 13 плану П3-2a): двигун пише SQL з розрахунку на неї.
@@ -329,6 +343,11 @@ async function runAttempt(
     if (savedPath !== undefined && index === lastEngine)
       await tx.query("SELECT set_config('search_path', $1, true)", [savedPath])
   }
+
+  // 7a. Заміри «після» — у нових іменах, після кроків і відновлення
+  // `search_path`. Та сама транзакція й ті самі налаштування сесії, що й
+  // «до», тож текст значень порівнюваний без закріплення GUC
+  await provePreservation(tx, preserved, before, parse)
 
   // 8. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
   const resultFingerprint = await readFingerprint(tx, plan.scope)
@@ -402,6 +421,108 @@ async function runGuard(
   }
   if (lost > 0)
     throw stop("failed", "apply.type-narrowing", { step, table, column, lost })
+}
+
+/** Один рядок заміру: `rows` і суми `c<i>` колонок у порядку секції. */
+type Measurement = Record<string, unknown>
+
+async function measure(
+  tx: ApplyTransaction,
+  t: PreservedTable,
+  side: "before" | "after"
+): Promise<Measurement> {
+  const [row] = await tx.query(preservationQuery(t, side))
+  if (row === undefined)
+    throw new Error("preservation measurement returned no row")
+  return row
+}
+
+const tableName = (t: PreservedTable["after"]): string =>
+  `${t.schema}.${t.table}`
+
+/**
+ * Заміри «до». Колонка зі зміною типу читається через приведення до нового
+ * типу, і невдале приведення (SQLSTATE класу `22`) — те саме звуження, що
+ * зловив би сторож кроку: його називає `apply.type-narrowing` з id кроку
+ * зміни типу, а не сирий збій. Один прохід не каже, яка колонка впала, тож
+ * таблицю з приведеннями міряємо в точці збереження й після збою пробуємо
+ * приведення по одному, кожне окремо від ключа.
+ */
+async function measureBefore(
+  tx: ApplyTransaction,
+  tables: readonly PreservedTable[],
+  parse: SqlParser
+): Promise<Measurement[]> {
+  const out: Measurement[] = []
+  for (const t of tables) {
+    const casts = t.columns.filter((c) => c.typeChangeStep !== undefined)
+    if (casts.length === 0) {
+      out.push(await measure(tx, t, "before"))
+      continue
+    }
+    await tx.query("SAVEPOINT simetra_preservation")
+    try {
+      out.push(await measure(tx, t, "before"))
+    } catch (error) {
+      if (!castFailure(error)) throw error
+      await tx.query("ROLLBACK TO SAVEPOINT simetra_preservation")
+      // Невдала проба перериває транзакцію, але після неї спроба однаково
+      // зупиняється; вдала нічого не змінює
+      for (const c of casts)
+        try {
+          await tx.query(castProbeQuery(t, c))
+        } catch (probe) {
+          if (!castFailure(probe)) throw probe
+          throw stop("failed", "apply.type-narrowing", {
+            step: c.typeChangeStep!,
+            table: tableName(t.after),
+            column: preservedColumnName(c.after, parse),
+            sqlstate: probe.sqlstate!,
+          })
+        }
+      // Жодне приведення окремо не впало: збій не звуження, тож як є
+      throw error
+    }
+    await tx.query("RELEASE SAVEPOINT simetra_preservation")
+  }
+  return out
+}
+
+const castFailure = (error: unknown): error is ApplyDbError =>
+  error instanceof ApplyDbError &&
+  error.sqlstate !== undefined &&
+  error.sqlstate.startsWith("22")
+
+/**
+ * Заміри «після» проти «до». Розбіжність — `apply.preservation-failed`:
+ * спершу кількість рядків, далі перша колонка в порядку секції. Виняток
+ * відкочує транзакцію.
+ */
+async function provePreservation(
+  tx: ApplyTransaction,
+  tables: readonly PreservedTable[],
+  before: readonly Measurement[],
+  parse: SqlParser
+): Promise<void> {
+  for (const [i, t] of tables.entries()) {
+    const was = before[i]!
+    const now = await measure(tx, t, "after")
+    const table = tableName(t.after)
+    if (String(was.rows) !== String(now.rows))
+      throw stop("failed", "apply.preservation-failed", {
+        table,
+        rows: `${String(was.rows)} → ${String(now.rows)}`,
+      })
+    // Сума порожньої таблиці — `NULL` з обох боків
+    const changed = t.columns.findIndex(
+      (_, c) => String(was[`c${c}`]) !== String(now[`c${c}`])
+    )
+    if (changed >= 0)
+      throw stop("failed", "apply.preservation-failed", {
+        table,
+        column: preservedColumnName(t.columns[changed]!.after, parse),
+      })
+  }
 }
 
 async function checkChain(
