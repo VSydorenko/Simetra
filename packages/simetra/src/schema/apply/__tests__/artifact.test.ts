@@ -34,6 +34,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   steps: [
     {
       id: "s1",
+      origin: "engine",
       sql: "ALTER TABLE app.t DROP COLUMN c",
       verb: "alter",
       class: "destructive",
@@ -44,8 +45,10 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
       produces: [],
       consumes: ["table:app.t"],
       destroys: ["column:app.t.c"],
+      destroyed: [{ kind: "column", schema: "app", table: "t", name: "c" }],
       dataLoss: true,
       rewriteRisk: false,
+      guards: [],
     },
   ],
   requiredPermissions: ["s1"],

@@ -391,11 +391,13 @@ function ownerMismatches(
 /**
  * SQL двигуна, якого не читає парсер, — дефект адаптера: `classifySteps` і
  * `lintSteps` кинули б на ньому виняток. Перевіряється наперед, щоб план
- * відмовив діагностикою з id кроку (`stepId`, як у `classifySteps`).
+ * відмовив діагностикою з id кроку (`stepId` зі зсувом на кроки наміру, як
+ * у `classifySteps`).
  */
 function unparsableSteps(
   actions: readonly EngineAction[],
-  parse: SqlParser
+  parse: SqlParser,
+  offset = 0
 ): EngineDiagnostic[] {
   return actions.flatMap((action, index) => {
     const result = parse(action.sql)
@@ -403,7 +405,7 @@ function unparsableSteps(
       ? []
       : [
           applyDiagnostic("plan.unparsable-step", "error", {
-            step: stepId(index),
+            step: stepId(offset + index),
             message: result.message,
           }),
         ]

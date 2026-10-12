@@ -29,7 +29,10 @@ export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
 export {
   promotionTransition,
+  renameIntent,
+  withTempNames,
   type PromotionInput,
+  type RenameIntent,
   type TransitionVerdict,
 } from "./promotion"
 export {
@@ -44,6 +47,7 @@ export {
   checkPermissions,
   classifySteps,
   DRIFT_PERMISSION,
+  intentStep,
   lintSteps,
   requiredPermissions,
   STEP_CLASSES,

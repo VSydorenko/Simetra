@@ -176,6 +176,7 @@ const desiredFingerprint = (
 function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
   return {
     id,
+    origin: "engine",
     sql,
     verb: "create",
     class: "catalogOnly",
@@ -186,8 +187,10 @@ function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
     produces: [],
     consumes: [],
     destroys: [],
+    destroyed: [],
     dataLoss: false,
     rewriteRisk: false,
+    guards: [],
     ...over,
   }
 }

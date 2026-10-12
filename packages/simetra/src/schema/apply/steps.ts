@@ -1,7 +1,12 @@
 import type { AlterTableCmd, Node, TypeName } from "libpg-query"
 import type { SqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
-import type { EngineAction, EngineDiagnostic, LockedTable } from "../engine"
+import type {
+  EngineAction,
+  EngineDiagnostic,
+  EngineObjectRef,
+  LockedTable,
+} from "../engine"
 import { applyDiagnostic } from "./diagnostic"
 import type { DriftReport } from "./drift"
 
@@ -19,10 +24,19 @@ export const STEP_CLASSES = [
 ] as const
 export type StepClass = (typeof STEP_CLASSES)[number]
 
-/** Крок плану: дія двигуна з id, за яким дають дозвіл, і класом. */
+/**
+ * Крок плану: дія двигуна чи крок наміру платформи з id, за яким дають
+ * дозвіл, і класом.
+ */
 export interface PlanStep {
-  /** `s1`, `s2`, … у порядку двигуна. */
+  /** `s1`, `s2`, … наскрізно: спершу кроки наміру, далі кроки двигуна. */
   id: string
+  /**
+   * Звідки крок: намір платформи (перейменування промоції, рішення 2 плану
+   * П3-2a) виконується до diff двигуна, тож двигун своїх перейменувань не
+   * вгадує.
+   */
+  origin: "intent" | "engine"
   sql: string
   verb: EngineAction["verb"]
   class: StepClass
@@ -33,8 +47,12 @@ export interface PlanStep {
   produces: string[]
   consumes: string[]
   destroys: string[]
+  /** Структурна форма `destroys` від адаптера; у кроку наміру порожня. */
+  destroyed: EngineObjectRef[]
   dataLoss: boolean
   rewriteRisk: boolean
+  /** SQL сторожів кроку; раннер виконує їх перед кроком. */
+  guards: string[]
 }
 
 /**
@@ -415,20 +433,52 @@ function columnTypeReader(
 }
 
 /**
- * Id кроку за його позицією в плані двигуна: `s1`, `s2`, … Одне місце для
- * правила — за цими id дають дозвіл і їх називають діагностики плану.
+ * Id кроку за його позицією в плані: `s1`, `s2`, … Одне місце для правила —
+ * за цими id дають дозвіл і їх називають діагностики плану.
  */
 export const stepId = (index: number): string => `s${index + 1}`
+
+/**
+ * Крок наміру платформи (рішення 3 плану П3-2a): лише перейменування й
+ * інші зміни каталогу без даних, тож клас і блокування сталі. Таблиці —
+ * у старих іменах: раннер блокує їх до першого кроку, коли нових імен ще
+ * немає.
+ */
+export function intentStep(
+  sql: string,
+  lockedTables: LockedTable[]
+): Omit<PlanStep, "id"> {
+  return {
+    origin: "intent",
+    sql,
+    verb: "alter",
+    class: "catalogOnly",
+    lockClass: "accessExclusive",
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables,
+    produces: [],
+    consumes: [],
+    destroys: [],
+    destroyed: [],
+    dataLoss: false,
+    rewriteRisk: false,
+    guards: [],
+  }
+}
 
 /**
  * Класи кроків із прапорів двигуна й дерева розбору. `target` — модель
  * каталогу цілі, тобто вихідного стану плану: лише вона знає, чи знятий
  * індекс унікальний, чи таблиця вже існує і який тип мала колонка.
+ * `offset` — кількість кроків наміру перед кроками двигуна: нумерація
+ * наскрізна, тож дозвіл на `s<N>` однозначний у всьому плані.
  */
 export function classifySteps(
   actions: readonly EngineAction[],
   target: CatalogModel,
-  parse: SqlParser
+  parse: SqlParser,
+  offset = 0
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -445,7 +495,7 @@ export function classifySteps(
     columnType: columnTypeReader(parse),
   }
   return actions.map((action, index) => {
-    const id = stepId(index)
+    const id = stepId(offset + index)
     const base = baseClass(action, parsed(id, action.sql, parse), facts)
     // Виняток не перекриває втрату даних: `destructive` сюди не доходить
     const cls =
@@ -454,6 +504,7 @@ export function classifySteps(
         : base
     return {
       id,
+      origin: "engine",
       sql: action.sql,
       verb: action.verb,
       class: cls,
@@ -464,8 +515,10 @@ export function classifySteps(
       produces: action.produces,
       consumes: action.consumes,
       destroys: action.destroys,
+      destroyed: action.destroyed,
       dataLoss: action.dataLoss,
       rewriteRisk: action.rewriteRisk,
+      guards: [],
     }
   })
 }

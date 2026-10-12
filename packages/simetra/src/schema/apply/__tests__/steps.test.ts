@@ -531,8 +531,11 @@ describe("classifySteps", () => {
         produces: [],
         consumes: ["column:app.t.x"],
         destroys: [],
+        destroyed: [],
         dataLoss: false,
         rewriteRisk: false,
+        origin: "engine",
+        guards: [],
       },
       {
         id: "s2",
@@ -546,10 +549,33 @@ describe("classifySteps", () => {
         produces: [],
         consumes: [],
         destroys: [],
+        destroyed: [],
         dataLoss: false,
         rewriteRisk: false,
+        origin: "engine",
+        guards: [],
       },
     ])
+  })
+
+  it("numbers engine steps after the intent steps", () => {
+    const destroyed = [
+      { kind: "column", schema: "app", table: "t.x", name: "c.d" },
+    ]
+    const steps = classifySteps(
+      [
+        action("ALTER TABLE app.t DROP COLUMN c", {
+          destroys: ["column:app.t.c"],
+          destroyed,
+        }),
+        action("ALTER TABLE app.t ALTER x SET NOT NULL"),
+      ],
+      UNIQUE,
+      parse,
+      3
+    )
+    expect(steps.map((s) => s.id)).toEqual(["s4", "s5"])
+    expect(steps[0]).toMatchObject({ origin: "engine", guards: [], destroyed })
   })
 
   it("refuses engine SQL that does not parse", () => {

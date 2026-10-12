@@ -49,6 +49,7 @@ const fingerprintSchema = z.strictObject({
 
 const stepSchema = z.strictObject({
   id: z.string(),
+  origin: z.enum(["intent", "engine"]),
   sql: z.string(),
   verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),
@@ -61,8 +62,17 @@ const stepSchema = z.strictObject({
   produces: z.array(z.string()),
   consumes: z.array(z.string()),
   destroys: z.array(z.string()),
+  destroyed: z.array(
+    z.strictObject({
+      kind: z.string(),
+      schema: z.string(),
+      table: z.string().optional(),
+      name: z.string(),
+    })
+  ),
   dataLoss: z.boolean(),
   rewriteRisk: z.boolean(),
+  guards: z.array(z.string()),
 })
 
 /**

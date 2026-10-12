@@ -220,6 +220,7 @@ const read = (url: string): Promise<CatalogFingerprint> =>
 
 const CREATE_N: PlanStep = {
   id: "s1",
+  origin: "engine",
   sql: "CREATE TABLE app.n (id int)",
   verb: "create",
   class: "catalogOnly",
@@ -230,8 +231,10 @@ const CREATE_N: PlanStep = {
   produces: [],
   consumes: [],
   destroys: [],
+  destroyed: [],
   dataLoss: false,
   rewriteRisk: false,
+  guards: [],
 }
 
 /**
