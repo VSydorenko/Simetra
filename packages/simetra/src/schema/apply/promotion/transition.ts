@@ -71,7 +71,12 @@ const markerSnapshotSchema = z.looseObject({
           })
         ),
         primaryKey: z.looseObject({ name: z.string() }).optional(),
-        foreignKeys: z.array(z.looseObject({ columns: z.array(z.string()) })),
+        foreignKeys: z.array(
+          z.looseObject({
+            columns: z.array(z.string()),
+            onDelete: z.string(),
+          })
+        ),
       })
     ),
   }),
@@ -154,6 +159,44 @@ function firstDifference(
   return undefined
 }
 
+const byCodeUnit = (a: string, b: string): number =>
+  a < b ? -1 : a > b ? 1 : 0
+
+/**
+ * Таблиці одиниці з ідентичності (рішення 1): сам об'єкт і кожна його ТЧ, що
+ * в marker була `CustomTable` з тим самим id. Факти виводяться лише з таблиць
+ * запису, тож пропущена таблиця ТЧ інакше звузила б і факти, і звірку —
+ * а план без її перейменування перестворив би таблицю з даними.
+ */
+function unitTablesDifference(
+  record: PromotionRecord,
+  before: MarkerSnapshot,
+  model: CompiledModel
+): string | undefined {
+  const { objectId } = record
+  const expected = new Set([objectId])
+  for (const { origin } of model.physical.tables) {
+    const section = origin.tabularSectionId
+    if (
+      origin.objectId === objectId &&
+      origin.part === undefined &&
+      section !== undefined &&
+      isAdopted(before.kinds.get(section))
+    )
+      expected.add(section)
+  }
+  const recorded = new Set(record.tables.map((t) => t.id))
+  for (const id of [...expected].sort(byCodeUnit)) {
+    if (!recorded.has(id))
+      return `tables: ${id} was a CustomTable and is now part of ${objectId}, but the record does not name it`
+  }
+  for (const id of [...recorded].sort(byCodeUnit)) {
+    if (!expected.has(id))
+      return `tables: ${id} is neither ${objectId} nor its tabular section adopted from a CustomTable`
+  }
+  return undefined
+}
+
 type Reconciliation =
   | { ok: true; recordHash: string; facts: PromotionFacts }
   | { ok: false; diagnostics: EngineDiagnostic[] }
@@ -180,6 +223,19 @@ async function reconcile(
           file,
           base: record.base,
           marker: marker.snapshotHash,
+        }),
+      ],
+    }
+  }
+  const unitDifference = unitTablesDifference(record, before, model)
+  if (unitDifference !== undefined) {
+    return {
+      ok: false,
+      diagnostics: [
+        error("plan.promotion-record-mismatch", {
+          objectId,
+          file,
+          detail: unitDifference,
         }),
       ],
     }

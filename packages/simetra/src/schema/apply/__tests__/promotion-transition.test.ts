@@ -24,6 +24,7 @@ import {
 import {
   CATALOG_FILE,
   CONTACT_FILE,
+  CONTACT_ID,
   COUNTERPARTY_ID,
   INN_ID,
   counterpartyMapping,
@@ -94,6 +95,41 @@ async function promoted(
 
 const counterparty = () =>
   promoted(promotionProject(PARTS), counterpartyMapping(NO_FILL))
+
+/** Промоція `Counterparty` з ТЧ `contacts` з таблиці контактів, без кроків даних. */
+async function withContacts(): Promise<Promoted> {
+  const files = edit(
+    promotionProject({ ...PARTS, contacts: true }),
+    CONTACT_FILE,
+    (raw) => {
+      ;(raw.columns as Json[]).push({
+        id: uuid(7105),
+        name: "lineNumber",
+        physicalName: "line_number",
+        type: "Integer",
+        notNull: true,
+      })
+    }
+  )
+  const mapping = structuredClone(counterpartyMapping(NO_FILL))
+  mapping.tabularSections = [
+    {
+      table: "CounterpartyContact",
+      name: "contacts",
+      columns: {
+        id: { to: "standard", name: "ref" },
+        counterpartyId: { to: "standard", name: "parent" },
+        lineNumber: { to: "standard", name: "lineNumber" },
+        phone: {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "phone" },
+        },
+      },
+    },
+  ]
+  return promoted(files, mapping)
+}
 
 /** Стан цілі, застосованої до моделі `model`. */
 function applied(model: CompiledModel): ApplyState {
@@ -225,38 +261,53 @@ describe("promotionTransition: the decision table", () => {
     ])
   })
 
-  it("4 accepts a matching record with its tabular section", async () => {
-    const files = edit(
-      promotionProject({ ...PARTS, contacts: true }),
-      CONTACT_FILE,
-      (raw) => {
-        ;(raw.columns as Json[]).push({
-          id: uuid(7105),
-          name: "lineNumber",
-          physicalName: "line_number",
-          type: "Integer",
-          notNull: true,
-        })
-      }
+  it("3 refuses a record that omits a tabular section table", async () => {
+    const { before, after, record } = await withContacts()
+    // Запис без таблиці ТЧ і всіх її фактів: звірка фактів сама б зійшлась.
+    const changed = structuredClone(record)
+    const contacts = record.tables.find((t) => t.id === CONTACT_ID)!.to
+    changed.tables = changed.tables.filter((t) => t.id !== CONTACT_ID)
+    changed.columns = changed.columns.filter((c) => c.table !== contacts)
+    changed.retired = changed.retired.filter((c) => c.table !== contacts)
+    changed.deleteSemantics = changed.deleteSemantics.filter(
+      (d) => d.table !== contacts
     )
-    const mapping = structuredClone(counterpartyMapping(NO_FILL))
-    mapping.tabularSections = [
-      {
-        table: "CounterpartyContact",
-        name: "contacts",
-        columns: {
-          id: { to: "standard", name: "ref" },
-          counterpartyId: { to: "standard", name: "parent" },
-          lineNumber: { to: "standard", name: "lineNumber" },
-          phone: {
-            to: "attribute",
-            collection: "attributes",
-            element: { name: "phone" },
-          },
-        },
-      },
-    ]
-    const { before, after, record } = await promoted(files, mapping)
+    const verdict = await transition({
+      state: applied(before),
+      model: after,
+      records: [input(changed)],
+    })
+    expect(verdict.status).toBe("refused")
+    expect(codes(verdict)).toEqual([
+      ["plan.promotion-record-mismatch", "error"],
+    ])
+    expect(verdict.diagnostics[0]!.params?.detail).toContain(CONTACT_ID)
+  })
+
+  it("3 refuses a record table that is not a tabular section of the object", async () => {
+    const { before, after, record } = await withContacts()
+    const foreign = uuid(7998)
+    const changed = structuredClone(record)
+    changed.tables.push({
+      id: foreign,
+      schema: "app",
+      from: "elsewhere",
+      to: "elsewhere",
+    })
+    const verdict = await transition({
+      state: applied(before),
+      model: after,
+      records: [input(changed)],
+    })
+    expect(verdict.status).toBe("refused")
+    expect(codes(verdict)).toEqual([
+      ["plan.promotion-record-mismatch", "error"],
+    ])
+    expect(verdict.diagnostics[0]!.params?.detail).toContain(foreign)
+  })
+
+  it("4 accepts a matching record with its tabular section", async () => {
+    const { before, after, record } = await withContacts()
     expect(record.tables).toHaveLength(2)
     expect(record.dataSteps).toEqual([])
     const verdict = await transition({
