@@ -24,6 +24,7 @@ function engineStep(
     produces: [],
     consumes: [],
     destroys: [],
+    produced: [],
     destroyed: [],
     consumed: [],
     dataLoss: false,

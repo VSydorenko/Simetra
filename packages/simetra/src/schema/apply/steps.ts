@@ -55,6 +55,8 @@ export interface PlanStep {
   produces: string[]
   consumes: string[]
   destroys: string[]
+  /** Структурна форма `produces` від адаптера; у кроку наміру порожня. */
+  produced: EngineObjectRef[]
   /** Структурна форма `destroys` від адаптера; у кроку наміру порожня. */
   destroyed: EngineObjectRef[]
   /** Структурна форма `consumes` від адаптера; у кроку наміру порожня. */
@@ -394,6 +396,7 @@ export function intentStep(
     produces: [],
     consumes: [],
     destroys: [],
+    produced: [],
     destroyed: [],
     consumed: [],
     dataLoss: false,
@@ -456,6 +459,7 @@ export function classifySteps(
       produces: action.produces,
       consumes: action.consumes,
       destroys: action.destroys,
+      produced: action.produced,
       destroyed: action.destroyed,
       consumed: action.consumed,
       dataLoss: action.dataLoss,

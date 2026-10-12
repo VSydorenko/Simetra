@@ -554,6 +554,7 @@ describe("buildPlan", () => {
           produces: [],
           consumes: [],
           destroys: [],
+          produced: [],
           destroyed: [],
           consumed: [],
           transactionality: "transactional",

@@ -210,6 +210,7 @@ const stepSchema = z.strictObject({
   produces: z.array(z.string()),
   consumes: z.array(z.string()),
   destroys: z.array(z.string()),
+  produced: z.array(objectRefSchema),
   destroyed: z.array(objectRefSchema),
   consumed: z.array(objectRefSchema),
   dataLoss: z.boolean(),

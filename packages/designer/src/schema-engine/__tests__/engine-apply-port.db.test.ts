@@ -203,6 +203,37 @@ describe("SchemaEngine apply port", () => {
     ])
   })
 
+  it("reports produced objects structurally", async () => {
+    const plan = await planOf(
+      'create schema app; create table app.p (id int primary key); create table app."a.b" (id int, p int);',
+      'create schema app; create table app.p (id int primary key); create table app."a.b" (id int, p int constraint ab_p_fk references app.p(id));'
+    )
+    expect(actionMatching(plan, /ADD CONSTRAINT/i).produced).toEqual([
+      { kind: "constraint", schema: "app", table: "a.b", name: "ab_p_fk" },
+    ])
+  })
+
+  it.each([
+    ["sets", "", "comment on table app.t is 'x';"],
+    [
+      "changes",
+      "comment on table app.t is 'x';",
+      "comment on table app.t is 'y';",
+    ],
+    ["drops", "comment on column app.t.c is 'x';", ""],
+  ])(
+    "locks the table of a comment it %s in SHARE UPDATE EXCLUSIVE mode",
+    async (_, from, to) => {
+      // Postgres бере `SHARE UPDATE EXCLUSIVE` на таблиці коментаря таблиці
+      // чи колонки, а клас двигуна для коментаря — «none»
+      const table = "create schema app; create table app.t (id int, c int);"
+      const plan = await planOf(`${table} ${from}`, `${table} ${to}`)
+      const comment = actionMatching(plan, /COMMENT ON/i)
+      expect(comment.lockClass).toBe("shareUpdateExclusive")
+      expect(comment.lockedTables).toEqual([{ schema: "app", name: "t" }])
+    }
+  )
+
   it("passes the engine preamble through on every path", async () => {
     const desired = [
       "create schema app;",

@@ -231,6 +231,7 @@ const CREATE_N: PlanStep = {
   produces: [],
   consumes: [],
   destroys: [],
+  produced: [],
   destroyed: [],
   consumed: [],
   dataLoss: false,

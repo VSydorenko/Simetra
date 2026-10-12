@@ -290,6 +290,7 @@ describe("renameIntent", () => {
       produces: [],
       consumes: [],
       destroys: [],
+      produced: [],
       destroyed: [],
       consumed: [],
       dataLoss: false,
@@ -307,6 +308,7 @@ describe("intentStep", () => {
       origin: "intent",
       class: "catalogOnly",
       guards: [],
+      produced: [],
       destroyed: [],
       consumed: [],
     })

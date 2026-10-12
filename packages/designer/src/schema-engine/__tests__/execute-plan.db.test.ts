@@ -198,6 +198,7 @@ function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
     produces: [],
     consumes: [],
     destroys: [],
+    produced: [],
     destroyed: [],
     consumed: [],
     dataLoss: false,

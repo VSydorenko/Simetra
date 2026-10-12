@@ -265,6 +265,10 @@ function tableOf(id: StableId): LockedTable | undefined {
     case "rule":
     case "trigger":
       return { schema: id.schema, name: id.table }
+    // Зміна коментаря вживає лише ідентичність коментаря, а блокує таблицю
+    // його об'єкта
+    case "comment":
+      return tableOf(id.target)
     default:
       return undefined
   }
@@ -306,6 +310,30 @@ function lockedTablesOf(
     out.push(table)
   }
   return out
+}
+
+/**
+ * Клас блокування дії. Для коментаря двигун дає «none», а Postgres бере
+ * `SHARE UPDATE EXCLUSIVE` на таблиці коментованої таблиці чи колонки (на
+ * обмеженні — слабше, тож це верхня межа). Без поправки слід плану не знав
+ * би цього замка, і звірка сліду на доказі назвала б його прогалиною.
+ */
+function lockClassOf(action: Action): string {
+  if (action.lockClass !== "none") return action.lockClass
+  const comment = [
+    ...action.produces,
+    ...action.consumes,
+    ...action.destroys,
+  ].some((id) => id.kind === "comment" && tableOf(id) !== undefined)
+  return comment ? "shareUpdateExclusive" : action.lockClass
+}
+
+/**
+ * Створювані об'єкти структурно, тим самим правилом, що й `destroyedOf`: за
+ * ними T2 розпізнає, що крок створює FK і яку таблицю той займе.
+ */
+function producedOf(action: Action): EngineObjectRef[] {
+  return objectRefs(action.produces)
 }
 
 /**
@@ -351,12 +379,13 @@ function toEngineAction(
     produces: action.produces.map(encodeId),
     consumes: action.consumes.map(encodeId),
     destroys: action.destroys.map(encodeId),
+    produced: producedOf(action),
     destroyed: destroyedOf(action),
     consumed: consumedOf(action),
     transactionality: action.transactionality,
     newSegmentBefore: action.newSegmentBefore,
     lockedTables: lockedTablesOf(action, tables),
-    lockClass: action.lockClass,
+    lockClass: lockClassOf(action),
     dataLoss: action.dataLoss === "destructive",
     rewriteRisk: action.rewriteRisk,
   }

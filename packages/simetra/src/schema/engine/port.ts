@@ -131,6 +131,12 @@ export interface EngineAction {
   consumes: string[]
   destroys: string[]
   /**
+   * Створювані об'єкти структурно (з `produces`), за тим самим правилом, що
+   * й `destroyed`: слід кроку (FK, який він створює) T2 розпізнає без
+   * відтворення рядкової форми ідентичності двигуна.
+   */
+  produced: EngineObjectRef[]
+  /**
    * Знищувані об'єкти структурно (з `destroys`): за ними розпізнають, що план
    * губить, без розбору рядкових ідентичностей. Об'єкти без схеми й імені
    * (ролі, членства, гранти) сюди не входять.
@@ -156,6 +162,12 @@ export interface EngineAction {
    * адаптері; раннер блокує список як є.
    */
   lockedTables: LockedTable[]
+  /**
+   * Найсильніший режим, який дія бере на `lockedTables` (`none`,
+   * `shareUpdateExclusive`, `share`, `shareRowExclusive`,
+   * `accessExclusive`). Наслідки на інших таблицях (ціль FK, таблиці, що
+   * посилаються) виводить T2 зі сліду кроку.
+   */
   lockClass: string
   dataLoss: boolean
   rewriteRisk: boolean

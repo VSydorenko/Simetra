@@ -202,6 +202,7 @@ describe("classifySteps", () => {
     produces: [],
     consumes: [],
     destroys: [],
+    produced: [],
     destroyed: [],
     consumed: [],
     transactionality: "transactional",

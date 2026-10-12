@@ -65,6 +65,7 @@ const ACTION: EngineAction = {
   produces: ["table:app.note"],
   consumes: ["schema:app"],
   destroys: [],
+  produced: [],
   destroyed: [],
   consumed: [],
   transactionality: "transactional",
