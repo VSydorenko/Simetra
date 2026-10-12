@@ -74,7 +74,10 @@ Preview a deletion without writing and without confirmation:
 
 Promote an adopted `CustomTable` into a Catalog from a complete one-off
 mapping (every column of the table is named; the call is dry-runnable like any
-mutation, and its response carries the promotion record):
+mutation, and its response carries the promotion record). `promote` also
+writes the record to `plans/<objectId>.promotion.json`: commit it with the
+metadata, since `plan` refuses a promotion without it
+(`plan.promotion-record-missing`).
 
 ```json simetra:promote
 {
@@ -351,6 +354,11 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 `drift` when the plan carries drift; the plan output says which items need
 it. `rehearse` runs the plan and rolls it back, but still takes the same
 locks as `apply`.
+
+A promotion plan's `allow` also takes the `access:<table>`,
+`delete:<table>.<constraint>` and `remove:<table>` items its output lists.
+Applying a promotion with a commit is refused for now
+(`apply.promotion-checks-pending`); `rehearse` it instead.
 
 Which connection to use:
 
