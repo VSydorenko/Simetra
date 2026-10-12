@@ -1,4 +1,8 @@
-import { loadSqlParser, type SqlParser } from "simetra/compiler"
+import {
+  loadSqlParser,
+  promotionRecordHash,
+  type SqlParser,
+} from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import type { DbConnection, EngineDiagnostic, EngineSetting } from "../engine"
 import {
@@ -189,6 +193,18 @@ export async function executePlan(
   ]
   if (refusals.length > 0)
     return { status: "refused", attempts: 0, diagnostics: refusals }
+  // З хешу в ledger `readAppliedPromotions` виводить «запис застосовано»,
+  // тож він мусить бути хешем саме записаного запису. Обидва поля під
+  // `planHash`, і розбіжність — зламаний конвеєр плану, а не стан цілі:
+  // виняток до BEGIN, а не відмова з кодом
+  if (
+    plan.promotion !== null &&
+    (await promotionRecordHash(plan.promotion.record)) !==
+      plan.promotion.recordHash
+  )
+    throw new Error(
+      "the promotion section's recordHash is not the hash of its record"
+    )
 
   // Поза артефактом і його хешем: той самий план, застосований удруге, —
   // інше застосування з іншим рядком ledger
@@ -306,28 +322,14 @@ async function runAttempt(
   const before = await measureBefore(tx, preserved, parse)
 
   // 7. Кроки по черзі, кожен після своїх сторожів; конфлікт блокувань
-  // летить далі на повтор спроби. Кроки двигуна — під `search_path`
-  // преамбули (рішення 13 плану П3-2a): двигун пише SQL з розрахунку на неї.
-  // Кроки наміру, заміри, відбиток і запис стану — під налаштуваннями
-  // транзакції; сторожі між кроками двигуна повністю кваліфіковані
-  const searchPath = plan.preamble.find((s) => s.name === "search_path")
-  const firstEngine = plan.steps.findIndex((s) => s.origin === "engine")
-  const lastEngine = plan.steps.reduce(
-    (last, s, i) => (s.origin === "engine" ? i : last),
-    -1
-  )
-  let savedPath: string | undefined
-  for (const [index, step] of plan.steps.entries()) {
-    if (searchPath !== undefined && index === firstEngine) {
-      const [saved] = await tx.query<{ path: string }>(
-        "SELECT current_setting('search_path') AS path"
-      )
-      if (saved === undefined) throw new Error("search_path returned no row")
-      savedPath = saved.path
-      await tx.query("SELECT set_config('search_path', $1, true)", [
-        searchPath.value,
-      ])
-    }
+  // летить далі на повтор спроби. Усі кроки й сторожі — під налаштуваннями
+  // транзакції, як у П3-1: преамбулу двигуна план несе під `planHash`, але
+  // раннер її не виконує, бо пара преамбули неподільна; П3-2b виконує її
+  // разом із ревалідацією (R22 плану П3-2a). Половина пари — `search_path =
+  // pg_catalog` при ввімкненій валідації тіл — дала б хибну відмову доказу
+  // для тіла SQL-функції з некваліфікованим ім'ям. Сторожі від `search_path`
+  // не залежать: таблиця й типи в них повністю кваліфіковані
+  for (const step of plan.steps) {
     for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
     try {
       await tx.query(step.sql)
@@ -340,13 +342,11 @@ async function runAttempt(
         })
       throw error
     }
-    if (savedPath !== undefined && index === lastEngine)
-      await tx.query("SELECT set_config('search_path', $1, true)", [savedPath])
   }
 
-  // 7a. Заміри «після» — у нових іменах, після кроків і відновлення
-  // `search_path`. Та сама транзакція й ті самі налаштування сесії, що й
-  // «до», тож текст значень порівнюваний без закріплення GUC
+  // 7a. Заміри «після» — у нових іменах, після кроків. Та сама транзакція
+  // й ті самі налаштування сесії, що й «до», тож текст значень порівнюваний
+  // без закріплення GUC
   await provePreservation(tx, preserved, before, parse)
 
   // 8. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
@@ -574,7 +574,8 @@ async function lockTables(
 }
 
 /**
- * Лінт преамбули: раннер виконує лише відоме (рішення 13 плану П3-2a).
+ * Лінт преамбули: план несе лише відоме (рішення 13, R22 плану П3-2a), бо
+ * П3-2b виконуватиме його як є.
  * Схема артефакту таку пару вже не пропускає, але раннер не покладається на
  * те, що план прийшов через неї.
  */

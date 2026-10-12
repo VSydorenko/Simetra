@@ -8,7 +8,12 @@ import {
   expect,
   it,
 } from "vitest"
-import { compile, loadSqlParser, type PromotionRecord } from "simetra/compiler"
+import {
+  compile,
+  loadSqlParser,
+  promotionRecordHash,
+  type PromotionRecord,
+} from "simetra/compiler"
 import type { CatalogModel, PhysicalTable } from "simetra/model"
 import {
   ApplyConnectionLost,
@@ -783,10 +788,13 @@ describe("executePlan", () => {
         return Object.fromEntries(rows.map((r) => [r.at, r]))
       })
 
-    it("runs engine steps under the preamble search path and restores it", async () => {
+    // R22 плану П3-2a: пара преамбули неподільна; П3-2b виконує її разом
+    // із ревалідацією тіл, а в 2a кроки двигуна йдуть під налаштуваннями
+    // транзакції, як у П3-1
+    it("runs engine steps under the transaction search path although the plan records a preamble", async () => {
       const rows = await seen([{ name: "search_path", value: "pg_catalog" }])
-      expect(rows.engine!.path).toBe("pg_catalog")
       expect(rows.intent!.path).not.toBe("pg_catalog")
+      expect(rows.engine!.path).toBe(rows.intent!.path)
       expect(rows.state!.path).toBe(rows.intent!.path)
     })
 
@@ -795,8 +803,40 @@ describe("executePlan", () => {
         { name: "search_path", value: "pg_catalog" },
         { name: "check_function_bodies", value: "off" },
       ])
-      expect(rows.engine).toMatchObject({ path: "pg_catalog", bodies: "on" })
+      expect(rows.engine).toMatchObject({
+        path: rows.intent!.path,
+        bodies: "on",
+      })
       expect(rows.state!.bodies).toBe("on")
+    })
+
+    it("proves a SQL function whose body names a table of public without schema", async () => {
+      // Під `search_path = pg_catalog` при ввімкненій валідації тіл
+      // `CREATE FUNCTION` упав би: `zz_rows` не знайшлася б (рев'ю I1)
+      const setup = `${BASE};
+        create table public.zz_rows (id int);
+        insert into public.zz_rows values (1), (2);`
+      const steps = [
+        step(
+          "s1",
+          "CREATE FUNCTION app.count_rows() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) FROM zz_rows $$"
+        ),
+      ]
+      const outcome = await inTarget(setup, async (url) =>
+        executePlan(
+          apply,
+          { url },
+          await planFor(url, steps, {
+            preamble: [
+              { name: "search_path", value: "pg_catalog" },
+              { name: "check_function_bodies", value: "off" },
+            ],
+            desiredFingerprint: await desiredFingerprint(setup, steps),
+          }),
+          { ...options, mode: "proof" }
+        )
+      )
+      expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
     })
   })
 
@@ -899,11 +939,13 @@ describe("executePlan", () => {
       return planFor(url, steps, {
         locks: planLocks({ steps, newToOld, foreignKeyTargets: [] }),
         promotion: {
-          recordHash: "d".repeat(64),
+          recordHash: await promotionRecordHash(RECORD),
           record: RECORD,
           permissionItems: [],
           preservation,
-          columns: [{ table: "app.pu", from: "c", to: "d" }],
+          columns: [
+            { table: { schema: "app", name: "pu" }, from: "c", to: "d" },
+          ],
           canonicalNames: [],
           conversions: [],
         },

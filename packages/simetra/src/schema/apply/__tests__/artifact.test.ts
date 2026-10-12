@@ -6,6 +6,7 @@ import {
   PLAN_FORMAT,
   PLATFORM_VERSION,
   parsePlan,
+  planArtifactSchema,
   planFileName,
   serializePlan,
   stampPlan,
@@ -105,11 +106,17 @@ const PROMOTION = (): NonNullable<PlanArtifact["promotion"]> => ({
       ],
     },
   ],
-  columns: [{ table: "party", from: "name", to: "description" }],
+  columns: [
+    {
+      table: { schema: "app", name: "party" },
+      from: "name",
+      to: "description",
+    },
+  ],
   canonicalNames: [
     {
       kind: "constraint",
-      table: "party",
+      table: { schema: "app", name: "party" },
       from: "parties_pkey",
       to: "party_pkey",
     },
@@ -319,6 +326,14 @@ describe("plan artifact", () => {
     expect(PLAN_FORMAT).toBe(2)
   })
 
+  it("holds the current format in the schema itself, not only in parsePlan", async () => {
+    const artifact = await stampPlan(draft())
+    expect(planArtifactSchema.safeParse(artifact).success).toBe(true)
+    expect(
+      planArtifactSchema.safeParse({ ...artifact, format: 1 }).success
+    ).toBe(false)
+  })
+
   it("round-trips a plan with a promotion section", async () => {
     const artifact = await stampPlan(withPromotion())
     const text = serializePlan(artifact)
@@ -350,10 +365,36 @@ describe("plan artifact", () => {
       {
         ...section,
         canonicalNames: [
-          { kind: "trigger", table: "party", from: "a", to: "b" },
+          {
+            kind: "trigger",
+            table: { schema: "app", name: "party" },
+            from: "a",
+            to: "b",
+          },
         ],
       },
-      { ...section, columns: [{ table: "party", from: "a" }] },
+      {
+        ...section,
+        columns: [{ table: { schema: "app", name: "party" }, from: "a" }],
+      },
+      // Таблиця — структурний ключ нового імені (R23): голе ім'я неоднозначне
+      { ...section, columns: [{ table: "party", from: "a", to: "b" }] },
+      {
+        ...section,
+        columns: [
+          {
+            table: { schema: "app", name: "party", note: "x" },
+            from: "a",
+            to: "b",
+          },
+        ],
+      },
+      {
+        ...section,
+        canonicalNames: [
+          { kind: "index", table: "app.party", from: "a", to: "b" },
+        ],
+      },
       {
         ...section,
         permissionItems: [{ token: "access:app.party", summary: "x" }],

@@ -52,6 +52,12 @@ export interface PreservedTable {
 /** Вид канонічного імені, яке намір повертає підоб'єкту таблиці. */
 export const CANONICAL_NAME_KINDS = ["constraint", "index", "sequence"] as const
 
+/** Таблиця секції промоції в новому імені. */
+export interface SectionTable {
+  schema: string
+  name: string
+}
+
 /**
  * Секція промоції артефакту (рішення 11, R7 плану П3-2a). Під `planHash`:
  * дозвіл прийняв саме цей запис, ці пункти й ці перейменування. Пункти
@@ -64,12 +70,16 @@ export interface PromotionSection {
   /** Пункти `access:`, `delete:`, `remove:` з тим, що людина переглядає. */
   permissionItems: PermissionItem[]
   preservation: PreservedTable[]
-  /** Перейменування колонок наміру в порядку його кроків. */
-  columns: { table: string; from: string; to: string }[]
+  /**
+   * Перейменування колонок наміру в порядку його кроків. Таблиця — у новому
+   * імені структурним ключем (R23, R11 плану П3-2a): одиниця може мати
+   * таблиці в різних схемах межі.
+   */
+  columns: { table: SectionTable; from: string; to: string }[]
   /** Канонічні імена підоб'єктів у порядку кроків наміру. */
   canonicalNames: {
     kind: (typeof CANONICAL_NAME_KINDS)[number]
-    table: string
+    table: SectionTable
     from: string
     to: string
   }[]
@@ -83,7 +93,7 @@ export interface PromotionSection {
  * інше, зокрема кроки разом із `lockedTables`, дрейф і `resultCatalog`.
  */
 export interface PlanArtifact {
-  format: number
+  format: typeof PLAN_FORMAT
   platformVersion: string
   engine: EngineIdentity
   fingerprintVersion: number
@@ -107,8 +117,9 @@ export interface PlanArtifact {
    */
   locks: TableLock[]
   /**
-   * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. Раннер виконує
-   * з неї лише `search_path` навколо кроків двигуна (рішення 13).
+   * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. У 2a план її
+   * лише несе під хешем, а раннер не виконує: пара неподільна, і П3-2b
+   * виконує її разом із ревалідацією тіл (R22 плану П3-2a).
    */
   preamble: EngineSetting[]
   /** Секція промоції; `null` — план без промоції. Поле є завжди, як `drift`. */
@@ -118,6 +129,11 @@ export interface PlanArtifact {
 }
 
 const hashSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
+const sectionTableSchema = z.strictObject({
+  schema: z.string(),
+  name: z.string(),
+})
 
 const promotionSectionSchema = z.strictObject({
   recordHash: hashSchema,
@@ -140,12 +156,16 @@ const promotionSectionSchema = z.strictObject({
     })
   ),
   columns: z.array(
-    z.strictObject({ table: z.string(), from: z.string(), to: z.string() })
+    z.strictObject({
+      table: sectionTableSchema,
+      from: z.string(),
+      to: z.string(),
+    })
   ),
   canonicalNames: z.array(
     z.strictObject({
       kind: z.enum(CANONICAL_NAME_KINDS),
-      table: z.string(),
+      table: sectionTableSchema,
       from: z.string(),
       to: z.string(),
     })
@@ -197,7 +217,9 @@ const stepSchema = z.strictObject({
  * Так само `readApplyState` читає `marker.catalog`.
  */
 export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
-  format: z.number().int(),
+  // Ранній вихід `parsePlan` дає іншому формату власну відмову; літерал
+  // тримає ту саму гарантію і в схемі, і в типі для будь-якого читача
+  format: z.literal(PLAN_FORMAT),
   platformVersion: z.string(),
   engine: z.strictObject({ name: z.string(), version: z.string() }),
   fingerprintVersion: z.number().int(),

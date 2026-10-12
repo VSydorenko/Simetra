@@ -12,7 +12,7 @@ import {
   type FingerprintSection,
   type PlanStep,
 } from "simetra/schema"
-import type { PromotionRecord } from "simetra/compiler"
+import { promotionRecordHash, type PromotionRecord } from "simetra/compiler"
 
 /**
  * Раннер транзакції на фейковому порті (план П3-1, задача 8): порядок
@@ -111,13 +111,15 @@ const RECORD: PromotionRecord = {
   contractChanges: [],
 }
 
+const RECORD_HASH = await promotionRecordHash(RECORD)
+
 /** План із секцією промоції: пункт `access:` поза `requiredPermissions`. */
 const promoted: ExecutablePlan = {
   ...plan,
   // Поле лише показ: раннер рахує пункти з секції, тож порожнє не допомагає
   requiredPermissions: [],
   promotion: {
-    recordHash: "d".repeat(64),
+    recordHash: RECORD_HASH,
     record: RECORD,
     permissionItems: [{ token: "access:app.party", summary: ["anon: select"] }],
     preservation: [],
@@ -126,9 +128,6 @@ const promoted: ExecutablePlan = {
     conversions: [],
   },
 }
-
-/** `search_path` транзакції до преамбули — його раннер і повертає. */
-const SESSION_PATH = '"$user", public'
 
 const options: ExecuteOptions = {
   mode: "apply",
@@ -220,15 +219,13 @@ function fakeDb(script: Script = {}) {
                         ? script.ledgerHasApply === true
                           ? [{ format: script.ledgerFormat ?? 1 }]
                           : []
-                        : label === "save-path"
-                          ? [{ path: SESSION_PATH }]
-                          : sql.includes("encode(sha256")
-                            ? [
-                                stepsRan
-                                  ? DESIRED.sections
-                                  : (script.targetSections ?? TARGET.sections),
-                              ]
-                            : []
+                        : sql.includes("encode(sha256")
+                          ? [
+                              stepsRan
+                                ? DESIRED.sections
+                                : (script.targetSections ?? TARGET.sections),
+                            ]
+                          : []
           return rows as R[]
         },
       }
@@ -260,12 +257,9 @@ describe("executePlan", () => {
       "state",
       'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
-      "save-path",
-      "set-path",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
-      "set-path",
       "fingerprint",
       "marker",
       "ledger",
@@ -346,57 +340,43 @@ describe("executePlan", () => {
     })
   })
 
-  it("sets the preamble search path around the engine steps only", async () => {
+  // R22 плану П3-2a: пара преамбули неподільна, тож у 2a план її лише несе
+  it("runs every step and guard under the transaction settings although the plan records a preamble", async () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
     })
-    const engineSteps = plan.steps.map((s, i) => ({ ...s, id: `s${i + 2}` }))
+    const guard =
+      "SELECT count(*) AS lost FROM app.t WHERE c IS NOT NULL AND c::int::text IS DISTINCT FROM c"
+    const engineSteps = plan.steps.map((s, i) => ({
+      ...s,
+      id: `s${i + 2}`,
+      guards: i === 0 ? [guard] : [],
+    }))
     const { db, log, calls } = spied()
     const outcome = await executePlan(
       db,
       target,
-      { ...plan, steps: [intent, ...engineSteps] },
+      {
+        ...plan,
+        steps: [intent, ...engineSteps],
+        preamble: [
+          { name: "search_path", value: "pg_catalog" },
+          { name: "check_function_bodies", value: "off" },
+        ],
+      },
       options
     )
     expect(outcome).toMatchObject({ status: "committed" })
-    const at = (label: string) => log.indexOf(label)
-    // Крок наміру — під налаштуваннями транзакції, до преамбули
-    expect(at("ALTER TABLE app.t RENAME TO t2")).toBeLessThan(at("save-path"))
-    expect(log.slice(at("save-path"), at("save-path") + 3)).toEqual([
-      "save-path",
-      "set-path",
-      "ALTER TABLE app.t ADD COLUMN d int",
-    ])
-    expect(log.lastIndexOf("set-path")).toBe(
-      log.indexOf('ALTER TABLE app."x.y" ADD COLUMN e int') + 1
-    )
-    const sets = calls.filter((c) => c.sql.includes("set_config('search_path'"))
-    expect(sets.map((c) => c.params)).toEqual([["pg_catalog"], [SESSION_PATH]])
-    expect(log).not.toContain("function-bodies")
-  })
-
-  it("runs the guards of an engine step under the preamble search path", async () => {
-    const guard =
-      "SELECT count(*) AS lost FROM app.t WHERE c IS NOT NULL AND c::int::text IS DISTINCT FROM c"
-    const guarded = step("s1", "ALTER TABLE app.t ALTER COLUMN c TYPE int", {
-      guards: [guard],
-    })
-    const { db, calls } = spied()
-    // Результат не важить (фейк не знає цього кроку): лише порядок операторів
-    await executePlan(db, target, { ...plan, steps: [guarded] }, options)
-    const sqls = calls.map((c) => c.sql)
-    const setAt = sqls.findIndex((sql) =>
-      sql.includes("set_config('search_path'")
-    )
-    expect(setAt).toBeGreaterThanOrEqual(0)
-    expect(sqls.indexOf(guard)).toBeGreaterThan(setAt)
-  })
-
-  it("does not touch the search path without a preamble", async () => {
-    const { db, log } = fakeDb()
-    await executePlan(db, target, { ...plan, preamble: [] }, options)
     expect(log).not.toContain("save-path")
     expect(log).not.toContain("set-path")
+    expect(log).not.toContain("function-bodies")
+    expect(calls.some((c) => c.params?.includes("pg_catalog") === true)).toBe(
+      false
+    )
+    // Сторож повністю кваліфікований і йде перед своїм кроком без преамбули
+    expect(log.indexOf(guard)).toBe(
+      log.indexOf("ALTER TABLE app.t ADD COLUMN d int") - 1
+    )
   })
 
   it("leaves function body validation on although the preamble turns it off", async () => {
@@ -488,12 +468,29 @@ describe("executePlan", () => {
         c.sql.startsWith("INSERT INTO simetra.ledger")
       )!
       expect(ledger.params).toContain(
-        JSON.stringify({ hash: "d".repeat(64), record: RECORD })
+        JSON.stringify({ hash: RECORD_HASH, record: RECORD })
       )
     }
   )
 
-  it("measures preservation before the steps and after the restored search path", async () => {
+  it("refuses before BEGIN a promotion whose hash is not its record's", async () => {
+    const { db, log } = fakeDb()
+    const run = executePlan(
+      db,
+      target,
+      {
+        ...promoted,
+        promotion: { ...promoted.promotion!, recordHash: "d".repeat(64) },
+      },
+      { ...options, mode: "rehearse", allow: ["access:app.party"] }
+    )
+    // Ledger виводить із хешу «запис застосовано»: розбіжність із записом —
+    // зламаний конвеєр плану, а не стан цілі, тож це виняток, а не відмова
+    await expect(run).rejects.toThrow(/recordHash/)
+    expect(log).toEqual([])
+  })
+
+  it("measures preservation before the steps and after them", async () => {
     const { db, log } = fakeDb()
     const outcome = await executePlan(
       db,
@@ -525,12 +522,9 @@ describe("executePlan", () => {
     ).toEqual([
       "fingerprint",
       "measure app.t",
-      "save-path",
-      "set-path",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
-      "set-path",
       "measure app.u",
       "fingerprint",
       "marker",

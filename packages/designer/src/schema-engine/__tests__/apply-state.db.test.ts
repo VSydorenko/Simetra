@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   canonicalSnapshot,
   compile,
+  promotionRecordHash,
   type CompiledModel,
   type PromotionRecord,
 } from "simetra/compiler"
@@ -405,7 +406,7 @@ describe("readAppliedPromotions", () => {
         {
           ...artifact,
           promotion: {
-            recordHash: "a".repeat(64),
+            recordHash: await promotionRecordHash(RECORD),
             record: RECORD,
             permissionItems: [],
             preservation: [],
@@ -429,6 +430,6 @@ describe("readAppliedPromotions", () => {
       )
     )
     expect(outcome.run).toMatchObject({ status: "committed" })
-    expect(outcome.hashes).toEqual(new Set(["a".repeat(64)]))
+    expect(outcome.hashes).toEqual(new Set([await promotionRecordHash(RECORD)]))
   })
 })
