@@ -1,4 +1,5 @@
 export {
+  foreignSequenceRefusals,
   promotionTransition,
   type PromotionInput,
   type TransitionVerdict,
@@ -25,3 +26,5 @@ export {
   readAccessDependents,
   type AccessChange,
 } from "./access"
+export { readWritePath } from "./write-path"
+export type { CanonicalRename } from "./equivalence"

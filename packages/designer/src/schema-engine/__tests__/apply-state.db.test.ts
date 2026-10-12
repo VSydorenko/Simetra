@@ -391,7 +391,8 @@ describe("readAppliedPromotions", () => {
           scratch: createApplyDatabase({ readOnly: false }),
         },
         model,
-        { target: { url } }
+        { target: { url } },
+        []
       )
       if (plan.status !== "planned")
         throw new Error(

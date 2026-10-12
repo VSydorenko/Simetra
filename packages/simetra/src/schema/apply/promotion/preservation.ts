@@ -96,6 +96,9 @@ export function preservationPlan(
   })
 }
 
+/** Конкатенація з `pg_catalog`, як і решта заміру: від `search_path` не залежить. */
+const CONCAT = "OPERATOR(pg_catalog.||)"
+
 /**
  * Один прохід по таблиці: `count(*)` і для кожної колонки сума хешів
  * «ключ:значення». `NULL` кодується окремою ознакою `n`, значення — `v` і
@@ -110,9 +113,9 @@ export function preservationQuery(
   const key = t.key[side]
   const sums = t.columns.map((c, i) => {
     const expr = c[side]
-    return `sum(hashtextextended(${key}::text || ':' || CASE WHEN (${expr}) IS NULL THEN 'n' ELSE 'v' || (${expr})::text END, 0)::numeric) AS c${i}`
+    return `pg_catalog.sum(pg_catalog.hashtextextended(${key}::pg_catalog.text ${CONCAT} ':' ${CONCAT} CASE WHEN (${expr}) IS NULL THEN 'n' ELSE 'v' ${CONCAT} (${expr})::pg_catalog.text END, 0)::pg_catalog.numeric) AS c${i}`
   })
-  return `${["SELECT count(*) AS rows", ...sums].join(", ")} FROM ${qualified(t[side])}`
+  return `${["SELECT pg_catalog.count(*) AS rows", ...sums].join(", ")} FROM ${qualified(t[side])}`
 }
 
 /**
@@ -124,7 +127,7 @@ export function castProbeQuery(
   t: PreservedTable,
   column: PreservedTable["columns"][number]
 ): string {
-  return `SELECT count(${column.before}) AS probe FROM ${qualified(t.before)}`
+  return `SELECT pg_catalog.count(${column.before}) AS probe FROM ${qualified(t.before)}`
 }
 
 const qualified = ({ schema, table }: PreservedTable["before"]): string =>

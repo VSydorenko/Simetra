@@ -205,6 +205,13 @@ export async function executePlan(
     throw new Error(
       "the promotion section's recordHash is not the hash of its record"
     )
+  // Порожній чи неповний перелік збереження тихо пропустив би доказ рядків і
+  // значень (рішення 6): кожна таблиця запису — рівно один замір у її
+  // нових іменах. Розбіжність — так само зламаний конвеєр плану
+  if (plan.promotion !== null && !preservesEveryTable(plan.promotion))
+    throw new Error(
+      "the promotion section does not preserve exactly the tables of its record"
+    )
 
   // Поза артефактом і його хешем: той самий план, застосований удруге, —
   // інше застосування з іншим рядком ledger
@@ -254,6 +261,23 @@ export async function executePlan(
       await sleep(backoff(attempt, timeouts.backoffMs))
     }
   }
+}
+
+/** Рівно один замір на кожну таблицю запису, за новим ім'ям, і нічого більше. */
+function preservesEveryTable(
+  section: NonNullable<ExecutablePlan["promotion"]>
+): boolean {
+  const { tables } = section.record
+  const { preservation } = section
+  return (
+    preservation.length === tables.length &&
+    tables.every(
+      (t) =>
+        preservation.filter(
+          (p) => p.after.schema === t.schema && p.after.table === t.to
+        ).length === 1
+    )
+  )
 }
 
 /**

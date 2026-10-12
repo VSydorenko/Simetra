@@ -117,6 +117,7 @@ function intent(
 ): RenameIntent {
   return {
     steps: [],
+    columns: [],
     tablesNewToOld: new Map(
       (over.tables ?? []).map(([to, from]) => [
         tableKey("app", to),
@@ -1016,11 +1017,24 @@ describe("unrealizedRenames", () => {
               name: "simetra_retired_1",
             },
           ],
+          // Адаптер називає вжитим саму таблицю: втрату даних несе знята
+          // вилучена колонка, а не перейменована таблиця
+          consumed: [{ kind: "table", schema: "app", name: "catalog_items" }],
           dataLoss: true,
         }
       ),
     ]
     expect(unrealizedRenames(steps, renames, renamed)).toEqual([])
+  })
+
+  it("refuses data loss on a renamed table that no dropped column explains", () => {
+    const lossy = step("s4", "TRUNCATE app.catalog_items", {
+      consumed: [{ kind: "table", schema: "app", name: "catalog_items" }],
+      dataLoss: true,
+    })
+    expect(unrealizedRenames([lossy], renames, renamed)[0]?.params).toEqual({
+      objects: "app.catalog_items",
+    })
   })
 })
 

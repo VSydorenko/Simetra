@@ -260,15 +260,6 @@ function isPlainUsing(
   )
 }
 
-/** Зміни типу колонок кроку; для кроку, якому сторожа не побудувати, — ті, що до проблеми. */
-export function typeChanges(
-  step: Pick<PlanStep, "id" | "sql">,
-  source: CatalogModel,
-  parse: SqlParser
-): TypeChange[] {
-  return inspect(step, source, parse).changes
-}
-
 const qualifiedTable = (schema: string, table: string): string =>
   `${quoteIdent(schema)}.${quoteIdent(table)}`
 
@@ -281,7 +272,12 @@ function guardSql(change: TypeChange): string {
   return `SELECT count(*) AS lost FROM ${qualifiedTable(change.schema, change.table)} WHERE ${column} IS NOT NULL AND (${column}::${change.to})::${change.from} IS DISTINCT FROM ${column}`
 }
 
-export type GuardResult = { guards: string[] } | { refusal: EngineDiagnostic }
+/**
+ * Сторожі кроку разом зі змінами типу, з яких їх побудовано (зокрема без
+ * втрат — їх теж питає детектор залежних): один розбір кроку на обидва.
+ */
+export type GuardResult =
+  { guards: string[]; changes: TypeChange[] } | { refusal: EngineDiagnostic }
 
 /**
  * Сторожі звуження типу кроку (рішення 5 плану П3-2a): кожна зміна типу
@@ -303,7 +299,7 @@ export function typeGuards(
         reason: problem,
       }),
     }
-  return { guards: changes.filter((c) => !c.lossless).map(guardSql) }
+  return { guards: changes.filter((c) => !c.lossless).map(guardSql), changes }
 }
 
 /**

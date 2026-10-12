@@ -9,9 +9,14 @@ import {
   it,
 } from "vitest"
 import {
+  applyChanges,
   canonicalSnapshot,
   compile,
+  promoteObject,
+  promotionRecordHash,
   type CompiledModel,
+  type PromoteInput,
+  type PromotionRecord,
 } from "simetra/compiler"
 import {
   ApplyConnectionLost,
@@ -24,6 +29,7 @@ import {
   type EngineScope,
   type PlanArtifact,
   type PlanOutcome,
+  type PromotionInput,
   type SchemaEngine,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
@@ -31,8 +37,13 @@ import {
   acceptDebt,
   attribute,
   catalog,
+  CONTACT_FILE,
+  COUNTERPARTY_FILE,
+  COUNTERPARTY_ID,
+  counterpartyMapping,
   customTable,
   metaFiles,
+  promotionProject,
   project,
   shadowDatabaseCount,
   testDatabaseUrl,
@@ -155,7 +166,7 @@ const plan = (
   url: string,
   model: CompiledModel,
   over: SchemaEngine = engine
-): Promise<PlanOutcome> => buildPlan(over, dbs, model, { target: { url } })
+): Promise<PlanOutcome> => buildPlan(over, dbs, model, { target: { url } }, [])
 
 function planned(outcome: PlanOutcome): PlanArtifact {
   if (outcome.status !== "planned")
@@ -930,9 +941,13 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       }
       const outcome = await inTarget(EMPTY, async (url) => {
         await establish(url, before)
-        return buildPlan(engine, { ...dbs, scratch: losing }, after, {
-          target: { url },
-        })
+        return buildPlan(
+          engine,
+          { ...dbs, scratch: losing },
+          after,
+          { target: { url } },
+          []
+        )
       })
       expect(outcome.status).toBe("refused")
       expect(errors(outcome)).toEqual(["engine.clone-failed"])
@@ -1026,6 +1041,446 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
           (d) => d.code === "plan.type-guard-unsupported"
         )?.params
       ).toEqual({ step: "s1", reason: "equality" })
+    })
+  })
+
+  describe("promotion", () => {
+    type Json = Record<string, unknown>
+
+    /**
+     * Тека фікстури без модуля й рахунку, з таблицею контактів як ТЧ.
+     * Коментар таблиці `promote` переносить в опис виду, а таблиця виду
+     * коментаря не має: план назвав би його зняття непокритим, тож тут
+     * коментаря немає.
+     */
+    function contactsProject(): Map<string, string> {
+      const files = promotionProject({
+        module: false,
+        contacts: true,
+        invoice: false,
+      })
+      const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
+      delete party.comment
+      files.set(COUNTERPARTY_FILE, JSON.stringify(party))
+      const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
+      ;(raw.columns as Json[]).push({
+        id: uuid(7105),
+        name: "lineNumber",
+        physicalName: "line_number",
+        type: "Integer",
+        notNull: true,
+      })
+      files.set(CONTACT_FILE, JSON.stringify(raw))
+      return files
+    }
+
+    /** Мапінг без кроку `fill` і з ТЧ `contacts`. */
+    function contactsMapping(): PromoteInput {
+      const mapping = structuredClone(
+        counterpartyMapping({ module: false, fill: false })
+      )
+      mapping.tabularSections = [
+        {
+          table: "CounterpartyContact",
+          name: "contacts",
+          columns: {
+            id: { to: "standard", name: "ref" },
+            counterpartyId: { to: "standard", name: "parent" },
+            lineNumber: { to: "standard", name: "lineNumber" },
+            phone: {
+              to: "attribute",
+              collection: "attributes",
+              element: { name: "phone" },
+            },
+          },
+        },
+      ]
+      return mapping
+    }
+
+    interface Promoted {
+      before: CompiledModel
+      after: CompiledModel
+      afterFiles: Map<string, string>
+      record: PromotionRecord
+      input: PromotionInput
+    }
+
+    async function promoted(
+      files: Map<string, string> = contactsProject(),
+      mapping: PromoteInput = contactsMapping()
+    ): Promise<Promoted> {
+      const compiledFiles = async (f: ReadonlyMap<string, string>) => {
+        const result = await compile(f)
+        expect(
+          result.diagnostics.filter((d) => d.severity === "error")
+        ).toEqual([])
+        return result.model!
+      }
+      const before = await compiledFiles(files)
+      let n = 900_000
+      const result = await promoteObject(files, mapping, {
+        schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+        newId: () => uuid(++n),
+      })
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      const record = result.record!
+      const after = applyChanges(files, result.changes)
+      return {
+        before,
+        after: await compiledFiles(after),
+        afterFiles: after,
+        record,
+        input: { record, file: `plans/${COUNTERPARTY_ID}.promotion.json` },
+      }
+    }
+
+    /** Ціль у стані до промоції, `drift` поверх неї, і план стану після. */
+    async function planPromotion(
+      p: Promoted,
+      o: {
+        drift?: string
+        superuser?: boolean
+        records?: PromotionInput[]
+      } = {}
+    ): Promise<PlanOutcome> {
+      return inTarget(EMPTY, async (url) => {
+        await establish(url, p.before)
+        if (o.drift !== undefined)
+          await other(o.superuser === true ? asSuperuser(url) : url, o.drift)
+        return buildPlan(
+          engine,
+          dbs,
+          p.after,
+          { target: { url } },
+          o.records ?? [p.input]
+        )
+      })
+    }
+
+    /** Стара таблиця фікстури, як її бачить ціль до промоції. */
+    const OLD = "app.counterparties"
+
+    const params = (outcome: PlanOutcome, code: string) =>
+      outcome.diagnostics.filter((d) => d.code === code).map((d) => d.params)
+
+    it("plans a promotion with intent steps first and proves it on a copy", async () => {
+      const p = await promoted()
+      const outcome = await planPromotion(p)
+      const artifact = planned(outcome)
+
+      // Кроки наміру — першими: таблиця, колонки, потім канонічні імена
+      const intent = artifact.steps.filter((s) => s.origin === "intent")
+      expect(artifact.steps.slice(0, intent.length)).toEqual(intent)
+      expect(intent.map((s) => s.sql)).toEqual([
+        "ALTER TABLE app.counterparties RENAME TO counterparty",
+        "ALTER TABLE app.counterparty RENAME COLUMN created_at TO simetra_retired_1",
+        "ALTER TABLE app.counterparty RENAME COLUMN name TO description",
+        "ALTER TABLE app.counterparty RENAME COLUMN inn TO tax_id",
+        "ALTER TABLE app.counterparty RENAME COLUMN is_deleted TO archived",
+        "ALTER TABLE app.counterparty_contacts RENAME COLUMN counterparty_id TO parent_id",
+        "ALTER TABLE app.counterparty RENAME CONSTRAINT counterparties_pkey TO counterparty_pkey",
+        "ALTER TABLE app.counterparty_contacts RENAME CONSTRAINT counterparty_contacts_counterparty_id_fkey TO counterparty_contacts_parent_id_fkey",
+      ])
+      // Нумерація наскрізна: кроки двигуна йдуть за кроками наміру
+      expect(artifact.steps.map((s) => s.id)).toEqual(
+        artifact.steps.map((_, i) => `s${i + 1}`)
+      )
+      // PK і FK ТЧ — перейменування, а не DROP/ADD; таблиці не перестворено
+      const engine = artifact.steps.filter((s) => s.origin === "engine")
+      expect(
+        engine.filter((s) =>
+          /pkey|parent_id_fkey|DROP TABLE|CREATE TABLE/.test(s.sql)
+        )
+      ).toEqual([])
+      expect(stepMatching(artifact, /DROP COLUMN/).map((s) => s.sql)).toEqual([
+        'ALTER TABLE "app"."counterparty" DROP COLUMN "simetra_retired_1"',
+      ])
+
+      const section = artifact.promotion!
+      expect(section.recordHash).toBe(await promotionRecordHash(p.record))
+      expect(section.record).toEqual(p.record)
+      const counterparty = { schema: "app", name: "counterparty" }
+      const contacts = { schema: "app", name: "counterparty_contacts" }
+      expect(section.columns).toEqual([
+        { table: counterparty, from: "created_at", to: "simetra_retired_1" },
+        { table: counterparty, from: "name", to: "description" },
+        { table: counterparty, from: "inn", to: "tax_id" },
+        { table: counterparty, from: "is_deleted", to: "archived" },
+        { table: contacts, from: "counterparty_id", to: "parent_id" },
+      ])
+      expect(section.canonicalNames).toEqual([
+        {
+          kind: "constraint",
+          table: counterparty,
+          from: "counterparties_pkey",
+          to: "counterparty_pkey",
+        },
+        {
+          kind: "constraint",
+          table: contacts,
+          from: "counterparty_contacts_counterparty_id_fkey",
+          to: "counterparty_contacts_parent_id_fkey",
+        },
+      ])
+      // Кожна таблиця запису — один замір; колонка зі зміною типу несе крок
+      expect(
+        section.preservation.map((t) => [t.before.table, t.after.table])
+      ).toEqual(p.record.tables.map((t) => [t.from, t.to]))
+      const retype = stepMatching(artifact, /ALTER COLUMN "description" TYPE/)
+      expect(retype).toHaveLength(1)
+      expect(p.record.typeChanges.map((t) => t.column)).toEqual(["description"])
+      expect(
+        section.preservation
+          .flatMap((t) => t.columns)
+          .filter((c) => c.typeChangeStep !== undefined)
+      ).toEqual([
+        {
+          before: "(name::character varying(150))",
+          after: "description",
+          typeChangeStep: retype[0]!.id,
+        },
+      ])
+      expect(section.permissionItems.map((i) => i.token)).toEqual([
+        "access:app.counterparty_contacts",
+        "remove:app.counterparty",
+      ])
+      expect(artifact.requiredPermissions.slice(0, 2)).toEqual([
+        "access:app.counterparty_contacts",
+        "remove:app.counterparty",
+      ])
+      // Блокування — у старих іменах, до кроку наміру
+      expect(artifact.locks).toEqual([
+        { schema: "app", name: "counterparties", mode: "accessExclusive" },
+        {
+          schema: "app",
+          name: "counterparty_contacts",
+          mode: "accessExclusive",
+        },
+      ])
+      expect(
+        outcome.diagnostics.find(
+          (d) => d.code === "plan.promotion-commit-pending"
+        )?.severity
+      ).toBe("warning")
+      expect(errors(outcome)).toEqual([])
+    })
+
+    it("locks a foreign key target outside the unit in SHARE ROW EXCLUSIVE mode", async () => {
+      const files = contactsProject()
+      files.set(
+        "catalogs/Region/Region.meta.json",
+        JSON.stringify(catalog("Region", { id: uuid(7301) }))
+      )
+      const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
+      ;(party.columns as Json[]).push({
+        id: uuid(7007),
+        name: "regionId",
+        physicalName: "region_id",
+        type: "UUID",
+      })
+      party.foreignKeys = [
+        {
+          name: "counterparties_region_id_fkey",
+          columns: ["regionId"],
+          references: {
+            object: { kind: "Catalog", name: "Region" },
+            columns: ["ref"],
+          },
+        },
+      ]
+      files.set(COUNTERPARTY_FILE, JSON.stringify(party))
+      const mapping = contactsMapping()
+      mapping.columns.regionId = {
+        to: "attribute",
+        collection: "attributes",
+        element: { name: "region" },
+      }
+      const p = await promoted(files, mapping)
+      const artifact = planned(await planPromotion(p))
+      const region = p.after.physical.tables.find(
+        (t) => t.origin.objectId === uuid(7301)
+      )!
+      expect(artifact.locks).toContainEqual({
+        schema: region.schema,
+        name: region.name,
+        mode: "shareRowExclusive",
+      })
+      expect(artifact.locks.at(-1)?.mode).toBe("shareRowExclusive")
+    })
+
+    it("refuses a plan whose SQL function body is broken", async () => {
+      // Тінь вантажить тіла без перевірки, а раннер перевіряє: тіло читає
+      // колонку за старим ім'ям, і доказ на копії падає на кроці функції
+      const p = await promoted()
+      const files = await acceptDebt(
+        new Map([
+          ...p.afterFiles,
+          [
+            "sql/app/broken.sql",
+            "CREATE FUNCTION app.party_inns() RETURNS bigint LANGUAGE sql STABLE AS $fn$ SELECT count(inn) FROM app.counterparty $fn$;\n",
+          ],
+        ])
+      )
+      const result = await compile(files)
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      const outcome = await planPromotion({ ...p, after: result.model! })
+      expect(outcome.status).toBe("refused")
+      expect(params(outcome, "apply.step-failed")).toEqual([
+        expect.objectContaining({ sqlstate: "42703" }),
+      ])
+    })
+
+    it("compares owners of the renamed tables through the intent", async () => {
+      // Тінь називає таблицю новим іменем, ціль — старим: без перекладу
+      // через намір чужий власник прийнятої таблиці пройшов би непоміченим
+      const outcome = await planPromotion(await promoted(), {
+        drift: `GRANT CREATE ON SCHEMA app TO ${OWNER};
+          ALTER TABLE ${OLD} OWNER TO ${OWNER}`,
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.owner-mismatch"])
+      expect(params(outcome, "plan.owner-mismatch")[0]?.objects).toMatch(
+        new RegExp(
+          `^relation app\\.counterparties \\(owner ${OWNER}, expected `
+        )
+      )
+    })
+
+    it("refuses a transition when no record is passed", async () => {
+      const p = await promoted()
+      const outcome = await planPromotion(p, { records: [] })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.promotion-record-missing"])
+    })
+
+    it("refuses a promotion when an API role can write the adopted table", async () => {
+      const outcome = await planPromotion(await promoted(), {
+        drift: `GRANT INSERT ON ${OLD} TO authenticated`,
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.write-path"])
+      expect(params(outcome, "plan.write-path")).toEqual([
+        {
+          table: "app.counterparties, app.counterparty_contacts",
+          detail: "grant INSERT to authenticated on app.counterparties",
+        },
+      ])
+    })
+
+    it.each([
+      [
+        "a column-level write grant",
+        `GRANT UPDATE (name) ON ${OLD} TO authenticated`,
+        "column grant UPDATE to authenticated on app.counterparties",
+      ],
+      [
+        "schema default privileges",
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT INSERT ON TABLES TO anon",
+        "in schema app grant INSERT to anon",
+      ],
+      [
+        "global default privileges of the applying role",
+        "ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO authenticated",
+        "grant INSERT to authenticated",
+      ],
+      [
+        "an insert policy",
+        `CREATE POLICY p ON ${OLD} FOR INSERT TO authenticated WITH CHECK (true)`,
+        "policy app.counterparties.p (INSERT)",
+      ],
+      [
+        "a grant to PUBLIC",
+        `GRANT DELETE ON ${OLD} TO PUBLIC`,
+        "grant DELETE to anon on app.counterparties",
+      ],
+      [
+        "TRUNCATE",
+        `GRANT TRUNCATE ON ${OLD} TO service_role`,
+        "grant TRUNCATE to service_role on app.counterparties",
+      ],
+    ])("refuses through %s", async (_, drift, detail) => {
+      const outcome = await planPromotion(await promoted(), { drift })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.write-path"])
+      expect(params(outcome, "plan.write-path")[0]?.detail).toContain(detail)
+    })
+
+    it.each([
+      [
+        // `OWNED BY` і `SET SCHEMA` таку пару не дають (послідовність мусить
+        // бути в схемі таблиці), але каталог її не забороняє: залежність
+        // вписано прямо, як її лишив би інший шлях
+        "OWNED BY",
+        `CREATE SCHEMA seq; CREATE SEQUENCE seq.party_numbers;
+         INSERT INTO pg_catalog.pg_depend
+           (classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype)
+         SELECT 'pg_class'::regclass, 'seq.party_numbers'::regclass, 0,
+           'pg_class'::regclass, a.attrelid, a.attnum, 'a'
+         FROM pg_catalog.pg_attribute a
+         WHERE a.attrelid = '${OLD}'::regclass AND a.attname = 'inn'`,
+        true,
+      ],
+      [
+        "DEFAULT nextval",
+        `CREATE SCHEMA seq; CREATE SEQUENCE seq.party_numbers;
+         ALTER TABLE ${OLD} ALTER COLUMN inn SET DEFAULT nextval('seq.party_numbers')::text`,
+        false,
+      ],
+    ])(
+      "refuses a sequence outside the unit schema through %s",
+      async (_, drift, superuser) => {
+        const outcome = await planPromotion(await promoted(), {
+          drift,
+          superuser,
+        })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.promotion-unsupported"])
+        expect(params(outcome, "plan.promotion-unsupported")).toEqual([
+          {
+            objectId: COUNTERPARTY_ID,
+            file: `plans/${COUNTERPARTY_ID}.promotion.json`,
+            reason: "sequenceSchema",
+            table: "app.counterparties",
+            column: "inn",
+            sequence: "seq.party_numbers",
+          },
+        ])
+      }
+    )
+
+    it("plans a sequence in the unit schema without the refusal", async () => {
+      // Та сама послідовність у схемі таблиці — справа канонічних імен і
+      // класів видалень, а не відмови виявлення
+      const outcome = await planPromotion(await promoted(), {
+        drift:
+          "CREATE SEQUENCE app.party_numbers OWNED BY app.counterparties.inn",
+      })
+      expect(
+        params(outcome, "plan.promotion-unsupported").map((d) => d.reason)
+      ).not.toContain("sequenceSchema")
+      expect(outcome.status).toBe("planned")
+    })
+
+    it("plans unchanged files without a promotion as P3-1 did", async () => {
+      const p = await promoted()
+      // Свіжа ціль: перехід не виявлено, запис — не для неї (рядок 9)
+      const [without, withRecord] = await inTarget(EMPTY, async (url) => [
+        await buildPlan(engine, dbs, p.before, { target: { url } }, []),
+        await buildPlan(engine, dbs, p.before, { target: { url } }, [p.input]),
+      ])
+      const a = planned(without!)
+      const b = planned(withRecord!)
+      expect(a.promotion).toBeNull()
+      expect(b.promotion).toBeNull()
+      expect(b.steps).toEqual(a.steps)
+      expect(b.planHash).toBe(a.planHash)
+      expect(codes(withRecord!)).toContain("plan.promotion-not-applicable")
+      expect(codes(without!)).not.toContain("plan.promotion-commit-pending")
     })
   })
 })

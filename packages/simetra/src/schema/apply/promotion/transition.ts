@@ -19,6 +19,7 @@ import {
 } from "simetra/model"
 import type { EngineDiagnostic } from "../../engine"
 import { applyDiagnostic } from "../diagnostic"
+import type { ApplyTransaction } from "../port"
 import type { ApplyState, MarkerRecord } from "../state"
 import { tableKey } from "../table-key"
 
@@ -41,6 +42,11 @@ export type TransitionVerdict =
        * дозволу `delete:*` (рішення 15 плану П3-2a).
        */
       facts: PromotionFacts
+      /**
+       * Фізичні таблиці стану «до» зі знімка marker: з них заміри збереження
+       * беруть первинний ключ (рішення 6), а не з живої цілі.
+       */
+      source: PhysicalTable[]
       diagnostics: EngineDiagnostic[]
     }
 
@@ -369,6 +375,7 @@ export async function promotionTransition(p: {
       record: input.record,
       recordHash: outcome.recordHash,
       facts: outcome.facts,
+      source: before.tables,
       diagnostics,
     }
   }
@@ -407,4 +414,77 @@ function verdictOf(
   return promotion === undefined
     ? { status: "none", diagnostics }
     : { ...promotion, diagnostics }
+}
+
+/**
+ * Колонки таблиць одиниці, що залежать від послідовності поза схемою своєї
+ * таблиці (R17 плану П3-2a): `OWNED BY` (`pg_depend` `a`) чи `DEFAULT
+ * nextval` (`pg_attrdef` → послідовність, `n`). Канонічне ім'я шукається
+ * лише в схемі таблиці (рішення 4), тож таку послідовність двигун зняв би й
+ * створив наново — тихо скинувши лічильник.
+ */
+const FOREIGN_SEQUENCES_SQL = `
+with t as (
+  select c.oid, c.relnamespace as nsp, x.schema, x.name
+  from pg_catalog.json_to_recordset($1::pg_catalog.json) as x(schema text, name text)
+  join pg_catalog.pg_namespace n on n.nspname = x.schema
+  join pg_catalog.pg_class c on c.relnamespace = n.oid and c.relname = x.name
+), dep as (
+  select t.oid as relid, t.schema, t.name, t.nsp, d.refobjsubid as attnum,
+    d.objid as seq
+  from t join pg_catalog.pg_depend d
+    on d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
+   and d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+   and d.refobjid = t.oid and d.deptype = 'a'
+  union
+  select t.oid, t.schema, t.name, t.nsp, ad.adnum, d.refobjid
+  from t join pg_catalog.pg_attrdef ad on ad.adrelid = t.oid
+  join pg_catalog.pg_depend d
+    on d.classid = 'pg_catalog.pg_attrdef'::pg_catalog.regclass
+   and d.objid = ad.oid
+   and d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+   and d.deptype = 'n'
+)
+select distinct
+  pg_catalog.format('%s.%s', pg_catalog.quote_ident(dep.schema), pg_catalog.quote_ident(dep.name)) as "table",
+  a.attname::text as "column",
+  pg_catalog.format('%s.%s', pg_catalog.quote_ident(sn.nspname), pg_catalog.quote_ident(s.relname)) as "sequence"
+from dep
+join pg_catalog.pg_class s on s.oid = dep.seq and s.relkind = 'S' and s.relnamespace <> dep.nsp
+join pg_catalog.pg_namespace sn on sn.oid = s.relnamespace
+join pg_catalog.pg_attribute a on a.attrelid = dep.relid and a.attnum = dep.attnum
+`
+
+/**
+ * Відмови `plan.promotion-unsupported` (`reason: "sequenceSchema"`) за
+ * послідовностями поза схемою таблиці одиниці — на рівні виявлення, до diff
+ * двигуна, як `primaryKey`. Таблиці — у старих іменах, як їх бачить ціль;
+ * викликач відкриває транзакцію `READ ONLY` на цілі.
+ */
+export async function foreignSequenceRefusals(
+  tx: ApplyTransaction,
+  { record, file }: PromotionInput
+): Promise<EngineDiagnostic[]> {
+  const rows = await tx.query<{
+    table: string
+    column: string
+    sequence: string
+  }>(FOREIGN_SEQUENCES_SQL, [
+    JSON.stringify(
+      record.tables.map((t) => ({ schema: t.schema, name: t.from }))
+    ),
+  ])
+  return rows
+    .map((r) => ({ ...r, key: canonicalize([r.table, r.column, r.sequence]) }))
+    .sort((a, b) => byCodeUnit(a.key, b.key))
+    .map(({ table, column, sequence }) =>
+      error("plan.promotion-unsupported", {
+        objectId: record.objectId,
+        file,
+        reason: "sequenceSchema",
+        table,
+        column,
+        sequence,
+      })
+    )
 }

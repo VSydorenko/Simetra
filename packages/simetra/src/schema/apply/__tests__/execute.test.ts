@@ -129,6 +129,19 @@ const promoted: ExecutablePlan = {
   },
 }
 
+/**
+ * Запис з однією таблицею `app.t → app.u` і його хеш: секція зі
+ * збереженням мусить мати рівно один замір на кожну таблицю запису.
+ */
+const TABLED: PromotionRecord = {
+  ...RECORD,
+  tables: [{ id: RECORD.objectId, schema: "app", from: "t", to: "u" }],
+}
+const tabled = {
+  record: TABLED,
+  recordHash: await promotionRecordHash(TABLED),
+}
+
 const options: ExecuteOptions = {
   mode: "apply",
   planHash: "p".repeat(64),
@@ -169,7 +182,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("hashtextextended"))
     return `measure ${sql.slice(sql.lastIndexOf(" FROM ") + 6)}`
   if (sql.includes(" AS probe"))
-    return `probe ${sql.slice("SELECT count(".length, sql.indexOf(") AS probe"))}`
+    return `probe ${sql.slice("SELECT pg_catalog.count(".length, sql.indexOf(") AS probe"))}`
   // Решта операторів відбитка й стану — частини вже позначених кроків
   if (
     sql.includes("search_path") ||
@@ -490,6 +503,44 @@ describe("executePlan", () => {
     expect(log).toEqual([])
   })
 
+  it.each([
+    ["no measurement", []],
+    [
+      "a measurement of another table",
+      [
+        {
+          before: { schema: "app", table: "t" },
+          after: { schema: "app", table: "v" },
+          key: { before: "id", after: "id" },
+          columns: [],
+        },
+      ],
+    ],
+  ])(
+    "refuses before BEGIN a promotion with %s for its table",
+    async (_, preservation) => {
+      const { db, log } = fakeDb()
+      const run = executePlan(
+        db,
+        target,
+        {
+          ...promoted,
+          promotion: {
+            ...promoted.promotion!,
+            ...tabled,
+            permissionItems: [],
+            preservation,
+          },
+        },
+        { ...options, mode: "rehearse" }
+      )
+      // Без заміру доказ збереження тихо пропустився б: це зламаний
+      // конвеєр плану, а не стан цілі
+      await expect(run).rejects.toThrow(/preserve exactly the tables/)
+      expect(log).toEqual([])
+    }
+  )
+
   it("measures preservation before the steps and after them", async () => {
     const { db, log } = fakeDb()
     const outcome = await executePlan(
@@ -499,6 +550,7 @@ describe("executePlan", () => {
         ...promoted,
         promotion: {
           ...promoted.promotion!,
+          ...tabled,
           permissionItems: [],
           preservation: [
             {
@@ -550,6 +602,7 @@ describe("executePlan", () => {
         ...promoted,
         promotion: {
           ...promoted.promotion!,
+          ...tabled,
           permissionItems: [],
           preservation: [
             {
@@ -592,6 +645,7 @@ describe("executePlan", () => {
           ...promoted,
           promotion: {
             ...promoted.promotion!,
+            ...tabled,
             permissionItems: [],
             preservation: [
               {

@@ -5,7 +5,12 @@ import {
   type RuleCode,
   type SqlParser,
 } from "simetra/compiler"
-import { diffCatalogModels, type CatalogModel } from "simetra/model"
+import {
+  diffCatalogModels,
+  PROVIDER_API_ROLES,
+  quoteIdent,
+  type CatalogModel,
+} from "simetra/model"
 import type {
   DbConnection,
   EngineAction,
@@ -17,10 +22,15 @@ import type {
   ShadowOptions,
 } from "../engine"
 import { dedupe } from "../engine/desired"
-import { PLAN_FORMAT, stampPlan, type PlanArtifact } from "./artifact"
-import { desiredForApply } from "./desired"
+import {
+  PLAN_FORMAT,
+  stampPlan,
+  type PlanArtifact,
+  type PromotionSection,
+} from "./artifact"
+import { desiredForApply, type ApplyDesired } from "./desired"
 import { applyDiagnostic } from "./diagnostic"
-import { driftGate } from "./drift"
+import { driftGate, type DriftReport } from "./drift"
 import { executePlan, type ExecutablePlan } from "./execute"
 import {
   compareFingerprints,
@@ -33,15 +43,40 @@ import {
   type ObjectOwner,
 } from "./fingerprint"
 import { planLocks } from "./locks"
-import { ApplyConnectionLost, type ApplyDatabase } from "./port"
-import { readApplyState } from "./state"
-import { classifySteps, lintSteps, requiredPermissions, stepId } from "./steps"
+import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
 import {
-  typeChangeRefusals,
-  typeChanges,
-  typeGuards,
-  type TypeChange,
-} from "./type-guard"
+  accessChanges,
+  adoptedReplacements,
+  canonicalRenames,
+  classifyRemovals,
+  foreignSequenceRefusals,
+  preservationPlan,
+  promotionPermissionItems,
+  promotionTransition,
+  readAccessDependents,
+  readEquivalenceObjects,
+  readWritePath,
+  renameIntent,
+  stepConversions,
+  unclassifiedRemovals,
+  unrealizedRenames,
+  withTempNames,
+  type CanonicalRename,
+  type EquivalenceObject,
+  type PromotionInput,
+  type RenameIntent,
+  type TransitionVerdict,
+} from "./promotion"
+import { readAppliedPromotions, readApplyState } from "./state"
+import {
+  classifySteps,
+  lintSteps,
+  requiredPermissions,
+  stepId,
+  type PlanStep,
+} from "./steps"
+import { tableKey } from "./table-key"
+import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
 
 export interface PlanDatabases {
@@ -142,18 +177,42 @@ function differingAcross(
 }
 
 /**
+ * Сторожі й зміни типу кроків одним розбором кожного: відмова побудувати
+ * сторожа — окремо, зміни — для детектора залежних і приведень на базі.
+ */
+function guardedChanges(
+  steps: readonly PlanStep[],
+  source: CatalogModel,
+  parse: SqlParser
+): { refusals: EngineDiagnostic[]; changes: TypeChange[] } {
+  const refusals: EngineDiagnostic[] = []
+  const changes: TypeChange[] = []
+  for (const step of steps) {
+    const guarded = typeGuards(step, source, parse)
+    if ("refusal" in guarded) refusals.push(guarded.refusal)
+    else changes.push(...guarded.changes)
+  }
+  return { refusals, changes }
+}
+
+/**
  * Конвеєр плану (платформна спека §6.2 п.2–4, §6.6; задача 9 плану П3-1):
  * стан застосування, гейт дрейфу, план від живої цілі до бажаного стану,
  * класи, лінт і дозволи, доказ на жертовній копії тим самим раннером і
  * детермінований артефакт. Дрейф планування не зупиняє: він іде в артефакт
  * пунктом дозволу (рішення 16). Ціль і тіні лише читаються (`reader`), пише
  * тільки прогін-доказ у копію (`scratch`).
+ *
+ * `promotions` — записи промоції з `plans/`; порожній масив передається
+ * явно: перехід виявляється з ідентичності, а записи з ним лише звіряються
+ * (рішення 1 плану П3-2a). План із промоцією будує `planPromotion`.
  */
 export async function buildPlan(
   engine: SchemaEngine,
   dbs: PlanDatabases,
   model: CompiledModel,
-  o: ShadowOptions
+  o: ShadowOptions,
+  promotions: readonly PromotionInput[]
 ): Promise<PlanOutcome> {
   const witness = async (
     db: DbConnection,
@@ -207,6 +266,53 @@ export async function buildPlan(
   if (!verdict.ok) return refused(verdict.diagnostics)
   const { drift, fromHash } = verdict
 
+  // 3а. Перехід промоції — з ідентичності marker і бажаної моделі; записи
+  // звіряються з ним за таблицею рішень (рішення 1 плану П3-2a)
+  const appliedHashes = await dbs.reader.transaction(
+    o.target,
+    "rollback",
+    (tx) => readAppliedPromotions(tx)
+  )
+  const transition = await promotionTransition({
+    state,
+    model,
+    records: promotions,
+    appliedHashes,
+    liveTables: new Set(
+      live.extracted.model.tables.map((t) => tableKey(t.schema, t.name))
+    ),
+  })
+  if (transition.status === "refused")
+    return refused(dedupe([...verdict.diagnostics, ...transition.diagnostics]))
+  if (transition.status === "promotion") {
+    // Вердикт несе той самий об'єкт запису, що прийшов на вхід
+    const input = promotions.find((p) => p.record === transition.record)
+    if (input === undefined)
+      throw new Error(
+        "the promotion verdict names a record that was not passed"
+      )
+    return planPromotion({
+      engine,
+      dbs,
+      model,
+      o,
+      witness,
+      scope,
+      live,
+      desired,
+      drift,
+      fromHash,
+      targetOwners,
+      promotion: transition,
+      file: input.file,
+      diagnostics: dedupe([
+        ...verdict.diagnostics,
+        ...transition.diagnostics,
+        ...desired.diagnostics,
+      ]),
+    })
+  }
+
   // 4–5. План «ціль → бажана тінь» і модель та відбиток тіні під межею плану.
   // Тінь живе лише в колбеку, тож усе з неї знімається тут
   const shadow = await engine.withDesiredShadow(
@@ -225,6 +331,7 @@ export async function buildPlan(
     return refused(
       dedupe([
         ...verdict.diagnostics,
+        ...transition.diagnostics,
         ...desired.diagnostics,
         ...shadow.diagnostics,
       ])
@@ -232,6 +339,7 @@ export async function buildPlan(
   const target = shadow.value
   const diagnostics = dedupe([
     ...verdict.diagnostics,
+    ...transition.diagnostics,
     ...desired.diagnostics,
     ...shadow.diagnostics,
     ...live.extracted.diagnostics.map(forPlan),
@@ -267,13 +375,8 @@ export async function buildPlan(
   const steps = classifySteps(actions, live.extracted.model, parse)
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
-  const lint = [
-    ...lintSteps(steps, parse),
-    ...steps.flatMap((step) => {
-      const guarded = typeGuards(step, live.extracted.model, parse)
-      return "refusal" in guarded ? [guarded.refusal] : []
-    }),
-  ]
+  const guarded = guardedChanges(steps, live.extracted.model, parse)
+  const lint = [...lintSteps(steps, parse), ...guarded.refusals]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Без промоції імена вихідного стану й кроків збігаються, а цілей FK поза
@@ -288,9 +391,7 @@ export async function buildPlan(
     live,
     desired: target,
     model,
-    typeChanges: steps.flatMap((step) =>
-      typeChanges(step, live.extracted.model, parse)
-    ),
+    typeChanges: guarded.changes,
     plan: {
       fromHash,
       toHash: model.hash,
@@ -339,6 +440,509 @@ export async function buildPlan(
       applyDiagnostic("plan.schema-only-proof", "warning"),
     ]),
   }
+}
+
+/** Що конвеєр П3-1 уже зібрав до гілки промоції. */
+interface PromotionContext {
+  engine: SchemaEngine
+  dbs: PlanDatabases
+  model: CompiledModel
+  o: ShadowOptions
+  witness: (db: DbConnection, scope: EngineScope) => Promise<Witness>
+  scope: EngineScope
+  live: Witness
+  desired: ApplyDesired
+  drift: DriftReport | null
+  fromHash: string | null
+  targetOwners: { session: string; owners: ObjectOwner[] }
+  promotion: Extract<TransitionVerdict, { status: "promotion" }>
+  /** Файл запису в `plans/`: його називають відмови виявлення. */
+  file: string
+  /** Діагностики гейта, переходу й бажаного стану. */
+  diagnostics: EngineDiagnostic[]
+}
+
+/** Таблиця, як її бачить ціль чи копія. */
+interface TableName {
+  schema: string
+  name: string
+}
+
+/**
+ * План із промоцією (рішення 2, 9, 10, 12 плану П3-2a). Ціль ще має старі
+ * імена, тож план будується з першої копії після кроків наміру
+ * (перейменування таблиць і колонок, далі канонічні імена), а не з живої
+ * цілі: двигун з `renames: "off"` перетворив би перейменування на DROP +
+ * CREATE. Порядок на першій копії (R5): намір → канонічні імена → витяг →
+ * план двигуна з опціями живої цілі → класи й сторожі → детектор залежних і
+ * приведення. Далі — класи видалень, доступ, блокування й збереження, доказ
+ * усього плану на другій, свіжій копії й артефакт із секцією `promotion`.
+ * Читання цілі — лише транзакції `READ ONLY` порту (`reader`).
+ */
+async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
+  const { engine, dbs, o, scope, live, promotion } = c
+  const { record } = promotion
+  const oldTables = record.tables.map((t): TableName => ({
+    schema: t.schema,
+    name: t.from,
+  }))
+  const newTables = record.tables.map((t): TableName => ({
+    schema: t.schema,
+    name: t.to,
+  }))
+
+  // Послідовність поза схемою таблиці (R17) і шлях запису через API
+  // (рішення 10) — на живій цілі, до тіні й копій: обидва — відмова з
+  // порадою, і жодна копія тут нічого не уточнить
+  const blocked = await dbs.reader.transaction(
+    o.target,
+    "rollback",
+    async (tx) => [
+      ...(await foreignSequenceRefusals(tx, { record, file: c.file })),
+      ...writePathRefusal(
+        oldTables,
+        await readWritePath(tx, {
+          tables: oldTables,
+          apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]),
+        })
+      ),
+    ]
+  )
+  if (blocked.length > 0) return refused(dedupe([...c.diagnostics, ...blocked]))
+
+  // Бажана тінь: модель, відбиток, власники й об'єкти еквівалентності таблиць
+  // одиниці в нових іменах. План «ціль → тінь» порту тут не потрібен: план
+  // будується з копії після наміру
+  const shadow = await engine.withDesiredShadow(
+    o,
+    c.desired.sql,
+    scope,
+    async (db) => ({
+      ...(await dbs.reader.transaction(db, "rollback", async (tx) => ({
+        owners: await readOwners(tx, scope),
+        equivalence: await readEquivalenceObjects(tx, newTables),
+      }))),
+      ...(await c.witness(db, scope)),
+    })
+  )
+  if (shadow.status === "shadow-failed")
+    return refused(dedupe([...c.diagnostics, ...shadow.diagnostics]))
+  const target = shadow.value
+  const diagnostics = dedupe([
+    ...c.diagnostics,
+    ...shadow.diagnostics,
+    ...live.extracted.diagnostics.map(forPlan),
+    ...target.extracted.diagnostics.map(forPlan),
+  ])
+  if (hasError(diagnostics)) return refused(diagnostics)
+
+  // Власники тіні — у нових іменах, цілі — ще в старих: без перекладу
+  // перейменовані таблиці випали б із порівняння (рішення 9)
+  const intent = renameIntent(record, c.model.physical)
+  const mismatched = ownerMismatches(
+    c.targetOwners,
+    ownersInOldNames(target.owners, intent.tablesNewToOld)
+  )
+  if (mismatched.length > 0)
+    return refused([
+      ...diagnostics,
+      ownersDiagnostic("plan.owner-mismatch", mismatched),
+    ])
+
+  const parse = await loadSqlParser()
+  const cloned = await engine.withTargetClone(
+    o,
+    live.extracted,
+    scope,
+    (clone) =>
+      analyseOnClone({
+        engine,
+        scratch: dbs.scratch,
+        clone,
+        scope,
+        intent,
+        newTables,
+        shadowEquivalence: target.equivalence,
+        desired: target.extracted.catalog,
+        optionsFrom: live.extracted.catalog,
+        parse,
+      })
+  )
+  if (cloned.status === "shadow-failed")
+    return refused(dedupe([...diagnostics, ...cloned.diagnostics]))
+  const analysis = cloned.value
+  const withClone = dedupe([
+    ...diagnostics,
+    ...cloned.diagnostics,
+    ...analysis.diagnostics,
+  ])
+  if (!analysis.ok || hasError(withClone)) return refused(withClone)
+  const { steps, model: cloneModel } = analysis
+
+  // Класи видалень і нереалізовані перейменування — копія після наміру
+  // проти бажаної тіні (рішення 2, 7)
+  const removals = classifyRemovals({
+    record,
+    intent: analysis.intent,
+    clone: cloneModel,
+    desired: target.extracted.model,
+    parse,
+  })
+  const unclassified = [
+    ...unrealizedRenames(steps, analysis.intent, record),
+    ...unclassifiedRemovals(removals),
+  ]
+  if (unclassified.length > 0) return refused([...withClone, ...unclassified])
+
+  // Залежні доступу — з живої цілі, у старих іменах (рішення 8)
+  const dependents = await dbs.reader.transaction(o.target, "rollback", (tx) =>
+    readAccessDependents(
+      tx,
+      record.tables.map((t) => ({
+        schema: t.schema,
+        name: t.from,
+        forcedToEnabled: record.rowLevelSecurity.some(
+          (r) =>
+            r.schema === t.schema && r.table === t.from && r.from === "forced"
+        ),
+      }))
+    )
+  )
+  const access = accessChanges({
+    record,
+    intent: analysis.intent,
+    clone: cloneModel,
+    desired: target.extracted.model,
+    dependents,
+    parse,
+  })
+  // `delete:*` — лише з виведених фактів (R3), запис для них не читається
+  const permissionItems = promotionPermissionItems(
+    access,
+    promotion.facts.deleteSemantics,
+    removals
+  )
+  const locks = planLocks({
+    steps,
+    newToOld: analysis.intent.tablesNewToOld,
+    foreignKeyTargets: foreignKeyTargets(
+      record,
+      live.extracted.model,
+      target.extracted.model
+    ),
+  })
+  const typeChangeSteps = new Map(
+    analysis.changes.map((t) => [
+      JSON.stringify([t.schema, t.table, t.column]),
+      t.step,
+    ])
+  )
+  const section: PromotionSection = {
+    recordHash: promotion.recordHash,
+    record,
+    permissionItems,
+    preservation: preservationPlan(
+      record,
+      analysis.intent,
+      { tables: promotion.source },
+      typeChangeSteps
+    ),
+    columns: analysis.intent.columns,
+    canonicalNames: analysis.canonicalNames,
+    // Лише показ (R6): дозволи й класи кроків від нього не залежать
+    conversions: [
+      ...stepConversions(steps, record, analysis.intent, parse),
+    ].map(([step, cls]) => ({ step, class: cls })),
+  }
+  const permissions = requiredPermissions({
+    steps,
+    drift: c.drift,
+    promotion: section,
+  })
+
+  // Доказ усього плану на другій, свіжій копії. Залежні й приведення змін
+  // типу вже перевірено на першій копії після наміру: на цій таблиці ще
+  // мають старі імена, і детектор їх би не знайшов
+  const proof = await prove(engine, dbs, o, c.witness, {
+    scope,
+    live,
+    desired: target,
+    model: c.model,
+    typeChanges: [],
+    plan: {
+      fromHash: c.fromHash,
+      toHash: c.model.hash,
+      scope,
+      engine: engine.identity,
+      steps,
+      requiredPermissions: permissions,
+      drift: c.drift,
+      locks,
+      preamble: analysis.preamble,
+      promotion: section,
+      targetFingerprint: live.fingerprint,
+      desiredFingerprint: target.fingerprint,
+      resultCatalog: target.extracted.model,
+    },
+  })
+  if (!proof.ok) return refused(dedupe([...withClone, ...proof.diagnostics]))
+
+  const artifact = await stampPlan({
+    format: PLAN_FORMAT,
+    platformVersion: PLATFORM_VERSION,
+    engine: engine.identity,
+    fingerprintVersion: FINGERPRINT_VERSION,
+    fromHash: c.fromHash,
+    toHash: c.model.hash,
+    scope,
+    targetFingerprint: live.fingerprint,
+    desiredFingerprint: target.fingerprint,
+    steps,
+    requiredPermissions: permissions,
+    drift: c.drift,
+    locks,
+    preamble: analysis.preamble,
+    promotion: section,
+    resultCatalog: proof.resultCatalog,
+  })
+  return {
+    status: "planned",
+    artifact,
+    diagnostics: dedupe([
+      ...withClone,
+      ...proof.diagnostics,
+      applyDiagnostic("plan.schema-only-proof", "warning"),
+      // Межа 2a (рішення 12): людина дізнається про неї до `apply`
+      applyDiagnostic("plan.promotion-commit-pending", "warning"),
+    ]),
+  }
+}
+
+/** Відмова шляху запису: усі знахідки однією діагностикою. */
+function writePathRefusal(
+  tables: readonly TableName[],
+  found: readonly string[]
+): EngineDiagnostic[] {
+  return found.length === 0
+    ? []
+    : [
+        applyDiagnostic("plan.write-path", "error", {
+          table: tables
+            .map((t) => `${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
+            .join(", "),
+          detail: found.join("; "),
+        }),
+      ]
+}
+
+type CloneAnalysis =
+  | {
+      ok: true
+      /** Кроки наміру, далі кроки двигуна, нумерація наскрізна. */
+      steps: PlanStep[]
+      /** Модель копії після наміру: вихідний стан кроків двигуна. */
+      model: CatalogModel
+      /** Намір разом із тимчасовими іменами канонічних перейменувань. */
+      intent: RenameIntent
+      canonicalNames: CanonicalRename[]
+      changes: TypeChange[]
+      preamble: EnginePlan["preamble"]
+      diagnostics: EngineDiagnostic[]
+    }
+  | { ok: false; diagnostics: EngineDiagnostic[] }
+
+/** Крок наміру впав на копії: ціль не така, як каже запис. */
+class IntentStepFailed extends Error {
+  constructor(readonly diagnostic: EngineDiagnostic) {
+    super(diagnostic.message)
+    this.name = "IntentStepFailed"
+  }
+}
+
+/** Кроки наміру на копії однією транзакцією з `COMMIT`. */
+async function runOnClone(
+  scratch: ApplyDatabase,
+  clone: DbConnection,
+  steps: readonly PlanStep[]
+): Promise<void> {
+  if (steps.length === 0) return
+  await scratch.transaction(clone, "commit", async (tx) => {
+    for (const step of steps) {
+      try {
+        await tx.query(step.sql)
+      } catch (error) {
+        if (!(error instanceof ApplyDbError)) throw error
+        throw new IntentStepFailed(
+          applyDiagnostic("apply.step-failed", "error", {
+            step: step.id,
+            sqlstate: error.sqlstate ?? "unknown",
+            error: error.message,
+          })
+        )
+      }
+    }
+  })
+}
+
+/**
+ * Перша копія (рішення 2, R5 плану П3-2a): кроки наміру й канонічні імена
+ * виконуються на ній, план двигуна знімається з неї після них, а класи,
+ * сторожі, залежні й приведення змін типу питають саме її — там уже нові
+ * імена й старі типи. Опції плану — від живої цілі: план застосовують до неї.
+ */
+async function analyseOnClone(p: {
+  engine: SchemaEngine
+  scratch: ApplyDatabase
+  clone: DbConnection
+  scope: EngineScope
+  intent: RenameIntent
+  newTables: readonly TableName[]
+  shadowEquivalence: readonly EquivalenceObject[]
+  desired: Extracted["catalog"]
+  optionsFrom: Extracted["catalog"]
+  parse: SqlParser
+}): Promise<CloneAnalysis> {
+  const { engine, scratch, clone, scope, parse } = p
+  try {
+    const renames = p.intent.steps.map((s, i) => ({ ...s, id: stepId(i) }))
+    await runOnClone(scratch, clone, renames)
+    const equivalence = await scratch.transaction(clone, "rollback", (tx) =>
+      readEquivalenceObjects(tx, p.newTables)
+    )
+    const canonical = canonicalRenames(
+      equivalence,
+      p.shadowEquivalence,
+      p.intent.tablesNewToOld
+    )
+    const names = canonical.steps.map((s, i) => ({
+      ...s,
+      id: stepId(renames.length + i),
+    }))
+    await runOnClone(scratch, clone, names)
+
+    const extracted = await engine.extract(clone, scope)
+    const enginePlan = engine.plan(extracted.catalog, p.desired, scope, {
+      optionsFrom: p.optionsFrom,
+    })
+    const diagnostics = [
+      ...extracted.diagnostics.map(forPlan),
+      ...enginePlan.diagnostics,
+    ]
+    if (hasError(diagnostics)) return { ok: false, diagnostics }
+
+    const offset = renames.length + names.length
+    const { actions } = enginePlan
+    const unparsable = unparsableSteps(actions, parse, offset)
+    if (unparsable.length > 0)
+      return { ok: false, diagnostics: [...diagnostics, ...unparsable] }
+    // Виняток «заміна» не діє для прийнятого об'єкта таблиці одиниці
+    // (рішення 3): рахується з дій до класифікатора, бо він — його вхід
+    const unitTables = new Set(
+      p.newTables.map((t) => tableKey(t.schema, t.name))
+    )
+    const engineSteps = classifySteps(actions, extracted.model, parse, offset, {
+      noReplacement: adoptedReplacements(
+        actions,
+        extracted.model,
+        unitTables,
+        offset
+      ),
+    })
+    const steps = [...renames, ...names, ...engineSteps]
+    const guarded = guardedChanges(engineSteps, extracted.model, parse)
+    const lint = [...lintSteps(steps, parse), ...guarded.refusals]
+    if (lint.length > 0)
+      return { ok: false, diagnostics: [...diagnostics, ...lint] }
+    const blocked =
+      guarded.changes.length === 0
+        ? []
+        : await scratch.transaction(clone, "rollback", (tx) =>
+            typeChangeRefusals(tx, guarded.changes, steps)
+          )
+    if (blocked.length > 0)
+      return { ok: false, diagnostics: [...diagnostics, ...blocked] }
+    return {
+      ok: true,
+      steps,
+      model: extracted.model,
+      intent: withTempNames(p.intent, canonical.tempNames),
+      canonicalNames: canonical.renames,
+      changes: guarded.changes,
+      preamble: enginePlan.preamble,
+      diagnostics,
+    }
+  } catch (error) {
+    if (error instanceof IntentStepFailed)
+      return { ok: false, diagnostics: [error.diagnostic] }
+    // Копія жертовна: обрив з'єднання з нею — недоведеність, а не стан цілі
+    if (error instanceof ApplyConnectionLost)
+      return {
+        ok: false,
+        diagnostics: [
+          applyDiagnostic("engine.clone-failed", "error", {
+            detail:
+              "the connection to the copy was lost while planning the promotion, so the plan could not be built; nothing was written to the database",
+          }),
+        ],
+      }
+    throw error
+  }
+}
+
+/**
+ * Власники тіні в старих іменах перейменованих таблиць. Перепис називає
+ * таблицю `relation <схема>.<ім'я>` у формі `regclass`, яку дає й
+ * `quoteIdent`; залежні об'єкти (індекси, послідовності колонок) `readOwners`
+ * уже пропустив.
+ */
+function ownersInOldNames(
+  shadow: { session: string; owners: readonly ObjectOwner[] },
+  newToOld: ReadonlyMap<string, string>
+): { session: string; owners: ObjectOwner[] } {
+  const relation = (key: string): string => {
+    const [schema, name] = JSON.parse(key) as [string, string]
+    return `relation ${quoteIdent(schema)}.${quoteIdent(name)}`
+  }
+  const renamed = new Map(
+    [...newToOld].map(([to, from]) => [relation(to), relation(from)])
+  )
+  return {
+    session: shadow.session,
+    owners: shadow.owners.map((o) => ({
+      ...o,
+      object: renamed.get(o.object) ?? o.object,
+    })),
+  }
+}
+
+/**
+ * Цілі FK таблиць одиниці поза одиницею (рішення 9): і наявних на цілі
+ * (старі імена), і бажаних (нові). Лише таблиці, що є на цілі в межі: `LOCK`
+ * таблиці, якої ще немає, дав би хибне «ціль змінилась», а поза межею план
+ * таблиць не знає.
+ */
+function foreignKeyTargets(
+  record: PromotionContext["promotion"]["record"],
+  live: CatalogModel,
+  desired: CatalogModel
+): TableName[] {
+  const unit = new Set(
+    record.tables.flatMap((t) => [
+      tableKey(t.schema, t.from),
+      tableKey(t.schema, t.to),
+    ])
+  )
+  const existing = new Set(live.tables.map((t) => tableKey(t.schema, t.name)))
+  const out = new Map<string, TableName>()
+  for (const t of [...live.tables, ...desired.tables]) {
+    if (!unit.has(tableKey(t.schema, t.name))) continue
+    for (const { references } of t.foreignKeys) {
+      const key = tableKey(references.schema, references.table)
+      if (unit.has(key) || !existing.has(key)) continue
+      out.set(key, { schema: references.schema, name: references.table })
+    }
+  }
+  return [...out.values()]
 }
 
 /** Відмови перепису власників: план і звірка (`diff`) — одна порада, різні коди. */

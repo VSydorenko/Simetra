@@ -320,6 +320,9 @@ describe("promotionTransition: the decision table", () => {
       record,
       recordHash: await promotionRecordHash(record),
       facts: expect.objectContaining({ tables: record.tables }),
+      source: expect.arrayContaining([
+        expect.objectContaining({ schema: "app", name: "counterparties" }),
+      ]),
       diagnostics: [],
     })
   })

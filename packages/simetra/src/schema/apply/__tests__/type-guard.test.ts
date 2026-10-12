@@ -1,12 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
-import {
-  classifySteps,
-  typeChanges,
-  typeGuards,
-  type EngineAction,
-} from "simetra/schema"
+import { classifySteps, typeGuards, type EngineAction } from "simetra/schema"
 import { guardTarget } from "../type-guard"
 
 let parse: SqlParser
@@ -151,17 +146,17 @@ describe("typeGuards", () => {
   })
 })
 
-describe("typeChanges", () => {
+describe("typeGuards changes", () => {
   it("lists every changed column, lossless ones included", () => {
-    expect(
-      typeChanges(
-        step(
-          "ALTER TABLE app.t ALTER COLUMN x TYPE bigint, ALTER COLUMN c TYPE varchar(5)"
-        ),
-        SOURCE,
-        parse
-      )
-    ).toEqual([
+    const result = typeGuards(
+      step(
+        "ALTER TABLE app.t ALTER COLUMN x TYPE bigint, ALTER COLUMN c TYPE varchar(5)"
+      ),
+      SOURCE,
+      parse
+    )
+    if (!("changes" in result)) throw new Error(result.refusal.message)
+    expect(result.changes).toEqual([
       {
         step: "s3",
         schema: "app",

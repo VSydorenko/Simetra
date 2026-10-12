@@ -932,7 +932,12 @@ describe("executePlan", () => {
       ]
       const preservation = preservationPlan(
         RECORD,
-        { steps: [], tablesNewToOld: newToOld, tempNames: new Map() },
+        {
+          steps: [],
+          tablesNewToOld: newToOld,
+          tempNames: new Map(),
+          columns: [],
+        },
         { tables: [source] },
         new Map([[JSON.stringify(["app", "pu", "x"]), TYPE_STEP]])
       )

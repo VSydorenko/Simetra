@@ -23,6 +23,16 @@ export interface RenameIntent {
    * видалень бачать об'єкт під початковим ім'ям.
    */
   tempNames: ReadonlyMap<string, string>
+  /**
+   * Перейменування колонок у порядку кроків наміру, зокрема відведення
+   * вбік: секція плану показує їх із наміру, а не розбором SQL (R7 плану
+   * П3-2a). Таблиця — у новому імені структурно (R23).
+   */
+  columns: {
+    table: { schema: string; name: string }
+    from: string
+    to: string
+  }[]
 }
 
 interface Rename {
@@ -90,6 +100,7 @@ export function renameIntent(
   const steps: Omit<PlanStep, "id">[] = []
   const tablesNewToOld = new Map<string, string>()
   const tempNames = new Map<string, string>()
+  const columns: RenameIntent["columns"] = []
   const tmp = counter("simetra_tmp_")
   const retiredName = counter("simetra_retired_")
 
@@ -132,6 +143,7 @@ export function renameIntent(
     const wanted = new Set(target.columns.map((c) => c.name))
     const alter = `ALTER TABLE ${qualified(t.schema, t.to)} RENAME COLUMN`
     const lock = lockOf(t.schema, t.to)
+    const newTable = { schema: t.schema, name: t.to }
 
     for (const r of record.retired) {
       if (r.schema !== t.schema || r.table !== t.from || !wanted.has(r.column))
@@ -143,21 +155,24 @@ export function renameIntent(
           lock
         )
       )
+      columns.push({ table: newTable, from: r.column, to: aside })
       tempNames.set(JSON.stringify([t.schema, t.to, aside]), r.column)
     }
 
-    const columns = record.columns.filter(
+    const renamed = record.columns.filter(
       (c) => c.schema === t.schema && c.table === t.to
     )
-    for (const r of ordered(columns, tmp))
+    for (const r of ordered(renamed, tmp)) {
       steps.push(
         intentStep(
           `${alter} ${quoteIdent(r.from)} TO ${quoteIdent(r.to)}`,
           lock
         )
       )
+      columns.push({ table: newTable, from: r.from, to: r.to })
+    }
   }
-  return { steps, tablesNewToOld, tempNames }
+  return { steps, tablesNewToOld, tempNames, columns }
 }
 
 /**

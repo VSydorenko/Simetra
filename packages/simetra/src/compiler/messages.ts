@@ -2500,16 +2500,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `The promotion record ${p.file} has data steps, which plans support from P3-2b on`
         : p.reason === "labelTranslation"
           ? `The promotion record ${p.file} translates kind labels, which plans support from P3-3 on`
-          : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
+          : p.reason === "sequenceSchema"
+            ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
+            : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
     uk: (p) =>
       p.reason === "dataSteps"
         ? `Запис промоції ${p.file} має кроки даних, які план підтримує з П3-2b`
         : p.reason === "labelTranslation"
           ? `Запис промоції ${p.file} перекладає мітки виду, які план підтримує з П3-3`
-          : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
+          : p.reason === "sequenceSchema"
+            ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
+            : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
     hint: {
-      en: "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
-      uk: "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
+      en: (p) =>
+        p.reason === "sequenceSchema"
+          ? "No plan was written. Move the sequence into the schema of the table or remove the dependency before promoting."
+          : "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
+      uk: (p) =>
+        p.reason === "sequenceSchema"
+          ? "План не записано. Перенесіть послідовність у схему таблиці або зніміть залежність перед промоцією."
+          : "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
     },
   },
   "plan.promotion-applied": {
@@ -2550,6 +2560,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "No plan was written. Every adopted constraint, index, default, comment, policy or grant that disappears needs a conversion class in promote; give it one, or keep the object. An adopted primary key must match the kind's key, and the identity, generated expression or collation of a column cannot change in a promotion.",
       uk: "План не записано. Кожне прийняте обмеження, індекс, значення за замовчуванням, коментар, політика чи грант, що зникає, потребує класу конверсії в promote; призначте його або збережіть об'єкт. Прийнятий первинний ключ мусить збігатися з ключем виду, а identity, вираз генерованої колонки чи колляція колонки в промоції не змінюються.",
+    },
+  },
+  "plan.write-path": {
+    en: (p) =>
+      `The adopted tables ${p.table} of the promotion are writable through the API on the target (${p.detail}), and the write path after promotion is an open question`,
+    uk: (p) =>
+      `Прийняті таблиці ${p.table} промоції доступні на запис через API на цілі (${p.detail}), а шлях запису після промоції — відкрите питання`,
+    hint: {
+      en: 'No plan was written. Revoke the write privileges, default privileges or write policies on the target and plan again; see the open question "Write path after promotion" in the promotion spec.',
+      uk: "План не записано. Відкличте привілеї запису, типові привілеї чи політики запису на цілі й побудуйте план знову; див. відкрите питання «Шлях запису після промоції» у спеці промоції.",
+    },
+  },
+  "plan.promotion-commit-pending": {
+    en: () =>
+      "The plan carries a promotion: applying it with COMMIT is refused until the full promotion checks are in place, and rehearsing it on the target is allowed",
+    uk: () =>
+      "План несе промоцію: застосування з COMMIT відхиляється, доки немає повної перевірки промоції, а репетицію на цілі дозволено",
+    hint: {
+      en: "Rehearse the plan on the target: it runs every step and rolls back.",
+      uk: "Відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
     },
   },
   "database.failed": {

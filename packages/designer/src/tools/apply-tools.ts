@@ -97,10 +97,18 @@ export const planTool = defineTool({
       scratch: await applyDatabase({ readOnly: false }),
     }
     const built = await withDatabase(required(database), "plan", (db) =>
-      buildPlan(engine, dbs, model, {
-        target: db.target,
-        ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
-      })
+      // Записи промоції з `plans/` інструмент підключає окремо; доти —
+      // явно жодного: перехід без запису план відхилить сам
+      buildPlan(
+        engine,
+        dbs,
+        model,
+        {
+          target: db.target,
+          ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
+        },
+        []
+      )
     )
     if (!built.ok)
       return refusedWith([...compiled.diagnostics, built.diagnostic])

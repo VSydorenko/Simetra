@@ -179,6 +179,12 @@ export function canonicalRenames(
 ): {
   steps: Omit<PlanStep, "id">[]
   tempNames: ReadonlyMap<string, string>
+  /**
+   * Перейменування в порядку кроків, зокрема відведення вбік: секція плану
+   * показує саме їх, а не розбір SQL (R7a плану П3-2a). Таблиця — у новому
+   * імені.
+   */
+  renames: CanonicalRename[]
 } {
   const onClone = new Set(clone.map((o) => identity(o)))
   const inShadow = new Set(shadow.map((o) => identity(o)))
@@ -264,7 +270,21 @@ export function canonicalRenames(
     return [{ schema, name }]
   }
   const steps = moves.map((m) => intentStep(renameSql(m), lockOf(m.of)))
-  return { steps, tempNames }
+  const renames = moves.map((m): CanonicalRename => ({
+    kind: m.of.kind,
+    table: { schema: m.of.schema, name: m.of.table },
+    from: m.from,
+    to: m.to,
+  }))
+  return { steps, tempNames, renames }
+}
+
+/** Одне канонічне перейменування підоб'єкта таблиці одиниці. */
+export interface CanonicalRename {
+  kind: EquivalenceObject["kind"]
+  table: { schema: string; name: string }
+  from: string
+  to: string
 }
 
 function renameSql({ of, from, to }: Move): string {

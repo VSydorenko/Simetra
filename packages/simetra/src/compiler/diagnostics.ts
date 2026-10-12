@@ -214,6 +214,8 @@ export const COMPILER_RULES = [
   "plan.promotion-not-applicable",
   "plan.rename-not-realized",
   "plan.removal-unclassified",
+  "plan.write-path",
+  "plan.promotion-commit-pending",
   "database.failed",
   "introspect.unrepresentable",
   "introspect.identity-conflict",

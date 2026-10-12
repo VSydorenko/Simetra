@@ -77,7 +77,25 @@ describe("canonicalRenames", () => {
     const tablesNewToOld = new Map([
       [tableKey("app", "items"), tableKey("app", "legacy_items")],
     ])
-    const { steps, tempNames } = canonicalRenames(clone, shadow, tablesNewToOld)
+    const { steps, tempNames, renames } = canonicalRenames(
+      clone,
+      shadow,
+      tablesNewToOld
+    )
+    // Секція плану бере канонічні імена звідси, у порядку кроків
+    const items = { schema: "app", name: "items" }
+    expect(renames).toEqual([
+      {
+        kind: "constraint",
+        table: items,
+        from: "old_code_key",
+        to: "new_code_key",
+      },
+      { kind: "constraint", table: items, from: "old_fkey", to: "new_fkey" },
+      { kind: "constraint", table: items, from: "old_pkey", to: "new_pkey" },
+      { kind: "index", table: items, from: "old_name_idx", to: "new_name_idx" },
+      { kind: "sequence", table: items, from: "old_id_seq", to: "new_id_seq" },
+    ])
     expect(steps.map((s) => s.sql)).toEqual([
       "ALTER TABLE app.items RENAME CONSTRAINT old_code_key TO new_code_key",
       "ALTER TABLE app.items RENAME CONSTRAINT old_fkey TO new_fkey",

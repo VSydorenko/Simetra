@@ -208,6 +208,13 @@ describe("renameIntent", () => {
         "code",
       ],
     ])
+    // Секція плану бере перейменування колонок звідси, у порядку кроків
+    const at = { schema: "app", name: "catalog_counterparties" }
+    expect(intent.columns).toEqual([
+      { table: at, from: "description", to: "simetra_retired_1" },
+      { table: at, from: "code", to: "simetra_retired_2" },
+      { table: at, from: "title", to: "code" },
+    ])
   })
 
   it("locks intent steps by old table names", () => {

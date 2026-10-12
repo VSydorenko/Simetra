@@ -223,10 +223,10 @@ describe("preservationQuery", () => {
     const sql = preservationQuery(t!, "before")
     expect(sql).toBe(
       [
-        "SELECT count(*) AS rows",
-        `sum(hashtextextended(id::text || ':' || CASE WHEN (id) IS NULL THEN 'n' ELSE 'v' || (id)::text END, 0)::numeric) AS c0`,
-        `sum(hashtextextended(id::text || ':' || CASE WHEN ("Name") IS NULL THEN 'n' ELSE 'v' || ("Name")::text END, 0)::numeric) AS c1`,
-        `sum(hashtextextended(id::text || ':' || CASE WHEN ((x::integer)) IS NULL THEN 'n' ELSE 'v' || ((x::integer))::text END, 0)::numeric) AS c2 FROM app.t`,
+        "SELECT pg_catalog.count(*) AS rows",
+        `pg_catalog.sum(pg_catalog.hashtextextended(id::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN (id) IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) (id)::pg_catalog.text END, 0)::pg_catalog.numeric) AS c0`,
+        `pg_catalog.sum(pg_catalog.hashtextextended(id::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN ("Name") IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) ("Name")::pg_catalog.text END, 0)::pg_catalog.numeric) AS c1`,
+        `pg_catalog.sum(pg_catalog.hashtextextended(id::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN ((x::integer)) IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) ((x::integer))::pg_catalog.text END, 0)::pg_catalog.numeric) AS c2 FROM app.t`,
       ].join(", ")
     )
     expect(sql).not.toMatch(/\bONLY\b/)

@@ -239,9 +239,14 @@ export function unrealizedRenames(
     for (const r of renamed) {
       const destroyed = step.destroyed.some((d) => sameRef(d, r.ref))
       // Лише структурні форми (рішення 15, R20): рядкова ідентичність
-      // двигуна в T2 не відтворюється
+      // двигуна в T2 не відтворюється. `DROP COLUMN` адаптер називає
+      // вжитою саму таблицю: втрату тоді несе знята колонка, і її перевіряє
+      // рядок колонки — інакше зняття вилученої колонки (рішення 2,
+      // очікуване) назвало б нереалізованою перейменовану таблицю
       const lossy =
-        step.dataLoss && step.consumed.some((d) => sameRef(d, r.ref))
+        step.dataLoss &&
+        step.consumed.some((d) => sameRef(d, r.ref)) &&
+        !(r.ref.kind === "table" && dropsColumnOf(step, r.ref))
       if (destroyed || lossy) hit.add(r.text)
     }
   }
@@ -254,6 +259,13 @@ export function unrealizedRenames(
         }),
       ]
 }
+
+/** Крок знімає колонку таблиці `table`. */
+const dropsColumnOf = (step: PlanStep, table: EngineObjectRef): boolean =>
+  step.destroyed.some(
+    (d) =>
+      d.kind === "column" && d.schema === table.schema && d.table === table.name
+  )
 
 const sameRef = (a: EngineObjectRef, b: EngineObjectRef): boolean =>
   a.kind === b.kind &&
