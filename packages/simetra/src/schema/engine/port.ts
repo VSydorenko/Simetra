@@ -41,6 +41,18 @@ export interface LockedTable {
   name: string
 }
 
+/**
+ * Структурна адреса знищуваного об'єкта: з StableId двигуна, а не з його
+ * рядкової форми, яка неоднозначна для імен із крапкою. `table` — лише для
+ * підоб'єктів таблиці (колонка, обмеження, тригер тощо).
+ */
+export interface EngineObjectRef {
+  kind: string
+  schema: string
+  table?: string
+  name: string
+}
+
 export interface EngineDiagnostic {
   code: RuleCode
   severity: Severity
@@ -89,6 +101,23 @@ export const ENGINE_TRANSACTIONALITIES = [
   "commitBoundaryAfter",
 ] as const
 
+/** Налаштування сесії, яке виконавець плану виставляє перед діями сегмента. */
+export interface EngineSetting {
+  name: string
+  value: string
+}
+
+/**
+ * Дозволена преамбула плану: ім'я — значення. Виконавець виставляє лише це
+ * (через `set_config(…, true)`, без стану сесії на цілі); будь-що інше в
+ * преамбулі двигуна — діагностика `engine.preamble-unknown`, а не тихе
+ * виконання. Перелік належить порту: його перевіряють і адаптер, і раннер.
+ */
+export const ENGINE_PREAMBLE_ALLOWED: Readonly<Record<string, string>> = {
+  search_path: "pg_catalog",
+  check_function_bodies: "off",
+}
+
 /**
  * Дія плану у формі порту. Ціль дії видно лише разом із `consumes`: GRANT,
  * `ENABLE RLS`, `REPLICA IDENTITY` тощо не мають ні `produces`, ні `destroys`.
@@ -100,6 +129,12 @@ export interface EngineAction {
   produces: string[]
   consumes: string[]
   destroys: string[]
+  /**
+   * Знищувані об'єкти структурно (з `destroys`): за ними розпізнають, що план
+   * губить, без розбору рядкових ідентичностей. Об'єкти без схеми й імені
+   * (ролі, членства, гранти) сюди не входять.
+   */
+  destroyed: EngineObjectRef[]
   transactionality: (typeof ENGINE_TRANSACTIONALITIES)[number]
   /**
    * Дія вживає результат попередньої `commitBoundaryAfter` (нове значення
@@ -122,6 +157,10 @@ export interface EngineAction {
 export interface EnginePlan {
   actions: EngineAction[]
   empty: boolean
+  /** Преамбула двигуна, як є; допустимість рахує `ENGINE_PREAMBLE_ALLOWED`. */
+  preamble: EngineSetting[]
+  /** Діагностики самого плану (зокрема `engine.preamble-unknown`). */
+  diagnostics: EngineDiagnostic[]
 }
 
 export type ShadowOutcome<T> =
@@ -131,11 +170,17 @@ export type ShadowOutcome<T> =
 export interface SchemaEngine {
   readonly identity: EngineIdentity
   extract(db: DbConnection, scope: EngineScope): Promise<Extracted>
-  /** Чисто, без бази: обидва каталоги несуть усе, що потрібно двигуну. */
+  /**
+   * Чисто, без бази: обидва каталоги несуть усе, що потрібно двигуну. Опції
+   * плану (роль, можливості, профіль) беруться з `source`, а з `optionsFrom` —
+   * якщо задано: план часто будують між двома копіями, а застосовують до
+   * третьої бази, і саме її роль визначає, що двигун має право планувати.
+   */
   plan(
     source: EngineCatalog,
     target: EngineCatalog,
-    scope: EngineScope
+    scope: EngineScope,
+    o?: { optionsFrom?: EngineCatalog }
   ): EnginePlan
   /**
    * Створює тінь поруч із `target` (або на `shadowBase` тієї самої мажорної

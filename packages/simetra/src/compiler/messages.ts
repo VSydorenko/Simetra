@@ -1980,6 +1980,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Копія — свіжа тінь, засіяна базовим станом провайдера, тож причина в цілі чи середовищі, а не в метаданих: розширення, якого тінь не встановить, засів провайдера або режим з'єднання тіні (потрібне пряме чи сесійне з'єднання). Усуньте причину з повідомлення.",
     },
   },
+  "engine.preamble-unknown": {
+    en: (p) =>
+      `The schema engine's plan preamble sets ${p.name} = ${p.value}, which is not on the allowed list`,
+    uk: (p) =>
+      `Преамбула плану рушія схеми виставляє ${p.name} = ${p.value}, чого немає в дозволеному переліку`,
+    hint: {
+      en: "The executor sets only the allowed session settings, so this plan was not applied as written. The installed schema engine emits a setting this platform version does not know; update the platform or pin the engine version.",
+      uk: "Виконавець виставляє лише дозволені налаштування сесії, тож цей план не застосовано як є. Встановлений рушій схеми видає налаштування, якого ця версія платформи не знає; оновіть платформу або зафіксуйте версію рушія.",
+    },
+  },
   "engine.unrepresentable": {
     en: (p) =>
       `${p.object}: property ${p.property} cannot be represented in the catalog model: ${p.detail}`,

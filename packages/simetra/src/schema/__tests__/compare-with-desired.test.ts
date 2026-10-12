@@ -22,7 +22,12 @@ import {
 const TARGET: DbConnection = { url: "postgres://target" }
 const SHADOW: DbConnection = { url: "postgres://shadow" }
 const SCOPE: EngineScope = { schemas: ["app"], provider: "supabase" }
-const EMPTY_PLAN: EnginePlan = { actions: [], empty: true }
+const EMPTY_PLAN: EnginePlan = {
+  actions: [],
+  empty: true,
+  preamble: [],
+  diagnostics: [],
+}
 
 const VIEW: CatalogUnit = {
   class: "materializedView",
@@ -60,6 +65,7 @@ const ACTION: EngineAction = {
   produces: ["table:app.note"],
   consumes: ["schema:app"],
   destroys: [],
+  destroyed: [],
   transactionality: "transactional",
   newSegmentBefore: false,
   lockedTables: [],
@@ -136,7 +142,12 @@ describe("compareWithDesired", () => {
   })
 
   it("reports differences when the engine plan has actions", async () => {
-    const plan: EnginePlan = { actions: [ACTION], empty: false }
+    const plan: EnginePlan = {
+      actions: [ACTION],
+      empty: false,
+      preamble: [],
+      diagnostics: [],
+    }
     const result = await compare({ plan })
     expect(result.status).toBe("compared")
     if (result.status !== "compared") return

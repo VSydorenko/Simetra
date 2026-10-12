@@ -19,6 +19,7 @@ import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { loadSqlParser, localize, type RuleCode } from "simetra/compiler"
 import {
+  ENGINE_PREAMBLE_ALLOWED,
   censusDiagnostics,
   renderProviderSeed,
   unmodeledClasses,
@@ -28,8 +29,10 @@ import {
   type EngineCatalog,
   type EngineDiagnostic,
   type EngineIdentity,
+  type EngineObjectRef,
   type EnginePlan,
   type EngineScope,
+  type EngineSetting,
   type Extracted,
   type LockedTable,
   type SchemaEngine,
@@ -307,6 +310,27 @@ function lockedTablesOf(
   return out
 }
 
+/**
+ * Знищувані об'єкти структурно, з тих самих StableId, що й `tableOf`.
+ * Об'єкти без схеми й імені (ролі, членства, гранти, коментарі) у перелік не
+ * входять: за ними план не губить даних застосунку.
+ */
+function destroyedOf(action: Action): EngineObjectRef[] {
+  return action.destroys.flatMap((id): EngineObjectRef[] => {
+    if (!("schema" in id) || !("name" in id)) return []
+    if (typeof id.schema !== "string") return []
+    const table = "table" in id && typeof id.table === "string" ? id.table : ""
+    return [
+      {
+        kind: id.kind,
+        schema: id.schema,
+        ...(table === "" ? {} : { table }),
+        name: id.name,
+      },
+    ]
+  })
+}
+
 function toEngineAction(
   action: Action,
   tables: ReadonlySet<string>
@@ -317,6 +341,7 @@ function toEngineAction(
     produces: action.produces.map(encodeId),
     consumes: action.consumes.map(encodeId),
     destroys: action.destroys.map(encodeId),
+    destroyed: destroyedOf(action),
     transactionality: action.transactionality,
     newSegmentBefore: action.newSegmentBefore,
     lockedTables: lockedTablesOf(action, tables),
@@ -326,11 +351,47 @@ function toEngineAction(
   }
 }
 
-/** `source` — вихідний стан саме цього плану: проти нього рахуються `lockedTables`. */
-function toEnginePlan(plan: Plan, source: FactBase): EnginePlan {
+/**
+ * Преамбула двигуна проти дозволеного переліку порту: виконавець виставляє
+ * лише відоме, тож невідоме ім'я чи значення — помилка, а не тихе виконання.
+ */
+export function checkPreamble(
+  settings: readonly EngineSetting[]
+): EngineDiagnostic[] {
+  return settings
+    .filter((s) => ENGINE_PREAMBLE_ALLOWED[s.name] !== s.value)
+    .map((s) =>
+      engineDiagnostic(
+        "engine.preamble-unknown",
+        { name: s.name, value: s.value },
+        "error",
+        undefined
+      )
+    )
+}
+
+/**
+ * `source` — вихідний стан саме цього плану: проти нього рахуються
+ * `lockedTables`. `counted` — класи, які перепис бази вже назвав: з ними
+ * діагностики плану фільтруються так само, як в інших шляхах.
+ */
+function toEnginePlan(
+  plan: Plan,
+  source: FactBase,
+  counted: ReadonlySet<CensusClass> = new Set()
+): EnginePlan {
   const tables = existingTables(source)
   const actions = plan.actions.map((a) => toEngineAction(a, tables))
-  return { actions, empty: actions.length === 0 }
+  const preamble = plan.preamble.map(({ name, value }) => ({ name, value }))
+  return {
+    actions,
+    empty: actions.length === 0,
+    preamble,
+    diagnostics: [
+      ...checkPreamble(preamble),
+      ...toEngineDiagnostics(plan.diagnostics ?? [], counted),
+    ],
+  }
 }
 
 function asOwnCatalog(catalog: EngineCatalog): PgDeltaCatalog {
@@ -503,7 +564,6 @@ async function planAndRun<T>(
         onWarning: (message) => warnings.push(message),
       }
     )
-    plan = toEnginePlan(result.plan, result.targetFactBase)
     // Той самий фільтр `unmodeled_kind`, що в extract: клас, який перепис
     // бази-джерела діагностики вже назвав у межі, вдруге не звучить
     const counted = async (pool: pg.Pool) =>
@@ -516,13 +576,13 @@ async function planAndRun<T>(
       counted(shadowPool),
     ])
     const bothCounted = new Set([...targetCounted, ...shadowCounted])
+    plan = toEnginePlan(result.plan, result.targetFactBase, bothCounted)
     diagnostics = [
       ...toEngineDiagnostics(result.loadDiagnostics, shadowCounted),
       ...toEngineDiagnostics(result.targetDiagnostics, targetCounted),
-      ...toEngineDiagnostics(
-        [...result.driftDiagnostics, ...(result.plan.diagnostics ?? [])],
-        bothCounted
-      ),
+      ...toEngineDiagnostics(result.driftDiagnostics, bothCounted),
+      // Діагностики плану й преамбули несе сам `EnginePlan`
+      ...plan.diagnostics,
       // Попередження фронтенду — проза без коду й суб'єкта
       ...warnings.map((message) =>
         engineDiagnostic(
@@ -737,16 +797,23 @@ export function createPgDeltaEngine(): SchemaEngine {
       }
     },
 
-    plan(source, target, scope) {
+    plan(source, target, scope, o) {
       const from = asOwnCatalog(source)
       const to = asOwnCatalog(target)
+      const optionsFrom =
+        o?.optionsFrom === undefined ? from : asOwnCatalog(o.optionsFrom)
       const key = scopeKeyOf(scope)
-      if (from.scopeKey !== key || to.scopeKey !== key)
+      if (
+        from.scopeKey !== key ||
+        to.scopeKey !== key ||
+        optionsFrom.scopeKey !== key
+      )
         throw new Error("catalogs were extracted under a different scope")
-      // Опції — з джерела: план змінює базу-джерело, тож її роль і
-      // можливості визначають, що двигун має право планувати
+      // Опції — з бази, яку план змінить: за замовчуванням це джерело, а коли
+      // план будують між копіями, — база, до якої його застосують, бо її
+      // роль і можливості визначають, що двигун має право планувати
       return toEnginePlan(
-        enginePlan(from.factBase, to.factBase, from.planOptions),
+        enginePlan(from.factBase, to.factBase, optionsFrom.planOptions),
         from.factBase
       )
     },

@@ -429,6 +429,8 @@ describe("buildPlan", () => {
         engine.withDesiredShadow(o, sql, scope, (db, enginePlan) =>
           fn(db, {
             empty: false,
+            preamble: enginePlan.preamble,
+            diagnostics: enginePlan.diagnostics,
             actions: [
               ...enginePlan.actions,
               { ...enginePlan.actions[0]!, sql: "THIS IS NOT SQL" },
@@ -458,7 +460,7 @@ describe("buildPlan", () => {
       ...engine,
       withDesiredShadow: (o, sql, scope, fn) =>
         engine.withDesiredShadow(o, sql, scope, (db) =>
-          fn(db, { empty: true, actions: [] })
+          fn(db, { empty: true, actions: [], preamble: [], diagnostics: [] })
         ),
     }
     await inTarget(EMPTY, async (url) => {
@@ -491,6 +493,7 @@ describe("buildPlan", () => {
           produces: [],
           consumes: [],
           destroys: [],
+          destroyed: [],
           transactionality: "transactional",
           newSegmentBefore: false,
           lockedTables: [],
@@ -498,7 +501,7 @@ describe("buildPlan", () => {
           dataLoss: false,
           rewriteRisk: false,
         }
-        return { empty: false, actions: [...real.actions, fake] }
+        return { ...real, empty: false, actions: [...real.actions, fake] }
       },
     }
     await inTarget(EMPTY, async (url) => {

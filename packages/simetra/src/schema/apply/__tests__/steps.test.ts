@@ -23,6 +23,7 @@ function action(sql: string, over: Partial<EngineAction> = {}): EngineAction {
     produces: [],
     consumes: [],
     destroys: [],
+    destroyed: [],
     transactionality: "transactional",
     newSegmentBefore: false,
     lockedTables: [],

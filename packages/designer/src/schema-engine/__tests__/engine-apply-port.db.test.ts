@@ -173,6 +173,80 @@ describe("SchemaEngine apply port", () => {
     )
   })
 
+  it("reports destroyed objects structurally", async () => {
+    const dropColumn = await planOf(
+      'create schema app; create table app."a.b" (id int, c int);',
+      'create schema app; create table app."a.b" (id int);'
+    )
+    expect(actionMatching(dropColumn, /DROP COLUMN/i).destroyed).toEqual([
+      { kind: "column", schema: "app", table: "a.b", name: "c" },
+    ])
+    const dropTable = await planOf(
+      "create schema app; create table app.t (id int);",
+      "create schema app;"
+    )
+    expect(actionMatching(dropTable, /DROP TABLE/i).destroyed).toEqual(
+      expect.arrayContaining([{ kind: "table", schema: "app", name: "t" }])
+    )
+  })
+
+  it("passes the engine preamble through on every path", async () => {
+    const desired = [
+      "create schema app;",
+      "create function app.f() returns int language sql as 'select 1';",
+    ].join("\n")
+    const expected = expect.arrayContaining([
+      { name: "check_function_bodies", value: "off" },
+      { name: "search_path", value: "pg_catalog" },
+    ])
+    const viaShadow = await planOf("create schema app;", desired)
+    expect(viaShadow.preamble).toEqual(expected)
+    expect(viaShadow.diagnostics).toEqual([])
+    await inTarget("create schema app;", async (url) => {
+      const from = await engine.extract({ url }, scope)
+      await inTarget(desired, async (desiredUrl) => {
+        const to = await engine.extract({ url: desiredUrl }, scope)
+        const plan = engine.plan(from.catalog, to.catalog, scope)
+        expect(plan.preamble).toEqual(expected)
+        expect(plan.diagnostics).toEqual([])
+      })
+    })
+  })
+
+  it("plans with the options of the given catalog", async () => {
+    const targetSql = "create schema app; create table app.t (id int);"
+    const desiredSql =
+      "create schema app; create table app.t (id int, c int not null default 0);"
+    await inTarget(targetSql, async (url) => {
+      const viaShadow = await engine.withDesiredShadow(
+        { target: { url } },
+        desiredSql,
+        scope,
+        async (shadowUrl, plan) => ({
+          plan,
+          shadow: await engine.extract(shadowUrl, scope),
+        })
+      )
+      if (viaShadow.status !== "loaded") throw new Error("shadow failed")
+      const target = await engine.extract({ url }, scope)
+      const { plan: expected, shadow } = viaShadow.value
+      // Копія цілі як джерело, тінь — бажане; опції — з цілі
+      const clone = await engine.withTargetClone(
+        { target: { url } },
+        target,
+        scope,
+        (cloneUrl) => engine.extract(cloneUrl, scope)
+      )
+      if (clone.status !== "loaded") throw new Error("clone failed")
+      const plan = engine.plan(clone.value.catalog, shadow.catalog, scope, {
+        optionsFrom: target.catalog,
+      })
+      expect(plan.actions.map((a) => a.sql)).toEqual(
+        expected.actions.map((a) => a.sql)
+      )
+    })
+  })
+
   it("identity matches the installed pg-delta", async () => {
     // Пакет не експортує `package.json`, тож шлях — від точки входу `dist`
     const entry = createRequire(import.meta.url).resolve("@supabase/pg-delta")

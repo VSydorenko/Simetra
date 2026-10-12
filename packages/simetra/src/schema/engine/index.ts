@@ -4,15 +4,21 @@ export type {
   EngineCatalog,
   EngineDiagnostic,
   EngineIdentity,
+  EngineObjectRef,
   EnginePlan,
   EngineScope,
+  EngineSetting,
   Extracted,
   LockedTable,
   SchemaEngine,
   ShadowOptions,
   ShadowOutcome,
 } from "./port"
-export { ENGINE_ACTION_VERBS, ENGINE_TRANSACTIONALITIES } from "./port"
+export {
+  ENGINE_ACTION_VERBS,
+  ENGINE_PREAMBLE_ALLOWED,
+  ENGINE_TRANSACTIONALITIES,
+} from "./port"
 export {
   compareWithDesired,
   engineScope,
