@@ -54,6 +54,7 @@ export type ExecutablePlan = Pick<
   | "desiredFingerprint"
   | "locks"
   | "preamble"
+  | "promotion"
   | "resultCatalog"
 >
 
@@ -164,12 +165,18 @@ export async function executePlan(
     ...fingerprintVersions(plan),
     ...unknownPreamble(plan.preamble),
     ...lintSteps(plan.steps, parse),
-    // Артефакт ще не несе секції `promotion` (рішення 15 плану П3-2a, R1):
-    // пунктів промоції план не має
+    // Пункти промоції — із секції під `planHash`, а не з поля показу
+    // `requiredPermissions` (рішення 15 плану П3-2a, R1)
     ...checkPermissions(
-      { steps: plan.steps, drift: plan.drift, promotion: null },
+      { steps: plan.steps, drift: plan.drift, promotion: plan.promotion },
       o.allow
     ),
+    // Межа 2a (рішення 12): промоцію з `COMMIT` застосовує лише повна
+    // перевірка П3-2b. Копія доказу й репетиція з `ROLLBACK` нічого не
+    // лишають, тож вони дозволені
+    ...(o.mode === "apply" && plan.promotion !== null
+      ? [applyDiagnostic("apply.promotion-checks-pending", "error")]
+      : []),
   ]
   if (refusals.length > 0)
     return { status: "refused", attempts: 0, diagnostics: refusals }
@@ -348,6 +355,10 @@ async function runAttempt(
     resultFingerprint,
     allow: o.allow,
     drift: plan.drift,
+    promotion:
+      plan.promotion === null
+        ? null
+        : { hash: plan.promotion.recordHash, record: plan.promotion.record },
     applyId,
   }))
     await tx.query(statement.sql, statement.params)

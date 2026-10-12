@@ -301,6 +301,7 @@ export async function buildPlan(
       drift,
       locks,
       preamble,
+      promotion: null,
       targetFingerprint: live.fingerprint,
       desiredFingerprint: target.fingerprint,
       // Модель бажаної тіні лише для marker копії, яку буде викинуто;
@@ -326,6 +327,7 @@ export async function buildPlan(
     drift,
     locks,
     preamble,
+    promotion: null,
     resultCatalog: proof.resultCatalog,
   })
   return {

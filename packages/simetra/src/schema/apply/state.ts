@@ -1,4 +1,8 @@
-import { platformSchemaGrants, type CompiledModel } from "simetra/compiler"
+import {
+  platformSchemaGrants,
+  type CompiledModel,
+  type PromotionRecord,
+} from "simetra/compiler"
 import { PLATFORM_SCHEMA, quoteIdent, type CatalogModel } from "simetra/model"
 import type {
   EngineDiagnostic,
@@ -71,6 +75,9 @@ export function renderApplyState(
       "  result_fingerprint jsonb NOT NULL,",
       "  allowed jsonb NOT NULL,",
       "  drift jsonb,",
+      // Запис застосованої промоції з хешем (рішення 11 плану П3-2a); з нього
+      // `readAppliedPromotions` відрізняє застосований запис від чужого
+      "  promotion jsonb,",
       "  apply_id uuid NOT NULL UNIQUE,",
       "  engine_name text NOT NULL,",
       "  engine_version text NOT NULL,",
@@ -206,6 +213,11 @@ export interface ApplyRecord {
    * лише тут, в історії.
    */
   drift: DriftReport | null
+  /**
+   * Застосована промоція: запис і його хеш (`promotionRecordHash`); `null` —
+   * план без промоції.
+   */
+  promotion: { hash: string; record: PromotionRecord } | null
   /** UUID виклику раннера; не входить в артефакт і хеш (рішення 14.3). */
   applyId: string
 }
@@ -265,8 +277,8 @@ export function writeApplyStateStatements(
   }
   const ledger = {
     sql: [
-      `INSERT INTO ${LEDGER} (format, plan_hash, from_hash, to_hash, scope, snapshot, target_fingerprint, result_fingerprint, allowed, drift, apply_id, engine_name, engine_version, fingerprint_version, platform_version)`,
-      "VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::uuid, $12, $13, $14, $15)",
+      `INSERT INTO ${LEDGER} (format, plan_hash, from_hash, to_hash, scope, snapshot, target_fingerprint, result_fingerprint, allowed, drift, promotion, apply_id, engine_name, engine_version, fingerprint_version, platform_version)`,
+      "VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::uuid, $13, $14, $15, $16)",
     ].join("\n"),
     params: [
       APPLY_STATE_FORMAT,
@@ -280,6 +292,8 @@ export function writeApplyStateStatements(
       json(record.allow),
       // SQL NULL, а не JSON `null`: «дрейфу не було» — відсутність значення
       record.drift === null ? null : json(record.drift),
+      // Так само SQL NULL: план без промоції
+      record.promotion === null ? null : json(record.promotion),
       record.applyId,
       record.engine.name,
       record.engine.version,

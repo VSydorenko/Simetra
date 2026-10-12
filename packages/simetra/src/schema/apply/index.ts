@@ -84,6 +84,7 @@ export {
   type TypeChangeDependent,
 } from "./type-guard"
 export {
+  CANONICAL_NAME_KINDS,
   PLAN_FORMAT,
   parsePlan,
   planArtifactSchema,
@@ -93,6 +94,8 @@ export {
   verifyPlanHash,
   type ParsedPlan,
   type PlanArtifact,
+  type PreservedTable,
+  type PromotionSection,
 } from "./artifact"
 export {
   DRIFT_REASONS,

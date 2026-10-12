@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { compile, type CompiledModel } from "simetra/compiler"
+import {
+  canonicalSnapshot,
+  compile,
+  type CompiledModel,
+  type PromotionRecord,
+} from "simetra/compiler"
 import {
   APPLY_STATE_FORMAT,
+  buildPlan,
   compareWithDesired,
   desiredForApply,
+  executePlan,
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
   PLATFORM_VERSION,
@@ -118,7 +125,30 @@ const record: ApplyRecord = {
   resultFingerprint: fingerprint("result"),
   allow: ["drop:table:app.old"],
   drift: null,
+  promotion: null,
   applyId: "6f1c1e8e-3d7a-4c3e-9f55-0b7f0a2d9c11",
+}
+
+const RECORD: PromotionRecord = {
+  format: 1,
+  base: "0".repeat(64),
+  result: "1".repeat(64),
+  objectId: "00000000-0000-4000-8000-000000000001",
+  kind: "Catalog",
+  labelDropped: false,
+  tables: [],
+  columns: [],
+  typeChanges: [],
+  dataSteps: [],
+  retired: [],
+  relaxed: [],
+  tightened: [],
+  rowLevelSecurity: [],
+  deleteSemantics: [],
+  conversions: [],
+  movedUnits: [],
+  rewrittenUnits: [],
+  contractChanges: [],
 }
 
 /** Дрейф, прийнятий другим застосуванням тесту ledger. */
@@ -292,6 +322,16 @@ describe("readAppliedPromotions", () => {
   it("is empty on a ledger without the promotion column", async () => {
     const hashes = await inAppliedTarget(async (url) => {
       await applied(url)
+      // Форма ledger до промоцій
+      await write(url, "ALTER TABLE simetra.ledger DROP COLUMN promotion")
+      return promotions(url)
+    })
+    expect(hashes).toEqual(new Set())
+  })
+
+  it("is empty when no applied plan carried a promotion", async () => {
+    const hashes = await inAppliedTarget(async (url) => {
+      await applied(url)
       return promotions(url)
     })
     expect(hashes).toEqual(new Set())
@@ -310,16 +350,85 @@ describe("readAppliedPromotions", () => {
   })
 
   it("reads the hashes of applied promotion records", async () => {
-    const hashes = await inAppliedTarget(async (url) => {
-      await applied(url)
-      // Колонку додасть наступна форма ledger; тут — лише її читання.
-      await write(
-        url,
-        `ALTER TABLE simetra.ledger ADD COLUMN promotion jsonb;
-         UPDATE simetra.ledger SET promotion = '{"hash": "h1"}'::jsonb`
+    const promotion = { hash: "h".repeat(64), record: RECORD }
+    const stored = await inAppliedTarget(async (url) => {
+      await createApplyDatabase({ readOnly: false }).transaction(
+        { url },
+        "commit",
+        async (tx) => {
+          for (const s of writeApplyStateStatements({ ...record, promotion }))
+            await tx.query(s.sql, s.params)
+        }
       )
-      return promotions(url)
+      return {
+        hashes: await promotions(url),
+        row: await createApplyDatabase({ readOnly: true }).transaction(
+          { url },
+          "rollback",
+          (tx) =>
+            tx.query<{ promotion: string }>(
+              "SELECT promotion::text AS promotion FROM simetra.ledger"
+            )
+        ),
+      }
     })
-    expect(hashes).toEqual(new Set(["h1"]))
+    expect(stored.hashes).toEqual(new Set(["h".repeat(64)]))
+    expect(stored.row.map((r) => JSON.parse(r.promotion) as unknown)).toEqual([
+      promotion,
+    ])
+  })
+
+  // Рішення 11 плану П3-2a: колонку додає той самий план, що пише стан
+  it("adds the column to an older ledger in the same plan that records the promotion", async () => {
+    const model = await partyModel()
+    const outcome = await inAppliedTarget(async (url) => {
+      await write(url, "ALTER TABLE simetra.ledger DROP COLUMN promotion")
+      const plan = await buildPlan(
+        engine,
+        {
+          reader: createApplyDatabase({ readOnly: true }),
+          scratch: createApplyDatabase({ readOnly: false }),
+        },
+        model,
+        { target: { url } }
+      )
+      if (plan.status !== "planned")
+        throw new Error(
+          `expected planned, got ${plan.status}: ${plan.diagnostics.map((d) => d.message).join("; ")}`
+        )
+      const { artifact } = plan
+      // `COMMIT` промоції до П3-2b відхиляється (рішення 12), а прогін
+      // `proof` комітить: ним рядок ledger і пишеться
+      const run = await executePlan(
+        createApplyDatabase({ readOnly: false }),
+        { url },
+        {
+          ...artifact,
+          promotion: {
+            recordHash: "a".repeat(64),
+            record: RECORD,
+            permissionItems: [],
+            preservation: [],
+            columns: [],
+            canonicalNames: [],
+            conversions: [],
+          },
+        },
+        {
+          mode: "proof",
+          planHash: artifact.planHash,
+          allow: artifact.requiredPermissions,
+          snapshot: canonicalSnapshot(model),
+        }
+      )
+      return { artifact, run, hashes: await promotions(url) }
+    })
+    expect(outcome.artifact.steps.map((s) => s.sql)).toContainEqual(
+      expect.stringMatching(
+        /^ALTER TABLE "?simetra"?\."?ledger"? ADD COLUMN "?promotion"? jsonb$/
+      )
+    )
+    expect(outcome.run).toMatchObject({ status: "committed" })
+    expect(outcome.hashes).toEqual(new Set(["a".repeat(64)]))
   })
 })

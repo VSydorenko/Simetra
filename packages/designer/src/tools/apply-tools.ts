@@ -253,9 +253,14 @@ export const applyTool = defineTool({
 
     // 6. Дозволи — до підключення: відмова не відкриває пулу запису
     const allow = input.allow ?? []
-    // Артефакт ще не несе секції `promotion` (рішення 15 плану П3-2a, R1)
+    // Пункти промоції — із секції артефакту під хешем (рішення 15 плану
+    // П3-2a, R1); раннер перевіряє їх знову
     const permissions = checkPermissions(
-      { steps: artifact.steps, drift: artifact.drift, promotion: null },
+      {
+        steps: artifact.steps,
+        drift: artifact.drift,
+        promotion: artifact.promotion,
+      },
       allow
     )
     if (permissions.length > 0) return refusedWith(permissions.map(fromEngine))

@@ -192,6 +192,7 @@ export const COMPILER_RULES = [
   "apply.connection-lost",
   "apply.type-narrowing",
   "apply.type-guard-failed",
+  "apply.promotion-checks-pending",
   "plan.unparsable-step",
   "plan.clone-mismatch",
   "plan.proof-not-empty",

@@ -12,6 +12,7 @@ import {
   type FingerprintSection,
   type PlanStep,
 } from "simetra/schema"
+import type { PromotionRecord } from "simetra/compiler"
 
 /**
  * Раннер транзакції на фейковому порті (план П3-1, задача 8): порядок
@@ -84,7 +85,46 @@ const plan: ExecutablePlan = {
     { schema: "app", name: "x.y", mode: "accessExclusive" },
   ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
+  promotion: null,
   resultCatalog: { tables: [], enumTypes: [], units: [] },
+}
+
+const RECORD: PromotionRecord = {
+  format: 1,
+  base: "0".repeat(64),
+  result: "1".repeat(64),
+  objectId: "00000000-0000-4000-8000-000000000001",
+  kind: "Catalog",
+  labelDropped: false,
+  tables: [],
+  columns: [],
+  typeChanges: [],
+  dataSteps: [],
+  retired: [],
+  relaxed: [],
+  tightened: [],
+  rowLevelSecurity: [],
+  deleteSemantics: [],
+  conversions: [],
+  movedUnits: [],
+  rewrittenUnits: [],
+  contractChanges: [],
+}
+
+/** План із секцією промоції: пункт `access:` поза `requiredPermissions`. */
+const promoted: ExecutablePlan = {
+  ...plan,
+  // Поле лише показ: раннер рахує пункти з секції, тож порожнє не допомагає
+  requiredPermissions: [],
+  promotion: {
+    recordHash: "d".repeat(64),
+    record: RECORD,
+    permissionItems: [{ token: "access:app.party", summary: ["anon: select"] }],
+    preservation: [],
+    columns: [],
+    canonicalNames: [],
+    conversions: [],
+  },
 }
 
 /** `search_path` транзакції до преамбули — його раннер і повертає. */
@@ -390,6 +430,74 @@ describe("executePlan", () => {
       ],
     })
     expect(log).toEqual([])
+  })
+
+  it("checks the promotion items of the section, not the display field", async () => {
+    const { db, log } = fakeDb()
+    const outcome = await executePlan(db, target, promoted, {
+      ...options,
+      mode: "rehearse",
+    })
+    expect(outcome).toMatchObject({
+      status: "refused",
+      attempts: 0,
+      diagnostics: [
+        {
+          code: "apply.permission-required",
+          params: { items: "access:app.party" },
+        },
+      ],
+    })
+    expect(log).toEqual([])
+  })
+
+  it("refuses to commit a promotion before BEGIN", async () => {
+    const { db, log } = fakeDb()
+    const outcome = await executePlan(db, target, promoted, {
+      ...options,
+      allow: ["access:app.party"],
+    })
+    expect(outcome).toMatchObject({
+      status: "refused",
+      attempts: 0,
+      diagnostics: [{ code: "apply.promotion-checks-pending" }],
+    })
+    expect(log).toEqual([])
+  })
+
+  it.each(["rehearse", "proof"] as const)(
+    "runs a promotion in %s mode and records it with its hash",
+    async (mode) => {
+      const { db, log, calls } = spied()
+      const outcome = await executePlan(db, target, promoted, {
+        ...options,
+        mode,
+        allow: ["access:app.party"],
+      })
+      expect(outcome.status).toBe(
+        mode === "rehearse" ? "rolledBack" : "committed"
+      )
+      expect(log).toContain("ledger")
+      const ledger = calls.find((c) =>
+        c.sql.startsWith("INSERT INTO simetra.ledger")
+      )!
+      expect(ledger.params).toContain(
+        JSON.stringify({ hash: "d".repeat(64), record: RECORD })
+      )
+    }
+  )
+
+  it("records no promotion for a plan without one", async () => {
+    const { db, calls } = spied()
+    await executePlan(db, target, plan, options)
+    const ledger = calls.find((c) =>
+      c.sql.startsWith("INSERT INTO simetra.ledger")
+    )!
+    const columns = /\(([^)]*)\)/
+      .exec(ledger.sql)![1]!
+      .split(",")
+      .map((c) => c.trim())
+    expect(ledger.params![columns.indexOf("promotion")]).toBeNull()
   })
 
   it("takes the advisory lock with the platform key", async () => {

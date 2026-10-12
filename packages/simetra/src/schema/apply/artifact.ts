@@ -1,5 +1,13 @@
 import { z } from "zod"
-import { canonicalize, serializeCanonical, sha256Hex } from "simetra/compiler"
+import {
+  canonicalize,
+  conversionClass,
+  promotionRecordSchema,
+  serializeCanonical,
+  sha256Hex,
+  type ConversionClass,
+  type PromotionRecord,
+} from "simetra/compiler"
 import { DATABASE_PROVIDERS, type CatalogModel } from "simetra/model"
 import {
   ENGINE_ACTION_VERBS,
@@ -14,7 +22,7 @@ import { applyDiagnostic } from "./diagnostic"
 import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
 import { TABLE_LOCK_MODES, type TableLock } from "./locks"
-import { STEP_CLASSES, type PlanStep } from "./steps"
+import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**
  * Форма файлу плану; читач порівнює її з поточною, а не вгадує. Другий
@@ -22,6 +30,52 @@ import { STEP_CLASSES, type PlanStep } from "./steps"
  * двигуна (рішення 11 плану П3-2a).
  */
 export const PLAN_FORMAT = 2
+
+/**
+ * Таблиця одиниці, чиї дані план зберігає (рішення 6 плану П3-2a): імена до й
+ * після, ключ рядка й пари колонок як SQL-вирази, якими заміри порівнюють
+ * дані до кроків і після.
+ */
+export interface PreservedTable {
+  /** Старі імена: заміри «до» йдуть до кроків наміру. */
+  before: { schema: string; table: string }
+  after: { schema: string; table: string }
+  /** SQL-вираз ключа рядка до й після. */
+  key: { before: string; after: string }
+  /**
+   * SQL-вирази колонки до й після; `typeChangeStep` — id кроку зміни типу,
+   * що його розбіжність називає `apply.type-narrowing`.
+   */
+  columns: { before: string; after: string; typeChangeStep?: string }[]
+}
+
+/** Вид канонічного імені, яке намір повертає підоб'єкту таблиці. */
+export const CANONICAL_NAME_KINDS = ["constraint", "index", "sequence"] as const
+
+/**
+ * Секція промоції артефакту (рішення 11, R7 плану П3-2a). Під `planHash`:
+ * дозвіл прийняв саме цей запис, ці пункти й ці перейменування. Пункти
+ * дозволу раннер рахує звідси, а не з `requiredPermissions`.
+ */
+export interface PromotionSection {
+  /** `promotionRecordHash(record)`: те, що ledger запам'ятає як застосоване. */
+  recordHash: string
+  record: PromotionRecord
+  /** Пункти `access:`, `delete:`, `remove:` з тим, що людина переглядає. */
+  permissionItems: PermissionItem[]
+  preservation: PreservedTable[]
+  /** Перейменування колонок наміру в порядку його кроків. */
+  columns: { table: string; from: string; to: string }[]
+  /** Канонічні імена підоб'єктів у порядку кроків наміру. */
+  canonicalNames: {
+    kind: (typeof CANONICAL_NAME_KINDS)[number]
+    table: string
+    from: string
+    to: string
+  }[]
+  /** Id кроку → клас конверсії: лише для показу біля кроку. */
+  conversions: { step: string; class: ConversionClass }[]
+}
 
 /**
  * Незмінний артефакт плану (платформна спека §6.10, рішення 9 плану П3-1):
@@ -57,9 +111,49 @@ export interface PlanArtifact {
    * з неї лише `search_path` навколо кроків двигуна (рішення 13).
    */
   preamble: EngineSetting[]
+  /** Секція промоції; `null` — план без промоції. Поле є завжди, як `drift`. */
+  promotion: PromotionSection | null
   resultCatalog: CatalogModel
   planHash: string
 }
+
+const hashSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
+const promotionSectionSchema = z.strictObject({
+  recordHash: hashSchema,
+  record: promotionRecordSchema,
+  permissionItems: z.array(
+    z.strictObject({ token: z.string(), summary: z.array(z.string()) })
+  ),
+  preservation: z.array(
+    z.strictObject({
+      before: z.strictObject({ schema: z.string(), table: z.string() }),
+      after: z.strictObject({ schema: z.string(), table: z.string() }),
+      key: z.strictObject({ before: z.string(), after: z.string() }),
+      columns: z.array(
+        z.strictObject({
+          before: z.string(),
+          after: z.string(),
+          typeChangeStep: z.string().optional(),
+        })
+      ),
+    })
+  ),
+  columns: z.array(
+    z.strictObject({ table: z.string(), from: z.string(), to: z.string() })
+  ),
+  canonicalNames: z.array(
+    z.strictObject({
+      kind: z.enum(CANONICAL_NAME_KINDS),
+      table: z.string(),
+      from: z.string(),
+      to: z.string(),
+    })
+  ),
+  conversions: z.array(
+    z.strictObject({ step: z.string(), class: conversionClass })
+  ),
+})
 
 const fingerprintSchema = z.strictObject({
   version: z.number().int(),
@@ -139,10 +233,11 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
         message: "preamble setting is not on the allowed list",
       })
   ),
+  promotion: promotionSectionSchema.nullable(),
   resultCatalog: z
     .record(z.string(), z.unknown())
     .transform((catalog) => catalog as unknown as CatalogModel),
-  planHash: z.string().regex(/^[0-9a-f]{64}$/),
+  planHash: hashSchema,
 })
 
 /** Чи дозволена пара преамбули; власні ключі, не ланцюжок прототипів. */

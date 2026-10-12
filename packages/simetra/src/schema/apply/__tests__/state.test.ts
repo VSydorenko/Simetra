@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { compile, type CompiledModel } from "simetra/compiler"
+import {
+  compile,
+  type CompiledModel,
+  type PromotionRecord,
+} from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import {
   FINGERPRINT_SECTIONS,
@@ -64,6 +68,12 @@ describe("renderApplyState", () => {
     for (const grant of usage) expect(layer).toContain(grant)
   })
 
+  it("gives the ledger a nullable promotion column", async () => {
+    const sql = renderApplyState(await withoutUsers())
+    const ledger = sql.slice(sql.indexOf("CREATE TABLE simetra.ledger ("))
+    expect(ledger).toMatch(/^ {2}promotion jsonb,$/m)
+  })
+
   it("grants nothing on the state tables", async () => {
     for (const m of [await withoutUsers(), await withUsers()]) {
       const sql = renderApplyState(m)
@@ -96,13 +106,18 @@ describe("writeApplyStateStatements", () => {
         resultFingerprint: fingerprint(2),
         allow: [],
         drift: null,
+        promotion: null,
         applyId: "00000000-0000-4000-8000-000000000000",
       })
     ).toThrow(/fingerprint versions differ/)
   })
 
   /** Значення колонки ledger за її назвою в `INSERT`. */
-  const ledgerValue = (drift: DriftReport | null, column: string): unknown => {
+  const ledgerValue = (
+    drift: DriftReport | null,
+    column: string,
+    promotion: { hash: string; record: PromotionRecord } | null = null
+  ): unknown => {
     const [, ledger] = writeApplyStateStatements({
       planHash: "p",
       fromHash: null,
@@ -115,6 +130,7 @@ describe("writeApplyStateStatements", () => {
       resultFingerprint: fingerprint(1),
       allow: ["drift"],
       drift,
+      promotion,
       applyId: "00000000-0000-4000-8000-000000000000",
     })
     const columns = /\(([^)]*)\)/
@@ -136,5 +152,45 @@ describe("writeApplyStateStatements", () => {
 
   it("writes SQL NULL, not JSON null, for a plan without drift", () => {
     expect(ledgerValue(null, "drift")).toBeNull()
+  })
+
+  const RECORD: PromotionRecord = {
+    format: 1,
+    base: "0".repeat(64),
+    result: "1".repeat(64),
+    objectId: "00000000-0000-4000-8000-000000000001",
+    kind: "Catalog",
+    labelDropped: false,
+    tables: [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        schema: "app",
+        from: "parties",
+        to: "party",
+      },
+    ],
+    columns: [],
+    typeChanges: [],
+    dataSteps: [],
+    retired: [],
+    relaxed: [],
+    tightened: [],
+    rowLevelSecurity: [],
+    deleteSemantics: [],
+    conversions: [],
+    movedUnits: [],
+    rewrittenUnits: [],
+    contractChanges: [],
+  }
+
+  it("records the applied promotion with its hash", () => {
+    const promotion = { hash: "h".repeat(64), record: RECORD }
+    expect(ledgerValue(null, "promotion", promotion)).toBe(
+      JSON.stringify(promotion)
+    )
+  })
+
+  it("writes SQL NULL for a plan without promotion", () => {
+    expect(ledgerValue(null, "promotion")).toBeNull()
   })
 })

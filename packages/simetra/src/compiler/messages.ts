@@ -2318,6 +2318,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Перевірка порівнює кожне значення з ним самим після приведення до нового типу й назад; тип без рівності (як-от json) не порівняти, тож таку колонку змінюйте кроком даних.",
     },
   },
+  "apply.promotion-checks-pending": {
+    en: () =>
+      "The plan carries a promotion, and applying a promotion with COMMIT is refused until the full promotion checks are in place (function bodies, revalidation and constraint validity after the steps)",
+    uk: () =>
+      "План несе промоцію, а застосування промоції з COMMIT відхиляється, доки немає повної перевірки промоції (тіла функцій, ревалідація й валідність обмежень після кроків)",
+    hint: {
+      en: "Nothing was written. Rehearse the plan on the target instead: it runs every step and rolls back.",
+      uk: "Нічого не записано. Натомість відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
+    },
+  },
   "plan.unparsable-step": {
     en: (p) =>
       `The schema engine produced plan step ${p.step} that the SQL parser cannot read: ${p.message}`,

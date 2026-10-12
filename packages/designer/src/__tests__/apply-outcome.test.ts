@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
-import { compile } from "simetra/compiler"
+import { compile, type PromotionRecord } from "simetra/compiler"
 import {
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
@@ -68,7 +68,8 @@ const fingerprint = (): CatalogFingerprint => ({
 
 /** Чинний план без кроків для еталонних метаданих у `plans/` кореня. */
 async function writePlan(
-  dir: string
+  dir: string,
+  promotion: PlanArtifact["promotion"] = null
 ): Promise<{ file: string; artifact: PlanArtifact }> {
   const model = (await compile(await readMetadataDir(dir))).model
   if (model === undefined) throw new Error("reference metadata must compile")
@@ -87,6 +88,7 @@ async function writePlan(
     drift: null,
     locks: [],
     preamble: [],
+    promotion,
     resultCatalog: { tables: [], enumTypes: [], units: [] },
   })
   const file = `plans/${planFileName(null, model.hash)}`
@@ -186,5 +188,76 @@ describe("apply with an unknown outcome", () => {
     ])
     expect(r.diagnostics[0]!.message).toMatch(/rebuild the plan/)
     expect(lost.transactions).toBe(0)
+  })
+
+  describe("a plan with a promotion", () => {
+    const RECORD: PromotionRecord = {
+      format: 1,
+      base: "0".repeat(64),
+      result: "1".repeat(64),
+      objectId: "00000000-0000-4000-8000-000000000001",
+      kind: "Catalog",
+      labelDropped: false,
+      tables: [],
+      columns: [],
+      typeChanges: [],
+      dataSteps: [],
+      retired: [],
+      relaxed: [],
+      tightened: [],
+      rowLevelSecurity: [],
+      deleteSemantics: [],
+      conversions: [],
+      movedUnits: [],
+      rewrittenUnits: [],
+      contractChanges: [],
+    }
+    const section: NonNullable<PlanArtifact["promotion"]> = {
+      recordHash: "d".repeat(64),
+      record: RECORD,
+      permissionItems: [{ token: "access:app.party", summary: ["anon"] }],
+      preservation: [],
+      columns: [],
+      canonicalNames: [],
+      conversions: [],
+    }
+    const apply = async (allow?: string[]) => {
+      const dir = await project()
+      const { file, artifact } = await writePlan(dir, section)
+      return invoke(
+        toolByName("apply")!,
+        {
+          plan: file,
+          planHash: artifact.planHash,
+          ...(allow === undefined ? {} : { allow }),
+        },
+        {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: true,
+          dryRun: false,
+          confirmed: true,
+          channel: "cli",
+          database: databaseResource(env, { url: ENV }),
+        }
+      )
+    }
+
+    it("asks for the promotion items of the section", async () => {
+      const r = await apply()
+      expect(r.diagnostics.map((d) => [d.code, d.params?.items])).toEqual([
+        ["apply.permission-required", "access:app.party"],
+      ])
+      expect(lost.transactions).toBe(0)
+    })
+
+    it("refuses to commit it before any transaction", async () => {
+      const r = await apply(["access:app.party"])
+      expect(r.ok).toBe(false)
+      expect(r.diagnostics.map((d) => d.code)).toEqual([
+        "apply.promotion-checks-pending",
+      ])
+      expect(lost.transactions).toBe(0)
+    })
   })
 })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import type { PromotionRecord } from "simetra/compiler"
 import {
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
@@ -56,7 +57,70 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   drift: null,
   locks: [{ schema: "app", name: "t", mode: "accessExclusive" }],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
+  promotion: null,
   resultCatalog: { tables: [], enumTypes: [], units: [] },
+})
+
+const RECORD: PromotionRecord = {
+  format: 1,
+  base: "0".repeat(64),
+  result: "1".repeat(64),
+  objectId: "00000000-0000-4000-8000-000000000001",
+  kind: "Catalog",
+  labelDropped: false,
+  tables: [
+    {
+      id: "00000000-0000-4000-8000-000000000001",
+      schema: "app",
+      from: "parties",
+      to: "party",
+    },
+  ],
+  columns: [],
+  typeChanges: [],
+  dataSteps: [],
+  retired: [],
+  relaxed: [],
+  tightened: [],
+  rowLevelSecurity: [],
+  deleteSemantics: [],
+  conversions: [],
+  movedUnits: [],
+  rewrittenUnits: [],
+  contractChanges: [],
+}
+
+const PROMOTION = (): NonNullable<PlanArtifact["promotion"]> => ({
+  recordHash: "d".repeat(64),
+  record: RECORD,
+  permissionItems: [{ token: "access:app.party", summary: ["anon: select"] }],
+  preservation: [
+    {
+      before: { schema: "app", table: "parties" },
+      after: { schema: "app", table: "party" },
+      key: { before: "id", after: "id" },
+      columns: [
+        { before: "name", after: "description" },
+        { before: "code", after: "code", typeChangeStep: "s4" },
+      ],
+    },
+  ],
+  columns: [{ table: "party", from: "name", to: "description" }],
+  canonicalNames: [
+    {
+      kind: "constraint",
+      table: "party",
+      from: "parties_pkey",
+      to: "party_pkey",
+    },
+  ],
+  conversions: [{ step: "s1", class: "removed" }],
+})
+
+const withPromotion = (): Omit<PlanArtifact, "planHash"> => ({
+  ...draft(),
+  promotion: PROMOTION(),
+  requiredPermissions: ["access:app.party", "s1"],
 })
 
 const DRIFT = {
@@ -253,6 +317,59 @@ describe("plan artifact", () => {
       /plan format 1 is not supported.*rebuild the plan/i
     )
     expect(PLAN_FORMAT).toBe(2)
+  })
+
+  it("round-trips a plan with a promotion section", async () => {
+    const artifact = await stampPlan(withPromotion())
+    const text = serializePlan(artifact)
+    const parsed = parsePlan(text)
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
+    expect(serializePlan(parsed.artifact)).toBe(text)
+    expect(await verifyPlanHash(parsed.artifact)).toBe(true)
+  })
+
+  it("covers the promotion section with the hash", async () => {
+    const stamped = await stampPlan(withPromotion())
+    expect(stamped.planHash).not.toBe((await stampPlan(draft())).planHash)
+    const changed = withPromotion()
+    changed.promotion!.columns[0]!.to = "title"
+    expect((await stampPlan(changed)).planHash).not.toBe(stamped.planHash)
+    const swapped: PlanArtifact = { ...stamped, promotion: null }
+    expect(await verifyPlanHash(swapped)).toBe(false)
+  })
+
+  it("rejects a promotion section of unknown shape", async () => {
+    const artifact = await stampPlan(withPromotion())
+    const section = PROMOTION()
+    const variants: unknown[] = [
+      { ...section, note: "x" },
+      { ...section, recordHash: "not-a-hash" },
+      { ...section, record: { ...RECORD, note: "x" } },
+      { ...section, conversions: [{ step: "s1", class: "lost" }] },
+      {
+        ...section,
+        canonicalNames: [
+          { kind: "trigger", table: "party", from: "a", to: "b" },
+        ],
+      },
+      { ...section, columns: [{ table: "party", from: "a" }] },
+      {
+        ...section,
+        permissionItems: [{ token: "access:app.party", summary: "x" }],
+      },
+      {
+        ...section,
+        preservation: [{ ...section.preservation[0]!, note: "x" }],
+      },
+    ]
+    for (const promotion of variants)
+      expect(parsePlan(JSON.stringify({ ...artifact, promotion })).ok).toBe(
+        false
+      )
+    const missing: Record<string, unknown> = { ...artifact }
+    delete missing.promotion
+    expect(parsePlan(JSON.stringify(missing)).ok).toBe(false)
   })
 
   it("rejects text that is not JSON", () => {
