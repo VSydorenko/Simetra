@@ -8,6 +8,7 @@ import {
   FINGERPRINT_VERSION,
   PLATFORM_VERSION,
   readApplyState,
+  readAppliedPromotions,
   writeApplyStateStatements,
   type ApplyRecord,
   type ApplyState,
@@ -188,6 +189,7 @@ describe("readApplyState", () => {
       marker: {
         format: APPLY_STATE_FORMAT,
         snapshotHash: record.toHash,
+        snapshot: record.snapshot,
         scope: record.scope,
         catalog: record.catalog,
         engine: record.engine,
@@ -276,5 +278,48 @@ describe("readApplyState", () => {
       params: { found: 99 },
     })
     expect(state.diagnostic.message).toContain("99")
+  })
+})
+
+describe("readAppliedPromotions", () => {
+  const promotions = (url: string): Promise<Set<string>> =>
+    createApplyDatabase({ readOnly: true }).transaction(
+      { url },
+      "rollback",
+      readAppliedPromotions
+    )
+
+  it("is empty on a ledger without the promotion column", async () => {
+    const hashes = await inAppliedTarget(async (url) => {
+      await applied(url)
+      return promotions(url)
+    })
+    expect(hashes).toEqual(new Set())
+  })
+
+  it("is empty on a database without the state tables", async () => {
+    const outcome = await engine.withDesiredShadow(
+      { target: stack },
+      "create schema app;",
+      { schemas: ["app"], provider: "supabase" },
+      (target) => promotions(target.url)
+    )
+    expect(outcome.status).toBe("loaded")
+    if (outcome.status !== "loaded") return
+    expect(outcome.value).toEqual(new Set())
+  })
+
+  it("reads the hashes of applied promotion records", async () => {
+    const hashes = await inAppliedTarget(async (url) => {
+      await applied(url)
+      // Колонку додасть наступна форма ledger; тут — лише її читання.
+      await write(
+        url,
+        `ALTER TABLE simetra.ledger ADD COLUMN promotion jsonb;
+         UPDATE simetra.ledger SET promotion = '{"hash": "h1"}'::jsonb`
+      )
+      return promotions(url)
+    })
+    expect(hashes).toEqual(new Set(["h1"]))
   })
 })

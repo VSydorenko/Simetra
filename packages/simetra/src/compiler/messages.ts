@@ -2340,6 +2340,110 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
     },
   },
+  "plan.promotion-record-missing": {
+    en: (p) =>
+      `${p.kind} ${p.name} (${p.objectId}) was a CustomTable when the target was last applied: the plan is a promotion, and its record plans/${p.objectId}.promotion.json is missing`,
+    uk: (p) =>
+      `${p.kind} ${p.name} (${p.objectId}) був CustomTable під час останнього застосування цілі: план — промоція, а її запису plans/${p.objectId}.promotion.json немає`,
+    hint: {
+      en: "No plan was written. The record carries what the database cannot derive (which adopted column becomes which attribute, the conversion classes); restore the file written by promote from version control, or check out the commit of the promotion.",
+      uk: "План не записано. Запис несе те, чого не вивести з бази (яка прийнята колонка стає яким реквізитом, класи конверсій); відновіть файл, записаний promote, з контролю версій або перейдіть на коміт промоції.",
+    },
+  },
+  "plan.promotion-record-invalid": {
+    en: (p) => `The promotion record ${p.file} is not valid: ${p.detail}`,
+    uk: (p) => `Запис промоції ${p.file} невалідний: ${p.detail}`,
+    hint: {
+      en: "No plan was written. A record is never repaired by guessing; restore the file written by promote, or promote again on the state before the promotion.",
+      uk: "План не записано. Запис ніколи не виправляється вгадуванням; відновіть файл, записаний promote, або повторіть промоцію на стані до неї.",
+    },
+  },
+  "plan.promotion-base": {
+    en: (p) =>
+      `The promotion record ${p.file} was written for model ${p.base}, but the target was last applied with model ${p.marker}`,
+    uk: (p) =>
+      `Запис промоції ${p.file} написано для моделі ${p.base}, а ціль востаннє застосовано з моделлю ${p.marker}`,
+    hint: {
+      en: "No plan was written. A promotion is applied exactly on the state it was made from: apply the commit before the promotion first, then plan the promotion.",
+      uk: "План не записано. Промоція застосовується рівно на стані, з якого її зроблено: спершу застосуйте коміт до промоції, потім сплануйте промоцію.",
+    },
+  },
+  "plan.promotion-record-mismatch": {
+    en: (p) =>
+      `The promotion record ${p.file} does not match what the models before and after the promotion show: ${p.detail}`,
+    uk: (p) =>
+      `Запис промоції ${p.file} не збігається з тим, що показують моделі до й після промоції: ${p.detail}`,
+    hint: {
+      en: "No plan was written. Either the record was edited, or a later commit changed the promoted object; apply the promotion on its own commit, then plan the later changes.",
+      uk: "План не записано. Або запис змінено вручну, або пізніший коміт змінив промотований об'єкт; застосуйте промоцію на її коміті, потім сплануйте пізніші зміни.",
+    },
+  },
+  "plan.promotion-record-stale": {
+    en: (p) =>
+      `The promotion record ${p.file} does not fit the state of object ${p.objectId} in the target and in the metadata`,
+    uk: (p) =>
+      `Запис промоції ${p.file} не відповідає стану об'єкта ${p.objectId} у цілі й у метаданих`,
+    hint: {
+      en: "No plan was written. The promotion it describes was reverted or never reached this state; remove the record if the promotion is abandoned, or restore the metadata of the promotion.",
+      uk: "План не записано. Промоцію, яку він описує, скасовано або вона не дійшла до цього стану; приберіть запис, якщо від промоції відмовились, або відновіть метадані промоції.",
+    },
+  },
+  "plan.promotion-needs-marker": {
+    en: (p) =>
+      `The target has no apply state, but table ${p.table} that the promotion record ${p.file} adopts already exists`,
+    uk: (p) =>
+      `Ціль не має стану застосування, а таблиця ${p.table}, яку приймає запис промоції ${p.file}, уже існує`,
+    hint: {
+      en: "No plan was written. Without the state before the promotion the plan cannot prove the live table is the adopted one; apply the state before the promotion first, then plan the promotion.",
+      uk: "План не записано. Без стану до промоції план не доведе, що жива таблиця — та сама прийнята; спершу застосуйте стан до промоції, потім сплануйте промоцію.",
+    },
+  },
+  "plan.promotion-multiple": {
+    en: (p) => `One plan cannot carry more than one promotion: ${p.objects}`,
+    uk: (p) => `Один план не несе більше однієї промоції: ${p.objects}`,
+    hint: {
+      en: "No plan was written. Apply the promotions one at a time, each on its own commit.",
+      uk: "План не записано. Застосовуйте промоції по одній, кожну на її коміті.",
+    },
+  },
+  "plan.promotion-unsupported": {
+    en: (p) =>
+      p.reason === "dataSteps"
+        ? `The promotion record ${p.file} has data steps, which plans support from P3-2b on`
+        : p.reason === "labelTranslation"
+          ? `The promotion record ${p.file} translates kind labels, which plans support from P3-3 on`
+          : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
+    uk: (p) =>
+      p.reason === "dataSteps"
+        ? `Запис промоції ${p.file} має кроки даних, які план підтримує з П3-2b`
+        : p.reason === "labelTranslation"
+          ? `Запис промоції ${p.file} перекладає мітки виду, які план підтримує з П3-3`
+          : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
+    hint: {
+      en: "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
+      uk: "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
+    },
+  },
+  "plan.promotion-applied": {
+    en: (p) =>
+      `The promotion record ${p.file} is already applied to this target and is ignored`,
+    uk: (p) =>
+      `Запис промоції ${p.file} уже застосовано до цієї цілі, його проігноровано`,
+    hint: {
+      en: "The file stays in plans/ until every instance has applied it.",
+      uk: "Файл лишається в plans/, доки його не застосують усі інстанси.",
+    },
+  },
+  "plan.promotion-not-applicable": {
+    en: (p) =>
+      `The promotion record ${p.file} does not apply to this target: object ${p.objectId} was never an adopted table here, and it is ignored`,
+    uk: (p) =>
+      `Запис промоції ${p.file} не стосується цієї цілі: об'єкт ${p.objectId} тут ніколи не був прийнятою таблицею, його проігноровано`,
+    hint: {
+      en: "A new environment gets the promoted object directly; the record matters only to instances that hold the adopted table.",
+      uk: "Нове середовище отримує промотований об'єкт одразу; запис важить лише для інстансів, які мають прийняту таблицю.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,

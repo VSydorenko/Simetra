@@ -22,6 +22,7 @@ import {
   ENGINE_PREAMBLE_ALLOWED,
   censusDiagnostics,
   renderProviderSeed,
+  tableKey,
   unmodeledClasses,
   type CensusClass,
   type DbConnection,
@@ -268,9 +269,6 @@ function tableOf(id: StableId): LockedTable | undefined {
       return undefined
   }
 }
-
-const tableKey = (schema: string, name: string): string =>
-  JSON.stringify([schema, name])
 
 /** Наявні таблиці вихідного стану: факти виду `table` — це `relkind` r/p. */
 function existingTables(source: FactBase): ReadonlySet<string> {

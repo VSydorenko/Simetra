@@ -56,6 +56,7 @@ function applied(over: Partial<MarkerRecord> = {}): ApplyState {
     marker: {
       format: 1,
       snapshotHash: SNAPSHOT,
+      snapshot: {},
       scope: { schemas: ["app", "simetra"], provider: "supabase" },
       catalog: model(["id"]),
       engine: ENGINE,

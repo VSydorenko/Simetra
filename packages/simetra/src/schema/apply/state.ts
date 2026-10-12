@@ -87,6 +87,11 @@ export function renderApplyState(
 export interface MarkerRecord {
   format: number
   snapshotHash: string
+  /**
+   * `canonicalSnapshot` застосованої моделі: ідентичність стану «до», з якої
+   * виявляється перехід промоції. Читач тлумачить лише потрібні поля.
+   */
+  snapshot: unknown
   scope: EngineScope
   catalog: CatalogModel
   engine: EngineIdentity
@@ -104,6 +109,7 @@ export type ApplyState =
 interface MarkerRow {
   format: number
   snapshot_hash: string
+  snapshot: unknown
   scope: EngineScope
   catalog: CatalogModel
   engine_name: string
@@ -168,6 +174,7 @@ export async function readApplyState(
     marker: {
       format: row.format,
       snapshotHash: row.snapshot_hash,
+      snapshot: row.snapshot,
       scope: row.scope,
       catalog: row.catalog,
       engine: { name: row.engine_name, version: row.engine_version },
@@ -306,6 +313,27 @@ export async function findApply(
   )
   if (row === undefined) return "not-applied"
   return row.format === APPLY_STATE_FORMAT ? "applied" : "unknown"
+}
+
+/**
+ * Хеші застосованих записів промоції (`ledger.promotion->>'hash'`, рішення 1
+ * плану П3-2a): рядок 5 таблиці рішень відрізняє з них застосований запис від
+ * чужого. Ledger без колонки `promotion` — форма до промоцій, у ній жодну
+ * промоцію не застосовано: порожня множина, а не помилка. Колонку шукаємо в
+ * каталозі, а не запитом до неї: інакше відсутня колонка зламала б транзакцію.
+ */
+export async function readAppliedPromotions(
+  tx: ApplyTransaction
+): Promise<Set<string>> {
+  const [column] = await tx.query<{ exists: boolean }>(
+    "SELECT EXISTS (SELECT FROM pg_catalog.pg_attribute WHERE attrelid = to_regclass($1) AND attname = 'promotion' AND NOT attisdropped) AS exists",
+    [LEDGER]
+  )
+  if (column?.exists !== true) return new Set()
+  const rows = await tx.query<{ hash: string }>(
+    `SELECT promotion->>'hash' AS hash FROM ${LEDGER} WHERE promotion->>'hash' IS NOT NULL`
+  )
+  return new Set(rows.map((r) => r.hash))
 }
 
 const STATE_TABLES = ["marker", "ledger"] as const

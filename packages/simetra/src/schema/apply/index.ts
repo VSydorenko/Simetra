@@ -17,6 +17,7 @@ export {
   applyStateOf,
   findApply,
   readApplyState,
+  readAppliedPromotions,
   renderApplyState,
   writeApplyStateStatements,
   type ApplyRecord,
@@ -25,6 +26,12 @@ export {
   type MarkerRecord,
 } from "./state"
 export { PLATFORM_VERSION } from "./version"
+export { tableKey } from "./table-key"
+export {
+  promotionTransition,
+  type PromotionInput,
+  type TransitionVerdict,
+} from "./promotion"
 export {
   DEFAULT_APPLY_TIMEOUTS,
   executePlan,
