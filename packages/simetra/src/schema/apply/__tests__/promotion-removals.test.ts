@@ -18,6 +18,7 @@ import {
   classifyRemovals,
   classifySteps,
   promotionPermissionItems,
+  requiredPermissions,
   stepConversions,
   tableKey,
   unclassifiedRemovals,
@@ -1388,6 +1389,66 @@ describe("access and permission items", () => {
         summary: ["tables.app.items.columns.org_ref.default"],
       },
     ])
+  })
+
+  it("lets a removed key of a multi-target unit require remove: for its table only", () => {
+    // Грант на основну таблицю й таблицю ТЧ: ключ основної має клас
+    // metadata, ключ ТЧ — removed. Зняття гранту на ТЧ без `remove:`
+    // пройшло б, тож одиниця покрита класом removed лише для таблиці ТЧ
+    const grant = unit(
+      "grant",
+      "grant:app.items,app.items_lines:anon:select",
+      "items",
+      "GRANT SELECT ON TABLE app.items, app.items_lines TO anon"
+    )
+    const key = (t: string): PromotionObject => ({
+      kind: "unit",
+      class: "grant",
+      schema: "app",
+      table: t,
+      name: "grant:anon:select",
+    })
+    const tables = [table("items"), table("items_lines")]
+    const removals = classify(
+      record({
+        tables: [
+          { id: OBJECT_ID, schema: "app", from: "items", to: "items" },
+          {
+            id: "00000000-0000-4000-8000-000000000002",
+            schema: "app",
+            from: "items_lines",
+            to: "items_lines",
+          },
+        ],
+        conversions: [
+          conversion("metadata", key("items")),
+          conversion("removed", key("items_lines")),
+        ],
+      }),
+      model(tables, [grant]),
+      model(tables)
+    )
+    expect(removals).toEqual([
+      {
+        path: "units.grant:app.items,app.items_lines:anon:select",
+        kind: "missing",
+        covered: "removed",
+        tables: [{ schema: "app", name: "items_lines" }],
+      },
+    ])
+    const permissionItems = promotionPermissionItems([], [], removals)
+    expect(permissionItems.map((i) => i.token)).toEqual([
+      "remove:app.items_lines",
+    ])
+    const subject = { steps: [], drift: null, promotion: { permissionItems } }
+    expect(requiredPermissions(subject)).toEqual(["remove:app.items_lines"])
+    expect(checkPermissions(subject, [])).toEqual([
+      expect.objectContaining({
+        code: "apply.permission-required",
+        params: { items: "remove:app.items_lines" },
+      }),
+    ])
+    expect(checkPermissions(subject, ["remove:app.items_lines"])).toEqual([])
   })
 
   it("gives no remove: for removals covered by other classes", () => {
