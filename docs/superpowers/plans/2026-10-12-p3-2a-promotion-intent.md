@@ -380,6 +380,15 @@
        і сторож бачить їхні рядки.
      - `lost > 0` або помилка приведення (SQLSTATE класу `22`) →
        `apply.type-narrowing` (`step`, `table`, `column`, `lost` чи `sqlstate`).
+     - Будь-яка інша помилка сторожа (не клас `22`) → `apply.type-guard-failed`
+       (`step`, `column`, `sqlstate`, `error`), а не сирий `apply.step-failed`.
+     - Обидва приведення перевіряються ще під час `plan`. На копії в точці
+       збереження виконується `SELECT ((NULL::<старий>)::<новий>)::<старий>`.
+       Помилка (наприклад, `42846` — пари без зворотного приведення) →
+       `plan.type-guard-unsupported` з `reason: "cast"`.
+     - Тип, що нормалізує текст (`text → jsonb`: пробіли, порядок ключів),
+       дає хибну «втрату» і збій кроку. Це безпечний бік; свідома конверсія —
+       крок даних (П3-2b).
      - Сторож будується з дерева кроку (таблиця, колонка, новий тип); старий
        тип — з моделі вихідного стану. SQL сторожа повністю кваліфікований
        і не залежить від `search_path`.
@@ -387,7 +396,8 @@
        Таке буває, коли:
        - `USING` не рівно `<колонка>::<новий>`;
        - старого типу не видно;
-       - це `ALTER TYPE … ALTER ATTRIBUTE … TYPE` складеного типу.
+       - це `ALTER TYPE … ALTER ATTRIBUTE … TYPE` складеного типу;
+       - немає приведення туди чи назад (`reason: "cast"`).
    - **Детектор.** На копії шукаються тригери, що залежать від колонки зі
      зміною типу (`WHEN` чи `UPDATE OF`), і SQL-функції з `prosqlbody`, що
      залежать від неї: `pg_depend` з `refobjsubid` = `attnum`.
@@ -408,6 +418,10 @@
    - Без `ONLY`, як і сторож: рядки партицій і нащадків теж рахуються.
    - **Ключ** — первинний ключ таблиці зі знімка «до». Складений —
      `ROW(<k1>, …)::text`.
+   - **Таблиця одиниці без первинного ключа** — відмова плану
+     `plan.promotion-unsupported` (`reason: "primaryKey"`) ще у виявленні
+     переходу. Хеш мультимножини без ключа відхилено: він не доводить, що
+     значення лишились у своїх рядках.
    - **«До»:** після відбитка цілі, до першого кроку, у старих іменах.
    - **«Після»:** після останнього кроку, у нових іменах.
    - **Колонка зі зміною типу.** `<вираз>` «до» — `(<колонка>::<новий тип>)`.
@@ -586,6 +600,9 @@
       відмовляє `apply.promotion-checks-pending` (причина «П3-2b») до
       `BEGIN`.
     - Режими `proof` (копія) і `rehearse` (ціль, `ROLLBACK`) дозволені.
+    - `plan` для артефакту з промоцією одразу дає попередження
+      `plan.promotion-commit-pending`: застосування з `COMMIT` відмовить до
+      П3-2b, репетиція дозволена. Людина дізнається про межу до `apply`.
     - П3-2b знімає відмову разом із `plpgsql_check`, ревалідацією,
       валідністю обмежень, обгорткою extract і вимогою звіту репетиції.
 13. **Преамбула двигуна виконується, а не ігнорується.**
@@ -602,13 +619,20 @@
         `engine.preamble-unknown` в `EnginePlan.diagnostics`;
       - схема артефакту приймає лише пари з переліку; раннер інше відхиляє
         (лінт);
-      - раннер перед першим кроком двигуна зберігає `current_setting` обох
-        параметрів і ставить преамбулу через `set_config(…, true)`. Після
-        останнього кроку двигуна повертає збережене.
-    - Сторожі між кроками двигуна йдуть під преамбулою: їхній SQL повністю
-      кваліфікований. Кроки наміру, заміри збереження, відбиток і запис стану
-      йдуть під налаштуваннями транзакції. Мовчазне неперевірене припущення
-      стає перевіреним.
+      - раннер у 2a застосовує з преамбули лише `search_path`: перед першим
+        кроком двигуна зберігає `current_setting('search_path')` і ставить
+        `set_config('search_path', 'pg_catalog', true)`, після останнього
+        кроку двигуна повертає збережене;
+      - `check_function_bodies = off` дозволений перелік приймає, а раннер
+        свідомо лишає валідацію тіл увімкненою (вердикт архітектора).
+        Раннер П3-1 валідує тіла, тож доказ на копії ловить зламане тіло
+        SQL-функції. Вимкнути валідацію до ревалідації після кроків означало б
+        регресію для всіх планів. `off` вмикає П3-2b тим самим комітом, що й
+        ревалідацію.
+    - Сторожі між кроками двигуна йдуть під `search_path` преамбули: їхній SQL
+      повністю кваліфікований. Кроки наміру, заміри збереження, відбиток і
+      запис стану йдуть під налаштуваннями транзакції. Мовчазне неперевірене
+      припущення стає перевіреним.
 14. **Вивід `plan`.**
     1. Блок дрейфу (П3-1).
     2. Блок «Promotion»: об'єкт, перейменування таблиць і колонок, канонічні
@@ -635,9 +659,10 @@
   `identity`/`generated` колонки — `plan.removal-unclassified`.
 - **Статичний гейт доступу** вимагає `access:*` для кожної таблиці, яку
   читають через API, навіть коли політики П3-3 відтворили б доступ точно.
-- **Функції `SECURITY DEFINER` з рядковим тілом,** що читають промотовану
-  таблицю, у перелік залежних пункту `access` не потрапляють: `pg_depend`
-  їх не бачить.
+- **Функції з рядковим тілом** (будь-якого режиму безпеки, зокрема типові
+  помічники політик) у перелік залежних пункту `access` не потрапляють:
+  `pg_depend` їх не бачить. Перелік інформаційний — сам пункт виникає зі
+  зміни доступу таблиці.
 - **Таблиця в схемі `public` на Supabase.** Тут схемні типові привілеї
   провайдера дають ролям API запис, тож промоція — `plan.write-path`
   (Пр21). Обхід — відкликати ці типові привілеї окремою зміною метаданих.
@@ -647,9 +672,15 @@
 - **Еквівалентність не бачить семантично рівних, але текстово різних
   визначень** (наприклад, `CHECK (a > 0)` проти `CHECK (0 < a)`). Такий
   об'єкт стає DROP+CREATE двигуна з класом конверсії — безпечно.
-- **`check_function_bodies = off` з преамбули.** Тіла SQL-функцій, які
-  створює будь-який план, при застосуванні не валідуються. Так само поводиться
-  завантаження бажаного стану двигуном. Ревалідація після кроків — П3-2b.
+- **Тіло функції з посиланням уперед.** Раннер лишає валідацію тіл
+  увімкненою (рішення 13), а двигун не пише ребер залежності тіл. Тож план,
+  що створює SQL-функцію, тіло якої посилається на об'єкт, створений пізнішим
+  кроком того самого плану, падає на доказі — хибна відмова, як і в П3-1.
+  Обхід — розбити зміну метаданих на два застосування. Знімає це П3-2b разом
+  із ревалідацією.
+- **Типи, що нормалізують текст** (`text → jsonb`), — хибна «втрата»
+  сторожа звуження й збій кроку на репетиції. Свідома конверсія — крок даних
+  (П3-2b).
 - **Ім'я з комою в токені дозволу** — лише через MCP.
 - **Хибна розбіжність запису** — коли запис змінено руками чи пізніший коміт
   змінив промотований об'єкт. Це безпечна відмова з порадою.
@@ -731,6 +762,8 @@ Expected: зелено. Червоне до початку — стоп і зв�
    - залежні об'єкти бажаного стану (в'юхи, політики, `CHECK`, індекси,
      значення за замовчуванням) двигун знімає й створює наново в тій самій
      транзакції з опціями, коментарями й ACL бажаного стану;
+   - власник відтвореного об'єкта — роль, що застосовує (платформна §6.7);
+     розбіжність власника — відмова плану;
    - тригер, що залежить від колонки зі зміною типу (`WHEN`, `UPDATE OF`), і
      SQL-функція з тілом `BEGIN ATOMIC`, що залежить від неї, — відмова плану
      зі списком;
@@ -762,6 +795,10 @@ Expected: зелено. Червоне до початку — стоп і зв�
     втрат перед кроком перевіряє, що кожне наявне значення переживає
     приведення туди й назад. Втрата — збій кроку, а не мовчазне обрізання.
     Свідома зміна значень — крок даних.
+12. **Промоція §8, «Дозволи».** Додати: дозвіл може охоплювати показаний
+    повністю перелік видалень однієї таблиці (`remove`) чи змін її доступу
+    (`access`). Перелік лежить під хешем плану, тож його зміна анулює дозвіл,
+    як і зміна плану.
 
 - [ ] **Step 2: Якори**
 
@@ -1053,6 +1090,7 @@ it("9 ignores a record in a fresh environment", …)          // marker нема
 it("refuses two transitions in one plan", …)                // plan.promotion-multiple
 it("refuses data steps until P3-2b", …)                     // counterpartyMapping() з fill → plan.promotion-unsupported, reason "dataSteps"
 it("refuses a label translation until P3-3", …)             // reason "labelTranslation"
+it("refuses a unit table without a primary key", …)          // reason "primaryKey"
 it("derives incoming delete semantics from the desired model", …) // пізніший вхідний FK з каскадом не дає mismatch
 ```
 `apply-state.db.test.ts`: `readAppliedPromotions` на ledger без колонки
@@ -1237,10 +1275,13 @@ git commit -m "feat(schema): канонічні імена обмежень, FK,
   ```ts
   export type GuardResult = { guards: string[] } | { refusal: EngineDiagnostic } // plan.type-guard-unsupported
   export function typeGuards(step: Pick<PlanStep, "id" | "sql">, source: CatalogModel, parse: SqlParser): GuardResult
+  export async function checkGuardCasts(tx: ApplyTransaction, casts: readonly { step: string; from: string; to: string }[]): Promise<EngineDiagnostic[]>
+  // на копії в точці збереження: SELECT ((NULL::<from>)::<to>)::<from>; помилка → plan.type-guard-unsupported, reason "cast"
   export async function readTypeChangeDependents(tx: ApplyTransaction, columns: readonly { schema: string; table: string; column: string }[]): Promise<string[]>
   // "trigger app.t.name", "function app.f(integer)" — для plan.type-change-dependent
   ```
 - Коди: `apply.type-narrowing` (`step`, `table`, `column`, `lost` | `sqlstate`),
+  `apply.type-guard-failed` (`step`, `column`, `sqlstate`, `error`),
   `plan.type-guard-unsupported` (`step`, `reason`),
   `plan.type-change-dependent` (`objects`).
 
@@ -1256,6 +1297,7 @@ it("does not guard a lossless change", …)                  // int4 → int8 �
 it("refuses a non-plain USING", …)                         // USING upper(c) → plan.type-guard-unsupported
 it("refuses ALTER TYPE … ALTER ATTRIBUTE … TYPE", …)
 it("refuses when the old type is not visible", …)
+it("refuses a type pair without a cast back", …)   // checkGuardCasts на стеку: пара без зворотного приведення (взяти з pg_cast) → reason "cast"
 ```
 `execute-plan.db.test.ts`:
 ```ts
@@ -1265,6 +1307,7 @@ it("stops truncation inside a partition", …)            // розділена 
 it("stops a rounding numeric change", …)               // numeric(10,4)→numeric(10,2) з 1.2345
 it("lets an enum to text change through", …)            // енам→text з даними → rolledBack без діагностик сторожа
 it("reports a failing cast as narrowing", …)            // int8→int4 з 2^40 → apply.type-narrowing, sqlstate 22003
+it("reports a guard error outside class 22 by its own code", …) // сторож, що падає з 42883, → apply.type-guard-failed
 ```
 `build-plan.db.test.ts`:
 ```ts
@@ -1284,8 +1327,10 @@ Expected: FAIL.
   - Раннер перед кроком виконує кожен сторож:
     - `lost > 0` → `stop("failed", "apply.type-narrowing", …)`;
     - `ApplyDbError` з SQLSTATE `22…` → те саме з `sqlstate`.
-  - Детектор — за рішенням 5. У `prove` для плану без промоції він іде на
+  - Детектор і `checkGuardCasts` — за рішенням 5. У плані з промоцією
+    обидва йдуть на копії після наміру, у `prove` для плану без промоції — на
     копії до прогону.
+  - Помилка сторожа не класу `22` → `apply.type-guard-failed`.
 
 - [ ] **Step 4: Запустити — проходять**
 
@@ -1454,8 +1499,10 @@ it("refuses with target-changed when a renamed table vanished before apply", …
   // план з наміром RENAME; таблицю зі старим ім'ям знято після плану → apply.target-changed (sections relations), не step-failed
 it("takes SHARE ROW EXCLUSIVE on FK targets up front", …)
   // поки інша сесія тримає ROW EXCLUSIVE на цілі FK, спроба чекає на LOCK, а не посеред кроку (pg_locks)
-it("runs engine steps under the engine preamble and restores the settings", …)
-  // функція з посиланням уперед у тілі створюється; після кроків current_setting('check_function_bodies') = як до
+it("runs engine steps under the preamble search path and restores it", …)
+  // під час кроку двигуна current_setting('search_path') = pg_catalog; після — як до
+it("keeps function body validation on although the preamble asks to turn it off", …)
+  // преамбула з check_function_bodies=off → під час кроків current_setting('check_function_bodies') = on
 ```
 
 - [ ] **Step 2: Запустити — падають**
@@ -1466,9 +1513,11 @@ Expected: FAIL.
 - [ ] **Step 3: Реалізація**
   - Два оператори `LOCK TABLE ONLY …`: спершу `ACCESS EXCLUSIVE`, потім
     `SHARE ROW EXCLUSIVE`. Обробка `42P01`/`42809` — як у П3-1.
-  - Преамбула:
-    - перед першим кроком з `origin: "engine"` — `set_config(name, value, true)`;
-    - після останнього такого кроку — `set_config(name, <збережене>, true)`.
+  - Преамбула (рішення 13), лише `search_path`:
+    - перед першим кроком з `origin: "engine"` —
+      `set_config('search_path', 'pg_catalog', true)`;
+    - після останнього такого кроку — `set_config('search_path', <збережене>, true)`;
+    - `check_function_bodies` не чіпається.
 
 - [ ] **Step 4: Запустити — проходять**
 
@@ -1632,7 +1681,8 @@ git commit -m "feat(schema): доказ збереження рядків і з�
     apiRoles: readonly string[]
   }): Promise<string[]>   // "grant INSERT to authenticated on app.t", "default privileges …", "policy app.t.p (INSERT)"
   ```
-- Коди: `plan.write-path` (`table`, `detail`), `apply.promotion-checks-pending`.
+- Коди: `plan.write-path` (`table`, `detail`), `apply.promotion-checks-pending`,
+  `plan.promotion-commit-pending` (`warning`).
 
 Порядок гілки промоції в `buildPlan`, після кроків 1–3 П3-1:
 1. `readAppliedPromotions` + `promotionTransition` (`liveTables` — з
@@ -1644,7 +1694,7 @@ git commit -m "feat(schema): доказ збереження рядків і з�
 4. `withTargetClone` №1:
    - `renameIntent` → кроки на копії (`dbs.scratch`, `commit`);
    - `readEquivalenceObjects` копії → `canonicalRenames` → на копії;
-   - `readTypeChangeDependents`;
+   - `readTypeChangeDependents`, `checkGuardCasts`;
    - `engine.extract(копія)` → `engine.plan(копія, тінь, scope, { optionsFrom:
      live.extracted.catalog })` з його діагностиками.
 5. Решта аналізу:
@@ -1664,6 +1714,9 @@ git commit -m "feat(schema): доказ збереження рядків і з�
 
 ```ts
 it("plans a promotion with intent steps first and proves it on a copy", …)
+  // діагностики містять попередження plan.promotion-commit-pending
+it("refuses a plan whose SQL function body is broken", …)
+  // бажаний стан з SQL-функцією, тіло якої читає неіснуючу колонку → доказ на копії падає, план refused
   // перші кроки origin "intent"; FK ТЧ і PK — перейменування, без DROP/ADD; promotion.recordHash; proof пройшов
 it("refuses a transition when no record is passed", …)    // buildPlan(..., []) → plan.promotion-record-missing
 it("refuses a promotion when an API role can write the adopted table", …)
