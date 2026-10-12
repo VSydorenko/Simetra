@@ -426,6 +426,7 @@ describe("diff narrowed to tables", () => {
     consumes: [],
     destroys: [],
     destroyed: [],
+    consumed: [],
     transactionality: "transactional",
     newSegmentBefore: false,
     lockedTables: [],

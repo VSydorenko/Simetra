@@ -190,6 +190,7 @@ function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
     consumes: [],
     destroys: [],
     destroyed: [],
+    consumed: [],
     dataLoss: false,
     rewriteRisk: false,
     guards: [],

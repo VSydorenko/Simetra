@@ -64,6 +64,9 @@ export const commentSubject = (table: string, column?: string) =>
  */
 const COMMENT_CLASSES: readonly ConversionClass[] = ["removed"]
 
+/** DEFAULT носія скоупу лише знімається (рішення 15, R21). */
+const SCOPE_DEFAULT_CLASSES: readonly ConversionClass[] = ["removed"]
+
 /** Структурні елементи, що потребують класу конверсії (рішення 5). */
 const CLASSIFIED_COLLECTIONS = ["uniques", "checks", "indexes"] as const
 
@@ -419,13 +422,21 @@ export function structuralSubjects(
   }
   for (const { index, column, fate } of promoted.columns) {
     const pointer = `/columns/${index}`
-    if (column.default !== undefined && fate.to === "attribute") {
-      // Обов'язковий клас перевіряє `placeColumns` разом із `defaultValue`.
+    if (
+      column.default !== undefined &&
+      (fate.to === "attribute" || fate.to === "scope")
+    ) {
+      // Реквізиту обов'язковий клас перевіряє `placeColumns` разом із
+      // `defaultValue`. Значення скоупу вид у базі не дає, тож мапінг зникнення
+      // DEFAULT носія скоупу не покриває (рішення 15, R21): клас обов'язковий
+      // і лише «видалено з дозволом» — заміни платформою для скоупу в 2a немає
       found.push({
         subject: defaultSubject(object.name, column.name),
         file: object.file,
         pointer,
-        required: false,
+        ...(fate.to === "scope"
+          ? { required: true, allowed: SCOPE_DEFAULT_CLASSES }
+          : { required: false }),
         objects: [
           {
             kind: "default",

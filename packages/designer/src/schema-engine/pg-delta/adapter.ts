@@ -314,7 +314,19 @@ function lockedTablesOf(
  * входять: за ними план не губить даних застосунку.
  */
 function destroyedOf(action: Action): EngineObjectRef[] {
-  return action.destroys.flatMap((id): EngineObjectRef[] => {
+  return objectRefs(action.destroys)
+}
+
+/**
+ * Вжиті об'єкти структурно, тим самим правилом, що й `destroyedOf`: T2
+ * розпізнає, на чому дія несе `dataLoss`, без рядкової форми StableId.
+ */
+function consumedOf(action: Action): EngineObjectRef[] {
+  return objectRefs(action.consumes)
+}
+
+function objectRefs(ids: readonly StableId[]): EngineObjectRef[] {
+  return ids.flatMap((id): EngineObjectRef[] => {
     if (!("schema" in id) || !("name" in id)) return []
     if (typeof id.schema !== "string") return []
     const table = "table" in id && typeof id.table === "string" ? id.table : ""
@@ -340,6 +352,7 @@ function toEngineAction(
     consumes: action.consumes.map(encodeId),
     destroys: action.destroys.map(encodeId),
     destroyed: destroyedOf(action),
+    consumed: consumedOf(action),
     transactionality: action.transactionality,
     newSegmentBefore: action.newSegmentBefore,
     lockedTables: lockedTablesOf(action, tables),

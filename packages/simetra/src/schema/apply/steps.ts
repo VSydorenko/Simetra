@@ -57,6 +57,8 @@ export interface PlanStep {
   destroys: string[]
   /** Структурна форма `destroys` від адаптера; у кроку наміру порожня. */
   destroyed: EngineObjectRef[]
+  /** Структурна форма `consumes` від адаптера; у кроку наміру порожня. */
+  consumed: EngineObjectRef[]
   dataLoss: boolean
   rewriteRisk: boolean
   /** SQL сторожів кроку; раннер виконує їх перед кроком. */
@@ -393,6 +395,7 @@ export function intentStep(
     consumes: [],
     destroys: [],
     destroyed: [],
+    consumed: [],
     dataLoss: false,
     rewriteRisk: false,
     guards: [],
@@ -454,6 +457,7 @@ export function classifySteps(
       consumes: action.consumes,
       destroys: action.destroys,
       destroyed: action.destroyed,
+      consumed: action.consumed,
       dataLoss: action.dataLoss,
       rewriteRisk: action.rewriteRisk,
       guards: guardsOf(typeGuards({ id, sql: action.sql }, target, parse)),

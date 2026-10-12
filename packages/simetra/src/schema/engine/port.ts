@@ -135,6 +135,12 @@ export interface EngineAction {
    * (ролі, членства, гранти) сюди не входять.
    */
   destroyed: EngineObjectRef[]
+  /**
+   * Вжиті об'єкти структурно (з `consumes`), за тим самим правилом, що й
+   * `destroyed`: на чому дія несе `dataLoss`, T2 розпізнає без відтворення
+   * рядкової форми ідентичності двигуна.
+   */
+  consumed: EngineObjectRef[]
   transactionality: (typeof ENGINE_TRANSACTIONALITIES)[number]
   /**
    * Дія вживає результат попередньої `commitBoundaryAfter` (нове значення

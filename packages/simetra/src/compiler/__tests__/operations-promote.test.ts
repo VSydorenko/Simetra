@@ -8,6 +8,7 @@ import {
   promotionMapping,
   promotionRecordSchema,
   serializeCanonical,
+  type ConversionClass,
   type PromoteInput,
   type PromotionRecord,
   type SchemaPathResolver,
@@ -1543,6 +1544,55 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     expect(result.diagnostics[0]!.hint).toMatch(/notNull/)
     const ok = await promoted(files(true), scope)
     expect(errors(ok.result)).toEqual([])
+  })
+
+  it("requires the removed class for a default of the scope column", async () => {
+    // Значення скоупу вид у базі не дає (R21): DEFAULT носія скоупу мапінг не
+    // покриває, тож він потребує класу, і лише «видалено»
+    const counterparty = withCounterparty((raw) => {
+      raw.scope = "org"
+      raw.scopeColumn = "orgId"
+      ;(raw.columns as Json[]).push({
+        id: uuid(7010),
+        name: "orgId",
+        physicalName: "org_ref",
+        type: "UUID",
+        notNull: true,
+        default: "gen_random_uuid()",
+      })
+    })
+    const files = scoped({
+      [COUNTERPARTY_FILE]: json(counterparty, COUNTERPARTY_FILE),
+    })
+    expect((await compile(files)).diagnostics).toEqual([])
+    const scope = (cls?: ConversionClass) =>
+      mapping((m) => {
+        m.columns.orgId = { to: "scope" }
+        if (cls !== undefined) m.conversions["Counterparty#default/orgId"] = cls
+      })
+    const subject = "Counterparty#default/orgId"
+    const missing = await promoted(files, scope())
+    expect(
+      missing.result.diagnostics.map((d) => [d.code, d.params?.subject])
+    ).toEqual([["promote.unclassified", subject]])
+    const platform = await promoted(files, scope("platform"))
+    expect(
+      platform.result.diagnostics.map((d) => [d.code, d.params?.allowed])
+    ).toEqual([["promote.unclassified", "removed"]])
+    const ok = await promoted(files, scope("removed"))
+    expect(errors(ok.result)).toEqual([])
+    expect(ok.result.record?.conversions).toContainEqual({
+      subject,
+      class: "removed",
+      objects: [
+        {
+          kind: "default",
+          schema: "app",
+          table: "counterparties",
+          column: "org_ref",
+        },
+      ],
+    })
   })
 
   it("refuses a reference to the scope column and records the scope carrier", async () => {

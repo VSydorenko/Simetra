@@ -2514,8 +2514,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Промоція знімає чи перевизначає об'єкти прийнятих таблиць, яких не покриває жоден клас конверсії: ${p.paths}`,
     hint: {
-      en: "No plan was written. Every adopted constraint, index, default, comment, policy or grant that disappears needs a conversion class in promote; give it one, or keep the object. An adopted primary key must match the kind's key, and an identity or generated column cannot change in a promotion.",
-      uk: "План не записано. Кожне прийняте обмеження, індекс, значення за замовчуванням, коментар, політика чи грант, що зникає, потребує класу конверсії в promote; призначте його або збережіть об'єкт. Прийнятий первинний ключ мусить збігатися з ключем виду, а identity чи генерована колонка в промоції не змінюється.",
+      en: "No plan was written. Every adopted constraint, index, default, comment, policy or grant that disappears needs a conversion class in promote; give it one, or keep the object. An adopted primary key must match the kind's key, and the identity, generated expression or collation of a column cannot change in a promotion.",
+      uk: "План не записано. Кожне прийняте обмеження, індекс, значення за замовчуванням, коментар, політика чи грант, що зникає, потребує класу конверсії в promote; призначте його або збережіть об'єкт. Прийнятий первинний ключ мусить збігатися з ключем виду, а identity, вираз генерованої колонки чи колляція колонки в промоції не змінюються.",
     },
   },
   "database.failed": {

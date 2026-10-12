@@ -220,21 +220,21 @@ export function unrealizedRenames(
     ...tables.map((t) => ({
       text: `${quoteIdent(t.schema)}.${quoteIdent(t.name)}`,
       ref: { kind: "table", schema: t.schema, name: t.name },
-      id: engineId("table", [t.schema, t.name]),
     })),
     ...columns.map((c) => ({
       text: `${quoteIdent(c.schema)}.${quoteIdent(c.table)}.${quoteIdent(c.name)}`,
       ref: { kind: "column", schema: c.schema, table: c.table, name: c.name },
-      id: engineId("column", [c.schema, c.table, c.name]),
     })),
   ]
   const hit = new Set<string>()
   for (const step of steps) {
     if (step.origin !== "engine") continue
-    const ids = new Set([...step.consumes, ...step.destroys])
     for (const r of renamed) {
       const destroyed = step.destroyed.some((d) => sameRef(d, r.ref))
-      const lossy = step.dataLoss && ids.has(r.id)
+      // Лише структурні форми (рішення 15, R20): рядкова ідентичність
+      // двигуна в T2 не відтворюється
+      const lossy =
+        step.dataLoss && step.consumed.some((d) => sameRef(d, r.ref))
       if (destroyed || lossy) hit.add(r.text)
     }
   }
@@ -254,18 +254,6 @@ const sameRef = (a: EngineObjectRef, b: EngineObjectRef): boolean =>
   (a.table ?? "") === (b.table ?? "") &&
   a.name === b.name
 
-/**
- * Рядкова форма ідентичності двигуна (`EngineAction.consumes`): сегменти
- * через `.`, сегмент із розділовими знаками чи порожній — у лапках. Лише для
- * `consumes`, бо структурної форми в них немає; знищене читається з
- * `destroyed`.
- */
-function engineId(kind: string, parts: readonly string[]): string {
-  const seg = (p: string) =>
-    p === "" || /[.:(),"\s]/.test(p) ? `"${p.replaceAll('"', '""')}"` : p
-  return `${kind}:${parts.map(seg).join(".")}`
-}
-
 /** Види об'єктів без даних, що висять на таблиці (рішення 3). */
 const ADOPTED_KINDS: ReadonlySet<string> = new Set([
   "constraint",
@@ -282,6 +270,14 @@ const ADOPTED_KINDS: ReadonlySet<string> = new Set([
  * частковий індекс, ставши повним, не пройде як `catalogOnly`. Рахується з
  * дій до `classifySteps`, бо його результат — вхід класифікатора.
  * `unitTables` — `tableKey` нових імен; `offset` — кількість кроків наміру.
+ *
+ * Припущення (рішення 15, R5): `clone` — та сама модель копії після наміру,
+ * з якої двигун будував план. Тоді все, що дія знищує на таблиці одиниці,
+ * у копії є, а намір лише перейменовує — тож кожен такий об'єкт прийнятий.
+ * Тому політика, тригер і правило визнаються прийнятими за самою таблицею;
+ * обмеження й індекс додатково шукаються в копії, бо їх адресу (індекс — без
+ * таблиці) інакше не прив'язати до таблиці одиниці. Інша модель тут зламала
+ * б висновок: новий об'єкт втратив би виняток, а прийнятий — проскочив.
  */
 export function adoptedReplacements(
   actions: readonly EngineAction[],
@@ -541,7 +537,9 @@ function columnChanges(
     )
   if (from.default !== undefined && from.default !== to.default) {
     // Значення стандартного реквізиту заміщує вид (промоція-4, рішення 5):
-    // його синтетичний id — `<власник>#<ім'я>`, у UUID реквізиту `#` немає
+    // його синтетичний id — `<власник>#<ім'я>`, у UUID реквізиту `#` немає.
+    // Носій скоупу (id — UUID виду скоупу) сюди не потрапляє: значення скоупу
+    // вид у базі не дає, тож його DEFAULT потребує класу (рішення 15, R21)
     const standard = record.columns.some(
       (c) =>
         c.schema === u.schema &&

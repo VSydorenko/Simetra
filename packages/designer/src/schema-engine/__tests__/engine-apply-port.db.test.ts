@@ -190,6 +190,19 @@ describe("SchemaEngine apply port", () => {
     )
   })
 
+  it("reports consumed objects structurally", async () => {
+    // Ім'я з крапкою: рядкова форма його лапкує, структурна — ні
+    const plan = await planOf(
+      'create schema app; create table app."a.b" (id int, c int);',
+      'create schema app; create table app."a.b" (id int, c int not null);'
+    )
+    const setNotNull = actionMatching(plan, /SET NOT NULL/i)
+    expect(setNotNull.consumes).toEqual(['column:app."a.b".c'])
+    expect(setNotNull.consumed).toEqual([
+      { kind: "column", schema: "app", table: "a.b", name: "c" },
+    ])
+  })
+
   it("passes the engine preamble through on every path", async () => {
     const desired = [
       "create schema app;",

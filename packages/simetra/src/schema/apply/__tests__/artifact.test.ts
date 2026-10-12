@@ -46,6 +46,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
       consumes: ["table:app.t"],
       destroys: ["column:app.t.c"],
       destroyed: [{ kind: "column", schema: "app", table: "t", name: "c" }],
+      consumed: [{ kind: "table", schema: "app", name: "t" }],
       dataLoss: true,
       rewriteRisk: false,
       guards: [],

@@ -539,6 +539,7 @@ describe("buildPlan", () => {
           consumes: [],
           destroys: [],
           destroyed: [],
+          consumed: [],
           transactionality: "transactional",
           newSegmentBefore: false,
           lockedTables: [],

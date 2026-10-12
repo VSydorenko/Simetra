@@ -284,6 +284,7 @@ describe("renameIntent", () => {
       consumes: [],
       destroys: [],
       destroyed: [],
+      consumed: [],
       dataLoss: false,
       rewriteRisk: false,
       guards: [],
@@ -300,6 +301,7 @@ describe("intentStep", () => {
       class: "catalogOnly",
       guards: [],
       destroyed: [],
+      consumed: [],
     })
   })
 })

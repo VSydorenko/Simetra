@@ -159,6 +159,7 @@ function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
     consumes: [],
     destroys: [],
     destroyed: [],
+    consumed: [],
     dataLoss: false,
     rewriteRisk: false,
     guards: [],
@@ -174,6 +175,7 @@ function action(sql: string, over: Partial<EngineAction> = {}): EngineAction {
     consumes: [],
     destroys: [],
     destroyed: [],
+    consumed: [],
     transactionality: "transactional",
     newSegmentBefore: false,
     lockedTables: [],
@@ -413,6 +415,56 @@ describe("classifyRemovals", () => {
         covered: "mapping",
       },
     ])
+  })
+
+  it("needs a class for a lost default of the scope column", () => {
+    // Носій скоупу: id запису — UUID виду скоупу, не синтетичний id
+    // стандартного реквізиту, тож мапінг значення не покриває (R21)
+    const scopeColumn = {
+      id: "00000000-0000-4000-8000-000000000301",
+      sourceId: "00000000-0000-4000-8000-000000000302",
+      schema: "app",
+      table: "items",
+      from: "org_ref",
+      to: "org_id",
+    }
+    const clone = model([
+      table("items", {
+        columns: [
+          col("org_id", { type: "uuid", default: "gen_random_uuid()" }),
+        ],
+      }),
+    ])
+    const desired = model([
+      table("items", { columns: [col("org_id", { type: "uuid" })] }),
+    ])
+    const without = classify(record({ columns: [scopeColumn] }), clone, desired)
+    expect(unclassifiedRemovals(without)[0]?.params).toEqual({
+      paths: "tables.app.items.columns.org_ref.default",
+    })
+    const removed = classify(
+      record({
+        columns: [scopeColumn],
+        conversions: [
+          conversion("removed", {
+            kind: "default",
+            schema: "app",
+            table: "items",
+            column: "org_ref",
+          }),
+        ],
+      }),
+      clone,
+      desired
+    )
+    expect(removed).toEqual([
+      {
+        path: "tables.app.items.columns.org_ref.default",
+        kind: "changed",
+        covered: "removed",
+      },
+    ])
+    expect(unclassifiedRemovals(removed)).toEqual([])
   })
 
   it("covers a removed column comment by its class", () => {
@@ -699,6 +751,86 @@ describe("classifyRemovals", () => {
     ])
   })
 
+  it.each([
+    [
+      "constraint",
+      "ALTER TABLE app.items DROP CONSTRAINT items_k",
+      "ALTER TABLE app.items ADD CONSTRAINT items_k CHECK (id IS NOT NULL) NOT VALID",
+      "constraint:app.items.items_k",
+      "items_k",
+    ],
+    [
+      "policy",
+      "DROP POLICY items_read ON app.items",
+      "CREATE POLICY items_read ON app.items FOR SELECT USING (false)",
+      "policy:app.items.items_read",
+      "items_read",
+    ],
+    [
+      "trigger",
+      "DROP TRIGGER items_audit ON app.items",
+      "CREATE TRIGGER items_audit AFTER UPDATE ON app.items FOR EACH ROW EXECUTE FUNCTION app.audit()",
+      "trigger:app.items.items_audit",
+      "items_audit",
+    ],
+    [
+      "rule",
+      "DROP RULE items_rule ON app.items",
+      "CREATE RULE items_rule AS ON DELETE TO app.items DO INSTEAD NOTHING",
+      "rule:app.items.items_rule",
+      "items_rule",
+    ],
+  ])(
+    "keeps a same-name redefinition of an adopted %s a relaxation",
+    (kind, drop, create, id, name) => {
+      const actions = [
+        action(drop, {
+          verb: "drop",
+          destroys: [id],
+          destroyed: [{ kind, schema: "app", table: "items", name }],
+        }),
+        action(create, { verb: "create", produces: [id] }),
+      ]
+      const clone = model([
+        table("items", {
+          checks: [{ name: "items_k", expression: "CHECK (true)" }],
+        }),
+      ])
+      const noReplacement = adoptedReplacements(
+        actions,
+        clone,
+        new Set([tableKey("app", "items")]),
+        0
+      )
+      expect([...noReplacement]).toEqual(["s1"])
+      expect(
+        classifySteps(actions, clone, parse, 0, { noReplacement })[0]?.class
+      ).toBe("relaxation")
+      // Без промоції — заміна
+      expect(classifySteps(actions, clone, parse, 0)[0]?.class).toBe(
+        "catalogOnly"
+      )
+    }
+  )
+
+  it("does not count a constraint the clone does not hold as adopted", () => {
+    const actions = [
+      action("ALTER TABLE app.items DROP CONSTRAINT gone", {
+        destroyed: [
+          { kind: "constraint", schema: "app", table: "items", name: "gone" },
+        ],
+      }),
+    ]
+    expect(
+      adoptedReplacements(
+        actions,
+        model([table("items")]),
+        new Set([tableKey("app", "items")]),
+        0
+      ).size
+    ).toBe(0)
+  })
+
   it("does not count objects of other tables as adopted", () => {
     const actions = [
       action("DROP INDEX app.other_idx", {
@@ -801,11 +933,35 @@ describe("unrealizedRenames", () => {
     const lossy = step(
       "s3",
       "ALTER TABLE app.catalog_items ALTER COLUMN code TYPE integer",
-      { consumes: ["column:app.catalog_items.code"], dataLoss: true }
+      {
+        consumed: [
+          {
+            kind: "column",
+            schema: "app",
+            table: "catalog_items",
+            name: "code",
+          },
+        ],
+        dataLoss: true,
+      }
     )
     expect(unrealizedRenames([lossy], renames, renamed)[0]?.params).toEqual({
       objects: "app.catalog_items.code",
     })
+    // Рядкова форма двигуна в T2 не розбирається: лише структурне `consumed`
+    expect(
+      unrealizedRenames(
+        [
+          {
+            ...lossy,
+            consumes: ["column:app.catalog_items.code"],
+            consumed: [],
+          },
+        ],
+        renames,
+        renamed
+      )
+    ).toEqual([])
     // Без `dataLoss` той самий крок — звичайна зміна, не нереалізоване
     // оголошення
     expect(

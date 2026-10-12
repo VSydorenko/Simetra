@@ -208,6 +208,7 @@ describe("classifySteps", () => {
     consumes: [],
     destroys: [],
     destroyed: [],
+    consumed: [],
     transactionality: "transactional",
     newSegmentBefore: false,
     lockedTables: [],

@@ -66,6 +66,7 @@ const ACTION: EngineAction = {
   consumes: ["schema:app"],
   destroys: [],
   destroyed: [],
+  consumed: [],
   transactionality: "transactional",
   newSegmentBefore: false,
   lockedTables: [],
