@@ -56,6 +56,20 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
   `src/schema-engine/apply-database.ts`: одне з'єднання й одна транзакція на
   виклик; пул, що може писати в ціль, `apply` відкриває лише після всіх
   перевірок, що не потребують бази.
+- **Промоція в плані.** `promote` пише запис промоції
+  `plans/<objectId>.promotion.json` (артефакти — до змін у теках). `plan` читає
+  `plans/*.promotion.json` суворо (хибний файл — `plan.promotion-record-invalid`),
+  показує блок «Промоція» (перейменування таблиць і колонок, канонічні імена,
+  переліки `access:`/`delete:`/`remove:`, неявні замки) і кроки з походженням та
+  класом перетворення. `allow` у `apply` приймає `s<N>`, `drift`,
+  `access:<table>`, `delete:<table>.<constraint>`, `remove:<table>`; CLI
+  `--allow` ділить за комою, тож імена з комою — лише масивом через MCP.
+  Застосування промоції з `COMMIT` відхиляється (`apply.promotion-checks-pending`),
+  доки не з'являться решта перевірок; репетиція на цілі дозволена. Замки плану
+  йдуть за слідом кроків, а план фіксує свою роль (`apply.role-mismatch`).
+  Правила — спека промоції
+  [§7.2, §8](../superpowers/specs/2026-10-06-promotion-design.md), план
+  [П3-2a](../superpowers/plans/2026-10-12-p3-2a-promotion-intent.md).
 
 ## 2. Правила безпеки
 
