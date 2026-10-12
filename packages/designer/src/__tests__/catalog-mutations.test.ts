@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
-import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { dirname, join } from "node:path"
+import { serializeCanonical, type PromotionRecord } from "simetra/compiler"
+import { describe, expect, it, vi } from "vitest"
+import { writeChanges } from "../io/metadata-dir"
 import { toolByName } from "../tools/catalog"
 import {
   addAdoptedTag,
@@ -14,7 +16,17 @@ import {
   useTmpProjects,
 } from "./helpers/catalog"
 
+// Шпигун лише записує виклики й пише як є: тест порядку читає їхню чергу.
+vi.mock("../io/metadata-dir", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../io/metadata-dir")>()
+  return { ...actual, writeChanges: vi.fn(actual.writeChanges) }
+})
+
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
+const TAG_ID = "00000000-0000-4000-8000-00000000a000"
+/** Запис промоції лягає в `plans/` поруч із текою метаданих. */
+const recordFile = (dir: string) =>
+  join(dirname(dir), "plans", `${TAG_ID}.promotion.json`)
 
 useTmpProjects()
 
@@ -166,11 +178,26 @@ describe("mutation tools", () => {
       expect(r.written).toBe(true)
       expect(existsSync(join(dir, TAG_FILE))).toBe(false)
       expect(existsSync(join(dir, "catalogs/Tag/Tag.meta.json"))).toBe(true)
-      expect(r.data).toMatchObject({
-        kind: "Catalog",
-        objectId: "00000000-0000-4000-8000-00000000a000",
-      })
+      expect(r.data).toMatchObject({ kind: "Catalog", objectId: TAG_ID })
+      expect(r.artifacts).toEqual([`plans/${TAG_ID}.promotion.json`])
+      expect(await readFile(recordFile(dir), "utf8")).toBe(
+        serializeCanonical(r.data as PromotionRecord)
+      )
       expect((await run("compile", dir, {})).ok).toBe(true)
+    })
+
+    it("writes the record before the files of the metadata directory", async () => {
+      const dir = await project()
+      await addAdoptedTag(dir)
+      const spy = vi.mocked(writeChanges)
+      spy.mockClear()
+      const r = await run("promote", dir, tagMapping)
+      expect(r.written).toBe(true)
+      // Запис без змін теки інертний, зміни теки без запису не відновити.
+      expect(spy.mock.calls.map(([, changes]) => changes[0]!.path)).toEqual([
+        `plans/${TAG_ID}.promotion.json`,
+        expect.not.stringMatching(/^plans\//),
+      ])
     })
 
     it("dry run writes nothing but still returns the record", async () => {
@@ -186,6 +213,7 @@ describe("mutation tools", () => {
       expect(r.changes.length).toBeGreaterThan(0)
       expect(r.data).toBeDefined()
       expect(await snapshotOf(dir)).toEqual(before)
+      expect(existsSync(dirname(recordFile(dir)))).toBe(false)
     })
 
     it("a refused mapping writes nothing and has no record", async () => {
@@ -199,6 +227,7 @@ describe("mutation tools", () => {
       expect(r.ok).toBe(false)
       expect(r.written).toBe(false)
       expect(r.data).toBeUndefined()
+      expect(r.artifacts).toBeUndefined()
       expect(await snapshotOf(dir)).toEqual(before)
     })
 

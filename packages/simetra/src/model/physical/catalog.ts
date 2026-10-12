@@ -6,26 +6,33 @@ import type {
   PhysicalTable,
 } from "./snapshot"
 
-/** Клас SQL-одиниці (спека П2 §8.3); належить T0, бо його читає й порт каталогу. */
-export type SqlUnitClass =
-  | "function"
-  | "procedure"
-  | "aggregate"
-  | "trigger"
-  | "policy"
-  | "view"
-  | "materializedView"
-  | "grant"
-  | "defaultPrivileges"
-  | "comment"
-  | "extension"
-  | "sequence"
-  | "sequenceOwnedBy"
-  | "domain"
-  | "publication"
-  | "replicaIdentity"
-  | "functionSettings"
-  | "movementQuery"
+/**
+ * Класи SQL-одиниць (спека П2 §8.3); належать T0, бо їх читає й порт
+ * каталогу. Масив, а не лише тип: строгі схеми файлів (запис промоції)
+ * перевіряють клас тим самим переліком.
+ */
+export const SQL_UNIT_CLASSES = [
+  "function",
+  "procedure",
+  "aggregate",
+  "trigger",
+  "policy",
+  "view",
+  "materializedView",
+  "grant",
+  "defaultPrivileges",
+  "comment",
+  "extension",
+  "sequence",
+  "sequenceOwnedBy",
+  "domain",
+  "publication",
+  "replicaIdentity",
+  "functionSettings",
+  "movementQuery",
+] as const
+
+export type SqlUnitClass = (typeof SQL_UNIT_CLASSES)[number]
 
 /**
  * Модель каталогу порту `SchemaEngine`: те, що бачить база, без походження

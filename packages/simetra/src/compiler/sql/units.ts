@@ -2,6 +2,7 @@ import type {
   AccessPriv,
   CreateFunctionStmt,
   FunctionParameter,
+  GrantStmt,
   Node,
   ObjectWithArgs,
   RangeVar,
@@ -703,15 +704,16 @@ function classify(stmt: Node, scope: TypeScope): Classified {
     const objects = sorted(
       (node.objects ?? []).map((o) => targetName(o, node.objtype, scope))
     ).join(",")
+    const parts = grantParts(node)
     return unit(
       "grant",
       { schema: "", name: objects },
       [
-        node.is_grant === true ? "grant" : "revoke",
+        parts.action,
         objectType(node.objtype),
         objects,
-        roles(node.grantees),
-        privileges(node.privileges),
+        parts.roles,
+        parts.privileges,
       ].join(":")
     )
   }
@@ -1155,6 +1157,23 @@ function role(spec: RoleSpec): string {
     spec.rolename ??
     (spec.roletype ?? "").replace(/^ROLESPEC_/, "").toLowerCase()
   )
+}
+
+/**
+ * Частини ідентичності гранту, що не називають його об'єктів: дія, ролі й
+ * привілеї. Їх читає й ключ предмета промоції (`unitSubjectKeys`), тож обидва
+ * будуються одним правилом.
+ */
+export function grantParts(node: GrantStmt): {
+  action: "grant" | "revoke"
+  roles: string
+  privileges: string
+} {
+  return {
+    action: node.is_grant === true ? "grant" : "revoke",
+    roles: roles(node.grantees),
+    privileges: privileges(node.privileges),
+  }
 }
 
 function roles(nodes: readonly Node[] | undefined): string {

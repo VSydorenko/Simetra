@@ -13,6 +13,12 @@ export interface PromotionParts {
   module?: boolean
   contacts?: boolean
   invoice?: boolean
+  /**
+   * Лише мапінг: `false` — без кроку `fill`. Тоді `createdAt` виводиться, а
+   * `isDeleted` зі своїм `DEFAULT` стає власним реквізитом, тож мапінг
+   * класифікує й значення за замовчуванням (`#default/isDeleted`).
+   */
+  fill?: boolean
 }
 
 export const COUNTERPARTY_ID = uuid(7001)
@@ -204,7 +210,7 @@ export const CREATED_AT_FILL =
   "coalesce(created_at, '2000-01-01 00:00:00+00'::timestamptz)"
 
 export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
-  const { module = true } = o
+  const { module = true, fill = true } = o
   return promoteInput.parse({
     target: { name: "Counterparty" },
     into: {
@@ -216,17 +222,24 @@ export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
       id: { to: "standard", name: "ref" },
       name: { to: "standard", name: "description" },
       inn: { to: "attribute", element: { name: "taxId" } },
-      isDeleted: { to: "standard", name: "deletionMark" },
-      createdAt: { to: "standard", name: "createdAt" },
+      isDeleted: fill
+        ? { to: "standard", name: "deletionMark" }
+        : { to: "attribute", element: { name: "archived" } },
+      createdAt: fill
+        ? { to: "standard", name: "createdAt" }
+        : { to: "retire" },
     },
-    fill: [
-      {
-        target: { to: "standard", name: "createdAt" },
-        expression: CREATED_AT_FILL,
-      },
-    ],
+    fill: fill
+      ? [
+          {
+            target: { to: "standard", name: "createdAt" },
+            expression: CREATED_AT_FILL,
+          },
+        ]
+      : [],
     conversions: {
       "Counterparty#uniques/counterparties_inn_key": "property",
+      ...(fill ? {} : { "Counterparty#default/isDeleted": "removed" }),
       ...(module
         ? {
             [COUNTERPARTY_UNITS.trigger]: "platform",

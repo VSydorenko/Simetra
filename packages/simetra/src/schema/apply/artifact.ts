@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { canonicalize, sha256Hex } from "simetra/compiler"
+import { canonicalize, serializeCanonical, sha256Hex } from "simetra/compiler"
 import { DATABASE_PROVIDERS, type CatalogModel } from "simetra/model"
 import {
   ENGINE_ACTION_VERBS,
@@ -112,60 +112,9 @@ export async function verifyPlanHash(artifact: PlanArtifact): Promise<boolean> {
   return (await sha256Hex(canonicalize(draft))) === planHash
 }
 
-/**
- * Файл плану — канонічна форма з відступом 2 і `\n` наприкінці. Відступи
- * додаються до самого канонічного тексту, а не до повторного `JSON.stringify`:
- * той ставить цілочисельні ключі об'єкта першими й зламав би порядок RFC 8785.
- */
+/** Файл плану — канонічна форма з відступом 2 і `\n` наприкінці. */
 export function serializePlan(artifact: PlanArtifact): string {
-  return `${indentJson(canonicalize(artifact))}\n`
-}
-
-/** Відступи для компактного JSON; рядки копіюються як є, з екрануванням. */
-function indentJson(text: string): string {
-  let out = ""
-  let depth = 0
-  let inString = false
-  const newline = () => `\n${"  ".repeat(depth)}`
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!
-    if (inString) {
-      out += ch
-      if (ch === "\\") out += text[++i]!
-      else if (ch === '"') inString = false
-      continue
-    }
-    switch (ch) {
-      case '"':
-        inString = true
-        out += ch
-        break
-      case "{":
-      case "[":
-        // Порожні `{}` і `[]` лишаються в рядку, як у `JSON.stringify`
-        if (text[i + 1] === (ch === "{" ? "}" : "]")) {
-          out += ch + text[++i]!
-          break
-        }
-        depth++
-        out += ch + newline()
-        break
-      case "}":
-      case "]":
-        depth--
-        out += newline() + ch
-        break
-      case ",":
-        out += `,${newline()}`
-        break
-      case ":":
-        out += ": "
-        break
-      default:
-        out += ch
-    }
-  }
-  return out
+  return serializeCanonical(artifact)
 }
 
 export function parsePlan(

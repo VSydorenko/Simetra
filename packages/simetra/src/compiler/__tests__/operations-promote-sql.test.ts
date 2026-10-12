@@ -112,11 +112,33 @@ $fn$;
     expect(result.record?.movedUnits).toEqual([
       { identity: TOUCH, from: COUNTERPARTY_SQL, to: KIND_MODULE },
     ])
+    // Об'єкт класу одиниці — ключ предмета в старих іменах (рішення 7 П3-2a).
+    const unit = (cls: string, name: string) => [
+      {
+        kind: "unit",
+        class: cls,
+        schema: "app",
+        table: "counterparties",
+        name,
+      },
+    ]
     expect(result.record?.conversions).toEqual(
       expect.arrayContaining([
-        { subject: COUNTERPARTY_UNITS.trigger, class: "platform" },
-        { subject: COUNTERPARTY_UNITS.policy, class: "platform" },
-        { subject: COUNTERPARTY_UNITS.grant, class: "platform" },
+        {
+          subject: COUNTERPARTY_UNITS.trigger,
+          class: "platform",
+          objects: unit("trigger", "counterparty_touch"),
+        },
+        {
+          subject: COUNTERPARTY_UNITS.policy,
+          class: "platform",
+          objects: unit("policy", "counterparties_read"),
+        },
+        {
+          subject: COUNTERPARTY_UNITS.grant,
+          class: "platform",
+          objects: unit("grant", "grant:authenticated:select"),
+        },
       ])
     )
     const debt = after.get(SQL_DEBT_FILE)

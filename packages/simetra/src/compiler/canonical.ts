@@ -40,6 +40,63 @@ export function canonicalize(value: unknown): string {
   }
 }
 
+/**
+ * Файл у канонічній формі (план, запис промоції): канонічний текст з
+ * відступом 2 і `\n` наприкінці. Відступи додаються до самого канонічного
+ * тексту, а не до повторного `JSON.stringify`: той ставить цілочисельні ключі
+ * об'єкта першими й зламав би порядок RFC 8785.
+ */
+export function serializeCanonical(value: unknown): string {
+  return `${indentJson(canonicalize(value))}\n`
+}
+
+/** Відступи для компактного JSON; рядки копіюються як є, з екрануванням. */
+function indentJson(text: string): string {
+  let out = ""
+  let depth = 0
+  let inString = false
+  const newline = () => `\n${"  ".repeat(depth)}`
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!
+    if (inString) {
+      out += ch
+      if (ch === "\\") out += text[++i]!
+      else if (ch === '"') inString = false
+      continue
+    }
+    switch (ch) {
+      case '"':
+        inString = true
+        out += ch
+        break
+      case "{":
+      case "[":
+        // Порожні `{}` і `[]` лишаються в рядку, як у `JSON.stringify`
+        if (text[i + 1] === (ch === "{" ? "}" : "]")) {
+          out += ch + text[++i]!
+          break
+        }
+        depth++
+        out += ch + newline()
+        break
+      case "}":
+      case "]":
+        depth--
+        out += newline() + ch
+        break
+      case ",":
+        out += `,${newline()}`
+        break
+      case ":":
+        out += ": "
+        break
+      default:
+        out += ch
+    }
+  }
+  return out
+}
+
 // Самотній сурогат — старший без молодшого або молодший без старшого.
 const LONE_SURROGATE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/

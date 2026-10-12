@@ -356,7 +356,7 @@ export interface KindDefinition {
  * `ref` однаковий в обох стилях, решта в snake_case — пряма зміна регістру.
  */
 export function standardLogicalName(
-  def: StandardColumnDef,
+  def: Pick<StandardColumnDef, "logicalName">,
   style: AttributeCase
 ): string {
   if (style === "camelCase" || def.logicalName === "ref") return def.logicalName

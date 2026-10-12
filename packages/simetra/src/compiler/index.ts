@@ -40,8 +40,10 @@ export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   triggerFunctionSchema,
   unitPlacement,
+  unitSubjectKeys,
   unitTarget,
   unitTargets,
+  type UnitSubjectKey,
   type UnitTarget,
 } from "./sql/unit-target"
 // Вузли дерева розбору, яке віддає `SqlParser`: споживач розбору (адаптер
@@ -64,7 +66,12 @@ export type {
 } from "./contracts"
 export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
-export { canonicalSnapshot, canonicalize, sha256Hex } from "./canonical"
+export {
+  canonicalSnapshot,
+  canonicalize,
+  serializeCanonical,
+  sha256Hex,
+} from "./canonical"
 export {
   addElement,
   addElementInput,
@@ -77,10 +84,16 @@ export {
   createObjectInput,
   deleteElement,
   deleteInput,
+  derivePromotionFacts,
   elementTarget,
   fixFiles,
+  PROMOTION_RECORD_FORMAT,
   promoteInput,
   promoteObject,
+  promotionFileName,
+  promotionMapping,
+  promotionRecordHash,
+  promotionRecordSchema,
   sqlDebtText,
   renameElement,
   renameInput,
@@ -91,12 +104,16 @@ export {
   type ConversionClass,
   type CreateObjectInput,
   type DeleteInput,
+  type DerivedFacts,
   type ElementTarget,
   type FileChange,
   type IdSource,
   type OperationResult,
   type PromoteInput,
   type PromoteResult,
+  type PromotionFacts,
+  type PromotionMapping,
+  type PromotionObject,
   type PromotionRecord,
   type RenameInput,
   type ResolvedTarget,

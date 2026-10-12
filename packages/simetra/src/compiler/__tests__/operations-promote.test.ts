@@ -2,15 +2,21 @@ import { describe, expect, it } from "vitest"
 import {
   applyChanges,
   compile,
+  derivePromotionFacts,
   promoteInput,
   promoteObject,
+  promotionMapping,
+  promotionRecordSchema,
+  serializeCanonical,
   type PromoteInput,
+  type PromotionRecord,
   type SchemaPathResolver,
 } from "simetra/compiler"
 import {
   CATALOG_FILE,
   CONTACT_FILE,
   CONTACT_ID,
+  COUNTERPARTY_COLUMNS,
   COUNTERPARTY_FILE,
   COUNTERPARTY_ID,
   CREATED_AT_FILL,
@@ -124,6 +130,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
       expect.arrayContaining([
         {
           id: INN_ID,
+          sourceId: INN_ID,
           schema: "app",
           table: "counterparty",
           from: "inn",
@@ -131,6 +138,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         },
         {
           id: `${COUNTERPARTY_ID}#description`,
+          sourceId: COUNTERPARTY_COLUMNS.name,
           schema: "app",
           table: "counterparty",
           from: "name",
@@ -138,6 +146,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         },
         {
           id: `${COUNTERPARTY_ID}#deletionMark`,
+          sourceId: COUNTERPARTY_COLUMNS.isDeleted,
           schema: "app",
           table: "counterparty",
           from: "is_deleted",
@@ -228,6 +237,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
     ])
     expect(result.record?.columns).toContainEqual({
       id: `${COUNTERPARTY_ID}#deletionMark`,
+      sourceId: COUNTERPARTY_COLUMNS.isDeleted,
       schema: "app",
       table: "counterparty",
       from: "is_deleted",
@@ -427,7 +437,12 @@ describe("promoteObject: catalog from one CustomTable", () => {
     )
     expect(errors(result)).toEqual([])
     expect(result.record?.retired).toEqual([
-      { schema: "app", table: "counterparties", column: "created_at" },
+      {
+        sourceId: COUNTERPARTY_COLUMNS.createdAt,
+        schema: "app",
+        table: "counterparties",
+        column: "created_at",
+      },
     ])
     expect(result.record?.relaxed).toEqual([
       {
@@ -764,6 +779,274 @@ describe("promoteObject: catalog from one CustomTable", () => {
   })
 })
 
+/** Факти запису — те, що T2 виводить сам і звіряє (рішення 1 плану П3-2a). */
+const factsOf = (record: PromotionRecord) => ({
+  tables: record.tables,
+  columns: record.columns,
+  typeChanges: record.typeChanges,
+  retired: record.retired,
+  relaxed: record.relaxed,
+  tightened: record.tightened,
+  rowLevelSecurity: record.rowLevelSecurity,
+  deleteSemantics: record.deleteSemantics,
+})
+
+/** Факти, виведені зі знімків до й після, як їх виведе T2. */
+async function derived(
+  files: ReadonlyMap<string, string>,
+  record: PromotionRecord,
+  changes: Parameters<typeof applyChanges>[1]
+) {
+  const before = (await compile(files)).model!
+  const after = (await compile(applyChanges(files, changes))).model!
+  return derivePromotionFacts(
+    before.physical,
+    {
+      physical: after.physical,
+      attributeCase: after.project.naming.attributeCase,
+    },
+    promotionMapping(record)
+  )
+}
+
+describe("promoteObject: the promotion record", () => {
+  const NO_FILL = { ...PARTS, fill: false }
+
+  it("records the hashes before and after, and the adopted column ids", async () => {
+    for (const fill of [true, false]) {
+      const files = promotionProject(PARTS)
+      const before = await compile(files)
+      const result = await promoteObject(
+        files,
+        counterpartyMapping({ ...PARTS, fill }),
+        COMPLETION
+      )
+      expect(errors(result)).toEqual([])
+      const after = await compile(applyChanges(files, result.changes))
+      expect(result.record!.format).toBe(1)
+      expect(result.record!.base).toBe(before.model!.hash)
+      expect(result.record!.result).toBe(after.model!.hash)
+      // Кожна прийнята колонка — рівно раз у columns або retired, за id.
+      const sources = [...result.record!.columns, ...result.record!.retired]
+        .map((c) => c.sourceId)
+        .sort()
+      expect(sources).toEqual(Object.values(COUNTERPARTY_COLUMNS).sort())
+    }
+    const { result } = await promoted(
+      promotionProject(PARTS),
+      counterpartyMapping(NO_FILL)
+    )
+    expect(result.record!.retired).toEqual([
+      {
+        sourceId: COUNTERPARTY_COLUMNS.createdAt,
+        schema: "app",
+        table: "counterparties",
+        column: "created_at",
+      },
+    ])
+  })
+
+  it("derives the same facts from the snapshots as the record carries", async () => {
+    for (const input of [
+      counterpartyMapping(PARTS),
+      counterpartyMapping(NO_FILL),
+    ]) {
+      const files = promotionProject(PARTS)
+      const { result } = await promoted(files, input)
+      expect(errors(result)).toEqual([])
+      const facts = await derived(files, result.record!, result.changes)
+      expect(facts).toEqual({ ok: true, facts: factsOf(result.record!) })
+    }
+  })
+
+  it("derives the facts in a snake_case project", async () => {
+    const files = promotionProject(PARTS)
+    const project = json(files, "project.meta.json")
+    files.set(
+      "project.meta.json",
+      JSON.stringify({ ...project, naming: { attributeCase: "snake_case" } })
+    )
+    for (const path of [COUNTERPARTY_FILE, INVOICE_FILE]) {
+      const raw = JSON.stringify(json(files, path)).replace(
+        /"(isDeleted|createdAt|docDate|counterpartyId)"/g,
+        (_, name: string) =>
+          `"${name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}"`
+      )
+      files.set(path, raw)
+    }
+    const input = mapping((m) => {
+      m.columns = {
+        id: { to: "standard", name: "ref" },
+        name: { to: "standard", name: "description" },
+        inn: {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "tax_id" },
+        },
+        is_deleted: { to: "standard", name: "deletionMark" },
+        created_at: { to: "standard", name: "createdAt" },
+      }
+    })
+    const { result } = await promoted(files, input)
+    expect(errors(result)).toEqual([])
+    expect(result.record!.columns).toContainEqual(
+      expect.objectContaining({
+        id: `${COUNTERPARTY_ID}#deletionMark`,
+        sourceId: COUNTERPARTY_COLUMNS.isDeleted,
+        to: "deletion_mark",
+      })
+    )
+    const facts = await derived(files, result.record!, result.changes)
+    expect(facts).toEqual({ ok: true, facts: factsOf(result.record!) })
+  })
+
+  it("reports a mapping the snapshots do not bear out as a mismatch, not an exception", async () => {
+    const files = promotionProject(PARTS)
+    const { result } = await promoted(files, counterpartyMapping(PARTS))
+    const record = structuredClone(result.record!)
+    // Стандартний реквізит, якого вид не має.
+    record.columns[0]!.id = `${COUNTERPARTY_ID}#nothing`
+    const facts = await derived(files, record, result.changes)
+    expect(facts.ok).toBe(false)
+    // Виведена колонка, чий id лишився в моделі.
+    const retired = structuredClone(result.record!)
+    const kept = retired.columns.find(
+      (c) => c.sourceId === COUNTERPARTY_COLUMNS.inn
+    )!
+    retired.columns = retired.columns.filter((c) => c !== kept)
+    retired.retired.push({
+      sourceId: kept.sourceId,
+      schema: "app",
+      table: "counterparties",
+      column: "inn",
+    })
+    expect((await derived(files, retired, result.changes)).ok).toBe(false)
+  })
+
+  it("names the database objects each conversion class covers", async () => {
+    const files = withCounterparty((raw) => {
+      raw.comment = "Counterparties of the company"
+      ;(raw.columns as Json[])[2]!.comment = "Tax number"
+    })
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.columns = counterpartyMapping(NO_FILL).columns
+        m.fill = []
+        m.into.data = { ...m.into.data, description: { uk: "Контрагенти" } }
+        ;(m.columns.inn as { element: Json }).element.description = {
+          uk: "ІПН",
+        }
+        m.conversions["Counterparty#default/isDeleted"] = "removed"
+        m.conversions["Counterparty#comment"] = "removed"
+        m.conversions["Counterparty#comment/inn"] = "removed"
+      })
+    )
+    expect(errors(result)).toEqual([])
+    const at = { schema: "app", table: "counterparties" }
+    expect(result.record!.conversions).toEqual([
+      {
+        subject: "Counterparty#comment",
+        class: "removed",
+        objects: [{ kind: "comment", ...at }],
+      },
+      {
+        subject: "Counterparty#comment/inn",
+        class: "removed",
+        objects: [{ kind: "comment", ...at, column: "inn" }],
+      },
+      {
+        subject: "Counterparty#default/isDeleted",
+        class: "removed",
+        objects: [{ kind: "default", ...at, column: "is_deleted" }],
+      },
+      {
+        subject: "Counterparty#uniques/counterparties_inn_key",
+        class: "property",
+        objects: [
+          { kind: "constraint", ...at, name: "counterparties_inn_key" },
+        ],
+      },
+    ])
+  })
+
+  it("finds an unnamed unique by its content and refuses an ambiguous one", async () => {
+    const one = withCounterparty((raw) => {
+      ;(raw.uniques as Json[]).push({ columns: ["name"] })
+    })
+    const classified = mapping((m) => {
+      m.conversions["Counterparty#uniques/1"] = "removed"
+    })
+    const { result } = await promoted(one, classified)
+    expect(errors(result)).toEqual([])
+    const physical = (await compile(one)).model!.physical.tables.find(
+      (t) => t.name === "counterparties"
+    )!
+    const name = physical.uniques.find(
+      (u) => u.name !== "counterparties_inn_key"
+    )!.name
+    expect(
+      result.record!.conversions.find(
+        (c) => c.subject === "Counterparty#uniques/1"
+      )!.objects
+    ).toEqual([
+      {
+        kind: "constraint",
+        schema: "app",
+        table: "counterparties",
+        name,
+      },
+    ])
+
+    const two = withCounterparty((raw) => {
+      ;(raw.uniques as Json[]).push(
+        { columns: ["name"] },
+        { columns: ["name"] }
+      )
+    })
+    const ambiguous = await promoted(
+      two,
+      mapping((m) => {
+        m.conversions["Counterparty#uniques/1"] = "removed"
+        m.conversions["Counterparty#uniques/2"] = "removed"
+      })
+    )
+    expect(ambiguous.result.ok).toBe(false)
+    expect(
+      brief(ambiguous.result).map((d) => [d.code, d.pointer, d.params?.at])
+    ).toEqual([
+      [
+        "promote.mapping-unknown",
+        "/uniques/1",
+        "/conversions/Counterparty#uniques~11",
+      ],
+      [
+        "promote.mapping-unknown",
+        "/uniques/2",
+        "/conversions/Counterparty#uniques~12",
+      ],
+    ])
+  })
+
+  it("round-trips through the strict schema and rejects an unknown key", async () => {
+    const { result } = await promoted(
+      promotionProject(PARTS),
+      counterpartyMapping(PARTS)
+    )
+    const record = result.record!
+    const text = serializeCanonical(record)
+    expect(text.endsWith("}\n")).toBe(true)
+    expect(promotionRecordSchema.parse(JSON.parse(text))).toEqual(record)
+    expect(() => promotionRecordSchema.parse({ ...record, extra: 1 })).toThrow()
+    expect(() =>
+      promotionRecordSchema.parse({
+        ...record,
+        conversions: [{ ...record.conversions[0], extra: 1 }],
+      })
+    ).toThrow()
+  })
+})
+
 describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
   it("refuses a nullable source of a notNull target without fill", async () => {
     const files = promotionProject(PARTS)
@@ -875,6 +1158,14 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
     expect(removed.result.record?.conversions).toContainEqual({
       subject,
       class: "removed",
+      objects: [
+        {
+          kind: "comment",
+          schema: "app",
+          table: "counterparties",
+          column: "name",
+        },
+      ],
     })
   })
 
@@ -1111,6 +1402,7 @@ describe("promoteObject: foreign keys and references", () => {
     expect(errors(asParent.result)).toEqual([])
     expect(asParent.result.record?.columns).toContainEqual({
       id: `${COUNTERPARTY_ID}#parent`,
+      sourceId: uuid(7009),
       schema: "app",
       table: "counterparty",
       from: "parent_id",
@@ -1295,6 +1587,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     )[0]!.id
     expect(ok.result.record?.columns).toContainEqual({
       id: orgKindId,
+      sourceId: uuid(7010),
       schema: "app",
       table: "counterparty",
       from: "org_ref",
@@ -1462,6 +1755,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     })
     expect(record.columns).toContainEqual({
       id: `${CONTACT_ID}#parent`,
+      sourceId: uuid(7103),
       schema: "app",
       table: "counterparty_contacts",
       from: "counterparty_id",
@@ -1516,6 +1810,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(errors(result)).toEqual([])
     expect(result.record?.dataSteps.map((s) => s.kind)).toEqual(["conversion"])
     expect(result.record?.retired).toContainEqual({
+      sourceId: uuid(7205),
       schema: "app",
       table: "invoices",
       column: "status",

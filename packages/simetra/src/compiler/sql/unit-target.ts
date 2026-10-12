@@ -1,6 +1,7 @@
 import type { Node, RangeVar } from "libpg-query"
-import type { CatalogUnit } from "simetra/model"
+import type { CatalogUnit, SqlUnitClass } from "simetra/model"
 import type { SqlParser } from "./parse"
+import { grantParts, targetParts } from "./units"
 
 /**
  * Ціль одиниці — об'єкт, на який діє оператор без власного об'єкта в схемі
@@ -89,6 +90,63 @@ export function triggerFunctionSchema(
       return names.length > 1 ? names.at(-2) : undefined
     }
   return undefined
+}
+
+/**
+ * Ключ предмета класу конверсії промоції (рішення 7 плану П3-2a): об'єкт,
+ * який клас покриває, коли одиниця зникає з бажаного стану. Будується з
+ * класу, цілі й імені одиниці, а не з її ідентичності: об'єкти гранту
+ * змінюються з перейменуванням таблиці, яку й так дає `table`.
+ */
+export interface UnitSubjectKey {
+  class: SqlUnitClass
+  schema: string
+  table: string
+  name: string
+}
+
+/**
+ * Ключі одиниці — по одному на ціль: грант на основну таблицю й таблицю ТЧ
+ * покриває обидві. `ownerSchema` — схема цілі з порожньою схемою
+ * (некваліфікований грант чи коментар компілятора). Ім'я гранту —
+ * `<grant|revoke>:<ролі>:<привілеї>`, тож два різні гранти на одну таблицю
+ * мають різні ключі й клас одного не покриває інший; ім'я коментаря —
+ * член таблиці (колонка) або `""` для коментаря самої таблиці. Одиниця без
+ * цілі (функція, в'юха) — один ключ без таблиці на її власне ім'я.
+ */
+export function unitSubjectKeys(
+  unit: Pick<CatalogUnit, "class" | "schema" | "name" | "sql">,
+  parse: SqlParser,
+  ownerSchema: string
+): UnitSubjectKey[] {
+  const key = (schema: string, table: string, name: string) => ({
+    class: unit.class,
+    schema: schema === "" ? ownerSchema : schema,
+    table,
+    name,
+  })
+  if (!TARGETED.has(unit.class)) return [key(unit.schema, "", unit.name)]
+  return statements(unit, parse).flatMap((stmt) => {
+    const name = subjectName(stmt, unit.name)
+    return statementTargets(stmt, unit.schema).map((t) =>
+      key(t.schema, t.object ?? "", name)
+    )
+  })
+}
+
+/** Ім'я ключа предмета за оператором одиниці (`unitSubjectKeys`). */
+function subjectName(stmt: Node, unitName: string): string {
+  if ("GrantStmt" in stmt) {
+    const { action, roles, privileges } = grantParts(stmt.GrantStmt)
+    return `${action}:${roles}:${privileges}`
+  }
+  if ("CommentStmt" in stmt) {
+    const { object, objtype } = stmt.CommentStmt
+    // Член таблиці (колонка, політика, тригер) — список `[схема,] таблиця, ім'я`.
+    if (object === undefined || !TABLE_MEMBERS.has(objtype ?? "")) return ""
+    return targetParts(object).at(-1) ?? ""
+  }
+  return unitName
 }
 
 const TARGETED: ReadonlySet<CatalogUnit["class"]> = new Set([

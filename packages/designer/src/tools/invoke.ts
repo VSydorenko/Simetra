@@ -151,8 +151,12 @@ export async function invoke<D>(
         tool.files === "write" &&
         !o.dryRun &&
         artifacts.length > 0
-      if (write) await writeChanges(o.dir, outcome.changes)
+      // Артефакти — до змін теки: записаний запис промоції без змін теки
+      // інертний (план відмовить, повторний `promote` перезапише його), а
+      // зміни теки без запису не відновити — `promote` вдруге не запуститься,
+      // бо об'єкт уже вид (рішення 1 плану П3-2a).
       if (writeArtifacts) await writeChanges(root, artifacts)
+      if (write) await writeChanges(o.dir, outcome.changes)
       return {
         ok: outcome.ok,
         written: write || writeArtifacts,

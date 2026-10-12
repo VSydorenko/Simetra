@@ -435,6 +435,7 @@ export async function promoteObject(
       objectId: t.promoted.object.id,
       schema: physical.schema,
       name: physical.name,
+      physical,
     }
   })
   problems.push(...writePathProblems(model, unitTables, parse))
@@ -460,16 +461,19 @@ export async function promoteObject(
     )
   }
 
+  const structural = tables.map((t, i) =>
+    structuralSubjects(
+      t.promoted,
+      unitTables[i]!.physical,
+      t.section === undefined ? into.data?.description : null,
+      model.project.defaultLocale
+    )
+  )
   const subjects: (ConversionSubject & { line?: number })[] = [
-    ...tables.flatMap((t) =>
-      structuralSubjects(
-        t.promoted,
-        t.section === undefined ? into.data?.description : null,
-        model.project.defaultLocale
-      )
-    ),
+    ...structural.flatMap((s) => s.subjects),
     ...sql.subjects,
   ]
+  problems.push(...structural.flatMap((s) => s.problems))
   for (const s of subjects) {
     const given = input.conversions[s.subject]
     if (given === undefined) {
@@ -602,12 +606,14 @@ export async function promoteObject(
   if (!completed.result.ok || completed.model === undefined) {
     return completed.result
   }
+  const objects = new Map(subjects.map((s) => [s.subject, s.objects]))
   const record = (m: NonNullable<typeof completed.model>) =>
     promotionRecord(
       input,
       model,
       m,
       main,
+      objects,
       tables.flatMap((t) =>
         t.section === undefined
           ? []

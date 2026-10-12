@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   loadSqlParser,
+  unitSubjectKeys,
   unitTarget,
   unitTargets,
   type SqlParser,
@@ -163,5 +164,125 @@ describe("unitTarget", () => {
     expect(
       target("view", "CREATE VIEW app.v AS SELECT 1", "app")
     ).toBeUndefined()
+  })
+})
+
+/**
+ * Ключ предмета класу конверсії промоції (рішення 7 плану П3-2a): з класу,
+ * цілей і імені одиниці; T2 зіставляє з ним одиниці, що зникли.
+ */
+describe("unitSubjectKeys", () => {
+  const keys = (
+    cls: SqlUnitClass,
+    sql: string,
+    name = "",
+    schema = "",
+    owner = "app"
+  ) => unitSubjectKeys({ class: cls, schema, name, sql }, parse, owner)
+
+  it("a policy and a trigger take the table and their own name", () => {
+    expect(
+      keys(
+        "policy",
+        "CREATE POLICY p_read ON app.items FOR SELECT USING (true)",
+        "p_read",
+        "app"
+      )
+    ).toEqual([
+      { class: "policy", schema: "app", table: "items", name: "p_read" },
+    ])
+    expect(
+      keys(
+        "trigger",
+        "CREATE TRIGGER t_touch BEFORE INSERT ON app.items FOR EACH ROW EXECUTE FUNCTION app.touch()",
+        "t_touch",
+        "app"
+      )
+    ).toEqual([
+      { class: "trigger", schema: "app", table: "items", name: "t_touch" },
+    ])
+  })
+
+  it("a grant is named by action, roles and privileges, not by its objects", () => {
+    const table = keys(
+      "grant",
+      "GRANT SELECT, INSERT ON app.items TO authenticated, anon"
+    )
+    expect(table).toEqual([
+      {
+        class: "grant",
+        schema: "app",
+        table: "items",
+        name: "grant:anon,authenticated:insert,select",
+      },
+    ])
+    const column = keys("grant", "GRANT UPDATE (code) ON app.items TO anon")
+    expect(column).toEqual([
+      {
+        class: "grant",
+        schema: "app",
+        table: "items",
+        name: "grant:anon:update(code)",
+      },
+    ])
+    // Два різні гранти на одну таблицю — різні ключі.
+    expect(table[0]!.name).not.toBe(column[0]!.name)
+    expect(keys("grant", "REVOKE SELECT ON app.items FROM anon")).toEqual([
+      {
+        class: "grant",
+        schema: "app",
+        table: "items",
+        name: "revoke:anon:select",
+      },
+    ])
+  })
+
+  it("an unqualified grant of the compiler takes the owner schema", () => {
+    expect(
+      keys("grant", "GRANT SELECT ON items TO anon", "", "", "sales")
+    ).toEqual([
+      {
+        class: "grant",
+        schema: "sales",
+        table: "items",
+        name: "grant:anon:select",
+      },
+    ])
+  })
+
+  it("a grant on two tables gives two keys", () => {
+    expect(
+      keys("grant", "GRANT SELECT ON app.items, app.item_lines TO anon")
+    ).toEqual([
+      {
+        class: "grant",
+        schema: "app",
+        table: "items",
+        name: "grant:anon:select",
+      },
+      {
+        class: "grant",
+        schema: "app",
+        table: "item_lines",
+        name: "grant:anon:select",
+      },
+    ])
+  })
+
+  it("a comment is named by its column, or empty for the table", () => {
+    expect(keys("comment", "COMMENT ON TABLE app.items IS 'Items'")).toEqual([
+      { class: "comment", schema: "app", table: "items", name: "" },
+    ])
+    expect(
+      keys("comment", "COMMENT ON COLUMN app.items.code IS 'Code'")
+    ).toEqual([
+      { class: "comment", schema: "app", table: "items", name: "code" },
+    ])
+  })
+
+  it("a unit without a target is keyed by its own name", () => {
+    expect(keys("view", "CREATE VIEW app.v AS SELECT 1", "v", "app")).toEqual([
+      { class: "view", schema: "app", table: "", name: "v" },
+    ])
   })
 })

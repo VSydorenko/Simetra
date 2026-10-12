@@ -3,12 +3,14 @@ import {
   singleUuidKeyColumn,
   type CustomTable,
   type MetadataKind,
+  type PhysicalTable,
   type StandardColumnDef,
 } from "simetra/model"
 import type { CompiledModel, SourceObject } from "../../compile"
 import { diagnostic, toPointer, type Diagnostic } from "../../diagnostics"
 import { isRecord, type Json } from "../../object-files"
 import type { ConversionClass, PromoteInput } from "../inputs"
+import type { PromotionObject } from "./record"
 
 export type TableColumn = CustomTable["columns"][number]
 type ColumnMappings = PromoteInput["columns"]
@@ -319,6 +321,8 @@ export interface ConversionSubject {
   required: boolean
   /** Допустимі класи; немає — будь-який. */
   allowed?: readonly ConversionClass[]
+  /** Об'єкти бази, які покриває клас предмета (рішення 7 плану П3-2a). */
+  objects: PromotionObject[]
 }
 
 /** Опис за мовою проєкту, як його з коментаря пише файл виду. */
@@ -330,24 +334,73 @@ const describes = (description: unknown, locale: string, comment: string) =>
  * прийняті `uniques`/`checks`/`indexes` (ім'я, а без нього — індекс),
  * значення за замовчуванням колонок, змаплених на власний реквізит, і
  * коментарі, яким у виді немає місця. SQL-одиниці додає `planUnits`.
- * `description` — опис, який вхід задає елементу таблиці: `undefined` —
- * описом стає коментар, `null` — опису в елемента немає (таблична частина).
+ * `physical` — таблиця в знімку до промоції: з неї фізичні імена об'єктів
+ * класу. `description` — опис, який вхід задає елементу таблиці:
+ * `undefined` — описом стає коментар, `null` — опису в елемента немає
+ * (таблична частина).
  */
 export function structuralSubjects(
   promoted: PromotedTable,
+  physical: PhysicalTable,
   description: unknown,
   locale: string
-): ConversionSubject[] {
+): { subjects: ConversionSubject[]; problems: Diagnostic[] } {
   const { object, table } = promoted
-  const found: ConversionSubject[] = CLASSIFIED_COLLECTIONS.flatMap(
-    (collection) =>
-      table[collection].map((element, index) => ({
-        subject: `${object.name}#${collection}/${element.name ?? index}`,
+  const problems: Diagnostic[] = []
+  const { schema, name: tableName } = physical
+  const columnName = new Map(
+    table.columns.flatMap((c) => {
+      const found = physical.columns.find((p) => p.origin.elementId === c.id)
+      return found === undefined ? [] : [[c.name, found.name] as const]
+    })
+  )
+  const physicalColumn = (name: string) => {
+    const found = columnName.get(name)
+    if (found === undefined) {
+      throw new Error(`column ${name} of ${object.name} has no physical column`)
+    }
+    return found
+  }
+  const found: ConversionSubject[] = []
+  for (const collection of CLASSIFIED_COLLECTIONS) {
+    const kind = collection === "indexes" ? "index" : "constraint"
+    table[collection].forEach((element, index) => {
+      const subject = `${object.name}#${collection}/${element.name ?? index}`
+      let name = element.name
+      if (name === undefined) {
+        // Ім'я неназваного дала стадія імен, назовні його не виставлено:
+        // шукається за вмістом серед неназваних у файлі (рішення 7).
+        const candidates = unnamedMatches(
+          collection,
+          element,
+          table,
+          physical,
+          physicalColumn
+        )
+        if (candidates.length !== 1) {
+          problems.push(
+            diagnostic(
+              "promote.mapping-unknown",
+              object.file,
+              `/${collection}/${index}`,
+              {
+                at: toPointer(["conversions", subject]),
+                detail: `the unnamed element matches ${candidates.length} ${collection} of ${schema}.${tableName} by its content, not one: name it in the file`,
+              }
+            )
+          )
+        }
+        name = candidates.length === 1 ? candidates[0]! : ""
+      }
+      found.push({
+        subject,
         file: object.file,
         pointer: `/${collection}/${index}`,
         required: true,
-      }))
-  )
+        objects: [{ kind, schema, table: tableName, name }],
+      })
+    })
+  }
   // Коментар таблиці стає описом виду, якщо вхід не задає іншого; у ТЧ
   // опису немає, тож коментар її таблиці лише знімається.
   if (
@@ -361,6 +414,7 @@ export function structuralSubjects(
       pointer: "/comment",
       required: true,
       allowed: COMMENT_CLASSES,
+      objects: [{ kind: "comment", schema, table: tableName }],
     })
   }
   for (const { index, column, fate } of promoted.columns) {
@@ -372,6 +426,14 @@ export function structuralSubjects(
         file: object.file,
         pointer,
         required: false,
+        objects: [
+          {
+            kind: "default",
+            schema,
+            table: tableName,
+            column: physicalColumn(column.name),
+          },
+        ],
       })
     }
     // Коментар виведеної колонки йде разом із нею; коментар реквізиту стає
@@ -391,9 +453,94 @@ export function structuralSubjects(
       pointer: `${pointer}/comment`,
       required: true,
       allowed: COMMENT_CLASSES,
+      objects: [
+        {
+          kind: "comment",
+          schema,
+          table: tableName,
+          column: physicalColumn(column.name),
+        },
+      ],
     })
   }
-  return found
+  return { subjects: found, problems }
+}
+
+type Classified<C extends (typeof CLASSIFIED_COLLECTIONS)[number]> =
+  CustomTable[C][number]
+
+/**
+ * Фізичні імена неназваних елементів колекції, що збігаються з елементом за
+ * вмістом: колонки (через `physicalName`), опції, ключі індексу. Кандидати —
+ * лише ті, чиїх імен файл не називає явно: названий елемент своє ім'я має.
+ */
+function unnamedMatches(
+  collection: (typeof CLASSIFIED_COLLECTIONS)[number],
+  element: Classified<typeof collection>,
+  table: CustomTable,
+  physical: PhysicalTable,
+  column: (name: string) => string
+): string[] {
+  const named = new Set(
+    table[collection].flatMap((e) => (e.name === undefined ? [] : [e.name]))
+  )
+  const same = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((x, i) => x === b[i])
+  const free = <T extends { name: string }>(items: readonly T[]) =>
+    items.filter((p) => !named.has(p.name))
+  switch (collection) {
+    case "uniques": {
+      const unique = element as Classified<"uniques">
+      return free(physical.uniques)
+        .filter(
+          (p) =>
+            same(p.columns, unique.columns.map(column)) &&
+            p.nullsNotDistinct === unique.nullsNotDistinct &&
+            (p.deferrable ?? "no") === (unique.deferrable ?? "no")
+        )
+        .map((p) => p.name)
+    }
+    case "checks": {
+      const check = element as Classified<"checks">
+      return free(physical.checks)
+        .filter((p) => p.expression === check.expression)
+        .map((p) => p.name)
+    }
+    case "indexes": {
+      const index = element as Classified<"indexes">
+      const keys = index.keys.map((k) =>
+        JSON.stringify(
+          "column" in k
+            ? ["column", column(k.column)]
+            : ["expression", k.expression]
+        )
+      )
+      return free(physical.indexes)
+        .filter(
+          (p) =>
+            p.unique === index.unique &&
+            p.method === index.method &&
+            same(
+              p.keys.map((k) =>
+                JSON.stringify(
+                  "column" in k
+                    ? ["column", k.column]
+                    : ["expression", k.expression]
+                )
+              ),
+              keys
+            ) &&
+            same(p.include, index.include.map(column)) &&
+            p.where === index.where &&
+            p.nullsNotDistinct === index.nullsNotDistinct
+        )
+        .map((p) => p.name)
+    }
+    default: {
+      const unhandled: never = collection
+      throw new Error(`unknown collection ${String(unhandled)}`)
+    }
+  }
 }
 
 /**

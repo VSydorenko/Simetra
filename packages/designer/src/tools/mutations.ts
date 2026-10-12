@@ -7,17 +7,19 @@ import {
   deleteInput,
   promoteInput,
   promoteObject,
+  promotionFileName,
   renameElement,
   renameInput,
   type CompletionOptions,
   type OperationResult,
   type PromotionRecord,
   type PromoteResult,
+  serializeCanonical,
 } from "simetra/compiler"
 import { readMetadataDir } from "../io/metadata-dir"
 import { schemaPathResolver } from "../io/schema-path"
 import type { RunOutcome } from "./types"
-import { defineTool } from "./types"
+import { defineTool, PLANS_DIR } from "./types"
 
 const completion = (dir: string): CompletionOptions => ({
   schemaPath: schemaPathResolver(dir),
@@ -40,17 +42,32 @@ async function apply(
   }
 }
 
-/** Те саме для `promote`: запис промоції їде в `data`, а не губиться. */
+/**
+ * Те саме для `promote`: запис промоції їде в `data` і артефактом у
+ * `plans/<objectId>.promotion.json` — план бази читає його звідти (рішення 1
+ * плану П3-2a), бо мапінг у `metadata/` не лишається.
+ */
 async function applyPromotion(
   dir: string,
   operation: (files: Map<string, string>) => Promise<PromoteResult>
 ): Promise<RunOutcome<PromotionRecord>> {
   const result = await operation(await readMetadataDir(dir))
+  const { record } = result
   return {
     ok: result.ok,
     changes: result.changes,
     diagnostics: result.diagnostics,
-    ...(result.record === undefined ? {} : { data: result.record }),
+    ...(record === undefined
+      ? {}
+      : {
+          data: record,
+          artifacts: [
+            {
+              path: `${PLANS_DIR}/${promotionFileName(record.objectId)}`,
+              content: serializeCanonical(record),
+            },
+          ],
+        }),
   }
 }
 

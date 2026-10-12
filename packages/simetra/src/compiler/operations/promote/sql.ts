@@ -30,7 +30,11 @@ import {
   type TableRename,
   type TextEdit,
 } from "../../sql/rewrite/renames"
-import { unitTargets, type UnitTarget } from "../../sql/unit-target"
+import {
+  unitSubjectKeys,
+  unitTargets,
+  type UnitTarget,
+} from "../../sql/unit-target"
 import {
   functionIdentity,
   readSqlUnits,
@@ -139,12 +143,20 @@ export function planUnits(
     bindings: bindings(model, units, o.parse),
   }
   const classify = (unit: FileUnit) => {
+    // Некваліфікована ціль одиниці модуля — у схемі її таблиці.
+    const ownerSchema =
+      tables.find((t) => t.objectId === unit.ownerObjectId)?.schema ??
+      unit.schema
     plan.subjects.push({
       subject: unit.identity,
       file: unit.file,
       pointer: "",
       required: true,
       line: unit.line,
+      objects: unitSubjectKeys(unit, o.parse, ownerSchema).map((key) => ({
+        kind: "unit",
+        ...key,
+      })),
     })
     if (input.conversions[unit.identity] !== undefined) plan.removed.push(unit)
   }

@@ -32,4 +32,17 @@ export {
   type RenameInput,
 } from "./inputs"
 export { promoteObject } from "./promote"
-export type { PromoteResult, PromotionRecord } from "./promote/record"
+export {
+  PROMOTION_RECORD_FORMAT,
+  derivePromotionFacts,
+  promotionFileName,
+  promotionMapping,
+  promotionRecordHash,
+  promotionRecordSchema,
+  type DerivedFacts,
+  type PromoteResult,
+  type PromotionFacts,
+  type PromotionMapping,
+  type PromotionObject,
+  type PromotionRecord,
+} from "./promote/record"
