@@ -25,6 +25,7 @@ import {
   CATALOG_FILE,
   CONTACT_FILE,
   CONTACT_ID,
+  COUNTERPARTY_FILE,
   COUNTERPARTY_ID,
   INN_ID,
   counterpartyMapping,
@@ -355,6 +356,27 @@ describe("promotionTransition: the decision table", () => {
     const { after, record } = await counterparty()
     const verdict = await transition({
       state: applied(after),
+      model: after,
+      records: [input(record)],
+    })
+    expect(verdict.status).toBe("none")
+    expect(codes(verdict)).toEqual([
+      ["plan.promotion-not-applicable", "warning"],
+    ])
+  })
+
+  it("7 ignores a record whose object the marker does not know", async () => {
+    // Об'єкта X у marker немає зовсім (інстанс, де таблицю ніколи не
+    // приймали): запис не для цього інстансу — попередження, а не відмова
+    const { after, record } = await counterparty()
+    const empty = await compiled(
+      new Map(
+        [...promotionProject(PARTS)].filter(([f]) => f !== COUNTERPARTY_FILE)
+      )
+    )
+    expect(empty.objects.map((o) => o.id)).not.toContain(COUNTERPARTY_ID)
+    const verdict = await transition({
+      state: applied(empty),
       model: after,
       records: [input(record)],
     })

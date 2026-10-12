@@ -57,3 +57,32 @@ describe("SchemaEngine.plan options", () => {
     ).toThrow("different scope")
   })
 })
+
+/**
+ * Преамбула двигуна проти дозволеного переліку — на кожному шляху плану
+ * адаптера: невідоме налаштування дає помилку в діагностиках плану, а не
+ * тихе виконання (рішення 13 плану П3-2a).
+ */
+describe("SchemaEngine.plan preamble", () => {
+  const engine = createPgDeltaEngine()
+
+  it("reports a preamble setting outside the allowed list", () => {
+    planSpy.mockReset()
+    planSpy.mockReturnValue({
+      actions: [],
+      preamble: [{ name: "role", value: "postgres" }],
+      diagnostics: [],
+    })
+    const enginePlan = engine.plan(
+      catalog("source").catalog,
+      catalog("target").catalog,
+      scope
+    )
+    expect(enginePlan.preamble).toEqual([{ name: "role", value: "postgres" }])
+    expect(
+      enginePlan.diagnostics.map((d) => [d.code, d.severity, d.params])
+    ).toEqual([
+      ["engine.preamble-unknown", "error", { name: "role", value: "postgres" }],
+    ])
+  })
+})

@@ -1159,6 +1159,37 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       }
     )
 
+    it("warns when the proof takes a lock outside the footprint", async () => {
+      // Двигун, що не називає таблиці кроків: слід порожній, а доказ бере
+      // замок посеред кроків — звірка сліду каже це попередженням плану
+      const unnamed: SchemaEngine = {
+        ...engine,
+        withDesiredShadow: (o, sql, scope, fn) =>
+          engine.withDesiredShadow(o, sql, scope, (db, enginePlan) =>
+            fn(db, {
+              ...enginePlan,
+              actions: enginePlan.actions.map((a) => ({
+                ...a,
+                lockedTables: [],
+              })),
+            })
+          ),
+      }
+      const from = await tables({ fk: false })
+      const to = await tables({ fk: false, code: 20 })
+      const outcome = await inTarget(EMPTY, async (url) => {
+        await establish(url, from)
+        return plan(url, to, unnamed)
+      })
+      const artifact = planned(outcome)
+      expect(artifact.locks).toEqual([])
+      expect(
+        outcome.diagnostics
+          .filter((d) => d.code === "apply.lock-footprint-exceeded")
+          .map((d) => d.severity)
+      ).toEqual(["warning"])
+    })
+
     it.each([
       ["with", "", "lockable"],
       ["without", `ALTER TABLE ext.r OWNER TO ${STRANGER}`, "implicit"],
@@ -1443,6 +1474,8 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         drift?: string
         superuser?: boolean
         records?: PromotionInput[]
+        /** Двигун лише для плану промоції; стан «до» ставить справжній. */
+        engine?: SchemaEngine
       } = {}
     ): Promise<PlanOutcome> {
       return inTarget(EMPTY, async (url) => {
@@ -1450,7 +1483,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         if (o.drift !== undefined)
           await other(o.superuser === true ? asSuperuser(url) : url, o.drift)
         return buildPlan(
-          engine,
+          o.engine ?? engine,
           dbs,
           p.after,
           { target: { url } },
@@ -1910,6 +1943,129 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         params(outcome, "plan.promotion-unsupported").map((d) => d.reason)
       ).not.toContain("sequenceSchema")
       expect(outcome.status).toBe("planned")
+    })
+
+    it("refuses an engine step that drops a renamed column", async () => {
+      // Двигун, що бачить інший стан, ніж оголошено: після наміру він ще й
+      // знімає перейменовану колонку — її дані пропали б мовчки
+      const dropsRenamed: SchemaEngine = {
+        ...engine,
+        plan: (from, to, scope, o) => {
+          const enginePlan = engine.plan(from, to, scope, o)
+          const retired = enginePlan.actions.find((a) =>
+            /DROP COLUMN "simetra_retired_1"/.test(a.sql)
+          )
+          if (retired === undefined) return enginePlan
+          const renamed = (text: string) =>
+            text.replace("simetra_retired_1", "tax_id")
+          return {
+            ...enginePlan,
+            actions: [
+              ...enginePlan.actions,
+              {
+                ...retired,
+                sql: renamed(retired.sql),
+                destroys: retired.destroys.map(renamed),
+                destroyed: retired.destroyed.map((d) =>
+                  d.kind === "column" ? { ...d, name: "tax_id" } : d
+                ),
+              },
+            ],
+          }
+        },
+      }
+      const outcome = await planPromotion(await promoted(), {
+        engine: dropsRenamed,
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.rename-not-realized"])
+      expect(params(outcome, "plan.rename-not-realized")).toEqual([
+        { objects: "app.counterparty.tax_id" },
+      ])
+    })
+
+    it("keeps a same-name redefinition of an adopted index a relaxation", async () => {
+      // Прийнятий частковий унікальний індекс у бажаному стані стає повним
+      // під тим самим ім'ям: для прийнятого об'єкта це не заміна, а зняття
+      // унікальності з дозволом і класом із запису (рішення 3)
+      const INDEX = "counterparties_inn_active"
+      const files = contactsProject()
+      const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
+      party.indexes = [
+        {
+          name: INDEX,
+          unique: true,
+          keys: [{ column: "inn" }],
+          where: "(inn IS NOT NULL)",
+        },
+      ]
+      files.set(COUNTERPARTY_FILE, JSON.stringify(party))
+      const mapping = contactsMapping()
+      mapping.conversions[`Counterparty#indexes/${INDEX}`] = "rowRule"
+      const p = await promoted(files, mapping)
+      // Вид такого індексу не описує, тож повний індекс додає бажаній тіні
+      // обгортка двигуна
+      const fullIndex: SchemaEngine = {
+        ...engine,
+        withDesiredShadow: (o, sql, scope, fn) =>
+          engine.withDesiredShadow(
+            o,
+            `${sql}\nCREATE UNIQUE INDEX ${INDEX} ON app.counterparty (tax_id);`,
+            scope,
+            fn
+          ),
+      }
+      const outcome = await planPromotion(p, { engine: fullIndex })
+      const artifact = planned(outcome)
+      const [drop] = stepMatching(artifact, new RegExp(`DROP INDEX .*${INDEX}`))
+      expect(
+        stepMatching(artifact, new RegExp(`CREATE UNIQUE INDEX ${INDEX}`))
+      ).toHaveLength(1)
+      expect(drop?.class).toBe("relaxation")
+      expect(artifact.requiredPermissions).toContain(drop!.id)
+      expect(artifact.promotion!.conversions).toContainEqual({
+        step: drop!.id,
+        class: "rowRule",
+      })
+    })
+
+    it("refuses a record without a marker when the old table is live", async () => {
+      // Рядок 8 через конвеєр: стара таблиця на цілі, а marker немає
+      const p = await promoted()
+      const outcome = await inTarget(
+        `create schema app; create table ${OLD} (id uuid primary key);`,
+        (url) => buildPlan(engine, dbs, p.after, { target: { url } }, [p.input])
+      )
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.promotion-needs-marker"])
+      expect(params(outcome, "plan.promotion-needs-marker")).toEqual([
+        {
+          objectId: COUNTERPARTY_ID,
+          file: p.input.file,
+          table: OLD,
+        },
+      ])
+    })
+
+    it("ignores a record the ledger has already applied", async () => {
+      // Рядок 5 через конвеєр: хеш запису — у ledger цілі
+      const p = await promoted()
+      const hash = await promotionRecordHash(p.record)
+      const outcome = await inTarget(EMPTY, async (url) => {
+        await establish(url, p.after)
+        // Застосування з COMMIT у 2a відмовляє, тож рядок пише тест
+        await other(
+          url,
+          `update simetra.ledger set promotion = jsonb_build_object('hash', '${hash}')`
+        )
+        return buildPlan(engine, dbs, p.after, { target: { url } }, [p.input])
+      })
+      expect(outcome.status).toBe("unchanged")
+      expect(
+        outcome.diagnostics
+          .filter((d) => d.code.startsWith("plan.promotion-"))
+          .map((d) => [d.code, d.severity])
+      ).toEqual([["plan.promotion-applied", "warning"]])
     })
 
     it("plans unchanged files without a promotion as P3-1 did", async () => {
