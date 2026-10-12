@@ -8,6 +8,7 @@ import {
   intentStep,
   joinModes,
   lockPrivileges,
+  lockRightsSql,
   planFootprint,
   planLocks,
   providerStatement,
@@ -455,8 +456,8 @@ describe("provider locks", () => {
       other: ["auth.sessions"],
     })
     expect(providerTableNames(raw, "postgres")).toEqual([
-      "auth.users",
-      "storage.objects",
+      { schema: "auth", name: "users" },
+      { schema: "storage", name: "objects" },
     ])
   })
 
@@ -473,18 +474,54 @@ describe("provider locks", () => {
     ],
     // Ключ ролі — лише власний, не з ланцюжка прототипів
     ["an inherited key", "{}", "toString"],
+    // JSON-примітив як усе значення налаштування
+    ["a JSON number", "5", "postgres"],
+    ["a JSON boolean", "true", "postgres"],
+    ["a JSON null", "null", "postgres"],
+    ["a JSON string", '"auth.users"', "postgres"],
   ])("gives no tables for %s", (_, raw, role) => {
     expect(providerTableNames(raw, role)).toEqual([])
   })
 
-  it("drops names that to_regclass would reject with an error", () => {
+  it("parses names into parts and drops what the catalog lookup cannot take", () => {
     const raw = JSON.stringify({
-      postgres: ["auth.users", 1, "a.b.c", "x..y", '"', "Auth.Users"],
+      postgres: [
+        "auth.users",
+        1,
+        // Кваліфіковане базою ім'я — не з переліку провайдера
+        "postgres.auth.users",
+        "x..y",
+        '"',
+        "Auth.Users",
+        '"Auth"."Users"',
+        // Некваліфіковане — шукається в current_schemas(true)
+        "users",
+        // NUL параметр запиту не передасть
+        "auth.us\u0000ers",
+      ],
     })
     expect(providerTableNames(raw, "postgres")).toEqual([
-      "auth.users",
-      "Auth.Users",
+      { schema: "auth", name: "users" },
+      { schema: "auth", name: "users" },
+      { schema: "Auth", name: "Users" },
+      { name: "users" },
     ])
+  })
+})
+
+describe("lockRightsSql", () => {
+  it("checks the right on the table and every descendant before PostgreSQL 17", () => {
+    const sql = lockRightsSql(160004)
+    expect(sql).toContain("WITH RECURSIVE")
+    expect(sql).toContain("pg_catalog.pg_inherits i ON i.inhparent = tree.rel")
+    expect(sql).toContain("pg_catalog.bool_and(")
+  })
+
+  it("checks the right on the table only from PostgreSQL 17", () => {
+    const sql = lockRightsSql(170006)
+    expect(sql).not.toContain("pg_inherits")
+    expect(sql).not.toContain("bool_and")
+    expect(sql).toContain("pg_catalog.has_table_privilege(t.oid, $2)")
   })
 })
 

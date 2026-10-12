@@ -1,10 +1,15 @@
 import type { Node } from "libpg-query"
 import { relationNameText, type SqlParser } from "simetra/compiler"
-import type { CatalogModel, CatalogTable } from "simetra/model"
 import type {
-  EngineObjectRef,
-  ProviderLocks,
-  ProviderLockStatement,
+  CatalogModel,
+  CatalogTable,
+  DatabaseProvider,
+} from "simetra/model"
+import {
+  SUPABASE_LOCKS,
+  type EngineObjectRef,
+  type ProviderLocks,
+  type ProviderLockStatement,
 } from "../engine"
 import type { ApplyTransaction } from "./port"
 import type { PlanStep } from "./steps"
@@ -560,10 +565,45 @@ export const lockPrivileges = (serverVersionNum: number): string =>
     : "UPDATE, DELETE, TRUNCATE"
 
 /**
+ * Запит права на явний `LOCK` для `readLockRights`: `$1` — JSON таблиць,
+ * `$2` — `lockPrivileges`. До Postgres 17 `LOCK TABLE` без `ONLY` може
+ * перевіряти право й на кожному нащадку, тож там таблиця придатна, лише
+ * коли право є на ній і на всіх її нащадках (рекурсія `pg_inherits`); інакше
+ * явний замок дав би сталу відмову `apply.lock-privilege`, а неявний замок
+ * кроку — ні. На 17+ рекурсія права нащадків не перевіряє (виміряно).
+ */
+export function lockRightsSql(serverVersionNum: number): string {
+  const right = (rel: string) =>
+    `(pg_catalog.pg_has_role(${rel}.relowner, 'USAGE')
+         OR pg_catalog.has_table_privilege(${rel}.oid, $2))`
+  const target = `SELECT x.schema, x.name, c.oid, c.relowner
+     FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
+     JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
+     JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
+       AND c.relkind IN ('r', 'p')`
+  if (serverVersionNum >= 170000)
+    return `SELECT t.schema, t.name, ${right("t")} AS lockable
+     FROM (${target}) AS t`
+  return `WITH RECURSIVE target AS (${target}),
+     tree AS (
+       SELECT t.oid AS root, t.oid AS rel FROM target t
+       UNION
+       SELECT tree.root, i.inhrelid
+       FROM tree JOIN pg_catalog.pg_inherits i ON i.inhparent = tree.rel
+     )
+     SELECT t.schema, t.name, pg_catalog.bool_and(${right("c")}) AS lockable
+     FROM target t
+     JOIN tree ON tree.root = t.oid
+     JOIN pg_catalog.pg_class c ON c.oid = tree.rel
+     GROUP BY t.schema, t.name`
+}
+
+/**
  * Право ролі сесії на явний `LOCK` кожної таблиці сліду, що є на цілі
  * (`relkind` r/p): членство в ролі-власнику (з успадкуванням привілеїв) чи
- * один із `lockPrivileges`. Таблиці, якої на цілі немає, у мапі немає.
- * Ключ — `tableKey`.
+ * один із `lockPrivileges` — до Postgres 17 й на всіх нащадках
+ * (`lockRightsSql`). Таблиці, якої на цілі немає, у мапі немає. Ключ —
+ * `tableKey`.
  */
 export async function readLockRights(
   tx: ApplyTransaction,
@@ -579,16 +619,10 @@ export async function readLockRights(
     schema: string
     name: string
     lockable: boolean
-  }>(
-    `SELECT x.schema, x.name,
-       pg_catalog.pg_has_role(c.relowner, 'USAGE')
-         OR pg_catalog.has_table_privilege(c.oid, $2) AS lockable
-     FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
-     JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
-     JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
-       AND c.relkind IN ('r', 'p')`,
-    [JSON.stringify(tables), lockPrivileges(version.version)]
-  )
+  }>(lockRightsSql(version.version), [
+    JSON.stringify(tables),
+    lockPrivileges(version.version),
+  ])
   return new Map(rows.map((r) => [tableKey(r.schema, r.name), r.lockable]))
 }
 
@@ -649,14 +683,29 @@ export async function readLiveForeignKeys(
   }))
 }
 
+/** Механізм провайдерських замків пресету (R27 плану П3-2a). */
+export const PROVIDER_LOCKS: Readonly<Record<DatabaseProvider, ProviderLocks>> =
+  { supabase: SUPABASE_LOCKS }
+
+/** Ім'я таблиці з переліку провайдера; без `schema` — некваліфіковане. */
+export interface ProviderTableName {
+  schema?: string
+  name: string
+}
+
 /**
  * Імена таблиць ролі `role` зі значення налаштування провайдера (JSON-об'єкт
- * «роль → імена»). Немає налаштування, немає ключа ролі чи JSON битий —
+ * «роль → імена»), розібрані на частини тим самим правилом, що й `regclass`
+ * (`relationNameText`). Немає налаштування, немає ключа ролі чи JSON битий —
  * таблиць немає, без відмови: звірка сліду на доказі й репетиції підстрахує.
- * Ім'я, яке `to_regclass` не розбере без помилки (понад дві частини чи
- * нерозбірний текст), відкидається: помилка зірвала б транзакцію плану.
+ * Відкидаються: нерозбірний текст; ім'я з трьох частин (кваліфіковане базою —
+ * перелік провайдера так таблиць не називає, а таблицю іншої бази провайдер
+ * не займе); ім'я з символом NUL, якого параметр запиту не передасть.
  */
-export function providerTableNames(raw: string | null, role: string): string[] {
+export function providerTableNames(
+  raw: string | null,
+  role: string
+): ProviderTableName[] {
   if (raw === null) return []
   let json: unknown
   try {
@@ -670,19 +719,25 @@ export function providerTableNames(raw: string | null, role: string): string[] {
     ? (json as Record<string, unknown>)[role]
     : undefined
   if (!Array.isArray(entry)) return []
-  return entry.filter((name): name is string => {
-    if (typeof name !== "string") return false
-    const parts = relationNameText(name)
-    return parts !== undefined && parts.length <= 2
+  return entry.flatMap((text): ProviderTableName[] => {
+    if (typeof text !== "string" || text.includes("\u0000")) return []
+    const parts = relationNameText(text)
+    if (parts?.length === 1) return [{ name: parts[0]! }]
+    if (parts?.length === 2) return [{ schema: parts[0]!, name: parts[1]! }]
+    return []
   })
 }
 
 /**
  * Перелік таблиць кожного джерела провайдерських замків для ролі плану
- * (R27): `current_setting(…, true)` дає `NULL` без налаштування, а
- * `to_regclass` лишає лише наявні таблиці (`relkind` r/p) — тим самим
- * правилом розв'язання імені, що й у провайдера. Читання — у транзакції
- * `READ ONLY` побудови плану, разом із правами на `LOCK`.
+ * (R27): `current_setting(…, true)` дає `NULL` без налаштування, а ім'я
+ * розв'язується з'єднанням каталогу, як це робить `regclass`: кваліфіковане —
+ * у своїй схемі, некваліфіковане — перше в порядку `current_schemas(true)`;
+ * лишаються наявні таблиці (`relkind` r/p) у схемах, де роль має `USAGE`.
+ * Не `to_regclass`: на схемі без `USAGE` той кидає `42501`, а помилка
+ * зірвала б транзакцію плану; тут така таблиця просто не входить у перелік —
+ * явно її роль однаково не заблокує. Те саме читання робить раннер перед
+ * блокуваннями й звіряє з планом.
  */
 export async function readProviderLocks(
   tx: ApplyTransaction,
@@ -701,11 +756,23 @@ export async function readProviderLocks(
         ? []
         : await tx.query<{ schema: string; name: string }>(
             `SELECT DISTINCT n.nspname AS schema, c.relname AS name
-             FROM pg_catalog.unnest($1::text[]) AS x(name)
-             JOIN pg_catalog.pg_class c ON c.oid = pg_catalog.to_regclass(x.name)
+             FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
+             CROSS JOIN LATERAL (
+               SELECT c.oid
+               FROM pg_catalog.unnest(CASE WHEN x.schema IS NULL
+                   THEN pg_catalog.current_schemas(true)
+                   ELSE ARRAY[x.schema]::pg_catalog.name[] END)
+                 WITH ORDINALITY AS s(schema, ord)
+               JOIN pg_catalog.pg_namespace n ON n.nspname = s.schema
+                 AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+               JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
+               ORDER BY s.ord
+               LIMIT 1
+             ) AS found
+             JOIN pg_catalog.pg_class c ON c.oid = found.oid
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
              WHERE c.relkind IN ('r', 'p')`,
-            [names]
+            [JSON.stringify(names)]
           )
     out.push({
       setting: source.setting,

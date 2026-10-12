@@ -8,6 +8,8 @@ import {
   desiredForApply,
   executePlan,
   readFingerprint,
+  readProviderLocks,
+  SUPABASE_LOCKS,
   type ApplyDesired,
   type CatalogFingerprint,
   type ExecutablePlan,
@@ -260,6 +262,11 @@ describe("transaction-mode pooler", () => {
         role: "postgres",
         locks: [],
         implicitLocks: [],
+        providerLocks: await createApplyDatabase({
+          readOnly: true,
+        }).transaction({ url }, "rollback", (tx) =>
+          readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
+        ),
         preamble: [],
         promotion: null,
         resultCatalog: { tables: [], enumTypes: [], units: [] },

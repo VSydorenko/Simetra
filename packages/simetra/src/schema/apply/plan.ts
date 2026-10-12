@@ -10,19 +10,16 @@ import {
   PROVIDER_API_ROLES,
   quoteIdent,
   type CatalogModel,
-  type DatabaseProvider,
 } from "simetra/model"
-import {
-  SUPABASE_LOCKS,
-  type DbConnection,
-  type EngineAction,
-  type EngineDiagnostic,
-  type EnginePlan,
-  type EngineScope,
-  type Extracted,
-  type ProviderLocks,
-  type SchemaEngine,
-  type ShadowOptions,
+import type {
+  DbConnection,
+  EngineAction,
+  EngineDiagnostic,
+  EnginePlan,
+  EngineScope,
+  Extracted,
+  SchemaEngine,
+  ShadowOptions,
 } from "../engine"
 import { dedupe } from "../engine/desired"
 import {
@@ -50,6 +47,7 @@ import {
   footprintTables,
   planFootprint,
   planLocks,
+  PROVIDER_LOCKS,
   providerStatements,
   readLiveForeignKeys,
   readLockRights,
@@ -123,11 +121,6 @@ const MISMATCH_PATH_LIMIT = 20
 
 /** Скільки об'єктів називає відмова власників; решту дає лише `count`. */
 const OWNER_LIMIT = 20
-
-/** Механізм провайдерських замків пресету (R27 плану П3-2a). */
-const PROVIDER_LOCKS: Record<DatabaseProvider, ProviderLocks> = {
-  supabase: SUPABASE_LOCKS,
-}
 
 /** Модель і відбиток однієї бази, зняті під однією межею. */
 interface Witness {
@@ -441,6 +434,7 @@ export async function buildPlan(
       role: targetOwners.session,
       locks,
       implicitLocks,
+      providerLocks,
       preamble,
       promotion: null,
       targetFingerprint: live.fingerprint,
@@ -735,6 +729,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       role: c.targetOwners.session,
       locks,
       implicitLocks,
+      providerLocks,
       preamble: analysis.preamble,
       promotion: section,
       targetFingerprint: live.fingerprint,

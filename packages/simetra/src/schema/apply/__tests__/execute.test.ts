@@ -12,6 +12,8 @@ import {
   type FingerprintSection,
   type PlanStep,
   type PreservedTable,
+  type ProviderLockSet,
+  SUPABASE_LOCKS,
 } from "simetra/schema"
 import { promotionRecordHash, type PromotionRecord } from "simetra/compiler"
 
@@ -54,6 +56,15 @@ function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
   }
 }
 
+/** Перелік провайдера, який план прочитав з цілі: таблиць немає. */
+const NO_PROVIDER_TABLES: ProviderLockSet[] = SUPABASE_LOCKS.sources.map(
+  (source) => ({
+    setting: source.setting,
+    statements: [...source.statements],
+    tables: [],
+  })
+)
+
 const TARGET = fingerprint("target")
 const DESIRED = fingerprint("desired")
 
@@ -84,6 +95,7 @@ const plan: ExecutablePlan = {
   desiredFingerprint: DESIRED,
   role: "postgres",
   implicitLocks: [],
+  providerLocks: NO_PROVIDER_TABLES,
   locks: [
     { schema: "app", name: "t", mode: "accessExclusive" },
     { schema: "app", name: "x.y", mode: "accessExclusive" },
@@ -175,6 +187,10 @@ interface Script {
   held?: { oid: string; mode: string }[]
   /** Таблиці замків, що є в базі (копії доказу). */
   present?: { schema: string; name: string }[]
+  /** Значення налаштувань провайдера за іменем; типово немає. */
+  providerSettings?: Record<string, string>
+  /** Таблиці переліку провайдера, що є в базі. */
+  providerTables?: { schema: string; name: string }[]
 }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
@@ -187,6 +203,8 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("current_user")) return "role"
   if (sql.includes("FROM pg_catalog.pg_locks")) return "held-locks"
   if (sql.includes("c.oid::text AS oid")) return "existing"
+  if (sql.includes("current_setting($1, true)")) return "provider-setting"
+  if (sql.includes("current_schemas(true)")) return "provider-tables"
   if (sql.includes("x(schema text, name text)")) return "present"
   if (sql.includes("to_regclass") && sql.includes(" AS marker")) return "state"
   if (sql.startsWith("SAVEPOINT simetra_fingerprint")) return "fingerprint"
@@ -237,32 +255,40 @@ function fakeDb(script: Script = {}) {
           const rows: Record<string, unknown>[] =
             label?.startsWith("measure") === true
               ? [{ rows: "1", c0: "5" }]
-              : label === "present"
-                ? (script.present ?? [])
-                : label === "existing"
-                  ? (script.existing ?? [])
-                  : label === "held-locks"
-                    ? (script.held ?? [])
-                    : label === "try-lock"
-                      ? [{ locked: script.locked ?? true }]
-                      : label === "role"
-                        ? [{ role: script.role ?? "postgres" }]
-                        : sql.includes(" AS marker")
-                          ? [{ marker: false, ledger: false }]
-                          : sql.includes("to_regclass")
-                            ? [{ exists: true }]
-                            : label === "lookup"
-                              ? script.ledgerHasApply === true
-                                ? [{ format: script.ledgerFormat ?? 1 }]
-                                : []
-                              : sql.includes("encode(sha256")
-                                ? [
-                                    stepsRan
-                                      ? DESIRED.sections
-                                      : (script.targetSections ??
-                                        TARGET.sections),
-                                  ]
-                                : []
+              : label === "provider-setting"
+                ? [
+                    {
+                      value: script.providerSettings?.[String(p?.[0])] ?? null,
+                    },
+                  ]
+                : label === "provider-tables"
+                  ? (script.providerTables ?? [])
+                  : label === "present"
+                    ? (script.present ?? [])
+                    : label === "existing"
+                      ? (script.existing ?? [])
+                      : label === "held-locks"
+                        ? (script.held ?? [])
+                        : label === "try-lock"
+                          ? [{ locked: script.locked ?? true }]
+                          : label === "role"
+                            ? [{ role: script.role ?? "postgres" }]
+                            : sql.includes(" AS marker")
+                              ? [{ marker: false, ledger: false }]
+                              : sql.includes("to_regclass")
+                                ? [{ exists: true }]
+                                : label === "lookup"
+                                  ? script.ledgerHasApply === true
+                                    ? [{ format: script.ledgerFormat ?? 1 }]
+                                    : []
+                                  : sql.includes("encode(sha256")
+                                    ? [
+                                        stepsRan
+                                          ? DESIRED.sections
+                                          : (script.targetSections ??
+                                            TARGET.sections),
+                                      ]
+                                    : []
           return rows as R[]
         },
       }
@@ -292,6 +318,8 @@ describe("executePlan", () => {
       "role",
       "timeouts",
       "state",
+      "provider-setting",
+      "provider-setting",
       'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
       "ALTER TABLE app.t ADD COLUMN d int",
@@ -397,6 +425,56 @@ describe("executePlan", () => {
     expect(
       await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
     ).toMatchObject({ status: "committed" })
+  })
+
+  it("refuses before the locks when the provider list changed after the plan", async () => {
+    // План побудовано з порожнім переліком, а на цілі він уже називає таблицю
+    const script: Script = {
+      providerSettings: {
+        "supautils.policy_grants": JSON.stringify({ postgres: ["auth.users"] }),
+      },
+      providerTables: [{ schema: "auth", name: "users" }],
+    }
+    const { db, log } = fakeDb(script)
+    const outcome = await executePlan(db, target, plan, {
+      ...options,
+      mode: "rehearse",
+    })
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        {
+          code: "apply.target-changed",
+          params: { sections: "providerLocks" },
+        },
+      ],
+    })
+    // Без повтору й без жодного замка
+    expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
+    expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+    // Той самий перелік, що й у плані, — застосування йде далі
+    const same = fakeDb(script)
+    expect(
+      await executePlan(
+        same.db,
+        target,
+        {
+          ...plan,
+          providerLocks: NO_PROVIDER_TABLES.map((set) =>
+            set.setting === "supautils.policy_grants"
+              ? { ...set, tables: [{ schema: "auth", name: "users" }] }
+              : set
+          ),
+        },
+        options
+      )
+    ).toMatchObject({ status: "committed" })
+    // Копія доказу перелік не перечитує
+    const proof = fakeDb(script)
+    expect(
+      await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
+    ).toMatchObject({ status: "committed" })
+    expect(proof.log).not.toContain("provider-setting")
   })
 
   it("warns about a lock beyond the plan's footprint on existing tables only", async () => {

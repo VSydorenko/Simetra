@@ -34,6 +34,8 @@ import {
   coversMode,
   joinModes,
   LOCK_MODE_SQL,
+  PROVIDER_LOCKS,
+  readProviderLocks,
   TABLE_LOCK_MODES,
   type TableLock,
   type TableLockMode,
@@ -76,6 +78,7 @@ export type ExecutablePlan = Pick<
   | "role"
   | "locks"
   | "implicitLocks"
+  | "providerLocks"
   | "preamble"
   | "promotion"
   | "resultCatalog"
@@ -358,6 +361,22 @@ async function runAttempt(
   // 4. Ланцюжок: план застосовний лише до стану, від якого його побудовано.
   // Копія доказу стану застосування не має, тож там перевіряти нічого
   if (o.mode !== "proof") await checkChain(tx, plan.fromHash)
+
+  // 4a. Перелік таблиць провайдера — той самий, з яким план побудовано (R27
+  // плану П3-2a): відбиток каталогу налаштувань не бачить, а таблиця, що
+  // з'явилася в переліку, займалася б посеред кроків. Те саме читання, що й у
+  // плані, до блокувань; копія доказу — інша база, її перелік план не записував
+  if (o.mode !== "proof") {
+    const live = await readProviderLocks(
+      tx,
+      plan.role,
+      PROVIDER_LOCKS[plan.scope.provider]
+    )
+    if (JSON.stringify(live) !== JSON.stringify(plan.providerLocks))
+      throw stop("refused", "apply.target-changed", {
+        sections: "providerLocks",
+      })
+  }
 
   // 5. Блокування наперед за слідом кроків — одна точка очікування замість
   // очікувань посеред кроків. Від сильнішого режиму до слабшого, усередині —
