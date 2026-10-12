@@ -116,7 +116,7 @@ async function assertShadowServer(o: ShadowOptions): Promise<void> {
   try {
     const targetMajor = await serverMajor(target)
     const shadowMajor = await serverMajor(shadow).catch((error: unknown) => {
-      throw new ShadowServerError(error)
+      throw new ShadowServerError(error, true)
     })
     const refusal = shadowServerRefusal(targetMajor, shadowMajor)
     if (refusal !== undefined) throw new ShadowServerMismatchError(refusal)
@@ -692,20 +692,36 @@ async function dropAfter<T>(
 }
 
 /**
- * Збій провізії називає сервер, на якому він стався: без `CREATEDB` —
- * відмова з адресою того сервера, інший збій окремого сервера тіні — його.
+ * Провізія тіні — обидві її сесійні вимоги: `CREATE DATABASE` і підключення
+ * до нової бази за іменем. Збій називає сервер, на якому він стався: без
+ * `CREATEDB` — відмова з причиною, будь-який інший — `ShadowServerError` з
+ * вимогою до режиму з'єднання. Сервер цілі вже прочитано до провізії (`plan`,
+ * `diff`), тож збій тут — збій тіні, а не недосяжна ціль.
  */
 async function provisionShadow(
   o: ShadowOptions
 ): Promise<Awaited<ReturnType<typeof provisionCoLocatedShadow>>> {
+  const onShadowBase = o.shadowBase !== undefined
+  let shadow: Awaited<ReturnType<typeof provisionCoLocatedShadow>>
   try {
-    return await provisionCoLocatedShadow((o.shadowBase ?? o.target).url)
+    shadow = await provisionCoLocatedShadow((o.shadowBase ?? o.target).url)
   } catch (error) {
     if (isShadowProvisionError(error))
-      throw new ShadowCreateRefusedError(o.shadowBase !== undefined)
-    if (o.shadowBase !== undefined) throw new ShadowServerError(error)
-    throw error
+      throw new ShadowCreateRefusedError(onShadowBase)
+    throw new ShadowServerError(error, onShadowBase)
   }
+  // Пулер у режимі транзакцій може створити базу, але не пустити до неї за
+  // іменем: перше підключення — частина провізії, а не роботи з тінню
+  const probe = writablePool(shadow.url)
+  try {
+    await probe.query("select 1")
+  } catch (error) {
+    await probe.end()
+    await shadow.cleanup()
+    throw new ShadowServerError(error, onShadowBase)
+  }
+  await probe.end()
+  return shadow
 }
 
 export function createPgDeltaEngine(): SchemaEngine {

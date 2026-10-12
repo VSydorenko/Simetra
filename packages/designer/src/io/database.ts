@@ -121,8 +121,9 @@ const refusal = (message: string, note = ""): DatabaseErrorClass => ({
 /**
  * Тінь потребує сесійної семантики (`CREATE DATABASE`, підключення до нової
  * бази за іменем, сесійні `SET` завантажувача), а детектора режиму пулера
- * немає (рішення 14.4 плану П3-1): збій сервера тіні лише називає вимогу.
- * Відмова без `CREATEDB` її не отримує — причина там уже відома.
+ * немає (спека designer §3.2): збій тіні з нерозпізнаною причиною лише
+ * називає вимогу. Відмова без `CREATEDB` чи через іншу мажорну версію її не
+ * отримує — причина там уже відома.
  */
 const SHADOW_CONNECTION =
   " The shadow needs a direct or session-mode connection; a transaction-mode pooler is not guaranteed to support it."
@@ -159,13 +160,19 @@ function classify(
       `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`
     )
   }
-  // Збій окремого сервера тіні — та сама класифікація, але з його адресою
-  if (error instanceof ShadowServerError)
-    return classify(
-      error.cause,
-      { target: names.shadow ?? describe },
+  // Збій тіні — та сама класифікація з адресою сервера, де мала з'явитися
+  // тінь. Збій роботи з базою тут теж стає відмовою: «підключення вдалося»
+  // з підказки `database.failed` про тінь неправда, а вимогу треба назвати
+  if (error instanceof ShadowServerError) {
+    const where = error.onShadowBase ? (names.shadow ?? describe) : describe
+    const c = classify(error.cause, { target: where }, SHADOW_CONNECTION)
+    if (c.kind === "refusal") return c
+    const { error: name, sqlstate } = c.params
+    return refusal(
+      `A shadow database could not be created or reached on ${where} (${name}${sqlstate === undefined ? "" : `, SQLSTATE ${sqlstate}`}).`,
       SHADOW_CONNECTION
     )
+  }
   if (error instanceof AggregateError && error.errors.length > 0)
     return classify(error.errors[0], names, note)
   if (!(error instanceof Error))

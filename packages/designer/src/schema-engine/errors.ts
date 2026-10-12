@@ -21,12 +21,18 @@ export class ShadowCreateRefusedError extends Error {
 }
 
 /**
- * Збій на окремому сервері тіні: причина — у `cause`, а межа описує її
- * адресою сервера тіні, а не цілі.
+ * Збій створення тіні чи підключення до неї з причиною, якої адаптер не
+ * розпізнав: причина — у `cause`. Межа описує її адресою сервера, де мала
+ * з'явитися тінь, і називає вимогу тіні до режиму з'єднання (спека designer
+ * §3.2).
  */
 export class ShadowServerError extends Error {
   override name = "ShadowServerError"
-  constructor(cause: unknown) {
-    super("the shadow server failed", { cause })
+  constructor(
+    cause: unknown,
+    /** Сервер — окремий `--shadow-url-env`, а не сервер цілі. */
+    readonly onShadowBase: boolean
+  ) {
+    super("the shadow could not be created or reached", { cause })
   }
 }

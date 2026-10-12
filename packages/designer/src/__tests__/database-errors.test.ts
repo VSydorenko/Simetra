@@ -241,7 +241,7 @@ describe("classifyDatabaseError", () => {
 
   it("describes a failure on the shadow server by its own address", () => {
     const unreachable = classifyDatabaseError(
-      new ShadowServerError(pgError("ECONNREFUSED", URL_)),
+      new ShadowServerError(pgError("ECONNREFUSED", URL_), true),
       names
     )
     expect(unreachable.kind === "refusal" && unreachable.message).toContain(
@@ -250,19 +250,36 @@ describe("classifyDatabaseError", () => {
     expect(unreachable.kind === "refusal" && unreachable.message).toContain(
       `${SHADOW_MODE} Nothing changed.`
     )
-    expect(
-      classifyDatabaseError(
-        new ShadowServerError(pgError("XX000", USER)),
-        names
-      )
-    ).toEqual({
-      kind: "failure",
-      params: {
-        database: "shadow.example.test:5432/postgres",
-        error: "Error",
-        sqlstate: "XX000",
-      },
+    // Збій роботи з тінню — теж відмова з вимогою, а не `database.failed`:
+    // його підказка «підключення вдалося» про тінь була б неправдою
+    const failed = classifyDatabaseError(
+      new ShadowServerError(pgError("XX000", USER), true),
+      names
+    )
+    expect(failed).toEqual({
+      kind: "refusal",
+      message: `A shadow database could not be created or reached on shadow.example.test:5432/postgres (Error, SQLSTATE XX000). ${SHADOW_MODE} Nothing changed.`,
     })
+    expect(leaks(JSON.stringify(failed))).toEqual([])
+  })
+
+  it("describes a co-located shadow failure by the target address", () => {
+    // Тінь поруч із ціллю: пулер створив базу, але не пустив до неї за іменем
+    const coLocated = classifyDatabaseError(
+      new ShadowServerError(pgError("XX000", USER), false),
+      names
+    )
+    expect(coLocated).toEqual({
+      kind: "refusal",
+      message: `A shadow database could not be created or reached on ${DESCRIBE} (Error, SQLSTATE XX000). ${SHADOW_MODE} Nothing changed.`,
+    })
+    const missing = classifyDatabaseError(
+      new ShadowServerError(pgError("3D000", USER), false),
+      names
+    )
+    expect(missing.kind === "refusal" && missing.message).toContain(
+      `The database at ${DESCRIBE} does not exist. ${SHADOW_MODE}`
+    )
   })
 
   it("recognises our errors by class, not by name", () => {
@@ -379,7 +396,7 @@ describe("withDatabase", () => {
       { url: "APP_DB", shadow: "APP_SHADOW" }
     )!
     const error = await withDatabase(withShadow, "diff", () =>
-      Promise.reject(new ShadowServerError(pgError("ECONNREFUSED", URL_)))
+      Promise.reject(new ShadowServerError(pgError("ECONNREFUSED", URL_), true))
     ).catch((e: unknown) => e)
     expect((error as Error).message).toContain("The database at sh.test:7000/x")
     expect(leaks((error as Error).message)).toEqual([])
