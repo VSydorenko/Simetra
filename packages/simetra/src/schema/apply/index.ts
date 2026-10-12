@@ -28,9 +28,12 @@ export {
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
 export {
+  canonicalRenames,
   promotionTransition,
+  readEquivalenceObjects,
   renameIntent,
   withTempNames,
+  type EquivalenceObject,
   type PromotionInput,
   type RenameIntent,
   type TransitionVerdict,
