@@ -122,6 +122,7 @@ const PROMOTION = (): NonNullable<PlanArtifact["promotion"]> => ({
     },
   ],
   conversions: [{ step: "s1", class: "removed" }],
+  implicitLocks: [{ schema: "storage", name: "objects" }],
 })
 
 const withPromotion = (): Omit<PlanArtifact, "planHash"> => ({
@@ -402,6 +403,12 @@ describe("plan artifact", () => {
       {
         ...section,
         preservation: [{ ...section.preservation[0]!, note: "x" }],
+      },
+      // Неявний замок — структурний ключ таблиці (R25), як і решта секції
+      { ...section, implicitLocks: ["storage.objects"] },
+      {
+        ...section,
+        implicitLocks: [{ schema: "storage", name: "objects", mode: "x" }],
       },
     ]
     for (const promotion of variants)

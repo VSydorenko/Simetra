@@ -952,6 +952,7 @@ describe("executePlan", () => {
             { table: { schema: "app", name: "pu" }, from: "c", to: "d" },
           ],
           canonicalNames: [],
+          implicitLocks: [],
           conversions: [],
         },
         // Розбіжність зупиняє спробу до звірки з бажаним відбитком

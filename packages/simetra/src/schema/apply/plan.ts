@@ -43,7 +43,12 @@ import {
   type ObjectOwner,
 } from "./fingerprint"
 import { planLocks } from "./locks"
-import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
+import {
+  ApplyConnectionLost,
+  ApplyDbError,
+  type ApplyDatabase,
+  type ApplyTransaction,
+} from "./port"
 import {
   accessChanges,
   adoptedReplacements,
@@ -66,6 +71,7 @@ import {
   type PromotionInput,
   type RenameIntent,
   type TransitionVerdict,
+  type WritePath,
 } from "./promotion"
 import { readAppliedPromotions, readApplyState } from "./state"
 import {
@@ -594,19 +600,31 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])
 
-  // Залежні доступу — з живої цілі, у старих іменах (рішення 8)
-  const dependents = await dbs.reader.transaction(o.target, "rollback", (tx) =>
-    readAccessDependents(
-      tx,
-      record.tables.map((t) => ({
-        schema: t.schema,
-        name: t.from,
-        forcedToEnabled: record.rowLevelSecurity.some(
-          (r) =>
-            r.schema === t.schema && r.table === t.from && r.from === "forced"
-        ),
-      }))
-    )
+  // Залежні доступу (рішення 8) і цілі FK поза межею двигуна (R25) — з
+  // живої цілі, у старих іменах, однією транзакцією READ ONLY
+  const fkTargets = foreignKeyTargets(
+    record,
+    scope,
+    live.extracted.model,
+    target.extracted.model
+  )
+  const { dependents, outside } = await dbs.reader.transaction(
+    o.target,
+    "rollback",
+    async (tx) => ({
+      dependents: await readAccessDependents(
+        tx,
+        record.tables.map((t) => ({
+          schema: t.schema,
+          name: t.from,
+          forcedToEnabled: record.rowLevelSecurity.some(
+            (r) =>
+              r.schema === t.schema && r.table === t.from && r.from === "forced"
+          ),
+        }))
+      ),
+      outside: await readLockable(tx, fkTargets.outside),
+    })
   )
   const access = accessChanges({
     record,
@@ -625,11 +643,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   const locks = planLocks({
     steps,
     newToOld: analysis.intent.tablesNewToOld,
-    foreignKeyTargets: foreignKeyTargets(
-      record,
-      live.extracted.model,
-      target.extracted.model
-    ),
+    foreignKeyTargets: [...fkTargets.inside, ...outside.lockable],
   })
   const typeChangeSteps = new Map(
     analysis.changes.map((t) => [
@@ -653,6 +667,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     conversions: [
       ...stepConversions(steps, record, analysis.intent, parse),
     ].map(([step, cls]) => ({ step, class: cls })),
+    implicitLocks: outside.implicit,
   }
   const permissions = requiredPermissions({
     steps,
@@ -718,21 +733,27 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   }
 }
 
-/** Відмова шляху запису: усі знахідки однією діагностикою. */
+/**
+ * Відмова шляху запису: усі знахідки однією діагностикою. `table` — лише
+ * таблиці, яких знахідки стосуються, у порядку одиниці.
+ */
 function writePathRefusal(
   tables: readonly TableName[],
-  found: readonly string[]
+  found: readonly WritePath[]
 ): EngineDiagnostic[] {
-  return found.length === 0
-    ? []
-    : [
-        applyDiagnostic("plan.write-path", "error", {
-          table: tables
-            .map((t) => `${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
-            .join(", "),
-          detail: found.join("; "),
-        }),
-      ]
+  if (found.length === 0) return []
+  const hit = new Set(
+    found.flatMap((f) => f.tables.map((t) => tableKey(t.schema, t.name)))
+  )
+  return [
+    applyDiagnostic("plan.write-path", "error", {
+      table: tables
+        .filter((t) => hit.has(tableKey(t.schema, t.name)))
+        .map((t) => `${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
+        .join(", "),
+      detail: found.map((f) => f.detail).join("; "),
+    }),
+  ]
 }
 
 type CloneAnalysis =
@@ -917,15 +938,17 @@ function ownersInOldNames(
 
 /**
  * Цілі FK таблиць одиниці поза одиницею (рішення 9): і наявних на цілі
- * (старі імена), і бажаних (нові). Лише таблиці, що є на цілі в межі: `LOCK`
- * таблиці, якої ще немає, дав би хибне «ціль змінилась», а поза межею план
- * таблиць не знає.
+ * (старі імена), і бажаних (нові). `inside` — таблиці межі двигуна, що є на
+ * цілі: `LOCK` таблиці, якої ще немає, дав би хибне «ціль змінилась».
+ * `outside` — таблиці поза межею: їх план не знає, тож чи є вони на цілі й чи
+ * можна їх заблокувати явно, читає `readLockable` (R25).
  */
 function foreignKeyTargets(
   record: PromotionContext["promotion"]["record"],
+  scope: EngineScope,
   live: CatalogModel,
   desired: CatalogModel
-): TableName[] {
+): { inside: TableName[]; outside: TableName[] } {
   const unit = new Set(
     record.tables.flatMap((t) => [
       tableKey(t.schema, t.from),
@@ -933,16 +956,57 @@ function foreignKeyTargets(
     ])
   )
   const existing = new Set(live.tables.map((t) => tableKey(t.schema, t.name)))
-  const out = new Map<string, TableName>()
+  const inside = new Map<string, TableName>()
+  const outside = new Map<string, TableName>()
   for (const t of [...live.tables, ...desired.tables]) {
     if (!unit.has(tableKey(t.schema, t.name))) continue
     for (const { references } of t.foreignKeys) {
       const key = tableKey(references.schema, references.table)
-      if (unit.has(key) || !existing.has(key)) continue
-      out.set(key, { schema: references.schema, name: references.table })
+      const table = { schema: references.schema, name: references.table }
+      if (unit.has(key)) continue
+      if (!scope.schemas.includes(references.schema)) outside.set(key, table)
+      else if (existing.has(key)) inside.set(key, table)
     }
   }
-  return [...out.values()]
+  return { inside: [...inside.values()], outside: [...outside.values()] }
+}
+
+/**
+ * Цілі FK поза межею на живій цілі (R25): явний `LOCK … IN SHARE ROW
+ * EXCLUSIVE MODE` потребує `UPDATE`, `DELETE` чи `TRUNCATE` (будь-якого), тож
+ * таблиця з таким привілеєм ролі, що застосовує, іде в замки плану, а без
+ * нього — у неявні: замок бере сам крок FK, і вивід плану це показує.
+ * Таблиці, якої на цілі немає, немає й серед жодних. Порядок — схема, потім
+ * ім'я за кодовими одиницями.
+ */
+async function readLockable(
+  tx: ApplyTransaction,
+  tables: readonly TableName[]
+): Promise<{ lockable: TableName[]; implicit: TableName[] }> {
+  if (tables.length === 0) return { lockable: [], implicit: [] }
+  const rows = await tx.query<{
+    schema: string
+    name: string
+    lockable: boolean
+  }>(
+    `SELECT x.schema, x.name,
+       pg_catalog.has_table_privilege(c.oid, 'UPDATE, DELETE, TRUNCATE') AS lockable
+     FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
+     JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
+     JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
+       AND c.relkind IN ('r', 'p')`,
+    [JSON.stringify(tables)]
+  )
+  const sorted = rows
+    .map((r) => ({ schema: r.schema, name: r.name, lockable: r.lockable }))
+    .sort(
+      (a, b) => byCodeUnit(a.schema, b.schema) || byCodeUnit(a.name, b.name)
+    )
+  const plain = ({ schema, name }: TableName): TableName => ({ schema, name })
+  return {
+    lockable: sorted.filter((r) => r.lockable).map(plain),
+    implicit: sorted.filter((r) => !r.lockable).map(plain),
+  }
 }
 
 /** Відмови перепису власників: план і звірка (`diff`) — одна порада, різні коди. */

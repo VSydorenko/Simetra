@@ -219,6 +219,7 @@ describe("apply with an unknown outcome", () => {
       preservation: [],
       columns: [],
       canonicalNames: [],
+      implicitLocks: [],
       conversions: [],
     }
     const apply = async (allow?: string[]) => {

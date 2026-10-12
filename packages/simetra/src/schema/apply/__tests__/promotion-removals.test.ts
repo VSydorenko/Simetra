@@ -510,6 +510,33 @@ describe("classifyRemovals", () => {
     ])
   })
 
+  // R24: дослівно перенесений коментар таблиці покриває лише клас `metadata`
+  // на саме цей об'єкт, а не мапінг
+  it("covers a table comment only by a class on that comment", () => {
+    const clone = model([table("items", { comment: "Items" })])
+    const desired = model([table("items")])
+    const comment = { kind: "comment" as const, schema: "app", table: "items" }
+    expect(
+      classify(
+        record({ conversions: [conversion("metadata", comment)] }),
+        clone,
+        desired
+      )
+    ).toEqual([
+      {
+        path: "tables.app.items.comment",
+        kind: "changed",
+        covered: "metadata",
+        tables: ITEMS,
+      },
+    ])
+    const uncovered = classify(record({}), clone, desired)
+    expect(uncovered.map((r) => r.covered)).toEqual([null])
+    expect(unclassifiedRemovals(uncovered)[0]?.params).toEqual({
+      paths: "tables.app.items.comment",
+    })
+  })
+
   it("does not let one grant's class cover another grant on the same table", () => {
     // Грант на колонку несе її ім'я в ключі: на копії `code` уже перейменовано
     // з `old_code`, а запис називає старе ім'я

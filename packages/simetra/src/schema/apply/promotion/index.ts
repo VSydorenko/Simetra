@@ -26,5 +26,5 @@ export {
   readAccessDependents,
   type AccessChange,
 } from "./access"
-export { readWritePath } from "./write-path"
+export { readWritePath, type WritePath } from "./write-path"
 export type { CanonicalRename } from "./equivalence"

@@ -64,6 +64,12 @@ export const commentSubject = (table: string, column?: string) =>
  */
 const COMMENT_CLASSES: readonly ConversionClass[] = ["removed"]
 
+/**
+ * Клас коментаря, що дослівно став описом виду чи реквізиту: опис лишився в
+ * метаданих, а з бази коментар знімається (R24 плану П3-2a).
+ */
+const COMMENT_MOVED: ConversionClass = "metadata"
+
 /** DEFAULT носія скоупу лише знімається (рішення 15, R21). */
 const SCOPE_DEFAULT_CLASSES: readonly ConversionClass[] = ["removed"]
 
@@ -326,6 +332,11 @@ export interface ConversionSubject {
   allowed?: readonly ConversionClass[]
   /** Об'єкти бази, які покриває клас предмета (рішення 7 плану П3-2a). */
   objects: PromotionObject[]
+  /**
+   * Клас, який `promote` записує сам, без вибору людини: вхід предмет не
+   * називає, а ключ у `conversions` — невідомий (R24 плану П3-2a).
+   */
+  implied?: ConversionClass
 }
 
 /** Опис за мовою проєкту, як його з коментаря пише файл виду. */
@@ -405,18 +416,20 @@ export function structuralSubjects(
     })
   }
   // Коментар таблиці стає описом виду, якщо вхід не задає іншого; у ТЧ
-  // опису немає, тож коментар її таблиці лише знімається.
-  if (
-    table.comment !== undefined &&
-    description !== undefined &&
-    (description === null || !describes(description, locale, table.comment))
-  ) {
+  // опису немає, тож коментар її таблиці лише знімається. Таблиця виду
+  // коментаря не несе, тож і дослівне перенесення знімає його з бази: клас
+  // `metadata` такому перенесенню `promote` записує сам (R24)
+  if (table.comment !== undefined) {
+    const moved =
+      description === undefined ||
+      (description !== null && describes(description, locale, table.comment))
     found.push({
       subject: commentSubject(object.name),
       file: object.file,
       pointer: "/comment",
-      required: true,
-      allowed: COMMENT_CLASSES,
+      ...(moved
+        ? { required: false, implied: COMMENT_MOVED }
+        : { required: true, allowed: COMMENT_CLASSES }),
       objects: [{ kind: "comment", schema, table: tableName }],
     })
   }
@@ -448,22 +461,21 @@ export function structuralSubjects(
       })
     }
     // Коментар виведеної колонки йде разом із нею; коментар реквізиту стає
-    // його описом, якщо елемент не задає іншого.
+    // його описом, якщо елемент не задає іншого. Колонки реквізиту вид
+    // коментарем не описує, тож перенесення — теж `metadata` від `promote`
     const comment = column.comment
     if (comment === undefined || fate.to === "retire") continue
-    if (
+    const moved =
       fate.to === "attribute" &&
       (fate.element.description === undefined ||
         describes(fate.element.description, locale, comment))
-    ) {
-      continue
-    }
     found.push({
       subject: commentSubject(object.name, column.name),
       file: object.file,
       pointer: `${pointer}/comment`,
-      required: true,
-      allowed: COMMENT_CLASSES,
+      ...(moved
+        ? { required: false, implied: COMMENT_MOVED }
+        : { required: true, allowed: COMMENT_CLASSES }),
       objects: [
         {
           kind: "comment",

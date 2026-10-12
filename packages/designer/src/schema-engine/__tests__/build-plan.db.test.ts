@@ -72,6 +72,9 @@ const OWNER = "simetra_build_plan_owner"
 /** Роль, членом якої роль сесії не є: об'єкт такого власника план не зніме. */
 const STRANGER = "simetra_build_plan_stranger"
 
+/** Роль-група, членом якої є роль API: її привілеї роль API успадковує. */
+const WRITERS = "simetra_build_plan_writers"
+
 /** Службова роль провайдера, членом якої роль сесії застосування не є. */
 const SERVICE_ROLE = "supabase_auth_admin"
 
@@ -92,7 +95,8 @@ async function other<R extends Record<string, unknown>>(
 const dropRole = () =>
   other(
     testSuperuserUrl(),
-    `drop role if exists ${OWNER}; drop role if exists ${STRANGER};`
+    `drop role if exists ${OWNER}; drop role if exists ${STRANGER};
+     drop role if exists ${WRITERS};`
   )
 
 /** Та сама база цілі, але сесією суперкористувача стеку. */
@@ -108,7 +112,8 @@ beforeAll(async () => {
   await other(
     testSuperuserUrl(),
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;
-     create role ${STRANGER} nologin;`
+     create role ${STRANGER} nologin;
+     create role ${WRITERS} nologin; grant ${WRITERS} to authenticated;`
   )
 })
 afterAll(dropRole)
@@ -1048,10 +1053,9 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
     type Json = Record<string, unknown>
 
     /**
-     * Тека фікстури без модуля й рахунку, з таблицею контактів як ТЧ.
-     * Коментар таблиці `promote` переносить в опис виду, а таблиця виду
-     * коментаря не має: план назвав би його зняття непокритим, тож тут
-     * коментаря немає.
+     * Тека фікстури без модуля й рахунку, з таблицею контактів як ТЧ. Коментар
+     * таблиці фікстури й коментар колонки `inn` `promote` переносить в описи
+     * дослівно й сам дає їм клас `metadata` (R24).
      */
     function contactsProject(): Map<string, string> {
       const files = promotionProject({
@@ -1060,7 +1064,7 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
         invoice: false,
       })
       const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
-      delete party.comment
+      ;(party.columns as Json[])[2]!.comment = "Taxpayer number"
       files.set(COUNTERPARTY_FILE, JSON.stringify(party))
       const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
       ;(raw.columns as Json[]).push({
@@ -1199,7 +1203,28 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
         'ALTER TABLE "app"."counterparty" DROP COLUMN "simetra_retired_1"',
       ])
 
+      // Дослівно перенесені коментарі знімаються з бази з класом `metadata`
+      // від `promote` (R24), а не відмовою
+      expect(
+        p.record.conversions
+          .filter((c) => c.subject.includes("#comment"))
+          .map((c) => [c.subject, c.class])
+      ).toEqual([
+        ["Counterparty#comment", "metadata"],
+        ["Counterparty#comment/inn", "metadata"],
+      ])
+      const comments = stepMatching(artifact, /^COMMENT ON/)
+      expect(comments.map((s) => s.sql)).toEqual([
+        'COMMENT ON COLUMN "app"."counterparty"."tax_id" IS NULL',
+        'COMMENT ON TABLE "app"."counterparty" IS NULL',
+      ])
+
       const section = artifact.promotion!
+      expect(section.conversions).toEqual(
+        expect.arrayContaining(
+          comments.map((s) => ({ step: s.id, class: "metadata" }))
+        )
+      )
       expect(section.recordHash).toBe(await promotionRecordHash(p.record))
       expect(section.record).toEqual(p.record)
       const counterparty = { schema: "app", name: "counterparty" }
@@ -1311,6 +1336,83 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       expect(artifact.locks.at(-1)?.mode).toBe("shareRowExclusive")
     })
 
+    it("refuses a dropped comment that the record does not classify", async () => {
+      // Запис без класу перенесеного коментаря (зіпсований чи старший за
+      // R24): зникнення коментаря нічим не покрите — відмова, а не мовчки
+      const p = await promoted()
+      const record = {
+        ...p.record,
+        conversions: p.record.conversions.filter(
+          (c) => !c.subject.includes("#comment")
+        ),
+      }
+      const outcome = await planPromotion(p, {
+        records: [{ ...p.input, record }],
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.removal-unclassified"])
+      expect(params(outcome, "plan.removal-unclassified")).toEqual([
+        {
+          paths:
+            "tables.app.counterparties.comment, tables.app.counterparties.columns.inn.comment",
+        },
+      ])
+    })
+
+    it.each([
+      ["with", "", "lockable"],
+      [
+        "without",
+        `ALTER TABLE storage.objects OWNER TO ${STRANGER}`,
+        "implicit",
+      ],
+    ])(
+      "plans a foreign key target outside the scope %s a lock privilege",
+      async (_, drift, expected) => {
+        // Вилучена колонка з FK на `storage.objects`: таблиця поза межею
+        // двигуна, тож явний замок — лише з привілеєм (R25)
+        const files = contactsProject()
+        const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
+        ;(party.columns as Json[]).push({
+          id: uuid(7008),
+          name: "objectId",
+          physicalName: "object_id",
+          type: "UUID",
+        })
+        party.foreignKeys = [
+          {
+            name: "counterparties_object_id_fkey",
+            columns: ["objectId"],
+            references: {
+              external: {
+                schema: "storage",
+                table: "objects",
+                columns: ["id"],
+              },
+            },
+          },
+        ]
+        files.set(COUNTERPARTY_FILE, JSON.stringify(party))
+        const mapping = contactsMapping()
+        mapping.columns.objectId = { to: "retire" }
+        const p = await promoted(files, mapping)
+        const artifact = planned(
+          await planPromotion(p, {
+            ...(drift === "" ? {} : { drift, superuser: true }),
+          })
+        )
+        const objects = { schema: "storage", name: "objects" }
+        const locked = artifact.locks.filter((l) => l.schema === "storage")
+        if (expected === "lockable") {
+          expect(locked).toEqual([{ ...objects, mode: "shareRowExclusive" }])
+          expect(artifact.promotion!.implicitLocks).toEqual([])
+        } else {
+          expect(locked).toEqual([])
+          expect(artifact.promotion!.implicitLocks).toEqual([objects])
+        }
+      }
+    )
+
     it("refuses a plan whose SQL function body is broken", async () => {
       // Тінь вантажить тіла без перевірки, а раннер перевіряє: тіло читає
       // колонку за старим ім'ям, і доказ на копії падає на кроці функції
@@ -1366,8 +1468,26 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       expect(errors(outcome)).toEqual(["plan.write-path"])
       expect(params(outcome, "plan.write-path")).toEqual([
         {
-          table: "app.counterparties, app.counterparty_contacts",
+          // Лише таблиця зі знахідкою: контакти на запис закриті
+          table: "app.counterparties",
           detail: "grant INSERT to authenticated on app.counterparties",
+        },
+      ])
+    })
+
+    it("refuses default privileges granted to a role an API role is a member of", async () => {
+      const outcome = await planPromotion(await promoted(), {
+        drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT INSERT ON TABLES TO ${WRITERS}`,
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.write-path"])
+      expect(params(outcome, "plan.write-path")).toEqual([
+        {
+          // Схемні типові привілеї стосуються всіх таблиць одиниці схеми
+          table: "app.counterparties, app.counterparty_contacts",
+          detail: expect.stringMatching(
+            new RegExp(`in schema app grant INSERT to ${WRITERS}$`)
+          ),
         },
       ])
     })

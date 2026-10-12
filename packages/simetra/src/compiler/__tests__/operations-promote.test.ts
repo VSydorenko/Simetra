@@ -169,6 +169,8 @@ describe("promoteObject: catalog from one CustomTable", () => {
       kindLabel: "counterparty",
       labelDropped: false,
       conversions: [
+        // Коментар таблиці дослівно став описом виду (R24)
+        { subject: "Counterparty#comment", class: "metadata" },
         {
           subject: "Counterparty#uniques/counterparties_inn_key",
           class: "property",
@@ -1200,6 +1202,17 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
     expect(json(removed.after, CATALOG_FILE).description).toEqual({
       en: "Partners",
     })
+    // Опис, що збігається з коментарем, — перенесення: клас дає `promote`
+    expect(
+      same.result.record!.conversions.find(
+        (c) => c.subject === "Counterparty#comment"
+      )?.class
+    ).toBe("metadata")
+    expect(
+      removed.result.record!.conversions.find(
+        (c) => c.subject === "Counterparty#comment"
+      )?.class
+    ).toBe("removed")
   })
 
   it("classifies an attribute column comment only when the element replaces it", async () => {
@@ -1238,6 +1251,49 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
     )
     expect(errors(same.result)).toEqual([])
     // Без опису коментар сам стає описом (наступний тест).
+  })
+
+  // R24 плану П3-2a: дослівно перенесений коментар таблиця виду не несе,
+  // тож `promote` сам записує його клас `metadata` — без вибору людини
+  it("records a verbatim comment transfer itself with class metadata", async () => {
+    const files = withCounterparty((raw) => {
+      ;(raw.columns as Json[])[2]!.comment = "Taxpayer number"
+    })
+    const { result } = await promoted(files)
+    expect(errors(result)).toEqual([])
+    const at = { schema: "app", table: "counterparties" }
+    const comments = result.record!.conversions.filter((c) =>
+      c.subject.includes("#comment")
+    )
+    expect(comments).toEqual([
+      {
+        subject: "Counterparty#comment",
+        class: "metadata",
+        objects: [{ kind: "comment", ...at }],
+      },
+      {
+        subject: "Counterparty#comment/inn",
+        class: "metadata",
+        objects: [{ kind: "comment", ...at, column: "inn" }],
+      },
+    ])
+  })
+
+  it("leaves a verbatim comment transfer to promote, not to the input", async () => {
+    const files = withCounterparty((raw) => {
+      ;(raw.columns as Json[])[2]!.comment = "Taxpayer number"
+    })
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.conversions["Counterparty#comment"] = "removed"
+        m.conversions["Counterparty#comment/inn"] = "metadata"
+      })
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.params?.at])).toEqual([
+      ["promote.mapping-unknown", "/conversions/Counterparty#comment"],
+      ["promote.mapping-unknown", "/conversions/Counterparty#comment~1inn"],
+    ])
   })
 
   it("carries the column title and comment into the attribute", async () => {

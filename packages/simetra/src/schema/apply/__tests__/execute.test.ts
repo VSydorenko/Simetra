@@ -11,6 +11,7 @@ import {
   type ExecuteOptions,
   type FingerprintSection,
   type PlanStep,
+  type PreservedTable,
 } from "simetra/schema"
 import { promotionRecordHash, type PromotionRecord } from "simetra/compiler"
 
@@ -125,6 +126,7 @@ const promoted: ExecutablePlan = {
     preservation: [],
     columns: [],
     canonicalNames: [],
+    implicitLocks: [],
     conversions: [],
   },
 }
@@ -503,7 +505,11 @@ describe("executePlan", () => {
     expect(log).toEqual([])
   })
 
-  it.each([
+  const brokenPreservation: [
+    string,
+    PreservedTable[],
+    PromotionRecord["columns"]?,
+  ][] = [
     ["no measurement", []],
     [
       "a measurement of another table",
@@ -516,9 +522,43 @@ describe("executePlan", () => {
         },
       ],
     ],
-  ])(
+    [
+      "a measurement under another old name",
+      [
+        {
+          before: { schema: "app", table: "x" },
+          after: { schema: "app", table: "u" },
+          key: { before: "id", after: "id" },
+          columns: [],
+        },
+      ],
+    ],
+    [
+      "a measurement without a mapped column",
+      [
+        {
+          before: { schema: "app", table: "t" },
+          after: { schema: "app", table: "u" },
+          key: { before: "id", after: "id" },
+          columns: [],
+        },
+      ],
+      [
+        {
+          id: "00000000-0000-4000-8000-000000000011",
+          sourceId: "00000000-0000-4000-8000-000000000012",
+          schema: "app",
+          table: "u",
+          from: "c",
+          to: "d",
+        },
+      ],
+    ],
+  ]
+  it.each(brokenPreservation)(
     "refuses before BEGIN a promotion with %s for its table",
-    async (_, preservation) => {
+    async (_, preservation, columns = []) => {
+      const record = { ...TABLED, columns }
       const { db, log } = fakeDb()
       const run = executePlan(
         db,
@@ -527,7 +567,8 @@ describe("executePlan", () => {
           ...promoted,
           promotion: {
             ...promoted.promotion!,
-            ...tabled,
+            record,
+            recordHash: await promotionRecordHash(record),
             permissionItems: [],
             preservation,
           },

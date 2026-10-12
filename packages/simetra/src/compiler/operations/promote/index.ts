@@ -474,7 +474,10 @@ export async function promoteObject(
     ...sql.subjects,
   ]
   problems.push(...structural.flatMap((s) => s.problems))
-  for (const s of subjects) {
+  // Клас предмета, який `promote` записує сам, вхід не обирає: такий ключ у
+  // `conversions` — невідомий (R24)
+  const chosen = subjects.filter((s) => s.implied === undefined)
+  for (const s of chosen) {
     const given = input.conversions[s.subject]
     if (given === undefined) {
       if (s.required) {
@@ -495,7 +498,7 @@ export async function promoteObject(
       )
     }
   }
-  const known = new Set(subjects.map((s) => s.subject))
+  const known = new Set(chosen.map((s) => s.subject))
   for (const key of Object.keys(input.conversions)) {
     if (!known.has(key)) {
       problems.push(
@@ -607,9 +610,21 @@ export async function promoteObject(
     return completed.result
   }
   const objects = new Map(subjects.map((s) => [s.subject, s.objects]))
+  // Запис несе і класи входу, і ті, що `promote` записав сам
+  const classified: PromoteInput = {
+    ...input,
+    conversions: {
+      ...input.conversions,
+      ...Object.fromEntries(
+        subjects.flatMap((s) =>
+          s.implied === undefined ? [] : [[s.subject, s.implied]]
+        )
+      ),
+    },
+  }
   const record = (m: NonNullable<typeof completed.model>) =>
     promotionRecord(
-      input,
+      classified,
       model,
       m,
       main,

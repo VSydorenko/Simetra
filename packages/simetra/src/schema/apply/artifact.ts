@@ -85,6 +85,13 @@ export interface PromotionSection {
   }[]
   /** Id кроку → клас конверсії: лише для показу біля кроку. */
   conversions: { step: string; class: ConversionClass }[]
+  /**
+   * Цілі FK таблиць одиниці поза межею двигуна, які роль, що застосовує, не
+   * може заблокувати явно (немає `UPDATE`, `DELETE` чи `TRUNCATE`): `SHARE
+   * ROW EXCLUSIVE` бере сам крок FK. У `locks` їх немає, але вивід плану їх
+   * показує — не мовчки (R25 плану П3-2a). Порядок — схема, потім ім'я.
+   */
+  implicitLocks: SectionTable[]
 }
 
 /**
@@ -173,6 +180,7 @@ const promotionSectionSchema = z.strictObject({
   conversions: z.array(
     z.strictObject({ step: z.string(), class: conversionClass })
   ),
+  implicitLocks: z.array(sectionTableSchema),
 })
 
 const fingerprintSchema = z.strictObject({

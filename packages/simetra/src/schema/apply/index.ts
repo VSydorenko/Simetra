@@ -54,6 +54,7 @@ export {
   type PromotionInput,
   type RenameIntent,
   type TransitionVerdict,
+  type WritePath,
 } from "./promotion"
 export {
   DEFAULT_APPLY_TIMEOUTS,

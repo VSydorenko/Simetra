@@ -207,7 +207,8 @@ export async function executePlan(
     )
   // Порожній чи неповний перелік збереження тихо пропустив би доказ рядків і
   // значень (рішення 6): кожна таблиця запису — рівно один замір у її
-  // нових іменах. Розбіжність — так само зламаний конвеєр плану
+  // старих і нових іменах з кожною змапленою колонкою. Розбіжність — так
+  // само зламаний конвеєр плану
   if (plan.promotion !== null && !preservesEveryTable(plan.promotion))
     throw new Error(
       "the promotion section does not preserve exactly the tables of its record"
@@ -263,20 +264,32 @@ export async function executePlan(
   }
 }
 
-/** Рівно один замір на кожну таблицю запису, за новим ім'ям, і нічого більше. */
+/**
+ * Рівно один замір на кожну таблицю запису — у її старих і нових іменах, і
+ * нічого більше; кожна змаплена колонка запису в ньому є. Замір без колонки
+ * не довів би, що її значення лишились.
+ */
 function preservesEveryTable(
   section: NonNullable<ExecutablePlan["promotion"]>
 ): boolean {
-  const { tables } = section.record
+  const { tables, columns } = section.record
   const { preservation } = section
   return (
     preservation.length === tables.length &&
-    tables.every(
-      (t) =>
-        preservation.filter(
-          (p) => p.after.schema === t.schema && p.after.table === t.to
-        ).length === 1
-    )
+    tables.every((t) => {
+      const found = preservation.filter(
+        (p) =>
+          p.before.schema === t.schema &&
+          p.before.table === t.from &&
+          p.after.schema === t.schema &&
+          p.after.table === t.to
+      )
+      if (found.length !== 1) return false
+      const measured = new Set(found[0]!.columns.map((c) => c.after))
+      return columns
+        .filter((c) => c.schema === t.schema && c.table === t.to)
+        .every((c) => measured.has(quoteIdent(c.to)))
+    })
   )
 }
 
