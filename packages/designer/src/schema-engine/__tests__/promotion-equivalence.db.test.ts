@@ -247,4 +247,43 @@ describe("canonicalRenames", () => {
       })
     })
   })
+
+  it("does not match an index with another operator class", async () => {
+    // `text_pattern_ops` і клас за замовчуванням — різні індекси: хибне
+    // перейменування сховало б зняття індексу користувача за чужим іменем
+    await inTarget(
+      `create schema app;
+       create table app.items (code text);
+       create index legacy_code_pattern on app.items (code text_pattern_ops);`,
+      async (clone) => {
+        await inDatabase(
+          clone,
+          `create schema app;
+           create table app.items (code text);
+           create index items_code_idx on app.items (code);`,
+          async (shadow) => {
+            const { steps, renames } = canonicalRenames(
+              await read(clone, "items"),
+              await read(shadow, "items"),
+              new Map()
+            )
+            expect(steps).toEqual([])
+            expect(renames).toEqual([])
+            // Індекс копії лишається DROP двигуна, а індекс виду — CREATE
+            const actions = engine.plan(
+              (await engine.extract({ url: clone }, scope)).catalog,
+              (await engine.extract({ url: shadow }, scope)).catalog,
+              scope
+            ).actions
+            expect(actions.map((a) => a.sql)).toEqual(
+              expect.arrayContaining([
+                expect.stringMatching(/DROP INDEX .*legacy_code_pattern/),
+                expect.stringMatching(/CREATE INDEX .*items_code_idx/),
+              ])
+            )
+          }
+        )
+      }
+    )
+  })
 })

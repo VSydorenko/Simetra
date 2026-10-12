@@ -331,9 +331,13 @@
    - **окремий індекс** (не носій обмеження): (таблиця, `amname`,
      `indisunique`, `indnullsnotdistinct`, `indnkeyatts`,
      `pg_get_indexdef(oid, k, false)` для `k = 1..indnatts`, `indoption`,
+     `indclass` (імена класів операторів за позицією ключа),
      `indcollation`, `pg_get_expr(indpred, indrelid)`, `reloptions`).
      - `pg_get_indexdef(oid)` цілком містить ім'я, тож ключ складено з
        частин.
+     - Частина колонки класу операторів не містить, а `(a text_pattern_ops)`
+       і `(a)` — різні індекси. Класи й колляції — іменами: OID у копії й
+       тіні різні.
      - `indnkeyatts` розрізняє `UNIQUE (a) INCLUDE (b)` і `UNIQUE (a, b)`;
    - **послідовність:** колонка-власник (`pg_depend` `deptype` `a`/`i`) і
      ознака, чи `DEFAULT` цієї колонки посилається саме на цю послідовність.

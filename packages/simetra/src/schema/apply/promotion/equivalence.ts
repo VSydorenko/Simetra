@@ -31,8 +31,10 @@ export interface EquivalenceObject {
  * зі своїм обмеженням, а унікальне обмеження й унікальний індекс — різні
  * види ключа. `pg_get_indexdef(oid)` цілком містить ім'я, тож ключ індексу
  * складено з частин; `indnkeyatts` розрізняє `UNIQUE (a) INCLUDE (b)` і
- * `UNIQUE (a, b)`. Колляції — іменами: копія й тінь — різні бази, OID
- * користувацької колляції в них різні. Послідовність — лише в схемі своєї
+ * `UNIQUE (a, b)`. `pg_get_indexdef(oid, k, …)` для ключової колонки не
+ * містить класу операторів, а `(a text_pattern_ops)` і `(a)` — різні індекси,
+ * тож класи (`indclass`) — окремою частиною. Класи й колляції — іменами: копія
+ * й тінь — різні бази, OID користувацьких об'єктів у них різні. Послідовність — лише в схемі своєї
  * таблиці: крок перейменування адресує її схемою таблиці.
  */
 const EQUIVALENCE_SQL = `
@@ -55,6 +57,11 @@ select 'index', t.schema, t.tbl, ic.relname,
     (select json_agg(pg_get_indexdef(i.indexrelid, k, false) order by k)
        from generate_series(1, i.indnatts::int) as k),
     i.indoption::int2[],
+    (select json_agg(quote_ident(on_.nspname) || '.' || quote_ident(oc.opcname)
+                     order by u.ord)
+       from unnest(i.indclass::oid[]) with ordinality as u(cls, ord)
+       join pg_opclass oc on oc.oid = u.cls
+       join pg_namespace on_ on on_.oid = oc.opcnamespace),
     (select json_agg(case when u.coll = 0 then null
                      else quote_ident(cn.nspname) || '.' || quote_ident(co.collname) end
                      order by u.ord)
