@@ -340,33 +340,61 @@ export function guardTarget(
   }
 }
 
+/** Ім'я підготовленого оператора проби; префікс платформи — щоб не зачепити чужого. */
+const probeName = (index: number): string => `simetra_guard_probe_${index}`
+
 /**
- * Обидва приведення сторожа на копії (рішення 5): `((NULL::<старий>)::<новий>)::<старий>`
- * у точці збереження, щоб одна невдала пара не обірвала решту. Пара без
- * приведення назад (`42846`) інакше впала б лише в раннері, на цілі.
+ * Обидва приведення сторожа й рівність старого типу на копії (рішення 5,
+ * R18): `PREPARE` з параметром старого типу лише розбирає й аналізує вираз
+ * сторожа, нічого не обчислюючи, тож `NOT NULL` домену, на якому падала б
+ * NULL-константа, відмови не дає. Пара без приведення (`42846`) чи старий тип
+ * без оператора рівності (`42883`, `json`) інакше впали б лише в раннері, на
+ * цілі. Точка збереження — щоб одна невдала пара не обірвала решту.
+ * Підготовлений оператор живе в сесії поза транзакцією, тож `DEALLOCATE`
+ * обов'язковий: відкат його не прибирає.
  */
 export async function checkGuardCasts(
   tx: ApplyTransaction,
   casts: readonly { step: string; from: string; to: string }[]
 ): Promise<EngineDiagnostic[]> {
   const out: EngineDiagnostic[] = []
-  for (const cast of casts) {
+  for (const [index, cast] of casts.entries()) {
+    const name = probeName(index)
     await tx.query("SAVEPOINT simetra_guard_cast")
     try {
-      await tx.query(`SELECT ((NULL::${cast.from})::${cast.to})::${cast.from}`)
-      await tx.query("RELEASE SAVEPOINT simetra_guard_cast")
+      await tx.query(
+        `PREPARE ${name}(${cast.from}) AS SELECT (($1::${cast.to})::${cast.from}) IS DISTINCT FROM $1`
+      )
     } catch (error) {
       if (!(error instanceof ApplyDbError)) throw error
       await tx.query("ROLLBACK TO SAVEPOINT simetra_guard_cast")
       out.push(
         applyDiagnostic("plan.type-guard-unsupported", "error", {
           step: cast.step,
-          reason: "cast",
+          // Без рівності сторож не порівняє значення, хоч приведення й є:
+          // порада тут інша, ніж для пари без приведення
+          reason: error.sqlstate === "42883" ? "equality" : "cast",
         })
       )
+      continue
     }
+    await tx.query(`DEALLOCATE ${name}`)
+    await tx.query("RELEASE SAVEPOINT simetra_guard_cast")
   }
   return out
+}
+
+/** Об'єкт, що залежить від колонки зі зміною типу. */
+export interface TypeChangeDependent {
+  /** Крок зміни типу колонки. */
+  step: string
+  kind: "trigger" | "function" | "procedure"
+  schema: string
+  /** Таблиця тригера; у функції її немає. */
+  table?: string
+  name: string
+  /** Текст для відмови: `trigger app.t.name`, `function app.f(args)`. */
+  text: string
 }
 
 /**
@@ -378,26 +406,39 @@ export async function checkGuardCasts(
  */
 export async function readTypeChangeDependents(
   tx: ApplyTransaction,
-  columns: readonly { schema: string; table: string; column: string }[]
-): Promise<string[]> {
+  columns: readonly {
+    step: string
+    schema: string
+    table: string
+    column: string
+  }[]
+): Promise<TypeChangeDependent[]> {
   if (columns.length === 0) return []
-  const rows = await tx.query<{ object: string }>(
+  const rows = await tx.query<{
+    step: string
+    kind: TypeChangeDependent["kind"]
+    schema: string
+    table: string | null
+    name: string
+    text: string
+  }>(
     `WITH RECURSIVE input AS (
-       SELECT c.oid AS relid, i."column"
-       FROM jsonb_to_recordset($1::jsonb) AS i("schema" text, "table" text, "column" text)
+       SELECT i.step, c.oid AS relid, i."column"
+       FROM jsonb_to_recordset($1::jsonb) AS i(step text, "schema" text, "table" text, "column" text)
        JOIN pg_catalog.pg_namespace n ON n.nspname = i."schema"
        JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = i."table"
      ), rel AS (
-       SELECT relid, "column" FROM input
+       SELECT step, relid, "column" FROM input
        UNION
-       SELECT h.inhrelid, rel."column"
+       SELECT rel.step, h.inhrelid, rel."column"
        FROM rel JOIN pg_catalog.pg_inherits h ON h.inhparent = rel.relid
      ), col AS (
-       SELECT a.attrelid, a.attnum
+       SELECT rel.step, a.attrelid, a.attnum
        FROM rel JOIN pg_catalog.pg_attribute a
          ON a.attrelid = rel.relid AND a.attname = rel."column" AND NOT a.attisdropped
      )
-     SELECT DISTINCT format('trigger %s.%s.%s', quote_ident(n.nspname), quote_ident(c.relname), quote_ident(t.tgname)) AS object
+     SELECT DISTINCT col.step, 'trigger' AS kind, n.nspname AS "schema", c.relname AS "table", t.tgname AS name,
+       format('trigger %s.%s.%s', quote_ident(n.nspname), quote_ident(c.relname), quote_ident(t.tgname)) AS text
      FROM col
      JOIN pg_catalog.pg_depend d
        ON d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = col.attrelid AND d.refobjsubid = col.attnum
@@ -406,7 +447,8 @@ export async function readTypeChangeDependents(
      JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
      UNION
-     SELECT DISTINCT format('%s %s.%s(%s)', CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, quote_ident(n.nspname), quote_ident(p.proname), pg_catalog.pg_get_function_identity_arguments(p.oid))
+     SELECT DISTINCT col.step, CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, n.nspname, NULL, p.proname,
+       format('%s %s.%s(%s)', CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, quote_ident(n.nspname), quote_ident(p.proname), pg_catalog.pg_get_function_identity_arguments(p.oid))
      FROM col
      JOIN pg_catalog.pg_depend d
        ON d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = col.attrelid AND d.refobjsubid = col.attnum
@@ -415,26 +457,66 @@ export async function readTypeChangeDependents(
      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace`,
     [
       JSON.stringify(
-        columns.map(({ schema, table, column }) => ({ schema, table, column }))
+        columns.map(({ step, schema, table, column }) => ({
+          step,
+          schema,
+          table,
+          column,
+        }))
       ),
     ]
   )
-  // Порядок кодових одиниць, а не колації бази: текст відмови детермінований
-  return rows.map((r) => r.object).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  return rows.map(({ table, ...row }) =>
+    table === null ? row : { ...row, table }
+  )
+}
+
+/**
+ * Залежний об'єкт, який крок, що стоїть строго до кроку зміни типу, уже
+ * знімає (R19): на момент `ALTER … TYPE` його немає, а пізніше відтворення
+ * компілюється вже під новий тип. Лише точна ідентичність і лише тригер:
+ * ідентичність функції двигуна не несе сигнатури, тож знята перевантажена
+ * функція могла бути іншою — така лишається відмовою.
+ */
+function droppedBefore(
+  dependent: TypeChangeDependent,
+  steps: readonly Pick<PlanStep, "id" | "destroyed">[]
+): boolean {
+  if (dependent.kind !== "trigger") return false
+  const at = steps.findIndex((s) => s.id === dependent.step)
+  return steps
+    .slice(0, Math.max(at, 0))
+    .some((s) =>
+      s.destroyed.some(
+        (d) =>
+          d.kind === "trigger" &&
+          d.schema === dependent.schema &&
+          d.table === dependent.table &&
+          d.name === dependent.name
+      )
+    )
 }
 
 /**
  * Відмови плану зі змінами типу, що їх видно лише на базі (рішення 5):
- * залежні тригери й функції `BEGIN ATOMIC` і пари типів без приведення в
- * обидва боки. `tx` — транзакція на копії: план без промоції питає копію
- * доказу до прогону, план із промоцією — копію після наміру.
+ * залежні тригери й функції `BEGIN ATOMIC`, яких попередні кроки плану не
+ * знімають, і пари типів, яким сторожа не виконати. `tx` — транзакція на
+ * копії: план без промоції питає копію доказу до прогону, план із
+ * промоцією — копію після наміру. `steps` — кроки плану в порядку виконання.
  */
 export async function typeChangeRefusals(
   tx: ApplyTransaction,
-  changes: readonly TypeChange[]
+  changes: readonly TypeChange[],
+  steps: readonly Pick<PlanStep, "id" | "destroyed">[]
 ): Promise<EngineDiagnostic[]> {
   if (changes.length === 0) return []
-  const dependents = await readTypeChangeDependents(tx, changes)
+  const blocking = (await readTypeChangeDependents(tx, changes))
+    .filter((d) => !droppedBefore(d, steps))
+    .map((d) => d.text)
+  // Порядок кодових одиниць, а не колації бази: текст відмови детермінований
+  const dependents = [...new Set(blocking)].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0
+  )
   const casts = await checkGuardCasts(
     tx,
     changes.filter((c) => !c.lossless)

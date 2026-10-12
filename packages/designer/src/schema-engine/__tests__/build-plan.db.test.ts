@@ -14,9 +14,12 @@ import {
   type CompiledModel,
 } from "simetra/compiler"
 import {
+  ApplyConnectionLost,
   buildPlan,
+  checkGuardCasts,
   executePlan,
   serializePlan,
+  type ApplyDatabase,
   type EngineAction,
   type EngineScope,
   type PlanArtifact,
@@ -845,6 +848,183 @@ CREATE TRIGGER party_note_of BEFORE UPDATE OF note ON app.party FOR EACH ROW EXE
         outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
           ?.params
       ).toEqual({ objects: "function app.party_notes(lim integer)" })
+    })
+
+    const WHEN_TRIGGER = `${TRIGGER_FN}
+CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION app.party_touch();`
+
+    it("lets a type change through when an earlier step drops the dependent trigger", async () => {
+      const artifact = planned(
+        await planChange(
+          await withUnit(LONG, WHEN_TRIGGER),
+          await withUnit(SHORT, TRIGGER_FN)
+        )
+      )
+      const ids = artifact.steps.map((s) => s.id)
+      const [drop] = stepMatching(artifact, /DROP TRIGGER/)
+      const [change] = stepMatching(artifact, /ALTER COLUMN "note" TYPE/)
+      expect(ids.indexOf(drop!.id)).toBeLessThan(ids.indexOf(change!.id))
+    })
+
+    it("refuses a type change when the dependent trigger is dropped only after it", async () => {
+      const before = await withUnit(LONG, WHEN_TRIGGER)
+      const after = await withUnit(SHORT, TRIGGER_FN)
+      // Двигун, що знімає тригер лише після зміни типу: на момент ALTER він
+      // ще стоїть, тож відмова лишається
+      const dropsLast: SchemaEngine = {
+        ...engine,
+        withDesiredShadow: (o, sql, scope, fn) =>
+          engine.withDesiredShadow(o, sql, scope, (db, enginePlan) => {
+            const late = (a: EngineAction) => /DROP TRIGGER/.test(a.sql)
+            return fn(db, {
+              ...enginePlan,
+              actions: [
+                ...enginePlan.actions.filter((a) => !late(a)),
+                ...enginePlan.actions.filter(late),
+              ],
+            })
+          }),
+      }
+      const outcome = await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        return plan(url, after, dropsLast)
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
+          ?.params
+      ).toEqual({ objects: "trigger app.party.party_note" })
+    })
+
+    it("keeps refusing a dropped overloaded function it cannot tell apart", async () => {
+      // Ідентичність функції двигуна не несе сигнатури: знята перевантажена
+      // функція могла бути й іншою, тож детектор її не віднімає
+      const spare = `CREATE FUNCTION app.party_notes(lim text) RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT count(*) FROM app.party; END;`
+      const dependent = `CREATE FUNCTION app.party_notes(lim integer) RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT count(note) FROM app.party LIMIT lim; END;`
+      const outcome = await planChange(
+        await withUnit(LONG, `${dependent}\n${spare}`),
+        await withUnit(SHORT, spare)
+      )
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
+          ?.params
+      ).toEqual({ objects: "function app.party_notes(lim integer)" })
+    })
+
+    it("names a lost connection during the type-change checks as a failed copy", async () => {
+      const before = await compiled({ [PARTY]: note(LONG) })
+      const after = await compiled({ [PARTY]: note(SHORT) })
+      // Порт копії, що губить з'єднання на першому ж запиті транзакції
+      const losing: ApplyDatabase = {
+        transaction: (db, end, fn) =>
+          dbs.scratch.transaction(db, end, () =>
+            fn({
+              query: () =>
+                Promise.reject(new ApplyConnectionLost("connection lost")),
+            })
+          ),
+      }
+      const outcome = await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        return buildPlan(engine, { ...dbs, scratch: losing }, after, {
+          target: { url },
+        })
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["engine.clone-failed"])
+      expect(codes(outcome)).not.toContain("apply.connection-lost")
+    })
+
+    describe("guard probe", () => {
+      /** Проба приведень на цілі з `setup`; скільки підготовлених операторів лишилось у сесії. */
+      async function probe(
+        setup: string,
+        casts: { from: string; to: string }[]
+      ): Promise<{ reasons: unknown[]; prepared: number }> {
+        return inTarget(setup, (url) =>
+          writer.transaction({ url }, "rollback", async (tx) => {
+            const out = await checkGuardCasts(
+              tx,
+              casts.map((c) => ({ step: "s1", ...c }))
+            )
+            const [left] = await tx.query<{ n: number }>(
+              "select count(*)::int as n from pg_catalog.pg_prepared_statements"
+            )
+            return {
+              reasons: out.map((d) => [d.code, d.params.reason]),
+              prepared: left!.n,
+            }
+          })
+        )
+      }
+
+      const DOMAIN =
+        "create schema if not exists app; create domain app.code as varchar(5) not null;"
+
+      it("accepts a NOT NULL domain as the old type", async () => {
+        expect(
+          await probe(DOMAIN, [{ from: "app.code", to: "pg_catalog.text" }])
+        ).toEqual({ reasons: [], prepared: 0 })
+      })
+
+      it("accepts a NOT NULL domain as the new type", async () => {
+        expect(
+          await probe(DOMAIN, [{ from: "pg_catalog.text", to: "app.code" }])
+        ).toEqual({ reasons: [], prepared: 0 })
+      })
+
+      it("names a type without equality and a pair without a cast back", async () => {
+        expect(
+          await probe(EMPTY, [
+            { from: "pg_catalog.json", to: "pg_catalog.text" },
+            { from: "pg_catalog.jsonb", to: "pg_catalog.numeric" },
+            { from: "pg_catalog.text", to: "pg_catalog.json" },
+          ])
+        ).toEqual({
+          reasons: [
+            ["plan.type-guard-unsupported", "equality"],
+            ["plan.type-guard-unsupported", "cast"],
+          ],
+          prepared: 0,
+        })
+      })
+    })
+
+    it("refuses a type change of a column without equality at plan", async () => {
+      const model = await compiled({ [PARTY]: party() })
+      // Двигун, що міняє `json` на `text`: порівняти старі значення сторож
+      // не зможе, тож план відмовляє ще на копії, а не раннер на цілі
+      const rewriting: SchemaEngine = {
+        ...engine,
+        withDesiredShadow: (o, sql, scope, fn) =>
+          engine.withDesiredShadow(o, sql, scope, (db, enginePlan) =>
+            fn(db, {
+              ...enginePlan,
+              empty: false,
+              actions: [
+                {
+                  ...enginePlan.actions[0]!,
+                  sql: "ALTER TABLE app.v ALTER COLUMN j TYPE text",
+                },
+              ],
+            })
+          ),
+      }
+      const outcome = await inTarget(EMPTY, async (url) => {
+        await establish(url, model)
+        await other(url, "create table app.v (id int primary key, j json)")
+        return plan(url, model, rewriting)
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-guard-unsupported"])
+      expect(
+        outcome.diagnostics.find(
+          (d) => d.code === "plan.type-guard-unsupported"
+        )?.params
+      ).toEqual({ step: "s1", reason: "equality" })
     })
   })
 })

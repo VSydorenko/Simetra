@@ -67,7 +67,6 @@ export {
 } from "./steps"
 export {
   checkGuardCasts,
-  guardTarget,
   readTypeChangeDependents,
   typeChangeRefusals,
   typeChanges,
@@ -75,6 +74,7 @@ export {
   type GuardProblem,
   type GuardResult,
   type TypeChange,
+  type TypeChangeDependent,
 } from "./type-guard"
 export {
   PLAN_FORMAT,

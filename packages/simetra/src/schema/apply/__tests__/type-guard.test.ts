@@ -3,11 +3,11 @@ import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   classifySteps,
-  guardTarget,
   typeChanges,
   typeGuards,
   type EngineAction,
 } from "simetra/schema"
+import { guardTarget } from "../type-guard"
 
 let parse: SqlParser
 beforeAll(async () => {

@@ -32,7 +32,7 @@ import {
   type FingerprintSection,
   type ObjectOwner,
 } from "./fingerprint"
-import type { ApplyDatabase } from "./port"
+import { ApplyConnectionLost, type ApplyDatabase } from "./port"
 import { readApplyState } from "./state"
 import { classifySteps, lintSteps, requiredPermissions, stepId } from "./steps"
 import {
@@ -469,9 +469,7 @@ async function prove(
       const blocked =
         p.typeChanges.length === 0
           ? []
-          : await dbs.scratch.transaction(clone, "rollback", (tx) =>
-              typeChangeRefusals(tx, p.typeChanges)
-            )
+          : await typeChangeProof(dbs.scratch, clone, p.typeChanges, p.plan)
       if (blocked.length > 0) return { ok: false, diagnostics: blocked }
 
       const run = await executePlan(dbs.scratch, clone, p.plan, {
@@ -525,6 +523,32 @@ async function prove(
   return outcome.value.ok && !hasError(diagnostics)
     ? { ...outcome.value, diagnostics }
     : { ok: false, diagnostics }
+}
+
+/**
+ * Відмови змін типу на копії. Обрив з'єднання тут — така сама недоведеність,
+ * як обрив прогону-доказу (див. `asProofRefusal`): копія жертовна, ціль ніхто
+ * не чіпав.
+ */
+async function typeChangeProof(
+  scratch: ApplyDatabase,
+  clone: DbConnection,
+  changes: readonly TypeChange[],
+  plan: ExecutablePlan
+): Promise<EngineDiagnostic[]> {
+  try {
+    return await scratch.transaction(clone, "rollback", (tx) =>
+      typeChangeRefusals(tx, changes, plan.steps)
+    )
+  } catch (error) {
+    if (!(error instanceof ApplyConnectionLost)) throw error
+    return [
+      applyDiagnostic("engine.clone-failed", "error", {
+        detail:
+          "the connection to the copy was lost while checking the column type changes, so the plan could not be proved; nothing was written to the database",
+      }),
+    ]
+  }
 }
 
 /** Помилки самого плану двигуна: попередження вже звучать у результаті порту. */

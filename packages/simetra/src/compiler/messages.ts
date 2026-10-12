@@ -2366,12 +2366,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.type-guard-unsupported": {
     en: (p) =>
-      `Plan step ${p.step} changes a column type in a way the platform cannot check for lost values (${p.reason})`,
+      p.reason === "equality"
+        ? `Plan step ${p.step} changes the type of a column whose old type has no equality operator, so the platform cannot compare the values before and after the change`
+        : `Plan step ${p.step} changes a column type in a way the platform cannot check for lost values (${p.reason})`,
     uk: (p) =>
-      `Крок плану ${p.step} змінює тип колонки так, що платформа не може перевірити втрату значень (${p.reason})`,
+      p.reason === "equality"
+        ? `Крок плану ${p.step} змінює тип колонки, старий тип якої не має оператора рівності, тож платформа не може порівняти значення до й після зміни`
+        : `Крок плану ${p.step} змінює тип колонки так, що платформа не може перевірити втрату значень (${p.reason})`,
     hint: {
-      en: "No plan was written. The check needs a plain `<column>::<new type>` conversion, an old type the plan can see and a cast both ways between the types; make the change through a data step instead.",
-      uk: "План не записано. Перевірці потрібне просте приведення `<колонка>::<новий тип>`, видимий планові старий тип і приведення між типами в обидва боки; зробіть зміну кроком даних.",
+      en: (p) =>
+        p.reason === "equality"
+          ? "No plan was written. A type such as json has no equality, so the check cannot tell whether values survive; move the column to a comparable type (for example jsonb or text) through a data step first, then change the type."
+          : "No plan was written. The check needs a plain `<column>::<new type>` conversion, an old type the plan can see and a cast both ways between the types; make the change through a data step instead.",
+      uk: (p) =>
+        p.reason === "equality"
+          ? "План не записано. Тип на кшталт json не має рівності, тож перевірка не скаже, чи збереглися значення; спершу переведіть колонку в порівнюваний тип (наприклад, jsonb чи text) кроком даних, потім змініть тип."
+          : "План не записано. Перевірці потрібне просте приведення `<колонка>::<новий тип>`, видимий планові старий тип і приведення між типами в обидва боки; зробіть зміну кроком даних.",
     },
   },
   "plan.type-change-dependent": {
