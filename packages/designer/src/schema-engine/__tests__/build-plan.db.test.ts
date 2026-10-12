@@ -1210,6 +1210,140 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
     )
   })
 
+  describe("provider locks", () => {
+    // Провайдер (supautils) бере ACCESS EXCLUSIVE на таблицях свого переліку
+    // для операторів політик і зняття тригера ролі з переліку (R27)
+    const POLICY =
+      "CREATE POLICY party_read ON app.party FOR SELECT TO authenticated USING (true);"
+    const TOUCH = `CREATE FUNCTION app.party_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`
+    const TRIGGER = `${TOUCH}
+CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCTION app.party_touch();`
+    const SERVICES = "Auth, Storage, Realtime"
+
+    const withSql = (sql: string | undefined) =>
+      compiled({
+        [PARTY]: party(),
+        ...(sql === undefined ? {} : { "sql/app/unit.sql": sql }),
+      })
+
+    /** Наявні таблиці переліку налаштування для ролі сесії на цілі. */
+    const listed = (url: string, setting: string) =>
+      other<{ schema: string; name: string }>(
+        url,
+        `select n.nspname as schema, c.relname as name
+           from pg_catalog.json_array_elements_text(
+             pg_catalog.current_setting('${setting}')::json -> current_user::text) x(name)
+           join pg_catalog.pg_class c on c.oid = pg_catalog.to_regclass(x.name)
+           join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+          where c.relkind in ('r', 'p')`
+      ).then((rows) =>
+        rows.sort(
+          (a, b) =>
+            (a.schema < b.schema ? -1 : a.schema > b.schema ? 1 : 0) ||
+            (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+        )
+      )
+
+    const lockParams = (outcome: PlanOutcome) =>
+      outcome.diagnostics
+        .filter((d) => d.code === "plan.foreign-exclusive-lock")
+        .map((d) => d.params)
+
+    async function rehearse(
+      url: string,
+      artifact: PlanArtifact,
+      model: CompiledModel
+    ) {
+      return executePlan(writer, { url }, artifact, {
+        mode: "rehearse",
+        planHash: artifact.planHash,
+        allow: artifact.requiredPermissions,
+        snapshot: canonicalSnapshot(model),
+      })
+    }
+
+    it.each([
+      [
+        "creates a policy",
+        undefined,
+        POLICY,
+        /^CREATE POLICY/,
+        "supautils.policy_grants",
+      ],
+      [
+        "drops a trigger",
+        TRIGGER,
+        TOUCH,
+        /^DROP TRIGGER/,
+        "supautils.drop_trigger_grants",
+      ],
+    ])(
+      "takes the provider tables from the target list up front when the plan %s",
+      async (_, before, after, pattern, setting) => {
+        const from = await withSql(before)
+        const to = await withSql(after)
+        await inTarget(EMPTY, async (url) => {
+          await establish(url, from)
+          const outcome = await plan(url, to)
+          const artifact = planned(outcome)
+          const [step] = stepMatching(artifact, pattern)
+          const tables = await listed(url, setting)
+          expect(tables).toContainEqual({ schema: "auth", name: "users" })
+          // Перелік — з цілі, під хешем плану
+          expect(
+            artifact.providerLocks.find((s) => s.setting === setting)?.tables
+          ).toEqual(tables)
+          const taken = [
+            ...artifact.locks,
+            ...artifact.implicitLocks.map((l) => ({
+              schema: l.schema,
+              name: l.name,
+              mode: l.mode,
+            })),
+          ]
+          for (const t of tables)
+            expect(taken).toContainEqual({ ...t, mode: "accessExclusive" })
+          // Одне попередження на крок з переліком таблиць і службами
+          expect(lockParams(outcome)).toEqual([
+            {
+              table: tables.map((t) => `${t.schema}.${t.name}`).join(", "),
+              step: step!.id,
+              services: SERVICES,
+            },
+          ])
+          // Доказ на копії й репетиція на цілі: замків поза слідом немає
+          expect(codes(outcome)).not.toContain("apply.lock-footprint-exceeded")
+          expect(await rehearse(url, artifact, to)).toMatchObject({
+            status: "rolledBack",
+            diagnostics: [],
+          })
+        })
+      }
+    )
+
+    it("takes no provider tables when the plan creates a trigger", async () => {
+      const from = await withSql(TOUCH)
+      const to = await withSql(TRIGGER)
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, from)
+        const outcome = await plan(url, to)
+        const artifact = planned(outcome)
+        expect(stepMatching(artifact, /^CREATE TRIGGER/)).toHaveLength(1)
+        const provider = ["auth", "storage", "realtime"]
+        expect(
+          [...artifact.locks, ...artifact.implicitLocks].filter((l) =>
+            provider.includes(l.schema)
+          )
+        ).toEqual([])
+        expect(lockParams(outcome)).toEqual([])
+        expect(await rehearse(url, artifact, to)).toMatchObject({
+          status: "rolledBack",
+          diagnostics: [],
+        })
+      })
+    })
+  })
+
   describe("promotion", () => {
     type Json = Record<string, unknown>
 

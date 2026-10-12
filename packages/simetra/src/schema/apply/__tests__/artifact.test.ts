@@ -67,6 +67,13 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
       step: "s1",
     },
   ],
+  providerLocks: [
+    {
+      setting: "supautils.policy_grants",
+      statements: ["createPolicy", "dropPolicy"],
+      tables: [{ schema: "auth", name: "users" }],
+    },
+  ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   promotion: null,
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -249,7 +256,7 @@ describe("plan artifact", () => {
     expect(parsePlan(text).ok).toBe(false)
   })
 
-  it("covers the role, the locks and the preamble with the hash", async () => {
+  it("covers the role, the locks, the provider list and the preamble with the hash", async () => {
     const stamped = await stampPlan(draft())
     const relocked = draft()
     relocked.locks[0]!.mode = "shareRowExclusive"
@@ -263,6 +270,10 @@ describe("plan artifact", () => {
     const bare = draft()
     bare.preamble = []
     expect((await stampPlan(bare)).planHash).not.toBe(stamped.planHash)
+    // Перелік провайдера — властивість цілі, з якою план побудовано (R27)
+    const provider = draft()
+    provider.providerLocks[0]!.tables = []
+    expect((await stampPlan(provider)).planHash).not.toBe(stamped.planHash)
   })
 
   it("is strict about the role, the locks and the preamble", async () => {
@@ -291,10 +302,33 @@ describe("plan artifact", () => {
         ],
       },
       { ...artifact, role: 1 },
+      // Невідомий клас оператора і зайвий ключ таблиці провайдера
+      {
+        ...artifact,
+        providerLocks: [
+          { setting: "x", statements: ["createTrigger"], tables: [] },
+        ],
+      },
+      {
+        ...artifact,
+        providerLocks: [
+          {
+            setting: "x",
+            statements: [],
+            tables: [{ schema: "auth", name: "users", mode: "share" }],
+          },
+        ],
+      },
     ]
     for (const variant of variants)
       expect(parsePlan(JSON.stringify(variant)).ok).toBe(false)
-    for (const field of ["role", "locks", "implicitLocks", "preamble"]) {
+    for (const field of [
+      "role",
+      "locks",
+      "implicitLocks",
+      "providerLocks",
+      "preamble",
+    ]) {
       const missing: Record<string, unknown> = { ...artifact }
       delete missing[field]
       expect(parsePlan(JSON.stringify(missing)).ok).toBe(false)

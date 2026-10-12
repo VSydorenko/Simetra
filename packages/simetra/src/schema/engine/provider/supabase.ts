@@ -196,3 +196,61 @@ export const SUPABASE_SURFACES: readonly ProviderSurface[] = [
     (schema): ProviderSurface => ({ schema, table: "*", classes: ["trigger"] })
   ),
 ]
+
+/**
+ * Класи операторів, до яких провайдер може додати замки на свої таблиці
+ * (спека промоції §8, R27 плану П3-2a). Клас кроку T2 виводить з дерева
+ * розбору, а не з тексту SQL.
+ */
+export const PROVIDER_LOCK_STATEMENTS = [
+  "createPolicy",
+  "alterPolicy",
+  "dropPolicy",
+  "commentPolicy",
+  "dropTrigger",
+] as const
+
+export type ProviderLockStatement = (typeof PROVIDER_LOCK_STATEMENTS)[number]
+
+/**
+ * Джерело переліку таблиць, які займає клас операторів: налаштування цілі з
+ * JSON-об'єктом «роль → кваліфіковані імена таблиць».
+ */
+export interface ProviderLockSource {
+  statements: readonly ProviderLockStatement[]
+  setting: string
+}
+
+/**
+ * Механізм провайдерських замків як дані: самого переліку таблиць пресет не
+ * тримає — його читає план з цілі, бо провайдер змінює його між версіями.
+ * `services` — служби провайдера, що стоять, доки транзакція тримає ці замки.
+ */
+export interface ProviderLocks {
+  sources: readonly ProviderLockSource[]
+  services: readonly string[]
+}
+
+/**
+ * supautils виконує оператори політик і зняття тригера ролі з переліку з
+ * підвищеними правами і бере при цьому `ACCESS EXCLUSIVE` на кожну таблицю
+ * переліку цієї ролі — незалежно від таблиці самого оператора, до кінця
+ * транзакції (перевірено на локальному стеку). `COMMENT ON POLICY` займає їх
+ * так само; перейменування політики, створення тригера й `DROP TABLE` з
+ * каскадом — ні.
+ */
+export const SUPABASE_LOCKS: ProviderLocks = {
+  sources: [
+    {
+      statements: [
+        "createPolicy",
+        "alterPolicy",
+        "dropPolicy",
+        "commentPolicy",
+      ],
+      setting: "supautils.policy_grants",
+    },
+    { statements: ["dropTrigger"], setting: "supautils.drop_trigger_grants" },
+  ],
+  services: ["Auth", "Storage", "Realtime"],
+}

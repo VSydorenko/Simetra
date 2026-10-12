@@ -39,13 +39,18 @@ export {
 } from "./census"
 export { ALL_PRIVILEGES } from "./privileges"
 export {
+  PROVIDER_LOCK_STATEMENTS,
   renderProviderSeed,
   SUPABASE_BASE_EXTENSIONS,
   SUPABASE_EVENT_TRIGGERS,
   SUPABASE_EXTENSIONS,
+  SUPABASE_LOCKS,
   SUPABASE_PUBLIC_SCHEMA_GRANTS,
   SUPABASE_ROLES,
   SUPABASE_SCHEMAS,
   SUPABASE_SURFACES,
+  type ProviderLocks,
+  type ProviderLockSource,
+  type ProviderLockStatement,
   type ProviderSurface,
 } from "./provider/supabase"

@@ -10,16 +10,19 @@ import {
   PROVIDER_API_ROLES,
   quoteIdent,
   type CatalogModel,
+  type DatabaseProvider,
 } from "simetra/model"
-import type {
-  DbConnection,
-  EngineAction,
-  EngineDiagnostic,
-  EnginePlan,
-  EngineScope,
-  Extracted,
-  SchemaEngine,
-  ShadowOptions,
+import {
+  SUPABASE_LOCKS,
+  type DbConnection,
+  type EngineAction,
+  type EngineDiagnostic,
+  type EnginePlan,
+  type EngineScope,
+  type Extracted,
+  type ProviderLocks,
+  type SchemaEngine,
+  type ShadowOptions,
 } from "../engine"
 import { dedupe } from "../engine/desired"
 import {
@@ -47,10 +50,13 @@ import {
   footprintTables,
   planFootprint,
   planLocks,
+  providerStatements,
   readLiveForeignKeys,
   readLockRights,
+  readProviderLocks,
   type FootprintModels,
   type ImplicitLock,
+  type ProviderLockSet,
   type TableLock,
 } from "./locks"
 import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
@@ -117,6 +123,11 @@ const MISMATCH_PATH_LIMIT = 20
 
 /** Скільки об'єктів називає відмова власників; решту дає лише `count`. */
 const OWNER_LIMIT = 20
+
+/** Механізм провайдерських замків пресету (R27 плану П3-2a). */
+const PROVIDER_LOCKS: Record<DatabaseProvider, ProviderLocks> = {
+  supabase: SUPABASE_LOCKS,
+}
 
 /** Модель і відбиток однієї бази, зняті під однією межею. */
 interface Witness {
@@ -392,17 +403,21 @@ export async function buildPlan(
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (R26); без
   // промоції імена вихідного стану й кроків збігаються
-  const { locks, implicitLocks, lockWarnings } = await lockPlan(
+  const { locks, implicitLocks, providerLocks, lockWarnings } = await lockPlan(
     dbs.reader,
     o.target,
-    scope,
-    steps,
     {
-      source: live.extracted.model,
-      desired: target.extracted.model,
-      typeChanges: guarded.changes,
-      newToOld: new Map(),
-      columnsNewToOld: new Map(),
+      scope,
+      role: targetOwners.session,
+      steps,
+      parse,
+      models: {
+        source: live.extracted.model,
+        desired: target.extracted.model,
+        typeChanges: guarded.changes,
+        newToOld: new Map(),
+        columnsNewToOld: new Map(),
+      },
     }
   )
   const { preamble } = target.enginePlan
@@ -454,6 +469,7 @@ export async function buildPlan(
     role: targetOwners.session,
     locks,
     implicitLocks,
+    providerLocks,
     preamble,
     promotion: null,
     resultCatalog: proof.resultCatalog,
@@ -653,17 +669,21 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   )
   // Слід кроків двигуна — від копії після наміру, у нових іменах, і
   // перекладається в старі (R26)
-  const { locks, implicitLocks, lockWarnings } = await lockPlan(
+  const { locks, implicitLocks, providerLocks, lockWarnings } = await lockPlan(
     dbs.reader,
     o.target,
-    scope,
-    steps,
     {
-      source: cloneModel,
-      desired: target.extracted.model,
-      typeChanges: analysis.changes,
-      newToOld: analysis.intent.tablesNewToOld,
-      columnsNewToOld: columnsNewToOld(analysis.intent.columns),
+      scope,
+      role: c.targetOwners.session,
+      steps,
+      parse,
+      models: {
+        source: cloneModel,
+        desired: target.extracted.model,
+        typeChanges: analysis.changes,
+        newToOld: analysis.intent.tablesNewToOld,
+        columnsNewToOld: columnsNewToOld(analysis.intent.columns),
+      },
     }
   )
   const typeChangeSteps = new Map(
@@ -740,6 +760,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     role: c.targetOwners.session,
     locks,
     implicitLocks,
+    providerLocks,
     preamble: analysis.preamble,
     promotion: section,
     resultCatalog: proof.resultCatalog,
@@ -979,36 +1000,58 @@ function columnsNewToOld(
 }
 
 /**
- * Блокування плану за слідом кроків (спека промоції §8, R26 плану П3-2a):
- * слід кожного кроку, право ролі на явний `LOCK` кожної його таблиці на живій
- * цілі (READ ONLY) і замки з неявними замками. `ACCESS EXCLUSIVE` на таблиці
- * поза межею двигуна — попередження: її читання блоковані на всю транзакцію.
+ * Блокування плану за слідом кроків (спека промоції §8, R26 і R27 плану
+ * П3-2a): слід кожного кроку з провайдерськими замками, право ролі на явний
+ * `LOCK` кожної його таблиці на живій цілі (READ ONLY) і замки з неявними
+ * замками. `ACCESS EXCLUSIVE` на таблиці поза межею двигуна — попередження:
+ * її читання блоковані на всю транзакцію.
  */
 async function lockPlan(
   reader: ApplyDatabase,
   target: DbConnection,
-  scope: EngineScope,
-  steps: readonly PlanStep[],
-  models: Omit<FootprintModels, "live">
+  o: {
+    scope: EngineScope
+    role: string
+    steps: readonly PlanStep[]
+    parse: SqlParser
+    models: Omit<
+      FootprintModels,
+      "live" | "providerStatements" | "providerLocks"
+    >
+  }
 ): Promise<{
   locks: TableLock[]
   implicitLocks: ImplicitLock[]
+  providerLocks: ProviderLockSet[]
   lockWarnings: EngineDiagnostic[]
 }> {
-  // FK живої цілі — до сліду: таблиця поза межею двигуна, що посилається на
-  // колонку зі зміною типу, моделям каталогу невидима. Права — тією самою
-  // транзакцією READ ONLY
-  const { footprint, rights } = await reader.transaction(
+  const { scope, steps } = o
+  const statements = providerStatements(steps, o.parse)
+  // Перелік провайдера й FK живої цілі — до сліду: таблиці провайдера й
+  // таблиця поза межею двигуна, що посилається на колонку зі зміною типу,
+  // моделям каталогу невидимі. Права — тією самою транзакцією READ ONLY
+  const { footprint, rights, providerLocks } = await reader.transaction(
     target,
     "rollback",
     async (tx) => {
+      const providerLocks = await readProviderLocks(
+        tx,
+        o.role,
+        PROVIDER_LOCKS[scope.provider]
+      )
       const live = await readLiveForeignKeys(
         tx,
-        footprintSubjects(steps, models)
+        footprintSubjects(steps, o.models)
       )
-      const footprint = planFootprint(steps, { ...models, live })
+      const footprint = planFootprint(steps, {
+        ...o.models,
+        live,
+        providerStatements: statements,
+        providerLocks,
+      })
       return {
         footprint,
+        providerLocks,
         rights: await readLockRights(tx, footprintTables(footprint)),
       }
     }
@@ -1024,20 +1067,51 @@ async function lockPlan(
           t.name === l.name
       )
     )?.step ?? ""
-  const lockWarnings = [...locks, ...implicitLocks]
+  // Таблиця провайдера в попередженні — та, яку провайдер займає через
+  // оператор самого кроку попередження; FK на таблицю провайдера — звичайний
+  // замок кроку
+  const byProvider = (l: TableLock, step: string): boolean => {
+    const ofStep = statements.get(step) ?? []
+    return providerLocks.some(
+      (set) =>
+        set.statements.some((s) => ofStep.includes(s)) &&
+        set.tables.some((t) => t.schema === l.schema && t.name === l.name)
+    )
+  }
+  const foreign = [...locks, ...implicitLocks]
     .filter(
       (l) => l.mode === "accessExclusive" && !scope.schemas.includes(l.schema)
     )
     .sort(
       (a, b) => byCodeUnit(a.schema, b.schema) || byCodeUnit(a.name, b.name)
     )
-    .map((l) =>
+    .map((l) => ({ lock: l, step: exclusiveStep(l) }))
+  const qualified = (l: TableLock) =>
+    `${quoteIdent(l.schema)}.${quoteIdent(l.name)}`
+  // Таблиці провайдера — одним попередженням на крок: їх займає один
+  // оператор разом, і стоять тоді служби провайдера, а не окрема таблиця
+  const byStep = new Map<string, string[]>()
+  for (const { lock, step } of foreign)
+    if (byProvider(lock, step))
+      byStep.set(step, [...(byStep.get(step) ?? []), qualified(lock)])
+  const lockWarnings = [
+    ...foreign
+      .filter(({ lock, step }) => !byProvider(lock, step))
+      .map(({ lock, step }) =>
+        applyDiagnostic("plan.foreign-exclusive-lock", "warning", {
+          table: qualified(lock),
+          step,
+        })
+      ),
+    ...[...byStep].map(([step, tables]) =>
       applyDiagnostic("plan.foreign-exclusive-lock", "warning", {
-        table: `${quoteIdent(l.schema)}.${quoteIdent(l.name)}`,
-        step: exclusiveStep(l),
+        table: tables.join(", "),
+        step,
+        services: PROVIDER_LOCKS[scope.provider].services.join(", "),
       })
-    )
-  return { locks, implicitLocks, lockWarnings }
+    ),
+  ]
+  return { locks, implicitLocks, providerLocks, lockWarnings }
 }
 
 /** Відмови перепису власників: план і звірка (`diff`) — одна порада, різні коди. */

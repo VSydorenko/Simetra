@@ -13,6 +13,7 @@ import {
   ENGINE_ACTION_VERBS,
   ENGINE_PREAMBLE_ALLOWED,
   ENGINE_TRANSACTIONALITIES,
+  PROVIDER_LOCK_STATEMENTS,
   type EngineDiagnostic,
   type EngineIdentity,
   type EngineScope,
@@ -21,7 +22,12 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
-import { TABLE_LOCK_MODES, type ImplicitLock, type TableLock } from "./locks"
+import {
+  TABLE_LOCK_MODES,
+  type ImplicitLock,
+  type ProviderLockSet,
+  type TableLock,
+} from "./locks"
 import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**
@@ -127,6 +133,13 @@ export interface PlanArtifact {
    * їх показує — не мовчки. Порядок — схема, потім ім'я.
    */
   implicitLocks: ImplicitLock[]
+  /**
+   * Перелік таблиць провайдерських замків, прочитаний з цілі для `role`
+   * (R27 плану П3-2a): з нього слід кроків узяв замки політик і тригерів.
+   * Під хешем — план застосовують саме з тим переліком, з яким його
+   * побудовано.
+   */
+  providerLocks: ProviderLockSet[]
   /**
    * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. У 2a план її
    * лише несе під хешем, а раннер не виконує: пара неподільна, і П3-2b
@@ -266,6 +279,13 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
       name: z.string(),
       mode: z.enum(TABLE_LOCK_MODES),
       step: z.string(),
+    })
+  ),
+  providerLocks: z.array(
+    z.strictObject({
+      setting: z.string(),
+      statements: z.array(z.enum(PROVIDER_LOCK_STATEMENTS)),
+      tables: z.array(z.strictObject({ schema: z.string(), name: z.string() })),
     })
   ),
   // Пара поза переліком — не план цієї платформи: раннер її не виконав би

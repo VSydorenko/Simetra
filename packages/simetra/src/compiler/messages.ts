@@ -2615,14 +2615,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Відкличте привілеї запису, типові привілеї чи політики запису на цілі й побудуйте план знову; див. відкрите питання «Шлях запису після промоції» у спеці промоції.",
     },
   },
+  // `services` — таблиці провайдера, які займає сам провайдер для оператора
+  // кроку (R27 плану П3-2a): одне попередження на крок з переліком таблиць
   "plan.foreign-exclusive-lock": {
     en: (p) =>
-      `Step ${p.step} takes ACCESS EXCLUSIVE on ${p.table}, a table outside the managed schemas: every read of it is blocked until the apply transaction ends`,
+      p.services === undefined
+        ? `Step ${p.step} takes ACCESS EXCLUSIVE on ${p.table}, a table outside the managed schemas: every read of it is blocked until the apply transaction ends`
+        : `Step ${p.step} makes the provider take ACCESS EXCLUSIVE on its tables ${p.table}: ${p.services} stall until the apply transaction ends`,
     uk: (p) =>
-      `Крок ${p.step} бере ACCESS EXCLUSIVE на ${p.table} — таблиці поза керованими схемами: кожне її читання заблоковане до кінця транзакції застосування`,
+      p.services === undefined
+        ? `Крок ${p.step} бере ACCESS EXCLUSIVE на ${p.table} — таблиці поза керованими схемами: кожне її читання заблоковане до кінця транзакції застосування`
+        : `Через крок ${p.step} провайдер бере ACCESS EXCLUSIVE на своїх таблицях ${p.table}: ${p.services} стоять до кінця транзакції застосування`,
     hint: {
-      en: "Apply when the services that read this table can wait, or split the change so that this step goes alone.",
-      uk: "Застосовуйте, коли сервіси, що читають цю таблицю, можуть зачекати, або розділіть зміну, щоб цей крок ішов окремо.",
+      en: (p) =>
+        p.services === undefined
+          ? "Apply when the services that read this table can wait, or split the change so that this step goes alone."
+          : "The provider takes these locks for policy and trigger statements of the applying role. Apply when these services can wait, or split the change so that policy and trigger changes go alone.",
+      uk: (p) =>
+        p.services === undefined
+          ? "Застосовуйте, коли сервіси, що читають цю таблицю, можуть зачекати, або розділіть зміну, щоб цей крок ішов окремо."
+          : "Провайдер бере ці замки для операторів політик і тригерів ролі, що застосовує. Застосовуйте, коли ці служби можуть зачекати, або розділіть зміну, щоб зміни політик і тригерів ішли окремо.",
     },
   },
   "plan.promotion-commit-pending": {

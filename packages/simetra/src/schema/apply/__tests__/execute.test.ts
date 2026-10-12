@@ -166,7 +166,12 @@ interface Script {
   /** Секції відбитка цілі до кроків; типово `TARGET`. */
   targetSections?: CatalogFingerprint["sections"]
   /** Таблиці до кроків і замки сесії для звірки сліду. */
-  existing?: { oid: string; schema: string; name: string }[]
+  existing?: {
+    oid: string
+    schema: string
+    name: string
+    ancestors: string[]
+  }[]
   held?: { oid: string; mode: string }[]
   /** Таблиці замків, що є в базі (копії доказу). */
   present?: { schema: string; name: string }[]
@@ -287,7 +292,7 @@ describe("executePlan", () => {
       "role",
       "timeouts",
       "state",
-      'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
+      'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
@@ -338,10 +343,10 @@ describe("executePlan", () => {
     expect(outcome).toMatchObject({ status: "committed" })
     const locks = log.filter((l) => l.startsWith("LOCK TABLE"))
     expect(locks).toEqual([
-      'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
-      "LOCK TABLE ONLY app.p, ONLY ref.q IN SHARE ROW EXCLUSIVE MODE",
-      "LOCK TABLE ONLY app.s IN SHARE MODE",
-      "LOCK TABLE ONLY app.v IN SHARE UPDATE EXCLUSIVE MODE",
+      'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
+      "LOCK TABLE app.p, ref.q IN SHARE ROW EXCLUSIVE MODE",
+      "LOCK TABLE app.s IN SHARE MODE",
+      "LOCK TABLE app.v IN SHARE UPDATE EXCLUSIVE MODE",
     ])
     expect(log.indexOf(locks.at(-1)!)).toBeLessThan(log.indexOf("fingerprint"))
   })
@@ -397,10 +402,10 @@ describe("executePlan", () => {
   it("warns about a lock beyond the plan's footprint on existing tables only", async () => {
     const { db } = fakeDb({
       existing: [
-        { oid: "1", schema: "app", name: "t" },
-        { oid: "2", schema: "app", name: "p" },
-        { oid: "3", schema: "app", name: "w" },
-        { oid: "4", schema: "app", name: "x" },
+        { oid: "1", schema: "app", name: "t", ancestors: [] },
+        { oid: "2", schema: "app", name: "p", ancestors: [] },
+        { oid: "3", schema: "app", name: "w", ancestors: [] },
+        { oid: "4", schema: "app", name: "x", ancestors: [] },
       ],
       held: [
         { oid: "1", mode: "AccessExclusiveLock" },
@@ -450,6 +455,46 @@ describe("executePlan", () => {
     })
   })
 
+  it("plans a child in the mode of its ancestors, locked without ONLY", async () => {
+    const { db } = fakeDb({
+      existing: [
+        { oid: "1", schema: "app", name: "t", ancestors: [] },
+        // Партиція партиції app.t: замок предка займає і її
+        { oid: "5", schema: "app", name: "t_2026", ancestors: ["6", "1"] },
+        { oid: "6", schema: "app", name: "t_y", ancestors: ["1"] },
+        { oid: "7", schema: "app", name: "p", ancestors: [] },
+        { oid: "8", schema: "app", name: "p_1", ancestors: ["7"] },
+      ],
+      held: [
+        { oid: "1", mode: "AccessExclusiveLock" },
+        { oid: "5", mode: "AccessExclusiveLock" },
+        { oid: "6", mode: "AccessExclusiveLock" },
+        // Нащадок неявного замка SHARE узяв сильніший режим — прогалина
+        { oid: "8", mode: "ExclusiveLock" },
+      ],
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...plan,
+        implicitLocks: [
+          { schema: "app", name: "p", mode: "share", step: "s2" },
+        ],
+      },
+      { ...options, mode: "rehearse" }
+    )
+    expect(outcome).toMatchObject({
+      status: "rolledBack",
+      diagnostics: [
+        {
+          code: "apply.lock-footprint-exceeded",
+          params: { table: "app.p_1", mode: "EXCLUSIVE", planned: "SHARE" },
+        },
+      ],
+    })
+  })
+
   it("locks on the proof copy only the tables it has", async () => {
     const { db, log } = fakeDb({ present: [{ schema: "app", name: "t" }] })
     const outcome = await executePlan(db, target, plan, {
@@ -458,7 +503,7 @@ describe("executePlan", () => {
     })
     expect(outcome).toMatchObject({ status: "committed" })
     expect(log.filter((l) => l.startsWith("LOCK TABLE"))).toEqual([
-      "LOCK TABLE ONLY app.t IN ACCESS EXCLUSIVE MODE",
+      "LOCK TABLE app.t IN ACCESS EXCLUSIVE MODE",
     ])
     // Ціль: таблиця, якої немає, — відмова «ціль змінилась», а не пропуск
     const live = fakeDb()
@@ -764,9 +809,7 @@ describe("executePlan", () => {
     expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
     expect(
       log.slice(
-        log.indexOf(
-          'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE'
-        ) + 1
+        log.indexOf('LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE') + 1
       )
     ).toEqual([
       "fingerprint",

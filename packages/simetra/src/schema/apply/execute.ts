@@ -479,23 +479,42 @@ async function presentLocks(
   return locks.filter((l) => present.has(tableKey(l.schema, l.name)))
 }
 
-/** Наявна таблиця (`relkind` r/p) на початку кроків: oid і ім'я до них. */
+/**
+ * Наявна таблиця (`relkind` r/p) на початку кроків: oid і ім'я до них, oid
+ * усіх предків за успадкуванням чи партиціюванням.
+ */
 interface ExistingTable {
   oid: string
   schema: string
   name: string
+  ancestors: string[]
 }
 
 /**
  * Таблиці користувача, що є до кроків, з іменами до кроків — тими самими
  * вихідними іменами, якими план називає замки. Схеми каталогу Postgres —
  * поза звіркою: їх DDL займає службово, і слід плану про них не каже.
+ * Предки — бо замок батька без `ONLY` і рекурсія кроку займають нащадка в
+ * режимі батька, а слід називає лише батька.
  */
 async function readExistingTables(
   tx: ApplyTransaction
 ): Promise<ExistingTable[]> {
-  return tx.query<{ oid: string; schema: string; name: string }>(
-    `SELECT c.oid::text AS oid, n.nspname AS schema, c.relname AS name
+  return tx.query<{
+    oid: string
+    schema: string
+    name: string
+    ancestors: string[]
+  }>(
+    `WITH RECURSIVE up AS (
+       SELECT i.inhrelid AS child, i.inhparent AS ancestor
+       FROM pg_catalog.pg_inherits i
+       UNION
+       SELECT up.child, i.inhparent
+       FROM up JOIN pg_catalog.pg_inherits i ON i.inhrelid = up.ancestor
+     )
+     SELECT c.oid::text AS oid, n.nspname AS schema, c.relname AS name,
+       ARRAY(SELECT up.ancestor::text FROM up WHERE up.child = c.oid) AS ancestors
      FROM pg_catalog.pg_class c
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
      WHERE c.relkind IN ('r', 'p')
@@ -548,9 +567,23 @@ async function footprintGaps(
   }
   const out: { table: string; mode: TableLockMode; planned?: TableLockMode }[] =
     []
+  // Запланований режим таблиці — разом із режимами її предків: замок предка
+  // без `ONLY` чи рекурсія кроку на ньому займає й нащадка
+  const plannedFor = (table: ExistingTable): TableLockMode | undefined => {
+    let out: TableLockMode | undefined
+    for (const t of [
+      table,
+      ...table.ancestors.flatMap((a) => byOid.get(a) ?? []),
+    ]) {
+      const mode = planned.get(tableKey(t.schema, t.name))
+      if (mode !== undefined)
+        out = out === undefined ? mode : joinModes(out, mode)
+    }
+    return out
+  }
   for (const [oid, mode] of held) {
     const table = byOid.get(oid)!
-    const expected = planned.get(tableKey(table.schema, table.name))
+    const expected = plannedFor(table)
     if (expected !== undefined && coversMode(expected, mode)) continue
     out.push({
       table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
@@ -742,8 +775,10 @@ async function lockTables(
     .map((t) => `${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
   if (tables.length === 0) return
   try {
+    // Без `ONLY` (R27 плану П3-2a): нащадки й партиції займаються наперед у
+    // тому самому режимі, як їх займе й рекурсія `ALTER TABLE` кроку
     await tx.query(
-      `LOCK TABLE ${tables.map((t) => `ONLY ${t}`).join(", ")} IN ${LOCK_MODE_SQL[mode]} MODE`
+      `LOCK TABLE ${tables.join(", ")} IN ${LOCK_MODE_SQL[mode]} MODE`
     )
   } catch (error) {
     if (!(error instanceof ApplyDbError) || error.sqlstate === undefined)

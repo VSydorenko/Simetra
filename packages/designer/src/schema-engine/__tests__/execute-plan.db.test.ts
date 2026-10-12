@@ -33,6 +33,8 @@ import {
   planLocks,
   preservationPlan,
   readLockRights,
+  readProviderLocks,
+  SUPABASE_LOCKS,
   tableKey,
   type PlanStep,
   type TableLock,
@@ -242,6 +244,8 @@ function locksOf(
     newToOld,
     columnsNewToOld: new Map(),
     live: [],
+    providerStatements: new Map(),
+    providerLocks: [],
   })
   const rights = new Map(
     footprintTables(footprint).map((t) => [tableKey(t.schema, t.name), true])
@@ -718,6 +722,120 @@ describe("executePlan", () => {
     })
   })
 
+  it("reads the provider lock list of the plan role, only tables that exist", async () => {
+    const reader = createApplyDatabase({ readOnly: true })
+    const read = (url: string, role: string) =>
+      reader.transaction({ url }, "rollback", (tx) =>
+        readProviderLocks(tx, role, SUPABASE_LOCKS)
+      )
+    // База стеку несе всі таблиці провайдера, і перелік — з налаштування
+    // supautils цілі, а не з пресету
+    const [policy, trigger] = await read(stack.url, "postgres")
+    const listed = (setting: string) =>
+      other<{ names: string[] }>(
+        stack.url,
+        `select array(select pg_catalog.json_array_elements_text(
+           pg_catalog.current_setting('${setting}')::json -> 'postgres')) as names`
+      ).then((rows) => rows[0]!.names)
+    for (const [set, setting] of [
+      [policy!, "supautils.policy_grants"],
+      [trigger!, "supautils.drop_trigger_grants"],
+    ] as const) {
+      expect(set.setting).toBe(setting)
+      const names = await listed(setting)
+      expect(set.tables).toContainEqual({ schema: "auth", name: "users" })
+      for (const t of set.tables)
+        expect(names).toContain(`${t.schema}.${t.name}`)
+    }
+    expect(policy!.statements).toEqual([
+      "createPolicy",
+      "alterPolicy",
+      "dropPolicy",
+      "commentPolicy",
+    ])
+    expect(trigger!.statements).toEqual(["dropTrigger"])
+    // Таблиця з переліку, якої на цілі немає, відсіюється, а не валить план
+    await inTarget(BASE, async (url) => {
+      const su = new URL(testSuperuserUrl())
+      su.pathname = new URL(url).pathname
+      await other(su.toString(), "drop table auth.audit_log_entries cascade")
+      const [onTarget] = await read(url, "postgres")
+      expect(onTarget!.tables).toEqual(
+        policy!.tables.filter((t) => t.name !== "audit_log_entries")
+      )
+    })
+    // Роль поза переліком — таблиць немає, без відмови
+    expect(
+      (await read(stack.url, "authenticated")).map((s) => s.tables)
+    ).toEqual([[], []])
+  })
+
+  it("locks the children of a table up front and plans them in its mode", async () => {
+    const setup = `${BASE};
+      create table app.pt (id int, k int) partition by list (k);
+      create table app.pt_1 partition of app.pt for values in (1);
+      create table app.it (id int);
+      create table app.it_child () inherits (app.it);`
+    await inTarget(setup, async (url) => {
+      const steps = [
+        step("s1", "ALTER TABLE app.pt ADD COLUMN x int", {
+          verb: "alter",
+          lockClass: "accessExclusive",
+          lockedTables: [{ schema: "app", name: "pt" }],
+        }),
+        step("s2", "ALTER TABLE app.it ADD COLUMN x int", {
+          verb: "alter",
+          lockClass: "accessExclusive",
+          lockedTables: [{ schema: "app", name: "it" }],
+        }),
+      ]
+      const plan = await planFor(url, steps, {
+        desiredFingerprint: await desiredFingerprint(setup, steps),
+      })
+      expect(plan.locks).toEqual([
+        { schema: "app", name: "it", mode: "accessExclusive" },
+        { schema: "app", name: "pt", mode: "accessExclusive" },
+      ])
+      // Читач партиції: замок без ONLY чекає на неї ще до кроків
+      const reader = await holder(
+        url,
+        "begin; lock table app.pt_1 in access share mode"
+      )
+      try {
+        const running = executePlan(apply, { url }, plan, {
+          ...options,
+          mode: "rehearse",
+          timeouts: { lockTimeoutMs: 15_000 },
+        })
+        let waiting: { query: string; mode: string } | undefined
+        await until("the apply to wait on the partition", async () => {
+          ;[waiting] = await other<{ query: string; mode: string }>(
+            url,
+            `select a.query, l.mode from pg_locks l
+               join pg_stat_activity a on a.pid = l.pid
+              where l.relation = 'app.pt_1'::regclass and not l.granted
+                -- Знімок pg_stat_activity окремий від pg_locks: без цієї
+                -- умови він міг показати попередній оператор того backend
+                and a.wait_event_type = 'Lock'`
+          )
+          return waiting !== undefined
+        })
+        expect(waiting!.mode).toBe("AccessExclusiveLock")
+        expect(waiting!.query).toMatch(
+          /^LOCK TABLE app\.it, app\.pt IN ACCESS EXCLUSIVE MODE$/
+        )
+        await reader.query("rollback")
+        // Нащадки заплановано в режимі батька: звірка сліду мовчить
+        expect(await running).toMatchObject({
+          status: "rolledBack",
+          diagnostics: [],
+        })
+      } finally {
+        await reader.end()
+      }
+    })
+  })
+
   it("warns on rehearsal about a lock beyond the plan's footprint", async () => {
     await inTarget(BASE, async (url) => {
       // Слід без власної таблиці кроку: замок береться посеред кроків
@@ -903,14 +1021,17 @@ describe("executePlan", () => {
             url,
             `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
-              where l.relation = 'app.p'::regclass and not l.granted`
+              where l.relation = 'app.p'::regclass and not l.granted
+                -- Знімок pg_stat_activity окремий від pg_locks: без цієї
+                -- умови він міг показати попередній оператор того backend
+                and a.wait_event_type = 'Lock'`
           )
           return waiting !== undefined
         })
         // Очікування — на блокуванні наперед, а не посеред кроку
         expect(waiting!.mode).toBe("ShareRowExclusiveLock")
         expect(waiting!.query).toMatch(
-          /^LOCK TABLE ONLY app\.p IN SHARE ROW EXCLUSIVE MODE$/
+          /^LOCK TABLE app\.p IN SHARE ROW EXCLUSIVE MODE$/
         )
         await writer.query("rollback")
         expect(await running).toMatchObject({ status: "committed" })

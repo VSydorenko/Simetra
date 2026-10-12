@@ -89,6 +89,7 @@ async function writePlan(
     role: "postgres",
     locks: [],
     implicitLocks: [],
+    providerLocks: [],
     preamble: [],
     promotion,
     resultCatalog: { tables: [], enumTypes: [], units: [] },

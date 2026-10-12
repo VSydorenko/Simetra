@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { loadSqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   coversMode,
@@ -9,10 +10,14 @@ import {
   lockPrivileges,
   planFootprint,
   planLocks,
+  providerStatement,
+  providerStatements,
+  providerTableNames,
   stepFootprint,
   tableKey,
   type FootprintModels,
   type PlanStep,
+  type ProviderLockSet,
 } from "simetra/schema"
 
 /**
@@ -107,6 +112,8 @@ const models = (over: Partial<FootprintModels> = {}): FootprintModels => ({
   newToOld: new Map(),
   columnsNewToOld: new Map(),
   live: [],
+  providerStatements: new Map(),
+  providerLocks: [],
   ...over,
 })
 
@@ -355,6 +362,128 @@ describe("live foreign keys", () => {
     })
     // Таблиця зміни типу — у старому імені; власна таблиця запасного правила
     expect(subjects).toEqual([t("app", "p"), t("app", "c")])
+  })
+})
+
+describe("provider locks", () => {
+  /** Перелік, як його прочитав би план з цілі (R27). */
+  const providerLocks: ProviderLockSet[] = [
+    {
+      setting: "supautils.policy_grants",
+      statements: [
+        "createPolicy",
+        "alterPolicy",
+        "dropPolicy",
+        "commentPolicy",
+      ],
+      tables: [t("auth", "users"), t("storage", "objects")],
+    },
+    {
+      setting: "supautils.drop_trigger_grants",
+      statements: ["dropTrigger"],
+      tables: [t("auth", "users"), t("realtime", "messages")],
+    },
+  ]
+
+  it.each([
+    ["CREATE POLICY p ON app.t USING (true)", "createPolicy"],
+    ["ALTER POLICY p ON app.t USING (false)", "alterPolicy"],
+    ["DROP POLICY p ON app.t", "dropPolicy"],
+    ["COMMENT ON POLICY p ON app.t IS 'x'", "commentPolicy"],
+    ["DROP TRIGGER tr ON app.t", "dropTrigger"],
+    [
+      "CREATE TRIGGER tr BEFORE INSERT ON app.t FOR EACH ROW EXECUTE FUNCTION app.f()",
+      undefined,
+    ],
+    ["ALTER POLICY p ON app.t RENAME TO q", undefined],
+    ["DROP TABLE app.t", undefined],
+    ["COMMENT ON TABLE app.t IS 'x'", undefined],
+  ])("classifies %s from the parse tree", async (sql, expected) => {
+    const parse = await loadSqlParser()
+    const result = parse(sql)
+    if (!result.ok) throw new Error(result.message)
+    expect(providerStatement(result.statements[0]!.stmt)).toBe(expected)
+  })
+
+  it("maps steps to their provider statements and skips the rest", async () => {
+    const steps = [
+      engineStep("s1", "accessExclusive", [t("app", "t")], {
+        sql: "CREATE POLICY p ON app.t USING (true)",
+      }),
+      engineStep("s2", "accessExclusive", [t("app", "t")], {
+        sql: "ALTER TABLE app.t ADD COLUMN x int",
+      }),
+    ]
+    expect(providerStatements(steps, await loadSqlParser())).toEqual(
+      new Map([["s1", ["createPolicy"]]])
+    )
+  })
+
+  it("takes ACCESS EXCLUSIVE on the tables of the matching source only", () => {
+    const m = models({
+      providerLocks,
+      providerStatements: new Map([
+        ["s1", ["createPolicy"]],
+        ["s2", ["dropTrigger"]],
+      ]),
+    })
+    const own = t("app", "c")
+    expect(
+      stepFootprint(engineStep("s1", "accessExclusive", [own]), m)
+    ).toEqual([
+      { ...own, mode: "accessExclusive" },
+      { schema: "auth", name: "users", mode: "accessExclusive" },
+      { schema: "storage", name: "objects", mode: "accessExclusive" },
+    ])
+    expect(
+      stepFootprint(engineStep("s2", "accessExclusive", [own]), m)
+    ).toEqual([
+      { ...own, mode: "accessExclusive" },
+      { schema: "auth", name: "users", mode: "accessExclusive" },
+      { schema: "realtime", name: "messages", mode: "accessExclusive" },
+    ])
+    // Крок без провайдерського оператора (створення тригера) — лише своє
+    expect(
+      stepFootprint(engineStep("s3", "shareRowExclusive", [own]), m)
+    ).toEqual([{ ...own, mode: "shareRowExclusive" }])
+  })
+
+  it("reads the tables of the plan role from the setting", () => {
+    const raw = JSON.stringify({
+      postgres: ["auth.users", "storage.objects"],
+      other: ["auth.sessions"],
+    })
+    expect(providerTableNames(raw, "postgres")).toEqual([
+      "auth.users",
+      "storage.objects",
+    ])
+  })
+
+  it.each([
+    ["no setting", null, "postgres"],
+    ["an empty setting", "", "postgres"],
+    ["broken JSON", '{"postgres": ["auth.users"', "postgres"],
+    ["a JSON array", '["auth.users"]', "postgres"],
+    ["no key for the role", '{"other": ["auth.users"]}', "postgres"],
+    [
+      "a role entry that is not a list",
+      '{"postgres": "auth.users"}',
+      "postgres",
+    ],
+    // Ключ ролі — лише власний, не з ланцюжка прототипів
+    ["an inherited key", "{}", "toString"],
+  ])("gives no tables for %s", (_, raw, role) => {
+    expect(providerTableNames(raw, role)).toEqual([])
+  })
+
+  it("drops names that to_regclass would reject with an error", () => {
+    const raw = JSON.stringify({
+      postgres: ["auth.users", 1, "a.b.c", "x..y", '"', "Auth.Users"],
+    })
+    expect(providerTableNames(raw, "postgres")).toEqual([
+      "auth.users",
+      "Auth.Users",
+    ])
   })
 })
 
