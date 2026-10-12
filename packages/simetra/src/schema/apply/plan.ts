@@ -10,6 +10,7 @@ import type {
   DbConnection,
   EngineAction,
   EngineDiagnostic,
+  EnginePlan,
   EngineScope,
   Extracted,
   SchemaEngine,
@@ -451,11 +452,16 @@ async function prove(
         return { ok: false, diagnostics: run.diagnostics.map(asProofRefusal) }
 
       const after = await witness(clone, p.scope)
-      const remaining = engine.plan(
+      const afterPlan = engine.plan(
         after.extracted.catalog,
         p.desired.extracted.catalog,
         p.scope
-      ).actions
+      )
+      const remaining = afterPlan.actions
+      // Помилка плану двигуна (зокрема невідома преамбула) означає, що порожній
+      // чи ні план не можна вважати доказом
+      const planErrors = errorsOf(afterPlan)
+      if (planErrors.length > 0) return { ok: false, diagnostics: planErrors }
       if (remaining.length > 0)
         return {
           ok: false,
@@ -487,6 +493,11 @@ async function prove(
   return outcome.value.ok && !hasError(diagnostics)
     ? { ...outcome.value, diagnostics }
     : { ok: false, diagnostics }
+}
+
+/** Помилки самого плану двигуна: попередження вже звучать у результаті порту. */
+function errorsOf(plan: EnginePlan): EngineDiagnostic[] {
+  return plan.diagnostics.filter((d) => d.severity === "error")
 }
 
 /**
@@ -532,11 +543,14 @@ function cloneMismatch(
   const mismatch = (how: string, detail: string) =>
     applyDiagnostic("plan.clone-mismatch", "error", { how, detail })
   const out: EngineDiagnostic[] = []
-  const actions = engine.plan(
+  const copyToLive = engine.plan(
     copy.extracted.catalog,
     live.extracted.catalog,
     scope
-  ).actions
+  )
+  const actions = copyToLive.actions
+  // Плану з помилкою довіряти не можна: порожні дії тоді нічого не доводять
+  out.push(...errorsOf(copyToLive))
   if (actions.length > 0)
     out.push(
       mismatch(

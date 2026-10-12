@@ -135,7 +135,7 @@ async function assertShadowServer(o: ShadowOptions): Promise<void> {
  * Клас, а не голий об'єкт, — щоб `plan` порту відрізняв свій каталог від
  * чужого без приведення типів.
  */
-class PgDeltaCatalog implements EngineCatalog {
+export class PgDeltaCatalog implements EngineCatalog {
   readonly engine = ENGINE
   constructor(
     readonly factBase: FactBase,
@@ -145,7 +145,7 @@ class PgDeltaCatalog implements EngineCatalog {
 }
 
 /** Межа як рядок: каталоги, витягнуті під різні межі, не порівнюються. */
-function scopeKeyOf(scope: EngineScope): string {
+export function scopeKeyOf(scope: EngineScope): string {
   return JSON.stringify([scope.provider, [...scope.schemas].sort()])
 }
 
@@ -581,7 +581,9 @@ async function planAndRun<T>(
       ...toEngineDiagnostics(result.loadDiagnostics, shadowCounted),
       ...toEngineDiagnostics(result.targetDiagnostics, targetCounted),
       ...toEngineDiagnostics(result.driftDiagnostics, bothCounted),
-      // Діагностики плану й преамбули несе сам `EnginePlan`
+      // Ті самі діагностики лежать і на `EnginePlan`, що йде в `fn`; у списку
+      // результату вони лише тут, тож споживач, який бере список результату,
+      // не бачить їх двічі
       ...plan.diagnostics,
       // Попередження фронтенду — проза без коду й суб'єкта
       ...warnings.map((message) =>
@@ -678,6 +680,9 @@ async function cloneAndRun<T>(
         ),
       }
     }
+    // Преамбулу цього плану не звіряємо з дозволеним переліком: його виконує
+    // `apply` самого двигуна, а не виконавець порту, тож перелік тут не діє;
+    // план же копіюється лише в жертовну копію й назовні не виходить
     const seeded = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
     const plan = enginePlan(
       seeded.factBase,

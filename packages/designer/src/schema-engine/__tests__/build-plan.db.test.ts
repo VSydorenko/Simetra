@@ -471,6 +471,48 @@ describe("buildPlan", () => {
     })
   })
 
+  it.each([
+    ["the copy-to-target comparison", 1],
+    ["the proof comparison after the run", 2],
+  ])(
+    "refuses a proof when the engine plan of %s carries an error diagnostic",
+    async (_label, failingCall) => {
+      const withNote = await compiled({
+        [PARTY]: party([attribute("note", { id: uuid(9070 + failingCall) })]),
+      })
+      const without = await compiled({ [PARTY]: party() })
+      // Справжній двигун, але N-й `plan` у доказі несе помилку преамбули: дій
+      // немає, тож лише діагностика плану може зупинити доказ
+      let calls = 0
+      const badPreamble: SchemaEngine = {
+        ...engine,
+        plan: (source, target, scope, o) => {
+          calls += 1
+          const real = engine.plan(source, target, scope, o)
+          if (calls !== failingCall) return real
+          return {
+            ...real,
+            diagnostics: [
+              ...real.diagnostics,
+              {
+                code: "engine.preamble-unknown",
+                severity: "error",
+                message: "unknown preamble",
+                params: { name: "role", value: "postgres" },
+              },
+            ],
+          }
+        },
+      }
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, without)
+        const outcome = await plan(url, withNote, badPreamble)
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toContain("engine.preamble-unknown")
+      })
+    }
+  )
+
   it("refuses a proof whose clone still differs from the desired state", async () => {
     const withNote = await compiled({
       [PARTY]: party([attribute("note", { id: uuid(9061) })]),
