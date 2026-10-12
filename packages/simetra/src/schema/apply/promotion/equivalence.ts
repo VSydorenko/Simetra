@@ -33,7 +33,9 @@ export interface EquivalenceObject {
  * складено з частин; `indnkeyatts` розрізняє `UNIQUE (a) INCLUDE (b)` і
  * `UNIQUE (a, b)`. `pg_get_indexdef(oid, k, …)` для ключової колонки не
  * містить класу операторів, а `(a text_pattern_ops)` і `(a)` — різні індекси,
- * тож класи (`indclass`) — окремою частиною. Класи й колляції — іменами: копія
+ * тож класи (`indclass`) — окремою частиною, і так само параметри класу
+ * (`attoptions` ключових колонок індексу, PG13+: `tsvector_ops (siglen = 32)`
+ * і `(siglen = 64)` — різні індекси). Класи й колляції — іменами: копія
  * й тінь — різні бази, OID користувацьких об'єктів у них різні. Послідовність — лише в схемі своєї
  * таблиці: крок перейменування адресує її схемою таблиці.
  */
@@ -62,6 +64,9 @@ select 'index', t.schema, t.tbl, ic.relname,
        from unnest(i.indclass::oid[]) with ordinality as u(cls, ord)
        join pg_opclass oc on oc.oid = u.cls
        join pg_namespace on_ on on_.oid = oc.opcnamespace),
+    (select json_agg(a.attoptions order by a.attnum)
+       from pg_attribute a
+       where a.attrelid = i.indexrelid and a.attnum between 1 and i.indnkeyatts),
     (select json_agg(case when u.coll = 0 then null
                      else quote_ident(cn.nspname) || '.' || quote_ident(co.collname) end
                      order by u.ord)

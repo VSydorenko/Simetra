@@ -286,4 +286,33 @@ describe("canonicalRenames", () => {
       }
     )
   })
+
+  it("does not match an index whose operator class has other parameters", async () => {
+    // Параметр класу (`siglen`, PG13+) живе в `pg_attribute.attoptions`
+    // індексу, а частина колонки його не містить: без нього індекси з різною
+    // сигнатурою злилися б у хибне перейменування. `tsvector_ops` для GiST —
+    // вбудований клас з параметром, без розширення
+    await inTarget(
+      `create schema app;
+       create table app.items (doc tsvector);
+       create index legacy_doc_sig on app.items using gist (doc tsvector_ops (siglen = 32));`,
+      async (clone) => {
+        await inDatabase(
+          clone,
+          `create schema app;
+           create table app.items (doc tsvector);
+           create index items_doc_idx on app.items using gist (doc tsvector_ops (siglen = 64));`,
+          async (shadow) => {
+            const { steps, renames } = canonicalRenames(
+              await read(clone, "items"),
+              await read(shadow, "items"),
+              new Map()
+            )
+            expect(steps).toEqual([])
+            expect(renames).toEqual([])
+          }
+        )
+      }
+    )
+  })
 })
