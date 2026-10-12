@@ -1,4 +1,4 @@
-import type { AlterTableCmd, Node, TypeName } from "libpg-query"
+import type { AlterTableCmd, Node } from "libpg-query"
 import type { SqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
 import type {
@@ -9,6 +9,14 @@ import type {
 } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
 import type { DriftReport } from "./drift"
+import {
+  isLossless,
+  parseType,
+  stringsOf,
+  typeGuards,
+  typeOf,
+  type ColumnType,
+} from "./type-guard"
 
 /**
  * Класи кроків плану (платформна спека §6.6, рішення 10 плану П3-1).
@@ -130,15 +138,6 @@ interface Named {
   name: string
 }
 
-/**
- * Тип колонки без масиву: ім'я з `pg_catalog.` для вбудованих і
- * модифікатори (`varchar(n)`, `numeric(p,s)`).
- */
-interface ColumnType {
-  name: string
-  mods: number[]
-}
-
 /** Що про вихідний стан знає модель цілі, а оператор — ні. */
 interface Facts {
   /** Індекси, які модель цілі знає, з їхньою унікальністю. */
@@ -173,65 +172,10 @@ function scansOnAdd(def: Node | undefined): boolean {
   )
 }
 
-function stringsOf(items: readonly Node[] | undefined): string[] {
-  return (items ?? []).flatMap((item) =>
-    "String" in item && item.String.sval !== undefined ? [item.String.sval] : []
-  )
-}
-
-/**
- * Тип з дерева. Некваліфіковане ім'я — вбудований тип: адаптер читає
- * `format_type()` під `search_path = pg_catalog`, тож користувацькі типи
- * (домени, енами) там завжди кваліфіковані. Масив і модифікатор, що не є
- * числом, дають `undefined`: такий перехід у переліку без втрат не буває.
- */
-function typeOf(typeName: TypeName | undefined): ColumnType | undefined {
-  if (typeName === undefined || (typeName.arrayBounds?.length ?? 0) > 0)
-    return undefined
-  const names = stringsOf(typeName.names)
-  const mods: number[] = []
-  for (const mod of typeName.typmods ?? []) {
-    // `A_Const` нуля не має поля `ival.ival`
-    if (!("A_Const" in mod) || mod.A_Const.ival === undefined) return undefined
-    mods.push(mod.A_Const.ival.ival ?? 0)
-  }
-  return {
-    name: names.length === 1 ? `pg_catalog.${names[0]}` : names.join("."),
-    mods,
-  }
-}
-
 const sameType = (a: ColumnType, b: ColumnType): boolean =>
   a.name === b.name &&
   a.mods.length === b.mods.length &&
   a.mods.every((m, i) => m === b.mods[i])
-
-const INT_WIDENING: Readonly<Record<string, readonly string[]>> = {
-  "pg_catalog.int2": ["pg_catalog.int4", "pg_catalog.int8"],
-  "pg_catalog.int4": ["pg_catalog.int8"],
-}
-
-/**
- * Перехід, що зберігає кожне значення (рішення 10). `bpchar → text` сюди не
- * входить: приведення відкидає кінцеві пробіли.
- */
-function isLossless(from: ColumnType, to: ColumnType): boolean {
-  if (INT_WIDENING[from.name]?.includes(to.name) === true)
-    return from.mods.length === 0 && to.mods.length === 0
-  if (from.name === "pg_catalog.varchar") {
-    if (to.name === "pg_catalog.text") return to.mods.length === 0
-    if (to.name !== "pg_catalog.varchar" || from.mods.length !== 1) return false
-    return to.mods.length === 0 || to.mods[0]! >= from.mods[0]!
-  }
-  if (from.name === "pg_catalog.numeric" && to.name === "pg_catalog.numeric") {
-    if (from.mods.length === 0) return false
-    if (to.mods.length === 0) return true
-    const [precision, scale = 0] = from.mods
-    const [toPrecision, toScale = 0] = to.mods
-    return toPrecision! >= precision! && toScale === scale
-  }
-  return false
-}
 
 /**
  * `USING` без втрат — лише відсутній або `<та сама колонка>::<новий тип>`:
@@ -416,19 +360,7 @@ function columnTypeReader(
 ): (table: CatalogTable, column: string) => ColumnType | undefined {
   return (table, column) => {
     const type = table.columns.find((c) => c.name === column)?.type
-    if (type === undefined) return undefined
-    const result = parse(`SELECT NULL::${type}`)
-    if (!result.ok || result.statements.length !== 1) return undefined
-    const stmt = result.statements[0]!.stmt
-    const target =
-      "SelectStmt" in stmt ? stmt.SelectStmt.targetList?.[0] : undefined
-    const value =
-      target !== undefined && "ResTarget" in target
-        ? target.ResTarget.val
-        : undefined
-    return value !== undefined && "TypeCast" in value
-      ? typeOf(value.TypeCast.typeName)
-      : undefined
+    return type === undefined ? undefined : typeOf(parseType(type, parse))
   }
 }
 
@@ -518,10 +450,17 @@ export function classifySteps(
       destroyed: action.destroyed,
       dataLoss: action.dataLoss,
       rewriteRisk: action.rewriteRisk,
-      guards: [],
+      guards: guardsOf(typeGuards({ id, sql: action.sql }, target, parse)),
     }
   })
 }
+
+/**
+ * Сторожі кроку; відмову побудувати сторожа план збирає окремо тим самим
+ * `typeGuards`, тож крок без сторожів тут ще не означає «перевіряти нічого».
+ */
+const guardsOf = (result: ReturnType<typeof typeGuards>): string[] =>
+  "guards" in result ? result.guards : []
 
 const isCascade = (behavior: string | undefined): boolean =>
   behavior === "DROP_CASCADE"

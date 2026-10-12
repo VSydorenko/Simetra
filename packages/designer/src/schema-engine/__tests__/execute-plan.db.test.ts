@@ -8,7 +8,8 @@ import {
   expect,
   it,
 } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, loadSqlParser } from "simetra/compiler"
+import type { CatalogModel } from "simetra/model"
 import {
   ApplyConnectionLost,
   desiredForApply,
@@ -22,6 +23,7 @@ import {
   type ExecuteOptions,
   type ExecuteOutcome,
   type PlanStep,
+  typeGuards,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
@@ -1009,6 +1011,248 @@ describe("executePlan", () => {
         ],
       })
       expect(await marker(url)).toEqual(before)
+    })
+  })
+
+  describe("type-narrowing guard", () => {
+    /**
+     * Крок зміни типу зі сторожами, як їх ставить `classifySteps`: старий тип
+     * — з моделі вихідного стану, тут зібраної вручну у формі `format_type()`.
+     */
+    async function typeStep(
+      sql: string,
+      table: string,
+      columns: Record<string, string>
+    ): Promise<PlanStep> {
+      const source: CatalogModel = {
+        tables: [
+          {
+            schema: "app",
+            name: table,
+            rowLevelSecurity: "off",
+            columns: Object.entries(columns).map(([name, type]) => ({
+              name,
+              type,
+              notNull: false,
+            })),
+            uniques: [],
+            checks: [],
+            foreignKeys: [],
+            indexes: [],
+          },
+        ],
+        enumTypes: [],
+        units: [],
+      }
+      const result = typeGuards(
+        { id: "s1", sql },
+        source,
+        await loadSqlParser()
+      )
+      if (!("guards" in result)) throw new Error(result.refusal.message)
+      expect(result.guards).toHaveLength(1)
+      return step("s1", sql, {
+        verb: "alter",
+        class: "destructive",
+        lockClass: "accessExclusive",
+        lockedTables: [{ schema: "app", name: table }],
+        guards: result.guards,
+      })
+    }
+
+    /** План, що мусить зупинитися до кроку: бажаний відбиток не важить. */
+    const stopping = async (url: string, s: PlanStep) =>
+      planFor(url, [s], {
+        requiredPermissions: ["s1"],
+        desiredFingerprint: await read(url),
+      })
+
+    const allowS1 = { ...options, allow: ["s1"] }
+
+    it("stops a truncating varchar change on the data", async () => {
+      const setup = `${BASE};
+        create table app.v (id int primary key, c text);
+        insert into app.v values (1, 'abcdefgh'), (2, 'abc'), (3, null);`
+      await inTarget(setup, async (url) => {
+        const s = await typeStep(
+          `ALTER TABLE "app"."v" ALTER COLUMN "c" TYPE character varying(5) USING "c"::character varying(5)`,
+          "v",
+          { id: "integer", c: "text" }
+        )
+        const outcome = await executePlan(
+          apply,
+          { url },
+          await stopping(url, s),
+          { ...allowS1, mode: "rehearse" }
+        )
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-narrowing",
+              params: { step: "s1", table: "app.v", column: "c", lost: 1 },
+            },
+          ],
+        })
+        expect(
+          await other(
+            url,
+            "select c, pg_typeof(c)::text as type from app.v where id = 1"
+          )
+        ).toEqual([{ c: "abcdefgh", type: "text" }])
+      })
+    })
+
+    it("stops truncation inside a partition", async () => {
+      const setup = `${BASE};
+        create table app.p (id int, c text) partition by list (id);
+        create table app.p1 partition of app.p for values in (1);
+        insert into app.p values (1, 'abcdefgh');`
+      await inTarget(setup, async (url) => {
+        const s = await typeStep(
+          "ALTER TABLE app.p ALTER COLUMN c TYPE character varying(5) USING c::character varying(5)",
+          "p",
+          { id: "integer", c: "text" }
+        )
+        const outcome = await executePlan(
+          apply,
+          { url },
+          await stopping(url, s),
+          allowS1
+        )
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-narrowing",
+              params: { step: "s1", table: "app.p", column: "c", lost: 1 },
+            },
+          ],
+        })
+        expect(await other(url, "select c from app.p1")).toEqual([
+          { c: "abcdefgh" },
+        ])
+      })
+    })
+
+    it("stops a rounding numeric change", async () => {
+      const setup = `${BASE};
+        create table app.v (id int primary key, n numeric(10,4));
+        insert into app.v values (1, 1.2345), (2, 1.2);`
+      await inTarget(setup, async (url) => {
+        const s = await typeStep(
+          "ALTER TABLE app.v ALTER COLUMN n TYPE numeric(10,2) USING n::numeric(10,2)",
+          "v",
+          { id: "integer", n: "numeric(10,4)" }
+        )
+        const outcome = await executePlan(
+          apply,
+          { url },
+          await stopping(url, s),
+          allowS1
+        )
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-narrowing",
+              params: { step: "s1", table: "app.v", column: "n", lost: 1 },
+            },
+          ],
+        })
+        expect(
+          await other(url, "select n::text from app.v where id = 1")
+        ).toEqual([{ n: "1.2345" }])
+      })
+    })
+
+    it("lets an enum to text change through", async () => {
+      const setup = `${BASE};
+        create type app.mood as enum ('calm', 'busy');
+        create table app.v (id int primary key, m app.mood);
+        insert into app.v values (1, 'calm'), (2, null);`
+      await inTarget(setup, async (url) => {
+        const s = await typeStep(
+          "ALTER TABLE app.v ALTER COLUMN m TYPE text USING m::text",
+          "v",
+          { id: "integer", m: "app.mood" }
+        )
+        const plan = await planFor(url, [s], {
+          requiredPermissions: ["s1"],
+          desiredFingerprint: await desiredFingerprint(setup, [s]),
+        })
+        const outcome = await executePlan(apply, { url }, plan, {
+          ...allowS1,
+          mode: "rehearse",
+        })
+        expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+      })
+    })
+
+    it("reports a failing cast as narrowing", async () => {
+      const setup = `${BASE};
+        create table app.v (id int primary key, x bigint);
+        insert into app.v values (1, 1099511627776);`
+      await inTarget(setup, async (url) => {
+        const s = await typeStep(
+          "ALTER TABLE app.v ALTER COLUMN x TYPE integer USING x::integer",
+          "v",
+          { id: "integer", x: "bigint" }
+        )
+        const outcome = await executePlan(
+          apply,
+          { url },
+          await stopping(url, s),
+          allowS1
+        )
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-narrowing",
+              params: {
+                step: "s1",
+                table: "app.v",
+                column: "x",
+                sqlstate: "22003",
+              },
+            },
+          ],
+        })
+        expect(outcome.diagnostics[0]!.params).not.toHaveProperty("lost")
+      })
+    })
+
+    it("reports a guard error outside class 22 by its own code", async () => {
+      // У `json` немає рівності: сторож падає з 42883, а не на даних
+      const setup = `${BASE};
+        create table app.v (id int primary key, j json);
+        insert into app.v values (1, '{"a": 1}');`
+      await inTarget(setup, async (url) => {
+        const s = await typeStep(
+          "ALTER TABLE app.v ALTER COLUMN j TYPE jsonb USING j::jsonb",
+          "v",
+          { id: "integer", j: "json" }
+        )
+        const outcome = await executePlan(
+          apply,
+          { url },
+          await stopping(url, s),
+          allowS1
+        )
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-guard-failed",
+              params: { step: "s1", column: "j", sqlstate: "42883" },
+            },
+          ],
+        })
+        expect(
+          await other(url, "select pg_typeof(j)::text as type from app.v")
+        ).toEqual([{ type: "json" }])
+      })
     })
   })
 })

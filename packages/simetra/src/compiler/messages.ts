@@ -2284,6 +2284,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
             : "Нічого не записано; застосуйте знову.",
     },
   },
+  "apply.type-narrowing": {
+    en: (p) =>
+      p.lost !== undefined
+        ? `Plan step ${p.step} would change the type of column ${p.column} of ${p.table} and lose ${p.lost} value(s): converting them to the new type and back does not give the same value. The transaction was rolled back`
+        : `Plan step ${p.step} would change the type of column ${p.column} of ${p.table}, but a value does not convert to the new type (SQLSTATE ${p.sqlstate}). The transaction was rolled back`,
+    uk: (p) =>
+      p.lost !== undefined
+        ? `Крок плану ${p.step} змінив би тип колонки ${p.column} таблиці ${p.table} і втратив би значень: ${p.lost} — приведення до нового типу й назад не дає того самого значення. Транзакцію відкочено`
+        : `Крок плану ${p.step} змінив би тип колонки ${p.column} таблиці ${p.table}, але значення не приводиться до нового типу (SQLSTATE ${p.sqlstate}). Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. A permission for a destructive step allows it to fail on the data, not to truncate or round values silently; fix the data or the target type and plan again.",
+      uk: "Нічого не записано. Дозвіл на руйнівний крок дозволяє йому впасти на даних, а не мовчки обрізати чи округлити значення; виправте дані чи цільовий тип і сплануйте знову.",
+    },
+  },
+  "apply.type-guard-failed": {
+    en: (p) =>
+      `The check before plan step ${p.step} for column ${p.column} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`,
+    uk: (p) =>
+      `Перевірка перед кроком плану ${p.step} для колонки ${p.column} завершилася помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. The check compares each value with itself after converting it to the new type and back; a type without equality (such as json) cannot be compared, so change such a column through a data step.",
+      uk: "Нічого не записано. Перевірка порівнює кожне значення з ним самим після приведення до нового типу й назад; тип без рівності (як-от json) не порівняти, тож таку колонку змінюйте кроком даних.",
+    },
+  },
   "plan.unparsable-step": {
     en: (p) =>
       `The schema engine produced plan step ${p.step} that the SQL parser cannot read: ${p.message}`,
@@ -2338,6 +2362,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: `No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner the applying role is a member of. ${OWNER_RECIPE.en}, and plan again.`,
       uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
+    },
+  },
+  "plan.type-guard-unsupported": {
+    en: (p) =>
+      `Plan step ${p.step} changes a column type in a way the platform cannot check for lost values (${p.reason})`,
+    uk: (p) =>
+      `Крок плану ${p.step} змінює тип колонки так, що платформа не може перевірити втрату значень (${p.reason})`,
+    hint: {
+      en: "No plan was written. The check needs a plain `<column>::<new type>` conversion, an old type the plan can see and a cast both ways between the types; make the change through a data step instead.",
+      uk: "План не записано. Перевірці потрібне просте приведення `<колонка>::<новий тип>`, видимий планові старий тип і приведення між типами в обидва боки; зробіть зміну кроком даних.",
+    },
+  },
+  "plan.type-change-dependent": {
+    en: (p) =>
+      `The plan changes the type of a column that these objects depend on, and the schema engine does not rebuild them: ${p.objects}`,
+    uk: (p) =>
+      `План змінює тип колонки, від якої залежать ці об'єкти, а двигун схеми їх не перебудовує: ${p.objects}`,
+    hint: {
+      en: "No plan was written. A trigger WHEN condition or UPDATE OF list and a BEGIN ATOMIC function block a column type change; drop them in one metadata change and create them again after the type change in the next.",
+      uk: "План не записано. Умова WHEN чи перелік UPDATE OF тригера й функція BEGIN ATOMIC блокують зміну типу колонки; зніміть їх однією зміною метаданих і створіть знову після зміни типу наступною.",
     },
   },
   "plan.promotion-record-missing": {

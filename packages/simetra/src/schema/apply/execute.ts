@@ -1,4 +1,4 @@
-import { loadSqlParser } from "simetra/compiler"
+import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import type { DbConnection, EngineDiagnostic, LockedTable } from "../engine"
 import type { PlanArtifact } from "./artifact"
@@ -18,6 +18,7 @@ import {
 } from "./port"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
 import { checkPermissions, lintSteps, type PlanStep } from "./steps"
+import { guardTarget } from "./type-guard"
 
 /** Тайм-аути й повтори однієї спроби застосування (рішення 11 плану П3-1). */
 export interface ApplyTimeouts {
@@ -155,9 +156,10 @@ export async function executePlan(
   const sleep =
     o.sleep ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const parse = await loadSqlParser()
   const refusals = [
     ...fingerprintVersions(plan),
-    ...lintSteps(plan.steps, await loadSqlParser()),
+    ...lintSteps(plan.steps, parse),
     ...checkPermissions({ steps: plan.steps, drift: plan.drift }, o.allow),
   ]
   if (refusals.length > 0)
@@ -170,7 +172,7 @@ export async function executePlan(
   for (let attempt = 1; ; attempt++) {
     try {
       await db.transaction(target, end, (tx) =>
-        runAttempt(tx, plan, o, timeouts, applyId)
+        runAttempt(tx, plan, o, timeouts, applyId, parse)
       )
       return {
         status: end === "commit" ? "committed" : "rolledBack",
@@ -222,7 +224,8 @@ async function runAttempt(
   plan: ExecutablePlan,
   o: ExecuteOptions,
   timeouts: ApplyTimeouts,
-  applyId: string
+  applyId: string,
+  parse: SqlParser
 ): Promise<void> {
   // 1. Одне застосування на базу; зайнято — одразу відмова, без повторів
   const [lock] = await tx.query<{ locked: boolean }>(
@@ -289,8 +292,10 @@ async function runAttempt(
       sections: changed.join(", "),
     })
 
-  // 7. Кроки по черзі; конфлікт блокувань летить далі на повтор спроби
-  for (const step of plan.steps)
+  // 7. Кроки по черзі, кожен після своїх сторожів; конфлікт блокувань
+  // летить далі на повтор спроби
+  for (const step of plan.steps) {
+    for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
     try {
       await tx.query(step.sql)
     } catch (error) {
@@ -302,6 +307,7 @@ async function runAttempt(
         })
       throw error
     }
+  }
 
   // 8. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
   const resultFingerprint = await readFingerprint(tx, plan.scope)
@@ -332,6 +338,45 @@ async function runAttempt(
   }))
     await tx.query(statement.sql, statement.params)
   // 10. `COMMIT` чи `ROLLBACK` виконує порт за `end`
+}
+
+/**
+ * Сторож звуження типу перед кроком (рішення 5 плану П3-2a): значення, які
+ * приведення туди й назад не зберігає, чи збій самого приведення (SQLSTATE
+ * класу `22`) зупиняють спробу до кроку, що обрізав би їх мовчки. Інша
+ * помилка сторожа — своїм кодом, а не сирим збоєм кроку: крок ще не
+ * виконувався.
+ */
+async function runGuard(
+  tx: ApplyTransaction,
+  step: string,
+  guard: string,
+  parse: SqlParser
+): Promise<void> {
+  const { table, column } = guardTarget(guard, parse)
+  let lost: number
+  try {
+    const [row] = await tx.query<{ lost: string | number }>(guard)
+    lost = Number(row?.lost ?? 0)
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+    const sqlstate = error.sqlstate ?? "unknown"
+    if (sqlstate.startsWith("22"))
+      throw stop("failed", "apply.type-narrowing", {
+        step,
+        table,
+        column,
+        sqlstate,
+      })
+    throw stop("failed", "apply.type-guard-failed", {
+      step,
+      column,
+      sqlstate,
+      error: error.message,
+    })
+  }
+  if (lost > 0)
+    throw stop("failed", "apply.type-narrowing", { step, table, column, lost })
 }
 
 async function checkChain(

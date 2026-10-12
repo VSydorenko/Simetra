@@ -711,4 +711,140 @@ describe("buildPlan", () => {
       expect(artifact.requiredPermissions).toEqual([drop!.id])
     })
   })
+
+  describe("type change", () => {
+    const note = (type: Record<string, unknown>) =>
+      party([attribute("note", { id: uuid(9070), ...type })])
+
+    /** Модель із `note` і дослівною одиницею, що залежить від колонки. */
+    const withUnit = (type: Record<string, unknown>, sql: string) =>
+      compiled({ [PARTY]: note(type), "sql/app/dependent.sql": sql })
+
+    /** Ціль із першою моделлю й план до другої. */
+    async function planChange(
+      before: CompiledModel,
+      after: CompiledModel
+    ): Promise<PlanOutcome> {
+      return inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        return plan(url, after)
+      })
+    }
+
+    const LONG = { type: "String", length: 20 }
+    const SHORT = { type: "String", length: 5 }
+
+    it("puts a guard on a lossy type change", async () => {
+      const outcome = await planChange(
+        await compiled({ [PARTY]: note(LONG) }),
+        await compiled({ [PARTY]: note(SHORT) })
+      )
+      const artifact = planned(outcome)
+      const [change] = stepMatching(artifact, /ALTER COLUMN "note" TYPE/)
+      expect(change?.class).toBe("destructive")
+      expect(change?.guards).toEqual([
+        `SELECT count(*) AS lost FROM app.party WHERE note IS NOT NULL AND (note::pg_catalog."varchar"(5))::pg_catalog."varchar"(20) IS DISTINCT FROM note`,
+      ])
+    })
+
+    it("refuses a type pair without a cast back", async () => {
+      // `jsonb → numeric` приводиться, а `numeric → jsonb` — ні: сторож упав
+      // би вже на цілі, тож план відмовляє ще на копії
+      const outcome = await planChange(
+        await compiled({ [PARTY]: note({ type: "Json" }) }),
+        await compiled({
+          [PARTY]: note({ type: "Numeric", precision: 12, scale: 2 }),
+        })
+      )
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-guard-unsupported"])
+      expect(
+        outcome.diagnostics.find(
+          (d) => d.code === "plan.type-guard-unsupported"
+        )?.params
+      ).toEqual({ step: expect.stringMatching(/^s\d+$/), reason: "cast" })
+    })
+
+    it("refuses a type change it cannot guard", async () => {
+      const model = await compiled({ [PARTY]: note(LONG) })
+      // Двигун із нестандартним `USING`: сторож не перевіряє довільний вираз
+      const rewriting: SchemaEngine = {
+        ...engine,
+        withDesiredShadow: (o, sql, scope, fn) =>
+          engine.withDesiredShadow(o, sql, scope, (db, enginePlan) =>
+            fn(db, {
+              ...enginePlan,
+              empty: false,
+              actions: [
+                {
+                  ...enginePlan.actions[0]!,
+                  sql: "ALTER TABLE app.party ALTER COLUMN note TYPE varchar(5) USING upper(note)::varchar(5)",
+                },
+              ],
+            })
+          ),
+      }
+      const outcome = await inTarget(EMPTY, async (url) => {
+        await establish(url, model)
+        await other(url, "alter table app.party add column extra int")
+        return plan(url, model, rewriting)
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-guard-unsupported"])
+      expect(
+        outcome.diagnostics.find(
+          (d) => d.code === "plan.type-guard-unsupported"
+        )?.params
+      ).toEqual({ step: "s1", reason: "using" })
+    })
+
+    const TRIGGER_FN = `CREATE FUNCTION app.party_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`
+
+    it("refuses a type change under a trigger WHEN condition", async () => {
+      const sql = `${TRIGGER_FN}
+CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION app.party_touch();`
+      const outcome = await planChange(
+        await withUnit(LONG, sql),
+        await withUnit(SHORT, sql)
+      )
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
+          ?.params
+      ).toEqual({ objects: "trigger app.party.party_note" })
+    })
+
+    it("refuses a type change under a trigger UPDATE OF list", async () => {
+      // Зміна без втрат: детектор дивиться на кожну зміну типу, бо `ALTER …
+      // TYPE` падає однаково
+      const sql = `${TRIGGER_FN}
+CREATE TRIGGER party_note_of BEFORE UPDATE OF note ON app.party FOR EACH ROW EXECUTE FUNCTION app.party_touch();`
+      const outcome = await planChange(
+        await withUnit(SHORT, sql),
+        await withUnit(LONG, sql)
+      )
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
+          ?.params
+      ).toEqual({ objects: "trigger app.party.party_note_of" })
+    })
+
+    it("refuses a type change under a BEGIN ATOMIC function", async () => {
+      const sql =
+        "CREATE FUNCTION app.party_notes(lim integer) RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT count(note) FROM app.party LIMIT lim; END;"
+      const outcome = await planChange(
+        await withUnit(LONG, sql),
+        await withUnit(SHORT, sql)
+      )
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
+          ?.params
+      ).toEqual({ objects: "function app.party_notes(lim integer)" })
+    })
+  })
 })

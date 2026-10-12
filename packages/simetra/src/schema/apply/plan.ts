@@ -35,6 +35,12 @@ import {
 import type { ApplyDatabase } from "./port"
 import { readApplyState } from "./state"
 import { classifySteps, lintSteps, requiredPermissions, stepId } from "./steps"
+import {
+  typeChangeRefusals,
+  typeChanges,
+  typeGuards,
+  type TypeChange,
+} from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
 
 export interface PlanDatabases {
@@ -258,7 +264,15 @@ export async function buildPlan(
   const unparsable = unparsableSteps(actions, parse)
   if (unparsable.length > 0) return refused([...diagnostics, ...unparsable])
   const steps = classifySteps(actions, live.extracted.model, parse)
-  const lint = lintSteps(steps, parse)
+  // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
+  // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
+  const lint = [
+    ...lintSteps(steps, parse),
+    ...steps.flatMap((step) => {
+      const guarded = typeGuards(step, live.extracted.model, parse)
+      return "refusal" in guarded ? [guarded.refusal] : []
+    }),
+  ]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
   const permissions = requiredPermissions({ steps, drift })
 
@@ -269,6 +283,9 @@ export async function buildPlan(
     live,
     desired: target,
     model,
+    typeChanges: steps.flatMap((step) =>
+      typeChanges(step, live.extracted.model, parse)
+    ),
     plan: {
       fromHash,
       toHash: model.hash,
@@ -432,6 +449,8 @@ async function prove(
     live: Witness
     desired: Witness
     model: CompiledModel
+    /** Зміни типу колонок плану: їхні відмови видно лише на базі. */
+    typeChanges: readonly TypeChange[]
     plan: ExecutablePlan
   }
 ): Promise<ProofResult> {
@@ -443,6 +462,17 @@ async function prove(
       const copy = await witness(clone, p.scope)
       const mismatch = cloneMismatch(engine, p.scope, p.live, copy)
       if (mismatch.length > 0) return { ok: false, diagnostics: mismatch }
+
+      // Залежні від колонок зі зміною типу й приведення сторожів — на копії
+      // до прогону: прогін упав би на першому сирим збоєм кроку. Плану без
+      // зміни типу зайва транзакція на копії ні до чого
+      const blocked =
+        p.typeChanges.length === 0
+          ? []
+          : await dbs.scratch.transaction(clone, "rollback", (tx) =>
+              typeChangeRefusals(tx, p.typeChanges)
+            )
+      if (blocked.length > 0) return { ok: false, diagnostics: blocked }
 
       const run = await executePlan(dbs.scratch, clone, p.plan, {
         mode: "proof",

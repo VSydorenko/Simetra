@@ -59,6 +59,17 @@ export {
   type StepClass,
 } from "./steps"
 export {
+  checkGuardCasts,
+  guardTarget,
+  readTypeChangeDependents,
+  typeChangeRefusals,
+  typeChanges,
+  typeGuards,
+  type GuardProblem,
+  type GuardResult,
+  type TypeChange,
+} from "./type-guard"
+export {
   PLAN_FORMAT,
   parsePlan,
   planArtifactSchema,
