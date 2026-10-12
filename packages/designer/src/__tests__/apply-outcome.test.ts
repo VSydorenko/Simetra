@@ -85,6 +85,8 @@ async function writePlan(
     steps: [],
     requiredPermissions: [],
     drift: null,
+    locks: [],
+    preamble: [],
     resultCatalog: { tables: [], enumTypes: [], units: [] },
   })
   const file = `plans/${planFileName(null, model.hash)}`
@@ -155,5 +157,34 @@ describe("apply with an unknown outcome", () => {
     expect(text).not.toContain("nothing was written")
     // Кожен виклик — нове застосування зі своїм id
     expect(HEAD.exec(text)?.[1]).not.toBe(applyId)
+  })
+
+  it("refuses a plan of another format with a rebuild hint, before connecting", async () => {
+    const dir = await project()
+    const { file, artifact } = await writePlan(dir)
+    // Форма першого формату: інший `format` і без полів другого
+    const old: Record<string, unknown> = { ...artifact, format: 1 }
+    delete old.locks
+    delete old.preamble
+    await writeFile(join(dirname(dir), file), JSON.stringify(old))
+    const r = await invoke(
+      toolByName("apply")!,
+      { plan: file, planHash: artifact.planHash },
+      {
+        dir,
+        readOnly: false,
+        allowDatabaseWrite: true,
+        dryRun: false,
+        confirmed: true,
+        channel: "cli",
+        database: databaseResource(env, { url: ENV }),
+      }
+    )
+    expect(r.ok).toBe(false)
+    expect(r.diagnostics.map((d) => [d.code, d.params?.found])).toEqual([
+      ["apply.plan-format", 1],
+    ])
+    expect(r.diagnostics[0]!.message).toMatch(/rebuild the plan/)
+    expect(lost.transactions).toBe(0)
   })
 })

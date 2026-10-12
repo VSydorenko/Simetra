@@ -1,7 +1,7 @@
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
-import type { DbConnection, EngineDiagnostic, LockedTable } from "../engine"
-import type { PlanArtifact } from "./artifact"
+import type { DbConnection, EngineDiagnostic, EngineSetting } from "../engine"
+import { isAllowedSetting, type PlanArtifact } from "./artifact"
 import { applyDiagnostic } from "./diagnostic"
 import {
   compareFingerprints,
@@ -17,7 +17,8 @@ import {
   type ApplyTransaction,
 } from "./port"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
-import { checkPermissions, lintSteps, type PlanStep } from "./steps"
+import type { TableLock } from "./locks"
+import { checkPermissions, lintSteps } from "./steps"
 import { guardTarget } from "./type-guard"
 
 /** Тайм-аути й повтори однієї спроби застосування (рішення 11 плану П3-1). */
@@ -51,6 +52,8 @@ export type ExecutablePlan = Pick<
   | "drift"
   | "targetFingerprint"
   | "desiredFingerprint"
+  | "locks"
+  | "preamble"
   | "resultCatalog"
 >
 
@@ -159,6 +162,7 @@ export async function executePlan(
   const parse = await loadSqlParser()
   const refusals = [
     ...fingerprintVersions(plan),
+    ...unknownPreamble(plan.preamble),
     ...lintSteps(plan.steps, parse),
     // Артефакт ще не несе секції `promotion` (рішення 15 плану П3-2a, R1):
     // пунктів промоції план не має
@@ -264,26 +268,9 @@ async function runAttempt(
   if (o.mode !== "proof") await checkChain(tx, plan.fromHash)
 
   // 5. Блокування наперед — одна точка очікування замість очікувань
-  // посеред кроків
-  const tables = tablesToLock(plan.steps)
-  if (tables.length > 0)
-    try {
-      await tx.query(
-        `LOCK TABLE ${tables
-          .map((t) => `ONLY ${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
-          .join(", ")} IN ACCESS EXCLUSIVE MODE`
-      )
-    } catch (error) {
-      if (
-        error instanceof ApplyDbError &&
-        error.sqlstate !== undefined &&
-        VANISHED.has(error.sqlstate)
-      )
-        throw stop("refused", "apply.target-changed", {
-          sections: "relations",
-        })
-      throw error
-    }
+  // посеред кроків. Спершу `ACCESS EXCLUSIVE`, потім `SHARE ROW EXCLUSIVE`
+  // цілей FK: порядок артефакту детермінований (рішення 9 плану П3-2a)
+  for (const mode of LOCK_MODES) await lockTables(tx, plan.locks, mode)
 
   // 6. Ціль та сама, що при плануванні. Під блокуваннями п.5 чужа DDL на
   // цих таблицях до кроків уже неможлива. Ціль ↔ ціль — з власником; копія
@@ -298,8 +285,28 @@ async function runAttempt(
     })
 
   // 7. Кроки по черзі, кожен після своїх сторожів; конфлікт блокувань
-  // летить далі на повтор спроби
-  for (const step of plan.steps) {
+  // летить далі на повтор спроби. Кроки двигуна — під `search_path`
+  // преамбули (рішення 13 плану П3-2a): двигун пише SQL з розрахунку на неї.
+  // Кроки наміру, заміри, відбиток і запис стану — під налаштуваннями
+  // транзакції; сторожі між кроками двигуна повністю кваліфіковані
+  const searchPath = plan.preamble.find((s) => s.name === "search_path")
+  const firstEngine = plan.steps.findIndex((s) => s.origin === "engine")
+  const lastEngine = plan.steps.reduce(
+    (last, s, i) => (s.origin === "engine" ? i : last),
+    -1
+  )
+  let savedPath: string | undefined
+  for (const [index, step] of plan.steps.entries()) {
+    if (searchPath !== undefined && index === firstEngine) {
+      const [saved] = await tx.query<{ path: string }>(
+        "SELECT current_setting('search_path') AS path"
+      )
+      if (saved === undefined) throw new Error("search_path returned no row")
+      savedPath = saved.path
+      await tx.query("SELECT set_config('search_path', $1, true)", [
+        searchPath.value,
+      ])
+    }
     for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
     try {
       await tx.query(step.sql)
@@ -312,6 +319,8 @@ async function runAttempt(
         })
       throw error
     }
+    if (savedPath !== undefined && index === lastEngine)
+      await tx.query("SELECT set_config('search_path', $1, true)", [savedPath])
   }
 
   // 8. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
@@ -399,22 +408,55 @@ async function checkChain(
     })
 }
 
+const LOCK_MODES = [
+  ["accessExclusive", "ACCESS EXCLUSIVE"],
+  ["shareRowExclusive", "SHARE ROW EXCLUSIVE"],
+] as const satisfies readonly (readonly [TableLock["mode"], string])[]
+
 /**
- * Таблиці кроків класу `accessExclusive` у порядку плану, без дублів. Інші
- * класи блокування беруть своє блокування самі: брати за них `ACCESS
- * EXCLUSIVE` наперед — блокувати читання без потреби.
+ * Один `LOCK TABLE` на режим. Таблиця, що зникла чи змінила вид після плану,
+ * — ціль уже не та: відмова, а не збій кроку.
  */
-function tablesToLock(steps: readonly PlanStep[]): LockedTable[] {
-  const seen = new Set<string>()
-  return steps
-    .filter((s) => s.lockClass === "accessExclusive")
-    .flatMap((s) => s.lockedTables)
-    .filter((t) => {
-      const key = JSON.stringify([t.schema, t.name])
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+async function lockTables(
+  tx: ApplyTransaction,
+  locks: readonly TableLock[],
+  [mode, sqlMode]: (typeof LOCK_MODES)[number]
+): Promise<void> {
+  const tables = locks.filter((l) => l.mode === mode)
+  if (tables.length === 0) return
+  try {
+    await tx.query(
+      `LOCK TABLE ${tables
+        .map((t) => `ONLY ${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
+        .join(", ")} IN ${sqlMode} MODE`
+    )
+  } catch (error) {
+    if (
+      error instanceof ApplyDbError &&
+      error.sqlstate !== undefined &&
+      VANISHED.has(error.sqlstate)
+    )
+      throw stop("refused", "apply.target-changed", { sections: "relations" })
+    throw error
+  }
+}
+
+/**
+ * Лінт преамбули: раннер виконує лише відоме (рішення 13 плану П3-2a).
+ * Схема артефакту таку пару вже не пропускає, але раннер не покладається на
+ * те, що план прийшов через неї.
+ */
+function unknownPreamble(
+  preamble: readonly EngineSetting[]
+): EngineDiagnostic[] {
+  return preamble
+    .filter((s) => !isAllowedSetting(s))
+    .map((s) =>
+      applyDiagnostic("engine.preamble-unknown", "error", {
+        name: s.name,
+        value: s.value,
+      })
+    )
 }
 
 function differing(

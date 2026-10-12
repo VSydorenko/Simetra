@@ -32,6 +32,7 @@ import {
   type FingerprintSection,
   type ObjectOwner,
 } from "./fingerprint"
+import { planLocks } from "./locks"
 import { ApplyConnectionLost, type ApplyDatabase } from "./port"
 import { readApplyState } from "./state"
 import { classifySteps, lintSteps, requiredPermissions, stepId } from "./steps"
@@ -275,6 +276,10 @@ export async function buildPlan(
   ]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
   const permissions = requiredPermissions({ steps, drift, promotion: null })
+  // Без промоції імена вихідного стану й кроків збігаються, а цілей FK поза
+  // одиницею немає: блокування — таблиці кроків у детермінованому порядку
+  const locks = planLocks({ steps, newToOld: new Map(), foreignKeyTargets: [] })
+  const { preamble } = target.enginePlan
 
   // 8–10. Доказ на копії. План доказу несе той самий дрейф, тож дозволи
   // `requiredPermissions` йому відповідають
@@ -294,6 +299,8 @@ export async function buildPlan(
       steps,
       requiredPermissions: permissions,
       drift,
+      locks,
+      preamble,
       targetFingerprint: live.fingerprint,
       desiredFingerprint: target.fingerprint,
       // Модель бажаної тіні лише для marker копії, яку буде викинуто;
@@ -317,6 +324,8 @@ export async function buildPlan(
     steps,
     requiredPermissions: permissions,
     drift,
+    locks,
+    preamble,
     resultCatalog: proof.resultCatalog,
   })
   return {

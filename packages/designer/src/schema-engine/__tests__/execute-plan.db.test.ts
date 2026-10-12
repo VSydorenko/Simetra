@@ -22,6 +22,9 @@ import {
   type ExecutablePlan,
   type ExecuteOptions,
   type ExecuteOutcome,
+  intentStep,
+  planLocks,
+  tableKey,
   type PlanStep,
   typeGuards,
 } from "simetra/schema"
@@ -205,6 +208,10 @@ const ALTER_T = step("s1", "ALTER TABLE app.t ADD COLUMN d int", {
   lockedTables: [{ schema: "app", name: "t" }],
 })
 
+/** Блокування плану без промоції: імена кроків, детермінований порядок. */
+const locksOf = (steps: readonly PlanStep[]) =>
+  planLocks({ steps, newToOld: new Map(), foreignKeyTargets: [] })
+
 /** План від `fromHash` до `toHash` над живою ціллю. */
 async function planFor(
   url: string,
@@ -219,6 +226,8 @@ async function planFor(
     steps,
     requiredPermissions: [],
     drift: null,
+    locks: locksOf(steps),
+    preamble: [],
     resultCatalog: { tables: [], enumTypes: [], units: [] },
     ...over,
     targetFingerprint: over.targetFingerprint ?? (await read(url)),
@@ -249,6 +258,8 @@ async function establish(url: string, hash: string): Promise<void> {
       steps: [],
       requiredPermissions: [],
       drift: null,
+      locks: [],
+      preamble: [],
       targetFingerprint: fingerprint,
       desiredFingerprint: fingerprint,
       resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -618,6 +629,174 @@ describe("executePlan", () => {
     })
   })
 
+  /**
+   * Перейменування наміром і крок двигуна, що називає таблицю вже новим
+   * іменем (рішення 9 плану П3-2a). Артефакт зібрано вручну: конвеєр плану
+   * з промоцією з'являється пізніше (R12).
+   */
+  const renamePlan = (url: string) => {
+    const steps: PlanStep[] = [
+      {
+        ...intentStep("ALTER TABLE app.t RENAME TO u", [
+          { schema: "app", name: "t" },
+        ]),
+        id: "s1",
+      },
+      step("s2", "ALTER TABLE app.u ADD COLUMN d int", {
+        verb: "alter",
+        lockClass: "accessExclusive",
+        lockedTables: [{ schema: "app", name: "u" }],
+      }),
+    ]
+    const newToOld = new Map([[tableKey("app", "u"), tableKey("app", "t")]])
+    return planFor(url, steps, {
+      locks: planLocks({ steps, newToOld, foreignKeyTargets: [] }),
+    })
+  }
+
+  it("locks a renamed table by its old name", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await renamePlan(url)
+      expect(plan.locks).toEqual([
+        { schema: "app", name: "t", mode: "accessExclusive" },
+      ])
+      const outcome = await executePlan(apply, { url }, plan, options)
+      expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+      expect(await exists(url, "app.u")).toBe(true)
+      expect(await exists(url, "app.t")).toBe(false)
+    })
+  })
+
+  // Review Focus 3 плану П3-2a
+  it("refuses with target-changed when a renamed table vanished before apply", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await renamePlan(url)
+      // Таблицю зі старим ім'ям прибрано за спиною платформи після плану
+      await other(url, "drop table app.t")
+      const outcome = await executePlan(apply, { url }, plan, options)
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.target-changed",
+            params: { sections: "relations" },
+          },
+        ],
+      })
+      expect(await marker(url)).toBeUndefined()
+      expect(await ledger(url)).toEqual([])
+    })
+  })
+
+  it("takes SHARE ROW EXCLUSIVE on FK targets up front", async () => {
+    const setup = `${BASE};
+      create table app.p (id int primary key);
+      create table app.c (id int primary key, p int);`
+    await inTarget(setup, async (url) => {
+      const steps = [
+        step(
+          "s1",
+          "ALTER TABLE app.c ADD CONSTRAINT c_p_fk FOREIGN KEY (p) REFERENCES app.p (id)",
+          {
+            verb: "alter",
+            lockClass: "accessExclusive",
+            lockedTables: [{ schema: "app", name: "c" }],
+          }
+        ),
+      ]
+      const plan = await planFor(url, steps, {
+        locks: planLocks({
+          steps,
+          newToOld: new Map(),
+          foreignKeyTargets: [{ schema: "app", name: "p" }],
+        }),
+        desiredFingerprint: await desiredFingerprint(setup, steps),
+      })
+      // Запис у ціль FK тримає ROW EXCLUSIVE, що конфліктує з SHARE ROW
+      // EXCLUSIVE перевірки FK
+      const writer = await holder(
+        url,
+        "begin; lock table app.p in row exclusive mode"
+      )
+      try {
+        const running = executePlan(apply, { url }, plan, {
+          ...options,
+          timeouts: { lockTimeoutMs: 15_000 },
+        })
+        let waiting: { query: string; mode: string } | undefined
+        await until("the apply to wait on the FK target", async () => {
+          ;[waiting] = await other<{ query: string; mode: string }>(
+            url,
+            `select a.query, l.mode from pg_locks l
+               join pg_stat_activity a on a.pid = l.pid
+              where l.relation = 'app.p'::regclass and not l.granted`
+          )
+          return waiting !== undefined
+        })
+        // Очікування — на блокуванні наперед, а не посеред кроку
+        expect(waiting!.mode).toBe("ShareRowExclusiveLock")
+        expect(waiting!.query).toMatch(
+          /^LOCK TABLE ONLY app\.p IN SHARE ROW EXCLUSIVE MODE$/
+        )
+        await writer.query("rollback")
+        expect(await running).toMatchObject({ status: "committed" })
+      } finally {
+        await writer.end()
+      }
+    })
+  })
+
+  describe("engine preamble", () => {
+    /** Що бачить кожна фаза: намір, крок двигуна, запис стану. */
+    const SEEN = `${BASE};
+      create table app.seen (at text, path text, bodies text);
+      create function app.seen_state() returns trigger language plpgsql as $$
+      begin
+        insert into app.seen values ('state', current_setting('search_path'), current_setting('check_function_bodies'));
+        return null;
+      end $$;
+      create trigger seen_state after insert on simetra.ledger
+        for each row execute function app.seen_state();`
+    const record = (at: string) =>
+      `INSERT INTO app.seen VALUES ('${at}', current_setting('search_path'), current_setting('check_function_bodies'))`
+
+    const seen = async (preamble: ExecutablePlan["preamble"]) =>
+      inTarget(SEEN, async (target) => {
+        const steps: PlanStep[] = [
+          { ...intentStep(record("intent"), []), id: "s1" },
+          step("s2", record("engine"), { verb: "alter" }),
+        ]
+        const plan = await planFor(target, steps, {
+          preamble,
+          desiredFingerprint: await desiredFingerprint(SEEN, steps),
+        })
+        const outcome = await executePlan(apply, { url: target }, plan, options)
+        expect(outcome).toMatchObject({ status: "committed" })
+        const rows = await other<{ at: string; path: string; bodies: string }>(
+          target,
+          "select at, path, bodies from app.seen"
+        )
+        return Object.fromEntries(rows.map((r) => [r.at, r]))
+      })
+
+    it("runs engine steps under the preamble search path and restores it", async () => {
+      const rows = await seen([{ name: "search_path", value: "pg_catalog" }])
+      expect(rows.engine!.path).toBe("pg_catalog")
+      expect(rows.intent!.path).not.toBe("pg_catalog")
+      expect(rows.state!.path).toBe(rows.intent!.path)
+    })
+
+    it("keeps function body validation on although the preamble asks to turn it off", async () => {
+      const rows = await seen([
+        { name: "search_path", value: "pg_catalog" },
+        { name: "check_function_bodies", value: "off" },
+      ])
+      expect(rows.engine).toMatchObject({ path: "pg_catalog", bodies: "on" })
+      expect(rows.state!.bodies).toBe("on")
+    })
+  })
+
   it("catches an owner swap on the target", async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [CREATE_N])
@@ -842,6 +1021,7 @@ describe("executePlan", () => {
           }),
         ],
         requiredPermissions: ["s1"],
+        locks: [{ schema: "app", name: "n", mode: "accessExclusive" }],
         targetFingerprint: await read(url),
         desiredFingerprint: fingerprintA,
       }

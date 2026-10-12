@@ -2166,6 +2166,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Сплануйте знову поточною платформою: план застосовується лише з тими версіями, що його побудували й довели.",
     },
   },
+  "apply.plan-format": {
+    en: (p) =>
+      `The plan format ${p.found} is not supported (this platform reads plan format ${p.supported}), so rebuild the plan`,
+    uk: (p) =>
+      `Формат плану ${p.found} не підтримується (ця платформа читає формат плану ${p.supported}), тож побудуйте план наново`,
+    hint: {
+      en: "Nothing was written. Plan again with the current platform and review the new plan before applying it.",
+      uk: "Нічого не записано. Сплануйте знову поточною платформою й перегляньте новий план перед застосуванням.",
+    },
+  },
   "apply.plan-hash": {
     en: (p) =>
       `The plan file ${p.file} does not carry the confirmed plan hash ${p.planHash}: it is another plan, or it was edited after planning`,

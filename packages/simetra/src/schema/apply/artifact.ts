@@ -3,16 +3,25 @@ import { canonicalize, serializeCanonical, sha256Hex } from "simetra/compiler"
 import { DATABASE_PROVIDERS, type CatalogModel } from "simetra/model"
 import {
   ENGINE_ACTION_VERBS,
+  ENGINE_PREAMBLE_ALLOWED,
   ENGINE_TRANSACTIONALITIES,
+  type EngineDiagnostic,
   type EngineIdentity,
   type EngineScope,
+  type EngineSetting,
 } from "../engine"
+import { applyDiagnostic } from "./diagnostic"
 import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
+import { TABLE_LOCK_MODES, type TableLock } from "./locks"
 import { STEP_CLASSES, type PlanStep } from "./steps"
 
-/** Форма файлу плану; читач порівнює її з поточною, а не вгадує. */
-export const PLAN_FORMAT = 1
+/**
+ * Форма файлу плану; читач порівнює її з поточною, а не вгадує. Другий
+ * формат: кроки з походженням і сторожами, блокування з режимами, преамбула
+ * двигуна (рішення 11 плану П3-2a).
+ */
+export const PLAN_FORMAT = 2
 
 /**
  * Незмінний артефакт плану (платформна спека §6.10, рішення 9 плану П3-1):
@@ -38,6 +47,16 @@ export interface PlanArtifact {
    * Під хешем: дозвіл `drift` прийняв саме цей дрейф, а не будь-який.
    */
   drift: DriftReport | null
+  /**
+   * Що раннер блокує до кроків: вихідні імена з режимом, у детермінованому
+   * порядку (рішення 9 плану П3-2a). Рахує `planLocks`.
+   */
+  locks: TableLock[]
+  /**
+   * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. Раннер виконує
+   * з неї лише `search_path` навколо кроків двигуна (рішення 13).
+   */
+  preamble: EngineSetting[]
   resultCatalog: CatalogModel
   planHash: string
 }
@@ -105,11 +124,34 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
       paths: z.array(z.string()),
     })
     .nullable(),
+  locks: z.array(
+    z.strictObject({
+      schema: z.string(),
+      name: z.string(),
+      mode: z.enum(TABLE_LOCK_MODES),
+    })
+  ),
+  // Пара поза переліком — не план цієї платформи: раннер її не виконав би
+  preamble: z.array(
+    z
+      .strictObject({ name: z.string(), value: z.string() })
+      .refine(isAllowedSetting, {
+        message: "preamble setting is not on the allowed list",
+      })
+  ),
   resultCatalog: z
     .record(z.string(), z.unknown())
     .transform((catalog) => catalog as unknown as CatalogModel),
   planHash: z.string().regex(/^[0-9a-f]{64}$/),
 })
+
+/** Чи дозволена пара преамбули; власні ключі, не ланцюжок прототипів. */
+export function isAllowedSetting(s: EngineSetting): boolean {
+  return (
+    Object.hasOwn(ENGINE_PREAMBLE_ALLOWED, s.name) &&
+    ENGINE_PREAMBLE_ALLOWED[s.name] === s.value
+  )
+}
 
 /** `planHash` — hex SHA-256 канонічної форми артефакту без самого хешу. */
 export async function stampPlan(
@@ -128,22 +170,57 @@ export function serializePlan(artifact: PlanArtifact): string {
   return serializeCanonical(artifact)
 }
 
-export function parsePlan(
-  text: string
-): { ok: true; artifact: PlanArtifact } | { ok: false; message: string } {
+export type ParsedPlan =
+  | { ok: true; artifact: PlanArtifact }
+  /** План іншого формату: його будують наново, а не лагодять. */
+  | {
+      ok: false
+      reason: "format"
+      message: string
+      diagnostic: EngineDiagnostic
+    }
+  | { ok: false; reason: "invalid"; message: string }
+
+/**
+ * Строгий розбір файлу плану. `format` читається до строгої схеми: план
+ * іншого формату має інші поля, і строга схема назвала б його зіпсованим
+ * файлом, хоча правда — «побудуй наново». Шиму для старих форматів немає.
+ */
+export function parsePlan(text: string): ParsedPlan {
   let json: unknown
   try {
     json = JSON.parse(text)
   } catch (error) {
     return {
       ok: false,
+      reason: "invalid",
       message: error instanceof Error ? error.message : String(error),
+    }
+  }
+  const format =
+    typeof json === "object" && json !== null && !Array.isArray(json)
+      ? (json as Record<string, unknown>).format
+      : undefined
+  if (typeof format === "number" && format !== PLAN_FORMAT) {
+    const diagnostic = applyDiagnostic("apply.plan-format", "error", {
+      found: format,
+      supported: PLAN_FORMAT,
+    })
+    return {
+      ok: false,
+      reason: "format",
+      message: diagnostic.message,
+      diagnostic,
     }
   }
   const result = planArtifactSchema.safeParse(json)
   return result.success
     ? { ok: true, artifact: result.data }
-    : { ok: false, message: z.prettifyError(result.error) }
+    : {
+        ok: false,
+        reason: "invalid",
+        message: z.prettifyError(result.error),
+      }
 }
 
 /**

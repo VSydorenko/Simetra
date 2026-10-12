@@ -54,6 +54,8 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   ],
   requiredPermissions: ["s1"],
   drift: null,
+  locks: [{ schema: "app", name: "t", mode: "accessExclusive" }],
+  preamble: [{ name: "search_path", value: "pg_catalog" }],
   resultCatalog: { tables: [], enumTypes: [], units: [] },
 })
 
@@ -164,6 +166,93 @@ describe("plan artifact", () => {
     // Відмова від схеми, а не від синтаксису
     expect(() => JSON.parse(text) as unknown).not.toThrow()
     expect(parsePlan(text).ok).toBe(false)
+  })
+
+  it("covers the locks and the preamble with the hash", async () => {
+    const stamped = await stampPlan(draft())
+    const relocked = draft()
+    relocked.locks[0]!.mode = "shareRowExclusive"
+    expect((await stampPlan(relocked)).planHash).not.toBe(stamped.planHash)
+    const bare = draft()
+    bare.preamble = []
+    expect((await stampPlan(bare)).planHash).not.toBe(stamped.planHash)
+  })
+
+  it("is strict about the locks and the preamble", async () => {
+    const artifact = await stampPlan(draft())
+    const variants: unknown[] = [
+      { ...artifact, locks: [{ schema: "app", name: "t" }] },
+      {
+        ...artifact,
+        locks: [{ schema: "app", name: "t", mode: "rowExclusive" }],
+      },
+      {
+        ...artifact,
+        locks: [
+          { schema: "app", name: "t", mode: "accessExclusive", note: "x" },
+        ],
+      },
+      {
+        ...artifact,
+        preamble: [{ name: "search_path", value: "pg_catalog", note: "x" }],
+      },
+    ]
+    for (const variant of variants)
+      expect(parsePlan(JSON.stringify(variant)).ok).toBe(false)
+    for (const field of ["locks", "preamble"]) {
+      const missing: Record<string, unknown> = { ...artifact }
+      delete missing[field]
+      expect(parsePlan(JSON.stringify(missing)).ok).toBe(false)
+    }
+  })
+
+  it.each([
+    { name: "role", value: "postgres" },
+    { name: "search_path", value: "app, public" },
+    { name: "check_function_bodies", value: "on" },
+    { name: "toString", value: "x" },
+  ])(
+    "rejects a preamble setting off the allowed list ($name = $value)",
+    async (setting) => {
+      const artifact = await stampPlan({ ...draft(), preamble: [setting] })
+      expect(parsePlan(serializePlan(artifact)).ok).toBe(false)
+    }
+  )
+
+  it("accepts every allowed preamble setting", async () => {
+    const artifact = await stampPlan({
+      ...draft(),
+      preamble: [
+        { name: "search_path", value: "pg_catalog" },
+        { name: "check_function_bodies", value: "off" },
+      ],
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error("plan must parse")
+    expect(parsed.artifact).toEqual(artifact)
+  })
+
+  it("reports a plan of another format as unsupported, not as malformed", async () => {
+    const artifact = await stampPlan(draft())
+    // Форма першого формату: без нових полів і з іншим `format`
+    const old: Record<string, unknown> = { ...artifact, format: 1 }
+    delete old.locks
+    delete old.preamble
+    const parsed = parsePlan(JSON.stringify(old))
+    expect(parsed).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        severity: "error",
+        params: { found: 1, supported: PLAN_FORMAT },
+      },
+    })
+    if (parsed.ok || parsed.reason !== "format") throw new Error("format")
+    expect(parsed.diagnostic.message).toMatch(
+      /plan format 1 is not supported.*rebuild the plan/i
+    )
+    expect(PLAN_FORMAT).toBe(2)
   })
 
   it("rejects text that is not JSON", () => {

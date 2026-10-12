@@ -79,8 +79,16 @@ const plan: ExecutablePlan = {
   drift: null,
   targetFingerprint: TARGET,
   desiredFingerprint: DESIRED,
+  locks: [
+    { schema: "app", name: "t", mode: "accessExclusive" },
+    { schema: "app", name: "x.y", mode: "accessExclusive" },
+  ],
+  preamble: [{ name: "search_path", value: "pg_catalog" }],
   resultCatalog: { tables: [], enumTypes: [], units: [] },
 }
+
+/** `search_path` транзакції до преамбули — його раннер і повертає. */
+const SESSION_PATH = '"$user", public'
 
 const options: ExecuteOptions = {
   mode: "apply",
@@ -116,6 +124,9 @@ function labelOf(sql: string): string | undefined {
   if (sql.startsWith("INSERT INTO simetra.marker")) return "marker"
   if (sql.startsWith("INSERT INTO simetra.ledger")) return "ledger"
   if (sql.includes("WHERE apply_id")) return "lookup"
+  if (sql.includes("current_setting('search_path')")) return "save-path"
+  if (sql.includes("set_config('search_path'")) return "set-path"
+  if (sql.includes("check_function_bodies")) return "function-bodies"
   // Решта операторів відбитка й стану — частини вже позначених кроків
   if (
     sql.includes("search_path") ||
@@ -163,13 +174,15 @@ function fakeDb(script: Script = {}) {
                       ? script.ledgerHasApply === true
                         ? [{ format: script.ledgerFormat ?? 1 }]
                         : []
-                      : sql.includes("encode(sha256")
-                        ? [
-                            stepsRan
-                              ? DESIRED.sections
-                              : (script.targetSections ?? TARGET.sections),
-                          ]
-                        : []
+                      : label === "save-path"
+                        ? [{ path: SESSION_PATH }]
+                        : sql.includes("encode(sha256")
+                          ? [
+                              stepsRan
+                                ? DESIRED.sections
+                                : (script.targetSections ?? TARGET.sections),
+                            ]
+                          : []
           return rows as R[]
         },
       }
@@ -201,15 +214,182 @@ describe("executePlan", () => {
       "state",
       'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
+      "save-path",
+      "set-path",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
+      "set-path",
       "fingerprint",
       "marker",
       "ledger",
       "COMMIT",
     ])
     expect(params.timeouts).toEqual(["3000ms", "600000ms", "60000ms"])
+  })
+
+  /** Журнал операторів разом із параметрами кожного. */
+  function spied(script: Script = {}) {
+    const calls: { sql: string; params?: readonly unknown[] }[] = []
+    const { db, log } = fakeDb(script)
+    const spy: ApplyDatabase = {
+      transaction: (t, end, fn) =>
+        db.transaction(t, end, (tx) =>
+          fn({
+            query: (sql, p) => {
+              calls.push({ sql, params: p })
+              return tx.query(sql, p)
+            },
+          })
+        ),
+    }
+    return { db: spy, log, calls }
+  }
+
+  it("takes access-exclusive locks first, then share-row-exclusive ones", async () => {
+    const { db, log } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...plan,
+        locks: [
+          ...plan.locks,
+          { schema: "app", name: "p", mode: "shareRowExclusive" },
+          { schema: "ref", name: "q", mode: "shareRowExclusive" },
+        ],
+      },
+      options
+    )
+    expect(outcome).toMatchObject({ status: "committed" })
+    const locks = log.filter((l) => l.startsWith("LOCK TABLE"))
+    expect(locks).toEqual([
+      'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
+      "LOCK TABLE ONLY app.p, ONLY ref.q IN SHARE ROW EXCLUSIVE MODE",
+    ])
+    expect(log.indexOf(locks[1]!)).toBeLessThan(log.indexOf("fingerprint"))
+  })
+
+  it("locks the artifact's tables, not the step tables", async () => {
+    const { db, log } = fakeDb()
+    await executePlan(db, target, { ...plan, locks: [] }, options)
+    expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+  })
+
+  it("reports a vanished share-row-exclusive table as a changed target", async () => {
+    const { db } = fakeDb({
+      fail: (label) =>
+        label.includes("SHARE ROW EXCLUSIVE")
+          ? new ApplyDbError("gone", "42P01")
+          : undefined,
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...plan,
+        locks: [{ schema: "app", name: "p", mode: "shareRowExclusive" }],
+      },
+      options
+    )
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        { code: "apply.target-changed", params: { sections: "relations" } },
+      ],
+    })
+  })
+
+  it("sets the preamble search path around the engine steps only", async () => {
+    const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
+      origin: "intent",
+    })
+    const engineSteps = plan.steps.map((s, i) => ({ ...s, id: `s${i + 2}` }))
+    const { db, log, calls } = spied()
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, steps: [intent, ...engineSteps] },
+      options
+    )
+    expect(outcome).toMatchObject({ status: "committed" })
+    const at = (label: string) => log.indexOf(label)
+    // Крок наміру — під налаштуваннями транзакції, до преамбули
+    expect(at("ALTER TABLE app.t RENAME TO t2")).toBeLessThan(at("save-path"))
+    expect(log.slice(at("save-path"), at("save-path") + 3)).toEqual([
+      "save-path",
+      "set-path",
+      "ALTER TABLE app.t ADD COLUMN d int",
+    ])
+    expect(log.lastIndexOf("set-path")).toBe(
+      log.indexOf('ALTER TABLE app."x.y" ADD COLUMN e int') + 1
+    )
+    const sets = calls.filter((c) => c.sql.includes("set_config('search_path'"))
+    expect(sets.map((c) => c.params)).toEqual([["pg_catalog"], [SESSION_PATH]])
+    expect(log).not.toContain("function-bodies")
+  })
+
+  it("runs the guards of an engine step under the preamble search path", async () => {
+    const guard =
+      "SELECT count(*) AS lost FROM app.t WHERE c IS NOT NULL AND c::int::text IS DISTINCT FROM c"
+    const guarded = step("s1", "ALTER TABLE app.t ALTER COLUMN c TYPE int", {
+      guards: [guard],
+    })
+    const { db, calls } = spied()
+    // Результат не важить (фейк не знає цього кроку): лише порядок операторів
+    await executePlan(db, target, { ...plan, steps: [guarded] }, options)
+    const sqls = calls.map((c) => c.sql)
+    const setAt = sqls.findIndex((sql) =>
+      sql.includes("set_config('search_path'")
+    )
+    expect(setAt).toBeGreaterThanOrEqual(0)
+    expect(sqls.indexOf(guard)).toBeGreaterThan(setAt)
+  })
+
+  it("does not touch the search path without a preamble", async () => {
+    const { db, log } = fakeDb()
+    await executePlan(db, target, { ...plan, preamble: [] }, options)
+    expect(log).not.toContain("save-path")
+    expect(log).not.toContain("set-path")
+  })
+
+  it("leaves function body validation on although the preamble turns it off", async () => {
+    const { db, log } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...plan,
+        preamble: [
+          { name: "search_path", value: "pg_catalog" },
+          { name: "check_function_bodies", value: "off" },
+        ],
+      },
+      options
+    )
+    expect(outcome).toMatchObject({ status: "committed" })
+    expect(log).not.toContain("function-bodies")
+  })
+
+  it("refuses a preamble setting off the allowed list before BEGIN", async () => {
+    const { db, log } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, preamble: [{ name: "role", value: "postgres" }] },
+      options
+    )
+    expect(outcome).toMatchObject({
+      status: "refused",
+      attempts: 0,
+      diagnostics: [
+        {
+          code: "engine.preamble-unknown",
+          params: { name: "role", value: "postgres" },
+        },
+      ],
+    })
+    expect(log).toEqual([])
   })
 
   it("takes the advisory lock with the platform key", async () => {

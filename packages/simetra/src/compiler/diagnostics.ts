@@ -179,6 +179,7 @@ export const COMPILER_RULES = [
   "apply.drift-partial",
   "apply.versions-changed",
   "apply.plan-versions",
+  "apply.plan-format",
   "apply.plan-hash",
   "apply.plan-stale",
   "apply.busy",

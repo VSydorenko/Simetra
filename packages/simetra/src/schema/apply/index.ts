@@ -27,6 +27,7 @@ export {
 } from "./state"
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
+export { planLocks, TABLE_LOCK_MODES, type TableLock } from "./locks"
 export {
   accessChanges,
   adoptedReplacements,
@@ -90,6 +91,7 @@ export {
   serializePlan,
   stampPlan,
   verifyPlanHash,
+  type ParsedPlan,
   type PlanArtifact,
 } from "./artifact"
 export {

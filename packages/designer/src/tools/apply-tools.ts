@@ -12,7 +12,6 @@ import {
   executePlan,
   FINGERPRINT_VERSION,
   parsePlan,
-  PLAN_FORMAT,
   planFileName,
   PLATFORM_VERSION,
   serializePlan,
@@ -160,14 +159,14 @@ async function readPlanFile(root: string, plan: string): Promise<string> {
 
 /**
  * Версії, з якими план побудовано й доведено, мусять бути поточними: інакше
- * кроки, відбитки чи формат значать інше (рішення 9 плану П3-1).
+ * кроки чи відбитки значать інше (рішення 9 плану П3-1). Формат файлу звіряє
+ * вже `parsePlan`.
  */
 function versionMismatches(
   artifact: PlanArtifact,
   engine: EngineIdentity
 ): Diagnostic[] {
   const pairs: [string, string | number, string | number][] = [
-    ["format", artifact.format, PLAN_FORMAT],
     ["fingerprintVersion", artifact.fingerprintVersion, FINGERPRINT_VERSION],
     ["platformVersion", artifact.platformVersion, PLATFORM_VERSION],
     ["engine", engineLabel(artifact.engine), engineLabel(engine)],
@@ -213,6 +212,10 @@ export const applyTool = defineTool({
   async run({ dir, root, database }, input): Promise<RunOutcome<ApplyData>> {
     // 1–2. Артефакт лише з `plans/` і лише строгий
     const parsed = parsePlan(await readPlanFile(root, input.plan))
+    // План іншого формату — чинний файл старої платформи: відмова з порадою
+    // побудувати план наново, а не «це не файл плану»
+    if (!parsed.ok && parsed.reason === "format")
+      return refusedWith([fromEngine(parsed.diagnostic)])
     if (!parsed.ok)
       throw new UsageError(
         `${input.plan} is not a plan file: ${parsed.message}. Nothing changed.`

@@ -256,6 +256,8 @@ describe("transaction-mode pooler", () => {
         steps: [CREATE_N],
         requiredPermissions: [],
         drift: null,
+        locks: [],
+        preamble: [],
         resultCatalog: { tables: [], enumTypes: [], units: [] },
         targetFingerprint: await read(url),
         desiredFingerprint,
