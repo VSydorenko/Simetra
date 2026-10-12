@@ -1763,11 +1763,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "promote.mapping-unknown": {
     en: (p) =>
-      `The promotion input at ${p.at} does not fit the model: ${p.detail}`,
-    uk: (p) => `Вхід промоції в ${p.at} не відповідає моделі: ${p.detail}`,
+      p.reason === "implied"
+        ? `The promotion input at ${p.at} classifies a subject that promote records itself with class ${p.class}`
+        : `The promotion input at ${p.at} does not fit the model: ${p.detail}`,
+    uk: (p) =>
+      p.reason === "implied"
+        ? `Вхід промоції в ${p.at} класифікує предмет, клас якого promote записує сам: ${p.class}`
+        : `Вхід промоції в ${p.at} не відповідає моделі: ${p.detail}`,
     hint: {
-      en: "Name columns of the adopted table, standard attributes that the target kind has with its settings (canonical camelCase names), each target once, and conversion keys that name a SQL unit or a structural element of the promoted tables.",
-      uk: "Називайте колонки прийнятої таблиці, стандартні реквізити, які цільовий вид має з його налаштуваннями (канонічні camelCase-імена), кожну ціль один раз і ключі конверсій, що називають SQL-одиницю чи структурний елемент промотованих таблиць.",
+      en: (p) =>
+        p.reason === "implied"
+          ? "Remove the key: a comment carried over verbatim into a description is recorded by promote itself; the input classifies only what needs a decision."
+          : "Name columns of the adopted table, standard attributes that the target kind has with its settings (canonical camelCase names), each target once, and conversion keys that name a SQL unit or a structural element of the promoted tables.",
+      uk: (p) =>
+        p.reason === "implied"
+          ? "Приберіть ключ: дослівно перенесений в опис коментар promote записує сам; вхід класифікує лише те, що потребує рішення."
+          : "Називайте колонки прийнятої таблиці, стандартні реквізити, які цільовий вид має з його налаштуваннями (канонічні camelCase-імена), кожну ціль один раз і ключі конверсій, що називають SQL-одиницю чи структурний елемент промотованих таблиць.",
     },
   },
   "promote.unit-unsupported": {

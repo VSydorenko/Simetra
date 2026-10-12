@@ -1,10 +1,15 @@
-import { readFile } from "node:fs/promises"
-import { resolve, sep } from "node:path"
+import { readdir, readFile } from "node:fs/promises"
+import { join, resolve, sep } from "node:path"
 import {
   canonicalSnapshot,
   compile,
   diagnostic,
+  promotionFileName,
+  promotionRecordSchema,
+  type CompiledModel,
+  type ConversionClass,
   type Diagnostic,
+  type PromotionRecord,
 } from "simetra/compiler"
 import {
   buildPlan,
@@ -19,8 +24,12 @@ import {
   type ApplyTimeouts,
   type DriftReport,
   type EngineIdentity,
+  type PermissionItem,
   type PlanArtifact,
   type PlanStep,
+  type PromotionInput,
+  type PromotionSection,
+  type SectionTable,
 } from "simetra/schema"
 import { z } from "zod"
 import { withDatabase } from "../io/database"
@@ -28,6 +37,33 @@ import { readMetadataDir } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { fromEngine, hasErrors, loadEngine, required } from "./database-tools"
 import { defineTool, PLANS_DIR, type RunOutcome } from "./types"
+
+/**
+ * Промоція, яку план несе (рішення 14 плану П3-2a): що стає чим, і що людина
+ * дозволяє. Таблиці — структурно, як у секції артефакту: ім'я з крапкою
+ * рядок `schema.name` зробив би неоднозначним.
+ */
+export interface PlanPromotion {
+  objectId: string
+  kind: PromotionRecord["kind"]
+  /** Ім'я об'єкта в метаданих після промоції. */
+  name: string
+  recordHash: string
+  /** Перейменування таблиць одиниці; схема та сама. */
+  tables: { schema: string; from: string; to: string }[]
+  columns: PromotionSection["columns"]
+  canonicalNames: PromotionSection["canonicalNames"]
+  /** Пункти `access:`, `delete:`, `remove:` з переліками. */
+  permissionItems: PermissionItem[]
+  /** Цілі FK, які бере сам крок FK, а не явне блокування (R25). */
+  implicitLocks: SectionTable[]
+}
+
+/** Крок плану для перегляду; клас конверсії — лише біля кроку видалення. */
+export type PlanDataStep = Pick<
+  PlanStep,
+  "id" | "origin" | "class" | "lockClass" | "sql"
+> & { conversion?: ConversionClass }
 
 /** Те з артефакту, що людина чи агент переглядає перед `apply`. */
 export interface PlanData {
@@ -37,7 +73,8 @@ export interface PlanData {
   fromHash: string | null
   toHash: string
   drift: DriftReport | null
-  steps: Pick<PlanStep, "id" | "class" | "lockClass" | "sql">[]
+  promotion: PlanPromotion | null
+  steps: PlanDataStep[]
   requiredPermissions: string[]
 }
 
@@ -61,21 +98,117 @@ const refusedWith = <D>(diagnostics: Diagnostic[]): RunOutcome<D> => ({
   diagnostics,
 })
 
-function planData(file: string, artifact: PlanArtifact): PlanData {
+function planPromotion(
+  section: PromotionSection,
+  model: CompiledModel
+): PlanPromotion {
+  const { record } = section
+  // Ім'я — з метаданих, з якими план побудовано: запис несе лише id, а
+  // людина впізнає об'єкт за іменем
+  const object = model.objects.find((o) => o.id === record.objectId)
+  return {
+    objectId: record.objectId,
+    kind: record.kind,
+    name: object?.name ?? record.objectId,
+    recordHash: section.recordHash,
+    tables: record.tables.map(({ schema, from, to }) => ({ schema, from, to })),
+    columns: section.columns,
+    canonicalNames: section.canonicalNames,
+    permissionItems: section.permissionItems,
+    implicitLocks: section.implicitLocks,
+  }
+}
+
+function planData(
+  file: string,
+  artifact: PlanArtifact,
+  model: CompiledModel
+): PlanData {
+  const conversions = new Map(
+    (artifact.promotion?.conversions ?? []).map((c) => [c.step, c.class])
+  )
   return {
     file,
     planHash: artifact.planHash,
     fromHash: artifact.fromHash,
     toHash: artifact.toHash,
     drift: artifact.drift,
-    steps: artifact.steps.map(({ id, class: cls, lockClass, sql }) => ({
-      id,
-      class: cls,
-      lockClass,
-      sql,
-    })),
+    promotion:
+      artifact.promotion === null
+        ? null
+        : planPromotion(artifact.promotion, model),
+    steps: artifact.steps.map(({ id, origin, class: cls, lockClass, sql }) => {
+      const conversion = conversions.get(id)
+      return {
+        id,
+        origin,
+        class: cls,
+        lockClass,
+        sql,
+        ...(conversion === undefined ? {} : { conversion }),
+      }
+    }),
     requiredPermissions: artifact.requiredPermissions,
   }
+}
+
+/** Суфікс файлу запису промоції в `plans/` (`promotionFileName`). */
+const RECORD_SUFFIX = promotionFileName("")
+
+/**
+ * Записи промоції з `plans/` кореня (рішення 1 плану П3-2a), строго: файл, що
+ * не розбирається схемою чи названий не за своїм `objectId`, — відмова плану
+ * `plan.promotion-record-invalid`, а не пропуск. Пропущений запис перетворив
+ * би промоцію на «запису немає», а вгаданий — на чужий намір. Порядок — за
+ * іменем файлу: план детермінований незалежно від файлової системи.
+ */
+export async function readPromotionRecords(
+  root: string
+): Promise<
+  | { ok: true; records: PromotionInput[] }
+  | { ok: false; diagnostic: Diagnostic }
+> {
+  let names: string[]
+  try {
+    names = await readdir(join(root, PLANS_DIR))
+  } catch (error) {
+    // Без `plans/` записів немає: це звичайний проєкт без промоції
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { ok: true, records: [] }
+    throw error
+  }
+  const records: PromotionInput[] = []
+  for (const name of names.filter((n) => n.endsWith(RECORD_SUFFIX)).sort()) {
+    const file = `${PLANS_DIR}/${name}`
+    const invalid = (detail: string) => ({
+      ok: false as const,
+      diagnostic: diagnostic("plan.promotion-record-invalid", "", "", {
+        file,
+        detail,
+      }),
+    })
+    let json: unknown
+    try {
+      json = JSON.parse(await readFile(join(root, file), "utf8"))
+    } catch (error) {
+      if (error instanceof SyntaxError) return invalid(error.message)
+      throw error
+    }
+    const parsed = promotionRecordSchema.safeParse(json)
+    if (!parsed.success)
+      return invalid(
+        parsed.error.issues
+          .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+          .join("; ")
+      )
+    const record = parsed.data
+    if (promotionFileName(record.objectId) !== name)
+      return invalid(
+        `the record is for object ${record.objectId}, so its file is ${PLANS_DIR}/${promotionFileName(record.objectId)}`
+      )
+    records.push({ record, file })
+  }
+  return { ok: true, records }
 }
 
 export const planTool = defineTool({
@@ -86,10 +219,14 @@ export const planTool = defineTool({
   files: "write",
   database: "read",
   destructive: false,
-  async run({ dir, database }): Promise<RunOutcome<PlanData>> {
+  async run({ dir, root, database }): Promise<RunOutcome<PlanData>> {
     const compiled = await compile(await readMetadataDir(dir))
     const model = compiled.model
     if (model === undefined) return refusedWith(compiled.diagnostics)
+    // Записи — до підключення: невалідний файл не відкриває пулів
+    const promotions = await readPromotionRecords(root)
+    if (!promotions.ok)
+      return refusedWith([...compiled.diagnostics, promotions.diagnostic])
     const engine = await loadEngine()
     // Ціль і тіні лише читаються; пише тільки прогін-доказ у жертовну копію
     const dbs = {
@@ -97,8 +234,6 @@ export const planTool = defineTool({
       scratch: await applyDatabase({ readOnly: false }),
     }
     const built = await withDatabase(required(database), "plan", (db) =>
-      // Записи промоції з `plans/` інструмент підключає окремо; доти —
-      // явно жодного: перехід без запису план відхилить сам
       buildPlan(
         engine,
         dbs,
@@ -107,7 +242,7 @@ export const planTool = defineTool({
           target: db.target,
           ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
         },
-        []
+        promotions.records
       )
     )
     if (!built.ok)
@@ -136,7 +271,7 @@ export const planTool = defineTool({
           changes: [],
           diagnostics,
           artifacts: [{ path: file, content: serializePlan(artifact) }],
-          data: planData(file, artifact),
+          data: planData(file, artifact, model),
         }
       }
     }

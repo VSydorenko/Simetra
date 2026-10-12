@@ -12,7 +12,11 @@ import { dirname, join, resolve } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import pg from "pg"
-import { compile } from "simetra/compiler"
+import {
+  compile,
+  promotionRecordSchema,
+  type PromotionRecord,
+} from "simetra/compiler"
 import {
   parsePlan,
   serializePlan,
@@ -391,6 +395,84 @@ describe("plan", () => {
         expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
       }
     )
+  })
+})
+
+describe("plan with promotion records", () => {
+  const RECORD = `plans/${uuid(9101)}.promotion.json`
+
+  /** Найменший запис, що проходить строгу схему. */
+  const recordOf = (objectId: string): PromotionRecord =>
+    promotionRecordSchema.parse({
+      format: 1,
+      base: "a".repeat(64),
+      result: "b".repeat(64),
+      objectId,
+      kind: "Catalog",
+      labelDropped: false,
+      tables: [],
+      columns: [],
+      typeChanges: [],
+      dataSteps: [],
+      retired: [],
+      relaxed: [],
+      tightened: [],
+      rowLevelSecurity: [],
+      deleteSemantics: [],
+      conversions: [],
+      movedUnits: [],
+      rewrittenUnits: [],
+      contractChanges: [],
+    })
+
+  /** Корінь проєкту з файлом запису `content` у `plans/`. */
+  async function withRecord(name: string, content: string): Promise<string> {
+    const dir = await projectWith({ [PARTY]: party() })
+    await mkdir(join(dirname(dir), "plans"))
+    await writeFile(join(dirname(dir), "plans", name), content)
+    return dir
+  }
+
+  it.each([
+    ["not JSON", "{", /JSON/],
+    ["not a record", JSON.stringify({ format: 1 }), /base: /],
+  ])(
+    "plan refuses a promotion record that is %s before connecting",
+    async (_, content, detail) => {
+      const dir = await withRecord(`${uuid(9101)}.promotion.json`, content)
+      const spy = spyDatabase()
+      const r = await call(
+        "plan",
+        {},
+        options(dir, "postgres://unused", { database: spy.database })
+      )
+      expect(errors(r)).toEqual(["plan.promotion-record-invalid"])
+      const [invalid] = r.diagnostics
+      expect(invalid!.params?.file).toBe(RECORD)
+      expect(String(invalid!.params?.detail)).toMatch(detail)
+      expect(r.written).toBe(false)
+      expect(spy.connects()).toBe(0)
+    }
+  )
+
+  it("plan refuses a record named after another object", async () => {
+    const valid = JSON.stringify(
+      // Форму тримає схема: лише ім'я файлу не те
+      recordOf(uuid(9101))
+    )
+    const dir = await withRecord(`${uuid(9999)}.promotion.json`, valid)
+    const spy = spyDatabase()
+    const r = await call(
+      "plan",
+      {},
+      options(dir, "postgres://unused", { database: spy.database })
+    )
+    expect(errors(r)).toEqual(["plan.promotion-record-invalid"])
+    expect(r.diagnostics[0]!.params).toMatchObject({
+      file: `plans/${uuid(9999)}.promotion.json`,
+      detail: `the record is for object ${uuid(9101)}, so its file is plans/${uuid(9101)}.promotion.json`,
+    })
+    expect(spy.connects()).toBe(0)
   })
 })
 

@@ -3,6 +3,7 @@ import {
   applyChanges,
   compile,
   derivePromotionFacts,
+  localize,
   promoteInput,
   promoteObject,
   promotionMapping,
@@ -1294,6 +1295,24 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
       ["promote.mapping-unknown", "/conversions/Counterparty#comment"],
       ["promote.mapping-unknown", "/conversions/Counterparty#comment~1inn"],
     ])
+    // Ключ називає предмет, а не ніщо: власний текст каже прибрати ключ, а
+    // не шукати SQL-одиницю, якої немає
+    const [first] = result.diagnostics
+    expect(first!.params).toEqual({
+      at: "/conversions/Counterparty#comment",
+      reason: "implied",
+      class: "metadata",
+    })
+    expect(localize(first!, "en")).toEqual({
+      message:
+        "The promotion input at /conversions/Counterparty#comment classifies a subject that promote records itself with class metadata",
+      hint: "Remove the key: a comment carried over verbatim into a description is recorded by promote itself; the input classifies only what needs a decision.",
+    })
+    expect(localize(first!, "uk")).toEqual({
+      message:
+        "Вхід промоції в /conversions/Counterparty#comment класифікує предмет, клас якого promote записує сам: metadata",
+      hint: "Приберіть ключ: дослівно перенесений в опис коментар promote записує сам; вхід класифікує лише те, що потребує рішення.",
+    })
   })
 
   it("carries the column title and comment into the attribute", async () => {

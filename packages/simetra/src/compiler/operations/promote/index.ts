@@ -499,16 +499,31 @@ export async function promoteObject(
     }
   }
   const known = new Set(chosen.map((s) => s.subject))
+  const implied = new Map(
+    subjects.flatMap((s) =>
+      s.implied === undefined ? [] : [[s.subject, s.implied] as const]
+    )
+  )
   for (const key of Object.keys(input.conversions)) {
-    if (!known.has(key)) {
-      problems.push(
-        diagnostic("promote.mapping-unknown", "", "", {
-          at: toPointer(["conversions", key]),
-          detail:
-            "it names no SQL unit or structural element of the promoted tables",
-        })
+    if (known.has(key)) continue
+    const at = toPointer(["conversions", key])
+    const own = implied.get(key)
+    // Ключ предмета, клас якого `promote` записує сам, щось називає: окремий
+    // текст каже прибрати ключ, а не шукати неіснуючу SQL-одиницю (R24)
+    problems.push(
+      diagnostic(
+        "promote.mapping-unknown",
+        "",
+        "",
+        own === undefined
+          ? {
+              at,
+              detail:
+                "it names no SQL unit or structural element of the promoted tables",
+            }
+          : { at, reason: "implied", class: own }
       )
-    }
+    )
   }
   for (const t of tables) {
     problems.push(

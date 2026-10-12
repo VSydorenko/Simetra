@@ -465,9 +465,11 @@ describe("cli adapter", () => {
           sections: ["relations"],
           paths: ["tables.app.party.columns.extra"],
         },
+        promotion: null,
         steps: [
           {
             id: "s1",
+            origin: "engine",
             class: "destructive",
             lockClass: "accessExclusive",
             sql: "ALTER TABLE app.party DROP COLUMN extra;\n-- second line",
@@ -488,7 +490,7 @@ describe("cli adapter", () => {
         { dir: "metadata", locale: "en", format: "text" }
       )
       const drift = stdout.indexOf("drift (drift)")
-      const step = stdout.indexOf("s1 destructive")
+      const step = stdout.indexOf("s1 engine destructive")
       expect(drift).toBeGreaterThan(-1)
       expect(step).toBeGreaterThan(drift)
       expect(stdout).toContain(hash)
@@ -496,6 +498,93 @@ describe("cli adapter", () => {
       expect(stdout).toContain("needs allow: drift")
       expect(stdout).toContain("needs allow: s1")
       expect(stdout).not.toContain("second line")
+    })
+
+    it("the text of a plan shows the promotion between drift and steps", () => {
+      const item = { schema: "app", name: "item" }
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: { reason: "drift", sections: ["relations"], paths: [] },
+        promotion: {
+          objectId: "00000000-0000-4000-8000-000000009311",
+          kind: "Catalog",
+          name: "Item",
+          recordHash: "f".repeat(64),
+          tables: [{ schema: "app", from: "items", to: "item" }],
+          columns: [{ table: item, from: "title", to: "description" }],
+          canonicalNames: [
+            {
+              kind: "constraint",
+              table: item,
+              from: "items_pkey",
+              to: "item_pkey",
+            },
+          ],
+          permissionItems: [
+            { token: "access:app.item", summary: ["policy item_read"] },
+            { token: "remove:app.item", summary: ["Item#comment"] },
+          ],
+          // Ім'я з крапкою лишається однозначним: лапки, а не склеювання
+          implicitLocks: [{ schema: "app", name: "odd.name" }],
+        },
+        steps: [
+          {
+            id: "s1",
+            origin: "intent",
+            class: "catalogOnly",
+            lockClass: "accessExclusive",
+            sql: "ALTER TABLE app.items RENAME TO item",
+          },
+          {
+            id: "s2",
+            origin: "engine",
+            class: "destructive",
+            lockClass: "accessExclusive",
+            sql: 'ALTER TABLE "app"."item" DROP COLUMN "legacy"',
+            conversion: "removed",
+          },
+        ],
+        requiredPermissions: ["drift", "access:app.item", "s2"],
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const lines = stdout.split("\n")
+      const at = (line: string) => lines.indexOf(line)
+      const block = [
+        "promotion: Catalog Item (00000000-0000-4000-8000-000000009311)",
+        `  record hash: ${"f".repeat(64)}`,
+        "  table app.items -> app.item",
+        "  column app.item: title -> description",
+        "  constraint app.item: items_pkey -> item_pkey",
+        '  implicit lock of the FK step: app."odd.name"',
+        "  access:app.item (needs allow: access:app.item)",
+        "    policy item_read",
+        "  remove:app.item",
+        "    Item#comment",
+      ]
+      const start = at(block[0]!)
+      expect(lines.slice(start, start + block.length)).toEqual(block)
+      expect(start).toBeGreaterThan(at("drift (drift): needs allow: drift"))
+      expect(at("steps (2):")).toBe(start + block.length)
+      expect(lines).toContain(
+        "  s1 intent catalogOnly (lock accessExclusive) ALTER TABLE app.items RENAME TO item"
+      )
+      expect(lines).toContain(
+        '  s2 engine destructive (lock accessExclusive; conversion removed; needs allow: s2) ALTER TABLE "app"."item" DROP COLUMN "legacy"'
+      )
     })
 
     it("the text of a rehearsal warns about ACCESS EXCLUSIVE", () => {

@@ -1,6 +1,7 @@
 import type { Diagnostic, Locale } from "simetra/compiler"
 import { localize } from "simetra/compiler"
-import type { ApplyData, PlanData } from "../tools/apply-tools"
+import { quoteIdent } from "simetra/model"
+import type { ApplyData, PlanData, PlanPromotion } from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 
 export interface ReportOptions {
@@ -87,10 +88,48 @@ export function renderDiff(d: DiffData, report: string): string {
 const short = (hash: string | null): string =>
   hash === null ? "initial" : hash.slice(0, 12)
 
+const qualified = (schema: string, name: string): string =>
+  `${quoteIdent(schema)}.${quoteIdent(name)}`
+
+/**
+ * Блок «Promotion» (рішення 14 плану П3-2a): що стає чим і що людина
+ * дозволяє. Неявний замок кроку FK показано окремим рядком: його немає в
+ * явних замках плану, але таблицю він таки блокує (R25).
+ */
+function promotionLines(p: PlanPromotion, needs: Set<string>): string[] {
+  const lines = [
+    `promotion: ${p.kind} ${p.name} (${p.objectId})`,
+    `  record hash: ${p.recordHash}`,
+  ]
+  for (const t of p.tables)
+    lines.push(
+      `  table ${qualified(t.schema, t.from)} -> ${qualified(t.schema, t.to)}`
+    )
+  for (const c of p.columns)
+    lines.push(
+      `  column ${qualified(c.table.schema, c.table.name)}: ${quoteIdent(c.from)} -> ${quoteIdent(c.to)}`
+    )
+  for (const c of p.canonicalNames)
+    lines.push(
+      `  ${c.kind} ${qualified(c.table.schema, c.table.name)}: ${quoteIdent(c.from)} -> ${quoteIdent(c.to)}`
+    )
+  for (const t of p.implicitLocks)
+    lines.push(`  implicit lock of the FK step: ${qualified(t.schema, t.name)}`)
+  for (const item of p.permissionItems) {
+    lines.push(
+      `  ${item.token}${needs.has(item.token) ? ` (needs allow: ${item.token})` : ""}`
+    )
+    for (const s of item.summary) lines.push(`    ${s}`)
+  }
+  return lines
+}
+
 /**
  * Зведення плану для людини й агента: звідки й куди, `planHash` і файл,
  * дрейф — першим блоком, до кроків (рішення 16 плану П3-1): кроки читаються
- * вже знаючи, що ціль дрейфнула. Повний SQL — у файлі плану; тут перший рядок.
+ * вже знаючи, що ціль дрейфнула. Далі — промоція, бо кроки наміру й класи
+ * конверсій читаються, знаючи, що стає чим (рішення 14 плану П3-2a). Повний
+ * SQL — у файлі плану; тут перший рядок.
  */
 export function renderPlan(
   d: PlanData | undefined,
@@ -116,16 +155,20 @@ export function renderPlan(
       lines.push(`  fingerprint sections: ${d.drift.sections.join(", ")}`)
     for (const path of d.drift.paths) lines.push(`  ${path}`)
   }
+  if (d.promotion !== null) lines.push(...promotionLines(d.promotion, needs))
   if (d.steps.length === 0) lines.push("steps: none")
   else {
     lines.push(`steps (${d.steps.length}):`)
     for (const s of d.steps) {
       const tags = [
         `lock ${s.lockClass}`,
+        ...(s.conversion === undefined ? [] : [`conversion ${s.conversion}`]),
         ...(needs.has(s.id) ? [`needs allow: ${s.id}`] : []),
       ]
       const first = s.sql.trim().split("\n")[0] ?? ""
-      lines.push(`  ${s.id} ${s.class} (${tags.join("; ")}) ${first}`)
+      lines.push(
+        `  ${s.id} ${s.origin} ${s.class} (${tags.join("; ")}) ${first}`
+      )
     }
   }
   lines.push(report)
