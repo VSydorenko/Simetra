@@ -146,7 +146,7 @@ async function readPlanFile(root: string, plan: string): Promise<string> {
   const path = resolve(root, plan)
   if (!path.startsWith(resolve(root, PLANS_DIR) + sep))
     throw new UsageError(
-      `The plan file must be under ${PLANS_DIR}/ next to the metadata directory: ${plan}. Nothing changed.`
+      `The plan file must be under ${PLANS_DIR}/, given relative to the project root (the directory that contains the metadata directory), not to the current directory: ${plan}. Nothing changed.`
     )
   try {
     return await readFile(path, "utf8")

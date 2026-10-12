@@ -494,13 +494,27 @@ async function prove(
  * доказу: відбиток копії після кроків проти бажаного без `owner`. Відмова
  * доказу називається кодом доказу, а не кодом застосування: на цілі ще
  * нічого не застосовувалось.
+ *
+ * Обрив з'єднання з копією так само не стосується цілі: текст раннера («під
+ * час застосування», «шукайте в ledger») послав би того, хто планує,
+ * перевіряти базу, якої ніхто не чіпав. Копія жертовна, тож її результат
+ * не цікавий — план просто не доведено. `engine.clone-failed` — про копію,
+ * і його підказка вже називає режим з'єднання тіні як можливу причину.
  */
 function asProofRefusal(d: EngineDiagnostic): EngineDiagnostic {
-  return d.code === "apply.verify-failed"
-    ? applyDiagnostic("plan.fingerprint-disagrees", "error", {
+  switch (d.code) {
+    case "apply.verify-failed":
+      return applyDiagnostic("plan.fingerprint-disagrees", "error", {
         sections: d.params.sections ?? "",
       })
-    : d
+    case "apply.connection-lost":
+      return applyDiagnostic("engine.clone-failed", "error", {
+        detail:
+          "the connection to the copy was lost during the proof run, so the plan could not be proved; nothing was written to the database",
+      })
+    default:
+      return d
+  }
 }
 
 /**

@@ -16,6 +16,7 @@ import { compile } from "simetra/compiler"
 import {
   parsePlan,
   serializePlan,
+  type ApplyDatabase,
   type PlanArtifact,
   stampPlan,
   type EngineScope,
@@ -28,6 +29,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
@@ -60,6 +62,26 @@ import { snapshotOf } from "./helpers/catalog"
  * й свіжість ще до підключення, а пише лише за підтвердженням. Ціль кожного
  * тесту — окрема база від `withDesiredShadow`; база стеку лише читається.
  */
+
+/**
+ * Перемикач обриву: увімкнений, він підміняє порт, що пише (прогін-доказ
+ * плану), на такий, що губить з'єднання в кожній транзакції. Вимкнений —
+ * справжній порт.
+ */
+const lose = vi.hoisted(() => ({ writer: false }))
+vi.mock("../schema-engine", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../schema-engine")>()
+  const { ApplyConnectionLost } = await import("simetra/schema")
+  const lost: ApplyDatabase = {
+    transaction: () =>
+      Promise.reject(new ApplyConnectionLost("connection lost")),
+  }
+  return {
+    ...original,
+    createApplyDatabase: (o: { readOnly: boolean }) =>
+      lose.writer && !o.readOnly ? lost : original.createApplyDatabase(o),
+  }
+})
 
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
@@ -110,6 +132,7 @@ let shadowsBefore = 0
 const disposers: (() => Promise<void>)[] = []
 const clients: Client[] = []
 beforeEach(async () => {
+  lose.writer = false
   shadowsBefore = await shadowDatabaseCount()
 })
 afterEach(async () => {
@@ -330,6 +353,21 @@ describe("plan", () => {
       expect(next.ok).toBe(true)
       expect(next.data).toBeUndefined()
       expect(next.artifacts).toEqual([])
+    })
+  })
+
+  it("plan names a lost connection during the proof as a failed copy", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      lose.writer = true
+      const r = await call("plan", {}, options(dir, url))
+      expect(r.written).toBe(false)
+      expect(errors(r)).toEqual(["engine.clone-failed"])
+      const [failed] = r.diagnostics.filter((d) => d.severity === "error")
+      expect(failed!.message).toContain("proof run")
+      // Текст раннера про застосування й ledger до того, хто планує, не доходить
+      expect(codes(r)).not.toContain("apply.connection-lost")
+      expect(await markerExists(url)).toBe(false)
     })
   })
 

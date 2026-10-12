@@ -148,7 +148,7 @@ export function renderResult(
               written: r.written,
               dry: !r.written && (r.artifacts ?? []).length > 0,
             })
-          : renderApply(r.data as ApplyData | undefined, report),
+          : renderApply(r.data as ApplyData | undefined, r.diagnostics, report),
     }
   }
   if (tool.files === "read") return { stdout: report }

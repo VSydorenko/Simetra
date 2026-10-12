@@ -132,11 +132,25 @@ export function renderPlan(
   return lines.join("\n")
 }
 
-/** Підсумок застосування; репетиція нагадує, що блокування були справжні. */
-export function renderApply(d: ApplyData | undefined, report: string): string {
+/**
+ * Підсумок застосування; репетиція нагадує, що блокування були справжні.
+ * Без даних заголовок судить за діагностикою: після обриву з невідомим
+ * результатом «нічого не записано» було б неправдою, а повтор за нею міг би
+ * застосувати план удруге.
+ */
+export function renderApply(
+  d: ApplyData | undefined,
+  diagnostics: readonly Diagnostic[],
+  report: string
+): string {
+  const unknown = diagnostics.find(
+    (x) => x.code === "apply.connection-lost" && x.params?.outcome === "unknown"
+  )
   const head =
     d === undefined
-      ? "apply: nothing was written"
+      ? unknown === undefined
+        ? "apply: nothing was written"
+        : `apply: outcome unknown — check simetra.ledger for apply id ${String(unknown.params?.applyId)}`
       : d.status === "committed"
         ? `apply: committed in ${d.attempts} attempt(s)`
         : `rehearse: rolled back after ${d.attempts} attempt(s); nothing was written. The rehearsal took ACCESS EXCLUSIVE locks on the changed tables, as apply does.`

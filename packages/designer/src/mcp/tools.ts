@@ -122,7 +122,7 @@ function toResponse(
     return {
       isError: !ok,
       structuredContent: { ok, diagnostics, ...data },
-      content: [{ type: "text", text: renderApply(data, report) }],
+      content: [{ type: "text", text: renderApply(data, diagnostics, report) }],
     }
   }
   // Запис промоції — вхід плану бази: повністю в `structuredContent`, а в

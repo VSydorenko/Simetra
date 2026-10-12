@@ -375,6 +375,11 @@ Which connection to use:
 A changed plan file, changed metadata or a changed database refuses the
 apply; plan again.
 
+If `apply` reports `outcome unknown`, the connection was lost and the apply may
+or may not have been committed. Never apply again blindly: look up the printed
+apply id in the `apply_id` column of `simetra.ledger` first — a row means it was
+committed.
+
 ## Agents over MCP
 
 ```sh

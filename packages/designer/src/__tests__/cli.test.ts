@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { renderResult } from "../cli/render"
 import type { PlanData } from "../tools/apply-tools"
-import { TOOLS, toolByName } from "../tools/catalog"
+import { TOOLS, toolByName, type Tool } from "../tools/catalog"
 import { TOOL_NAMES } from "../tools/types"
 import {
   addAdoptedTag,
@@ -407,6 +407,36 @@ describe("cli adapter", () => {
       )
       expect(r.exitCode).toBe(2)
       expect(r.stderr).toContain("needs confirmation")
+    })
+
+    it("apply --yes --dry-run exits 2 before the tool runs", async () => {
+      // Усі підключення до бази відкриває `run` інструмента: не викликаний
+      // `run` — жодного підключення
+      const run = vi.fn<Tool["run"]>()
+      const r = await runTool(
+        { ...tool("apply"), run },
+        {
+          _: ["plans/initial-0123456789ab.plan.json", await project()],
+          "plan-hash": hash,
+          yes: true,
+          "dry-run": true,
+        },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("--rehearse")
+      expect(run).not.toHaveBeenCalled()
+    })
+
+    it("--dry-run on a tool that writes no files exits 2", async () => {
+      const r = await runTool(tool("compile"), {
+        _: [await project()],
+        "dry-run": true,
+      })
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("compile has no --dry-run")
     })
 
     it("apply has --yes and no --dry-run; plan has --dry-run", () => {

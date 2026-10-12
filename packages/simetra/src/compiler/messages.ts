@@ -2212,8 +2212,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `База змінилася після побудови плану; секції відбитка каталогу: ${p.sections}`,
     hint: {
-      en: "Plan again; permissions of the old plan no longer apply.",
-      uk: "Сплануйте знову; дозволи старого плану більше не діють.",
+      en: "Nothing was written. Plan again; permissions of the old plan no longer apply.",
+      uk: "Нічого не записано. Сплануйте знову; дозволи старого плану більше не діють.",
     },
   },
   "apply.verify-failed": {
@@ -2242,8 +2242,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Застосування не змогло взяти блокування за ${p.attempts} спроб: таблиці, які воно змінює, тримають інші сесії, або транзакція щоразу закінчувалася взаємним блокуванням`,
     hint: {
-      en: "Nothing was written. Apply again when the load is lower, or raise the lock timeout or the number of attempts.",
-      uk: "Нічого не записано. Застосуйте знову, коли навантаження менше, або збільште тайм-аут блокування чи кількість спроб.",
+      en: "Nothing was written. Apply again when the load is lower, or raise the lock timeout.",
+      uk: "Нічого не записано. Застосуйте знову, коли навантаження менше, або збільште тайм-аут блокування.",
     },
   },
   "apply.connection-lost": {
