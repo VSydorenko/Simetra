@@ -49,8 +49,8 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
   підключення, користувач і пароль не потрапляють у жоден канал виводу.
 - **План і застосування** (`src/tools/apply-tools.ts`) — `plan`
   (`files: "write"`, `database: "read"`) будує план порту T2 (`buildPlan`) і
-  пише артефакт у `plans/` поруч із текою метаданих — єдиний запис поза
-  текою (спека designer §3.1, §3.2); `apply` (`files: "read"`,
+  пише артефакт у `plans/` поруч із текою метаданих — запис поза текою
+  (перелік винятків межі запису — спека designer §3.2); `apply` (`files: "read"`,
   `database: "write"`, руйнівний) читає артефакт лише звідти й виконує його
   раннером T2 (`executePlan`). Порт виконання `ApplyDatabase` реалізує
   `src/schema-engine/apply-database.ts`: одне з'єднання й одна транзакція на
