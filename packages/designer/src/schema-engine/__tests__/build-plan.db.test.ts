@@ -1158,6 +1158,56 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
         })
       }
     )
+
+    it.each([
+      ["with", "", "lockable"],
+      ["without", `ALTER TABLE ext.r OWNER TO ${STRANGER}`, "implicit"],
+    ])(
+      "locks a referencing table outside the managed schemas %s a lock right on a type change",
+      async (_, owner, expected) => {
+        // `ext.r` поза межею двигуна посилається на `app.p.code`: моделі
+        // каталогу її не бачать, а зміна типу колонки перебудовує її FK
+        const from = await tables({ fk: false })
+        const to = await tables({ fk: false, code: 20 })
+        await inTarget(EMPTY, async (url) => {
+          await establish(url, from)
+          await other(
+            url,
+            `create schema ext;
+             create table ext.r (id int primary key,
+               p_code varchar(10) references app.p (code));`
+          )
+          if (owner !== "") await other(asSuperuser(url), owner)
+          const outcome = await plan(url, to)
+          const artifact = planned(outcome)
+          const [retype] = stepMatching(artifact, /ALTER COLUMN "code" TYPE/)
+          const r = { schema: "ext", name: "r", mode: "accessExclusive" }
+          if (expected === "lockable") {
+            expect(artifact.locks).toContainEqual(r)
+            expect(artifact.implicitLocks).toEqual([])
+          } else {
+            expect(artifact.locks.filter((l) => l.schema === "ext")).toEqual([])
+            expect(artifact.implicitLocks).toEqual([{ ...r, step: retype!.id }])
+          }
+          expect(
+            outcome.diagnostics
+              .filter((d) => d.code === "plan.foreign-exclusive-lock")
+              .map((d) => d.params)
+          ).toEqual([{ table: "ext.r", step: retype!.id }])
+          // Репетиція на цілі, де `ext.r` справді є: замок не поза слідом
+          const rehearsal = await executePlan(writer, { url }, artifact, {
+            mode: "rehearse",
+            planHash: artifact.planHash,
+            allow: artifact.requiredPermissions,
+            snapshot: canonicalSnapshot(to),
+          })
+          expect(rehearsal).toMatchObject({
+            status: "rolledBack",
+            diagnostics: [],
+          })
+        })
+      }
+    )
   })
 
   describe("promotion", () => {

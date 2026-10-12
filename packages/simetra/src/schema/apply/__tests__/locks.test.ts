@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   coversMode,
+  footprintSubjects,
   footprintTables,
   intentStep,
   joinModes,
@@ -104,6 +105,8 @@ const models = (over: Partial<FootprintModels> = {}): FootprintModels => ({
   desired: withFk,
   typeChanges: [],
   newToOld: new Map(),
+  columnsNewToOld: new Map(),
+  live: [],
   ...over,
 })
 
@@ -254,6 +257,104 @@ describe("stepFootprint", () => {
       { schema: "app", name: "p", mode: "accessExclusive" },
       { schema: "app", name: "c", mode: "accessExclusive" },
     ])
+  })
+})
+
+describe("live foreign keys", () => {
+  /** `ext.r.p_code → app.p.code` на живій цілі: таблиця поза межею двигуна. */
+  const outside = {
+    schema: "ext",
+    table: "r",
+    columns: ["p_code"],
+    references: { schema: "app", table: "p", columns: ["code"] },
+  }
+
+  it("takes ACCESS EXCLUSIVE on a live referencing table outside the models", () => {
+    const step = engineStep("s1", "accessExclusive", [t("app", "p")])
+    const typeChanges = [
+      { step: "s1", schema: "app", table: "p", column: "code" },
+    ]
+    expect(
+      stepFootprint(step, models({ typeChanges, live: [outside] }))
+    ).toContainEqual({ schema: "ext", name: "r", mode: "accessExclusive" })
+    // Інша колонка тієї самої таблиці FK не перебудовує
+    expect(
+      stepFootprint(
+        step,
+        models({
+          typeChanges: [{ ...typeChanges[0]!, column: "id" }],
+          live: [outside],
+        })
+      ).map((x) => x.name)
+    ).not.toContain("r")
+  })
+
+  it("matches a renamed table and column by their old names", () => {
+    // Намір: `app.p` → `app.party`, `code` → `tax_code`; ціль — ще в старих
+    const step = engineStep("s3", "accessExclusive", [t("app", "party")])
+    expect(
+      stepFootprint(
+        step,
+        models({
+          typeChanges: [
+            { step: "s3", schema: "app", table: "party", column: "tax_code" },
+          ],
+          newToOld: new Map([[tableKey("app", "party"), tableKey("app", "p")]]),
+          columnsNewToOld: new Map([
+            [JSON.stringify(["app", "party", "tax_code"]), "code"],
+          ]),
+          live: [outside],
+        })
+      )
+    ).toEqual([
+      { schema: "app", name: "p", mode: "accessExclusive" },
+      { schema: "ext", name: "r", mode: "accessExclusive" },
+    ])
+  })
+
+  it("adds live links in both directions to the fallback", () => {
+    const step = engineStep("s1", "accessExclusive", [t("app", "p")], {
+      verb: "create",
+      produced: [
+        { kind: "constraint", schema: "app", table: "p", name: "p_excl" },
+      ],
+    })
+    const back = {
+      schema: "app",
+      table: "p",
+      columns: ["owner"],
+      references: { schema: "auth", table: "users", columns: ["id"] },
+    }
+    const names = stepFootprint(step, models({ live: [outside, back] })).map(
+      (x) => `${x.schema}.${x.name}:${x.mode}`
+    )
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "ext.r:accessExclusive",
+        "auth.users:accessExclusive",
+      ])
+    )
+  })
+
+  it("names the tables whose live foreign keys the footprint needs, in old names", () => {
+    const steps = [
+      engineStep("s1", "accessExclusive", [t("app", "party")]),
+      engineStep("s2", "accessExclusive", [t("app", "c")], {
+        verb: "create",
+        produced: [constraint("c_excl")],
+      }),
+    ]
+    const subjects = footprintSubjects(steps, {
+      source: withFk,
+      desired: withFk,
+      typeChanges: [
+        { step: "s1", schema: "app", table: "party", column: "code" },
+      ],
+      newToOld: new Map([[tableKey("app", "party"), tableKey("app", "p")]]),
+      columnsNewToOld: new Map(),
+    })
+    // Таблиця зміни типу — у старому імені; власна таблиця запасного правила
+    expect(subjects).toEqual([t("app", "p"), t("app", "c")])
   })
 })
 

@@ -362,8 +362,13 @@ async function runAttempt(
   // 5. Блокування наперед за слідом кроків — одна точка очікування замість
   // очікувань посеред кроків. Від сильнішого режиму до слабшого, усередині —
   // порядок артефакту, детермінований (R26 плану П3-2a)
+  // Копія доказу несе лише межу двигуна й базу провайдера: таблиці поза
+  // межею (скажімо, та, що посилається на колонку зі зміною типу) там може
+  // не бути, і `LOCK` на ній дав би хибну відмову доказу
+  const locks =
+    o.mode === "proof" ? await presentLocks(tx, plan.locks) : plan.locks
   for (const mode of [...TABLE_LOCK_MODES].reverse())
-    await lockTables(tx, plan.locks, mode)
+    await lockTables(tx, locks, mode)
 
   // 6. Ціль та сама, що при плануванні. Під блокуваннями п.5 чужа DDL на
   // цих таблицях до кроків уже неможлива. Ціль ↔ ціль — з власником; копія
@@ -454,6 +459,24 @@ async function runAttempt(
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 10. `COMMIT` чи `ROLLBACK` виконує порт за `end`
   return warnings
+}
+
+/** Замки плану на таблицях, що є в цій базі (`relkind` r/p). */
+async function presentLocks(
+  tx: ApplyTransaction,
+  locks: readonly TableLock[]
+): Promise<TableLock[]> {
+  if (locks.length === 0) return []
+  const rows = await tx.query<{ schema: string; name: string }>(
+    `SELECT x.schema, x.name
+     FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
+     JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
+     JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
+       AND c.relkind IN ('r', 'p')`,
+    [JSON.stringify(locks.map(({ schema, name }) => ({ schema, name })))]
+  )
+  const present = new Set(rows.map((r) => tableKey(r.schema, r.name)))
+  return locks.filter((l) => present.has(tableKey(l.schema, l.name)))
 }
 
 /** Наявна таблиця (`relkind` r/p) на початку кроків: oid і ім'я до них. */

@@ -104,6 +104,25 @@ export interface FootprintModels {
   >[]
   /** `tableKey` нового імені → старого; порожня без промоції. */
   newToOld: ReadonlyMap<string, string>
+  /**
+   * `JSON.stringify([схема, нова таблиця, нова колонка])` → старе ім'я
+   * колонки; порожня без промоції.
+   */
+  columnsNewToOld: ReadonlyMap<string, string>
+  /**
+   * FK живої цілі (вихідні імена), що торкаються таблиць `footprintSubjects`
+   * в обидва боки. Моделі каталогу бачать лише межу двигуна, а таблиця поза
+   * нею, що посилається на колонку зі зміною типу, теж займається.
+   */
+  live: readonly LiveForeignKey[]
+}
+
+/** FK живої цілі у вихідних іменах. */
+export interface LiveForeignKey {
+  schema: string
+  table: string
+  columns: string[]
+  references: { schema: string; table: string; columns: string[] }
 }
 
 interface Named {
@@ -140,7 +159,10 @@ function knownConstraint(table: CatalogTable | undefined, name: string) {
  * правило: наслідку кроку для FK модель надійно не визначає, тож замість
  * вгадування — `ACCESS EXCLUSIVE` на всьому, з чим таблиця пов'язана.
  */
-function linkedTables(m: FootprintModels, own: Named): Named[] {
+function linkedTables(
+  m: Pick<FootprintModels, "source" | "desired">,
+  own: Named
+): Named[] {
   const out: Named[] = []
   for (const model of [m.source, m.desired])
     for (const t of model.tables) {
@@ -158,17 +180,25 @@ function linkedTables(m: FootprintModels, own: Named): Named[] {
   return out
 }
 
-/** Наслідки кроку двигуна для FK — у тих самих іменах, що й крок. */
-function foreignKeyEffects(step: PlanStep, m: FootprintModels): TableLock[] {
+/**
+ * Наслідки кроку двигуна для FK за моделями — у тих самих іменах, що й крок.
+ * `fallbacks` — власні таблиці кроку, для яких спрацювало запасне правило:
+ * їхні зв'язки на живій цілі дає `liveEffects`.
+ */
+function foreignKeyEffects(
+  step: PlanStep,
+  m: Pick<FootprintModels, "source" | "desired" | "typeChanges">
+): { locks: TableLock[]; fallbacks: Named[] } {
   const out: TableLock[] = []
+  const fallbacks: Named[] = []
   const add = (tables: readonly Named[], mode: TableLockMode) => {
     for (const t of tables) out.push({ schema: t.schema, name: t.name, mode })
   }
-  const fallback = (ref: { schema: string; table: string }) =>
-    add(
-      linkedTables(m, { schema: ref.schema, name: ref.table }),
-      "accessExclusive"
-    )
+  const fallback = (ref: { schema: string; table: string }) => {
+    const own = { schema: ref.schema, name: ref.table }
+    fallbacks.push(own)
+    add(linkedTables(m, own), "accessExclusive")
+  }
   const tableRef = (r: EngineObjectRef) =>
     r.table === undefined ? undefined : { schema: r.schema, table: r.table }
 
@@ -245,7 +275,80 @@ function foreignKeyEffects(step: PlanStep, m: FootprintModels): TableLock[] {
       "accessExclusive"
     )
   }
+  return { locks: out, fallbacks }
+}
+
+/** Вихідне ім'я таблиці, яку крок двигуна називає `schema.name`. */
+function oldTable(m: FootprintModels, schema: string, name: string): Named {
+  const old = m.newToOld.get(tableKey(schema, name))
+  if (old === undefined) return { schema, name }
+  const [s, n] = JSON.parse(old) as [string, string]
+  return { schema: s, name: n }
+}
+
+/**
+ * Наслідки кроку двигуна для FK за живою ціллю, уже у вихідних іменах:
+ * таблиці, що посилаються на колонку зі зміною типу (зокрема поза межею
+ * двигуна), і зв'язки в обидва боки власних таблиць запасного правила.
+ */
+function liveEffects(
+  step: PlanStep,
+  m: FootprintModels,
+  fallbacks: readonly Named[]
+): TableLock[] {
+  const out: TableLock[] = []
+  const exclusive = (schema: string, name: string) =>
+    out.push({ schema, name, mode: "accessExclusive" })
+  for (const change of m.typeChanges) {
+    if (change.step !== step.id) continue
+    const table = oldTable(m, change.schema, change.table)
+    const column =
+      m.columnsNewToOld.get(
+        JSON.stringify([change.schema, change.table, change.column])
+      ) ?? change.column
+    for (const fk of m.live)
+      if (
+        fk.references.schema === table.schema &&
+        fk.references.table === table.name &&
+        fk.references.columns.includes(column)
+      )
+        exclusive(fk.schema, fk.table)
+  }
+  for (const own of fallbacks) {
+    const table = oldTable(m, own.schema, own.name)
+    for (const fk of m.live) {
+      if (fk.schema === table.schema && fk.table === table.name)
+        exclusive(fk.references.schema, fk.references.table)
+      if (
+        fk.references.schema === table.schema &&
+        fk.references.table === table.name
+      )
+        exclusive(fk.schema, fk.table)
+    }
+  }
   return out
+}
+
+/**
+ * Таблиці (вихідні імена), чиї FK на живій цілі потрібні сліду: таблиці
+ * змін типу колонок і власні таблиці запасного правила.
+ */
+export function footprintSubjects(
+  steps: readonly PlanStep[],
+  m: Omit<FootprintModels, "live">
+): Named[] {
+  const out = new Map<string, Named>()
+  const put = (t: Named) => out.set(tableKey(t.schema, t.name), t)
+  const full = { ...m, live: [] }
+  for (const step of steps) {
+    if (step.origin === "intent") continue
+    for (const own of foreignKeyEffects(step, m).fallbacks)
+      put(oldTable(full, own.schema, own.name))
+    for (const change of m.typeChanges)
+      if (change.step === step.id)
+        put(oldTable(full, change.schema, change.table))
+  }
+  return [...out.values()]
 }
 
 /**
@@ -263,14 +366,14 @@ export function stepFootprint(step: PlanStep, m: FootprintModels): TableLock[] {
   const tables: TableLock[] =
     own === undefined ? [] : step.lockedTables.map((t) => ({ ...t, mode: own }))
   if (step.origin === "intent") return merged(tables)
-  return merged(
-    [...tables, ...foreignKeyEffects(step, m)].map((t) => {
-      const old = m.newToOld.get(tableKey(t.schema, t.name))
-      if (old === undefined) return t
-      const [schema, name] = JSON.parse(old) as [string, string]
-      return { schema, name, mode: t.mode }
-    })
-  )
+  const effects = foreignKeyEffects(step, m)
+  return merged([
+    ...[...tables, ...effects.locks].map((t) => ({
+      ...oldTable(m, t.schema, t.name),
+      mode: t.mode,
+    })),
+    ...liveEffects(step, m, effects.fallbacks),
+  ])
 }
 
 /** Одна таблиця — один запис з об'єднаним режимом, у порядку появи. */
@@ -402,4 +505,61 @@ export async function readLockRights(
     [JSON.stringify(tables), lockPrivileges(version.version)]
   )
   return new Map(rows.map((r) => [tableKey(r.schema, r.name), r.lockable]))
+}
+
+/**
+ * FK живої цілі, що торкаються `tables` в обидва боки, з колонками в порядку
+ * ключа; партиції теж, бо Postgres займає й їх. Читання — у транзакції
+ * `READ ONLY` побудови плану.
+ */
+export async function readLiveForeignKeys(
+  tx: ApplyTransaction,
+  tables: readonly Named[]
+): Promise<LiveForeignKey[]> {
+  if (tables.length === 0) return []
+  const rows = await tx.query<{
+    schema: string
+    table: string
+    columns: string[]
+    ref_schema: string
+    ref_table: string
+    ref_columns: string[]
+  }>(
+    `WITH subject AS (
+       SELECT c.oid
+       FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
+       JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
+       JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
+     )
+     SELECT n.nspname AS schema, c.relname AS "table",
+       ARRAY(SELECT a.attname::text
+             FROM pg_catalog.unnest(k.conkey) WITH ORDINALITY AS u(num, ord)
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.num
+             ORDER BY u.ord) AS columns,
+       rn.nspname AS ref_schema, rc.relname AS ref_table,
+       ARRAY(SELECT a.attname::text
+             FROM pg_catalog.unnest(k.confkey) WITH ORDINALITY AS u(num, ord)
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = u.num
+             ORDER BY u.ord) AS ref_columns
+     FROM pg_catalog.pg_constraint k
+     JOIN pg_catalog.pg_class c ON c.oid = k.conrelid
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     JOIN pg_catalog.pg_class rc ON rc.oid = k.confrelid
+     JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+     WHERE k.contype = 'f'
+       AND (k.conrelid IN (SELECT oid FROM subject)
+         OR k.confrelid IN (SELECT oid FROM subject))
+     ORDER BY n.nspname, c.relname, k.conname`,
+    [JSON.stringify(tables)]
+  )
+  return rows.map((r) => ({
+    schema: r.schema,
+    table: r.table,
+    columns: r.columns,
+    references: {
+      schema: r.ref_schema,
+      table: r.ref_table,
+      columns: r.ref_columns,
+    },
+  }))
 }

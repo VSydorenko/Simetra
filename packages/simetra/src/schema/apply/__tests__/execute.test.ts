@@ -168,6 +168,8 @@ interface Script {
   /** Таблиці до кроків і замки сесії для звірки сліду. */
   existing?: { oid: string; schema: string; name: string }[]
   held?: { oid: string; mode: string }[]
+  /** Таблиці замків, що є в базі (копії доказу). */
+  present?: { schema: string; name: string }[]
 }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
@@ -180,6 +182,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("current_user")) return "role"
   if (sql.includes("FROM pg_catalog.pg_locks")) return "held-locks"
   if (sql.includes("c.oid::text AS oid")) return "existing"
+  if (sql.includes("x(schema text, name text)")) return "present"
   if (sql.includes("to_regclass") && sql.includes(" AS marker")) return "state"
   if (sql.startsWith("SAVEPOINT simetra_fingerprint")) return "fingerprint"
   if (sql.startsWith("INSERT INTO simetra.marker")) return "marker"
@@ -229,30 +232,32 @@ function fakeDb(script: Script = {}) {
           const rows: Record<string, unknown>[] =
             label?.startsWith("measure") === true
               ? [{ rows: "1", c0: "5" }]
-              : label === "existing"
-                ? (script.existing ?? [])
-                : label === "held-locks"
-                  ? (script.held ?? [])
-                  : label === "try-lock"
-                    ? [{ locked: script.locked ?? true }]
-                    : label === "role"
-                      ? [{ role: script.role ?? "postgres" }]
-                      : sql.includes(" AS marker")
-                        ? [{ marker: false, ledger: false }]
-                        : sql.includes("to_regclass")
-                          ? [{ exists: true }]
-                          : label === "lookup"
-                            ? script.ledgerHasApply === true
-                              ? [{ format: script.ledgerFormat ?? 1 }]
-                              : []
-                            : sql.includes("encode(sha256")
-                              ? [
-                                  stepsRan
-                                    ? DESIRED.sections
-                                    : (script.targetSections ??
-                                      TARGET.sections),
-                                ]
-                              : []
+              : label === "present"
+                ? (script.present ?? [])
+                : label === "existing"
+                  ? (script.existing ?? [])
+                  : label === "held-locks"
+                    ? (script.held ?? [])
+                    : label === "try-lock"
+                      ? [{ locked: script.locked ?? true }]
+                      : label === "role"
+                        ? [{ role: script.role ?? "postgres" }]
+                        : sql.includes(" AS marker")
+                          ? [{ marker: false, ledger: false }]
+                          : sql.includes("to_regclass")
+                            ? [{ exists: true }]
+                            : label === "lookup"
+                              ? script.ledgerHasApply === true
+                                ? [{ format: script.ledgerFormat ?? 1 }]
+                                : []
+                              : sql.includes("encode(sha256")
+                                ? [
+                                    stepsRan
+                                      ? DESIRED.sections
+                                      : (script.targetSections ??
+                                        TARGET.sections),
+                                  ]
+                                : []
           return rows as R[]
         },
       }
@@ -443,6 +448,22 @@ describe("executePlan", () => {
         },
       ],
     })
+  })
+
+  it("locks on the proof copy only the tables it has", async () => {
+    const { db, log } = fakeDb({ present: [{ schema: "app", name: "t" }] })
+    const outcome = await executePlan(db, target, plan, {
+      ...options,
+      mode: "proof",
+    })
+    expect(outcome).toMatchObject({ status: "committed" })
+    expect(log.filter((l) => l.startsWith("LOCK TABLE"))).toEqual([
+      "LOCK TABLE ONLY app.t IN ACCESS EXCLUSIVE MODE",
+    ])
+    // Ціль: таблиця, якої немає, — відмова «ціль змінилась», а не пропуск
+    const live = fakeDb()
+    await executePlan(live.db, target, plan, options)
+    expect(live.log).not.toContain("present")
   })
 
   it("checks the lock footprint on rehearsal and proof, not on apply", async () => {

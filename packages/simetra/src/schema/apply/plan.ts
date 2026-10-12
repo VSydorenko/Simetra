@@ -43,9 +43,11 @@ import {
   type ObjectOwner,
 } from "./fingerprint"
 import {
+  footprintSubjects,
   footprintTables,
   planFootprint,
   planLocks,
+  readLiveForeignKeys,
   readLockRights,
   type FootprintModels,
   type ImplicitLock,
@@ -400,6 +402,7 @@ export async function buildPlan(
       desired: target.extracted.model,
       typeChanges: guarded.changes,
       newToOld: new Map(),
+      columnsNewToOld: new Map(),
     }
   )
   const { preamble } = target.enginePlan
@@ -660,6 +663,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       desired: target.extracted.model,
       typeChanges: analysis.changes,
       newToOld: analysis.intent.tablesNewToOld,
+      columnsNewToOld: columnsNewToOld(analysis.intent.columns),
     }
   )
   const typeChangeSteps = new Map(
@@ -958,6 +962,23 @@ function ownersInOldNames(
 }
 
 /**
+ * Старе ім'я кожної колонки, яку намір перейменував, за її новим іменем:
+ * ланцюжок перейменувань у порядку кроків (обмін іде через тимчасове ім'я).
+ */
+function columnsNewToOld(
+  columns: RenameIntent["columns"]
+): Map<string, string> {
+  const original = new Map<string, string>()
+  for (const c of columns) {
+    const from = JSON.stringify([c.table.schema, c.table.name, c.from])
+    const first = original.get(from) ?? c.from
+    original.delete(from)
+    original.set(JSON.stringify([c.table.schema, c.table.name, c.to]), first)
+  }
+  return original
+}
+
+/**
  * Блокування плану за слідом кроків (спека промоції §8, R26 плану П3-2a):
  * слід кожного кроку, право ролі на явний `LOCK` кожної його таблиці на живій
  * цілі (READ ONLY) і замки з неявними замками. `ACCESS EXCLUSIVE` на таблиці
@@ -968,15 +989,29 @@ async function lockPlan(
   target: DbConnection,
   scope: EngineScope,
   steps: readonly PlanStep[],
-  models: FootprintModels
+  models: Omit<FootprintModels, "live">
 ): Promise<{
   locks: TableLock[]
   implicitLocks: ImplicitLock[]
   lockWarnings: EngineDiagnostic[]
 }> {
-  const footprint = planFootprint(steps, models)
-  const rights = await reader.transaction(target, "rollback", (tx) =>
-    readLockRights(tx, footprintTables(footprint))
+  // FK живої цілі — до сліду: таблиця поза межею двигуна, що посилається на
+  // колонку зі зміною типу, моделям каталогу невидима. Права — тією самою
+  // транзакцією READ ONLY
+  const { footprint, rights } = await reader.transaction(
+    target,
+    "rollback",
+    async (tx) => {
+      const live = await readLiveForeignKeys(
+        tx,
+        footprintSubjects(steps, models)
+      )
+      const footprint = planFootprint(steps, { ...models, live })
+      return {
+        footprint,
+        rights: await readLockRights(tx, footprintTables(footprint)),
+      }
+    }
   )
   const { locks, implicitLocks } = planLocks({ footprint, rights })
   // Крок попередження — перший, чий слід бере на таблиці ACCESS EXCLUSIVE

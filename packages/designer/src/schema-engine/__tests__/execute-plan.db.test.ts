@@ -240,6 +240,8 @@ function locksOf(
     desired: EMPTY_MODEL,
     typeChanges: [],
     newToOld,
+    columnsNewToOld: new Map(),
+    live: [],
   })
   const rights = new Map(
     footprintTables(footprint).map((t) => [tableKey(t.schema, t.name), true])
