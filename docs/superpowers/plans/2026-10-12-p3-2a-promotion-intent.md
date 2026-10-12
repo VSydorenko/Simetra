@@ -640,6 +640,44 @@
     3. Кроки з `origin`. Біля кроку з класом видалення — клас конверсії.
 
     Підтвердження — за designer §3.2 без змін.
+15. **Уточнення передпольотного скану** (вердикт архітектора; рядок
+    тут має перевагу над текстом задачі):
+    - **R1.** Задача 8 передає в `checkPermissions` `promotion: null`;
+      секцію `promotion` підключає задача 10.
+    - **R2.** `adoptedReplacements(actions, clone, unitTables, offset):
+      Set<stepId>` — з дій двигуна, рахується до `classifySteps`.
+    - **R3.** `TransitionVerdict.promotion` несе виведені `facts`. Пункти
+      `delete:*` будуються лише з них (власні звірено із записом під час
+      виявлення, вхідні — виведені); запис для `delete:*` не читається.
+    - **R4.** `classifyRemovals` не вживає `diffCatalogModels` (рішення 7).
+    - **R5.** Порядок на копії №1: намір → канонічні імена → `extract` →
+      `engine.plan` → `classifySteps` і `typeGuards` → детектор залежних і
+      `checkGuardCasts`.
+    - **R6.** `stepConversions(steps, record, intent)` у `removals.ts`
+      (задача 8) зіставляє `destroyed`/`destroys` кроку через мапи наміру з
+      `conversions[].objects`. Лише показ: дозволи й класи кроків від нього
+      не залежать. Крок без класу до нього не доходить — раніше
+      `plan.removal-unclassified`.
+    - **R7.** `PromotionSection` (задача 10) і `PlanData.promotion` (задача 13)
+      несуть `columns: { table, from, to }[]` і `canonicalNames: { kind,
+      table, from, to }[]` з `RenameIntent` (не розбором SQL), у порядку
+      кроків наміру, під `planHash`.
+    - **R8.** `plan.promotion-record-invalid` реєструється в задачі 4 разом з
+      іншими `plan.promotion-*`.
+    - **R9.** Тестові файли, які ламають нові обов'язкові поля, входять у
+      Files і коміт задачі, що додає поле (задачі 2, 3, 5, 10).
+    - **R10.** Ключ послідовності — `JSON.stringify([column,
+      defaultUsesThisSequence])`.
+    - **R11.** `tableKey(schema, name)` експортує T2 `schema/apply` (задача 4);
+      приватна копія в адаптері designer прибирається, адаптер імпортує T2.
+      Складені ключі — `JSON.stringify([schema, table, name])`.
+    - **R12.** Тест Review Focus 3 у задачі 9 — на артефакті, зібраному
+      вручну з `intentStep`.
+    - **R13.** Тест «немає зворотного приведення» — у designer `*.db.test.ts`.
+    - **R14.** Таблиця рішень 1 отримує рядок за замовчуванням після рядка 9:
+      будь-яка інша комбінація із записом — `plan.promotion-record-stale`
+      (один тест).
+    - **R15.** Задачі 4, 6, 7, 11 запускають і typecheck `@simetra/designer`.
 
 ## Відомі обмеження
 
