@@ -57,7 +57,16 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   ],
   requiredPermissions: ["s1"],
   drift: null,
+  role: "postgres",
   locks: [{ schema: "app", name: "t", mode: "accessExclusive" }],
+  implicitLocks: [
+    {
+      schema: "storage",
+      name: "objects",
+      mode: "shareRowExclusive",
+      step: "s1",
+    },
+  ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   promotion: null,
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -123,7 +132,6 @@ const PROMOTION = (): NonNullable<PlanArtifact["promotion"]> => ({
     },
   ],
   conversions: [{ step: "s1", class: "removed" }],
-  implicitLocks: [{ schema: "storage", name: "objects" }],
 })
 
 const withPromotion = (): Omit<PlanArtifact, "planHash"> => ({
@@ -241,17 +249,23 @@ describe("plan artifact", () => {
     expect(parsePlan(text).ok).toBe(false)
   })
 
-  it("covers the locks and the preamble with the hash", async () => {
+  it("covers the role, the locks and the preamble with the hash", async () => {
     const stamped = await stampPlan(draft())
     const relocked = draft()
     relocked.locks[0]!.mode = "shareRowExclusive"
     expect((await stampPlan(relocked)).planHash).not.toBe(stamped.planHash)
+    const implicit = draft()
+    implicit.implicitLocks[0]!.step = "s2"
+    expect((await stampPlan(implicit)).planHash).not.toBe(stamped.planHash)
+    expect((await stampPlan({ ...draft(), role: "other" })).planHash).not.toBe(
+      stamped.planHash
+    )
     const bare = draft()
     bare.preamble = []
     expect((await stampPlan(bare)).planHash).not.toBe(stamped.planHash)
   })
 
-  it("is strict about the locks and the preamble", async () => {
+  it("is strict about the role, the locks and the preamble", async () => {
     const artifact = await stampPlan(draft())
     const variants: unknown[] = [
       { ...artifact, locks: [{ schema: "app", name: "t" }] },
@@ -269,10 +283,18 @@ describe("plan artifact", () => {
         ...artifact,
         preamble: [{ name: "search_path", value: "pg_catalog", note: "x" }],
       },
+      // Неявний замок без кроку
+      {
+        ...artifact,
+        implicitLocks: [
+          { schema: "storage", name: "objects", mode: "shareRowExclusive" },
+        ],
+      },
+      { ...artifact, role: 1 },
     ]
     for (const variant of variants)
       expect(parsePlan(JSON.stringify(variant)).ok).toBe(false)
-    for (const field of ["locks", "preamble"]) {
+    for (const field of ["role", "locks", "implicitLocks", "preamble"]) {
       const missing: Record<string, unknown> = { ...artifact }
       delete missing[field]
       expect(parsePlan(JSON.stringify(missing)).ok).toBe(false)
@@ -405,12 +427,8 @@ describe("plan artifact", () => {
         ...section,
         preservation: [{ ...section.preservation[0]!, note: "x" }],
       },
-      // Неявний замок — структурний ключ таблиці (R25), як і решта секції
-      { ...section, implicitLocks: ["storage.objects"] },
-      {
-        ...section,
-        implicitLocks: [{ schema: "storage", name: "objects", mode: "x" }],
-      },
+      // Неявні замки — поле артефакту, а не секції (R26): у секції воно чуже
+      { ...section, implicitLocks: [] },
     ]
     for (const promotion of variants)
       expect(parsePlan(JSON.stringify({ ...artifact, promotion })).ok).toBe(

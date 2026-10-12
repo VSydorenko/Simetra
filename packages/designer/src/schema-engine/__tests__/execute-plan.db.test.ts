@@ -27,11 +27,15 @@ import {
   type ExecutablePlan,
   type ExecuteOptions,
   type ExecuteOutcome,
+  footprintTables,
   intentStep,
+  planFootprint,
   planLocks,
   preservationPlan,
+  readLockRights,
   tableKey,
   type PlanStep,
+  type TableLock,
   typeGuards,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
@@ -62,6 +66,9 @@ const OWNER = "simetra_execute_owner"
 /** Роль входу, чия сесія стає роллю API провайдера. */
 const API_LOGIN = "simetra_execute_api"
 const API_PASSWORD = "simetra-execute-api"
+/** Роль входу без права на явний `LOCK`: лише те, що їй дасть тест. */
+const LOCKER = "simetra_execute_locker"
+const LOCKER_PASSWORD = "simetra-execute-locker"
 
 /** Базовий стан цілі поверх бажаного стану моделі. */
 const BASE = `
@@ -116,7 +123,8 @@ async function until(
 async function dropRoles(): Promise<void> {
   await other(
     testSuperuserUrl(),
-    `drop role if exists ${API_LOGIN}; drop role if exists ${OWNER};`
+    `drop role if exists ${API_LOGIN}; drop role if exists ${OWNER};
+     drop role if exists ${LOCKER};`
   )
 }
 
@@ -136,7 +144,8 @@ beforeAll(async () => {
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;
      create role ${API_LOGIN} login password '${API_PASSWORD}';
      grant service_role to ${API_LOGIN};
-     alter role ${API_LOGIN} set role = 'service_role';`
+     alter role ${API_LOGIN} set role = 'service_role';
+     create role ${LOCKER} login password '${LOCKER_PASSWORD}';`
   )
 })
 afterAll(dropRoles)
@@ -215,9 +224,28 @@ const ALTER_T = step("s1", "ALTER TABLE app.t ADD COLUMN d int", {
   lockedTables: [{ schema: "app", name: "t" }],
 })
 
-/** Блокування плану без промоції: імена кроків, детермінований порядок. */
-const locksOf = (steps: readonly PlanStep[]) =>
-  planLocks({ steps, newToOld: new Map(), foreignKeyTargets: [] })
+const EMPTY_MODEL = { tables: [], enumTypes: [], units: [] }
+
+/**
+ * Блокування плану за слідом кроків без моделей (кроки тут без FK): власні
+ * таблиці, вихідні імена через `newToOld`, детермінований порядок. Право на
+ * явний `LOCK` — на кожній таблиці: роль тестів ними володіє.
+ */
+function locksOf(
+  steps: readonly PlanStep[],
+  newToOld: ReadonlyMap<string, string> = new Map()
+): TableLock[] {
+  const footprint = planFootprint(steps, {
+    source: EMPTY_MODEL,
+    desired: EMPTY_MODEL,
+    typeChanges: [],
+    newToOld,
+  })
+  const rights = new Map(
+    footprintTables(footprint).map((t) => [tableKey(t.schema, t.name), true])
+  )
+  return planLocks({ footprint, rights }).locks
+}
 
 /** План від `fromHash` до `toHash` над живою ціллю. */
 async function planFor(
@@ -233,7 +261,9 @@ async function planFor(
     steps,
     requiredPermissions: [],
     drift: null,
+    role: "postgres",
     locks: locksOf(steps),
+    implicitLocks: [],
     preamble: [],
     promotion: null,
     resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -266,7 +296,9 @@ async function establish(url: string, hash: string): Promise<void> {
       steps: [],
       requiredPermissions: [],
       drift: null,
+      role: "postgres",
       locks: [],
+      implicitLocks: [],
       preamble: [],
       promotion: null,
       targetFingerprint: fingerprint,
@@ -563,9 +595,18 @@ describe("executePlan", () => {
     })
   })
 
+  /** Та сама база цілі, але сесією іншої ролі входу. */
+  const loginAs = (url: string, user: string, password: string): string => {
+    const as = new URL(url)
+    as.username = user
+    as.password = password
+    return as.toString()
+  }
+
   it("refuses an API role", async () => {
     await inTarget(BASE, async (url) => {
-      const plan = await planFor(url, [CREATE_N])
+      // План тієї самої ролі API: збіг ролі плану від відмови не рятує
+      const plan = await planFor(url, [CREATE_N], { role: "service_role" })
       const asApi = new URL(url)
       asApi.username = API_LOGIN
       asApi.password = API_PASSWORD
@@ -583,6 +624,128 @@ describe("executePlan", () => {
         ],
       })
       expect(await exists(url, "app.n")).toBe(false)
+    })
+  })
+
+  it("refuses a plan built for another role", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await planFor(url, [CREATE_N])
+      const outcome = await executePlan(
+        apply,
+        { url: loginAs(url, API_LOGIN, API_PASSWORD) },
+        plan,
+        { ...options, mode: "rehearse" }
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.role-mismatch",
+            params: { plan: "postgres", current: "service_role" },
+          },
+        ],
+      })
+      expect(await exists(url, "app.n")).toBe(false)
+    })
+  })
+
+  it("refuses a LOCK the role has no right to, without a retry", async () => {
+    // Лише REFERENCES: неявний замок кроку FK він дає, явний LOCK — ні
+    const setup = `${BASE};
+      grant usage on schema app, simetra to ${LOCKER};
+      grant select on all tables in schema simetra to ${LOCKER};
+      grant references on app.t to ${LOCKER};`
+    await inTarget(setup, async (url) => {
+      const plan = await planFor(url, [ALTER_T], { role: LOCKER })
+      const outcome = await executePlan(
+        apply,
+        { url: loginAs(url, LOCKER, LOCKER_PASSWORD) },
+        plan,
+        { ...options, mode: "rehearse" }
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.lock-privilege",
+            params: { mode: "ACCESS EXCLUSIVE", tables: "app.t" },
+          },
+        ],
+      })
+    })
+  })
+
+  it("reads the right to an explicit LOCK and keeps a table without it implicit", async () => {
+    const setup = `${BASE};
+      grant usage on schema app, simetra to ${LOCKER};
+      grant select on all tables in schema simetra to ${LOCKER};
+      grant references on app.t to ${LOCKER};`
+    await inTarget(setup, async (url) => {
+      const asLocker = { url: loginAs(url, LOCKER, LOCKER_PASSWORD) }
+      const reader = createApplyDatabase({ readOnly: true })
+      const rights = () =>
+        reader.transaction(asLocker, "rollback", (tx) =>
+          readLockRights(tx, [
+            { schema: "app", name: "t" },
+            // Таблиці, якої на цілі немає, у правах немає
+            { schema: "app", name: "absent" },
+          ])
+        )
+      const t = tableKey("app", "t")
+      expect(await rights()).toEqual(new Map([[t, false]]))
+      // Без права таблиця сліду — неявний замок свого кроку
+      const footprint = [
+        {
+          step: "s1",
+          tables: [
+            { schema: "app", name: "t", mode: "accessExclusive" as const },
+          ],
+        },
+      ]
+      expect(planLocks({ footprint, rights: await rights() })).toEqual({
+        locks: [],
+        implicitLocks: [
+          { schema: "app", name: "t", mode: "accessExclusive", step: "s1" },
+        ],
+      })
+      // MAINTAIN (Postgres 17) теж дає явний LOCK
+      await other(url, `grant maintain on app.t to ${LOCKER}`)
+      expect(await rights()).toEqual(new Map([[t, true]]))
+    })
+  })
+
+  it("warns on rehearsal about a lock beyond the plan's footprint", async () => {
+    await inTarget(BASE, async (url) => {
+      // Слід без власної таблиці кроку: замок береться посеред кроків
+      const plan = await planFor(url, [ALTER_T], { locks: [] })
+      const outcome = await executePlan(apply, { url }, plan, {
+        ...options,
+        mode: "rehearse",
+      })
+      expect(outcome).toMatchObject({
+        status: "rolledBack",
+        diagnostics: [
+          {
+            code: "apply.lock-footprint-exceeded",
+            severity: "warning",
+            params: {
+              table: "app.t",
+              mode: "ACCESS EXCLUSIVE",
+              planned: "none",
+            },
+          },
+        ],
+      })
+      // З повним слідом — тиша
+      const full = await planFor(url, [ALTER_T])
+      expect(
+        await executePlan(apply, { url }, full, {
+          ...options,
+          mode: "rehearse",
+        })
+      ).toMatchObject({ status: "rolledBack", diagnostics: [] })
     })
   })
 
@@ -658,9 +821,7 @@ describe("executePlan", () => {
       }),
     ]
     const newToOld = new Map([[tableKey("app", "u"), tableKey("app", "t")]])
-    return planFor(url, steps, {
-      locks: planLocks({ steps, newToOld, foreignKeyTargets: [] }),
-    })
+    return planFor(url, steps, { locks: locksOf(steps, newToOld) })
   }
 
   it("locks a renamed table by its old name", async () => {
@@ -714,12 +875,13 @@ describe("executePlan", () => {
           }
         ),
       ]
+      // Слід кроку FK: власна таблиця й ціль FK (виведення сліду — у
+      // модульних тестах і тестах плану)
       const plan = await planFor(url, steps, {
-        locks: planLocks({
-          steps,
-          newToOld: new Map(),
-          foreignKeyTargets: [{ schema: "app", name: "p" }],
-        }),
+        locks: [
+          { schema: "app", name: "c", mode: "accessExclusive" },
+          { schema: "app", name: "p", mode: "shareRowExclusive" },
+        ],
         desiredFingerprint: await desiredFingerprint(setup, steps),
       })
       // Запис у ціль FK тримає ROW EXCLUSIVE, що конфліктує з SHARE ROW
@@ -943,7 +1105,7 @@ describe("executePlan", () => {
         new Map([[JSON.stringify(["app", "pu", "x"]), TYPE_STEP]])
       )
       return planFor(url, steps, {
-        locks: planLocks({ steps, newToOld, foreignKeyTargets: [] }),
+        locks: locksOf(steps, newToOld),
         promotion: {
           recordHash: await promotionRecordHash(RECORD),
           record: RECORD,
@@ -953,7 +1115,6 @@ describe("executePlan", () => {
             { table: { schema: "app", name: "pu" }, from: "c", to: "d" },
           ],
           canonicalNames: [],
-          implicitLocks: [],
           conversions: [],
         },
         // Розбіжність зупиняє спробу до звірки з бажаним відбитком

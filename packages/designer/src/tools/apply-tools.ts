@@ -24,12 +24,13 @@ import {
   type ApplyTimeouts,
   type DriftReport,
   type EngineIdentity,
+  type ImplicitLock,
   type PermissionItem,
   type PlanArtifact,
   type PlanStep,
   type PromotionInput,
   type PromotionSection,
-  type SectionTable,
+  type TableLock,
 } from "simetra/schema"
 import { z } from "zod"
 import { withDatabase } from "../io/database"
@@ -55,8 +56,6 @@ export interface PlanPromotion {
   canonicalNames: PromotionSection["canonicalNames"]
   /** Пункти `access:`, `delete:`, `remove:` з переліками. */
   permissionItems: PermissionItem[]
-  /** Цілі FK, які бере сам крок FK, а не явне блокування (R25). */
-  implicitLocks: SectionTable[]
 }
 
 /** Крок плану для перегляду; клас конверсії — лише біля кроку видалення. */
@@ -75,6 +74,13 @@ export interface PlanData {
   drift: DriftReport | null
   promotion: PlanPromotion | null
   steps: PlanDataStep[]
+  /** Що раннер блокує наперед, до кроків: вихідні імена з режимом. */
+  locks: TableLock[]
+  /**
+   * Таблиці, які роль не може заблокувати наперед: замок бере сам крок
+   * (R26 плану П3-2a). Показуються, щоб замок не був мовчазним.
+   */
+  implicitLocks: ImplicitLock[]
   requiredPermissions: string[]
 }
 
@@ -115,7 +121,6 @@ function planPromotion(
     columns: section.columns,
     canonicalNames: section.canonicalNames,
     permissionItems: section.permissionItems,
-    implicitLocks: section.implicitLocks,
   }
 }
 
@@ -148,6 +153,8 @@ function planData(
         ...(conversion === undefined ? {} : { conversion }),
       }
     }),
+    locks: artifact.locks,
+    implicitLocks: artifact.implicitLocks,
     requiredPermissions: artifact.requiredPermissions,
   }
 }
@@ -187,9 +194,19 @@ export async function readPromotionRecords(
         detail,
       }),
     })
+    // Нечитний файл (тека з таким іменем, немає доступу) — той самий
+    // зіпсований запис: пропуск чи сирий виняток сховали б намір промоції
+    let text: string
+    try {
+      text = await readFile(join(root, file), "utf8")
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === undefined) throw error
+      return invalid(`the file could not be read (${code})`)
+    }
     let json: unknown
     try {
-      json = JSON.parse(await readFile(join(root, file), "utf8"))
+      json = JSON.parse(text)
     } catch (error) {
       if (error instanceof SyntaxError) return invalid(error.message)
       throw error
@@ -326,7 +343,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes ACCESS EXCLUSIVE locks). Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete: and remove: items.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete: and remove: items.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:

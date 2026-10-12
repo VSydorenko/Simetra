@@ -1,11 +1,34 @@
+import type { CatalogModel, CatalogTable } from "simetra/model"
+import type { EngineObjectRef } from "../engine"
+import type { ApplyTransaction } from "./port"
 import type { PlanStep } from "./steps"
 import { tableKey } from "./table-key"
+import type { TypeChange } from "./type-guard"
 
-/** Режим блокування наперед: лише ці два раннер бере до кроків. */
+/**
+ * Режими блокування таблиці сильніші за `ROW EXCLUSIVE`, від слабшого до
+ * сильнішого в порядку Postgres. Слабші режими блокування наперед не
+ * потребують: їх бере будь-яке читання чи запис, і з DDL вони не
+ * конфліктують так, щоб замок посеред транзакції чекав.
+ */
 export const TABLE_LOCK_MODES = [
-  "accessExclusive",
+  "shareUpdateExclusive",
+  "share",
   "shareRowExclusive",
+  "exclusive",
+  "accessExclusive",
 ] as const
+
+export type TableLockMode = (typeof TABLE_LOCK_MODES)[number]
+
+/** Режим у тексті `LOCK TABLE … IN <режим> MODE`. */
+export const LOCK_MODE_SQL: Readonly<Record<TableLockMode, string>> = {
+  shareUpdateExclusive: "SHARE UPDATE EXCLUSIVE",
+  share: "SHARE",
+  shareRowExclusive: "SHARE ROW EXCLUSIVE",
+  exclusive: "EXCLUSIVE",
+  accessExclusive: "ACCESS EXCLUSIVE",
+}
 
 /**
  * Таблиця, яку раннер блокує до кроків, з режимом. Окремий тип плану:
@@ -14,59 +37,369 @@ export const TABLE_LOCK_MODES = [
 export interface TableLock {
   schema: string
   name: string
-  mode: (typeof TABLE_LOCK_MODES)[number]
+  mode: TableLockMode
+}
+
+/**
+ * Таблиця сліду, яку роль, що застосовує, не може заблокувати явно: замок
+ * бере сам крок `step`, і вивід плану це показує.
+ */
+export interface ImplicitLock extends TableLock {
+  step: string
+}
+
+/** Слід одного кроку: які наявні таблиці й у якому режимі він займе. */
+export interface StepFootprint {
+  step: string
+  tables: TableLock[]
+}
+
+const strength = (mode: TableLockMode): number => TABLE_LOCK_MODES.indexOf(mode)
+
+/**
+ * Найслабший режим, що покриває обидва. Порядок лінійний, крім пари `SHARE`
+ * і `SHARE UPDATE EXCLUSIVE`: перший не конфліктує сам із собою, другий —
+ * конфліктує, тож жоден не покриває іншого, і їх покриває `SHARE ROW
+ * EXCLUSIVE`.
+ */
+export function joinModes(a: TableLockMode, b: TableLockMode): TableLockMode {
+  const pair = new Set([a, b])
+  if (pair.has("share") && pair.has("shareUpdateExclusive"))
+    return "shareRowExclusive"
+  return strength(a) >= strength(b) ? a : b
+}
+
+/** Чи взятий наперед режим `planned` робить замок `held` неочікуваним. */
+export const coversMode = (
+  planned: TableLockMode,
+  held: TableLockMode
+): boolean => joinModes(planned, held) === planned
+
+/**
+ * Режим власної таблиці кроку за класом двигуна. `none` — замка немає;
+ * невідомий клас — найгірший випадок, а не заспокійливе «нічого».
+ */
+function lockClassMode(lockClass: string): TableLockMode | undefined {
+  if (lockClass === "none") return undefined
+  return (TABLE_LOCK_MODES as readonly string[]).includes(lockClass)
+    ? (lockClass as TableLockMode)
+    : "accessExclusive"
+}
+
+/**
+ * Моделі, з яких виводиться слід кроків двигуна. Імена — ті, якими кроки
+ * двигуна називають таблиці: для плану з промоцією це нові імена копії після
+ * наміру. `newToOld` перекладає їх у вихідні: блокування береться до першого
+ * кроку, коли нових імен на цілі ще немає.
+ */
+export interface FootprintModels {
+  /** Вихідний стан кроків двигуна: тут шукаються FK, які крок знімає. */
+  source: CatalogModel
+  /** Бажаний стан: тут шукаються FK, які крок створює. */
+  desired: CatalogModel
+  /** Зміни типу колонок із кроками, з дерева розбору (`typeGuards`). */
+  typeChanges: readonly Pick<
+    TypeChange,
+    "step" | "schema" | "table" | "column"
+  >[]
+  /** `tableKey` нового імені → старого; порожня без промоції. */
+  newToOld: ReadonlyMap<string, string>
+}
+
+interface Named {
+  schema: string
+  name: string
+}
+
+const findTable = (
+  model: CatalogModel,
+  schema: string,
+  name: string
+): CatalogTable | undefined =>
+  model.tables.find((t) => t.schema === schema && t.name === name)
+
+type ForeignKey = CatalogTable["foreignKeys"][number]
+
+const target = (fk: ForeignKey): Named => ({
+  schema: fk.references.schema,
+  name: fk.references.table,
+})
+
+/** Чи названо обмеження таблиці в моделі якимось відомим їй видом. */
+function knownConstraint(table: CatalogTable | undefined, name: string) {
+  if (table === undefined) return false
+  return (
+    table.primaryKey?.name === name ||
+    table.uniques.some((u) => u.name === name) ||
+    table.checks.some((c) => c.name === name)
+  )
+}
+
+/**
+ * Таблиці, пов'язані з таблицею FK в обидва боки, в обох моделях. Запасне
+ * правило: наслідку кроку для FK модель надійно не визначає, тож замість
+ * вгадування — `ACCESS EXCLUSIVE` на всьому, з чим таблиця пов'язана.
+ */
+function linkedTables(m: FootprintModels, own: Named): Named[] {
+  const out: Named[] = []
+  for (const model of [m.source, m.desired])
+    for (const t of model.tables) {
+      if (t.schema === own.schema && t.name === own.name)
+        out.push(...t.foreignKeys.map(target))
+      if (
+        t.foreignKeys.some(
+          (fk) =>
+            fk.references.schema === own.schema &&
+            fk.references.table === own.name
+        )
+      )
+        out.push({ schema: t.schema, name: t.name })
+    }
+  return out
+}
+
+/** Наслідки кроку двигуна для FK — у тих самих іменах, що й крок. */
+function foreignKeyEffects(step: PlanStep, m: FootprintModels): TableLock[] {
+  const out: TableLock[] = []
+  const add = (tables: readonly Named[], mode: TableLockMode) => {
+    for (const t of tables) out.push({ schema: t.schema, name: t.name, mode })
+  }
+  const fallback = (ref: { schema: string; table: string }) =>
+    add(
+      linkedTables(m, { schema: ref.schema, name: ref.table }),
+      "accessExclusive"
+    )
+  const tableRef = (r: EngineObjectRef) =>
+    r.table === undefined ? undefined : { schema: r.schema, table: r.table }
+
+  // Створення FK: `SHARE ROW EXCLUSIVE` на таблиці, на яку він посилається
+  for (const ref of step.produced) {
+    const owner = tableRef(ref)
+    if (ref.kind !== "constraint" || owner === undefined) continue
+    const table = findTable(m.desired, owner.schema, owner.table)
+    const fk = table?.foreignKeys.find((f) => f.name === ref.name)
+    if (fk !== undefined) add([target(fk)], "shareRowExclusive")
+    else if (!knownConstraint(table, ref.name)) fallback(owner)
+  }
+
+  // Зняття FK — і разом із колонкою чи таблицею: `ACCESS EXCLUSIVE` на
+  // таблиці, на яку він посилався
+  for (const ref of step.destroyed) {
+    if (ref.kind === "table") {
+      const table = findTable(m.source, ref.schema, ref.name)
+      add(table?.foreignKeys.map(target) ?? [], "accessExclusive")
+      continue
+    }
+    const owner = tableRef(ref)
+    if (owner === undefined) continue
+    const table = findTable(m.source, owner.schema, owner.table)
+    if (ref.kind === "column")
+      add(
+        (table?.foreignKeys ?? [])
+          .filter((fk) => fk.columns.includes(ref.name))
+          .map(target),
+        "accessExclusive"
+      )
+    else if (ref.kind === "constraint") {
+      const fk = table?.foreignKeys.find((f) => f.name === ref.name)
+      if (fk !== undefined) add([target(fk)], "accessExclusive")
+      else if (!knownConstraint(table, ref.name)) fallback(owner)
+    }
+  }
+
+  // Зміна FK на місці (не зняття й створення) — форма, якої модель не
+  // описує: запасне правило
+  if (step.verb === "alter")
+    for (const ref of step.consumed) {
+      const owner = tableRef(ref)
+      if (ref.kind !== "constraint" || owner === undefined) continue
+      const isForeignKey = [m.source, m.desired].some((model) =>
+        findTable(model, owner.schema, owner.table)?.foreignKeys.some(
+          (fk) => fk.name === ref.name
+        )
+      )
+      if (isForeignKey) fallback(owner)
+    }
+
+  // Зміна типу колонки FK перебудовує FK: `ACCESS EXCLUSIVE` на таблиці, на
+  // яку він посилається. Зміна типу колонки, на яку посилаються, перебудовує
+  // FK таблиць, що посилаються: `ACCESS EXCLUSIVE` на них
+  for (const change of m.typeChanges) {
+    if (change.step !== step.id) continue
+    const table = findTable(m.source, change.schema, change.table)
+    add(
+      (table?.foreignKeys ?? [])
+        .filter((fk) => fk.columns.includes(change.column))
+        .map(target),
+      "accessExclusive"
+    )
+    add(
+      m.source.tables.filter((t) =>
+        t.foreignKeys.some(
+          (fk) =>
+            fk.references.schema === change.schema &&
+            fk.references.table === change.table &&
+            fk.references.columns.includes(change.column)
+        )
+      ),
+      "accessExclusive"
+    )
+  }
+  return out
+}
+
+/**
+ * Слід кроку (спека промоції §8 «Механіка застосування»): які таблиці й у
+ * якому режимі крок займе, у вихідних іменах. Власна таблиця — з
+ * `lockedTables` і `lockClass`; наслідки для FK — зі структурних
+ * `produced`/`destroyed`/`consumed` і моделей (жива — для знятого, бажана —
+ * для створеного), без розбору рядкових ідентичностей. Крок наміру —
+ * перейменування — займає лише власну таблицю, і його таблиці вже у
+ * вихідних іменах: при обміні імен старе ім'я одного — нове ім'я іншого,
+ * тож перекладати їх не можна.
+ */
+export function stepFootprint(step: PlanStep, m: FootprintModels): TableLock[] {
+  const own = lockClassMode(step.lockClass)
+  const tables: TableLock[] =
+    own === undefined ? [] : step.lockedTables.map((t) => ({ ...t, mode: own }))
+  if (step.origin === "intent") return merged(tables)
+  return merged(
+    [...tables, ...foreignKeyEffects(step, m)].map((t) => {
+      const old = m.newToOld.get(tableKey(t.schema, t.name))
+      if (old === undefined) return t
+      const [schema, name] = JSON.parse(old) as [string, string]
+      return { schema, name, mode: t.mode }
+    })
+  )
+}
+
+/** Одна таблиця — один запис з об'єднаним режимом, у порядку появи. */
+function merged(tables: readonly TableLock[]): TableLock[] {
+  const out = new Map<string, TableLock>()
+  for (const t of tables) {
+    const key = tableKey(t.schema, t.name)
+    const seen = out.get(key)
+    out.set(key, {
+      schema: t.schema,
+      name: t.name,
+      mode: seen === undefined ? t.mode : joinModes(seen.mode, t.mode),
+    })
+  }
+  return [...out.values()]
+}
+
+/** Слід кожного кроку плану. */
+export const planFootprint = (
+  steps: readonly PlanStep[],
+  m: FootprintModels
+): StepFootprint[] =>
+  steps.map((step) => ({ step: step.id, tables: stepFootprint(step, m) }))
+
+/** Таблиці сліду плану без повторів — вхід читання прав на цілі. */
+export function footprintTables(footprint: readonly StepFootprint[]): Named[] {
+  const out = new Map<string, Named>()
+  for (const { tables } of footprint)
+    for (const { schema, name } of tables)
+      out.set(tableKey(schema, name), { schema, name })
+  return [...out.values()]
 }
 
 const byCodeUnit = (a: string, b: string): number =>
   a < b ? -1 : a > b ? 1 : 0
 
 /**
- * Блокування плану (рішення 9 плану П3-2a). Блокування береться до першого
- * кроку, тож лише вихідні імена: кроки двигуна, зняті після наміру, називають
- * перейменовану таблицю новим іменем, якого на цілі ще немає, і `LOCK` дав би
- * хибне «ціль змінилась». Кроки наміру вже несуть старі імена — їх не
- * перекладаємо: при обміні імен старе ім'я одного — нове ім'я іншого.
+ * Блокування плану з його сліду. Для кожної таблиці — найсильніший режим
+ * серед кроків, тож замок посеред транзакції не підвищується. `rights` —
+ * таблиці, що є на цілі, з правом ролі на явний `LOCK`: таблиці, якої немає
+ * (її створює сам план), не заблокувати; таблиця без права лишається
+ * неявним замком кроку, що бере найсильніший режим (першого такого).
  *
- * Цілі FK таблиць одиниці поза одиницею — `shareRowExclusive`: перевірка FK
- * під час кроків бере його сама, і посеред кроків це було б очікування з
- * ризиком взаємоблокування. Таблиця в обох — сильніший режим.
- *
- * Порядок детермінований (режим, потім схема й ім'я за кодовими одиницями),
- * а не порядок плану: два застосування з різними планами блокують спільні
- * таблиці в одному порядку і не чекають одне одного навхрест.
+ * Порядок детермінований — режим від сильнішого, потім схема й ім'я за
+ * кодовими одиницями, а не порядок плану: два застосування з різними
+ * планами блокують спільні таблиці в одному порядку і не чекають одне одного
+ * навхрест. Правило однакове для плану з промоцією й без неї.
  */
 export function planLocks(p: {
-  steps: readonly PlanStep[]
-  /** `tableKey` нового імені → старого; тотожна (порожня) без промоції. */
-  newToOld: ReadonlyMap<string, string>
-  foreignKeyTargets: readonly { schema: string; name: string }[]
-}): TableLock[] {
-  const locks = new Map<string, TableLock>()
-  for (const step of p.steps) {
-    if (step.lockClass !== "accessExclusive") continue
-    for (const table of step.lockedTables) {
-      const key = tableKey(table.schema, table.name)
-      const old = step.origin === "engine" ? p.newToOld.get(key) : undefined
-      const [schema, name] =
-        old === undefined
-          ? [table.schema, table.name]
-          : (JSON.parse(old) as [string, string])
-      locks.set(tableKey(schema, name), {
-        schema,
-        name,
-        mode: "accessExclusive",
-      })
+  footprint: readonly StepFootprint[]
+  rights: ReadonlyMap<string, boolean>
+}): { locks: TableLock[]; implicitLocks: ImplicitLock[] } {
+  const strongest = new Map<string, ImplicitLock>()
+  for (const { step, tables } of p.footprint)
+    for (const t of tables) {
+      const key = tableKey(t.schema, t.name)
+      if (!p.rights.has(key)) continue
+      const seen = strongest.get(key)
+      if (seen === undefined) {
+        strongest.set(key, { ...t, step })
+        continue
+      }
+      const mode = joinModes(seen.mode, t.mode)
+      // Крок неявного замка — той, що першим бере підсумковий режим
+      if (mode !== seen.mode)
+        strongest.set(key, {
+          ...seen,
+          mode,
+          step: mode === t.mode ? step : seen.step,
+        })
     }
+  const all = [...strongest.entries()]
+  const order = (a: TableLock, b: TableLock): number =>
+    strength(b.mode) - strength(a.mode) ||
+    byCodeUnit(a.schema, b.schema) ||
+    byCodeUnit(a.name, b.name)
+  return {
+    locks: all
+      .filter(([key]) => p.rights.get(key) === true)
+      .map(([, { schema, name, mode }]) => ({ schema, name, mode }))
+      .sort(order),
+    implicitLocks: all
+      .filter(([key]) => p.rights.get(key) === false)
+      .map(([, l]) => l)
+      .sort(
+        (a, b) => byCodeUnit(a.schema, b.schema) || byCodeUnit(a.name, b.name)
+      ),
   }
-  for (const { schema, name } of p.foreignKeyTargets) {
-    const key = tableKey(schema, name)
-    if (!locks.has(key))
-      locks.set(key, { schema, name, mode: "shareRowExclusive" })
-  }
-  return [...locks.values()].sort(
-    (a, b) =>
-      TABLE_LOCK_MODES.indexOf(a.mode) - TABLE_LOCK_MODES.indexOf(b.mode) ||
-      byCodeUnit(a.schema, b.schema) ||
-      byCodeUnit(a.name, b.name)
+}
+
+/**
+ * Привілеї, будь-який із яких дає явний `LOCK` сильніше за `ROW EXCLUSIVE`.
+ * `MAINTAIN` з'явився в Postgres 17, а 15 і 16 саме слово в переліку
+ * `has_table_privilege` відкидають.
+ */
+export const lockPrivileges = (serverVersionNum: number): string =>
+  serverVersionNum >= 170000
+    ? "MAINTAIN, UPDATE, DELETE, TRUNCATE"
+    : "UPDATE, DELETE, TRUNCATE"
+
+/**
+ * Право ролі сесії на явний `LOCK` кожної таблиці сліду, що є на цілі
+ * (`relkind` r/p): членство в ролі-власнику (з успадкуванням привілеїв) чи
+ * один із `lockPrivileges`. Таблиці, якої на цілі немає, у мапі немає.
+ * Ключ — `tableKey`.
+ */
+export async function readLockRights(
+  tx: ApplyTransaction,
+  tables: readonly Named[]
+): Promise<Map<string, boolean>> {
+  if (tables.length === 0) return new Map()
+  const [version] = await tx.query<{ version: number }>(
+    "SELECT pg_catalog.current_setting('server_version_num')::int AS version"
   )
+  if (version === undefined)
+    throw new Error("server_version_num returned no row")
+  const rows = await tx.query<{
+    schema: string
+    name: string
+    lockable: boolean
+  }>(
+    `SELECT x.schema, x.name,
+       pg_catalog.pg_has_role(c.relowner, 'USAGE')
+         OR pg_catalog.has_table_privilege(c.oid, $2) AS lockable
+     FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
+     JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
+     JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
+       AND c.relkind IN ('r', 'p')`,
+    [JSON.stringify(tables), lockPrivileges(version.version)]
+  )
+  return new Map(rows.map((r) => [tableKey(r.schema, r.name), r.lockable]))
 }

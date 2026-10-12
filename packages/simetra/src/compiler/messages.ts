@@ -2227,6 +2227,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Підключіться роллю, що володіє схемою застосунку, а не роллю API.",
     },
   },
+  "apply.role-mismatch": {
+    en: (p) =>
+      `The plan was built for role ${p.plan}, but the apply runs as ${p.current}: the locks, owners and write path of the plan hold for its role only`,
+    uk: (p) =>
+      `План побудовано для ролі ${p.plan}, а застосування виконується від ${p.current}: замки, власники й шлях запису плану чинні лише для його ролі`,
+    hint: {
+      en: (p) =>
+        `Nothing was written. Apply as ${p.plan}, or plan again as the role that will apply.`,
+      uk: (p) =>
+        `Нічого не записано. Застосуйте від ролі ${p.plan} або побудуйте план знову від ролі, що застосовуватиме.`,
+    },
+  },
   "apply.chain": {
     en: (p) =>
       `The plan starts from snapshot ${p.expected}, but the database is at ${p.found}`,
@@ -2275,6 +2287,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was written. Apply again when the load is lower, or raise the lock timeout.",
       uk: "Нічого не записано. Застосуйте знову, коли навантаження менше, або збільште тайм-аут блокування.",
+    },
+  },
+  "apply.lock-privilege": {
+    en: (p) =>
+      `The apply role may not lock ${p.tables} in ${p.mode} mode up front (${p.error}); the right was there when the plan was built`,
+    uk: (p) =>
+      `Роль застосування не може наперед заблокувати ${p.tables} у режимі ${p.mode} (${p.error}); під час побудови плану це право було`,
+    hint: {
+      en: "Nothing was written. An explicit LOCK stronger than ROW EXCLUSIVE needs MAINTAIN, UPDATE, DELETE or TRUNCATE on the table, or membership in its owner role; restore the right, or plan again so the table becomes an implicit lock of its step.",
+      uk: "Нічого не записано. Явний LOCK сильніше за ROW EXCLUSIVE потребує MAINTAIN, UPDATE, DELETE чи TRUNCATE на таблиці або членства в ролі-власнику; поверніть право або побудуйте план знову, і таблиця стане неявним замком свого кроку.",
+    },
+  },
+  "apply.lock-footprint-exceeded": {
+    en: (p) =>
+      `A step locked ${p.table} in ${p.mode} mode, but the plan expected ${p.planned === "none" ? "no lock" : `at most ${p.planned}`} on it: the lock was taken in the middle of the steps, not up front`,
+    uk: (p) =>
+      `Крок заблокував ${p.table} у режимі ${p.mode}, а план очікував на ній ${p.planned === "none" ? "жодного замка" : `не більше за ${p.planned}`}: замок узято посеред кроків, а не наперед`,
+    hint: {
+      en: "The plan is still valid. The lock footprint model of the platform missed this lock; report the plan, because on the live database the wait for this lock comes outside the single up-front lock point.",
+      uk: "План чинний. Модель сліду замків платформи пропустила цей замок; повідомте про план, бо на живій базі очікування цього замка буде поза єдиною точкою блокування наперед.",
     },
   },
   "apply.connection-lost": {
@@ -2581,6 +2613,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: 'No plan was written. Revoke the write privileges, default privileges or write policies on the target and plan again; see the open question "Write path after promotion" in the promotion spec.',
       uk: "План не записано. Відкличте привілеї запису, типові привілеї чи політики запису на цілі й побудуйте план знову; див. відкрите питання «Шлях запису після промоції» у спеці промоції.",
+    },
+  },
+  "plan.foreign-exclusive-lock": {
+    en: (p) =>
+      `Step ${p.step} takes ACCESS EXCLUSIVE on ${p.table}, a table outside the managed schemas: every read of it is blocked until the apply transaction ends`,
+    uk: (p) =>
+      `Крок ${p.step} бере ACCESS EXCLUSIVE на ${p.table} — таблиці поза керованими схемами: кожне її читання заблоковане до кінця транзакції застосування`,
+    hint: {
+      en: "Apply when the services that read this table can wait, or split the change so that this step goes alone.",
+      uk: "Застосовуйте, коли сервіси, що читають цю таблицю, можуть зачекати, або розділіть зміну, щоб цей крок ішов окремо.",
     },
   },
   "plan.promotion-commit-pending": {

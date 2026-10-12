@@ -475,6 +475,8 @@ describe("cli adapter", () => {
             sql: "ALTER TABLE app.party DROP COLUMN extra;\n-- second line",
           },
         ],
+        locks: [],
+        implicitLocks: [],
         requiredPermissions: ["drift", "s1"],
       }
       const { stdout } = renderResult(
@@ -513,7 +515,11 @@ describe("cli adapter", () => {
           kind: "Catalog",
           name: "Item",
           recordHash: "f".repeat(64),
-          tables: [{ schema: "app", from: "items", to: "item" }],
+          // Таблиця, що лишає ім'я, рядка перейменування не дає
+          tables: [
+            { schema: "app", from: "items", to: "item" },
+            { schema: "app", from: "item_rows", to: "item_rows" },
+          ],
           columns: [{ table: item, from: "title", to: "description" }],
           canonicalNames: [
             {
@@ -527,8 +533,6 @@ describe("cli adapter", () => {
             { token: "access:app.item", summary: ["policy item_read"] },
             { token: "remove:app.item", summary: ["Item#comment"] },
           ],
-          // Ім'я з крапкою лишається однозначним: лапки, а не склеювання
-          implicitLocks: [{ schema: "app", name: "odd.name" }],
         },
         steps: [
           {
@@ -545,6 +549,19 @@ describe("cli adapter", () => {
             lockClass: "accessExclusive",
             sql: 'ALTER TABLE "app"."item" DROP COLUMN "legacy"',
             conversion: "removed",
+          },
+        ],
+        locks: [
+          { schema: "app", name: "items", mode: "accessExclusive" },
+          { schema: "app", name: "groups", mode: "shareRowExclusive" },
+        ],
+        // Ім'я з крапкою лишається однозначним: лапки, а не склеювання
+        implicitLocks: [
+          {
+            schema: "app",
+            name: "odd.name",
+            mode: "shareRowExclusive",
+            step: "s2",
           },
         ],
         requiredPermissions: ["drift", "access:app.item", "s2"],
@@ -569,7 +586,6 @@ describe("cli adapter", () => {
         "  table app.items -> app.item",
         "  column app.item: title -> description",
         "  constraint app.item: items_pkey -> item_pkey",
-        '  implicit lock of the FK step: app."odd.name"',
         "  access:app.item (needs allow: access:app.item)",
         "    policy item_read",
         "  remove:app.item",
@@ -585,9 +601,20 @@ describe("cli adapter", () => {
       expect(lines).toContain(
         '  s2 engine destructive (lock accessExclusive; conversion removed; needs allow: s2) ALTER TABLE "app"."item" DROP COLUMN "legacy"'
       )
+      expect(stdout).not.toContain("app.item_rows ->")
+      expect(
+        at(
+          "locks up front: app.items ACCESS EXCLUSIVE, app.groups SHARE ROW EXCLUSIVE"
+        )
+      ).toBeGreaterThan(at("steps (2):"))
+      expect(
+        at(
+          'implicit lock: app."odd.name" SHARE ROW EXCLUSIVE taken by step s2, not up front: the apply role may not lock it explicitly'
+        )
+      ).toBeGreaterThan(at("steps (2):"))
     })
 
-    it("the text of a rehearsal warns about ACCESS EXCLUSIVE", () => {
+    it("the text of a rehearsal warns about the locks it took", () => {
       const { stdout } = renderResult(
         tool("apply"),
         {
@@ -599,7 +626,7 @@ describe("cli adapter", () => {
         },
         { dir: "metadata", locale: "en", format: "text" }
       )
-      expect(stdout).toContain("ACCESS EXCLUSIVE")
+      expect(stdout).toContain("took the plan's locks")
       expect(stdout).toContain("rolled back")
     })
   })

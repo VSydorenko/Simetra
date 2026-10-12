@@ -327,8 +327,7 @@ function argsFor(tool: Tool): ArgsDef {
     args.rehearse = {
       type: "boolean",
       default: false,
-      description:
-        "Run the plan and roll back; still takes ACCESS EXCLUSIVE locks",
+      description: "Run the plan and roll back; still takes the plan's locks",
     }
     args["lock-timeout-ms"] = {
       type: "string",

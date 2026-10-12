@@ -86,7 +86,9 @@ async function writePlan(
     steps: [],
     requiredPermissions: [],
     drift: null,
+    role: "postgres",
     locks: [],
+    implicitLocks: [],
     preamble: [],
     promotion,
     resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -219,7 +221,6 @@ describe("apply with an unknown outcome", () => {
       preservation: [],
       columns: [],
       canonicalNames: [],
-      implicitLocks: [],
       conversions: [],
     }
     const apply = async (allow?: string[]) => {

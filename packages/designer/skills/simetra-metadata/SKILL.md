@@ -350,7 +350,7 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 `allow` the id of every step that drops data or relaxes a guarantee and
 `drift` when the plan carries drift; the plan output says which items need
 it. `rehearse` runs the plan and rolls it back, but still takes the same
-`ACCESS EXCLUSIVE` locks.
+locks as `apply`.
 
 Which connection to use:
 

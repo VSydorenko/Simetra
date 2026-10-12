@@ -82,6 +82,8 @@ const plan: ExecutablePlan = {
   drift: null,
   targetFingerprint: TARGET,
   desiredFingerprint: DESIRED,
+  role: "postgres",
+  implicitLocks: [],
   locks: [
     { schema: "app", name: "t", mode: "accessExclusive" },
     { schema: "app", name: "x.y", mode: "accessExclusive" },
@@ -127,7 +129,6 @@ const promoted: ExecutablePlan = {
     preservation: [],
     columns: [],
     canonicalNames: [],
-    implicitLocks: [],
     conversions: [],
   },
 }
@@ -164,6 +165,9 @@ interface Script {
   ledgerFormat?: number
   /** Секції відбитка цілі до кроків; типово `TARGET`. */
   targetSections?: CatalogFingerprint["sections"]
+  /** Таблиці до кроків і замки сесії для звірки сліду. */
+  existing?: { oid: string; schema: string; name: string }[]
+  held?: { oid: string; mode: string }[]
 }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
@@ -174,6 +178,8 @@ function labelOf(sql: string): string | undefined {
     return "lookup-timeouts"
   if (sql.includes("set_config('lock_timeout'")) return "timeouts"
   if (sql.includes("current_user")) return "role"
+  if (sql.includes("FROM pg_catalog.pg_locks")) return "held-locks"
+  if (sql.includes("c.oid::text AS oid")) return "existing"
   if (sql.includes("to_regclass") && sql.includes(" AS marker")) return "state"
   if (sql.startsWith("SAVEPOINT simetra_fingerprint")) return "fingerprint"
   if (sql.startsWith("INSERT INTO simetra.marker")) return "marker"
@@ -223,25 +229,30 @@ function fakeDb(script: Script = {}) {
           const rows: Record<string, unknown>[] =
             label?.startsWith("measure") === true
               ? [{ rows: "1", c0: "5" }]
-              : label === "try-lock"
-                ? [{ locked: script.locked ?? true }]
-                : label === "role"
-                  ? [{ role: script.role ?? "postgres" }]
-                  : sql.includes(" AS marker")
-                    ? [{ marker: false, ledger: false }]
-                    : sql.includes("to_regclass")
-                      ? [{ exists: true }]
-                      : label === "lookup"
-                        ? script.ledgerHasApply === true
-                          ? [{ format: script.ledgerFormat ?? 1 }]
-                          : []
-                        : sql.includes("encode(sha256")
-                          ? [
-                              stepsRan
-                                ? DESIRED.sections
-                                : (script.targetSections ?? TARGET.sections),
-                            ]
-                          : []
+              : label === "existing"
+                ? (script.existing ?? [])
+                : label === "held-locks"
+                  ? (script.held ?? [])
+                  : label === "try-lock"
+                    ? [{ locked: script.locked ?? true }]
+                    : label === "role"
+                      ? [{ role: script.role ?? "postgres" }]
+                      : sql.includes(" AS marker")
+                        ? [{ marker: false, ledger: false }]
+                        : sql.includes("to_regclass")
+                          ? [{ exists: true }]
+                          : label === "lookup"
+                            ? script.ledgerHasApply === true
+                              ? [{ format: script.ledgerFormat ?? 1 }]
+                              : []
+                            : sql.includes("encode(sha256")
+                              ? [
+                                  stepsRan
+                                    ? DESIRED.sections
+                                    : (script.targetSections ??
+                                      TARGET.sections),
+                                ]
+                              : []
           return rows as R[]
         },
       }
@@ -268,8 +279,8 @@ describe("executePlan", () => {
     expect(log).toEqual([
       "BEGIN",
       "try-lock",
-      "timeouts",
       "role",
+      "timeouts",
       "state",
       'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
@@ -302,7 +313,7 @@ describe("executePlan", () => {
     return { db: spy, log, calls }
   }
 
-  it("takes access-exclusive locks first, then share-row-exclusive ones", async () => {
+  it("takes the locks from the strongest mode down, before the fingerprint", async () => {
     const { db, log } = fakeDb()
     const outcome = await executePlan(
       db,
@@ -313,6 +324,8 @@ describe("executePlan", () => {
           ...plan.locks,
           { schema: "app", name: "p", mode: "shareRowExclusive" },
           { schema: "ref", name: "q", mode: "shareRowExclusive" },
+          { schema: "app", name: "s", mode: "share" },
+          { schema: "app", name: "v", mode: "shareUpdateExclusive" },
         ],
       },
       options
@@ -322,8 +335,129 @@ describe("executePlan", () => {
     expect(locks).toEqual([
       'LOCK TABLE ONLY app.t, ONLY app."x.y" IN ACCESS EXCLUSIVE MODE',
       "LOCK TABLE ONLY app.p, ONLY ref.q IN SHARE ROW EXCLUSIVE MODE",
+      "LOCK TABLE ONLY app.s IN SHARE MODE",
+      "LOCK TABLE ONLY app.v IN SHARE UPDATE EXCLUSIVE MODE",
     ])
-    expect(log.indexOf(locks[1]!)).toBeLessThan(log.indexOf("fingerprint"))
+    expect(log.indexOf(locks.at(-1)!)).toBeLessThan(log.indexOf("fingerprint"))
+  })
+
+  it("refuses a lock privilege denial without a retry", async () => {
+    const { db, log } = fakeDb({
+      fail: (label) =>
+        label.startsWith("LOCK TABLE")
+          ? new ApplyDbError("permission denied for table t", "42501")
+          : undefined,
+    })
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome).toMatchObject({
+      status: "refused",
+      attempts: 1,
+      diagnostics: [
+        {
+          code: "apply.lock-privilege",
+          params: {
+            mode: "ACCESS EXCLUSIVE",
+            tables: 'app.t, app."x.y"',
+            error: "permission denied for table t",
+          },
+        },
+      ],
+    })
+    expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
+  })
+
+  it("refuses a role other than the plan's right after the advisory lock", async () => {
+    const { db, log } = fakeDb({ role: "someone_else" })
+    const outcome = await executePlan(db, target, plan, {
+      ...options,
+      mode: "rehearse",
+    })
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        {
+          code: "apply.role-mismatch",
+          params: { plan: "postgres", current: "someone_else" },
+        },
+      ],
+    })
+    expect(log).toEqual(["BEGIN", "try-lock", "role", "ROLLBACK"])
+    // Копія доказу — інша база, можливо з іншою роллю адміністрування
+    const proof = fakeDb({ role: "someone_else" })
+    expect(
+      await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
+    ).toMatchObject({ status: "committed" })
+  })
+
+  it("warns about a lock beyond the plan's footprint on existing tables only", async () => {
+    const { db } = fakeDb({
+      existing: [
+        { oid: "1", schema: "app", name: "t" },
+        { oid: "2", schema: "app", name: "p" },
+        { oid: "3", schema: "app", name: "w" },
+        { oid: "4", schema: "app", name: "x" },
+      ],
+      held: [
+        { oid: "1", mode: "AccessExclusiveLock" },
+        { oid: "2", mode: "ShareRowExclusiveLock" },
+        // Кілька режимів однієї таблиці — одне попередження з сильнішим
+        { oid: "2", mode: "ShareLock" },
+        // Не сильніше за ROW EXCLUSIVE
+        { oid: "3", mode: "RowExclusiveLock" },
+        { oid: "4", mode: "ShareUpdateExclusiveLock" },
+        // Таблиця, створена планом: її до кроків не було
+        { oid: "9", mode: "AccessExclusiveLock" },
+      ],
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...plan,
+        implicitLocks: [
+          { schema: "app", name: "p", mode: "share", step: "s2" },
+        ],
+      },
+      { ...options, mode: "rehearse" }
+    )
+    expect(outcome).toMatchObject({
+      status: "rolledBack",
+      diagnostics: [
+        {
+          code: "apply.lock-footprint-exceeded",
+          severity: "warning",
+          params: {
+            table: "app.p",
+            mode: "SHARE ROW EXCLUSIVE",
+            planned: "SHARE",
+          },
+        },
+        {
+          code: "apply.lock-footprint-exceeded",
+          severity: "warning",
+          params: {
+            table: "app.x",
+            mode: "SHARE UPDATE EXCLUSIVE",
+            planned: "none",
+          },
+        },
+      ],
+    })
+  })
+
+  it("checks the lock footprint on rehearsal and proof, not on apply", async () => {
+    for (const mode of ["rehearse", "proof"] as const) {
+      const { db, log } = fakeDb()
+      await executePlan(db, target, plan, { ...options, mode })
+      expect(log.indexOf("existing")).toBeLessThan(
+        log.indexOf("ALTER TABLE app.t ADD COLUMN d int")
+      )
+      expect(log.indexOf("held-locks")).toBe(log.indexOf("ledger") + 1)
+    }
+    const { db, log } = fakeDb()
+    await executePlan(db, target, plan, options)
+    expect(log).not.toContain("existing")
+    expect(log).not.toContain("held-locks")
   })
 
   it("locks the artifact's tables, not the step tables", async () => {
@@ -616,6 +750,7 @@ describe("executePlan", () => {
     ).toEqual([
       "fingerprint",
       "measure app.t",
+      "existing",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
@@ -623,6 +758,7 @@ describe("executePlan", () => {
       "fingerprint",
       "marker",
       "ledger",
+      "held-locks",
       "ROLLBACK",
     ])
   })
@@ -755,7 +891,7 @@ describe("executePlan", () => {
         mode: "rehearse",
       })
     ).toMatchObject({ status: "rolledBack", attempts: 1 })
-    expect(rehearse.log.slice(-3)).toEqual(["marker", "ledger", "ROLLBACK"])
+    expect(rehearse.log.slice(-3)).toEqual(["ledger", "held-locks", "ROLLBACK"])
   })
 
   it("backs off 500, 1000, 2000, 4000 ms ±20% between attempts", async () => {
@@ -890,8 +1026,11 @@ describe("executePlan", () => {
   })
 
   it("refuses an API role", async () => {
+    // План, побудований тією самою роллю API: збіг ролі не рятує
     const { db } = fakeDb({ role: "authenticated" })
-    expect(await executePlan(db, target, plan, options)).toMatchObject({
+    expect(
+      await executePlan(db, target, { ...plan, role: "authenticated" }, options)
+    ).toMatchObject({
       status: "refused",
       diagnostics: [
         { code: "apply.api-role", params: { role: "authenticated" } },

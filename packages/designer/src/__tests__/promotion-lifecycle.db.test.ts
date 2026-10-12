@@ -397,7 +397,6 @@ describe("promotion lifecycle", () => {
           { schema: "app", from: "items", to: "item" },
           { schema: "app", from: "item_lines", to: "item_lines" },
         ],
-        implicitLocks: [],
       })
       const itemTable = { schema: "app", name: "item" }
       const lines = { schema: "app", name: "item_lines" }
@@ -461,6 +460,14 @@ describe("promotion lifecycle", () => {
       expect(data.requiredPermissions[0]).toBe(
         "delete:app.item.item_group_id_fkey"
       )
+      // Зняття FK бере ACCESS EXCLUSIVE на `groups` — наперед, у старому
+      // імені, а не посеред кроків (R26)
+      expect(data.locks).toContainEqual({
+        schema: "app",
+        name: "groups",
+        mode: "accessExclusive",
+      })
+      expect(data.implicitLocks).toEqual([])
 
       // Клас конверсії — біля кроку видалення, який він покриває
       const conversion = (pattern: RegExp) =>
@@ -483,6 +490,8 @@ describe("promotion lifecycle", () => {
       expect(block).toBeGreaterThan(text.indexOf(`planHash: ${data.planHash}`))
       expect(text.indexOf("steps (")).toBeGreaterThan(block)
       expect(text).toContain("  table app.items -> app.item\n")
+      // Таблиця, що лишає ім'я, рядка перейменування не дає
+      expect(text).not.toContain("app.item_lines -> app.item_lines")
       expect(text).toContain("  constraint app.item: items_pkey -> item_pkey\n")
       expect(text).toContain(
         "  delete:app.item.item_group_id_fkey (needs allow: delete:app.item.item_group_id_fkey)\n    own (group_id) → groups: on delete restrict → noAction\n"
@@ -493,6 +502,8 @@ describe("promotion lifecycle", () => {
       const r = await apply(dir, url, data, { rehearse: true })
       expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
       expect((r.data as ApplyData).status).toBe("rolledBack")
+      // Звірка сліду: замки сесії не вийшли за слід плану
+      expect(codes(r)).not.toContain("apply.lock-footprint-exceeded")
       expect(await state(url)).toEqual(before)
       expect(before.items).toEqual([
         expect.objectContaining({ id: ITEM_ROW, title: "first", code: "c-1" }),
@@ -568,7 +579,11 @@ describe("promotion lifecycle", () => {
       const before = await state(url)
       const r = await apply(dir, url, data, { rehearse: true })
       expect(errors(r)).toEqual(["apply.type-narrowing"])
-      expect(r.diagnostics[0]!.params).toMatchObject({ step: retype!.id })
+      expect(r.diagnostics[0]!.params).toMatchObject({
+        step: retype!.id,
+        table: "app.item",
+        column: "description",
+      })
       expect(await state(url)).toEqual(before)
       expect(before.items).toEqual([expect.objectContaining({ title: long })])
     })

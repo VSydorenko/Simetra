@@ -413,7 +413,6 @@ describe("readAppliedPromotions", () => {
             preservation: [],
             columns: [],
             canonicalNames: [],
-            implicitLocks: [],
             conversions: [],
           },
         },

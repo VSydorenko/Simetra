@@ -474,6 +474,24 @@ describe("plan with promotion records", () => {
     })
     expect(spy.connects()).toBe(0)
   })
+
+  it("plan refuses a record file it cannot read", async () => {
+    // Тека з іменем файлу запису: читання дає EISDIR, а не сирий виняток
+    const dir = await projectWith({ [PARTY]: party() })
+    await mkdir(join(dirname(dir), RECORD), { recursive: true })
+    const spy = spyDatabase()
+    const r = await call(
+      "plan",
+      {},
+      options(dir, "postgres://unused", { database: spy.database })
+    )
+    expect(errors(r)).toEqual(["plan.promotion-record-invalid"])
+    expect(r.diagnostics[0]!.params).toMatchObject({
+      file: RECORD,
+      detail: "the file could not be read (EISDIR)",
+    })
+    expect(spy.connects()).toBe(0)
+  })
 })
 
 describe("apply", () => {

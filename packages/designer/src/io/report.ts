@@ -1,6 +1,7 @@
 import type { Diagnostic, Locale } from "simetra/compiler"
 import { localize } from "simetra/compiler"
 import { quoteIdent } from "simetra/model"
+import { LOCK_MODE_SQL } from "simetra/schema"
 import type { ApplyData, PlanData, PlanPromotion } from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 
@@ -93,15 +94,15 @@ const qualified = (schema: string, name: string): string =>
 
 /**
  * Блок «Promotion» (рішення 14 плану П3-2a): що стає чим і що людина
- * дозволяє. Неявний замок кроку FK показано окремим рядком: його немає в
- * явних замках плану, але таблицю він таки блокує (R25).
+ * дозволяє. Таблиця, що лишає своє ім'я, рядка перейменування не дає:
+ * `a -> a` читався б як зміна, якої немає.
  */
 function promotionLines(p: PlanPromotion, needs: Set<string>): string[] {
   const lines = [
     `promotion: ${p.kind} ${p.name} (${p.objectId})`,
     `  record hash: ${p.recordHash}`,
   ]
-  for (const t of p.tables)
+  for (const t of p.tables.filter((x) => x.from !== x.to))
     lines.push(
       `  table ${qualified(t.schema, t.from)} -> ${qualified(t.schema, t.to)}`
     )
@@ -113,8 +114,6 @@ function promotionLines(p: PlanPromotion, needs: Set<string>): string[] {
     lines.push(
       `  ${c.kind} ${qualified(c.table.schema, c.table.name)}: ${quoteIdent(c.from)} -> ${quoteIdent(c.to)}`
     )
-  for (const t of p.implicitLocks)
-    lines.push(`  implicit lock of the FK step: ${qualified(t.schema, t.name)}`)
   for (const item of p.permissionItems) {
     lines.push(
       `  ${item.token}${needs.has(item.token) ? ` (needs allow: ${item.token})` : ""}`
@@ -171,6 +170,16 @@ export function renderPlan(
       )
     }
   }
+  // Замки наперед — одна точка очікування застосування; неявний замок —
+  // таблиці немає серед них, але крок її таки блокує (R26 плану П3-2a)
+  if (d.locks.length > 0)
+    lines.push(
+      `locks up front: ${d.locks.map((l) => `${qualified(l.schema, l.name)} ${LOCK_MODE_SQL[l.mode]}`).join(", ")}`
+    )
+  for (const l of d.implicitLocks)
+    lines.push(
+      `implicit lock: ${qualified(l.schema, l.name)} ${LOCK_MODE_SQL[l.mode]} taken by step ${l.step}, not up front: the apply role may not lock it explicitly`
+    )
   lines.push(report)
   return lines.join("\n")
 }
@@ -196,6 +205,6 @@ export function renderApply(
         : `apply: outcome unknown — check simetra.ledger for apply id ${String(unknown.params?.applyId)}`
       : d.status === "committed"
         ? `apply: committed in ${d.attempts} attempt(s)`
-        : `rehearse: rolled back after ${d.attempts} attempt(s); nothing was written. The rehearsal took ACCESS EXCLUSIVE locks on the changed tables, as apply does.`
+        : `rehearse: rolled back after ${d.attempts} attempt(s); nothing was written. The rehearsal took the plan's locks, as apply does.`
   return [head, report].join("\n")
 }

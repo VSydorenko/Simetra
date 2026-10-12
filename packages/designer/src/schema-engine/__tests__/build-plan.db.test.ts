@@ -1050,6 +1050,116 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
     })
   })
 
+  /**
+   * Слід кроків (спека промоції §8, R26 плану П3-2a) на плані без промоції:
+   * `app.c.pc → app.p.code`. Замок кожного кроку FK береться наперед у
+   * найсильнішому режимі, і звірка сліду на доказі не бачить зайвих замків.
+   */
+  describe("lock footprint", () => {
+    const text = (n: number, name: string, length: number) => ({
+      id: uuid(n),
+      name,
+      physicalName: name,
+      type: "String",
+      length,
+    })
+    const key = (n: number) => ({
+      id: uuid(n),
+      name: "id",
+      physicalName: "id",
+      type: "Integer",
+      notNull: true,
+    })
+    const tables = async (o: {
+      fk: boolean
+      code?: number
+      pc?: number
+    }): Promise<CompiledModel> =>
+      compiled({
+        "custom-tables/P/P.meta.json": customTable("P", {
+          id: uuid(9101),
+          columns: [key(9102), text(9103, "code", o.code ?? 10)],
+          primaryKey: { name: "p_pkey", columns: ["id"] },
+          uniques: [{ name: "p_code_key", columns: ["code"] }],
+        }),
+        "custom-tables/C/C.meta.json": customTable("C", {
+          id: uuid(9111),
+          columns: [key(9112), text(9113, "pc", o.pc ?? 10)],
+          primaryKey: { name: "c_pkey", columns: ["id"] },
+          foreignKeys: o.fk
+            ? [
+                {
+                  name: "c_pc_fk",
+                  columns: ["pc"],
+                  references: {
+                    object: { kind: "CustomTable", name: "P" },
+                    columns: ["code"],
+                  },
+                },
+              ]
+            : [],
+        }),
+      })
+    const table = (name: string, mode: string) => ({
+      schema: "app",
+      name,
+      mode,
+    })
+
+    it.each([
+      [
+        "drops an FK",
+        { fk: true },
+        { fk: false },
+        table("p", "accessExclusive"),
+      ],
+      [
+        "adds an FK",
+        { fk: false },
+        { fk: true },
+        table("p", "shareRowExclusive"),
+      ],
+      [
+        "changes the type of an FK column",
+        { fk: true },
+        { fk: true, pc: 20 },
+        table("p", "accessExclusive"),
+      ],
+      [
+        "changes the type of a referenced column",
+        { fk: true },
+        { fk: true, code: 20 },
+        table("c", "accessExclusive"),
+      ],
+    ])(
+      "locks the other side up front when the plan %s",
+      async (_, before, after, expected) => {
+        const from = await tables(before)
+        const to = await tables(after)
+        await inTarget(EMPTY, async (url) => {
+          await establish(url, from)
+          const outcome = await plan(url, to)
+          const artifact = planned(outcome)
+          expect(artifact.locks).toContainEqual(expected)
+          expect(artifact.implicitLocks).toEqual([])
+          // Доказ звірив замки сесії зі слідом: зайвого немає
+          expect(codes(outcome)).not.toContain("apply.lock-footprint-exceeded")
+          // І на цілі: репетиція бере ті самі замки наперед
+          const rehearsal = await executePlan(writer, { url }, artifact, {
+            mode: "rehearse",
+            planHash: artifact.planHash,
+            allow: artifact.requiredPermissions,
+            snapshot: canonicalSnapshot(to),
+          })
+          expect(rehearsal).toMatchObject({
+            status: "rolledBack",
+            diagnostics: [],
+          })
+        })
+      }
+    )
+  })
+
   describe("promotion", () => {
     type Json = Record<string, unknown>
 
@@ -1294,7 +1404,7 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       expect(errors(outcome)).toEqual([])
     })
 
-    it("locks a foreign key target outside the unit in SHARE ROW EXCLUSIVE mode", async () => {
+    it("does not lock a foreign key target when the promotion only renames the FK column", async () => {
       const files = contactsProject()
       files.set(
         "catalogs/Region/Region.meta.json",
@@ -1322,19 +1432,34 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       mapping.columns.regionId = {
         to: "attribute",
         collection: "attributes",
-        element: { name: "region" },
+        element: { name: "area" },
       }
       const p = await promoted(files, mapping)
-      const artifact = planned(await planPromotion(p))
+      const outcome = await planPromotion(p)
+      const artifact = planned(outcome)
       const region = p.after.physical.tables.find(
         (t) => t.origin.objectId === uuid(7301)
       )!
-      expect(artifact.locks).toContainEqual({
-        schema: region.schema,
-        name: region.name,
-        mode: "shareRowExclusive",
-      })
-      expect(artifact.locks.at(-1)?.mode).toBe("shareRowExclusive")
+      // Перейменування колонки FK і самого FK займає лише власну таблицю
+      // (R26): ціль FK не блокується ні явно, ні неявно
+      expect(
+        stepMatching(artifact, /RENAME COLUMN region_id TO area_id$/)
+      ).toHaveLength(1)
+      expect(
+        stepMatching(
+          artifact,
+          /RENAME CONSTRAINT counterparties_region_id_fkey/
+        )
+      ).toHaveLength(1)
+      expect(
+        [...artifact.locks, ...artifact.implicitLocks].filter(
+          (l) => l.name === region.name
+        )
+      ).toEqual([])
+      // Звірка сліду на доказі: зайвого замка немає
+      expect(outcome.diagnostics.map((d) => d.code)).not.toContain(
+        "apply.lock-footprint-exceeded"
+      )
     })
 
     it("refuses a dropped comment that the record does not classify", async () => {
@@ -1370,8 +1495,8 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
     ])(
       "plans a foreign key target outside the scope %s a lock privilege",
       async (_, drift, expected) => {
-        // Вилучена колонка з FK на `storage.objects`: таблиця поза межею
-        // двигуна, тож явний замок — лише з привілеєм (R25)
+        // Вилучена колонка з FK на `storage.objects`: зняття FK бере ACCESS
+        // EXCLUSIVE на ціль, а явний замок — лише з правом на LOCK (R26)
         const files = contactsProject()
         const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
         ;(party.columns as Json[]).push({
@@ -1397,20 +1522,36 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
         const mapping = contactsMapping()
         mapping.columns.objectId = { to: "retire" }
         const p = await promoted(files, mapping)
-        const artifact = planned(
-          await planPromotion(p, {
-            ...(drift === "" ? {} : { drift, superuser: true }),
-          })
-        )
-        const objects = { schema: "storage", name: "objects" }
+        const outcome = await planPromotion(p, {
+          ...(drift === "" ? {} : { drift, superuser: true }),
+        })
+        const artifact = planned(outcome)
+        const objects = {
+          schema: "storage",
+          name: "objects",
+          mode: "accessExclusive",
+        }
         const locked = artifact.locks.filter((l) => l.schema === "storage")
+        const dropFk = stepMatching(
+          artifact,
+          /DROP CONSTRAINT "counterparties_object_id_fkey"/
+        )[0]!
         if (expected === "lockable") {
-          expect(locked).toEqual([{ ...objects, mode: "shareRowExclusive" }])
-          expect(artifact.promotion!.implicitLocks).toEqual([])
+          expect(locked).toEqual([objects])
+          expect(artifact.implicitLocks).toEqual([])
         } else {
           expect(locked).toEqual([])
-          expect(artifact.promotion!.implicitLocks).toEqual([objects])
+          expect(artifact.implicitLocks).toEqual([
+            { ...objects, step: dropFk.id },
+          ])
         }
+        // Читання таблиці провайдера блоковані на всю транзакцію
+        expect(params(outcome, "plan.foreign-exclusive-lock")).toEqual([
+          { table: "storage.objects", step: dropFk.id },
+        ])
+        expect(outcome.diagnostics.map((d) => d.code)).not.toContain(
+          "apply.lock-footprint-exceeded"
+        )
       }
     )
 

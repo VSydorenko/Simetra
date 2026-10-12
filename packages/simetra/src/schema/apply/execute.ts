@@ -30,8 +30,16 @@ import {
   preservedColumnName,
 } from "./promotion/preservation"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
-import type { TableLock } from "./locks"
+import {
+  coversMode,
+  joinModes,
+  LOCK_MODE_SQL,
+  TABLE_LOCK_MODES,
+  type TableLock,
+  type TableLockMode,
+} from "./locks"
 import { checkPermissions, lintSteps } from "./steps"
+import { tableKey } from "./table-key"
 import { guardTarget } from "./type-guard"
 
 /** Тайм-аути й повтори однієї спроби застосування (рішення 11 плану П3-1). */
@@ -65,7 +73,9 @@ export type ExecutablePlan = Pick<
   | "drift"
   | "targetFingerprint"
   | "desiredFingerprint"
+  | "role"
   | "locks"
+  | "implicitLocks"
   | "preamble"
   | "promotion"
   | "resultCatalog"
@@ -117,6 +127,9 @@ const RETRYABLE: ReadonlySet<string> = new Set(["55P03", "40P01"])
  * плану: ціль уже не та, проти якої план побудовано.
  */
 const VANISHED: ReadonlySet<string> = new Set(["42P01", "42809"])
+
+/** Відмова прав на `LOCK TABLE`: роль не має права на явний замок. */
+const LOCK_PRIVILEGE = "42501"
 
 /** Мітка «стану ще немає» — та сама, що в імені файлу першого плану. */
 const INITIAL = "initial"
@@ -220,14 +233,14 @@ export async function executePlan(
   const end = o.mode === "rehearse" ? "rollback" : "commit"
   for (let attempt = 1; ; attempt++) {
     try {
-      await db.transaction(target, end, (tx) =>
+      const warnings = await db.transaction(target, end, (tx) =>
         runAttempt(tx, plan, o, timeouts, applyId, parse)
       )
       return {
         status: end === "commit" ? "committed" : "rolledBack",
         applyId,
         attempts: attempt,
-        diagnostics: [],
+        diagnostics: warnings,
       }
     } catch (error) {
       if (error instanceof AttemptStop)
@@ -295,7 +308,8 @@ function preservesEveryTable(
 
 /**
  * Одна спроба — оператори рішення 11 по черзі. Нормальне повернення
- * означає `COMMIT` (чи `ROLLBACK` репетиції); кожна відмова — виняток.
+ * означає `COMMIT` (чи `ROLLBACK` репетиції) і несе попередження спроби;
+ * кожна відмова — виняток.
  */
 async function runAttempt(
   tx: ApplyTransaction,
@@ -304,12 +318,24 @@ async function runAttempt(
   timeouts: ApplyTimeouts,
   applyId: string,
   parse: SqlParser
-): Promise<void> {
+): Promise<EngineDiagnostic[]> {
   // 1. Одне застосування на базу; зайнято — одразу відмова, без повторів
   const [lock] = await tx.query<{ locked: boolean }>(
     `SELECT pg_try_advisory_xact_lock(${ADVISORY_LOCK}) AS locked`
   )
   if (lock?.locked !== true) throw stop("refused", "apply.busy")
+
+  // 1a. План побудовано для своєї ролі: від неї залежать замки (право на
+  // явний `LOCK`), власники й шлях запису. `current_user`, бо сесія входу
+  // може переключитися на іншу роль налаштуванням `role`. Копія доказу —
+  // інша база, можливо з іншою роллю адміністрування
+  const [who] = await tx.query<{ role: string }>("SELECT current_user AS role")
+  if (who === undefined) throw new Error("current_user returned no row")
+  if (o.mode !== "proof" && who.role !== plan.role)
+    throw stop("refused", "apply.role-mismatch", {
+      plan: plan.role,
+      current: who.role,
+    })
 
   // 2. `SET LOCAL` параметрів не приймає; `set_config(…, true)` — те саме
   // в межах транзакції, тож за пулером тайм-аут не осяде на чужому backend
@@ -322,10 +348,7 @@ async function runAttempt(
     ]
   )
 
-  // 3. Роллю API схему не змінюють (спека П2 §8.6): `current_user`, бо
-  // сесія входу може переключитися на роль API налаштуванням `role`
-  const [who] = await tx.query<{ role: string }>("SELECT current_user AS role")
-  if (who === undefined) throw new Error("current_user returned no row")
+  // 3. Роллю API схему не змінюють (спека П2 §8.6)
   const apiRoles: readonly string[] = Object.values(
     PROVIDER_API_ROLES[plan.scope.provider]
   )
@@ -336,10 +359,11 @@ async function runAttempt(
   // Копія доказу стану застосування не має, тож там перевіряти нічого
   if (o.mode !== "proof") await checkChain(tx, plan.fromHash)
 
-  // 5. Блокування наперед — одна точка очікування замість очікувань
-  // посеред кроків. Спершу `ACCESS EXCLUSIVE`, потім `SHARE ROW EXCLUSIVE`
-  // цілей FK: порядок артефакту детермінований (рішення 9 плану П3-2a)
-  for (const mode of LOCK_MODES) await lockTables(tx, plan.locks, mode)
+  // 5. Блокування наперед за слідом кроків — одна точка очікування замість
+  // очікувань посеред кроків. Від сильнішого режиму до слабшого, усередині —
+  // порядок артефакту, детермінований (R26 плану П3-2a)
+  for (const mode of [...TABLE_LOCK_MODES].reverse())
+    await lockTables(tx, plan.locks, mode)
 
   // 6. Ціль та сама, що при плануванні. Під блокуваннями п.5 чужа DDL на
   // цих таблицях до кроків уже неможлива. Ціль ↔ ціль — з власником; копія
@@ -357,6 +381,11 @@ async function runAttempt(
   // налаштуваннями транзакції (рішення 6 плану П3-2a)
   const preserved = plan.promotion?.preservation ?? []
   const before = await measureBefore(tx, preserved, parse)
+
+  // 6b. Таблиці, що є до кроків: звірка сліду дивиться лише на них, бо
+  // створена планом таблиця нікого не блокує. Застосування з COMMIT звірки
+  // не робить — це перевірка моделі сліду на доказі й репетиції
+  const existing = o.mode === "apply" ? undefined : await readExistingTables(tx)
 
   // 7. Кроки по черзі, кожен після своїх сторожів; конфлікт блокувань
   // летить далі на повтор спроби. Усі кроки й сторожі — під налаштуваннями
@@ -418,7 +447,104 @@ async function runAttempt(
     applyId,
   }))
     await tx.query(statement.sql, statement.params)
+
+  // 9a. Звірка сліду перед відкатом репетиції чи кінцем доказу: замок,
+  // якого слід плану не передбачив, — прогалина моделі сліду
+  const warnings =
+    existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 10. `COMMIT` чи `ROLLBACK` виконує порт за `end`
+  return warnings
+}
+
+/** Наявна таблиця (`relkind` r/p) на початку кроків: oid і ім'я до них. */
+interface ExistingTable {
+  oid: string
+  schema: string
+  name: string
+}
+
+/**
+ * Таблиці користувача, що є до кроків, з іменами до кроків — тими самими
+ * вихідними іменами, якими план називає замки. Схеми каталогу Postgres —
+ * поза звіркою: їх DDL займає службово, і слід плану про них не каже.
+ */
+async function readExistingTables(
+  tx: ApplyTransaction
+): Promise<ExistingTable[]> {
+  return tx.query<{ oid: string; schema: string; name: string }>(
+    `SELECT c.oid::text AS oid, n.nspname AS schema, c.relname AS name
+     FROM pg_catalog.pg_class c
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.relkind IN ('r', 'p')
+       AND n.nspname NOT IN ('pg_catalog', 'information_schema')`
+  )
+}
+
+/** Режим `pg_locks` сильніший за `ROW EXCLUSIVE`; слабші звірка не бачить. */
+const HELD_MODES: Readonly<Record<string, TableLockMode>> = {
+  ShareUpdateExclusiveLock: "shareUpdateExclusive",
+  ShareLock: "share",
+  ShareRowExclusiveLock: "shareRowExclusive",
+  ExclusiveLock: "exclusive",
+  AccessExclusiveLock: "accessExclusive",
+}
+
+/**
+ * Звірка сліду (спека промоції §8): замки сесії (`pg_locks` власного
+ * backend) на таблицях, що були до кроків, проти сліду плану — явних і
+ * неявних замків. Замок сильніший за `ROW EXCLUSIVE` на таблиці поза слідом
+ * чи сильніший за запланований — попередження `apply.lock-footprint-exceeded`:
+ * такий замок узявся посеред кроків, а не наперед.
+ */
+async function footprintGaps(
+  tx: ApplyTransaction,
+  plan: ExecutablePlan,
+  existing: readonly ExistingTable[]
+): Promise<EngineDiagnostic[]> {
+  const rows = await tx.query<{ oid: string; mode: string }>(
+    `SELECT l.relation::text AS oid, l.mode
+     FROM pg_catalog.pg_locks l
+     WHERE l.pid = pg_catalog.pg_backend_pid() AND l.locktype = 'relation'
+       AND l.granted AND l.relation::text = ANY($1::text[])`,
+    [existing.map((t) => t.oid)]
+  )
+  const byOid = new Map(existing.map((t) => [t.oid, t]))
+  const planned = new Map(
+    [...plan.locks, ...plan.implicitLocks].map((l) => [
+      tableKey(l.schema, l.name),
+      l.mode,
+    ])
+  )
+  // Таблиця може тримати кілька режимів: звіряється найсильніший разом
+  const held = new Map<string, TableLockMode>()
+  for (const row of rows) {
+    const mode = HELD_MODES[row.mode]
+    if (mode === undefined || !byOid.has(row.oid)) continue
+    const seen = held.get(row.oid)
+    held.set(row.oid, seen === undefined ? mode : joinModes(seen, mode))
+  }
+  const out: { table: string; mode: TableLockMode; planned?: TableLockMode }[] =
+    []
+  for (const [oid, mode] of held) {
+    const table = byOid.get(oid)!
+    const expected = planned.get(tableKey(table.schema, table.name))
+    if (expected !== undefined && coversMode(expected, mode)) continue
+    out.push({
+      table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
+      mode,
+      ...(expected === undefined ? {} : { planned: expected }),
+    })
+  }
+  return out
+    .sort((a, b) => (a.table < b.table ? -1 : a.table > b.table ? 1 : 0))
+    .map((gap) =>
+      applyDiagnostic("apply.lock-footprint-exceeded", "warning", {
+        table: gap.table,
+        mode: LOCK_MODE_SQL[gap.mode],
+        planned:
+          gap.planned === undefined ? "none" : LOCK_MODE_SQL[gap.planned],
+      })
+    )
 }
 
 /**
@@ -577,35 +703,36 @@ async function checkChain(
     })
 }
 
-const LOCK_MODES = [
-  ["accessExclusive", "ACCESS EXCLUSIVE"],
-  ["shareRowExclusive", "SHARE ROW EXCLUSIVE"],
-] as const satisfies readonly (readonly [TableLock["mode"], string])[]
-
 /**
  * Один `LOCK TABLE` на режим. Таблиця, що зникла чи змінила вид після плану,
- * — ціль уже не та: відмова, а не збій кроку.
+ * — ціль уже не та: відмова, а не збій кроку. Відмова прав (`42501`) — теж
+ * відмова, без повтору: право ролі план звірив під час побудови, тож воно
+ * змінилося після плану, і повтор його не поверне.
  */
 async function lockTables(
   tx: ApplyTransaction,
   locks: readonly TableLock[],
-  [mode, sqlMode]: (typeof LOCK_MODES)[number]
+  mode: TableLockMode
 ): Promise<void> {
-  const tables = locks.filter((l) => l.mode === mode)
+  const tables = locks
+    .filter((l) => l.mode === mode)
+    .map((t) => `${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
   if (tables.length === 0) return
   try {
     await tx.query(
-      `LOCK TABLE ${tables
-        .map((t) => `ONLY ${quoteIdent(t.schema)}.${quoteIdent(t.name)}`)
-        .join(", ")} IN ${sqlMode} MODE`
+      `LOCK TABLE ${tables.map((t) => `ONLY ${t}`).join(", ")} IN ${LOCK_MODE_SQL[mode]} MODE`
     )
   } catch (error) {
-    if (
-      error instanceof ApplyDbError &&
-      error.sqlstate !== undefined &&
-      VANISHED.has(error.sqlstate)
-    )
+    if (!(error instanceof ApplyDbError) || error.sqlstate === undefined)
+      throw error
+    if (VANISHED.has(error.sqlstate))
       throw stop("refused", "apply.target-changed", { sections: "relations" })
+    if (error.sqlstate === LOCK_PRIVILEGE)
+      throw stop("refused", "apply.lock-privilege", {
+        mode: LOCK_MODE_SQL[mode],
+        tables: tables.join(", "),
+        error: error.message,
+      })
     throw error
   }
 }

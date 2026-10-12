@@ -21,7 +21,7 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
-import { TABLE_LOCK_MODES, type TableLock } from "./locks"
+import { TABLE_LOCK_MODES, type ImplicitLock, type TableLock } from "./locks"
 import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**
@@ -85,13 +85,6 @@ export interface PromotionSection {
   }[]
   /** Id кроку → клас конверсії: лише для показу біля кроку. */
   conversions: { step: string; class: ConversionClass }[]
-  /**
-   * Цілі FK таблиць одиниці поза межею двигуна, які роль, що застосовує, не
-   * може заблокувати явно (немає `UPDATE`, `DELETE` чи `TRUNCATE`): `SHARE
-   * ROW EXCLUSIVE` бере сам крок FK. У `locks` їх немає, але вивід плану їх
-   * показує — не мовчки (R25 плану П3-2a). Порядок — схема, потім ім'я.
-   */
-  implicitLocks: SectionTable[]
 }
 
 /**
@@ -119,10 +112,21 @@ export interface PlanArtifact {
    */
   drift: DriftReport | null
   /**
+   * Роль сесії (`current_user`), для якої план побудовано: від неї залежать
+   * замки, власники й шлях запису, тож застосування іншою роллю — відмова.
+   */
+  role: string
+  /**
    * Що раннер блокує до кроків: вихідні імена з режимом, у детермінованому
-   * порядку (рішення 9 плану П3-2a). Рахує `planLocks`.
+   * порядку, за слідом кроків (R26 плану П3-2a). Рахує `planLocks`.
    */
   locks: TableLock[]
+  /**
+   * Таблиці сліду, які роль не може заблокувати явно (немає права на
+   * `LOCK`): замок бере сам крок `step`. У `locks` їх немає, але вивід плану
+   * їх показує — не мовчки. Порядок — схема, потім ім'я.
+   */
+  implicitLocks: ImplicitLock[]
   /**
    * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. У 2a план її
    * лише несе під хешем, а раннер не виконує: пара неподільна, і П3-2b
@@ -180,7 +184,6 @@ const promotionSectionSchema = z.strictObject({
   conversions: z.array(
     z.strictObject({ step: z.string(), class: conversionClass })
   ),
-  implicitLocks: z.array(sectionTableSchema),
 })
 
 const fingerprintSchema = z.strictObject({
@@ -249,11 +252,20 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
       paths: z.array(z.string()),
     })
     .nullable(),
+  role: z.string(),
   locks: z.array(
     z.strictObject({
       schema: z.string(),
       name: z.string(),
       mode: z.enum(TABLE_LOCK_MODES),
+    })
+  ),
+  implicitLocks: z.array(
+    z.strictObject({
+      schema: z.string(),
+      name: z.string(),
+      mode: z.enum(TABLE_LOCK_MODES),
+      step: z.string(),
     })
   ),
   // Пара поза переліком — не план цієї платформи: раннер її не виконав би

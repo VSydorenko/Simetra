@@ -27,7 +27,23 @@ export {
 } from "./state"
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
-export { planLocks, TABLE_LOCK_MODES, type TableLock } from "./locks"
+export {
+  coversMode,
+  footprintTables,
+  joinModes,
+  LOCK_MODE_SQL,
+  lockPrivileges,
+  planFootprint,
+  planLocks,
+  readLockRights,
+  stepFootprint,
+  TABLE_LOCK_MODES,
+  type FootprintModels,
+  type ImplicitLock,
+  type StepFootprint,
+  type TableLock,
+  type TableLockMode,
+} from "./locks"
 export {
   accessChanges,
   adoptedReplacements,
