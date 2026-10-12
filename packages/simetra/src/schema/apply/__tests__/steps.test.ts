@@ -482,6 +482,23 @@ describe("classifySteps", () => {
     )
   })
 
+  it("keeps a replacement a relaxation for the steps named by noReplacement", () => {
+    // Наскрізна нумерація: крок двигуна після двох кроків наміру — `s3`
+    const steps = classifySteps([dropConstraint, addCheck], UNIQUE, parse, 2, {
+      noReplacement: new Set(["s3"]),
+    })
+    expect(steps.map((s) => [s.id, s.class])).toEqual([
+      ["s3", "relaxation"],
+      ["s4", "validationScan"],
+    ])
+    // Інший id у множині виняток не знімає
+    expect(
+      classifySteps([dropConstraint, addCheck], UNIQUE, parse, 2, {
+        noReplacement: new Set(["s1"]),
+      })[0]?.class
+    ).toBe("catalogOnly")
+  })
+
   it.each(TYPE_CASES)("type change %s", (_name, change, cls) => {
     const step = action(`ALTER TABLE app.t ${change}`, { rewriteRisk: true })
     expect(classifySteps([step], UNIQUE, parse).map((s) => s.class)).toEqual([

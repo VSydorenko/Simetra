@@ -2488,6 +2488,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нове середовище отримує промотований об'єкт одразу; запис важить лише для інстансів, які мають прийняту таблицю.",
     },
   },
+  "plan.rename-not-realized": {
+    en: (p) =>
+      `The schema engine plan would drop or lose data of tables or columns that the promotion renames: ${p.objects}`,
+    uk: (p) =>
+      `План двигуна схеми знищив би чи втратив би дані таблиць або колонок, які перейменовує промоція: ${p.objects}`,
+    hint: {
+      en: "No plan was written. The promotion renames these objects before the engine compares the states, so the engine should keep them; the record and the desired state disagree. Promote again on the state before the promotion, or report the plan output as a platform defect.",
+      uk: "План не записано. Промоція перейменовує ці об'єкти до того, як двигун порівнює стани, тож двигун мав би їх зберегти; запис і бажаний стан розходяться. Повторіть промоцію на стані до неї або повідомте вивід плану як дефект платформи.",
+    },
+  },
+  "plan.removal-unclassified": {
+    en: (p) =>
+      `The promotion removes or redefines objects of the adopted tables that no conversion class covers: ${p.paths}`,
+    uk: (p) =>
+      `Промоція знімає чи перевизначає об'єкти прийнятих таблиць, яких не покриває жоден клас конверсії: ${p.paths}`,
+    hint: {
+      en: "No plan was written. Every adopted constraint, index, default, comment, policy or grant that disappears needs a conversion class in promote; give it one, or keep the object. An adopted primary key must match the kind's key, and an identity or generated column cannot change in a promotion.",
+      uk: "План не записано. Кожне прийняте обмеження, індекс, значення за замовчуванням, коментар, політика чи грант, що зникає, потребує класу конверсії в promote; призначте його або збережіть об'єкт. Прийнятий первинний ключ мусить збігатися з ключем виду, а identity чи генерована колонка в промоції не змінюється.",
+    },
+  },
   "database.failed": {
     en: (p) =>
       `The ${p.tool} call to the database at ${p.database} failed (${p.error}${p.sqlstate === undefined ? "" : `, SQLSTATE ${p.sqlstate}`}). Nothing was written.`,

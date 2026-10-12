@@ -405,12 +405,16 @@ export function intentStep(
  * індекс унікальний, чи таблиця вже існує і який тип мала колонка.
  * `offset` — кількість кроків наміру перед кроками двигуна: нумерація
  * наскрізна, тож дозвіл на `s<N>` однозначний у всьому плані.
+ * `noReplacement` — id кроків, для яких виняток «заміна» не діє: під
+ * промоцією прийнятий об'єкт, перевизначений під тим самим ім'ям, — це
+ * видалення плюс створення (рішення 3 плану П3-2a).
  */
 export function classifySteps(
   actions: readonly EngineAction[],
   target: CatalogModel,
   parse: SqlParser,
-  offset = 0
+  offset = 0,
+  o: { noReplacement?: ReadonlySet<string> } = {}
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -431,7 +435,9 @@ export function classifySteps(
     const base = baseClass(action, parsed(id, action.sql, parse), facts)
     // Виняток не перекриває втрату даних: `destructive` сюди не доходить
     const cls =
-      base === "relaxation" && isReplacement(action, actions.slice(index + 1))
+      base === "relaxation" &&
+      o.noReplacement?.has(id) !== true &&
+      isReplacement(action, actions.slice(index + 1))
         ? "catalogOnly"
         : base
     return {
