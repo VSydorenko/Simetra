@@ -678,6 +678,15 @@
       будь-яка інша комбінація із записом — `plan.promotion-record-stale`
       (один тест).
     - **R15.** Задачі 4, 6, 7, 11 запускають і typecheck `@simetra/designer`.
+    - **R7a.** `canonicalRenames` повертає ще `renames: { kind, table, from,
+      to }[]` у порядку кроків; поле додає перший споживач (задача 10 чи
+      12). У секцію `promotion` іде саме цей масив, під `planHash`.
+    - **R17.** Колонка таблиці одиниці, що залежить від послідовності поза
+      схемою одиниці (OWNED BY — `pg_depend` `a`, чи `DEFAULT nextval` —
+      `pg_attrdef` → `pg_class` `relkind 'S'`, `n`), — відмова у виявленні
+      переходу `plan.promotion-unsupported` (`reason: "sequenceSchema"`), як
+      `primaryKey`: інакше двигун тихо скинув би лічильник. Тест на кожен
+      варіант і негативний (та сама схема → канонічне перейменування).
 
 ## Відомі обмеження
 
