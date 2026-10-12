@@ -35,7 +35,10 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // вище застаріле на 163); reviewed decision архітектора П3-1 — колишній бюджет +
 // приріст × 1,05: 18144 + ceil((17013 − 15120) × 1,05) = 20132; резерв — дубль
 // мапінгу без `$defs`
-const TOOLS_LIST_BUDGET = 20132
+// перевиміряно в П3-2a: токени access:/delete:/remove: у вході й описі apply —
+// 17146 символів (було 17013); за тим самим правилом: 20132 + ceil((17146 −
+// 17013) × 1,05) = 20272
+const TOOLS_LIST_BUDGET = 20272
 const clients: Client[] = []
 
 useTmpProjects()
@@ -156,6 +159,26 @@ describe("apply over MCP", () => {
     const plan = mcpInputSchema(planTool)
     expect(plan.safeParse({ dryRun: true }).success).toBe(true)
     expect(plan.safeParse({ confirm: true }).success).toBe(false)
+  })
+
+  it("takes promotion items in allow", () => {
+    const schema = mcpInputSchema(applyTool)
+    const allow = (items: string[]) =>
+      schema.safeParse({ ...applyInput, confirm: true, allow: items }).success
+    expect(
+      allow([
+        "drift",
+        "s1",
+        "access:app.items",
+        "delete:app.items.items_group_fkey",
+        "remove:app.items",
+        // Ім'я з комою — лише масивом MCP: `--allow` CLI ділить за комою
+        'access:app."a,b"',
+      ])
+    ).toBe(true)
+    expect(allow(["access:"])).toBe(false)
+    expect(allow(["grant:app.items"])).toBe(false)
+    expect(allow(["s0"])).toBe(false)
   })
 
   it("a dry run does not stand in for confirmation", async () => {

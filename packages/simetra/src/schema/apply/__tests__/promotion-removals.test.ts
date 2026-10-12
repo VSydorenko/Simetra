@@ -12,9 +12,12 @@ import type {
   CatalogUnit,
 } from "simetra/model"
 import {
+  accessChanges,
   adoptedReplacements,
+  checkPermissions,
   classifyRemovals,
   classifySteps,
+  promotionPermissionItems,
   stepConversions,
   tableKey,
   unclassifiedRemovals,
@@ -137,6 +140,9 @@ const conversion = (
   objects,
 })
 
+const ITEMS = [{ schema: "app", name: "items" }]
+const CATALOG_ITEMS = [{ schema: "app", name: "catalog_items" }]
+
 const constraint = (name: string, t = "items"): PromotionObject => ({
   kind: "constraint",
   schema: "app",
@@ -210,6 +216,7 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.uniques.items_code_key",
         kind: "missing",
         covered: "rowRule",
+        tables: ITEMS,
       },
     ])
     expect(unclassifiedRemovals(removals)).toEqual([])
@@ -228,6 +235,7 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.checks.items_k",
         kind: "missing",
         covered: "rowRule",
+        tables: ITEMS,
       },
     ])
   })
@@ -263,6 +271,7 @@ describe("classifyRemovals", () => {
         path: "units.policy:app.catalog_items.items_read",
         kind: "missing",
         covered: "platform",
+        tables: CATALOG_ITEMS,
       },
     ])
   })
@@ -290,6 +299,7 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.columns.code",
         kind: "missing",
         covered: "retired",
+        tables: ITEMS,
       },
     ])
   })
@@ -348,16 +358,19 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.columns.old_group",
         kind: "missing",
         covered: "retired",
+        tables: ITEMS,
       },
       {
         path: "tables.app.items.foreignKeys.items_group_id_fkey",
         kind: "changed",
         covered: "deleteSemantics",
+        tables: ITEMS,
       },
       {
         path: "tables.app.items.foreignKeys.items_old_group_fkey",
         kind: "missing",
         covered: "retired",
+        tables: ITEMS,
       },
     ])
   })
@@ -407,12 +420,14 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.columns.code.default",
         kind: "changed",
         covered: "property",
+        tables: ITEMS,
       },
       {
         // Шлях — у старих іменах: `description` був `title`
         path: "tables.app.items.columns.title.default",
         kind: "changed",
         covered: "mapping",
+        tables: ITEMS,
       },
     ])
   })
@@ -462,6 +477,7 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.columns.org_ref.default",
         kind: "changed",
         covered: "removed",
+        tables: ITEMS,
       },
     ])
     expect(unclassifiedRemovals(removed)).toEqual([])
@@ -487,6 +503,7 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.columns.code.comment",
         kind: "changed",
         covered: "metadata",
+        tables: ITEMS,
       },
     ])
   })
@@ -543,11 +560,13 @@ describe("classifyRemovals", () => {
         path: "units.grant:app.catalog_items:anon:select",
         kind: "missing",
         covered: null,
+        tables: CATALOG_ITEMS,
       },
       {
         path: "units.grant:app.catalog_items:authenticated:update",
         kind: "missing",
         covered: "removed",
+        tables: CATALOG_ITEMS,
       },
     ])
     expect(unclassifiedRemovals(removals)).toEqual([
@@ -586,7 +605,12 @@ describe("classifyRemovals", () => {
       parse,
     })
     expect(removals).toEqual([
-      { path: "tables.a.b.c.checks.k", kind: "missing", covered: null },
+      {
+        path: "tables.a.b.c.checks.k",
+        kind: "missing",
+        covered: null,
+        tables: [{ schema: "a", name: "b.c" }],
+      },
     ])
   })
 
@@ -618,16 +642,19 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.rowLevelSecurity",
         kind: "changed",
         covered: "rowLevelSecurity",
+        tables: ITEMS,
       },
       {
         path: "tables.app.items.columns.code.default",
         kind: "changed",
         covered: "property",
+        tables: ITEMS,
       },
       {
         path: "tables.app.items.columns.code.comment",
         kind: "changed",
         covered: null,
+        tables: ITEMS,
       },
     ])
   })
@@ -747,6 +774,7 @@ describe("classifyRemovals", () => {
         path: "tables.app.items.indexes.items_code_idx",
         kind: "changed",
         covered: "rowRule",
+        tables: ITEMS,
       },
     ])
   })
@@ -1090,5 +1118,291 @@ describe("stepConversions", () => {
       destroyed: [{ kind: "index", schema: "app", name: "items_name_idx" }],
     })
     expect(stepConversions([drop], rec, intent(), parse).size).toBe(0)
+  })
+})
+
+describe("access and permission items", () => {
+  const access = (
+    rec: PromotionRecord,
+    clone: CatalogModel,
+    desired: CatalogModel,
+    dependents: Map<string, string[]> = new Map(),
+    i: RenameIntent = intent()
+  ) =>
+    accessChanges({ record: rec, intent: i, clone, desired, dependents, parse })
+
+  it("lists an access change for RLS off → enabled and a dropped read policy", () => {
+    const read = unit(
+      "policy",
+      "policy:app.catalog_items.items_read",
+      "items_read",
+      "CREATE POLICY items_read ON app.catalog_items FOR SELECT USING (true)"
+    )
+    // Політика іншої таблиці лишається: зміна доступу — лише таблиці одиниці
+    const other = unit(
+      "policy",
+      "policy:app.debts.debts_read",
+      "debts_read",
+      "CREATE POLICY debts_read ON app.debts FOR SELECT USING (true)"
+    )
+    const changes = access(
+      record({
+        tables: [
+          { id: OBJECT_ID, schema: "app", from: "items", to: "catalog_items" },
+        ],
+        rowLevelSecurity: [
+          { schema: "app", table: "items", from: "off", to: "enabled" },
+        ],
+      }),
+      model(
+        [table("catalog_items", { rowLevelSecurity: "off" }), table("debts")],
+        [read, other]
+      ),
+      model([table("catalog_items"), table("debts")], [other]),
+      // Залежні прочитано з цілі, де таблиця ще має старе ім'я
+      new Map([
+        [
+          tableKey("app", "items"),
+          ["policy app.debts.debts_read", "view app.items_view"],
+        ],
+      ]),
+      intent({ tables: [["catalog_items", "items"]] })
+    )
+    expect(changes).toEqual([
+      {
+        table: { schema: "app", name: "catalog_items" },
+        rowLevelSecurity: { from: "off", to: "enabled" },
+        policies: ["missing policy:app.catalog_items.items_read"],
+        grants: [],
+        dependents: ["policy app.debts.debts_read", "view app.items_view"],
+      },
+    ])
+    expect(promotionPermissionItems(changes, [], [])).toEqual([
+      {
+        token: "access:app.catalog_items",
+        summary: [
+          "rowLevelSecurity off → enabled",
+          "missing policy:app.catalog_items.items_read",
+          "dependent policy app.debts.debts_read",
+          "dependent view app.items_view",
+        ],
+      },
+    ])
+  })
+
+  it("lists an access change for a changed grant", () => {
+    const grant = (role: string, sql: string) =>
+      unit("grant", `grant:app.items:${role}:select`, "items", sql)
+    const changes = access(
+      record({}),
+      model(
+        [table("items")],
+        [grant("anon", "GRANT SELECT ON TABLE app.items TO anon")]
+      ),
+      model(
+        [table("items")],
+        [
+          grant("anon", "GRANT SELECT (id) ON TABLE app.items TO anon"),
+          grant(
+            "authenticated",
+            "GRANT SELECT ON TABLE app.items TO authenticated"
+          ),
+        ]
+      )
+    )
+    expect(changes).toEqual([
+      {
+        table: { schema: "app", name: "items" },
+        policies: [],
+        grants: [
+          "changed grant:app.items:anon:select",
+          "extra grant:app.items:authenticated:select",
+        ],
+        dependents: [],
+      },
+    ])
+    expect(
+      promotionPermissionItems(changes, [], []).map((i) => i.token)
+    ).toEqual(["access:app.items"])
+    // Той самий доступ — жодної зміни й жодного пункту
+    const same = model(
+      [table("items")],
+      [grant("anon", "GRANT SELECT ON TABLE app.items TO anon")]
+    )
+    expect(access(record({}), same, same)).toEqual([])
+  })
+
+  it("emits delete tokens for own and incoming delete semantics", () => {
+    const items = promotionPermissionItems(
+      [],
+      [
+        {
+          direction: "incoming",
+          schema: "app",
+          table: "orders.v2",
+          constraint: "orders_item_fkey",
+          columns: ["item_id"],
+          target: "items",
+          from: "cascade",
+          to: "cascade",
+        },
+        {
+          direction: "own",
+          schema: "app",
+          table: "items",
+          constraint: "items_group_fkey",
+          columns: ["group_id"],
+          target: "groups",
+          from: "none",
+          to: "restrict",
+        },
+      ],
+      []
+    )
+    // Порядок — за кодовими одиницями токена: `"` іде перед літерами
+    expect(items).toEqual([
+      {
+        // Ім'я з крапкою кваліфіковано `quoteIdent`: токен однозначний
+        token: 'delete:app."orders.v2".orders_item_fkey',
+        summary: ["incoming (item_id) → items: on delete cascade → cascade"],
+      },
+      {
+        token: "delete:app.items.items_group_fkey",
+        summary: ["own (group_id) → groups: on delete none → restrict"],
+      },
+    ])
+  })
+
+  it("requires remove: for objects classed removed", () => {
+    const index = {
+      name: "items_name_idx",
+      unique: false,
+      method: "btree",
+      keys: [{ column: "name" }],
+      include: [],
+      nullsNotDistinct: false,
+    }
+    const clone = model([
+      table("items", { columns: [col("name")], indexes: [index] }),
+    ])
+    const desired = model([table("items", { columns: [col("name")] })])
+    const removals = classify(
+      record({
+        conversions: [
+          conversion("removed", {
+            kind: "index",
+            schema: "app",
+            table: "items",
+            name: "items_name_idx",
+          }),
+        ],
+      }),
+      clone,
+      desired
+    )
+    expect(unclassifiedRemovals(removals)).toEqual([])
+    // Неунікальний індекс знімається кроком `catalogOnly`: дозволу просить
+    // лише пункт `remove:`
+    const steps = classifySteps(
+      [
+        action("DROP INDEX app.items_name_idx", {
+          verb: "drop",
+          destroys: ["index:app.items_name_idx"],
+          destroyed: [{ kind: "index", schema: "app", name: "items_name_idx" }],
+        }),
+      ],
+      clone,
+      parse
+    )
+    expect(steps.map((s) => s.class)).toEqual(["catalogOnly"])
+    const permissionItems = promotionPermissionItems([], [], removals)
+    expect(permissionItems).toEqual([
+      {
+        token: "remove:app.items",
+        summary: ["tables.app.items.indexes.items_name_idx"],
+      },
+    ])
+    const subject = { steps, drift: null, promotion: { permissionItems } }
+    expect(checkPermissions(subject, [])).toEqual([
+      expect.objectContaining({
+        code: "apply.permission-required",
+        params: { items: "remove:app.items" },
+      }),
+    ])
+    expect(checkPermissions(subject, ["remove:app.items"])).toEqual([])
+  })
+
+  it("requires remove: for a lost scope column default classed removed", () => {
+    // DEFAULT носія скоупу має лише клас «видалено» (R21); крок DROP DEFAULT
+    // — `catalogOnly`, тож дозвіл дає тільки `remove:` нового імені таблиці
+    const clone = model([
+      table("catalog_items", {
+        columns: [
+          col("org_id", { type: "uuid", default: "gen_random_uuid()" }),
+        ],
+      }),
+    ])
+    const removals = classify(
+      record({
+        tables: [
+          { id: OBJECT_ID, schema: "app", from: "items", to: "catalog_items" },
+        ],
+        columns: [
+          {
+            id: "00000000-0000-4000-8000-000000000301",
+            sourceId: "00000000-0000-4000-8000-000000000302",
+            schema: "app",
+            table: "catalog_items",
+            from: "org_ref",
+            to: "org_id",
+          },
+        ],
+        conversions: [
+          conversion("removed", {
+            kind: "default",
+            schema: "app",
+            table: "items",
+            column: "org_ref",
+          }),
+        ],
+      }),
+      clone,
+      model([
+        table("catalog_items", { columns: [col("org_id", { type: "uuid" })] }),
+      ]),
+      intent({ tables: [["catalog_items", "items"]] })
+    )
+    const steps = classifySteps(
+      [
+        action(
+          "ALTER TABLE app.catalog_items ALTER COLUMN org_id DROP DEFAULT"
+        ),
+      ],
+      clone,
+      parse
+    )
+    expect(steps.map((s) => s.class)).toEqual(["catalogOnly"])
+    expect(promotionPermissionItems([], [], removals)).toEqual([
+      {
+        token: "remove:app.catalog_items",
+        summary: ["tables.app.items.columns.org_ref.default"],
+      },
+    ])
+  })
+
+  it("gives no remove: for removals covered by other classes", () => {
+    const removals = classify(
+      record({
+        conversions: [conversion("rowRule", constraint("items_k"))],
+      }),
+      model([
+        table("items", {
+          checks: [{ name: "items_k", expression: "CHECK (true)" }],
+        }),
+      ]),
+      model([table("items")])
+    )
+    expect(removals.map((r) => r.covered)).toEqual(["rowRule"])
+    expect(promotionPermissionItems([], [], removals)).toEqual([])
   })
 })

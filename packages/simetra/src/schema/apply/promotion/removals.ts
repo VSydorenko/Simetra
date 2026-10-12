@@ -41,13 +41,20 @@ export type RemovalCover =
 /**
  * Запис класифікатора: що з прийнятої таблиці зникає (`missing`) чи
  * змінюється (`changed`) між копією після наміру й бажаною тінню. `path` —
- * лише для повідомлення, у старих іменах таблиці й об'єкта.
+ * лише для повідомлення, у старих іменах таблиці й об'єкта. `tables` —
+ * таблиці одиниці, яких стосується запис, структурно й у нових іменах: за
+ * ними `remove:<таблиця>` (рішення 8). Одиниця з кількома цілями (грант на
+ * таблицю й ТЧ) називає кілька таблиць.
  */
 export interface Removal {
   path: string
   kind: "missing" | "changed"
   covered: RemovalCover
+  tables: { schema: string; name: string }[]
 }
+
+/** Запис таблиці до того, як класифікатор додасть саму таблицю. */
+type TableRemoval = Omit<Removal, "tables">
 
 /** Таблиця одиниці: схема, нове (на копії після наміру) і старе ім'я. */
 interface UnitTable {
@@ -348,10 +355,16 @@ export function classifyRemovals(p: {
         path: path("tables", u.schema, u.old),
         kind: "missing",
         covered: null,
+        tables: [{ schema: u.schema, name: u.name }],
       })
       continue
     }
-    out.push(...tableRemovals(u, from, to, record, names))
+    out.push(
+      ...tableRemovals(u, from, to, record, names).map((r) => ({
+        ...r,
+        tables: [{ schema: u.schema, name: u.name }],
+      }))
+    )
   }
   out.push(...unitRemovals(record, clone, desired, parse, names, unitTables))
   return out
@@ -370,8 +383,8 @@ function tableRemovals(
   to: CatalogTable,
   record: PromotionRecord,
   names: OldNames
-): Removal[] {
-  const out: Removal[] = []
+): TableRemoval[] {
+  const out: TableRemoval[] = []
   const at = (...rest: string[]) => path("tables", u.schema, u.old, ...rest)
   const object = (o: PromotionObject) => classOf(record, o)
   const oldColumn = (c: string) => names.column(u.schema, u.name, c)
@@ -505,8 +518,8 @@ function columnChanges(
   old: string,
   record: PromotionRecord,
   at: (...rest: string[]) => string
-): Removal[] {
-  const out: Removal[] = []
+): TableRemoval[] {
+  const out: TableRemoval[] = []
   const changed = (field: string, covered: RemovalCover) =>
     out.push({ path: at("columns", old, field), kind: "changed", covered })
   const onColumn = <
@@ -607,11 +620,28 @@ function unitRemovals(
       const classes = keys.map((k) =>
         classOf(record, { kind: "unit", ...k.key })
       )
+      // Ключ із класом `removed` важить більше за інші класи тієї самої
+      // одиниці: його зняття без дозволу `remove:` пройшло б (рішення 8)
+      const removed = classes.includes("removed")
+      const covered = classes.every((c) => c !== null)
+        ? removed
+          ? "removed"
+          : classes[0]!
+        : null
+      const tables = keys
+        .filter((_, i) => covered !== "removed" || classes[i] === "removed")
+        .map((k) => ({ schema: k.key.schema, name: k.newTable }))
       return [
         {
           path: path("units", unit.identity),
           kind: same === undefined ? "missing" : "changed",
-          covered: classes.every((c) => c !== null) ? classes[0]! : null,
+          covered,
+          tables: tables.filter(
+            (t, i) =>
+              tables.findIndex(
+                (o) => o.schema === t.schema && o.name === t.name
+              ) === i
+          ),
         },
       ]
     })

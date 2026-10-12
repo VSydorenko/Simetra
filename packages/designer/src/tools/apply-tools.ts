@@ -184,7 +184,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes ACCESS EXCLUSIVE locks). Needs the plan's hash; destructive and relaxing steps need `allow` by id, and a plan with drift needs `drift` in `allow`.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes ACCESS EXCLUSIVE locks). Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete: and remove: items.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:
@@ -195,9 +195,14 @@ export const applyTool = defineTool({
       .regex(/^[0-9a-f]{64}$/)
       .meta({ description: "planHash of the reviewed plan." }),
     allow: z
-      .array(z.string().regex(/^(?:s[1-9][0-9]*|drift)$/))
+      .array(
+        z.string().regex(/^(?:s[1-9][0-9]*|drift|(?:access|delete|remove):.+)$/)
+      )
       .optional()
-      .meta({ description: "Step ids (s1, s2, …) and drift to permit." }),
+      .meta({
+        description:
+          "Plan items to permit: step ids (s1, s2, …), drift, access:<table>, delete:<table>.<constraint>, remove:<table>.",
+      }),
     rehearse: z.boolean().optional(),
     lockTimeoutMs: timeoutMs.optional(),
     statementTimeoutMs: timeoutMs.optional(),
@@ -245,7 +250,11 @@ export const applyTool = defineTool({
 
     // 6. Дозволи — до підключення: відмова не відкриває пулу запису
     const allow = input.allow ?? []
-    const permissions = checkPermissions(artifact, allow)
+    // Артефакт ще не несе секції `promotion` (рішення 15 плану П3-2a, R1)
+    const permissions = checkPermissions(
+      { steps: artifact.steps, drift: artifact.drift, promotion: null },
+      allow
+    )
     if (permissions.length > 0) return refusedWith(permissions.map(fromEngine))
 
     // 7. Лише тут відкривається пул, що може писати в ціль. Тайм-аути — лише

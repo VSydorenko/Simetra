@@ -580,27 +580,67 @@ const NEEDS_PERMISSION: ReadonlySet<StepClass> = new Set<StepClass>([
  */
 export const DRIFT_PERMISSION = "drift"
 
-/** Що в плані дозволяють: кроки й дрейф. */
+/**
+ * Пункт дозволу промоції (рішення 8 плану П3-2a): токен `access:`,
+ * `delete:` чи `remove:` і те, що людина переглядає перед дозволом.
+ */
+export interface PermissionItem {
+  token: string
+  summary: string[]
+}
+
+/** Що в плані дозволяють: кроки, дрейф і пункти промоції. */
 export interface PermissionSubject {
   steps: readonly PlanStep[]
   drift: DriftReport | null
+  promotion: { permissionItems: readonly PermissionItem[] } | null
+}
+
+/**
+ * Групи токенів промоції в порядку перегляду: спершу зміна доступу, потім
+ * семантика видалення, далі видалене з дозволом.
+ */
+const PROMOTION_GROUPS = ["access:", "delete:", "remove:"] as const
+
+const groupOf = (token: string): number =>
+  PROMOTION_GROUPS.findIndex((prefix) => token.startsWith(prefix))
+
+/**
+ * Порядок пунктів промоції: група, усередині — за кодовими одиницями, а не
+ * за локаллю, щоб порядок не залежав від машини.
+ */
+export function comparePermissionItems(
+  a: PermissionItem,
+  b: PermissionItem
+): number {
+  const group = groupOf(a.token) - groupOf(b.token)
+  if (group !== 0) return group
+  return a.token < b.token ? -1 : a.token > b.token ? 1 : 0
 }
 
 /**
  * Пункти, яким потрібен явний дозвіл: дрейф першим — його переглядають до
  * кроків, бо кроки показують, що станеться з об'єктами, які дрейфнули, —
- * далі id кроків у порядку плану.
+ * далі пункти промоції (`access:`, `delete:`, `remove:`), бо вони кажуть,
+ * чим стане таблиця, а не як туди дійти, і насамкінець id кроків у порядку
+ * плану.
  */
 export function requiredPermissions(plan: PermissionSubject): string[] {
+  const promotion = [...(plan.promotion?.permissionItems ?? [])]
+    .sort(comparePermissionItems)
+    .map((i) => i.token)
   return [
     ...(plan.drift === null ? [] : [DRIFT_PERMISSION]),
+    ...new Set(promotion),
     ...plan.steps.filter((s) => NEEDS_PERMISSION.has(s.class)).map((s) => s.id),
   ]
 }
 
 /**
- * Дозволи `allow` проти плану. Зайвий пункт — теж відмова: дозвіл на крок,
- * якого немає чи який дозволу не потребує, або на дрейф, якого план не має,
+ * Дозволи `allow` проти плану. Пункти рахуються тут із кроків, дрейфу й
+ * пунктів промоції, а не беруться з поля `requiredPermissions` артефакту:
+ * поле лише показ. Зайвий пункт — теж відмова: дозвіл на крок, якого немає
+ * чи який дозволу не потребує, на дрейф чи пункт промоції, яких план не має,
  * означає, що автор дозволяв інший план.
  */
 export function checkPermissions(

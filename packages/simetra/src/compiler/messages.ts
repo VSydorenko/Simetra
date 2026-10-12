@@ -2102,12 +2102,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.permission-required": {
     en: (p) =>
-      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, or drift, a change made to the database outside the platform`,
+      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, drift (a change made to the database outside the platform), or a promotion's access change, delete semantics or removal`,
     uk: (p) =>
-      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, або дрейф — зміна бази повз платформу`,
+      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, дрейф (зміна бази повз платформу) або зміна доступу, семантика видалення чи видалення промоції`,
     hint: {
-      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift.",
-      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift.",
+      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift, a promotion item by its access:, delete: or remove: token.",
+      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift, пункт промоції — його токеном access:, delete: чи remove:.",
     },
   },
   "apply.permission-unknown": {
@@ -2116,8 +2116,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Дозволені пункти ${p.items} відсутні в плані або не потребують дозволу`,
     hint: {
-      en: "Allow only the ids of destructive and relaxation steps of this plan, and drift only when the plan reports drift; a stale item means the permission was given for another plan.",
-      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, а drift — лише коли план повідомляє дрейф; застарілий пункт означає, що дозвіл давали іншому плану.",
+      en: "Allow only the ids of destructive and relaxation steps of this plan, drift only when the plan reports drift, and only the promotion items the plan lists; a stale item means the permission was given for another plan.",
+      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, drift — лише коли план повідомляє дрейф, і лише ті пункти промоції, які план перелічує; застарілий пункт означає, що дозвіл давали іншому плану.",
     },
   },
   "apply.first-apply": {

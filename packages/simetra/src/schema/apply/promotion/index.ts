@@ -18,3 +18,9 @@ export {
   type Removal,
   type RemovalCover,
 } from "./removals"
+export {
+  accessChanges,
+  promotionPermissionItems,
+  readAccessDependents,
+  type AccessChange,
+} from "./access"

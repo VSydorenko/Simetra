@@ -619,7 +619,9 @@ describe("requiredPermissions", () => {
       UNIQUE,
       parse
     )
-    expect(requiredPermissions({ steps, drift: null })).toEqual(["s2", "s3"])
+    expect(
+      requiredPermissions({ steps, drift: null, promotion: null })
+    ).toEqual(["s2", "s3"])
   })
 
   it("needs nothing for a replacement", () => {
@@ -627,6 +629,7 @@ describe("requiredPermissions", () => {
       requiredPermissions({
         steps: classifySteps([dropConstraint, addCheck], UNIQUE, parse),
         drift: null,
+        promotion: null,
       })
     ).toEqual([])
   })
@@ -636,8 +639,37 @@ describe("requiredPermissions", () => {
       requiredPermissions({
         steps: classifySteps([dropTrigger], UNIQUE, parse),
         drift: { reason: "drift", sections: ["owner"], paths: [] },
+        promotion: null,
       })
     ).toEqual(["drift", "s1"])
+  })
+
+  it("orders permissions drift, access, delete, remove, then steps", () => {
+    // Пункти промоції подано врозсип: порядок задає сам `requiredPermissions`
+    const items = [
+      "remove:app.b",
+      "delete:app.x.x_fkey",
+      "access:app.z",
+      "remove:app.a",
+      "access:app.a",
+      "delete:app.a.a_fkey",
+    ].map((token) => ({ token, summary: [] }))
+    expect(
+      requiredPermissions({
+        steps: classifySteps([dropTrigger], UNIQUE, parse),
+        drift: { reason: "drift", sections: ["owner"], paths: [] },
+        promotion: { permissionItems: items },
+      })
+    ).toEqual([
+      "drift",
+      "access:app.a",
+      "access:app.z",
+      "delete:app.a.a_fkey",
+      "delete:app.x.x_fkey",
+      "remove:app.a",
+      "remove:app.b",
+      "s1",
+    ])
   })
 })
 
@@ -806,11 +838,13 @@ describe("checkPermissions", () => {
     paths: [],
   }
   const check = (allow: string[], drift: DriftReport | null = null) =>
-    checkPermissions({ steps: steps(), drift }, allow).map((d) => ({
-      code: d.code,
-      severity: d.severity,
-      params: d.params,
-    }))
+    checkPermissions({ steps: steps(), drift, promotion: null }, allow).map(
+      (d) => ({
+        code: d.code,
+        severity: d.severity,
+        params: d.params,
+      })
+    )
 
   it("passes when every step that needs permission is allowed", () => {
     expect(check(["s1", "s3"])).toEqual([])
@@ -876,6 +910,67 @@ describe("checkPermissions", () => {
         params: { items: "drift, s1, s3" },
       },
     ])
+  })
+
+  describe("with promotion items", () => {
+    const promotion = {
+      permissionItems: [
+        { token: "delete:app.items.items_group_fkey", summary: [] },
+        { token: "access:app.items", summary: [] },
+      ],
+    }
+    const checkPromotion = (allow: string[]) =>
+      checkPermissions({ steps: steps(), drift: null, promotion }, allow).map(
+        (d) => ({ code: d.code, params: d.params })
+      )
+
+    it("requires every access and delete token", () => {
+      expect(checkPromotion(["s1", "s3"])).toEqual([
+        {
+          code: "apply.permission-required",
+          params: {
+            items: "access:app.items, delete:app.items.items_group_fkey",
+          },
+        },
+      ])
+      expect(checkPromotion(["s1", "s3", "access:app.items"])).toEqual([
+        {
+          code: "apply.permission-required",
+          params: { items: "delete:app.items.items_group_fkey" },
+        },
+      ])
+      expect(
+        checkPromotion([
+          "s1",
+          "s3",
+          "access:app.items",
+          "delete:app.items.items_group_fkey",
+        ])
+      ).toEqual([])
+    })
+
+    it("refuses an access token the plan does not need", () => {
+      const all = [
+        "s1",
+        "s3",
+        "access:app.items",
+        "delete:app.items.items_group_fkey",
+      ]
+      expect(checkPromotion([...all, "access:app.other"])).toEqual([
+        {
+          code: "apply.permission-unknown",
+          params: { items: "access:app.other" },
+        },
+      ])
+      // Без секції промоції жоден токен промоції не потрібен
+      expect(check(["s1", "s3", "remove:app.items"])).toEqual([
+        {
+          code: "apply.permission-unknown",
+          severity: "error",
+          params: { items: "remove:app.items" },
+        },
+      ])
+    })
   })
 
   it("refuses allowing drift on a plan without drift", () => {

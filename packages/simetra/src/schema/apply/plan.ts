@@ -274,7 +274,7 @@ export async function buildPlan(
     }),
   ]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
-  const permissions = requiredPermissions({ steps, drift })
+  const permissions = requiredPermissions({ steps, drift, promotion: null })
 
   // 8–10. Доказ на копії. План доказу несе той самий дрейф, тож дозволи
   // `requiredPermissions` йому відповідають

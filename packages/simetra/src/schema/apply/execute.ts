@@ -160,7 +160,12 @@ export async function executePlan(
   const refusals = [
     ...fingerprintVersions(plan),
     ...lintSteps(plan.steps, parse),
-    ...checkPermissions({ steps: plan.steps, drift: plan.drift }, o.allow),
+    // Артефакт ще не несе секції `promotion` (рішення 15 плану П3-2a, R1):
+    // пунктів промоції план не має
+    ...checkPermissions(
+      { steps: plan.steps, drift: plan.drift, promotion: null },
+      o.allow
+    ),
   ]
   if (refusals.length > 0)
     return { status: "refused", attempts: 0, diagnostics: refusals }
