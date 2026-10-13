@@ -568,3 +568,154 @@ describe("apply lifecycle", () => {
     })
   })
 })
+
+/**
+ * Глобальні типові привілеї ролі застосування (рішення 5 плану П3-2b-0, Пр22):
+ * поза межею й поза відбитком, але Postgres застосовує їх до кожного об'єкта,
+ * який створює план. Кроки середовища повертають таким об'єктам права
+ * бажаного стану, а раннер відмовляє, коли перелік змінився після плану.
+ */
+describe("global default privileges", () => {
+  /** Права функції чи таблиці рядками `aclexplode` з урахуванням типових. */
+  const acl = async (url: string, sql: string): Promise<string[]> =>
+    (await rows<{ item: string }>(url, sql)).map((r) => r.item)
+
+  const functionAcl = (url: string) =>
+    acl(
+      url,
+      `select format('%s:%s:%s', x.grantee::regrole, x.privilege_type, x.is_grantable) as item
+       from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
+       where p.oid = 'app.f()'::regprocedure order by 1`
+    )
+
+  /** Права `app.f()` у бажаній тіні метаданих теки — без глобальних ADP. */
+  async function shadowFunctionAcl(dir: string): Promise<string[]> {
+    const compiled = await compile(await readMetadataDir(dir))
+    if (compiled.model === undefined)
+      throw new Error(JSON.stringify(compiled.diagnostics))
+    const desired = await desiredForApply(compiled.model)
+    const outcome = await engine.withDesiredShadow(
+      { target: stack },
+      desired.sql,
+      desired.scope,
+      (shadow) => functionAcl(shadow.url)
+    )
+    if (outcome.status !== "loaded")
+      throw new Error(JSON.stringify(outcome.diagnostics))
+    return outcome.value
+  }
+
+  const F_SQL =
+    "CREATE FUNCTION app.f() RETURNS int LANGUAGE sql STABLE AS $$SELECT 1$$;"
+
+  it("neutralizes a global revoke on functions for a new function", async () => {
+    await inTarget(async (url) => {
+      await other(
+        url,
+        "alter default privileges for role postgres revoke all on functions from public"
+      )
+      const dir = await newProject()
+      await writeMetadata(dir, party("Party", null))
+      await committed(dir, url, await planned(dir, url))
+
+      await writeMetadata(dir, party("Party", null), { "sql/app/f.sql": F_SQL })
+      const data = await planned(dir, url)
+      expect(data.environment.defaultPrivileges).toEqual([
+        {
+          objtype: "f",
+          grantee: "postgres",
+          privilege: "EXECUTE",
+          grantable: false,
+        },
+      ])
+      // Пара двигуна не скорочується: спершу все знято, далі виконання PUBLIC
+      expect(
+        data.steps.filter((s) => s.origin === "environment").map((s) => s.sql)
+      ).toEqual([
+        'REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
+        'GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC',
+      ])
+      await committed(dir, url, data)
+      expect(await functionAcl(url)).toEqual(await shadowFunctionAcl(dir))
+      expect(
+        (
+          await rows<{ ok: boolean }>(
+            url,
+            "select has_function_privilege('anon', 'app.f()', 'EXECUTE') as ok"
+          )
+        )[0]?.ok
+      ).toBe(true)
+      await expectUnchanged(dir, url)
+    })
+  })
+
+  it("keeps anon away from the platform tables on the first apply", async () => {
+    await inTarget(async (url) => {
+      await other(
+        url,
+        "alter default privileges for role postgres grant select on tables to anon"
+      )
+      const dir = await newProject()
+      await writeMetadata(dir, party("Party", null))
+      const r = await call("plan", {}, options(dir, url))
+      expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+      const data = r.data as PlanData
+      expect(
+        data.steps.filter((s) => s.origin === "environment").map((s) => s.sql)
+      ).toEqual(
+        expect.arrayContaining([
+          'REVOKE ALL ON TABLE "simetra"."marker" FROM "anon"',
+          'REVOKE ALL ON TABLE "simetra"."ledger" FROM "anon"',
+        ])
+      )
+      // R2: кроки середовища займають лише таблиці, які створює сам план, —
+      // звірка сліду в доказі й репетиції не бачить у них прогалини
+      expect(r.diagnostics.map((d) => d.code)).not.toContain(
+        "apply.lock-footprint-exceeded"
+      )
+      const rehearsal = await applyCall(dir, url, data, {
+        allow: data.requiredPermissions,
+        rehearse: true,
+      })
+      expect(rehearsal.diagnostics).toEqual([])
+      expect((rehearsal.data as ApplyData).status).toBe("rolledBack")
+
+      await committed(dir, url, data)
+      expect(
+        await rows<{ marker: boolean; ledger: boolean }>(
+          url,
+          `select has_table_privilege('anon', 'simetra.marker', 'SELECT') as marker,
+             has_table_privilege('anon', 'simetra.ledger', 'SELECT') as ledger`
+        )
+      ).toEqual([{ marker: false, ledger: false }])
+      await expectUnchanged(dir, url)
+    })
+  })
+
+  it("refuses when the global default privileges changed after the plan", async () => {
+    await inTarget(async (url) => {
+      const dir = await newProject()
+      await writeMetadata(dir, party("Party", null))
+      const data = await planned(dir, url)
+      expect(data.environment.defaultPrivileges).toEqual([])
+      await other(
+        url,
+        "alter default privileges for role postgres grant select on sequences to anon"
+      )
+      const r = await applyCall(dir, url, data, {
+        allow: data.requiredPermissions,
+      })
+      expect(errors(r)).toEqual(["apply.target-changed"])
+      expect(
+        r.diagnostics.find((d) => d.code === "apply.target-changed")?.params
+      ).toEqual({ sections: "environment" })
+      // Нічого не записано: стану застосування на цілі так і немає
+      expect(
+        await rows<{ exists: boolean }>(
+          url,
+          "select to_regclass('simetra.marker') is not null as exists"
+        )
+      ).toEqual([{ exists: false }])
+    })
+  })
+})

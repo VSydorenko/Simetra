@@ -31,6 +31,13 @@ import {
 import { desiredForApply, type ApplyDesired } from "./desired"
 import { applyDiagnostic } from "./diagnostic"
 import { driftGate, type DriftReport } from "./drift"
+import {
+  environmentMismatch,
+  environmentSteps,
+  readGlobalDefaultPrivileges,
+  renderGlobalDefaultPrivileges,
+  type GlobalDefaultPrivilege,
+} from "./environment"
 import { executePlan, type ExecutablePlan } from "./execute"
 import {
   compareFingerprints,
@@ -387,12 +394,29 @@ export async function buildPlan(
   const parse = await loadSqlParser()
   const unparsable = unparsableSteps(actions, parse)
   if (unparsable.length > 0) return refused([...diagnostics, ...unparsable])
-  const steps = classifySteps(actions, live.extracted.model, parse)
+  const planSteps = classifySteps(actions, live.extracted.model, parse)
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
-  const guarded = guardedChanges(steps, live.extracted.model, parse)
-  const lint = [...lintSteps(steps, parse), ...guarded.refusals]
+  const guarded = guardedChanges(planSteps, live.extracted.model, parse)
+  const lint = [...lintSteps(planSteps, parse), ...guarded.refusals]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
+  // 7а. Кроки середовища (рішення 5 плану П3-2b-0) — наприкінці плану; клас
+  // і дозволи рахуються вже з ними
+  const collected = await collectEnvironment({
+    engine,
+    dbs,
+    o,
+    scope,
+    witness,
+    live,
+    desired: target.extracted.catalog,
+    role: targetOwners.session,
+    steps: planSteps,
+    parse,
+  })
+  if (!collected.ok) return refused([...diagnostics, ...collected.diagnostics])
+  const { environment } = collected
+  const steps = [...planSteps, ...collected.steps]
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (R26); без
   // промоції імена вихідного стану й кроків збігаються
@@ -437,6 +461,7 @@ export async function buildPlan(
       providerLocks,
       preamble,
       promotion: null,
+      environment,
       targetFingerprint: live.fingerprint,
       desiredFingerprint: target.fingerprint,
       // Модель бажаної тіні лише для marker копії, яку буде викинуто;
@@ -466,6 +491,7 @@ export async function buildPlan(
     providerLocks,
     preamble,
     promotion: null,
+    environment,
     resultCatalog: proof.resultCatalog,
   })
   return {
@@ -615,7 +641,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ...analysis.diagnostics,
   ])
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
-  const { steps, model: cloneModel } = analysis
+  const { steps: planSteps, model: cloneModel } = analysis
 
   // Класи видалень і нереалізовані перейменування — копія після наміру
   // проти бажаної тіні (рішення 2, 7)
@@ -627,10 +653,28 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     parse,
   })
   const unclassified = [
-    ...unrealizedRenames(steps, analysis.intent, record),
+    ...unrealizedRenames(planSteps, analysis.intent, record),
     ...unclassifiedRemovals(removals),
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])
+
+  // Кроки середовища (рішення 5 плану П3-2b-0): копія цілі в старих іменах
+  // проходить і кроки наміру, і кроки двигуна, тож залишок — у нових
+  const collected = await collectEnvironment({
+    engine,
+    dbs,
+    o,
+    scope,
+    witness: c.witness,
+    live,
+    desired: target.extracted.catalog,
+    role: c.targetOwners.session,
+    steps: planSteps,
+    parse,
+  })
+  if (!collected.ok) return refused([...withClone, ...collected.diagnostics])
+  const { environment } = collected
+  const steps = [...planSteps, ...collected.steps]
 
   // Залежні доступу (рішення 8) — з живої цілі, у старих іменах, транзакцією
   // READ ONLY
@@ -732,6 +776,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       providerLocks,
       preamble: analysis.preamble,
       promotion: section,
+      environment,
       targetFingerprint: live.fingerprint,
       desiredFingerprint: target.fingerprint,
       resultCatalog: target.extracted.model,
@@ -758,6 +803,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     providerLocks,
     preamble: analysis.preamble,
     promotion: section,
+    environment,
     resultCatalog: proof.resultCatalog,
   })
   return {
@@ -1209,6 +1255,166 @@ function unparsableSteps(
   })
 }
 
+/** Діагностика збою засіву копії: копія не відтворила середовища цілі. */
+const environmentFailed = (reason?: string): EngineDiagnostic =>
+  applyDiagnostic("engine.clone-failed", "error", {
+    detail: `the copy could not reproduce the target's global default privileges${reason === undefined ? "" : `: ${reason}`}`,
+  })
+
+/**
+ * Засів копії глобальними типовими привілеями ролі плану й звірка засіву
+ * тим самим запитом, що читав ціль (рішення 5(б)). Порожній перелік теж
+ * звіряється: копія без засіву не має мати чужих глобальних ADP. Сіяти тоді
+ * нічого, тож звірка — транзакцією лише читання: писати в копію нічого. Збій
+ * оператора (скажімо, роль сесії копії не член ролі плану) — так само
+ * невідтворене середовище, а не стан цілі.
+ */
+async function seedEnvironment(
+  dbs: PlanDatabases,
+  clone: DbConnection,
+  role: string,
+  privileges: readonly GlobalDefaultPrivilege[]
+): Promise<EngineDiagnostic[]> {
+  const statements = renderGlobalDefaultPrivileges(role, privileges)
+  try {
+    const seeded = await (
+      statements.length === 0 ? dbs.reader : dbs.scratch
+    ).transaction(
+      clone,
+      statements.length === 0 ? "rollback" : "commit",
+      async (tx) => {
+        for (const statement of statements) await tx.query(statement)
+        return readGlobalDefaultPrivileges(tx, role)
+      }
+    )
+    return environmentMismatch(privileges, seeded) ? [environmentFailed()] : []
+  } catch (error) {
+    if (error instanceof ApplyDbError) return [environmentFailed(error.message)]
+    if (error instanceof ApplyConnectionLost)
+      return [
+        environmentFailed(
+          "the connection to the copy was lost; nothing was written to the database"
+        ),
+      ]
+    throw error
+  }
+}
+
+type EnvironmentResult =
+  | {
+      ok: true
+      environment: { defaultPrivileges: GlobalDefaultPrivilege[] }
+      /** Кроки `origin: "environment"` з id після кроків плану. */
+      steps: PlanStep[]
+    }
+  | { ok: false; diagnostics: EngineDiagnostic[] }
+
+/**
+ * Кроки середовища (рішення 5(а), (в) плану П3-2b-0). Глобальні типові
+ * привілеї ролі плану читаються з цілі (READ ONLY); є вони — перша копія
+ * засівається ними, проходить усі кроки плану сирою транзакцією з `COMMIT`
+ * (раннер у режимі `proof` звірив би відбиток і відкотився б раніше, ніж
+ * залишок можна обчислити), а план «копія → бажана тінь» стає кроками
+ * середовища, якщо він — лише гранти на об'єктах, які створює сам план.
+ * Семантику ADP дає сам Postgres, а не друга реалізація в T2; механізм
+ * доводить прогін доказу. Без глобальних ADP копії немає.
+ */
+async function collectEnvironment(p: {
+  engine: SchemaEngine
+  dbs: PlanDatabases
+  o: ShadowOptions
+  scope: EngineScope
+  witness: (db: DbConnection, scope: EngineScope) => Promise<Witness>
+  live: Witness
+  desired: Extracted["catalog"]
+  role: string
+  steps: readonly PlanStep[]
+  parse: SqlParser
+}): Promise<EnvironmentResult> {
+  const { engine, dbs, scope, live, role, parse } = p
+  const defaultPrivileges = await dbs.reader.transaction(
+    p.o.target,
+    "rollback",
+    (tx) => readGlobalDefaultPrivileges(tx, role)
+  )
+  const environment = { defaultPrivileges }
+  if (defaultPrivileges.length === 0)
+    return { ok: true, environment, steps: [] }
+
+  const outcome = await engine.withTargetClone(
+    p.o,
+    live.extracted,
+    scope,
+    async (clone): Promise<EnvironmentResult> => {
+      const seeded = await seedEnvironment(dbs, clone, role, defaultPrivileges)
+      if (seeded.length > 0) return { ok: false, diagnostics: seeded }
+      // Неточна копія дала б залишок, не пов'язаний із середовищем: її
+      // називає своя відмова, а не «доказ не порожній»
+      const mismatch = cloneMismatch(
+        engine,
+        scope,
+        live,
+        await p.witness(clone, scope)
+      )
+      if (mismatch.length > 0) return { ok: false, diagnostics: mismatch }
+      try {
+        await runOnClone(dbs.scratch, clone, p.steps)
+      } catch (error) {
+        if (error instanceof IntentStepFailed)
+          return { ok: false, diagnostics: [error.diagnostic] }
+        if (error instanceof ApplyConnectionLost)
+          return {
+            ok: false,
+            diagnostics: [
+              applyDiagnostic("engine.clone-failed", "error", {
+                detail:
+                  "the connection to the copy was lost while collecting the environment steps, so the plan could not be built; nothing was written to the database",
+              }),
+            ],
+          }
+        throw error
+      }
+      const after = await engine.extract(clone, scope)
+      // Опції — від живої цілі: кроки середовища застосовують до неї
+      const residual = engine.plan(after.catalog, p.desired, scope, {
+        optionsFrom: live.extracted.catalog,
+      })
+      const planErrors = errorsOf(residual)
+      if (planErrors.length > 0) return { ok: false, diagnostics: planErrors }
+      const offset = p.steps.length
+      const unparsable = unparsableSteps(residual.actions, parse, offset)
+      if (unparsable.length > 0) return { ok: false, diagnostics: unparsable }
+      const admitted = environmentSteps(
+        residual.actions,
+        p.steps.flatMap((s) => s.produced),
+        parse
+      )
+      if ("refusal" in admitted)
+        return { ok: false, diagnostics: [admitted.refusal] }
+      // Клас — від моделі копії після кроків: це вихідний стан кроків
+      // середовища; гранти завжди `catalogOnly`
+      const steps = classifySteps(
+        admitted.steps,
+        after.model,
+        parse,
+        offset
+      ).map((s): PlanStep => ({ ...s, origin: "environment" }))
+      return { ok: true, environment, steps }
+    }
+  )
+  if (outcome.status === "shadow-failed")
+    return { ok: false, diagnostics: outcome.diagnostics }
+  return outcome.value.ok && !hasError(outcome.diagnostics)
+    ? outcome.value
+    : {
+        ok: false,
+        diagnostics: [
+          ...outcome.diagnostics,
+          ...(outcome.value.ok ? [] : outcome.value.diagnostics),
+        ],
+      }
+}
+
 type ProofResult =
   | { ok: true; resultCatalog: CatalogModel; diagnostics: EngineDiagnostic[] }
   | { ok: false; diagnostics: EngineDiagnostic[] }
@@ -1239,6 +1445,15 @@ async function prove(
     p.live.extracted,
     p.scope,
     async (clone): Promise<ProofResult> => {
+      // Глобальні типові привілеї ролі — до прогону: Postgres застосує їх до
+      // кожного об'єкта кроків так само, як на цілі (рішення 5(г))
+      const seeded = await seedEnvironment(
+        dbs,
+        clone,
+        p.plan.role,
+        p.plan.environment.defaultPrivileges
+      )
+      if (seeded.length > 0) return { ok: false, diagnostics: seeded }
       const copy = await witness(clone, p.scope)
       const mismatch = cloneMismatch(engine, p.scope, p.live, copy)
       if (mismatch.length > 0) return { ok: false, diagnostics: mismatch }

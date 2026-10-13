@@ -20,6 +20,10 @@ import {
   type EngineSetting,
 } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import {
+  DEFAULT_PRIVILEGE_OBJTYPES,
+  type GlobalDefaultPrivilege,
+} from "./environment"
 import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
 import {
@@ -31,11 +35,12 @@ import {
 import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**
- * Форма файлу плану; читач порівнює її з поточною, а не вгадує. Другий
- * формат: кроки з походженням і сторожами, блокування з режимами, преамбула
- * двигуна (рішення 11 плану П3-2a).
+ * Форма файлу плану; читач порівнює її з поточною, а не вгадує. Третій
+ * формат: кроки середовища й глобальні типові привілеї ролі плану (рішення 5
+ * плану П3-2b-0) поверх кроків із походженням і сторожами, блокувань із
+ * режимами й преамбули двигуна (рішення 11 плану П3-2a).
  */
-export const PLAN_FORMAT = 2
+export const PLAN_FORMAT = 3
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (рішення 6 плану П3-2a): імена до й
@@ -149,6 +154,14 @@ export interface PlanArtifact {
   preamble: EngineSetting[]
   /** Секція промоції; `null` — план без промоції. Поле є завжди, як `drift`. */
   promotion: PromotionSection | null
+  /**
+   * Середовище, з яким план доведено (рішення 5 плану П3-2b-0): глобальні
+   * типові привілеї `role` на цілі, рядками `aclexplode`, відсортовано. Під
+   * хешем: кроки середовища правильні саме для цього переліку, тож раннер
+   * перед блокуваннями читає його на цілі знову, і інший перелік —
+   * `apply.target-changed`. Поле є завжди; порожній перелік — їх немає.
+   */
+  environment: { defaultPrivileges: GlobalDefaultPrivilege[] }
   resultCatalog: CatalogModel
   planHash: string
 }
@@ -214,7 +227,7 @@ const objectRefSchema = z.strictObject({
 
 const stepSchema = z.strictObject({
   id: z.string(),
-  origin: z.enum(["intent", "engine"]),
+  origin: z.enum(["intent", "engine", "environment"]),
   sql: z.string(),
   verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),
@@ -298,6 +311,16 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
       })
   ),
   promotion: promotionSectionSchema.nullable(),
+  environment: z.strictObject({
+    defaultPrivileges: z.array(
+      z.strictObject({
+        objtype: z.enum(DEFAULT_PRIVILEGE_OBJTYPES),
+        grantee: z.string(),
+        privilege: z.string(),
+        grantable: z.boolean(),
+      })
+    ),
+  }),
   resultCatalog: z
     .record(z.string(), z.unknown())
     .transform((catalog) => catalog as unknown as CatalogModel),

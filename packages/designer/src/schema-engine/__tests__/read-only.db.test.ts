@@ -269,6 +269,7 @@ describe("transaction-mode pooler", () => {
         ),
         preamble: [],
         promotion: null,
+        environment: { defaultPrivileges: [] },
         resultCatalog: { tables: [], enumTypes: [], units: [] },
         targetFingerprint: await read(url),
         desiredFingerprint,

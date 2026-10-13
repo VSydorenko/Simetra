@@ -269,6 +269,52 @@ describe("stepFootprint", () => {
   })
 })
 
+describe("environment steps", () => {
+  // Рішення 5 плану П3-2b-0, R2: об'єкти кроку середовища створює той самий
+  // план у тій самій транзакції, тож крок нікого на цілі не блокує
+  const environment = engineStep("s3", "accessExclusive", [t("app", "new")], {
+    origin: "environment",
+    sql: 'REVOKE ALL ON TABLE "app"."new" FROM "anon"',
+    consumed: [{ kind: "table", schema: "app", name: "new" }],
+    produced: [
+      { kind: "constraint", schema: "app", table: "new", name: "new_p_fk" },
+    ],
+  })
+
+  it("has an empty footprint even with locked tables", () => {
+    expect(stepFootprint(environment, models())).toEqual([])
+  })
+
+  it("puts a table the plan creates neither into locks nor into implicit locks", () => {
+    const footprint = planFootprint([environment], models())
+    expect(footprint).toEqual([{ step: "s3", tables: [] }])
+    expect(
+      planLocks({
+        footprint,
+        rights: new Map([[tableKey("app", "new"), false]]),
+      })
+    ).toEqual({ locks: [], implicitLocks: [] })
+  })
+
+  it("asks for no live foreign keys", () => {
+    expect(
+      footprintSubjects(
+        [environment],
+        models({
+          typeChanges: [
+            {
+              step: "s3",
+              schema: "app",
+              table: "new",
+              column: "x",
+            },
+          ],
+        })
+      )
+    ).toEqual([])
+  })
+})
+
 describe("live foreign keys", () => {
   /** `ext.r.p_code → app.p.code` на живій цілі: таблиця поза межею двигуна. */
   const outside = {

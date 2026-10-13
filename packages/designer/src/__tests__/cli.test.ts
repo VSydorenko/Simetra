@@ -478,6 +478,7 @@ describe("cli adapter", () => {
         locks: [],
         implicitLocks: [],
         requiredPermissions: ["drift", "s1"],
+        environment: { role: "postgres", defaultPrivileges: [] },
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -565,6 +566,7 @@ describe("cli adapter", () => {
           },
         ],
         requiredPermissions: ["drift", "access:app.item", "s2"],
+        environment: { role: "postgres", defaultPrivileges: [] },
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -612,6 +614,74 @@ describe("cli adapter", () => {
           'implicit lock: app."odd.name" SHARE ROW EXCLUSIVE taken by step s2, not up front: the apply role may not lock it explicitly'
         )
       ).toBeGreaterThan(at("steps (2):"))
+    })
+
+    it("the text of a plan shows the environment steps as their own group", () => {
+      // Рішення 5(е) плану П3-2b-0: пара REVOKE ALL + GRANT — вивід двигуна,
+      // обидва рядки лишаються
+      const environment = (id: string, sql: string) => ({
+        id,
+        origin: "environment" as const,
+        class: "catalogOnly" as const,
+        lockClass: "none",
+        sql,
+      })
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: null,
+        promotion: null,
+        steps: [
+          {
+            id: "s1",
+            origin: "engine",
+            class: "catalogOnly",
+            lockClass: "none",
+            sql: 'CREATE FUNCTION "app"."f"() RETURNS integer',
+          },
+          environment("s2", 'REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC'),
+          environment("s3", 'GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC'),
+        ],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: [],
+        environment: {
+          role: "postgres",
+          defaultPrivileges: [
+            {
+              objtype: "f",
+              grantee: "postgres",
+              privilege: "EXECUTE",
+              grantable: false,
+            },
+          ],
+        },
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const lines = stdout.split("\n")
+      const steps = lines.indexOf("steps (1):")
+      expect(steps).toBeGreaterThan(-1)
+      expect(lines[steps + 1]).toBe(
+        '  s1 engine catalogOnly (lock none) CREATE FUNCTION "app"."f"() RETURNS integer'
+      )
+      expect(lines.slice(steps + 2, steps + 5)).toEqual([
+        "Environment rights: the global default privileges of role postgres:",
+        '  s2 environment catalogOnly (lock none) REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
+        '  s3 environment catalogOnly (lock none) GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC',
+      ])
     })
 
     it("the text of a rehearsal warns about the locks it took", () => {

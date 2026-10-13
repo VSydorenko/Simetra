@@ -296,6 +296,8 @@ async function planFor(
     implicitLocks: [],
     preamble: [],
     promotion: null,
+    // Цілі тестів глобальних ADP ролі не мають
+    environment: { defaultPrivileges: [] },
     resultCatalog: { tables: [], enumTypes: [], units: [] },
     ...over,
     providerLocks:
@@ -334,6 +336,7 @@ async function establish(url: string, hash: string): Promise<void> {
       providerLocks: await providerList(url),
       preamble: [],
       promotion: null,
+      environment: { defaultPrivileges: [] },
       targetFingerprint: fingerprint,
       desiredFingerprint: fingerprint,
       resultCatalog: { tables: [], enumTypes: [], units: [] },

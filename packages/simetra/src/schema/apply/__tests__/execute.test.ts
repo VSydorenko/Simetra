@@ -10,6 +10,7 @@ import {
   type ExecutablePlan,
   type ExecuteOptions,
   type FingerprintSection,
+  type GlobalDefaultPrivilege,
   type PlanStep,
   type PreservedTable,
   type ProviderLockSet,
@@ -102,6 +103,7 @@ const plan: ExecutablePlan = {
   ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   promotion: null,
+  environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
 }
 
@@ -191,6 +193,8 @@ interface Script {
   providerSettings?: Record<string, string>
   /** Таблиці переліку провайдера, що є в базі. */
   providerTables?: { schema: string; name: string }[]
+  /** Рядки глобальних типових привілеїв ролі на цілі; типово немає. */
+  environment?: GlobalDefaultPrivilege[]
 }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
@@ -206,6 +210,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("current_setting($1, true)")) return "provider-setting"
   if (sql.includes("current_schemas(true)")) return "provider-tables"
   if (sql.includes("x(schema text, name text)")) return "present"
+  if (sql.includes("FROM pg_catalog.pg_default_acl")) return "environment"
   if (sql.includes("to_regclass") && sql.includes(" AS marker")) return "state"
   if (sql.startsWith("SAVEPOINT simetra_fingerprint")) return "fingerprint"
   if (sql.startsWith("INSERT INTO simetra.marker")) return "marker"
@@ -265,30 +270,32 @@ function fakeDb(script: Script = {}) {
                   ? (script.providerTables ?? [])
                   : label === "present"
                     ? (script.present ?? [])
-                    : label === "existing"
-                      ? (script.existing ?? [])
-                      : label === "held-locks"
-                        ? (script.held ?? [])
-                        : label === "try-lock"
-                          ? [{ locked: script.locked ?? true }]
-                          : label === "role"
-                            ? [{ role: script.role ?? "postgres" }]
-                            : sql.includes(" AS marker")
-                              ? [{ marker: false, ledger: false }]
-                              : sql.includes("to_regclass")
-                                ? [{ exists: true }]
-                                : label === "lookup"
-                                  ? script.ledgerHasApply === true
-                                    ? [{ format: script.ledgerFormat ?? 1 }]
-                                    : []
-                                  : sql.includes("encode(sha256")
-                                    ? [
-                                        stepsRan
-                                          ? DESIRED.sections
-                                          : (script.targetSections ??
-                                            TARGET.sections),
-                                      ]
-                                    : []
+                    : label === "environment"
+                      ? (script.environment ?? []).map((r) => ({ ...r }))
+                      : label === "existing"
+                        ? (script.existing ?? [])
+                        : label === "held-locks"
+                          ? (script.held ?? [])
+                          : label === "try-lock"
+                            ? [{ locked: script.locked ?? true }]
+                            : label === "role"
+                              ? [{ role: script.role ?? "postgres" }]
+                              : sql.includes(" AS marker")
+                                ? [{ marker: false, ledger: false }]
+                                : sql.includes("to_regclass")
+                                  ? [{ exists: true }]
+                                  : label === "lookup"
+                                    ? script.ledgerHasApply === true
+                                      ? [{ format: script.ledgerFormat ?? 1 }]
+                                      : []
+                                    : sql.includes("encode(sha256")
+                                      ? [
+                                          stepsRan
+                                            ? DESIRED.sections
+                                            : (script.targetSections ??
+                                              TARGET.sections),
+                                        ]
+                                      : []
           return rows as R[]
         },
       }
@@ -320,6 +327,7 @@ describe("executePlan", () => {
       "state",
       "provider-setting",
       "provider-setting",
+      "environment",
       'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
       "ALTER TABLE app.t ADD COLUMN d int",
@@ -425,6 +433,47 @@ describe("executePlan", () => {
     expect(
       await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
     ).toMatchObject({ status: "committed" })
+  })
+
+  it("refuses before the locks when the global default privileges changed after the plan", async () => {
+    // Рішення 5(д) плану П3-2b-0: план доведено без глобальних ADP ролі, а на
+    // цілі вони вже є
+    const anon: GlobalDefaultPrivilege = {
+      objtype: "S",
+      grantee: "anon",
+      privilege: "SELECT",
+      grantable: false,
+    }
+    const { db, log, params } = fakeDb({ environment: [anon] })
+    expect(await executePlan(db, target, plan, options)).toMatchObject({
+      status: "refused",
+      attempts: 1,
+      diagnostics: [
+        {
+          code: "apply.target-changed",
+          params: { sections: "environment" },
+        },
+      ],
+    })
+    expect(params.environment).toEqual(["postgres"])
+    expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
+    expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+    // Той самий перелік, що й у плані, — застосування йде далі
+    const same = fakeDb({ environment: [anon] })
+    expect(
+      await executePlan(
+        same.db,
+        target,
+        { ...plan, environment: { defaultPrivileges: [anon] } },
+        options
+      )
+    ).toMatchObject({ status: "committed" })
+    // Копію доказу засіяно й звірено окремо: раннер її середовища не читає
+    const proof = fakeDb({ environment: [anon] })
+    expect(
+      await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
+    ).toMatchObject({ status: "committed" })
+    expect(proof.log).not.toContain("environment")
   })
 
   it("refuses before the locks when the provider list changed after the plan", async () => {

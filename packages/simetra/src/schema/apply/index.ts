@@ -85,6 +85,14 @@ export {
   type WritePath,
 } from "./promotion"
 export {
+  DEFAULT_PRIVILEGE_OBJTYPES,
+  environmentMismatch,
+  environmentSteps,
+  readGlobalDefaultPrivileges,
+  renderGlobalDefaultPrivileges,
+  type GlobalDefaultPrivilege,
+} from "./environment"
+export {
   DEFAULT_APPLY_TIMEOUTS,
   executePlan,
   type ApplyTimeouts,

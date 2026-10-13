@@ -76,6 +76,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   promotion: null,
+  environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
 })
 
@@ -381,7 +382,84 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(2)
+    expect(PLAN_FORMAT).toBe(3)
+  })
+
+  it("asks to rebuild a plan of the second format", async () => {
+    const artifact = await stampPlan(draft())
+    // Форма другого формату: без середовища
+    const old: Record<string, unknown> = { ...artifact, format: 2 }
+    delete old.environment
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: { params: { found: 2, supported: 3 } },
+    })
+  })
+
+  it("round-trips environment steps and the role's global default privileges", async () => {
+    const base = draft()
+    const artifact = await stampPlan({
+      ...base,
+      steps: [
+        ...base.steps,
+        {
+          ...base.steps[0]!,
+          id: "s2",
+          origin: "environment",
+          sql: 'REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
+          class: "catalogOnly",
+          lockClass: "none",
+          lockedTables: [],
+          consumes: [],
+          destroys: [],
+          destroyed: [],
+          consumed: [],
+          dataLoss: false,
+        },
+      ],
+      environment: {
+        defaultPrivileges: [
+          {
+            objtype: "f",
+            grantee: "postgres",
+            privilege: "EXECUTE",
+            grantable: false,
+          },
+        ],
+      },
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
+    expect(await verifyPlanHash(parsed.artifact)).toBe(true)
+  })
+
+  it("rejects a plan without the environment or with an unknown object type", async () => {
+    const artifact = await stampPlan(draft())
+    const without: Record<string, unknown> = { ...artifact }
+    delete without.environment
+    expect(parsePlan(JSON.stringify(without))).toMatchObject({
+      ok: false,
+      reason: "invalid",
+    })
+    const unknownType = {
+      ...artifact,
+      environment: {
+        defaultPrivileges: [
+          {
+            objtype: "L",
+            grantee: "anon",
+            privilege: "SELECT",
+            grantable: false,
+          },
+        ],
+      },
+    }
+    expect(parsePlan(JSON.stringify(unknownType))).toMatchObject({
+      ok: false,
+      reason: "invalid",
+    })
   })
 
   it("holds the current format in the schema itself, not only in parsePlan", async () => {

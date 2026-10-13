@@ -374,7 +374,7 @@ export function footprintSubjects(
   const out = new Map<string, Named>()
   const put = (t: Named) => out.set(tableKey(t.schema, t.name), t)
   for (const step of steps) {
-    if (step.origin === "intent") continue
+    if (step.origin !== "engine") continue
     for (const own of foreignKeyEffects(step, m).fallbacks)
       put(oldTable(m, own.schema, own.name))
     for (const change of m.typeChanges)
@@ -391,9 +391,14 @@ export function footprintSubjects(
  * для створеного), без розбору рядкових ідентичностей. Крок наміру —
  * перейменування — займає лише власну таблицю, і його таблиці вже у
  * вихідних іменах: при обміні імен старе ім'я одного — нове ім'я іншого,
- * тож перекладати їх не можна.
+ * тож перекладати їх не можна. Слід кроку середовища порожній (рішення 5
+ * плану П3-2b-0, R2): його об'єкти створює той самий план у тій самій
+ * транзакції, а `lockedTables`, пораховані від копії після прогону, назвали б
+ * таблицю, якої на цілі до кроків ще немає. Рядки, що відтворюють такий
+ * об'єкт, покриває слід кроку, що його знімає.
  */
 export function stepFootprint(step: PlanStep, m: FootprintModels): TableLock[] {
+  if (step.origin === "environment") return []
   const own = lockClassMode(step.lockClass)
   const tables: TableLock[] =
     own === undefined ? [] : step.lockedTables.map((t) => ({ ...t, mode: own }))

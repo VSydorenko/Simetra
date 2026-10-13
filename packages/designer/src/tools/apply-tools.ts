@@ -24,6 +24,7 @@ import {
   type ApplyTimeouts,
   type DriftReport,
   type EngineIdentity,
+  type GlobalDefaultPrivilege,
   type ImplicitLock,
   type PermissionItem,
   type PlanArtifact,
@@ -82,6 +83,12 @@ export interface PlanData {
    */
   implicitLocks: ImplicitLock[]
   requiredPermissions: string[]
+  /**
+   * Роль плану і її глобальні типові привілеї, з якими план доведено
+   * (рішення 5 плану П3-2b-0). Кроки середовища — у `steps` з походженням
+   * `environment`: вивід показує їх окремою групою з поясненням ролі.
+   */
+  environment: { role: string; defaultPrivileges: GlobalDefaultPrivilege[] }
 }
 
 export interface ApplyData {
@@ -156,6 +163,10 @@ function planData(
     locks: artifact.locks,
     implicitLocks: artifact.implicitLocks,
     requiredPermissions: artifact.requiredPermissions,
+    environment: {
+      role: artifact.role,
+      defaultPrivileges: artifact.environment.defaultPrivileges,
+    },
   }
 }
 

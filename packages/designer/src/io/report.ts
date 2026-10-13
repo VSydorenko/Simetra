@@ -155,20 +155,31 @@ export function renderPlan(
     for (const path of d.drift.paths) lines.push(`  ${path}`)
   }
   if (d.promotion !== null) lines.push(...promotionLines(d.promotion, needs))
-  if (d.steps.length === 0) lines.push("steps: none")
+  const stepLine = (s: PlanData["steps"][number]): string => {
+    const tags = [
+      `lock ${s.lockClass}`,
+      ...(s.conversion === undefined ? [] : [`conversion ${s.conversion}`]),
+      ...(needs.has(s.id) ? [`needs allow: ${s.id}`] : []),
+    ]
+    const first = s.sql.trim().split("\n")[0] ?? ""
+    return `  ${s.id} ${s.origin} ${s.class} (${tags.join("; ")}) ${first}`
+  }
+  // Кроки середовища — окремою групою (рішення 5(е) плану П3-2b-0): вони не
+  // з метаданих, а з глобальних типових привілеїв ролі на цілі, і без цього
+  // пояснення пара `REVOKE ALL` + `GRANT` виглядала б зайвою. Пара не
+  // скорочується: це вивід двигуна
+  const environment = d.steps.filter((s) => s.origin === "environment")
+  const steps = d.steps.filter((s) => s.origin !== "environment")
+  if (steps.length === 0) lines.push("steps: none")
   else {
-    lines.push(`steps (${d.steps.length}):`)
-    for (const s of d.steps) {
-      const tags = [
-        `lock ${s.lockClass}`,
-        ...(s.conversion === undefined ? [] : [`conversion ${s.conversion}`]),
-        ...(needs.has(s.id) ? [`needs allow: ${s.id}`] : []),
-      ]
-      const first = s.sql.trim().split("\n")[0] ?? ""
-      lines.push(
-        `  ${s.id} ${s.origin} ${s.class} (${tags.join("; ")}) ${first}`
-      )
-    }
+    lines.push(`steps (${steps.length}):`)
+    lines.push(...steps.map(stepLine))
+  }
+  if (environment.length > 0) {
+    lines.push(
+      `Environment rights: the global default privileges of role ${quoteIdent(d.environment.role)}:`
+    )
+    lines.push(...environment.map(stepLine))
   }
   // Замки наперед — одна точка очікування застосування; неявний замок —
   // таблиці немає серед них, але крок її таки блокує (R26 плану П3-2a)

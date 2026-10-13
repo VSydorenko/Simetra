@@ -92,6 +92,7 @@ async function writePlan(
     providerLocks: [],
     preamble: [],
     promotion,
+    environment: { defaultPrivileges: [] },
     resultCatalog: { tables: [], enumTypes: [], units: [] },
   })
   const file = `plans/${planFileName(null, model.hash)}`

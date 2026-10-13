@@ -11,6 +11,7 @@ import {
   type PreservedTable,
 } from "./artifact"
 import { applyDiagnostic } from "./diagnostic"
+import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
 import {
   compareFingerprints,
   FINGERPRINT_VERSION,
@@ -81,6 +82,7 @@ export type ExecutablePlan = Pick<
   | "providerLocks"
   | "preamble"
   | "promotion"
+  | "environment"
   | "resultCatalog"
 >
 
@@ -375,6 +377,18 @@ async function runAttempt(
     if (JSON.stringify(live) !== JSON.stringify(plan.providerLocks))
       throw stop("refused", "apply.target-changed", {
         sections: "providerLocks",
+      })
+  }
+
+  // 4b. Глобальні типові привілеї ролі — ті самі, з якими план доведено
+  // (рішення 5 плану П3-2b-0): відбиток їх не бачить, а від них залежать
+  // права кожного об'єкта, який створюють кроки, і кроки середовища правильні
+  // лише для цього переліку. Копія доказу засіяна й звірена окремо
+  if (o.mode !== "proof") {
+    const live = await readGlobalDefaultPrivileges(tx, plan.role)
+    if (environmentMismatch(plan.environment.defaultPrivileges, live))
+      throw stop("refused", "apply.target-changed", {
+        sections: "environment",
       })
   }
 

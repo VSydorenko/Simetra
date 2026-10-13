@@ -835,6 +835,147 @@ describe("buildPlan", () => {
     })
   })
 
+  describe("environment", () => {
+    /** Двигун, що рахує копії: збір кроків середовища — окрема копія. */
+    function counting(): { engine: SchemaEngine; clones: () => number } {
+      let clones = 0
+      return {
+        engine: {
+          ...engine,
+          withTargetClone: (o, target, scope, fn) => {
+            clones++
+            return engine.withTargetClone(o, target, scope, fn)
+          },
+        },
+        clones: () => clones,
+      }
+    }
+
+    it("carries no environment and runs one proof without global default privileges", async () => {
+      const model = await compiled({ [PARTY]: party() })
+      await inTarget(EMPTY, async (url) => {
+        const { engine: over, clones } = counting()
+        const artifact = planned(await plan(url, model, over))
+        expect(artifact.environment).toEqual({ defaultPrivileges: [] })
+        expect(
+          artifact.steps.filter((s) => s.origin === "environment")
+        ).toEqual([])
+        expect(clones()).toBe(1)
+      })
+    })
+
+    it("records the role's global default privileges and proves the plan with environment steps", async () => {
+      const model = await compiled({ [PARTY]: party() })
+      await inTarget(EMPTY, async (url) => {
+        await other(
+          url,
+          `alter default privileges for role postgres grant select on tables to anon with grant option;
+           alter default privileges for role postgres revoke all on functions from public`
+        )
+        const { engine: over, clones } = counting()
+        const outcome = await plan(url, model, over)
+        const artifact = planned(outcome)
+        expect(artifact.environment.defaultPrivileges).toEqual([
+          {
+            objtype: "f",
+            grantee: "postgres",
+            privilege: "EXECUTE",
+            grantable: false,
+          },
+          {
+            objtype: "r",
+            grantee: "anon",
+            privilege: "SELECT",
+            grantable: true,
+          },
+          ...[
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE",
+          ].map((privilege) => ({
+            objtype: "r",
+            grantee: "postgres",
+            privilege,
+            grantable: false,
+          })),
+        ])
+        // Збір і доказ — дві копії
+        expect(clones()).toBe(2)
+        // Кроки середовища — наприкінці, `catalogOnly`, без дозволу й сліду
+        const environment = artifact.steps.filter(
+          (s) => s.origin === "environment"
+        )
+        expect(environment.length).toBeGreaterThan(0)
+        expect(artifact.steps.slice(-environment.length)).toEqual(environment)
+        expect(new Set(environment.map((s) => s.class))).toEqual(
+          new Set(["catalogOnly"])
+        )
+        expect(environment.map((s) => s.sql)).toContain(
+          'REVOKE ALL ON TABLE "simetra"."marker" FROM "anon"'
+        )
+        expect(artifact.requiredPermissions).toEqual([])
+        expect(codes(outcome)).not.toContain("apply.lock-footprint-exceeded")
+      })
+    })
+
+    it("refuses when the copy cannot reproduce the global default privileges", async () => {
+      const model = await compiled({ [PARTY]: party() })
+      // Копія, у якій уже є чужий глобальний ADP: засів його не знімає, бо
+      // торкається лише видів із переліку цілі
+      const polluted: SchemaEngine = {
+        ...engine,
+        withTargetClone: (o, target, scope, fn) =>
+          engine.withTargetClone(o, target, scope, async (clone) => {
+            await other(
+              clone.url,
+              "alter default privileges for role postgres grant usage on types to anon"
+            )
+            return fn(clone)
+          }),
+      }
+      await inTarget(EMPTY, async (url) => {
+        await other(
+          url,
+          "alter default privileges for role postgres revoke all on functions from public"
+        )
+        const outcome = await plan(url, model, polluted)
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["engine.clone-failed"])
+        expect(
+          String(
+            outcome.diagnostics.find((d) => d.code === "engine.clone-failed")
+              ?.params.detail
+          )
+        ).toMatch(/global default privileges/)
+      })
+    })
+
+    it("refuses a proof copy with a global default privilege the target lacks", async () => {
+      // Порожній перелік теж звіряється: копія не має привносити свого
+      const model = await compiled({ [PARTY]: party() })
+      const polluted: SchemaEngine = {
+        ...engine,
+        withTargetClone: (o, target, scope, fn) =>
+          engine.withTargetClone(o, target, scope, async (clone) => {
+            await other(
+              clone.url,
+              "alter default privileges for role postgres grant select on tables to anon"
+            )
+            return fn(clone)
+          }),
+      }
+      await inTarget(EMPTY, async (url) => {
+        const outcome = await plan(url, model, polluted)
+        expect(errors(outcome)).toEqual(["engine.clone-failed"])
+      })
+    })
+  })
+
   it("requires permissions for destructive steps", async () => {
     const withNote = await compiled({
       [PARTY]: party([attribute("note", { id: uuid(9040) })]),
@@ -1928,6 +2069,50 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           `^relation app\\.counterparties \\(owner ${OWNER}, expected `
         )
       )
+    })
+
+    it("collects environment steps after the intent and engine steps of a promotion", async () => {
+      // Рішення 5 плану П3-2b-0: копія збору проходить і кроки наміру, тож
+      // залишок двигуна — у нових іменах, а доказ засіяний тим самим переліком
+      const p = await promoted()
+      const outcome = await planPromotion(p, {
+        drift:
+          "alter default privileges for role postgres grant select on tables to anon",
+      })
+      const artifact = planned(outcome)
+      expect(
+        artifact.environment.defaultPrivileges.filter(
+          (d) => d.grantee === "anon"
+        )
+      ).toEqual([
+        {
+          objtype: "r",
+          grantee: "anon",
+          privilege: "SELECT",
+          grantable: false,
+        },
+      ])
+      const origins = artifact.steps.map((s) => s.origin)
+      // Походження йдуть блоками: намір, двигун, середовище
+      expect(origins).toEqual(
+        [...origins].sort(
+          (a, b) =>
+            ["intent", "engine", "environment"].indexOf(a) -
+            ["intent", "engine", "environment"].indexOf(b)
+        )
+      )
+      expect(artifact.steps.map((s) => s.id)).toEqual(
+        artifact.steps.map((_, i) => `s${i + 1}`)
+      )
+      // Класу конверсії біля кроку середовища немає
+      const environment = new Set(
+        artifact.steps
+          .filter((s) => s.origin === "environment")
+          .map((s) => s.id)
+      )
+      expect(
+        artifact.promotion!.conversions.filter((c) => environment.has(c.step))
+      ).toEqual([])
     })
 
     it("refuses a transition when no record is passed", async () => {

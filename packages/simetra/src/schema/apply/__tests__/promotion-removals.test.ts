@@ -1056,6 +1056,18 @@ describe("unrealizedRenames", () => {
     expect(unrealizedRenames(steps, renames, renamed)).toEqual([])
   })
 
+  it("does not see an environment step", () => {
+    // Рішення 5 плану П3-2b-0: крок середовища — лише права об'єкта, який
+    // створює сам план; втратою перейменування він не буває
+    const environment = step("s5", "DROP TABLE app.catalog_items", {
+      origin: "environment",
+      destroyed: [{ kind: "table", schema: "app", name: "catalog_items" }],
+      consumed: [{ kind: "table", schema: "app", name: "catalog_items" }],
+      dataLoss: true,
+    })
+    expect(unrealizedRenames([environment], renames, renamed)).toEqual([])
+  })
+
   it("refuses data loss on a renamed table that no dropped column explains", () => {
     const lossy = step("s4", "TRUNCATE app.catalog_items", {
       consumed: [{ kind: "table", schema: "app", name: "catalog_items" }],
@@ -1139,6 +1151,36 @@ describe("stepConversions", () => {
       ["s3", "platform"],
       ["s4", "property"],
     ])
+  })
+
+  it("does not show a class next to an environment step", () => {
+    const rec = record({
+      conversions: [
+        conversion("platform", {
+          kind: "unit",
+          class: "grant",
+          schema: "app",
+          table: "items",
+          name: "grant:authenticated:update(old_code)",
+        }),
+      ],
+    })
+    const revoke = step(
+      "s3",
+      "REVOKE UPDATE (old_code) ON TABLE app.items FROM authenticated"
+    )
+    // Той самий оператор кроком двигуна клас має, кроком середовища — ні
+    expect([...stepConversions([revoke], rec, intent(), parse)]).toEqual([
+      ["s3", "platform"],
+    ])
+    expect(
+      stepConversions(
+        [{ ...revoke, origin: "environment" }],
+        rec,
+        intent(),
+        parse
+      ).size
+    ).toBe(0)
   })
 
   it("never reaches a step whose object has no class: the plan refuses first", () => {
