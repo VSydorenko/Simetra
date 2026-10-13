@@ -146,6 +146,7 @@ function item(onDelete = "restrict") {
         onDelete,
       },
     ],
+    indexes: [{ name: "items_title_idx", keys: [{ column: "title" }] }],
     rowLevelSecurity: "enabled",
   }
 }
@@ -233,7 +234,7 @@ function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
       },
       groupId: { to: "attribute", element: { name: "group" } },
       legacy: o.swap
-        ? { to: "attribute", element: { name: "code", unique: true } }
+        ? { to: "attribute", element: { name: "code" } }
         : { to: "retire" },
     },
     tabularSections: [
@@ -250,6 +251,8 @@ function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
     ],
     conversions: {
       "Item#uniques/items_code_key": "property",
+      // Вид не відтворює індекс опису, тож він лише знімається
+      "Item#indexes/items_title_idx": "removed",
       ...(o.read === true
         ? { [READ_UNITS.policy]: "platform", [READ_UNITS.grant]: "platform" }
         : {}),
@@ -464,6 +467,10 @@ describe("promotion lifecycle", () => {
           token: "delete:app.item.item_group_id_fkey",
           summary: ["own (group_id) → groups: on delete restrict → noAction"],
         },
+        {
+          token: "remove:app.item",
+          summary: ["tables.app.items.indexes.items_title_idx"],
+        },
       ])
       expect(data.requiredPermissions[0]).toBe(
         "delete:app.item.item_group_id_fkey"
@@ -481,6 +488,9 @@ describe("promotion lifecycle", () => {
       const conversion = (pattern: RegExp) =>
         stepMatching(data, pattern).map((s) => s.conversion)
       expect(conversion(/^COMMENT ON TABLE/)).toEqual(["metadata"])
+      expect(conversion(/DROP INDEX "app"."items_title_idx"/)).toEqual([
+        "removed",
+      ])
       // Еквівалентно відтворений `property` не знімається: лише перейменовано
       expect(conversion(/DROP CONSTRAINT "items_code_key"/)).toEqual([])
       expect(conversion(/DROP COLUMN "legacy"/)).toEqual([undefined])
@@ -535,7 +545,10 @@ describe("promotion lifecycle", () => {
           "ALTER TABLE app.item RENAME CONSTRAINT items_group_id_fkey TO item_group_id_fkey",
         ],
       ])
-      expect(data.promotion!.permissionItems).toEqual([])
+      // Лишився тільки дозвіл на зняття індексу опису (клас `removed`)
+      expect(data.promotion!.permissionItems.map((i) => i.token)).toEqual([
+        "remove:app.item",
+      ])
     })
   })
 
