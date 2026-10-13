@@ -498,6 +498,8 @@ describe("provider locks", () => {
         "users",
         // NUL параметр запиту не передасть
         "auth.us\u0000ers",
+        // Одинокий сурогат json_to_recordset відкинув би з 22P02
+        "auth.us\ud800ers",
       ],
     })
     expect(providerTableNames(raw, "postgres")).toEqual([

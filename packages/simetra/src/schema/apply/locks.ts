@@ -693,6 +693,10 @@ export interface ProviderTableName {
   name: string
 }
 
+// Прапорець u: пара сурогатів — одна кодова точка, тож збіг дає лише
+// одинокий сурогат (String.prototype.isWellFormed — ES2024, поза lib пакета)
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u
+
 /**
  * Імена таблиць ролі `role` зі значення налаштування провайдера (JSON-об'єкт
  * «роль → імена»), розібрані на частини тим самим правилом, що й `regclass`
@@ -720,7 +724,14 @@ export function providerTableNames(
     : undefined
   if (!Array.isArray(entry)) return []
   return entry.flatMap((text): ProviderTableName[] => {
-    if (typeof text !== "string" || text.includes("\u0000")) return []
+    // NUL і одинокий сурогат параметр запиту не передасть: json_to_recordset
+    // відповів би 22P02 і обірвав би транзакцію плану
+    if (
+      typeof text !== "string" ||
+      text.includes("\u0000") ||
+      LONE_SURROGATE.test(text)
+    )
+      return []
     const parts = relationNameText(text)
     if (parts?.length === 1) return [{ name: parts[0]! }]
     if (parts?.length === 2) return [{ schema: parts[0]!, name: parts[1]! }]
