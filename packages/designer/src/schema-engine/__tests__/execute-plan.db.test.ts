@@ -263,12 +263,18 @@ function asSuperuser(url: string): string {
   return su.toString()
 }
 
-/** Перелік провайдера цілі для ролі тестів — як його записав би план. */
-const providerList = (url: string): Promise<ProviderLockSet[]> =>
+/**
+ * Перелік провайдера цілі для ролі плану — як його записав би план: ключ
+ * переліку — роль плану.
+ */
+const providerList = (
+  url: string,
+  role = "postgres"
+): Promise<ProviderLockSet[]> =>
   createApplyDatabase({ readOnly: true }).transaction(
     { url },
     "rollback",
-    (tx) => readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
+    (tx) => readProviderLocks(tx, role, SUPABASE_LOCKS)
   )
 
 /** План від `fromHash` до `toHash` над живою ціллю. */
@@ -292,7 +298,8 @@ async function planFor(
     promotion: null,
     resultCatalog: { tables: [], enumTypes: [], units: [] },
     ...over,
-    providerLocks: over.providerLocks ?? (await providerList(url)),
+    providerLocks:
+      over.providerLocks ?? (await providerList(url, over.role ?? "postgres")),
     targetFingerprint: over.targetFingerprint ?? (await read(url)),
     desiredFingerprint:
       over.desiredFingerprint ?? (await desiredFingerprint(BASE, steps)),
