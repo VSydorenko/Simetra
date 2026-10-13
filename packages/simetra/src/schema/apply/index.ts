@@ -37,6 +37,7 @@ export {
   planFootprint,
   planLocks,
   PROVIDER_LOCKS,
+  PROVIDER_SYSTEM_ROLES,
   lockRightsSql,
   providerStatement,
   providerStatements,

@@ -7,6 +7,7 @@ import type {
 } from "simetra/model"
 import {
   SUPABASE_LOCKS,
+  SUPABASE_ROLES,
   type EngineObjectRef,
   type ProviderLocks,
   type ProviderLockStatement,
@@ -686,6 +687,14 @@ export async function readLiveForeignKeys(
 /** Механізм провайдерських замків пресету (R27 плану П3-2a). */
 export const PROVIDER_LOCKS: Readonly<Record<DatabaseProvider, ProviderLocks>> =
   { supabase: SUPABASE_LOCKS }
+
+/**
+ * Системні ролі пресету: типові привілеї «для ролі» з цього переліку двигун
+ * не бачить (політика провайдера), тож і відбиток їх не читає.
+ */
+export const PROVIDER_SYSTEM_ROLES: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = { supabase: SUPABASE_ROLES }
 
 /** Ім'я таблиці з переліку провайдера; без `schema` — некваліфіковане. */
 export interface ProviderTableName {

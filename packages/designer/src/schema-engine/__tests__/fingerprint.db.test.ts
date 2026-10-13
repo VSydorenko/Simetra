@@ -259,6 +259,41 @@ describe("readFingerprint", () => {
     })
   })
 
+  describe("default privileges", () => {
+    const section = (setup: string): Promise<string> =>
+      inTarget(FIXTURE, async (url) => {
+        await other(superuserIn(url), setup)
+        return (await read(url)).sections.defaultPrivileges
+      })
+
+    it("ignores a schema default privilege equal to the built-in default", async () => {
+      // Двигун пише лише відхилення від `acldefault`, тож запис «роль собі
+      // ALL» він не бачить, а відбиток без нормалізації бачив би
+      expect(
+        await section(
+          "alter default privileges for role postgres in schema app grant all on tables to postgres"
+        )
+      ).toBe(await section("select 1"))
+    })
+
+    it("keeps a real schema default privilege", async () => {
+      expect(
+        await section(
+          "alter default privileges for role postgres in schema app grant select on tables to anon"
+        )
+      ).not.toBe(await section("select 1"))
+    })
+
+    it("ignores default privileges of a provider service role", async () => {
+      // Поза межею двигуна: політика провайдера виключає ADP системних ролей
+      expect(
+        await section(
+          "alter default privileges for role supabase_admin in schema app grant all on tables to anon"
+        )
+      ).toBe(await section("select 1"))
+    })
+  })
+
   it("sees an invalid index", async () => {
     await inTarget(FIXTURE, async (url) => {
       await other(

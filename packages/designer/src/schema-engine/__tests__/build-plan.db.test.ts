@@ -717,6 +717,43 @@ describe("buildPlan", () => {
     })
   })
 
+  it("proves a schema whose own default privileges equal the built-in ones", async () => {
+    // Відтворення В-2: «роль собі ALL» двигун не бачить, а відбиток бачив
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(
+      `create schema app;
+       alter default privileges for role postgres in schema app
+         grant all on tables to postgres, anon;
+       create table app.party (id uuid primary key);`,
+      async (url) => {
+        const outcome = await plan(url, model)
+        expect(errors(outcome)).not.toContain("plan.clone-mismatch")
+      }
+    )
+  })
+
+  it("proves a scope with public on the provider base state", async () => {
+    // Відтворення В-3: типові привілеї базового стану провайдера в `public`
+    // (власні та службових ролей) копія не відтворює, а двигун їх не бачить
+    const model = await compiled({
+      "project.meta.json": project({ defaultSchema: "public" }),
+      [PARTY]: party(),
+    })
+    await inTarget(EMPTY, async (url) => {
+      await other(
+        asSuperuser(url),
+        `alter default privileges for role postgres in schema public
+           grant all on tables to postgres, anon, authenticated, service_role;
+         alter default privileges for role supabase_admin in schema public
+           grant all on tables to postgres, anon, authenticated, service_role;
+         alter default privileges for role supabase_auth_admin in schema public
+           grant all on tables to postgres, anon;`
+      )
+      const outcome = await plan(url, model)
+      expect(errors(outcome)).not.toContain("plan.clone-mismatch")
+    })
+  })
+
   it("requires permissions for destructive steps", async () => {
     const withNote = await compiled({
       [PARTY]: party([attribute("note", { id: uuid(9040) })]),

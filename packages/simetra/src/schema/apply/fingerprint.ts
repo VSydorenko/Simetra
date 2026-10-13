@@ -4,13 +4,14 @@ import {
   type EngineScope,
   type ProviderSurface,
 } from "../engine"
+import { PROVIDER_SYSTEM_ROLES } from "./locks"
 import type { ApplyTransaction } from "./port"
 
 /**
  * Версія формули відбитка. Відбитки різних версій не порівнюються: зміна
  * вмісту секції інакше виглядала б дрейфом (рішення 2 плану П3-1).
  */
-export const FINGERPRINT_VERSION = 1
+export const FINGERPRINT_VERSION = 2
 
 export const FINGERPRINT_SECTIONS = [
   "schemas",
@@ -98,6 +99,7 @@ export async function readFingerprint(
   const rows = await inCatalogPath(tx, FINGERPRINT_SQL, [
     scope.schemas,
     JSON.stringify(surfaces),
+    PROVIDER_SYSTEM_ROLES[scope.provider],
   ])
   const row = rows[0]
   const sections = {} as Record<FingerprintSection, string>
@@ -420,6 +422,10 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
         and (t.typrelid = 0 or t.typrelid in (select oid from scope_rel where relkind = 'c'))
     ) o cross join aclexplode(o.acl) x`,
 
+  // Двигун пише лише відхилення від `acldefault`, а схемний ADP додається до
+  // вбудованих прав (Пр22): рядок, що вже є в `acldefault`, нічого не змінює
+  // й у відбиток не йде. ADP системних ролей провайдера двигун не бачить
+  // (політика провайдера), тож `$3` їх виключає
   defaultPrivileges: `
     select distinct format('role=%s schema=%I objtype=%s grantee=%s privilege=%s grantable=%s',
       case when d.defaclrole = n.nspowner then '=owner'
@@ -428,7 +434,14 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
       x.is_grantable)
     from pg_default_acl d
       join scope_ns n on n.oid = d.defaclnamespace
-      cross join aclexplode(d.defaclacl) x`,
+      cross join aclexplode(d.defaclacl) x
+    where d.defaclrole not in (select oid from pg_roles where rolname = any($3::text[]))
+      and not exists (
+        select from aclexplode(acldefault(
+          (case d.defaclobjtype when 'S' then 's' else d.defaclobjtype end)::"char",
+          d.defaclrole)) b
+        where b.grantee = x.grantee and b.privilege_type = x.privilege_type
+          and not x.is_grantable)`,
 
   extensions: `
     select format('%I schema=%I', e.extname, n.nspname)
@@ -536,7 +549,7 @@ const SCOPE_CTES = `
 
 /**
  * Один запит на всі секції: `$1` — схеми межі, `$2` — JSON поверхонь
- * провайдера з `table` як шаблоном `LIKE`.
+ * провайдера з `table` як шаблоном `LIKE`, `$3` — системні ролі провайдера.
  */
 const FINGERPRINT_SQL = `
 with${SCOPE_CTES},
