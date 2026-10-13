@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  compile,
   loadSqlParser,
   type PromotionObject,
   type PromotionRecord,
@@ -17,16 +18,20 @@ import {
   checkPermissions,
   classifyRemovals,
   classifySteps,
+  platformReplacements,
   promotionPermissionItems,
   requiredPermissions,
   stepConversions,
   tableKey,
   unclassifiedRemovals,
   unrealizedRenames,
+  valueElementColumns,
   type EngineAction,
+  type EquivalenceObject,
   type PlanStep,
   type RenameIntent,
 } from "simetra/schema"
+import { enumerations } from "../../__tests__/fixtures/e1-fixtures"
 
 /**
  * Класи видалень промоції, нереалізоване оголошення й виняток «заміна»
@@ -1550,5 +1555,471 @@ describe("access and permission items", () => {
     )
     expect(removals.map((r) => r.covered)).toEqual(["rowRule"])
     expect(promotionPermissionItems([], [], removals)).toEqual([])
+  })
+})
+
+describe("platformReplacements", () => {
+  // Таблиця одиниці перейменовується: копія після наміру й тінь бачать нове
+  // ім'я, а запис — старе (рішення 7 плану П3-2b-0, R9)
+  const RENAMED = {
+    tables: [{ id: OBJECT_ID, schema: "app", from: "items", to: "item" }],
+  }
+
+  const eq = (
+    kind: EquivalenceObject["kind"],
+    name: string,
+    parts: unknown[],
+    t = "item"
+  ): EquivalenceObject => ({
+    kind,
+    schema: "app",
+    table: t,
+    name,
+    key: JSON.stringify(parts),
+    valid: true,
+  })
+  const index = (name: string, keys: string[], t = "item") =>
+    eq("index", name, ["btree", false, false, keys.length, keys], t)
+  const fk = (name: string, def: string) => eq("constraint", name, ["f", def])
+  const check = (name: string, def: string) =>
+    eq("constraint", name, ["c", def])
+  const indexObject = (name: string): PromotionObject => ({
+    kind: "index",
+    schema: "app",
+    table: "items",
+    name,
+  })
+
+  function gate(
+    over: Partial<PromotionRecord>,
+    clone: EquivalenceObject[],
+    shadow: EquivalenceObject[],
+    o: {
+      units?: CatalogUnit[]
+      labels?: { schema: string; table: string; column: string }[]
+    } = {}
+  ) {
+    return platformReplacements({
+      record: record({ ...RENAMED, ...over }),
+      cloneEquivalence: clone,
+      shadowEquivalence: shadow,
+      desired: model([table("item")], o.units ?? []),
+      valueElementColumns: o.labels ?? [],
+      parse,
+    })
+  }
+
+  const refusedObjects = (out: ReturnType<typeof gate>) =>
+    out.map((d) => [d.code, d.severity, d.params?.objects])
+
+  describe("equivalent element (§9.2: indexes on FK, register keys, the rest)", () => {
+    it("refuses an adopted index the shadow does not reproduce", () => {
+      const out = gate(
+        {
+          conversions: [conversion("platform", indexObject("items_code_idx"))],
+        },
+        [index("items_code_idx", ["code"])],
+        [index("item_title_idx", ["title"])]
+      )
+      expect(refusedObjects(out)).toEqual([
+        [
+          "plan.platform-replacement-missing",
+          "error",
+          "subject-platform (index app.items.items_code_idx)",
+        ],
+      ])
+    })
+
+    it("passes when the shadow has an equivalent index on the same table", () => {
+      const out = gate(
+        {
+          conversions: [conversion("platform", indexObject("items_code_idx"))],
+        },
+        [index("items_code_idx", ["code"])],
+        [index("item_code_idx", ["code"])]
+      )
+      expect(out).toEqual([])
+    })
+
+    it("refuses an equivalent index that sits on another table", () => {
+      const out = gate(
+        {
+          conversions: [conversion("platform", indexObject("items_code_idx"))],
+        },
+        [index("items_code_idx", ["code"])],
+        [index("other_code_idx", ["code"], "other")]
+      )
+      expect(out.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+    })
+
+    it("refuses a register key until registers exist", () => {
+      // Ключ запису регістра чи зв'язку M:N: еквівалентного ключа вид поки не
+      // дає, тож це відома відмова, а не тихе зникнення
+      const key = eq("constraint", "items_a_b_key", ["u", "UNIQUE (a, b)"])
+      const out = gate(
+        { conversions: [conversion("platform", constraint("items_a_b_key"))] },
+        [key],
+        []
+      )
+      expect(out.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+    })
+
+    it("does not check the same object with the class removed", () => {
+      const out = gate(
+        { conversions: [conversion("removed", indexObject("items_code_idx"))] },
+        [index("items_code_idx", ["code"])],
+        []
+      )
+      expect(out).toEqual([])
+    })
+
+    it("names every object without a replacement in one diagnostic", () => {
+      const out = gate(
+        {
+          conversions: [
+            conversion(
+              "platform",
+              indexObject("items_code_idx"),
+              indexObject("items_title_idx")
+            ),
+          ],
+        },
+        [
+          index("items_code_idx", ["code"]),
+          index("items_title_idx", ["title"]),
+        ],
+        [index("item_code_idx", ["code"])]
+      )
+      expect(refusedObjects(out)).toEqual([
+        [
+          "plan.platform-replacement-missing",
+          "error",
+          "subject-platform (index app.items.items_title_idx)",
+        ],
+      ])
+    })
+  })
+
+  describe("foreign key (§9.2: FK reference, RESTRICT → NO ACTION)", () => {
+    const TARGET = "REFERENCES app.groups(id)"
+    const adopted = (def: string) =>
+      gate(
+        {
+          conversions: [conversion("platform", constraint("items_group_fkey"))],
+        },
+        [
+          fk(
+            "items_group_fkey",
+            `FOREIGN KEY (group_id) ${TARGET} ON DELETE RESTRICT`
+          ),
+        ],
+        [fk("item_group_id_fkey", def)]
+      )
+
+    it.each([
+      ["RESTRICT → NO ACTION", `FOREIGN KEY (group_id) ${TARGET}`],
+      [
+        "the same action",
+        `FOREIGN KEY (group_id) ${TARGET} ON DELETE RESTRICT`,
+      ],
+      [
+        "RESTRICT → NO ACTION on update too",
+        `FOREIGN KEY (group_id) ${TARGET} ON UPDATE RESTRICT ON DELETE NO ACTION`,
+      ],
+    ])("passes %s without a permission", (_, def) => {
+      expect(adopted(def)).toEqual([])
+    })
+
+    it("passes NO ACTION → RESTRICT", () => {
+      const out = gate(
+        {
+          conversions: [conversion("platform", constraint("items_group_fkey"))],
+        },
+        [fk("items_group_fkey", `FOREIGN KEY (group_id) ${TARGET}`)],
+        [
+          fk(
+            "item_group_id_fkey",
+            `FOREIGN KEY (group_id) ${TARGET} ON DELETE RESTRICT`
+          ),
+        ]
+      )
+      expect(out).toEqual([])
+    })
+
+    it.each([
+      [
+        "CASCADE → NO ACTION",
+        `FOREIGN KEY (group_id) ${TARGET} ON DELETE CASCADE`,
+        `FOREIGN KEY (group_id) ${TARGET}`,
+      ],
+      [
+        "NO ACTION → CASCADE",
+        `FOREIGN KEY (group_id) ${TARGET}`,
+        `FOREIGN KEY (group_id) ${TARGET} ON DELETE CASCADE`,
+      ],
+      [
+        "SET NULL → RESTRICT",
+        `FOREIGN KEY (group_id) ${TARGET} ON DELETE SET NULL`,
+        `FOREIGN KEY (group_id) ${TARGET} ON DELETE RESTRICT`,
+      ],
+      [
+        "a changed deferrability",
+        `FOREIGN KEY (group_id) ${TARGET} DEFERRABLE INITIALLY DEFERRED`,
+        `FOREIGN KEY (group_id) ${TARGET}`,
+      ],
+      [
+        "INITIALLY DEFERRED → IMMEDIATE",
+        `FOREIGN KEY (group_id) ${TARGET} DEFERRABLE INITIALLY DEFERRED`,
+        `FOREIGN KEY (group_id) ${TARGET} DEFERRABLE`,
+      ],
+      [
+        "a changed MATCH",
+        `FOREIGN KEY (group_id) ${TARGET} MATCH FULL`,
+        `FOREIGN KEY (group_id) ${TARGET}`,
+      ],
+      [
+        "another target table",
+        `FOREIGN KEY (group_id) ${TARGET}`,
+        "FOREIGN KEY (group_id) REFERENCES app.teams(id)",
+      ],
+      [
+        "another column",
+        `FOREIGN KEY (group_id) ${TARGET}`,
+        `FOREIGN KEY (team_id) ${TARGET}`,
+      ],
+    ])("refuses %s under the class platform", (_, was, now) => {
+      const out = gate(
+        {
+          conversions: [conversion("platform", constraint("items_group_fkey"))],
+        },
+        [fk("items_group_fkey", was)],
+        [fk("item_group_id_fkey", now)]
+      )
+      expect(out.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+    })
+
+    it("refuses a foreign key of the shadow on another table", () => {
+      const def = `FOREIGN KEY (group_id) ${TARGET}`
+      const out = gate(
+        {
+          conversions: [conversion("platform", constraint("items_group_fkey"))],
+        },
+        [fk("items_group_fkey", def)],
+        [{ ...fk("other_group_id_fkey", def), table: "other" }]
+      )
+      expect(out.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+    })
+  })
+
+  describe("value list in CHECK (§9.2: → Ref to an enumeration)", () => {
+    const STATUS = [{ schema: "app", table: "item", column: "status" }]
+    const adopted = (
+      def: string,
+      labels = STATUS,
+      shadow: EquivalenceObject[] = []
+    ) =>
+      gate(
+        {
+          conversions: [
+            conversion("platform", constraint("items_status_check")),
+          ],
+        },
+        [check("items_status_check", def)],
+        shadow,
+        { labels }
+      )
+
+    it.each([
+      "CHECK ((status = ANY (ARRAY['a'::text, 'b'::text])))",
+      "CHECK (((status)::text = ANY ((ARRAY['a'::character varying, 'b'::character varying])::text[])))",
+      "CHECK (status IN ('a', 'b'))",
+    ])("passes %s when the mapped column is a Ref to an enumeration", (def) => {
+      expect(adopted(def)).toEqual([])
+    })
+
+    it("refuses the value list when the mapped column is no such Ref", () => {
+      const out = adopted(
+        "CHECK ((status = ANY (ARRAY['a'::text, 'b'::text])))",
+        [{ schema: "app", table: "item", column: "kind" }]
+      )
+      expect(out.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+    })
+
+    it("does not accept a value-list CHECK of the shadow as the replacement", () => {
+      // Сама форма `CHECK` у тіні не доводить перерахування: її міг дописати
+      // будь-хто (R9)
+      const def = "CHECK ((status = ANY (ARRAY['a'::text, 'b'::text])))"
+      const out = adopted(def, [], [check("item_status_check", def)])
+      expect(out.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+    })
+
+    it.each([
+      ["a comparison", "CHECK ((status <> ''::text))"],
+      [
+        "a list over an expression",
+        "CHECK ((lower(status) = ANY (ARRAY['a'::text])))",
+      ],
+      [
+        "a list of non-literals",
+        "CHECK ((status = ANY (ARRAY[kind, 'b'::text])))",
+      ],
+      [
+        "a negated list",
+        "CHECK ((status <> ALL (ARRAY['a'::text, 'b'::text])))",
+      ],
+    ])("checks %s by the equivalence key", (_, def) => {
+      expect(adopted(def).map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+      expect(adopted(def, STATUS, [check("item_status_check", def)])).toEqual(
+        []
+      )
+    })
+  })
+
+  describe("units (§9.2: mechanics triggers, RLS, grants, document commands)", () => {
+    const policy: PromotionObject = {
+      kind: "unit",
+      class: "policy",
+      schema: "app",
+      table: "items",
+      name: "items_read",
+    }
+
+    it("refuses a policy when the shadow has no policy on the table", () => {
+      const out = gate(
+        { conversions: [conversion("platform", policy)] },
+        [],
+        [],
+        {
+          units: [
+            unit(
+              "trigger",
+              "trigger:app.item.t",
+              "t",
+              "CREATE TRIGGER t BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.f()"
+            ),
+            unit(
+              "policy",
+              "policy:app.other.p",
+              "p",
+              "CREATE POLICY p ON app.other FOR SELECT USING (true)"
+            ),
+          ],
+        }
+      )
+      expect(refusedObjects(out)).toEqual([
+        [
+          "plan.platform-replacement-missing",
+          "error",
+          "subject-platform (policy app.items.items_read)",
+        ],
+      ])
+    })
+
+    it("passes a policy when the shadow has a policy on the renamed table", () => {
+      const out = gate(
+        { conversions: [conversion("platform", policy)] },
+        [],
+        [],
+        {
+          units: [
+            unit(
+              "policy",
+              "policy:app.item.p",
+              "p",
+              "CREATE POLICY p ON app.item FOR SELECT USING (true)"
+            ),
+          ],
+        }
+      )
+      expect(out).toEqual([])
+    })
+
+    it("needs a function of the same name for a unit without a table", () => {
+      const fn: PromotionObject = {
+        kind: "unit",
+        class: "function",
+        schema: "app",
+        table: "",
+        name: "post_item",
+      }
+      const sql = (name: string) =>
+        `CREATE FUNCTION app.${name}() RETURNS void LANGUAGE sql AS $$ SELECT $$`
+      const other = unit(
+        "function",
+        "function:app.other()",
+        "other",
+        sql("other")
+      )
+      const same = unit(
+        "function",
+        "function:app.post_item()",
+        "post_item",
+        sql("post_item")
+      )
+      const refused = gate(
+        { conversions: [conversion("platform", fn)] },
+        [],
+        [],
+        {
+          units: [other],
+        }
+      )
+      expect(refused.map((d) => d.code)).toEqual([
+        "plan.platform-replacement-missing",
+      ])
+      expect(
+        gate({ conversions: [conversion("platform", fn)] }, [], [], {
+          units: [same],
+        })
+      ).toEqual([])
+    })
+  })
+
+  it("refuses a default under the class platform: no replacement shape", () => {
+    const out = gate(
+      {
+        conversions: [
+          conversion("platform", {
+            kind: "default",
+            schema: "app",
+            table: "items",
+            column: "code",
+          }),
+        ],
+      },
+      [],
+      []
+    )
+    expect(refusedObjects(out)).toEqual([
+      [
+        "plan.platform-replacement-missing",
+        "error",
+        "subject-platform (default app.items.code)",
+      ],
+    ])
+  })
+
+  it("collects the columns that are a Ref to a kind with value elements", async () => {
+    const compiled = await compile(enumerations())
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    expect(valueElementColumns(compiled.model!)).toEqual([
+      { schema: "app", table: "item", column: "color" },
+    ])
   })
 })

@@ -188,7 +188,7 @@ function itemLine() {
 
 /**
  * Читання через API до промоції: грант ролі `authenticated` і політика
- * читання — дослівний модуль таблиці, який вид замінює своїм доступом.
+ * читання — дослівний модуль таблиці, який промоція знімає (клас `removed`).
  */
 const READ_MODULE = `CREATE POLICY items_read ON app.items FOR SELECT TO authenticated USING (true);
 
@@ -253,8 +253,11 @@ function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
       "Item#uniques/items_code_key": "property",
       // Вид не відтворює індекс опису, тож він лише знімається
       "Item#indexes/items_title_idx": "removed",
+      // Генерованих політик і грантів ролям API вид ще не дає, тож клас
+      // `platform` для них відмовив би (рішення 7 плану П3-2b-0): читання
+      // знімається класом `removed`
       ...(o.read === true
-        ? { [READ_UNITS.policy]: "platform", [READ_UNITS.grant]: "platform" }
+        ? { [READ_UNITS.policy]: "removed", [READ_UNITS.grant]: "removed" }
         : {}),
     },
   })

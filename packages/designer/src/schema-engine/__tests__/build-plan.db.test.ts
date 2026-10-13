@@ -2461,6 +2461,59 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       })
     })
 
+    describe("class platform (decision 7, R9)", () => {
+      const INDEX = "counterparties_inn_idx"
+
+      /** Прийнятий звичайний індекс `inn` з класом `platform`. */
+      async function platformIndex(): Promise<Promoted> {
+        const files = contactsProject()
+        const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
+        party.indexes = [{ name: INDEX, keys: [{ column: "inn" }] }]
+        files.set(COUNTERPARTY_FILE, JSON.stringify(party))
+        const mapping = contactsMapping()
+        mapping.conversions[`Counterparty#indexes/${INDEX}`] = "platform"
+        return promoted(files, mapping)
+      }
+
+      it("refuses an adopted index of the class platform that the kind does not reproduce", async () => {
+        // Вид такого індексу не дає: клас `platform` без заміни був би тихим
+        // зникненням індексу
+        const outcome = await planPromotion(await platformIndex())
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.platform-replacement-missing"])
+        expect(params(outcome, "plan.platform-replacement-missing")).toEqual([
+          {
+            objects: `Counterparty#indexes/${INDEX} (index app.counterparties.${INDEX})`,
+          },
+        ])
+      })
+
+      it("plans an adopted index of the class platform that the desired state reproduces", async () => {
+        // Еквівалентний індекс на тій самій таблиці бажаної тіні — заміна є;
+        // його додає обгортка двигуна, бо вид такого індексу поки не описує
+        const reproduced: SchemaEngine = {
+          ...engine,
+          withDesiredShadow: (o, sql, scope, fn) =>
+            engine.withDesiredShadow(
+              o,
+              `${sql}\nCREATE INDEX counterparty_tax_id_idx ON app.counterparty (tax_id);`,
+              scope,
+              fn
+            ),
+        }
+        const outcome = await planPromotion(await platformIndex(), {
+          engine: reproduced,
+        })
+        const artifact = planned(outcome)
+        expect(artifact.promotion!.canonicalNames).toContainEqual({
+          kind: "index",
+          table: { schema: "app", name: "counterparty" },
+          from: INDEX,
+          to: "counterparty_tax_id_idx",
+        })
+      })
+    })
+
     it("refuses a record without a marker when the old table is live", async () => {
       // Рядок 8 через конвеєр: стара таблиця на цілі, а marker немає
       const p = await promoted()

@@ -27,4 +27,9 @@ export {
   type AccessChange,
 } from "./access"
 export { readWritePath, type WritePath } from "./write-path"
+export {
+  platformReplacements,
+  valueElementColumns,
+  type ColumnName,
+} from "./replacements"
 export type { CanonicalRename } from "./equivalence"

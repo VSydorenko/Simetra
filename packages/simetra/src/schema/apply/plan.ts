@@ -71,6 +71,7 @@ import {
   canonicalRenames,
   classifyRemovals,
   foreignSequenceRefusals,
+  platformReplacements,
   preservationPlan,
   promotionPermissionItems,
   promotionTransition,
@@ -81,6 +82,7 @@ import {
   stepConversions,
   unclassifiedRemovals,
   unrealizedRenames,
+  valueElementColumns,
   withTempNames,
   type CanonicalRename,
   type EquivalenceObject,
@@ -653,9 +655,19 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     desired: target.extracted.model,
     parse,
   })
+  // Клас `platform` — лише за наявного механізму-заміни (рішення 7, R9 плану
+  // П3-2b-0): колонки `Ref` на перерахування — з бажаної моделі через реєстр
   const unclassified = [
     ...unrealizedRenames(planSteps, analysis.intent, record),
     ...unclassifiedRemovals(removals),
+    ...platformReplacements({
+      record,
+      cloneEquivalence: analysis.equivalence,
+      shadowEquivalence: target.equivalence,
+      desired: target.extracted.model,
+      valueElementColumns: valueElementColumns(c.model),
+      parse,
+    }),
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])
 
@@ -854,6 +866,11 @@ type CloneAnalysis =
       model: CatalogModel
       /** Намір разом із тимчасовими іменами канонічних перейменувань. */
       intent: RenameIntent
+      /**
+       * Об'єкти еквівалентності копії після наміру, до канонічних імен: імена
+       * обмежень та індексів — ще початкові (гейт класу `platform`).
+       */
+      equivalence: EquivalenceObject[]
       canonicalNames: CanonicalRename[]
       changes: TypeChange[]
       preamble: EnginePlan["preamble"]
@@ -976,6 +993,7 @@ async function analyseOnClone(p: {
       steps,
       model: extracted.model,
       intent: withTempNames(p.intent, canonical.tempNames),
+      equivalence,
       canonicalNames: canonical.renames,
       changes: guarded.changes,
       preamble: enginePlan.preamble,

@@ -2635,6 +2635,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Кожне прийняте обмеження, індекс, значення за замовчуванням, коментар, політика чи грант, що зникає, потребує класу конверсії в promote; призначте його або збережіть об'єкт. Прийнятий первинний ключ мусить збігатися з ключем виду, а identity, вираз генерованої колонки чи колляція колонки в промоції не змінюються.",
     },
   },
+  "plan.platform-replacement-missing": {
+    en: (p) =>
+      `The promotion gives the class platform to adopted objects that the desired state has no replacement for: ${p.objects}`,
+    uk: (p) =>
+      `Промоція дає клас platform прийнятим об'єктам, яким бажаний стан не має заміни: ${p.objects}`,
+    hint: {
+      en: "No plan was written. The class platform means the kind replaces the adopted object: an equivalent index or constraint on the same table, a foreign key with the same columns, target, MATCH and deferrability (only RESTRICT and NO ACTION may swap), a Ref to an enumeration for a CHECK value list, or a unit of the same class on the same table. Generated policies and triggers do not exist yet, and neither do register keys. Give such an object the class removed (it then needs the remove: permission) or keep the table adopted.",
+      uk: "План не записано. Клас platform означає, що вид заміняє прийнятий об'єкт: еквівалентним індексом чи обмеженням на тій самій таблиці, FK з тими самими колонками, ціллю, MATCH і відкладеністю (міняються місцями лише RESTRICT і NO ACTION), Ref на перерахування для переліку значень у CHECK або одиницею того самого класу на тій самій таблиці. Генерованих політик і тригерів, як і ключів регістрів, ще немає. Дайте такому об'єкту клас removed (тоді потрібен дозвіл remove:) або лишіть таблицю прийнятою.",
+    },
+  },
   "plan.write-path": {
     en: (p) =>
       `The adopted tables ${p.table} of the promotion are writable through the API on the target (${p.detail}), and the write path after promotion is an open question`,

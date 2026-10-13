@@ -2,6 +2,7 @@ export {
   COMPILER_RULES,
   diagnostic,
   sortDiagnostics,
+  valueAt,
   type CompilerRule,
   type Diagnostic,
   type DiagnosticParams,
