@@ -169,6 +169,12 @@ export interface PlanArtifact {
    * розширенням немає.
    */
   plpgsqlCheck: PlpgsqlCheckMode
+  /**
+   * Недійсні обмеження й індекси бажаної тіні (`readInvalidObjects`): раннер
+   * після кроків відмовляє лише на недійсному, чого в бажаному стані немає
+   * (рішення 1 плану П3-2b-1, фаза 16).
+   */
+  desiredInvalid: string[]
   /** Секція промоції; `null` — план без промоції. Поле є завжди, як `drift`. */
   promotion: PromotionSection | null
   /**
@@ -329,6 +335,7 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
   ),
   revalidationSearchPath: z.string(),
   plpgsqlCheck: z.enum(PLPGSQL_CHECK_MODES),
+  desiredInvalid: z.array(z.string()),
   promotion: promotionSectionSchema.nullable(),
   environment: z.strictObject({
     defaultPrivileges: z.array(

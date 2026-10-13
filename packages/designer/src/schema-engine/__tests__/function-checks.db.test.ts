@@ -230,6 +230,7 @@ async function planFor(
     revalidationSearchPath: await sessionPath(url),
     // Режим, який план дає на стеку: supautils ставить розширення
     plpgsqlCheck: "transient",
+    desiredInvalid: [],
     promotion: null,
     environment: { defaultPrivileges: [] },
     resultCatalog: EMPTY_MODEL,

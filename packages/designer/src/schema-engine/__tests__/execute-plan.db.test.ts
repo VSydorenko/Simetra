@@ -307,6 +307,7 @@ async function planFor(
     preamble: [],
     // Перевірку `plpgsql_check` тримає `function-checks.db.test.ts`
     plpgsqlCheck: "unavailable",
+    desiredInvalid: [],
     promotion: null,
     // Цілі тестів глобальних ADP ролі не мають
     environment: { defaultPrivileges: [] },
@@ -351,6 +352,7 @@ async function establish(url: string, hash: string): Promise<void> {
       preamble: [],
       revalidationSearchPath: await sessionPath(url),
       plpgsqlCheck: "unavailable",
+      desiredInvalid: [],
       promotion: null,
       environment: { defaultPrivileges: [] },
       targetFingerprint: fingerprint,
@@ -2155,6 +2157,90 @@ describe("executePlan", () => {
         expect(
           await other(url, "select pg_typeof(j)::text as type from app.v")
         ).toEqual([{ type: "json" }])
+      })
+    })
+  })
+
+  describe("end of transaction", () => {
+    const NOT_VALID = step(
+      "s1",
+      "ALTER TABLE app.t ADD CONSTRAINT t_a CHECK (c <> '') NOT VALID",
+      {
+        verb: "alter",
+        lockClass: "accessExclusive",
+        lockedTables: [{ schema: "app", name: "t" }],
+      }
+    )
+    const VALID = step("s1", NOT_VALID.sql.replace(" NOT VALID", ""), {
+      ...NOT_VALID,
+    })
+
+    // Review Focus 5 плану П3-2b-1: `ROLLBACK` не запускає відкладених
+    // перевірок, тож без `SET CONSTRAINTS ALL IMMEDIATE` репетиція мовчала б
+    it("surfaces a deferred foreign key violation before a rehearsal rolls back", async () => {
+      const setup = `${BASE};
+        create table app.p (id int primary key);
+        create table app.c (id int, p int references app.p deferrable initially deferred);
+        insert into app.p values (1);
+        insert into app.c values (1, 1);`
+      await inTarget(setup, async (url) => {
+        const steps = [
+          step("s1", "DELETE FROM app.p", {
+            verb: "alter",
+            class: "destructive",
+          }),
+        ]
+        const plan = await planFor(url, steps, {
+          // Каталог кроком не змінюється
+          desiredFingerprint: await read(url),
+        })
+        const outcome = await executePlan(apply, { url }, plan, {
+          ...options,
+          mode: "rehearse",
+          allow: ["s1"],
+        })
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.deferred-constraint-failed",
+              params: { sqlstate: "23503" },
+            },
+          ],
+        })
+        expect(await other(url, "select id from app.p")).toEqual([{ id: 1 }])
+      })
+    })
+
+    it("refuses a NOT VALID constraint the desired state does not have", async () => {
+      await inTarget(BASE, async (url) => {
+        const plan = await planFor(url, [NOT_VALID], {
+          desiredInvalid: [],
+          desiredFingerprint: await desiredFingerprint(BASE, [VALID]),
+        })
+        const outcome = await executePlan(apply, { url }, plan, options)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [{ code: "apply.constraint-invalid" }],
+        })
+        expect(String(outcome.diagnostics[0]!.params?.objects)).toContain("t_a")
+        expect(
+          await other(
+            url,
+            "select conname from pg_constraint where conname = 't_a'"
+          )
+        ).toEqual([])
+      })
+    })
+
+    it("accepts an invalid object the desired state also has", async () => {
+      await inTarget(BASE, async (url) => {
+        const plan = await planFor(url, [NOT_VALID], {
+          desiredInvalid: ["constraint app.t t_a"],
+          desiredFingerprint: await desiredFingerprint(BASE, [NOT_VALID]),
+        })
+        const outcome = await executePlan(apply, { url }, plan, options)
+        expect(outcome).toMatchObject({ status: "committed" })
       })
     })
   })

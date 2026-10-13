@@ -104,6 +104,7 @@ const plan: ExecutablePlan = {
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public, extensions',
   plpgsqlCheck: "unavailable",
+  desiredInvalid: [],
   promotion: null,
   environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -171,6 +172,8 @@ const options: ExecuteOptions = {
 }
 
 interface Script {
+  /** Недійсні обмеження й індекси цілі після кроків (фаза 16). */
+  invalid?: string[]
   locked?: boolean
   role?: string
   /** Помилка оператора з міткою `label` у спробі `attempt`. */
@@ -249,6 +252,8 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("pg_available_extension_versions")) return "plpgsql-facts"
   if (sql.includes("plpgsql_check_function_tb(p.oid")) return "plpgsql-check"
   if (sql.includes("regprocedure::text AS signature")) return "blind"
+  if (sql === "SET CONSTRAINTS ALL IMMEDIATE") return "set-constraints"
+  if (sql.includes("c.convalidated")) return "invalid"
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
   if (sql.includes("pg_advisory_xact_lock")) return "lookup-lock"
   if (sql.includes("set_config('statement_timeout', $1"))
@@ -342,55 +347,58 @@ function fakeDb(script: Script = {}) {
                         expected: true,
                       })),
                     ]
-                  : label === "plpgsql-facts"
-                    ? [{ ...PLPGSQL_FACTS, ...script.plpgsql }]
-                    : label === "plpgsql-check"
-                      ? (script.plpgsqlGroups?.(plpgsqlCalls++) ?? [])
-                      : label === "provider-setting"
-                        ? [
-                            {
-                              value:
-                                script.providerSettings?.[String(p?.[0])] ??
-                                null,
-                            },
-                          ]
-                        : label === "provider-tables"
-                          ? (script.providerTables ?? [])
-                          : label === "present"
-                            ? (script.present ?? [])
-                            : label === "environment"
-                              ? (script.environment ?? []).map((r) => ({
-                                  ...r,
-                                }))
-                              : label === "existing"
-                                ? (script.existing ?? [])
-                                : label === "held-locks"
-                                  ? (script.held ?? [])
-                                  : label === "try-lock"
-                                    ? [{ locked: script.locked ?? true }]
-                                    : label === "role"
-                                      ? [{ role: script.role ?? "postgres" }]
-                                      : sql.includes(" AS marker")
-                                        ? [{ marker: false, ledger: false }]
-                                        : sql.includes("to_regclass")
-                                          ? [{ exists: true }]
-                                          : label === "lookup"
-                                            ? script.ledgerHasApply === true
-                                              ? [
-                                                  {
-                                                    format:
-                                                      script.ledgerFormat ?? 1,
-                                                  },
-                                                ]
-                                              : []
-                                            : sql.includes("encode(sha256")
-                                              ? [
-                                                  stepsRan
-                                                    ? DESIRED.sections
-                                                    : (script.targetSections ??
-                                                      TARGET.sections),
-                                                ]
-                                              : []
+                  : label === "invalid"
+                    ? (script.invalid ?? []).map((object) => ({ object }))
+                    : label === "plpgsql-facts"
+                      ? [{ ...PLPGSQL_FACTS, ...script.plpgsql }]
+                      : label === "plpgsql-check"
+                        ? (script.plpgsqlGroups?.(plpgsqlCalls++) ?? [])
+                        : label === "provider-setting"
+                          ? [
+                              {
+                                value:
+                                  script.providerSettings?.[String(p?.[0])] ??
+                                  null,
+                              },
+                            ]
+                          : label === "provider-tables"
+                            ? (script.providerTables ?? [])
+                            : label === "present"
+                              ? (script.present ?? [])
+                              : label === "environment"
+                                ? (script.environment ?? []).map((r) => ({
+                                    ...r,
+                                  }))
+                                : label === "existing"
+                                  ? (script.existing ?? [])
+                                  : label === "held-locks"
+                                    ? (script.held ?? [])
+                                    : label === "try-lock"
+                                      ? [{ locked: script.locked ?? true }]
+                                      : label === "role"
+                                        ? [{ role: script.role ?? "postgres" }]
+                                        : sql.includes(" AS marker")
+                                          ? [{ marker: false, ledger: false }]
+                                          : sql.includes("to_regclass")
+                                            ? [{ exists: true }]
+                                            : label === "lookup"
+                                              ? script.ledgerHasApply === true
+                                                ? [
+                                                    {
+                                                      format:
+                                                        script.ledgerFormat ??
+                                                        1,
+                                                    },
+                                                  ]
+                                                : []
+                                              : sql.includes("encode(sha256")
+                                                ? [
+                                                    stepsRan
+                                                      ? DESIRED.sections
+                                                      : (script.targetSections ??
+                                                        TARGET.sections),
+                                                  ]
+                                                : []
           return rows as R[]
         },
       }
@@ -437,12 +445,16 @@ describe("executePlan", () => {
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
       "set-settings",
+      "set-constraints",
       // 15. Ревалідація й сліпі функції
       "get-settings",
       "set-settings",
       "validators",
       "blind",
       "set-settings",
+      // 16. Валідність; далі відбиток результату
+      "fingerprint",
+      "invalid",
       "fingerprint",
       "marker",
       "ledger",
@@ -1290,6 +1302,73 @@ describe("executePlan", () => {
     expect(log.filter((l) => l === "COMMIT")).toHaveLength(1)
   })
 
+  it("stops with the sqlstate when a deferred constraint fails before the end", async () => {
+    const { db, log } = fakeDb({
+      fail: (label) =>
+        label === "set-constraints"
+          ? new ApplyDbError("insert or update violates", "23503")
+          : undefined,
+    })
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.deferred-constraint-failed",
+          params: { sqlstate: "23503" },
+        },
+      ],
+    })
+    expect(log).not.toContain("COMMIT")
+  })
+
+  it("retries the attempt when SET CONSTRAINTS waits on a lock", async () => {
+    const { db } = fakeDb({
+      fail: (label, attempt) =>
+        label === "set-constraints" && attempt === 1
+          ? new ApplyDbError("canceling statement due to lock timeout", "55P03")
+          : undefined,
+    })
+    expect(await executePlan(db, target, plan, options)).toMatchObject({
+      status: "committed",
+      attempts: 2,
+    })
+  })
+
+  it("refuses an invalid object the desired state does not have, before the result fingerprint", async () => {
+    const { db, log } = fakeDb({
+      invalid: ["constraint app.t t_a", "index app.i"],
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, desiredInvalid: ["index app.i"] },
+      options
+    )
+    expect(outcome).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.constraint-invalid",
+          params: { objects: "constraint app.t t_a" },
+        },
+      ],
+    })
+    expect(log).not.toContain("COMMIT")
+    expect(log.filter((l) => l === "fingerprint")).toHaveLength(2)
+  })
+
+  it("accepts an invalid object the desired state has", async () => {
+    const { db } = fakeDb({ invalid: ["index app.i"] })
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, desiredInvalid: ["index app.i"] },
+      options
+    )
+    expect(outcome).toMatchObject({ status: "committed" })
+  })
+
   it.each(["apply", "rehearse"] as const)(
     "warns in %s mode about functions the check cannot see",
     async (mode) => {
@@ -1562,6 +1641,7 @@ describe("executePlan", () => {
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
       "set-settings",
+      "set-constraints",
       // Заміри «після» — до ревалідації (рішення 1 плану П3-2b-1)
       "measure app.u",
       "get-settings",
@@ -1569,6 +1649,8 @@ describe("executePlan", () => {
       "validators",
       "blind",
       "set-settings",
+      "fingerprint",
+      "invalid",
       "fingerprint",
       "marker",
       "ledger",

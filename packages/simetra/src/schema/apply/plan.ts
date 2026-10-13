@@ -59,6 +59,7 @@ import {
   type FingerprintSection,
   type ObjectOwner,
 } from "./fingerprint"
+import { readInvalidObjects } from "./validity"
 import {
   footprintSubjects,
   footprintTables,
@@ -361,9 +362,10 @@ export async function buildPlan(
     scope,
     async (db, enginePlan) => ({
       enginePlan,
-      owners: await dbs.reader.transaction(db, "rollback", (tx) =>
-        readOwners(tx, scope)
-      ),
+      ...(await dbs.reader.transaction(db, "rollback", async (tx) => ({
+        owners: await readOwners(tx, scope),
+        desiredInvalid: await readInvalidObjects(tx, scope),
+      }))),
       ...(await witness(db, scope)),
     })
   )
@@ -486,6 +488,7 @@ export async function buildPlan(
       preamble,
       revalidationSearchPath,
       plpgsqlCheck,
+      desiredInvalid: target.desiredInvalid,
       promotion: null,
       environment,
       targetFingerprint: live.fingerprint,
@@ -518,6 +521,7 @@ export async function buildPlan(
     preamble,
     revalidationSearchPath,
     plpgsqlCheck,
+    desiredInvalid: target.desiredInvalid,
     promotion: null,
     environment,
     resultCatalog: proof.resultCatalog,
@@ -616,6 +620,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     async (db) => ({
       ...(await dbs.reader.transaction(db, "rollback", async (tx) => ({
         owners: await readOwners(tx, scope),
+        desiredInvalid: await readInvalidObjects(tx, scope),
         equivalence: await readEquivalenceObjects(tx, newTables),
       }))),
       ...(await c.witness(db, scope)),
@@ -835,6 +840,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       preamble: analysis.preamble,
       revalidationSearchPath,
       plpgsqlCheck,
+      desiredInvalid: target.desiredInvalid,
       promotion: section,
       environment,
       targetFingerprint: live.fingerprint,
@@ -864,6 +870,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     preamble: analysis.preamble,
     revalidationSearchPath,
     plpgsqlCheck,
+    desiredInvalid: target.desiredInvalid,
     promotion: section,
     environment,
     resultCatalog: proof.resultCatalog,

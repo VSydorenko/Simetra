@@ -93,6 +93,7 @@ async function writePlan(
     preamble: [],
     revalidationSearchPath: '"$user", public',
     plpgsqlCheck: "transient",
+    desiredInvalid: [],
     promotion,
     environment: { defaultPrivileges: [] },
     resultCatalog: { tables: [], enumTypes: [], units: [] },

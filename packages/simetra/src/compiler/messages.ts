@@ -2439,6 +2439,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Перевірка не бачить тіл цих функцій: перегляньте їх вручну проти змін плану.",
     },
   },
+  "apply.deferred-constraint-failed": {
+    en: (p) =>
+      `A deferred constraint failed when the transaction checked it before its end (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
+    uk: (p) =>
+      `Відкладене обмеження не спрацювало, коли транзакція перевірила його перед кінцем (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. A step leaves rows that violate a DEFERRABLE constraint: fix the step or the data it works on.",
+      uk: "Нічого не записано. Крок лишає рядки, що порушують обмеження DEFERRABLE: виправте крок або дані, з якими він працює.",
+    },
+  },
+  "apply.constraint-invalid": {
+    en: (p) =>
+      `After the plan's steps these constraints or indexes are invalid, and the desired state has them valid: ${p.objects}. The transaction was rolled back`,
+    uk: (p) =>
+      `Після кроків плану ці обмеження чи індекси недійсні, а в бажаному стані вони дійсні: ${p.objects}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. A NOT VALID constraint or an index left invalid is not what the desired state describes: validate it in the same plan or drop it.",
+      uk: "Нічого не записано. Обмеження NOT VALID чи недійсний індекс — не те, що описує бажаний стан: перевірте його в тому самому плані або приберіть.",
+    },
+  },
   "apply.temp-name-taken": {
     en: (p) =>
       `The name ${p.name} the apply needs for a check inside its transaction is already taken. Nothing was written`,

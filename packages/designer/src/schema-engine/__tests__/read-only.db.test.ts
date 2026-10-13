@@ -273,6 +273,7 @@ describe("transaction-mode pooler", () => {
           readOnly: true,
         }).transaction({ url }, "rollback", readSessionSearchPath),
         plpgsqlCheck: "unavailable",
+        desiredInvalid: [],
         promotion: null,
         environment: { defaultPrivileges: [] },
         resultCatalog: { tables: [], enumTypes: [], units: [] },

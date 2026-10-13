@@ -111,7 +111,7 @@ export async function readFingerprint(
  * `pg_get_*` і `::regclass` кваліфікують імена схемою незалежно від сесії,
  * а `search_path` транзакції лишається незмінним.
  */
-async function inCatalogPath(
+export async function inCatalogPath(
   tx: ApplyTransaction,
   sql: string,
   params: readonly unknown[]

@@ -77,6 +77,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public',
   plpgsqlCheck: "transient",
+  desiredInvalid: [],
   promotion: null,
   environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -494,6 +495,20 @@ describe("plan artifact", () => {
     expect(
       parsePlan(JSON.stringify({ ...artifact, plpgsqlCheck: "maybe" }))
     ).toMatchObject({ ok: false, reason: "invalid" })
+  })
+
+  it("covers the desired invalid objects with the hash and requires them", async () => {
+    const artifact = await stampPlan(draft())
+    expect(
+      (await stampPlan({ ...draft(), desiredInvalid: ["index app.i"] }))
+        .planHash
+    ).not.toBe(artifact.planHash)
+    const without: Record<string, unknown> = { ...artifact }
+    delete without.desiredInvalid
+    expect(parsePlan(JSON.stringify(without))).toMatchObject({
+      ok: false,
+      reason: "invalid",
+    })
   })
 
   it("holds the current format in the schema itself, not only in parsePlan", async () => {

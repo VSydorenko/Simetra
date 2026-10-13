@@ -331,6 +331,43 @@ describe("buildPlan", () => {
     })
   })
 
+  it("carries no invalid objects when the desired state has none", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      expect(planned(await plan(url, model)).desiredInvalid).toEqual([])
+    })
+  })
+
+  it("reads the invalid objects from the desired shadow, not from the target", async () => {
+    // Читач підмінює лише запит недійсних об'єктів і лише на базі, що не є
+    // ціллю, — тобто на бажаній тіні: рядок в артефакті доводить джерело
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      const reader: ApplyDatabase = {
+        transaction: (target, end, fn) =>
+          dbs.reader.transaction(target, end, (tx) =>
+            fn({
+              query: async <R extends Record<string, unknown>>(
+                sql: string,
+                params?: readonly unknown[]
+              ): Promise<R[]> =>
+                target.url !== url && sql.includes("convalidated")
+                  ? ([{ object: "constraint app.x x_a" }] as unknown as R[])
+                  : tx.query<R>(sql, params),
+            })
+          ),
+      }
+      const outcome = await buildPlan(
+        engine,
+        { ...dbs, reader },
+        model,
+        { target: { url } },
+        []
+      )
+      expect(planned(outcome).desiredInvalid).toEqual(["constraint app.x x_a"])
+    })
+  })
+
   it("warns about a plan on a target without plpgsql_check", async () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {

@@ -51,6 +51,7 @@ import {
   preservedColumnName,
 } from "./promotion/preservation"
 import { isRetryable } from "./retry"
+import { readInvalidObjects } from "./validity"
 import { revalidationSettings, withLocalSettings } from "./settings"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
 import {
@@ -104,6 +105,7 @@ export type ExecutablePlan = Pick<
   | "preamble"
   | "revalidationSearchPath"
   | "plpgsqlCheck"
+  | "desiredInvalid"
   | "promotion"
   | "environment"
   | "resultCatalog"
@@ -505,6 +507,19 @@ async function runAttempt(
   // транзакції
   await runSteps(tx, blocks[2]!, parse)
 
+  // 13. Відкладені обмеження спрацьовують тут, а не при `COMMIT`: `ROLLBACK`
+  // репетиції їх не запускає, і порушення лишилося б непоміченим. Стоїть до
+  // замірів «після», бо відкладений тригер користувача може змінити рядки
+  try {
+    await tx.query("SET CONSTRAINTS ALL IMMEDIATE")
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || isRetryable(error)) throw error
+    throw stop("failed", "apply.deferred-constraint-failed", {
+      sqlstate: error.sqlstate ?? "unknown",
+      error: error.message,
+    })
+  }
+
   // 14. Заміри «після» — у нових іменах, після кроків. Та сама транзакція
   // й ті самі налаштування сесії, що й «до», тож текст значень порівнюваний
   // без закріплення GUC
@@ -538,6 +553,17 @@ async function runAttempt(
       ? []
       : [[baseline.plpgsql, after.plpgsql] as const]),
   ])
+
+  // 16. Недійсне (`NOT VALID`, невдалий `CONCURRENTLY`), чого немає в
+  // бажаному стані, не лишається: відбиток таке не завжди відрізняє
+  const desiredInvalid = new Set(plan.desiredInvalid)
+  const invalid = (await readInvalidObjects(tx, plan.scope)).filter(
+    (object) => !desiredInvalid.has(object)
+  )
+  if (invalid.length > 0)
+    throw stop("failed", "apply.constraint-invalid", {
+      objects: invalid.join("; "),
+    })
 
   // 17. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
   const resultFingerprint = await readFingerprint(tx, plan.scope)

@@ -200,6 +200,8 @@ export const COMPILER_RULES = [
   "apply.promotion-checks-pending",
   "apply.function-check-failed",
   "apply.function-check-blind",
+  "apply.deferred-constraint-failed",
+  "apply.constraint-invalid",
   "apply.temp-name-taken",
   "apply.plpgsql-check-unavailable",
   "plan.unparsable-step",
