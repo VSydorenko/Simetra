@@ -114,7 +114,8 @@ export function driftGate(
     : [applyDiagnostic("apply.drift-partial", "warning", versions)]
   const sections = comparison.comparable ? comparison.differing : []
   const differences = sameEngineVersion
-    ? diffCatalogModels(marker.catalog, current.model)
+    ? // Marker описує саму ціль, а ціль порядку колонок сама не змінює
+      diffCatalogModels(marker.catalog, current.model, { columnOrder: true })
     : []
   if (sections.length === 0 && differences.length === 0)
     return { ok: true, fromHash, drift: null, diagnostics }

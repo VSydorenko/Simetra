@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import pg from "pg"
 import { compile } from "simetra/compiler"
-import type { EngineScope } from "simetra/schema"
+import { desiredForApply, type EngineScope } from "simetra/schema"
 import {
   afterAll,
   afterEach,
@@ -32,6 +32,7 @@ import {
   acceptDebt,
   attribute,
   catalog,
+  customTable,
   metaFiles,
   project as projectFile,
   shadowDatabaseCount,
@@ -135,11 +136,16 @@ const party = (title: string, extra: Record<string, unknown> | null) =>
   })
 
 /** Записує метадані в теку; дослівні одиниці — прийнятий борг. */
-async function writeMetadata(dir: string, entry: unknown): Promise<void> {
+async function writeMetadata(
+  dir: string,
+  entry: unknown,
+  extra: Record<string, unknown> = {}
+): Promise<void> {
   const files = await acceptDebt(
     metaFiles({
       "project.meta.json": projectFile({ defaultSchema: "app" }),
       [PARTY]: entry,
+      ...extra,
     })
   )
   await rm(dir, { recursive: true, force: true })
@@ -251,6 +257,35 @@ const columnNullable = async (url: string, column: string) =>
       `select is_nullable from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = '${column}'`
     )
   )[0]?.is_nullable
+
+/** `attnum` колонок таблиці в порядку їхніх номерів. */
+const columnOrder = async (url: string, table: string) =>
+  (
+    await rows<{ attname: string; attnum: number }>(
+      url,
+      `select attname, attnum from pg_attribute where attrelid = '${table}'::regclass and attnum > 0 and not attisdropped order by attnum`
+    )
+  ).map((r) => `${r.attnum}:${r.attname}`)
+
+/** Порядок колонок тієї самої таблиці в бажаній тіні метаданих теки. */
+async function shadowColumnOrder(
+  dir: string,
+  table: string
+): Promise<string[]> {
+  const compiled = await compile(await readMetadataDir(dir))
+  if (compiled.model === undefined)
+    throw new Error(JSON.stringify(compiled.diagnostics))
+  const desired = await desiredForApply(compiled.model)
+  const outcome = await engine.withDesiredShadow(
+    { target: stack },
+    desired.sql,
+    desired.scope,
+    (shadow) => columnOrder(shadow.url, table)
+  )
+  if (outcome.status !== "loaded")
+    throw new Error(JSON.stringify(outcome.diagnostics))
+  return outcome.value
+}
 
 describe("apply lifecycle", () => {
   it("runs plan, apply and diff through chain, rehearsal, data failure, drift and owner swap", async () => {
@@ -412,6 +447,124 @@ describe("apply lifecycle", () => {
       expect(all[3]?.drift).not.toBeNull()
       expect(all[4]?.drift?.reason).toBe("versions-changed")
       expect(all[4]?.from_hash).toBe(all[4]?.to_hash)
+    })
+  })
+
+  /**
+   * Застосування нової версії метаданих над уже застосованою ціллю: перевірка
+   * відбитка зелена, наступний план порожній, `diff` пустий. Порядок колонок
+   * таблиці на цілі й у бажаній тіні — повертається для перевірки.
+   */
+  async function appliedWithOrder(
+    dir: string,
+    url: string,
+    table: string
+  ): Promise<{ target: string[]; shadow: string[] }> {
+    await committed(dir, url, await planned(dir, url))
+    await expectUnchanged(dir, url)
+    const diff = await call("diff", {}, options(dir, url))
+    expect(diff.diagnostics, JSON.stringify(diff.diagnostics)).toEqual([])
+    expect(diff.data, JSON.stringify(diff.data)).toMatchObject({
+      differences: [],
+      empty: true,
+    })
+    return {
+      target: await columnOrder(url, table),
+      shadow: await shadowColumnOrder(dir, table),
+    }
+  }
+
+  const column = (n: number, name: string, type: Record<string, unknown>) => ({
+    id: uuid(n),
+    name,
+    physicalName: name,
+    ...type,
+  })
+
+  // Порядок колонок — не властивість бажаного стану (R4 плану П3-2b-0):
+  // колонка типу, який створює той самий план, на цілі стає останньою, бо
+  // двигун не вбудовує її в CREATE TABLE раніше за тип. Гейти «проєкт ↔ ціль»
+  // і `diff` цього не рахують
+  it("applies a table that uses a type created in the same plan", async () => {
+    await inTarget(async (url) => {
+      const dir = await newProject()
+      await writeMetadata(dir, party("Party", null))
+      await committed(dir, url, await planned(dir, url))
+
+      // Енам рендерить сам вид `PgEnum`
+      await writeMetadata(dir, party("Party", null), {
+        "pg-enums/Hue/Hue.meta.json": {
+          id: uuid(9210),
+          kind: "PgEnum",
+          name: "Hue",
+          physicalName: "hue",
+          values: ["red", "green"],
+        },
+        "custom-tables/Card/Card.meta.json": customTable("Card", {
+          id: uuid(9211),
+          columns: [
+            column(9212, "id", { type: "UUID", notNull: true }),
+            column(9213, "hue", {
+              type: "PgEnum",
+              enum: { kind: "PgEnum", name: "Hue" },
+            }),
+            column(9214, "label", { type: "String", length: 20 }),
+          ],
+        }),
+      })
+      expect(await appliedWithOrder(dir, url, "app.card")).toEqual({
+        target: ["1:id", "2:label", "3:hue"],
+        shadow: ["1:id", "2:hue", "3:label"],
+      })
+
+      // Домен — борг `sql/`, колонка `Raw` його типу
+      await writeMetadata(dir, party("Party", null), {
+        "sql/app/color.sql":
+          "CREATE DOMAIN app.color AS text CHECK (VALUE IN ('red', 'green'));",
+        "custom-tables/Swatch/Swatch.meta.json": customTable("Swatch", {
+          id: uuid(9221),
+          columns: [
+            column(9222, "id", { type: "UUID", notNull: true }),
+            column(9223, "c", { type: "Raw", pgType: "app.color" }),
+            column(9224, "label", { type: "String", length: 20 }),
+          ],
+        }),
+      })
+      expect(await appliedWithOrder(dir, url, "app.swatch")).toEqual({
+        target: ["1:id", "2:label", "3:c"],
+        shadow: ["1:id", "2:c", "3:label"],
+      })
+    })
+  })
+
+  // Postgres додає колонку лише в кінець: реквізит посередині масиву
+  // наявного довідника на цілі стає останнім
+  it("applies an attribute inserted in the middle of an existing table", async () => {
+    await inTarget(async (url) => {
+      const dir = await newProject()
+      const withAttributes = (names: string[]) =>
+        catalog("Party", {
+          id: uuid(9201),
+          title: { en: "Party" },
+          attributes: names.map((name) =>
+            attribute(name, {
+              id: uuid(9230 + ["first", "middle", "last"].indexOf(name)),
+              type: "String",
+              length: 20,
+            })
+          ),
+        })
+      await writeMetadata(dir, withAttributes(["first", "last"]))
+      await committed(dir, url, await planned(dir, url))
+
+      await writeMetadata(dir, withAttributes(["first", "middle", "last"]))
+      const { target, shadow } = await appliedWithOrder(dir, url, "app.party")
+      const names = (order: string[]) =>
+        order
+          .map((c) => c.split(":")[1]!)
+          .filter((n) => ["first", "middle", "last"].includes(n))
+      expect(names(target)).toEqual(["first", "last", "middle"])
+      expect(names(shadow)).toEqual(["first", "middle", "last"])
     })
   })
 })

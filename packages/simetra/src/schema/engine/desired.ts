@@ -127,7 +127,11 @@ export async function compareWithDesired(
 
   const { plan, target: extractedTarget, desired } = outcome.value
   const differences = [
-    ...diffCatalogModels(extractedTarget.model, desired.model),
+    // Порядок колонок не є властивістю бажаного стану: нова колонка наявної
+    // таблиці на цілі стає останньою, а тінь будує таблицю з нуля
+    ...diffCatalogModels(extractedTarget.model, desired.model, {
+      columnOrder: false,
+    }),
     ...populationDifferences(extractedTarget, desired),
   ]
   const diagnostics = dedupe([

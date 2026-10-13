@@ -99,6 +99,21 @@ describe("catalog model", () => {
     ])
   })
 
+  it("reordered columns are no difference without column order", () => {
+    const t = table()
+    const reordered = table({ columns: [...t.columns].reverse() })
+    expect(
+      diffCatalogModels(model(), model(reordered), { columnOrder: false })
+    ).toEqual([])
+    // Інший набір колонок і далі різниця: вимикається лише порядок
+    const fewer = table({ columns: t.columns.slice(1) })
+    expect(
+      diffCatalogModels(model(), model(fewer), { columnOrder: false }).map(
+        (d) => d.kind
+      )
+    ).toEqual(["missing"])
+  })
+
   it("missing and extra index", () => {
     const ix = (name: string) => ({
       name,

@@ -179,7 +179,8 @@ function diffTable(
   path: string,
   a: CatalogTable,
   b: CatalogTable,
-  out: CatalogDifference[]
+  out: CatalogDifference[],
+  columnOrder: boolean
 ): void {
   const {
     columns: ca,
@@ -207,7 +208,7 @@ function diffTable(
   const namesB = cb.map((c) => c.name)
   const sameSet =
     namesA.length === namesB.length && namesA.every((n) => namesB.includes(n))
-  if (sameSet && namesA.some((n, i) => n !== namesB[i]))
+  if (columnOrder && sameSet && namesA.some((n, i) => n !== namesB[i]))
     out.push({
       path: `${path}.columns`,
       kind: "order",
@@ -228,10 +229,23 @@ function diffTable(
   )
 }
 
+/**
+ * Опції порівняння. `columnOrder: false` — для порівнянь «проєкт ↔ ціль»:
+ * порядок колонок не є властивістю бажаного стану, бо Postgres додає колонку
+ * лише в кінець, тож нова колонка наявної таблиці на цілі стає останньою, а
+ * тінь будує таблицю з нуля в порядку компіляції. Копія доказу ↔ ціль і
+ * marker ↔ ціль звіряють порядок точно: копія мусить відтворювати ціль, а
+ * ціль сама порядку не змінює.
+ */
+export interface DiffCatalogOptions {
+  columnOrder: boolean
+}
+
 /** Структурне порівняння двох моделей каталогу; результат упорядкований за `path`. */
 export function diffCatalogModels(
   a: CatalogModel,
-  b: CatalogModel
+  b: CatalogModel,
+  { columnOrder }: DiffCatalogOptions = { columnOrder: true }
 ): CatalogDifference[] {
   const out: CatalogDifference[] = []
   const qualified = <T extends { schema: string; name: string }>(
@@ -242,7 +256,7 @@ export function diffCatalogModels(
     qualified(a.tables),
     qualified(b.tables),
     out,
-    (p, x, y) => diffTable(p, x, y, out)
+    (p, x, y) => diffTable(p, x, y, out, columnOrder)
   )
   diffKeyed(
     "enumTypes",

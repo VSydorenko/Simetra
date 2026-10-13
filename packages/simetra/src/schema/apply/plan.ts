@@ -1399,9 +1399,12 @@ function cloneMismatch(
         `${actions.length} engine action(s), the first is \`${actions[0]!.sql}\``
       )
     )
+  // Порядок колонок — точно: копія мусить відтворювати ціль, і marker бере
+  // модель саме з копії
   const differences = diffCatalogModels(
     live.extracted.model,
-    copy.extracted.model
+    copy.extracted.model,
+    { columnOrder: true }
   )
   if (differences.length > 0)
     out.push(
