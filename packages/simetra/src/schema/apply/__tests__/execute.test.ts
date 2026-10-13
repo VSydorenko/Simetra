@@ -1093,6 +1093,40 @@ describe("executePlan", () => {
     )
   })
 
+  it("fails, not refuses, when the role lost its rights on the installed extension", async () => {
+    // Рішення 4, крок 3: розширення на місці — ціль та сама, а взяти його
+    // перевірка не може
+    const { db, log } = fakeDb({
+      plpgsql: {
+        installed: true,
+        schema: "ext",
+        schemaUsage: false,
+        functionExecute: true,
+      },
+    })
+    expect(
+      await executePlan(
+        db,
+        target,
+        { ...plan, plpgsqlCheck: "installed" },
+        options
+      )
+    ).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.plpgsql-check-unavailable",
+          params: { sqlstate: "42501" },
+        },
+      ],
+    })
+    // Звірка фази 4 пройшла: блокування взято
+    expect(log).toContain(
+      'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE'
+    )
+    expect(log).not.toContain("ALTER TABLE app.t ADD COLUMN d int")
+  })
+
   it("applies an installed plan with the extension in place", async () => {
     const { db, log } = fakeDb({
       plpgsql: {

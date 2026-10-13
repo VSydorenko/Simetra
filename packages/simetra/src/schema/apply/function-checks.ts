@@ -3,7 +3,7 @@ import { quoteIdent } from "simetra/model"
 import type { EngineDiagnostic } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
 import { ApplyDbError, type ApplyTransaction } from "./port"
-import { RETRYABLE_SQLSTATES } from "./retry"
+import { isRetryable, RETRYABLE_SQLSTATES } from "./retry"
 
 /**
  * Помилка тіла функції, яку дала перевірка. `relationOid` і `relation` —
@@ -245,8 +245,12 @@ export interface BlindFunctions {
  *
  * `expected` — ідентичності пресету провайдера
  * (`PROVIDER_EXPECTED_BLIND_FUNCTIONS`): `<схема>.<ім'я>(<oidvectortypes>)`
- * без лапок, від `search_path` не залежить, на відміну від тексту
- * `regprocedure`.
+ * без лапок. Схема й ім'я функції кваліфіковані завжди, на відміну від
+ * тексту `regprocedure`; типи аргументів `oidvectortypes` пише так само, як
+ * `format_type`, — без схеми, коли тип видно в `search_path`. Тож від шляху
+ * ідентичність не залежить лише для вбудованих типів аргументів (схема
+ * `pg_catalog`); запис пресету з типом іншої схеми мусить бути таким, як його
+ * друкує каталог під шляхом ревалідації.
  */
 export async function readBlindFunctions(
   tx: ApplyTransaction,
@@ -376,6 +380,16 @@ function modeOf(
     (f.trusted || f.superuser || installable.includes(PLPGSQL_CHECK))
     ? "transient"
     : "unavailable"
+}
+
+/**
+ * Розширення є в `pg_extension` цієї бази — незалежно від прав ролі на нього:
+ * звірка цілі з планом `installed` (рішення 4) питає лише про наявність.
+ */
+export async function plpgsqlCheckInstalled(
+  tx: ApplyTransaction
+): Promise<boolean> {
+  return (await readPlpgsqlCheckFacts(tx)).installed
 }
 
 /** Режим `plpgsql_check` цієї бази; `installable` — перелік пресету провайдера. */
@@ -515,12 +529,7 @@ export async function readPlpgsqlErrors(
       await tx.query(`CREATE SCHEMA ${CHECK_SCHEMA}`)
       await tx.query(`CREATE EXTENSION ${PLPGSQL_CHECK} SCHEMA ${CHECK_SCHEMA}`)
     } catch (error) {
-      if (
-        !(error instanceof ApplyDbError) ||
-        (error.sqlstate !== undefined &&
-          RETRYABLE_SQLSTATES.includes(error.sqlstate))
-      )
-        throw error
+      if (!(error instanceof ApplyDbError) || isRetryable(error)) throw error
       await release()
       throw new PlpgsqlCheckUnavailable(
         error.sqlstate ?? "unknown",

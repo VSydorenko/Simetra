@@ -623,16 +623,42 @@ describe("plpgsql_check", () => {
   })
 
   it("installs the extension only for the check", async () => {
-    await run(TABLE_T, [NEUTRAL], {}, async (outcome, url) => {
-      expect(outcome).toMatchObject({ status: "committed" })
-      expect(
-        await other(
-          url,
-          `select
-             exists (select 1 from pg_extension where extname = 'plpgsql_check') as extension,
-             exists (select 1 from pg_namespace where nspname = 'simetra_plpgsql_check') as schema`
-        )
-      ).toEqual([{ extension: false, schema: false }])
+    const leftover = (url: string) =>
+      other(
+        url,
+        `select
+           exists (select 1 from pg_extension where extname = 'plpgsql_check') as extension,
+           exists (select 1 from pg_namespace where nspname = 'simetra_plpgsql_check') as schema`
+      )
+    const broken = await desiredFingerprint(FP, [RENAME_A])
+    const neutral = await desiredFingerprint(FP, [NEUTRAL])
+    await inTarget(FP, async (url) => {
+      // Розширення в цій базі немає, і помилку тіла, якої валідатор мови не
+      // бачить, ловить лише воно: тимчасове встановлення справді відбулося
+      expect(await leftover(url)).toEqual([{ extension: false, schema: false }])
+      const failed = await executePlan(
+        apply,
+        { url },
+        await planFor(url, [RENAME_A], broken),
+        options
+      )
+      expect(failed).toMatchObject({
+        status: "failed",
+        diagnostics: [{ code: "apply.function-check-failed" }],
+      })
+      expect(String(failed.diagnostics[0]!.params.functions)).toContain(
+        "app.fp(): 42703"
+      )
+      // Та сама база, закомічений прогін: розширення й схема не пережили
+      // своєї точки збереження
+      const committed = await executePlan(
+        apply,
+        { url },
+        await planFor(url, [NEUTRAL], neutral),
+        options
+      )
+      expect(committed).toMatchObject({ status: "committed", diagnostics: [] })
+      expect(await leftover(url)).toEqual([{ extension: false, schema: false }])
     })
   })
 

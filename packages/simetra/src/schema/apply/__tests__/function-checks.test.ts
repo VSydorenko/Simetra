@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
+import { localize } from "simetra/compiler"
 import {
   ApplyDbError,
   CheckNameTaken,
+  isRetryable,
   FUNCTION_ERROR_LIMIT,
   FUNCTION_SCOPE_SQL,
   newFunctionErrors,
@@ -540,5 +542,34 @@ describe("validator block settings", () => {
     expect(log[1]!.sql).toContain(
       "CONTINUE WHEN pg_catalog.split_part(kv, '=', 1) IN ('check_function_bodies', 'lock_timeout', 'statement_timeout');"
     )
+  })
+})
+
+describe("isRetryable", () => {
+  it("is true only for a database error with a retryable SQLSTATE", () => {
+    for (const s of RETRYABLE_SQLSTATES)
+      expect(isRetryable(new ApplyDbError("x", s))).toBe(true)
+    expect(isRetryable(new ApplyDbError("x", "42501"))).toBe(false)
+    expect(isRetryable(new ApplyDbError("x", undefined))).toBe(false)
+    expect(isRetryable(new Error("55P03"))).toBe(false)
+  })
+})
+
+describe("plan.plpgsql-check-unavailable hint", () => {
+  // На копії розширення бракує серверу копій доказу, а не цілі
+  it("names the server of the copies for the copy and the database for the target", () => {
+    const hint = (on: string, locale: "en" | "uk") =>
+      localize(
+        {
+          code: "plan.plpgsql-check-unavailable",
+          params: { on, sqlstate: "58P01", error: "x" },
+        },
+        locale
+      ).hint
+    expect(hint("copy", "en")).toContain("shadowBase")
+    expect(hint("copy", "uk")).toContain("shadowBase")
+    expect(hint("target", "en")).toContain("on the database")
+    expect(hint("target", "en")).not.toContain("shadowBase")
+    expect(hint("target", "uk")).not.toContain("shadowBase")
   })
 })

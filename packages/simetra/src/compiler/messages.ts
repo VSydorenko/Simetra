@@ -2751,8 +2751,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `plpgsql_check не вдалося взяти на копії бази для доказу (SQLSTATE ${p.sqlstate}: ${p.error}), тож доказ не перевірив ним тіла plpgsql-функцій`
         : "plpgsql_check недоступне в базі: воно не встановлене для ролі застосування, і роль не може його поставити, тож тіла функцій перевіряють лише валідатори мов",
     hint: {
-      en: "A promotion requires plpgsql_check and is refused without it; another plan only warns. Install plpgsql_check (or let the applying role install it), then plan again.",
-      uk: "Промоція вимагає plpgsql_check і без нього відхиляється; інший план лише попереджає. Поставте plpgsql_check (чи дозвольте ролі застосування його ставити) і сплануйте знову.",
+      en: (p) =>
+        p.on === "copy"
+          ? "A promotion requires plpgsql_check and is refused without it; another plan only warns. The copy lives on the server of the proof copies (shadowBase when it is set): make plpgsql_check available there for the applying role, or use a server that has it, then plan again."
+          : "A promotion requires plpgsql_check and is refused without it; another plan only warns. Install plpgsql_check on the database (or let the applying role install it), then plan again.",
+      uk: (p) =>
+        p.on === "copy"
+          ? "Промоція вимагає plpgsql_check і без нього відхиляється; інший план лише попереджає. Копія живе на сервері копій доказу (shadowBase, коли його задано): зробіть там plpgsql_check доступним для ролі застосування чи візьміть сервер, де воно є, і сплануйте знову."
+          : "Промоція вимагає plpgsql_check і без нього відхиляється; інший план лише попереджає. Поставте plpgsql_check у базі (чи дозвольте ролі застосування його ставити) і сплануйте знову.",
     },
   },
   "database.failed": {

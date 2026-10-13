@@ -94,7 +94,7 @@ export {
   renderGlobalDefaultPrivileges,
   type GlobalDefaultPrivilege,
 } from "./environment"
-export { RETRYABLE_SQLSTATES } from "./retry"
+export { isRetryable, RETRYABLE_SQLSTATES } from "./retry"
 export {
   readSessionSearchPath,
   revalidationSettings,
@@ -106,6 +106,7 @@ export {
   FUNCTION_SCOPE_SQL,
   newFunctionErrors,
   planFunctionChecks,
+  plpgsqlCheckInstalled,
   PLPGSQL_CHECK_MODES,
   PlpgsqlCheckUnavailable,
   readBlindFunctions,

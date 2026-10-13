@@ -6,7 +6,6 @@ import {
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import {
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
-  PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
   type DbConnection,
   type EngineDiagnostic,
@@ -25,9 +24,9 @@ import {
   FUNCTION_ERROR_LIMIT,
   FUNCTION_LIMIT,
   newFunctionErrors,
+  plpgsqlCheckInstalled,
   PlpgsqlCheckUnavailable,
   readBlindFunctions,
-  readPlpgsqlCheckMode,
   readPlpgsqlErrors,
   readValidatorErrors,
   type CheckResult,
@@ -51,7 +50,7 @@ import {
   preservationQuery,
   preservedColumnName,
 } from "./promotion/preservation"
-import { RETRYABLE_SQLSTATES } from "./retry"
+import { isRetryable } from "./retry"
 import { revalidationSettings, withLocalSettings } from "./settings"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
 import {
@@ -148,16 +147,6 @@ export type ExecuteOutcome =
  */
 const ADVISORY_LOCK = "1397312837, 1"
 
-/**
- * Конфлікт блокувань (`lock_timeout`, deadlock) — єдине, на чому повторюється
- * спроба. Збій серіалізації (`40001`) перевірки тіл лише прокидають далі, а не
- * записують помилкою функції; під `READ COMMITTED` порту він не виникає, тож
- * раннер прокидає його сирим, як будь-яку іншу помилку бази.
- */
-const RETRYABLE: ReadonlySet<string> = new Set(
-  RETRYABLE_SQLSTATES.filter((s) => s !== "40001")
-)
-
 /** Порядок блоків кроків за походженням (рішення 1 плану П3-2b-1). */
 const ORIGIN_ORDER = ["intent", "engine", "environment"] as const
 
@@ -195,10 +184,15 @@ const stop = (
 ): AttemptStop =>
   new AttemptStop(status, [applyDiagnostic(code, "error", params)])
 
+/**
+ * Конфлікт блокувань (`lock_timeout`, deadlock) — єдине, на чому повторюється
+ * спроба. Збій серіалізації (`40001`) перевірки тіл лише прокидають далі, а не
+ * записують помилкою функції; під `READ COMMITTED` порту він не виникає, тож
+ * раннер прокидає його сирим, як будь-яку іншу помилку бази.
+ */
 const retryable = (error: unknown): boolean =>
-  error instanceof ApplyDbError &&
-  error.sqlstate !== undefined &&
-  RETRYABLE.has(error.sqlstate)
+  isRetryable(error) &&
+  !(error instanceof ApplyDbError && error.sqlstate === "40001")
 
 /**
  * Застосування плану однією транзакцією (платформна спека §6.2 п.4–5, §6.6;
@@ -437,16 +431,15 @@ async function runAttempt(
   }
 
   // 4c. Режим `plpgsql_check` (рішення 4 плану П3-2b-1): план, що застав
-  // розширення встановленим, не ставить його тимчасово, тож без нього
-  // ціль уже не та. Перехід «тимчасове → встановлене» допустимий. Копія
-  // доказу розширення цілі може не мати — там раннер бере його сам
+  // розширення встановленим, а його в базі вже немає, — ціль уже не та.
+  // Розширення на місці, але без прав ролі, — не звірка, а збій перевірки
+  // (`apply.plpgsql-check-unavailable` у фазі 7). Перехід «тимчасове →
+  // встановлене» допустимий. Копія доказу розширення цілі може не мати — там
+  // раннер бере його сам
   if (
     o.mode !== "proof" &&
     plan.plpgsqlCheck === "installed" &&
-    (await readPlpgsqlCheckMode(
-      tx,
-      PROVIDER_INSTALLABLE_EXTENSIONS[plan.scope.provider]
-    )) !== "installed"
+    !(await plpgsqlCheckInstalled(tx))
   )
     throw stop("refused", "apply.target-changed", {
       sections: "plpgsqlCheck",
