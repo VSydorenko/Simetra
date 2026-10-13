@@ -164,11 +164,12 @@ export function placeColumns(
 ): { table: PromotedTable; problems: Diagnostic[] } {
   const table = object.data as CustomTable
   const problems: Diagnostic[] = []
-  const unknown = (path: readonly string[], detail: string) =>
+  const unknown = (path: readonly string[], detail: string, reason?: string) =>
     problems.push(
       diagnostic("promote.mapping-unknown", "", "", {
         at: toPointer([...at, ...path]),
         detail,
+        ...(reason === undefined ? {} : { reason }),
       })
     )
   const onColumn = (
@@ -229,7 +230,8 @@ export function placeColumns(
         if (table.scopeColumn !== column.name) {
           unknown(
             [column.name],
-            `${column.name} is not the scope column of ${object.name}`
+            `${column.name} is not the scope column of ${object.name}`,
+            "scopeColumn"
           )
           return
         }

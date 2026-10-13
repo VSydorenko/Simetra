@@ -767,6 +767,28 @@ describe("names the promotion changes outside the column map", () => {
     }
   })
 
+  it("lets a literal of an unrenamed promoted table pass, keeps refusing a renamed one", () => {
+    // Таблиця, яку промоція лишає під своїм ім'ям, у рядку не зміниться
+    const kept: TableRename = {
+      ...COUNTERPARTIES,
+      schema: "app",
+      from: "items",
+      to: "items",
+    }
+    const map: RenameMap = {
+      tables: [kept, COUNTERPARTIES],
+      knownTables: MAP.knownTables,
+    }
+    const run = (sql: string) =>
+      rewriteStatementText(sql, parse, map, {
+        variables: new Set(),
+        records: new Map(),
+        labels: [],
+      }).problems.map((p) => p.code)
+    expect(run("SELECT 'app.items'")).toEqual([])
+    expect(run("SELECT 'app.counterparties'")).toEqual(["rewrite.unsupported"])
+  })
+
   it("refuses constraint and sequence names a promotion renames separately", () => {
     expect(
       refused(

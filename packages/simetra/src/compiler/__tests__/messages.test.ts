@@ -60,6 +60,19 @@ describe("messages catalog", () => {
     expect(localize(d!, "uk").message).toMatch(/^Неправильн.*отримано число/)
   })
 
+  it("physical.reserved-word does not claim a keyword must always be quoted", () => {
+    // COL_NAME_KEYWORD (`position`) у ролі імені колонки лапок не потребує
+    const entry = MESSAGES["physical.reserved-word"]
+    const params = { name: "position" }
+    expect(entry.en(params)).not.toMatch(/must be quoted/)
+    expect(entry.en(params)).toBe(
+      "Physical name position is a PostgreSQL keyword; some positions need it quoted"
+    )
+    expect(entry.uk(params)).toBe(
+      "Фізичне ім'я position — ключове слово Postgres; на деяких позиціях його треба брати в лапки"
+    )
+  })
+
   it("localize returns uk text", () => {
     const d = diagnostic("identity.id-missing", "a.meta.json", "/id")
     expect(d.message).toBe("id is missing")

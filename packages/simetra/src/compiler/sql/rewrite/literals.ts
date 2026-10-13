@@ -46,8 +46,13 @@ function textTable(
   if (names === undefined || names.length > 3) return undefined
   const relname = names.at(-1)!
   const schema = names.length >= 2 ? names.at(-2) : undefined
+  // Таблиця, яку промоція лишає під своїм ім'ям, у рядку не змінюється, тож
+  // рядок — не відмова; колонки в динамічному SQL ловить `rewrite.dynamic-sql`.
   return ctx.map.tables.find(
-    (t) => t.from === relname && (schema === undefined || t.schema === schema)
+    (t) =>
+      t.from !== t.to &&
+      t.from === relname &&
+      (schema === undefined || t.schema === schema)
   )
 }
 

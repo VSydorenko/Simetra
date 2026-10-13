@@ -1616,9 +1616,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "physical.reserved-word": {
     en: (p) =>
-      `Physical name ${p.name} is a PostgreSQL keyword that must be quoted`,
+      `Physical name ${p.name} is a PostgreSQL keyword; some positions need it quoted`,
     uk: (p) =>
-      `Фізичне ім'я ${p.name} — ключове слово Postgres, яке треба брати в лапки`,
+      `Фізичне ім'я ${p.name} — ключове слово Postgres; на деяких позиціях його треба брати в лапки`,
     hint: {
       en: "It works when quoted, but new elements should not take reserved words.",
       uk: "У лапках воно працює, але нові елементи не мають брати зарезервованих слів.",
@@ -1790,11 +1790,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       en: (p) =>
         p.reason === "implied"
           ? "Remove the key: a comment carried over verbatim into a description is recorded by promote itself; the input classifies only what needs a decision."
-          : "Name columns of the adopted table, standard attributes that the target kind has with its settings (canonical camelCase names), each target once, and conversion keys that name a SQL unit or a structural element of the promoted tables.",
+          : p.reason === "scopeColumn"
+            ? "Declare `scope` and `scopeColumn` on the CustomTable, naming this column, before the promotion; only the scope column of a table can map to the scope."
+            : "Name columns of the adopted table, standard attributes that the target kind has with its settings (canonical camelCase names), each target once, and conversion keys that name a SQL unit or a structural element of the promoted tables.",
       uk: (p) =>
         p.reason === "implied"
           ? "Приберіть ключ: дослівно перенесений в опис коментар promote записує сам; вхід класифікує лише те, що потребує рішення."
-          : "Називайте колонки прийнятої таблиці, стандартні реквізити, які цільовий вид має з його налаштуваннями (канонічні camelCase-імена), кожну ціль один раз і ключі конверсій, що називають SQL-одиницю чи структурний елемент промотованих таблиць.",
+          : p.reason === "scopeColumn"
+            ? "Оголосіть `scope` і `scopeColumn` на CustomTable з цією колонкою до промоції; на скоуп мапиться лише колонка-носій скоупу таблиці."
+            : "Називайте колонки прийнятої таблиці, стандартні реквізити, які цільовий вид має з його налаштуваннями (канонічні camelCase-імена), кожну ціль один раз і ключі конверсій, що називають SQL-одиницю чи структурний елемент промотованих таблиць.",
     },
   },
   "promote.unit-unsupported": {
