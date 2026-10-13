@@ -89,6 +89,16 @@ export interface PlanData {
    * `environment`: вивід показує їх окремою групою з поясненням ролі.
    */
   environment: { role: string; defaultPrivileges: GlobalDefaultPrivilege[] }
+  /**
+   * Як раннер бере `plpgsql_check` (рішення 4 плану П3-2b-1): `transient` —
+   * ставить на час перевірки й відкочує.
+   */
+  plpgsqlCheck: PlanArtifact["plpgsqlCheck"]
+  /**
+   * Сліпі функції цілі з переліку пресету провайдера (рішення 5): не
+   * попередження, лише кількість у виводі.
+   */
+  expectedBlindFunctions: number
 }
 
 export interface ApplyData {
@@ -134,7 +144,8 @@ function planPromotion(
 function planData(
   file: string,
   artifact: PlanArtifact,
-  model: CompiledModel
+  model: CompiledModel,
+  expectedBlindFunctions: number
 ): PlanData {
   const conversions = new Map(
     (artifact.promotion?.conversions ?? []).map((c) => [c.step, c.class])
@@ -167,6 +178,8 @@ function planData(
       role: artifact.role,
       defaultPrivileges: artifact.environment.defaultPrivileges,
     },
+    plpgsqlCheck: artifact.plpgsqlCheck,
+    expectedBlindFunctions,
   }
 }
 
@@ -299,7 +312,7 @@ export const planTool = defineTool({
           changes: [],
           diagnostics,
           artifacts: [{ path: file, content: serializePlan(artifact) }],
-          data: planData(file, artifact, model),
+          data: planData(file, artifact, model, outcome.expectedBlindFunctions),
         }
       }
     }

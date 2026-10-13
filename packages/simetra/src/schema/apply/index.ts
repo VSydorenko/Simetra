@@ -101,12 +101,22 @@ export {
   withLocalSettings,
 } from "./settings"
 export {
+  CheckNameTaken,
   FUNCTION_ERROR_LIMIT,
+  FUNCTION_SCOPE_SQL,
   newFunctionErrors,
+  planFunctionChecks,
+  PLPGSQL_CHECK_MODES,
+  PlpgsqlCheckUnavailable,
   readBlindFunctions,
+  readPlpgsqlCheckMode,
+  readPlpgsqlErrors,
   readValidatorErrors,
+  UNAPPLIED_FUNCTION_SETTINGS,
+  type BlindFunctions,
   type CheckResult,
   type FunctionError,
+  type PlpgsqlCheckMode,
 } from "./function-checks"
 export {
   DEFAULT_APPLY_TIMEOUTS,

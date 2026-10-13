@@ -89,6 +89,14 @@ export function renderDiff(d: DiffData, report: string): string {
 const short = (hash: string | null): string =>
   hash === null ? "initial" : hash.slice(0, 12)
 
+/** Режим `plpgsql_check` плану словами виводу. */
+const PLPGSQL_CHECK_LABEL: Readonly<Record<PlanData["plpgsqlCheck"], string>> =
+  {
+    installed: "installed",
+    transient: "transient (installed for the check, rolled back)",
+    unavailable: "unavailable",
+  }
+
 const qualified = (schema: string, name: string): string =>
   `${quoteIdent(schema)}.${quoteIdent(name)}`
 
@@ -190,6 +198,13 @@ export function renderPlan(
   for (const l of d.implicitLocks)
     lines.push(
       `implicit lock: ${qualified(l.schema, l.name)} ${LOCK_MODE_SQL[l.mode]} taken by step ${l.step}, not up front: the apply role may not lock it explicitly`
+    )
+  lines.push(`plpgsql_check: ${PLPGSQL_CHECK_LABEL[d.plpgsqlCheck]}`)
+  // Очікувані сліпі функції провайдера — рядок, а не попередження: інакше
+  // попередження звучало б на кожній цілі провайдера (рішення 5 плану П3-2b-1)
+  if (d.expectedBlindFunctions > 0)
+    lines.push(
+      `expected provider blind functions (preset): ${d.expectedBlindFunctions}`
     )
   lines.push(report)
   return lines.join("\n")

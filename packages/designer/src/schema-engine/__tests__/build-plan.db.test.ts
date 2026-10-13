@@ -27,6 +27,7 @@ import {
   executePlan,
   reverseGenerate,
   serializePlan,
+  SUPABASE_EXPECTED_BLIND_FUNCTIONS,
   type ApplyDatabase,
   type EngineAction,
   type EngineScope,
@@ -196,11 +197,28 @@ const codes = (outcome: PlanOutcome): string[] =>
 const errors = (outcome: PlanOutcome): string[] =>
   outcome.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
 
+/**
+ * Попередження про сліпі функції, яке дає застосування чи репетиція: тригерна
+ * plpgsql-функція без тригера сліпа для `plpgsql_check` (рішення 5 плану
+ * П3-2b-1). Немає — порожньо.
+ */
+const blindDiagnostics = (functions: readonly string[]) =>
+  functions.length === 0
+    ? []
+    : [
+        expect.objectContaining({
+          code: "apply.function-check-blind",
+          severity: "warning",
+          params: { count: functions.length, functions: functions.join(", ") },
+        }),
+      ]
+
 /** Застосовує артефакт так само, як інструмент `apply`. */
 async function applyArtifact(
   url: string,
   artifact: PlanArtifact,
-  model: CompiledModel
+  model: CompiledModel,
+  blind: readonly string[] = []
 ): Promise<void> {
   const outcome = await executePlan(writer, { url }, artifact, {
     mode: "apply",
@@ -208,17 +226,72 @@ async function applyArtifact(
     allow: artifact.requiredPermissions,
     snapshot: canonicalSnapshot(model),
   })
-  expect(outcome.diagnostics).toEqual([])
+  expect(outcome.diagnostics).toEqual(blindDiagnostics(blind))
   expect(outcome.status).toBe("committed")
 }
 
-/** План і застосування моделі на цілі. */
-async function establish(url: string, model: CompiledModel): Promise<void> {
-  await applyArtifact(url, planned(await plan(url, model)), model)
+/**
+ * План і застосування моделі на цілі; `blind` — сліпі функції, про які
+ * застосування попереджає.
+ */
+async function establish(
+  url: string,
+  model: CompiledModel,
+  blind: readonly string[] = []
+): Promise<void> {
+  await applyArtifact(url, planned(await plan(url, model)), model, blind)
 }
 
 const stepMatching = (artifact: PlanArtifact, pattern: RegExp) =>
   artifact.steps.filter((s) => pattern.test(s.sql))
+
+/**
+ * Читач цілі, на якій `plpgsql_check` немає й поставити його не можна: на
+ * запиті фактів розширення справжній читач підмінено, решта — як є.
+ */
+const readerWithoutPlpgsqlCheck: ApplyDatabase = {
+  transaction: (target, end, fn) =>
+    dbs.reader.transaction(target, end, (tx) =>
+      fn({
+        query: async <R extends Record<string, unknown>>(
+          sql: string,
+          params?: readonly unknown[]
+        ): Promise<R[]> =>
+          sql.includes("pg_available_extension_versions")
+            ? ([
+                {
+                  installed: false,
+                  schema: null,
+                  schemaUsage: false,
+                  functionExecute: false,
+                  available: false,
+                  trusted: false,
+                  superuser: false,
+                  createOnDatabase: true,
+                  checkSchemaTaken: false,
+                },
+              ] as unknown as R[])
+            : tx.query<R>(sql, params),
+      })
+    ),
+}
+
+/**
+ * Сліпі функції поза межею (сесією суперкористувача): застосунку
+ * (`other.fh()`), провайдера з переліку пресету (`pgbouncer.get_auth(text)`:
+ * її вже має засів тіні, але з власником `postgres`) і провайдера поза ним.
+ * Власник — роль, членом якої сесія не є, без `EXECUTE` для всіх, як у
+ * `pgbouncer.get_auth` справжнього стеку.
+ */
+const BLIND_SETUP = `create schema other;
+  create function other.fh() returns int language sql as $$ select 1 $$;
+  create function pgbouncer.other_auth(p_usename text) returns text language plpgsql as $$ begin return p_usename; end $$;
+  alter function other.fh() owner to ${STRANGER};
+  revoke execute on function other.fh() from public;
+  alter function pgbouncer.get_auth(text) owner to ${STRANGER};
+  revoke execute on function pgbouncer.get_auth(text) from public;
+  alter function pgbouncer.other_auth(text) owner to ${STRANGER};
+  revoke execute on function pgbouncer.other_auth(text) from public;`
 
 describe("buildPlan", () => {
   it("plans a first apply", async () => {
@@ -245,6 +318,65 @@ describe("buildPlan", () => {
         )
       ).toEqual(["catalogOnly"])
       expect(artifact.scope.schemas).toEqual(["app", "simetra"])
+    })
+  })
+
+  it("carries the plpgsql_check mode of the target", async () => {
+    // Розширення на стеку доступне, а supautils дає ролі його поставити
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await plan(url, model)
+      expect(planned(outcome).plpgsqlCheck).toBe("transient")
+      expect(codes(outcome)).not.toContain("plan.plpgsql-check-unavailable")
+    })
+  })
+
+  it("warns about a plan on a target without plpgsql_check", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await buildPlan(
+        engine,
+        { ...dbs, reader: readerWithoutPlpgsqlCheck },
+        model,
+        { target: { url } },
+        []
+      )
+      expect(planned(outcome).plpgsqlCheck).toBe("unavailable")
+      expect(
+        outcome.diagnostics.filter(
+          (d) => d.code === "plan.plpgsql-check-unavailable"
+        )
+      ).toMatchObject([{ severity: "warning", params: { on: "target" } }])
+    })
+  })
+
+  // Рішення 5 плану П3-2b-1 і вердикт «(г)»: сліпа функція з переліку
+  // пресету провайдера — рядок виводу, а не попередження; сліпа функція
+  // провайдера поза переліком і функція застосування — попередження
+  it("warns about blind functions in the plan except the provider's expected ones", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await other(asSuperuser(url), BLIND_SETUP)
+      const outcome = await plan(url, model)
+      // Засів тіні несе базовий стан провайдера, тож сліпі там усі функції
+      // переліку: ідентичності пресету збігаються з каталогом поіменно
+      expect(outcome).toMatchObject({
+        status: "planned",
+        expectedBlindFunctions: SUPABASE_EXPECTED_BLIND_FUNCTIONS.length,
+      })
+      expect(
+        outcome.diagnostics.filter(
+          (d) => d.code === "apply.function-check-blind"
+        )
+      ).toMatchObject([
+        {
+          severity: "warning",
+          params: {
+            count: 2,
+            functions: "other.fh(), pgbouncer.other_auth(text)",
+          },
+        },
+      ])
     })
   })
 
@@ -1675,6 +1807,9 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       })
     }
 
+    // Тригерна функція, що лишається без тригера, сліпа для `plpgsql_check`
+    const UNTRIGGERED = ["app.party_touch()"]
+
     it.each([
       [
         "creates a policy",
@@ -1682,6 +1817,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         POLICY,
         /^CREATE POLICY/,
         "supautils.policy_grants",
+        [],
       ],
       [
         "drops a trigger",
@@ -1689,10 +1825,11 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         TOUCH,
         /^DROP TRIGGER/,
         "supautils.drop_trigger_grants",
+        UNTRIGGERED,
       ],
     ])(
       "takes the provider tables from the target list up front when the plan %s",
-      async (_, before, after, pattern, setting) => {
+      async (_, before, after, pattern, setting, blind) => {
         const from = await withSql(before)
         const to = await withSql(after)
         await inTarget(EMPTY, async (url) => {
@@ -1726,10 +1863,9 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           ])
           // Доказ на копії й репетиція на цілі: замків поза слідом немає
           expect(codes(outcome)).not.toContain("apply.lock-footprint-exceeded")
-          expect(await rehearse(url, artifact, to)).toMatchObject({
-            status: "rolledBack",
-            diagnostics: [],
-          })
+          const rehearsal = await rehearse(url, artifact, to)
+          expect(rehearsal.status).toBe("rolledBack")
+          expect(rehearsal.diagnostics).toEqual(blindDiagnostics(blind))
         })
       }
     )
@@ -1738,7 +1874,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       const from = await withSql(TOUCH)
       const to = await withSql(TRIGGER)
       await inTarget(EMPTY, async (url) => {
-        await establish(url, from)
+        await establish(url, from, UNTRIGGERED)
         const outcome = await plan(url, to)
         const artifact = planned(outcome)
         expect(stepMatching(artifact, /^CREATE TRIGGER/)).toHaveLength(1)
@@ -1858,6 +1994,8 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         records?: PromotionInput[]
         /** Двигун лише для плану промоції; стан «до» ставить справжній. */
         engine?: SchemaEngine
+        /** Читач цілі лише для плану промоції. */
+        reader?: ApplyDatabase
       } = {}
     ): Promise<PlanOutcome> {
       return inTarget(EMPTY, async (url) => {
@@ -1866,7 +2004,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           await other(o.superuser === true ? asSuperuser(url) : url, o.drift)
         return buildPlan(
           o.engine ?? engine,
-          dbs,
+          { ...dbs, reader: o.reader ?? dbs.reader },
           p.after,
           { target: { url } },
           o.records ?? [p.input]
@@ -2186,6 +2324,32 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           count: 1,
           functions: expect.stringMatching(/^app\.party_inns\(\): 42703 /),
         },
+      ])
+    })
+
+    it("refuses a promotion on a target without plpgsql_check", async () => {
+      const outcome = await planPromotion(await promoted(), {
+        reader: readerWithoutPlpgsqlCheck,
+      })
+      expect(outcome.status).toBe("refused")
+      expect(
+        outcome.diagnostics.filter(
+          (d) => d.code === "plan.plpgsql-check-unavailable"
+        )
+      ).toMatchObject([{ severity: "error", params: { on: "target" } }])
+    })
+
+    it("plans a promotion with plpgsql_check and the blind warning", async () => {
+      const outcome = await planPromotion(await promoted(), {
+        drift: BLIND_SETUP,
+        superuser: true,
+      })
+      expect(planned(outcome).plpgsqlCheck).toBe("transient")
+      expect(outcome).toMatchObject({
+        expectedBlindFunctions: SUPABASE_EXPECTED_BLIND_FUNCTIONS.length,
+      })
+      expect(params(outcome, "apply.function-check-blind")).toEqual([
+        { count: 2, functions: "other.fh(), pgbouncer.other_auth(text)" },
       ])
     })
 

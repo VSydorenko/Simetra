@@ -479,6 +479,8 @@ describe("cli adapter", () => {
         implicitLocks: [],
         requiredPermissions: ["drift", "s1"],
         environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "transient",
+        expectedBlindFunctions: 1,
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -501,6 +503,13 @@ describe("cli adapter", () => {
       expect(stdout).toContain("needs allow: drift")
       expect(stdout).toContain("needs allow: s1")
       expect(stdout).not.toContain("second line")
+      // Режим `plpgsql_check` і очікувані сліпі функції пресету — рядками
+      expect(stdout.split("\n")).toContain(
+        "plpgsql_check: transient (installed for the check, rolled back)"
+      )
+      expect(stdout.split("\n")).toContain(
+        "expected provider blind functions (preset): 1"
+      )
     })
 
     it("the text of a plan shows the promotion between drift and steps", () => {
@@ -567,6 +576,8 @@ describe("cli adapter", () => {
         ],
         requiredPermissions: ["drift", "access:app.item", "s2"],
         environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "installed",
+        expectedBlindFunctions: 0,
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -581,6 +592,9 @@ describe("cli adapter", () => {
         { dir: "metadata", locale: "en", format: "text" }
       )
       const lines = stdout.split("\n")
+      expect(lines).toContain("plpgsql_check: installed")
+      // Очікуваних сліпих функцій немає — рядка теж
+      expect(stdout).not.toContain("expected provider blind functions")
       const at = (line: string) => lines.indexOf(line)
       const block = [
         "promotion: Catalog Item (00000000-0000-4000-8000-000000009311)",
@@ -658,6 +672,8 @@ describe("cli adapter", () => {
             },
           ],
         },
+        plpgsqlCheck: "unavailable",
+        expectedBlindFunctions: 0,
       }
       const { stdout } = renderResult(
         tool("plan"),

@@ -92,6 +92,7 @@ async function writePlan(
     providerLocks: [],
     preamble: [],
     revalidationSearchPath: '"$user", public',
+    plpgsqlCheck: "transient",
     promotion,
     environment: { defaultPrivileges: [] },
     resultCatalog: { tables: [], enumTypes: [], units: [] },

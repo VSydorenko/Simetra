@@ -228,6 +228,8 @@ async function planFor(
     ),
     preamble: [],
     revalidationSearchPath: await sessionPath(url),
+    // Режим, який план дає на стеку: supautils ставить розширення
+    plpgsqlCheck: "transient",
     promotion: null,
     environment: { defaultPrivileges: [] },
     resultCatalog: EMPTY_MODEL,
@@ -484,6 +486,192 @@ describe("function body revalidation", () => {
           "select path, bodies from app.seen"
         )
       ).toEqual([{ path: session, bodies: "on" }])
+    })
+  })
+})
+
+/**
+ * `plpgsql_check` проти базової лінії (рішення 4 плану П3-2b-1): тимчасове
+ * розширення в точці збереження, наявне — на місці.
+ */
+describe("plpgsql_check", () => {
+  const FP = `${TABLE_T};
+    create function app.fp() returns text language plpgsql as $$ declare r text; begin select a into r from app.t limit 1; return r; end $$`
+
+  /** Прогін `steps` на цілі після `setup`; `fn` бачить результат і базу. */
+  async function run(
+    setup: string,
+    steps: PlanStep[],
+    over: Partial<ExecutablePlan> = {},
+    fn: (
+      outcome: Awaited<ReturnType<typeof executePlan>>,
+      url: string
+    ) => Promise<void> = async () => {},
+    superuser?: string
+  ) {
+    const wanted = await desiredFingerprint(
+      setup,
+      steps,
+      superuser === undefined ? {} : { superuser }
+    )
+    await inTarget(
+      setup,
+      async (url) =>
+        fn(
+          await executePlan(
+            apply,
+            { url },
+            await planFor(url, steps, wanted, over),
+            options
+          ),
+          url
+        ),
+      superuser
+    )
+  }
+
+  const checkFailed = (
+    outcome: Awaited<ReturnType<typeof executePlan>>
+  ): string => {
+    expect(outcome).toMatchObject({
+      status: "failed",
+      diagnostics: [{ code: "apply.function-check-failed" }],
+    })
+    return String(outcome.diagnostics[0]!.params.functions)
+  }
+
+  it("refuses a step that breaks a plpgsql body", async () => {
+    await run(FP, [RENAME_A], {}, async (outcome, url) => {
+      expect(checkFailed(outcome)).toContain("app.fp(): 42703")
+      expect(await columnsOf(url, "app.t")).toEqual(["id", "a"])
+    })
+    // Валідатор мови колонок у запитах тіла не розв'язує: без розширення
+    // той самий крок проходить, тож відмову вище дав саме plpgsql_check
+    await run(
+      FP,
+      [RENAME_A],
+      { plpgsqlCheck: "unavailable" },
+      async (outcome) => expect(outcome).toMatchObject({ status: "committed" })
+    )
+  })
+
+  it("checks a trigger function with each table it fires on", async () => {
+    const setup = `${TABLE_T};
+      create table app.t2 (id int, a text);
+      create function app.tg() returns trigger language plpgsql as $$ begin new.a := upper(new.a); return new; end $$;
+      create trigger tg before insert on app.t for each row execute function app.tg();
+      create trigger tg before insert on app.t2 for each row execute function app.tg()`
+    await run(setup, [RENAME_A], {}, async (outcome) => {
+      const functions = checkFailed(outcome)
+      expect(outcome.diagnostics[0]!.params.count).toBe(1)
+      expect(functions).toMatch(/^app\.tg\(\) on app\.t: /)
+      expect(functions).not.toContain("app.t2")
+    })
+  })
+
+  it("checks a trigger with transition tables", async () => {
+    const setup = `${TABLE_T};
+      create function app.tt() returns trigger language plpgsql as $$ begin perform count(*) from n; return null; end $$;
+      create trigger tt after insert on app.t referencing new table as n
+        for each statement execute function app.tt()`
+    await run(setup, [NEUTRAL], {}, async (outcome) =>
+      expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+    )
+  })
+
+  // Review Focus 3: базова лінія поглинає наявну помилку функції чужої
+  // ролі, а нова помилка в тій самій функції однаково ловиться
+  it("keeps an error of another role's function that was there before", async () => {
+    const setup = `${TABLE_T};
+      create function app.fo() returns int language plpgsql as $$ declare x int; begin select nope into x from app.t; perform a from app.t; return x; end $$`
+    const superuser = `alter function app.fo() owner to ${STRANGER}`
+    await run(
+      setup,
+      [NEUTRAL],
+      {},
+      async (outcome) =>
+        expect(outcome).toMatchObject({ status: "committed", diagnostics: [] }),
+      superuser
+    )
+    await run(
+      setup,
+      [RENAME_A],
+      {},
+      async (outcome) => {
+        expect(checkFailed(outcome)).toContain("app.fo(): 42703")
+        expect(outcome.diagnostics[0]!.params.count).toBe(1)
+      },
+      superuser
+    )
+  })
+
+  // Review Focus 4: oid перествореної функції інший — збіг за сигнатурою
+  it("matches a function the plan recreates with the same error", async () => {
+    const body = `RETURNS int LANGUAGE plpgsql AS $$ DECLARE x int; BEGIN SELECT nope INTO x FROM app.t; RETURN x; END $$`
+    const setup = `${TABLE_T};
+      create function app.fz() ${body}`
+    await run(
+      setup,
+      [
+        step("s1", "DROP FUNCTION app.fz()", { verb: "drop" }),
+        step("s2", `CREATE FUNCTION app.fz() ${body}`),
+      ],
+      {},
+      async (outcome) =>
+        expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+    )
+  })
+
+  it("installs the extension only for the check", async () => {
+    await run(TABLE_T, [NEUTRAL], {}, async (outcome, url) => {
+      expect(outcome).toMatchObject({ status: "committed" })
+      expect(
+        await other(
+          url,
+          `select
+             exists (select 1 from pg_extension where extname = 'plpgsql_check') as extension,
+             exists (select 1 from pg_namespace where nspname = 'simetra_plpgsql_check') as schema`
+        )
+      ).toEqual([{ extension: false, schema: false }])
+    })
+  })
+
+  it("uses an installed extension in place", async () => {
+    const setup = `${FP};
+      create schema ext;
+      create extension plpgsql_check schema ext`
+    await run(
+      setup,
+      [RENAME_A],
+      { plpgsqlCheck: "installed" },
+      async (outcome, url) => {
+        expect(checkFailed(outcome)).toContain("app.fp(): 42703")
+        expect(
+          await other(
+            url,
+            "select extnamespace::regnamespace::text as schema from pg_extension where extname = 'plpgsql_check'"
+          )
+        ).toEqual([{ schema: "ext" }])
+      }
+    )
+  })
+
+  it("refuses a taken check schema", async () => {
+    const setup = `${TABLE_T};
+      create schema simetra_plpgsql_check`
+    await run(setup, [NEUTRAL], {}, async (outcome, url) => {
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          {
+            code: "apply.temp-name-taken",
+            params: { name: "simetra_plpgsql_check" },
+          },
+        ],
+      })
+      expect(
+        await other(url, "select to_regclass('app.n') is null as absent")
+      ).toEqual([{ absent: true }])
     })
   })
 })

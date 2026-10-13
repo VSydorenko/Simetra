@@ -305,6 +305,8 @@ async function planFor(
     locks: locksOf(steps),
     implicitLocks: [],
     preamble: [],
+    // Перевірку `plpgsql_check` тримає `function-checks.db.test.ts`
+    plpgsqlCheck: "unavailable",
     promotion: null,
     // Цілі тестів глобальних ADP ролі не мають
     environment: { defaultPrivileges: [] },
@@ -348,6 +350,7 @@ async function establish(url: string, hash: string): Promise<void> {
       providerLocks: await providerList(url),
       preamble: [],
       revalidationSearchPath: await sessionPath(url),
+      plpgsqlCheck: "unavailable",
       promotion: null,
       environment: { defaultPrivileges: [] },
       targetFingerprint: fingerprint,

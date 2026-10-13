@@ -272,6 +272,7 @@ describe("transaction-mode pooler", () => {
         revalidationSearchPath: await createApplyDatabase({
           readOnly: true,
         }).transaction({ url }, "rollback", readSessionSearchPath),
+        plpgsqlCheck: "unavailable",
         promotion: null,
         environment: { defaultPrivileges: [] },
         resultCatalog: { tables: [], enumTypes: [], units: [] },

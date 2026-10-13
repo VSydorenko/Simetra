@@ -103,6 +103,7 @@ const plan: ExecutablePlan = {
   ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public, extensions',
+  plpgsqlCheck: "unavailable",
   promotion: null,
   environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -204,6 +205,25 @@ interface Script {
   validators?: (call: number) => ValidatorResult | "none"
   /** Сліпі функції цілі; типово немає. */
   blind?: string[]
+  /** Сліпі функції цілі з переліку пресету провайдера; типово немає. */
+  expectedBlind?: string[]
+  /** Факти `plpgsql_check` бази поверх «немає, але можна поставити». */
+  plpgsql?: Record<string, unknown>
+  /** Групи помилок `plpgsql_check` за номером виклику: 0 — до, 1 — після. */
+  plpgsqlGroups?: (call: number) => Record<string, unknown>[]
+}
+
+/** Факти бази: розширення немає, роль може його поставити. */
+const PLPGSQL_FACTS = {
+  installed: false,
+  schema: null,
+  schemaUsage: false,
+  functionExecute: false,
+  available: true,
+  trusted: false,
+  superuser: false,
+  createOnDatabase: true,
+  checkSchemaTaken: false,
 }
 
 /** Те, що DO-блок валідаторів віддає винятком `SIMFE`. */
@@ -226,6 +246,8 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("set_config(s.name, s.value, true)")) return "set-settings"
   if (sql.startsWith("DO $simetra$")) return "validators"
   if (sql.includes("simetra_revalidate")) return undefined
+  if (sql.includes("pg_available_extension_versions")) return "plpgsql-facts"
+  if (sql.includes("plpgsql_check_function_tb(p.oid")) return "plpgsql-check"
   if (sql.includes("regprocedure::text AS signature")) return "blind"
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
   if (sql.includes("pg_advisory_xact_lock")) return "lookup-lock"
@@ -273,6 +295,7 @@ function fakeDb(script: Script = {}) {
       attempt++
       let stepsRan = false
       let validatorCalls = 0
+      let plpgsqlCalls = 0
       const settings: Record<string, string> = { ...SESSION }
       log.push("BEGIN")
       const tx = {
@@ -309,49 +332,65 @@ function fakeDb(script: Script = {}) {
               : label === "get-settings"
                 ? (p![0] as string[]).map((n) => ({ value: settings[n] }))
                 : label === "blind"
-                  ? (script.blind ?? []).map((signature) => ({ signature }))
-                  : label === "provider-setting"
-                    ? [
-                        {
-                          value:
-                            script.providerSettings?.[String(p?.[0])] ?? null,
-                        },
-                      ]
-                    : label === "provider-tables"
-                      ? (script.providerTables ?? [])
-                      : label === "present"
-                        ? (script.present ?? [])
-                        : label === "environment"
-                          ? (script.environment ?? []).map((r) => ({ ...r }))
-                          : label === "existing"
-                            ? (script.existing ?? [])
-                            : label === "held-locks"
-                              ? (script.held ?? [])
-                              : label === "try-lock"
-                                ? [{ locked: script.locked ?? true }]
-                                : label === "role"
-                                  ? [{ role: script.role ?? "postgres" }]
-                                  : sql.includes(" AS marker")
-                                    ? [{ marker: false, ledger: false }]
-                                    : sql.includes("to_regclass")
-                                      ? [{ exists: true }]
-                                      : label === "lookup"
-                                        ? script.ledgerHasApply === true
-                                          ? [
-                                              {
-                                                format:
-                                                  script.ledgerFormat ?? 1,
-                                              },
-                                            ]
-                                          : []
-                                        : sql.includes("encode(sha256")
-                                          ? [
-                                              stepsRan
-                                                ? DESIRED.sections
-                                                : (script.targetSections ??
-                                                  TARGET.sections),
-                                            ]
-                                          : []
+                  ? [
+                      ...(script.blind ?? []).map((signature) => ({
+                        signature,
+                        expected: false,
+                      })),
+                      ...(script.expectedBlind ?? []).map((signature) => ({
+                        signature,
+                        expected: true,
+                      })),
+                    ]
+                  : label === "plpgsql-facts"
+                    ? [{ ...PLPGSQL_FACTS, ...script.plpgsql }]
+                    : label === "plpgsql-check"
+                      ? (script.plpgsqlGroups?.(plpgsqlCalls++) ?? [])
+                      : label === "provider-setting"
+                        ? [
+                            {
+                              value:
+                                script.providerSettings?.[String(p?.[0])] ??
+                                null,
+                            },
+                          ]
+                        : label === "provider-tables"
+                          ? (script.providerTables ?? [])
+                          : label === "present"
+                            ? (script.present ?? [])
+                            : label === "environment"
+                              ? (script.environment ?? []).map((r) => ({
+                                  ...r,
+                                }))
+                              : label === "existing"
+                                ? (script.existing ?? [])
+                                : label === "held-locks"
+                                  ? (script.held ?? [])
+                                  : label === "try-lock"
+                                    ? [{ locked: script.locked ?? true }]
+                                    : label === "role"
+                                      ? [{ role: script.role ?? "postgres" }]
+                                      : sql.includes(" AS marker")
+                                        ? [{ marker: false, ledger: false }]
+                                        : sql.includes("to_regclass")
+                                          ? [{ exists: true }]
+                                          : label === "lookup"
+                                            ? script.ledgerHasApply === true
+                                              ? [
+                                                  {
+                                                    format:
+                                                      script.ledgerFormat ?? 1,
+                                                  },
+                                                ]
+                                              : []
+                                            : sql.includes("encode(sha256")
+                                              ? [
+                                                  stepsRan
+                                                    ? DESIRED.sections
+                                                    : (script.targetSections ??
+                                                      TARGET.sections),
+                                                ]
+                                              : []
           return rows as R[]
         },
       }
@@ -885,11 +924,13 @@ describe("executePlan", () => {
   })
 
   it.each([
-    ["the baseline", 0],
-    ["the check after the steps", 1],
+    ["the baseline", 0, "baseline"],
+    ["the check after the steps", 1, "after"],
   ])(
-    "refuses to compare when the function error list was cut in %s",
-    async (_, cut) => {
+    "refuses to compare when the function error list was cut in %s, naming that side",
+    async (_, cut, side) => {
+      // Обрізаний бік несе 1001, інший — нуль: кількість мусить бути саме
+      // обрізаного боку, а не «нових» помилок після кроків
       const { db } = fakeDb({
         validators: (call) =>
           call === cut ? { total: 1001, errors: [] } : { total: 0, errors: [] },
@@ -900,15 +941,300 @@ describe("executePlan", () => {
         diagnostics: [
           {
             code: "apply.function-check-failed",
-            params: {
-              functions:
-                "(the list was cut at 1000; the check cannot compare it)",
-            },
+            params: { cut: side, count: 1001, limit: 1000 },
           },
         ],
       })
+      expect(outcome.diagnostics[0]!.message).toContain(
+        `${side === "baseline" ? "before" : "after"} the plan's steps: there are at least 1001`
+      )
     }
   )
+
+  it("checks plpgsql bodies with a transient extension in a savepoint, before and after the steps", async () => {
+    const { db, log, seen } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, plpgsqlCheck: "transient" },
+      options
+    )
+    expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+    const plpgsql = [
+      "SAVEPOINT simetra_plpgsql_check",
+      "plpgsql-facts",
+      "CREATE SCHEMA simetra_plpgsql_check",
+      "CREATE EXTENSION plpgsql_check SCHEMA simetra_plpgsql_check",
+      "plpgsql-check",
+      "ROLLBACK TO SAVEPOINT simetra_plpgsql_check",
+      "RELEASE SAVEPOINT simetra_plpgsql_check",
+    ]
+    const at = log.indexOf("fingerprint")
+    expect(log.slice(at + 1, at + 5 + plpgsql.length)).toEqual([
+      "get-settings",
+      "set-settings",
+      "validators",
+      ...plpgsql,
+      "set-settings",
+    ])
+    expect(log.filter((l) => l === "plpgsql-check")).toHaveLength(2)
+    const revalidation = {
+      search_path: plan.revalidationSearchPath,
+      check_function_bodies: "on",
+    }
+    expect(seen["plpgsql-check"]).toEqual([revalidation, revalidation])
+    // Режим звіряється лише для встановленого розширення
+    expect(log.indexOf("plpgsql-facts")).toBeGreaterThan(at)
+  })
+
+  it("refuses a plpgsql error the steps brought in, with the trigger table", async () => {
+    const kept = {
+      oid: "100",
+      signature: "app.old()",
+      relationOid: null,
+      relation: null,
+      sqlstate: "42P01",
+      message: "x",
+      n: 2,
+    }
+    const { db } = fakeDb({
+      plpgsqlGroups: (call) =>
+        call === 0
+          ? [kept]
+          : [
+              { ...kept, oid: "101" },
+              {
+                oid: "200",
+                signature: "app.tf()",
+                relationOid: "7",
+                relation: "app.t",
+                sqlstate: "42703",
+                message: 'record "new" has no field "a"',
+                n: 1,
+              },
+            ],
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, plpgsqlCheck: "transient" },
+      options
+    )
+    expect(outcome).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.function-check-failed",
+          params: {
+            count: 1,
+            functions: 'app.tf() on app.t: 42703 record "new" has no field "a"',
+          },
+        },
+      ],
+    })
+  })
+
+  it("fails when the extension cannot be taken", async () => {
+    const { db, log } = fakeDb({
+      fail: (label) =>
+        label.startsWith("CREATE EXTENSION")
+          ? new ApplyDbError("extension is not allowed", "0A000")
+          : undefined,
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, plpgsqlCheck: "transient" },
+      options
+    )
+    expect(outcome).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      diagnostics: [
+        {
+          code: "apply.plpgsql-check-unavailable",
+          severity: "error",
+          params: { sqlstate: "0A000", error: "extension is not allowed" },
+        },
+      ],
+    })
+    expect(log).not.toContain("ALTER TABLE app.t ADD COLUMN d int")
+  })
+
+  it("refuses when the installed extension is gone", async () => {
+    const installed: ExecutablePlan = { ...plan, plpgsqlCheck: "installed" }
+    const live = fakeDb()
+    expect(
+      await executePlan(live.db, target, installed, options)
+    ).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        {
+          code: "apply.target-changed",
+          params: { sections: "plpgsqlCheck" },
+        },
+      ],
+    })
+    // До блокувань, як інші звірки фази 4
+    expect(live.log).toContain("plpgsql-facts")
+    expect(live.log).not.toContain(
+      'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE'
+    )
+    // Копія доказу розширення цілі може не мати: раннер ставить його сам
+    const copy = fakeDb()
+    expect(
+      await executePlan(copy.db, target, installed, {
+        ...options,
+        mode: "proof",
+      })
+    ).toMatchObject({ status: "committed", diagnostics: [] })
+    expect(copy.log).toContain(
+      "CREATE EXTENSION plpgsql_check SCHEMA simetra_plpgsql_check"
+    )
+  })
+
+  it("applies an installed plan with the extension in place", async () => {
+    const { db, log } = fakeDb({
+      plpgsql: {
+        installed: true,
+        schema: "ext",
+        schemaUsage: true,
+        functionExecute: true,
+      },
+    })
+    expect(
+      await executePlan(
+        db,
+        target,
+        { ...plan, plpgsqlCheck: "installed" },
+        options
+      )
+    ).toMatchObject({ status: "committed" })
+    expect(log).not.toContain("CREATE SCHEMA simetra_plpgsql_check")
+    expect(log.filter((l) => l === "plpgsql-check")).toHaveLength(2)
+  })
+
+  it("warns on a copy without the extension", async () => {
+    const fail = (label: string) =>
+      label.startsWith("CREATE EXTENSION")
+        ? new ApplyDbError("could not open extension control file", "58P01")
+        : undefined
+    const copy = fakeDb({ fail })
+    const proof = { ...options, mode: "proof" as const }
+    const outcome = await executePlan(
+      copy.db,
+      target,
+      { ...plan, plpgsqlCheck: "transient" },
+      proof
+    )
+    expect(outcome).toMatchObject({
+      status: "committed",
+      diagnostics: [
+        {
+          code: "plan.plpgsql-check-unavailable",
+          severity: "warning",
+          params: { on: "copy", sqlstate: "58P01" },
+        },
+      ],
+    })
+    // Пропущена до кроків перевірка не повторюється після них
+    expect(
+      copy.log.filter((l) => l === "SAVEPOINT simetra_plpgsql_check")
+    ).toHaveLength(1)
+    // Промоція вимагає перевірки: та сама відмова
+    const promotion = fakeDb({ fail })
+    expect(
+      await executePlan(
+        promotion.db,
+        target,
+        { ...promoted, plpgsqlCheck: "transient" },
+        { ...proof, allow: ["access:app.party"] }
+      )
+    ).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "plan.plpgsql-check-unavailable",
+          severity: "error",
+          params: { on: "copy" },
+        },
+      ],
+    })
+  })
+
+  it("refuses a taken check schema", async () => {
+    const { db } = fakeDb({ plpgsql: { checkSchemaTaken: true } })
+    expect(
+      await executePlan(
+        db,
+        target,
+        { ...plan, plpgsqlCheck: "transient" },
+        options
+      )
+    ).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        {
+          code: "apply.temp-name-taken",
+          params: { name: "simetra_plpgsql_check" },
+        },
+      ],
+    })
+  })
+
+  it("refuses to compare a cut plpgsql_check list", async () => {
+    const { db } = fakeDb({
+      plpgsqlGroups: (call) =>
+        call === 1
+          ? Array.from({ length: 1001 }, (_, i) => ({
+              oid: String(i),
+              signature: `app.f${i}()`,
+              relationOid: null,
+              relation: null,
+              sqlstate: "42703",
+              message: "x",
+              n: 1,
+            }))
+          : [],
+    })
+    expect(
+      await executePlan(
+        db,
+        target,
+        { ...plan, plpgsqlCheck: "transient" },
+        options
+      )
+    ).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.function-check-failed",
+          params: { cut: "after", count: 1001, limit: 1000 },
+        },
+      ],
+    })
+  })
+
+  it("does not warn about the provider's expected blind functions", async () => {
+    const { db, params } = fakeDb({
+      blind: ["app.fh()"],
+      expectedBlind: ["pgbouncer.get_auth(text)"],
+    })
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, plpgsqlCheck: "transient" },
+      options
+    )
+    expect(outcome.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "apply.function-check-blind",
+        params: { count: 1, functions: "app.fh()" },
+      }),
+    ])
+    expect(params.blind![0]).toBe(true)
+    expect(params.blind![1]).toContain("pgbouncer.get_auth(text)")
+  })
 
   it("throws when the validator block ends without its result", async () => {
     const { db, log } = fakeDb({ validators: () => "none" })

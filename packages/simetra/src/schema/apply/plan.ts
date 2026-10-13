@@ -12,6 +12,8 @@ import {
   type CatalogModel,
 } from "simetra/model"
 import {
+  PROVIDER_EXPECTED_BLIND_FUNCTIONS,
+  PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
   type DbConnection,
   type EngineAction,
@@ -40,7 +42,13 @@ import {
   type GlobalDefaultPrivilege,
 } from "./environment"
 import { executePlan, type ExecutablePlan } from "./execute"
-import { blindWarning, readBlindFunctions } from "./function-checks"
+import {
+  blindWarning,
+  planFunctionChecks,
+  readBlindFunctions,
+  type BlindFunctions,
+  type PlpgsqlCheckMode,
+} from "./function-checks"
 import {
   compareFingerprints,
   FINGERPRINT_SECTIONS,
@@ -118,6 +126,11 @@ export type PlanOutcome =
       status: "planned"
       artifact: PlanArtifact
       diagnostics: EngineDiagnostic[]
+      /**
+       * Скільки сліпих функцій цілі — очікувані пресетом провайдера
+       * (рішення 5 плану П3-2b-1): вивід їх лише лічить, без попередження.
+       */
+      expectedBlindFunctions: number
     }
   | { status: "unchanged"; diagnostics: EngineDiagnostic[] }
   | { status: "refused"; diagnostics: EngineDiagnostic[] }
@@ -432,11 +445,14 @@ export async function buildPlan(
     lockWarnings,
     revalidationSearchPath,
     blindFunctions,
+    plpgsqlCheck,
+    checkDiagnostics,
   } = await lockPlan(dbs.reader, o.target, {
     scope,
     role: targetOwners.session,
     steps,
     parse,
+    promotion: false,
     models: {
       source: live.extracted.model,
       desired: target.extracted.model,
@@ -469,6 +485,7 @@ export async function buildPlan(
       providerLocks,
       preamble,
       revalidationSearchPath,
+      plpgsqlCheck,
       promotion: null,
       environment,
       targetFingerprint: live.fingerprint,
@@ -500,6 +517,7 @@ export async function buildPlan(
     providerLocks,
     preamble,
     revalidationSearchPath,
+    plpgsqlCheck,
     promotion: null,
     environment,
     resultCatalog: proof.resultCatalog,
@@ -507,11 +525,13 @@ export async function buildPlan(
   return {
     status: "planned",
     artifact,
+    expectedBlindFunctions: blindFunctions.expected.length,
     diagnostics: dedupe([
       ...diagnostics,
       ...collected.diagnostics,
       ...lockWarnings,
-      ...blindWarning(blindFunctions),
+      ...checkDiagnostics,
+      ...blindWarning(blindFunctions.blind),
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
     ]),
@@ -743,11 +763,14 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     lockWarnings,
     revalidationSearchPath,
     blindFunctions,
+    plpgsqlCheck,
+    checkDiagnostics,
   } = await lockPlan(dbs.reader, o.target, {
     scope,
     role: c.targetOwners.session,
     steps,
     parse,
+    promotion: true,
     models: {
       source: cloneModel,
       desired: target.extracted.model,
@@ -756,6 +779,9 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       columnsNewToOld: columnsNewToOld(analysis.intent.columns),
     },
   })
+  // Промоція без `plpgsql_check` — відмова до доказу (рішення 4 плану П3-2b-1)
+  if (hasError(checkDiagnostics))
+    return refused([...withClone, ...checkDiagnostics])
   const typeChangeSteps = new Map(
     analysis.changes.map((t) => [
       JSON.stringify([t.schema, t.table, t.column]),
@@ -808,6 +834,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       providerLocks,
       preamble: analysis.preamble,
       revalidationSearchPath,
+      plpgsqlCheck,
       promotion: section,
       environment,
       targetFingerprint: live.fingerprint,
@@ -836,6 +863,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     providerLocks,
     preamble: analysis.preamble,
     revalidationSearchPath,
+    plpgsqlCheck,
     promotion: section,
     environment,
     resultCatalog: proof.resultCatalog,
@@ -843,11 +871,13 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   return {
     status: "planned",
     artifact,
+    expectedBlindFunctions: blindFunctions.expected.length,
     diagnostics: dedupe([
       ...withClone,
       ...collected.diagnostics,
       ...lockWarnings,
-      ...blindWarning(blindFunctions),
+      ...checkDiagnostics,
+      ...blindWarning(blindFunctions.blind),
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
       // Межа 2a (рішення 12): людина дізнається про неї до `apply`
@@ -1102,6 +1132,8 @@ async function lockPlan(
     role: string
     steps: readonly PlanStep[]
     parse: SqlParser
+    /** План несе промоцію: без `plpgsql_check` — відмова, а не попередження. */
+    promotion: boolean
     models: Omit<
       FootprintModels,
       "live" | "providerStatements" | "providerLocks"
@@ -1113,7 +1145,10 @@ async function lockPlan(
   providerLocks: ProviderLockSet[]
   lockWarnings: EngineDiagnostic[]
   revalidationSearchPath: string
-  blindFunctions: string[]
+  blindFunctions: BlindFunctions
+  plpgsqlCheck: PlpgsqlCheckMode
+  /** Попередження чи відмова `plan.plpgsql-check-unavailable`. */
+  checkDiagnostics: EngineDiagnostic[]
 }> {
   const { scope, steps } = o
   const statements = providerStatements(steps, o.parse)
@@ -1126,6 +1161,7 @@ async function lockPlan(
     providerLocks,
     revalidationSearchPath,
     blindFunctions,
+    checks,
   } = await reader.transaction(target, "rollback", async (tx) => {
     const providerLocks = await readProviderLocks(
       tx,
@@ -1142,13 +1178,21 @@ async function lockPlan(
       providerStatements: statements,
       providerLocks,
     })
+    const checks = await planFunctionChecks(tx, {
+      promotion: o.promotion,
+      installable: PROVIDER_INSTALLABLE_EXTENSIONS[scope.provider],
+    })
     return {
       footprint,
       providerLocks,
       rights: await readLockRights(tx, footprintTables(footprint)),
       revalidationSearchPath: await readSessionSearchPath(tx),
-      // Режим `plpgsql_check` ще не під'єднано: перевіряють лише валідатори
-      blindFunctions: await readBlindFunctions(tx, "unavailable"),
+      checks,
+      blindFunctions: await readBlindFunctions(
+        tx,
+        checks.mode === "unavailable" ? "unavailable" : "available",
+        PROVIDER_EXPECTED_BLIND_FUNCTIONS[scope.provider]
+      ),
     }
   })
   const { locks, implicitLocks } = planLocks({ footprint, rights })
@@ -1213,6 +1257,8 @@ async function lockPlan(
     lockWarnings,
     revalidationSearchPath,
     blindFunctions,
+    plpgsqlCheck: checks.mode,
+    checkDiagnostics: checks.diagnostics,
   }
 }
 

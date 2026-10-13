@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest"
 import {
   ApplyDbError,
+  CheckNameTaken,
   FUNCTION_ERROR_LIMIT,
+  FUNCTION_SCOPE_SQL,
   newFunctionErrors,
+  planFunctionChecks,
+  PlpgsqlCheckUnavailable,
+  readBlindFunctions,
+  readPlpgsqlErrors,
   readValidatorErrors,
   RETRYABLE_SQLSTATES,
+  UNAPPLIED_FUNCTION_SETTINGS,
   withLocalSettings,
   type ApplyTransaction,
   type FunctionError,
@@ -56,16 +63,15 @@ describe("newFunctionErrors", () => {
     ).toHaveLength(1))
 
   it("lets a match by oid win over a match by signature", () => {
-    // Перестворена функція з тією самою сигнатурою стоїть першою: жадібний
-    // збіг за сигнатурою забрав би елемент, потрібний збігу за oid
-    const recreated = e({ oid: "200" })
-    const kept = e({ oid: "100", message: "other" })
-    expect(
-      newFunctionErrors(
-        [e({ oid: "100", message: "other" })],
-        [recreated, kept]
-      )
-    ).toEqual([recreated])
+    // Обидві помилки «після» збігаються з єдиною помилкою базової лінії: та,
+    // що з іншим oid, — за сигнатурою, та, що з тим самим, — за oid. Один
+    // жадібний прохід за порядком віддав би базову лінію першій і назвав би
+    // новою помилку функції, яка її мала
+    const extra = e({ oid: "300" })
+    const same = e({ oid: "100" })
+    expect(newFunctionErrors([e({ oid: "100" })], [extra, same])).toEqual([
+      extra,
+    ])
   })
 
   it("tells a trigger function checked with another table apart", () =>
@@ -227,5 +233,312 @@ describe("readValidatorErrors", () => {
   it("throws when the block ends without its result", async () => {
     const { tx } = fakeTx(() => [])
     await expect(readValidatorErrors(tx)).rejects.toThrow(/without its result/)
+  })
+})
+
+/** Факти `plpgsql_check` цілі: типово нічого немає й нічого не можна. */
+const facts = (over: Record<string, unknown> = {}) => ({
+  installed: false,
+  schema: null,
+  schemaUsage: false,
+  functionExecute: false,
+  available: false,
+  trusted: false,
+  superuser: false,
+  createOnDatabase: false,
+  checkSchemaTaken: false,
+  ...over,
+})
+
+const factsTx = (over: Record<string, unknown> = {}) =>
+  fakeTx((sql) =>
+    sql.includes("pg_available_extension_versions") ? [facts(over)] : []
+  ).tx
+
+describe("planFunctionChecks", () => {
+  const mode = async (
+    over: Record<string, unknown>,
+    installable: readonly string[] = []
+  ) =>
+    (await planFunctionChecks(factsTx(over), { promotion: false, installable }))
+      .mode
+
+  it("refuses a promotion without the extension", async () => {
+    expect(
+      await planFunctionChecks(factsTx(), { promotion: true, installable: [] })
+    ).toMatchObject({
+      mode: "unavailable",
+      diagnostics: [
+        { code: "plan.plpgsql-check-unavailable", severity: "error" },
+      ],
+    })
+  })
+
+  it("warns another plan without the extension", async () => {
+    const out = await planFunctionChecks(factsTx(), {
+      promotion: false,
+      installable: [],
+    })
+    expect(out.mode).toBe("unavailable")
+    expect(out.diagnostics).toHaveLength(1)
+    expect(out.diagnostics[0]).toMatchObject({
+      code: "plan.plpgsql-check-unavailable",
+      severity: "warning",
+    })
+  })
+
+  it("needs CREATE on the database to install it", async () =>
+    expect(
+      await mode({ available: true, trusted: true }, ["plpgsql_check"])
+    ).toBe("unavailable"))
+
+  it("installs an untrusted extension only when the role may", async () => {
+    const may = { available: true, createOnDatabase: true }
+    expect(await mode(may)).toBe("unavailable")
+    expect(await mode(may, ["plpgsql_check"])).toBe("transient")
+    expect(await mode({ ...may, trusted: true })).toBe("transient")
+    expect(await mode({ ...may, superuser: true })).toBe("transient")
+  })
+
+  it("does not use an installed extension without the rights", async () => {
+    const installed = {
+      installed: true,
+      schema: "ext",
+      available: true,
+      createOnDatabase: true,
+      superuser: true,
+    }
+    expect(await mode({ ...installed, functionExecute: true })).toBe(
+      "unavailable"
+    )
+    expect(await mode({ ...installed, schemaUsage: true })).toBe("unavailable")
+  })
+
+  it("uses an installed extension with the rights", async () =>
+    expect(
+      await planFunctionChecks(
+        factsTx({
+          installed: true,
+          schema: "ext",
+          schemaUsage: true,
+          functionExecute: true,
+        }),
+        { promotion: true, installable: [] }
+      )
+    ).toEqual({ mode: "installed", diagnostics: [] }))
+})
+
+/** Група `plpgsql_check`: `n` однакових помилок. */
+const group = (over: Record<string, unknown> = {}) => ({
+  oid: "100",
+  signature: "app.fp()",
+  relationOid: null,
+  relation: null,
+  sqlstate: "42703",
+  message: 'column "a" does not exist',
+  n: 1,
+  ...over,
+})
+
+describe("readPlpgsqlErrors", () => {
+  const firstLines = (log: { sql: string }[]) =>
+    log.map((l) => l.sql.split("\n")[0]!)
+
+  it("skips the check for a plan without the extension", async () => {
+    const { tx, log } = fakeTx(() => [])
+    expect(await readPlpgsqlErrors(tx, "unavailable")).toBe("skipped")
+    expect(log).toEqual([])
+  })
+
+  it("installs the extension in a savepoint and rolls it back", async () => {
+    const { tx, log } = fakeTx((sql) =>
+      sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true })]
+        : sql.includes("plpgsql_check_function_tb(p.oid")
+          ? [group({ n: 2 }), group({ oid: "101", signature: "app.g()" })]
+          : []
+    )
+    const result = await readPlpgsqlErrors(tx, "transient")
+    expect(result).toEqual({
+      total: 3,
+      errors: [
+        e({ signature: "app.fp()" }),
+        e({ signature: "app.fp()" }),
+        e({ oid: "101", signature: "app.g()" }),
+      ],
+    })
+    expect(firstLines(log)).toEqual([
+      "SAVEPOINT simetra_plpgsql_check",
+      "SELECT e.oid IS NOT NULL AS installed,",
+      "CREATE SCHEMA simetra_plpgsql_check",
+      "CREATE EXTENSION plpgsql_check SCHEMA simetra_plpgsql_check",
+      "SELECT p.oid::text AS oid, p.oid::pg_catalog.regprocedure::text AS signature,",
+      "ROLLBACK TO SAVEPOINT simetra_plpgsql_check",
+      "RELEASE SAVEPOINT simetra_plpgsql_check",
+    ])
+    expect(log[4]!.sql).toContain(
+      "simetra_plpgsql_check.plpgsql_check_function_tb("
+    )
+    expect(log[4]!.sql).toContain(`LIMIT ${FUNCTION_ERROR_LIMIT + 1}`)
+  })
+
+  it("uses an installed extension in place, in a savepoint", async () => {
+    const { tx, log } = fakeTx((sql) =>
+      sql.includes("pg_available_extension_versions")
+        ? [
+            facts({
+              installed: true,
+              schema: "Ext",
+              schemaUsage: true,
+              functionExecute: true,
+            }),
+          ]
+        : []
+    )
+    expect(await readPlpgsqlErrors(tx, "installed")).toEqual({
+      total: 0,
+      errors: [],
+    })
+    expect(log.some((l) => l.sql.startsWith("CREATE"))).toBe(false)
+    expect(log[2]!.sql).toContain('"Ext".plpgsql_check_function_tb(')
+    expect(firstLines(log).at(-2)).toBe(
+      "ROLLBACK TO SAVEPOINT simetra_plpgsql_check"
+    )
+  })
+
+  it("throws when the role has no rights on the installed extension", async () => {
+    const { tx, log } = fakeTx((sql) =>
+      sql.includes("pg_available_extension_versions")
+        ? [facts({ installed: true, schema: "ext", functionExecute: true })]
+        : []
+    )
+    const error = await readPlpgsqlErrors(tx, "installed").catch((x) => x)
+    expect(error).toBeInstanceOf(PlpgsqlCheckUnavailable)
+    expect(error).toMatchObject({ sqlstate: "42501" })
+    expect(firstLines(log).slice(-2)).toEqual([
+      "ROLLBACK TO SAVEPOINT simetra_plpgsql_check",
+      "RELEASE SAVEPOINT simetra_plpgsql_check",
+    ])
+  })
+
+  it("throws with the SQLSTATE when the extension cannot be created, after rolling back", async () => {
+    const { tx, log } = fakeTx((sql) => {
+      if (sql.startsWith("CREATE EXTENSION"))
+        throw new ApplyDbError("permission denied to create extension", "42501")
+      return sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true })]
+        : []
+    })
+    const error = await readPlpgsqlErrors(tx, "transient").catch((x) => x)
+    expect(error).toBeInstanceOf(PlpgsqlCheckUnavailable)
+    expect(error).toMatchObject({
+      sqlstate: "42501",
+      message: "permission denied to create extension",
+    })
+    expect(firstLines(log).slice(-2)).toEqual([
+      "ROLLBACK TO SAVEPOINT simetra_plpgsql_check",
+      "RELEASE SAVEPOINT simetra_plpgsql_check",
+    ])
+  })
+
+  it("lets a lock timeout of the installation through as it is", async () => {
+    const timeout = new ApplyDbError("lock timeout", "55P03")
+    const { tx } = fakeTx((sql) => {
+      if (sql.startsWith("CREATE SCHEMA")) throw timeout
+      return sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true })]
+        : []
+    })
+    await expect(readPlpgsqlErrors(tx, "transient")).rejects.toBe(timeout)
+  })
+
+  it("refuses a taken check schema", async () => {
+    const { tx, log } = fakeTx((sql) =>
+      sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true, checkSchemaTaken: true })]
+        : []
+    )
+    const error = await readPlpgsqlErrors(tx, "transient").catch((x) => x)
+    expect(error).toBeInstanceOf(CheckNameTaken)
+    expect(error).toMatchObject({ taken: "simetra_plpgsql_check" })
+    expect(log.some((l) => l.sql.startsWith("CREATE"))).toBe(false)
+  })
+
+  it("marks a list cut past the limit of groups", async () => {
+    const { tx } = fakeTx((sql) =>
+      sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true })]
+        : sql.includes("plpgsql_check_function_tb(p.oid")
+          ? Array.from({ length: FUNCTION_ERROR_LIMIT + 1 }, (_, i) =>
+              group({ oid: String(i) })
+            )
+          : []
+    )
+    const result = await readPlpgsqlErrors(tx, "transient")
+    expect(result).not.toBe("skipped")
+    if (result === "skipped") return
+    expect(result.total).toBe(FUNCTION_ERROR_LIMIT + 1)
+    expect(result.errors).toHaveLength(FUNCTION_ERROR_LIMIT)
+  })
+})
+
+describe("function check scope", () => {
+  // Обсяг перевірки тіл — один фрагмент SQL у трьох запитах: розбіжність
+  // обсягів лишила б функцію і неперевіреною, і не названою сліпою
+  it("is the same fragment in the validators, the blind functions and plpgsql_check", async () => {
+    const { tx, log } = fakeTx((sql) => {
+      if (sql.startsWith("DO "))
+        throw new ApplyDbError('{"total":0,"errors":[]}', "SIMFE")
+      return sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true })]
+        : []
+    })
+    await readValidatorErrors(tx)
+    await readBlindFunctions(tx, "available", [])
+    await readPlpgsqlErrors(tx, "transient")
+    const queries = [
+      log.find((l) => l.sql.startsWith("DO "))!,
+      log.find((l) => l.sql.includes("AS expected"))!,
+      log.find((l) => l.sql.includes("plpgsql_check_function_tb(p.oid"))!,
+    ]
+    for (const q of queries) expect(q.sql).toContain(FUNCTION_SCOPE_SQL)
+  })
+})
+
+describe("readBlindFunctions", () => {
+  it("separates the functions the provider preset expects", async () => {
+    const { tx, log } = fakeTx(() => [
+      { signature: "pgbouncer.get_auth(text)", expected: true },
+      { signature: "pgbouncer.other(text)", expected: false },
+      { signature: "app.fh()", expected: false },
+    ])
+    expect(
+      await readBlindFunctions(tx, "available", ["pgbouncer.get_auth(text)"])
+    ).toEqual({
+      blind: ["app.fh()", "pgbouncer.other(text)"],
+      expected: ["pgbouncer.get_auth(text)"],
+    })
+    expect(log[0]!.params).toEqual([true, ["pgbouncer.get_auth(text)"]])
+  })
+})
+
+describe("validator block settings", () => {
+  // Налаштування функції, які блок не застосовує, — один перелік; тайм-аути
+  // функції не мають підмінити тайм-аути раннера
+  it("does not apply the unapplied keys of the function's proconfig", async () => {
+    expect(UNAPPLIED_FUNCTION_SETTINGS).toEqual([
+      "check_function_bodies",
+      "lock_timeout",
+      "statement_timeout",
+    ])
+    const { tx, log } = fakeTx((sql) => {
+      if (sql.startsWith("DO "))
+        throw new ApplyDbError('{"total":0,"errors":[]}', "SIMFE")
+      return []
+    })
+    await readValidatorErrors(tx)
+    expect(log[1]!.sql).toContain(
+      "CONTINUE WHEN pg_catalog.split_part(kv, '=', 1) IN ('check_function_bodies', 'lock_timeout', 'statement_timeout');"
+    )
   })
 })

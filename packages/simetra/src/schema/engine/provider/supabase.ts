@@ -255,3 +255,39 @@ export const SUPABASE_LOCKS: ProviderLocks = {
   ],
   services: ["Auth", "Storage", "Realtime"],
 }
+
+/**
+ * Розширення, які роль застосування може поставити, хоч вони й не довірені
+ * (`trusted = false`) і роль не суперкористувач: supautils провайдера
+ * виконує `CREATE EXTENSION` переліку з підвищеними правами (рішення 4 плану
+ * П3-2b-1). Раннер ставить `plpgsql_check` лише в точці збереження.
+ */
+export const SUPABASE_INSTALLABLE_EXTENSIONS: readonly string[] = [
+  "plpgsql_check",
+]
+
+/**
+ * Функції базового стану провайдера, яких перевірка тіл не бачить
+ * (рішення 5 плану П3-2b-1), — поіменно, за ідентичністю
+ * `<схема>.<ім'я>(<типи аргументів>)` (`oidvectortypes`, без лапок), не за
+ * схемою: виняток цілою схемою був би тихою зоною, а попередження, що
+ * звучить завжди, привчає його не читати. Сліпа функція провайдера поза
+ * переліком (нова версія провайдера) і далі дає попередження. Перелік звірено
+ * з локальним стеком роллю `postgres`.
+ */
+export const SUPABASE_EXPECTED_BLIND_FUNCTIONS: readonly string[] = [
+  // Функції подієвих тригерів провайдера: `plpgsql_check` подієвих функцій
+  // не перевіряє (валідатор мови їх таки компілює)
+  "extensions.grant_pg_cron_access()",
+  "extensions.grant_pg_graphql_access()",
+  "extensions.grant_pg_net_access()",
+  "extensions.pgrst_ddl_watch()",
+  "extensions.pgrst_drop_watch()",
+  "extensions.set_graphql_placeholder()",
+  // Власник — `supabase_admin`, `EXECUTE` лише для ролі пулера: роль
+  // застосування тіла не перевірить жодним способом
+  "pgbouncer.get_auth(text)",
+  // Тригерна функція вебхуків без тригера, доки жодного вебхука не
+  // створено: `plpgsql_check` перевіряє тригерну функцію лише з таблицею
+  "supabase_functions.http_request()",
+]

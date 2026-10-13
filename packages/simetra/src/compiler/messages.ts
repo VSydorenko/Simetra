@@ -2417,12 +2417,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.function-check-failed": {
     en: (p) =>
-      `After the plan's steps ${p.count} function(s) have errors they did not have before: ${p.functions}. The transaction was rolled back`,
+      p.cut !== undefined
+        ? `The function check cannot compare the function errors ${p.cut === "baseline" ? "before" : "after"} the plan's steps: there are at least ${p.count}, more than the ${p.limit} it compares. The transaction was rolled back`
+        : `After the plan's steps ${p.count} function(s) have errors they did not have before: ${p.functions}. The transaction was rolled back`,
     uk: (p) =>
-      `Після кроків плану ${p.count} функцій мають помилки, яких до кроків не було: ${p.functions}. Транзакцію відкочено`,
+      p.cut !== undefined
+        ? `Перевірка функцій не може порівняти помилки функцій ${p.cut === "baseline" ? "до" : "після"} кроків плану: їх щонайменше ${p.count}, більше за ${p.limit}, які вона порівнює. Транзакцію відкочено`
+        : `Після кроків плану ${p.count} функцій мають помилки, яких до кроків не було: ${p.functions}. Транзакцію відкочено`,
     hint: {
-      en: "Nothing was written. Fix the function body in the same plan, or split the change so the function is changed together with what it reads.",
-      uk: "Нічого не записано. Виправте тіло функції в тому самому плані або розбийте зміну так, щоб функція змінювалася разом із тим, що вона читає.",
+      en: "Nothing was written. Fix the function body in the same plan, or split the change so the function is changed together with what it reads; with too many errors to compare, fix the existing function errors first.",
+      uk: "Нічого не записано. Виправте тіло функції в тому самому плані або розбийте зміну так, щоб функція змінювалася разом із тим, що вона читає; коли помилок забагато для порівняння, спершу виправте наявні помилки функцій.",
     },
   },
   "apply.function-check-blind": {
@@ -2443,6 +2447,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Remove or rename the object with this name, then apply again.",
       uk: "Приберіть чи перейменуйте об'єкт із цим іменем і застосуйте знову.",
+    },
+  },
+  "apply.plpgsql-check-unavailable": {
+    en: (p) =>
+      `The plan checks function bodies with plpgsql_check, but the apply could not take the extension in its transaction (SQLSTATE ${p.sqlstate}: ${p.error}). The transaction was rolled back`,
+    uk: (p) =>
+      `План перевіряє тіла функцій через plpgsql_check, але застосування не змогло взяти розширення у своїй транзакції (SQLSTATE ${p.sqlstate}: ${p.error}). Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Give the applying role back what the plan found (the right to install plpgsql_check, or USAGE on the schema of the installed extension), or plan again.",
+      uk: "Нічого не записано. Поверніть ролі застосування те, що план застав (право поставити plpgsql_check чи USAGE на схему встановленого розширення), або сплануйте знову.",
     },
   },
   "plan.unparsable-step": {
@@ -2725,6 +2739,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Rehearse the plan on the target: it runs every step and rolls back.",
       uk: "Відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
+    },
+  },
+  "plan.plpgsql-check-unavailable": {
+    en: (p) =>
+      p.on === "copy"
+        ? `plpgsql_check could not be taken on the copy of the database for the proof (SQLSTATE ${p.sqlstate}: ${p.error}), so the proof did not check plpgsql function bodies with it`
+        : "plpgsql_check is not available on the database: it is not installed for the applying role, and the role cannot install it, so function bodies are checked by the language validators only",
+    uk: (p) =>
+      p.on === "copy"
+        ? `plpgsql_check не вдалося взяти на копії бази для доказу (SQLSTATE ${p.sqlstate}: ${p.error}), тож доказ не перевірив ним тіла plpgsql-функцій`
+        : "plpgsql_check недоступне в базі: воно не встановлене для ролі застосування, і роль не може його поставити, тож тіла функцій перевіряють лише валідатори мов",
+    hint: {
+      en: "A promotion requires plpgsql_check and is refused without it; another plan only warns. Install plpgsql_check (or let the applying role install it), then plan again.",
+      uk: "Промоція вимагає plpgsql_check і без нього відхиляється; інший план лише попереджає. Поставте plpgsql_check (чи дозвольте ролі застосування його ставити) і сплануйте знову.",
     },
   },
   "database.failed": {

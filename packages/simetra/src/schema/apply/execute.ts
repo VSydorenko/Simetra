@@ -5,6 +5,8 @@ import {
 } from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import {
+  PROVIDER_EXPECTED_BLIND_FUNCTIONS,
+  PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
   type DbConnection,
   type EngineDiagnostic,
@@ -19,10 +21,14 @@ import { applyDiagnostic } from "./diagnostic"
 import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
 import {
   blindWarning,
+  CheckNameTaken,
   FUNCTION_ERROR_LIMIT,
   FUNCTION_LIMIT,
   newFunctionErrors,
+  PlpgsqlCheckUnavailable,
   readBlindFunctions,
+  readPlpgsqlCheckMode,
+  readPlpgsqlErrors,
   readValidatorErrors,
   type CheckResult,
   type FunctionError,
@@ -98,6 +104,7 @@ export type ExecutablePlan = Pick<
   | "providerLocks"
   | "preamble"
   | "revalidationSearchPath"
+  | "plpgsqlCheck"
   | "promotion"
   | "environment"
   | "resultCatalog"
@@ -429,6 +436,22 @@ async function runAttempt(
       })
   }
 
+  // 4c. Режим `plpgsql_check` (рішення 4 плану П3-2b-1): план, що застав
+  // розширення встановленим, не ставить його тимчасово, тож без нього
+  // ціль уже не та. Перехід «тимчасове → встановлене» допустимий. Копія
+  // доказу розширення цілі може не мати — там раннер бере його сам
+  if (
+    o.mode !== "proof" &&
+    plan.plpgsqlCheck === "installed" &&
+    (await readPlpgsqlCheckMode(
+      tx,
+      PROVIDER_INSTALLABLE_EXTENSIONS[plan.scope.provider]
+    )) !== "installed"
+  )
+    throw stop("refused", "apply.target-changed", {
+      sections: "plpgsqlCheck",
+    })
+
   // 5. Блокування наперед за слідом кроків — одна точка очікування замість
   // очікувань посеред кроків. Від сильнішого режиму до слабшого, усередині —
   // порядок артефакту, детермінований (R26 плану П3-2a)
@@ -466,9 +489,12 @@ async function runAttempt(
   // до першого кроку (рішення 3 плану П3-2b-1): помилка, що була до плану,
   // не стає відмовою після нього
   const revalidation = revalidationSettings(plan.revalidationSearchPath)
-  const baseline = await withLocalSettings(tx, revalidation, () =>
-    readValidatorErrors(tx)
-  )
+  const warnings: EngineDiagnostic[] = []
+  const plpgsqlCheck = () => readPlpgsqlChecked(tx, plan, o, warnings)
+  const baseline = await withLocalSettings(tx, revalidation, async () => ({
+    validators: await readValidatorErrors(tx),
+    plpgsql: await plpgsqlCheck(),
+  }))
 
   // 9. Кроки наміру — під налаштуваннями транзакції
   const blocks = ORIGIN_ORDER.map((origin) =>
@@ -491,17 +517,34 @@ async function runAttempt(
   // без закріплення GUC
   await provePreservation(tx, preserved, before, parse)
 
-  // 15. Ревалідація тіл проти базової лінії. Сліпі функції називає
-  // попередження застосування й репетиції; копія доказу його не дає, бо
-  // вивід плану вже назвав перелік цілі
+  // 15. Ревалідація тіл проти базової лінії. `plpgsql_check`, пропущений до
+  // кроків, пропускається й після: порівнювати нема з чим. Сліпі функції
+  // називає попередження застосування й репетиції, крім очікуваних
+  // пресетом провайдера; копія доказу його не дає, бо вивід плану вже назвав
+  // перелік цілі
   const after = await withLocalSettings(tx, revalidation, async () => ({
-    check: await readValidatorErrors(tx),
+    validators: await readValidatorErrors(tx),
+    plpgsql:
+      baseline.plpgsql === "skipped"
+        ? ("skipped" as const)
+        : await plpgsqlCheck(),
     blind:
       o.mode === "proof"
         ? []
-        : await readBlindFunctions(tx, PLPGSQL_CHECK_MODE),
+        : (
+            await readBlindFunctions(
+              tx,
+              plan.plpgsqlCheck === "unavailable" ? "unavailable" : "available",
+              PROVIDER_EXPECTED_BLIND_FUNCTIONS[plan.scope.provider]
+            )
+          ).blind,
   }))
-  checkFunctionErrors(baseline, after.check)
+  checkFunctionErrors([
+    [baseline.validators, after.validators],
+    ...(baseline.plpgsql === "skipped" || after.plpgsql === "skipped"
+      ? []
+      : [[baseline.plpgsql, after.plpgsql] as const]),
+  ])
 
   // 17. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
   const resultFingerprint = await readFingerprint(tx, plan.scope)
@@ -541,15 +584,43 @@ async function runAttempt(
   const gaps =
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
-  return [...blindWarning(after.blind), ...gaps]
+  return [...warnings, ...blindWarning(after.blind), ...gaps]
 }
 
 /**
- * Режим `plpgsql_check` для переліку сліпих функцій. Розширення ще не
- * під'єднано, тож перевіряють лише валідатори мов, і подієві та тригерні
- * функції без тригера сліпими не вважаються: валідатор `plpgsql` бачить їх.
+ * Помилки `plpgsql_check` цієї бази (рішення 4 плану П3-2b-1, крок 3).
+ * Розширення не вдалося взяти, а план його чекає:
+ * - на цілі — `apply.plpgsql-check-unavailable`: план обіцяв перевірку;
+ * - на копії доказу — план без промоції попереджає й пропускає перевірку:
+ *   копія може жити на `shadowBase` зі стандартним образом Postgres без
+ *   розширення; промоція — відмова того самого коду, що називає копію
+ *   (спека промоції вимагає перевірки).
  */
-const PLPGSQL_CHECK_MODE = "unavailable"
+async function readPlpgsqlChecked(
+  tx: ApplyTransaction,
+  plan: ExecutablePlan,
+  o: ExecuteOptions,
+  warnings: EngineDiagnostic[]
+): Promise<CheckResult | "skipped"> {
+  try {
+    return await readPlpgsqlErrors(tx, plan.plpgsqlCheck)
+  } catch (error) {
+    if (error instanceof CheckNameTaken)
+      throw stop("refused", "apply.temp-name-taken", { name: error.taken })
+    if (!(error instanceof PlpgsqlCheckUnavailable)) throw error
+    const params = { sqlstate: error.sqlstate, error: error.message }
+    if (o.mode !== "proof")
+      throw stop("failed", "apply.plpgsql-check-unavailable", params)
+    const copy = applyDiagnostic(
+      "plan.plpgsql-check-unavailable",
+      plan.promotion === null ? "warning" : "error",
+      { on: "copy", ...params }
+    )
+    if (plan.promotion !== null) throw new AttemptStop("failed", [copy])
+    warnings.push(copy)
+    return "skipped"
+  }
+}
 
 /** Кроки блоку по черзі, кожен після своїх сторожів. */
 async function runSteps(
@@ -576,20 +647,28 @@ async function runSteps(
 }
 
 /**
- * Ревалідація проти базової лінії (рішення 3, 4 плану П3-2b-1). Обрізаний
- * перелік з будь-якого боку порівняти не можна — відмова з поясненням, а не
- * тиша; інакше нові помилки мультимножиною — `apply.function-check-failed`.
+ * Ревалідація проти базової лінії (рішення 3, 4 плану П3-2b-1): пари «до» і
+ * «після» кожної перевірки — валідаторів і `plpgsql_check`. Обрізаний
+ * перелік з будь-якого боку порівняти не можна — відмова, що називає
+ * обрізаний бік, а не тиша; інакше нові помилки мультимножиною однією
+ * діагностикою — `apply.function-check-failed`.
  */
-function checkFunctionErrors(baseline: CheckResult, after: CheckResult): void {
-  if (
-    baseline.total > FUNCTION_ERROR_LIMIT ||
-    after.total > FUNCTION_ERROR_LIMIT
+function checkFunctionErrors(
+  pairs: readonly (readonly [CheckResult, CheckResult])[]
+): void {
+  const cut = (r: CheckResult) => r.errors.length < r.total
+  for (const [baseline, after] of pairs) {
+    const side = cut(baseline) ? baseline : cut(after) ? after : undefined
+    if (side !== undefined)
+      throw stop("failed", "apply.function-check-failed", {
+        cut: side === baseline ? "baseline" : "after",
+        count: side.total,
+        limit: FUNCTION_ERROR_LIMIT,
+      })
+  }
+  const found = pairs.flatMap(([baseline, after]) =>
+    newFunctionErrors(baseline.errors, after.errors)
   )
-    throw stop("failed", "apply.function-check-failed", {
-      count: after.total,
-      functions: `(the list was cut at ${FUNCTION_ERROR_LIMIT}; the check cannot compare it)`,
-    })
-  const found = newFunctionErrors(baseline.errors, after.errors)
   if (found.length > 0)
     throw stop("failed", "apply.function-check-failed", {
       count: found.length,

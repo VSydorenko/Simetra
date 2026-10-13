@@ -26,6 +26,7 @@ import {
 } from "./environment"
 import { DRIFT_REASONS, type DriftReport } from "./drift"
 import { FINGERPRINT_SECTIONS, type CatalogFingerprint } from "./fingerprint"
+import { PLPGSQL_CHECK_MODES, type PlpgsqlCheckMode } from "./function-checks"
 import {
   TABLE_LOCK_MODES,
   type ImplicitLock,
@@ -161,6 +162,13 @@ export interface PlanArtifact {
    * репетиція й застосування перевіряють однаково.
    */
   revalidationSearchPath: string
+  /**
+   * Як раннер бере `plpgsql_check` у кожній базі (рішення 4 плану П3-2b-1):
+   * режим цілі, прочитаний планом. Під хешем: раннер звіряє його з ціллю, а
+   * `unavailable` означає, що план уже попередив чи відмовив і перевірки
+   * розширенням немає.
+   */
+  plpgsqlCheck: PlpgsqlCheckMode
   /** Секція промоції; `null` — план без промоції. Поле є завжди, як `drift`. */
   promotion: PromotionSection | null
   /**
@@ -320,6 +328,7 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
       })
   ),
   revalidationSearchPath: z.string(),
+  plpgsqlCheck: z.enum(PLPGSQL_CHECK_MODES),
   promotion: promotionSectionSchema.nullable(),
   environment: z.strictObject({
     defaultPrivileges: z.array(

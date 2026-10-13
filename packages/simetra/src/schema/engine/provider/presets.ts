@@ -8,6 +8,8 @@
 
 import type { DatabaseProvider } from "simetra/model"
 import {
+  SUPABASE_EXPECTED_BLIND_FUNCTIONS,
+  SUPABASE_INSTALLABLE_EXTENSIONS,
   SUPABASE_LOCKS,
   SUPABASE_ROLES,
   SUPABASE_SURFACES,
@@ -31,3 +33,20 @@ export const PROVIDER_SYSTEM_ROLES: Readonly<
 /** Механізм провайдерських замків пресету (R27 плану П3-2a). */
 export const PROVIDER_LOCKS: Readonly<Record<DatabaseProvider, ProviderLocks>> =
   { supabase: SUPABASE_LOCKS }
+
+/**
+ * Розширення, які роль застосування може поставити попри `trusted = false`
+ * (рішення 4 плану П3-2b-1): так план виводить режим `transient` для
+ * `plpgsql_check`.
+ */
+export const PROVIDER_INSTALLABLE_EXTENSIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = { supabase: SUPABASE_INSTALLABLE_EXTENSIONS }
+
+/**
+ * Сліпі функції базового стану провайдера поіменно (рішення 5 плану
+ * П3-2b-1): замість попередження вивід плану називає їхню кількість.
+ */
+export const PROVIDER_EXPECTED_BLIND_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = { supabase: SUPABASE_EXPECTED_BLIND_FUNCTIONS }
