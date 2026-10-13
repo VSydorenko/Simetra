@@ -46,6 +46,22 @@ const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
   },
 }
 
+/** Слова для виду елемента в `promote.property-not-equivalent`. */
+const KIND_WORD: Record<"en" | "uk", Record<string, string>> = {
+  en: {
+    unique: "unique constraint",
+    check: "check constraint",
+    index: "index",
+    constraint: "constraint",
+  },
+  uk: {
+    unique: "унікальний ключ",
+    check: "CHECK-обмеження",
+    index: "індекс",
+    constraint: "обмеження",
+  },
+}
+
 /** Причини `promote.expression-invalid`: чому вираз не стає кроком даних. */
 const FILL_PROBLEM: Readonly<Record<FillProblem, { en: string; uk: string }>> =
   {
@@ -1949,9 +1965,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "promote.property-not-equivalent": {
     en: (p) =>
-      `The adopted ${p.kind} ${p.name} is classified \`property\`, but the kind recreates it differently: ${p.detail}`,
+      `The adopted ${KIND_WORD.en[String(p.kind)] ?? p.kind} ${p.name} is classified \`property\`, but the kind recreates it differently: ${p.detail}`,
     uk: (p) =>
-      `Прийнятий ${p.kind} ${p.name} має клас \`property\`, але вид відтворює його інакше: ${p.detail}`,
+      `Прийнятий ${KIND_WORD.uk[String(p.kind)] ?? p.kind} ${p.name} має клас \`property\`, але вид відтворює його інакше: ${p.detail}`,
     hint: {
       en: "Classify it removed (the plan then needs permission to drop it) or keep the table a CustomTable. The metamodel does not express a DEFERRABLE attribute, so such an element cannot be property.",
       uk: "Класифікуйте його removed (план тоді потребує дозволу на видалення) або лишіть таблицю CustomTable. Метамодель не виражає DEFERRABLE-реквізит, тож такий елемент не може бути property.",

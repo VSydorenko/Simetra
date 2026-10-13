@@ -986,7 +986,7 @@ describe("promoteObject: the promotion record", () => {
         pointer: "/uniques/0",
         params: {
           subject: "Counterparty#uniques/counterparties_inn_key",
-          kind: "unique constraint",
+          kind: "unique",
           name: "counterparties_inn_key",
           detail: "deferrable: initiallyDeferred → no",
         },

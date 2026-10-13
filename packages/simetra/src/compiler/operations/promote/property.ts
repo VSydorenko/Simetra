@@ -25,6 +25,7 @@ export interface PropertyCheck {
 }
 
 const NO_ELEMENT = "no element on these columns"
+const NOT_FOUND = "the element is not in the snapshot before the promotion"
 
 const render = (diffs: readonly FieldDifference[]) =>
   diffs.map((d) => `${d.field}: ${d.was} → ${d.now}`).join("; ")
@@ -56,11 +57,14 @@ export function propertyRefusals(input: PropertyCheck): Diagnostic[] {
       const now = input.after.tables.find(
         (t) => t.schema === object.schema && t.name === newName
       )
-      if (was === undefined) continue
+      // Елемент, якого немає у знімку «до», не доводить еквівалентності:
+      // хибна відмова допустима, мовчазна втрата — ні.
       const detail =
-        now === undefined
-          ? NO_ELEMENT
-          : differences(object, was, now, input.columnsOldToNew)
+        was === undefined
+          ? NOT_FOUND
+          : now === undefined
+            ? NO_ELEMENT
+            : differences(object, was, now, input.columnsOldToNew)
       if (detail === undefined) continue
       refusals.push(
         diagnostic(
@@ -80,14 +84,32 @@ export function propertyRefusals(input: PropertyCheck): Diagnostic[] {
   return refusals
 }
 
+/** Код виду елемента; слово для людини підставляє текст повідомлення. */
 function elementKind(
   object: { kind: string; name: string },
-  was: PhysicalTable
-): string {
+  was: PhysicalTable | undefined
+): "unique" | "check" | "index" | "constraint" {
   if (object.kind === "index") return "index"
-  return was.checks.some((c) => c.name === object.name)
-    ? "check constraint"
-    : "unique constraint"
+  if (was === undefined) return "constraint"
+  if (was.checks.some((c) => c.name === object.name)) return "check"
+  return was.uniques.some((u) => u.name === object.name)
+    ? "unique"
+    : "constraint"
+}
+
+/**
+ * Переклад імен перейменованих колонок у тексті виразу (CHECK, предикат чи
+ * вираз ключа індексу) однією заміною: обмін імен не подвоюється.
+ */
+function translateText(text: string, renamed: ReadonlyMap<string, string>) {
+  if (renamed.size === 0) return text
+  return text.replace(
+    new RegExp(
+      `(?<![\\w"])(${[...renamed.keys()].map(escapeRegExp).join("|")})(?![\\w"])`,
+      "g"
+    ),
+    (name) => renamed.get(name)!
+  )
 }
 
 /** `undefined` — відтворено еквівалентно; інакше — чим воно інше. */
@@ -104,9 +126,15 @@ function differences(
     const found = columns.map(rename)
     return found.every((c) => c !== undefined) ? (found as string[]) : undefined
   }
+  // Імена, що змінилися, — для тексту виразів, у яких колонки названо словами.
+  const renamed = new Map<string, string>()
+  for (const column of was.columns) {
+    const to = rename(column.name)
+    if (to !== undefined && to !== column.name) renamed.set(column.name, to)
+  }
   if (object.kind === "index") {
     const index = was.indexes.find((i) => i.name === object.name)
-    if (index === undefined) return undefined
+    if (index === undefined) return NOT_FOUND
     const columns = translate([
       ...index.keys.flatMap((k) => ("column" in k ? [k.column] : [])),
       ...index.include,
@@ -115,14 +143,18 @@ function differences(
     const keyOf = (k: PhysicalTable["indexes"][number]["keys"][number]) =>
       JSON.stringify({
         ...k,
-        ...("column" in k ? { column: rename(k.column) } : {}),
+        ...("column" in k
+          ? { column: rename(k.column) }
+          : { expression: translateText(k.expression, renamed) }),
       })
     const shaped = {
       unique: index.unique,
       method: index.method,
       keys: index.keys.map(keyOf),
       include: index.include.map((c) => rename(c)!),
-      ...(index.where === undefined ? {} : { where: index.where }),
+      ...(index.where === undefined
+        ? {}
+        : { where: translateText(index.where, renamed) }),
       nullsNotDistinct: index.nullsNotDistinct,
     }
     const candidates = now.indexes
@@ -145,24 +177,10 @@ function differences(
     return verdict(candidates)
   }
   const check = was.checks.find((c) => c.name === object.name)
-  if (check === undefined) return undefined
+  if (check === undefined) return NOT_FOUND
   // Вираз міняється лише за іменами колонок, які перейменовано; текстово інший,
   // але рівний семантично вираз — хибна відмова, безпечна.
-  const renamed = new Map<string, string>()
-  for (const column of was.columns) {
-    const to = rename(column.name)
-    if (to !== undefined && to !== column.name) renamed.set(column.name, to)
-  }
-  const translated =
-    renamed.size === 0
-      ? check.expression
-      : check.expression.replace(
-          new RegExp(
-            `(?<![\\w"])(${[...renamed.keys()].map(escapeRegExp).join("|")})(?![\\w"])`,
-            "g"
-          ),
-          (name) => renamed.get(name)!
-        )
+  const translated = translateText(check.expression, renamed)
   // Кандидат — CHECK, що згадує всі колонки, які згадує вихідний вираз.
   const mentions = (expression: string, column: string) =>
     new RegExp(`(?<![\\w"])${escapeRegExp(column)}(?![\\w"])`).test(expression)
