@@ -161,7 +161,7 @@ describe("a mutated target is never silently empty", () => {
     )
   })
 
-  it("reordered columns: the engine plan is empty, the models are not", async () => {
+  it("reordered columns are no difference from the desired state", async () => {
     const result = await reconcile(
       replaced(
         render,
@@ -171,16 +171,13 @@ describe("a mutated target is never silently empty", () => {
       render,
       scope
     )
-    // Двигун не бачить порядку колонок: без рівності моделей звірка була б
-    // тихо порожньою
+    // Порядок колонок — не властивість бажаного стану (платформна спека
+    // §6.9): Postgres додає колонку лише в кінець, тож ціль з іншим порядком
+    // тим самим метаданим відповідає. Точну звірку порядку тримають копія
+    // доказу й drift, а не звірка проєкт ↔ ціль
     expect(result.plan.empty).toBe(true)
-    expect(result.differences).toEqual([
-      expect.objectContaining({
-        path: "tables.app.ledger.columns",
-        kind: "order",
-      }),
-    ])
-    expect(result.empty).toBe(false)
+    expect(result.differences).toEqual([])
+    expect(result.empty).toBe(true)
   })
 
   it("changed function body", async () => {
