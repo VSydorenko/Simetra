@@ -219,6 +219,7 @@ export const COMPILER_RULES = [
   "plan.rename-not-realized",
   "plan.removal-unclassified",
   "plan.platform-replacement-missing",
+  "plan.property-not-reproduced",
   "plan.write-path",
   "plan.foreign-exclusive-lock",
   "plan.promotion-commit-pending",

@@ -64,6 +64,7 @@ export {
   foreignSequenceRefusals,
   platformReplacements,
   promotionPermissionItems,
+  propertyReproductions,
   preservationPlan,
   preservationQuery,
   promotionTransition,

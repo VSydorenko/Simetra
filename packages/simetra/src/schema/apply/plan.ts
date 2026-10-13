@@ -72,6 +72,7 @@ import {
   classifyRemovals,
   foreignSequenceRefusals,
   platformReplacements,
+  propertyReproductions,
   preservationPlan,
   promotionPermissionItems,
   promotionTransition,
@@ -667,6 +668,13 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       desired: target.extracted.model,
       valueElementColumns: valueElementColumns(c.model),
       parse,
+    }),
+    // Клас `property` — лише за еквівалентного відтворення в тіні (R10):
+    // запис, метадані після `promote` чи ручна правка класу не доводять
+    ...propertyReproductions({
+      record,
+      cloneEquivalence: analysis.equivalence,
+      shadowEquivalence: target.equivalence,
     }),
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])

@@ -125,9 +125,10 @@ const REPLACEMENT_SHAPES = {
    * (UNIQUE, `CHECK` іншої форми, індекс): еквівалентний елемент на тій самій
    * таблиці тіні, ключ — `readEquivalenceObjects` (рішення 4 плану П3-2a).
    * «Ключі записів регістрів і зв'язків M:N» потрапляють сюди ж: до появи
-   * регістрів вид такого ключа не дає — відома відмова.
+   * регістрів вид такого ключа не дає — відома відмова. Те саме порівняння
+   * тримає й гейт плану класу `property` (`propertyReproductions`).
    */
-  equivalent: (adopted: EquivalenceObject, c: Context) =>
+  equivalent: (adopted: EquivalenceObject, c: Pick<Context, "shadow">) =>
     sameTable(c.shadow, adopted).some(
       (s) => s.kind === adopted.kind && s.key === adopted.key
     ),
@@ -173,8 +174,7 @@ export function platformReplacements(p: {
 }): EngineDiagnostic[] {
   const { record, parse } = p
   const newTable = (schema: string, table: string): string =>
-    record.tables.find((t) => t.schema === schema && t.from === table)?.to ??
-    table
+    newTableName(record, schema, table)
   const c: Context = {
     shadow: p.shadowEquivalence,
     desired: p.desired,
@@ -185,14 +185,9 @@ export function platformReplacements(p: {
   const subject = (o: PromotionObject): Subject | undefined => {
     if (o.kind === "unit") return { of: "unit", key: o }
     if (o.kind !== "constraint" && o.kind !== "index") return { of: "other" }
-    const table = newTable(o.schema, o.table)
-    const adopted = p.cloneEquivalence.find(
-      (e) =>
-        e.kind === o.kind &&
-        e.schema === o.schema &&
-        e.table === table &&
-        e.name === o.name
-    )
+    const adopted = adoptedOnClone(o, p.cloneEquivalence, record)
+    // Копія доказу — копія цілі: об'єкта, якого немає на копії, немає й на
+    // цілі, тож знімати нічого і заміна не потрібна
     return adopted === undefined ? undefined : { of: "structural", adopted }
   }
   const replaced = (s: Subject): boolean => {
@@ -224,6 +219,137 @@ export function platformReplacements(p: {
           objects: missing.join(", "),
         }),
       ]
+}
+
+/**
+ * Гейт плану класу `property` (R10 плану П3-2b-0): кожне прийняте обмеження
+ * чи індекс з цим класом бажана тінь мусить відтворити еквівалентно — тим
+ * самим порівнянням, що й форма `equivalent` класу `platform`. Клас запису
+ * сам нічого не доводить: запис, написаний до гейта мутації
+ * (`promote.property-not-equivalent`), змінені після `promote` метадані чи
+ * ручна правка запису інакше мовчки зняли б відкладеність чи предикат.
+ * Умова — відсутність еквівалента в тіні, а не DROP двигуна: залежне
+ * обмеження двигун законно знімає й створює наново при зміні типу колонки
+ * (спека промоції §7.2).
+ */
+export function propertyReproductions(p: {
+  record: PromotionRecord
+  cloneEquivalence: readonly EquivalenceObject[]
+  shadowEquivalence: readonly EquivalenceObject[]
+}): EngineDiagnostic[] {
+  const c = { shadow: p.shadowEquivalence }
+  const refusals: EngineDiagnostic[] = []
+  for (const conversion of p.record.conversions) {
+    if (conversion.class !== "property") continue
+    for (const o of conversion.objects) {
+      if (o.kind !== "constraint" && o.kind !== "index") continue
+      const adopted = adoptedOnClone(o, p.cloneEquivalence, p.record)
+      // Як і для `platform`: чого немає на копії цілі, того немає на цілі
+      if (adopted === undefined || REPLACEMENT_SHAPES.equivalent(adopted, c))
+        continue
+      refusals.push(
+        applyDiagnostic("plan.property-not-reproduced", "error", {
+          subject: conversion.subject,
+          object: describe(o),
+          detail: closestDifference(adopted, c.shadow),
+        })
+      )
+    }
+  }
+  return refusals
+}
+
+/** Нове ім'я таблиці одиниці за старим (`record.tables`). */
+const newTableName = (
+  record: PromotionRecord,
+  schema: string,
+  table: string
+): string =>
+  record.tables.find((t) => t.schema === schema && t.from === table)?.to ??
+  table
+
+/**
+ * Прийнятий об'єкт на копії після наміру: таблиця там уже в новому імені, а
+ * ім'я обмеження чи індексу ще початкове, як у записі.
+ */
+function adoptedOnClone(
+  o: Extract<PromotionObject, { kind: "constraint" | "index" }>,
+  clone: readonly EquivalenceObject[],
+  record: PromotionRecord
+): EquivalenceObject | undefined {
+  const table = newTableName(record, o.schema, o.table)
+  return clone.find(
+    (e) =>
+      e.kind === o.kind &&
+      e.schema === o.schema &&
+      e.table === table &&
+      e.name === o.name
+  )
+}
+
+/**
+ * Назви частин ключа індексу — у порядку `readEquivalenceObjects`; ключ
+ * обмеження — `[contype, definition]`.
+ */
+const INDEX_PARTS = [
+  "method",
+  "unique",
+  "nullsNotDistinct",
+  "keyColumns",
+  "columns",
+  "options",
+  "operatorClasses",
+  "operatorClassOptions",
+  "collations",
+  "where",
+  "storage",
+] as const
+const CONSTRAINT_PARTS = ["type", "definition"] as const
+
+/**
+ * Чим найближчий елемент того самого виду на таблиці тіні відрізняється від
+ * прийнятого — лише для повідомлення, вердикт дає `equivalent`. Найближчий —
+ * з найменшою кількістю різних частин, далі з найдовшим спільним початком
+ * ключа.
+ */
+function closestDifference(
+  adopted: EquivalenceObject,
+  shadow: readonly EquivalenceObject[]
+): string {
+  const names: readonly string[] =
+    adopted.kind === "index" ? INDEX_PARTS : CONSTRAINT_PARTS
+  const was = JSON.parse(adopted.key) as unknown[]
+  const show = (v: unknown) =>
+    v === null || v === undefined
+      ? "(none)"
+      : typeof v === "string"
+        ? v
+        : JSON.stringify(v)
+  const common = (a: string, b: string) => {
+    let i = 0
+    while (i < a.length && a[i] === b[i]) i++
+    return i
+  }
+  const candidates = sameTable(shadow, adopted)
+    .filter(
+      (s) =>
+        s.kind === adopted.kind &&
+        (s.kind !== "constraint" || parts(s)[0] === parts(adopted)[0])
+    )
+    .map((s) => {
+      const now = JSON.parse(s.key) as unknown[]
+      const fields = names.flatMap((field, i) =>
+        show(was[i]) === show(now[i])
+          ? []
+          : [`${field}: ${show(was[i])} → ${show(now[i])}`]
+      )
+      return { fields, prefix: common(adopted.key, s.key) }
+    })
+    .sort((a, b) => a.fields.length - b.fields.length || b.prefix - a.prefix)
+  const closest = candidates[0]
+  return closest === undefined
+    ? "no element of this kind on the table in the desired state"
+    : closest.fields.join("; ")
 }
 
 /** Об'єкт запису для повідомлення — у старих іменах, як у записі. */

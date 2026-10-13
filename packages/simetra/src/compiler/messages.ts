@@ -2645,6 +2645,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Клас platform означає, що вид заміняє прийнятий об'єкт: еквівалентним індексом чи обмеженням на тій самій таблиці, FK з тими самими колонками, ціллю, MATCH і відкладеністю (міняються місцями лише RESTRICT і NO ACTION), Ref на перерахування для переліку значень у CHECK або одиницею того самого класу на тій самій таблиці. Генерованих політик і тригерів, як і ключів регістрів, ще немає. Дайте такому об'єкту клас removed (тоді потрібен дозвіл remove:) або лишіть таблицю прийнятою.",
     },
   },
+  "plan.property-not-reproduced": {
+    en: (p) =>
+      `The promotion gives the class property to the adopted ${p.object} of ${p.subject}, but the desired state does not recreate it equivalently: ${p.detail}`,
+    uk: (p) =>
+      `Промоція дає клас property прийнятому об'єкту ${p.object} предмета ${p.subject}, але бажаний стан не відтворює його еквівалентно: ${p.detail}`,
+    hint: {
+      en: "No plan was written. The class property means the kind recreates the adopted element equivalently on the same table: the same columns, expression, predicate, NULLS NOT DISTINCT and deferrability. The record, a later metadata change or a hand edit broke that. Give the element the class removed in promote (it then needs the remove: permission) or make the kind recreate it equivalently.",
+      uk: "План не записано. Клас property означає, що вид відтворює прийнятий елемент еквівалентно на тій самій таблиці: ті самі колонки, вираз, предикат, NULLS NOT DISTINCT і відкладеність. Запис, пізніша зміна метаданих чи ручна правка це порушили. Дайте елементу клас removed у promote (тоді потрібен дозвіл remove:) або зробіть так, щоб вид відтворював його еквівалентно.",
+    },
+  },
   "plan.write-path": {
     en: (p) =>
       `The adopted tables ${p.table} of the promotion are writable through the API on the target (${p.detail}), and the write path after promotion is an open question`,

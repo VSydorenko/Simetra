@@ -40,6 +40,7 @@ import {
   acceptDebt,
   attribute,
   catalog,
+  CATALOG_FILE,
   CONTACT_FILE,
   COUNTERPARTY_FILE,
   COUNTERPARTY_ID,
@@ -2511,6 +2512,72 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           from: INDEX,
           to: "counterparty_tax_id_idx",
         })
+      })
+    })
+
+    describe("class property (R10)", () => {
+      /** Предмет UNIQUE `inn` фікстури має клас `property` (мапінг-зразок). */
+      const SUBJECT = "Counterparty#uniques/counterparties_inn_key"
+      const OBJECT = "constraint app.counterparties.counterparties_inn_key"
+
+      it("refuses a deferred unique of the class property that the kind recreates immediate", async () => {
+        // Запис, написаний до гейта мутації: ціль має відкладений UNIQUE, а
+        // вид дає негайний — клас запису сам нічого не доводить
+        const outcome = await planPromotion(await promoted(), {
+          drift: `ALTER TABLE ${OLD} DROP CONSTRAINT counterparties_inn_key,
+            ADD CONSTRAINT counterparties_inn_key UNIQUE (inn)
+              DEFERRABLE INITIALLY DEFERRED`,
+        })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.property-not-reproduced"])
+        expect(params(outcome, "plan.property-not-reproduced")).toEqual([
+          {
+            subject: SUBJECT,
+            object: OBJECT,
+            detail:
+              "definition: UNIQUE (tax_id) DEFERRABLE INITIALLY DEFERRED → UNIQUE (tax_id)",
+          },
+        ])
+      })
+
+      it("refuses a unique of the class property that metadata dropped after promote", async () => {
+        // Пізніша зміна метаданих зняла `unique` реквізиту, а запис лишив клас
+        const p = await promoted()
+        const files = new Map(p.afterFiles)
+        const raw = JSON.parse(files.get(CATALOG_FILE)!) as Json
+        for (const a of raw.attributes as Json[]) delete a.unique
+        files.set(CATALOG_FILE, JSON.stringify(raw))
+        const changed = await compile(files)
+        expect(
+          changed.diagnostics.filter((d) => d.severity === "error")
+        ).toEqual([])
+        const outcome = await planPromotion({ ...p, after: changed.model! })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.property-not-reproduced"])
+        expect(params(outcome, "plan.property-not-reproduced")).toEqual([
+          {
+            subject: SUBJECT,
+            object: OBJECT,
+            detail: "no element of this kind on the table in the desired state",
+          },
+        ])
+      })
+
+      it("plans a unique of the class property whose column changes type", async () => {
+        // Двигун законно перебудовує залежний UNIQUE при зміні типу колонки
+        // (§7.2): умова гейта — еквівалент у тіні, а не відсутність DROP
+        const mapping = contactsMapping()
+        mapping.columns.inn = {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "taxId", type: "String", length: 12, unique: true },
+        }
+        const p = await promoted(contactsProject(), mapping)
+        expect(p.record.typeChanges.map((t) => t.column)).toContain("tax_id")
+        const artifact = planned(await planPromotion(p))
+        expect(
+          stepMatching(artifact, /ALTER COLUMN "tax_id" TYPE/)
+        ).toHaveLength(1)
       })
     })
 

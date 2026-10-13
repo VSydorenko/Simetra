@@ -19,6 +19,7 @@ import {
   classifyRemovals,
   classifySteps,
   platformReplacements,
+  propertyReproductions,
   promotionPermissionItems,
   requiredPermissions,
   stepConversions,
@@ -1702,6 +1703,19 @@ describe("platformReplacements", () => {
         ],
       ])
     })
+
+    it("skips an object the copy of the target does not have", () => {
+      // Копія доказу — копія цілі: чого немає на копії, немає й на цілі, тож
+      // знімати нічого
+      const out = gate(
+        {
+          conversions: [conversion("platform", indexObject("items_code_idx"))],
+        },
+        [],
+        []
+      )
+      expect(out).toEqual([])
+    })
   })
 
   describe("foreign key (§9.2: FK reference, RESTRICT → NO ACTION)", () => {
@@ -2021,5 +2035,142 @@ describe("platformReplacements", () => {
     expect(valueElementColumns(compiled.model!)).toEqual([
       { schema: "app", table: "item", column: "color" },
     ])
+  })
+})
+
+describe("propertyReproductions", () => {
+  // Гейт плану класу `property` (R10 плану П3-2b-0): тінь мусить відтворити
+  // прийнятий елемент еквівалентно, за тим самим порівнянням, що й клас
+  // `platform`
+  const RENAMED = {
+    tables: [{ id: OBJECT_ID, schema: "app", from: "items", to: "item" }],
+  }
+  const eq = (
+    kind: EquivalenceObject["kind"],
+    name: string,
+    parts: unknown[],
+    t = "item"
+  ): EquivalenceObject => ({
+    kind,
+    schema: "app",
+    table: t,
+    name,
+    key: JSON.stringify(parts),
+    valid: true,
+  })
+  const unique = (name: string, def: string, t = "item") =>
+    eq("constraint", name, ["u", def], t)
+  // Частини ключа індексу — у порядку `readEquivalenceObjects`
+  const index = (name: string, keys: string[], where: string | null = null) =>
+    eq("index", name, [
+      "btree",
+      false,
+      false,
+      keys.length,
+      keys,
+      keys.map(() => 0),
+      keys.map(() => "pg_catalog.text_ops"),
+      keys.map(() => null),
+      keys.map(() => null),
+      where,
+      null,
+    ])
+  const indexObject = (name: string): PromotionObject => ({
+    kind: "index",
+    schema: "app",
+    table: "items",
+    name,
+  })
+
+  const gate = (
+    conversions: PromotionRecord["conversions"],
+    clone: EquivalenceObject[],
+    shadow: EquivalenceObject[]
+  ) =>
+    propertyReproductions({
+      record: record({ ...RENAMED, conversions }),
+      cloneEquivalence: clone,
+      shadowEquivalence: shadow,
+    })
+
+  const refused = (out: ReturnType<typeof gate>) =>
+    out.map((d) => [d.code, d.severity, d.params])
+
+  it("passes an element the shadow recreates equivalently", () => {
+    // Двигун знімає й створює залежний UNIQUE заново при зміні типу колонки
+    // (§7.2): ім'я інше, форма та сама — не відмова
+    const out = gate(
+      [conversion("property", constraint("items_code_key"))],
+      [unique("items_code_key", "UNIQUE (code)")],
+      [unique("item_code_key", "UNIQUE (code)")]
+    )
+    expect(out).toEqual([])
+  })
+
+  it("refuses a deferred unique the shadow recreates immediate", () => {
+    const out = gate(
+      [conversion("property", constraint("items_code_key"))],
+      [unique("items_code_key", "UNIQUE (code) DEFERRABLE INITIALLY DEFERRED")],
+      [
+        unique("item_title_key", "UNIQUE (title)"),
+        unique("item_code_key", "UNIQUE (code)"),
+      ]
+    )
+    expect(refused(out)).toEqual([
+      [
+        "plan.property-not-reproduced",
+        "error",
+        {
+          subject: "subject-property",
+          object: "constraint app.items.items_code_key",
+          detail:
+            "definition: UNIQUE (code) DEFERRABLE INITIALLY DEFERRED → UNIQUE (code)",
+        },
+      ],
+    ])
+  })
+
+  it("names the differing fields of an index", () => {
+    const out = gate(
+      [conversion("property", indexObject("items_code_idx"))],
+      [index("items_code_idx", ["code"], "(code IS NOT NULL)")],
+      [index("item_code_idx", ["code"])]
+    )
+    expect(out.map((d) => d.params?.detail)).toEqual([
+      "where: (code IS NOT NULL) → (none)",
+    ])
+  })
+
+  it("refuses an element the shadow does not have at all", () => {
+    const out = gate(
+      [conversion("property", constraint("items_code_key"))],
+      [unique("items_code_key", "UNIQUE (code)")],
+      [unique("other_code_key", "UNIQUE (code)", "other")]
+    )
+    expect(out.map((d) => d.params?.detail)).toEqual([
+      "no element of this kind on the table in the desired state",
+    ])
+  })
+
+  it("ignores the other classes", () => {
+    const out = gate(
+      [
+        conversion("removed", constraint("items_code_key")),
+        conversion("platform", constraint("items_code_key")),
+      ],
+      [unique("items_code_key", "UNIQUE (code)")],
+      []
+    )
+    expect(out).toEqual([])
+  })
+
+  it("skips an element the copy of the target does not have", () => {
+    // Чого немає на копії цілі, немає й на цілі: знімати нічого
+    const out = gate(
+      [conversion("property", constraint("items_code_key"))],
+      [],
+      []
+    )
+    expect(out).toEqual([])
   })
 })

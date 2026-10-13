@@ -29,6 +29,7 @@ export {
 export { readWritePath, type WritePath } from "./write-path"
 export {
   platformReplacements,
+  propertyReproductions,
   valueElementColumns,
   type ColumnName,
 } from "./replacements"
