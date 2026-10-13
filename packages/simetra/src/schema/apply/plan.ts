@@ -11,15 +11,16 @@ import {
   quoteIdent,
   type CatalogModel,
 } from "simetra/model"
-import type {
-  DbConnection,
-  EngineAction,
-  EngineDiagnostic,
-  EnginePlan,
-  EngineScope,
-  Extracted,
-  SchemaEngine,
-  ShadowOptions,
+import {
+  PROVIDER_LOCKS,
+  type DbConnection,
+  type EngineAction,
+  type EngineDiagnostic,
+  type EnginePlan,
+  type EngineScope,
+  type Extracted,
+  type SchemaEngine,
+  type ShadowOptions,
 } from "../engine"
 import { dedupe } from "../engine/desired"
 import {
@@ -55,7 +56,6 @@ import {
   footprintTables,
   planFootprint,
   planLocks,
-  PROVIDER_LOCKS,
   providerStatements,
   readLiveForeignKeys,
   readLockRights,

@@ -54,3 +54,8 @@ export {
   type ProviderLockStatement,
   type ProviderSurface,
 } from "./provider/supabase"
+export {
+  PROVIDER_LOCKS,
+  PROVIDER_SURFACES,
+  PROVIDER_SYSTEM_ROLES,
+} from "./provider/presets"

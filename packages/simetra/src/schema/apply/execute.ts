@@ -4,7 +4,12 @@ import {
   type SqlParser,
 } from "simetra/compiler"
 import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
-import type { DbConnection, EngineDiagnostic, EngineSetting } from "../engine"
+import {
+  PROVIDER_LOCKS,
+  type DbConnection,
+  type EngineDiagnostic,
+  type EngineSetting,
+} from "../engine"
 import {
   isAllowedSetting,
   type PlanArtifact,
@@ -47,7 +52,6 @@ import {
   coversMode,
   joinModes,
   LOCK_MODE_SQL,
-  PROVIDER_LOCKS,
   readProviderLocks,
   TABLE_LOCK_MODES,
   type TableLock,

@@ -1,10 +1,8 @@
-import type { DatabaseProvider } from "simetra/model"
 import {
-  SUPABASE_SURFACES,
+  PROVIDER_SURFACES,
+  PROVIDER_SYSTEM_ROLES,
   type EngineScope,
-  type ProviderSurface,
 } from "../engine"
-import { PROVIDER_SYSTEM_ROLES } from "./locks"
 import type { ApplyTransaction } from "./port"
 
 /**
@@ -67,10 +65,6 @@ export function compareFingerprints(
   }
 }
 
-const SURFACES: Record<DatabaseProvider, readonly ProviderSurface[]> = {
-  supabase: SUPABASE_SURFACES,
-}
-
 /** Glob поверхні як шаблон `LIKE`: літеральні `%`, `_` і `\` екрануються. */
 function likePattern(glob: string): string {
   return glob
@@ -91,7 +85,7 @@ export async function readFingerprint(
   tx: ApplyTransaction,
   scope: EngineScope
 ): Promise<CatalogFingerprint> {
-  const surfaces = SURFACES[scope.provider].map((s) => ({
+  const surfaces = PROVIDER_SURFACES[scope.provider].map((s) => ({
     schema: s.schema,
     table: likePattern(s.table),
     classes: s.classes,
