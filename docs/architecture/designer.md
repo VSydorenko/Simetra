@@ -78,8 +78,9 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
   нейтралізує глобальні типові привілеї ролі кроками середовища
   (`origin: "environment"`) наприкінці; `plan` виводить їх окремою групою
   `environment rights`, зміна середовища до застосування — `apply.target-changed`
-  (формат артефакта плану — у `src/schema/apply/artifact.ts`; план старого
-  формату будують заново). Правила — спека промоції
+  (формат артефакта плану — у
+  `packages/simetra/src/schema/apply/artifact.ts`; план старого формату
+  будують заново). Правила — спека промоції
   [§7.2, Пр22](../superpowers/specs/2026-10-06-promotion-design.md).
 
 ## 2. Правила безпеки

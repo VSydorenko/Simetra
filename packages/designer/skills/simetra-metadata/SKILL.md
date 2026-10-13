@@ -127,8 +127,13 @@ says why a mapping is wrong, so read its diagnostics):
   (`promote.property-not-equivalent`; a DEFERRABLE attribute, for one, cannot be
   `property`), and `platform` only when the desired state holds the replacement
   mechanism (`plan.platform-replacement-missing`, raised by `plan`, which then
-  writes no plan). When refused, classify the element `removed` (the plan then
-  needs the `remove:` permission) or keep the table a `CustomTable`.
+  writes no plan). `plan` checks `property` again against the desired state:
+  a record, a later metadata change or a hand edit whose element the kind no
+  longer recreates equivalently is refused (`plan.property-not-reproduced`).
+  When refused, classify the element `removed` (the plan then needs the
+  `remove:` permission) or keep the table a `CustomTable`; for
+  `plan.property-not-reproduced`, alternatively make the kind recreate the
+  element equivalently.
 - Functions in the closed shell move to the kind's module, and functions that
   read the promoted tables are rewritten in place. Other verbatim SQL that
   reads them is refused: rewrite or drop it first.
@@ -362,10 +367,10 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 it. `rehearse` runs the plan and rolls it back, but still takes the same
 locks as `apply`.
 
-A plan also ends with environment steps: explicit GRANT/REVOKE that cancel the
-role's global default privileges on the objects the plan creates. The output
-shows them as their own group, `environment rights: the global default
-privileges of role <role>`; review them with the rest of the plan.
+When the role has global default privileges, a plan also ends with environment
+steps: explicit GRANT/REVOKE that cancel them on the objects the plan creates.
+The output shows them as their own group, `environment rights: the global
+default privileges of role <role>`; review them with the rest of the plan.
 If the environment changes before the apply, it is refused
 (`apply.target-changed`); plan again. A plan file from an older tool version is
 refused too: rebuild it with `plan`.
