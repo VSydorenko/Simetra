@@ -1947,6 +1947,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Розмістіть кожен оператор файлу в окремому рядку й повторіть промоцію.",
     },
   },
+  "promote.property-not-equivalent": {
+    en: (p) =>
+      `The adopted ${p.kind} ${p.name} is classified \`property\`, but the kind recreates it differently: ${p.detail}`,
+    uk: (p) =>
+      `Прийнятий ${p.kind} ${p.name} має клас \`property\`, але вид відтворює його інакше: ${p.detail}`,
+    hint: {
+      en: "Classify it removed (the plan then needs permission to drop it) or keep the table a CustomTable. The metamodel does not express a DEFERRABLE attribute, so such an element cannot be property.",
+      uk: "Класифікуйте його removed (план тоді потребує дозволу на видалення) або лишіть таблицю CustomTable. Метамодель не виражає DEFERRABLE-реквізит, тож такий елемент не може бути property.",
+    },
+  },
   "engine.diagnostic": {
     en: (p) => `Schema engine reported ${p.engineCode}: ${p.detail}`,
     uk: (p) => `Рушій схеми повідомив ${p.engineCode}: ${p.detail}`,

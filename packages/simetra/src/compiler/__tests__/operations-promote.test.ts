@@ -228,7 +228,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         inn: {
           to: "attribute",
           collection: "attributes",
-          element: { name: "tax_id" },
+          element: { name: "tax_id", unique: true },
         },
         is_deleted: { to: "standard", name: "deletionMark" },
         created_at: { to: "standard", name: "createdAt" },
@@ -341,7 +341,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         m.columns.inn = {
           to: "attribute",
           collection: "attributes",
-          element: { name: "taxId", type: "String", length: 12 },
+          element: { name: "taxId", type: "String", length: 12, unique: true },
         }
       })
     )
@@ -885,7 +885,7 @@ describe("promoteObject: the promotion record", () => {
         inn: {
           to: "attribute",
           collection: "attributes",
-          element: { name: "tax_id" },
+          element: { name: "tax_id", unique: true },
         },
         is_deleted: { to: "standard", name: "deletionMark" },
         created_at: { to: "standard", name: "createdAt" },
@@ -972,6 +972,35 @@ describe("promoteObject: the promotion record", () => {
         ],
       },
     ])
+  })
+
+  it("refuses the property class for a deferred unique the kind recreates as immediate", async () => {
+    const files = withCounterparty((raw) => {
+      ;(raw.uniques as Json[])[0]!.deferrable = "initiallyDeferred"
+    })
+    const { result, after } = await promoted(files, mapping())
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.property-not-equivalent",
+        file: COUNTERPARTY_FILE,
+        pointer: "/uniques/0",
+        params: {
+          subject: "Counterparty#uniques/counterparties_inn_key",
+          kind: "unique constraint",
+          name: "counterparties_inn_key",
+          detail: "deferrable: initiallyDeferred → no",
+        },
+      },
+    ])
+    expect(after).toEqual(files)
+    // Той самий елемент класом `removed` проходить: відкладеність тоді не бреше.
+    const removed = await promoted(
+      files,
+      mapping((m) => {
+        m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
+      })
+    )
+    expect(errors(removed.result)).toEqual([])
   })
 
   it("finds an unnamed unique by its content and refuses an ambiguous one", async () => {
@@ -1079,7 +1108,7 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
       m.columns.inn = {
         to: "attribute",
         collection: "attributes",
-        element: { name: "taxId", required: true },
+        element: { name: "taxId", required: true, unique: true },
       }
     }
     const attribute = await promoted(files, mapping(required))
@@ -1224,7 +1253,7 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
       m.columns.inn = {
         to: "attribute",
         collection: "attributes",
-        element: { name: "taxId", description },
+        element: { name: "taxId", description, unique: true },
       }
     }
     const subject = "Counterparty#comment/inn"
@@ -1599,6 +1628,8 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     }
     const scope = mapping((m) => {
       m.columns.orgId = { to: "scope" }
+      // Вид скоупу складає UNIQUE разом з носієм: не еквівалент колишньому
+      m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
     })
     const nullable = files(false)
     expect((await compile(nullable)).diagnostics).toEqual([])
@@ -1643,6 +1674,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     const scope = (cls?: ConversionClass) =>
       mapping((m) => {
         m.columns.orgId = { to: "scope" }
+        m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
         if (cls !== undefined) m.conversions["Counterparty#default/orgId"] = cls
       })
     const subject = "Counterparty#default/orgId"
@@ -1690,6 +1722,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     expect((await compile(files)).diagnostics).toEqual([])
     const scope = (m: PromoteInput) => {
       m.columns.orgId = { to: "scope" }
+      m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
     }
     const { result } = await promoted(files, mapping(scope))
     expect(brief(result)).toEqual([
@@ -1990,6 +2023,9 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         mapping((m) => {
           label(m)
           m.columns.inn = { to: "retire" }
+          // Виведена з ужитку колонка не лишає, на чому відтворити UNIQUE
+          m.conversions["Counterparty#uniques/counterparties_inn_key"] =
+            "removed"
           m.fill.push({
             target:
               target === "label"
@@ -2273,6 +2309,8 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         files,
         mapping((m) => {
           m.columns.inn = { to: "retire" }
+          m.conversions["Counterparty#uniques/counterparties_inn_key"] =
+            "removed"
           ;(m.columns as Json).updatedAt = {
             to: "attribute",
             collection: "attributes",
@@ -2814,6 +2852,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       files,
       withContacts((m) => {
         m.columns.orgId = { to: "scope" }
+        m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
         m.tabularSections[0]!.columns.orgId = { to: "scope" }
       })
     )

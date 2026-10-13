@@ -146,7 +146,6 @@ function item(onDelete = "restrict") {
         onDelete,
       },
     ],
-    indexes: [{ name: "items_title_idx", keys: [{ column: "title" }] }],
     rowLevelSecurity: "enabled",
   }
 }
@@ -228,10 +227,13 @@ function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
       title: { to: "standard", name: "description" },
       isDeleted: { to: "standard", name: "deletionMark" },
       // Обмін: колонка `code` стає реквізитом `legacy` і навпаки
-      code: { to: "attribute", element: { name: o.swap ? "legacy" : "code" } },
+      code: {
+        to: "attribute",
+        element: { name: o.swap ? "legacy" : "code", unique: true },
+      },
       groupId: { to: "attribute", element: { name: "group" } },
       legacy: o.swap
-        ? { to: "attribute", element: { name: "code" } }
+        ? { to: "attribute", element: { name: "code", unique: true } }
         : { to: "retire" },
     },
     tabularSections: [
@@ -248,7 +250,6 @@ function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
     ],
     conversions: {
       "Item#uniques/items_code_key": "property",
-      "Item#indexes/items_title_idx": "property",
       ...(o.read === true
         ? { [READ_UNITS.policy]: "platform", [READ_UNITS.grant]: "platform" }
         : {}),
@@ -409,6 +410,12 @@ describe("promotion lifecycle", () => {
         {
           kind: "constraint",
           table: itemTable,
+          from: "items_code_key",
+          to: "item_code_key",
+        },
+        {
+          kind: "constraint",
+          table: itemTable,
           from: "items_pkey",
           to: "item_pkey",
         },
@@ -428,6 +435,7 @@ describe("promotion lifecycle", () => {
         "ALTER TABLE app.item RENAME COLUMN title TO description",
         "ALTER TABLE app.item RENAME COLUMN is_deleted TO deletion_mark",
         "ALTER TABLE app.item_lines RENAME COLUMN item_id TO parent_id",
+        "ALTER TABLE app.item RENAME CONSTRAINT items_code_key TO item_code_key",
         "ALTER TABLE app.item RENAME CONSTRAINT items_pkey TO item_pkey",
         "ALTER TABLE app.item_lines RENAME CONSTRAINT item_lines_item_id_fkey TO item_lines_parent_id_fkey",
       ])
@@ -473,12 +481,8 @@ describe("promotion lifecycle", () => {
       const conversion = (pattern: RegExp) =>
         stepMatching(data, pattern).map((s) => s.conversion)
       expect(conversion(/^COMMENT ON TABLE/)).toEqual(["metadata"])
-      expect(conversion(/DROP INDEX "app"."items_title_idx"/)).toEqual([
-        "property",
-      ])
-      expect(conversion(/DROP CONSTRAINT "items_code_key"/)).toEqual([
-        "property",
-      ])
+      // Еквівалентно відтворений `property` не знімається: лише перейменовано
+      expect(conversion(/DROP CONSTRAINT "items_code_key"/)).toEqual([])
       expect(conversion(/DROP COLUMN "legacy"/)).toEqual([undefined])
       expect(stepMatching(data, /TYPE character varying\(150\)/)).toHaveLength(
         1

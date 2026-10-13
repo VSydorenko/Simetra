@@ -492,6 +492,91 @@ export function structuralSubjects(
 type Classified<C extends (typeof CLASSIFIED_COLLECTIONS)[number]> =
   CustomTable[C][number]
 
+/** Поле, за яким два елементи таблиці різняться, у вигляді «було → стало». */
+export interface FieldDifference {
+  field: string
+  was: string
+  now: string
+}
+
+/** Форма UNIQUE для порівняння: колонки — вже фізичні імена одного боку. */
+export interface UniqueShape {
+  columns: readonly string[]
+  nullsNotDistinct: boolean
+  deferrable?: string
+}
+
+/** Форма індексу для порівняння: ключі — рядки, що вже несуть усе про ключ. */
+export interface IndexShape {
+  unique: boolean
+  method: string
+  keys: readonly string[]
+  include: readonly string[]
+  where?: string
+  nullsNotDistinct: boolean
+}
+
+const listOf = (items: readonly string[]) => items.join(", ")
+
+/**
+ * Поля еквівалентності UNIQUE (колонки, `NULLS NOT DISTINCT`, відкладеність).
+ * Єдине джерело і для зіставлення неназваних елементів, і для класу
+ * `property`: обидва питають «чи це той самий елемент», тож перелік полів не
+ * має розійтися.
+ */
+export function uniqueDifferences(
+  was: UniqueShape,
+  now: UniqueShape
+): FieldDifference[] {
+  const found: FieldDifference[] = []
+  if (listOf(was.columns) !== listOf(now.columns)) {
+    found.push({
+      field: "columns",
+      was: listOf(was.columns),
+      now: listOf(now.columns),
+    })
+  }
+  if (was.nullsNotDistinct !== now.nullsNotDistinct) {
+    found.push({
+      field: "nullsNotDistinct",
+      was: String(was.nullsNotDistinct),
+      now: String(now.nullsNotDistinct),
+    })
+  }
+  const wasDeferrable = was.deferrable ?? "no"
+  const nowDeferrable = now.deferrable ?? "no"
+  if (wasDeferrable !== nowDeferrable) {
+    found.push({
+      field: "deferrable",
+      was: wasDeferrable,
+      now: nowDeferrable,
+    })
+  }
+  return found
+}
+
+/** Поля еквівалентності індексу: `unique`, метод, ключі, `INCLUDE`, предикат. */
+export function indexDifferences(
+  was: IndexShape,
+  now: IndexShape
+): FieldDifference[] {
+  const found: FieldDifference[] = []
+  const differ = (field: string, a: string, b: string) => {
+    if (a !== b) found.push({ field, was: a, now: b })
+  }
+  differ("unique", String(was.unique), String(now.unique))
+  differ("method", was.method, now.method)
+  differ("keys", listOf(was.keys), listOf(now.keys))
+  differ("include", listOf(was.include), listOf(now.include))
+  differ("where", was.where ?? "(none)", now.where ?? "(none)")
+  differ(
+    "nullsNotDistinct",
+    String(was.nullsNotDistinct),
+    String(now.nullsNotDistinct)
+  )
+  return found
+}
+
 /**
  * Фізичні імена неназваних елементів колекції, що збігаються з елементом за
  * вмістом: колонки (через `physicalName`), опції, ключі індексу. Кандидати —
@@ -507,20 +592,20 @@ function unnamedMatches(
   const named = new Set(
     table[collection].flatMap((e) => (e.name === undefined ? [] : [e.name]))
   )
-  const same = (a: readonly string[], b: readonly string[]) =>
-    a.length === b.length && a.every((x, i) => x === b[i])
   const free = <T extends { name: string }>(items: readonly T[]) =>
     items.filter((p) => !named.has(p.name))
   switch (collection) {
     case "uniques": {
       const unique = element as Classified<"uniques">
+      const was: UniqueShape = {
+        columns: unique.columns.map(column),
+        nullsNotDistinct: unique.nullsNotDistinct,
+        ...(unique.deferrable === undefined
+          ? {}
+          : { deferrable: unique.deferrable }),
+      }
       return free(physical.uniques)
-        .filter(
-          (p) =>
-            same(p.columns, unique.columns.map(column)) &&
-            p.nullsNotDistinct === unique.nullsNotDistinct &&
-            (p.deferrable ?? "no") === (unique.deferrable ?? "no")
-        )
+        .filter((p) => uniqueDifferences(was, p).length === 0)
         .map((p) => p.name)
     }
     case "checks": {
@@ -531,31 +616,27 @@ function unnamedMatches(
     }
     case "indexes": {
       const index = element as Classified<"indexes">
-      const keys = index.keys.map((k) =>
+      const keyOf = (k: { column: string } | { expression: string }) =>
         JSON.stringify(
-          "column" in k
-            ? ["column", column(k.column)]
-            : ["expression", k.expression]
+          "column" in k ? ["column", k.column] : ["expression", k.expression]
         )
-      )
+      const was: IndexShape = {
+        unique: index.unique,
+        method: index.method,
+        keys: index.keys.map((k) =>
+          keyOf("column" in k ? { column: column(k.column) } : k)
+        ),
+        include: index.include.map(column),
+        ...(index.where === undefined ? {} : { where: index.where }),
+        nullsNotDistinct: index.nullsNotDistinct,
+      }
       return free(physical.indexes)
         .filter(
           (p) =>
-            p.unique === index.unique &&
-            p.method === index.method &&
-            same(
-              p.keys.map((k) =>
-                JSON.stringify(
-                  "column" in k
-                    ? ["column", k.column]
-                    : ["expression", k.expression]
-                )
-              ),
-              keys
-            ) &&
-            same(p.include, index.include.map(column)) &&
-            p.where === index.where &&
-            p.nullsNotDistinct === index.nullsNotDistinct
+            indexDifferences(was, {
+              ...p,
+              keys: p.keys.map(keyOf),
+            }).length === 0
         )
         .map((p) => p.name)
     }

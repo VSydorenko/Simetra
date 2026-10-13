@@ -221,7 +221,7 @@ export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
     columns: {
       id: { to: "standard", name: "ref" },
       name: { to: "standard", name: "description" },
-      inn: { to: "attribute", element: { name: "taxId" } },
+      inn: { to: "attribute", element: { name: "taxId", unique: true } },
       isDeleted: fill
         ? { to: "standard", name: "deletionMark" }
         : { to: "attribute", element: { name: "archived" } },

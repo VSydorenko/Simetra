@@ -40,6 +40,7 @@ import {
   type PromotedTable,
   type PromotionTarget,
 } from "./mapping"
+import { propertyRefusals } from "./property"
 import {
   promotionRecord,
   type PlannedStep,
@@ -654,7 +655,32 @@ export async function promoteObject(
 
   // 8a. Переписування функцій в обсязі (рішення 13, 14) — над іменами, які
   // дала модель результату. Будь-яка відмова переписувача — нічого не пишеться.
-  const map = renameMap(model, completed.model, record(completed.model))
+  const early = record(completed.model)
+  // Клас `property` чесний лише за еквівалентного відтворення видом; перевірка
+  // до першого запису, тож відмова лишає файли як були.
+  const property = propertyRefusals({
+    before: model.physical,
+    after: completed.model.physical,
+    conversions: subjects.flatMap((s) => {
+      const cls = classified.conversions[s.subject]
+      return cls === undefined ? [] : [{ ...s, class: cls }]
+    }),
+    tablesOldToNew: new Map(
+      early.tables.map((t) => [`${t.schema}.${t.from}`, t.to])
+    ),
+    columnsOldToNew: new Map(
+      early.columns.flatMap((c) => {
+        const was = early.tables.find(
+          (t) => t.schema === c.schema && t.to === c.table
+        )
+        return was === undefined
+          ? []
+          : [[`${c.schema}.${was.from}.${c.from}`, c.to] as const]
+      })
+    ),
+  })
+  if (property.length > 0) return refused(files, property)
+  const map = renameMap(model, completed.model, early)
   const rewrite = rewriteCandidates(
     sql,
     map,
