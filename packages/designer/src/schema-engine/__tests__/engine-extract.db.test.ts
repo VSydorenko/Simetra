@@ -260,9 +260,11 @@ async function expectExtractMatchesModel(files: Map<string, string>) {
     enumTypes: m.enumTypes,
     units: [],
   })
-  expect(diffCatalogModels(tablesOnly(expected), tablesOnly(actual))).toEqual(
-    []
-  )
+  expect(
+    diffCatalogModels(tablesOnly(expected), tablesOnly(actual), {
+      columnOrder: true,
+    })
+  ).toEqual([])
   expect(actual.units.map((u) => u.identity)).toEqual(
     databaseIdentities(model.sqlUnits)
   )

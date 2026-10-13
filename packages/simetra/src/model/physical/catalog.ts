@@ -245,7 +245,7 @@ export interface DiffCatalogOptions {
 export function diffCatalogModels(
   a: CatalogModel,
   b: CatalogModel,
-  { columnOrder }: DiffCatalogOptions = { columnOrder: true }
+  { columnOrder }: DiffCatalogOptions
 ): CatalogDifference[] {
   const out: CatalogDifference[] = []
   const qualified = <T extends { schema: string; name: string }>(

@@ -79,19 +79,24 @@ describe("catalog model", () => {
     expect(
       diffCatalogModels(
         { ...catalog, units: [] },
-        model(table({ checks: [check] }))
+        model(table({ checks: [check] })),
+        { columnOrder: true }
       )
     ).toEqual([])
   })
 
   it("identical models have no differences", () => {
-    expect(diffCatalogModels(model(), model())).toEqual([])
+    expect(diffCatalogModels(model(), model(), { columnOrder: true })).toEqual(
+      []
+    )
   })
 
   it("reordered columns are an order difference", () => {
     const t = table()
     const reordered = table({ columns: [...t.columns].reverse() })
-    expect(diffCatalogModels(model(), model(reordered))).toEqual([
+    expect(
+      diffCatalogModels(model(), model(reordered), { columnOrder: true })
+    ).toEqual([
       expect.objectContaining({
         path: "tables.public.orders.columns",
         kind: "order",
@@ -125,7 +130,8 @@ describe("catalog model", () => {
     })
     const diffs = diffCatalogModels(
       model(table({ indexes: [ix("ix_a")] })),
-      model(table({ indexes: [ix("ix_b")] }))
+      model(table({ indexes: [ix("ix_b")] })),
+      { columnOrder: true }
     )
     expect(diffs.map((d) => [d.path, d.kind])).toEqual([
       ["tables.public.orders.indexes.ix_a", "missing"],
@@ -136,7 +142,8 @@ describe("catalog model", () => {
   it("changed check expression", () => {
     const diffs = diffCatalogModels(
       model(table({ checks: [{ name: "c", expression: "amount > 0" }] })),
-      model(table({ checks: [{ name: "c", expression: "amount >= 0" }] }))
+      model(table({ checks: [{ name: "c", expression: "amount >= 0" }] })),
+      { columnOrder: true }
     )
     expect(diffs).toHaveLength(1)
     expect(diffs[0]).toMatchObject({
@@ -169,7 +176,12 @@ describe("catalog model", () => {
         unit("function:public.h()", "x"),
       ],
     }
-    expect(diffCatalogModels(a, b).map((d) => [d.path, d.kind])).toEqual([
+    expect(
+      diffCatalogModels(a, b, { columnOrder: true }).map((d) => [
+        d.path,
+        d.kind,
+      ])
+    ).toEqual([
       ["units.function:public.f()", "changed"],
       ["units.function:public.g()", "missing"],
       ["units.function:public.h()", "extra"],

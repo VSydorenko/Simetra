@@ -339,7 +339,9 @@ describe("SchemaEngine apply port", () => {
       const back = engine.plan(clone.catalog, target.catalog, scope)
       expect(back.actions.map((a) => a.sql)).toEqual([])
       expect(back.empty).toBe(true)
-      expect(diffCatalogModels(target.model, clone.model)).toEqual([])
+      expect(
+        diffCatalogModels(target.model, clone.model, { columnOrder: true })
+      ).toEqual([])
     })
   })
 
@@ -374,6 +376,41 @@ describe("SchemaEngine apply port", () => {
         expect(outcome.diagnostics[0]!.message).toMatch(
           /^The current target state could not be reproduced in a copy: .*other\.e/
         )
+        expect(await shadowDatabaseCount()).toBe(before)
+      }
+    )
+  })
+
+  it("reports a failure of the type phase as engine.clone-failed", async () => {
+    // Обмеження домену викликає функцію зі схеми поза межею: копія її не має,
+    // тож `CREATE DOMAIN` падає у фазі типів, до створення таблиць
+    await inTarget(
+      [
+        "create schema other;",
+        "create function other.ok(int) returns boolean language sql as $$ select true $$;",
+        "create schema app;",
+        "create domain app.d as int check (other.ok(value));",
+        "create table app.t (id int, d app.d);",
+      ].join("\n"),
+      async (url) => {
+        const before = await shadowDatabaseCount()
+        const target = await engine.extract({ url }, scope)
+        let called = false
+        const outcome = await engine.withTargetClone(
+          { target: { url } },
+          target,
+          scope,
+          async () => {
+            called = true
+          }
+        )
+        expect(called).toBe(false)
+        expect(outcome.status).toBe("shadow-failed")
+        expect(outcome.diagnostics.map((d) => d.code)).toEqual([
+          "engine.clone-failed",
+        ])
+        expect(outcome.diagnostics[0]!.engineCode).toBe("apply_failed")
+        expect(outcome.diagnostics[0]!.message).toMatch(/CREATE DOMAIN/i)
         expect(await shadowDatabaseCount()).toBe(before)
       }
     )
