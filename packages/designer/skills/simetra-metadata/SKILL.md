@@ -122,6 +122,13 @@ says why a mapping is wrong, so read its diagnostics):
   attribute without `defaultValue`); `<CustomTable>#comment` and
   `<CustomTable>#comment/<column>` (a comment the kind has no place for; only
   `removed`). A refusal names each element still missing a class.
+- A class must be true of the desired state: `property` is accepted only when
+  the kind recreates the element equivalently
+  (`promote.property-not-equivalent`; a DEFERRABLE attribute, for one, cannot be
+  `property`), and `platform` only when the desired state holds the replacement
+  mechanism (`plan.platform-replacement-missing`, raised by `plan`, which then
+  writes no plan). When refused, classify the element `removed` (the plan then
+  needs the `remove:` permission) or keep the table a `CustomTable`.
 - Functions in the closed shell move to the kind's module, and functions that
   read the promoted tables are rewritten in place. Other verbatim SQL that
   reads them is refused: rewrite or drop it first.
@@ -354,6 +361,14 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 `drift` when the plan carries drift; the plan output says which items need
 it. `rehearse` runs the plan and rolls it back, but still takes the same
 locks as `apply`.
+
+A plan also ends with environment steps: explicit GRANT/REVOKE that cancel the
+role's global default privileges on the objects the plan creates. The output
+shows them as their own group, `environment rights: the global default
+privileges of role <role>`; review them with the rest of the plan.
+If the environment changes before the apply, it is refused
+(`apply.target-changed`); plan again. A plan file from an older tool version is
+refused too: rebuild it with `plan`.
 
 A promotion plan's `allow` also takes the `access:<table>`,
 `delete:<table>.<constraint>` and `remove:<table>` items its output lists.
