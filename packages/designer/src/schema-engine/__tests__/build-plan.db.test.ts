@@ -1773,6 +1773,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         "ALTER TABLE app.counterparty RENAME COLUMN is_deleted TO archived",
         "ALTER TABLE app.counterparty_contacts RENAME COLUMN counterparty_id TO parent_id",
         "ALTER TABLE app.counterparty RENAME CONSTRAINT counterparties_pkey TO counterparty_pkey",
+        "ALTER TABLE app.counterparty RENAME CONSTRAINT counterparties_inn_key TO counterparty_tax_id_key",
         "ALTER TABLE app.counterparty_contacts RENAME CONSTRAINT counterparty_contacts_counterparty_id_fkey TO counterparty_contacts_parent_id_fkey",
       ])
       // Нумерація наскрізна: кроки двигуна йдуть за кроками наміру
@@ -1829,6 +1830,12 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           table: counterparty,
           from: "counterparties_pkey",
           to: "counterparty_pkey",
+        },
+        {
+          kind: "constraint",
+          table: counterparty,
+          from: "counterparties_inn_key",
+          to: "counterparty_tax_id_key",
         },
         {
           kind: "constraint",
