@@ -57,6 +57,7 @@ import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
 import { aclDefaultsOf, producedBy } from "./map-units"
 import { scopeProfile } from "./policy"
+import { typePhase } from "./type-phase"
 import {
   ShadowCreateRefusedError,
   ShadowServerError,
@@ -673,13 +674,29 @@ function cloneFailed(
   }
 }
 
+/** Застосовує план відтворення до копії; збій — діагностика копії. */
+async function reproduce(
+  clonePool: pg.Pool,
+  plan: Plan
+): Promise<EngineDiagnostic | undefined> {
+  const report = await apply(plan, clonePool, { fingerprintGate: false })
+  if (report.status === "applied") return undefined
+  return cloneFailed(
+    // Текст помилки оператора стосується об'єкта, а не підключення
+    report.error === undefined
+      ? "the reproduction plan was not applied"
+      : `\`${report.error.sql}\`: ${report.error.message}`,
+    "apply_failed"
+  )
+}
+
 /**
  * Тіло копії без її прибирання. Засів — так само, як бажана тінь у
  * `planAndRun`, і план засіву відкидається: лише `renderProviderSeed()` замало,
  * бо заглушки `auth.users` і `storage.objects` дає `seedAssumedSchemas`, а без
  * них тригер чи політика застосунку на поверхні провайдера не відтворилися б.
  * Стан цілі відтворює план двигуна «копія → ціль» з опціями копії, як `plan`
- * порту. Гейт відбитка `apply` вимкнено: копія жертовна, а точність її стану
+ * порту, — після фази типів (`typePhase`), коли вона потрібна. Гейт відбитка `apply` вимкнено: копія жертовна, а точність її стану
  * перевіряє викликач.
  */
 async function cloneAndRun<T>(
@@ -720,29 +737,34 @@ async function cloneAndRun<T>(
         ),
       }
     }
-    // Преамбулу цього плану не звіряємо з дозволеним переліком: його виконує
+    // Преамбулу цих планів не звіряємо з дозволеним переліком: їх виконує
     // `apply` самого двигуна, а не виконавець порту, тож перелік тут не діє;
-    // план же копіюється лише в жертовну копію й назовні не виходить
+    // плани же копіюються лише в жертовну копію й назовні не виходять.
+    // Фаза 1 (рішення 1 плану П3-2b-0) створює типи цілі раніше за таблиці:
+    // інакше двигун не вбудує колонку нового типу в `CREATE TABLE`, поставить
+    // її в кінець, і порядок колонок копії розійдеться з ціллю
     const seeded = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
+    const phase = typePhase(seeded.factBase, targetCatalog.factBase)
+    let source = seeded
+    if (phase !== undefined) {
+      const failure = await reproduce(
+        clonePool,
+        enginePlan(seeded.factBase, phase, seeded.planOptions)
+      )
+      if (failure !== undefined)
+        return { status: "shadow-failed", diagnostics: [failure] }
+      source = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
+    }
+    // Діагностики — лише плану, що відтворює ціль: фаза 1 описує проміжний
+    // стан, а все, що вона створила, план фази 2 бачить на цілі теж
     const plan = enginePlan(
-      seeded.factBase,
+      source.factBase,
       targetCatalog.factBase,
-      seeded.planOptions
+      source.planOptions
     )
-    const report = await apply(plan, clonePool, { fingerprintGate: false })
-    if (report.status !== "applied")
-      return {
-        status: "shadow-failed",
-        diagnostics: [
-          cloneFailed(
-            // Текст помилки оператора стосується об'єкта, а не підключення
-            report.error === undefined
-              ? "the reproduction plan was not applied"
-              : `\`${report.error.sql}\`: ${report.error.message}`,
-            "apply_failed"
-          ),
-        ],
-      }
+    const failure = await reproduce(clonePool, plan)
+    if (failure !== undefined)
+      return { status: "shadow-failed", diagnostics: [failure] }
     // Той самий фільтр `unmodeled_kind`, що в `planAndRun`
     const counted = async (pool: pg.Pool) =>
       unmodeledClasses(

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import pg from "pg"
 import {
   afterAll,
@@ -12,6 +13,7 @@ import {
   applyChanges,
   canonicalSnapshot,
   compile,
+  loadSqlParser,
   promoteObject,
   promotionRecordHash,
   type CompiledModel,
@@ -23,6 +25,7 @@ import {
   buildPlan,
   checkGuardCasts,
   executePlan,
+  reverseGenerate,
   serializePlan,
   type ApplyDatabase,
   type EngineAction,
@@ -715,6 +718,76 @@ describe("buildPlan", () => {
       expect(outcome.status).toBe("refused")
       expect(new Set(errors(outcome))).toEqual(new Set(["plan.clone-mismatch"]))
     })
+  })
+
+  it("refuses a clone whose column order differs from the target", async () => {
+    // Порядок колонок копії ↔ ціль звіряється точно (R4): marker бере модель
+    // копії, тож копія мусить відтворювати порядок цілі
+    const attributes = [
+      attribute("first", { id: uuid(9050) }),
+      attribute("last", { id: uuid(9051) }),
+    ]
+    const before = await compiled({ [PARTY]: party(attributes) })
+    // Доказ біжить лише для непорожнього плану
+    const after = await compiled({
+      [PARTY]: party([...attributes, attribute("extra", { id: uuid(9052) })]),
+    })
+    const reordering: SchemaEngine = {
+      ...engine,
+      withTargetClone: (o, target, scope, fn) =>
+        engine.withTargetClone(o, target, scope, async (clone) => {
+          await other(
+            clone.url,
+            "alter table app.party drop column first; alter table app.party add column first boolean"
+          )
+          return fn(clone)
+        }),
+    }
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      const outcome = await plan(url, after, reordering)
+      expect(outcome.status).toBe("refused")
+      expect(
+        outcome.diagnostics
+          .filter((d) => d.code === "plan.clone-mismatch")
+          .map((d) => d.params)
+      ).toEqual([{ how: "model", detail: "tables.app.party.columns" }])
+    })
+  })
+
+  it("proves an adopted table whose column type the same database defines", async () => {
+    // Відтворення В-1: копія в одну фазу ставила колонку енаму в кінець
+    // таблиці, бо двигун створює таблицю раніше за тип
+    await inTarget(
+      `create schema app;
+       create type app.color as enum ('red', 'green');
+       create table app.t (id uuid primary key, c app.color, name text);`,
+      async (url) => {
+        const extracted = await engine.extract({ url }, targetScope)
+        const reversed = await reverseGenerate(extracted.model, {
+          project: {
+            name: "Adopted",
+            defaultSchema: "app",
+            attributeCase: "camelCase",
+            databaseProvider: "supabase",
+          },
+          existing: new Map(),
+          newId: () => randomUUID(),
+          schemaPath: (_file, schemaFile) => `schemas/${schemaFile}`,
+          parse: await loadSqlParser(),
+        })
+        expect(
+          reversed.diagnostics.filter((d) => d.severity === "error")
+        ).toEqual([])
+        const result = await compile(await acceptDebt(reversed.files))
+        expect(
+          result.diagnostics.filter((d) => d.severity === "error")
+        ).toEqual([])
+        const outcome = await plan(url, result.model!)
+        expect(codes(outcome)).not.toContain("plan.clone-mismatch")
+        planned(outcome)
+      }
+    )
   })
 
   it("proves a schema whose own default privileges equal the built-in ones", async () => {
