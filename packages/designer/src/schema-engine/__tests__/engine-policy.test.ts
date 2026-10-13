@@ -1,6 +1,9 @@
 import {
+  buildFactBase,
+  factMatches,
   flattenPolicy,
   supabasePolicy,
+  type Fact,
   type Policy,
   type Predicate,
 } from "@supabase/pg-delta"
@@ -148,5 +151,34 @@ describe("provider preset matches the pinned engine", () => {
   it("provider roles are the engine's system roles", () => {
     expect(new Set(SUPABASE_ROLES)).toEqual(ownerRoles(supabasePolicy))
     expect(SUPABASE_ROLES).toContain("authenticated")
+  })
+
+  it("default privileges declared for a provider system role are excluded, postgres ones are managed", () => {
+    // Відбиток типових привілеїв спирається на це правило пресету (6b):
+    // якби двигун звузив його, відбиток мовчки виключив би ADP, які двигун
+    // керує, і розбіжність пройшла б непоміченою
+    const policy = flattenPolicy(
+      scopePolicy({ schemas: ["app"], provider: "supabase" })
+    )
+    const fact = (role: string): Fact => ({
+      id: {
+        kind: "defaultPrivilege",
+        role,
+        schema: "app",
+        objtype: "r",
+        grantee: "anon",
+      },
+      payload: {},
+    })
+    const verdict = (role: string) => {
+      const f = fact(role)
+      const view = buildFactBase([f], [])
+      return (
+        policy.filter.find((rule) => factMatches(rule.match, f, view))
+          ?.action ?? "include"
+      )
+    }
+    expect(verdict("supabase_admin")).toBe("exclude")
+    expect(verdict("postgres")).toBe("include")
   })
 })

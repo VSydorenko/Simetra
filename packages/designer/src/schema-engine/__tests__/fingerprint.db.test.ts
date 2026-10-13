@@ -284,6 +284,24 @@ describe("readFingerprint", () => {
       ).not.toBe(await section("select 1"))
     })
 
+    it("keeps a schema default privilege to its own role with grant option", async () => {
+      // `WITH GRANT OPTION` — відхилення від `acldefault`, хоч роль і та сама
+      expect(
+        await section(
+          "alter default privileges for role postgres in schema app grant all on tables to postgres with grant option"
+        )
+      ).not.toBe(await section("select 1"))
+    })
+
+    it("ignores a PUBLIC default privilege equal to the built-in default", async () => {
+      // `EXECUTE` для `PUBLIC` на функціях — вбудований типовий стан
+      expect(
+        await section(
+          "alter default privileges for role postgres in schema app grant execute on functions to public"
+        )
+      ).toBe(await section("select 1"))
+    })
+
     it("ignores default privileges of a provider service role", async () => {
       // Поза межею двигуна: політика провайдера виключає ADP системних ролей
       expect(
