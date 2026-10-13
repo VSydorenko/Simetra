@@ -75,6 +75,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
     },
   ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
+  revalidationSearchPath: '"$user", public',
   promotion: null,
   environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -460,6 +461,22 @@ describe("plan artifact", () => {
       ok: false,
       reason: "invalid",
     })
+  })
+
+  it("covers the revalidation search path with the hash and requires it", async () => {
+    const artifact = await stampPlan(draft())
+    expect(
+      (await stampPlan({ ...draft(), revalidationSearchPath: "app" })).planHash
+    ).not.toBe(artifact.planHash)
+    const without: Record<string, unknown> = { ...artifact }
+    delete without.revalidationSearchPath
+    expect(parsePlan(JSON.stringify(without))).toMatchObject({
+      ok: false,
+      reason: "invalid",
+    })
+    expect(
+      parsePlan(JSON.stringify({ ...artifact, revalidationSearchPath: null }))
+    ).toMatchObject({ ok: false, reason: "invalid" })
   })
 
   it("holds the current format in the schema itself, not only in parsePlan", async () => {

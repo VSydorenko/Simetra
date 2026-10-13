@@ -96,6 +96,20 @@ export {
   renderGlobalDefaultPrivileges,
   type GlobalDefaultPrivilege,
 } from "./environment"
+export { RETRYABLE_SQLSTATES } from "./retry"
+export {
+  readSessionSearchPath,
+  revalidationSettings,
+  withLocalSettings,
+} from "./settings"
+export {
+  FUNCTION_ERROR_LIMIT,
+  newFunctionErrors,
+  readBlindFunctions,
+  readValidatorErrors,
+  type CheckResult,
+  type FunctionError,
+} from "./function-checks"
 export {
   DEFAULT_APPLY_TIMEOUTS,
   executePlan,

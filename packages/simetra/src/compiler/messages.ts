@@ -2415,6 +2415,36 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Натомість відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
     },
   },
+  "apply.function-check-failed": {
+    en: (p) =>
+      `After the plan's steps ${p.count} function(s) have errors they did not have before: ${p.functions}. The transaction was rolled back`,
+    uk: (p) =>
+      `Після кроків плану ${p.count} функцій мають помилки, яких до кроків не було: ${p.functions}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Fix the function body in the same plan, or split the change so the function is changed together with what it reads.",
+      uk: "Нічого не записано. Виправте тіло функції в тому самому плані або розбийте зміну так, щоб функція змінювалася разом із тим, що вона читає.",
+    },
+  },
+  "apply.function-check-blind": {
+    en: (p) =>
+      `${p.count} function(s) cannot be checked after the steps (another procedural language, no EXECUTE for the applying role, or plpgsql_check skips them): ${p.functions}`,
+    uk: (p) =>
+      `${p.count} функцій не можна перевірити після кроків (інша процедурна мова, немає EXECUTE для ролі застосування або plpgsql_check їх пропускає): ${p.functions}`,
+    hint: {
+      en: "The check does not see these function bodies: review them by hand against the plan's changes.",
+      uk: "Перевірка не бачить тіл цих функцій: перегляньте їх вручну проти змін плану.",
+    },
+  },
+  "apply.temp-name-taken": {
+    en: (p) =>
+      `The name ${p.name} the apply needs for a check inside its transaction is already taken. Nothing was written`,
+    uk: (p) =>
+      `Ім'я ${p.name}, яке застосуванню потрібне для перевірки всередині транзакції, уже зайняте. Нічого не записано`,
+    hint: {
+      en: "Remove or rename the object with this name, then apply again.",
+      uk: "Приберіть чи перейменуйте об'єкт із цим іменем і застосуйте знову.",
+    },
+  },
   "plan.unparsable-step": {
     en: (p) =>
       `The schema engine produced plan step ${p.step} that the SQL parser cannot read: ${p.message}`,

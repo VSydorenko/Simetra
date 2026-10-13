@@ -39,6 +39,7 @@ import {
   type GlobalDefaultPrivilege,
 } from "./environment"
 import { executePlan, type ExecutablePlan } from "./execute"
+import { blindWarning, readBlindFunctions } from "./function-checks"
 import {
   compareFingerprints,
   FINGERPRINT_SECTIONS,
@@ -92,6 +93,7 @@ import {
   type TransitionVerdict,
   type WritePath,
 } from "./promotion"
+import { readSessionSearchPath } from "./settings"
 import { readAppliedPromotions, readApplyState } from "./state"
 import {
   classifySteps,
@@ -423,23 +425,26 @@ export async function buildPlan(
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (R26); без
   // промоції імена вихідного стану й кроків збігаються
-  const { locks, implicitLocks, providerLocks, lockWarnings } = await lockPlan(
-    dbs.reader,
-    o.target,
-    {
-      scope,
-      role: targetOwners.session,
-      steps,
-      parse,
-      models: {
-        source: live.extracted.model,
-        desired: target.extracted.model,
-        typeChanges: guarded.changes,
-        newToOld: new Map(),
-        columnsNewToOld: new Map(),
-      },
-    }
-  )
+  const {
+    locks,
+    implicitLocks,
+    providerLocks,
+    lockWarnings,
+    revalidationSearchPath,
+    blindFunctions,
+  } = await lockPlan(dbs.reader, o.target, {
+    scope,
+    role: targetOwners.session,
+    steps,
+    parse,
+    models: {
+      source: live.extracted.model,
+      desired: target.extracted.model,
+      typeChanges: guarded.changes,
+      newToOld: new Map(),
+      columnsNewToOld: new Map(),
+    },
+  })
   const { preamble } = target.enginePlan
 
   // 8–10. Доказ на копії. План доказу несе той самий дрейф, тож дозволи
@@ -463,6 +468,7 @@ export async function buildPlan(
       implicitLocks,
       providerLocks,
       preamble,
+      revalidationSearchPath,
       promotion: null,
       environment,
       targetFingerprint: live.fingerprint,
@@ -493,6 +499,7 @@ export async function buildPlan(
     implicitLocks,
     providerLocks,
     preamble,
+    revalidationSearchPath,
     promotion: null,
     environment,
     resultCatalog: proof.resultCatalog,
@@ -504,6 +511,7 @@ export async function buildPlan(
       ...diagnostics,
       ...collected.diagnostics,
       ...lockWarnings,
+      ...blindWarning(blindFunctions),
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
     ]),
@@ -728,23 +736,26 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   )
   // Слід кроків двигуна — від копії після наміру, у нових іменах, і
   // перекладається в старі (R26)
-  const { locks, implicitLocks, providerLocks, lockWarnings } = await lockPlan(
-    dbs.reader,
-    o.target,
-    {
-      scope,
-      role: c.targetOwners.session,
-      steps,
-      parse,
-      models: {
-        source: cloneModel,
-        desired: target.extracted.model,
-        typeChanges: analysis.changes,
-        newToOld: analysis.intent.tablesNewToOld,
-        columnsNewToOld: columnsNewToOld(analysis.intent.columns),
-      },
-    }
-  )
+  const {
+    locks,
+    implicitLocks,
+    providerLocks,
+    lockWarnings,
+    revalidationSearchPath,
+    blindFunctions,
+  } = await lockPlan(dbs.reader, o.target, {
+    scope,
+    role: c.targetOwners.session,
+    steps,
+    parse,
+    models: {
+      source: cloneModel,
+      desired: target.extracted.model,
+      typeChanges: analysis.changes,
+      newToOld: analysis.intent.tablesNewToOld,
+      columnsNewToOld: columnsNewToOld(analysis.intent.columns),
+    },
+  })
   const typeChangeSteps = new Map(
     analysis.changes.map((t) => [
       JSON.stringify([t.schema, t.table, t.column]),
@@ -796,6 +807,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       implicitLocks,
       providerLocks,
       preamble: analysis.preamble,
+      revalidationSearchPath,
       promotion: section,
       environment,
       targetFingerprint: live.fingerprint,
@@ -823,6 +835,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     implicitLocks,
     providerLocks,
     preamble: analysis.preamble,
+    revalidationSearchPath,
     promotion: section,
     environment,
     resultCatalog: proof.resultCatalog,
@@ -834,6 +847,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       ...withClone,
       ...collected.diagnostics,
       ...lockWarnings,
+      ...blindWarning(blindFunctions),
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
       // Межа 2a (рішення 12): людина дізнається про неї до `apply`
@@ -1075,6 +1089,10 @@ function columnsNewToOld(
  * `LOCK` кожної його таблиці на живій цілі (READ ONLY) і замки з неявними
  * замками. `ACCESS EXCLUSIVE` на таблиці поза межею двигуна — попередження:
  * її читання блоковані на всю транзакцію.
+ *
+ * Тією самою транзакцією READ ONLY — те, що ціль дає ревалідації тіл
+ * (рішення 2, 5 плану П3-2b-1): шлях пошуку сесії, під яким раннер перевіряє
+ * тіла, і функції, яких перевірка не бачить, для попередження у виводі плану.
  */
 async function lockPlan(
   reader: ApplyDatabase,
@@ -1094,38 +1112,45 @@ async function lockPlan(
   implicitLocks: ImplicitLock[]
   providerLocks: ProviderLockSet[]
   lockWarnings: EngineDiagnostic[]
+  revalidationSearchPath: string
+  blindFunctions: string[]
 }> {
   const { scope, steps } = o
   const statements = providerStatements(steps, o.parse)
   // Перелік провайдера й FK живої цілі — до сліду: таблиці провайдера й
   // таблиця поза межею двигуна, що посилається на колонку зі зміною типу,
   // моделям каталогу невидимі. Права — тією самою транзакцією READ ONLY
-  const { footprint, rights, providerLocks } = await reader.transaction(
-    target,
-    "rollback",
-    async (tx) => {
-      const providerLocks = await readProviderLocks(
-        tx,
-        o.role,
-        PROVIDER_LOCKS[scope.provider]
-      )
-      const live = await readLiveForeignKeys(
-        tx,
-        footprintSubjects(steps, o.models)
-      )
-      const footprint = planFootprint(steps, {
-        ...o.models,
-        live,
-        providerStatements: statements,
-        providerLocks,
-      })
-      return {
-        footprint,
-        providerLocks,
-        rights: await readLockRights(tx, footprintTables(footprint)),
-      }
+  const {
+    footprint,
+    rights,
+    providerLocks,
+    revalidationSearchPath,
+    blindFunctions,
+  } = await reader.transaction(target, "rollback", async (tx) => {
+    const providerLocks = await readProviderLocks(
+      tx,
+      o.role,
+      PROVIDER_LOCKS[scope.provider]
+    )
+    const live = await readLiveForeignKeys(
+      tx,
+      footprintSubjects(steps, o.models)
+    )
+    const footprint = planFootprint(steps, {
+      ...o.models,
+      live,
+      providerStatements: statements,
+      providerLocks,
+    })
+    return {
+      footprint,
+      providerLocks,
+      rights: await readLockRights(tx, footprintTables(footprint)),
+      revalidationSearchPath: await readSessionSearchPath(tx),
+      // Режим `plpgsql_check` ще не під'єднано: перевіряють лише валідатори
+      blindFunctions: await readBlindFunctions(tx, "unavailable"),
     }
-  )
+  })
   const { locks, implicitLocks } = planLocks({ footprint, rights })
   // Крок попередження — перший, чий слід бере на таблиці ACCESS EXCLUSIVE
   const exclusiveStep = (l: TableLock): string =>
@@ -1181,7 +1206,14 @@ async function lockPlan(
       })
     ),
   ]
-  return { locks, implicitLocks, providerLocks, lockWarnings }
+  return {
+    locks,
+    implicitLocks,
+    providerLocks,
+    lockWarnings,
+    revalidationSearchPath,
+    blindFunctions,
+  }
 }
 
 /** Відмови перепису власників: план і звірка (`diff`) — одна порада, різні коди. */

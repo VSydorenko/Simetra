@@ -2162,8 +2162,9 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
     )
 
     it("refuses a plan whose SQL function body is broken", async () => {
-      // Тінь вантажить тіла без перевірки, а раннер перевіряє: тіло читає
-      // колонку за старим ім'ям, і доказ на копії падає на кроці функції
+      // Тінь вантажить тіла без перевірки, і крок функції під преамбулою
+      // двигуна теж: тіло читає колонку за старим ім'ям, і доказ на копії
+      // падає на ревалідації тіл (рішення 3 плану П3-2b-1)
       const p = await promoted()
       const files = await acceptDebt(
         new Map([
@@ -2180,8 +2181,11 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       )
       const outcome = await planPromotion({ ...p, after: result.model! })
       expect(outcome.status).toBe("refused")
-      expect(params(outcome, "apply.step-failed")).toEqual([
-        expect.objectContaining({ sqlstate: "42703" }),
+      expect(params(outcome, "apply.function-check-failed")).toEqual([
+        {
+          count: 1,
+          functions: expect.stringMatching(/^app\.party_inns\(\): 42703 /),
+        },
       ])
     })
 

@@ -13,6 +13,16 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
 import {
+  blindWarning,
+  FUNCTION_ERROR_LIMIT,
+  FUNCTION_LIMIT,
+  newFunctionErrors,
+  readBlindFunctions,
+  readValidatorErrors,
+  type CheckResult,
+  type FunctionError,
+} from "./function-checks"
+import {
   compareFingerprints,
   FINGERPRINT_VERSION,
   readFingerprint,
@@ -30,6 +40,8 @@ import {
   preservationQuery,
   preservedColumnName,
 } from "./promotion/preservation"
+import { RETRYABLE_SQLSTATES } from "./retry"
+import { revalidationSettings, withLocalSettings } from "./settings"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
 import {
   coversMode,
@@ -41,7 +53,7 @@ import {
   type TableLock,
   type TableLockMode,
 } from "./locks"
-import { checkPermissions, lintSteps } from "./steps"
+import { checkPermissions, lintSteps, type PlanStep } from "./steps"
 import { tableKey } from "./table-key"
 import { guardTarget } from "./type-guard"
 
@@ -81,6 +93,7 @@ export type ExecutablePlan = Pick<
   | "implicitLocks"
   | "providerLocks"
   | "preamble"
+  | "revalidationSearchPath"
   | "promotion"
   | "environment"
   | "resultCatalog"
@@ -124,8 +137,18 @@ export type ExecuteOutcome =
  */
 const ADVISORY_LOCK = "1397312837, 1"
 
-/** Конфлікт блокувань (`lock_timeout`, deadlock) — єдине, що повторюється. */
-const RETRYABLE: ReadonlySet<string> = new Set(["55P03", "40P01"])
+/**
+ * Конфлікт блокувань (`lock_timeout`, deadlock) — єдине, на чому повторюється
+ * спроба. Збій серіалізації (`40001`) перевірки тіл лише прокидають далі, а не
+ * записують помилкою функції; під `READ COMMITTED` порту він не виникає, тож
+ * раннер прокидає його сирим, як будь-яку іншу помилку бази.
+ */
+const RETRYABLE: ReadonlySet<string> = new Set(
+  RETRYABLE_SQLSTATES.filter((s) => s !== "40001")
+)
+
+/** Порядок блоків кроків за походженням (рішення 1 плану П3-2b-1). */
+const ORIGIN_ORDER = ["intent", "engine", "environment"] as const
 
 /**
  * `LOCK TABLE` на таблиці, що зникла (`42P01`) чи змінила вид (`42809`) після
@@ -231,6 +254,15 @@ export async function executePlan(
     throw new Error(
       "the promotion section does not preserve exactly the tables of its record"
     )
+  // Раннер виконує три блоки кроків кожен під своїми налаштуваннями: крок
+  // наміру після кроку двигуна пішов би під преамбулою. Так кроки будують
+  // `analyseOnClone` і збір середовища, тож інший порядок — зламаний конвеєр
+  // (рішення 1 плану П3-2b-1)
+  const ranks = plan.steps.map((s) => ORIGIN_ORDER.indexOf(s.origin))
+  if (ranks.some((rank, i) => i > 0 && rank < ranks[i - 1]!))
+    throw new Error(
+      "plan steps are out of origin order: intent, engine, environment"
+    )
 
   // Поза артефактом і його хешем: той самий план, застосований удруге, —
   // інше застосування з іншим рядком ledger
@@ -312,9 +344,10 @@ function preservesEveryTable(
 }
 
 /**
- * Одна спроба — оператори рішення 11 по черзі. Нормальне повернення
- * означає `COMMIT` (чи `ROLLBACK` репетиції) і несе попередження спроби;
- * кожна відмова — виняток.
+ * Одна спроба — оператори рішення 11 плану П3-1 по черзі; номери фаз від 7 —
+ * таблиця рішення 1 плану П3-2b-1 (пропущені номери — фази інших задач).
+ * Нормальне повернення означає `COMMIT` (чи `ROLLBACK` репетиції) і несе
+ * попередження спроби; кожна відмова — виняток.
  */
 async function runAttempt(
   tx: ApplyTransaction,
@@ -425,35 +458,48 @@ async function runAttempt(
   // не робить — це перевірка моделі сліду на доказі й репетиції
   const existing = o.mode === "apply" ? undefined : await readExistingTables(tx)
 
-  // 7. Кроки по черзі, кожен після своїх сторожів; конфлікт блокувань
-  // летить далі на повтор спроби. Усі кроки й сторожі — під налаштуваннями
-  // транзакції, як у П3-1: преамбулу двигуна план несе під `planHash`, але
-  // раннер її не виконує, бо пара преамбули неподільна; П3-2b виконує її
-  // разом із ревалідацією (R22 плану П3-2a). Половина пари — `search_path =
-  // pg_catalog` при ввімкненій валідації тіл — дала б хибну відмову доказу
-  // для тіла SQL-функції з некваліфікованим ім'ям. Сторожі від `search_path`
-  // не залежать: таблиця й типи в них повністю кваліфіковані
-  for (const step of plan.steps) {
-    for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
-    try {
-      await tx.query(step.sql)
-    } catch (error) {
-      if (error instanceof ApplyDbError && !retryable(error))
-        throw stop("failed", "apply.step-failed", {
-          step: step.id,
-          sqlstate: error.sqlstate ?? "unknown",
-          error: error.message,
-        })
-      throw error
-    }
-  }
+  // 7. Базова лінія тіл функцій — у тій самій транзакції, під блокуваннями,
+  // до першого кроку (рішення 3 плану П3-2b-1): помилка, що була до плану,
+  // не стає відмовою після нього
+  const revalidation = revalidationSettings(plan.revalidationSearchPath)
+  const baseline = await withLocalSettings(tx, revalidation, () =>
+    readValidatorErrors(tx)
+  )
 
-  // 7a. Заміри «після» — у нових іменах, після кроків. Та сама транзакція
+  // 9. Кроки наміру — під налаштуваннями транзакції
+  const blocks = ORIGIN_ORDER.map((origin) =>
+    plan.steps.filter((s) => s.origin === origin)
+  )
+  await runSteps(tx, blocks[0]!, parse)
+  // 11. Кроки двигуна разом зі сторожами — під преамбулою, такою, як її
+  // записав план, і з поверненням налаштувань транзакції після них. Пару
+  // виконуємо лише разом із ревалідацією (R22 плану П3-2a):
+  // `check_function_bodies = off` пропускає тіло, яке ловить фаза 15
+  await withLocalSettings(tx, plan.preamble, () =>
+    runSteps(tx, blocks[1]!, parse)
+  )
+  // 12. Кроки середовища (рішення 5 плану П3-2b-0) — під налаштуваннями
+  // транзакції
+  await runSteps(tx, blocks[2]!, parse)
+
+  // 14. Заміри «після» — у нових іменах, після кроків. Та сама транзакція
   // й ті самі налаштування сесії, що й «до», тож текст значень порівнюваний
   // без закріплення GUC
   await provePreservation(tx, preserved, before, parse)
 
-  // 8. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
+  // 15. Ревалідація тіл проти базової лінії. Сліпі функції називає
+  // попередження застосування й репетиції; копія доказу його не дає, бо
+  // вивід плану вже назвав перелік цілі
+  const after = await withLocalSettings(tx, revalidation, async () => ({
+    check: await readValidatorErrors(tx),
+    blind:
+      o.mode === "proof"
+        ? []
+        : await readBlindFunctions(tx, PLPGSQL_CHECK_MODE),
+  }))
+  checkFunctionErrors(baseline, after.check)
+
+  // 17. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
   const resultFingerprint = await readFingerprint(tx, plan.scope)
   const diverged = differing(plan.desiredFingerprint, resultFingerprint, {
     owner: false,
@@ -463,7 +509,7 @@ async function runAttempt(
       sections: diverged.join(", "),
     })
 
-  // 9. Стан у тій самій транзакції. Marker отримує повний відбиток
+  // 19. Стан у тій самій транзакції. Marker отримує повний відбиток
   // результату з власником: наступний гейт порівнює ціль ↔ ціль. Прийнятий
   // дрейф лишається в ledger, а marker стає новою базою (рішення 16)
   for (const statement of writeApplyStateStatements({
@@ -486,13 +532,69 @@ async function runAttempt(
   }))
     await tx.query(statement.sql, statement.params)
 
-  // 9a. Звірка сліду перед відкатом репетиції чи кінцем доказу: замок,
+  // 19a. Звірка сліду перед відкатом репетиції чи кінцем доказу: замок,
   // якого слід плану не передбачив, — прогалина моделі сліду
-  const warnings =
+  const gaps =
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
-  // 10. `COMMIT` чи `ROLLBACK` виконує порт за `end`
-  return warnings
+  // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
+  return [...blindWarning(after.blind), ...gaps]
 }
+
+/**
+ * Режим `plpgsql_check` для переліку сліпих функцій. Розширення ще не
+ * під'єднано, тож перевіряють лише валідатори мов, і подієві та тригерні
+ * функції без тригера сліпими не вважаються: валідатор `plpgsql` бачить їх.
+ */
+const PLPGSQL_CHECK_MODE = "unavailable"
+
+/** Кроки блоку по черзі, кожен після своїх сторожів. */
+async function runSteps(
+  tx: ApplyTransaction,
+  steps: readonly PlanStep[],
+  parse: SqlParser
+): Promise<void> {
+  // Конфлікт блокувань летить далі на повтор спроби. Сторожі від
+  // `search_path` не залежать: таблиця й типи в них повністю кваліфіковані
+  for (const step of steps) {
+    for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
+    try {
+      await tx.query(step.sql)
+    } catch (error) {
+      if (error instanceof ApplyDbError && !retryable(error))
+        throw stop("failed", "apply.step-failed", {
+          step: step.id,
+          sqlstate: error.sqlstate ?? "unknown",
+          error: error.message,
+        })
+      throw error
+    }
+  }
+}
+
+/**
+ * Ревалідація проти базової лінії (рішення 3, 4 плану П3-2b-1). Обрізаний
+ * перелік з будь-якого боку порівняти не можна — відмова з поясненням, а не
+ * тиша; інакше нові помилки мультимножиною — `apply.function-check-failed`.
+ */
+function checkFunctionErrors(baseline: CheckResult, after: CheckResult): void {
+  if (
+    baseline.total > FUNCTION_ERROR_LIMIT ||
+    after.total > FUNCTION_ERROR_LIMIT
+  )
+    throw stop("failed", "apply.function-check-failed", {
+      count: after.total,
+      functions: `(the list was cut at ${FUNCTION_ERROR_LIMIT}; the check cannot compare it)`,
+    })
+  const found = newFunctionErrors(baseline.errors, after.errors)
+  if (found.length > 0)
+    throw stop("failed", "apply.function-check-failed", {
+      count: found.length,
+      functions: found.slice(0, FUNCTION_LIMIT).map(describeError).join("; "),
+    })
+}
+
+const describeError = (e: FunctionError): string =>
+  `${e.signature}${e.relation === null ? "" : ` on ${e.relation}`}: ${e.sqlstate} ${e.message}`
 
 /** Замки плану на таблицях, що є в цій базі (`relkind` r/p). */
 async function presentLocks(
@@ -830,7 +932,7 @@ async function lockTables(
 
 /**
  * Лінт преамбули: план несе лише відоме (рішення 13, R22 плану П3-2a), бо
- * П3-2b виконуватиме його як є.
+ * раннер виконує її як є.
  * Схема артефакту таку пару вже не пропускає, але раннер не покладається на
  * те, що план прийшов через неї.
  */

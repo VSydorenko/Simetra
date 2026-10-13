@@ -17,6 +17,7 @@ import {
 import type { CatalogModel, PhysicalTable } from "simetra/model"
 import {
   ApplyConnectionLost,
+  ApplyDbError,
   desiredForApply,
   executePlan,
   readFingerprint,
@@ -36,6 +37,7 @@ import {
   lockRightsSql,
   readLockRights,
   readProviderLocks,
+  readSessionSearchPath,
   SUPABASE_LOCKS,
   tableKey,
   type PlanStep,
@@ -277,6 +279,14 @@ const providerList = (
     (tx) => readProviderLocks(tx, role, SUPABASE_LOCKS)
   )
 
+/** Шлях пошуку сесії цілі — як його записав би план для ревалідації. */
+const sessionPath = (url: string): Promise<string> =>
+  createApplyDatabase({ readOnly: true }).transaction(
+    { url },
+    "rollback",
+    readSessionSearchPath
+  )
+
 /** План від `fromHash` до `toHash` над живою ціллю. */
 async function planFor(
   url: string,
@@ -302,6 +312,8 @@ async function planFor(
     ...over,
     providerLocks:
       over.providerLocks ?? (await providerList(url, over.role ?? "postgres")),
+    revalidationSearchPath:
+      over.revalidationSearchPath ?? (await sessionPath(url)),
     targetFingerprint: over.targetFingerprint ?? (await read(url)),
     desiredFingerprint:
       over.desiredFingerprint ?? (await desiredFingerprint(BASE, steps)),
@@ -335,6 +347,7 @@ async function establish(url: string, hash: string): Promise<void> {
       implicitLocks: [],
       providerLocks: await providerList(url),
       preamble: [],
+      revalidationSearchPath: await sessionPath(url),
       promotion: null,
       environment: { defaultPrivileges: [] },
       targetFingerprint: fingerprint,
@@ -1196,6 +1209,7 @@ describe("executePlan", () => {
         const steps: PlanStep[] = [
           { ...intentStep(record("intent"), []), id: "s1" },
           step("s2", record("engine"), { verb: "alter" }),
+          step("s3", record("environment"), { origin: "environment" }),
         ]
         const plan = await planFor(target, steps, {
           preamble,
@@ -1210,26 +1224,25 @@ describe("executePlan", () => {
         return Object.fromEntries(rows.map((r) => [r.at, r]))
       })
 
-    // R22 плану П3-2a: пара преамбули неподільна; П3-2b виконує її разом
-    // із ревалідацією тіл, а в 2a кроки двигуна йдуть під налаштуваннями
-    // транзакції, як у П3-1
-    it("runs engine steps under the transaction search path although the plan records a preamble", async () => {
-      const rows = await seen([{ name: "search_path", value: "pg_catalog" }])
-      expect(rows.intent!.path).not.toBe("pg_catalog")
-      expect(rows.engine!.path).toBe(rows.intent!.path)
-      expect(rows.state!.path).toBe(rows.intent!.path)
-    })
-
-    it("keeps function body validation on although the preamble asks to turn it off", async () => {
+    // R22 плану П3-2a, рішення 1 плану П3-2b-1: преамбула — лише навколо
+    // блоку кроків двигуна, бо тіла функцій після кроків перевіряє ревалідація
+    it("runs engine steps under the preamble and the other steps under the transaction settings", async () => {
       const rows = await seen([
         { name: "search_path", value: "pg_catalog" },
         { name: "check_function_bodies", value: "off" },
       ])
-      expect(rows.engine).toMatchObject({
-        path: rows.intent!.path,
-        bodies: "on",
-      })
-      expect(rows.state!.bodies).toBe("on")
+      expect(rows.engine).toMatchObject({ path: "pg_catalog", bodies: "off" })
+      expect(rows.intent!.path).not.toBe("pg_catalog")
+      expect(rows.intent!.bodies).toBe("on")
+      // Після кроків двигуна налаштування знову ті, що до них
+      expect(rows.environment).toEqual({ ...rows.intent, at: "environment" })
+      expect(rows.state).toEqual({ ...rows.intent, at: "state" })
+    })
+
+    it("runs a preamble of the search path alone as it is", async () => {
+      const rows = await seen([{ name: "search_path", value: "pg_catalog" }])
+      expect(rows.engine).toMatchObject({ path: "pg_catalog", bodies: "on" })
+      expect(rows.state).toEqual({ ...rows.intent, at: "state" })
     })
 
     it("proves a SQL function whose body names a table of public without schema", async () => {
@@ -1600,10 +1613,25 @@ describe("executePlan", () => {
           ).rows
           await client.query("BEGIN ISOLATION LEVEL READ COMMITTED")
           await fn({
+            // Помилка оператора з SQLSTATE — `ApplyDbError`, як у справжнього
+            // порту: раннер на цьому стоїть (зокрема транспорт ревалідації)
             query: async <R extends Record<string, unknown>>(
               sql: string,
               params?: readonly unknown[]
-            ) => (await client.query(sql, params as unknown[])).rows as R[],
+            ) => {
+              try {
+                return (await client.query(sql, params as unknown[]))
+                  .rows as R[]
+              } catch (error) {
+                const { code, message } = error as {
+                  code?: string
+                  message: string
+                }
+                throw code === undefined
+                  ? error
+                  : new ApplyDbError(message, code)
+              }
+            },
           })
           pending = then(client, row!.pid)
           throw new ApplyConnectionLost("Connection terminated unexpectedly")

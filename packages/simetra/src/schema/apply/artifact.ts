@@ -38,7 +38,9 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * Форма файлу плану; читач порівнює її з поточною, а не вгадує. Третій
  * формат: кроки середовища й глобальні типові привілеї ролі плану (рішення 5
  * плану П3-2b-0) поверх кроків із походженням і сторожами, блокувань із
- * режимами й преамбули двигуна (рішення 11 плану П3-2a).
+ * режимами й преамбули двигуна (рішення 11 плану П3-2a). Шлях ревалідації
+ * та інші поля П3-2b-1 додано в той самий формат: релізу між планами П3-2b
+ * немає (рішення 12 плану П3-2b-1).
  */
 export const PLAN_FORMAT = 3
 
@@ -147,11 +149,18 @@ export interface PlanArtifact {
    */
   providerLocks: ProviderLockSet[]
   /**
-   * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. У 2a план її
-   * лише несе під хешем, а раннер не виконує: пара неподільна, і П3-2b
-   * виконує її разом із ревалідацією тіл (R22 плану П3-2a).
+   * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. Раннер виконує
+   * її навколо кроків двигуна разом із їхніми сторожами, такою, як її записав
+   * план, а тіла функцій після кроків перевіряє ревалідація (R22 плану
+   * П3-2a, рішення 1–3 плану П3-2b-1).
    */
   preamble: EngineSetting[]
+  /**
+   * `search_path` сесії цілі, прочитаний планом (рішення 2 плану П3-2b-1):
+   * під ним раннер перевіряє тіла функцій до кроків і після. Під хешем, тож
+   * репетиція й застосування перевіряють однаково.
+   */
+  revalidationSearchPath: string
   /** Секція промоції; `null` — план без промоції. Поле є завжди, як `drift`. */
   promotion: PromotionSection | null
   /**
@@ -310,6 +319,7 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
         message: "preamble setting is not on the allowed list",
       })
   ),
+  revalidationSearchPath: z.string(),
   promotion: promotionSectionSchema.nullable(),
   environment: z.strictObject({
     defaultPrivileges: z.array(

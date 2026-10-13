@@ -91,6 +91,7 @@ async function writePlan(
     implicitLocks: [],
     providerLocks: [],
     preamble: [],
+    revalidationSearchPath: '"$user", public',
     promotion,
     environment: { defaultPrivileges: [] },
     resultCatalog: { tables: [], enumTypes: [], units: [] },

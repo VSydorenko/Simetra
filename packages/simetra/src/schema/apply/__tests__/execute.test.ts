@@ -102,6 +102,7 @@ const plan: ExecutablePlan = {
     { schema: "app", name: "x.y", mode: "accessExclusive" },
   ],
   preamble: [{ name: "search_path", value: "pg_catalog" }],
+  revalidationSearchPath: '"$user", public, extensions',
   promotion: null,
   environment: { defaultPrivileges: [] },
   resultCatalog: { tables: [], enumTypes: [], units: [] },
@@ -195,10 +196,37 @@ interface Script {
   providerTables?: { schema: string; name: string }[]
   /** Рядки глобальних типових привілеїв ролі на цілі; типово немає. */
   environment?: GlobalDefaultPrivilege[]
+  /**
+   * Результат DO-блоку валідаторів за номером виклику в спробі: 0 — базова
+   * лінія, 1 — після кроків; `"none"` — блок завершився без результату.
+   * Типово помилок немає.
+   */
+  validators?: (call: number) => ValidatorResult | "none"
+  /** Сліпі функції цілі; типово немає. */
+  blind?: string[]
 }
+
+/** Те, що DO-блок валідаторів віддає винятком `SIMFE`. */
+interface ValidatorResult {
+  total: number
+  errors: {
+    oid: string
+    signature: string
+    sqlstate: string
+    message: string
+  }[]
+}
+
+/** Налаштування транзакції фейкової бази до будь-якого `set_config`. */
+const SESSION = { search_path: '"$user", public', check_function_bodies: "on" }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
 function labelOf(sql: string): string | undefined {
+  if (sql.includes("current_setting(s.name)")) return "get-settings"
+  if (sql.includes("set_config(s.name, s.value, true)")) return "set-settings"
+  if (sql.startsWith("DO $simetra$")) return "validators"
+  if (sql.includes("simetra_revalidate")) return undefined
+  if (sql.includes("regprocedure::text AS signature")) return "blind"
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
   if (sql.includes("pg_advisory_xact_lock")) return "lookup-lock"
   if (sql.includes("set_config('statement_timeout', $1"))
@@ -237,11 +265,15 @@ function labelOf(sql: string): string | undefined {
 function fakeDb(script: Script = {}) {
   const log: string[] = []
   const params: Record<string, readonly unknown[] | undefined> = {}
+  /** Налаштування транзакції під кожним виконанням оператора з міткою. */
+  const seen: Record<string, Record<string, string>[]> = {}
   let attempt = 0
   const db: ApplyDatabase = {
     async transaction(_target, end, fn) {
       attempt++
       let stepsRan = false
+      let validatorCalls = 0
+      const settings: Record<string, string> = { ...SESSION }
       log.push("BEGIN")
       const tx = {
         query: async <R extends Record<string, unknown>>(
@@ -253,49 +285,73 @@ function fakeDb(script: Script = {}) {
             log.push(label)
             params[label] = p
           }
+          if (label !== undefined)
+            seen[label] = [...(seen[label] ?? []), { ...settings }]
           const error =
             label === undefined ? undefined : script.fail?.(label, attempt)
           if (error !== undefined) throw error
           if (plan.steps.some((s) => s.sql === sql)) stepsRan = true
+          if (label === "set-settings") {
+            const [names, values] = p as [string[], string[]]
+            names.forEach((n, i) => (settings[n] = values[i]!))
+          }
+          if (label === "validators") {
+            const result = script.validators?.(validatorCalls++) ?? {
+              total: 0,
+              errors: [],
+            }
+            if (result !== "none")
+              throw new ApplyDbError(JSON.stringify(result), "SIMFE")
+          }
           const rows: Record<string, unknown>[] =
             label?.startsWith("measure") === true
               ? [{ rows: "1", c0: "5" }]
-              : label === "provider-setting"
-                ? [
-                    {
-                      value: script.providerSettings?.[String(p?.[0])] ?? null,
-                    },
-                  ]
-                : label === "provider-tables"
-                  ? (script.providerTables ?? [])
-                  : label === "present"
-                    ? (script.present ?? [])
-                    : label === "environment"
-                      ? (script.environment ?? []).map((r) => ({ ...r }))
-                      : label === "existing"
-                        ? (script.existing ?? [])
-                        : label === "held-locks"
-                          ? (script.held ?? [])
-                          : label === "try-lock"
-                            ? [{ locked: script.locked ?? true }]
-                            : label === "role"
-                              ? [{ role: script.role ?? "postgres" }]
-                              : sql.includes(" AS marker")
-                                ? [{ marker: false, ledger: false }]
-                                : sql.includes("to_regclass")
-                                  ? [{ exists: true }]
-                                  : label === "lookup"
-                                    ? script.ledgerHasApply === true
-                                      ? [{ format: script.ledgerFormat ?? 1 }]
-                                      : []
-                                    : sql.includes("encode(sha256")
-                                      ? [
-                                          stepsRan
-                                            ? DESIRED.sections
-                                            : (script.targetSections ??
-                                              TARGET.sections),
-                                        ]
-                                      : []
+              : label === "get-settings"
+                ? (p![0] as string[]).map((n) => ({ value: settings[n] }))
+                : label === "blind"
+                  ? (script.blind ?? []).map((signature) => ({ signature }))
+                  : label === "provider-setting"
+                    ? [
+                        {
+                          value:
+                            script.providerSettings?.[String(p?.[0])] ?? null,
+                        },
+                      ]
+                    : label === "provider-tables"
+                      ? (script.providerTables ?? [])
+                      : label === "present"
+                        ? (script.present ?? [])
+                        : label === "environment"
+                          ? (script.environment ?? []).map((r) => ({ ...r }))
+                          : label === "existing"
+                            ? (script.existing ?? [])
+                            : label === "held-locks"
+                              ? (script.held ?? [])
+                              : label === "try-lock"
+                                ? [{ locked: script.locked ?? true }]
+                                : label === "role"
+                                  ? [{ role: script.role ?? "postgres" }]
+                                  : sql.includes(" AS marker")
+                                    ? [{ marker: false, ledger: false }]
+                                    : sql.includes("to_regclass")
+                                      ? [{ exists: true }]
+                                      : label === "lookup"
+                                        ? script.ledgerHasApply === true
+                                          ? [
+                                              {
+                                                format:
+                                                  script.ledgerFormat ?? 1,
+                                              },
+                                            ]
+                                          : []
+                                        : sql.includes("encode(sha256")
+                                          ? [
+                                              stepsRan
+                                                ? DESIRED.sections
+                                                : (script.targetSections ??
+                                                  TARGET.sections),
+                                            ]
+                                          : []
           return rows as R[]
         },
       }
@@ -309,7 +365,7 @@ function fakeDb(script: Script = {}) {
       }
     },
   }
-  return { db, log, params }
+  return { db, log, params, seen }
 }
 
 const target = { url: "postgres://fake" }
@@ -330,9 +386,24 @@ describe("executePlan", () => {
       "environment",
       'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
+      // 7. Базова лінія тіл під налаштуваннями ревалідації
+      "get-settings",
+      "set-settings",
+      "validators",
+      "set-settings",
+      // 11. Кроки двигуна під преамбулою
+      "get-settings",
+      "set-settings",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
+      "set-settings",
+      // 15. Ревалідація й сліпі функції
+      "get-settings",
+      "set-settings",
+      "validators",
+      "blind",
+      "set-settings",
       "fingerprint",
       "marker",
       "ledger",
@@ -683,8 +754,9 @@ describe("executePlan", () => {
     })
   })
 
-  // R22 плану П3-2a: пара преамбули неподільна, тож у 2a план її лише несе
-  it("runs every step and guard under the transaction settings although the plan records a preamble", async () => {
+  // R22 плану П3-2a і рішення 1 плану П3-2b-1: преамбула — лише навколо
+  // блоку кроків двигуна разом із їхніми сторожами
+  it("runs engine steps and their guards under the preamble, the other steps under the transaction settings", async () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
     })
@@ -695,13 +767,16 @@ describe("executePlan", () => {
       id: `s${i + 2}`,
       guards: i === 0 ? [guard] : [],
     }))
-    const { db, log, calls } = spied()
+    const environment = step("s5", "GRANT SELECT ON app.n TO anon", {
+      origin: "environment",
+    })
+    const { db, seen } = fakeDb()
     const outcome = await executePlan(
       db,
       target,
       {
         ...plan,
-        steps: [intent, ...engineSteps],
+        steps: [intent, ...engineSteps, environment],
         preamble: [
           { name: "search_path", value: "pg_catalog" },
           { name: "check_function_bodies", value: "off" },
@@ -710,20 +785,27 @@ describe("executePlan", () => {
       options
     )
     expect(outcome).toMatchObject({ status: "committed" })
-    expect(log).not.toContain("save-path")
-    expect(log).not.toContain("set-path")
-    expect(log).not.toContain("function-bodies")
-    expect(calls.some((c) => c.params?.includes("pg_catalog") === true)).toBe(
-      false
-    )
-    // Сторож повністю кваліфікований і йде перед своїм кроком без преамбули
-    expect(log.indexOf(guard)).toBe(
-      log.indexOf("ALTER TABLE app.t ADD COLUMN d int") - 1
-    )
+    const preamble = { search_path: "pg_catalog", check_function_bodies: "off" }
+    expect(seen[guard]).toEqual([preamble])
+    for (const s of engineSteps) expect(seen[s.sql]).toEqual([preamble])
+    // Після блоку двигуна — знову налаштування транзакції
+    expect(seen[intent.sql]).toEqual([SESSION])
+    expect(seen[environment.sql]).toEqual([SESSION])
+    expect(seen.marker).toEqual([SESSION])
+    expect(seen.ledger).toEqual([SESSION])
   })
 
-  it("leaves function body validation on although the preamble turns it off", async () => {
-    const { db, log } = fakeDb()
+  it("runs a preamble of the search path alone as it is", async () => {
+    const { db, seen } = fakeDb()
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome).toMatchObject({ status: "committed" })
+    expect(seen["CREATE INDEX i ON app.u (id)"]).toEqual([
+      { search_path: "pg_catalog", check_function_bodies: "on" },
+    ])
+  })
+
+  it("validates the bodies under the revalidation settings before and after the steps", async () => {
+    const { db, seen } = fakeDb()
     const outcome = await executePlan(
       db,
       target,
@@ -737,7 +819,175 @@ describe("executePlan", () => {
       options
     )
     expect(outcome).toMatchObject({ status: "committed" })
-    expect(log).not.toContain("function-bodies")
+    const revalidation = {
+      search_path: plan.revalidationSearchPath,
+      check_function_bodies: "on",
+    }
+    expect(seen.validators).toEqual([revalidation, revalidation])
+    expect(seen.blind).toEqual([revalidation])
+    expect(seen.fingerprint!.at(-1)).toEqual(SESSION)
+  })
+
+  it("refuses a function error the steps brought in, naming the function", async () => {
+    const before = {
+      oid: "100",
+      signature: "app.old()",
+      sqlstate: "42P01",
+      message: 'relation "gone" does not exist',
+    }
+    const broken = {
+      oid: "200",
+      signature: "app.fa()",
+      sqlstate: "42703",
+      message: 'column "a" does not exist',
+    }
+    const { db, log } = fakeDb({
+      validators: (call) =>
+        call === 0
+          ? { total: 1, errors: [before] }
+          : { total: 2, errors: [{ ...before, oid: "101" }, broken] },
+    })
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      diagnostics: [
+        {
+          code: "apply.function-check-failed",
+          severity: "error",
+          params: {
+            count: 1,
+            functions: 'app.fa(): 42703 column "a" does not exist',
+          },
+        },
+      ],
+    })
+    expect(log).not.toContain("marker")
+    expect(log.at(-1)).toBe("ROLLBACK")
+  })
+
+  it("names at most ten new function errors and counts them all", async () => {
+    const errors = Array.from({ length: 12 }, (_, i) => ({
+      oid: String(i),
+      signature: `app.f${i}()`,
+      sqlstate: "42703",
+      message: "x",
+    }))
+    const { db } = fakeDb({
+      validators: (call) =>
+        call === 0 ? { total: 0, errors: [] } : { total: 12, errors },
+    })
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome.diagnostics[0]!.params.count).toBe(12)
+    expect(
+      String(outcome.diagnostics[0]!.params.functions).split("; ")
+    ).toHaveLength(10)
+  })
+
+  it.each([
+    ["the baseline", 0],
+    ["the check after the steps", 1],
+  ])(
+    "refuses to compare when the function error list was cut in %s",
+    async (_, cut) => {
+      const { db } = fakeDb({
+        validators: (call) =>
+          call === cut ? { total: 1001, errors: [] } : { total: 0, errors: [] },
+      })
+      const outcome = await executePlan(db, target, plan, options)
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.function-check-failed",
+            params: {
+              functions:
+                "(the list was cut at 1000; the check cannot compare it)",
+            },
+          },
+        ],
+      })
+    }
+  )
+
+  it("throws when the validator block ends without its result", async () => {
+    const { db, log } = fakeDb({ validators: () => "none" })
+    await expect(executePlan(db, target, plan, options)).rejects.toThrow(
+      /without its result/
+    )
+    expect(log.at(-1)).toBe("ROLLBACK")
+  })
+
+  it("retries the attempt when a validator waits on a lock past the timeout", async () => {
+    const { db, log } = fakeDb({
+      fail: (label, attempt) =>
+        label === "validators" && attempt === 1
+          ? new ApplyDbError("canceling statement due to lock timeout", "55P03")
+          : undefined,
+    })
+    const outcome = await executePlan(db, target, plan, options)
+    expect(outcome).toMatchObject({ status: "committed", attempts: 2 })
+    expect(log.filter((l) => l === "COMMIT")).toHaveLength(1)
+  })
+
+  it.each(["apply", "rehearse"] as const)(
+    "warns in %s mode about functions the check cannot see",
+    async (mode) => {
+      const blind = Array.from(
+        { length: 11 },
+        (_, i) => `app.b${String(i).padStart(2, "0")}()`
+      )
+      const { db } = fakeDb({ blind })
+      const outcome = await executePlan(db, target, plan, {
+        ...options,
+        mode,
+      })
+      expect(outcome.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "apply.function-check-blind",
+          severity: "warning",
+          params: {
+            count: 11,
+            functions: blind.slice(0, 10).join(", "),
+          },
+        }),
+      ])
+    }
+  )
+
+  it("does not warn about blind functions on the proof copy", async () => {
+    const { db, log } = fakeDb({ blind: ["app.b()"] })
+    const outcome = await executePlan(db, target, plan, {
+      ...options,
+      mode: "proof",
+    })
+    expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+    expect(log).not.toContain("blind")
+  })
+
+  it.each([
+    ["whose intent step follows an engine step", ["engine", "intent"] as const],
+    [
+      "whose environment step precedes an engine step",
+      ["environment", "engine"] as const,
+    ],
+  ])("refuses a plan %s before BEGIN", async (_, origins) => {
+    const { db, log } = fakeDb()
+    const run = executePlan(
+      db,
+      target,
+      {
+        ...plan,
+        steps: origins.map((origin, i) =>
+          step(`s${i + 1}`, `CREATE TABLE app.t${i} (id int)`, { origin })
+        ),
+      },
+      options
+    )
+    await expect(run).rejects.toThrow(
+      "plan steps are out of origin order: intent, engine, environment"
+    )
+    expect(log).toEqual([])
   })
 
   it("refuses a preamble setting off the allowed list before BEGIN", async () => {
@@ -942,10 +1192,23 @@ describe("executePlan", () => {
       "fingerprint",
       "measure app.t",
       "existing",
+      "get-settings",
+      "set-settings",
+      "validators",
+      "set-settings",
+      "get-settings",
+      "set-settings",
       "ALTER TABLE app.t ADD COLUMN d int",
       "CREATE INDEX i ON app.u (id)",
       'ALTER TABLE app."x.y" ADD COLUMN e int',
+      "set-settings",
+      // Заміри «після» — до ревалідації (рішення 1 плану П3-2b-1)
       "measure app.u",
+      "get-settings",
+      "set-settings",
+      "validators",
+      "blind",
+      "set-settings",
       "fingerprint",
       "marker",
       "ledger",
