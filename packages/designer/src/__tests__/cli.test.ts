@@ -678,7 +678,7 @@ describe("cli adapter", () => {
         '  s1 engine catalogOnly (lock none) CREATE FUNCTION "app"."f"() RETURNS integer'
       )
       expect(lines.slice(steps + 2, steps + 5)).toEqual([
-        "Environment rights: the global default privileges of role postgres:",
+        "environment rights: the global default privileges of role postgres:",
         '  s2 environment catalogOnly (lock none) REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
         '  s3 environment catalogOnly (lock none) GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC',
       ])

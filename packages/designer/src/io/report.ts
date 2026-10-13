@@ -177,7 +177,7 @@ export function renderPlan(
   }
   if (environment.length > 0) {
     lines.push(
-      `Environment rights: the global default privileges of role ${quoteIdent(d.environment.role)}:`
+      `environment rights: the global default privileges of role ${quoteIdent(d.environment.role)}:`
     )
     lines.push(...environment.map(stepLine))
   }

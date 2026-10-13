@@ -78,6 +78,10 @@ const STRANGER = "simetra_build_plan_stranger"
 /** Роль-група, членом якої є роль API: її привілеї роль API успадковує. */
 const WRITERS = "simetra_build_plan_writers"
 
+/** Роль адміністрування копії, інша за роль плану (R7 плану П3-2b-0). */
+const COPIER = "simetra_build_plan_copier"
+const COPIER_PASSWORD = "simetra_build_plan_copier"
+
 /** Службова роль провайдера, членом якої роль сесії застосування не є. */
 const SERVICE_ROLE = "supabase_auth_admin"
 
@@ -99,7 +103,7 @@ const dropRole = () =>
   other(
     testSuperuserUrl(),
     `drop role if exists ${OWNER}; drop role if exists ${STRANGER};
-     drop role if exists ${WRITERS};`
+     drop role if exists ${WRITERS}; drop role if exists ${COPIER};`
   )
 
 /** Та сама база цілі, але сесією суперкористувача стеку. */
@@ -116,7 +120,8 @@ beforeAll(async () => {
     testSuperuserUrl(),
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;
      create role ${STRANGER} nologin;
-     create role ${WRITERS} nologin; grant ${WRITERS} to authenticated;`
+     create role ${WRITERS} nologin; grant ${WRITERS} to authenticated;
+     create role ${COPIER} login password '${COPIER_PASSWORD}';`
   )
 })
 afterAll(dropRole)
@@ -952,6 +957,121 @@ describe("buildPlan", () => {
               ?.params.detail
           )
         ).toMatch(/global default privileges/)
+      })
+    })
+
+    /**
+     * Двигун, чия копія працює від іншої ролі (`COPIER`), як копія на
+     * `shadowBase` з іншою роллю адміністрування (R7 плану П3-2b-0). Не
+     * суперкористувач стеку: об'єкти системної ролі провайдера межа двигуна не
+     * бачить, і доказ відмовив би з іншої причини. `setup` виконується на
+     * копії від `COPIER`.
+     */
+    const otherCopyRole = (setup?: string): SchemaEngine => ({
+      ...engine,
+      withTargetClone: (o, target, scope, fn) =>
+        engine.withTargetClone(o, target, scope, async (clone) => {
+          const database = new URL(clone.url).pathname.slice(1)
+          await other(
+            clone.url,
+            `grant create on database "${database}" to ${COPIER}`
+          )
+          const as = new URL(clone.url)
+          as.username = COPIER
+          as.password = COPIER_PASSWORD
+          const url = as.toString()
+          if (setup !== undefined) await other(url, setup)
+          return fn({ url })
+        }),
+    })
+
+    const cloneFailure = (outcome: PlanOutcome): string =>
+      String(
+        outcome.diagnostics.find((d) => d.code === "engine.clone-failed")
+          ?.params.detail
+      )
+
+    it("refuses a copy of another role when the target has global default privileges", async () => {
+      // Засів для ролі плану не діяв би на об'єкти, які створює роль копії:
+      // доказ тихо позеленів би, а на цілі `anon` читав би нові таблиці
+      const model = await compiled({ [PARTY]: party() })
+      await inTarget(EMPTY, async (url) => {
+        await other(
+          url,
+          "alter default privileges for role postgres grant select on tables to anon"
+        )
+        const outcome = await plan(url, model, otherCopyRole())
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["engine.clone-failed"])
+        expect(cloneFailure(outcome)).toContain(
+          `the target's environment cannot be reproduced by another role: objects on the copy are created by ${COPIER}, on the target by postgres`
+        )
+        expect(cloneFailure(outcome)).toContain(
+          "the target has them for postgres"
+        )
+      })
+    })
+
+    it("does not refuse a copy of another role when neither side has global default privileges", async () => {
+      // R7 відмовляє лише за глобальних ADP хоч з одного боку. Сам доказ від
+      // іншої ролі копії тут і без R7 не сходиться — права власника схем і
+      // таблиць іншої ролі двигун бачить як зайві гранти, — тож тест тримає
+      // лише те, що засів не додає своєї відмови
+      const model = await compiled({ [PARTY]: party() })
+      await inTarget(EMPTY, async (url) => {
+        const outcome = await plan(url, model, otherCopyRole())
+        expect(errors(outcome)).not.toContain("engine.clone-failed")
+      })
+    })
+
+    it("refuses a copy whose own role has global default privileges on it", async () => {
+      // Власний глобальний ADP ролі копії дав би об'єктам доказу права, яких
+      // на цілі не буде
+      const model = await compiled({ [PARTY]: party() })
+      await inTarget(EMPTY, async (url) => {
+        const outcome = await plan(
+          url,
+          model,
+          otherCopyRole(
+            `alter default privileges for role ${COPIER} grant select on tables to anon`
+          )
+        )
+        expect(errors(outcome)).toEqual(["engine.clone-failed"])
+        expect(cloneFailure(outcome)).toContain(
+          `the copy has them for ${COPIER}`
+        )
+      })
+    })
+
+    it("passes on the warnings of the collection copy", async () => {
+      const model = await compiled({ [PARTY]: party() })
+      const warning = {
+        code: "engine.unrepresentable" as const,
+        severity: "warning" as const,
+        message: "a warning of the collection copy",
+        params: {},
+      }
+      let clones = 0
+      // Попередження — лише від першої копії, тобто копії збору
+      const warns: SchemaEngine = {
+        ...engine,
+        withTargetClone: async (o, target, scope, fn) => {
+          const outcome = await engine.withTargetClone(o, target, scope, fn)
+          clones++
+          return clones === 1 && outcome.status === "loaded"
+            ? { ...outcome, diagnostics: [...outcome.diagnostics, warning] }
+            : outcome
+        },
+      }
+      await inTarget(EMPTY, async (url) => {
+        await other(
+          url,
+          "alter default privileges for role postgres revoke all on functions from public"
+        )
+        const outcome = await plan(url, model, warns)
+        planned(outcome)
+        expect(clones).toBe(2)
+        expect(outcome.diagnostics).toContainEqual(warning)
       })
     })
 

@@ -499,6 +499,7 @@ export async function buildPlan(
     artifact,
     diagnostics: dedupe([
       ...diagnostics,
+      ...collected.diagnostics,
       ...lockWarnings,
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
@@ -811,6 +812,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     artifact,
     diagnostics: dedupe([
       ...withClone,
+      ...collected.diagnostics,
       ...lockWarnings,
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
@@ -1268,6 +1270,15 @@ const environmentFailed = (reason?: string): EngineDiagnostic =>
  * нічого, тож звірка — транзакцією лише читання: писати в копію нічого. Збій
  * оператора (скажімо, роль сесії копії не член ролі плану) — так само
  * невідтворене середовище, а не стан цілі.
+ *
+ * Глобальний ADP діє лише на об'єкти, які створює його роль, а кроки на
+ * копії створює роль сесії копії (`shadowBase` — інший сервер з іншою роллю
+ * адміністрування). Тож за іншої ролі копії засів для ролі плану нічого б не
+ * дав, і доказ тихо позеленів би; так само власні глобальні ADP ролі копії
+ * дали б її об'єктам права, яких на цілі не буде (R7 плану П3-2b-0). Інша
+ * роль з глобальними ADP хоч з одного боку — гучна відмова, а без них —
+ * допустима, як і раніше. Засів «для ролі копії» з мапою одержувачів
+ * відхилено: друга мапа ролей розійшлася б із семантикою тихо.
  */
 async function seedEnvironment(
   dbs: PlanDatabases,
@@ -1277,6 +1288,29 @@ async function seedEnvironment(
 ): Promise<EngineDiagnostic[]> {
   const statements = renderGlobalDefaultPrivileges(role, privileges)
   try {
+    const copy = await dbs.reader.transaction(clone, "rollback", async (tx) => {
+      const [who] = await tx.query<{ role: string }>(
+        "SELECT current_user AS role"
+      )
+      if (who === undefined) throw new Error("current_user returned no row")
+      return {
+        role: who.role,
+        own:
+          who.role === role
+            ? []
+            : await readGlobalDefaultPrivileges(tx, who.role),
+      }
+    })
+    if (copy.role !== role && (privileges.length > 0 || copy.own.length > 0))
+      return [
+        environmentFailed(
+          `the target's environment cannot be reproduced by another role: objects on the copy are created by ${quoteIdent(copy.role)}, on the target by ${quoteIdent(role)}, and global default privileges apply only to objects of their own role (${
+            privileges.length > 0
+              ? `the target has them for ${quoteIdent(role)}`
+              : `the copy has them for ${quoteIdent(copy.role)}`
+          })`
+        ),
+      ]
     const seeded = await (
       statements.length === 0 ? dbs.reader : dbs.scratch
     ).transaction(
@@ -1306,6 +1340,8 @@ type EnvironmentResult =
       environment: { defaultPrivileges: GlobalDefaultPrivilege[] }
       /** Кроки `origin: "environment"` з id після кроків плану. */
       steps: PlanStep[]
+      /** Попередження порту копії збору; план їх дедуплікує з рештою. */
+      diagnostics: EngineDiagnostic[]
     }
   | { ok: false; diagnostics: EngineDiagnostic[] }
 
@@ -1339,7 +1375,7 @@ async function collectEnvironment(p: {
   )
   const environment = { defaultPrivileges }
   if (defaultPrivileges.length === 0)
-    return { ok: true, environment, steps: [] }
+    return { ok: true, environment, steps: [], diagnostics: [] }
 
   const outcome = await engine.withTargetClone(
     p.o,
@@ -1399,13 +1435,13 @@ async function collectEnvironment(p: {
         parse,
         offset
       ).map((s): PlanStep => ({ ...s, origin: "environment" }))
-      return { ok: true, environment, steps }
+      return { ok: true, environment, steps, diagnostics: [] }
     }
   )
   if (outcome.status === "shadow-failed")
     return { ok: false, diagnostics: outcome.diagnostics }
   return outcome.value.ok && !hasError(outcome.diagnostics)
-    ? outcome.value
+    ? { ...outcome.value, diagnostics: outcome.diagnostics }
     : {
         ok: false,
         diagnostics: [
