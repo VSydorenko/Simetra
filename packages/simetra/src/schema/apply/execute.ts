@@ -3,13 +3,18 @@ import {
   promotionRecordHash,
   type SqlParser,
 } from "simetra/compiler"
-import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
+import {
+  diffCatalogModels,
+  PROVIDER_API_ROLES,
+  quoteIdent,
+} from "simetra/model"
 import {
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
   PROVIDER_LOCKS,
   type DbConnection,
   type EngineDiagnostic,
   type EngineSetting,
+  type Extracted,
 } from "../engine"
 import {
   isAllowedSetting,
@@ -17,6 +22,7 @@ import {
   type PreservedTable,
 } from "./artifact"
 import { applyDiagnostic } from "./diagnostic"
+import { differencePaths } from "./drift"
 import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
 import {
   blindWarning,
@@ -565,7 +571,9 @@ async function runAttempt(
       objects: invalid.join("; "),
     })
 
-  // 17. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша база
+  // 17. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша
+  // база. На цілі розбіжність називає ще й шляхи моделі, поки зміни кроків
+  // живі; на копії доказу їх уже дає план «копія → тінь» у `prove()`
   const resultFingerprint = await readFingerprint(tx, plan.scope)
   const diverged = differing(plan.desiredFingerprint, resultFingerprint, {
     owner: false,
@@ -573,6 +581,7 @@ async function runAttempt(
   if (diverged.length > 0)
     throw stop("failed", "apply.verify-failed", {
       sections: diverged.join(", "),
+      ...(o.mode === "proof" ? {} : { paths: await divergedPaths(tx, plan) }),
     })
 
   // 19. Стан у тій самій транзакції. Marker отримує повний відбиток
@@ -604,6 +613,35 @@ async function runAttempt(
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
   return [...warnings, ...blindWarning(after.blind), ...gaps]
+}
+
+/**
+ * Шляхи розбіжності до відкату (рішення 6 плану П3-2b-1): витяг двигуна в
+ * тій самій транзакції проти `resultCatalog` доказу, з точним порядком
+ * колонок, як marker ↔ ціль, бо копія відтворює ціль. Збій витягу —
+ * будь-який, зокрема обрив, — лише текст параметра: розбіжність уже
+ * доведено відбитком, і відмова лишається `apply.verify-failed`, а
+ * `COMMIT` після неї не настає.
+ */
+async function divergedPaths(
+  tx: ApplyTransaction,
+  plan: ExecutablePlan
+): Promise<string> {
+  let extracted: Extracted
+  try {
+    extracted = await tx.extract(plan.scope)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return `(the diagnostic extract failed: ${message})`
+  }
+  const paths = differencePaths(
+    diffCatalogModels(plan.resultCatalog, extracted.model, {
+      columnOrder: true,
+    })
+  )
+  return paths.length === 0
+    ? "(the catalog model shows no difference)"
+    : paths.join(", ")
 }
 
 /**

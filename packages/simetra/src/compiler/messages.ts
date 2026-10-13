@@ -2291,9 +2291,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.verify-failed": {
     en: (p) =>
-      `After the plan steps the database does not match the desired state; catalog fingerprint sections: ${p.sections}. The transaction was rolled back`,
+      `After the plan steps the database does not match the desired state; catalog fingerprint sections: ${p.sections}${p.paths === undefined ? "" : `; differing catalog paths: ${p.paths}`}. The transaction was rolled back`,
     uk: (p) =>
-      `Після кроків плану база не відповідає бажаному стану; секції відбитка каталогу: ${p.sections}. Транзакцію відкочено`,
+      `Після кроків плану база не відповідає бажаному стану; секції відбитка каталогу: ${p.sections}${p.paths === undefined ? "" : `; шляхи розбіжності в каталозі: ${p.paths}`}. Транзакцію відкочено`,
     hint: {
       en: "Nothing was written. The proof of the plan did not hold on this database; plan again, and report the plan if the mismatch repeats.",
       uk: "Нічого не записано. Доказ плану не справдився на цій базі; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",

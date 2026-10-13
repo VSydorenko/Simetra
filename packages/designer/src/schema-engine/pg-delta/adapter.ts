@@ -52,6 +52,7 @@ import {
 } from "./census-facts"
 import { readExtensionComments } from "../extension-comments"
 import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
+import { closeSavepoint, savepointPool } from "../savepoint-pool"
 import { readRoutineVolatility } from "../routine-volatility"
 import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
@@ -535,6 +536,31 @@ async function extractFrom(
       readUnpopulatedViews(client, scope)
     ),
   }
+}
+
+/**
+ * Витяг на клієнті відкритої транзакції застосування (рішення 8 плану
+ * П3-2b-1): двигун читає в точці збереження під сторожем `savepointPool`.
+ * Точку, яку двигун лишив відкритою (виняток між його `BEGIN` і
+ * `ROLLBACK`), закриваємо самі, інакше транзакція раннера лишилась би в
+ * підтранзакції. Збій закриття після винятку витягу не підміняє причину:
+ * транзакцію однаково буде відкочено.
+ */
+export async function extractOnTransactionClient(
+  client: pg.PoolClient,
+  scope: EngineScope,
+  trace?: string[]
+): Promise<Extracted> {
+  const pool = savepointPool(client, await loadSqlParser(), trace)
+  let extracted: Extracted
+  try {
+    extracted = await extractFrom(pool, scope)
+  } catch (error) {
+    await closeSavepoint(pool).catch(() => {})
+    throw error
+  }
+  await closeSavepoint(pool)
+  return extracted
 }
 
 /** Помилки бажаного стану (засів, порожній SQL, завантаження) — не винятки, а результат. */

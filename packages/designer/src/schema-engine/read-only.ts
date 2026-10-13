@@ -191,17 +191,27 @@ export function vetTargetQuery(
  * бути всередині хвостового коментаря.
  */
 function afterBeginKeyword(text: string, start: number): number {
-  const rest = text.slice(start)
-  const lead = /^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/.exec(rest)![0]
+  const from = statementStart(text, start)
   const keyword =
     /^(?:begin(?:\s+(?:work|transaction)\b)?|start\s+transaction)\b/i.exec(
-      rest.slice(lead.length)
+      text.slice(from)
     )
   if (keyword === null) throw new Error("transaction start without its keyword")
-  return start + lead.length + keyword[0].length
+  return from + keyword[0].length
 }
 
-function textOf(query: unknown): string | undefined {
+/**
+ * Перше ключове слово оператора: `start` парсера вказує одразу за `;`
+ * попереднього, тож охоплює пробіли й коментарі перед оператором.
+ */
+export function statementStart(text: string, start: number): number {
+  const lead = /^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/.exec(
+    text.slice(start)
+  )![0]
+  return start + lead.length
+}
+
+export function textOf(query: unknown): string | undefined {
   if (typeof query === "string") return query
   if (typeof query === "object" && query !== null && "text" in query) {
     const text = (query as { text: unknown }).text
@@ -210,7 +220,7 @@ function textOf(query: unknown): string | undefined {
   return undefined
 }
 
-function withText(args: unknown[], text: string): unknown[] {
+export function withText(args: unknown[], text: string): unknown[] {
   const [query, ...rest] = args
   return [
     typeof query === "string" ? text : { ...(query as object), text },
@@ -218,7 +228,18 @@ function withText(args: unknown[], text: string): unknown[] {
   ]
 }
 
-type RawQuery = (...args: unknown[]) => unknown
+export type RawQuery = (...args: unknown[]) => unknown
+
+/**
+ * Відмова сторожа у формі виклику: з колбеком, як у `pg`, помилка йде в
+ * колбек, а не відхиленим промісом, якого ніхто не чекає.
+ */
+export function refuseQuery(args: unknown[], error: Error): unknown {
+  const callback = args[args.length - 1]
+  if (typeof callback !== "function") return Promise.reject(error)
+  process.nextTick(() => callback(error))
+  return undefined
+}
 
 const guarded = new WeakSet<pg.PoolClient>()
 
@@ -233,19 +254,11 @@ export function guard(client: pg.PoolClient, parse: SqlParser): pg.PoolClient {
   guarded.add(client)
   const query = client.query.bind(client) as RawQuery
   let inTransaction = false
-  const refuse = (args: unknown[], error: Error): unknown => {
-    // Форма з колбеком, як у `pg`: помилка йде в колбек, а не відхиленим
-    // промісом, якого ніхто не чекає
-    const callback = args[args.length - 1]
-    if (typeof callback !== "function") return Promise.reject(error)
-    process.nextTick(() => callback(error))
-    return undefined
-  }
   const checked: RawQuery = (...args) => {
     const text = textOf(args[0])
-    if (text === undefined) return refuse(args, new Error(OUTSIDE))
+    if (text === undefined) return refuseQuery(args, new Error(OUTSIDE))
     const vetted = vetTargetQuery(text, inTransaction, parse)
-    if (!vetted.ok) return refuse(args, new Error(vetted.reason))
+    if (!vetted.ok) return refuseQuery(args, new Error(vetted.reason))
     inTransaction = vetted.inTransaction
     // Стан оновлено до відповіді сервера. Якщо сервер відхилив оператор, який
     // ми порахували за `BEGIN`, він лишився в autocommit, а ми вважали б

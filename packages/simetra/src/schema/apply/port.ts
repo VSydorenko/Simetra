@@ -1,4 +1,4 @@
-import type { DbConnection } from "../engine"
+import type { DbConnection, EngineScope, Extracted } from "../engine"
 
 /**
  * Помилка оператора з SQLSTATE: з'єднання живе, транзакція відкочена. Клас
@@ -33,6 +33,15 @@ export interface ApplyTransaction {
     sql: string,
     params?: readonly unknown[]
   ): Promise<R[]>
+  /**
+   * Витяг двигуна з цієї транзакції: бачить її незакомічені зміни. Двигун
+   * читає в точці збереження, яку закриває відкатом, тож після виклику ні
+   * налаштувань, ні об'єктів, ні замків, узятих витягом, у транзакції не
+   * лишається, а сама вона придатна далі. Ізоляція — транзакції
+   * (`READ COMMITTED`), а не `REPEATABLE READ`, якого чекає двигун: чужа DDL
+   * поза замками плану між запитами витягу може дати неузгоджений знімок.
+   */
+  extract(scope: EngineScope): Promise<Extracted>
 }
 
 /**

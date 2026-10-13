@@ -253,6 +253,7 @@ const readerWithoutPlpgsqlCheck: ApplyDatabase = {
   transaction: (target, end, fn) =>
     dbs.reader.transaction(target, end, (tx) =>
       fn({
+        ...tx,
         query: async <R extends Record<string, unknown>>(
           sql: string,
           params?: readonly unknown[]
@@ -347,6 +348,7 @@ describe("buildPlan", () => {
         transaction: (target, end, fn) =>
           dbs.reader.transaction(target, end, (tx) =>
             fn({
+              ...tx,
               query: async <R extends Record<string, unknown>>(
                 sql: string,
                 params?: readonly unknown[]
@@ -1492,6 +1494,8 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
           dbs.scratch.transaction(db, end, () =>
             fn({
               query: () =>
+                Promise.reject(new ApplyConnectionLost("connection lost")),
+              extract: () =>
                 Promise.reject(new ApplyConnectionLost("connection lost")),
             })
           ),

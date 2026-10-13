@@ -9,6 +9,7 @@ import {
   type CatalogFingerprint,
   type ExecutablePlan,
   type ExecuteOptions,
+  type Extracted,
   type FingerprintSection,
   type GlobalDefaultPrivilege,
   type PlanStep,
@@ -184,6 +185,10 @@ interface Script {
   ledgerFormat?: number
   /** Секції відбитка цілі до кроків; типово `TARGET`. */
   targetSections?: CatalogFingerprint["sections"]
+  /** Секції відбитка після кроків; типово `DESIRED`. */
+  resultSections?: CatalogFingerprint["sections"]
+  /** Діагностичний витяг у транзакції; типово фейк витягу не має. */
+  extract?: () => Promise<Extracted>
   /** Таблиці до кроків і замки сесії для звірки сліду. */
   existing?: {
     oid: string
@@ -394,12 +399,19 @@ function fakeDb(script: Script = {}) {
                                               : sql.includes("encode(sha256")
                                                 ? [
                                                     stepsRan
-                                                      ? DESIRED.sections
+                                                      ? (script.resultSections ??
+                                                        DESIRED.sections)
                                                       : (script.targetSections ??
                                                         TARGET.sections),
                                                   ]
                                                 : []
           return rows as R[]
+        },
+        extract: async (): Promise<Extracted> => {
+          log.push("extract")
+          if (script.extract === undefined)
+            throw new Error("the fake has no extract")
+          return script.extract()
         },
       }
       try {
@@ -471,6 +483,7 @@ describe("executePlan", () => {
       transaction: (t, end, fn) =>
         db.transaction(t, end, (tx) =>
           fn({
+            ...tx,
             query: (sql, p) => {
               calls.push({ sql, params: p })
               return tx.query(sql, p)
@@ -1358,6 +1371,108 @@ describe("executePlan", () => {
     expect(log.filter((l) => l === "fingerprint")).toHaveLength(2)
   })
 
+  it("names the differing catalog paths before it rolls back", async () => {
+    const enums = Array.from({ length: 21 }, (_, i) => ({
+      schema: "app",
+      name: `e${String(i).padStart(2, "0")}`,
+      values: [],
+    }))
+    const extracted = (enumTypes: typeof enums): Extracted =>
+      ({
+        model: { tables: [], enumTypes, units: [] },
+        catalog: {},
+        diagnostics: [],
+        unpopulated: [],
+      }) as unknown as Extracted
+    const diverging = { ...DESIRED.sections, relations: "other" }
+    for (const mode of ["apply", "rehearse"] as const) {
+      const { db, log } = fakeDb({
+        resultSections: diverging,
+        extract: async () => extracted(enums.slice(0, 2)),
+      })
+      expect(
+        await executePlan(db, target, plan, { ...options, mode })
+      ).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.verify-failed",
+            params: {
+              sections: "relations",
+              paths: "enumTypes.app.e00, enumTypes.app.e01",
+            },
+          },
+        ],
+      })
+      expect(log.slice(-2)).toEqual(["extract", "ROLLBACK"])
+    }
+    const many = await executePlan(
+      fakeDb({
+        resultSections: diverging,
+        extract: async () => extracted(enums),
+      }).db,
+      target,
+      plan,
+      options
+    )
+    const paths = String(many.diagnostics[0]!.params.paths).split(", ")
+    expect(paths).toHaveLength(21)
+    expect(paths.at(-2)).toBe("enumTypes.app.e19")
+    expect(paths.at(-1)).toBe("…")
+    const same = await executePlan(
+      fakeDb({ resultSections: diverging, extract: async () => extracted([]) })
+        .db,
+      target,
+      plan,
+      options
+    )
+    expect(same.diagnostics[0]!.params.paths).toBe(
+      "(the catalog model shows no difference)"
+    )
+  })
+
+  it("keeps verify-failed when the diagnostic extract fails", async () => {
+    const outcome = await executePlan(
+      fakeDb({
+        resultSections: { ...DESIRED.sections, relations: "other" },
+        extract: () => Promise.reject(new Error("engine broke")),
+      }).db,
+      target,
+      plan,
+      options
+    )
+    expect(outcome).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        {
+          code: "apply.verify-failed",
+          params: {
+            sections: "relations",
+            paths: "(the diagnostic extract failed: engine broke)",
+          },
+        },
+      ],
+    })
+  })
+
+  it("does not extract on the proof copy", async () => {
+    const { db, log } = fakeDb({
+      resultSections: { ...DESIRED.sections, relations: "other" },
+    })
+    const outcome = await executePlan(db, target, plan, {
+      ...options,
+      mode: "proof",
+      planHash: "proof",
+    })
+    expect(outcome.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "apply.verify-failed",
+        params: { sections: "relations" },
+      }),
+    ])
+    expect(log).not.toContain("extract")
+  })
+
   it("accepts an invalid object the desired state has", async () => {
     const { db } = fakeDb({ invalid: ["index app.i"] })
     const outcome = await executePlan(
@@ -1758,6 +1873,7 @@ describe("executePlan", () => {
       transaction: (t, end, fn) =>
         db.transaction(t, end, (tx) =>
           fn({
+            ...tx,
             query: (sql, p) => {
               sqls.push(sql)
               return tx.query(sql, p)

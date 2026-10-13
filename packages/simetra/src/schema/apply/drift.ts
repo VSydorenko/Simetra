@@ -1,4 +1,8 @@
-import { diffCatalogModels, type CatalogModel } from "simetra/model"
+import {
+  diffCatalogModels,
+  type CatalogDifference,
+  type CatalogModel,
+} from "simetra/model"
 import type { EngineDiagnostic, EngineIdentity } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
 import {
@@ -42,8 +46,18 @@ export type DriftVerdict =
   /** Лише пошкоджений стан: його лагодять вручну, а не дозволом. */
   | { ok: false; diagnostics: EngineDiagnostic[] }
 
-/** Скільки шляхів дрейфу називають звіт і діагностика; решту дає лише `count`. */
+/** Скільки шляхів розбіжності називають звіт і діагностика; решту дає лише `count`. */
 const DRIFT_PATH_LIMIT = 20
+
+/** Перші `DRIFT_PATH_LIMIT` шляхів розбіжності, далі `…`, якщо є ще. */
+export function differencePaths(
+  differences: readonly CatalogDifference[]
+): string[] {
+  return differences
+    .slice(0, DRIFT_PATH_LIMIT)
+    .map((d) => d.path)
+    .concat(differences.length > DRIFT_PATH_LIMIT ? ["…"] : [])
+}
 
 const engineLabel = (engine: EngineIdentity): string =>
   `${engine.name} ${engine.version}`
@@ -119,10 +133,7 @@ export function driftGate(
     : []
   if (sections.length === 0 && differences.length === 0)
     return { ok: true, fromHash, drift: null, diagnostics }
-  const paths = differences
-    .slice(0, DRIFT_PATH_LIMIT)
-    .map((d) => d.path)
-    .concat(differences.length > DRIFT_PATH_LIMIT ? ["…"] : [])
+  const paths = differencePaths(differences)
   return {
     ok: true,
     fromHash,

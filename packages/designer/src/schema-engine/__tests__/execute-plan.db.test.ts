@@ -1539,6 +1539,28 @@ describe("executePlan", () => {
     })
   })
 
+  it("names the differing catalog paths before it rolls back", async () => {
+    await inTarget(BASE, async (url) => {
+      // Хибний бажаний відбиток (ціль до кроку) і модель результату без
+      // колонки, яку створює крок: розбіжність називає саме її шлях
+      const before = await read(url)
+      const resultCatalog = (await engine.extract({ url }, desired.scope)).model
+      const plan = await planFor(url, [ALTER_T], {
+        desiredFingerprint: before,
+        resultCatalog,
+      })
+      const outcome = await executePlan(apply, { url }, plan, options)
+      expect(outcome).toMatchObject({ status: "failed" })
+      expect(codes(outcome)).toEqual(["apply.verify-failed"])
+      expect(outcome.diagnostics[0]!.params).toEqual({
+        sections: "columns",
+        paths: "tables.app.t.columns.d",
+      })
+      expect(await read(url)).toEqual(before)
+      expect(await marker(url)).toBeUndefined()
+    })
+  })
+
   it("reports applied after a connection loss at COMMIT", async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [CREATE_N])
@@ -1637,6 +1659,9 @@ describe("executePlan", () => {
                   : new ApplyDbError(message, code)
               }
             },
+            // Спроба цього порту доходить до кінця без розбіжності відбитка
+            extract: () =>
+              Promise.reject(new Error("this port does not extract")),
           })
           pending = then(client, row!.pid)
           throw new ApplyConnectionLost("Connection terminated unexpectedly")

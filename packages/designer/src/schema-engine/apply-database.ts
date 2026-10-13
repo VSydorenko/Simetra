@@ -5,6 +5,7 @@ import {
   type ApplyDatabase,
   type ApplyTransaction,
 } from "simetra/schema"
+import { extractOnTransactionClient } from "./pg-delta/adapter"
 
 /**
  * Збій транспорту без SQLSTATE, який кидає сам драйвер `pg`: сокет закрито,
@@ -68,24 +69,34 @@ export function createApplyDatabase(o: { readOnly: boolean }): ApplyDatabase {
         // без нього був би необробленою подією; причина йде через запит
         client.on("error", () => {})
         let lost = false
-        const run = async (
-          sql: string,
-          params?: readonly unknown[]
-        ): Promise<Record<string, unknown>[]> => {
+        /** Помилку драйвера — у помилку порту; обрив позначає з'єднання втраченим. */
+        const guarded = async <T>(call: () => Promise<T>): Promise<T> => {
           try {
-            const result = await client.query(sql, params as unknown[])
-            return result.rows as Record<string, unknown>[]
+            return await call()
           } catch (error) {
             const normalized = normalize(error)
             if (normalized instanceof ApplyConnectionLost) lost = true
             throw normalized
           }
         }
+        const run = (
+          sql: string,
+          params?: readonly unknown[]
+        ): Promise<Record<string, unknown>[]> =>
+          guarded(
+            async () =>
+              (await client.query(sql, params as unknown[])).rows as Record<
+                string,
+                unknown
+              >[]
+          )
         const tx: ApplyTransaction = {
           query: async <R extends Record<string, unknown>>(
             sql: string,
             params?: readonly unknown[]
           ) => (await run(sql, params)) as R[],
+          extract: (scope) =>
+            guarded(() => extractOnTransactionClient(client, scope)),
         }
         try {
           // Ізоляція — явно, не з налаштувань бази: кожен оператор бачить

@@ -103,6 +103,7 @@ function fakeTx(
         log.push({ sql, params })
         return answer(sql, params) as R[]
       },
+      extract: () => Promise.reject(new Error("the fake does not extract")),
     },
   }
 }
