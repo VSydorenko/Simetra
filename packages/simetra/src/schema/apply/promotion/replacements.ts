@@ -1,11 +1,13 @@
 import type { Node } from "libpg-query"
 import {
+  uniqueDifferences,
   unitSubjectKeys,
   valueAt,
   type CompiledModel,
   type PromotionObject,
   type PromotionRecord,
   type SqlParser,
+  type UniqueShape,
 } from "simetra/compiler"
 import {
   KIND_REGISTRY,
@@ -236,6 +238,7 @@ export function propertyReproductions(p: {
   record: PromotionRecord
   cloneEquivalence: readonly EquivalenceObject[]
   shadowEquivalence: readonly EquivalenceObject[]
+  parse: SqlParser
 }): EngineDiagnostic[] {
   const c = { shadow: p.shadowEquivalence }
   const refusals: EngineDiagnostic[] = []
@@ -251,7 +254,7 @@ export function propertyReproductions(p: {
         applyDiagnostic("plan.property-not-reproduced", "error", {
           subject: conversion.subject,
           object: describe(o),
-          detail: closestDifference(adopted, c.shadow),
+          detail: closestDifference(adopted, c.shadow, p.parse),
         })
       )
     }
@@ -310,11 +313,14 @@ const CONSTRAINT_PARTS = ["type", "definition"] as const
  * Чим найближчий елемент того самого виду на таблиці тіні відрізняється від
  * прийнятого — лише для повідомлення, вердикт дає `equivalent`. Найближчий —
  * з найменшою кількістю різних частин, далі з найдовшим спільним початком
- * ключа.
+ * ключа. Два UNIQUE порівнюються полями `uniqueDifferences` — тими самими, що
+ * й у гейті `promote` (`promote.property-not-equivalent`), а не цілим рядком
+ * `pg_get_constraintdef`.
  */
 function closestDifference(
   adopted: EquivalenceObject,
-  shadow: readonly EquivalenceObject[]
+  shadow: readonly EquivalenceObject[],
+  parse: SqlParser
 ): string {
   const names: readonly string[] =
     adopted.kind === "index" ? INDEX_PARTS : CONSTRAINT_PARTS
@@ -338,11 +344,13 @@ function closestDifference(
     )
     .map((s) => {
       const now = JSON.parse(s.key) as unknown[]
-      const fields = names.flatMap((field, i) =>
-        show(was[i]) === show(now[i])
-          ? []
-          : [`${field}: ${show(was[i])} → ${show(now[i])}`]
-      )
+      const fields =
+        uniqueFields(adopted, s, parse) ??
+        names.flatMap((field, i) =>
+          show(was[i]) === show(now[i])
+            ? []
+            : [`${field}: ${show(was[i])} → ${show(now[i])}`]
+        )
       return { fields, prefix: common(adopted.key, s.key) }
     })
     .sort((a, b) => a.fields.length - b.fields.length || b.prefix - a.prefix)
@@ -350,6 +358,45 @@ function closestDifference(
   return closest === undefined
     ? "no element of this kind on the table in the desired state"
     : closest.fields.join("; ")
+}
+
+/**
+ * Різні поля двох UNIQUE за `uniqueDifferences`. `undefined` — не пара
+ * UNIQUE, визначення не розбирається або поля рівні, а різниця в тому, чого
+ * форма UNIQUE не несе (скажімо, `INCLUDE`): тоді діє порівняння частин ключа.
+ */
+function uniqueFields(
+  adopted: EquivalenceObject,
+  shadow: EquivalenceObject,
+  parse: SqlParser
+): string[] | undefined {
+  const was = uniqueShape(adopted, parse)
+  const now = uniqueShape(shadow, parse)
+  if (was === undefined || now === undefined) return undefined
+  const found = uniqueDifferences(was, now)
+  return found.length === 0
+    ? undefined
+    : found.map((d) => `${d.field}: ${d.was} → ${d.now}`)
+}
+
+/** Форма UNIQUE з дерева визначення; інше обмеження — `undefined`. */
+function uniqueShape(
+  o: EquivalenceObject,
+  parse: SqlParser
+): UniqueShape | undefined {
+  if (o.kind !== "constraint" || parts(o)[0] !== "u") return undefined
+  const node = constraintNode(definition(o), parse)
+  if (node?.contype !== "CONSTR_UNIQUE") return undefined
+  return {
+    columns: strings(node.keys),
+    nullsNotDistinct: node.nulls_not_distinct ?? false,
+    deferrable:
+      node.deferrable !== true
+        ? "no"
+        : node.initdeferred === true
+          ? "initiallyDeferred"
+          : "deferrable",
+  }
 }
 
 /** Об'єкт запису для повідомлення — у старих іменах, як у записі. */

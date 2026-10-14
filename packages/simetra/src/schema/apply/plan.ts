@@ -713,6 +713,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       record,
       cloneEquivalence: analysis.equivalence,
       shadowEquivalence: target.equivalence,
+      parse,
     }),
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])

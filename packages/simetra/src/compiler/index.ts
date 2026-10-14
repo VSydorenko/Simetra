@@ -99,6 +99,7 @@ export {
   renameElement,
   renameInput,
   resolveTarget,
+  uniqueDifferences,
   type AddElementInput,
   type CompletionOptions,
   type ContainerTarget,
@@ -107,6 +108,7 @@ export {
   type DeleteInput,
   type DerivedFacts,
   type ElementTarget,
+  type FieldDifference,
   type FileChange,
   type IdSource,
   type OperationResult,
@@ -119,5 +121,6 @@ export {
   type RenameInput,
   type ResolvedTarget,
   type SchemaPathResolver,
+  type UniqueShape,
 } from "./operations"
 export { explainObject, type Explanation } from "./explain"

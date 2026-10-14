@@ -33,6 +33,11 @@ export {
 } from "./inputs"
 export { promoteObject } from "./promote"
 export {
+  uniqueDifferences,
+  type FieldDifference,
+  type UniqueShape,
+} from "./promote/mapping"
+export {
   PROMOTION_RECORD_FORMAT,
   derivePromotionFacts,
   promotionFileName,

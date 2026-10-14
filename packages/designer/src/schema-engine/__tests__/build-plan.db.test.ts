@@ -2835,8 +2835,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           {
             subject: SUBJECT,
             object: OBJECT,
-            detail:
-              "definition: UNIQUE (tax_id) DEFERRABLE INITIALLY DEFERRED → UNIQUE (tax_id)",
+            detail: "deferrable: initiallyDeferred → no",
           },
         ])
       })

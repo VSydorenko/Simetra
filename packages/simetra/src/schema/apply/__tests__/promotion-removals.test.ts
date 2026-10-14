@@ -2091,6 +2091,7 @@ describe("propertyReproductions", () => {
       record: record({ ...RENAMED, conversions }),
       cloneEquivalence: clone,
       shadowEquivalence: shadow,
+      parse,
     })
 
   const refused = (out: ReturnType<typeof gate>) =>
@@ -2123,10 +2124,33 @@ describe("propertyReproductions", () => {
         {
           subject: "subject-property",
           object: "constraint app.items.items_code_key",
-          detail:
-            "definition: UNIQUE (code) DEFERRABLE INITIALLY DEFERRED → UNIQUE (code)",
+          // Поля, як у гейті `promote`, а не цілий рядок визначення
+          detail: "deferrable: initiallyDeferred → no",
         },
       ],
+    ])
+  })
+
+  it("names every differing field of a unique, not the whole definition", () => {
+    const out = gate(
+      [conversion("property", constraint("items_code_key"))],
+      [unique("items_code_key", "UNIQUE NULLS NOT DISTINCT (code) DEFERRABLE")],
+      [unique("item_code_key", "UNIQUE (code, title)")]
+    )
+    expect(out.map((d) => d.params?.detail)).toEqual([
+      "columns: code → code, title; nullsNotDistinct: true → false; deferrable: deferrable → no",
+    ])
+  })
+
+  it("falls back to the definition when the unique fields are equal", () => {
+    // `INCLUDE` форма UNIQUE не несе: різницю називає рядок визначення
+    const out = gate(
+      [conversion("property", constraint("items_code_key"))],
+      [unique("items_code_key", "UNIQUE (code) INCLUDE (title)")],
+      [unique("item_code_key", "UNIQUE (code)")]
+    )
+    expect(out.map((d) => d.params?.detail)).toEqual([
+      "definition: UNIQUE (code) INCLUDE (title) → UNIQUE (code)",
     ])
   })
 
