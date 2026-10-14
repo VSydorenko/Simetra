@@ -34,6 +34,11 @@ import {
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
+import {
+  DATA_STEP_KINDS,
+  DATA_TRIGGER_MODES,
+  type DataTable,
+} from "./promotion/data"
 import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**
@@ -59,9 +64,15 @@ export interface PreservedTable {
   key: { before: string; after: string }
   /**
    * SQL-вирази колонки до й після; `typeChangeStep` — id кроку зміни типу,
-   * що його розбіжність називає `apply.type-narrowing`.
+   * що його розбіжність називає `apply.type-narrowing`; `dataStep` — крок
+   * даних, чий вираз міряє «до» (рішення 8 плану П3-2b-2).
    */
-  columns: { before: string; after: string; typeChangeStep?: string }[]
+  columns: {
+    before: string
+    after: string
+    typeChangeStep?: string
+    dataStep?: string
+  }[]
 }
 
 /** Вид канонічного імені, яке намір повертає підоб'єкту таблиці. */
@@ -82,7 +93,7 @@ export interface PromotionSection {
   /** `promotionRecordHash(record)`: те, що ledger запам'ятає як застосоване. */
   recordHash: string
   record: PromotionRecord
-  /** Пункти `access:`, `delete:`, `remove:` з тим, що людина переглядає. */
+  /** Пункти `access:`, `delete:`, `remove:`, `repair:` з тим, що людина переглядає. */
   permissionItems: PermissionItem[]
   preservation: PreservedTable[]
   /**
@@ -100,6 +111,11 @@ export interface PromotionSection {
   }[]
   /** Id кроку → клас конверсії: лише для показу біля кроку. */
   conversions: { step: string; class: ConversionClass }[]
+  /**
+   * Кроки даних за таблицями (рішення 2 плану П3-2b-2): раннер рендерить
+   * їхній SQL з цих полів. Порожньо — у записі кроків даних немає.
+   */
+  data: DataTable[]
 }
 
 /**
@@ -226,6 +242,7 @@ const promotionSectionSchema = z.strictObject({
           before: z.string(),
           after: z.string(),
           typeChangeStep: z.string().optional(),
+          dataStep: z.string().optional(),
         })
       ),
     })
@@ -247,6 +264,37 @@ const promotionSectionSchema = z.strictObject({
   ),
   conversions: z.array(
     z.strictObject({ step: z.string(), class: conversionClass })
+  ),
+  data: z.array(
+    z.strictObject({
+      temp: z.string(),
+      before: z.strictObject({
+        schema: z.string(),
+        table: z.string(),
+        key: z.string(),
+      }),
+      after: z.strictObject({
+        schema: z.string(),
+        table: z.string(),
+        key: z.string(),
+      }),
+      columns: z.array(
+        z.strictObject({
+          step: z.string(),
+          column: z.string(),
+          type: z.string(),
+          expression: z.string(),
+          kind: z.enum(DATA_STEP_KINDS),
+          guard: z.string(),
+        })
+      ),
+      triggers: z.array(
+        z.strictObject({
+          name: z.string(),
+          enabled: z.enum(DATA_TRIGGER_MODES),
+        })
+      ),
+    })
   ),
 })
 

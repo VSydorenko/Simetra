@@ -8,6 +8,7 @@ import { quoteIdent, type CatalogModel, type CatalogUnit } from "simetra/model"
 import type { ApplyTransaction } from "../port"
 import { comparePermissionItems, type PermissionItem } from "../steps"
 import { tableKey } from "../table-key"
+import type { DataTable } from "./data"
 import type { RenameIntent } from "./intent"
 import type { Removal } from "./removals"
 
@@ -211,12 +212,16 @@ export async function readAccessDependents(
  *   час виявлення переходу, вхідні — тільки виведені;
  * - `remove:<таблиця>` — на таблицю, де щось видаляється з класом
  *   `removed`: крок такого видалення буває `catalogOnly` і дозволу сам не
- *   просить. Один пункт на таблицю — переглядається перелік.
+ *   просить. Один пункт на таблицю — переглядається перелік;
+ * - `repair:<таблиця>` — на таблицю з ремонтом (рішення 3 плану П3-2b-2):
+ *   кожна ремонтована колонка з виразом. Конверсія, розщеплення й
+ *   дозаповнення наявних значень не змінюють, тож дозволу не просять.
  */
 export function promotionPermissionItems(
   access: readonly AccessChange[],
   deleteSemantics: PromotionFacts["deleteSemantics"],
-  removals: readonly Removal[]
+  removals: readonly Removal[],
+  data: readonly Pick<DataTable, "after" | "columns">[]
 ): PermissionItem[] {
   const items = new Map<string, string[]>()
   const add = (token: string, summary: readonly string[]) =>
@@ -249,6 +254,12 @@ export function promotionPermissionItems(
     if (r.covered === "removed")
       for (const t of r.tables)
         add(`remove:${qualified(t.schema, t.name)}`, [r.path])
+  for (const t of data)
+    for (const c of t.columns)
+      if (c.kind === "repair")
+        add(`repair:${qualified(t.after.schema, t.after.table)}`, [
+          `${quoteIdent(c.column)} ← ${c.expression}`,
+        ])
   return [...items]
     .map(([token, summary]) => ({ token, summary }))
     .sort(comparePermissionItems)

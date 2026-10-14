@@ -22,7 +22,7 @@ import type {
 import { applyDiagnostic } from "../diagnostic"
 import { stepId, type PlanStep } from "../steps"
 import { tableKey } from "../table-key"
-import type { RenameIntent } from "./intent"
+import { addedColumns, type RenameIntent } from "./intent"
 
 /**
  * Чим покрите видалення (рішення 7 плану П3-2a): клас конверсії з запису,
@@ -437,7 +437,12 @@ function tableRemovals(
       covered: object({ kind: "comment", schema: u.schema, table: u.old }),
     })
 
+  // Колонку цілі кроку даних додав сам намір (рішення 1 плану П3-2b-2):
+  // вона не прийнята, тож її `NOT NULL` і значення за замовчуванням від
+  // двигуна — не перевизначення прийнятого
+  const added = new Set(addedColumns(record, u.schema, u.old))
   for (const c of from.columns) {
+    if (added.has(c.name)) continue
     const target = to.columns.find((d) => d.name === c.name)
     const old = oldColumn(c.name)
     if (target === undefined) {

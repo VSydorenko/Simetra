@@ -228,6 +228,7 @@ describe("apply with an unknown outcome", () => {
       columns: [],
       canonicalNames: [],
       conversions: [],
+      data: [],
     }
     const apply = async (allow?: string[]) => {
       const dir = await project()

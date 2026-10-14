@@ -153,6 +153,7 @@ const promoted: ExecutablePlan = {
     columns: [],
     canonicalNames: [],
     conversions: [],
+    data: [],
   },
 }
 

@@ -414,6 +414,7 @@ describe("readAppliedPromotions", () => {
             columns: [],
             canonicalNames: [],
             conversions: [],
+            data: [],
           },
         },
         {

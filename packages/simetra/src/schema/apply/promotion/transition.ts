@@ -274,7 +274,6 @@ async function reconcile(
     diagnostics.push(
       error("plan.promotion-unsupported", { objectId, file, reason, ...extra })
     )
-  if (record.dataSteps.length > 0) unsupported("dataSteps")
   if (record.labelTranslation !== undefined) unsupported("labelTranslation")
   // Збереження значень рахується за первинним ключем «до» (рішення 6):
   // хеш мультимножини без ключа не доводить, що значення лишились у рядках.

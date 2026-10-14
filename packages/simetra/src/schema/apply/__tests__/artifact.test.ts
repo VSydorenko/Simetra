@@ -144,6 +144,7 @@ const PROMOTION = (): NonNullable<PlanArtifact["promotion"]> => ({
     },
   ],
   conversions: [{ step: "s1", class: "removed" }],
+  data: [],
 })
 
 const withPromotion = (): Omit<PlanArtifact, "planHash"> => ({

@@ -79,7 +79,12 @@ import {
   accessChanges,
   adoptedReplacements,
   canonicalRenames,
+  castGuardForms,
   classifyRemovals,
+  dataFactRefusals,
+  dataPlan,
+  dataStepRefusals,
+  dataTableStep,
   foreignSequenceRefusals,
   platformReplacements,
   propertyReproductions,
@@ -87,6 +92,7 @@ import {
   promotionPermissionItems,
   promotionTransition,
   readAccessDependents,
+  readDataFacts,
   readEquivalenceObjects,
   readReservedNames,
   readWritePath,
@@ -96,8 +102,11 @@ import {
   unrealizedRenames,
   valueElementColumns,
   withTempNames,
+  withTriggers,
   type CanonicalRename,
+  type DataOrigin,
   type EquivalenceObject,
+  type PlannedDataTable,
   type PromotionInput,
   type RenameIntent,
   type TransitionVerdict,
@@ -457,6 +466,7 @@ export async function buildPlan(
     steps,
     parse,
     promotion: false,
+    data: [],
     models: {
       source: live.extracted.model,
       desired: target.extracted.model,
@@ -655,6 +665,34 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ])
 
   const parse = await loadSqlParser()
+
+  // Секція кроків даних (рішення 2, 4 плану П3-2b-2): звірка запису й межі
+  // кроку — чисто, одразу після наміру. Факти цілі — окремою транзакцією
+  // READ ONLY до копії: тип, якого на цілі немає, інакше впав би сирим
+  // `42704` на `ADD COLUMN` наміру вже на копії
+  const origin: DataOrigin = { objectId: record.objectId, file: c.file }
+  const data = dataPlan({
+    record,
+    file: c.file,
+    source: { tables: promotion.source },
+    desired: c.model,
+    parse,
+  })
+  if ("refusal" in data)
+    return refused(dedupe([...diagnostics, ...data.refusal]))
+  const facts =
+    data.tables.length === 0
+      ? undefined
+      : await dbs.reader.transaction(o.target, "rollback", (tx) =>
+          readDataFacts(tx, data.tables, parse, data.sources)
+        )
+  const factRefusals =
+    facts === undefined
+      ? []
+      : dataFactRefusals(data.tables, facts, c.targetOwners.session, origin)
+  if (factRefusals.length > 0)
+    return refused(dedupe([...diagnostics, ...factRefusals]))
+
   const cloned = await engine.withTargetClone(
     o,
     live.extracted,
@@ -671,6 +709,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
         shadowEquivalence: target.equivalence,
         desired: target.extracted.catalog,
         optionsFrom: live.extracted.catalog,
+        data: data.tables,
+        origin,
         parse,
       })
   )
@@ -684,6 +724,15 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   ])
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
   const { steps: planSteps, model: cloneModel } = analysis
+
+  // Типи й функції моделі, які створює, змінює чи знищує крок плану, — лише
+  // за кроками двигуна (рішення 4, 5): обчислення йде до них
+  const stepRefusals = dataStepRefusals(analysis.data, planSteps, parse, origin)
+  if (stepRefusals.length > 0) return refused([...withClone, ...stepRefusals])
+  const dataSection = withTriggers(
+    analysis.data,
+    facts ?? { triggers: new Map() }
+  )
 
   // Класи видалень і нереалізовані перейменування — копія після наміру
   // проти бажаної тіні (рішення 2, 7)
@@ -763,7 +812,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   const permissionItems = promotionPermissionItems(
     access,
     promotion.facts.deleteSemantics,
-    removals
+    removals,
+    dataSection
   )
   // Слід кроків двигуна — від копії після наміру, у нових іменах, і
   // перекладається в старі (R26)
@@ -783,6 +833,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     steps,
     parse,
     promotion: true,
+    data: dataSection,
     models: {
       source: cloneModel,
       desired: target.extracted.model,
@@ -808,7 +859,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       record,
       analysis.intent,
       { tables: promotion.source },
-      typeChangeSteps
+      typeChangeSteps,
+      dataSection
     ),
     columns: analysis.intent.columns,
     canonicalNames: analysis.canonicalNames,
@@ -816,6 +868,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     conversions: [
       ...stepConversions(steps, record, analysis.intent, parse),
     ].map(([step, cls]) => ({ step, class: cls })),
+    data: dataSection,
   }
   const permissions = requiredPermissions({
     steps,
@@ -942,6 +995,8 @@ type CloneAnalysis =
       canonicalNames: CanonicalRename[]
       changes: TypeChange[]
       preamble: EnginePlan["preamble"]
+      /** Секція кроків даних із формою сторожа приведення, вибраною на копії. */
+      data: PlannedDataTable[]
       diagnostics: EngineDiagnostic[]
     }
   | { ok: false; diagnostics: EngineDiagnostic[] }
@@ -997,6 +1052,9 @@ async function analyseOnClone(p: {
   shadowEquivalence: readonly EquivalenceObject[]
   desired: Extracted["catalog"]
   optionsFrom: Extracted["catalog"]
+  /** Кроки даних без форми сторожа: її вибирає проба на цій копії. */
+  data: readonly PlannedDataTable[]
+  origin: DataOrigin
   parse: SqlParser
 }): Promise<CloneAnalysis> {
   const { engine, scratch, clone, scope, parse } = p
@@ -1018,6 +1076,15 @@ async function analyseOnClone(p: {
           }),
         ],
       }
+    // Форма сторожа приведення кроків даних (рішення 12 плану П3-2b-2) —
+    // до кроків наміру: вираз написано в старих іменах
+    const forms =
+      p.data.length === 0
+        ? { tables: [] }
+        : await scratch.transaction(clone, "rollback", (tx) =>
+            castGuardForms(tx, p.data, p.origin)
+          )
+    if ("refusal" in forms) return { ok: false, diagnostics: forms.refusal }
     const renames = p.intent.steps.map((s, i) => ({ ...s, id: stepId(i) }))
     await runOnClone(scratch, clone, renames)
     const equivalence = await scratch.transaction(clone, "rollback", (tx) =>
@@ -1084,6 +1151,7 @@ async function analyseOnClone(p: {
       canonicalNames: canonical.renames,
       changes: guarded.changes,
       preamble: enginePlan.preamble,
+      data: forms.tables,
       diagnostics,
     }
   } catch (error) {
@@ -1169,6 +1237,12 @@ async function lockPlan(
     parse: SqlParser
     /** План несе промоцію: без `plpgsql_check` — відмова, а не попередження. */
     promotion: boolean
+    /**
+     * Таблиці кроків даних: обчислення й запис займають таблицю запису в
+     * старому імені `SHARE ROW EXCLUSIVE` (рішення 2 плану П3-2b-2), окремим
+     * слідом з першим `d<N>` таблиці.
+     */
+    data: readonly Pick<PlannedDataTable, "before" | "columns">[]
     models: Omit<
       FootprintModels,
       "live" | "providerStatements" | "providerLocks"
@@ -1209,12 +1283,24 @@ async function lockPlan(
     // тим самим читанням перед блокуваннями
     const subjects = footprintSubjects(steps, o.models)
     const live = await readLiveForeignKeys(tx, subjects)
-    const footprint = planFootprint(steps, {
-      ...o.models,
-      live,
-      providerStatements: statements,
-      providerLocks,
-    })
+    const footprint = [
+      ...o.data.map((t) => ({
+        step: dataTableStep(t),
+        tables: [
+          {
+            schema: t.before.schema,
+            name: t.before.table,
+            mode: "shareRowExclusive" as const,
+          },
+        ],
+      })),
+      ...planFootprint(steps, {
+        ...o.models,
+        live,
+        providerStatements: statements,
+        providerLocks,
+      }),
+    ]
     const checks = await planFunctionChecks(tx, {
       promotion: o.promotion,
       installable: PROVIDER_INSTALLABLE_EXTENSIONS[scope.provider],

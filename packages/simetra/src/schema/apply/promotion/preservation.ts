@@ -3,6 +3,7 @@ import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
 import type { PreservedTable } from "../artifact"
 import { tableKey } from "../table-key"
 import { stringsOf } from "../type-guard"
+import { castExpression, type DataTable } from "./data"
 import type { RenameIntent } from "./intent"
 
 /**
@@ -14,12 +15,19 @@ import type { RenameIntent } from "./intent"
  * `typeChangeSteps` — `JSON.stringify([схема, нова таблиця, нова колонка])`
  * → id кроку двигуна, що змінює тип колонки: ним невдале приведення в замірі
  * «до» назветься `apply.type-narrowing`.
+ *
+ * Ціль кроку даних (рішення 8 плану П3-2b-2) міряється за виразом: «до» —
+ * вираз у типі запису (для змапленої цілі зі зміною типу — ще й приведений
+ * до нового, як звичайна колонка), «після» — нова колонка; `dataStep` —
+ * крок даних. Для змапленої цілі цей запис замінює звичайний, для
+ * незмапленої — додається після змаплених.
  */
 export function preservationPlan(
   record: PromotionRecord,
   intent: RenameIntent,
   before: Pick<PhysicalSnapshot, "tables">,
-  typeChangeSteps: ReadonlyMap<string, string>
+  typeChangeSteps: ReadonlyMap<string, string>,
+  data: readonly Pick<DataTable, "before" | "columns">[]
 ): PreservedTable[] {
   return record.tables.map((t) => {
     const newKey = tableKey(t.schema, t.to)
@@ -70,6 +78,37 @@ export function preservationPlan(
         ? expr(keyColumns[0]!)
         : `ROW(${keyColumns.map(expr).join(", ")})::text`
 
+    const typeChangeStep = (column: string): string | undefined => {
+      const step = typeChangeSteps.get(JSON.stringify([t.schema, t.to, column]))
+      // Зміна типу без кроку двигуна — розбіжність конвеєра плану, а не
+      // даних: без id кроку невдале приведення не було б кому приписати
+      if (newType(column) !== undefined && step === undefined)
+        throw new Error(
+          `type change of ${t.schema}.${t.to}.${column} has no step in the plan`
+        )
+      return step
+    }
+    const filled = new Map(
+      (
+        data.find(
+          (d) => d.before.schema === t.schema && d.before.table === t.from
+        )?.columns ?? []
+      ).map((c) => [c.column, c])
+    )
+    // Ціль кроку даних: вираз у типі запису, далі — як звичайна колонка
+    const measured = (c: DataTable["columns"][number]) => {
+      const type = newType(c.column)
+      const step = typeChangeStep(c.column)
+      const cast = castExpression(c)
+      return {
+        before: type === undefined ? cast : `(${cast}::${type})`,
+        after: quoteIdent(c.column),
+        dataStep: c.step,
+        ...(step === undefined ? {} : { typeChangeStep: step }),
+      }
+    }
+    const mapped = new Set(columns.map((c) => c.to))
+
     return {
       before: { schema: oldSchema, table: oldName },
       after: { schema: t.schema, table: t.to },
@@ -77,21 +116,21 @@ export function preservationPlan(
         before: key(beforeExpr),
         after: key((old) => quoteIdent(newName(old))),
       },
-      columns: columns.map((c) => {
-        const typeChanged = newType(c.to) !== undefined
-        const step = typeChangeSteps.get(JSON.stringify([t.schema, t.to, c.to]))
-        // Зміна типу без кроку двигуна — розбіжність конвеєра плану, а не
-        // даних: без id кроку невдале приведення не було б кому приписати
-        if (typeChanged && step === undefined)
-          throw new Error(
-            `type change of ${t.schema}.${t.to}.${c.to} has no step in the plan`
-          )
-        return {
-          before: beforeExpr(c.from),
-          after: quoteIdent(c.to),
-          ...(step === undefined ? {} : { typeChangeStep: step }),
-        }
-      }),
+      columns: [
+        ...columns.map((c) => {
+          const fill = filled.get(c.to)
+          if (fill !== undefined) return measured(fill)
+          const step = typeChangeStep(c.to)
+          return {
+            before: beforeExpr(c.from),
+            after: quoteIdent(c.to),
+            ...(step === undefined ? {} : { typeChangeStep: step }),
+          }
+        }),
+        ...[...filled.values()]
+          .filter((c) => !mapped.has(c.column))
+          .map(measured),
+      ],
     }
   })
 }

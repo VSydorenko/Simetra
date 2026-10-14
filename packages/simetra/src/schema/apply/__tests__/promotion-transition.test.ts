@@ -496,7 +496,7 @@ describe("promotionTransition: limits of P3-2a", () => {
     expect(codes(verdict)).toContainEqual(["plan.promotion-multiple", "error"])
   })
 
-  it("refuses data steps until P3-2b", async () => {
+  it("accepts a record with data steps: the plan builds their section", async () => {
     const { before, after, record } = await promoted(
       promotionProject(PARTS),
       counterpartyMapping(PARTS)
@@ -507,11 +507,8 @@ describe("promotionTransition: limits of P3-2a", () => {
       model: after,
       records: [input(record)],
     })
-    expect(verdict.status).toBe("refused")
-    expect(codes(verdict)).toEqual([["plan.promotion-unsupported", "error"]])
-    expect(verdict.diagnostics[0]!.params).toMatchObject({
-      reason: "dataSteps",
-    })
+    expect(verdict.status).toBe("promotion")
+    expect(codes(verdict)).toEqual([])
   })
 
   it("refuses a label translation until P3-3", async () => {

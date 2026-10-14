@@ -139,6 +139,64 @@ describe("renameIntent", () => {
     ])
   })
 
+  it("adds an unmapped fill target after the column renames", () => {
+    const items = {
+      id: OBJECT_ID,
+      schema: "app",
+      from: "items",
+      to: "catalog_items",
+    }
+    const desired = table("catalog_items", ["id", "title", "deletion_mark"])
+    desired.columns[2]!.type = "boolean"
+    const intent = renameIntent(
+      record({
+        tables: [items],
+        columns: [column("catalog_items", "name", "title", 1)],
+        retired: [
+          {
+            sourceId: "00000000-0000-4000-8000-000000000301",
+            schema: "app",
+            table: "items",
+            column: "inactive",
+          },
+        ],
+        dataSteps: [
+          {
+            names: "beforeRenames",
+            schema: "app",
+            table: "items",
+            key: "id",
+            column: "deletion_mark",
+            expression: "coalesce(inactive, false)",
+            kind: "conversion",
+          },
+          // Змаплена ціль уже є: колонки вона не додає
+          {
+            names: "beforeRenames",
+            schema: "app",
+            table: "items",
+            key: "id",
+            column: "title",
+            expression: "btrim(name)",
+            kind: "repair",
+          },
+        ],
+      }),
+      { tables: [desired] }
+    )
+    expect(intent.steps.map((s) => s.sql)).toEqual([
+      "ALTER TABLE app.items RENAME TO catalog_items",
+      "ALTER TABLE app.catalog_items RENAME COLUMN name TO title",
+      // Бажаний тип, без NOT NULL і DEFAULT: їх ставить двигун після запису
+      "ALTER TABLE app.catalog_items ADD COLUMN deletion_mark boolean",
+    ])
+    // Блокування — у старому імені, як і решта кроків наміру
+    expect(intent.steps.at(-1)!.lockedTables).toEqual([
+      { schema: "app", name: "items" },
+    ])
+    expect(intent.columns.map((c) => c.to)).toEqual(["title"])
+  })
+
   it("swaps two columns through a temporary name", () => {
     const intent = renameIntent(
       record({

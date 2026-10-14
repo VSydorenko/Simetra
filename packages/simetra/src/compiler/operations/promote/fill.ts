@@ -161,7 +161,9 @@ interface FunctionNode {
  * компілятор не виводить. Крок даних П3 виконує з `search_path = pg_catalog,
  * pg_temp`, тож функцію моделі вираз кличе лише кваліфікованою.
  */
-export function modelFunctions(model: CompiledModel): ModelFunctions {
+export function modelFunctions(
+  model: Pick<CompiledModel, "sqlUnits">
+): ModelFunctions {
   const immutable = new Set<string>()
   const other = new Set<string>()
   const bare = new Set<string>()

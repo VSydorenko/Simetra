@@ -38,4 +38,28 @@ export {
   valueElementColumns,
   type ColumnName,
 } from "./replacements"
+export {
+  castGuardForms,
+  DATA_STEP_KINDS,
+  DATA_TRIGGER_MODES,
+  dataComputeSql,
+  dataCountSql,
+  dataFactRefusals,
+  dataGuardSql,
+  dataPlan,
+  dataStepRefusals,
+  dataTableStep,
+  dataWriteSql,
+  readDataFacts,
+  readUserTriggers,
+  triggerSql,
+  typeIdentity,
+  withTriggers,
+  type DataFacts,
+  type DataOrigin,
+  type DataStepKind,
+  type DataTable,
+  type GuardForm,
+  type PlannedDataTable,
+} from "./data"
 export type { CanonicalRename } from "./equivalence"

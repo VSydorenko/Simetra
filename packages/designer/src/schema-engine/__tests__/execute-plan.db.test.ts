@@ -1536,7 +1536,8 @@ describe("executePlan", () => {
           columns: [],
         },
         { tables: [source] },
-        new Map([[JSON.stringify(["app", "pu", "x"]), TYPE_STEP]])
+        new Map([[JSON.stringify(["app", "pu", "x"]), TYPE_STEP]]),
+        []
       )
       return planFor(url, steps, {
         locks: locksOf(steps, newToOld),
@@ -1550,6 +1551,7 @@ describe("executePlan", () => {
           ],
           canonicalNames: [],
           conversions: [],
+          data: [],
         },
         // Розбіжність зупиняє спробу до звірки з бажаним відбитком
         desiredFingerprint:

@@ -2143,12 +2143,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.permission-required": {
     en: (p) =>
-      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, drift (a change made to the database outside the platform), or a promotion's access change, delete semantics or removal`,
+      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, drift (a change made to the database outside the platform), or a promotion's access change, delete semantics, removal or repair of existing values`,
     uk: (p) =>
-      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, дрейф (зміна бази повз платформу) або зміна доступу, семантика видалення чи видалення промоції`,
+      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, дрейф (зміна бази повз платформу) або зміна доступу, семантика видалення, видалення чи ремонт наявних значень промоції`,
     hint: {
-      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift, a promotion item by its access:, delete: or remove: token.",
-      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift, пункт промоції — його токеном access:, delete: чи remove:.",
+      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift, a promotion item by its access:, delete:, remove: or repair: token.",
+      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift, пункт промоції — його токеном access:, delete:, remove: чи repair:.",
     },
   },
   "apply.permission-unknown": {
@@ -2157,8 +2157,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Дозволені пункти ${p.items} відсутні в плані або не потребують дозволу`,
     hint: {
-      en: "Allow only the ids of destructive and relaxation steps of this plan, drift only when the plan reports drift, and only the promotion items the plan lists; a stale item means the permission was given for another plan.",
-      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, drift — лише коли план повідомляє дрейф, і лише ті пункти промоції, які план перелічує; застарілий пункт означає, що дозвіл давали іншому плану.",
+      en: "Allow only the ids of destructive and relaxation steps of this plan, drift only when the plan reports drift, and only the promotion items (access:, delete:, remove:, repair:) the plan lists; a stale item means the permission was given for another plan.",
+      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, drift — лише коли план повідомляє дрейф, і лише ті пункти промоції (access:, delete:, remove:, repair:), які план перелічує; застарілий пункт означає, що дозвіл давали іншому плану.",
     },
   },
   "apply.first-apply": {
@@ -2481,9 +2481,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.temp-name-taken": {
     en: (p) =>
-      `The name ${p.name} the apply needs for a check inside its transaction is already taken. Nothing was written`,
+      `The name ${p.name} the apply needs inside its transaction is already taken. Nothing was written`,
     uk: (p) =>
-      `Ім'я ${p.name}, яке застосуванню потрібне для перевірки всередині транзакції, уже зайняте. Нічого не записано`,
+      `Ім'я ${p.name}, яке застосуванню потрібне всередині транзакції, уже зайняте. Нічого не записано`,
     hint: {
       en: "Remove or rename the object with this name, then apply again.",
       uk: "Приберіть чи перейменуйте об'єкт із цим іменем і застосуйте знову.",
@@ -2507,6 +2507,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Rename these objects on the target so that no name matches simetra_tmp_<n> or simetra_retired_<n>, then plan again.",
       uk: "Перейменуйте ці об'єкти на цілі так, щоб жодне ім'я не мало вигляду simetra_tmp_<n> чи simetra_retired_<n>, і сплануйте знову.",
+    },
+  },
+  "plan.data-step-volatile": {
+    en: (p) =>
+      `Data step ${p.step} of the promotion calls ${p.function}, which on the target is not IMMUTABLE in every overload, returns a set or does not exist, so the computed values would not be deterministic`,
+    uk: (p) =>
+      `Крок даних ${p.step} промоції викликає ${p.function}, яка на цілі не IMMUTABLE в кожному перевантаженні, повертає множину чи відсутня, тож обчислені значення не були б детермінованими`,
+    hint: {
+      en: "No plan was written. Rewrite the fill expression with functions that are IMMUTABLE on the target, or make the model function IMMUTABLE there first; only the transaction time functions are allowed outside a repair.",
+      uk: "План не записано. Перепишіть вираз fill функціями, що на цілі IMMUTABLE, або спершу зробіть функцію моделі там IMMUTABLE; поза ремонтом дозволено лише функції часу транзакції.",
+    },
+  },
+  "plan.data-step-function-changed": {
+    en: (p) =>
+      `Data step ${p.step} of the promotion calls the model function ${p.function}, which this plan creates, changes or drops, while the data steps run before the engine steps and would compute with the old body`,
+    uk: (p) =>
+      `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, яку цей план створює, змінює чи знищує, а кроки даних ідуть до кроків двигуна й рахували б старим тілом`,
+    hint: {
+      en: "No plan was written. Apply the change of the function first, then plan the promotion.",
+      uk: "План не записано. Спершу застосуйте зміну функції, потім сплануйте промоцію.",
+    },
+  },
+  "plan.temp-privilege": {
+    en: (p) =>
+      `The promotion's data steps compute values in temporary tables, and role ${p.role} has no TEMP privilege on the target database`,
+    uk: (p) =>
+      `Кроки даних промоції обчислюють значення в тимчасових таблицях, а роль ${p.role} не має права TEMP на базу цілі`,
+    hint: {
+      en: "No plan was written. Grant TEMP on the database to the applying role, then plan again.",
+      uk: "План не записано. Надайте ролі застосування право TEMP на базу й сплануйте знову.",
+    },
+  },
+  "plan.replication-role": {
+    en: (p) =>
+      `The target session runs with session_replication_role = ${p.value}, and the promotion's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks`,
+    uk: (p) =>
+      `Сесія цілі має session_replication_role = ${p.value}, а кроки даних промоції потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань`,
+    hint: {
+      en: "No plan was written. Remove the session_replication_role setting of the database or the role (ALTER DATABASE … RESET / ALTER ROLE … RESET), then plan again.",
+      uk: "План не записано. Зніміть налаштування session_replication_role бази чи ролі (ALTER DATABASE … RESET / ALTER ROLE … RESET) і сплануйте знову.",
     },
   },
   "plan.unparsable-step": {
@@ -2663,30 +2703,70 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.promotion-unsupported": {
     en: (p) =>
-      p.reason === "dataSteps"
-        ? `The promotion record ${p.file} has data steps, which plans support from P3-2b on`
-        : p.reason === "labelTranslation"
-          ? `The promotion record ${p.file} translates kind labels, which plans support from P3-3 on`
-          : p.reason === "sequenceSchema"
-            ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
-            : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
+      p.reason === "labelTranslation"
+        ? `The promotion record ${p.file} translates kind labels, which plans support from P3-3 on`
+        : p.reason === "sequenceSchema"
+          ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
+          : p.reason === "dataStepTable"
+            ? `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has inheritance children or is partitioned, so one update and its preservation measure would cover different rows`
+            : p.reason === "dataStepType"
+              ? p.detail === "oldType"
+                ? `Data step ${p.step} in the promotion ${p.file} fills ${p.column} of ${p.table}, whose type also changes, and the old type ${p.type} is not an unbounded string type, so the value written before the change could be rounded silently`
+                : p.detail === "cast"
+                  ? `The value of data step ${p.step} in the promotion ${p.file} cannot be cast to ${p.type}, the type of ${p.column} of ${p.table} at the write`
+                  : `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which ${p.detail === "changed" ? "a step of the plan creates, changes or drops" : "does not exist on the target before the plan"}, while the data steps run before the engine steps`
+              : p.reason === "dataStepKey"
+                ? `Data step ${p.step} in the promotion ${p.file} addresses rows of ${p.table} by ${p.key}, which ${p.detail === "notPrimaryKey" ? "is not the single-column primary key of the table" : p.detail === "retired" ? "is retired" : p.detail === "fillTarget" ? "is itself a fill target" : "changes its type"}`
+                : p.reason === "dataStepReferenced"
+                  ? `Data step ${p.step} in the promotion ${p.file} changes ${p.column} of ${p.table}, which a foreign key references with ON UPDATE CASCADE, SET NULL or SET DEFAULT, so rows of other tables would change outside the preservation proof`
+                  : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
     uk: (p) =>
-      p.reason === "dataSteps"
-        ? `Запис промоції ${p.file} має кроки даних, які план підтримує з П3-2b`
-        : p.reason === "labelTranslation"
-          ? `Запис промоції ${p.file} перекладає мітки виду, які план підтримує з П3-3`
-          : p.reason === "sequenceSchema"
-            ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
-            : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
+      p.reason === "labelTranslation"
+        ? `Запис промоції ${p.file} перекладає мітки виду, які план підтримує з П3-3`
+        : p.reason === "sequenceSchema"
+          ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
+          : p.reason === "dataStepTable"
+            ? `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має нащадків за успадкуванням чи партиціонована, тож один запис і його замір збереження охопили б різні рядки`
+            : p.reason === "dataStepType"
+              ? p.detail === "oldType"
+                ? `Крок даних ${p.step} промоції ${p.file} заповнює ${p.column} таблиці ${p.table}, тип якої теж змінюється, а старий тип ${p.type} — не рядковий тип без межі, тож значення, записане до зміни, могло б мовчки округлитися`
+                : p.detail === "cast"
+                  ? `Значення кроку даних ${p.step} промоції ${p.file} не приводиться до ${p.type} — типу ${p.column} таблиці ${p.table} на момент запису`
+                  : `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, який ${p.detail === "changed" ? "крок плану створює, змінює чи знищує" : "відсутній на цілі до плану"}, а кроки даних ідуть до кроків двигуна`
+              : p.reason === "dataStepKey"
+                ? `Крок даних ${p.step} промоції ${p.file} адресує рядки ${p.table} за ${p.key}, який ${p.detail === "notPrimaryKey" ? "не є одноколонковим первинним ключем таблиці" : p.detail === "retired" ? "виводиться з ужитку" : p.detail === "fillTarget" ? "сам є ціллю fill" : "змінює тип"}`
+                : p.reason === "dataStepReferenced"
+                  ? `Крок даних ${p.step} промоції ${p.file} змінює ${p.column} таблиці ${p.table}, на яку посилається зовнішній ключ з ON UPDATE CASCADE, SET NULL чи SET DEFAULT, тож рядки інших таблиць змінилися б поза доказом збереження`
+                  : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
     hint: {
       en: (p) =>
         p.reason === "sequenceSchema"
           ? "No plan was written. Move the sequence into the schema of the table or remove the dependency before promoting."
-          : "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
+          : p.reason === "dataStepTable"
+            ? "No plan was written. Promote this table without data steps."
+            : p.reason === "dataStepType"
+              ? p.detail === "cast"
+                ? "No plan was written. Cast the fill expression explicitly to the type of the column."
+                : "No plan was written. Apply the change of the type first (a plan of its own), then promote."
+              : p.reason === "dataStepKey"
+                ? "No plan was written. A data step addresses rows by the single-column primary key of the table, which keeps its name meaning and type through the promotion."
+                : p.reason === "dataStepReferenced"
+                  ? "No plan was written. Drop the cascading update of the referencing foreign key, or promote without a step on this column."
+                  : "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
       uk: (p) =>
         p.reason === "sequenceSchema"
           ? "План не записано. Перенесіть послідовність у схему таблиці або зніміть залежність перед промоцією."
-          : "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
+          : p.reason === "dataStepTable"
+            ? "План не записано. Промотуйте цю таблицю без кроків даних."
+            : p.reason === "dataStepType"
+              ? p.detail === "cast"
+                ? "План не записано. Приведіть вираз fill явно до типу колонки."
+                : "План не записано. Спершу застосуйте зміну типу окремим планом, потім промотуйте."
+              : p.reason === "dataStepKey"
+                ? "План не записано. Крок даних адресує рядки одноколонковим первинним ключем таблиці, який зберігає зміст і тип через промоцію."
+                : p.reason === "dataStepReferenced"
+                  ? "План не записано. Зніміть каскадне оновлення зовнішнього ключа, що посилається, або промотуйте без кроку на цю колонку."
+                  : "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
     },
   },
   "plan.promotion-applied": {

@@ -604,9 +604,9 @@ export interface PermissionSubject {
 
 /**
  * Групи токенів промоції в порядку перегляду: спершу зміна доступу, потім
- * семантика видалення, далі видалене з дозволом.
+ * семантика видалення, далі видалене з дозволом і ремонт наявних значень.
  */
-const PROMOTION_GROUPS = ["access:", "delete:", "remove:"] as const
+const PROMOTION_GROUPS = ["access:", "delete:", "remove:", "repair:"] as const
 
 const groupOf = (token: string): number =>
   PROMOTION_GROUPS.findIndex((prefix) => token.startsWith(prefix))
@@ -627,7 +627,7 @@ export function comparePermissionItems(
 /**
  * Пункти, яким потрібен явний дозвіл: дрейф першим — його переглядають до
  * кроків, бо кроки показують, що станеться з об'єктами, які дрейфнули, —
- * далі пункти промоції (`access:`, `delete:`, `remove:`), бо вони кажуть,
+ * далі пункти промоції (`access:`, `delete:`, `remove:`, `repair:`), бо вони кажуть,
  * чим стане таблиця, а не як туди дійти, і насамкінець id кроків у порядку
  * плану.
  */

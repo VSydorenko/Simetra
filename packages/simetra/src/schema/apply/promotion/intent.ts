@@ -88,7 +88,8 @@ function counter(prefix: string): () => string {
 /**
  * Намір перейменувань за записом промоції. Пари «старе → нове» запис несе з
  * ідентичностей (T2 звірив їх із marker і бажаною моделлю), тож намір не
- * зіставляє імена. Порядок: таблиці, далі колонки кожної таблиці. Вилучена
+ * зіставляє імена. Порядок: таблиці, далі колонки кожної таблиці й
+ * `ADD COLUMN` незмаплених цілей її кроків даних. Вилучена
  * колонка, чиє ім'я потрібне бажаній таблиці, відходить на
  * `simetra_retired_<n>`: інакше двигун побачив би «наявну» колонку з
  * потрібним ім'ям і змінив би їй тип, віддавши її дані новому реквізиту.
@@ -171,8 +172,52 @@ export function renameIntent(
       )
       columns.push({ table: newTable, from: r.from, to: r.to })
     }
+
+    // Незмаплена ціль кроку даних з'являється кроком наміру (рішення 1
+    // плану П3-2b-2): запис значень іде до кроків двигуна. Бажаний тип, без
+    // `NOT NULL` і значення за замовчуванням — їх ставить двигун після
+    // запису. Колонку поза бажаною таблицею відхиляє звірка секції даних
+    for (const name of addedColumns(record, t.schema, t.from)) {
+      const column = target.columns.find((c) => c.name === name)
+      if (column === undefined) continue
+      steps.push(
+        intentStep(
+          `ALTER TABLE ${qualified(t.schema, t.to)} ADD COLUMN ${quoteIdent(name)} ${column.type}`,
+          lock
+        )
+      )
+    }
   }
   return { steps, tablesNewToOld, tempNames, columns }
+}
+
+/**
+ * Нові імена колонок, які додає намір: незмаплені цілі кроків даних таблиці
+ * (стара назва), у порядку запису, без повторів. Це не прийняті колонки, тож
+ * класи видалень їх не порівнюють.
+ */
+export function addedColumns(
+  record: PromotionRecord,
+  schema: string,
+  oldTable: string
+): string[] {
+  const promoted = record.tables.find(
+    (t) => t.schema === schema && t.from === oldTable
+  )
+  if (promoted === undefined) return []
+  const mapped = new Set(
+    record.columns
+      .filter((c) => c.schema === schema && c.table === promoted.to)
+      .map((c) => c.to)
+  )
+  return [
+    ...new Set(
+      record.dataSteps
+        .filter((s) => s.schema === schema && s.table === oldTable)
+        .map((s) => s.column)
+        .filter((c) => !mapped.has(c))
+    ),
+  ]
 }
 
 /**

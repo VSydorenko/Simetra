@@ -100,7 +100,7 @@ const plan = (
   desired: { tables: PhysicalTable[] } = DESIRED,
   steps: ReadonlyMap<string, string> = STEPS
 ): PreservedTable[] =>
-  preservationPlan(r, renameIntent(r, desired), before, steps)
+  preservationPlan(r, renameIntent(r, desired), before, steps, [])
 
 describe("preservationPlan", () => {
   it("measures before in old names and after in new names", () => {
@@ -114,6 +114,69 @@ describe("preservationPlan", () => {
           { before: '"Name"', after: "name" },
           { before: "(x::integer)", after: "x", typeChangeStep: "s7" },
         ],
+      },
+    ])
+  })
+
+  it("measures a fill target by its expression", () => {
+    const r = record({
+      tables: [{ id: OBJECT_ID, schema: "app", from: "t", to: "u" }],
+      columns: [column("u", "id", "id", 1), column("u", "code", "code", 2)],
+      typeChanges: [
+        {
+          schema: "app",
+          table: "u",
+          column: "code",
+          from: "text",
+          to: "varchar(20)",
+        },
+      ],
+    })
+    const data = [
+      {
+        before: { schema: "app", table: "t", key: "id" },
+        columns: [
+          {
+            step: "d1",
+            column: "code",
+            type: "text",
+            expression: "left(code, 20)",
+            kind: "repair" as const,
+            guard: "",
+          },
+          {
+            step: "d2",
+            column: "deletion_mark",
+            type: "boolean",
+            expression: "coalesce(inactive, false)",
+            kind: "conversion" as const,
+            guard: "",
+          },
+        ],
+      },
+    ]
+    const [t] = preservationPlan(
+      r,
+      renameIntent(r, { tables: [table("u", ["id", "code"], ["id"])] }),
+      { tables: [table("t", ["id", "code", "inactive"], ["id"])] },
+      new Map([[JSON.stringify(["app", "u", "code"]), "s5"]]),
+      data
+    )
+    expect(t!.columns).toEqual([
+      { before: "id", after: "id" },
+      // Змаплена ціль: вираз у старому типі, далі — приведення кроку двигуна;
+      // звичайного запису колонки немає
+      {
+        before: "(((\nleft(code, 20)\n)::text)::varchar(20))",
+        after: "code",
+        dataStep: "d1",
+        typeChangeStep: "s5",
+      },
+      // Незмаплена ціль — додатковий запис у бажаному типі
+      {
+        before: "((\ncoalesce(inactive, false)\n)::boolean)",
+        after: "deletion_mark",
+        dataStep: "d2",
       },
     ])
   })

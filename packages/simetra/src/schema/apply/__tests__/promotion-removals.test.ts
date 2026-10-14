@@ -232,6 +232,45 @@ describe("classifyRemovals", () => {
     expect(unclassifiedRemovals(removals)).toEqual([])
   })
 
+  it("leaves out a column the intent adds for a data step", () => {
+    // Колонку цілі кроку даних додав сам намір без NOT NULL і DEFAULT:
+    // їх ставить двигун, і це не перевизначення прийнятої колонки
+    const fill = {
+      names: "beforeRenames" as const,
+      schema: "app",
+      table: "items",
+      key: "id",
+      column: "deletion_mark",
+      expression: "coalesce(inactive, false)",
+      kind: "conversion" as const,
+    }
+    const clone = model([
+      table("items", {
+        columns: [
+          col("id", { type: "uuid", notNull: true }),
+          col("deletion_mark", { type: "boolean" }),
+        ],
+      }),
+    ])
+    const desired = model([
+      table("items", {
+        columns: [
+          col("id", { type: "uuid", notNull: true }),
+          col("deletion_mark", {
+            type: "boolean",
+            notNull: true,
+            default: "false",
+          }),
+        ],
+      }),
+    ])
+    expect(classify(record({ dataSteps: [fill] }), clone, desired)).toEqual([])
+    // Без кроку даних та сама колонка — прийнята, і її зміна без класу
+    expect(
+      unclassifiedRemovals(classify(record({}), clone, desired))
+    ).not.toEqual([])
+  })
+
   it("covers a constraint left under a temporary name by its original name", () => {
     const check = { name: "simetra_tmp_1", expression: "CHECK (true)" }
     const removals = classify(
@@ -1269,7 +1308,7 @@ describe("access and permission items", () => {
         dependents: ["policy app.debts.debts_read", "view app.items_view"],
       },
     ])
-    expect(promotionPermissionItems(changes, [], [])).toEqual([
+    expect(promotionPermissionItems(changes, [], [], [])).toEqual([
       {
         token: "access:app.catalog_items",
         summary: [
@@ -1314,7 +1353,7 @@ describe("access and permission items", () => {
       },
     ])
     expect(
-      promotionPermissionItems(changes, [], []).map((i) => i.token)
+      promotionPermissionItems(changes, [], [], []).map((i) => i.token)
     ).toEqual(["access:app.items"])
     // Той самий доступ — жодної зміни й жодного пункту
     const same = model(
@@ -1349,6 +1388,7 @@ describe("access and permission items", () => {
           to: "restrict",
         },
       ],
+      [],
       []
     )
     // Порядок — за кодовими одиницями токена: `"` іде перед літерами
@@ -1407,7 +1447,7 @@ describe("access and permission items", () => {
       parse
     )
     expect(steps.map((s) => s.class)).toEqual(["catalogOnly"])
-    const permissionItems = promotionPermissionItems([], [], removals)
+    const permissionItems = promotionPermissionItems([], [], removals, [])
     expect(permissionItems).toEqual([
       {
         token: "remove:app.items",
@@ -1474,7 +1514,7 @@ describe("access and permission items", () => {
       parse
     )
     expect(steps.map((s) => s.class)).toEqual(["catalogOnly"])
-    expect(promotionPermissionItems([], [], removals)).toEqual([
+    expect(promotionPermissionItems([], [], removals, [])).toEqual([
       {
         token: "remove:app.catalog_items",
         summary: ["tables.app.items.columns.org_ref.default"],
@@ -1527,7 +1567,7 @@ describe("access and permission items", () => {
         tables: [{ schema: "app", name: "items_lines" }],
       },
     ])
-    const permissionItems = promotionPermissionItems([], [], removals)
+    const permissionItems = promotionPermissionItems([], [], removals, [])
     expect(permissionItems.map((i) => i.token)).toEqual([
       "remove:app.items_lines",
     ])
@@ -1555,7 +1595,7 @@ describe("access and permission items", () => {
       model([table("items")])
     )
     expect(removals.map((r) => r.covered)).toEqual(["rowRule"])
-    expect(promotionPermissionItems([], [], removals)).toEqual([])
+    expect(promotionPermissionItems([], [], removals, [])).toEqual([])
   })
 })
 
