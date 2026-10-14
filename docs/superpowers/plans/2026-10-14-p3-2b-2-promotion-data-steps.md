@@ -391,9 +391,15 @@ checkout комітить одна сесія.
       `checkGuardCasts` (форма йде в `DataTable.columns[].guard` під
       `planHash`); жодна форма не готується — `plan.promotion-unsupported`
       (`reason: "dataStepType"`).
-    - Раннер виконує сторожі у фазі 8 перед CTAS під `DATA_SETTINGS`;
-      `lost > 0` → `apply.data-step-narrowing` (`step`, `lost`); клас `22`
-      самого сторожа → `apply.data-step-failed` з `step`.
+    - Раннер виконує сторожі у фазі 8 перед CTAS під `DATA_SETTINGS` — так
+      само, як CTAS: інакше текстова форма залежала б від `DateStyle` та
+      інших налаштувань сесії; `lost > 0` → `apply.data-step-narrowing`
+      (`step`, `lost`).
+    - Приведення, що на сторожі не змінює значення, а падає (клас `22`:
+      `22003` переповнення, `22P02` невірний текст тощо), —
+      `apply.data-step-failed` з `step`, `table`, `column` і `sqlstate`;
+      сира помилка бази на сторожі неприпустима. Повторювані SQLSTATE
+      летять як скрізь у раннері.
     - Наслідок для свідомої конверсії: вираз `payload` (текст) у нову
       колонку `jsonb` — текстова форма нормалізується, тож відмова; явний
       `payload::jsonb` — порівняння `jsonb` з `jsonb`, рівні. Конверсію
@@ -403,9 +409,11 @@ checkout комітить одна сесія.
     `replica` внутрішні тригери FK (`O`) не спрацьовують, тож запис значень
     обійшов би перевірку посилань, а тригери `R` спрацювали б. План із
     кроками даних читає `current_setting('session_replication_role')` у
-    `READ ONLY` → не `origin` — `plan.replication-role`; раннер повторює
-    перевірку на початку фази 8 → `apply.replication-role` (відмова без
-    повтору). Вплив на спеку: §7.2, абзац «Не закріплюються» — дописати, що
+    `READ ONLY` → не `origin` — `plan.replication-role`. Це лише ранній
+    сигнал: значення можна змінити між `plan` і `apply` через `ALTER
+    ROLE/DATABASE … SET`. Гарантія — у транзакції застосування: раннер
+    читає `current_setting('session_replication_role')` до фази 8 → не
+    `origin` — `apply.replication-role` (відмова без повтору). Вплив на спеку: §7.2, абзац «Не закріплюються» — дописати, що
     кроки даних вимагають `origin`.
 14. **Замір цілі `fill` — точно той, що виводиться з секції** (аудит Codex).
     `dataMatchesRecord` перевіряє не лише наявність колонки з `dataStep`, а
@@ -444,6 +452,12 @@ checkout комітить одна сесія.
   довге значення у `varchar(n)`, дробове у `numeric(p,s)`) —
   `apply.data-step-narrowing` (рішення 12). Конверсію записують явно
   (`payload::jsonb`, `left(code, 20)`, `round(x, 2)`).
+- **Хибні відмови текстової форми сторожа приведення** (рішення 12, вердикт
+  архітектора): коли оператора порівняння між типом виразу й типом запису
+  немає, сторож порівнює текст, а текст рівних значень може різнитися
+  (`'1.0'` проти `'1.00'` після `numeric(10,2)`) —
+  `apply.data-step-narrowing` без втрати. Обхід — явне приведення у виразі
+  до типу запису (тоді діє форма з порівнянням).
 - **`session_replication_role` не `origin`** (налаштування бази чи ролі) —
   `plan.replication-role` / `apply.replication-role`.
 - **Ціль без права `TEMP`** — `plan.temp-privilege`.
@@ -961,7 +975,13 @@ git commit -m "feat(schema): секція кроків даних промоці
     `BEGIN`;
   - `"stops a cast that changes a value"`: сторож приведення повертає
     `lost: 2` → `apply.data-step-narrowing` (`step: "d1"`, `lost: 2`), CTAS
-    не надсилається;
+    не надсилається; сторож іде між `set_config` пар `DATA_SETTINGS` і їх
+    поверненням;
+  - `"names the step whose cast overflows"` (вердикт архітектора): сторож
+    падає `22003` → `apply.data-step-failed` з `step`, `table`, `column`,
+    `sqlstate: "22003"`, а не сира помилка; DB-тест того самого в
+    `execute-plan.db.test.ts` — `(amount)::numeric(4,2)` на значенні
+    `123456`;
   - `"refuses a replication role other than origin"`: `current_setting`
     повертає `replica` → `apply.replication-role`, без повтору;
   - `"keeps the phase order of a plan without data steps"`: план без

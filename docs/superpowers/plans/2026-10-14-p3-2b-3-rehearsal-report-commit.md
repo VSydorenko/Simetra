@@ -405,7 +405,9 @@ pg-delta; реальна база споживача.
     Codex, конвеєр): копія — `CREATE DATABASE … TEMPLATE template0
     LC_COLLATE 'C' LC_CTYPE 'C'` з тією самою схемою й станом (факт
     `collate` інший) → репетиція → `apply.target-changed` з `sections:
-    "server"` до першого кроку; копію тест прибирає у `finally`.
+    "server"` до першого кроку; базу з `LC_COLLATE 'C'` створює сам тест і
+    прибирає у `finally`, зокрема на шляху падіння (інакше її зловить
+    `stack-guard`).
 - [ ] **Step 2: FAIL.** Run: `pnpm --filter simetra test execute artifact`.
 - [ ] **Step 3: Реалізувати:** `plan` читає обидва поля тією самою
   транзакцією `READ ONLY`, що стан застосування; фаза 4e — після 4d, без
