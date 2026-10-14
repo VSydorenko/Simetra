@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import pg from "pg"
-import { testDatabaseUrl } from "./connection"
+import { SHADOW_PREFIX, shadowAgeMinutes, testDatabaseUrl } from "./connection"
 
 // Замок у тимчасовій теці машини, а не в checkout: стек спільний і для інших
 // checkout чи worktree того самого репо
@@ -194,12 +194,17 @@ async function snapshot(): Promise<Snapshot> {
 // без людини не можна
 function reportOrphanShadows(before: Snapshot): void {
   const orphans = before.databases.filter((name) =>
-    name.startsWith("pgdelta_shadow_")
+    name.startsWith(SHADOW_PREFIX)
   )
   if (orphans.length > 0)
     process.stderr.write(
-      `Shadow databases are already on the stack, likely left by a killed run; they are not removed. To clean up:\n${orphans.map((name) => `  DROP DATABASE "${name}" WITH (FORCE);`).join("\n")}\n`
+      `Shadow databases are already on the stack, likely left by a killed run; they are not removed. To clean up:\n${orphans.map((name) => `  DROP DATABASE "${name}" WITH (FORCE);  -- ${ageNote(name)}`).join("\n")}\n`
     )
+}
+
+function ageNote(name: string): string {
+  const age = shadowAgeMinutes(name)
+  return age === undefined ? "age unknown" : `${Math.round(age)} min old`
 }
 
 type Change = {

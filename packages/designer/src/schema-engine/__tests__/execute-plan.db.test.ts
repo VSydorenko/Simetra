@@ -20,10 +20,13 @@ import {
   ApplyDbError,
   desiredForApply,
   executePlan,
+  FINGERPRINT_SECTIONS,
+  FINGERPRINT_VERSION,
   readFingerprint,
   type ApplyDatabase,
   type ApplyDesired,
   type CatalogFingerprint,
+  type FingerprintSection,
   type DriftReport,
   type EngineCatalog,
   type ExecutablePlan,
@@ -49,6 +52,7 @@ import {
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   catalog,
+  fingerprintAfterSteps,
   metaFiles,
   project,
   shadowDatabaseCount,
@@ -194,12 +198,28 @@ const read = (url: string): Promise<CatalogFingerprint> =>
     (tx) => readFingerprint(tx, desired.scope)
   )
 
-/** Відбиток бажаного стану: окрема база, де `setup` і кроки вже виконано. */
+/**
+ * Відбиток бажаного стану: кроки в тій самій цілі, у транзакції з відкатом.
+ * Окрема база була б іншою ціллю, і відбиток залежав би від того, як вона
+ * відтворила `setup`, а не від самої цілі.
+ */
 const desiredFingerprint = (
-  setup: string,
+  url: string,
   steps: readonly PlanStep[]
 ): Promise<CatalogFingerprint> =>
-  inTarget(`${setup};\n${steps.map((s) => `${s.sql};`).join("\n")}`, read)
+  fingerprintAfterSteps(url, desired.scope, steps)
+
+/**
+ * Бажаний відбиток для тестів, де відмова настає до звірки з ним: порівняння
+ * не відбувається, тож зміст не важить, а справжній відбиток створював би
+ * враження, що тест його перевіряє.
+ */
+const NOT_COMPARED: CatalogFingerprint = {
+  version: FINGERPRINT_VERSION,
+  sections: Object.fromEntries(
+    FINGERPRINT_SECTIONS.map((section) => [section, "not-compared"])
+  ) as Record<FingerprintSection, string>,
+}
 
 /**
  * Каталог двигуна бажаного стану: окрема база, де `setup` і кроки вже
@@ -334,7 +354,7 @@ async function planFor(
       over.revalidationSearchPath ?? (await sessionPath(url)),
     targetFingerprint: over.targetFingerprint ?? (await read(url)),
     desiredFingerprint:
-      over.desiredFingerprint ?? (await desiredFingerprint(BASE, steps)),
+      over.desiredFingerprint ?? (await desiredFingerprint(url, steps)),
   }
 }
 
@@ -981,7 +1001,7 @@ describe("executePlan", () => {
       expect(live).toEqual([])
       return planFor(url, [RETYPE], {
         foreignKeys: { subjects, live },
-        desiredFingerprint: await desiredFingerprint(setup, [RETYPE]),
+        desiredFingerprint: await desiredFingerprint(url, [RETYPE]),
       })
     }
 
@@ -1078,7 +1098,7 @@ describe("executePlan", () => {
         }),
       ]
       const plan = await planFor(url, steps, {
-        desiredFingerprint: await desiredFingerprint(setup, steps),
+        desiredFingerprint: await desiredFingerprint(url, steps),
       })
       expect(plan.locks).toEqual([
         { schema: "app", name: "it", mode: "accessExclusive" },
@@ -1293,7 +1313,7 @@ describe("executePlan", () => {
           { schema: "app", name: "c", mode: "accessExclusive" },
           { schema: "app", name: "p", mode: "shareRowExclusive" },
         ],
-        desiredFingerprint: await desiredFingerprint(setup, steps),
+        desiredFingerprint: await desiredFingerprint(url, steps),
       })
       // Запис у ціль FK тримає ROW EXCLUSIVE, що конфліктує з SHARE ROW
       // EXCLUSIVE перевірки FK
@@ -1355,7 +1375,7 @@ describe("executePlan", () => {
         ]
         const plan = await planFor(target, steps, {
           preamble,
-          desiredFingerprint: await desiredFingerprint(SEEN, steps),
+          desiredFingerprint: await desiredFingerprint(target, steps),
         })
         const outcome = await executePlan(apply, { url: target }, plan, options)
         expect(outcome).toMatchObject({ status: "committed" })
@@ -1408,7 +1428,7 @@ describe("executePlan", () => {
               { name: "search_path", value: "pg_catalog" },
               { name: "check_function_bodies", value: "off" },
             ],
-            desiredFingerprint: await desiredFingerprint(setup, steps),
+            desiredFingerprint: await desiredFingerprint(url, steps),
           }),
           { ...options, mode: "proof" }
         )
@@ -1534,8 +1554,8 @@ describe("executePlan", () => {
         // Розбіжність зупиняє спробу до звірки з бажаним відбитком
         desiredFingerprint:
           over.extra === undefined && over.stops !== true
-            ? await desiredFingerprint(SETUP, steps)
-            : await read(url),
+            ? await desiredFingerprint(url, steps)
+            : NOT_COMPARED,
       })
     }
 
@@ -2013,7 +2033,7 @@ describe("executePlan", () => {
       // Відмова настає до транзакції, тож бажаний стан тут не важить
       const plan = await planFor(url, [drop], {
         requiredPermissions: ["s1"],
-        desiredFingerprint: await read(url),
+        desiredFingerprint: NOT_COMPARED,
       })
       const port = counted(apply)
       const outcome = await executePlan(port.db, { url }, plan, options)
@@ -2040,7 +2060,7 @@ describe("executePlan", () => {
       // Відмова настає до транзакції, тож бажаний стан тут не важить
       const plan = await planFor(url, [drop], {
         requiredPermissions: ["s1"],
-        desiredFingerprint: await read(url),
+        desiredFingerprint: NOT_COMPARED,
       })
       const port = counted(apply)
       const outcome = await executePlan(port.db, { url }, plan, {
@@ -2135,7 +2155,7 @@ describe("executePlan", () => {
     const stopping = async (url: string, s: PlanStep) =>
       planFor(url, [s], {
         requiredPermissions: ["s1"],
-        desiredFingerprint: await read(url),
+        desiredFingerprint: NOT_COMPARED,
       })
 
     const allowS1 = { ...options, allow: ["s1"] }
@@ -2250,7 +2270,7 @@ describe("executePlan", () => {
         )
         const plan = await planFor(url, [s], {
           requiredPermissions: ["s1"],
-          desiredFingerprint: await desiredFingerprint(setup, [s]),
+          desiredFingerprint: await desiredFingerprint(url, [s]),
         })
         const outcome = await executePlan(apply, { url }, plan, {
           ...allowS1,
@@ -2384,7 +2404,7 @@ describe("executePlan", () => {
       await inTarget(BASE, async (url) => {
         const plan = await planFor(url, [NOT_VALID], {
           desiredInvalid: [],
-          desiredFingerprint: await desiredFingerprint(BASE, [VALID]),
+          desiredFingerprint: await desiredFingerprint(url, [VALID]),
         })
         const outcome = await executePlan(apply, { url }, plan, options)
         expect(outcome).toMatchObject({
@@ -2405,7 +2425,7 @@ describe("executePlan", () => {
       await inTarget(BASE, async (url) => {
         const plan = await planFor(url, [NOT_VALID], {
           desiredInvalid: ["constraint app.t t_a"],
-          desiredFingerprint: await desiredFingerprint(BASE, [NOT_VALID]),
+          desiredFingerprint: await desiredFingerprint(url, [NOT_VALID]),
         })
         const outcome = await executePlan(apply, { url }, plan, options)
         expect(outcome).toMatchObject({ status: "committed" })

@@ -31,6 +31,7 @@ import {
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
 import {
+  shadowAgeMinutes,
   shadowDatabaseNames,
   testDatabaseUrl,
   readReferenceDomain,
@@ -103,15 +104,6 @@ const engine: SchemaEngine = createPgDeltaEngine()
  * хвилин. Така тінь — сирота вбитого прогону, `finally` якого не відбувся.
  */
 const STALE_SHADOW_MINUTES = 30
-
-/**
- * Вік тіні з її імені: pg-delta називає її `pgdelta_shadow_<мс у base36>_…`.
- * Ім'я іншої форми — вік невідомий.
- */
-function shadowAgeMinutes(name: string): number | undefined {
-  const ms = parseInt(/^pgdelta_shadow_([0-9a-z]+)_/.exec(name)?.[1] ?? "", 36)
-  return Number.isNaN(ms) ? undefined : (Date.now() - ms) / 60_000
-}
 
 async function dropShadow(name: string): Promise<void> {
   await withClient(stack, (c) =>

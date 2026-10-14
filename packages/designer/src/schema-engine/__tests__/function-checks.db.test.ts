@@ -30,6 +30,7 @@ import {
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   catalog,
+  fingerprintAfterSteps,
   metaFiles,
   project,
   shadowDatabaseCount,
@@ -144,19 +145,15 @@ const read = (url: string): Promise<CatalogFingerprint> =>
   )
 
 /**
- * Відбиток бажаного стану: окрема база, де `setup` і кроки вже виконано;
+ * Відбиток бажаного стану: кроки в тій самій цілі, у транзакції з відкатом;
  * `bodiesOff` — кроки під вимкненою валідацією тіл, як під преамбулою.
  */
 const desiredFingerprint = (
-  setup: string,
+  url: string,
   steps: readonly PlanStep[],
-  o: { bodiesOff?: boolean; superuser?: string } = {}
+  o: { bodiesOff?: boolean } = {}
 ): Promise<CatalogFingerprint> =>
-  inTarget(
-    `${setup};\n${o.bodiesOff === true ? "set check_function_bodies = off;\n" : ""}${steps.map((s) => `${s.sql};`).join("\n")}`,
-    read,
-    o.superuser
-  )
+  fingerprintAfterSteps(url, desired.scope, steps, o)
 
 function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
   return {
@@ -205,11 +202,10 @@ function locksOf(steps: readonly PlanStep[]): TableLock[] {
 const sessionPath = (url: string): Promise<string> =>
   reader.transaction({ url }, "rollback", readSessionSearchPath)
 
-/** План над живою ціллю; `desiredFingerprint` — з окремої бази. */
+/** План над живою ціллю; бажаний відбиток — кроки в цій самій цілі. */
 async function planFor(
   url: string,
   steps: PlanStep[],
-  desiredFingerprint: CatalogFingerprint,
   over: Partial<ExecutablePlan> = {}
 ): Promise<ExecutablePlan> {
   return {
@@ -236,8 +232,9 @@ async function planFor(
     environment: { defaultPrivileges: [] },
     resultCatalog: EMPTY_MODEL,
     targetFingerprint: await read(url),
-    desiredFingerprint,
     ...over,
+    desiredFingerprint:
+      over.desiredFingerprint ?? (await desiredFingerprint(url, steps)),
   }
 }
 
@@ -262,12 +259,11 @@ describe("function body revalidation", () => {
     const setup = `${TABLE_T};
       create function app.fa() returns text language sql as $$ select a from app.t $$`
     const steps = [RENAME_A]
-    const wanted = await desiredFingerprint(setup, steps)
     await inTarget(setup, async (url) => {
       const outcome = await executePlan(
         apply,
         { url },
-        await planFor(url, steps, wanted),
+        await planFor(url, steps),
         options
       )
       expect(outcome).toMatchObject({
@@ -292,14 +288,14 @@ describe("function body revalidation", () => {
         "CREATE FUNCTION app.bad() RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN; END $$"
       ),
     ]
-    const wanted = await desiredFingerprint("select 1", steps, {
-      bodiesOff: true,
-    })
     await inTarget("select 1", async (url) => {
       const outcome = await executePlan(
         apply,
         { url },
-        await planFor(url, steps, wanted, {
+        await planFor(url, steps, {
+          desiredFingerprint: await desiredFingerprint(url, steps, {
+            bodiesOff: true,
+          }),
           preamble: PREAMBLE,
           plpgsqlCheck: "unavailable",
         }),
@@ -323,12 +319,11 @@ describe("function body revalidation", () => {
       set check_function_bodies = off;
       create function app.fb() returns int language sql as $$ select nope from app.t $$`
     const steps = [NEUTRAL]
-    const wanted = await desiredFingerprint(setup, steps)
     await inTarget(setup, async (url) => {
       const outcome = await executePlan(
         apply,
         { url },
-        await planFor(url, steps, wanted),
+        await planFor(url, steps),
         options
       )
       expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
@@ -344,12 +339,11 @@ describe("function body revalidation", () => {
       [[NEUTRAL], false],
       [[RENAME_A], true],
     ] as const) {
-      const wanted = await desiredFingerprint(setup, steps)
       await inTarget(setup, async (url) => {
         const outcome = await executePlan(
           apply,
           { url },
-          await planFor(url, [...steps], wanted),
+          await planFor(url, [...steps]),
           options
         )
         if (!broken) {
@@ -373,9 +367,8 @@ describe("function body revalidation", () => {
       create table other.far (x int);
       create function app.fr() returns int language sql as $$ select x from other.far $$`
     const steps = [NEUTRAL]
-    const wanted = await desiredFingerprint(setup, steps)
     await inTarget(setup, async (url) => {
-      const plan = await planFor(url, steps, wanted)
+      const plan = await planFor(url, steps)
       const holder = new pg.Client({ connectionString: url })
       holder.on("error", () => {})
       await holder.connect()
@@ -414,14 +407,16 @@ describe("function body revalidation", () => {
       ),
       step("s2", "CREATE TABLE app.later (id int)"),
     ]
-    const wanted = await desiredFingerprint("select 1", steps, {
-      bodiesOff: true,
-    })
     const outcome = await inTarget("select 1", async (url) =>
       executePlan(
         apply,
         { url },
-        await planFor(url, steps, wanted, { preamble: PREAMBLE }),
+        await planFor(url, steps, {
+          desiredFingerprint: await desiredFingerprint(url, steps, {
+            bodiesOff: true,
+          }),
+          preamble: PREAMBLE,
+        }),
         { ...options, mode: "proof" }
       )
     )
@@ -434,14 +429,13 @@ describe("function body revalidation", () => {
     const superuser = `alter function app.fh() owner to ${STRANGER};
       revoke execute on function app.fh() from public`
     const steps = [NEUTRAL]
-    const wanted = await desiredFingerprint(setup, steps, { superuser })
     await inTarget(
       setup,
       async (url) => {
         const outcome = await executePlan(
           apply,
           { url },
-          await planFor(url, steps, wanted),
+          await planFor(url, steps),
           options
         )
         expect(outcome).toMatchObject({
@@ -471,14 +465,13 @@ describe("function body revalidation", () => {
       create trigger seen_state after insert on simetra.ledger
         for each row execute function app.seen_state();`
     const steps = [NEUTRAL]
-    const wanted = await desiredFingerprint(setup, steps)
     await inTarget(setup, async (url) => {
       const session = await sessionPath(url)
       // Шлях ревалідації інший за сесійний: повернення видно
       const outcome = await executePlan(
         apply,
         { url },
-        await planFor(url, steps, wanted, {
+        await planFor(url, steps, {
           preamble: PREAMBLE,
           revalidationSearchPath: "app, public",
         }),
@@ -515,11 +508,6 @@ describe("plpgsql_check", () => {
     ) => Promise<void> = async () => {},
     superuser?: string
   ) {
-    const wanted = await desiredFingerprint(
-      setup,
-      steps,
-      superuser === undefined ? {} : { superuser }
-    )
     await inTarget(
       setup,
       async (url) =>
@@ -527,7 +515,7 @@ describe("plpgsql_check", () => {
           await executePlan(
             apply,
             { url },
-            await planFor(url, steps, wanted, over),
+            await planFor(url, steps, over),
             options
           ),
           url
@@ -636,8 +624,6 @@ describe("plpgsql_check", () => {
            exists (select 1 from pg_extension where extname = 'plpgsql_check') as extension,
            exists (select 1 from pg_namespace where nspname = 'simetra_plpgsql_check') as schema`
       )
-    const broken = await desiredFingerprint(FP, [RENAME_A])
-    const neutral = await desiredFingerprint(FP, [NEUTRAL])
     await inTarget(FP, async (url) => {
       // Розширення в цій базі немає, і помилку тіла, якої валідатор мови не
       // бачить, ловить лише воно: тимчасове встановлення справді відбулося
@@ -645,7 +631,7 @@ describe("plpgsql_check", () => {
       const failed = await executePlan(
         apply,
         { url },
-        await planFor(url, [RENAME_A], broken),
+        await planFor(url, [RENAME_A]),
         options
       )
       expect(failed).toMatchObject({
@@ -660,7 +646,7 @@ describe("plpgsql_check", () => {
       const committed = await executePlan(
         apply,
         { url },
-        await planFor(url, [NEUTRAL], neutral),
+        await planFor(url, [NEUTRAL]),
         options
       )
       expect(committed).toMatchObject({ status: "committed", diagnostics: [] })

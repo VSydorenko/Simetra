@@ -1,4 +1,10 @@
 import pg from "pg"
+import {
+  readFingerprint,
+  type ApplyTransaction,
+  type CatalogFingerprint,
+  type EngineScope,
+} from "../../src/schema"
 
 const DEFAULT_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
@@ -34,6 +40,28 @@ export function testSuperuserUrl(): string {
 }
 
 /**
+ * Префікс імені scratch-бази двигуна: pg-delta називає її
+ * `pgdelta_shadow_<мс у base36>_…`. Єдине місце, де тести знають цю форму, —
+ * сторож стеку, сторож тіней `round-trip.db.test.ts` і лічильники нижче.
+ */
+export const SHADOW_PREFIX = "pgdelta_shadow_"
+
+/**
+ * Вік тіні в хвилинах з її імені. Ім'я іншої форми — `undefined` («вік
+ * невідомий»): невпізнане ім'я не можна видавати ні за свіже, ні за старе.
+ */
+export function shadowAgeMinutes(
+  name: string,
+  now: number = Date.now()
+): number | undefined {
+  if (!name.startsWith(SHADOW_PREFIX)) return undefined
+  const stamp = /^([0-9a-z]+)_/.exec(name.slice(SHADOW_PREFIX.length))?.[1]
+  if (stamp === undefined) return undefined
+  const ms = parseInt(stamp, 36)
+  return Number.isNaN(ms) ? undefined : (now - ms) / 60_000
+}
+
+/**
  * Кількість scratch-баз двигуна (`pgdelta_shadow_%`) на стеку. Тінь-сирота
  * лишається, якщо процес убито до `finally` (план E2a, рішення за спайком, 1),
  * тож тести порівнюють лічильник до й після, а не покладаються на ім'я.
@@ -43,7 +71,8 @@ export async function shadowDatabaseCount(): Promise<number> {
   await client.connect()
   try {
     const result = await client.query<{ n: number }>(
-      "select count(*)::int as n from pg_database where datname like 'pgdelta_shadow_%'"
+      "select count(*)::int as n from pg_database where starts_with(datname, $1)",
+      [SHADOW_PREFIX]
     )
     return result.rows[0]?.n ?? -1
   } finally {
@@ -63,7 +92,8 @@ export async function shadowDatabaseNames(): Promise<string[]> {
   await client.connect()
   try {
     const result = await client.query<{ name: string }>(
-      "select datname as name from pg_database where starts_with(datname, 'pgdelta_shadow_') order by 1"
+      "select datname as name from pg_database where starts_with(datname, $1) order by 1",
+      [SHADOW_PREFIX]
     )
     return result.rows.map((r) => r.name)
   } finally {
@@ -90,6 +120,46 @@ export async function withRollback<T>(
     } finally {
       // Відкат після збою `fn` може сам впасти (перервана транзакція) — це не
       // має затирати першопричину
+      await client.query("ROLLBACK").catch(() => undefined)
+    }
+  } finally {
+    await client.end()
+  }
+}
+
+/**
+ * Відбиток каталогу, яким він став би після `steps`: ті самі кроки в тій самій
+ * базі-цілі, у транзакції, яку завжди відкочують. Окрема база для бажаного
+ * стану давала б відбиток, який залежить від того, як вона відтворила ціль, а
+ * не від самої цілі. `bodiesOff` — кроки під вимкненою валідацією тіл, як під
+ * преамбулою плану.
+ */
+export async function fingerprintAfterSteps(
+  url: string,
+  scope: EngineScope,
+  steps: readonly { sql: string }[],
+  o: { bodiesOff?: boolean } = {}
+): Promise<CatalogFingerprint> {
+  const client = new pg.Client({ connectionString: url })
+  await client.connect()
+  try {
+    await client.query("BEGIN")
+    try {
+      if (o.bodiesOff === true)
+        await client.query("SET LOCAL check_function_bodies = off")
+      for (const step of steps) await client.query(step.sql)
+      const tx: ApplyTransaction = {
+        query: async <R extends Record<string, unknown>>(
+          sql: string,
+          params?: readonly unknown[]
+        ) => (await client.query(sql, params as unknown[])).rows as R[],
+        extract: () => {
+          throw new Error("fingerprintAfterSteps: the extract is not provided")
+        },
+      }
+      return await readFingerprint(tx, scope)
+    } finally {
+      // Відкат після збою кроку може сам впасти — це не має затирати причину
       await client.query("ROLLBACK").catch(() => undefined)
     }
   } finally {
