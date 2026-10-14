@@ -63,6 +63,7 @@ export {
   platformReplacements,
   promotionPermissionItems,
   propertyReproductions,
+  castProbeQuery,
   preservationPlan,
   preservationQuery,
   promotionTransition,
@@ -96,6 +97,7 @@ export {
 } from "./environment"
 export { isRetryable, RETRYABLE_SQLSTATES } from "./retry"
 export {
+  DATA_SETTINGS,
   readSessionSearchPath,
   revalidationSettings,
   withLocalSettings,

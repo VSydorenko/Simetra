@@ -38,15 +38,17 @@ const CATALOG_KINDS: ReadonlyMap<string, FunctionKind> = new Map(
 )
 
 /**
- * Час транзакції — єдиний виняток з IMMUTABLE: стабільний у межах кроку,
- * тож значення, яких ще немає (нова колонка, `NULL` змапленої), ним
- * заповнювати допустимо, а ремонт наявних даних — ні: перезапис збереженого
- * значення мусить бути детермінованим.
+ * Час транзакції — єдиний виняток з IMMUTABLE: стабільний у межах
+ * транзакції, тож значення, яких ще немає (нова колонка, `NULL` змапленої),
+ * ним заповнювати допустимо, а ремонт наявних даних — ні: перезапис
+ * збереженого значення мусить бути детермінованим. Лише час транзакції
+ * (спека промоції §4): замір «до» й обчислення кроку — різні оператори, тож
+ * час оператора в них різний. T2 не питає ціль про ці функції як про
+ * IMMUTABLE: вони STABLE, і їх уже допустив цей вивід.
  */
-const NOW_FUNCTIONS: ReadonlySet<string> = new Set([
+export const NOW_FUNCTIONS: ReadonlySet<string> = new Set([
   "now",
   "transaction_timestamp",
-  "statement_timestamp",
 ])
 
 /** Ключові слова часу транзакції (`current_timestamp`, `localtime`, …). */
@@ -93,6 +95,7 @@ const VOLATILE_NAMES: ReadonlySet<string> = new Set([
   "gen_random_uuid",
   "uuid_generate_v4",
   "clock_timestamp",
+  "statement_timestamp",
   "timeofday",
   "nextval",
   "setval",
@@ -194,8 +197,8 @@ export function modelFunctions(model: CompiledModel): ModelFunctions {
  * Вираз розбирається як `SELECT <вираз> FROM <схема>.<таблиця>` у старих
  * іменах — саме так П3 виконує його в `UPDATE … FROM (SELECT <ключ>, <вираз>
  * …)` до перейменувань, тож форма, яку парсер приймає тут, — та, що
- * виконається там. `mapped` — цілі, змаплені з колонок (`fillTargetKey`), зі
- * старим ім'ям колонки-джерела; `retired` — старі імена виведених колонок,
+ * виконається там. `mapped` — є, коли ціль змаплена з колонки, зі старим
+ * ім'ям колонки-джерела; `retired` — старі імена виведених колонок,
  * `key` — одноколонковий первинний ключ таблиці (немає — кроку не адресувати
  * рядки), `functions` — функції моделі.
  *
@@ -205,8 +208,8 @@ export function modelFunctions(model: CompiledModel): ModelFunctions {
  * цілі переписує збережені значення — це ремонт, і він детермінований.
  */
 export function fillStepKind(
-  step: FillStep,
-  mapped: ReadonlyMap<string, string | undefined>,
+  expression: string,
+  mapped: { source: string | undefined } | undefined,
   retired: ReadonlySet<string>,
   parse: SqlParser,
   table: {
@@ -220,7 +223,7 @@ export function fillStepKind(
   if (table.key === undefined) return { reason: "noKey" }
   // Перевод рядка перед FROM: коментар `--` у виразі не ковтає таблицю.
   const parsed = parse(
-    `SELECT ${step.expression}\nFROM ${quoteIdent(table.schema)}.${quoteIdent(table.name)}`
+    `SELECT ${expression}\nFROM ${quoteIdent(table.schema)}.${quoteIdent(table.name)}`
   )
   if (!parsed.ok) return { reason: "syntax" }
   if (parsed.statements.length !== 1) return { reason: "multipleStatements" }
@@ -264,10 +267,10 @@ export function fillStepKind(
   const problem = walker.walk(target.val)
   if (problem !== undefined) return { reason: problem }
   const columns = [...walker.columns]
-  const targetKey = fillTargetKey(step.target)
-  const fillsNulls = mapped.has(targetKey)
-    ? nullFallback(target.val, mapped.get(targetKey), table)
-    : target.val
+  const fillsNulls =
+    mapped !== undefined
+      ? nullFallback(target.val, mapped.source, table)
+      : target.val
   if (fillsNulls === undefined) {
     if (walker.readsNow) return { reason: "volatile" }
     if (walker.readsTimeString) return { reason: "specialTimeLiteral" }
@@ -287,6 +290,99 @@ export function fillStepKind(
       ? "split"
       : "backfill"
   return { kind, columns }
+}
+
+/**
+ * Вид кроку з запису промоції (рішення 5 плану П3-2b-2): той самий
+ * `fillStepKind`, що й `promote`, тож T2 не вірить полю `kind` на слово —
+ * від нього залежить дозвіл ремонту. Змаплені й вилучені колонки — з
+ * `record.columns` і `record.retired` таблиці кроку; `table.columns` — колонки
+ * таблиці в старих іменах; `functions` — `modelFunctions` бажаної моделі.
+ * Таблиця кроку, якої немає в `record.tables`, — розбіжність запису, яку
+ * той, хто кличе, ловить раніше: тут це зламаний конвеєр.
+ */
+export function recordedFillKind(
+  step: PromotionRecord["dataSteps"][number],
+  record: PromotionRecord,
+  table: { columns: readonly string[] },
+  functions: ModelFunctions,
+  parse: SqlParser
+): { kind: StepKind } | { reason: FillProblem } {
+  const promoted = record.tables.find(
+    (t) => t.schema === step.schema && t.from === step.table
+  )
+  if (promoted === undefined)
+    throw new Error(
+      `data step table ${step.schema}.${step.table} is not a promotion table`
+    )
+  const source = record.columns.find(
+    (c) =>
+      c.schema === step.schema &&
+      c.table === promoted.to &&
+      c.to === step.column
+  )
+  const retired = new Set(
+    record.retired
+      .filter((c) => c.schema === step.schema && c.table === step.table)
+      .map((c) => c.column)
+  )
+  const kind = fillStepKind(
+    step.expression,
+    source === undefined ? undefined : { source: source.from },
+    retired,
+    parse,
+    {
+      schema: step.schema,
+      name: step.table,
+      key: step.key,
+      columns: table.columns,
+    },
+    functions
+  )
+  return "reason" in kind ? kind : { kind: kind.kind }
+}
+
+/**
+ * Виклики функцій і агрегатів виразу `fill` (вузли `FuncCall`) без повторів,
+ * у порядку обходу: T2 питає ціль про їхню волатильність (рішення 5 плану
+ * П3-2b-2). Лише збір — вираз уже перевірив `fillStepKind`, а
+ * `ExpressionWalker` зупиняється на першій проблемі. Перевод рядка після
+ * виразу — щоб коментар `--` не ковтнув решти.
+ */
+export function fillCalls(
+  expression: string,
+  parse: SqlParser
+): { schema?: string; name: string }[] {
+  const parsed = parse(`SELECT ${expression}\n`)
+  if (!parsed.ok)
+    throw new Error(`fill expression does not parse: ${expression}`)
+  const out: { schema?: string; name: string }[] = []
+  const seen = new Set<string>()
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item)
+      return
+    }
+    if (!isRecordNode(node)) return
+    for (const [type, value] of Object.entries(node)) {
+      if (type === "FuncCall" && isRecordNode(value)) {
+        const names = strings(value.funcname)
+        if (names !== undefined) {
+          const key = JSON.stringify(names)
+          if (!seen.has(key)) {
+            seen.add(key)
+            const name = names.at(-1)!
+            out.push(
+              names.length > 1 ? { schema: names.at(-2)!, name } : { name }
+            )
+          }
+        }
+      }
+      visit(value)
+    }
+  }
+  visit(parsed.statements)
+  return out
 }
 
 /**

@@ -5,7 +5,11 @@ export {
   type TransitionVerdict,
 } from "./transition"
 export { renameIntent, withTempNames, type RenameIntent } from "./intent"
-export { preservationPlan, preservationQuery } from "./preservation"
+export {
+  castProbeQuery,
+  preservationPlan,
+  preservationQuery,
+} from "./preservation"
 export {
   canonicalRenames,
   readEquivalenceObjects,

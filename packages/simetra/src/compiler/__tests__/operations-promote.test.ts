@@ -3,11 +3,15 @@ import {
   applyChanges,
   compile,
   derivePromotionFacts,
+  fillCalls,
+  loadSqlParser,
   localize,
+  modelFunctions,
   promoteInput,
   promoteObject,
   promotionMapping,
   promotionRecordSchema,
+  recordedFillKind,
   serializeCanonical,
   type ConversionClass,
   type PromoteInput,
@@ -2092,6 +2096,101 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       ).toMatchObject({ column: target, kind })
     }
   )
+
+  it("derives the recorded kind as promote does", async () => {
+    const parse = await loadSqlParser()
+    const files = promotionProject(PARTS)
+    const source = (await compile(files)).model!.physical.tables
+    const cases: [string, string][] = [
+      ["description", "coalesce(inn, name)"],
+      ["description", "coalesce(name, inn)"],
+      ["description", "left(name, 150)"],
+      ["label", "name || inn"],
+      ["label", "upper(name)"],
+      ["label", "'unnamed'"],
+      ["description", "coalesce(name, 'x')"],
+    ]
+    const seen = new Set<string>()
+    for (const [target, expression] of cases) {
+      const { result, after } = await promoted(
+        files,
+        mapping((m) => {
+          label(m)
+          m.columns.inn = { to: "retire" }
+          m.conversions["Counterparty#uniques/counterparties_inn_key"] =
+            "removed"
+          m.fill.push({
+            target:
+              target === "label"
+                ? { to: "attribute", name: target }
+                : { to: "standard", name: target },
+            expression,
+          })
+        })
+      )
+      expect(errors(result), expression).toEqual([])
+      const record = result.record!
+      const functions = modelFunctions((await compile(after)).model!)
+      for (const step of record.dataSteps) {
+        const table = source.find(
+          (t) => t.schema === step.schema && t.name === step.table
+        )!
+        expect(
+          recordedFillKind(
+            step,
+            record,
+            { columns: table.columns.map((c) => c.name) },
+            functions,
+            parse
+          ),
+          step.expression
+        ).toEqual({ kind: step.kind })
+        seen.add(step.kind)
+      }
+    }
+    expect([...seen].sort()).toEqual([
+      "backfill",
+      "conversion",
+      "repair",
+      "split",
+    ])
+  })
+
+  it("refuses statement_timestamp in a backfill", async () => {
+    // Замір «до» й обчислення — різні оператори: час оператора в них різний
+    const files = promotionProject(WITH_CONTACTS)
+    const { result } = await promoted(
+      files,
+      withContacts((m) => {
+        m.fill.at(-1)!.expression = "statement_timestamp()"
+      })
+    )
+    expect(brief(result)).toEqual([
+      {
+        code: "promote.expression-invalid",
+        file: "",
+        pointer: "",
+        params: {
+          at: "/fill/1/expression",
+          expression: "statement_timestamp()",
+          reason: "volatile",
+        },
+      },
+    ])
+  })
+
+  it("lists the calls of a fill expression", async () => {
+    const parse = await loadSqlParser()
+    // `coalesce` — `CoalesceExpr`, а не виклик функції
+    expect(fillCalls("coalesce(app.norm(lower(name)), 'x')", parse)).toEqual([
+      { schema: "app", name: "norm" },
+      { name: "lower" },
+    ])
+    expect(
+      fillCalls("lower(name) || pg_catalog.lower(code) -- trim", parse)
+    ).toEqual([{ name: "lower" }, { schema: "pg_catalog", name: "lower" }])
+    expect(fillCalls("upper(upper(name))", parse)).toEqual([{ name: "upper" }])
+  })
 
   it("refuses a reference to a tabular section table from inside the unit as unit-unsupported", async () => {
     const files = edited(

@@ -253,7 +253,15 @@ function planSteps(
       ...(keyColumns.length === 1 ? { key: keyColumns[0] } : {}),
       columns: physical.columns.map((c) => c.name),
     }
-    const kind = fillStepKind(step, mapped, retired, parse, shape, functions)
+    const targetKey = fillTargetKey(step.target)
+    const kind = fillStepKind(
+      step.expression,
+      mapped.has(targetKey) ? { source: mapped.get(targetKey) } : undefined,
+      retired,
+      parse,
+      shape,
+      functions
+    )
     if ("reason" in kind) {
       problems.push(
         diagnostic("promote.expression-invalid", "", "", {

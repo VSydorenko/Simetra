@@ -61,7 +61,11 @@ import {
 } from "./promotion/preservation"
 import { isRetryable } from "./retry"
 import { readInvalidObjects } from "./validity"
-import { revalidationSettings, withLocalSettings } from "./settings"
+import {
+  DATA_SETTINGS,
+  revalidationSettings,
+  withLocalSettings,
+} from "./settings"
 import { findApply, readApplyState, writeApplyStateStatements } from "./state"
 import {
   coversMode,
@@ -514,10 +518,14 @@ async function runAttempt(
       sections: changed.join(", "),
     })
 
-  // 6a. Заміри збереження «до» — у старих іменах, до першого кроку, під
-  // налаштуваннями транзакції (рішення 6 плану П3-2a)
+  // 6a. Заміри збереження «до» — у старих іменах, до першого кроку
+  // (рішення 6 плану П3-2a), під закріпленими налаштуваннями даних: текст
+  // значень залежить від налаштувань, тож репетиція й робота мусять мірити
+  // однаково (спека промоції §7.2)
   const preserved = plan.promotion?.preservation ?? []
-  const before = await measureBefore(tx, preserved, parse)
+  const before = await underDataSettings(tx, preserved, () =>
+    measureBefore(tx, preserved, parse)
+  )
 
   // 6b. Таблиці, що є до кроків: звірка сліду дивиться лише на них, бо
   // створена планом таблиця нікого не блокує. Застосування з COMMIT звірки
@@ -564,10 +572,11 @@ async function runAttempt(
     })
   }
 
-  // 14. Заміри «після» — у нових іменах, після кроків. Та сама транзакція
-  // й ті самі налаштування сесії, що й «до», тож текст значень порівнюваний
-  // без закріплення GUC
-  await provePreservation(tx, preserved, before, parse)
+  // 14. Заміри «після» — у нових іменах, після кроків, під тими самими
+  // закріпленими налаштуваннями даних, що й «до»: текст значень порівнюваний
+  await underDataSettings(tx, preserved, () =>
+    provePreservation(tx, preserved, before, parse)
+  )
 
   // 15. Ревалідація тіл проти базової лінії. `plpgsql_check`, пропущений до
   // кроків, пропускається й після: порівнювати нема з чим. Сліпі функції
@@ -992,6 +1001,17 @@ async function runGuard(
   if (lost > 0)
     throw stop("failed", "apply.type-narrowing", { step, table, column, lost })
 }
+
+/**
+ * Заміри під `DATA_SETTINGS`. План без промоції замірів не має, тож і
+ * налаштувань не ставить.
+ */
+const underDataSettings = <T>(
+  tx: ApplyTransaction,
+  preserved: readonly PreservedTable[],
+  run: () => Promise<T>
+): Promise<T> =>
+  withLocalSettings(tx, preserved.length === 0 ? [] : DATA_SETTINGS, run)
 
 /** Один рядок заміру: `rows` і суми `c<i>` колонок у порядку секції. */
 type Measurement = Record<string, unknown>

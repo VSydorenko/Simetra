@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
-import type { PromotionRecord } from "simetra/compiler"
+import { loadSqlParser, type PromotionRecord } from "simetra/compiler"
 import type { PhysicalTable } from "simetra/model"
 import {
+  castProbeQuery,
   preservationPlan,
   preservationQuery,
   renameIntent,
@@ -218,22 +219,68 @@ describe("preservationPlan", () => {
 
 describe("preservationQuery", () => {
   const [t] = plan()
+  const sum = (i: number) =>
+    `pg_catalog.sum(pg_catalog.hashtextextended(k::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN x${i} IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) x${i}::pg_catalog.text END, 0)::pg_catalog.numeric) AS c${i}`
 
   it("hashes key, NULL marker and value in one pass without ONLY", () => {
     const sql = preservationQuery(t!, "before")
     expect(sql).toBe(
-      [
-        "SELECT pg_catalog.count(*) AS rows",
-        `pg_catalog.sum(pg_catalog.hashtextextended(id::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN (id) IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) (id)::pg_catalog.text END, 0)::pg_catalog.numeric) AS c0`,
-        `pg_catalog.sum(pg_catalog.hashtextextended(id::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN ("Name") IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) ("Name")::pg_catalog.text END, 0)::pg_catalog.numeric) AS c1`,
-        `pg_catalog.sum(pg_catalog.hashtextextended(id::pg_catalog.text OPERATOR(pg_catalog.||) ':' OPERATOR(pg_catalog.||) CASE WHEN ((x::integer)) IS NULL THEN 'n' ELSE 'v' OPERATOR(pg_catalog.||) ((x::integer))::pg_catalog.text END, 0)::pg_catalog.numeric) AS c2 FROM app.t`,
-      ].join(", ")
+      `SELECT pg_catalog.count(*) AS rows, ${sum(0)}, ${sum(1)}, ${sum(2)} FROM (SELECT id AS k, (\nid\n) AS x0, (\n"Name"\n) AS x1, (\n(x::integer)\n) AS x2 FROM app.t) AS s`
     )
     expect(sql).not.toMatch(/\bONLY\b/)
   })
 
+  it("measures every expression in a subquery", () => {
+    // Віконна функція в агрегаті заборонена: кожен вираз рахується в
+    // підзапиті, а агрегати — над його колонками, з обох боків однаково
+    expect(preservationQuery(t!, "after")).toBe(
+      `SELECT pg_catalog.count(*) AS rows, ${sum(0)}, ${sum(1)}, ${sum(2)} FROM (SELECT ref AS k, (\nref\n) AS x0, (\nname\n) AS x1, (\nx\n) AS x2 FROM app.u) AS s`
+    )
+  })
+
   it("reads the new names after", () => {
-    expect(preservationQuery(t!, "after")).toMatch(/ FROM app\.u$/)
-    expect(preservationQuery(t!, "after")).toContain("hashtextextended(ref::")
+    expect(preservationQuery(t!, "after")).toMatch(/ FROM app\.u\) AS s$/)
+    expect(preservationQuery(t!, "after")).toContain("SELECT ref AS k")
+  })
+})
+
+describe("castProbeQuery", () => {
+  const windowed: PreservedTable = {
+    before: { schema: "app", table: "t" },
+    after: { schema: "app", table: "u" },
+    key: { before: "id", after: "id" },
+    columns: [
+      { before: "row_number() over (order by id)", after: "n" },
+      { before: "left(code, 20) -- trim", after: "code" },
+    ],
+  }
+
+  it("probes a windowed expression in a subquery", () => {
+    // Віконна функція прямо в `count` дала б `42803`, а не клас `22`
+    expect(castProbeQuery(windowed, windowed.columns[0]!)).toBe(
+      "SELECT pg_catalog.count(x) AS probe FROM (SELECT (\nrow_number() over (order by id)\n) AS x FROM app.t) AS s"
+    )
+  })
+
+  it("survives a comment in the expression", async () => {
+    const parse = await loadSqlParser()
+    const commented = windowed.columns[1]!
+    const statements = [
+      castProbeQuery(windowed, commented),
+      preservationQuery({ ...windowed, columns: [commented] }, "before"),
+    ]
+    for (const sql of statements) {
+      const parsed = parse(sql)
+      expect(parsed.ok, sql).toBe(true)
+      if (!parsed.ok) continue
+      expect(parsed.statements, sql).toHaveLength(1)
+      const select = (
+        parsed.statements[0]!.stmt as {
+          SelectStmt?: { fromClause?: unknown[] }
+        }
+      ).SelectStmt
+      // Однорядковий рендер закоментував би `FROM` разом із рештою
+      expect(select?.fromClause, sql).toHaveLength(1)
+    }
   })
 })

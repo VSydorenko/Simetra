@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   ApplyConnectionLost,
   ApplyDbError,
+  DATA_SETTINGS,
   executePlan,
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
@@ -302,10 +303,12 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("current_setting('search_path')")) return "save-path"
   if (sql.includes("set_config('search_path'")) return "set-path"
   if (sql.includes("check_function_bodies")) return "function-bodies"
+  // Заміри й проби рахують вирази в підзапиті: мітка — таблиця підзапиту
+  // і вираз проби між переводами рядка
   if (sql.includes("hashtextextended"))
-    return `measure ${sql.slice(sql.lastIndexOf(" FROM ") + 6)}`
+    return `measure ${/ FROM (\S+)\) AS s$/.exec(sql)![1]!}`
   if (sql.includes(" AS probe"))
-    return `probe ${sql.slice("SELECT pg_catalog.count(".length, sql.indexOf(") AS probe"))}`
+    return `probe ${/\(SELECT \(\n([\s\S]*)\n\) AS x FROM /.exec(sql)![1]!}`
   // Решта операторів відбитка й стану — частини вже позначених кроків
   if (
     sql.includes("search_path") ||
@@ -1969,7 +1972,10 @@ describe("executePlan", () => {
       )
     ).toEqual([
       "fingerprint",
+      "get-settings",
+      "set-settings",
       "measure app.t",
+      "set-settings",
       "existing",
       "get-settings",
       "set-settings",
@@ -1983,7 +1989,10 @@ describe("executePlan", () => {
       "set-settings",
       "set-constraints",
       // Заміри «після» — до ревалідації (рішення 1 плану П3-2b-1)
+      "get-settings",
+      "set-settings",
       "measure app.u",
+      "set-settings",
       "get-settings",
       "set-settings",
       "validators",
@@ -1999,6 +2008,51 @@ describe("executePlan", () => {
       "held-locks",
       "ROLLBACK",
     ])
+  })
+
+  it("measures preservation under the pinned data settings", async () => {
+    const { db, log, seen } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      {
+        ...promoted,
+        promotion: {
+          ...promoted.promotion!,
+          ...tabled,
+          permissionItems: [],
+          preservation: [
+            {
+              before: { schema: "app", table: "t" },
+              after: { schema: "app", table: "u" },
+              key: { before: "id", after: "id" },
+              columns: [{ before: "c", after: "d" }],
+            },
+          ],
+        },
+      },
+      { ...options, mode: "rehearse", rehearsal: stubRehearsal }
+    )
+    expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+    const pinned = {
+      ...SESSION,
+      ...Object.fromEntries(DATA_SETTINGS.map((s) => [s.name, s.value])),
+    }
+    // Обидва заміри — під усіма парами, і після кожного налаштування
+    // транзакції повертаються
+    expect(seen["measure app.t"]).toEqual([pinned])
+    expect(seen["measure app.u"]).toEqual([pinned])
+    expect(seen.existing).toEqual([SESSION])
+    expect(seen["set-constraints"]).toEqual([SESSION])
+    for (const label of ["measure app.t", "measure app.u"]) {
+      const i = log.indexOf(label)
+      expect(log.slice(i - 2, i + 2), label).toEqual([
+        "get-settings",
+        "set-settings",
+        label,
+        "set-settings",
+      ])
+    }
   })
 
   it("blames a failing key cast on the key, not on another cast column", async () => {

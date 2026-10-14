@@ -105,30 +105,40 @@ const CONCAT = "OPERATOR(pg_catalog.||)"
  * текстом: інакше `NULL` і рядок, що виглядає як маркер, дали б той самий
  * хеш. Без `ONLY`, як і сторож: рядки партицій і нащадків теж рахуються.
  * Сума — `numeric`, тож переповнення немає, а пам'ять стала.
+ *
+ * Вирази рахуються в підзапиті, агрегати — над його колонками (рішення 8
+ * плану П3-2b-2): віконна функція в аргументі агрегату заборонена, а вираз
+ * кроку даних може бути віконним; одна форма для всіх колонок не дає двох
+ * шляхів. Вираз — між переводами рядка: коментар `--` у ньому інакше
+ * закоментував би решту оператора.
  */
 export function preservationQuery(
   t: PreservedTable,
   side: "before" | "after"
 ): string {
-  const key = t.key[side]
-  const sums = t.columns.map((c, i) => {
-    const expr = c[side]
-    return `pg_catalog.sum(pg_catalog.hashtextextended(${key}::pg_catalog.text ${CONCAT} ':' ${CONCAT} CASE WHEN (${expr}) IS NULL THEN 'n' ELSE 'v' ${CONCAT} (${expr})::pg_catalog.text END, 0)::pg_catalog.numeric) AS c${i}`
-  })
-  return `${["SELECT pg_catalog.count(*) AS rows", ...sums].join(", ")} FROM ${qualified(t[side])}`
+  const sums = t.columns.map(
+    (_, i) =>
+      `pg_catalog.sum(pg_catalog.hashtextextended(k::pg_catalog.text ${CONCAT} ':' ${CONCAT} CASE WHEN x${i} IS NULL THEN 'n' ELSE 'v' ${CONCAT} x${i}::pg_catalog.text END, 0)::pg_catalog.numeric) AS c${i}`
+  )
+  const values = t.columns.map((c, i) => `${multiline(c[side])} AS x${i}`)
+  return `${["SELECT pg_catalog.count(*) AS rows", ...sums].join(", ")} FROM (SELECT ${[`${t.key[side]} AS k`, ...values].join(", ")} FROM ${qualified(t[side])}) AS s`
 }
 
 /**
  * Проба одного приведення «до», коли замір таблиці впав на приведенні: лише
  * вираз колонки, без ключа. Ключ зі зміною типу — теж змаплена колонка зі
  * своєю пробою; з ключем у кожній пробі його збій приписався б першій колонці.
+ * Підзапит — як у заміру: віконна функція прямо в `count` дала б `42803`, а
+ * не клас `22`, і сховала б справжню колонку зі звуженням.
  */
 export function castProbeQuery(
   t: PreservedTable,
   column: PreservedTable["columns"][number]
 ): string {
-  return `SELECT pg_catalog.count(${column.before}) AS probe FROM ${qualified(t.before)}`
+  return `SELECT pg_catalog.count(x) AS probe FROM (SELECT ${multiline(column.before)} AS x FROM ${qualified(t.before)}) AS s`
 }
+
+const multiline = (expr: string): string => `(\n${expr}\n)`
 
 const qualified = ({ schema, table }: PreservedTable["before"]): string =>
   `${quoteIdent(schema)}.${quoteIdent(table)}`

@@ -33,6 +33,13 @@ export {
 } from "./inputs"
 export { promoteObject } from "./promote"
 export {
+  fillCalls,
+  modelFunctions,
+  NOW_FUNCTIONS,
+  recordedFillKind,
+  type ModelFunctions,
+} from "./promote/fill"
+export {
   uniqueDifferences,
   type FieldDifference,
   type UniqueShape,

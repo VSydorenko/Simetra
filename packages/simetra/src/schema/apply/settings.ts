@@ -58,6 +58,30 @@ async function setLocal(
 }
 
 /**
+ * Закріплені налаштування даних: під ними йдуть кроки даних і заміри
+ * збереження «до» й «після», тож репетиція й робота рахують вирази й текст
+ * значень однаково. Перелік і причини — спека промоції §7.2 «Закріплені
+ * налаштування даних»; тест звіряє цей перелік із нею.
+ */
+export const DATA_SETTINGS: readonly EngineSetting[] = [
+  { name: "search_path", value: "pg_catalog, pg_temp" },
+  { name: "TimeZone", value: "UTC" },
+  { name: "DateStyle", value: "ISO, MDY" },
+  { name: "IntervalStyle", value: "postgres" },
+  { name: "extra_float_digits", value: "1" },
+  { name: "bytea_output", value: "hex" },
+  { name: "lc_monetary", value: "C" },
+  { name: "timezone_abbreviations", value: "Default" },
+  { name: "standard_conforming_strings", value: "on" },
+  { name: "array_nulls", value: "on" },
+  { name: "transform_null_equals", value: "off" },
+  { name: "quote_all_identifiers", value: "off" },
+  { name: "xmloption", value: "content" },
+  { name: "xmlbinary", value: "base64" },
+  { name: "row_security", value: "off" },
+]
+
+/**
  * Налаштування ревалідації тіл (рішення 2, 3): при вимкненій валідації
  * валідатор мови нічого не перевіряє, а шлях — сесійний шлях цілі, записаний
  * планом під `planHash`. Закріплений `pg_catalog, pg_temp` зробив би
