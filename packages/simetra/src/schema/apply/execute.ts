@@ -1,4 +1,5 @@
 import {
+  canonicalize,
   loadSqlParser,
   promotionRecordHash,
   type SqlParser,
@@ -441,7 +442,9 @@ async function runAttempt(
       plan.role,
       PROVIDER_LOCKS[plan.scope.provider]
     )
-    if (JSON.stringify(live) !== JSON.stringify(plan.providerLocks))
+    // Канонічна форма, а не JSON.stringify: план із файлу розібрано схемою
+    // артефакту, і порядок його ключів не мусить збігатися з порядком читача
+    if (canonicalize(live) !== canonicalize(plan.providerLocks))
       throw stop("refused", "apply.target-changed", {
         sections: "providerLocks",
       })
@@ -466,7 +469,8 @@ async function runAttempt(
   // провайдера. Копія доказу несе лише межу: FK поза нею там немає
   if (o.mode !== "proof" && plan.foreignKeys.subjects.length > 0) {
     const live = await readLiveForeignKeys(tx, plan.foreignKeys.subjects)
-    if (JSON.stringify(live) !== JSON.stringify(plan.foreignKeys.live))
+    // Канонічно, як перелік провайдера (4a)
+    if (canonicalize(live) !== canonicalize(plan.foreignKeys.live))
       throw stop("refused", "apply.target-changed", {
         sections: "foreignKeys",
       })

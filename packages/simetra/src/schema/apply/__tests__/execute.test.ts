@@ -678,13 +678,25 @@ describe("executePlan", () => {
     expect(log.indexOf("foreign-keys")).toBeGreaterThan(
       log.indexOf("environment")
     )
-    // Ті самі FK, що й у плані, — застосування йде далі
+    // Ті самі FK, що й у плані, — застосування йде далі. Ключі FK плану — в
+    // іншому порядку, ніж їх складає читач: план з артефакту розбирає Zod за
+    // своєю схемою, тож звірка — канонічна, а не за порядком ключів
+    const reordered = {
+      references: {
+        columns: r.references.columns,
+        table: r.references.table,
+        schema: r.references.schema,
+      },
+      columns: r.columns,
+      table: r.table,
+      schema: r.schema,
+    } satisfies LiveForeignKey
     const same = fakeDb({ foreignKeys: [r] })
     expect(
       await executePlan(
         same.db,
         target,
-        { ...plan, foreignKeys: { subjects, live: [r] } },
+        { ...plan, foreignKeys: { subjects, live: [reordered] } },
         options
       )
     ).toMatchObject({ status: "committed" })
@@ -733,9 +745,14 @@ describe("executePlan", () => {
         target,
         {
           ...plan,
+          // Ключі — в іншому порядку, ніж їх складає читач: звірка канонічна
           providerLocks: NO_PROVIDER_TABLES.map((set) =>
             set.setting === "supautils.policy_grants"
-              ? { ...set, tables: [{ schema: "auth", name: "users" }] }
+              ? {
+                  tables: [{ name: "users", schema: "auth" }],
+                  statements: set.statements,
+                  setting: set.setting,
+                }
               : set
           ),
         },
