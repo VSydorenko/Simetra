@@ -1656,9 +1656,17 @@ describe("executePlan", () => {
         mode: "rehearse",
         rehearsal: stubRehearsal,
       })
-      expect(outcome.diagnostics[0]!.code).not.toBe(
-        "apply.rehearsal-proof-failed"
-      )
+      // Обрив — не провал доказу: його розбирає пошук за id застосування, а
+      // пустушка ledger запису не має, тож «не застосовано»
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.connection-lost",
+            params: { outcome: "not-applied" },
+          },
+        ],
+      })
     })
 
     it("does not run for apply and proof", async () => {
