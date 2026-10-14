@@ -38,7 +38,10 @@
   Sonnet, read-only). Role matrix (who uses code tooling, who re-checks the
   plan) — `AGENTS.md` § "Code research". Library docs — `context7`.
 - **Committing agents run sequentially.** Never let two agents that commit
-  work on the same checkout at the same time.
+  work on the same checkout at the same time. The same holds for a gate run:
+  do not run the gates while an agent edits the checkout, or the result is not
+  tied to one commit (the DB guard prints the commit and warns when the tree
+  changed during the run).
 - **Architectural quality, not workarounds.** Propose solutions with a
   long-term architectural rationale, not short-term hacks.
 - **Plans are self-contained.** A plan for implementation in another session

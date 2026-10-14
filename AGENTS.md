@@ -47,6 +47,10 @@ specs. Claude Code specifics live in `CLAUDE.md`.
 
 Decisions that change the platform spec go through the owner. If you need to
 deviate from a spec, stop and report the deviation — never decide it silently.
+A deviation approved in the middle of executing a plan lands together with its
+spec amendment, in the same block of work: record the spec impact ("none" or
+the § to amend) next to the decision, so the drift is not left for the final
+review to find.
 
 ## Platform / consumer boundary
 
@@ -190,6 +194,13 @@ pnpm db:stop
   proves nothing.
 - The local stack is started only through `pnpm db:*` (pinned CLI version),
   never through a global `supabase`.
+- The local stack is one per machine and shared by every session and agent on
+  it. The DB test projects' `globalSetup`
+  (`packages/simetra/test/db/stack-guard.ts`) runs one DB run at a time (a
+  second run waits), refuses to start on a nearly full disk, and fails the run
+  when the stack differs afterwards. A DB test leaves nothing behind, failure
+  paths included. Never drop stack objects your run did not create; report an
+  orphan instead.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
   `pnpm metadata:check` and a `db` job that starts the stack and runs `pnpm test:db`. It does not run
   the anchor check — run it yourself whenever you edit docs or skills, or
