@@ -174,6 +174,18 @@ pg-delta; реальна база споживача.
    - Форма `table` у `data` — така сама, як у результаті `writeData` П3-2b-2
      (там вона структурна: `{ schema, table, computed, written }`, старі
      імена).
+   - **Лічильники — числа.** Порт повертає `count(*)` (`bigint`) рядком
+     (заміри 6a порівнюють `String(…)`). Докази перетворюють кожен лічильник
+     (`rows`, `computed`, `written`) помічником `countOf(value: unknown):
+     number`: десятковий рядок чи число → `Number`, перевірка
+     `Number.isSafeInteger(n) && n >= 0`, інакше `Error` (дефект порту, не
+     стан цілі). Схема звіту — `z.number().int().nonnegative()`.
+   - **Вивід репетиції** (аудит Codex): `renderApply` для `rolledBack` зараз
+     каже «nothing was written» — тепер «rolled back; the database was not
+     changed; rehearsal report written to <шлях>»; `ApplyData` отримує
+     `report: string | null`; CLI (`cli/render.ts`, де `artifacts` зараз
+     лише для `plan`) і MCP (`mcp/tools.ts`) віддають `artifacts` і для
+     `apply`.
 4. **Докази раннера.** `ExecuteOutcome` статусу `rolledBack` у режимі
    `rehearse` несе `evidence: RehearsalEvidence` — усе для звіту, крім
    `planHash`/`format`.
@@ -208,9 +220,21 @@ pg-delta; реальна база споживача.
    - `report.planHash ≠ planHash` → `apply.rehearsal-stale` (`reason:
      "plan"`) — у раннері (`rehearsalRefusals`), бо `executePlan` не довіряє
      інструменту;
-   - сервер і голову ledger звіряє фаза 4e з `plan.server` і
-     `plan.ledgerHead`: репетиція їх уже звірила з тими самими полями, тож
-     окремого порівняння звіт ↔ ціль не треба.
+   - `report.server ≠ plan.server` → `apply.rehearsal-stale` (`reason:
+     "server"`) — спека §8: «звіт іншого плану, формату чи сервера — відмова
+     „звіт застарів“» (аудит Codex). `report.ledgerHead ≠ plan.ledgerHead` →
+     `reason: "ledger"`. Звіт пише раннер після тих самих звірок, тож
+     розбіжність означає підмінений файл, але звіт не під `planHash`, і
+     раннер йому не довіряє;
+   - **склад рядків звіту** (аудит Codex, блокер): `report.rows` має рівно
+     один запис на кожну таблицю одиниці (`record.tables`, старі імена) і
+     нічого більше; інакше → `apply.rehearsal-stale` (`reason: "tables"`).
+     Без цього звіт з правильним `planHash` і `rows: []` оминув би гейт
+     порожньої копії;
+   - **живий сервер і голову ledger** цілі звіряє фаза 4e з `plan.server` і
+     `plan.ledgerHead` → `apply.target-changed` (`sections: "server"` /
+     `"ledger"`): це вже не звіт, а ціль, що змінилась. Два коди не
+     суперечать спеці: перший каже про звіт, другий — про ціль.
 6. **Рядки й тайм-аут — у транзакції** (правка §8, погоджена). Нова фаза 6c
    лише для `apply` промоції, після заміру «до» (6a, що вже рахує
    `count(*)` кожної таблиці одиниці під замками):
@@ -375,9 +399,13 @@ pg-delta; реальна база споживача.
   - `execute.test.ts` `"names the owners as the cause of a failed proof"`:
     фейковий двигун дає дію при відбитку, що різниться лише власником →
     `cause: "owners"`; та сама дія при рівних власниках — без `cause`, з
-    `count` і `first`.
-    Роль і бази тест прибирає у `finally`, зокрема на шляху падіння (роль —
-    після баз).
+    `count` і `first`. (Тест власників вище прибирає роль і бази у
+    `finally`, зокрема на шляху падіння; роль — після баз.)
+  - `execute-plan.db.test.ts` `"refuses a copy on another server"` (аудит
+    Codex, конвеєр): копія — `CREATE DATABASE … TEMPLATE template0
+    LC_COLLATE 'C' LC_CTYPE 'C'` з тією самою схемою й станом (факт
+    `collate` інший) → репетиція → `apply.target-changed` з `sections:
+    "server"` до першого кроку; копію тест прибирає у `finally`.
 - [ ] **Step 2: FAIL.** Run: `pnpm --filter simetra test execute artifact`.
 - [ ] **Step 3: Реалізувати:** `plan` читає обидва поля тією самою
   транзакцією `READ ONLY`, що стан застосування; фаза 4e — після 4d, без
@@ -394,14 +422,18 @@ git commit -m "feat(schema): доказ копії репетиції — фак
 ### Task 2: Докази репетиції в раннері
 
 **Files:**
+- Create: `packages/simetra/src/schema/apply/rehearsal.ts` — лише типи
+  `RehearsalReport` (рішення 3), `RehearsalEvidence` і помічник `countOf`;
+  схему, розбір і файл додає задача 3 (аудит Codex: тип мусить існувати до
+  коміту з `typecheck`)
 - Modify: `packages/simetra/src/schema/apply/execute.ts`
 - Test: `packages/simetra/src/schema/apply/__tests__/execute.test.ts`,
   `packages/designer/src/schema-engine/__tests__/execute-plan.db.test.ts`
 
 **Interfaces:**
 - Produces: `RehearsalEvidence` = `Omit<RehearsalReport, "format" |
-  "planHash">` (тип — у `rehearsal.ts`, задача 3 його лише наповнює схемою;
-  тут — інтерфейс); `ExecuteOutcome` статусу `rolledBack` у `rehearse` —
+  "planHash">`; `countOf(value: unknown): number` (рішення 3, «Лічильники —
+  числа»); `ExecuteOutcome` статусу `rolledBack` у `rehearse` —
   `{ …, evidence: RehearsalEvidence }`; `timedTransaction(tx, clock):
   ApplyTransaction & { setPhase(phase: string, step?: string): void;
   durations(): RehearsalEvidence["durations"] }` у `execute.ts`;
@@ -419,7 +451,11 @@ git commit -m "feat(schema): доказ копії репетиції — фак
     спроба — `55P03`, друга успішна → докази другої;
   - `execute.test.ts` `"has no evidence outside a rehearsal"`;
   - `execute-plan.db.test.ts` `"reports the rows and the data counters of a
-    rehearsal"` на справжній базі з кроком даних.
+    rehearsal"` на справжній базі з кроком даних: `rows`, `computed`,
+    `written` — числа (`typeof === "number"`), не рядки порту;
+  - `rehearsal.test.ts` `"reads a count as a safe integer"`: `countOf("12")`
+    → `12`; `countOf("-1")`, `countOf("9007199254740993")`, `countOf(null)`
+    → `Error`.
 - [ ] **Step 2–4:** FAIL → реалізувати (рішення 4) → PASS
   (`pnpm --filter simetra test execute`, typecheck, `pnpm test:db`).
 - [ ] **Step 5: Коміт**
@@ -432,8 +468,12 @@ git commit -m "feat(schema): раннер збирає докази репети
 ### Task 3: Звіт — схема, файл, вісь `"artifact"`, ledger
 
 **Files:**
-- Create: `packages/simetra/src/schema/apply/rehearsal.ts`
-- Create: `packages/simetra/src/schema/apply/__tests__/rehearsal.test.ts`
+- Modify: `packages/simetra/src/schema/apply/rehearsal.ts` (схема, розбір,
+  хеш, ім'я файлу)
+- Modify: `packages/simetra/src/schema/apply/__tests__/rehearsal.test.ts`
+- Modify: `packages/designer/src/io/report.ts` (`renderApply` — шлях звіту),
+  `packages/designer/src/cli/render.ts` (`artifacts` і для `apply`),
+  `packages/designer/src/mcp/tools.ts` (`artifacts` у результаті `apply`)
 - Modify: `packages/simetra/src/schema/apply/state.ts` (колонка
   `rehearsal_hash`, `ApplyRecord.rehearsalHash: string | null`)
 - Modify: `packages/simetra/src/schema/apply/index.ts` (експорти)
@@ -481,7 +521,9 @@ git commit -m "feat(schema): раннер збирає докази репети
     пише артефакт; `plan --dry-run` → `UsageError`;
   - `apply-tools.db.test.ts` `"writes the rehearsal report next to the
     plan"`: `apply --rehearse` → файл `plans/<from12>-<to12>.rehearsal.json`
-    з `planHash` плану, вивід називає шлях; невдала репетиція файлу не пише;
+    з `planHash` плану; текстовий вивід CLI каже «rehearsal report written
+    to <шлях>» замість «nothing was written», JSON CLI і результат MCP
+    містять шлях в `artifacts`; невдала репетиція файлу не пише;
   - `apply-state.db.test.ts` `"adds the rehearsal column to an older ledger
     in an applied plan"` (борг 2b-1, режим `apply`, рішення 7): `ALTER TABLE
     simetra.ledger DROP COLUMN rehearsal_hash`, `plan` без промоції →
@@ -525,12 +567,14 @@ git commit -m "feat(designer): звіт репетиції в plans/ — стр�
   тест бюджету описів інструментів (`tools/list`)
 
 **Interfaces:**
-- Produces: `rehearsalRefusals(planHash: string, report: RehearsalReport |
-  undefined): EngineDiagnostic[]` (лише для плану з промоцією);
+- Produces: `rehearsalRefusals(plan: Pick<ExecutablePlan, "server" |
+  "ledgerHead" | "promotion">, planHash: string, report: RehearsalReport |
+  undefined): EngineDiagnostic[]` (лише для плану з промоцією; рішення 5 —
+  план, сервер, голова ledger і склад `rows` проти `promotion.record.tables`);
   `statementTimeoutFromReport(report: RehearsalReport, targetRows: { schema:
   string; table: string; rows: number }[]): number`. Нові коди:
   `apply.rehearsal-required`, `apply.rehearsal-stale` (`reason: "plan" |
-  "format"`), `apply.rehearsal-copy-empty` (`table`),
+  "format" | "server" | "ledger" | "tables"`), `apply.rehearsal-copy-empty` (`table`),
   `apply.rehearsal-fewer-rows` (`table`, `copy`, `target`; попередження).
   Видалені коди: `apply.promotion-checks-pending`,
   `plan.promotion-commit-pending`.
@@ -543,6 +587,10 @@ git commit -m "feat(designer): звіт репетиції в plans/ — стр�
   - `execute.test.ts` `"refuses a promotion without a report"`, `"refuses a
     report of another plan"` (Review Focus 3) — `attempts: 0`, одна
     діагностика; `"does not need a report without a promotion"`;
+    `"refuses a report of another server"`, `"… of another ledger head"`,
+    `"… without a row count for every unit table"` (`rows: []`, зайва
+    таблиця, повтор таблиці) → `apply.rehearsal-stale` з `reason`
+    `server` / `ledger` / `tables`, `attempts: 0`;
   - `execute.test.ts` `"refuses a table empty on the copy"` (Review Focus
     4), `"warns about fewer rows on the copy"`, `"keeps an explicit
     statement timeout"`, `"sets the statement timeout after the measures"`
@@ -558,8 +606,10 @@ git commit -m "feat(designer): звіт репетиції в plans/ — стр�
   - `apply-tools.db.test.ts` (на рівні конвеєра): `apply` промоції без
     файлу звіту → `apply.rehearsal-required`; звіт іншого плану →
     `apply.rehearsal-stale` (`plan`); звіт іншого формату → `stale`
-    (`format`); зіпсований файл → `UsageError`; копія з меншою кількістю
-    рядків → попередження `apply.rehearsal-fewer-rows` і `committed`;
+    (`format`); звіт з `rows: []` (файл переписано, `planHash` той самий)
+    → `stale` (`tables`) до будь-якої транзакції (аудит Codex, блокер);
+    зіпсований файл → `UsageError`; копія з меншою кількістю рядків →
+    попередження `apply.rehearsal-fewer-rows` і `committed`;
   - переписати тести, що чекали відмову: `"refuses to commit the promotion
     in this plan"` (`promotion-lifecycle.db.test.ts`) → `"commits the
     promotion with a valid rehearsal report"`; тести
