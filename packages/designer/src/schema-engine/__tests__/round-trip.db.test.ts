@@ -54,41 +54,44 @@ const stack = { url: testDatabaseUrl() }
 
 /**
  * Тіні, які створив двигун цього файлу, — єдине правило «наша» і для
- * відмови, і для прибирання. Ім'я відоме ще до `CREATE DATABASE`: обгортка
- * сама задає суфікс тієї самої форми, що й pg-delta, записує ім'я й лише
- * тоді викликає справжню `provisionCoLocatedShadow` (функція pg-delta
- * виконується без змін, двигун не латається). Тож наша — й тінь, на якій
+ * відмови, і для прибирання. Обгортка — чистий шпигун: справжня
+ * `provisionCoLocatedShadow` отримує ті самі аргументи (функція pg-delta
+ * виконується без змін, двигун не латається), а ім'я тіні береться з її
+ * результату. Тіні до результату немає: `CREATE DATABASE` — останній крок
+ * провізії, а провізія, що впала до нього, тіні не лишає. Тож наша — й тінь, на якій
  * тест упав раніше за своє тіло: `planAndRun` застосовує бажаний SQL, двічі
  * читає каталоги й будує план до виклику `fn`. Тінь паралельної сесії сюди
  * не потрапить: її створив інший процес.
  */
 const provisioned = vi.hoisted(() => new Set<string>())
-/** Провізії, що ще йдуть: `afterAll` чекає їх, перш ніж шукати наші тіні. */
+/**
+ * Провізії, що ще йдуть: хуки чекають їх, перш ніж шукати наші тіні, — тест,
+ * що вийшов за тайм-аут посеред `CREATE DATABASE`, дістане ім'я своєї тіні,
+ * щойно провізія завершиться.
+ */
 const inFlight = vi.hoisted(() => new Set<Promise<unknown>>())
 vi.mock("@supabase/pg-delta", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@supabase/pg-delta")>()
   return {
     ...actual,
-    provisionCoLocatedShadow: async (
-      ...[url, opts]: Parameters<typeof actual.provisionCoLocatedShadow>
+    provisionCoLocatedShadow: (
+      ...args: Parameters<typeof actual.provisionCoLocatedShadow>
     ) => {
-      const uniqueSuffix =
-        opts?.uniqueSuffix ??
-        `${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}`
-      const name = `pgdelta_shadow_${uniqueSuffix}`
-      provisioned.add(name)
-      const pending = actual.provisionCoLocatedShadow(url, {
-        ...opts,
-        uniqueSuffix,
-      })
-      inFlight.add(pending)
-      const shadow = await pending.finally(() => inFlight.delete(pending))
-      // Інша схема імен у pg-delta — гучно, а не тихо порожній запис
-      if (shadow.name !== name)
-        throw new Error(
-          `pg-delta named the shadow ${shadow.name}, expected ${name}`
-        )
-      return shadow
+      const pending = actual
+        .provisionCoLocatedShadow(...args)
+        .then((shadow) => {
+          provisioned.add(shadow.name)
+          return shadow
+        })
+      // Окремий проміс, що завжди виконується: відмову провізії отримує
+      // двигун, а не необроблений проміс у наборі
+      const settled = pending.then(
+        () => undefined,
+        () => undefined
+      )
+      inFlight.add(settled)
+      void settled.then(() => inFlight.delete(settled))
+      return pending
     },
   }
 })
@@ -178,7 +181,9 @@ afterEach(async () => {
   // запускає afterEach одразу, а тіло ще тримає тінь, і воркер завершиться
   // раніше за `finally` порту), або прибирання pg-delta, яке ковтає збій
   // `DROP DATABASE`. Вона валить тест і прибирається — і тоді, коли тест
-  // упав ще до свого тіла
+  // упав ще до свого тіла. Спершу — дочекатися провізій, що ще йдуть: ім'я
+  // тіні відоме лише з результату провізії
+  await Promise.all([...inFlight])
   const present = await shadowDatabaseNames()
   const leaked = present.filter((name) => provisioned.has(name))
   // Нова тінь, якої цей файл не створював, — паралельна сесія: її лише
@@ -200,12 +205,12 @@ afterEach(async () => {
   failGuard(assertion, dropFailures)
 })
 afterAll(async () => {
-  // Тест, що вийшов за тайм-аут посеред `CREATE DATABASE`, лишає тінь, якої
-  // ще не було, коли йшов його afterEach. Її ловить afterEach наступного
-  // тесту, а після останнього — цей хук, дочекавшись провізій, що ще йдуть.
-  // Лишається вікно, якого процес не закриє: провізія, яку тіло почне вже
-  // після цього хука, перед виходом воркера, і вбитий прогін
-  await Promise.allSettled([...inFlight])
+  // Тіло, що вийшло за тайм-аут, іде далі й може почати провізію вже після
+  // свого afterEach. Її тінь ловить afterEach наступного тесту, а після
+  // останнього — цей хук, дочекавшись провізій, що ще йдуть. Лишається
+  // вікно, якого процес не закриє: провізія, яку тіло почне вже після цього
+  // хука, перед виходом воркера, і вбитий прогін
+  await Promise.all([...inFlight])
   const late = (await shadowDatabaseNames()).filter((name) =>
     provisioned.has(name)
   )
