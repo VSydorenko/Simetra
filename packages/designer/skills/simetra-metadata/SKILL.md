@@ -369,8 +369,9 @@ locks as `apply`. It also builds the desired shadow database and proves on the
 same connection that the catalog equals the desired state, so it holds the
 plan's locks a little longer.
 
-`apply` and `rehearse` re-validate function bodies and deferred constraints
-before the end of the transaction. An `apply.function-check-blind` warning lists
+Before the end of the transaction, `apply` and `rehearse` re-validate function
+bodies and fire deferred constraints; an invalid constraint or index that the
+desired state does not have is refused. An `apply.function-check-blind` warning lists
 functions the check cannot see (another language, no `EXECUTE` for the role, a
 trigger function without a trigger): nothing proved their bodies, so review
 them by hand.
