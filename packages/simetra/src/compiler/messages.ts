@@ -2521,9 +2521,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.data-step-function-changed": {
     en: (p) =>
-      `Data step ${p.step} of the promotion calls the model function ${p.function}, which this plan creates, changes or drops, while the data steps run before the engine steps and would compute with the old body`,
+      p.detail === "unproven"
+        ? `Data step ${p.step} of the promotion calls the model function ${p.function}, and plan step ${p.by} uses it in a statement whose object the plan cannot determine, so it cannot prove the function stays unchanged before the data steps compute with it`
+        : `Data step ${p.step} of the promotion calls the model function ${p.function}, which this plan creates, changes or drops${p.by === undefined ? "" : ` (step ${p.by})`}, while the data steps run before the engine steps and would compute with the old body`,
     uk: (p) =>
-      `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, яку цей план створює, змінює чи знищує, а кроки даних ідуть до кроків двигуна й рахували б старим тілом`,
+      p.detail === "unproven"
+        ? `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, а крок плану ${p.by} вживає її в операторі, предмета якого план не визначає, тож не доведе, що функція не зміниться до обчислення кроків даних`
+        : `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, яку цей план створює, змінює чи знищує${p.by === undefined ? "" : ` (крок ${p.by})`}, а кроки даних ідуть до кроків двигуна й рахували б старим тілом`,
     hint: {
       en: "No plan was written. Apply the change of the function first, then plan the promotion.",
       uk: "План не записано. Спершу застосуйте зміну функції, потім сплануйте промоцію.",
@@ -2547,6 +2551,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "No plan was written. Remove the session_replication_role setting of the database or the role (ALTER DATABASE … RESET / ALTER ROLE … RESET), then plan again.",
       uk: "План не записано. Зніміть налаштування session_replication_role бази чи ролі (ALTER DATABASE … RESET / ALTER ROLE … RESET) і сплануйте знову.",
+    },
+  },
+  "plan.preservation-type": {
+    en: (p) =>
+      `The preservation measure casts ${p.column} to its new type ${p.type} before any step, and ${p.detail === "missing" ? "that type does not exist on the target before the plan" : p.detail === "unparsed" ? "the plan cannot name that type as a schema and a type to check it on the target" : p.detail === "changed" ? `step ${p.by} of the plan creates, changes or drops that type` : `step ${p.by} of the plan uses that type in a statement whose object the plan cannot determine, so the plan cannot prove it unchanged`}`,
+    uk: (p) =>
+      `Замір збереження приводить ${p.column} до нового типу ${p.type} до будь-якого кроку, а ${p.detail === "missing" ? "цього типу на цілі до плану немає" : p.detail === "unparsed" ? "план не називає цей тип схемою й типом, щоб перевірити його на цілі" : p.detail === "changed" ? `крок плану ${p.by} створює, змінює чи знищує цей тип` : `крок плану ${p.by} вживає цей тип в операторі, предмета якого план не визначає, тож план не доведе, що тип не зміниться`}`,
+    hint: {
+      en: "No plan was written. Create or change the type in a separate, earlier apply, then plan the promotion.",
+      uk: "План не записано. Створіть чи змініть тип окремим попереднім застосуванням, потім сплануйте промоцію.",
     },
   },
   "plan.unparsable-step": {
@@ -2665,9 +2679,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.promotion-record-mismatch": {
     en: (p) =>
-      `The promotion record ${p.file} does not match what the models before and after the promotion show: ${p.detail}`,
+      p.detail === "dataSteps"
+        ? `The promotion record ${p.file} has data step ${p.step} that does not match the record and the desired state: ${p.reason}`
+        : `The promotion record ${p.file} does not match what the models before and after the promotion show: ${p.detail}`,
     uk: (p) =>
-      `Запис промоції ${p.file} не збігається з тим, що показують моделі до й після промоції: ${p.detail}`,
+      p.detail === "dataSteps"
+        ? `Запис промоції ${p.file} має крок даних ${p.step}, що не збігається із записом і бажаним станом: ${p.reason}`
+        : `Запис промоції ${p.file} не збігається з тим, що показують моделі до й після промоції: ${p.detail}`,
     hint: {
       en: "No plan was written. Either the record was edited, or a later commit changed the promoted object; apply the promotion on its own commit, then plan the later changes.",
       uk: "План не записано. Або запис змінено вручну, або пізніший коміт змінив промотований об'єкт; застосуйте промоцію на її коміті, потім сплануйте пізніші зміни.",
@@ -2714,7 +2732,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
                 ? `Data step ${p.step} in the promotion ${p.file} fills ${p.column} of ${p.table}, whose type also changes, and the old type ${p.type} is not an unbounded string type, so the value written before the change could be rounded silently`
                 : p.detail === "cast"
                   ? `The value of data step ${p.step} in the promotion ${p.file} cannot be cast to ${p.type}, the type of ${p.column} of ${p.table} at the write`
-                  : `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which ${p.detail === "changed" ? "a step of the plan creates, changes or drops" : "does not exist on the target before the plan"}, while the data steps run before the engine steps`
+                  : p.detail === "unparsed"
+                    ? `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which the plan cannot name as a schema and a type, so it cannot check that the type exists on the target`
+                    : `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which ${p.detail === "changed" ? `step ${p.by} of the plan creates, changes or drops` : p.detail === "unproven" ? `step ${p.by} of the plan uses in a statement whose object the plan cannot determine, so the plan cannot prove it unchanged` : "does not exist on the target before the plan"}, while the data steps run before the engine steps`
               : p.reason === "dataStepKey"
                 ? `Data step ${p.step} in the promotion ${p.file} addresses rows of ${p.table} by ${p.key}, which ${p.detail === "notPrimaryKey" ? "is not the single-column primary key of the table" : p.detail === "retired" ? "is retired" : p.detail === "fillTarget" ? "is itself a fill target" : "changes its type"}`
                 : p.reason === "dataStepReferenced"
@@ -2732,7 +2752,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
                 ? `Крок даних ${p.step} промоції ${p.file} заповнює ${p.column} таблиці ${p.table}, тип якої теж змінюється, а старий тип ${p.type} — не рядковий тип без межі, тож значення, записане до зміни, могло б мовчки округлитися`
                 : p.detail === "cast"
                   ? `Значення кроку даних ${p.step} промоції ${p.file} не приводиться до ${p.type} — типу ${p.column} таблиці ${p.table} на момент запису`
-                  : `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, який ${p.detail === "changed" ? "крок плану створює, змінює чи знищує" : "відсутній на цілі до плану"}, а кроки даних ідуть до кроків двигуна`
+                  : p.detail === "unparsed"
+                    ? `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, якого план не називає схемою й типом, тож не перевірить, що тип є на цілі`
+                    : `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, який ${p.detail === "changed" ? `крок плану ${p.by} створює, змінює чи знищує` : p.detail === "unproven" ? `крок плану ${p.by} вживає в операторі, предмета якого план не визначає, тож план не доведе, що тип не зміниться` : "відсутній на цілі до плану"}, а кроки даних ідуть до кроків двигуна`
               : p.reason === "dataStepKey"
                 ? `Крок даних ${p.step} промоції ${p.file} адресує рядки ${p.table} за ${p.key}, який ${p.detail === "notPrimaryKey" ? "не є одноколонковим первинним ключем таблиці" : p.detail === "retired" ? "виводиться з ужитку" : p.detail === "fillTarget" ? "сам є ціллю fill" : "змінює тип"}`
                 : p.reason === "dataStepReferenced"

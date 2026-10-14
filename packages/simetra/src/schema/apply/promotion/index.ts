@@ -9,6 +9,8 @@ export {
   castProbeQuery,
   preservationPlan,
   preservationQuery,
+  preservationTypeRefusals,
+  preservationTypeStepRefusals,
 } from "./preservation"
 export {
   canonicalRenames,
@@ -40,7 +42,6 @@ export {
 } from "./replacements"
 export {
   castGuardForms,
-  DATA_STEP_KINDS,
   DATA_TRIGGER_MODES,
   dataComputeSql,
   dataCountSql,
@@ -51,6 +52,7 @@ export {
   dataTableStep,
   dataWriteSql,
   readDataFacts,
+  readTypePresence,
   readUserTriggers,
   triggerSql,
   typeIdentity,
@@ -61,5 +63,6 @@ export {
   type DataTable,
   type GuardForm,
   type PlannedDataTable,
+  type TypePresence,
 } from "./data"
 export type { CanonicalRename } from "./equivalence"

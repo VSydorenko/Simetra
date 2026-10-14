@@ -45,6 +45,7 @@ export {
   type UniqueShape,
 } from "./promote/mapping"
 export {
+  DATA_STEP_KINDS,
   PROMOTION_RECORD_FORMAT,
   derivePromotionFacts,
   promotionFileName,

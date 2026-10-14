@@ -336,6 +336,19 @@ export function guardTarget(
   }
 }
 
+/**
+ * SQLSTATE, якими аналіз виразу сторожа каже «оператора чи приведення для
+ * цих типів немає», і причина відмови для кожного: `42883` — немає
+ * оператора (рівності), `42846` — немає приведення. Один перелік для
+ * сторожа зміни типу й сторожа приведення кроку даних: на цих кодах той
+ * бере текстову форму (рішення 12 плану П3-2b-2), а решта — не про пару типів.
+ */
+export const GUARD_PAIR_SQLSTATES: ReadonlyMap<string, "equality" | "cast"> =
+  new Map([
+    ["42883", "equality"],
+    ["42846", "cast"],
+  ])
+
 /** Ім'я підготовленого оператора проби; префікс платформи — щоб не зачепити чужого. */
 const probeName = (index: number): string => `simetra_guard_probe_${index}`
 
@@ -368,8 +381,9 @@ export async function checkGuardCasts(
         applyDiagnostic("plan.type-guard-unsupported", "error", {
           step: cast.step,
           // Без рівності сторож не порівняє значення, хоч приведення й є:
-          // порада тут інша, ніж для пари без приведення
-          reason: error.sqlstate === "42883" ? "equality" : "cast",
+          // порада тут інша, ніж для пари без приведення. Інший SQLSTATE
+          // (тип, якого ще немає, тощо) лишається відмовою «cast», як і був
+          reason: GUARD_PAIR_SQLSTATES.get(error.sqlstate ?? "") ?? "cast",
         })
       )
       continue

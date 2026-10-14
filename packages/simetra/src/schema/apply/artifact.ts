@@ -2,6 +2,7 @@ import { z } from "zod"
 import {
   canonicalize,
   conversionClass,
+  DATA_STEP_KINDS,
   promotionRecordSchema,
   serializeCanonical,
   sha256Hex,
@@ -34,11 +35,7 @@ import {
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
-import {
-  DATA_STEP_KINDS,
-  DATA_TRIGGER_MODES,
-  type DataTable,
-} from "./promotion/data"
+import { DATA_TRIGGER_MODES, type DataTable } from "./promotion/data"
 import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**

@@ -24,6 +24,14 @@ import type { PlacedColumn, PromotedTable } from "./mapping"
 /** Форма файлу запису; читач порівнює її з поточною, а не вгадує. */
 export const PROMOTION_RECORD_FORMAT = 1
 
+/** Види кроку даних (рішення 12): одне джерело для запису й секції плану T2. */
+export const DATA_STEP_KINDS = [
+  "repair",
+  "conversion",
+  "split",
+  "backfill",
+] as const
+
 /**
  * Об'єкт бази, який покриває клас конверсії (рішення 7 плану П3-2a): з ним
  * T2 зіставляє обмеження, індекси, значення, коментарі й одиниці, що зникли
@@ -97,7 +105,7 @@ export interface PromotionRecord {
     key: string
     column: string
     expression: string
-    kind: "repair" | "conversion" | "split" | "backfill"
+    kind: (typeof DATA_STEP_KINDS)[number]
   }[]
   retired: {
     sourceId: string
@@ -249,7 +257,7 @@ export const promotionRecordSchema: z.ZodType<PromotionRecord> = z.strictObject(
         ...atColumn,
         key: z.string(),
         expression: z.string(),
-        kind: z.enum(["repair", "conversion", "split", "backfill"]),
+        kind: z.enum(DATA_STEP_KINDS),
       })
     ),
     retired: z.array(z.strictObject({ sourceId: z.string(), ...atColumn })),

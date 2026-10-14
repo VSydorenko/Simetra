@@ -85,6 +85,7 @@ export {
   createObjectInput,
   deleteElement,
   deleteInput,
+  DATA_STEP_KINDS,
   derivePromotionFacts,
   elementTarget,
   fillCalls,

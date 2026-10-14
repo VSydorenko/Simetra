@@ -1,4 +1,5 @@
 import {
+  DATA_STEP_KINDS,
   fillCalls,
   modelFunctions,
   NOW_FUNCTIONS,
@@ -10,21 +11,19 @@ import {
   type SqlParser,
 } from "simetra/compiler"
 import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
-import type { EngineDiagnostic, EngineObjectRef } from "../../engine"
+import type { EngineDiagnostic } from "../../engine"
 import { applyDiagnostic } from "../diagnostic"
 import { ApplyDbError, type ApplyTransaction } from "../port"
 import { DATA_SETTINGS, withLocalSettings } from "../settings"
 import type { PlanStep } from "../steps"
+import { planChange } from "../step-subject"
 import { tableKey } from "../table-key"
-import { parseType, stringsOf, typeOf } from "../type-guard"
-
-/** Види кроку даних — ті самі, що пише запис промоції. */
-export const DATA_STEP_KINDS = [
-  "repair",
-  "conversion",
-  "split",
-  "backfill",
-] as const
+import {
+  GUARD_PAIR_SQLSTATES,
+  parseType,
+  stringsOf,
+  typeOf,
+} from "../type-guard"
 
 export type DataStepKind = (typeof DATA_STEP_KINDS)[number]
 
@@ -232,7 +231,11 @@ export function dataPlan(p: {
       error("plan.promotion-record-mismatch", {
         objectId: record.objectId,
         file: p.file,
-        detail: `dataSteps[${i}]: ${detail}`,
+        // `detail` — буквально `dataSteps` (рішення 2): який крок і чому —
+        // окремими параметрами
+        detail: "dataSteps",
+        step: `d${i + 1}`,
+        reason: detail,
       }),
     ],
   })
@@ -407,7 +410,7 @@ export function dataPlan(p: {
 /**
  * Факти цілі для кроків даних (рішення 4–6, 13), прочитані в `READ ONLY` до
  * копії. Ключі мап — `tableKey` старого імені; `types` — тип запису (текст
- * секції) → є у вихідному стані; `cascading` — id кроків, на колонку-ціль
+ * секції) → наявність у вихідному стані; `cascading` — id кроків, на колонку-ціль
  * яких посилається вхідний FK з `ON UPDATE CASCADE | SET NULL | SET DEFAULT`.
  */
 export interface DataFacts {
@@ -415,7 +418,7 @@ export interface DataFacts {
   inherited: string[]
   tempPrivilege: boolean
   replicationRole: string
-  types: Map<string, boolean>
+  types: Map<string, TypePresence>
   functions: {
     step: string
     schema?: string
@@ -501,6 +504,51 @@ select pg_catalog.has_database_privilege(pg_catalog.current_database(), 'TEMP') 
   pg_catalog.current_setting('session_replication_role') as role
 `
 
+/**
+ * Наявність типу у вихідному стані цілі: `unparsed` — тип, якого не назвати
+ * за правилом `typeIdentity` (його не питають і не вгадують).
+ */
+export type TypePresence = "found" | "missing" | "unparsed"
+
+/**
+ * Наявність типів за текстом (рішення В5): ідентичність — `typeIdentity`,
+ * пошук — структурно в `pg_type` за схемою й ім'ям. Викликач відкриває
+ * транзакцію `READ ONLY` на цілі. Спільне для типів запису кроків даних і
+ * нових типів замірів збереження.
+ */
+export async function readTypePresence(
+  tx: ApplyTransaction,
+  types: readonly string[],
+  parse: SqlParser
+): Promise<Map<string, TypePresence>> {
+  const texts = [...new Set(types)]
+  const identities = texts.map((type) => typeIdentity(type, parse))
+  const asked = identities.flatMap((id, i) =>
+    id === undefined ? [] : [{ i, ...id }]
+  )
+  const found = new Set(
+    asked.length === 0
+      ? []
+      : (
+          await tx.query<{ i: number; found: boolean }>(TYPES_SQL, [
+            JSON.stringify(asked),
+          ])
+        )
+          .filter((r) => r.found)
+          .map((r) => r.i)
+  )
+  return new Map(
+    texts.map((type, i): [string, TypePresence] => [
+      type,
+      identities[i] === undefined
+        ? "unparsed"
+        : found.has(i)
+          ? "found"
+          : "missing",
+    ])
+  )
+}
+
 /** Функція виразу питається як функція каталогу: голе ім'я чи `pg_catalog`. */
 const isCatalog = (schema: string | undefined): boolean =>
   schema === undefined || schema === "pg_catalog"
@@ -535,25 +583,11 @@ export async function readDataFacts(
     .map((r) => tableKey(r.schema, r.name))
     .sort(byCodeUnit)
 
-  const typeTexts = [
-    ...new Set(tables.flatMap((t) => t.columns.map((c) => c.type))),
-  ]
-  const identities = typeTexts.map((type) => typeIdentity(type, parse))
-  const asked = identities.flatMap((id, i) =>
-    id === undefined ? [] : [{ i, ...id }]
+  const types = await readTypePresence(
+    tx,
+    tables.flatMap((t) => t.columns.map((c) => c.type)),
+    parse
   )
-  const found = new Set(
-    asked.length === 0
-      ? []
-      : (
-          await tx.query<{ i: number; found: boolean }>(TYPES_SQL, [
-            JSON.stringify(asked),
-          ])
-        )
-          .filter((r) => r.found)
-          .map((r) => r.i)
-  )
-  const types = new Map(typeTexts.map((type, i) => [type, found.has(i)]))
 
   const calls = tables.flatMap((t) =>
     t.columns.flatMap((c) =>
@@ -636,14 +670,18 @@ const functionName = (f: { schema?: string; name: string }): string =>
  * Відмови з фактів цілі — до копії (рішення 4–6, 13): таблиця з нащадками
  * чи партиціонована, тип запису, якого немає у вихідному стані, вхідний FK
  * з каскадом оновлення, право `TEMP`, `session_replication_role` і
- * детермінованість викликів на цілі. Функція моделі, якої на цілі немає,
- * — `plan.data-step-function-changed`: її створює сам план.
+ * детермінованість викликів на цілі. `models` — кваліфіковані імена
+ * функцій моделі бажаного стану (`modelFunctions`): функція моделі, якої на
+ * цілі немає, — `plan.data-step-function-changed` (її створює сам план), а
+ * будь-яка інша відсутня функція — `plan.data-step-volatile`: її
+ * детермінованість на цілі не доведено.
  */
 export function dataFactRefusals(
   tables: readonly PlannedDataTable[],
   facts: DataFacts,
   role: string,
-  origin: DataOrigin
+  origin: DataOrigin,
+  models: ReadonlySet<string>
 ): EngineDiagnostic[] {
   if (tables.length === 0) return []
   const out: EngineDiagnostic[] = []
@@ -661,14 +699,15 @@ export function dataFactRefusals(
       continue
     }
     for (const c of t.columns) {
-      if (facts.types.get(c.type) !== true)
+      const presence = facts.types.get(c.type) ?? "missing"
+      if (presence !== "found")
         out.push(
           unsupported(origin, "dataStepType", {
             step: c.step,
             table,
             column: quoteIdent(c.column),
             type: c.type,
-            detail: "missing",
+            detail: presence,
           })
         )
       if (cascading.has(c.step))
@@ -687,7 +726,8 @@ export function dataFactRefusals(
     out.push(error("plan.replication-role", { value: facts.replicationRole }))
   for (const f of facts.functions) {
     const params = { step: f.step, function: functionName(f) }
-    if (!isCatalog(f.schema) && !f.exists)
+    const model = f.schema !== undefined && models.has(`${f.schema}.${f.name}`)
+    if (model && !f.exists)
       out.push(error("plan.data-step-function-changed", params))
     else if (!f.exists || !f.immutable)
       out.push(error("plan.data-step-volatile", params))
@@ -695,37 +735,14 @@ export function dataFactRefusals(
   return out
 }
 
-/** Види об'єктів двигуна, що несуть тип колонки. */
-const TYPE_KINDS: ReadonlySet<string> = new Set(["type", "domain"])
-/** Види підпрограм двигуна: виклик у виразі може бути будь-якою з них. */
-const ROUTINE_KINDS: ReadonlySet<string> = new Set([
-  "function",
-  "procedure",
-  "aggregate",
-])
-
 /**
- * Об'єкти, які крок створює, змінює чи знищує. Зміну двигун не несе в
- * `produced`/`destroyed`: `CREATE OR REPLACE FUNCTION` — дія `alter`, а
- * функція — у її `consumed`. Тож для `alter` береться й `consumed`; там
- * буває й предмет, який дія лише читає, — хибна відмова допустима.
- */
-const touched = (steps: readonly PlanStep[]): EngineObjectRef[] =>
-  steps.flatMap((s) => [
-    ...s.produced,
-    ...s.destroyed,
-    ...(s.verb === "alter" ? s.consumed : []),
-  ])
-
-/**
- * Відмови за кроками плану — після `analyseOnClone` (рішення 4, 5):
- * обчислення й `ADD COLUMN` наміру йдуть до кроків двигуна, тож тип запису,
- * який крок створює, змінює чи знищує, — `dataStepType`, а функція моделі
- * виразу, яку крок створює, змінює чи знищує, —
- * `plan.data-step-function-changed`: значення порахувало б старе тіло.
- * Збіг — структурно, за видом, схемою й ім'ям без сигнатури: будь-яке
- * перевантаження з тим самим ім'ям — відмова. Обмеження домену двигун
- * адресує таблицею-доменом, тож теж рахується зміною типу.
+ * Відмови за кроками плану — після `analyseOnClone` (рішення 4, 5, вердикт
+ * В7): обчислення й `ADD COLUMN` наміру йдуть до кроків двигуна, тож тип
+ * запису, який крок створює, змінює чи знищує, — `dataStepType`, а функція
+ * моделі виразу — `plan.data-step-function-changed`: значення порахувало б
+ * старе тіло. Чи змінює крок об'єкт — `planChange`; `detail` — `changed`
+ * чи `unproven` (крок вживає об'єкт, а предмета його оператора не визначити),
+ * `by` — id кроку.
  */
 export function dataStepRefusals(
   tables: readonly PlannedDataTable[],
@@ -734,44 +751,40 @@ export function dataStepRefusals(
   origin: DataOrigin
 ): EngineDiagnostic[] {
   if (tables.length === 0) return []
-  const refs = touched(steps)
   const out: EngineDiagnostic[] = []
   for (const t of tables) {
     const table = qualified(t.before.schema, t.before.table)
     for (const c of t.columns) {
       const id = typeIdentity(c.type, parse)
-      const hit =
-        id !== undefined &&
-        refs.some(
-          (r) =>
-            r.schema === id.schema &&
-            ((TYPE_KINDS.has(r.kind) && r.name === id.name) ||
-              r.table === id.name)
-        )
-      if (hit)
+      const type =
+        id === undefined
+          ? undefined
+          : planChange(steps, { kind: "type", ...id }, parse)
+      if (type !== undefined)
         out.push(
           unsupported(origin, "dataStepType", {
             step: c.step,
             table,
             column: quoteIdent(c.column),
             type: c.type,
-            detail: "changed",
+            detail: type.verdict,
+            by: type.step,
           })
         )
       for (const f of fillCalls(c.expression, parse)) {
-        if (isCatalog(f.schema)) continue
-        if (
-          refs.some(
-            (r) =>
-              ROUTINE_KINDS.has(r.kind) &&
-              r.schema === f.schema &&
-              r.name === f.name
-          )
+        if (f.schema === undefined || isCatalog(f.schema)) continue
+        const change = planChange(
+          steps,
+          { kind: "routine", schema: f.schema, name: f.name },
+          parse
         )
+        if (change !== undefined)
           out.push(
             error("plan.data-step-function-changed", {
               step: c.step,
               function: functionName(f),
+              detail: change.verdict,
+              by: change.step,
             })
           )
       }
@@ -787,7 +800,8 @@ const probeName = (index: number): string => `simetra_fill_probe_${index}`
  * Форма сторожа приведення кожної колонки (рішення 12): `PREPARE` на першій
  * копії до кроків наміру — вираз у старих іменах — лише розбирає й аналізує
  * запит, нічого не обчислюючи. Порівняння в типах, коли є оператор, інакше
- * текстова форма; жодна не готується — `dataStepType`. Під `DATA_SETTINGS`,
+ * (`GUARD_PAIR_SQLSTATES`) текстова форма; жодна не готується —
+ * `dataStepType`. Інший збій проби летить як є. Під `DATA_SETTINGS`,
  * як і раннер: від `search_path` залежить, які імена розв'язуються. Точка
  * збереження — щоб одна невдала проба не обірвала решту; `DEALLOCATE`
  * обов'язковий, бо підготовлений оператор живе поза транзакцією.
@@ -804,7 +818,14 @@ export async function castGuardForms(
     try {
       await tx.query(`PREPARE ${name} AS ${sql}`)
     } catch (error) {
-      if (!(error instanceof ApplyDbError)) throw error
+      // Лише «для цієї пари типів немає оператора чи приведення» міняє
+      // форму; решта (права, повторювані збої) летить як є, а не стає
+      // відмовою плану
+      if (
+        !(error instanceof ApplyDbError) ||
+        !GUARD_PAIR_SQLSTATES.has(error.sqlstate ?? "")
+      )
+        throw error
       await tx.query("ROLLBACK TO SAVEPOINT simetra_fill_probe")
       return false
     }

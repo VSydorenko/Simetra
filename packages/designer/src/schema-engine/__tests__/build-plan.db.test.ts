@@ -2950,6 +2950,8 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       const ITEM_FILE = "custom-tables/Item/Item.meta.json"
       const CODE_T = "sql/app/code_t.sql"
       const NORM = "sql/app/norm.sql"
+      const COLOR = "pg-enums/Color/Color.meta.json"
+      const OTHER = "custom-tables/Other/Other.meta.json"
       const DELETION_MARK = {
         target: { to: "standard", name: "deletionMark" },
         expression: "coalesce(inactive, false)",
@@ -3129,13 +3131,21 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       }
 
       /**
-       * Реквізит `label` бажаного стану — у домені `app.code_t`. Метадані виду
-       * доменів не несуть (`Raw` промоція відхиляє), тож тип підмінено в
-       * зібраній моделі, а одиницю домену поставлено перед таблицями.
+       * Реквізит `label` бажаного стану — у типі `type` з одиниці `unit`.
+       * Метадані виду доменів і власних типів не несуть (`Raw` промоція
+       * відхиляє), тож тип підмінено в зібраній моделі, а одиницю типу
+       * поставлено перед таблицями.
        */
-      const withDomainLabel = (p: Promoted): Promoted => {
-        const domain = p.after.creationOrder.find(
-          (n) => n.type === "unit" && n.identity.includes("code_t")
+      const withTypedLabel = (
+        p: Promoted,
+        type = "app.code_t",
+        unit = "code_t",
+        column = "label"
+      ): Promoted => {
+        const node = p.after.creationOrder.find(
+          (n) =>
+            (n.type === "unit" && n.identity.includes(unit)) ||
+            (n.type === "enumType" && n.name === unit)
         )!
         return {
           ...p,
@@ -3149,14 +3159,14 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
                   : {
                       ...t,
                       columns: t.columns.map((c) =>
-                        c.name === "label" ? { ...c, type: "app.code_t" } : c
+                        c.name === column ? { ...c, type } : c
                       ),
                     }
               ),
             },
             creationOrder: [
-              domain,
-              ...p.after.creationOrder.filter((n) => n !== domain),
+              node,
+              ...p.after.creationOrder.filter((n) => n !== node),
             ],
           },
         }
@@ -3194,8 +3204,15 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           await recompiled(p, { [NORM]: NORM_SQL("upper(t)") })
         )
         expect(outcome.status).toBe("refused")
+        // `CREATE OR REPLACE FUNCTION` — дія `alter`: предмет оператора з
+        // дерева — сама функція (вердикт В7)
         expect(params(outcome, "plan.data-step-function-changed")).toEqual([
-          { step: "d2", function: "app.norm" },
+          {
+            step: "d2",
+            function: "app.norm",
+            detail: "changed",
+            by: expect.stringMatching(/^s\d+$/),
+          },
         ])
       })
 
@@ -3294,7 +3311,9 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           {
             objectId: ITEM_ID,
             file: p.input.file,
-            detail: "dataSteps[1]: derived repair, recorded conversion",
+            detail: "dataSteps",
+            step: "d2",
+            reason: "derived repair, recorded conversion",
           },
         ])
       })
@@ -3402,6 +3421,75 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         })
       })
 
+      it("takes SHARE ROW EXCLUSIVE for a table only a repair touches", async () => {
+        // Вердикт (б): таблиця ТЧ уже має канонічні імена, тож ні намір, ні
+        // двигун її не займають — слід дає лише крок даних
+        const files = contactsProject()
+        const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
+        ;(raw.columns as Json[])[1]!.physicalName = "parent_id"
+        ;(raw.foreignKeys as Json[])[0]!.name =
+          "counterparty_contacts_parent_id_fkey"
+        raw.rowLevelSecurity = "enabled"
+        // Індекс ключа власника, який вид і так має, — під своїм іменем
+        raw.indexes = [
+          {
+            name: "counterparty_contacts_parent_id_idx",
+            keys: [{ column: "counterpartyId" }],
+          },
+        ]
+        files.set(CONTACT_FILE, JSON.stringify(raw))
+        const mapping = contactsMapping()
+        mapping.conversions[
+          "CounterpartyContact#indexes/counterparty_contacts_parent_id_idx"
+        ] = "property"
+        mapping.fill = [
+          {
+            table: "CounterpartyContact",
+            target: { to: "attribute", name: "phone" },
+            expression: "btrim(phone)",
+          },
+        ]
+        const p = await promoted(files, mapping)
+        const contacts = { schema: "app", name: "counterparty_contacts" }
+        const artifact = planned(await planPromotion(p))
+        expect(
+          artifact.steps.filter((s) =>
+            s.lockedTables.some((t) => t.name === contacts.name)
+          )
+        ).toEqual([])
+        expect(artifact.promotion!.data.map((t) => t.columns[0]!.step)).toEqual(
+          ["d1"]
+        )
+        expect(artifact.locks).toContainEqual({
+          ...contacts,
+          mode: "shareRowExclusive",
+        })
+        // Без права на явний LOCK замок бере сам крок — і це крок даних
+        const reader: ApplyDatabase = {
+          transaction: (target, end, fn) =>
+            dbs.reader.transaction(target, end, (tx) =>
+              fn({
+                ...tx,
+                query: async <R extends Record<string, unknown>>(
+                  sql: string,
+                  params?: readonly unknown[]
+                ): Promise<R[]> => {
+                  const rows = await tx.query<R>(sql, params)
+                  return sql.includes("AS lockable")
+                    ? rows.map((r) =>
+                        r.name === contacts.name ? { ...r, lockable: false } : r
+                      )
+                    : rows
+                },
+              })
+            ),
+        }
+        const implicit = planned(await planPromotion(p, { reader }))
+        expect(implicit.implicitLocks).toEqual([
+          { ...contacts, mode: "shareRowExclusive", step: "d1" },
+        ])
+      })
+
       it("refuses a target type absent on the target before the copy", async () => {
         // Домен створює бажаний стан: без відмови до копії `ADD COLUMN`
         // наміру впав би на ній сирим 42704
@@ -3409,7 +3497,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           attributes: LABEL,
           fill: fillLabel("code"),
         })
-        const desired = withDomainLabel(
+        const desired = withTypedLabel(
           await recompiled(p, {
             [CODE_T]: "CREATE DOMAIN app.code_t AS text;\n",
           })
@@ -3442,7 +3530,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           attributes: LABEL,
           fill: fillLabel("code"),
         })
-        const desired = withDomainLabel(
+        const desired = withTypedLabel(
           await recompiled(p, { [CODE_T]: domain("length(VALUE) < 100") })
         )
         const outcome = await planPromotion(desired)
@@ -3453,6 +3541,126 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           type: "app.code_t",
           detail: "changed",
         })
+      })
+
+      it("refuses an enum value an engine step adds", async () => {
+        // Вердикт архітектора (8): `ALTER TYPE … ADD VALUE` — предмет оператора
+        // — сам енам кроку даних
+        // Енам — прийнятий `PgEnum`: SQL-файл енамів не створює
+        const enumOf = (values: string[]) =>
+          JSON.stringify({
+            id: uuid(7601),
+            kind: "PgEnum",
+            name: "Color",
+            physicalName: "color",
+            schema: "app",
+            values,
+          })
+        const p = await promotedItems({
+          sql: { [COLOR]: enumOf(["red"]) },
+          attributes: LABEL,
+          fill: fillLabel("'red'"),
+        })
+        const desired = withTypedLabel(
+          await recompiled(p, { [COLOR]: enumOf(["red", "green"]) }),
+          "app.color",
+          "color"
+        )
+        const outcome = await planPromotion(desired)
+        expect(outcome.status).toBe("refused")
+        expect(reasons(outcome)).toEqual(["dataStepType"])
+        expect(params(outcome, "plan.promotion-unsupported")[0]).toMatchObject({
+          step: "d2",
+          type: "app.color",
+          detail: "changed",
+        })
+      })
+
+      it("lets through a type change of another table to the step's domain", async () => {
+        // Вердикт В7: `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter`
+        // із доменом у `consumed`, але предмет оператора — таблиця
+        const DOMAIN = "CREATE DOMAIN app.code_t AS text;\n"
+        const other = (column: Json) =>
+          JSON.stringify({
+            id: uuid(7501),
+            kind: "CustomTable",
+            name: "Other",
+            physicalName: "others",
+            kindLabel: "other",
+            schema: "app",
+            columns: [
+              {
+                id: uuid(7502),
+                name: "id",
+                physicalName: "id",
+                type: "UUID",
+                notNull: true,
+              },
+              { id: uuid(7503), name: "c", physicalName: "c", ...column },
+            ],
+            primaryKey: { name: "others_pkey", columns: ["id"] },
+            rowLevelSecurity: "enabled",
+          })
+        const p = await promotedItems({
+          sql: { [CODE_T]: DOMAIN, [OTHER]: other({ type: "Text" }) },
+          attributes: LABEL,
+          fill: fillLabel("code"),
+        })
+        const desired = withTypedLabel(
+          await recompiled(p, {
+            [OTHER]: other({ type: "Raw", pgType: "app.code_t" }),
+          })
+        )
+        const outcome = await planPromotion(desired)
+        const artifact = planned(outcome)
+        expect(
+          stepMatching(artifact, /ALTER COLUMN "c" TYPE/).map((s) => s.verb)
+        ).toEqual(["alter"])
+        expect(artifact.promotion!.data[0]!.columns[1]!.type).toBe("app.code_t")
+      })
+
+      it("refuses a preservation type the same plan creates", async () => {
+        // Вердикт (в): замір «до» приводить `code` до нового типу до будь-якого
+        // кроку, а домен створює сам план — відмова плану, а не сирий 42704
+        // заміру на застосуванні
+        const p = await promotedItems()
+        const desired = withTypedLabel(
+          await recompiled(p, {
+            [CODE_T]: "CREATE DOMAIN app.code_t AS text;\n",
+          }),
+          "app.code_t",
+          "code_t",
+          "code"
+        )
+        const record: PromotionRecord = {
+          ...p.record,
+          typeChanges: [
+            {
+              schema: "app",
+              table: "item",
+              column: "code",
+              from: "text",
+              to: "app.code_t",
+            },
+          ],
+        }
+        let clones = 0
+        const outcome = await planPromotion(desired, {
+          records: [{ ...p.input, record }],
+          engine: {
+            ...engine,
+            withTargetClone: (o, target, scope, fn) => {
+              clones++
+              return engine.withTargetClone(o, target, scope, fn)
+            },
+          },
+        })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.preservation-type"])
+        expect(params(outcome, "plan.preservation-type")).toEqual([
+          { column: "app.item.code", type: "app.code_t", detail: "missing" },
+        ])
+        expect(clones).toBe(0)
       })
 
       it("picks the text form of the cast guard when no operator exists", async () => {
@@ -3542,9 +3750,9 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
             expect(facts.cascading).toEqual(["d1"])
             expect(facts.types).toEqual(
               new Map([
-                ["text", true],
-                ["integer", true],
-                ["public.missing_t", false],
+                ["text", "found"],
+                ["integer", "found"],
+                ["public.missing_t", "missing"],
               ])
             )
             expect(facts.functions).toEqual([

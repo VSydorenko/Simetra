@@ -1,6 +1,7 @@
 import {
   canonicalSnapshot,
   loadSqlParser,
+  modelFunctions,
   type CompiledModel,
   type RuleCode,
   type SqlParser,
@@ -94,6 +95,9 @@ import {
   readAccessDependents,
   readDataFacts,
   readEquivalenceObjects,
+  readTypePresence,
+  preservationTypeRefusals,
+  preservationTypeStepRefusals,
   readReservedNames,
   readWritePath,
   renameIntent,
@@ -108,6 +112,7 @@ import {
   type EquivalenceObject,
   type PlannedDataTable,
   type PromotionInput,
+  type TypePresence,
   type RenameIntent,
   type TransitionVerdict,
   type WritePath,
@@ -680,16 +685,35 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   })
   if ("refusal" in data)
     return refused(dedupe([...diagnostics, ...data.refusal]))
-  const facts =
-    data.tables.length === 0
-      ? undefined
-      : await dbs.reader.transaction(o.target, "rollback", (tx) =>
-          readDataFacts(tx, data.tables, parse, data.sources)
-        )
-  const factRefusals =
-    facts === undefined
+  // Нові типи замірів збереження — тією самою транзакцією: замір «до»
+  // приводить до них до будь-якого кроку (вердикт (в))
+  const read =
+    data.tables.length === 0 && record.typeChanges.length === 0
+      ? { facts: undefined, types: new Map<string, TypePresence>() }
+      : await dbs.reader.transaction(o.target, "rollback", async (tx) => ({
+          facts:
+            data.tables.length === 0
+              ? undefined
+              : await readDataFacts(tx, data.tables, parse, data.sources),
+          types: await readTypePresence(
+            tx,
+            record.typeChanges.map((t) => t.to),
+            parse
+          ),
+        }))
+  const { facts } = read
+  const factRefusals = [
+    ...(facts === undefined
       ? []
-      : dataFactRefusals(data.tables, facts, c.targetOwners.session, origin)
+      : dataFactRefusals(
+          data.tables,
+          facts,
+          c.targetOwners.session,
+          origin,
+          modelFunctions(c.model).immutable
+        )),
+    ...preservationTypeRefusals(record, read.types),
+  ]
   if (factRefusals.length > 0)
     return refused(dedupe([...diagnostics, ...factRefusals]))
 
@@ -725,9 +749,13 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
   const { steps: planSteps, model: cloneModel } = analysis
 
-  // Типи й функції моделі, які створює, змінює чи знищує крок плану, — лише
-  // за кроками двигуна (рішення 4, 5): обчислення йде до них
-  const stepRefusals = dataStepRefusals(analysis.data, planSteps, parse, origin)
+  // Типи й функції моделі кроків даних і нові типи замірів, які створює,
+  // змінює чи знищує крок плану, — лише за кроками двигуна (рішення 4, 5,
+  // вердикти В7 і (в)): обчислення й замір «до» йдуть до них
+  const stepRefusals = [
+    ...dataStepRefusals(analysis.data, planSteps, parse, origin),
+    ...preservationTypeStepRefusals(record, planSteps, parse),
+  ]
   if (stepRefusals.length > 0) return refused([...withClone, ...stepRefusals])
   const dataSection = withTriggers(
     analysis.data,

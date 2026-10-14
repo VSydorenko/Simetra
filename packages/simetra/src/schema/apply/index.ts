@@ -66,6 +66,8 @@ export {
   castProbeQuery,
   preservationPlan,
   preservationQuery,
+  preservationTypeRefusals,
+  preservationTypeStepRefusals,
   promotionTransition,
   readAccessDependents,
   readEquivalenceObjects,
@@ -77,7 +79,6 @@ export {
   valueElementColumns,
   withTempNames,
   castGuardForms,
-  DATA_STEP_KINDS,
   DATA_TRIGGER_MODES,
   dataComputeSql,
   dataCountSql,
@@ -88,6 +89,7 @@ export {
   dataTableStep,
   dataWriteSql,
   readDataFacts,
+  readTypePresence,
   readUserTriggers,
   triggerSql,
   typeIdentity,
@@ -98,6 +100,7 @@ export {
   type DataTable,
   type GuardForm,
   type PlannedDataTable,
+  type TypePresence,
   type AccessChange,
   type ColumnName,
   type CanonicalRename,
@@ -168,6 +171,7 @@ export {
 } from "./steps"
 export {
   checkGuardCasts,
+  GUARD_PAIR_SQLSTATES,
   readTypeChangeDependents,
   typeChangeRefusals,
   typeGuards,
@@ -204,3 +208,10 @@ export {
   type PlanDatabases,
   type PlanOutcome,
 } from "./plan"
+export {
+  planChange,
+  statementSubjects,
+  type StatementSubject,
+  type StepChange,
+  type UsedObject,
+} from "./step-subject"

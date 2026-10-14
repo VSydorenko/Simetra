@@ -271,6 +271,34 @@ describe("classifyRemovals", () => {
     ).not.toEqual([])
   })
 
+  it("still classifies an adopted column outside the intent's added columns", () => {
+    // Вердикт В8: пропуск — лише для колонок, які додав намір; перевизначення
+    // прийнятої колонки поруч лишається видаленням без класу
+    const fill = {
+      names: "beforeRenames" as const,
+      schema: "app",
+      table: "items",
+      key: "id",
+      column: "deletion_mark",
+      expression: "coalesce(inactive, false)",
+      kind: "conversion" as const,
+    }
+    const columns = (notNull: boolean) => [
+      col("id", { type: "uuid", notNull: true }),
+      col("code", { notNull }),
+      col("deletion_mark", { type: "boolean", notNull }),
+    ]
+    const removals = classify(
+      record({ dataSteps: [fill] }),
+      model([table("items", { columns: columns(false) })]),
+      model([table("items", { columns: columns(true) })])
+    )
+    expect(removals.map((r) => [r.path, r.covered])).toEqual([
+      ["tables.app.items.columns.code.notNull", null],
+    ])
+    expect(unclassifiedRemovals(removals)).not.toEqual([])
+  })
+
   it("covers a constraint left under a temporary name by its original name", () => {
     const check = { name: "simetra_tmp_1", expression: "CHECK (true)" }
     const removals = classify(

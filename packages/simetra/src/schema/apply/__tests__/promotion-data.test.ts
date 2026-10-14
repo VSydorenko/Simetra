@@ -15,6 +15,10 @@ import {
   dataPlan,
   dataStepRefusals,
   dataWriteSql,
+  GUARD_PAIR_SQLSTATES,
+  preservationTypeRefusals,
+  preservationTypeStepRefusals,
+  statementSubjects,
   intentStep,
   promotionPermissionItems,
   readDataFacts,
@@ -27,6 +31,7 @@ import {
   type PlannedDataTable,
   type PlanStep,
   type Removal,
+  type TypePresence,
 } from "simetra/schema"
 
 /**
@@ -316,7 +321,10 @@ describe("dataPlan", () => {
         {
           objectId: OBJECT_ID,
           file: FILE,
-          detail: "dataSteps[0]: derived repair, recorded conversion",
+          // Рішення 2: `detail` — буквально `dataSteps`
+          detail: "dataSteps",
+          step: "d1",
+          reason: "derived repair, recorded conversion",
         },
       ],
     ])
@@ -329,7 +337,8 @@ describe("dataPlan", () => {
       })
     ) as [[string, Record<string, string>]]
     expect(code).toBe("plan.promotion-record-mismatch")
-    expect(params.detail).toMatch(/^dataSteps\[0\]: table app\.others /)
+    expect(params).toMatchObject({ detail: "dataSteps", step: "d1" })
+    expect(params.reason).toMatch(/^table app\.others /)
   })
 
   it("refuses a data step on a column the desired table lacks", () => {
@@ -339,7 +348,8 @@ describe("dataPlan", () => {
       })
     ) as [[string, Record<string, string>]]
     expect(code).toBe("plan.promotion-record-mismatch")
-    expect(params.detail).toMatch(/^dataSteps\[0\]: column missing /)
+    expect(params).toMatchObject({ detail: "dataSteps", step: "d1" })
+    expect(params.reason).toMatch(/^column missing /)
   })
 
   it("refuses a recorded expression that is not a data step", () => {
@@ -349,7 +359,7 @@ describe("dataPlan", () => {
       })
     ) as [[string, Record<string, string>]]
     expect(code).toBe("plan.promotion-record-mismatch")
-    expect(params.detail).toMatch(/not a data step \(volatile\)/)
+    expect(params.reason).toMatch(/not a data step \(volatile\)/)
   })
 
   const keyRefusal = (r: PromotionRecord) =>
@@ -554,9 +564,9 @@ const FACTS = (over: Partial<DataFacts> = {}): DataFacts => ({
   inherited: [],
   tempPrivilege: true,
   replicationRole: "origin",
-  types: new Map([
-    ["text", true],
-    ["boolean", true],
+  types: new Map<string, TypePresence>([
+    ["text", "found"],
+    ["boolean", "found"],
   ]),
   functions: [],
   cascading: [],
@@ -572,8 +582,11 @@ const PLANNED: PlannedDataTable[] = [
   },
 ]
 
+/** Функції моделі бажаного стану (`modelFunctions(...).immutable`). */
+const MODELS: ReadonlySet<string> = new Set(["app.norm"])
+
 const factCodes = (facts: DataFacts) =>
-  dataFactRefusals(PLANNED, facts, "postgres", ORIGIN).map((d) => [
+  dataFactRefusals(PLANNED, facts, "postgres", ORIGIN, MODELS).map((d) => [
     d.code,
     d.params,
   ])
@@ -582,7 +595,7 @@ describe("dataFactRefusals", () => {
   it("refuses nothing on a fitting target", () => {
     expect(factCodes(FACTS())).toEqual([])
     expect(
-      dataFactRefusals([], FACTS({ tempPrivilege: false }), "r", ORIGIN)
+      dataFactRefusals([], FACTS({ tempPrivilege: false }), "r", ORIGIN, MODELS)
     ).toEqual([])
   })
 
@@ -617,6 +630,25 @@ describe("dataFactRefusals", () => {
     ).toEqual([
       ["plan.data-step-function-changed", { step: "d2", function: "app.norm" }],
     ])
+    // Відсутня функція не моделі план не створює: її детермінованість на
+    // цілі просто не доведено
+    expect(
+      factCodes(
+        FACTS({
+          functions: [
+            {
+              step: "d2",
+              schema: "extensions",
+              name: "norm",
+              immutable: false,
+              exists: false,
+            },
+          ],
+        })
+      )
+    ).toEqual([
+      ["plan.data-step-volatile", { step: "d2", function: "extensions.norm" }],
+    ])
   })
 
   it("refuses an inherited table", () => {
@@ -637,7 +669,7 @@ describe("dataFactRefusals", () => {
   })
 
   it("refuses a target type absent on the target", () => {
-    expect(factCodes(FACTS({ types: new Map([["text", true]]) }))).toEqual([
+    expect(factCodes(FACTS({ types: new Map([["text", "found"]]) }))).toEqual([
       [
         "plan.promotion-unsupported",
         expect.objectContaining({
@@ -649,6 +681,19 @@ describe("dataFactRefusals", () => {
         }),
       ],
     ])
+  })
+
+  it("refuses a target type the plan cannot name as its own detail", () => {
+    expect(
+      factCodes(
+        FACTS({
+          types: new Map<string, TypePresence>([
+            ["text", "found"],
+            ["boolean", "unparsed"],
+          ]),
+        })
+      ).map(([, p]) => (p as Record<string, string>).detail)
+    ).toEqual(["unparsed"])
   })
 
   it("refuses a fill target referenced with a cascading update", () => {
@@ -770,7 +815,9 @@ describe("readDataFacts", () => {
       { step: "d3", name: "current_setting", immutable: false, exists: true },
     ])
     expect(
-      dataFactRefusals(tables, facts, "postgres", ORIGIN).map((d) => d.code)
+      dataFactRefusals(tables, facts, "postgres", ORIGIN, MODELS).map(
+        (d) => d.code
+      )
     ).toEqual(["plan.data-step-volatile"])
   })
 
@@ -818,9 +865,9 @@ describe("readDataFacts", () => {
     expect(JSON.parse(asked.params[0] as string)).toEqual([
       { i: 0, schema: "pg_catalog", name: "citext" },
     ])
-    expect(facts.types).toEqual(new Map([["citext", false]]))
+    expect(facts.types).toEqual(new Map([["citext", "missing"]]))
     expect(
-      dataFactRefusals(tables, facts, "postgres", ORIGIN).map((d) => [
+      dataFactRefusals(tables, facts, "postgres", ORIGIN, MODELS).map((d) => [
         d.code,
         d.params.reason,
       ])
@@ -842,17 +889,26 @@ describe("readDataFacts", () => {
   })
 })
 
-/** Крок двигуна з об'єктами, які він створює чи знищує. */
+/** Крок двигуна: SQL, дія й об'єкти, які він створює, знищує чи вживає. */
 const engineStep = (
-  over: Pick<PlanStep, "produced"> &
-    Partial<Pick<PlanStep, "destroyed" | "consumed" | "verb">>
+  over: Partial<
+    Pick<PlanStep, "sql" | "produced" | "destroyed" | "consumed" | "verb">
+  >
 ): PlanStep => ({
   ...intentStep("SELECT 1", []),
   id: "s9",
   origin: "engine",
+  produced: [],
   destroyed: [],
+  consumed: [],
   ...over,
 })
+
+const NORM = { kind: "function", schema: "app", name: "norm" }
+const CODE_T = { kind: "domain", schema: "app", name: "code_t" }
+
+const stepCodes = (tables: PlannedDataTable[], steps: PlanStep[]) =>
+  dataStepRefusals(tables, steps, parse, ORIGIN).map((d) => [d.code, d.params])
 
 describe("dataStepRefusals", () => {
   it("refuses a type a step creates", () => {
@@ -860,15 +916,11 @@ describe("dataStepRefusals", () => {
     expect(
       dataStepRefusals(
         tables,
-        [
-          engineStep({
-            produced: [{ kind: "domain", schema: "app", name: "code_t" }],
-          }),
-        ],
+        [engineStep({ produced: [CODE_T] })],
         parse,
         ORIGIN
-      ).map((d) => [d.code, d.params.reason, d.params.detail])
-    ).toEqual([["plan.promotion-unsupported", "dataStepType", "changed"]])
+      ).map((d) => [d.code, d.params.reason, d.params.detail, d.params.by])
+    ).toEqual([["plan.promotion-unsupported", "dataStepType", "changed", "s9"]])
   })
 
   it("refuses a type whose constraint a step changes", () => {
@@ -878,7 +930,6 @@ describe("dataStepRefusals", () => {
         tables,
         [
           engineStep({
-            produced: [],
             destroyed: [
               {
                 kind: "constraint",
@@ -895,88 +946,221 @@ describe("dataStepRefusals", () => {
     ).toEqual(["dataStepType"])
   })
 
-  it("refuses a model function a step changes, any overload", () => {
-    const tables = withExpressions(["d1", "app.norm(code)", "text"])
+  it("refuses a model function a step creates, any overload", () => {
     expect(
-      dataStepRefusals(
-        tables,
-        [
-          engineStep({
-            produced: [{ kind: "function", schema: "app", name: "norm" }],
-          }),
-        ],
-        parse,
-        ORIGIN
-      ).map((d) => [d.code, d.params])
+      stepCodes(withExpressions(["d1", "app.norm(code)", "text"]), [
+        engineStep({ produced: [NORM] }),
+      ])
     ).toEqual([
-      ["plan.data-step-function-changed", { step: "d1", function: "app.norm" }],
+      [
+        "plan.data-step-function-changed",
+        { step: "d1", function: "app.norm", detail: "changed", by: "s9" },
+      ],
     ])
   })
 
   it("refuses a model function a step replaces in place", () => {
-    // `CREATE OR REPLACE FUNCTION` двигун дає дією `alter` із функцією в
-    // `consumed`, а не в `produced`
-    const tables = withExpressions(["d1", "app.norm(code)", "text"])
+    // `CREATE OR REPLACE FUNCTION` двигун дає дією `alter` із функцією лише в
+    // `consumed`: предмет оператора — сама функція
     expect(
-      dataStepRefusals(
-        tables,
-        [
-          engineStep({
-            verb: "alter",
-            produced: [],
-            consumed: [{ kind: "function", schema: "app", name: "norm" }],
-          }),
-        ],
-        parse,
-        ORIGIN
-      ).map((d) => d.code)
-    ).toEqual(["plan.data-step-function-changed"])
-    // Створення, що лише вживає функцію, її не змінює
+      stepCodes(withExpressions(["d1", "app.norm(code)", "text"]), [
+        engineStep({
+          verb: "alter",
+          sql: "CREATE OR REPLACE FUNCTION app.norm(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT upper(t) $$",
+          consumed: [NORM],
+        }),
+      ])
+    ).toEqual([
+      [
+        "plan.data-step-function-changed",
+        { step: "d1", function: "app.norm", detail: "changed", by: "s9" },
+      ],
+    ])
+  })
+
+  it("lets through an alter of another table that only reads the domain", () => {
+    // Вердикт В7: `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter` із
+    // доменом у `consumed`, але предмет — таблиця
     expect(
-      dataStepRefusals(
-        tables,
+      stepCodes(withExpressions(["d1", "code", "app.code_t"]), [
+        engineStep({
+          verb: "alter",
+          sql: "ALTER TABLE app.other ALTER COLUMN c TYPE app.code_t",
+          consumed: [
+            { kind: "column", schema: "app", table: "other", name: "c" },
+            CODE_T,
+          ],
+        }),
+      ])
+    ).toEqual([])
+  })
+
+  it("refuses as unproven an alter whose statement has no determined subject", () => {
+    // Вузол поза переліком (`GRANT`) і ім'я без схеми — третій випадок: крок
+    // вживає функцію, а що він змінює, з дерева не визначити
+    for (const sql of [
+      "GRANT EXECUTE ON FUNCTION app.norm(text) TO anon",
+      "CREATE OR REPLACE FUNCTION norm(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT t $$",
+    ])
+      expect(
+        stepCodes(withExpressions(["d1", "app.norm(code)", "text"]), [
+          engineStep({ verb: "alter", sql, consumed: [NORM] }),
+        ]),
+        sql
+      ).toEqual([
         [
-          engineStep({
-            verb: "create",
-            produced: [
-              { kind: "trigger", schema: "app", table: "t", name: "x" },
-            ],
-            consumed: [{ kind: "function", schema: "app", name: "norm" }],
-          }),
+          "plan.data-step-function-changed",
+          { step: "d1", function: "app.norm", detail: "unproven", by: "s9" },
         ],
-        parse,
-        ORIGIN
+      ])
+    // Без самого об'єкта в `consumed` невизначений предмет не важить
+    expect(
+      stepCodes(withExpressions(["d1", "app.norm(code)", "text"]), [
+        engineStep({
+          verb: "alter",
+          sql: "GRANT SELECT ON app.t TO anon",
+          consumed: [{ kind: "table", schema: "app", name: "t" }],
+        }),
+      ])
+    ).toEqual([])
+  })
+
+  it("refuses when one statement of a multi-statement step is the subject", () => {
+    expect(
+      stepCodes(withExpressions(["d1", "code", "app.code_t"]), [
+        engineStep({
+          verb: "alter",
+          sql: "ALTER TABLE app.other ALTER COLUMN c SET NOT NULL; ALTER DOMAIN app.code_t SET DEFAULT ''",
+          consumed: [CODE_T],
+        }),
+      ]).map(([, p]) => (p as Record<string, string>).detail)
+    ).toEqual(["changed"])
+  })
+
+  it("lets through steps that touch other types and functions", () => {
+    expect(
+      stepCodes(withExpressions(["d1", "app.norm(code)", "app.code_t"]), [
+        engineStep({
+          produced: [
+            { kind: "domain", schema: "app", name: "other_t" },
+            { kind: "function", schema: "other", name: "norm" },
+            { kind: "table", schema: "app", name: "code_t2" },
+          ],
+        }),
+        engineStep({
+          verb: "alter",
+          sql: "ALTER TYPE app.other_t ADD VALUE 'x'",
+          consumed: [{ kind: "type", schema: "app", name: "other_t" }],
+        }),
+      ])
+    ).toEqual([])
+  })
+})
+
+describe("statementSubjects", () => {
+  it("names the subject of each statement structurally", () => {
+    expect(
+      statementSubjects(
+        `CREATE OR REPLACE FUNCTION app.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+         ALTER FUNCTION app.f() STABLE;
+         ALTER DOMAIN app.d ADD CONSTRAINT c CHECK (VALUE <> '');
+         ALTER TYPE app.e ADD VALUE 'x';
+         ALTER TYPE app.c ADD ATTRIBUTE a int;
+         ALTER TYPE app.e RENAME TO e2;
+         ALTER FUNCTION app.f() OWNER TO anon;
+         ALTER DOMAIN app.d SET SCHEMA other;
+         ALTER TABLE app.t ALTER COLUMN c TYPE app.d;
+         COMMENT ON FUNCTION app.f() IS 'x';
+         GRANT EXECUTE ON FUNCTION app.f() TO anon;
+         ALTER DOMAIN d SET DEFAULT ''`,
+        parse
+      )
+    ).toEqual([
+      { kind: "routine", schema: "app", name: "f" },
+      { kind: "routine", schema: "app", name: "f" },
+      { kind: "type", schema: "app", name: "d" },
+      { kind: "type", schema: "app", name: "e" },
+      { kind: "type", schema: "app", name: "c" },
+      { kind: "type", schema: "app", name: "e" },
+      { kind: "routine", schema: "app", name: "f" },
+      { kind: "type", schema: "app", name: "d" },
+      { kind: "other" },
+      { kind: "other" },
+      { kind: "unknown" },
+      // Ім'я без схеми — не вгадується
+      { kind: "unknown" },
+    ])
+  })
+})
+
+describe("preservation types", () => {
+  const changed = (to: string) =>
+    record({
+      typeChanges: [
+        { schema: "app", table: "item", column: "code", from: "text", to },
+      ],
+    })
+
+  it("refuses a new type absent on the target before the copy", () => {
+    expect(
+      preservationTypeRefusals(
+        changed("app.code_t"),
+        new Map<string, TypePresence>([["app.code_t", "missing"]])
+      ).map((d) => [d.code, d.params])
+    ).toEqual([
+      [
+        "plan.preservation-type",
+        { column: "app.item.code", type: "app.code_t", detail: "missing" },
+      ],
+    ])
+    expect(
+      preservationTypeRefusals(
+        changed("character varying(20)"),
+        new Map<string, TypePresence>([["character varying(20)", "found"]])
       )
     ).toEqual([])
   })
 
-  it("lets through steps that touch other types and functions", () => {
-    const tables = withExpressions(["d1", "app.norm(code)", "app.code_t"])
+  it("refuses a new type a step creates, changes or cannot prove", () => {
+    const steps = [engineStep({ produced: [CODE_T] })]
     expect(
-      dataStepRefusals(
-        tables,
+      preservationTypeStepRefusals(changed("app.code_t"), steps, parse).map(
+        (d) => [d.code, d.params]
+      )
+    ).toEqual([
+      [
+        "plan.preservation-type",
+        {
+          column: "app.item.code",
+          type: "app.code_t",
+          detail: "changed",
+          by: "s9",
+        },
+      ],
+    ])
+    // Зміна типу самої колонки лише читає домен
+    expect(
+      preservationTypeStepRefusals(
+        changed("app.code_t"),
         [
           engineStep({
-            produced: [
-              { kind: "domain", schema: "app", name: "other_t" },
-              { kind: "function", schema: "other", name: "norm" },
-              { kind: "table", schema: "app", name: "code_t2" },
-            ],
+            verb: "alter",
+            sql: "ALTER TABLE app.item ALTER COLUMN code TYPE app.code_t",
+            consumed: [CODE_T],
           }),
         ],
-        parse,
-        ORIGIN
+        parse
       )
     ).toEqual([])
   })
 })
 
 describe("castGuardForms", () => {
-  /** Копія, де `PREPARE` падає на формах, що містять `fails`. */
-  const probing = (fails: RegExp) =>
+  /** Копія, де `PREPARE` падає з `sqlstate` на формах, що містять `fails`. */
+  const probing = (fails: RegExp, sqlstate = "42883") =>
     spyTx((sql, params) => {
       if (sql.startsWith("PREPARE") && fails.test(sql))
-        throw new ApplyDbError("operator does not exist", "42883")
+        throw new ApplyDbError("probe failed", sqlstate)
       // Збережені налаштування `withLocalSettings`: по значенню на ім'я
       if (sql.includes("current_setting(s.name)"))
         return (params[0] as string[]).map(() => ({ value: "saved" }))
@@ -1001,6 +1185,60 @@ describe("castGuardForms", () => {
     expect("tables" in out && out.tables[0]!.columns[1]!.guard).toBe(
       dataGuardSql(ITEMS.before, ITEMS.columns[1]!, "text")
     )
+  })
+
+  it("probes inside a savepoint and deallocates", async () => {
+    const statements = (log: { sql: string }[]) =>
+      log
+        .map((q) => q.sql.split(" ")[0]!)
+        .filter((w) =>
+          [
+            "SAVEPOINT",
+            "PREPARE",
+            "DEALLOCATE",
+            "RELEASE",
+            "ROLLBACK",
+          ].includes(w)
+        )
+    const ok = probing(/^$/)
+    await castGuardForms(
+      ok.tx,
+      [{ ...PLANNED[0]!, columns: [ITEMS.columns[0]!] }],
+      ORIGIN
+    )
+    expect(statements(ok.log)).toEqual([
+      "SAVEPOINT",
+      "PREPARE",
+      "DEALLOCATE",
+      "RELEASE",
+    ])
+    // Невдала форма відкочується до точки збереження, і проба йде далі
+    const text = probing(/DISTINCT FROM x$/)
+    await castGuardForms(
+      text.tx,
+      [{ ...PLANNED[0]!, columns: [ITEMS.columns[0]!] }],
+      ORIGIN
+    )
+    expect(statements(text.log)).toEqual([
+      "SAVEPOINT",
+      "PREPARE",
+      "ROLLBACK",
+      "SAVEPOINT",
+      "PREPARE",
+      "DEALLOCATE",
+      "RELEASE",
+    ])
+  })
+
+  it("lets an error other than a missing operator or cast propagate", async () => {
+    // Права чи повторюваний збій — не відмова «немає приведення»
+    for (const sqlstate of ["42501", "40001"]) {
+      const { tx } = probing(/IS DISTINCT FROM/, sqlstate)
+      await expect(castGuardForms(tx, PLANNED, ORIGIN)).rejects.toMatchObject({
+        sqlstate,
+      })
+    }
+    expect([...GUARD_PAIR_SQLSTATES.keys()]).toEqual(["42883", "42846"])
   })
 
   it("refuses a cast no form prepares", async () => {

@@ -3,7 +3,16 @@ import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
 import type { PreservedTable } from "../artifact"
 import { tableKey } from "../table-key"
 import { stringsOf } from "../type-guard"
-import { castExpression, type DataTable } from "./data"
+import type { EngineDiagnostic } from "../../engine"
+import { applyDiagnostic } from "../diagnostic"
+import { planChange } from "../step-subject"
+import type { PlanStep } from "../steps"
+import {
+  castExpression,
+  typeIdentity,
+  type DataTable,
+  type TypePresence,
+} from "./data"
 import type { RenameIntent } from "./intent"
 
 /**
@@ -199,4 +208,64 @@ export function preservedColumnName(expr: string, parse: SqlParser): string {
       : undefined
   if (value === undefined || !("ColumnRef" in value)) return expr
   return stringsOf(value.ColumnRef.fields).join(".")
+}
+
+const qualifiedColumn = (t: {
+  schema: string
+  table: string
+  column: string
+}) => `${quoteIdent(t.schema)}.${quoteIdent(t.table)}.${quoteIdent(t.column)}`
+
+/**
+ * Відмови `plan.preservation-type` до копії (вердикт архітектора (в) до
+ * плану П3-2b-2): замір «до» приводить колонку до нового типу до будь-якого
+ * кроку, тож тип, якого у вихідному стані цілі немає (`missing`) чи якого не
+ * назвати (`unparsed`), дав би сирий `42704` замість доказу. `presence` —
+ * `readTypePresence` нових типів `record.typeChanges`.
+ */
+export function preservationTypeRefusals(
+  record: PromotionRecord,
+  presence: ReadonlyMap<string, TypePresence>
+): EngineDiagnostic[] {
+  return record.typeChanges.flatMap((t) => {
+    const found = presence.get(t.to) ?? "missing"
+    return found === "found"
+      ? []
+      : [
+          applyDiagnostic("plan.preservation-type", "error", {
+            column: qualifiedColumn(t),
+            type: t.to,
+            detail: found,
+          }),
+        ]
+  })
+}
+
+/**
+ * Відмови `plan.preservation-type` за кроками плану — після `analyseOnClone`:
+ * новий тип, який крок створює, змінює чи знищує (`planChange`), замір «до»
+ * читав би ще старим. `detail` — `changed` чи `unproven`, `by` — крок.
+ */
+export function preservationTypeStepRefusals(
+  record: PromotionRecord,
+  steps: readonly PlanStep[],
+  parse: SqlParser
+): EngineDiagnostic[] {
+  return record.typeChanges.flatMap((t) => {
+    const id = typeIdentity(t.to, parse)
+    const change =
+      id === undefined
+        ? undefined
+        : planChange(steps, { kind: "type", ...id }, parse)
+    return change === undefined
+      ? []
+      : [
+          applyDiagnostic("plan.preservation-type", "error", {
+            column: qualifiedColumn(t),
+            type: t.to,
+            detail: change.verdict,
+            by: change.step,
+          }),
+        ]
+  })
 }

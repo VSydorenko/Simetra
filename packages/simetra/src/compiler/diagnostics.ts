@@ -237,6 +237,7 @@ export const COMPILER_RULES = [
   "plan.data-step-function-changed",
   "plan.temp-privilege",
   "plan.replication-role",
+  "plan.preservation-type",
   "database.failed",
   "introspect.unrepresentable",
   "introspect.identity-conflict",
