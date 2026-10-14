@@ -53,8 +53,10 @@ export async function shadowDatabaseCount(): Promise<number> {
 
 /**
  * Імена scratch-баз двигуна на стеку, відсортовані. Набір, а не лічильник:
- * тест, що порівнює набори до й після, бачить саме нову тінь, а сирота
- * чужого прогону чи паралельна сесія лічбу не зсуває.
+ * сирота, що вже була чи зникла, нову тінь не маскує. Але нове ім'я в наборі
+ * ще не «наша» тінь: паралельна сесія створює такі самі імена на тому самому
+ * стеку. Чия тінь, вирішує тест за власним записом провізії
+ * (`round-trip.db.test.ts`), а не за різницею наборів.
  */
 export async function shadowDatabaseNames(): Promise<string[]> {
   const client = new pg.Client({ connectionString: testDatabaseUrl() })

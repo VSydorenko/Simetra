@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 import {
   compile,
   loadSqlParser,
@@ -44,24 +53,46 @@ import {
 const stack = { url: testDatabaseUrl() }
 
 /**
- * Тіні, чиє з'єднання дійшло до тесту: лише їх тест прибирає сам. Тінь, що
- * пережила тест, — це тест, що вийшов за тайм-аут (його тіло ще тримає тінь,
- * а воркер файлу завершується раніше за `finally` порту), або прибирання
- * pg-delta, яке ковтає збій `DROP DATABASE`. Нову тінь без такого сліду
- * (збій до виклику тіла) тест лише називає: певності, що вона наша, немає.
+ * Тіні, які створив двигун цього файлу, — єдине правило «наша» і для
+ * відмови, і для прибирання. Ім'я відоме ще до `CREATE DATABASE`: обгортка
+ * сама задає суфікс тієї самої форми, що й pg-delta, записує ім'я й лише
+ * тоді викликає справжню `provisionCoLocatedShadow` (функція pg-delta
+ * виконується без змін, двигун не латається). Тож наша — й тінь, на якій
+ * тест упав раніше за своє тіло: `planAndRun` застосовує бажаний SQL, двічі
+ * читає каталоги й будує план до виклику `fn`. Тінь паралельної сесії сюди
+ * не потрапить: її створив інший процес.
  */
-const reached = new Set<string>()
-const databaseName = (url: string): string =>
-  decodeURIComponent(new URL(url).pathname.slice(1))
-const pgDelta = createPgDeltaEngine()
-const engine: SchemaEngine = {
-  ...pgDelta,
-  withDesiredShadow: (o, sql, scope, fn) =>
-    pgDelta.withDesiredShadow(o, sql, scope, (shadow, plan) => {
-      reached.add(databaseName(shadow.url))
-      return fn(shadow, plan)
-    }),
-}
+const provisioned = vi.hoisted(() => new Set<string>())
+/** Провізії, що ще йдуть: `afterAll` чекає їх, перш ніж шукати наші тіні. */
+const inFlight = vi.hoisted(() => new Set<Promise<unknown>>())
+vi.mock("@supabase/pg-delta", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@supabase/pg-delta")>()
+  return {
+    ...actual,
+    provisionCoLocatedShadow: async (
+      ...[url, opts]: Parameters<typeof actual.provisionCoLocatedShadow>
+    ) => {
+      const uniqueSuffix =
+        opts?.uniqueSuffix ??
+        `${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}`
+      const name = `pgdelta_shadow_${uniqueSuffix}`
+      provisioned.add(name)
+      const pending = actual.provisionCoLocatedShadow(url, {
+        ...opts,
+        uniqueSuffix,
+      })
+      inFlight.add(pending)
+      const shadow = await pending.finally(() => inFlight.delete(pending))
+      // Інша схема імен у pg-delta — гучно, а не тихо порожній запис
+      if (shadow.name !== name)
+        throw new Error(
+          `pg-delta named the shadow ${shadow.name}, expected ${name}`
+        )
+      return shadow
+    },
+  }
+})
+const engine: SchemaEngine = createPgDeltaEngine()
 
 /**
  * Тінь, старша за цей вік, не належить живому прогонові: тінь живе один
@@ -84,6 +115,37 @@ async function dropShadow(name: string): Promise<void> {
     c.query(
       `DROP DATABASE IF EXISTS "${name.replaceAll('"', '""')}" WITH (FORCE)`
     )
+  )
+}
+
+/**
+ * Видаляє кожну тінь зі списку: збій одного `DROP` не зупиняє решту й не
+ * губиться — збої повертаються викликачеві.
+ */
+async function dropEach(names: readonly string[]): Promise<unknown[]> {
+  const failures: unknown[] = []
+  for (const name of names) {
+    try {
+      await dropShadow(name)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  return failures
+}
+
+/**
+ * Відмова guard'а після прибирання: спершу результат перевірки, а збої
+ * `DROP` — поруч із ним, а не замість нього.
+ */
+function failGuard(assertion: Error | undefined, dropFailures: unknown[]) {
+  if (dropFailures.length === 0) {
+    if (assertion !== undefined) throw assertion
+    return
+  }
+  throw new AggregateError(
+    assertion === undefined ? dropFailures : [assertion, ...dropFailures],
+    `${dropFailures.length} shadow database(s) of this test file could not be dropped`
   )
 }
 
@@ -110,20 +172,48 @@ beforeAll(async () => {
 let shadowsBefore: ReadonlySet<string> = new Set()
 beforeEach(async () => {
   shadowsBefore = new Set(await shadowDatabaseNames())
-  reached.clear()
 })
 afterEach(async () => {
-  // Набори, а не лічильник: сирота чужого прогону, що зникла чи з'явилася,
-  // лічбу зсунула б, а нову тінь цього тесту — ні
-  const fresh = (await shadowDatabaseNames()).filter(
-    (name) => !shadowsBefore.has(name)
+  // Наша тінь, що пережила тест, — тест, що вийшов за тайм-аут (vitest
+  // запускає afterEach одразу, а тіло ще тримає тінь, і воркер завершиться
+  // раніше за `finally` порту), або прибирання pg-delta, яке ковтає збій
+  // `DROP DATABASE`. Вона валить тест і прибирається — і тоді, коли тест
+  // упав ще до свого тіла
+  const present = await shadowDatabaseNames()
+  const leaked = present.filter((name) => provisioned.has(name))
+  // Нова тінь, якої цей файл не створював, — паралельна сесія: її лише
+  // названо, тест вона не валить і не видаляється
+  const foreign = present.filter(
+    (name) => !provisioned.has(name) && !shadowsBefore.has(name)
   )
+  if (foreign.length > 0)
+    process.stderr.write(
+      `Shadow databases appeared during the test that this test file did not create (another session?); not removed: ${foreign.join(", ")}\n`
+    )
+  const dropFailures = await dropEach(leaked)
+  let assertion: Error | undefined
   try {
-    expect(fresh, "shadow databases this test left behind").toEqual([])
-  } finally {
-    // Прибирання — і тоді, коли тест упав
-    for (const name of fresh) if (reached.has(name)) await dropShadow(name)
+    expect(leaked, "shadow databases this test file left behind").toEqual([])
+  } catch (error) {
+    assertion = error instanceof Error ? error : new Error(String(error))
   }
+  failGuard(assertion, dropFailures)
+})
+afterAll(async () => {
+  // Тест, що вийшов за тайм-аут посеред `CREATE DATABASE`, лишає тінь, якої
+  // ще не було, коли йшов його afterEach. Її ловить afterEach наступного
+  // тесту, а після останнього — цей хук, дочекавшись провізій, що ще йдуть.
+  // Лишається вікно, якого процес не закриє: провізія, яку тіло почне вже
+  // після цього хука, перед виходом воркера, і вбитий прогін
+  await Promise.allSettled([...inFlight])
+  const late = (await shadowDatabaseNames()).filter((name) =>
+    provisioned.has(name)
+  )
+  if (late.length > 0)
+    process.stderr.write(
+      `Shadow databases of this test file outlived their tests; dropping: ${late.join(", ")}\n`
+    )
+  failGuard(undefined, await dropEach(late))
 })
 
 const schemaPath: SchemaPathResolver = (_file, schemaFile) =>
