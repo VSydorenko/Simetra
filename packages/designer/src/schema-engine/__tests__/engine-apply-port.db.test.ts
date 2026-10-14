@@ -410,7 +410,43 @@ describe("SchemaEngine apply port", () => {
           "engine.clone-failed",
         ])
         expect(outcome.diagnostics[0]!.engineCode).toBe("apply_failed")
-        expect(outcome.diagnostics[0]!.message).toMatch(/CREATE DOMAIN/i)
+        // Діагностика називає фазу: та сама помилка у фазі 2 читалася б інакше
+        expect(outcome.diagnostics[0]!.params.detail).toMatch(
+          /^creating the target's types ahead of its tables failed: `CREATE DOMAIN/i
+        )
+        expect(await shadowDatabaseCount()).toBe(before)
+      }
+    )
+  })
+
+  it("names the reproduction phase when the type phase has passed", async () => {
+    // Фаза 1 створює `app.k`, а фаза 2 падає на типі `other.e` поза межею:
+    // діагностика каже, що впала саме вона, а не фаза типів
+    await inTarget(
+      [
+        "create schema other;",
+        "create type other.e as enum ('a');",
+        "create schema app;",
+        "create type app.k as enum ('x');",
+        "create table app.t (id int, k app.k, e other.e);",
+      ].join("\n"),
+      async (url) => {
+        const before = await shadowDatabaseCount()
+        const target = await engine.extract({ url }, scope)
+        const outcome = await engine.withTargetClone(
+          { target: { url } },
+          target,
+          scope,
+          async () => {}
+        )
+        expect(outcome.status).toBe("shadow-failed")
+        expect(outcome.diagnostics.map((d) => d.code)).toEqual([
+          "engine.clone-failed",
+        ])
+        expect(outcome.diagnostics[0]!.engineCode).toBe("apply_failed")
+        expect(outcome.diagnostics[0]!.params.detail).toMatch(
+          /^applying the target state failed: .*other\.e/
+        )
         expect(await shadowDatabaseCount()).toBe(before)
       }
     )

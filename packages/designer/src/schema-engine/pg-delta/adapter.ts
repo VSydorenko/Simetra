@@ -700,18 +700,33 @@ function cloneFailed(
   }
 }
 
-/** Застосовує план відтворення до копії; збій — діагностика копії. */
+/**
+ * Що робила копія у фазі, яка впала: фаза типів (1) і відтворення стану (2)
+ * дають той самий код двигуна, тож розрізняє їх лише текст.
+ */
+const CLONE_PHASES = {
+  types: "creating the target's types ahead of its tables failed",
+  state: "applying the target state failed",
+} as const
+
+/**
+ * Застосовує план фази до копії; збій — діагностика копії, що називає фазу:
+ * без неї збій фази типів і збій відтворення не відрізнити.
+ */
 async function reproduce(
   clonePool: pg.Pool,
-  plan: Plan
+  plan: Plan,
+  phase: keyof typeof CLONE_PHASES
 ): Promise<EngineDiagnostic | undefined> {
   const report = await apply(plan, clonePool, { fingerprintGate: false })
   if (report.status === "applied") return undefined
   return cloneFailed(
     // Текст помилки оператора стосується об'єкта, а не підключення
-    report.error === undefined
-      ? "the reproduction plan was not applied"
-      : `\`${report.error.sql}\`: ${report.error.message}`,
+    `${CLONE_PHASES[phase]}: ${
+      report.error === undefined
+        ? "the plan was not applied"
+        : `\`${report.error.sql}\`: ${report.error.message}`
+    }`,
     "apply_failed"
   )
 }
@@ -775,7 +790,8 @@ async function cloneAndRun<T>(
     if (phase !== undefined) {
       const failure = await reproduce(
         clonePool,
-        enginePlan(seeded.factBase, phase, seeded.planOptions)
+        enginePlan(seeded.factBase, phase, seeded.planOptions),
+        "types"
       )
       if (failure !== undefined)
         return { status: "shadow-failed", diagnostics: [failure] }
@@ -788,7 +804,7 @@ async function cloneAndRun<T>(
       targetCatalog.factBase,
       source.planOptions
     )
-    const failure = await reproduce(clonePool, plan)
+    const failure = await reproduce(clonePool, plan, "state")
     if (failure !== undefined)
       return { status: "shadow-failed", diagnostics: [failure] }
     // Той самий фільтр `unmodeled_kind`, що в `planAndRun`
