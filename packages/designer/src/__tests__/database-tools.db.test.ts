@@ -706,14 +706,18 @@ describe("credentials never leak", () => {
 })
 
 describe("pools", () => {
-  /** Сесії бази, крім власної, — їх лишив би незакритий пул. */
+  /**
+   * Клієнтські сесії цілі — їх лишив би незакритий пул. Службові процеси
+   * сервера (autovacuum, паралельні виконавці) приходять і йдуть самі, тож у
+   * лічбу не входять. Сесія лічби — з базою стеку, не цілі.
+   */
   async function sessions(url: string): Promise<number> {
     const client = new pg.Client({ connectionString: stack.url })
     await client.connect()
     try {
       const { rows } = await client.query<{ n: number }>(
         `select count(*)::int as n from pg_stat_activity
-          where datname = $1 and pid <> pg_backend_pid()`,
+          where datname = $1 and backend_type = 'client backend'`,
         [new URL(url).pathname.slice(1)]
       )
       return rows[0]!.n
@@ -722,10 +726,26 @@ describe("pools", () => {
     }
   }
 
-  /** Закриті сесії зникають із `pg_stat_activity` не миттєво. */
-  async function settled(url: string, expected: number): Promise<number> {
+  /**
+   * Межа очікування, поки сесії закритого пулу зникнуть із
+   * `pg_stat_activity`: процес сервера завершується вже після того, як
+   * клієнт закрив з'єднання, і під навантаженням це помітно довше за мить.
+   * Межа нижча за `idleTimeoutMillis` пулу `pg` (типово 10 с): інакше
+   * незакритий пул сам закрив би простійні з'єднання, і тест пройшов би хибно.
+   */
+  const SETTLE_MS = 6_000
+
+  /**
+   * Клієнтських сесій цілі не лишилося. Порівняння — з нулем, а не зі
+   * знімком «до»: знімок одразу після попереднього виклику ще бачив би його
+   * сесії, що закриваються, і порівняння ставало б перегонами (флейк у обидва
+   * боки: «до» з сесіями, що потім зникли, чи без тих, що ще не зникли). Між
+   * викликами ціль сесій не має: порт тіні з'єднань із нею не тримає.
+   */
+  async function settled(url: string): Promise<number> {
+    const deadline = Date.now() + SETTLE_MS
     let n = await sessions(url)
-    for (let i = 0; i < 30 && n !== expected; i++) {
+    while (n !== 0 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100))
       n = await sessions(url)
     }
@@ -734,7 +754,7 @@ describe("pools", () => {
 
   it("no pool is left open after a refused or failed call", async () => {
     await introspected(async (dir, env, url) => {
-      const before = await sessions(url)
+      expect(await settled(url)).toBe(0)
       // Відмова після читання бази: невідома таблиця фільтра
       const refused = await call(
         "diff",
@@ -742,7 +762,7 @@ describe("pools", () => {
         options(dir, env)
       )
       expect(refused.refusal).toBeDefined()
-      expect(await settled(url, before)).toBe(before)
+      expect(await settled(url)).toBe(0)
       // Відмова до бази: схема провайдера не читається
       const failed = await call(
         "introspect",
@@ -750,7 +770,7 @@ describe("pools", () => {
         options(dir, env)
       )
       expect(failed.refusal).toBeDefined()
-      expect(await settled(url, before)).toBe(before)
+      expect(await settled(url)).toBe(0)
       // Схема платформи теж не читається
       const platform = await call(
         "introspect",
@@ -758,13 +778,13 @@ describe("pools", () => {
         options(dir, env)
       )
       expect(platform.refusal?.message).toContain("belongs to the platform")
-      expect(await settled(url, before)).toBe(before)
+      expect(await settled(url)).toBe(0)
     })
   })
 
   it("no pool is left open after a failure in the middle of the database work", async () => {
     await introspected(async (dir, env, url) => {
-      const before = await sessions(url)
+      expect(await settled(url)).toBe(0)
       // Підключення вдається, а запити двигуна падають за таймаутом
       // (57014): збій роботи з базою, а не відмова підключення
       const slow = new URL(url)
@@ -781,7 +801,7 @@ describe("pools", () => {
             params: expect.objectContaining({ tool, sqlstate: "57014" }),
           }),
         ])
-        expect(await settled(url, before), tool).toBe(before)
+        expect(await settled(url), tool).toBe(0)
       }
       const cli = await runTool(
         toolByName("diff")!,
@@ -805,14 +825,14 @@ describe("pools", () => {
        );`,
       ["app"],
       async (url) => {
-        const before = await sessions(url)
+        expect(await settled(url)).toBe(0)
         const r = await call(
           "introspect",
           introspectInput,
           options(await freshProject(), { [ENV]: url })
         )
         expect(r.ok).toBe(false)
-        expect(await settled(url, before)).toBe(before)
+        expect(await settled(url)).toBe(0)
       }
     )
   })
