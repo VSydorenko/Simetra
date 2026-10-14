@@ -365,7 +365,15 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 `allow` the id of every step that drops data or relaxes a guarantee and
 `drift` when the plan carries drift; the plan output says which items need
 it. `rehearse` runs the plan and rolls it back, but still takes the same
-locks as `apply`.
+locks as `apply`. It also builds the desired shadow database and proves on the
+same connection that the catalog equals the desired state, so it holds the
+plan's locks a little longer.
+
+`apply` and `rehearse` re-validate function bodies and deferred constraints
+before the end of the transaction. An `apply.function-check-blind` warning lists
+functions the check cannot see (another language, no `EXECUTE` for the role, a
+trigger function without a trigger): nothing proved their bodies, so review
+them by hand.
 
 When the role has global default privileges, a plan also ends with environment
 steps: explicit GRANT/REVOKE that cancel them on the objects the plan creates.
