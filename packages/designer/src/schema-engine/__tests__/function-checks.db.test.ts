@@ -283,7 +283,8 @@ describe("function body revalidation", () => {
   })
 
   // Review Focus 1: під преамбулою крок проходить, а валідатор `plpgsql`
-  // компілює тіло в ревалідації
+  // компілює тіло в ревалідації. Без `plpgsql_check`: інакше відмову дав би
+  // і він, і тест не помітив би, що DO-блок пропустив мову `plpgsql`
   it("refuses a plpgsql body that does not compile although the preamble turned validation off", async () => {
     const steps = [
       step(
@@ -298,7 +299,10 @@ describe("function body revalidation", () => {
       const outcome = await executePlan(
         apply,
         { url },
-        await planFor(url, steps, wanted, { preamble: PREAMBLE }),
+        await planFor(url, steps, wanted, {
+          preamble: PREAMBLE,
+          plpgsqlCheck: "unavailable",
+        }),
         options
       )
       expect(outcome).toMatchObject({
