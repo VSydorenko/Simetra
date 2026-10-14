@@ -111,32 +111,67 @@ describe("vetSavepointQuery", () => {
     )
   })
 
+  // Кожна відмова — за своєю причиною: загальне /refused/ пропустило б
+  // відмову з чужої гілки сторожа
   it("refuses writes, row locks and SELECT INTO", () => {
+    for (const [text, reason] of [
+      ["INSERT INTO app.t VALUES (1)", /statement refused: InsertStmt/],
+      ["UPDATE app.t SET a = 1", /statement refused: UpdateStmt/],
+      ["CREATE TABLE app.x ()", /statement refused: CreateStmt/],
+      ["SELECT * FROM app.t FOR UPDATE", /row locks/],
+      ["SELECT * FROM app.t FOR SHARE", /row locks/],
+      ["SELECT * FROM (SELECT * FROM app.t FOR UPDATE) s", /row locks/],
+      [
+        "WITH d AS (DELETE FROM app.t RETURNING *) SELECT * FROM d",
+        /data-modifying/,
+      ],
+      ["SELECT 1 INTO app.copy", /SELECT INTO/],
+    ] as const)
+      expect(refused(text, true), text).toMatch(reason)
+  })
+
+  it("refuses functions whose effect outlives the savepoint or the transaction", () => {
+    for (const [text, name] of [
+      ["SELECT nextval('app.s')", "nextval"],
+      ["SELECT pg_catalog.setval('app.s', 1)", "setval"],
+      ["SELECT pg_advisory_lock(1)", "pg_advisory_lock"],
+      ["SELECT pg_advisory_lock_shared(1, 2)", "pg_advisory_lock_shared"],
+      ["SELECT pg_try_advisory_lock(1)", "pg_try_advisory_lock"],
+      [
+        "SELECT * FROM (SELECT pg_try_advisory_lock_shared(1)) s",
+        "pg_try_advisory_lock_shared",
+      ],
+    ] as const)
+      expect(refused(text, true), text).toBe(
+        `extract read refused: ${name}() is not allowed`
+      )
+  })
+
+  it("passes transaction-scoped advisory locks: the end of the transaction releases them", () => {
     for (const text of [
-      "INSERT INTO app.t VALUES (1)",
-      "UPDATE app.t SET a = 1",
-      "CREATE TABLE app.x ()",
-      "SELECT * FROM app.t FOR UPDATE",
-      "SELECT * FROM app.t FOR SHARE",
-      "SELECT * FROM (SELECT * FROM app.t FOR UPDATE) s",
-      "WITH d AS (DELETE FROM app.t RETURNING *) SELECT * FROM d",
-      "SELECT 1 INTO app.copy",
+      "SELECT pg_advisory_xact_lock(1)",
+      "SELECT pg_try_advisory_xact_lock_shared(1, 2)",
     ])
-      expect(refused(text, true), text).toMatch(/refused/)
+      expect(vet(text, true), text).toEqual({
+        ok: true,
+        text,
+        inSavepoint: true,
+      })
   })
 
   it("refuses transaction control other than one BEGIN and its end", () => {
     expect(refused("BEGIN", true)).toMatch(/already open/)
+    expect(refused("START TRANSACTION", true)).toMatch(/already open/)
     expect(refused("COMMIT AND CHAIN", true)).toMatch(/AND CHAIN/)
     expect(refused("ROLLBACK AND CHAIN", true)).toMatch(/AND CHAIN/)
-    for (const text of [
-      "PREPARE q AS SELECT 1",
-      "SAVEPOINT x",
-      "RELEASE x",
-      "ROLLBACK TO SAVEPOINT x",
-      "PREPARE TRANSACTION 'x'",
-    ])
-      expect(refused(text, true), text).toMatch(/refused/)
+    for (const [text, reason] of [
+      ["PREPARE q AS SELECT 1", /statement refused: PrepareStmt/],
+      ["SAVEPOINT x", /refused: TRANS_STMT_SAVEPOINT/],
+      ["RELEASE x", /refused: TRANS_STMT_RELEASE/],
+      ["ROLLBACK TO SAVEPOINT x", /refused: TRANS_STMT_ROLLBACK_TO/],
+      ["PREPARE TRANSACTION 'x'", /refused: TRANS_STMT_PREPARE/],
+    ] as const)
+      expect(refused(text, true), text).toMatch(reason)
   })
 
   it("refuses what does not parse", () => {

@@ -37,11 +37,29 @@ const WRITE = "extract read refused: it carries a data-modifying statement"
 const WRITES = new Set(["InsertStmt", "UpdateStmt", "DeleteStmt", "MergeStmt"])
 
 /**
- * Функції, яким у витягу не місце. `pg_export_snapshot` Postgres у
- * підтранзакції однаково відхиляє, і помилка аварійно закрила б точку
- * збереження; сторож називає причину до сервера.
+ * Функції, яким у витягу не місце.
+ *
+ * - `pg_export_snapshot` Postgres у підтранзакції однаково відхиляє, і
+ *   помилка аварійно закрила б точку збереження; сторож називає причину до
+ *   сервера.
+ * - `nextval` і `setval`: зсув послідовності не відкочує ні `ROLLBACK TO`,
+ *   ні `ROLLBACK`, тож витяг лишив би слід на цілі.
+ * - Сесійні advisory-замки: замок переживає і точку збереження, і
+ *   транзакцію раннера, а за пулером — і саму сесію застосування.
+ *   Транзакційні `*_xact_*` знімає кінець транзакції, їх дозволено.
+ *
+ * Старий шлях витягу (`READ ONLY`-транзакція) ці функції блокував сам
+ * Postgres; точка збереження `READ ONLY` не буває, тож межу тримає сторож.
  */
-const REFUSED_FUNCTIONS = new Set(["pg_export_snapshot"])
+const REFUSED_FUNCTIONS = new Set([
+  "pg_export_snapshot",
+  "nextval",
+  "setval",
+  "pg_advisory_lock",
+  "pg_advisory_lock_shared",
+  "pg_try_advisory_lock",
+  "pg_try_advisory_lock_shared",
+])
 
 export type VettedSavepointQuery =
   | {
