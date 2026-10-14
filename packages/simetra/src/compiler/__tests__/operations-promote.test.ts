@@ -1683,6 +1683,26 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     expect(unknown?.hint).toMatch(/`scope` and `scopeColumn`.*CustomTable/)
   })
 
+  it("hints to declare scope and scopeColumn when the table declares neither", async () => {
+    // Проєкт без видів скоупу, таблиця без `scope` і `scopeColumn` зовсім:
+    // носія скоупу немає, і колонка, змаплена на скоуп, дає ту саму пораду
+    const files = promotionProject(PARTS)
+    const raw = json(files, COUNTERPARTY_FILE)
+    expect(raw.scope).toBeUndefined()
+    expect(raw.scopeColumn).toBeUndefined()
+    const { result } = await promoted(
+      files,
+      mapping((m) => {
+        m.columns.inn = { to: "scope" }
+      })
+    )
+    const unknown = result.diagnostics.find(
+      (d) => d.code === "promote.mapping-unknown"
+    )
+    expect(unknown?.params).toMatchObject({ reason: "scopeColumn" })
+    expect(unknown?.hint).toMatch(/`scope` and `scopeColumn`.*CustomTable/)
+  })
+
   it("requires the removed class for a default of the scope column", async () => {
     // Значення скоупу вид у базі не дає (R21): DEFAULT носія скоупу мапінг не
     // покриває, тож він потребує класу, і лише «видалено»
