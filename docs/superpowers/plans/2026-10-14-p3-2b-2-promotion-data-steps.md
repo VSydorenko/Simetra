@@ -165,19 +165,22 @@ checkout комітить одна сесія.
      кожен `UPDATE` пише нову версію рядка, тож N кроків дали б N переписувань
      і N-кратне роздуття heap. Кроки однієї таблиці в одному `SELECT`
      однаково бачать вихідний рядок.
-   - **Тип у CTAS — бажаний тип цілі** (`(<вираз>)::<тип>`): збій приведення
-     ловиться до запису (вже заміром 6a).
-   - **Змаплена ціль зі зміною типу** у фазі 10 ще має старий тип: зміна
-     типу — крок двигуна фази 11. Запис робить друге, неявне приведення
-     «бажаний → старий» за правилами присвоєння. Воно точне лише тоді, коли
-     старий тип — рядковий без межі (`text`, `varchar` без довжини):
-     текстова форма значення бажаного типу, а двигун потім приводить її
-     туди. Тому крок даних на змаплену ціль зі зміною типу, чий старий тип
-     не `text`/`varchar` без межі, — відмова `plan.promotion-unsupported`
-     (`reason: "dataStepType"`). Хибна відмова допустима, хибна
-     `apply.preservation-failed` з оманливою підказкою — ні. Обидві форми
-     свідомої конверсії (`text → jsonb`, `text → varchar(n)`) під правило
-     підпадають.
+   - **Тип у CTAS — тип колонки-цілі на момент запису** (`DataTable.columns[].type`):
+     для незмапленої цілі й змапленої без зміни типу — бажаний тип; для
+     змапленої цілі зі зміною типу — **старий** тип, бо зміна типу — крок
+     двигуна фази 11, і її звуження ловить наявний сторож кроку вже на
+     записаних значеннях. Приведення до бажаного типу в CTAS мовчки обрізало
+     б і ненульові значення (`'…25 символів'::varchar(20)` обрізає без
+     помилки, виміряно): `coalesce(code, 'x')` пройшов би як дозаповнення
+     без `repair:` і обрізав би наявні довгі коди (аудит Codex).
+   - **Змаплена ціль зі зміною типу** допустима лише зі старим рядковим
+     типом без межі (`text`, `varchar` без довжини): лише тоді запис у
+     старий тип точно несе значення, а двигун потім приводить його туди зі
+     сторожем. Інакше — відмова `plan.promotion-unsupported` (`reason:
+     "dataStepType"`). Обидві форми свідомої конверсії (`text → jsonb`,
+     `text → varchar(n)`) під правило підпадають.
+   - **Сторож приведення кроку даних** (рішення 12) — перед CTAS: значення
+     виразу, яке приведення до типу запису змінює, зупиняє спробу.
    - **Рендер виразу з переводом рядка** — `(\n<вираз>\n)` у
      `dataComputeSql`, `preservationQuery` і `castProbeQuery`: T1 розбирає
      `SELECT <вираз>\nFROM …` і пропускає вираз з коментарем `--`, а
@@ -215,9 +218,10 @@ checkout комітить одна сесія.
        columns: {
          step: string // d<N>
          column: string // нове ім'я цілі
-         type: string // тип бажаного стану у формі record.typeChanges
+         type: string // тип колонки на момент запису, форма record.typeChanges
          expression: string // старі імена
          kind: "repair" | "conversion" | "split" | "backfill"
+         guard: string // SQL сторожа приведення (рішення 12)
        }[]
        triggers: { name: string; enabled: "O" | "A" }[] // за іменем
      }
@@ -323,8 +327,10 @@ checkout комітить одна сесія.
      backend.
 8. **Заміри за виразом мапінгу.**
    - Колонка-ціль `fill` у `PreservedTable.columns`: `before` —
-     `((<вираз>)::<тип>)`, `after` — нове ім'я колонки, нове поле
-     `dataStep: "d<N>"`. Для змапленої цілі цей запис замінює звичайний; для
+     `((\n<вираз>\n)::<тип запису>)`, а для змапленої цілі зі зміною типу —
+     ще й `::<бажаний тип>`, як звичайний `beforeExpr`; `after` — нове ім'я
+     колонки; нове поле `dataStep: "d<N>"` (і `typeChangeStep`, коли тип
+     змінюється). Для змапленої цілі цей запис замінює звичайний; для
      незмапленої — додається.
    - `preservationQuery` рахує вирази в підзапиті для обох боків: `SELECT
      count(*) AS rows, sum(…k…x0…) AS c0, … FROM (SELECT <key> AS k, <e0> AS
@@ -335,10 +341,11 @@ checkout комітить одна сесія.
      віконної колонки дає `42803`, а не клас `22`, і ховає справжню
      колонку зі звуженням.
    - Набір проб `measureBefore` — колонки з `typeChangeStep` ∪ колонки з
-     `dataStep`. Клас `22` у пробі колонки з `dataStep` —
-     `apply.data-step-failed` з `step` (вираз і є конверсією), у пробі з
-     `typeChangeStep` — як є `apply.type-narrowing`; інший SQLSTATE —
-     `apply.preservation-measure-failed`.
+     `dataStep`. Колонка з `dataStep` пробується двічі: спершу лише вираз із
+     приведенням до типу запису — клас `22` → `apply.data-step-failed` з
+     `step`; потім, якщо є `typeChangeStep`, повний вираз — клас `22` →
+     `apply.type-narrowing`. Колонка лише з `typeChangeStep` — як є. Інший
+     SQLSTATE — `apply.preservation-measure-failed`.
    - Під `DATA_SETTINGS` — і заміри без кроків даних: текстова форма значень
      однаково залежить від налаштувань.
 9. **`DATA_SETTINGS`** — один перелік у `settings.ts` з посиланням на спеку
@@ -370,6 +377,42 @@ checkout комітить одна сесія.
       `afterEach DROP … WITH (FORCE)` під час тіла тесту за тайм-аутом
       (давнє, 2b-2 не зачіпає).
 
+12. **Сторож приведення кроку даних** (аудит Codex, за зразком сторожів
+    звуження рішення 5 плану 2a). Приведення значення виразу до типу
+    запису (`varchar(n)`, `numeric(p,s)`) може мовчки змінити його.
+    - На кожну колонку секції — запит, що рахує втрати:
+      `SELECT count(*) AS lost FROM <старе ім'я> WHERE (\n<вираз>\n) IS NOT
+      NULL AND ((\n<вираз>\n)::<тип запису>) IS DISTINCT FROM (\n<вираз>\n)`
+      (порівняння в типах, які розв'язує Postgres: `numeric(10,2)` проти
+      `int` — рівні, `varchar(20)` проти довшого `text` — різні).
+    - Коли такого оператора немає (`42883`/`42846`), — текстова форма:
+      `((\n<вираз>\n)::<тип запису>)::text IS DISTINCT FROM (\n<вираз>\n)::text`.
+      Яку форму взяти, `plan` вирішує на першій копії пробою `PREPARE`, як
+      `checkGuardCasts` (форма йде в `DataTable.columns[].guard` під
+      `planHash`); жодна форма не готується — `plan.promotion-unsupported`
+      (`reason: "dataStepType"`).
+    - Раннер виконує сторожі у фазі 8 перед CTAS під `DATA_SETTINGS`;
+      `lost > 0` → `apply.data-step-narrowing` (`step`, `lost`); клас `22`
+      самого сторожа → `apply.data-step-failed` з `step`.
+    - Наслідок для свідомої конверсії: вираз `payload` (текст) у нову
+      колонку `jsonb` — текстова форма нормалізується, тож відмова; явний
+      `payload::jsonb` — порівняння `jsonb` з `jsonb`, рівні. Конверсію
+      записують явно, а не неявним приведенням.
+13. **`session_replication_role` — лише `origin`** (аудит Codex). Його ставить
+    лише суперкористувач, але й наперед, налаштуванням бази чи ролі. У режимі
+    `replica` внутрішні тригери FK (`O`) не спрацьовують, тож запис значень
+    обійшов би перевірку посилань, а тригери `R` спрацювали б. План із
+    кроками даних читає `current_setting('session_replication_role')` у
+    `READ ONLY` → не `origin` — `plan.replication-role`; раннер повторює
+    перевірку на початку фази 8 → `apply.replication-role` (відмова без
+    повтору). Вплив на спеку: §7.2, абзац «Не закріплюються» — дописати, що
+    кроки даних вимагають `origin`.
+14. **Замір цілі `fill` — точно той, що виводиться з секції** (аудит Codex).
+    `dataMatchesRecord` перевіряє не лише наявність колонки з `dataStep`, а
+    й те, що її `before` і `after` дорівнюють рендеру з `DataTable` (вираз,
+    тип запису, бажаний тип, нове ім'я): помилково зібрана секція доводила
+    б інше значення. Розбіжність — `Error` зламаного конвеєра до `BEGIN`.
+
 ### Рішення під час виконання
 
 (порожньо — заповнює виконавець; кожне з полем «вплив на спеку»)
@@ -397,6 +440,12 @@ checkout комітить одна сесія.
   спершу план зі зміною типу, потім промоція з ремонтом.
 - **Вхідний FK з каскадом оновлення на колонку-ціль** —
   `plan.promotion-unsupported` (`dataStepReferenced`).
+- **Неявна конверсія кроку даних** (`payload` текстом у колонку `jsonb`,
+  довге значення у `varchar(n)`, дробове у `numeric(p,s)`) —
+  `apply.data-step-narrowing` (рішення 12). Конверсію записують явно
+  (`payload::jsonb`, `left(code, 20)`, `round(x, 2)`).
+- **`session_replication_role` не `origin`** (налаштування бази чи ролі) —
+  `plan.replication-role` / `apply.replication-role`.
 - **Ціль без права `TEMP`** — `plan.temp-privilege`.
 - **Роль з `BYPASSRLS`** (зокрема `postgres` Supabase): `row_security = off`
   не дає помилки на `FORCE`-таблиці, бо RLS на неї не діє. Без `BYPASSRLS`
@@ -470,7 +519,19 @@ Expected: усе зелене; число тестів (simetra, designer, DB) �
   > несе всі її кроки, і запис іде одним `UPDATE` на таблицю: кожен
   > `UPDATE` пише нову версію рядка. Зайняте ім'я тимчасової таблиці —
   > відмова; без права `TEMP` на базу — відмова плану. Кількість записаних
-  > рядків дорівнює кількості обчислених.
+  > рядків дорівнює кількості обчислених. Значення обчислюється в типі
+  > колонки на момент запису, а для змапленої цілі зі зміною типу — у
+  > старому: звуження до нового типу ловить сторож кроку двигуна вже на
+  > записаному. Значення виразу, яке приведення до типу запису змінює
+  > (обрізання, округлення), — відмова до запису: приведення не мусить
+  > мовчки переписати дані.
+
+- [ ] **Step 3a: §7.2, абзац «Не закріплюються»** — після речення про
+  `lc_messages` і `session_replication_role` додати:
+
+  > Кроки даних вимагають `session_replication_role = origin`: у режимі
+  > `replica` внутрішні тригери FK не спрацьовують, і запис обійшов би
+  > перевірку посилань; інакше — відмова.
 
 - [ ] **Step 4: §7.2, пункт «тригери на час запису»** — «перед увімкненням
   раннер звіряє його з живим» замінити на «перед вимкненням раннер звіряє
@@ -718,7 +779,8 @@ git commit -m "feat(schema): закріплені налаштування да�
     readonly DataTable[])`; `lockPlan` отримує `data: readonly DataTable[]`
     і додає слід рішення 2.
 - Нові коди: `plan.data-step-volatile`, `plan.data-step-function-changed`,
-  `plan.temp-privilege`; причини `plan.promotion-unsupported`:
+  `plan.temp-privilege`, `plan.replication-role` (рішення 13); причини
+  `plan.promotion-unsupported`:
   `dataStepTable`, `dataStepType`, `dataStepKey`, `dataStepReferenced` —
   кожна зі своєю гілкою тексту en/uk (гілку `dataSteps` прибрати; гілка
   `else` тексту зараз говорить про первинний ключ). Підказки
@@ -742,9 +804,18 @@ git commit -m "feat(schema): закріплені налаштування да�
     `renameIntent` дає останнім кроком `ALTER TABLE "app"."catalog_items" ADD
     COLUMN "deletion_mark" boolean` (без `NOT NULL` і `DEFAULT`);
   - `"measures a fill target by its expression"`: `preservationPlan` для
-    змапленої цілі з ремонтом дає `before: "((left(code, 20))::varchar(20))"`,
-    `dataStep: "d1"`, без звичайного запису тієї колонки; для незмапленої —
-    додатковий запис;
+    змапленої цілі `code text → varchar(20)` з ремонтом дає `before`
+    `(((\nleft(code, 20)\n)::text)::varchar(20))`, `dataStep: "d1"`,
+    `typeChangeStep` кроку зміни типу, без звичайного запису тієї колонки;
+    для незмапленої цілі — додатковий запис з `((\n<вираз>\n)::<бажаний
+    тип>)`;
+  - `"computes a mapped target with a type change in its old type"`
+    (аудит Codex, блокер): `dataPlan` для `code text → varchar(20)` з
+    `coalesce(code, 'x')` дає `type: "text"`, а не `varchar(20)`: довгий
+    наявний код не обрізається в CTAS, і звуження ловить сторож кроку
+    двигуна;
+  - `"guards the cast of each data step"`: `guard` колонки — запит рішення 12
+    у формі з порівнянням, а для пари без оператора — у текстовій формі;
   - `"refuses a catalog function that is not immutable on the target"`:
     `dataFactRefusals` з фактом `{ step: "d1", name: "lower", immutable:
     false, exists: true }` → `plan.data-step-volatile` (`step: "d1"`,
@@ -806,12 +877,29 @@ Expected: FAIL.
     викликів), а не сирий `42704` кроку наміру;
   - `"reads desiredInvalid from the shadow in a promotion"` (борг T3, гілка
     промоції `planPromotion`; звичайний план уже має такий тест): бажаний
-    стан з `NOT VALID` обмеженням → `artifact.desiredInvalid` містить його.
+    стан з `NOT VALID` обмеженням → `artifact.desiredInvalid` містить його;
+  - на рівні конвеєра (аудит Codex) — `"refuses a type an engine step
+    changes"`: домен `app.code_t` є на цілі, бажаний стан змінює його
+    `CHECK`, ціль `fill` має тип `app.code_t` → `dataStepType` з
+    `dataStepRefusals`; `"refuses a record whose data step kind was
+    edited"`: файл запису `plans/<id>.promotion.json`, у якому ремонт
+    переписано на `conversion` (і `recordHash` перераховано) →
+    `plan.promotion-record-mismatch` (`detail: "dataSteps"`);
+  - `"refuses a session replication role other than origin"`: базі цілі
+    суперкористувачем (`o.superuser`, як у `function-checks.db.test.ts`)
+    `ALTER DATABASE … SET session_replication_role = replica` →
+    `plan.replication-role`; база прибирається, як усі цілі;
+  - `"picks the text form of the cast guard when no operator exists"`:
+    `fill` нової колонки `jsonb` з виразом `payload` (текст) → `guard` у
+    текстовій формі; явний `payload::jsonb` → форма з порівнянням.
 - [ ] **Step 5: Підключити в `planPromotion`** (дві точки, рішення 5):
   `dataPlan` одразу після `renameIntent`; `readDataFacts` окремою
   транзакцією `READ ONLY` цілі й `dataFactRefusals` — до
   `engine.withTargetClone`; `ADD COLUMN` наміру йде в `intent.steps`, тож
-  виконується й на копії; `dataStepRefusals` — після `analyseOnClone` за
+  виконується й на копії; форму сторожа приведення (рішення 12) `analyseOnClone`
+  вибирає пробою `PREPARE` на першій копії **до** кроків наміру (вираз — у
+  старих іменах), у точці збереження з `DEALLOCATE`, як `checkGuardCasts`;
+  `dataStepRefusals` — після `analyseOnClone` за
   його кроками; секція `data` з тригерами з фактів; у `lockPlan` — слід
   `SHARE ROW EXCLUSIVE` таблиці запису в старому імені (окремий
   `StepFootprint` з `step` першого `d<N>` таблиці).
@@ -843,9 +931,16 @@ git commit -m "feat(schema): секція кроків даних промоці
   table: string; computed: number; written: number }[]>` (старі імена,
   структурно) у `execute.ts` — їх результат П3-2b-3 покладе у звіт. Нові коди: `apply.data-step-failed` (`table`,
   `steps`, `sqlstate`, `error`; у замірі «до» — `step`),
-  `apply.data-write-mismatch` (`table`, `computed`, `written`); секція
-  `triggers` для `apply.target-changed`; параметр `after` у
+  `apply.data-write-mismatch` (`table`, `computed`, `written`),
+  `apply.data-step-narrowing` (`step`, `lost`), `apply.replication-role`;
+  секція `triggers` для `apply.target-changed`; параметр `after` у
   `apply.deferred-constraint-failed`.
+- Test helper (у `execute-plan.db.test.ts`): `observing(db: ApplyDatabase,
+  sql: string): { db: ApplyDatabase; rows(): Record<string, unknown>[] }` —
+  обгортка, чий `transaction(target, end, fn)` після `fn` і **до**
+  `COMMIT`/`ROLLBACK` виконує `sql` на тій самій транзакції й зберігає
+  рядки (аудит Codex: після `ROLLBACK` репетиції дані й режим тригерів
+  повертаються самі, тож перевірка після прогону нічого не доводить).
 
 - [ ] **Step 1: Падаючі тести фейкового порту** (`execute.test.ts`):
   - `"computes before the intent steps and writes before the engine steps"`:
@@ -861,6 +956,14 @@ git commit -m "feat(schema): секція кроків даних промоці
     record"`: крок запису без колонки в секції → `Error` до `BEGIN`;
   - `"is a broken pipeline when a data step is not measured"`: секція
     збереження без колонки з `dataStep` для кроку → `Error` до `BEGIN`;
+    `"… when the measure of a data step is not its expression"` (рішення
+    14): правильний `dataStep`, але підмінений `before` → `Error` до
+    `BEGIN`;
+  - `"stops a cast that changes a value"`: сторож приведення повертає
+    `lost: 2` → `apply.data-step-narrowing` (`step: "d1"`, `lost: 2`), CTAS
+    не надсилається;
+  - `"refuses a replication role other than origin"`: `current_setting`
+    повертає `replica` → `apply.replication-role`, без повтору;
   - `"keeps the phase order of a plan without data steps"`: план без
     секції `data` не надсилає `SET CONSTRAINTS` фази 10 — оператори ті самі,
     що до задачі;
@@ -885,8 +988,14 @@ Expected: FAIL.
 - [ ] **Step 4: Падаючі DB-тести** (`execute-plan.db.test.ts`,
   `describe("data steps")`, режими `proof` і `rehearse`):
   - `"writes a conversion with user triggers off"`: `BEFORE UPDATE`-тригер,
-    що дописує `!`, після прогону рядки без `!`, тригер знову `O`;
-  - `"restores an ENABLE ALWAYS trigger as always"` (Review Focus 3);
+    що дописує `!`; через `observing` до відкату — рядки мають записані
+    значення без `!`, `tgenabled` тригера — `O`;
+  - `"restores an ENABLE ALWAYS trigger as always"` (Review Focus 3): через
+    `observing` до відкату `tgenabled = 'A'`;
+  - `"truncates nothing in a backfill of a mapped column"` (аудит Codex,
+    блокер): `code text → varchar(20)` з `fill` `coalesce(code, 'x')` і
+    наявним кодом довжини 25 → `apply.type-narrowing` кроку зміни типу, а
+    не `rolledBack` з обрізаним кодом;
   - `"stops a deferred foreign key broken by the write"` →
     `apply.deferred-constraint-failed` з `after: "data"` (Review Focus 2);
   - `"refuses a session temp table left on the backend"` (Review Focus 4):
