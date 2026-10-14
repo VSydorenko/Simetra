@@ -268,6 +268,7 @@ describe("transaction-mode pooler", () => {
         }).transaction({ url }, "rollback", (tx) =>
           readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
         ),
+        foreignKeys: { subjects: [], live: [] },
         preamble: [],
         revalidationSearchPath: await createApplyDatabase({
           readOnly: true,

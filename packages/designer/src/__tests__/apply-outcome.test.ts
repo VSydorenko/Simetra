@@ -90,6 +90,7 @@ async function writePlan(
     locks: [],
     implicitLocks: [],
     providerLocks: [],
+    foreignKeys: { subjects: [], live: [] },
     preamble: [],
     revalidationSearchPath: '"$user", public',
     plpgsqlCheck: "transient",

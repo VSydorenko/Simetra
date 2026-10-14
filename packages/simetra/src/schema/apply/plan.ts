@@ -444,6 +444,7 @@ export async function buildPlan(
     locks,
     implicitLocks,
     providerLocks,
+    foreignKeys,
     lockWarnings,
     revalidationSearchPath,
     blindFunctions,
@@ -485,6 +486,7 @@ export async function buildPlan(
       locks,
       implicitLocks,
       providerLocks,
+      foreignKeys,
       preamble,
       revalidationSearchPath,
       plpgsqlCheck,
@@ -518,6 +520,7 @@ export async function buildPlan(
     locks,
     implicitLocks,
     providerLocks,
+    foreignKeys,
     preamble,
     revalidationSearchPath,
     plpgsqlCheck,
@@ -765,6 +768,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     locks,
     implicitLocks,
     providerLocks,
+    foreignKeys,
     lockWarnings,
     revalidationSearchPath,
     blindFunctions,
@@ -837,6 +841,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       locks,
       implicitLocks,
       providerLocks,
+      foreignKeys,
       preamble: analysis.preamble,
       revalidationSearchPath,
       plpgsqlCheck,
@@ -867,6 +872,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     locks,
     implicitLocks,
     providerLocks,
+    foreignKeys,
     preamble: analysis.preamble,
     revalidationSearchPath,
     plpgsqlCheck,
@@ -1150,6 +1156,7 @@ async function lockPlan(
   locks: TableLock[]
   implicitLocks: ImplicitLock[]
   providerLocks: ProviderLockSet[]
+  foreignKeys: PlanArtifact["foreignKeys"]
   lockWarnings: EngineDiagnostic[]
   revalidationSearchPath: string
   blindFunctions: BlindFunctions
@@ -1166,6 +1173,7 @@ async function lockPlan(
     footprint,
     rights,
     providerLocks,
+    foreignKeys,
     revalidationSearchPath,
     blindFunctions,
     checks,
@@ -1175,10 +1183,10 @@ async function lockPlan(
       o.role,
       PROVIDER_LOCKS[scope.provider]
     )
-    const live = await readLiveForeignKeys(
-      tx,
-      footprintSubjects(steps, o.models)
-    )
+    // Таблиці й FK — в артефакт (рішення 9 плану П3-2b-1): раннер звіряє їх
+    // тим самим читанням перед блокуваннями
+    const subjects = footprintSubjects(steps, o.models)
+    const live = await readLiveForeignKeys(tx, subjects)
     const footprint = planFootprint(steps, {
       ...o.models,
       live,
@@ -1192,6 +1200,7 @@ async function lockPlan(
     return {
       footprint,
       providerLocks,
+      foreignKeys: { subjects, live },
       rights: await readLockRights(tx, footprintTables(footprint)),
       revalidationSearchPath: await readSessionSearchPath(tx),
       checks,
@@ -1261,6 +1270,7 @@ async function lockPlan(
     locks,
     implicitLocks,
     providerLocks,
+    foreignKeys,
     lockWarnings,
     revalidationSearchPath,
     blindFunctions,

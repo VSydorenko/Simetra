@@ -226,6 +226,7 @@ async function planFor(
     providerLocks: await reader.transaction({ url }, "rollback", (tx) =>
       readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
     ),
+    foreignKeys: { subjects: [], live: [] },
     preamble: [],
     revalidationSearchPath: await sessionPath(url),
     // Режим, який план дає на стеку: supautils ставить розширення

@@ -36,6 +36,7 @@ import {
   preservationPlan,
   lockPrivileges,
   lockRightsSql,
+  readLiveForeignKeys,
   readLockRights,
   readProviderLocks,
   readSessionSearchPath,
@@ -319,6 +320,7 @@ async function planFor(
     role: "postgres",
     locks: locksOf(steps),
     implicitLocks: [],
+    foreignKeys: { subjects: [], live: [] },
     preamble: [],
     // Перевірку `plpgsql_check` тримає `function-checks.db.test.ts`
     plpgsqlCheck: "unavailable",
@@ -375,6 +377,7 @@ async function establish(url: string, hash: string): Promise<void> {
       locks: [],
       implicitLocks: [],
       providerLocks: await providerList(url),
+      foreignKeys: { subjects: [], live: [] },
       preamble: [],
       revalidationSearchPath: await sessionPath(url),
       plpgsqlCheck: "unavailable",
@@ -955,6 +958,73 @@ describe("executePlan", () => {
         await reader.end()
       }
       expect(await ledger(url)).toEqual([])
+    })
+  })
+
+  describe("foreign keys of the footprint", () => {
+    // Рішення 9 плану П3-2b-1: схема `other` поза межею, крок змінює тип
+    // колонки, на яку FK з неї посилався б
+    const setup = `${BASE};
+      create schema other;`
+    const RETYPE = step("s1", "ALTER TABLE app.t ALTER COLUMN id TYPE bigint", {
+      verb: "alter",
+      lockClass: "accessExclusive",
+      lockedTables: [{ schema: "app", name: "t" }],
+    })
+    const subjects = [{ schema: "app", name: "t" }]
+
+    /** План, що прочитав FK `app.t` так, як це робить `lockPlan`. */
+    async function watched(url: string): Promise<ExecutablePlan> {
+      const live = await createApplyDatabase({ readOnly: true }).transaction(
+        { url },
+        "rollback",
+        (tx) => readLiveForeignKeys(tx, subjects)
+      )
+      expect(live).toEqual([])
+      return planFor(url, [RETYPE], {
+        foreignKeys: { subjects, live },
+        desiredFingerprint: await desiredFingerprint(setup, [RETYPE]),
+      })
+    }
+
+    const idType = async (url: string): Promise<string> =>
+      (
+        await other<{ type: string }>(
+          url,
+          `select format_type(atttypid, atttypmod) as type from pg_attribute
+            where attrelid = 'app.t'::regclass and attname = 'id'`
+        )
+      )[0]!.type
+
+    it("refuses when a foreign key outside the scope appeared after the plan", async () => {
+      await inTarget(setup, async (url) => {
+        const plan = await watched(url)
+        await other(url, "create table other.r (t int references app.t)")
+        const outcome = await executePlan(apply, { url }, plan, options)
+        expect(outcome).toMatchObject({
+          status: "refused",
+          attempts: 1,
+          diagnostics: [
+            {
+              code: "apply.target-changed",
+              params: { sections: "foreignKeys" },
+            },
+          ],
+        })
+        // Кроків не виконано
+        expect(await idType(url)).toBe("integer")
+        expect(await ledger(url)).toEqual([])
+      })
+    })
+
+    it("applies when the foreign keys are as planned", async () => {
+      await inTarget(setup, async (url) => {
+        const plan = await watched(url)
+        expect(await executePlan(apply, { url }, plan, options)).toMatchObject({
+          status: "committed",
+        })
+        expect(await idType(url)).toBe("bigint")
+      })
     })
   })
 

@@ -74,6 +74,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
       tables: [{ schema: "auth", name: "users" }],
     },
   ],
+  foreignKeys: { subjects: [], live: [] },
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public',
   plpgsqlCheck: "transient",
@@ -494,6 +495,41 @@ describe("plan artifact", () => {
     })
     expect(
       parsePlan(JSON.stringify({ ...artifact, plpgsqlCheck: "maybe" }))
+    ).toMatchObject({ ok: false, reason: "invalid" })
+  })
+
+  it("covers the foreign keys of the footprint with the hash and requires them", async () => {
+    const artifact = await stampPlan(draft())
+    const watched = {
+      subjects: [{ schema: "app", name: "t" }],
+      live: [
+        {
+          schema: "other",
+          table: "r",
+          columns: ["t"],
+          references: { schema: "app", table: "t", columns: ["id"] },
+        },
+      ],
+    }
+    const stamped = await stampPlan({ ...draft(), foreignKeys: watched })
+    expect(stamped.planHash).not.toBe(artifact.planHash)
+    expect(parsePlan(serializePlan(stamped))).toEqual({
+      ok: true,
+      artifact: stamped,
+    })
+    const without: Record<string, unknown> = { ...artifact }
+    delete without.foreignKeys
+    expect(parsePlan(JSON.stringify(without))).toMatchObject({
+      ok: false,
+      reason: "invalid",
+    })
+    expect(
+      parsePlan(
+        JSON.stringify({
+          ...artifact,
+          foreignKeys: { subjects: [], live: [{ schema: "x" }] },
+        })
+      )
     ).toMatchObject({ ok: false, reason: "invalid" })
   })
 

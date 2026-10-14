@@ -30,6 +30,7 @@ import { PLPGSQL_CHECK_MODES, type PlpgsqlCheckMode } from "./function-checks"
 import {
   TABLE_LOCK_MODES,
   type ImplicitLock,
+  type LiveForeignKey,
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
@@ -149,6 +150,19 @@ export interface PlanArtifact {
    * `apply.target-changed`.
    */
   providerLocks: ProviderLockSet[]
+  /**
+   * FK живої цілі, з яких слід кроків узяв замки таблиць поза моделями
+   * каталогу (рішення 9 плану П3-2b-1): `subjects` — таблиці сліду у вихідних
+   * іменах (`footprintSubjects`), `live` — FK, що торкаються їх в обидва боки
+   * (`readLiveForeignKeys`). Під хешем; раннер перед блокуваннями читає FK
+   * тих самих таблиць знову, і інший набір — `apply.target-changed`: FK поза
+   * межею, доданий після плану, займався б посеред кроків. Поле є завжди;
+   * порожні переліки — плану FK цілі не потрібні.
+   */
+  foreignKeys: {
+    subjects: { schema: string; name: string }[]
+    live: LiveForeignKey[]
+  }
   /**
    * Преамбула двигуна, лише пари з `ENGINE_PREAMBLE_ALLOWED`. Раннер виконує
    * її навколо кроків двигуна разом із їхніми сторожами, такою, як її записав
@@ -325,6 +339,21 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
       tables: z.array(z.strictObject({ schema: z.string(), name: z.string() })),
     })
   ),
+  foreignKeys: z.strictObject({
+    subjects: z.array(z.strictObject({ schema: z.string(), name: z.string() })),
+    live: z.array(
+      z.strictObject({
+        schema: z.string(),
+        table: z.string(),
+        columns: z.array(z.string()),
+        references: z.strictObject({
+          schema: z.string(),
+          table: z.string(),
+          columns: z.array(z.string()),
+        }),
+      })
+    ),
+  }),
   // Пара поза переліком — не план цієї платформи: раннер її не виконав би
   preamble: z.array(
     z

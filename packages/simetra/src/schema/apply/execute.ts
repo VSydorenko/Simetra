@@ -66,6 +66,7 @@ import {
   coversMode,
   joinModes,
   LOCK_MODE_SQL,
+  readLiveForeignKeys,
   readProviderLocks,
   TABLE_LOCK_MODES,
   type TableLock,
@@ -110,6 +111,7 @@ export type ExecutablePlan = Pick<
   | "locks"
   | "implicitLocks"
   | "providerLocks"
+  | "foreignKeys"
   | "preamble"
   | "revalidationSearchPath"
   | "plpgsqlCheck"
@@ -457,7 +459,20 @@ async function runAttempt(
       })
   }
 
-  // 4c. Режим `plpgsql_check` (рішення 4 плану П3-2b-1): план, що застав
+  // 4c. FK таблиць сліду — ті самі, з якими план рахував замки (рішення 9
+  // плану П3-2b-1): відбиток бачить лише межу, а FK таблиці поза нею, що
+  // з'явився після плану, займав би її посеред кроків, а не наперед. Те саме
+  // читання, що й у плані, до блокувань і без повтору — як перелік
+  // провайдера. Копія доказу несе лише межу: FK поза нею там немає
+  if (o.mode !== "proof" && plan.foreignKeys.subjects.length > 0) {
+    const live = await readLiveForeignKeys(tx, plan.foreignKeys.subjects)
+    if (JSON.stringify(live) !== JSON.stringify(plan.foreignKeys.live))
+      throw stop("refused", "apply.target-changed", {
+        sections: "foreignKeys",
+      })
+  }
+
+  // 4d. Режим `plpgsql_check` (рішення 4 плану П3-2b-1): план, що застав
   // розширення встановленим, а його в базі вже немає, — ціль уже не та.
   // Розширення на місці, але без прав ролі, — не звірка, а збій перевірки
   // (`apply.plpgsql-check-unavailable` у фазі 7). Перехід «тимчасове →

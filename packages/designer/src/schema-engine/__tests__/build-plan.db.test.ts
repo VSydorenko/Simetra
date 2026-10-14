@@ -356,6 +356,18 @@ describe("buildPlan", () => {
     })
   })
 
+  it("carries no foreign keys of the target when no step needs them", async () => {
+    // Створення таблиць з ключами слідові FK цілі не потрібні (рішення 9
+    // плану П3-2b-1): раннерові звіряти нічого
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      expect(planned(await plan(url, model)).foreignKeys).toEqual({
+        subjects: [],
+        live: [],
+      })
+    })
+  })
+
   it("carries no invalid objects when the desired state has none", async () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
@@ -1792,6 +1804,18 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
           const outcome = await plan(url, to)
           const artifact = planned(outcome)
           const [retype] = stepMatching(artifact, /ALTER COLUMN "code" TYPE/)
+          // FK поза межею — в артефакті: раннер звіряє його до блокувань
+          expect(artifact.foreignKeys).toEqual({
+            subjects: [{ schema: "app", name: "p" }],
+            live: [
+              {
+                schema: "ext",
+                table: "r",
+                columns: ["p_code"],
+                references: { schema: "app", table: "p", columns: ["code"] },
+              },
+            ],
+          })
           const r = { schema: "ext", name: "r", mode: "accessExclusive" }
           if (expected === "lockable") {
             expect(artifact.locks).toContainEqual(r)

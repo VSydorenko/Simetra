@@ -13,6 +13,7 @@ import {
   type Extracted,
   type FingerprintSection,
   type GlobalDefaultPrivilege,
+  type LiveForeignKey,
   type PlanStep,
   type PreservedTable,
   type RehearsalProof,
@@ -104,6 +105,7 @@ const plan: ExecutablePlan = {
     { schema: "app", name: "t", mode: "accessExclusive" },
     { schema: "app", name: "x.y", mode: "accessExclusive" },
   ],
+  foreignKeys: { subjects: [], live: [] },
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public, extensions',
   plpgsqlCheck: "unavailable",
@@ -223,6 +225,8 @@ interface Script {
   providerTables?: { schema: string; name: string }[]
   /** Рядки глобальних типових привілеїв ролі на цілі; типово немає. */
   environment?: GlobalDefaultPrivilege[]
+  /** FK цілі, що торкаються таблиць сліду; типово немає. */
+  foreignKeys?: LiveForeignKey[]
   /**
    * Результат DO-блоку валідаторів за номером виклику в спробі: 0 — базова
    * лінія, 1 — після кроків; `"none"` — блок завершився без результату.
@@ -287,6 +291,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("c.oid::text AS oid")) return "existing"
   if (sql.includes("current_setting($1, true)")) return "provider-setting"
   if (sql.includes("current_schemas(true)")) return "provider-tables"
+  if (sql.includes("k.contype = 'f'")) return "foreign-keys"
   if (sql.includes("x(schema text, name text)")) return "present"
   if (sql.includes("FROM pg_catalog.pg_default_acl")) return "environment"
   if (sql.includes("to_regclass") && sql.includes(" AS marker")) return "state"
@@ -354,6 +359,15 @@ function fakeDb(script: Script = {}) {
             if (result !== "none")
               throw new ApplyDbError(JSON.stringify(result), "SIMFE")
           }
+          if (label === "foreign-keys")
+            return (script.foreignKeys ?? []).map((fk) => ({
+              schema: fk.schema,
+              table: fk.table,
+              columns: fk.columns,
+              ref_schema: fk.references.schema,
+              ref_table: fk.references.table,
+              ref_columns: fk.references.columns,
+            })) as unknown as R[]
           const rows: Record<string, unknown>[] =
             label?.startsWith("measure") === true
               ? [{ rows: "1", c0: "5" }]
@@ -633,6 +647,56 @@ describe("executePlan", () => {
       await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
     ).toMatchObject({ status: "committed" })
     expect(proof.log).not.toContain("environment")
+  })
+
+  it("refuses before the locks when a foreign key of the footprint appeared after the plan", async () => {
+    // Рішення 9 плану П3-2b-1: план прочитав FK таблиці сліду, коли FK поза
+    // межею ще не було; на цілі він уже є
+    const subjects = [{ schema: "app", name: "t" }]
+    const r: LiveForeignKey = {
+      schema: "other",
+      table: "r",
+      columns: ["t"],
+      references: { schema: "app", table: "t", columns: ["id"] },
+    }
+    const watched = { ...plan, foreignKeys: { subjects, live: [] } }
+    const { db, log, params } = fakeDb({ foreignKeys: [r] })
+    expect(await executePlan(db, target, watched, options)).toMatchObject({
+      status: "refused",
+      attempts: 1,
+      diagnostics: [
+        {
+          code: "apply.target-changed",
+          params: { sections: "foreignKeys" },
+        },
+      ],
+    })
+    expect(params["foreign-keys"]).toEqual([JSON.stringify(subjects)])
+    expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
+    expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+    // Після переліку провайдера й глобальних ADP (рішення 1)
+    expect(log.indexOf("foreign-keys")).toBeGreaterThan(
+      log.indexOf("environment")
+    )
+    // Ті самі FK, що й у плані, — застосування йде далі
+    const same = fakeDb({ foreignKeys: [r] })
+    expect(
+      await executePlan(
+        same.db,
+        target,
+        { ...plan, foreignKeys: { subjects, live: [r] } },
+        options
+      )
+    ).toMatchObject({ status: "committed" })
+    // Копія доказу несе лише межу: FK там не читаються
+    const proof = fakeDb({ foreignKeys: [r] })
+    expect(
+      await executePlan(proof.db, target, watched, {
+        ...options,
+        mode: "proof",
+      })
+    ).toMatchObject({ status: "committed" })
+    expect(proof.log).not.toContain("foreign-keys")
   })
 
   it("refuses before the locks when the provider list changed after the plan", async () => {
