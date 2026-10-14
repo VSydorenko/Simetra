@@ -2451,12 +2451,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.deferred-constraint-failed": {
     en: (p) =>
-      `A deferred constraint failed when the transaction checked it before its end (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
+      `A deferred trigger or constraint failed when the transaction checked it ${p.after === "data" ? "right after the data steps wrote their values" : "after the plan's steps"} (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
     uk: (p) =>
-      `Відкладене обмеження не спрацювало, коли транзакція перевірила його перед кінцем (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
+      `Відкладений тригер чи обмеження не спрацювали, коли транзакція перевірила їх ${p.after === "data" ? "одразу після запису значень кроків даних" : "після кроків плану"} (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
     hint: {
-      en: "Nothing was written. A step leaves rows that violate a DEFERRABLE constraint: fix the step or the data it works on.",
-      uk: "Нічого не записано. Крок лишає рядки, що порушують обмеження DEFERRABLE: виправте крок або дані, з якими він працює.",
+      en: (p) =>
+        p.after === "data"
+          ? "Nothing was written. The values the data steps wrote violate a DEFERRABLE constraint or a deferred trigger rejects them: fix the expression of the step or the data it reads."
+          : "Nothing was written. A step leaves rows that violate a DEFERRABLE constraint or a deferred trigger rejects them: fix the step or the data it works on.",
+      uk: (p) =>
+        p.after === "data"
+          ? "Нічого не записано. Значення, які записали кроки даних, порушують обмеження DEFERRABLE або їх відхиляє відкладений тригер: виправте вираз кроку чи дані, які він читає."
+          : "Нічого не записано. Крок лишає рядки, що порушують обмеження DEFERRABLE, або їх відхиляє відкладений тригер: виправте крок або дані, з якими він працює.",
     },
   },
   "apply.constraint-invalid": {
@@ -2497,6 +2503,54 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was written. Give the applying role back what the plan found (the right to install plpgsql_check, or USAGE on the schema of the installed extension), or plan again.",
       uk: "Нічого не записано. Поверніть ролі застосування те, що план застав (право поставити plpgsql_check чи USAGE на схему встановленого розширення), або сплануйте знову.",
+    },
+  },
+  "apply.replication-role": {
+    en: (p) =>
+      `The apply transaction runs with session_replication_role = ${p.value}, and the promotion's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks. Nothing was written`,
+    uk: (p) =>
+      `Транзакція застосування має session_replication_role = ${p.value}, а кроки даних промоції потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань. Нічого не записано`,
+    hint: {
+      en: "Remove the session_replication_role setting of the database or the role (ALTER DATABASE … RESET / ALTER ROLE … RESET), then apply again.",
+      uk: "Зніміть налаштування session_replication_role бази чи ролі (ALTER DATABASE … RESET / ALTER ROLE … RESET) і застосуйте знову.",
+    },
+  },
+  "apply.data-step-failed": {
+    en: (p) =>
+      p.phase === "measure-before"
+        ? `The expression of data step ${p.step} for column ${p.column} of ${p.table} fails on the existing rows (SQLSTATE ${p.sqlstate}). The transaction was rolled back`
+        : p.phase === "cast-guard"
+          ? `The check of data step ${p.step} that the value converts to the type of column ${p.column} of ${p.table} failed (SQLSTATE ${p.sqlstate}). The transaction was rolled back`
+          : `${p.phase === "compute" ? "Computing" : "Writing"} the values of data steps ${p.steps} of ${p.table} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`,
+    uk: (p) =>
+      p.phase === "measure-before"
+        ? `Вираз кроку даних ${p.step} для колонки ${p.column} таблиці ${p.table} не обчислюється на наявних рядках (SQLSTATE ${p.sqlstate}). Транзакцію відкочено`
+        : p.phase === "cast-guard"
+          ? `Перевірка кроку даних ${p.step}, що значення приводиться до типу колонки ${p.column} таблиці ${p.table}, завершилася помилкою (SQLSTATE ${p.sqlstate}). Транзакцію відкочено`
+          : `${p.phase === "compute" ? "Обчислення" : "Запис"} значень кроків даних ${p.steps} таблиці ${p.table} завершився помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Fix the data the step reads, or its expression in the promotion record, then plan again.",
+      uk: "Нічого не записано. Виправте дані, які читає крок, або його вираз у записі промоції й сплануйте знову.",
+    },
+  },
+  "apply.data-step-narrowing": {
+    en: (p) =>
+      `Data step ${p.step} would change ${p.lost} value(s) of its expression when it writes them as column ${p.column} of ${p.table}: the conversion to the column type truncates or rounds them. The transaction was rolled back`,
+    uk: (p) =>
+      `Крок даних ${p.step}, записуючи значення свого виразу в колонку ${p.column} таблиці ${p.table}, змінив би їх: ${p.lost} — приведення до типу колонки їх обрізає чи округлює. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Write the conversion explicitly in the expression (for example left(code, 20), round(x, 2) or payload::jsonb), then plan again.",
+      uk: "Нічого не записано. Запишіть приведення явно у виразі (наприклад, left(code, 20), round(x, 2) чи payload::jsonb) і сплануйте знову.",
+    },
+  },
+  "apply.data-write-mismatch": {
+    en: (p) =>
+      `The data steps of ${p.table} computed values for ${p.computed} row(s) but wrote ${p.written}. The transaction was rolled back`,
+    uk: (p) =>
+      `Кроки даних таблиці ${p.table} обчислили значення для рядків: ${p.computed}, а записали: ${p.written}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Every computed row is written once by its key; a different count is a defect of the plan, so report it to the platform maintainers.",
+      uk: "Нічого не записано. Кожен обчислений рядок записується один раз за ключем; інша кількість — дефект плану, тож повідомте про нього супровідникам платформи.",
     },
   },
   "plan.temp-name-taken": {

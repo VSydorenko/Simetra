@@ -55,7 +55,17 @@ import {
   type ApplyTransaction,
 } from "./port"
 import {
+  castExpression,
+  dataComputeSql,
+  dataCountSql,
+  dataWriteSql,
+  readUserTriggers,
+  triggerSql,
+  type DataTable,
+} from "./promotion/data"
+import {
   castProbeQuery,
+  dataMeasure,
   preservationQuery,
   preservedColumnName,
 } from "./promotion/preservation"
@@ -293,6 +303,13 @@ export async function executePlan(
     throw new Error(
       "the promotion section does not preserve exactly the tables of its record"
     )
+  // Секція кроків даних — те, що раннер виконує, а дозвіл `repair:` і заміри
+  // виведено з запису: розбіжність між ними пише не те, що доведено
+  // (рішення 2, 14 плану П3-2b-2) — так само зламаний конвеєр
+  if (plan.promotion !== null && !dataMatchesRecord(plan.promotion))
+    throw new Error(
+      "the promotion section's data steps do not match its record or their measures"
+    )
   // Раннер виконує три блоки кроків кожен під своїми налаштуваннями: крок
   // наміру після кроку двигуна пішов би під преамбулою. Так кроки будують
   // `analyseOnClone` і збір середовища, тож інший порядок — зламаний конвеєр
@@ -375,11 +392,85 @@ function preservesEveryTable(
       )
       if (found.length !== 1) return false
       const measured = new Set(found[0]!.columns.map((c) => c.after))
-      return columns
-        .filter((c) => c.schema === t.schema && c.table === t.to)
-        .every((c) => measured.has(quoteIdent(c.to)))
+      // Кожен крок даних таблиці міряється за виразом (рішення 8 плану
+      // П3-2b-2): без заміру записані значення ніхто не звірив би
+      const filled = new Set(found[0]!.columns.map((c) => c.dataStep))
+      return (
+        columns
+          .filter((c) => c.schema === t.schema && c.table === t.to)
+          .every((c) => measured.has(quoteIdent(c.to))) &&
+        section.record.dataSteps.every(
+          (s, i) =>
+            s.schema !== t.schema ||
+            s.table !== t.from ||
+            filled.has(dataStepId(i))
+        )
+      )
     })
   )
+}
+
+/** Id кроку даних — `d<N>` у порядку `record.dataSteps` (рішення 2). */
+const dataStepId = (i: number): string => `d${i + 1}`
+
+/**
+ * Секція кроків даних проти запису (рішення 2, 14 плану П3-2b-2): рівно одна
+ * колонка секції на кожен крок запису — та сама таблиця (старе й нове ім'я з
+ * `record.tables`), колонка, вираз і вид; і замір кожної колонки з
+ * `dataStep` — точно рендер з секції (`dataMeasure`): вираз, тип запису,
+ * бажаний тип і нове ім'я.
+ */
+function dataMatchesRecord(
+  section: NonNullable<ExecutablePlan["promotion"]>
+): boolean {
+  const { record, data, preservation } = section
+  const columns = data.flatMap((t) => t.columns.map((c) => ({ t, c })))
+  if (columns.length !== record.dataSteps.length) return false
+  const stepsMatch = record.dataSteps.every((s, i) => {
+    const found = columns.filter(({ c }) => c.step === dataStepId(i))
+    if (found.length !== 1) return false
+    const { t, c } = found[0]!
+    const table = record.tables.find(
+      (r) => r.schema === s.schema && r.from === s.table
+    )
+    return (
+      table !== undefined &&
+      t.before.schema === s.schema &&
+      t.before.table === s.table &&
+      t.before.key === s.key &&
+      t.after.schema === table.schema &&
+      t.after.table === table.to &&
+      c.column === s.column &&
+      c.expression === s.expression &&
+      c.kind === s.kind
+    )
+  })
+  if (!stepsMatch) return false
+  // Кожна колонка заміру з `dataStep` — крок секції, і навпаки
+  const measured = preservation.flatMap((p) =>
+    p.columns.flatMap((m) => (m.dataStep === undefined ? [] : [{ p, m }]))
+  )
+  if (measured.length !== columns.length) return false
+  return columns.every(({ t, c }) => {
+    const found = measured.filter(({ m }) => m.dataStep === c.step)
+    if (found.length !== 1) return false
+    const { p, m } = found[0]!
+    const newType = record.typeChanges.find(
+      (x) =>
+        x.schema === t.after.schema &&
+        x.table === t.after.table &&
+        x.column === c.column
+    )?.to
+    const expected = dataMeasure(c, newType)
+    return (
+      p.before.schema === t.before.schema &&
+      p.before.table === t.before.table &&
+      p.after.schema === t.after.schema &&
+      p.after.table === t.after.table &&
+      m.before === expected.before &&
+      m.after === expected.after
+    )
+  })
 }
 
 /**
@@ -523,8 +614,12 @@ async function runAttempt(
   // значень залежить від налаштувань, тож репетиція й робота мусять мірити
   // однаково (спека промоції §7.2)
   const preserved = plan.promotion?.preservation ?? []
+  const data = plan.promotion?.data ?? []
+  const filled = new Map(
+    data.flatMap((t) => t.columns.map((c) => [c.step, c] as const))
+  )
   const before = await underDataSettings(tx, preserved, () =>
-    measureBefore(tx, preserved, parse)
+    measureBefore(tx, preserved, filled, parse)
   )
 
   // 6b. Таблиці, що є до кроків: звірка сліду дивиться лише на них, бо
@@ -543,11 +638,42 @@ async function runAttempt(
     plpgsql: await plpgsqlCheck(),
   }))
 
-  // 9. Кроки наміру — під налаштуваннями транзакції
+  // 8. Обчислення кроків даних у старих іменах, до кроків наміру (рішення 1
+  // плану П3-2b-2). Режим `replica` вимкнув би внутрішні тригери FK, і запис
+  // обійшов би перевірку посилань: план це вже бачив, але налаштування бази
+  // чи ролі могло змінитися після нього, тож гарантія — тут (рішення 13)
   const blocks = ORIGIN_ORDER.map((origin) =>
     plan.steps.filter((s) => s.origin === origin)
   )
+  let computed = new Map<string, number>()
+  if (data.length > 0) {
+    const [session] = await tx.query<{ role: string }>(
+      "SELECT pg_catalog.current_setting('session_replication_role') AS role"
+    )
+    if (session === undefined)
+      throw new Error("current_setting returned no row")
+    if (session.role !== "origin")
+      throw stop("refused", "apply.replication-role", { value: session.role })
+    computed = await withLocalSettings(tx, DATA_SETTINGS, () =>
+      computeData(tx, data)
+    )
+  }
+
+  // 9. Кроки наміру — під налаштуваннями транзакції
   await runSteps(tx, blocks[0]!, parse)
+
+  // 10. Запис кроків даних — після наміру (колонка-ціль уже є) і до кроків
+  // двигуна (сторож звуження бачить записане, `SET NOT NULL` іде після).
+  // Відкладене одразу після запису: інакше наступна DDL тієї самої таблиці
+  // впала б «pending trigger events». Відновити «як було» не можна: `ALL
+  // DEFERRED` відклав би й обмеження `INITIALLY IMMEDIATE`, а фаза 13 однаково
+  // робить те саме для решти плану. Результат запису (обчислено й записано за
+  // таблицею) — для звіту репетиції П3-2b-3
+  if (data.length > 0)
+    await withLocalSettings(tx, DATA_SETTINGS, async () => {
+      await writeData(tx, data, computed)
+      await constraintsNow(tx, "data")
+    })
   // 11. Кроки двигуна разом зі сторожами — під преамбулою, такою, як її
   // записав план, і з поверненням налаштувань транзакції після них. Пару
   // виконуємо лише разом із ревалідацією (R22 плану П3-2a):
@@ -562,15 +688,7 @@ async function runAttempt(
   // 13. Відкладені обмеження спрацьовують тут, а не при `COMMIT`: `ROLLBACK`
   // репетиції їх не запускає, і порушення лишилося б непоміченим. Стоїть до
   // замірів «після», бо відкладений тригер користувача може змінити рядки
-  try {
-    await tx.query("SET CONSTRAINTS ALL IMMEDIATE")
-  } catch (error) {
-    if (!(error instanceof ApplyDbError) || isRetryable(error)) throw error
-    throw stop("failed", "apply.deferred-constraint-failed", {
-      sqlstate: error.sqlstate ?? "unknown",
-      error: error.message,
-    })
-  }
+  await constraintsNow(tx, "steps")
 
   // 14. Заміри «після» — у нових іменах, після кроків, під тими самими
   // закріпленими налаштуваннями даних, що й «до»: текст значень порівнюваний
@@ -666,6 +784,181 @@ async function runAttempt(
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
   return [...warnings, ...blindWarning(after.blind), ...gaps]
+}
+
+/**
+ * `SET CONSTRAINTS ALL IMMEDIATE` фаз 10 (`after: "data"`) і 13 (`"steps"`):
+ * не-повторну помилку дає відкладене обмеження чи тригер-обмеження
+ * користувача — своїм кодом, з місцем у транзакції.
+ */
+async function constraintsNow(
+  tx: ApplyTransaction,
+  after: "data" | "steps"
+): Promise<void> {
+  try {
+    await tx.query("SET CONSTRAINTS ALL IMMEDIATE")
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || isRetryable(error)) throw error
+    throw stop("failed", "apply.deferred-constraint-failed", {
+      after,
+      sqlstate: error.sqlstate ?? "unknown",
+      error: error.message,
+    })
+  }
+}
+
+type DataColumn = DataTable["columns"][number]
+
+/** Таблиця кроків даних у діагностиках — у нових іменах, як заміри «після». */
+const dataTableName = (t: DataTable): string =>
+  `${t.after.schema}.${t.after.table}`
+
+/**
+ * Фаза 8 (рішення 1, 7, 12 плану П3-2b-2) під `DATA_SETTINGS`, на таблицю:
+ * ім'я тимчасової таблиці вільне, сторожі приведення, CTAS у старих іменах і
+ * лічильник обчислених. Повертає temp → обчислено.
+ */
+async function computeData(
+  tx: ApplyTransaction,
+  tables: readonly DataTable[]
+): Promise<Map<string, number>> {
+  const computed = new Map<string, number>()
+  for (const t of tables) {
+    // За пулером на backend може лишитися сесійна тимчасова таблиця
+    // попереднього клієнта з тим самим іменем: CTAS дав би сирий `42P07`, а
+    // читання `pg_temp.<ім'я>` — чужі рядки (Review Focus 4)
+    const name = `pg_temp.${quoteIdent(t.temp)}`
+    const [slot] = await tx.query<{ taken: boolean }>(
+      "SELECT pg_catalog.to_regclass($1) IS NOT NULL AS taken",
+      [name]
+    )
+    if (slot === undefined) throw new Error("to_regclass returned no row")
+    if (slot.taken) throw stop("refused", "apply.temp-name-taken", { name })
+    for (const c of t.columns) await dataGuard(tx, t, c)
+    await dataQuery(tx, t, "compute", dataComputeSql(t))
+    const [row] = await dataQuery<{ computed: string | number }>(
+      tx,
+      t,
+      "compute",
+      dataCountSql(t)
+    )
+    if (row === undefined) throw new Error("the computed count returned no row")
+    computed.set(t.temp, Number(row.computed))
+  }
+  return computed
+}
+
+/**
+ * Сторож приведення кроку (рішення 12): значення виразу, яке приведення до
+ * типу запису змінює, зупиняє спробу до обчислення. Помилка бази на сторожі,
+ * що не повторювана, — своїм кодом із кроком, а не сирий збій.
+ */
+async function dataGuard(
+  tx: ApplyTransaction,
+  t: DataTable,
+  c: DataColumn
+): Promise<void> {
+  let lost: number
+  try {
+    const [row] = await tx.query<{ lost: string | number }>(c.guard)
+    lost = Number(row?.lost ?? 0)
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+    throw stop("failed", "apply.data-step-failed", {
+      phase: "cast-guard",
+      step: c.step,
+      table: dataTableName(t),
+      column: c.column,
+      sqlstate: error.sqlstate ?? "unknown",
+    })
+  }
+  if (lost > 0)
+    throw stop("failed", "apply.data-step-narrowing", {
+      step: c.step,
+      table: dataTableName(t),
+      column: c.column,
+      lost,
+    })
+}
+
+/**
+ * Оператор таблиці даних (CTAS, лічильник, тригери, `UPDATE`). Помилка бази,
+ * що не повторювана, — `apply.data-step-failed` з таблицею й її кроками;
+ * повторювана летить на повтор спроби, як скрізь у раннері.
+ */
+async function dataQuery<R extends Record<string, unknown>>(
+  tx: ApplyTransaction,
+  t: DataTable,
+  phase: "compute" | "write",
+  sql: string
+): Promise<R[]> {
+  try {
+    return await tx.query<R>(sql)
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+    throw stop("failed", "apply.data-step-failed", {
+      phase,
+      table: dataTableName(t),
+      steps: t.columns.map((c) => c.step).join(", "),
+      sqlstate: error.sqlstate ?? "unknown",
+      error: error.message,
+    })
+  }
+}
+
+/**
+ * Фаза 10 під `DATA_SETTINGS`, на таблицю в нових іменах: звірка тригерів
+ * користувача з планом (до вимкнення: після нього живий перелік уже `D`),
+ * `DISABLE TRIGGER` поштучно, один `UPDATE`, записано = обчислено, `ENABLE
+ * [ALWAYS] TRIGGER`. Повертає лічильники таблиць у старих іменах.
+ */
+async function writeData(
+  tx: ApplyTransaction,
+  tables: readonly DataTable[],
+  computed: ReadonlyMap<string, number>
+): Promise<
+  { schema: string; table: string; computed: number; written: number }[]
+> {
+  const out: {
+    schema: string
+    table: string
+    computed: number
+    written: number
+  }[] = []
+  for (const t of tables) {
+    // Канонічно, як перелік провайдера (4a): обидва боки впорядковано за
+    // іменем, а план із файлу розібрано схемою артефакту
+    const live = await readUserTriggers(tx, t.after)
+    if (canonicalize(live) !== canonicalize(t.triggers))
+      throw stop("refused", "apply.target-changed", { sections: "triggers" })
+    for (const sql of triggerSql(t, false)) await dataQuery(tx, t, "write", sql)
+    const [row] = await dataQuery<{ written: string | number }>(
+      tx,
+      t,
+      "write",
+      dataWriteSql(t)
+    )
+    if (row === undefined) throw new Error("the written count returned no row")
+    const written = Number(row.written)
+    const was = computed.get(t.temp)
+    if (was === undefined) throw new Error(`no computed count for ${t.temp}`)
+    // Рядок без пари в обчисленні (чи пара без рядка) лишив би значення
+    // незаписаним, а ціль — `NULL`
+    if (written !== was)
+      throw stop("failed", "apply.data-write-mismatch", {
+        table: dataTableName(t),
+        computed: was,
+        written,
+      })
+    for (const sql of triggerSql(t, true)) await dataQuery(tx, t, "write", sql)
+    out.push({
+      schema: t.before.schema,
+      table: t.before.table,
+      computed: was,
+      written,
+    })
+  }
+  return out
 }
 
 /**
@@ -1068,11 +1361,14 @@ const tableName = (t: PreservedTable["after"]): string =>
 async function measureBefore(
   tx: ApplyTransaction,
   tables: readonly PreservedTable[],
+  filled: ReadonlyMap<string, DataColumn>,
   parse: SqlParser
 ): Promise<Measurement[]> {
   const out: Measurement[] = []
   for (const t of tables) {
-    const casts = t.columns.filter((c) => c.typeChangeStep !== undefined)
+    const casts = t.columns.filter(
+      (c) => c.typeChangeStep !== undefined || c.dataStep !== undefined
+    )
     if (casts.length === 0) {
       out.push(await measure(tx, t, "before"))
       continue
@@ -1084,20 +1380,46 @@ async function measureBefore(
       if (!castFailure(error)) throw error
       await tx.query("ROLLBACK TO SAVEPOINT simetra_preservation")
       // Невдала проба перериває транзакцію, але після неї спроба однаково
-      // зупиняється; вдала нічого не змінює
-      for (const c of casts)
+      // зупиняється; вдала нічого не змінює. Ціль кроку даних пробується
+      // двічі (рішення 8 плану П3-2b-2): спершу лише вираз у типі запису —
+      // його збій називає крок даних; потім, зі зміною типу, повний замір —
+      // звуження кроку двигуна
+      const probe = async (
+        c: PreservedTable["columns"][number],
+        failed: (sqlstate: string) => AttemptStop
+      ) => {
         try {
           await tx.query(castProbeQuery(t, c))
-        } catch (probe) {
-          if (!(probe instanceof ApplyDbError) || retryable(probe)) throw probe
-          if (!castFailure(probe)) throw measureFailed(t, "before", probe)
-          throw stop("failed", "apply.type-narrowing", {
-            step: c.typeChangeStep!,
-            table: tableName(t.after),
-            column: preservedColumnName(c.after, parse),
-            sqlstate: probe.sqlstate!,
-          })
+        } catch (error) {
+          if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+          if (!castFailure(error)) throw measureFailed(t, "before", error)
+          throw failed(error.sqlstate!)
         }
+      }
+      for (const c of casts) {
+        const column = preservedColumnName(c.after, parse)
+        const fill =
+          c.dataStep === undefined ? undefined : filled.get(c.dataStep)
+        if (fill !== undefined)
+          await probe({ ...c, before: castExpression(fill) }, (sqlstate) =>
+            stop("failed", "apply.data-step-failed", {
+              phase: "measure-before",
+              step: fill.step,
+              table: tableName(t.after),
+              column,
+              sqlstate,
+            })
+          )
+        if (c.typeChangeStep !== undefined)
+          await probe(c, (sqlstate) =>
+            stop("failed", "apply.type-narrowing", {
+              step: c.typeChangeStep!,
+              table: tableName(t.after),
+              column,
+              sqlstate,
+            })
+          )
+      }
       // Жодне приведення окремо не впало: збій не звуження, але той самий
       // збій заміру
       throw measureFailed(t, "before", error)

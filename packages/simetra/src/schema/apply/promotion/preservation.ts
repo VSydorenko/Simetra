@@ -104,14 +104,10 @@ export function preservationPlan(
         )?.columns ?? []
       ).map((c) => [c.column, c])
     )
-    // Ціль кроку даних: вираз у типі запису, далі — як звичайна колонка
     const measured = (c: DataTable["columns"][number]) => {
-      const type = newType(c.column)
       const step = typeChangeStep(c.column)
-      const cast = castExpression(c)
       return {
-        before: type === undefined ? cast : `(${cast}::${type})`,
-        after: quoteIdent(c.column),
+        ...dataMeasure(c, newType(c.column)),
         dataStep: c.step,
         ...(step === undefined ? {} : { typeChangeStep: step }),
       }
@@ -142,6 +138,23 @@ export function preservationPlan(
       ],
     }
   })
+}
+
+/**
+ * Замір цілі кроку даних (рішення 8, 14 плану П3-2b-2): «до» — вираз у типі
+ * запису, для змапленої цілі зі зміною типу (`newType`) — ще й приведений до
+ * нового, як звичайна колонка; «після» — нова колонка. Один рендер для плану
+ * й для звірки раннера: помилково зібраний замір доводив би інше значення.
+ */
+export function dataMeasure(
+  c: Pick<DataTable["columns"][number], "expression" | "type" | "column">,
+  newType: string | undefined
+): { before: string; after: string } {
+  const cast = castExpression(c)
+  return {
+    before: newType === undefined ? cast : `(${cast}::${newType})`,
+    after: quoteIdent(c.column),
+  }
 }
 
 /** Конкатенація з `pg_catalog`, як і решта заміру: від `search_path` не залежить. */

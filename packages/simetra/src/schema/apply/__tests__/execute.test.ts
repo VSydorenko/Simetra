@@ -3,11 +3,13 @@ import {
   ApplyConnectionLost,
   ApplyDbError,
   DATA_SETTINGS,
+  dataGuardSql,
   executePlan,
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
   type ApplyDatabase,
   type CatalogFingerprint,
+  type DataTable,
   type EngineCatalog,
   type ExecutablePlan,
   type ExecuteOptions,
@@ -243,6 +245,17 @@ interface Script {
   plpgsql?: Record<string, unknown>
   /** Групи помилок `plpgsql_check` за номером виклику: 0 — до, 1 — після. */
   plpgsqlGroups?: (call: number) => Record<string, unknown>[]
+  /** `session_replication_role` транзакції; типово `origin`. */
+  replicationRole?: string
+  /** Ім'я тимчасової таблиці кроків даних уже зайняте в `pg_temp`. */
+  tempTaken?: boolean
+  /** Скільки значень змінює приведення сторожа кроку даних за міткою. */
+  lost?: (label: string) => number
+  /** Живі тригери користувача записуваної таблиці; типово немає. */
+  triggers?: { name: string; enabled: string }[]
+  /** Лічильники обчислених і записаних рядків; типово 3 і стільки ж. */
+  computed?: number
+  written?: number
 }
 
 /** Факти бази: розширення немає, роль може його поставити. */
@@ -274,6 +287,19 @@ const SESSION = { search_path: '"$user", public', check_function_bodies: "on" }
 
 /** Мітка оператора для журналу: що саме виконав раннер. */
 function labelOf(sql: string): string | undefined {
+  // Оператори кроків даних (фази 8 і 10)
+  if (sql.includes("current_setting('session_replication_role')"))
+    return "replication-role"
+  if (sql.includes(" AS taken")) return "temp-name"
+  if (sql.startsWith("CREATE TEMP TABLE "))
+    return `compute ${/^CREATE TEMP TABLE (\S+)/.exec(sql)![1]!}`
+  if (sql.includes(" AS computed FROM pg_temp."))
+    return `count ${/FROM pg_temp\.(\S+)$/.exec(sql)![1]!}`
+  if (sql.includes(" AS lost FROM (SELECT (\n"))
+    return `guard ${/\(SELECT \(\n([\s\S]*)\n\) AS x FROM /.exec(sql)![1]!}`
+  if (sql.includes("t.tgenabled::text as enabled")) return "triggers"
+  if (sql.startsWith("WITH u AS (UPDATE "))
+    return `write ${/^WITH u AS \(UPDATE (\S+)/.exec(sql)![1]!}`
   if (sql.includes("current_setting(s.name)")) return "get-settings"
   if (sql.includes("set_config(s.name, s.value, true)")) return "set-settings"
   if (sql.startsWith("DO $simetra$")) return "validators"
@@ -321,6 +347,25 @@ function labelOf(sql: string): string | undefined {
   return sql
 }
 
+/** Рядки операторів кроків даних фейкової бази; інше — `undefined`. */
+function dataRows(
+  label: string | undefined,
+  script: Script
+): Record<string, unknown>[] | undefined {
+  const computed = script.computed ?? 3
+  if (label === "replication-role")
+    return [{ role: script.replicationRole ?? "origin" }]
+  if (label === "temp-name") return [{ taken: script.tempTaken ?? false }]
+  if (label === "triggers") return script.triggers ?? []
+  if (label?.startsWith("guard ") === true)
+    return [{ lost: String(script.lost?.(label) ?? 0) }]
+  if (label?.startsWith("count ") === true)
+    return [{ computed: String(computed) }]
+  if (label?.startsWith("write ") === true)
+    return [{ written: String(script.written ?? computed) }]
+  return undefined
+}
+
 function fakeDb(script: Script = {}) {
   const log: string[] = []
   const params: Record<string, readonly unknown[] | undefined> = {}
@@ -363,6 +408,8 @@ function fakeDb(script: Script = {}) {
             if (result !== "none")
               throw new ApplyDbError(JSON.stringify(result), "SIMFE")
           }
+          const data = dataRows(label, script)
+          if (data !== undefined) return data as R[]
           if (label === "foreign-keys")
             return (script.foreignKeys ?? []).map((fk) => ({
               schema: fk.schema,
@@ -1438,7 +1485,7 @@ describe("executePlan", () => {
       diagnostics: [
         {
           code: "apply.deferred-constraint-failed",
-          params: { sqlstate: "23503" },
+          params: { after: "steps", sqlstate: "23503" },
         },
       ],
     })
@@ -2243,6 +2290,581 @@ describe("executePlan", () => {
         })
       ).toMatchObject({ status: "rolledBack", attempts: 2 })
       expect(log.filter((l) => l === "BEGIN")).toHaveLength(2)
+    })
+  })
+
+  describe("data steps", () => {
+    /** Крок `d1`: нова колонка `d` таблиці `app.t → app.u` з виразу. */
+    const STEP: PromotionRecord["dataSteps"][number] = {
+      names: "beforeRenames",
+      schema: "app",
+      table: "t",
+      key: "id",
+      column: "d",
+      expression: "upper(c)",
+      kind: "conversion",
+    }
+    const COLUMN: DataTable["columns"][number] = {
+      step: "d1",
+      column: "d",
+      type: "text",
+      expression: "upper(c)",
+      kind: "conversion",
+      guard: dataGuardSql(
+        { schema: "app", table: "t" },
+        { expression: "upper(c)", type: "text" },
+        "compare"
+      ),
+    }
+    const TABLE: DataTable = {
+      temp: "simetra_fill_1",
+      before: { schema: "app", table: "t", key: "id" },
+      after: { schema: "app", table: "u", key: "id" },
+      columns: [COLUMN],
+      triggers: [{ name: "tg", enabled: "O" }],
+    }
+    /** Замір цілі за виразом — рендер рішення 8. */
+    const MEASURE = {
+      before: "((\nupper(c)\n)::text)",
+      after: "d",
+      dataStep: "d1",
+    }
+    const LIVE = [{ name: "tg", enabled: "O" }]
+    const INTENT = [
+      step("s0", "ALTER TABLE app.t RENAME TO u", { origin: "intent" }),
+      step("s0a", "ALTER TABLE app.u ADD COLUMN d text", { origin: "intent" }),
+    ]
+
+    /** План репетиції з кроками даних; поля заміняють типові частини. */
+    async function withData(
+      over: {
+        record?: PromotionRecord
+        data?: DataTable[]
+        preservation?: PreservedTable[]
+      } = {}
+    ): Promise<ExecutablePlan> {
+      const record = over.record ?? { ...TABLED, dataSteps: [STEP] }
+      return {
+        ...promoted,
+        steps: [...INTENT, ...plan.steps],
+        promotion: {
+          ...promoted.promotion!,
+          record,
+          recordHash: await promotionRecordHash(record),
+          permissionItems: [],
+          preservation: over.preservation ?? [
+            {
+              before: { schema: "app", table: "t" },
+              after: { schema: "app", table: "u" },
+              key: { before: "id", after: "id" },
+              columns: [MEASURE],
+            },
+          ],
+          data: over.data ?? [TABLE],
+        },
+      }
+    }
+    const rehearse = { ...options, mode: "rehearse" as const }
+    const run = async (script: Script, p?: ExecutablePlan) => {
+      const fake = fakeDb(script)
+      const outcome = await executePlan(
+        fake.db,
+        target,
+        p ?? (await withData()),
+        {
+          ...rehearse,
+          rehearsal: stubRehearsal,
+        }
+      )
+      return { ...fake, outcome }
+    }
+
+    it("computes before the intent steps and writes before the engine steps", async () => {
+      const { log, outcome } = await run({ triggers: LIVE })
+      expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+      const from = log.indexOf("replication-role")
+      expect(log.slice(from, log.indexOf(plan.steps[0]!.sql))).toEqual([
+        "replication-role",
+        // 8. Обчислення — під закріпленими налаштуваннями даних
+        "get-settings",
+        "set-settings",
+        "temp-name",
+        `guard ${COLUMN.expression}`,
+        "compute simetra_fill_1",
+        "count simetra_fill_1",
+        "set-settings",
+        // 9. Кроки наміру
+        "ALTER TABLE app.t RENAME TO u",
+        "ALTER TABLE app.u ADD COLUMN d text",
+        // 10. Запис — під тими самими налаштуваннями, тригери поштучно
+        "get-settings",
+        "set-settings",
+        "triggers",
+        "ALTER TABLE app.u DISABLE TRIGGER tg",
+        "write app.u",
+        "ALTER TABLE app.u ENABLE TRIGGER tg",
+        "set-constraints",
+        "set-settings",
+        // 11. Кроки двигуна під преамбулою
+        "get-settings",
+        "set-settings",
+      ])
+      // Обчислення йде після базової лінії тіл функцій (фаза 7)
+      expect(log.lastIndexOf("validators", from)).toBeGreaterThan(0)
+      // Фаза 13 лишається для всього плану
+      expect(log.filter((l) => l === "set-constraints")).toHaveLength(2)
+    })
+
+    it("computes and writes under the pinned data settings", async () => {
+      const { seen } = await run({ triggers: LIVE })
+      const pinned = {
+        ...SESSION,
+        ...Object.fromEntries(DATA_SETTINGS.map((s) => [s.name, s.value])),
+      }
+      for (const label of [
+        `guard ${COLUMN.expression}`,
+        "compute simetra_fill_1",
+        "write app.u",
+      ])
+        expect(seen[label], label).toEqual([pinned])
+      expect(seen["ALTER TABLE app.u ADD COLUMN d text"]).toEqual([SESSION])
+    })
+
+    it("keeps the phase order of a plan without data steps", async () => {
+      const { log, outcome } = await run(
+        {},
+        await withData({
+          record: TABLED,
+          data: [],
+          preservation: [
+            {
+              before: { schema: "app", table: "t" },
+              after: { schema: "app", table: "u" },
+              key: { before: "id", after: "id" },
+              columns: [{ before: "c", after: "c" }],
+            },
+          ],
+        })
+      )
+      expect(outcome).toMatchObject({ status: "rolledBack" })
+      // Без секції `data` — жодного оператора фаз 8 і 10, і лише один
+      // `SET CONSTRAINTS` (фаза 13)
+      expect(log.filter((l) => l === "set-constraints")).toHaveLength(1)
+      expect(log).not.toContain("replication-role")
+      expect(log).not.toContain("temp-name")
+      expect(log).not.toContain("triggers")
+      expect(log.indexOf("set-constraints")).toBeGreaterThan(
+        log.indexOf(plan.steps[2]!.sql)
+      )
+    })
+
+    it("refuses a replication role other than origin", async () => {
+      const { log, outcome } = await run({
+        triggers: LIVE,
+        replicationRole: "replica",
+      })
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          { code: "apply.replication-role", params: { value: "replica" } },
+        ],
+      })
+      expect(log).not.toContain("temp-name")
+      expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
+    })
+
+    it("refuses a taken temp table name", async () => {
+      const { log, outcome } = await run({ triggers: LIVE, tempTaken: true })
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          {
+            code: "apply.temp-name-taken",
+            params: { name: "pg_temp.simetra_fill_1" },
+          },
+        ],
+      })
+      expect(log).not.toContain("compute simetra_fill_1")
+    })
+
+    it("stops a cast that changes a value", async () => {
+      const { log, seen, outcome } = await run({
+        triggers: LIVE,
+        lost: () => 2,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.data-step-narrowing",
+            params: { step: "d1", lost: 2, table: "app.u", column: "d" },
+          },
+        ],
+      })
+      expect(log).not.toContain("compute simetra_fill_1")
+      // Сторож — між `set_config` пар `DATA_SETTINGS` і їх поверненням
+      const i = log.indexOf(`guard ${COLUMN.expression}`)
+      expect(log.slice(i - 3, i)).toEqual([
+        "get-settings",
+        "set-settings",
+        "temp-name",
+      ])
+      expect(seen[`guard ${COLUMN.expression}`]).toEqual([
+        {
+          ...SESSION,
+          ...Object.fromEntries(DATA_SETTINGS.map((s) => [s.name, s.value])),
+        },
+      ])
+    })
+
+    it("names the step whose cast overflows", async () => {
+      const { log, outcome } = await run({
+        triggers: LIVE,
+        fail: (label) =>
+          label.startsWith("guard ")
+            ? new ApplyDbError("numeric field overflow", "22003")
+            : undefined,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.data-step-failed",
+            params: {
+              phase: "cast-guard",
+              step: "d1",
+              table: "app.u",
+              column: "d",
+              sqlstate: "22003",
+            },
+          },
+        ],
+      })
+      expect(log).not.toContain("compute simetra_fill_1")
+    })
+
+    it("names the table whose compute fails", async () => {
+      const { outcome } = await run({
+        triggers: LIVE,
+        fail: (label) =>
+          label === "compute simetra_fill_1"
+            ? new ApplyDbError(
+                "permission denied to create temporary tables",
+                "42501"
+              )
+            : undefined,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.data-step-failed",
+            params: {
+              phase: "compute",
+              table: "app.u",
+              steps: "d1",
+              sqlstate: "42501",
+            },
+          },
+        ],
+      })
+    })
+
+    it("refuses changed triggers before disabling them", async () => {
+      const { log, outcome } = await run({
+        triggers: [{ name: "tg", enabled: "A" }],
+      })
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          { code: "apply.target-changed", params: { sections: "triggers" } },
+        ],
+      })
+      expect(log).toContain("triggers")
+      expect(log).not.toContain("ALTER TABLE app.u DISABLE TRIGGER tg")
+    })
+
+    it("restores an always trigger with ENABLE ALWAYS", async () => {
+      const always = [{ name: "tg", enabled: "A" as const }]
+      const { log, outcome } = await run(
+        { triggers: always },
+        await withData({ data: [{ ...TABLE, triggers: always }] })
+      )
+      expect(outcome).toMatchObject({ status: "rolledBack" })
+      expect(log).toContain("ALTER TABLE app.u ENABLE ALWAYS TRIGGER tg")
+    })
+
+    it("fails when fewer rows are written than computed", async () => {
+      const { log, outcome } = await run({
+        triggers: LIVE,
+        computed: 3,
+        written: 2,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.data-write-mismatch",
+            params: { table: "app.u", computed: 3, written: 2 },
+          },
+        ],
+      })
+      expect(log).not.toContain("ALTER TABLE app.u ENABLE TRIGGER tg")
+    })
+
+    it("names the table whose write fails", async () => {
+      const { outcome } = await run({
+        triggers: LIVE,
+        fail: (label) =>
+          label === "write app.u"
+            ? new ApplyDbError("violates check constraint", "23514")
+            : undefined,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.data-step-failed",
+            params: {
+              phase: "write",
+              table: "app.u",
+              steps: "d1",
+              sqlstate: "23514",
+              error: "violates check constraint",
+            },
+          },
+        ],
+      })
+    })
+
+    it("lets a lock conflict of the write through to the retry", async () => {
+      const { log, outcome } = await run({
+        triggers: LIVE,
+        fail: (label, attempt) =>
+          label === "ALTER TABLE app.u DISABLE TRIGGER tg" && attempt === 1
+            ? new ApplyDbError("lock timeout", "55P03")
+            : undefined,
+      })
+      expect(outcome).toMatchObject({ status: "rolledBack", attempts: 2 })
+      expect(log.filter((l) => l === "BEGIN")).toHaveLength(2)
+    })
+
+    it("names the data phase of a deferred failure right after the write", async () => {
+      const { log, outcome } = await run({
+        triggers: LIVE,
+        fail: (label) =>
+          label === "set-constraints"
+            ? new ApplyDbError("violates foreign key constraint", "23503")
+            : undefined,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.deferred-constraint-failed",
+            params: { after: "data", sqlstate: "23503" },
+          },
+        ],
+      })
+      expect(log).not.toContain(plan.steps[0]!.sql)
+    })
+
+    it("names the data step whose expression fails in the before measure", async () => {
+      const invalid = new ApplyDbError("invalid input syntax", "22P02")
+      const { log, outcome } = await run({
+        triggers: LIVE,
+        fail: (label) =>
+          label === "measure app.t" || label === `probe ${MEASURE.before}`
+            ? invalid
+            : undefined,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.data-step-failed",
+            params: {
+              phase: "measure-before",
+              step: "d1",
+              table: "app.u",
+              column: "d",
+              sqlstate: "22P02",
+            },
+          },
+        ],
+      })
+      expect(log).not.toContain("temp-name")
+    })
+
+    it("names the data step of a narrowing beside a windowed column", async () => {
+      // `n` — віконний вираз, `code` — змаплена ціль зі зміною типу `s7`:
+      // проба вираз-у-типі-запису проходить, повна — ні
+      const steps: PromotionRecord["dataSteps"] = [
+        {
+          ...STEP,
+          column: "n",
+          expression: "(row_number() over (order by id))::text",
+        },
+        {
+          ...STEP,
+          column: "code",
+          expression: "coalesce(code, 'x')",
+          kind: "backfill",
+        },
+      ]
+      const record: PromotionRecord = {
+        ...TABLED,
+        columns: ["n", "code"].map((name, i) => ({
+          id: `00000000-0000-4000-8000-00000000011${i}`,
+          sourceId: `00000000-0000-4000-8000-00000000012${i}`,
+          schema: "app",
+          table: "u",
+          from: name,
+          to: name,
+        })),
+        typeChanges: [
+          {
+            schema: "app",
+            table: "u",
+            column: "code",
+            from: "text",
+            to: "varchar(20)",
+          },
+        ],
+        dataSteps: steps,
+      }
+      const columns = steps.map((s, i) => ({
+        ...COLUMN,
+        step: `d${i + 1}`,
+        column: s.column,
+        expression: s.expression,
+        kind: s.kind,
+      }))
+      const narrowing = "(((\ncoalesce(code, 'x')\n)::text)::varchar(20))"
+      const failure = new ApplyDbError("value too long", "22001")
+      const { log, outcome } = await run(
+        {
+          triggers: LIVE,
+          fail: (label) =>
+            label === "measure app.t" || label === `probe ${narrowing}`
+              ? failure
+              : undefined,
+        },
+        await withData({
+          record,
+          data: [{ ...TABLE, columns }],
+          preservation: [
+            {
+              before: { schema: "app", table: "t" },
+              after: { schema: "app", table: "u" },
+              key: { before: "id", after: "id" },
+              columns: [
+                {
+                  before:
+                    "((\n(row_number() over (order by id))::text\n)::text)",
+                  after: "n",
+                  dataStep: "d1",
+                },
+                {
+                  before: narrowing,
+                  after: "code",
+                  dataStep: "d2",
+                  typeChangeStep: "s7",
+                },
+              ],
+            },
+          ],
+        })
+      )
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.type-narrowing",
+            params: {
+              step: "s7",
+              table: "app.u",
+              column: "code",
+              sqlstate: "22001",
+            },
+          },
+        ],
+      })
+      // Віконна колонка й вираз змапленої цілі в типі запису пробувались і
+      // пройшли
+      expect(log).toContain(
+        "probe ((\n(row_number() over (order by id))::text\n)::text)"
+      )
+      expect(log).toContain("probe ((\ncoalesce(code, 'x')\n)::text)")
+    })
+
+    describe("a broken pipeline before BEGIN", () => {
+      const broken = async (p: ExecutablePlan, message: RegExp) => {
+        const { db, log } = fakeDb()
+        await expect(
+          executePlan(db, target, p, { ...rehearse, rehearsal: stubRehearsal })
+        ).rejects.toThrow(message)
+        expect(log).toEqual([])
+      }
+
+      it("is a broken pipeline when the data section disagrees with the record", async () => {
+        await broken(await withData({ data: [] }), /data steps/)
+        await broken(
+          await withData({
+            data: [{ ...TABLE, columns: [{ ...COLUMN, kind: "repair" }] }],
+          }),
+          /data steps/
+        )
+        await broken(
+          await withData({
+            data: [
+              { ...TABLE, columns: [{ ...COLUMN, expression: "lower(c)" }] },
+            ],
+          }),
+          /data steps/
+        )
+        await broken(
+          await withData({
+            data: [{ ...TABLE, after: { ...TABLE.after, table: "v" } }],
+          }),
+          /data steps/
+        )
+      })
+
+      it("is a broken pipeline when a data step is not measured", async () => {
+        await broken(
+          await withData({
+            preservation: [
+              {
+                before: { schema: "app", table: "t" },
+                after: { schema: "app", table: "u" },
+                key: { before: "id", after: "id" },
+                columns: [{ before: "c", after: "d" }],
+              },
+            ],
+          }),
+          /preserve exactly the tables/
+        )
+      })
+
+      it("is a broken pipeline when the measure of a data step is not its expression", async () => {
+        await broken(
+          await withData({
+            preservation: [
+              {
+                before: { schema: "app", table: "t" },
+                after: { schema: "app", table: "u" },
+                key: { before: "id", after: "id" },
+                columns: [{ ...MEASURE, before: "((\nlower(c)\n)::text)" }],
+              },
+            ],
+          }),
+          /data steps/
+        )
+      })
     })
   })
 
