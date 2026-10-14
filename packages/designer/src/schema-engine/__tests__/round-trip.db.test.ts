@@ -18,10 +18,11 @@ import {
   type EngineDiagnostic,
   type EngineScope,
   type Extracted,
+  type SchemaEngine,
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
 import {
-  shadowDatabaseCount,
+  shadowDatabaseNames,
   testDatabaseUrl,
   readReferenceDomain,
   FIXTURES,
@@ -40,20 +41,89 @@ import {
  * в тіні, тож однакова втрата з обох боків extract-у не пройде.
  */
 
-const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
+
+/**
+ * Тіні, чиє з'єднання дійшло до тесту: лише їх тест прибирає сам. Тінь, що
+ * пережила тест, — це тест, що вийшов за тайм-аут (його тіло ще тримає тінь,
+ * а воркер файлу завершується раніше за `finally` порту), або прибирання
+ * pg-delta, яке ковтає збій `DROP DATABASE`. Нову тінь без такого сліду
+ * (збій до виклику тіла) тест лише називає: певності, що вона наша, немає.
+ */
+const reached = new Set<string>()
+const databaseName = (url: string): string =>
+  decodeURIComponent(new URL(url).pathname.slice(1))
+const pgDelta = createPgDeltaEngine()
+const engine: SchemaEngine = {
+  ...pgDelta,
+  withDesiredShadow: (o, sql, scope, fn) =>
+    pgDelta.withDesiredShadow(o, sql, scope, (shadow, plan) => {
+      reached.add(databaseName(shadow.url))
+      return fn(shadow, plan)
+    }),
+}
+
+/**
+ * Тінь, старша за цей вік, не належить живому прогонові: тінь живе один
+ * тест (тайм-аут — 60 с), а повний прогін DB-тестів designer — близько 20
+ * хвилин. Така тінь — сирота вбитого прогону, `finally` якого не відбувся.
+ */
+const STALE_SHADOW_MINUTES = 30
+
+/**
+ * Вік тіні з її імені: pg-delta називає її `pgdelta_shadow_<мс у base36>_…`.
+ * Ім'я іншої форми — вік невідомий.
+ */
+function shadowAgeMinutes(name: string): number | undefined {
+  const ms = parseInt(/^pgdelta_shadow_([0-9a-z]+)_/.exec(name)?.[1] ?? "", 36)
+  return Number.isNaN(ms) ? undefined : (Date.now() - ms) / 60_000
+}
+
+async function dropShadow(name: string): Promise<void> {
+  await withClient(stack, (c) =>
+    c.query(
+      `DROP DATABASE IF EXISTS "${name.replaceAll('"', '""')}" WITH (FORCE)`
+    )
+  )
+}
 
 let parse: SqlParser
 beforeAll(async () => {
   parse = await loadSqlParser()
+  // Сироти вбитих прогонів лише називаються, а не видаляються: автоматичне
+  // прибирання чужих баз — окреме рішення власника
+  const stale = (await shadowDatabaseNames()).flatMap((name) => {
+    const age = shadowAgeMinutes(name)
+    if (age !== undefined && age < STALE_SHADOW_MINUTES) return []
+    return [
+      `${name} (${age === undefined ? "age unknown" : `${Math.round(age)} min`})`,
+    ]
+  })
+  // Попередження — прямо в stderr: вивід `console` тесту, що пройшов,
+  // звіт vitest не показує
+  if (stale.length > 0)
+    process.stderr.write(
+      `Shadow databases older than ${STALE_SHADOW_MINUTES} minutes are left on the stack, likely from a killed run; they are not removed: ${stale.join(", ")}\n`
+    )
 })
 
-let shadowsBefore = 0
+let shadowsBefore: ReadonlySet<string> = new Set()
 beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
+  shadowsBefore = new Set(await shadowDatabaseNames())
+  reached.clear()
 })
 afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
+  // Набори, а не лічильник: сирота чужого прогону, що зникла чи з'явилася,
+  // лічбу зсунула б, а нову тінь цього тесту — ні
+  const fresh = (await shadowDatabaseNames()).filter(
+    (name) => !shadowsBefore.has(name)
+  )
+  try {
+    expect(fresh, "shadow databases this test left behind").toEqual([])
+  } finally {
+    // Прибирання — і тоді, коли тест упав
+    for (const name of fresh) if (reached.has(name)) await dropShadow(name)
+  }
 })
 
 const schemaPath: SchemaPathResolver = (_file, schemaFile) =>

@@ -52,6 +52,24 @@ export async function shadowDatabaseCount(): Promise<number> {
 }
 
 /**
+ * Імена scratch-баз двигуна на стеку, відсортовані. Набір, а не лічильник:
+ * тест, що порівнює набори до й після, бачить саме нову тінь, а сирота
+ * чужого прогону чи паралельна сесія лічбу не зсуває.
+ */
+export async function shadowDatabaseNames(): Promise<string[]> {
+  const client = new pg.Client({ connectionString: testDatabaseUrl() })
+  await client.connect()
+  try {
+    const result = await client.query<{ name: string }>(
+      "select datname as name from pg_database where starts_with(datname, 'pgdelta_shadow_') order by 1"
+    )
+    return result.rows.map((r) => r.name)
+  } finally {
+    await client.end()
+  }
+}
+
+/**
  * Виконує `fn` у транзакції, яку завжди відкочує: DDL тесту не лишає слідів у
  * базі стеку. Відсутня база — виняток із `connect` (тест червоний, не пропуск).
  * `url` — інша роль стеку (`testSuperuserUrl()` для того, чого роль
