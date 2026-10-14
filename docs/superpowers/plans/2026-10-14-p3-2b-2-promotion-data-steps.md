@@ -749,6 +749,13 @@ git commit -m "feat(schema): закріплені налаштування да�
     `dataFactRefusals` з фактом `{ step: "d1", name: "lower", immutable:
     false, exists: true }` → `plan.data-step-volatile` (`step: "d1"`,
     `function: "lower"`); функція з `exists: false` — та сама відмова;
+  - `"exempts only the transaction time functions"` (вердикт архітектора):
+    `readDataFacts` не питає про `now`, `transaction_timestamp` (перелік
+    `NOW_FUNCTIONS`), а `STABLE`-функція поза переліком (`current_setting`
+    у факті з `immutable: false`) → `plan.data-step-volatile`. DB-тесту
+    функції каталогу немає свідомо: такий вираз уже відхиляє T1 (знімок
+    функцій), а підмінений запис ловить перевивід виду (`recordedFillKind`);
+    на рівні конвеєра правило тримає DB-тест функції моделі `STABLE` нижче;
   - `"refuses a type a step creates"`: `dataStepRefusals` з кроком
     `produced: [{ kind: "domain", schema: "app", name: "code_t" }]` і ціллю
     типу `app.code_t` → `dataStepType`;

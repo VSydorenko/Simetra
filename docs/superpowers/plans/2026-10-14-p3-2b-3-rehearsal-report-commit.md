@@ -110,10 +110,19 @@ pg-delta; реальна база споживача.
      двигуна фази 18 порівнює витяг копії з бажаною тінню, а витяг pg-delta
      несе нетиповий власник (`map-model.ts`). Задача 0 це вимірює: якщо
      двигун на копії з іншим власником дає дію чи помилку, репетиція такої
-     копії — `apply.rehearsal-proof-failed`, і це «Відоме обмеження» (копію
-     відновлюють роллю плану, `pg_restore --no-owner`; тоді власник — роль
-     плану, як і на цілі за переписом власників П3-1); якщо ні —
-     `rolledBack`. Тест задачі 1 фіксує виміряну гілку;
+     копії — `apply.rehearsal-proof-failed`, і це «Відоме обмеження»; якщо
+     ні — `rolledBack`. Тест задачі 1 фіксує виміряну гілку. Вердикт
+     архітектора для першої гілки:
+     - власників із повного доказу **не виключати**: це послабило б доказ;
+     - відмова називає причину, а не сирий diff: фаза 6 на `rehearse`
+       запам'ятовує, чи різнилася секція власника відбитка
+       (`ownersDiffer`, структурно з `compareFingerprints` з власником,
+       без розбору SQL), і збій фази 18 при `ownersDiffer` —
+       `apply.rehearsal-proof-failed` з параметром `cause: "owners"`:
+       текст «the owners of the copy differ from the target», підказка
+       «restore the copy with the plan's role and `pg_restore --no-owner`»
+       (тоді власник — роль плану, як і на цілі за переписом власників
+       П3-1); без `ownersDiffer` — як є, `count` і `first`;
    - **факти сервера** — нове поле артефакту `server` під `planHash`, яке
      `plan` читає в `READ ONLY`; нова фаза 4e на `rehearse` і `apply`:
      живі факти ≠ `plan.server` → `apply.target-changed` (`sections:
@@ -255,13 +264,30 @@ pg-delta; реальна база споживача.
     - `"artifact"` — інструмент пише лише власні артефакти в `plans/`, без
       перегляду `dryRun` і без зміни метаданих;
     - `--read-only` (вісь дозволів `permits`) його забороняє, як `"write"`;
-    - `apply` стає `files: "artifact"`; `plan` лишається `"write"` (його
-      `dryRun` — справжній перегляд).
+    - `apply` стає `files: "artifact"`;
+    - **`plan` теж стає `"artifact"`** (вердикт архітектора: дві різні осі
+      для «пише лише `plans/`» — розбіжність, яку ніхто потім не пояснить).
+      `plan` пише лише артефакт (`outcome.artifacts`), метаданих не змінює,
+      базу лише читає й не руйнівний. Його `dryRun` пропускав лише запис
+      інертного файлу плану, який наступний `plan` однаково перезаписує,
+      тож перегляд нічого не захищав. Тепер у `plan` немає `dryRun` і
+      `--dry-run`; тести `plan` з `dryRun` (`apply-tools.db.test.ts`
+      «plan writes the artifact next to metadata», `cli.test.ts` «apply has
+      --yes and no --dry-run; plan has --dry-run», `mcp.test.ts` «`plan` пише
+      лише файл») переписуються під нове правило;
+    - `promote` лишається `"write"`: він змінює теку метаданих і пише запис
+      у `plans/`, і його `dryRun` — справжній перегляд змін теки;
+    - `invoke.ts`: зміни теки (`changes`) пишуться лише для `"write"` і не
+      під `dryRun`; артефакти (`artifacts`) — для `"write"` (не під
+      `dryRun`) і для `"artifact"` (завжди, бо перегляду немає);
+      `checkArtifacts` тримає їх у `plans/`; інструмент `"artifact"` з
+      непорожніми `changes` — дефект інструмента (`Error`).
 
     Вичерпні `switch` у `permits`, `mcp/tools.ts` і `cli/command.ts`
     змушують вирішити кожне місце. Вплив на спеку: спека designer §3.2 —
-    рядок про осі дозволів (`files: read | artifact | write`), правка в
-    задачі 3 з diff архітекторові до коміту.
+    рядок про осі дозволів (`files: read | artifact | write`) і про
+    `--dry-run` (лише в інструментів, що змінюють теку); правка в задачі 3,
+    diff архітекторові до коміту (він погоджує з власником).
 
 ### Рішення під час виконання
 
@@ -343,7 +369,13 @@ pg-delta; реальна база споживача.
   - `execute-plan.db.test.ts` `"rehearses a copy restored under other
     owners"` (Review Focus 2): у копії таблиця належить ролі
     `simetra_copy_owner`, членом якої є роль застосування → очікування за
-    виміром задачі 0; та сама різниця на `apply` → `apply.target-changed`.
+    виміром задачі 0: `rolledBack` або `apply.rehearsal-proof-failed` з
+    `cause: "owners"` і підказкою про `--no-owner` (рішення 1); та сама
+    різниця на `apply` → `apply.target-changed`;
+  - `execute.test.ts` `"names the owners as the cause of a failed proof"`:
+    фейковий двигун дає дію при відбитку, що різниться лише власником →
+    `cause: "owners"`; та сама дія при рівних власниках — без `cause`, з
+    `count` і `first`.
     Роль і бази тест прибирає у `finally`, зокрема на шляху падіння (роль —
     після баз).
 - [ ] **Step 2: FAIL.** Run: `pnpm --filter simetra test execute artifact`.
@@ -407,7 +439,11 @@ git commit -m "feat(schema): раннер збирає докази репети
 - Modify: `packages/simetra/src/schema/apply/index.ts` (експорти)
 - Modify: `packages/designer/src/tools/types.ts` (`FILES_ACCESS`),
   `tools/invoke.ts`, `mcp/tools.ts`, `cli/command.ts` (кожен `switch` за
-  віссю файлів), `tools/apply-tools.ts` (`files: "artifact"`, запис звіту)
+  віссю файлів), `tools/apply-tools.ts` (`files: "artifact"` для `plan` і
+  `apply`, звіт — у `outcome.artifacts`), `docs/architecture/designer.md`
+  (рядок про `--dry-run`)
+- Test: `packages/designer/src/__tests__/cli.test.ts`, `mcp.test.ts`,
+  `apply-tools.db.test.ts` (тести `plan` з `dryRun`)
 - Modify: `docs/superpowers/specs/2026-10-02-simetra-designer-design.md`
   (§3.2, осі дозволів — рішення 10; diff архітекторові до коміту)
 - Test: `rehearsal.test.ts`;
@@ -430,10 +466,19 @@ git commit -m "feat(schema): раннер збирає докази репети
     form"`, `"refuses an unknown field"`, `"reports another format as
     format"`, `"names the report after the plan"` (той самий префікс, що
     `planFileName`);
-  - осі інструментів: `"apply has no dryRun"` — MCP-схема `apply` не має
-    `dryRun` (вхід з ним — невалідний), CLI `apply --dry-run` →
-    `UsageError`, `apply` без `confirm` → `unconfirmed`; `"read-only
-    forbids an artifact tool"`;
+  - осі інструментів (тест-гейт рішення 10): `"dryRun exists only for
+    tools that write files"` — перебір каталогу: `dryRun` у MCP-схемі й
+    `--dry-run` у CLI є рівно в інструментів з `files: "write"`; `"apply
+    has no dryRun"` — MCP-вхід `apply` з `dryRun` невалідний, CLI `apply
+    --dry-run` → `UsageError`, `apply` без `confirm` → `unconfirmed`;
+    `"apply with dryRun commits nothing"` — виклик `invoke` з `dryRun:
+    true` і `confirmed: true` до інструмента не `"write"` відмовляє новою
+    відмовою `invoke` `dry-run-unsupported` до `tool.run` (шпигун на `run`
+    — нуль викликів): канали не дають такого входу, але `invoke` не
+    покладається на них; `"read-only forbids an artifact tool"` (`plan`
+    і `apply`); `"an artifact tool may not change the directory"`;
+  - переписати тести `plan` з `dryRun` (рішення 10): `plan` без `dryRun`
+    пише артефакт; `plan --dry-run` → `UsageError`;
   - `apply-tools.db.test.ts` `"writes the rehearsal report next to the
     plan"`: `apply --rehearse` → файл `plans/<from12>-<to12>.rehearsal.json`
     з `planHash` плану, вивід називає шлях; невдала репетиція файлу не пише;
