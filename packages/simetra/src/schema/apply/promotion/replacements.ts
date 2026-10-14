@@ -509,13 +509,35 @@ const uncast = (node: Node): Node =>
     ? node.TypeCast.arg
     : node
 
+/**
+ * Колонка лівої частини. Знімається лише приведення до `text` — те, що
+ * Postgres сам дописує для `varchar`; приведення до іншого типу — вираз над
+ * колонкою, а не сама колонка, тож переліком значень він не є.
+ */
 function columnOf(node: Node): string | undefined {
-  const bare = uncast(node)
+  const bare =
+    ("TypeCast" in node && textCast(node.TypeCast)
+      ? node.TypeCast.arg
+      : undefined) ?? node
   if (!("ColumnRef" in bare)) return undefined
   const fields = bare.ColumnRef.fields ?? []
   return fields.length === 1 && "String" in fields[0]!
     ? fields[0].String.sval
     : undefined
+}
+
+type TypeCastNode = Extract<Node, { TypeCast: unknown }>["TypeCast"]
+
+/** `(…)::text` чи `(…)::pg_catalog.text` без модифікаторів і масиву. */
+function textCast(cast: TypeCastNode): boolean {
+  const type = cast.typeName
+  const names = strings(type?.names)
+  return (
+    cast.arg !== undefined &&
+    (type?.typmods ?? []).length === 0 &&
+    (type?.arrayBounds ?? []).length === 0 &&
+    (names.join(".") === "text" || names.join(".") === "pg_catalog.text")
+  )
 }
 
 const literals = (nodes: readonly Node[] | undefined): boolean =>

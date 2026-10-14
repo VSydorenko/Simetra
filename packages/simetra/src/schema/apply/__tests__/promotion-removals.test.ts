@@ -1893,6 +1893,11 @@ describe("platformReplacements", () => {
         "a negated list",
         "CHECK ((status <> ALL (ARRAY['a'::text, 'b'::text])))",
       ],
+      // Знімається лише приведення varchar → text, яке дописує Postgres
+      [
+        "a list over a cast to another type",
+        "CHECK (((status)::integer = ANY (ARRAY[1, 2])))",
+      ],
     ])("checks %s by the equivalence key", (_, def) => {
       expect(adopted(def).map((d) => d.code)).toEqual([
         "plan.platform-replacement-missing",
