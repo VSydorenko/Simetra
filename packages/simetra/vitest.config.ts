@@ -21,6 +21,9 @@ export default defineConfig({
           exclude: ["**/node_modules/**", "**/dist/**"],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
+          // Стек один на машину: один прогін за раз і стек після прогону такий
+          // самий, як до нього
+          globalSetup: ["./test/db/stack-guard.ts"],
         },
       },
     ],
