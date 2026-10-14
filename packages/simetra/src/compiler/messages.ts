@@ -2459,6 +2459,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Обмеження NOT VALID чи недійсний індекс — не те, що описує бажаний стан: перевірте його в тому самому плані або приберіть.",
     },
   },
+  "apply.rehearsal-proof-failed": {
+    en: (p) =>
+      `After the plan's steps the engine still finds ${p.count} difference(s) between the database and the desired state, the first: ${p.first}. The rehearsal was rolled back`,
+    uk: (p) =>
+      `Після кроків плану двигун ще бачить розбіжностей між базою й бажаним станом: ${p.count}, перша: ${p.first}. Репетицію відкочено`,
+    hint: {
+      en: "Nothing was written. The plan does not reach the desired state on this database; plan again, and report the plan if the difference repeats.",
+      uk: "Нічого не записано. План не доводить цю базу до бажаного стану; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",
+    },
+  },
   "apply.temp-name-taken": {
     en: (p) =>
       `The name ${p.name} the apply needs for a check inside its transaction is already taken. Nothing was written`,

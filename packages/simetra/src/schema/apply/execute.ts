@@ -12,9 +12,11 @@ import {
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
   PROVIDER_LOCKS,
   type DbConnection,
+  type EngineCatalog,
   type EngineDiagnostic,
   type EngineSetting,
   type Extracted,
+  type SchemaEngine,
 } from "../engine"
 import {
   isAllowedSetting,
@@ -117,13 +119,17 @@ export type ExecutablePlan = Pick<
   | "resultCatalog"
 >
 
-export interface ExecuteOptions {
-  /**
-   * `apply` — ціль, `COMMIT`; `rehearse` — ціль, усе те саме, але `ROLLBACK`;
-   * `proof` — копія стану цілі: без перевірки ланцюжка (стану застосування в
-   * копії немає) і з відбитком цілі без `owner` (бази різні).
-   */
-  mode: "apply" | "rehearse" | "proof"
+/**
+ * Доказ репетиції (рішення 7 плану П3-2b-1): двигун і бажаний каталог, з
+ * яким він порівнює результат кроків тією самою транзакцією. Порт двигуна
+ * лише `plan`: раннер у T2 не знає ні `pg`, ні `pg-delta`.
+ */
+export interface RehearsalProof {
+  engine: Pick<SchemaEngine, "plan">
+  desired: EngineCatalog
+}
+
+interface ExecuteBase {
   /** Хеш артефакту для marker і ledger; у режимі `proof` — `"proof"`. */
   planHash: string
   allow: readonly string[]
@@ -133,6 +139,19 @@ export interface ExecuteOptions {
   /** Пауза між спробами; тести підставляють свою. */
   sleep?: (ms: number) => Promise<void>
 }
+
+/**
+ * `apply` — ціль, `COMMIT`; `rehearse` — ціль, усе те саме, але `ROLLBACK`, і
+ * з повним доказом двигуна до відкату (тому `rehearsal` обов'язковий: режим
+ * без доказу мовчки послабив би репетицію); `proof` — копія стану цілі: без
+ * перевірки ланцюжка (стану застосування в копії немає) і з відбитком цілі
+ * без `owner` (бази різні).
+ */
+export type ExecuteOptions = ExecuteBase &
+  (
+    | { mode: "apply" | "proof" }
+    | { mode: "rehearse"; rehearsal: RehearsalProof }
+  )
 
 export type ExecuteOutcome =
   | {
@@ -584,6 +603,12 @@ async function runAttempt(
       ...(o.mode === "proof" ? {} : { paths: await divergedPaths(tx, plan) }),
     })
 
+  // 18. Повний доказ двигуна: після кроків ціль, витягнута тим самим
+  // з'єднанням, не має плану до бажаного каталогу. Відбиток із фази 17
+  // бачить не все, що бачить двигун, а репетиція — єдине місце, де цей
+  // доказ дешево перевірити до `COMMIT`
+  if (o.mode === "rehearse") await proveWithEngine(tx, plan, o.rehearsal)
+
   // 19. Стан у тій самій транзакції. Marker отримує повний відбиток
   // результату з власником: наступний гейт порівнює ціль ↔ ціль. Прийнятий
   // дрейф лишається в ledger, а marker стає новою базою (рішення 16)
@@ -613,6 +638,38 @@ async function runAttempt(
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
   return [...warnings, ...blindWarning(after.blind), ...gaps]
+}
+
+/**
+ * Фаза 18. Збій самого витягу — не обрив і не конфлікт блокувань — така сама
+ * відмова, що й розбіжність: довести стан не вдалося, а `COMMIT` без доказу
+ * репетиція не схвалює. Обрив і повторюваний конфлікт летять як усюди в
+ * раннері, бо їх обробляє повтор спроби чи пошук за `applyId`.
+ */
+async function proveWithEngine(
+  tx: ApplyTransaction,
+  plan: ExecutablePlan,
+  proof: RehearsalProof
+): Promise<void> {
+  let after: Extracted
+  try {
+    after = await tx.extract(plan.scope)
+  } catch (error) {
+    if (error instanceof ApplyConnectionLost || retryable(error)) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    throw stop("failed", "apply.rehearsal-proof-failed", {
+      count: 1,
+      first: `(the extract failed: ${message})`,
+    })
+  }
+  const rest = proof.engine.plan(after.catalog, proof.desired, plan.scope)
+  const errors = rest.diagnostics.filter((d) => d.severity === "error")
+  const count = rest.actions.length + errors.length
+  if (count === 0) return
+  throw stop("failed", "apply.rehearsal-proof-failed", {
+    count,
+    first: rest.actions[0]?.sql ?? errors[0]!.message,
+  })
 }
 
 /**

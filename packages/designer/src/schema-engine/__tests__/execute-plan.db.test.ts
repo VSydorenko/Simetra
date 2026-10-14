@@ -25,6 +25,7 @@ import {
   type ApplyDesired,
   type CatalogFingerprint,
   type DriftReport,
+  type EngineCatalog,
   type ExecutablePlan,
   type ExecuteOptions,
   type ExecuteOutcome,
@@ -42,6 +43,7 @@ import {
   tableKey,
   type PlanStep,
   type ProviderLockSet,
+  type RehearsalProof,
   type TableLock,
   typeGuards,
 } from "simetra/schema"
@@ -200,6 +202,19 @@ const desiredFingerprint = (
 ): Promise<CatalogFingerprint> =>
   inTarget(`${setup};\n${steps.map((s) => `${s.sql};`).join("\n")}`, read)
 
+/**
+ * Каталог двигуна бажаного стану: окрема база, де `setup` і кроки вже
+ * виконано, — те, що `applyTool` бере з бажаної тіні.
+ */
+const desiredCatalog = (
+  setup: string,
+  steps: readonly PlanStep[]
+): Promise<EngineCatalog> =>
+  inTarget(
+    `${setup};\n${steps.map((s) => `${s.sql};`).join("\n")}`,
+    async (url) => (await engine.extract({ url }, desired.scope)).catalog
+  )
+
 function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
   return {
     id,
@@ -321,6 +336,17 @@ async function planFor(
     desiredFingerprint:
       over.desiredFingerprint ?? (await desiredFingerprint(BASE, steps)),
   }
+}
+
+/**
+ * Заглушка доказу репетиції: тести, що не перевіряють сам доказ двигуна,
+ * підставляють двигун, який не бачить розбіжності.
+ */
+const stubRehearsal: RehearsalProof = {
+  engine: {
+    plan: () => ({ actions: [], empty: true, preamble: [], diagnostics: [] }),
+  },
+  desired: {} as EngineCatalog,
 }
 
 const options: ExecuteOptions = {
@@ -551,11 +577,47 @@ describe("executePlan", () => {
       const outcome = await executePlan(apply, { url }, plan, {
         ...options,
         mode: "rehearse",
+        rehearsal: stubRehearsal,
       })
       expect(outcome).toMatchObject({ status: "rolledBack", attempts: 1 })
       expect(await exists(url, "app.n")).toBe(false)
       expect(await marker(url)).toBeUndefined()
       expect(await ledger(url)).toEqual([])
+    })
+  })
+
+  it("proves the rehearsal on the same connection", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await planFor(url, [CREATE_N])
+      const outcome = await executePlan(apply, { url }, plan, {
+        ...options,
+        mode: "rehearse",
+        rehearsal: { engine, desired: await desiredCatalog(BASE, [CREATE_N]) },
+      })
+      expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+      expect(await exists(url, "app.n")).toBe(false)
+    })
+  })
+
+  it("refuses a rehearsal whose result differs from the desired state", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await planFor(url, [CREATE_N])
+      // Бажаний каталог бази без кроку: після кроку двигун ще має план
+      // його прибрати
+      const outcome = await executePlan(apply, { url }, plan, {
+        ...options,
+        mode: "rehearse",
+        rehearsal: { engine, desired: await desiredCatalog(BASE, []) },
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [{ code: "apply.rehearsal-proof-failed" }],
+      })
+      const params = outcome.diagnostics[0]!.params
+      expect(Number(params.count)).toBeGreaterThanOrEqual(1)
+      expect(String(params.first)).toMatch(/app.*\bn\b/i)
+      expect(await exists(url, "app.n")).toBe(false)
+      expect(await marker(url)).toBeUndefined()
     })
   })
 
@@ -688,7 +750,7 @@ describe("executePlan", () => {
         apply,
         { url: loginAs(url, API_LOGIN, API_PASSWORD) },
         plan,
-        { ...options, mode: "rehearse" }
+        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
       )
       expect(outcome).toMatchObject({
         status: "refused",
@@ -716,7 +778,7 @@ describe("executePlan", () => {
         apply,
         { url: loginAs(url, LOCKER, LOCKER_PASSWORD) },
         plan,
-        { ...options, mode: "rehearse" }
+        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
       )
       expect(outcome).toMatchObject({
         status: "refused",
@@ -959,6 +1021,7 @@ describe("executePlan", () => {
         const running = executePlan(apply, { url }, plan, {
           ...options,
           mode: "rehearse",
+          rehearsal: stubRehearsal,
           timeouts: { lockTimeoutMs: 15_000 },
         })
         let waiting: { query: string; mode: string } | undefined
@@ -997,6 +1060,7 @@ describe("executePlan", () => {
       const outcome = await executePlan(apply, { url }, plan, {
         ...options,
         mode: "rehearse",
+        rehearsal: stubRehearsal,
       })
       expect(outcome).toMatchObject({
         status: "rolledBack",
@@ -1018,6 +1082,7 @@ describe("executePlan", () => {
         await executePlan(apply, { url }, full, {
           ...options,
           mode: "rehearse",
+          rehearsal: stubRehearsal,
         })
       ).toMatchObject({ status: "rolledBack", diagnostics: [] })
     })
@@ -1402,7 +1467,11 @@ describe("executePlan", () => {
       })
     }
 
-    const rehearse = { ...options, mode: "rehearse" } as const
+    const rehearse = {
+      ...options,
+      mode: "rehearse",
+      rehearsal: stubRehearsal,
+    } as const
 
     /** Ціль не змінилася: таблиця під старим іменем зі старими даними. */
     const untouched = async (url: string) =>
@@ -2013,7 +2082,7 @@ describe("executePlan", () => {
           apply,
           { url },
           await stopping(url, s),
-          { ...allowS1, mode: "rehearse" }
+          { ...allowS1, mode: "rehearse", rehearsal: stubRehearsal }
         )
         expect(outcome).toMatchObject({
           status: "failed",
@@ -2114,6 +2183,7 @@ describe("executePlan", () => {
         const outcome = await executePlan(apply, { url }, plan, {
           ...allowS1,
           mode: "rehearse",
+          rehearsal: stubRehearsal,
         })
         expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
       })
@@ -2222,6 +2292,7 @@ describe("executePlan", () => {
         const outcome = await executePlan(apply, { url }, plan, {
           ...options,
           mode: "rehearse",
+          rehearsal: stubRehearsal,
           allow: ["s1"],
         })
         expect(outcome).toMatchObject({

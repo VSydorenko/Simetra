@@ -72,7 +72,13 @@ import { snapshotOf } from "./helpers/catalog"
  * плану), на такий, що губить з'єднання в кожній транзакції. Вимкнений —
  * справжній порт.
  */
-const lose = vi.hoisted(() => ({ writer: false }))
+const lose = vi.hoisted(() => ({
+  writer: false,
+  /** Бажана тінь двигуна не завантажується (`withDesiredShadow`). */
+  shadowFails: false,
+  /** Скільки транзакцій відкрив порт, що пише, відколи тест його скинув. */
+  writes: 0,
+}))
 vi.mock("../schema-engine", async (importOriginal) => {
   const original = await importOriginal<typeof import("../schema-engine")>()
   const { ApplyConnectionLost } = await import("simetra/schema")
@@ -82,8 +88,39 @@ vi.mock("../schema-engine", async (importOriginal) => {
   }
   return {
     ...original,
-    createApplyDatabase: (o: { readOnly: boolean }) =>
-      lose.writer && !o.readOnly ? lost : original.createApplyDatabase(o),
+    createApplyDatabase: (o: { readOnly: boolean }): ApplyDatabase => {
+      if (lose.writer && !o.readOnly) return lost
+      const real = original.createApplyDatabase(o)
+      if (o.readOnly) return real
+      return {
+        transaction: (target, end, fn) => {
+          lose.writes++
+          return real.transaction(target, end, fn)
+        },
+      }
+    },
+    createPgDeltaEngine: () => {
+      const real = original.createPgDeltaEngine()
+      return {
+        ...real,
+        withDesiredShadow: (
+          ...args: Parameters<typeof real.withDesiredShadow>
+        ) =>
+          lose.shadowFails
+            ? Promise.resolve({
+                status: "shadow-failed" as const,
+                diagnostics: [
+                  {
+                    code: "engine.shadow-load-failed" as const,
+                    severity: "error" as const,
+                    message: "the desired shadow did not load",
+                    params: {},
+                  },
+                ],
+              })
+            : real.withDesiredShadow(...args),
+      }
+    },
   }
 })
 
@@ -137,6 +174,7 @@ const disposers: (() => Promise<void>)[] = []
 const clients: Client[] = []
 beforeEach(async () => {
   lose.writer = false
+  lose.shadowFails = false
   shadowsBefore = await shadowDatabaseCount()
 })
 afterEach(async () => {
@@ -635,6 +673,42 @@ describe("apply", () => {
       )
       expect(r.diagnostics).toEqual([])
       expect((r.data as ApplyData).status).toBe("rolledBack")
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
+  it("apply --rehearse builds the desired shadow and passes the proof", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      const shadows = await shadowDatabaseCount()
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash, rehearse: true },
+        options(dir, url)
+      )
+      expect(errors(r)).toEqual([])
+      expect((r.data as ApplyData).status).toBe("rolledBack")
+      // Тінь доказу прибрано
+      expect(await shadowDatabaseCount()).toBe(shadows)
+    })
+  })
+
+  it("apply --rehearse refuses with the shadow diagnostics and runs nothing", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      lose.shadowFails = true
+      lose.writes = 0
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash, rehearse: true },
+        options(dir, url)
+      )
+      expect(errors(r)).toEqual(["engine.shadow-load-failed"])
+      expect(r.data).toBeUndefined()
+      // `executePlan` не викликано: транзакції цілі не було
+      expect(lose.writes).toBe(0)
       expect(await markerExists(url)).toBe(false)
     })
   })

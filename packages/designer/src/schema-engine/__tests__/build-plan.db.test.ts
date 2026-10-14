@@ -24,6 +24,7 @@ import {
   ApplyConnectionLost,
   buildPlan,
   checkGuardCasts,
+  desiredForApply,
   executePlan,
   reverseGenerate,
   serializePlan,
@@ -34,6 +35,7 @@ import {
   type PlanArtifact,
   type PlanOutcome,
   type PromotionInput,
+  type RehearsalProof,
   type SchemaEngine,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
@@ -182,6 +184,28 @@ const plan = (
   model: CompiledModel,
   over: SchemaEngine = engine
 ): Promise<PlanOutcome> => buildPlan(over, dbs, model, { target: { url } }, [])
+
+/**
+ * Доказ репетиції: бажаний каталог із бажаної тіні моделі, як його будує
+ * `applyTool`.
+ */
+async function rehearsalOf(
+  model: CompiledModel,
+  artifact: PlanArtifact
+): Promise<RehearsalProof> {
+  const desired = await desiredForApply(model)
+  const shadow = await engine.withDesiredShadow(
+    { target: stack },
+    desired.sql,
+    artifact.scope,
+    (db) => engine.extract(db, artifact.scope)
+  )
+  if (shadow.status !== "loaded")
+    throw new Error(
+      `desired shadow did not load: ${shadow.diagnostics.map((d) => d.message).join("; ")}`
+    )
+  return { engine, desired: shadow.value.catalog }
+}
 
 function planned(outcome: PlanOutcome): PlanArtifact {
   if (outcome.status !== "planned")
@@ -1702,6 +1726,7 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
           // І на цілі: репетиція бере ті самі замки наперед
           const rehearsal = await executePlan(writer, { url }, artifact, {
             mode: "rehearse",
+            rehearsal: await rehearsalOf(to, artifact),
             planHash: artifact.planHash,
             allow: artifact.requiredPermissions,
             snapshot: canonicalSnapshot(to),
@@ -1783,6 +1808,7 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
           // Репетиція на цілі, де `ext.r` справді є: замок не поза слідом
           const rehearsal = await executePlan(writer, { url }, artifact, {
             mode: "rehearse",
+            rehearsal: await rehearsalOf(to, artifact),
             planHash: artifact.planHash,
             allow: artifact.requiredPermissions,
             snapshot: canonicalSnapshot(to),
@@ -1842,6 +1868,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
     ) {
       return executePlan(writer, { url }, artifact, {
         mode: "rehearse",
+        rehearsal: await rehearsalOf(model, artifact),
         planHash: artifact.planHash,
         allow: artifact.requiredPermissions,
         snapshot: canonicalSnapshot(model),

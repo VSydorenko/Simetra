@@ -7,6 +7,7 @@ import {
   FINGERPRINT_VERSION,
   type ApplyDatabase,
   type CatalogFingerprint,
+  type EngineCatalog,
   type ExecutablePlan,
   type ExecuteOptions,
   type Extracted,
@@ -14,6 +15,7 @@ import {
   type GlobalDefaultPrivilege,
   type PlanStep,
   type PreservedTable,
+  type RehearsalProof,
   type ProviderLockSet,
   SUPABASE_LOCKS,
 } from "simetra/schema"
@@ -164,6 +166,17 @@ const tabled = {
   recordHash: await promotionRecordHash(TABLED),
 }
 
+/**
+ * Заглушка доказу репетиції (фаза 18): двигун не бачить розбіжності. Тести,
+ * що не перевіряють сам доказ, підставляють її в `rehearse`.
+ */
+const stubRehearsal: RehearsalProof = {
+  engine: {
+    plan: () => ({ actions: [], empty: true, preamble: [], diagnostics: [] }),
+  },
+  desired: {} as EngineCatalog,
+}
+
 const options: ExecuteOptions = {
   mode: "apply",
   planHash: "p".repeat(64),
@@ -171,6 +184,11 @@ const options: ExecuteOptions = {
   snapshot: { tables: [] },
   sleep: async () => {},
 }
+
+const withMode = (mode: "apply" | "rehearse" | "proof"): ExecuteOptions =>
+  mode === "rehearse"
+    ? { ...options, mode, rehearsal: stubRehearsal }
+    : { ...options, mode }
 
 interface Script {
   /** Недійсні обмеження й індекси цілі після кроків (фаза 16). */
@@ -409,9 +427,14 @@ function fakeDb(script: Script = {}) {
         },
         extract: async (): Promise<Extracted> => {
           log.push("extract")
-          if (script.extract === undefined)
-            throw new Error("the fake has no extract")
-          return script.extract()
+          return script.extract === undefined
+            ? ({
+                model: { tables: [], enumTypes: [], units: [] },
+                catalog: {},
+                diagnostics: [],
+                unpopulated: [],
+              } as unknown as Extracted)
+            : script.extract()
         },
       }
       try {
@@ -552,6 +575,7 @@ describe("executePlan", () => {
     const outcome = await executePlan(db, target, plan, {
       ...options,
       mode: "rehearse",
+      rehearsal: stubRehearsal,
     })
     expect(outcome).toMatchObject({
       status: "refused",
@@ -623,6 +647,7 @@ describe("executePlan", () => {
     const outcome = await executePlan(db, target, plan, {
       ...options,
       mode: "rehearse",
+      rehearsal: stubRehearsal,
     })
     expect(outcome).toMatchObject({
       status: "refused",
@@ -690,7 +715,7 @@ describe("executePlan", () => {
           { schema: "app", name: "p", mode: "share", step: "s2" },
         ],
       },
-      { ...options, mode: "rehearse" }
+      { ...options, mode: "rehearse", rehearsal: stubRehearsal }
     )
     expect(outcome).toMatchObject({
       status: "rolledBack",
@@ -744,7 +769,7 @@ describe("executePlan", () => {
           { schema: "app", name: "p", mode: "share", step: "s2" },
         ],
       },
-      { ...options, mode: "rehearse" }
+      { ...options, mode: "rehearse", rehearsal: stubRehearsal }
     )
     expect(outcome).toMatchObject({
       status: "rolledBack",
@@ -776,7 +801,7 @@ describe("executePlan", () => {
   it("checks the lock footprint on rehearsal and proof, not on apply", async () => {
     for (const mode of ["rehearse", "proof"] as const) {
       const { db, log } = fakeDb()
-      await executePlan(db, target, plan, { ...options, mode })
+      await executePlan(db, target, plan, withMode(mode))
       expect(log.indexOf("existing")).toBeLessThan(
         log.indexOf("ALTER TABLE app.t ADD COLUMN d int")
       )
@@ -1390,20 +1415,20 @@ describe("executePlan", () => {
         resultSections: diverging,
         extract: async () => extracted(enums.slice(0, 2)),
       })
-      expect(
-        await executePlan(db, target, plan, { ...options, mode })
-      ).toMatchObject({
-        status: "failed",
-        diagnostics: [
-          {
-            code: "apply.verify-failed",
-            params: {
-              sections: "relations",
-              paths: "enumTypes.app.e00, enumTypes.app.e01",
+      expect(await executePlan(db, target, plan, withMode(mode))).toMatchObject(
+        {
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.verify-failed",
+              params: {
+                sections: "relations",
+                paths: "enumTypes.app.e00, enumTypes.app.e01",
+              },
             },
-          },
-        ],
-      })
+          ],
+        }
+      )
       expect(log.slice(-2)).toEqual(["extract", "ROLLBACK"])
     }
     const many = await executePlan(
@@ -1455,6 +1480,115 @@ describe("executePlan", () => {
     })
   })
 
+  describe("the engine proof of a rehearsal (phase 18)", () => {
+    const refusing = (
+      actions: { sql: string }[],
+      diagnostics: { severity: string; message: string }[] = []
+    ): ExecuteOptions => ({
+      ...options,
+      mode: "rehearse",
+      rehearsal: {
+        engine: {
+          plan: () =>
+            ({
+              actions,
+              empty: actions.length === 0,
+              preamble: [],
+              diagnostics,
+            }) as unknown as ReturnType<RehearsalProof["engine"]["plan"]>,
+        },
+        desired: {} as EngineCatalog,
+      },
+    })
+
+    it("fails when the engine still plans actions, naming the first", async () => {
+      const { db, log } = fakeDb()
+      const outcome = await executePlan(
+        db,
+        target,
+        plan,
+        refusing([{ sql: "ALTER TABLE app.t ADD COLUMN z int" }, { sql: "x" }])
+      )
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.rehearsal-proof-failed",
+            params: { count: 2, first: "ALTER TABLE app.t ADD COLUMN z int" },
+          },
+        ],
+      })
+      expect(log.slice(-2)).toEqual(["extract", "ROLLBACK"])
+      expect(log).not.toContain("ledger")
+    })
+
+    it("fails on an error diagnostic of the engine plan, ignores warnings", async () => {
+      const outcome = await executePlan(
+        fakeDb().db,
+        target,
+        plan,
+        refusing([], [{ severity: "error", message: "unplannable" }])
+      )
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.rehearsal-proof-failed",
+            params: { count: 1, first: "unplannable" },
+          },
+        ],
+      })
+      expect(
+        await executePlan(
+          fakeDb().db,
+          target,
+          plan,
+          refusing([], [{ severity: "warning", message: "meh" }])
+        )
+      ).toMatchObject({ status: "rolledBack" })
+    })
+
+    it("turns a failing extract into the same refusal", async () => {
+      const outcome = await executePlan(
+        fakeDb({ extract: () => Promise.reject(new Error("engine broke")) }).db,
+        target,
+        plan,
+        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
+      )
+      expect(outcome).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.rehearsal-proof-failed",
+            params: { first: "(the extract failed: engine broke)" },
+          },
+        ],
+      })
+    })
+
+    it("lets a lost connection of the extract propagate to the lookup", async () => {
+      const { db } = fakeDb({
+        extract: () => Promise.reject(new ApplyConnectionLost("gone")),
+      })
+      const outcome = await executePlan(db, target, plan, {
+        ...options,
+        mode: "rehearse",
+        rehearsal: stubRehearsal,
+      })
+      expect(outcome.diagnostics[0]!.code).not.toBe(
+        "apply.rehearsal-proof-failed"
+      )
+    })
+
+    it("does not run for apply and proof", async () => {
+      for (const mode of ["apply", "proof"] as const) {
+        const { db, log } = fakeDb()
+        await executePlan(db, target, plan, { ...options, mode })
+        expect(log).not.toContain("extract")
+      }
+    })
+  })
+
   it("does not extract on the proof copy", async () => {
     const { db, log } = fakeDb({
       resultSections: { ...DESIRED.sections, relations: "other" },
@@ -1492,10 +1626,7 @@ describe("executePlan", () => {
         (_, i) => `app.b${String(i).padStart(2, "0")}()`
       )
       const { db } = fakeDb({ blind })
-      const outcome = await executePlan(db, target, plan, {
-        ...options,
-        mode,
-      })
+      const outcome = await executePlan(db, target, plan, withMode(mode))
       expect(outcome.diagnostics).toEqual([
         expect.objectContaining({
           code: "apply.function-check-blind",
@@ -1570,6 +1701,7 @@ describe("executePlan", () => {
     const outcome = await executePlan(db, target, promoted, {
       ...options,
       mode: "rehearse",
+      rehearsal: stubRehearsal,
     })
     expect(outcome).toMatchObject({
       status: "refused",
@@ -1603,8 +1735,7 @@ describe("executePlan", () => {
     async (mode) => {
       const { db, log, calls } = spied()
       const outcome = await executePlan(db, target, promoted, {
-        ...options,
-        mode,
+        ...withMode(mode),
         allow: ["access:app.party"],
       })
       expect(outcome.status).toBe(
@@ -1629,7 +1760,12 @@ describe("executePlan", () => {
         ...promoted,
         promotion: { ...promoted.promotion!, recordHash: "d".repeat(64) },
       },
-      { ...options, mode: "rehearse", allow: ["access:app.party"] }
+      {
+        ...options,
+        mode: "rehearse",
+        rehearsal: stubRehearsal,
+        allow: ["access:app.party"],
+      }
     )
     // Ledger виводить із хешу «запис застосовано»: розбіжність із записом —
     // зламаний конвеєр плану, а не стан цілі, тож це виняток, а не відмова
@@ -1705,7 +1841,7 @@ describe("executePlan", () => {
             preservation,
           },
         },
-        { ...options, mode: "rehearse" }
+        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
       )
       // Без заміру доказ збереження тихо пропустився б: це зламаний
       // конвеєр плану, а не стан цілі
@@ -1735,7 +1871,7 @@ describe("executePlan", () => {
           ],
         },
       },
-      { ...options, mode: "rehearse" }
+      { ...options, mode: "rehearse", rehearsal: stubRehearsal }
     )
     expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
     expect(
@@ -1767,6 +1903,8 @@ describe("executePlan", () => {
       "fingerprint",
       "invalid",
       "fingerprint",
+      // Фаза 18: повний доказ двигуна — лише репетиція, після відбитка
+      "extract",
       "marker",
       "ledger",
       "held-locks",
@@ -1806,7 +1944,7 @@ describe("executePlan", () => {
           ],
         },
       },
-      { ...options, mode: "rehearse" }
+      { ...options, mode: "rehearse", rehearsal: stubRehearsal }
     )
     expect(outcome).toMatchObject({
       status: "failed",
@@ -1848,7 +1986,7 @@ describe("executePlan", () => {
             ],
           },
         },
-        { ...options, mode: "rehearse" }
+        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
       )
     ).rejects.toBe(overflow)
   })
@@ -1901,6 +2039,7 @@ describe("executePlan", () => {
       await executePlan(rehearse.db, target, plan, {
         ...options,
         mode: "rehearse",
+        rehearsal: stubRehearsal,
       })
     ).toMatchObject({ status: "rolledBack", attempts: 1 })
     expect(rehearse.log.slice(-3)).toEqual(["ledger", "held-locks", "ROLLBACK"])
@@ -2300,7 +2439,11 @@ describe("executePlan", () => {
           : undefined,
     })
     expect(
-      await executePlan(db, target, plan, { ...options, mode: "rehearse" })
+      await executePlan(db, target, plan, {
+        ...options,
+        mode: "rehearse",
+        rehearsal: stubRehearsal,
+      })
     ).toMatchObject({
       status: "failed",
       diagnostics: [

@@ -126,6 +126,7 @@ export {
   type ExecutablePlan,
   type ExecuteOptions,
   type ExecuteOutcome,
+  type RehearsalProof,
 } from "./execute"
 export {
   checkPermissions,

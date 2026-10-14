@@ -202,6 +202,7 @@ export const COMPILER_RULES = [
   "apply.function-check-blind",
   "apply.deferred-constraint-failed",
   "apply.constraint-invalid",
+  "apply.rehearsal-proof-failed",
   "apply.temp-name-taken",
   "apply.plpgsql-check-unavailable",
   "plan.unparsable-step",

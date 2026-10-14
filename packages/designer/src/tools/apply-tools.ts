@@ -14,6 +14,7 @@ import {
 import {
   buildPlan,
   checkPermissions,
+  desiredForApply,
   executePlan,
   FINGERPRINT_VERSION,
   parsePlan,
@@ -23,7 +24,9 @@ import {
   verifyPlanHash,
   type ApplyTimeouts,
   type DriftReport,
+  type EngineDiagnostic,
   type EngineIdentity,
+  type ExecuteOutcome,
   type GlobalDefaultPrivilege,
   type ImplicitLock,
   type PermissionItem,
@@ -100,6 +103,10 @@ export interface PlanData {
    */
   expectedBlindFunctions: number
 }
+
+/** Результат колбека `withDatabase`: застосування або відмова бажаної тіні. */
+type ApplyRun =
+  { outcome: ExecuteOutcome } | { shadowFailed: EngineDiagnostic[] }
 
 export interface ApplyData {
   status: "committed" | "rolledBack"
@@ -367,7 +374,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete: and remove: items.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete: and remove: items.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:
@@ -460,17 +467,51 @@ export const applyTool = defineTool({
         : { statementTimeoutMs: input.statementTimeoutMs }),
     }
     const writer = await applyDatabase({ readOnly: false })
-    const executed = await withDatabase(required(database), "apply", (db) =>
-      executePlan(writer, db.target, artifact, {
-        mode: input.rehearse === true ? "rehearse" : "apply",
-        planHash: artifact.planHash,
-        allow,
-        snapshot: canonicalSnapshot(model),
-        timeouts,
-      })
+    const base = {
+      planHash: artifact.planHash,
+      allow,
+      snapshot: canonicalSnapshot(model),
+      timeouts,
+    }
+    const executed = await withDatabase(
+      required(database),
+      "apply",
+      async (db): Promise<ApplyRun> => {
+        if (input.rehearse !== true)
+          return {
+            outcome: await executePlan(writer, db.target, artifact, {
+              ...base,
+              mode: "apply",
+            }),
+          }
+        // Репетиція доводить стан повним планом двигуна на тому самому
+        // з'єднанні, тож бажану тінь будують до відкриття транзакції цілі
+        // (рішення 7 плану П3-2b-1): під замками плану її не будують
+        const desired = await desiredForApply(model)
+        const shadow = await engine.withDesiredShadow(
+          {
+            target: db.target,
+            ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
+          },
+          desired.sql,
+          artifact.scope,
+          (shadowDb) => engine.extract(shadowDb, artifact.scope)
+        )
+        if (shadow.status === "shadow-failed")
+          return { shadowFailed: shadow.diagnostics }
+        return {
+          outcome: await executePlan(writer, db.target, artifact, {
+            ...base,
+            mode: "rehearse",
+            rehearsal: { engine, desired: shadow.value.catalog },
+          }),
+        }
+      }
     )
     if (!executed.ok) return refusedWith([executed.diagnostic])
-    const outcome = executed.value
+    if ("shadowFailed" in executed.value)
+      return refusedWith(executed.value.shadowFailed.map(fromEngine))
+    const outcome = executed.value.outcome
     const diagnostics = outcome.diagnostics.map(fromEngine)
     switch (outcome.status) {
       case "committed":
