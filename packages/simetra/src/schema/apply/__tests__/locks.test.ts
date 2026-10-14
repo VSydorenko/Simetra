@@ -558,18 +558,14 @@ describe("provider locks", () => {
 })
 
 describe("lockRightsSql", () => {
-  it("checks the right on the table and every descendant before PostgreSQL 17", () => {
-    const sql = lockRightsSql(160004)
-    expect(sql).toContain("WITH RECURSIVE")
-    expect(sql).toContain("pg_catalog.pg_inherits i ON i.inhparent = tree.rel")
-    expect(sql).toContain("pg_catalog.bool_and(")
-  })
-
-  it("checks the right on the table only from PostgreSQL 17", () => {
-    const sql = lockRightsSql(170006)
+  it("checks the right on the table itself for every server version", () => {
+    // Рішення 10 плану П3-2b-1: LOCK без ONLY прав нащадків не перевіряє ні
+    // на 17+, ні на 14–16 (виміряно), тож рекурсії немає
+    const sql = lockRightsSql()
     expect(sql).not.toContain("pg_inherits")
+    expect(sql).not.toContain("RECURSIVE")
     expect(sql).not.toContain("bool_and")
-    expect(sql).toContain("pg_catalog.has_table_privilege(t.oid, $2)")
+    expect(sql).toContain("pg_catalog.has_table_privilege(c.oid, $2)")
   })
 })
 

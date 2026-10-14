@@ -88,6 +88,7 @@ import {
   promotionTransition,
   readAccessDependents,
   readEquivalenceObjects,
+  readReservedNames,
   readWritePath,
   renameIntent,
   stepConversions,
@@ -665,6 +666,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
         clone,
         scope,
         intent,
+        oldTables,
         newTables,
         shadowEquivalence: target.equivalence,
         desired: target.extracted.catalog,
@@ -988,6 +990,8 @@ async function analyseOnClone(p: {
   clone: DbConnection
   scope: EngineScope
   intent: RenameIntent
+  /** Таблиці одиниці в старих іменах: їхні колонки й обмеження займає намір. */
+  oldTables: readonly TableName[]
   newTables: readonly TableName[]
   shadowEquivalence: readonly EquivalenceObject[]
   desired: Extracted["catalog"]
@@ -996,6 +1000,23 @@ async function analyseOnClone(p: {
 }): Promise<CloneAnalysis> {
   const { engine, scratch, clone, scope, parse } = p
   try {
+    // Тимчасові імена наміру вже зайняті — відмова плану, а не сирий
+    // `42701`/`42P07` кроку наміру на копії (рішення 11 плану П3-2b-1)
+    const taken = await scratch.transaction(clone, "rollback", (tx) =>
+      readReservedNames(tx, {
+        schemas: [...new Set(p.oldTables.map((t) => t.schema))],
+        tables: p.oldTables,
+      })
+    )
+    if (taken.length > 0)
+      return {
+        ok: false,
+        diagnostics: [
+          applyDiagnostic("plan.temp-name-taken", "error", {
+            names: taken.join(", "),
+          }),
+        ],
+      }
     const renames = p.intent.steps.map((s, i) => ({ ...s, id: stepId(i) }))
     await runOnClone(scratch, clone, renames)
     const equivalence = await scratch.transaction(clone, "rollback", (tx) =>

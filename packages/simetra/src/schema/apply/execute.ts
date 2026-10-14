@@ -992,16 +992,43 @@ async function runGuard(
 /** Один рядок заміру: `rows` і суми `c<i>` колонок у порядку секції. */
 type Measurement = Record<string, unknown>
 
+/**
+ * Один замір. Помилка бази, що не конфлікт блокувань, — своїм кодом із
+ * таблицею й боком, а не сирий збій: без заміру доказу збереження немає.
+ * `probeCasts` — замір «до» таблиці з приведеннями: збій приведення (клас
+ * `22`) летить як є до проб приведення `measureBefore`. Після кроків змін типу
+ * вже немає, тож клас `22` там назвати звуженням нічим.
+ */
 async function measure(
   tx: ApplyTransaction,
   t: PreservedTable,
-  side: "before" | "after"
+  side: "before" | "after",
+  probeCasts = false
 ): Promise<Measurement> {
-  const [row] = await tx.query(preservationQuery(t, side))
+  let row: Measurement | undefined
+  try {
+    ;[row] = await tx.query(preservationQuery(t, side))
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+    if (probeCasts && castFailure(error)) throw error
+    throw measureFailed(t, side, error)
+  }
   if (row === undefined)
     throw new Error("preservation measurement returned no row")
   return row
 }
+
+const measureFailed = (
+  t: PreservedTable,
+  side: "before" | "after",
+  error: ApplyDbError
+): AttemptStop =>
+  stop("failed", "apply.preservation-measure-failed", {
+    table: tableName(side === "before" ? t.before : t.after),
+    side,
+    sqlstate: error.sqlstate ?? "unknown",
+    error: error.message,
+  })
 
 const tableName = (t: PreservedTable["after"]): string =>
   `${t.schema}.${t.table}`
@@ -1028,7 +1055,7 @@ async function measureBefore(
     }
     await tx.query("SAVEPOINT simetra_preservation")
     try {
-      out.push(await measure(tx, t, "before"))
+      out.push(await measure(tx, t, "before", true))
     } catch (error) {
       if (!castFailure(error)) throw error
       await tx.query("ROLLBACK TO SAVEPOINT simetra_preservation")
@@ -1038,7 +1065,8 @@ async function measureBefore(
         try {
           await tx.query(castProbeQuery(t, c))
         } catch (probe) {
-          if (!castFailure(probe)) throw probe
+          if (!(probe instanceof ApplyDbError) || retryable(probe)) throw probe
+          if (!castFailure(probe)) throw measureFailed(t, "before", probe)
           throw stop("failed", "apply.type-narrowing", {
             step: c.typeChangeStep!,
             table: tableName(t.after),
@@ -1046,8 +1074,9 @@ async function measureBefore(
             sqlstate: probe.sqlstate!,
           })
         }
-      // Жодне приведення окремо не впало: збій не звуження, тож як є
-      throw error
+      // Жодне приведення окремо не впало: збій не звуження, але той самий
+      // збій заміру
+      throw measureFailed(t, "before", error)
     }
     await tx.query("RELEASE SAVEPOINT simetra_preservation")
   }

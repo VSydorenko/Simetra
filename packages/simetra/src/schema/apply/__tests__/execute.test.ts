@@ -2023,36 +2023,147 @@ describe("executePlan", () => {
     expect(log).not.toContain("ALTER TABLE app.t ADD COLUMN d int")
   })
 
-  it("rethrows a before measurement failure that no single cast explains", async () => {
-    const overflow = new ApplyDbError("integer out of range", "22003")
-    const { db } = fakeDb({
-      fail: (label) => (label === "measure app.t" ? overflow : undefined),
-    })
-    await expect(
-      executePlan(
-        db,
-        target,
-        {
-          ...promoted,
-          promotion: {
-            ...promoted.promotion!,
-            ...tabled,
-            permissionItems: [],
-            preservation: [
-              {
-                before: { schema: "app", table: "t" },
-                after: { schema: "app", table: "u" },
-                key: { before: "id", after: "id" },
-                columns: [
-                  { before: "(x::integer)", after: "x", typeChangeStep: "s7" },
-                ],
-              },
-            ],
+  describe("a measurement error that is not a cast failure", () => {
+    /** План із одним заміром `app.t → app.u`; `columns` — пари заміру. */
+    const measured = (
+      columns: PreservedTable["columns"] = [{ before: "c", after: "d" }]
+    ): ExecutablePlan => ({
+      ...promoted,
+      promotion: {
+        ...promoted.promotion!,
+        ...tabled,
+        permissionItems: [],
+        preservation: [
+          {
+            before: { schema: "app", table: "t" },
+            after: { schema: "app", table: "u" },
+            key: { before: "id", after: "id" },
+            columns,
           },
-        },
-        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
+        ],
+      },
+    })
+    const rehearse = { ...options, mode: "rehearse" as const }
+    const run = (script: Script, p: ExecutablePlan = measured()) =>
+      executePlan(fakeDb(script).db, target, p, {
+        ...rehearse,
+        rehearsal: stubRehearsal,
+      })
+
+    it("names a failed before measurement with its table and side", async () => {
+      const missing = new ApplyDbError(
+        'relation "app.t" does not exist',
+        "42P01"
       )
-    ).rejects.toBe(overflow)
+      expect(
+        await run({
+          fail: (label) => (label === "measure app.t" ? missing : undefined),
+        })
+      ).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.preservation-measure-failed",
+            params: {
+              table: "app.t",
+              side: "before",
+              sqlstate: "42P01",
+              error: 'relation "app.t" does not exist',
+            },
+          },
+        ],
+      })
+    })
+
+    it.each([
+      ["42P01", 'relation "app.u" does not exist'],
+      // Після кроків змін типу вже немає: звуження назвати нічим
+      ["22003", "integer out of range"],
+    ])(
+      "names a failed after measurement with SQLSTATE %s",
+      async (sqlstate, message) => {
+        const error = new ApplyDbError(message, sqlstate)
+        expect(
+          await run({
+            fail: (label) => (label === "measure app.u" ? error : undefined),
+          })
+        ).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.preservation-measure-failed",
+              params: { table: "app.u", side: "after", sqlstate },
+            },
+          ],
+        })
+      }
+    )
+
+    it("names a before failure that no single cast explains", async () => {
+      const overflow = new ApplyDbError("integer out of range", "22003")
+      expect(
+        await run(
+          {
+            fail: (label) => (label === "measure app.t" ? overflow : undefined),
+          },
+          measured([
+            { before: "(x::integer)", after: "x", typeChangeStep: "s7" },
+          ])
+        )
+      ).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.preservation-measure-failed",
+            params: { table: "app.t", side: "before", sqlstate: "22003" },
+          },
+        ],
+      })
+    })
+
+    it("names a probe that fails with something other than a cast failure", async () => {
+      const overflow = new ApplyDbError("integer out of range", "22003")
+      const denied = new ApplyDbError("permission denied for table t", "42501")
+      expect(
+        await run(
+          {
+            fail: (label) =>
+              label === "measure app.t"
+                ? overflow
+                : label === "probe (x::integer)"
+                  ? denied
+                  : undefined,
+          },
+          measured([
+            { before: "(x::integer)", after: "x", typeChangeStep: "s7" },
+          ])
+        )
+      ).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.preservation-measure-failed",
+            params: { table: "app.t", side: "before", sqlstate: "42501" },
+          },
+        ],
+      })
+    })
+
+    it("lets a lock conflict through to the retry", async () => {
+      const conflict = new ApplyDbError("lock timeout", "55P03")
+      const { db, log } = fakeDb({
+        fail: (label, attempt) =>
+          label === "measure app.t" && attempt === 1 ? conflict : undefined,
+      })
+      expect(
+        await executePlan(db, target, measured(), {
+          ...rehearse,
+          rehearsal: stubRehearsal,
+        })
+      ).toMatchObject({ status: "rolledBack", attempts: 2 })
+      expect(log.filter((l) => l === "BEGIN")).toHaveLength(2)
+    })
   })
 
   it("records no promotion for a plan without one", async () => {

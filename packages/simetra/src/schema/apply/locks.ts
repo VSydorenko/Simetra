@@ -566,44 +566,27 @@ export const lockPrivileges = (serverVersionNum: number): string =>
 
 /**
  * Запит права на явний `LOCK` для `readLockRights`: `$1` — JSON таблиць,
- * `$2` — `lockPrivileges`. До Postgres 17 `LOCK TABLE` без `ONLY` може
- * перевіряти право й на кожному нащадку, тож там таблиця придатна, лише
- * коли право є на ній і на всіх її нащадках (рекурсія `pg_inherits`); інакше
- * явний замок дав би сталу відмову `apply.lock-privilege`, а неявний замок
- * кроку — ні. На 17+ рекурсія права нащадків не перевіряє (виміряно).
+ * `$2` — `lockPrivileges`. Право потрібне лише на самій таблиці: `LOCK TABLE`
+ * без `ONLY` займає нащадків і партиції, не перевіряючи прав на них, — на
+ * 17+ і, як виміряно (рішення 10 плану П3-2b-1), на 14.24, 15.19 і 16.15,
+ * для успадкування й для партицій. Тож одна гілка для всіх версій.
  */
-export function lockRightsSql(serverVersionNum: number): string {
-  const right = (rel: string) =>
-    `(pg_catalog.pg_has_role(${rel}.relowner, 'USAGE')
-         OR pg_catalog.has_table_privilege(${rel}.oid, $2))`
-  const target = `SELECT x.schema, x.name, c.oid, c.relowner
+export function lockRightsSql(): string {
+  return `SELECT x.schema, x.name,
+       (pg_catalog.pg_has_role(c.relowner, 'USAGE')
+         OR pg_catalog.has_table_privilege(c.oid, $2)) AS lockable
      FROM pg_catalog.json_to_recordset($1::pg_catalog.json) AS x(schema text, name text)
      JOIN pg_catalog.pg_namespace n ON n.nspname = x.schema
      JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = x.name
        AND c.relkind IN ('r', 'p')`
-  if (serverVersionNum >= 170000)
-    return `SELECT t.schema, t.name, ${right("t")} AS lockable
-     FROM (${target}) AS t`
-  return `WITH RECURSIVE target AS (${target}),
-     tree AS (
-       SELECT t.oid AS root, t.oid AS rel FROM target t
-       UNION
-       SELECT tree.root, i.inhrelid
-       FROM tree JOIN pg_catalog.pg_inherits i ON i.inhparent = tree.rel
-     )
-     SELECT t.schema, t.name, pg_catalog.bool_and(${right("c")}) AS lockable
-     FROM target t
-     JOIN tree ON tree.root = t.oid
-     JOIN pg_catalog.pg_class c ON c.oid = tree.rel
-     GROUP BY t.schema, t.name`
 }
 
 /**
  * Право ролі сесії на явний `LOCK` кожної таблиці сліду, що є на цілі
  * (`relkind` r/p): членство в ролі-власнику (з успадкуванням привілеїв) чи
- * один із `lockPrivileges` — до Postgres 17 й на всіх нащадках
- * (`lockRightsSql`). Таблиці, якої на цілі немає, у мапі немає. Ключ —
- * `tableKey`.
+ * один із `lockPrivileges` на самій таблиці (`lockRightsSql`). Версія сервера
+ * — лише для переліку привілеїв. Таблиці, якої на цілі немає, у мапі немає.
+ * Ключ — `tableKey`.
  */
 export async function readLockRights(
   tx: ApplyTransaction,
@@ -619,10 +602,7 @@ export async function readLockRights(
     schema: string
     name: string
     lockable: boolean
-  }>(lockRightsSql(version.version), [
-    JSON.stringify(tables),
-    lockPrivileges(version.version),
-  ])
+  }>(lockRightsSql(), [JSON.stringify(tables), lockPrivileges(version.version)])
   return new Map(rows.map((r) => [tableKey(r.schema, r.name), r.lockable]))
 }
 

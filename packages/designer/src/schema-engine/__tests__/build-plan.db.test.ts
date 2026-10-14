@@ -2419,6 +2419,47 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       ])
     })
 
+    describe("reserved temporary names", () => {
+      // Рішення 11 плану П3-2b-1: намір перейменовує через simetra_tmp_<n> і
+      // simetra_retired_<n>, тож зайняте таке ім'я — відмова плану, а не
+      // сирий 42701/42P07 кроку наміру на копії
+      it.each([
+        [
+          "a column of a unit table",
+          `alter table ${OLD} add column simetra_tmp_1 int`,
+          "column app.counterparties.simetra_tmp_1",
+        ],
+        // Саме це ім'я намір дає вилученій колонці created_at: без перевірки
+        // крок наміру на копії впав би з 42701
+        [
+          "a column holding the very name the intent needs",
+          `alter table ${OLD} add column simetra_retired_1 int`,
+          "column app.counterparties.simetra_retired_1",
+        ],
+        [
+          "a neighbour table in the unit schema",
+          "create table app.simetra_tmp_1 (id int)",
+          "relation app.simetra_tmp_1",
+        ],
+        [
+          "a type in the unit schema",
+          "create type app.simetra_retired_2 as enum ('a')",
+          "type app.simetra_retired_2",
+        ],
+        [
+          "a constraint of a unit table",
+          `alter table ${OLD} add constraint simetra_tmp_3 check (true)`,
+          "constraint app.counterparties.simetra_tmp_3",
+        ],
+      ])("refuses %s named like a temporary name", async (_, drift, name) => {
+        const outcome = await planPromotion(await promoted(), { drift })
+        expect(outcome.status).toBe("refused")
+        const [taken] = params(outcome, "plan.temp-name-taken")
+        expect(String(taken?.names).split(", ")).toContain(name)
+        expect(codes(outcome)).not.toContain("apply.step-failed")
+      })
+    })
+
     it("refuses a promotion on a target without plpgsql_check", async () => {
       const outcome = await planPromotion(await promoted(), {
         reader: readerWithoutPlpgsqlCheck,

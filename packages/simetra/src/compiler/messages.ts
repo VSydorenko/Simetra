@@ -2405,6 +2405,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Промоція перейменовує таблиці об'єкта й змінює їхні типи, але зберігає кожен рядок і кожне змаплене значення; крок, що їх змінює, — дефект плану, тож повідомте про нього супровідникам платформи.",
     },
   },
+  "apply.preservation-measure-failed": {
+    en: (p) =>
+      `The data measurement of ${p.table} ${p.side === "before" ? "before" : "after"} the plan's steps failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`,
+    uk: (p) =>
+      `Замір даних таблиці ${p.table} ${p.side === "before" ? "до" : "після"} кроків плану завершився помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Without the measurement the apply cannot prove that rows and mapped values survive the steps; fix what the error names (a missing table, a privilege) and apply again, or report the plan if it repeats.",
+      uk: "Нічого не записано. Без заміру застосування не доведе, що рядки й змаплені значення пережили кроки; виправте те, що називає помилка (відсутня таблиця, право), і застосуйте знову, а якщо повториться — повідомте про план.",
+    },
+  },
   "apply.promotion-checks-pending": {
     en: () =>
       "The plan carries a promotion, and applying a promotion with COMMIT is refused until the full promotion checks are in place (function bodies, revalidation and constraint validity after the steps)",
@@ -2487,6 +2497,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was written. Give the applying role back what the plan found (the right to install plpgsql_check, or USAGE on the schema of the installed extension), or plan again.",
       uk: "Нічого не записано. Поверніть ролі застосування те, що план застав (право поставити plpgsql_check чи USAGE на схему встановленого розширення), або сплануйте знову.",
+    },
+  },
+  "plan.temp-name-taken": {
+    en: (p) =>
+      `The promotion renames through temporary names simetra_tmp_<n> and simetra_retired_<n>, and these objects already carry such a name: ${p.names}. No plan was written`,
+    uk: (p) =>
+      `Промоція перейменовує через тимчасові імена simetra_tmp_<n> і simetra_retired_<n>, а ці об'єкти вже носять таке ім'я: ${p.names}. План не записано`,
+    hint: {
+      en: "Rename these objects on the target so that no name matches simetra_tmp_<n> or simetra_retired_<n>, then plan again.",
+      uk: "Перейменуйте ці об'єкти на цілі так, щоб жодне ім'я не мало вигляду simetra_tmp_<n> чи simetra_retired_<n>, і сплануйте знову.",
     },
   },
   "plan.unparsable-step": {

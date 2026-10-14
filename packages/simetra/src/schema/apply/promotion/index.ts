@@ -27,6 +27,7 @@ export {
   type AccessChange,
 } from "./access"
 export { readWritePath, type WritePath } from "./write-path"
+export { readReservedNames } from "./reserved-names"
 export {
   platformReplacements,
   propertyReproductions,

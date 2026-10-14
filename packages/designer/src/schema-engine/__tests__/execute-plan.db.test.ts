@@ -34,8 +34,6 @@ import {
   planFootprint,
   planLocks,
   preservationPlan,
-  lockPrivileges,
-  lockRightsSql,
   readLiveForeignKeys,
   readLockRights,
   readProviderLocks,
@@ -1028,7 +1026,8 @@ describe("executePlan", () => {
     })
   })
 
-  it("requires the right on every descendant for an explicit LOCK before PostgreSQL 17", async () => {
+  it("needs the right on the table itself only, its children are locked with it", async () => {
+    // Рішення 10 плану П3-2b-1: права нащадка LOCK без ONLY не перевіряє
     const setup = `${BASE};
       create table app.it (id int);
       create table app.it_child () inherits (app.it);
@@ -1036,23 +1035,26 @@ describe("executePlan", () => {
       grant update on app.it to ${LOCKER};`
     await inTarget(setup, async (url) => {
       const asLocker = { url: loginAs(url, LOCKER, LOCKER_PASSWORD) }
-      const reader = createApplyDatabase({ readOnly: true })
-      // Обидві гілки запиту виконуються на стеку: рекурсія — валідний SQL
-      const lockable = (version: number) =>
-        reader.transaction(asLocker, "rollback", async (tx) => {
-          const [row] = await tx.query<{ lockable: boolean }>(
-            lockRightsSql(version),
-            [
-              JSON.stringify([{ schema: "app", name: "it" }]),
-              lockPrivileges(version),
-            ]
-          )
-          return row?.lockable
-        })
-      expect(await lockable(160004)).toBe(false)
-      expect(await lockable(170006)).toBe(true)
-      await other(url, `grant update on app.it_child to ${LOCKER}`)
-      expect(await lockable(160004)).toBe(true)
+      const rights = await createApplyDatabase({ readOnly: true }).transaction(
+        asLocker,
+        "rollback",
+        (tx) => readLockRights(tx, [{ schema: "app", name: "it" }])
+      )
+      expect(rights).toEqual(new Map([[tableKey("app", "it"), true]]))
+      const held = await apply.transaction(asLocker, "rollback", async (tx) => {
+        await tx.query("LOCK TABLE app.it IN ACCESS EXCLUSIVE MODE")
+        return tx.query<{ child: boolean; mode: string }>(
+          `select l.relation = 'app.it_child'::regclass as child, l.mode
+             from pg_locks l
+            where l.pid = pg_backend_pid() and l.granted
+              and l.relation in ('app.it'::regclass, 'app.it_child'::regclass)
+            order by child`
+        )
+      })
+      expect(held).toEqual([
+        { child: false, mode: "AccessExclusiveLock" },
+        { child: true, mode: "AccessExclusiveLock" },
+      ])
     })
   })
 
