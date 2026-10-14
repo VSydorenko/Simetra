@@ -411,6 +411,26 @@ describe("buildPlan", () => {
     })
   })
 
+  it("carries a real NOT VALID constraint of the desired shadow", async () => {
+    // Метадані NOT VALID не несуть, тож обмеження дописано до SQL бажаного
+    // стану, який вантажить тінь: справжній `convalidated = false` у тіні
+    // доходить до артефакту, а прогін-доказ приймає його як бажане
+    const model = await compiled({ [PARTY]: party() })
+    const notValid =
+      "\nALTER TABLE app.party ADD CONSTRAINT party_mark CHECK (deletion_mark IS NOT NULL) NOT VALID;\n"
+    const withNotValid: SchemaEngine = {
+      ...engine,
+      withDesiredShadow: (o, sql, scope, fn) =>
+        engine.withDesiredShadow(o, sql + notValid, scope, fn),
+    }
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await plan(url, model, withNotValid)
+      expect(planned(outcome).desiredInvalid).toEqual([
+        "constraint app.party party_mark",
+      ])
+    })
+  })
+
   it("warns about a plan on a target without plpgsql_check", async () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {

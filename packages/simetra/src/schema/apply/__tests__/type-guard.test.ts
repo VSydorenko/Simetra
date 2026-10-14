@@ -1,7 +1,15 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import type { CatalogModel, CatalogTable } from "simetra/model"
-import { classifySteps, typeGuards, type EngineAction } from "simetra/schema"
+import {
+  ApplyDbError,
+  checkGuardCasts,
+  classifySteps,
+  GUARD_PAIR_SQLSTATES,
+  typeGuards,
+  type ApplyTransaction,
+  type EngineAction,
+} from "simetra/schema"
 import { guardTarget } from "../type-guard"
 
 let parse: SqlParser
@@ -234,5 +242,37 @@ describe("classifySteps", () => {
     expect(lossless).toMatchObject({ class: "tableRewrite", guards: [] })
     // Відмову сторожа план збирає окремо через `typeGuards`
     expect(refused).toMatchObject({ class: "destructive", guards: [] })
+  })
+})
+
+describe("checkGuardCasts", () => {
+  /** Транзакція, де `PREPARE` падає з `sqlstate`; решта запитів — порожньо. */
+  const failing = (sqlstate: string): ApplyTransaction => ({
+    query: async <R extends Record<string, unknown>>(sql: string) => {
+      if (sql.startsWith("PREPARE"))
+        throw new ApplyDbError("probe failed", sqlstate)
+      return [] as R[]
+    },
+    extract: () => {
+      throw new Error("the guard probe does not extract")
+    },
+  })
+  const cast = { step: "s1", from: "pg_catalog.text", to: "pg_catalog.int4" }
+
+  it("names a pair without an operator or a cast by the shared SQLSTATEs", async () => {
+    for (const [sqlstate, reason] of GUARD_PAIR_SQLSTATES)
+      expect(
+        (await checkGuardCasts(failing(sqlstate), [cast])).map(
+          (d) => d.params.reason
+        )
+      ).toEqual([reason])
+  })
+
+  it("lets a failure outside the shared SQLSTATEs propagate", async () => {
+    // Тайм-аут чи повторюваний збій — не «пари без приведення»
+    for (const sqlstate of ["57014", "40001"])
+      await expect(
+        checkGuardCasts(failing(sqlstate), [cast])
+      ).rejects.toMatchObject({ sqlstate })
   })
 })

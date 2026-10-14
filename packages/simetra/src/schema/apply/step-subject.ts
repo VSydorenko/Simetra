@@ -185,11 +185,12 @@ export interface StepChange {
 
 /**
  * Чи змінює план об'єкт, який читає вираз кроку даних чи замір (рішення 5,
- * вердикт В7). Створення й знищення — за `produced`/`destroyed`. Дію `alter`
- * двигун у них не несе: її предмет дає дерево кожного оператора — предмет
- * той самий → `changed`, інший визначений → нічого, невизначений, а
- * `consumed` кроку містить об'єкт → `unproven`. `changed` будь-якого кроку
- * важить більше за `unproven`.
+ * вердикти В7 і R4). `produced`/`destroyed` з об'єктом → `changed`. Далі
+ * предмет кожного оператора з дерева, для будь-якої дії: той самий →
+ * `changed`, інший визначений → нічого. Дію `alter` двигун у
+ * `produced`/`destroyed` не несе, тож лише для неї невизначений предмет при
+ * об'єкті в `consumed` → `unproven`. `changed` будь-якого кроку важить
+ * більше за `unproven`.
  */
 export function planChange(
   steps: readonly Pick<
@@ -203,11 +204,15 @@ export function planChange(
   for (const step of steps) {
     if ([...step.produced, ...step.destroyed].some((r) => refersTo(r, used)))
       return { verdict: "changed", step: step.id }
-    if (step.verb !== "alter") continue
+    // Предмет оператора — для будь-якої дії: `CREATE FUNCTION` нового
+    // перевантаження теж змінює те, що розв'яже виклик (вердикт R4)
     const subjects = statementSubjects(step.sql, parse)
     if (subjects.some((s) => sameSubject(s, used)))
       return { verdict: "changed", step: step.id }
+    // «Не доведено» — лише для `alter`: у `create`/`drop` `consumed` —
+    // залежності, а що крок змінює, кажуть `produced`/`destroyed`
     if (
+      step.verb === "alter" &&
       unproven === undefined &&
       subjects.some((s) => s.kind === "unknown") &&
       step.consumed.some((r) => refersTo(r, used))

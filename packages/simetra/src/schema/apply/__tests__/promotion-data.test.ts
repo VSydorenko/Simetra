@@ -978,6 +978,42 @@ describe("dataStepRefusals", () => {
     ])
   })
 
+  it("refuses a create of an overload with the name of the fill function", () => {
+    // Вердикт R4: предмет оператора важить для будь-якої дії. Нове
+    // перевантаження з тим самим ім'ям змінює те, що розв'яже виклик, навіть
+    // коли `produced` його не називає
+    expect(
+      stepCodes(withExpressions(["d1", "app.norm(code)", "text"]), [
+        engineStep({
+          verb: "create",
+          sql: "CREATE FUNCTION app.norm(t int) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT t::text $$",
+        }),
+      ])
+    ).toEqual([
+      [
+        "plan.data-step-function-changed",
+        { step: "d1", function: "app.norm", detail: "changed", by: "s9" },
+      ],
+    ])
+  })
+
+  it("lets through a trigger that calls the fill function", () => {
+    // `CREATE TRIGGER` вживає функцію (`consumed`), але не змінює її: предмет
+    // — тригер, і «не доведено» для `create` не діє
+    expect(
+      stepCodes(withExpressions(["d1", "app.norm(code)", "text"]), [
+        engineStep({
+          verb: "create",
+          sql: "CREATE TRIGGER t_norm BEFORE UPDATE ON app.t FOR EACH ROW EXECUTE FUNCTION app.norm()",
+          produced: [
+            { kind: "trigger", schema: "app", table: "t", name: "t_norm" },
+          ],
+          consumed: [NORM],
+        }),
+      ])
+    ).toEqual([])
+  })
+
   it("lets through an alter of another table that only reads the domain", () => {
     // Вердикт В7: `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter` із
     // доменом у `consumed`, але предмет — таблиця

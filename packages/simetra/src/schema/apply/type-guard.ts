@@ -375,15 +375,20 @@ export async function checkGuardCasts(
         `PREPARE ${name}(${cast.from}) AS SELECT (($1::${cast.to})::${cast.from}) IS DISTINCT FROM $1`
       )
     } catch (error) {
-      if (!(error instanceof ApplyDbError)) throw error
+      // Лише «для пари типів немає оператора чи приведення» — відмова; решта
+      // (тайм-аут, повторюваний збій, права) летить як є, а не стає «cast»
+      const reason =
+        error instanceof ApplyDbError
+          ? GUARD_PAIR_SQLSTATES.get(error.sqlstate ?? "")
+          : undefined
+      if (reason === undefined) throw error
       await tx.query("ROLLBACK TO SAVEPOINT simetra_guard_cast")
       out.push(
         applyDiagnostic("plan.type-guard-unsupported", "error", {
           step: cast.step,
           // Без рівності сторож не порівняє значення, хоч приведення й є:
-          // порада тут інша, ніж для пари без приведення. Інший SQLSTATE
-          // (тип, якого ще немає, тощо) лишається відмовою «cast», як і був
-          reason: GUARD_PAIR_SQLSTATES.get(error.sqlstate ?? "") ?? "cast",
+          // порада тут інша, ніж для пари без приведення
+          reason,
         })
       )
       continue
