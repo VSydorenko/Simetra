@@ -2417,9 +2417,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.promotion-checks-pending": {
     en: () =>
-      "The plan carries a promotion, and applying a promotion with COMMIT is refused until the full promotion checks are in place (function bodies, revalidation and constraint validity after the steps)",
+      "The plan carries a promotion, and applying a promotion with COMMIT is refused until the rest of the promotion checks are in place: the data steps and the rehearsal report on a copy with data",
     uk: () =>
-      "План несе промоцію, а застосування промоції з COMMIT відхиляється, доки немає повної перевірки промоції (тіла функцій, ревалідація й валідність обмежень після кроків)",
+      "План несе промоцію, а застосування промоції з COMMIT відхиляється, доки немає решти перевірок промоції: кроків даних і звіту репетиції на копії з даними",
     hint: {
       en: "Nothing was written. Rehearse the plan on the target instead: it runs every step and rolls back.",
       uk: "Нічого не записано. Натомість відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
@@ -2783,9 +2783,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.promotion-commit-pending": {
     en: () =>
-      "The plan carries a promotion: applying it with COMMIT is refused until the full promotion checks are in place, and rehearsing it on the target is allowed",
+      "The plan carries a promotion: applying it with COMMIT is refused until the rest of the promotion checks are in place (the data steps and the rehearsal report on a copy with data), and rehearsing it on the target is allowed",
     uk: () =>
-      "План несе промоцію: застосування з COMMIT відхиляється, доки немає повної перевірки промоції, а репетицію на цілі дозволено",
+      "План несе промоцію: застосування з COMMIT відхиляється, доки немає решти перевірок промоції (кроків даних і звіту репетиції на копії з даними), а репетицію на цілі дозволено",
     hint: {
       en: "Rehearse the plan on the target: it runs every step and rolls back.",
       uk: "Відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
