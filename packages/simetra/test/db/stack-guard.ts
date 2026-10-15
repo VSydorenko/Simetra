@@ -21,6 +21,7 @@ import {
   shadowAgeMinutes,
   testDatabaseUrl,
 } from "./connection"
+import { installInterruptCleanup } from "./interrupt"
 
 // Замок у тимчасовій теці машини, а не в checkout: стек спільний і для інших
 // checkout чи worktree того самого репо
@@ -42,10 +43,15 @@ type Snapshot = Record<
 export default async function setup(): Promise<() => Promise<void>> {
   checkFreeSpace()
   await acquireLock()
+  let removeInterruptCleanup = (): void => {}
   try {
     // Форки воркерів, які vitest стартує після globalSetup, успадковують env
     const runTag = newRunTag()
     process.env[RUN_TAG_ENV] = runTag
+    removeInterruptCleanup = installInterruptCleanup({
+      tag: runTag,
+      release: releaseLock,
+    })
     const tree = treeState()
     process.stderr.write(
       `DB run tag ${runTag}${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
@@ -53,6 +59,8 @@ export default async function setup(): Promise<() => Promise<void>> {
     const before = await snapshot()
     reportOrphanShadows(before)
     return async () => {
+      // Нормальне завершення не прибирає: що лишилось, показує звірка стеку
+      removeInterruptCleanup()
       try {
         const after = await snapshot()
         const changed = treeState()
@@ -67,6 +75,7 @@ export default async function setup(): Promise<() => Promise<void>> {
       }
     }
   } catch (error) {
+    removeInterruptCleanup()
     releaseLock()
     throw error
   }
