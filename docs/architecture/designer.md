@@ -67,7 +67,8 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
   Промоцію застосовують із `COMMIT` лише з чинним звітом репетиції на копії
   цілі з даними: `apply` читає `plans/<from>-<to>.rehearsal.json` і без нього
   відмовляє (`apply.rehearsal-required`), а звіт іншого плану, формату,
-  сервера чи голови ledger — `apply.rehearsal-stale`; рядки цілі проти копії й
+  сервера чи голови ledger або без рівно одного лічильника рядків на кожну
+  таблицю промоції (`tables`) — `apply.rehearsal-stale`; рядки цілі проти копії й
   `statement_timeout` зі звіту звіряє транзакція. Замки плану
   йдуть за слідом кроків, а план фіксує свою роль (`apply.role-mismatch`).
   Правила — спека промоції

@@ -389,9 +389,22 @@ A promotion plan's `allow` also takes the `access:<table>`,
 `delete:<table>.<constraint>`, `remove:<table>` and `repair:<table>` items its
 output lists; a repair rewrites existing values with the fill expression shown.
 A promotion is applied only with a valid rehearsal report: rehearse the plan on
-a copy of the target with data first; `apply` refuses without it
-(`apply.rehearsal-required`) and when the plan changed since
-(`apply.rehearsal-stale`).
+a copy of the target with data first. Point the rehearsal at the copy through
+the connection variable: `simetra apply --rehearse --database-url-env <VAR>`
+on the command line, or an MCP server launched with
+`simetra mcp --database-url-env <VAR>` (an MCP server's database is fixed at
+launch). Make the copy from the target after the plan, restore it as the plan's
+role with `pg_restore --no-owner`, on a server with the same PostgreSQL major
+version, encoding and collation; otherwise the rehearsal is refused as not a
+copy of the plan's target (`apply.target-changed`). Rehearsing on the target
+itself is allowed, but it holds the target's locks for the whole run: make it
+a deliberate choice of the owner, not a default. `apply` refuses without a
+report (`apply.rehearsal-required`), with a stale one (`apply.rehearsal-stale`:
+another plan, report format, server, ledger head, or not one row count per
+promoted table), and when a table has rows on the target but none on the copy
+(`apply.rehearsal-copy-empty`); it warns when the copy has fewer rows
+(`apply.rehearsal-fewer-rows`) or when the statement timeout computed from the
+report exceeds what Postgres accepts (`apply.rehearsal-timeout-unbounded`).
 
 Which connection to use:
 
