@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { SHADOW_PREFIX, shadowAgeMinutes } from "./connection"
 
@@ -14,5 +15,17 @@ describe("shadowAgeMinutes", () => {
   it("treats a name of another shape as unknown, not as old", () => {
     expect(shadowAgeMinutes("pgdelta_shadow_zz")).toBeUndefined()
     expect(shadowAgeMinutes("other")).toBeUndefined()
+  })
+})
+
+describe("connection.ts weight", () => {
+  // globalSetup і прибиральник вантажать цей модуль у головному процесі та в
+  // spawnSync, тож він має лишатися легким
+  it("imports nothing from the package sources", () => {
+    const source = readFileSync(
+      new URL("./connection.ts", import.meta.url),
+      "utf8"
+    )
+    expect(source).not.toMatch(/from\s+"\.\.\/\.\.\/src/)
   })
 })
