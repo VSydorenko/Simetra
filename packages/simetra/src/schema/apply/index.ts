@@ -158,6 +158,11 @@ export {
   type RehearsalProof,
 } from "./execute"
 export {
+  countOf,
+  type RehearsalEvidence,
+  type RehearsalReport,
+} from "./rehearsal"
+export {
   checkPermissions,
   classifySteps,
   comparePermissionItems,

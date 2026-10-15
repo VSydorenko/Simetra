@@ -1930,6 +1930,72 @@ describe("executePlan", () => {
       })
     })
 
+    it("takes the longest statement of a large table from its measure", async () => {
+      // Рішення 3–4 плану П3-2b-3: без повільного кроку двигуна найдовший
+      // оператор репетиції — замір великої таблиці, і саме він, а не сума
+      // фази, входить у формулу тайм-ауту застосування
+      const record: PromotionRecord = { ...RECORD, typeChanges: [] }
+      const setup = `${BASE};
+        create table app.pt (id int primary key, c text, x bigint);
+        insert into app.pt
+          select g, md5(g::text), g from generate_series(1, 500000) g;`
+      await inTarget(setup, async (url) => {
+        const newToOld = new Map([
+          [tableKey("app", "pu"), tableKey("app", "pt")],
+        ])
+        const old = [{ schema: "app", name: "pt" }]
+        const steps: PlanStep[] = [
+          { ...intentStep("ALTER TABLE app.pt RENAME TO pu", old), id: "s1" },
+          {
+            ...intentStep("ALTER TABLE app.pu RENAME COLUMN c TO d", old),
+            id: "s2",
+          },
+        ]
+        const preservation = preservationPlan(
+          record,
+          {
+            steps: [],
+            tablesNewToOld: newToOld,
+            tempNames: new Map(),
+            columns: [],
+          },
+          { tables: [source] },
+          new Map(),
+          []
+        )
+        const plan = await planFor(url, steps, {
+          locks: locksOf(steps, newToOld),
+          promotion: {
+            recordHash: await promotionRecordHash(record),
+            record,
+            permissionItems: [],
+            preservation,
+            columns: [
+              { table: { schema: "app", name: "pu" }, from: "c", to: "d" },
+            ],
+            canonicalNames: [],
+            conversions: [],
+            data: [],
+          },
+        })
+        const outcome = await executePlan(apply, { url }, plan, rehearse)
+        if (outcome.status !== "rolledBack")
+          throw new Error(
+            `not rolled back: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
+          )
+        const { evidence } = outcome
+        expect(evidence.rows).toEqual([
+          { schema: "app", table: "pt", rows: 500000 },
+        ])
+        expect(evidence.preservation).toEqual(evidence.rows)
+        const { steps: timed, longestStatementMs } = evidence.durations
+        const longest = timed.filter((s) => s.ms === longestStatementMs)
+        expect(longest.map((s) => s.id)).toEqual([
+          expect.stringMatching(/^measure(Before|After)-\d+$/),
+        ])
+      })
+    })
+
     it("reports a failing cast in the before measurement as narrowing", async () => {
       const setup = `${SETUP}; insert into app.pt values (4, 'b', 1099511627776);`
       await inTarget(setup, async (url) => {
@@ -2445,6 +2511,82 @@ describe("executePlan", () => {
         ])
       })
     })
+
+    it.runIf(mode === "rehearse")(
+      "reports the rows and the data counters of a rehearsal",
+      async () => {
+        await inTarget(`${BASE}; ${BANG}`, async (url) => {
+          const plan = await dataStepPlan(url, {
+            columns: ["c"],
+            fills: [CONVERSION],
+            triggers: [{ name: "dt_bang", enabled: "O" }],
+          })
+          const outcome = await run(apply, url, plan)
+          if (outcome.status !== "rolledBack")
+            throw new Error(`not rolled back: ${outcome.status}`)
+          const { evidence } = outcome
+          // Лічильники — числа, хоч порт віддає `count(*)` рядком
+          expect(evidence).toMatchObject({
+            rows: [{ schema: "app", table: "dt", rows: 3 }],
+            data: [{ schema: "app", table: "dt", computed: 3, written: 3 }],
+            preservation: [{ schema: "app", table: "dt", rows: 3 }],
+            triggers: [
+              { schema: "app", table: "dt", name: "dt_bang", enabled: "O" },
+            ],
+            plpgsqlCheck: "skipped",
+            lockFootprint: [],
+          })
+          const counts = [
+            ...evidence.rows.map((r) => r.rows),
+            ...evidence.data.flatMap((d) => [d.computed, d.written]),
+          ]
+          for (const n of counts) expect(typeof n).toBe("number")
+          const ids = evidence.durations.steps.map((s) => s.id)
+          for (const id of ["s1", "s2a", "compute-table-1", "write-table-1"])
+            expect(ids, id).toContain(id)
+        })
+      }
+    )
+
+    it.runIf(mode === "rehearse")(
+      "times the deferred check of the data write apart from the end of the steps",
+      async () => {
+        // Рішення В17: відкладений FK перевіряється одразу після запису
+        // даних; цей оператор — окремий запис доказів, не фаза 13
+        const setup = `${BASE}; ${KEEP}
+          create table app.dp (id int primary key);
+          insert into app.dp values (1), (2);
+          create table app.dt (id int primary key, c text,
+            p int references app.dp deferrable initially deferred);
+          insert into app.dt values (1, 'a', 1), (2, null, 1);
+          create trigger dt_keep before update on app.dt
+            for each row execute function app.keep();`
+        await inTarget(setup, async (url) => {
+          const plan = await dataStepPlan(url, {
+            columns: ["c", "p"],
+            fills: [
+              {
+                column: "p",
+                expression: "p + 1",
+                kind: "repair",
+                type: "integer",
+                mapped: true,
+              },
+              CONVERSION,
+            ],
+            triggers: [{ name: "dt_keep", enabled: "O" }],
+          })
+          const outcome = await run(apply, url, plan)
+          if (outcome.status !== "rolledBack")
+            throw new Error(`not rolled back: ${outcome.status}`)
+          const ids = outcome.evidence.durations.steps.map((s) => s.id)
+          expect(ids.filter((id) => id.startsWith("constraints-"))).toEqual([
+            "constraints-data",
+            "constraints-deferred",
+          ])
+        })
+      }
+    )
 
     // Вхідний відкладений FK `NO ACTION` ставить подію на таблицю, на яку
     // посилаються, — тобто знову на записувану

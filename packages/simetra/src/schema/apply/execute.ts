@@ -69,6 +69,7 @@ import {
   preservationQuery,
   preservedColumnName,
 } from "./promotion/preservation"
+import { countOf, type RehearsalEvidence } from "./rehearsal"
 import { isRetryable } from "./retry"
 import { readInvalidObjects } from "./validity"
 import {
@@ -76,7 +77,11 @@ import {
   revalidationSettings,
   withLocalSettings,
 } from "./settings"
-import { readServerFacts, serverVersionRefusal } from "./server"
+import {
+  readServerFacts,
+  serverVersionRefusal,
+  type ServerFacts,
+} from "./server"
 import {
   findApply,
   readApplyState,
@@ -163,6 +168,11 @@ interface ExecuteBase {
   timeouts?: Partial<ApplyTimeouts>
   /** Пауза між спробами; тести підставляють свою. */
   sleep?: (ms: number) => Promise<void>
+  /**
+   * Годинник доказів репетиції в мс; типово глобальний `performance.now`
+   * (без Node API). Тести підставляють свій.
+   */
+  clock?: () => number
 }
 
 /**
@@ -181,10 +191,18 @@ export type ExecuteOptions = ExecuteBase &
 
 export type ExecuteOutcome =
   | {
-      status: "committed" | "rolledBack"
+      status: "committed"
       applyId: string
       attempts: number
       diagnostics: EngineDiagnostic[]
+    }
+  | {
+      /** Відкат буває лише в репетиції, і вона несе докази для звіту. */
+      status: "rolledBack"
+      applyId: string
+      attempts: number
+      diagnostics: EngineDiagnostic[]
+      evidence: RehearsalEvidence
     }
   | {
       status: "refused" | "failed"
@@ -335,14 +353,25 @@ export async function executePlan(
   const end = o.mode === "rehearse" ? "rollback" : "commit"
   for (let attempt = 1; ; attempt++) {
     try {
-      const warnings = await db.transaction(target, end, (tx) =>
+      const { warnings, evidence } = await db.transaction(target, end, (tx) =>
         runAttempt(tx, plan, o, timeouts, applyId, parse)
       )
+      if (end === "commit")
+        return {
+          status: "committed",
+          applyId,
+          attempts: attempt,
+          diagnostics: warnings,
+        }
+      // Докази — лише цієї, останньої спроби: попередні відкочено повтором
+      if (evidence === undefined)
+        throw new Error("a rehearsal attempt returned no evidence")
       return {
-        status: end === "commit" ? "committed" : "rolledBack",
+        status: "rolledBack",
         applyId,
         attempts: attempt,
         diagnostics: warnings,
+        evidence,
       }
     } catch (error) {
       if (error instanceof AttemptStop)
@@ -483,29 +512,155 @@ function dataMatchesRecord(
 }
 
 /**
+ * Транзакція репетиції з виміром (рішення 4 плану П3-2b-3): міряє кожен
+ * `query`, хоч би звідки він ішов (раннер, відбиток, перевірки тіл, замки,
+ * `withLocalSettings`, кроки даних), і приписує його поточній фазі. SQL і
+ * порядок операторів не змінює: лише читає годинник до й після.
+ *
+ * Схема id записів `steps` (одне правило, кожен оператор — рівно один
+ * запис; задача 3 переносить її в схему звіту):
+ * - оператор кроку плану — id кроку (`s<N>`); сторожі кроку — порядкові;
+ * - оператор таблиці даних — `compute-table-<n>` (CTAS фази 8) і
+ *   `write-table-<n>` (єдиний `UPDATE` фази 10), `n` — номер таблиці в
+ *   секції `data` від 1. Кілька кроків даних таблиці — один `UPDATE`, тож
+ *   один запис; `d<N>` id запису не буває. Слово `table` відрізняє їх від
+ *   порядкових id тих самих фаз (`compute-<k>`);
+ * - `constraints-data` — `SET CONSTRAINTS ALL IMMEDIATE` після запису даних
+ *   (фаза `write`), `constraints-deferred` — той самий оператор фази 13
+ *   (фаза `deferred`);
+ * - решта — `<фаза>-<k>`, `k` — номер оператора без власного id у цій фазі
+ *   цієї спроби від 1 (заміри, сторожі, перевірки тіл, відбиток, замки,
+ *   налаштування, тригери тощо).
+ * Власний id (`setPhase(phase, step)`) називає лише наступний оператор:
+ * так один id не дістається двом операторам.
+ *
+ * Обгортка живе одну спробу: нумерація й докази — лише останньої спроби,
+ * не злиття спроб, бо попередні відкочено повтором.
+ *
+ * `extract` міряється лише в суму фази, а не записом `steps`: витяг є тільки
+ * у фазі 18 репетиції (`proveWithEngine`) і на шляху відмови фази 17
+ * (`divergedPaths`, де будь-який збій витягу — текст параметра й відкат).
+ * Успішне застосування витягу не робить (тест «never extracts on a
+ * successful apply»), тож тайм-аут оператора, виведений із найдовшого
+ * оператора, його не обірве, а витяг у максимумі роздув би тайм-аут.
+ */
+export function timedTransaction(
+  tx: ApplyTransaction,
+  clock: () => number
+): ApplyTransaction & {
+  setPhase(phase: string, step?: string): void
+  durations(): RehearsalEvidence["durations"]
+} {
+  const phases = new Map<string, number>()
+  const ordinals = new Map<string, number>()
+  const steps: { id: string; ms: number }[] = []
+  let current: string | undefined
+  let named: string | undefined
+  const inPhase = (): string => {
+    if (current === undefined)
+      throw new Error("a rehearsal statement ran before any phase")
+    return current
+  }
+  const timed = async <T>(
+    run: () => Promise<T>,
+    record: (ms: number) => void
+  ): Promise<T> => {
+    const start = clock()
+    try {
+      return await run()
+    } finally {
+      record(clock() - start)
+    }
+  }
+  return {
+    setPhase(phase, step) {
+      current = phase
+      named = step
+      if (!phases.has(phase)) phases.set(phase, 0)
+    },
+    query(sql, params) {
+      const phase = inPhase()
+      let id = named
+      named = undefined
+      if (id === undefined) {
+        const k = (ordinals.get(phase) ?? 0) + 1
+        ordinals.set(phase, k)
+        id = `${phase}-${k}`
+      }
+      const step = id
+      return timed(
+        () => tx.query(sql, params),
+        (ms) => {
+          phases.set(phase, phases.get(phase)! + ms)
+          steps.push({ id: step, ms })
+        }
+      )
+    },
+    extract(scope) {
+      const phase = inPhase()
+      return timed(
+        () => tx.extract(scope),
+        (ms) => phases.set(phase, phases.get(phase)! + ms)
+      )
+    },
+    durations: () => ({
+      phases: [...phases].map(([phase, ms]) => ({ phase, ms })),
+      steps: [...steps],
+      longestStatementMs: steps.reduce((max, s) => Math.max(max, s.ms), 0),
+    }),
+  }
+}
+
+/**
+ * Позначка фази репетиції: `step` — id наступного оператора. Поза
+ * репетицією нічого не робить.
+ */
+type Mark = (phase: string, step?: string) => void
+
+/**
  * Одна спроба — оператори рішення 11 плану П3-1 по черзі; номери фаз від 7 —
  * таблиця рішення 1 плану П3-2b-1 (пропущені номери — фази інших задач).
  * Нормальне повернення означає `COMMIT` (чи `ROLLBACK` репетиції) і несе
  * попередження спроби; кожна відмова — виняток.
  */
 async function runAttempt(
-  tx: ApplyTransaction,
+  raw: ApplyTransaction,
   plan: ExecutablePlan,
   o: ExecuteOptions,
   timeouts: ApplyTimeouts,
   applyId: string,
   parse: SqlParser
-): Promise<EngineDiagnostic[]> {
+): Promise<{ warnings: EngineDiagnostic[]; evidence?: RehearsalEvidence }> {
+  // Докази лише в репетиції: застосування й копія доказу йдуть повз обгортку
+  const timed =
+    o.mode === "rehearse"
+      ? timedTransaction(raw, o.clock ?? (() => globalThis.performance.now()))
+      : undefined
+  const tx: ApplyTransaction = timed ?? raw
+  const phase: Mark = (name, step) => timed?.setPhase(name, step)
+
   // 1. Одне застосування на базу; зайнято — одразу відмова, без повторів
+  phase("advisory")
   const [lock] = await tx.query<{ locked: boolean }>(
     `SELECT pg_try_advisory_xact_lock(${ADVISORY_LOCK}) AS locked`
   )
   if (lock?.locked !== true) throw stop("refused", "apply.busy")
 
+  // Сервер, старіший за мінімум платформи, — відмова одразу після замка:
+  // жодна наступна фаза не впаде сирою помилкою версійно залежного
+  // читання. Копія доказу — інша база, її версію перевіряє двигун
+  if (o.mode !== "proof") {
+    phase("targetChecks")
+    const unsupported = await serverVersionRefusal(tx)
+    if (unsupported !== undefined)
+      throw new AttemptStop("refused", [unsupported])
+  }
+
   // 1a. План побудовано для своєї ролі: від неї залежать замки (право на
   // явний `LOCK`), власники й шлях запису. `current_user`, бо сесія входу
   // може переключитися на іншу роль налаштуванням `role`. Копія доказу —
   // інша база, можливо з іншою роллю адміністрування
+  phase("role")
   const [who] = await tx.query<{ role: string }>("SELECT current_user AS role")
   if (who === undefined) throw new Error("current_user returned no row")
   if (o.mode !== "proof" && who.role !== plan.role)
@@ -516,6 +671,7 @@ async function runAttempt(
 
   // 2. `SET LOCAL` параметрів не приймає; `set_config(…, true)` — те саме
   // в межах транзакції, тож за пулером тайм-аут не осяде на чужому backend
+  phase("timeouts")
   await tx.query(
     "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true), set_config('idle_in_transaction_session_timeout', $3, true)",
     [
@@ -534,12 +690,14 @@ async function runAttempt(
 
   // 4. Ланцюжок: план застосовний лише до стану, від якого його побудовано.
   // Копія доказу стану застосування не має, тож там перевіряти нічого
+  phase("chain")
   if (o.mode !== "proof") await checkChain(tx, plan.fromHash)
 
   // 4a. Перелік таблиць провайдера — той самий, з яким план побудовано (R27
   // плану П3-2a): відбиток каталогу налаштувань не бачить, а таблиця, що
   // з'явилася в переліку, займалася б посеред кроків. Те саме читання, що й у
   // плані, до блокувань; копія доказу — інша база, її перелік план не записував
+  phase("targetChecks")
   if (o.mode !== "proof") {
     const live = await readProviderLocks(
       tx,
@@ -599,16 +757,17 @@ async function runAttempt(
   // П3-2b-3): факти сервера й голова ledger. Відбиток не бачить ні
   // упорядкування, ні історії застосувань, а копія на іншому сервері чи з
   // окремими застосуваннями тих самих планів пройшла б ланцюжок і відбиток.
-  // До блокувань і без повтору, як 4a–4d; копія доказу — інша база
+  // До блокувань і без повтору, як 4a–4d; копія доказу — інша база. Версію
+  // сервера вже звірено одразу після замка застосування
+  let identity: { server: ServerFacts; ledgerHead: string | null } | undefined
   if (o.mode !== "proof") {
-    const unsupported = await serverVersionRefusal(tx)
-    if (unsupported !== undefined)
-      throw new AttemptStop("refused", [unsupported])
     const server = await readServerFacts(tx)
     if (canonicalize(server) !== canonicalize(plan.server))
       throw stop("refused", "apply.target-changed", { sections: "server" })
-    if ((await readLedgerHead(tx)) !== plan.ledgerHead)
+    const ledgerHead = await readLedgerHead(tx)
+    if (ledgerHead !== plan.ledgerHead)
       throw stop("refused", "apply.target-changed", { sections: "ledger" })
+    identity = { server, ledgerHead }
   }
 
   // 5. Блокування наперед за слідом кроків — одна точка очікування замість
@@ -617,6 +776,7 @@ async function runAttempt(
   // Копія доказу несе лише межу двигуна й базу провайдера: таблиці поза
   // межею (скажімо, та, що посилається на колонку зі зміною типу) там може
   // не бути, і `LOCK` на ній дав би хибну відмову доказу
+  phase("lock")
   const locks =
     o.mode === "proof" ? await presentLocks(tx, plan.locks) : plan.locks
   for (const mode of [...TABLE_LOCK_MODES].reverse())
@@ -630,6 +790,7 @@ async function runAttempt(
   // запам'ятовуємо структурно: відмова фази 6 чи 18 тоді називає причину,
   // а не сирий diff. ACL не нормалізуємо відносно власника — це послабило б
   // доказ ідентичності
+  phase("fingerprint")
   const targetFingerprint = await readFingerprint(tx, plan.scope)
   const changed = differing(plan.targetFingerprint, targetFingerprint, {
     owner: o.mode === "apply",
@@ -659,6 +820,7 @@ async function runAttempt(
   const filled = new Map(
     data.flatMap((t) => t.columns.map((c) => [c.step, c] as const))
   )
+  phase("measureBefore")
   const before = await underDataSettings(tx, preserved, () =>
     measureBefore(tx, preserved, filled, parse)
   )
@@ -666,6 +828,7 @@ async function runAttempt(
   // 6b. Таблиці, що є до кроків: звірка сліду дивиться лише на них, бо
   // створена планом таблиця нікого не блокує. Застосування з COMMIT звірки
   // не робить — це перевірка моделі сліду на доказі й репетиції
+  if (o.mode !== "apply") phase("existing")
   const existing = o.mode === "apply" ? undefined : await readExistingTables(tx)
 
   // 7. Базова лінія тіл функцій — у тій самій транзакції, під блокуваннями,
@@ -674,6 +837,7 @@ async function runAttempt(
   const revalidation = revalidationSettings(plan.revalidationSearchPath)
   const warnings: EngineDiagnostic[] = []
   const plpgsqlCheck = () => readPlpgsqlChecked(tx, plan, o, warnings)
+  phase("baseline")
   const baseline = await withLocalSettings(tx, revalidation, async () => ({
     validators: await readValidatorErrors(tx),
     plpgsql: await plpgsqlCheck(),
@@ -687,6 +851,7 @@ async function runAttempt(
     plan.steps.filter((s) => s.origin === origin)
   )
   let computed = new Map<string, number>()
+  phase("compute")
   if (data.length > 0) {
     const [session] = await tx.query<{ role: string }>(
       "SELECT pg_catalog.current_setting('session_replication_role') AS role"
@@ -696,12 +861,13 @@ async function runAttempt(
     if (session.role !== "origin")
       throw stop("refused", "apply.replication-role", { value: session.role })
     computed = await withLocalSettings(tx, DATA_SETTINGS, () =>
-      computeData(tx, data)
+      computeData(tx, data, (id) => phase("compute", id))
     )
   }
 
   // 9. Кроки наміру — під налаштуваннями транзакції
-  await runSteps(tx, blocks[0]!, parse)
+  phase("intent")
+  await runSteps(tx, blocks[0]!, parse, (id) => phase("intent", id))
 
   // 10. Запис кроків даних — після наміру (колонка-ціль уже є) і до кроків
   // двигуна (сторож звуження бачить записане, `SET NOT NULL` іде після).
@@ -715,10 +881,13 @@ async function runAttempt(
   // налаштуваннями транзакції, як у фазі 13: закріплений `search_path`
   // зламав би тіло, що називає об'єкти без схеми. Результат запису
   // (обчислено й записано за таблицею) — для звіту репетиції П3-2b-3
+  phase("write")
+  let written: Awaited<ReturnType<typeof writeData>> = []
   if (data.length > 0) {
-    await withLocalSettings(tx, DATA_SETTINGS, () =>
-      writeData(tx, data, computed)
+    written = await withLocalSettings(tx, DATA_SETTINGS, () =>
+      writeData(tx, data, computed, (id) => phase("write", id))
     )
+    phase("write", "constraints-data")
     await constraintsNow(tx, "data")
     await enableTriggers(tx, data)
   }
@@ -726,21 +895,25 @@ async function runAttempt(
   // записав план, і з поверненням налаштувань транзакції після них. Пару
   // виконуємо лише разом із ревалідацією (R22 плану П3-2a):
   // `check_function_bodies = off` пропускає тіло, яке ловить фаза 15
+  phase("engine")
   await withLocalSettings(tx, plan.preamble, () =>
-    runSteps(tx, blocks[1]!, parse)
+    runSteps(tx, blocks[1]!, parse, (id) => phase("engine", id))
   )
   // 12. Кроки середовища (рішення 5 плану П3-2b-0) — під налаштуваннями
   // транзакції
-  await runSteps(tx, blocks[2]!, parse)
+  phase("environment")
+  await runSteps(tx, blocks[2]!, parse, (id) => phase("environment", id))
 
   // 13. Відкладені обмеження спрацьовують тут, а не при `COMMIT`: `ROLLBACK`
   // репетиції їх не запускає, і порушення лишилося б непоміченим. Стоїть до
   // замірів «після», бо відкладений тригер користувача може змінити рядки
+  phase("deferred", "constraints-deferred")
   await constraintsNow(tx, "steps")
 
   // 14. Заміри «після» — у нових іменах, після кроків, під тими самими
   // закріпленими налаштуваннями даних, що й «до»: текст значень порівнюваний
-  await underDataSettings(tx, preserved, () =>
+  phase("measureAfter")
+  const proven = await underDataSettings(tx, preserved, () =>
     provePreservation(tx, preserved, before, parse)
   )
 
@@ -749,6 +922,7 @@ async function runAttempt(
   // називає попередження застосування й репетиції, крім очікуваних
   // пресетом провайдера; копія доказу його не дає, бо вивід плану вже назвав
   // перелік цілі
+  phase("revalidation")
   const after = await withLocalSettings(tx, revalidation, async () => ({
     validators: await readValidatorErrors(tx),
     plpgsql:
@@ -775,6 +949,7 @@ async function runAttempt(
 
   // 16. Недійсне (`NOT VALID`, невдалий `CONCURRENTLY`), чого немає в
   // бажаному стані, не лишається: відбиток таке не завжди відрізняє
+  phase("validity")
   const desiredInvalid = new Set(plan.desiredInvalid)
   const invalid = (await readInvalidObjects(tx, plan.scope)).filter(
     (object) => !desiredInvalid.has(object)
@@ -787,6 +962,7 @@ async function runAttempt(
   // 17. Результат — бажаний стан доказу; без `owner`, бо бажана тінь — інша
   // база. На цілі розбіжність називає ще й шляхи моделі, поки зміни кроків
   // живі; на копії доказу їх уже дає план «копія → тінь» у `prove()`
+  phase("verify")
   const resultFingerprint = await readFingerprint(tx, plan.scope)
   const diverged = differing(plan.desiredFingerprint, resultFingerprint, {
     owner: false,
@@ -801,12 +977,15 @@ async function runAttempt(
   // з'єднанням, не має плану до бажаного каталогу. Відбиток із фази 17
   // бачить не все, що бачить двигун, а репетиція — єдине місце, де цей
   // доказ дешево перевірити до `COMMIT`
-  if (o.mode === "rehearse")
+  if (o.mode === "rehearse") {
+    phase("proof")
     await proveWithEngine(tx, plan, o.rehearsal, ownersDiffer, parse)
+  }
 
   // 19. Стан у тій самій транзакції. Marker отримує повний відбиток
   // результату з власником: наступний гейт порівнює ціль ↔ ціль. Прийнятий
   // дрейф лишається в ledger, а marker стає новою базою (рішення 16)
+  phase("state")
   for (const statement of writeApplyStateStatements({
     planHash: o.planHash,
     fromHash: plan.fromHash,
@@ -829,11 +1008,61 @@ async function runAttempt(
 
   // 19a. Звірка сліду перед відкатом репетиції чи кінцем доказу: замок,
   // якого слід плану не передбачив, — прогалина моделі сліду
+  if (existing !== undefined) phase("footprint")
   const gaps =
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
-  return [...warnings, ...blindWarning(after.blind), ...gaps]
+  return {
+    warnings: [
+      ...warnings,
+      ...blindWarning(after.blind),
+      ...gaps.map((gap) =>
+        applyDiagnostic("apply.lock-footprint-exceeded", "warning", gap)
+      ),
+    ],
+    ...(timed === undefined || identity === undefined
+      ? {}
+      : {
+          evidence: {
+            ...identity,
+            rows: preserved.map((t, i) => ({
+              ...oldName(t),
+              rows: countOf(before[i]!.rows),
+            })),
+            durations: timed.durations(),
+            data: written,
+            preservation: preserved.map((t, i) => ({
+              ...oldName(t),
+              rows: countOf(proven[i]!.rows),
+            })),
+            plpgsqlCheck:
+              baseline.plpgsql === "skipped" || after.plpgsql === "skipped"
+                ? "skipped"
+                : {
+                    mode: plan.plpgsqlCheck,
+                    baseline: baseline.plpgsql.errors,
+                    after: after.plpgsql.errors,
+                  },
+            // Звірені з живими перед вимкненням (фаза 10), у старих іменах
+            triggers: data.flatMap((t) =>
+              t.triggers.map((trigger) => ({
+                schema: t.before.schema,
+                table: t.before.table,
+                name: trigger.name,
+                enabled: trigger.enabled,
+              }))
+            ),
+            lockFootprint: gaps,
+          },
+        }),
+  }
 }
+
+/** Таблиця заміру в старих іменах — як її знає ціль і звіт репетиції. */
+const oldName = (t: PreservedTable): { schema: string; table: string } => ({
+  schema: t.before.schema,
+  table: t.before.table,
+})
 
 /**
  * `SET CONSTRAINTS ALL IMMEDIATE` фаз 10 (`after: "data"`) і 13 (`"steps"`):
@@ -869,10 +1098,11 @@ const dataTableName = (t: DataTable): string =>
  */
 async function computeData(
   tx: ApplyTransaction,
-  tables: readonly DataTable[]
+  tables: readonly DataTable[],
+  statement: (id: string) => void
 ): Promise<Map<string, number>> {
   const computed = new Map<string, number>()
-  for (const t of tables) {
+  for (const [n, t] of tables.entries()) {
     // За пулером на backend може лишитися сесійна тимчасова таблиця
     // попереднього клієнта з тим самим іменем: CTAS дав би сирий `42P07`, а
     // читання `pg_temp.<ім'я>` — чужі рядки (Review Focus 4)
@@ -884,6 +1114,7 @@ async function computeData(
     if (slot === undefined) throw new Error("to_regclass returned no row")
     if (slot.taken) throw stop("refused", "apply.temp-name-taken", { name })
     for (const c of t.columns) await dataGuard(tx, t, c)
+    statement(`compute-table-${n + 1}`)
     await dataQuery(tx, t, "compute", dataComputeSql(t))
     const [row] = await dataQuery<{ computed: string | number }>(
       tx,
@@ -892,7 +1123,7 @@ async function computeData(
       dataCountSql(t)
     )
     if (row === undefined) throw new Error("the computed count returned no row")
-    computed.set(t.temp, Number(row.computed))
+    computed.set(t.temp, countOf(row.computed))
   }
   return computed
 }
@@ -976,7 +1207,8 @@ async function dataQuery<R extends Record<string, unknown>>(
 async function writeData(
   tx: ApplyTransaction,
   tables: readonly DataTable[],
-  computed: ReadonlyMap<string, number>
+  computed: ReadonlyMap<string, number>,
+  statement: (id: string) => void
 ): Promise<
   { schema: string; table: string; computed: number; written: number }[]
 > {
@@ -986,7 +1218,7 @@ async function writeData(
     computed: number
     written: number
   }[] = []
-  for (const t of tables) {
+  for (const [n, t] of tables.entries()) {
     // Канонічно, як перелік провайдера (4a): обидва боки впорядковано за
     // іменем, а план із файлу розібрано схемою артефакту
     const live = await readUserTriggers(tx, t.after)
@@ -994,6 +1226,7 @@ async function writeData(
       throw stop("refused", "apply.target-changed", { sections: "triggers" })
     for (const sql of triggerSql(t, false))
       await dataQuery(tx, t, "trigger-disable", sql)
+    statement(`write-table-${n + 1}`)
     const [row] = await dataQuery<{ written: string | number }>(
       tx,
       t,
@@ -1001,7 +1234,7 @@ async function writeData(
       dataWriteSql(t)
     )
     if (row === undefined) throw new Error("the written count returned no row")
-    const written = Number(row.written)
+    const written = countOf(row.written)
     const was = computed.get(t.temp)
     if (was === undefined) throw new Error(`no computed count for ${t.temp}`)
     // Рядок без пари в обчисленні (чи пара без рядка) лишив би значення
@@ -1174,13 +1407,15 @@ async function readPlpgsqlChecked(
 async function runSteps(
   tx: ApplyTransaction,
   steps: readonly PlanStep[],
-  parse: SqlParser
+  parse: SqlParser,
+  statement: (id: string) => void
 ): Promise<void> {
   // Конфлікт блокувань летить далі на повтор спроби. Сторожі від
   // `search_path` не залежать: таблиця й типи в них повністю кваліфіковані
   for (const step of steps) {
     for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
     try {
+      statement(step.id)
       await tx.query(step.sql)
     } catch (error) {
       if (error instanceof ApplyDbError && !retryable(error))
@@ -1308,7 +1543,7 @@ async function footprintGaps(
   tx: ApplyTransaction,
   plan: ExecutablePlan,
   existing: readonly ExistingTable[]
-): Promise<EngineDiagnostic[]> {
+): Promise<RehearsalEvidence["lockFootprint"]> {
   const rows = await tx.query<{ oid: string; mode: string }>(
     `SELECT l.relation::text AS oid, l.mode
      FROM pg_catalog.pg_locks l
@@ -1359,14 +1594,11 @@ async function footprintGaps(
   }
   return out
     .sort((a, b) => (a.table < b.table ? -1 : a.table > b.table ? 1 : 0))
-    .map((gap) =>
-      applyDiagnostic("apply.lock-footprint-exceeded", "warning", {
-        table: gap.table,
-        mode: LOCK_MODE_SQL[gap.mode],
-        planned:
-          gap.planned === undefined ? "none" : LOCK_MODE_SQL[gap.planned],
-      })
-    )
+    .map((gap) => ({
+      table: gap.table,
+      mode: LOCK_MODE_SQL[gap.mode],
+      planned: gap.planned === undefined ? "none" : LOCK_MODE_SQL[gap.planned],
+    }))
 }
 
 /**
@@ -1550,17 +1782,19 @@ const castFailure = (error: unknown): error is ApplyDbError =>
 /**
  * Заміри «після» проти «до». Розбіжність — `apply.preservation-failed`:
  * спершу кількість рядків, далі перша колонка в порядку секції. Виняток
- * відкочує транзакцію.
+ * відкочує транзакцію. Повертає заміри «після» — доказ для звіту репетиції.
  */
 async function provePreservation(
   tx: ApplyTransaction,
   tables: readonly PreservedTable[],
   before: readonly Measurement[],
   parse: SqlParser
-): Promise<void> {
+): Promise<Measurement[]> {
+  const out: Measurement[] = []
   for (const [i, t] of tables.entries()) {
     const was = before[i]!
     const now = await measure(tx, t, "after")
+    out.push(now)
     const table = tableName(t.after)
     if (String(was.rows) !== String(now.rows))
       throw stop("failed", "apply.preservation-failed", {
@@ -1577,6 +1811,7 @@ async function provePreservation(
         column: preservedColumnName(t.columns[changed]!.after, parse),
       })
   }
+  return out
 }
 
 async function checkChain(

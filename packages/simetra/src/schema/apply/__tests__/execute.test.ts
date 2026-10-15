@@ -553,6 +553,36 @@ function fakeDb(script: Script = {}) {
   return { db, log, params, seen }
 }
 
+/**
+ * Фейкова база з годинником, що йде лише всередині операторів: оператор
+ * коштує `cost(sql)` мс, витяг — `extractCost`. Так тривалість кожного
+ * запису доказів відома наперед, а не залежить від швидкості тесту.
+ */
+function clocked(
+  script: Script = {},
+  cost: (sql: string) => number = () => 5,
+  extractCost = 0
+) {
+  let now = 0
+  const fake = fakeDb(script)
+  const db: ApplyDatabase = {
+    transaction: (t, end, fn) =>
+      fake.db.transaction(t, end, (tx) =>
+        fn({
+          query: (sql, p) => {
+            now += cost(sql)
+            return tx.query(sql, p)
+          },
+          extract: (scope) => {
+            now += extractCost
+            return tx.extract(scope)
+          },
+        })
+      ),
+  }
+  return { ...fake, db, clock: () => now }
+}
+
 const target = { url: "postgres://fake" }
 
 describe("executePlan", () => {
@@ -563,14 +593,16 @@ describe("executePlan", () => {
     expect(log).toEqual([
       "BEGIN",
       "try-lock",
+      // Версія сервера — одразу після замка застосування: жодна раніша фаза
+      // не впаде сирою помилкою версійно залежного читання
+      "server-version",
       "role",
       "timeouts",
       "state",
       "provider-setting",
       "provider-setting",
       "environment",
-      // 4e. Версія й факти сервера, голова ledger
-      "server-version",
+      // 4e. Факти сервера, голова ledger
       "server",
       "ledger-head",
       'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
@@ -693,7 +725,13 @@ describe("executePlan", () => {
         },
       ],
     })
-    expect(log).toEqual(["BEGIN", "try-lock", "role", "ROLLBACK"])
+    expect(log).toEqual([
+      "BEGIN",
+      "try-lock",
+      "server-version",
+      "role",
+      "ROLLBACK",
+    ])
     // Копія доказу — інша база, можливо з іншою роллю адміністрування
     const proof = fakeDb({ role: "someone_else" })
     expect(
@@ -750,7 +788,8 @@ describe("executePlan", () => {
         "Simetra requires PostgreSQL 17 or newer; this server is 16.4"
       )
       expect(log).not.toContain("server")
-      expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+      // Одразу після замка застосування, до будь-якої іншої фази
+      expect(log).toEqual(["BEGIN", "try-lock", "server-version", "ROLLBACK"])
     }
   })
 
@@ -2724,6 +2763,99 @@ describe("executePlan", () => {
       expect(seen["ALTER TABLE app.u ENABLE TRIGGER tg"]).toEqual([SESSION])
     })
 
+    it("collects rehearsal evidence", async () => {
+      // Рішення 3–4 плану П3-2b-3: кожен оператор — окремий запис, і
+      // кожен коштує 5 мс фейкового годинника
+      const fake = clocked({
+        triggers: LIVE,
+        existing: [{ oid: "9", schema: "app", name: "w", ancestors: [] }],
+        held: [{ oid: "9", mode: "ShareLock" }],
+      })
+      const outcome = await executePlan(fake.db, target, await withData(), {
+        ...rehearse,
+        rehearsal: stubRehearsal,
+        clock: fake.clock,
+      })
+      if (outcome.status !== "rolledBack")
+        throw new Error(`not rolled back: ${outcome.status}`)
+      const { durations, ...rest } = outcome.evidence
+      expect(rest).toEqual({
+        server: SERVER,
+        ledgerHead: null,
+        // Лічильники — числа, хоч порт віддає їх рядками; таблиці — у
+        // старих іменах
+        rows: [{ schema: "app", table: "t", rows: 1 }],
+        data: [{ schema: "app", table: "t", computed: 3, written: 3 }],
+        preservation: [{ schema: "app", table: "t", rows: 1 }],
+        plpgsqlCheck: "skipped",
+        triggers: [{ schema: "app", table: "t", name: "tg", enabled: "O" }],
+        lockFootprint: [{ table: "app.w", mode: "SHARE", planned: "none" }],
+      })
+      const ids = durations.steps.map((s) => s.id)
+      // Крок плану — своїм id; оператор таблиці даних — фазою й номером
+      // таблиці; два `SET CONSTRAINTS` — окремими записами
+      for (const id of [
+        "s0",
+        "s0a",
+        "compute-table-1",
+        "write-table-1",
+        "constraints-data",
+        "s1",
+        "s2",
+        "s3",
+        "constraints-deferred",
+        "advisory-1",
+        "fingerprint-1",
+        "measureBefore-1",
+      ])
+        expect(ids, id).toContain(id)
+      expect(ids.some((id) => /^d\d+$/.test(id))).toBe(false)
+      expect(new Set(ids).size).toBe(ids.length)
+      expect(durations.steps.every((s) => s.ms === 5)).toBe(true)
+      expect(durations.phases.map((p) => p.phase)).toEqual([
+        "advisory",
+        "targetChecks",
+        "role",
+        "timeouts",
+        "chain",
+        "lock",
+        "fingerprint",
+        "measureBefore",
+        "existing",
+        "baseline",
+        "compute",
+        "intent",
+        "write",
+        "engine",
+        "environment",
+        "deferred",
+        "measureAfter",
+        "revalidation",
+        "validity",
+        "verify",
+        "proof",
+        "state",
+        "footprint",
+      ])
+      // Фаза — сума своїх операторів
+      const sum = (phase: string) =>
+        durations.phases.find((p) => p.phase === phase)!.ms
+      expect(sum("write")).toBe(
+        5 * ids.filter((id) => /^write-|^constraints-data$/.test(id)).length
+      )
+      // Найдовший оператор — максимум записів, а не сума фази з кількома
+      // операторами
+      expect(durations.longestStatementMs).toBe(
+        Math.max(...durations.steps.map((s) => s.ms))
+      )
+      expect(durations.longestStatementMs).toBe(5)
+      expect(sum("engine")).toBeGreaterThan(durations.longestStatementMs)
+      expect(
+        durations.phases.filter((p) => p.ms === durations.longestStatementMs)
+          .length
+      ).toBeLessThan(durations.phases.length)
+    })
+
     it("writes every table of the unit before the deferred check and enables after it", async () => {
       const second: DataTable = {
         temp: "simetra_fill_2",
@@ -3770,6 +3902,117 @@ describe("executePlan", () => {
     })
     expect(log).not.toContain("lookup")
     expect(log).not.toContain("lookup-lock")
+  })
+
+  describe("rehearsal evidence", () => {
+    const rehearse = withMode("rehearse")
+    const evidenceOf = (outcome: Awaited<ReturnType<typeof executePlan>>) => {
+      if (outcome.status !== "rolledBack")
+        throw new Error(`not rolled back: ${outcome.status}`)
+      return outcome.evidence
+    }
+
+    it("times the statements of the helpers", async () => {
+      // Оператори йдуть і з помічників (відбиток, валідатори): їх міряє
+      // обгортка транзакції, а не виклики в раннері
+      const fake = clocked({}, (sql) =>
+        sql.includes("encode(sha256")
+          ? 100
+          : sql.startsWith("DO $simetra$")
+            ? 7
+            : 1
+      )
+      const { durations } = evidenceOf(
+        await executePlan(fake.db, target, plan, {
+          ...rehearse,
+          clock: fake.clock,
+        })
+      )
+      const of = (ms: number) =>
+        durations.steps.filter((s) => s.ms === ms).map((s) => s.id)
+      // Відбиток цілі — фаза 6, відбиток результату — фаза 17
+      expect(of(100)).toEqual([
+        expect.stringMatching(/^fingerprint-\d+$/),
+        expect.stringMatching(/^verify-\d+$/),
+      ])
+      expect(of(7)).toEqual([
+        expect.stringMatching(/^baseline-\d+$/),
+        expect.stringMatching(/^revalidation-\d+$/),
+      ])
+      const phase = (name: string) =>
+        durations.phases.find((p) => p.phase === name)!.ms
+      expect(phase("fingerprint")).toBeGreaterThanOrEqual(100)
+      expect(phase("baseline")).toBeGreaterThanOrEqual(7)
+    })
+
+    it("leaves the extract out of the longest statement", async () => {
+      // Витяг двигуна є лише в репетиції: на застосуванні його немає, тож
+      // він роздув би тайм-аут застосування; його час — лише у фазі доказу
+      const fake = clocked({}, () => 1, 1000)
+      const { durations } = evidenceOf(
+        await executePlan(fake.db, target, plan, {
+          ...rehearse,
+          clock: fake.clock,
+        })
+      )
+      expect(durations.longestStatementMs).toBe(1)
+      expect(durations.steps.some((s) => s.ms >= 1000)).toBe(false)
+      expect(durations.phases.find((p) => p.phase === "proof")).toEqual({
+        phase: "proof",
+        ms: 1000,
+      })
+    })
+
+    it("keeps the evidence of the last attempt", async () => {
+      // Перша спроба впирається в замок і відкочується: її оператори
+      // доказами не стають, і нумерація фаз починається знову
+      let attempt = 0
+      const fake = clocked(
+        {
+          fail: (label, n) =>
+            n === 1 && label.startsWith("LOCK TABLE")
+              ? new ApplyDbError("lock timeout", "55P03")
+              : undefined,
+        },
+        (sql) => {
+          if (sql.includes("pg_try_advisory_xact_lock")) attempt++
+          return attempt === 1 ? 50 : 5
+        }
+      )
+      const outcome = await executePlan(fake.db, target, plan, {
+        ...rehearse,
+        clock: fake.clock,
+      })
+      expect(outcome).toMatchObject({ status: "rolledBack", attempts: 2 })
+      const { durations } = evidenceOf(outcome)
+      const ids = durations.steps.map((s) => s.id)
+      expect(new Set(ids).size).toBe(ids.length)
+      expect(durations.steps.every((s) => s.ms === 5)).toBe(true)
+      expect(durations.steps.filter((s) => s.id === "advisory-1")).toEqual([
+        { id: "advisory-1", ms: 5 },
+      ])
+    })
+
+    it("has no evidence outside a rehearsal", async () => {
+      for (const mode of ["apply", "proof"] as const) {
+        const fake = clocked()
+        const outcome = await executePlan(fake.db, target, plan, {
+          ...withMode(mode),
+          clock: fake.clock,
+        })
+        expect(outcome.status).toBe("committed")
+        expect(outcome).not.toHaveProperty("evidence")
+      }
+    })
+
+    it("never extracts on a successful apply", async () => {
+      // Витяг є лише у фазі 18 репетиції й на шляху відмови фази 17, тож
+      // тайм-аут оператора не може обірвати успішне застосування на ньому
+      const { db, log } = fakeDb()
+      const outcome = await executePlan(db, target, plan, options)
+      expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+      expect(log).not.toContain("extract")
+    })
   })
 
   it("passes an unexpected database error through", async () => {
