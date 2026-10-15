@@ -732,8 +732,12 @@ describe("executePlan", () => {
   })
 
   describe("the proof that a rehearsal copy is a copy of this target", () => {
-    /** Роль-власник об'єктів копії, відновленої під іншими власниками. */
-    const COPY_OWNER = "simetra_copy_owner"
+    /**
+     * Роль-власник об'єктів копії, відновленої під іншими власниками. Ім'я
+     * унікальне для прогону, як і ім'я копії: стек спільний, і чужу роль з
+     * тим самим ім'ям тест не має права ні зайняти, ні видалити.
+     */
+    const COPY_OWNER = `simetra_copy_owner_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
     /** Ім'я бази з адреси. */
     const nameOf = (url: string): string => new URL(url).pathname.slice(1)
@@ -817,12 +821,13 @@ describe("executePlan", () => {
       // грантів (relacl IS NULL) у копії належить ролі, членом якої є роль
       // застосування. Фаза 6 репетиції порівнює без власника й пропускає;
       // повний доказ двигуна бачить дії ACL, і відмова називає причину
+      // Створення — до `try`: якщо воно впаде, `finally` не видалить роль,
+      // якої цей прогін не створив
+      await other(
+        testSuperuserUrl(),
+        `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
+      )
       try {
-        await other(
-          testSuperuserUrl(),
-          `drop role if exists ${COPY_OWNER};
-           create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
-        )
         await inTarget(BASE, (url) =>
           withCopy(`template ${nameOf(url)}`, async (copy) => {
             await other(
