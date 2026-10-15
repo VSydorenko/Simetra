@@ -217,6 +217,14 @@ pnpm db:stop
   when the stack differs afterwards. A DB test leaves nothing behind, failure
   paths included. Never drop stack objects your run did not create; report an
   orphan instead.
+- Every object a DB test creates on the stack (database, role, engine shadow)
+  carries the run tag: name it through the run-tag helpers in
+  `packages/simetra/test/db/connection.ts`; designer DB tests get tagged
+  shadows from their setup file. On SIGINT, SIGTERM or SIGHUP the guard kills
+  its workers and drops the objects of its own tag only; after a SIGKILL they
+  stay, and the next run names them. pnpm does not forward a signal sent to
+  its own pid: stop a DB run by signalling its process group (Ctrl-C, GNU
+  `timeout` without `--foreground`) or the vitest pid.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
   `pnpm metadata:check` and a `db` job that starts the stack and runs `pnpm test:db`. It does not run
   the anchor check — run it yourself whenever you edit docs or skills, or
