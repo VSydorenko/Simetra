@@ -335,6 +335,7 @@ describe("cli adapter", () => {
   describe("plan and apply", () => {
     const hash = "b".repeat(64)
     const env = { SIMETRA_DATABASE_URL: "postgres://u:p@db.example.test/app" }
+    const REPORT = "plans/initial-0123456789ab.rehearsal.json"
 
     it("plan takes its directory as a positional, not JSON", async () => {
       expect(await cliInput(tool("plan"), { _: ["meta/"] }, noStdin)).toEqual({
@@ -439,7 +440,7 @@ describe("cli adapter", () => {
       expect(r.stderr).toContain("compile has no --dry-run")
     })
 
-    it("apply has --yes and no --dry-run; plan has --dry-run", () => {
+    it("apply and plan have no --dry-run; apply has --yes", async () => {
       const apply = toolCommand(tool("apply")).args ?? {}
       for (const flag of [
         "plan-hash",
@@ -451,7 +452,20 @@ describe("cli adapter", () => {
       ])
         expect(flag in apply, flag).toBe(true)
       expect("dry-run" in apply).toBe(false)
-      expect("dry-run" in (toolCommand(tool("plan")).args ?? {})).toBe(true)
+      // `plan` пише лише свій артефакт (рішення 10 плану П3-2b-3): перегляду
+      // немає, а прапорець — помилка використання, не мовчазний запис
+      expect("dry-run" in (toolCommand(tool("plan")).args ?? {})).toBe(false)
+      const run = vi.fn<Tool["run"]>()
+      const r = await runTool(
+        { ...tool("plan"), run },
+        { _: [await project()], "dry-run": true },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("plan has no --dry-run")
+      expect(run).not.toHaveBeenCalled()
     })
 
     it("the text of a plan shows drift before the first step", () => {
@@ -749,12 +763,36 @@ describe("cli adapter", () => {
           written: false,
           changes: [],
           diagnostics: [],
-          data: { status: "rolledBack", attempts: 1 },
+          artifacts: [REPORT],
+          data: { status: "rolledBack", attempts: 1, report: REPORT },
         },
         { dir: "metadata", locale: "en", format: "text" }
       )
       expect(stdout).toContain("took the plan's locks")
       expect(stdout).toContain("rolled back")
+      // Звіт записано: «нічого не записано» було б неправдою
+      expect(stdout).toContain(`rehearsal report written to ${REPORT}`)
+      expect(stdout).toContain("the database was not changed")
+      expect(stdout).not.toContain("nothing was written")
+    })
+
+    it("the JSON of apply names its artifacts", () => {
+      const { stdout } = renderResult(
+        tool("apply"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [REPORT],
+          diagnostics: [],
+          data: { status: "rolledBack", attempts: 1, report: REPORT },
+        },
+        { dir: "metadata", locale: "en", format: "json" }
+      )
+      expect(JSON.parse(stdout)).toMatchObject({
+        artifacts: [REPORT],
+        report: REPORT,
+      })
     })
   })
 })

@@ -40,9 +40,19 @@ const confirm = z.boolean().optional().meta({
  * й запис вирішує `invoke`, тож тут лише перелік полів, які він отримує.
  */
 export function mcpInputSchema(tool: Tool): z.ZodType {
-  // `dryRun` — лише запису файлів; `confirm` — кожному руйнівному, зокрема
-  // `apply`, що файлів не пише: інакше підтвердження до нього не дійшло б
-  const previews = tool.files === "write"
+  // `dryRun` — лише змінам теки метаданих; `confirm` — кожному руйнівному,
+  // зокрема `apply`, що теки не змінює: інакше підтвердження до нього не
+  // дійшло б. Вичерпно по осі файлів: нове значення вирішує тут свій перегляд
+  let previews: boolean
+  switch (tool.files) {
+    case "read":
+    case "artifact":
+      previews = false
+      break
+    case "write":
+      previews = true
+      break
+  }
   if (!previews && !tool.destructive) return tool.input
   if (!(tool.input instanceof z.ZodObject)) {
     throw new Error(
@@ -113,15 +123,23 @@ function toResponse(
         ...data,
       },
       content: [
-        { type: "text", text: renderPlan(data, report, { ok, written, dry }) },
+        { type: "text", text: renderPlan(data, report, { ok, written }) },
       ],
     }
   }
+  // Шлях звіту репетиції — в `artifacts`, як у `plan`: агент читає файл
+  // звідти, а не з тексту
   if (tool.name === "apply") {
     const data = result.data as ApplyData | undefined
     return {
       isError: !ok,
-      structuredContent: { ok, diagnostics, ...data },
+      structuredContent: {
+        ok,
+        written,
+        artifacts: result.artifacts ?? [],
+        diagnostics,
+        ...data,
+      },
       content: [{ type: "text", text: renderApply(data, diagnostics, report) }],
     }
   }

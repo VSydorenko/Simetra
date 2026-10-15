@@ -74,6 +74,12 @@ describe("renderApplyState", () => {
     expect(ledger).toMatch(/^ {2}promotion jsonb,$/m)
   })
 
+  it("gives the ledger a nullable rehearsal hash column", async () => {
+    const sql = renderApplyState(await withoutUsers())
+    const ledger = sql.slice(sql.indexOf("CREATE TABLE simetra.ledger ("))
+    expect(ledger).toMatch(/^ {2}rehearsal_hash text,$/m)
+  })
+
   it("grants nothing on the state tables", async () => {
     for (const m of [await withoutUsers(), await withUsers()]) {
       const sql = renderApplyState(m)
@@ -107,6 +113,7 @@ describe("writeApplyStateStatements", () => {
         allow: [],
         drift: null,
         promotion: null,
+        rehearsalHash: null,
         applyId: "00000000-0000-4000-8000-000000000000",
       })
     ).toThrow(/fingerprint versions differ/)
@@ -116,7 +123,8 @@ describe("writeApplyStateStatements", () => {
   const ledgerValue = (
     drift: DriftReport | null,
     column: string,
-    promotion: { hash: string; record: PromotionRecord } | null = null
+    promotion: { hash: string; record: PromotionRecord } | null = null,
+    rehearsalHash: string | null = null
   ): unknown => {
     const [, ledger] = writeApplyStateStatements({
       planHash: "p",
@@ -131,6 +139,7 @@ describe("writeApplyStateStatements", () => {
       allow: ["drift"],
       drift,
       promotion,
+      rehearsalHash,
       applyId: "00000000-0000-4000-8000-000000000000",
     })
     const columns = /\(([^)]*)\)/
@@ -192,5 +201,13 @@ describe("writeApplyStateStatements", () => {
 
   it("writes SQL NULL for a plan without promotion", () => {
     expect(ledgerValue(null, "promotion")).toBeNull()
+    expect(ledgerValue(null, "rehearsal_hash")).toBeNull()
+  })
+
+  it("records the hash of the rehearsal report", () => {
+    const promotion = { hash: "h".repeat(64), record: RECORD }
+    expect(ledgerValue(null, "rehearsal_hash", promotion, "r".repeat(64))).toBe(
+      "r".repeat(64)
+    )
   })
 })

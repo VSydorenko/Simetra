@@ -154,7 +154,7 @@ function promotionLines(p: PlanPromotion, needs: Set<string>): string[] {
 export function renderPlan(
   d: PlanData | undefined,
   report: string,
-  o: { ok: boolean; written: boolean; dry: boolean }
+  o: { ok: boolean; written: boolean }
 ): string {
   if (d === undefined)
     return [
@@ -166,7 +166,7 @@ export function renderPlan(
   const needs = new Set(d.requiredPermissions)
   const lines = [
     `plan ${short(d.fromHash)} -> ${short(d.toHash)}`,
-    `${o.written ? "written" : "would write"} ${d.file}${o.dry ? " (dry run)" : ""}`,
+    `${o.written ? "written" : "not written"} ${d.file}`,
     `planHash: ${d.planHash}`,
   ]
   if (d.drift !== null) {
@@ -244,6 +244,6 @@ export function renderApply(
         : `apply: outcome unknown — check simetra.ledger for apply id ${String(unknown.params?.applyId)}`
       : d.status === "committed"
         ? `apply: committed in ${d.attempts} attempt(s)`
-        : `rehearse: rolled back after ${d.attempts} attempt(s); nothing was written. The rehearsal took the plan's locks, as apply does.`
+        : `rehearse: rolled back after ${d.attempts} attempt(s); the database was not changed; ${d.report === null ? "no rehearsal report was written" : `rehearsal report written to ${d.report}`}. The rehearsal took the plan's locks, as apply does.`
   return [head, report].join("\n")
 }

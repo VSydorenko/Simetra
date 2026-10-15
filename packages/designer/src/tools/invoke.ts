@@ -37,6 +37,8 @@ export function permits(
     case "read":
       filesOk = true
       break
+    // Артефакт у `plans/` — теж запис на диск: `--read-only` вимикає будь-який
+    case "artifact":
     case "write":
       filesOk = !o.readOnly
       break
@@ -103,6 +105,16 @@ export async function invoke<D>(
       .join("; ")
     return refused("invalid-input", message)
   }
+  // Перегляд є лише в інструмента, що змінює теку метаданих. Канали `dryRun`
+  // іншим не дають, але `invoke` на них не покладається: проігнорований
+  // прапорець разом із `confirm` застосував би план, хоча просили подивитися
+  if (o.dryRun && tool.files !== "write")
+    return refused(
+      "dry-run-unsupported",
+      tool.name === "apply"
+        ? "apply has no dry run: it writes the database, not files. To run the plan and roll it back, rehearse it. Nothing changed."
+        : `${tool.name} has no dry run: only tools that change the metadata directory preview their changes. Nothing changed.`
+    )
   if (!permits(tool, o))
     // Коли заважає лише прапорець запису в базу, підказка називає саме його:
     // `--read-only` вимикає запис у базу завжди, і тоді радити прапорець марно
@@ -115,10 +127,9 @@ export async function invoke<D>(
       noDatabaseHint(o.databaseEnv ?? DEFAULT_DATABASE_URL_ENV, o.channel)
     )
   // Dry-run нічого не пише, тож підтвердження там нічого не захищає, а агентові
-  // перегляд потрібен саме до `confirm`. Лише для запису файлів: інструмент
-  // без `dryRun` (`apply`) його не знає, і прапорець обійшов би підтвердження
-  const preview = o.dryRun && tool.files === "write"
-  if (tool.destructive && !preview && !o.confirmed) {
+  // перегляд потрібен саме до `confirm`. Сюди `dryRun` доходить лише в
+  // інструмента запису файлів (відмова вище)
+  if (tool.destructive && !o.dryRun && !o.confirmed) {
     return refused(
       "unconfirmed",
       `${tool.name} is destructive and needs confirmation. Nothing changed.`
@@ -139,18 +150,31 @@ export async function invoke<D>(
         },
         parsed.data
       )
-      const write =
-        outcome.ok &&
-        tool.files === "write" &&
-        !o.dryRun &&
-        outcome.changes.length > 0
       const artifacts = outcome.artifacts ?? []
       checkArtifacts(root, artifacts)
-      const writeArtifacts =
-        outcome.ok &&
-        tool.files === "write" &&
-        !o.dryRun &&
-        artifacts.length > 0
+      // Вичерпно по осі файлів: зміни теки — лише `write` поза переглядом;
+      // артефакти — `write` поза переглядом і `artifact` завжди (перегляду
+      // в нього немає)
+      let write = false
+      let writeArtifacts = false
+      const files: FilesAccess = tool.files
+      switch (files) {
+        case "read":
+          break
+        case "artifact":
+          // Інструмент лише артефактів, що змінює теку, — дефект інструмента:
+          // його `--read-only` і перегляд вирішено під «нічого в теці»
+          if (outcome.changes.length > 0)
+            throw new Error(
+              `${tool.name} is an artifact tool and must not change the metadata directory`
+            )
+          writeArtifacts = outcome.ok && artifacts.length > 0
+          break
+        case "write":
+          write = outcome.ok && !o.dryRun && outcome.changes.length > 0
+          writeArtifacts = outcome.ok && !o.dryRun && artifacts.length > 0
+          break
+      }
       // Артефакти — до змін теки: записаний запис промоції без змін теки
       // інертний (план відмовить, повторний `promote` перезапише його), а
       // зміни теки без запису не відновити — `promote` вдруге не запуститься,

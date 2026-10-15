@@ -20,7 +20,10 @@ import {
   parsePlan,
   planFileName,
   PLATFORM_VERSION,
+  rehearsalFileName,
+  rehearsalReport,
   serializePlan,
+  serializeRehearsal,
   verifyPlanHash,
   type ApplyTimeouts,
   type DriftReport,
@@ -113,6 +116,11 @@ type ApplyRun =
 export interface ApplyData {
   status: "committed" | "rolledBack"
   attempts: number
+  /**
+   * Звіт успішної репетиції в `plans/` відносно кореня проєкту; `null` —
+   * застосування чи репетиція, звіту якої не записано.
+   */
+  report: string | null
 }
 
 /**
@@ -265,9 +273,9 @@ export async function readPromotionRecords(
 export const planTool = defineTool({
   name: "plan",
   description:
-    "Plan applying the metadata to the live database: drift gate, steps with classes and lock levels, proof on a copy of the current state. Writes plans/<from>-<to>.plan.json next to the metadata directory; the database is only read.",
+    "Plan applying the metadata to the live database: drift gate, steps with classes and lock levels, proof on a copy of the current state. Writes plans/<from>-<to>.plan.json next to the metadata directory and nothing else; the database is only read.",
   input: z.strictObject({}),
-  files: "write",
+  files: "artifact",
   database: "read",
   destructive: false,
   async run({ dir, root, database }): Promise<RunOutcome<PlanData>> {
@@ -377,7 +385,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, remove: and repair: items.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer; a successful rehearsal writes its report to plans/<from>-<to>.rehearsal.json next to the plan. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, remove: and repair: items.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:
@@ -402,7 +410,7 @@ export const applyTool = defineTool({
     lockTimeoutMs: timeoutMs.optional(),
     statementTimeoutMs: timeoutMs.optional(),
   }),
-  files: "read",
+  files: "artifact",
   database: "write",
   destructive: true,
   async run({ dir, root, database }, input): Promise<RunOutcome<ApplyData>> {
@@ -518,15 +526,45 @@ export const applyTool = defineTool({
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
     const outcome = executed.value.outcome
     const diagnostics = outcome.diagnostics.map(fromEngine)
+    const ok = !hasErrors(diagnostics)
     switch (outcome.status) {
       case "committed":
-      case "rolledBack":
         return {
-          ok: !hasErrors(diagnostics),
+          ok,
           changes: [],
           diagnostics,
-          data: { status: outcome.status, attempts: outcome.attempts },
+          data: {
+            status: outcome.status,
+            attempts: outcome.attempts,
+            report: null,
+          },
         }
+      // Звіт успішної репетиції — поруч із файлом плану (рішення 3 плану
+      // П3-2b-3); пише його `invoke`, як і план. Результат з помилками
+      // `invoke` не пише, тож і шлях тоді не називаємо
+      case "rolledBack": {
+        const report = `${PLANS_DIR}/${rehearsalFileName(artifact.fromHash, artifact.toHash)}`
+        return {
+          ok,
+          changes: [],
+          diagnostics,
+          data: {
+            status: outcome.status,
+            attempts: outcome.attempts,
+            report: ok ? report : null,
+          },
+          artifacts: ok
+            ? [
+                {
+                  path: report,
+                  content: serializeRehearsal(
+                    rehearsalReport(artifact.planHash, outcome.evidence)
+                  ),
+                },
+              ]
+            : [],
+        }
+      }
       case "refused":
       case "failed":
         return refusedWith(diagnostics)

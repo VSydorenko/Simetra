@@ -158,9 +158,10 @@ describe("apply over MCP", () => {
     expect(schema.safeParse({ ...applyInput, dryRun: true }).success).toBe(
       false
     )
-    // `plan` пише лише файл: `dryRun` є, підтвердження немає
+    // `plan` пише лише свій артефакт: ні перегляду, ні підтвердження
     const plan = mcpInputSchema(planTool)
-    expect(plan.safeParse({ dryRun: true }).success).toBe(true)
+    expect(plan.safeParse({}).success).toBe(true)
+    expect(plan.safeParse({ dryRun: true }).success).toBe(false)
     expect(plan.safeParse({ confirm: true }).success).toBe(false)
   })
 
@@ -190,7 +191,8 @@ describe("apply over MCP", () => {
   })
 
   it("a dry run does not stand in for confirmation", async () => {
-    // `dryRun`, якого `apply` не знає, інакше обійшов би підтвердження
+    // `dryRun`, якого `apply` не знає, інакше обійшов би підтвердження:
+    // `invoke` відмовляє на ньому раніше, ніж дійде до підтвердження
     const dir = await project()
     const spy = spyDatabase()
     const r = await invoke(applyTool, applyInput, {
@@ -202,7 +204,7 @@ describe("apply over MCP", () => {
       channel: "mcp",
       database: spy.database,
     })
-    expect(r.refusal?.reason).toBe("unconfirmed")
+    expect(r.refusal?.reason).toBe("dry-run-unsupported")
     expect(spy.connects()).toBe(0)
   })
 

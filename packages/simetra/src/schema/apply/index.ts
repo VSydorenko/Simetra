@@ -159,8 +159,18 @@ export {
 } from "./execute"
 export {
   countOf,
+  parseRehearsal,
+  REHEARSAL_FORMAT,
+  REHEARSAL_PHASES,
+  rehearsalFileName,
+  rehearsalHash,
+  rehearsalReport,
+  rehearsalReportSchema,
+  serializeRehearsal,
   type RehearsalEvidence,
+  type RehearsalPhase,
   type RehearsalReport,
+  type RehearsalTimings,
 } from "./rehearsal"
 export {
   checkPermissions,

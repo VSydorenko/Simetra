@@ -27,6 +27,7 @@ import {
   readFingerprint,
   readLedgerHead,
   readServerFacts,
+  rehearsalReport,
   type ApplyDatabase,
   type ApplyDesired,
   type CatalogFingerprint,
@@ -1937,6 +1938,7 @@ describe("executePlan", () => {
       const record: PromotionRecord = { ...RECORD, typeChanges: [] }
       const setup = `${BASE};
         create table app.pt (id int primary key, c text, x bigint);
+        alter table app.pt set (autovacuum_enabled = false);
         insert into app.pt
           select g, md5(g::text), g from generate_series(1, 500000) g;`
       await inTarget(setup, async (url) => {
@@ -1988,11 +1990,17 @@ describe("executePlan", () => {
           { schema: "app", table: "pt", rows: 500000 },
         ])
         expect(evidence.preservation).toEqual(evidence.rows)
-        const { steps: timed, longestStatementMs } = evidence.durations
-        const longest = timed.filter((s) => s.ms === longestStatementMs)
+        // Найдовший — за сирим виміром: округлення звіту могло б зрівняти
+        // два заміри; звіт бере його округленим угору
+        const timed = evidence.durations.steps
+        const max = Math.max(...timed.map((s) => s.ms))
+        const longest = timed.filter((s) => s.ms === max)
         expect(longest.map((s) => s.id)).toEqual([
           expect.stringMatching(/^measure(Before|After)-\d+$/),
         ])
+        expect(
+          rehearsalReport("e".repeat(64), evidence).durations.longestStatementMs
+        ).toBe(Math.ceil(max))
       })
     })
 

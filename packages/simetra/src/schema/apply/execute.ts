@@ -69,7 +69,12 @@ import {
   preservationQuery,
   preservedColumnName,
 } from "./promotion/preservation"
-import { countOf, type RehearsalEvidence } from "./rehearsal"
+import {
+  countOf,
+  type RehearsalEvidence,
+  type RehearsalPhase,
+  type RehearsalTimings,
+} from "./rehearsal"
 import { isRetryable } from "./retry"
 import { readInvalidObjects } from "./validity"
 import {
@@ -518,7 +523,7 @@ function dataMatchesRecord(
  * порядок операторів не змінює: лише читає годинник до й після.
  *
  * Схема id записів `steps` (одне правило, кожен оператор — рівно один
- * запис; задача 3 переносить її в схему звіту):
+ * запис; схема звіту `rehearsalReportSchema` тримає її закритою):
  * - оператор кроку плану — id кроку (`s<N>`); сторожі кроку — порядкові;
  * - оператор таблиці даних — `compute-table-<n>` (CTAS фази 8) і
  *   `write-table-<n>` (єдиний `UPDATE` фази 10), `n` — номер таблиці в
@@ -537,7 +542,10 @@ function dataMatchesRecord(
  * Обгортка живе одну спробу: нумерація й докази — лише останньої спроби,
  * не злиття спроб, бо попередні відкочено повтором.
  *
- * `extract` міряється лише в суму фази, а не записом `steps`: витяг є тільки
+ * Тривалості — сирі, як їх дав годинник; округлює й сумує фази лише
+ * `rehearsalReport`. Тому кожен запис несе свою фазу.
+ *
+ * `extract` міряється лише в `extractMs` фази, а не записом `steps`: витяг є тільки
  * у фазі 18 репетиції (`proveWithEngine`) і на шляху відмови фази 17
  * (`divergedPaths`, де будь-який збій витягу — текст параметра й відкат).
  * Успішне застосування витягу не робить (тест «never extracts on a
@@ -548,15 +556,16 @@ export function timedTransaction(
   tx: ApplyTransaction,
   clock: () => number
 ): ApplyTransaction & {
-  setPhase(phase: string, step?: string): void
-  durations(): RehearsalEvidence["durations"]
+  setPhase(phase: RehearsalPhase, step?: string): void
+  durations(): RehearsalTimings
 } {
-  const phases = new Map<string, number>()
-  const ordinals = new Map<string, number>()
-  const steps: { id: string; ms: number }[] = []
-  let current: string | undefined
+  // Час витягу за фазою; ключі — ще й порядок входу у фази
+  const phases = new Map<RehearsalPhase, number>()
+  const ordinals = new Map<RehearsalPhase, number>()
+  const steps: RehearsalTimings["steps"] = []
+  let current: RehearsalPhase | undefined
   let named: string | undefined
-  const inPhase = (): string => {
+  const inPhase = (): RehearsalPhase => {
     if (current === undefined)
       throw new Error("a rehearsal statement ran before any phase")
     return current
@@ -590,10 +599,7 @@ export function timedTransaction(
       const step = id
       return timed(
         () => tx.query(sql, params),
-        (ms) => {
-          phases.set(phase, phases.get(phase)! + ms)
-          steps.push({ id: step, ms })
-        }
+        (ms) => steps.push({ id: step, phase, ms })
       )
     },
     extract(scope) {
@@ -604,9 +610,8 @@ export function timedTransaction(
       )
     },
     durations: () => ({
-      phases: [...phases].map(([phase, ms]) => ({ phase, ms })),
+      phases: [...phases].map(([phase, extractMs]) => ({ phase, extractMs })),
       steps: [...steps],
-      longestStatementMs: steps.reduce((max, s) => Math.max(max, s.ms), 0),
     }),
   }
 }
@@ -615,7 +620,7 @@ export function timedTransaction(
  * Позначка фази репетиції: `step` — id наступного оператора. Поза
  * репетицією нічого не робить.
  */
-type Mark = (phase: string, step?: string) => void
+type Mark = (phase: RehearsalPhase, step?: string) => void
 
 /**
  * Одна спроба — оператори рішення 11 плану П3-1 по черзі; номери фаз від 7 —
@@ -1002,6 +1007,8 @@ async function runAttempt(
       plan.promotion === null
         ? null
         : { hash: plan.promotion.recordHash, record: plan.promotion.record },
+    // Звіт читає й хеш подає лише застосування промоції; до того — SQL NULL
+    rehearsalHash: null,
     applyId,
   }))
     await tx.query(statement.sql, statement.params)

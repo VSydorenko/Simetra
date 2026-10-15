@@ -231,7 +231,18 @@ export interface PlanArtifact {
   planHash: string
 }
 
-const hashSchema = z.string().regex(/^[0-9a-f]{64}$/)
+export const hashSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
+/** `ServerFacts` строго: та сама форма в плані й у звіті репетиції. */
+export const serverFactsSchema = z.strictObject({
+  major: z.number().int(),
+  encoding: z.string(),
+  collate: z.string(),
+  ctype: z.string(),
+  localeProvider: z.string(),
+  locale: z.string().nullable(),
+  collationVersion: z.string().nullable(),
+})
 
 const sectionTableSchema = z.strictObject({
   schema: z.string(),
@@ -377,15 +388,7 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
     })
     .nullable(),
   role: z.string(),
-  server: z.strictObject({
-    major: z.number().int(),
-    encoding: z.string(),
-    collate: z.string(),
-    ctype: z.string(),
-    localeProvider: z.string(),
-    locale: z.string().nullable(),
-    collationVersion: z.string().nullable(),
-  }),
+  server: serverFactsSchema,
   ledgerHead: z.string().nullable(),
   locks: z.array(
     z.strictObject({
@@ -535,6 +538,14 @@ export function parsePlan(text: string): ParsedPlan {
  * знімка з різних, тож ім'я лише за `to` колізувало б (§6.10).
  */
 export function planFileName(fromHash: string | null, toHash: string): string {
+  return `${planFileStem(fromHash, toHash)}.plan.json`
+}
+
+/**
+ * Спільний префікс файлів переходу `from → to`: плану й звіту його
+ * репетиції (`rehearsalFileName`), щоб вони лежали поруч і не розходились.
+ */
+export function planFileStem(fromHash: string | null, toHash: string): string {
   const from = fromHash === null ? "initial" : fromHash.slice(0, 12)
-  return `${from}-${toHash.slice(0, 12)}.plan.json`
+  return `${from}-${toHash.slice(0, 12)}`
 }

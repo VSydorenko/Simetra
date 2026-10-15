@@ -367,7 +367,8 @@ of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
 it. `rehearse` runs the plan and rolls it back, but still takes the same
 locks as `apply`. It also builds the desired shadow database and proves on the
 same connection that the catalog equals the desired state, so it holds the
-plan's locks a little longer.
+plan's locks a little longer. A successful `rehearse` writes its report to
+`plans/<from>-<to>.rehearsal.json` next to the plan.
 
 Before the end of the transaction, `apply` and `rehearse` re-validate function
 bodies and fire deferred constraints; an invalid constraint or index that the
@@ -437,8 +438,8 @@ pnpm exec simetra mcp --allow-database-write
 - `apply` writes to the database only when the server runs with
   `--allow-database-write`; without it `apply` is refused with a hint to add
   the flag. Ask the owner; never add it yourself. `--read-only` refuses
-  `apply` too.
-- `dryRun` does not apply to `apply`: review with `plan`, and check on the
+  `plan` and `apply` too: they write their files under `plans/`.
+- `plan` and `apply` have no `dryRun`: review with `plan`, and check on the
   database with `rehearse`.
 - The server reads the disk on every call, so edits made by hand between calls
   are seen.

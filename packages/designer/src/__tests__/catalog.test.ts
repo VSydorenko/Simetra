@@ -1,10 +1,13 @@
 import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { compile } from "simetra/compiler"
+import { compile, type FileChange } from "simetra/compiler"
 import { z } from "zod"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { runTool, toolCommand } from "../cli/command"
 import { readMetadataDir } from "../io/metadata-dir"
+import { mcpInputSchema } from "../mcp/tools"
+import { applyTool, planTool } from "../tools/apply-tools"
 import { compileArtifacts } from "../tools/artifacts"
 import { TOOLS, toolByName } from "../tools/catalog"
 import { invoke, permits } from "../tools/invoke"
@@ -192,7 +195,7 @@ describe("tool catalog", () => {
         }
       }
     }
-    // `apply` лише читає файли, але пише в базу: `--read-only` вимикає і його
+    // `apply` пише лише свій артефакт і в базу: `--read-only` вимикає і його
     for (const t of TOOLS) {
       expect(
         permits(t, { readOnly: true, allowDatabaseWrite: true }),
@@ -501,6 +504,166 @@ describe("plan artifacts", () => {
     }
     expect(existsSync(join(dirname(dir), "x.plan.json"))).toBe(false)
     expect(existsSync(join(dir, "x.plan.json"))).toBe(false)
+  })
+})
+
+/** Заглушка інструмента осі `artifact`: пише лише свій артефакт. */
+const artifactTool = (changes: FileChange[] = []) =>
+  defineTool({
+    name: "plan",
+    description: "Artifact tool stub.",
+    input: z.strictObject({}),
+    files: "artifact",
+    database: "none",
+    destructive: false,
+    async run() {
+      return {
+        ok: true,
+        changes,
+        diagnostics: [],
+        artifacts: [{ path: "plans/d.plan.json", content: "{}\n" }],
+      }
+    },
+  }) as Tool
+
+const applyInput = {
+  plan: "plans/initial-0123456789ab.plan.json",
+  planHash: "a".repeat(64),
+}
+
+/** Поля об'єктної схеми входу MCP. */
+const mcpFields = (tool: Tool): string[] => {
+  const schema = mcpInputSchema(tool)
+  return schema instanceof z.ZodObject ? Object.keys(schema.shape) : []
+}
+
+describe("files axis", () => {
+  it("plan and apply write only their artifacts", () => {
+    // Рішення 10 плану П3-2b-3: одна вісь для «пише лише plans/»
+    expect(planTool.files).toBe("artifact")
+    expect(applyTool.files).toBe("artifact")
+    expect(toolByName("promote")!.files).toBe("write")
+  })
+
+  it("dryRun exists only for tools that write files", () => {
+    // Перегляд має сенс лише для змін теки метаданих: інструмент осі
+    // `artifact` нічого не показує наперед, а `dryRun` у `apply` обійшов би
+    // підтвердження
+    for (const t of TOOLS) {
+      expect(mcpFields(t).includes("dryRun"), t.name).toBe(t.files === "write")
+      expect("dry-run" in (toolCommand(t).args ?? {}), t.name).toBe(
+        t.files === "write"
+      )
+    }
+  })
+
+  it("apply has no dryRun", async () => {
+    const schema = mcpInputSchema(applyTool)
+    expect(schema.safeParse({ ...applyInput, confirm: true }).success).toBe(
+      true
+    )
+    expect(
+      schema.safeParse({ ...applyInput, confirm: true, dryRun: true }).success
+    ).toBe(false)
+    const run = vi.fn<Tool["run"]>()
+    const cli = await runTool(
+      { ...applyTool, run } as Tool,
+      {
+        _: [applyInput.plan, await project()],
+        "plan-hash": applyInput.planHash,
+        yes: true,
+        "dry-run": true,
+      },
+      () => Promise.resolve("")
+    )
+    expect(cli.exitCode).toBe(2)
+    expect(cli.stderr).toContain("apply has no --dry-run")
+    expect(run).not.toHaveBeenCalled()
+    const unconfirmed = await invoke(
+      { ...applyTool, run } as Tool,
+      applyInput,
+      {
+        ...opts(await project()),
+        allowDatabaseWrite: true,
+        database: {
+          describe: "db.example.test:5432/app",
+          connect: () => Promise.reject(new Error("must not connect")),
+        },
+      }
+    )
+    expect(unconfirmed.refusal?.reason).toBe("unconfirmed")
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("apply with dryRun commits nothing", async () => {
+    // Канали такого входу не дають, але `invoke` на них не покладається:
+    // `dryRun` інструмента без перегляду — відмова до `run`, а не
+    // підтверджене застосування
+    let connects = 0
+    const database: DatabaseResource = {
+      describe: "db.example.test:5432/app",
+      connect: () => {
+        connects++
+        return Promise.reject(new Error("must not connect"))
+      },
+    }
+    for (const tool of [applyTool, planTool, toolByName("compile")!]) {
+      const run = vi.fn<Tool["run"]>()
+      const r = await invoke(
+        { ...tool, run } as Tool,
+        tool === applyTool ? applyInput : {},
+        {
+          ...opts(await project()),
+          allowDatabaseWrite: true,
+          dryRun: true,
+          confirmed: true,
+          database,
+        }
+      )
+      expect(r.refusal?.reason, tool.name).toBe("dry-run-unsupported")
+      expect(r.written).toBe(false)
+      expect(run).not.toHaveBeenCalled()
+    }
+    expect(connects).toBe(0)
+  })
+
+  it("read-only forbids an artifact tool", async () => {
+    for (const tool of [planTool, applyTool]) {
+      expect(
+        permits(tool, { readOnly: true, allowDatabaseWrite: true }),
+        tool.name
+      ).toBe(false)
+      expect(
+        permits(tool, { readOnly: false, allowDatabaseWrite: true }),
+        tool.name
+      ).toBe(true)
+    }
+    const dir = await project()
+    const r = await invoke(artifactTool(), {}, { ...opts(dir), readOnly: true })
+    expect(r.refusal?.reason).toBe("read-only")
+    expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
+  })
+
+  it("an artifact tool writes its artifacts without a preview", async () => {
+    const dir = await project()
+    const before = await snapshotOf(dir)
+    const r = await invoke(artifactTool(), {}, opts(dir))
+    expect(r.written).toBe(true)
+    expect(r.artifacts).toEqual(["plans/d.plan.json"])
+    expect(existsSync(join(dirname(dir), "plans/d.plan.json"))).toBe(true)
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("an artifact tool may not change the directory", async () => {
+    // Зміни теки в інструмента осі `artifact` — дефект інструмента, а не
+    // відмова: нічого не пишеться, ні теки, ні артефакту
+    const dir = await project()
+    const before = await snapshotOf(dir)
+    await expect(
+      invoke(artifactTool([{ path: CURRENCY, content: "{}" }]), {}, opts(dir))
+    ).rejects.toThrow(/artifact tool/)
+    expect(await snapshotOf(dir)).toEqual(before)
+    expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
   })
 })
 

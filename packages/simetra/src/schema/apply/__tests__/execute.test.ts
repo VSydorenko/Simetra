@@ -7,6 +7,7 @@ import {
   executePlan,
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
+  rehearsalReport,
   type ApplyDatabase,
   type CatalogFingerprint,
   type DataTable,
@@ -72,6 +73,9 @@ const NO_PROVIDER_TABLES: ProviderLockSet[] = SUPABASE_LOCKS.sources.map(
     tables: [],
   })
 )
+
+/** Хеш плану для звіту з доказів фейкової репетиції. */
+const PLAN_HASH = "e".repeat(64)
 
 /** Факти сервера фейкової цілі — ті самі, що прочитав план. */
 const SERVER = {
@@ -2778,7 +2782,9 @@ describe("executePlan", () => {
       })
       if (outcome.status !== "rolledBack")
         throw new Error(`not rolled back: ${outcome.status}`)
-      const { durations, ...rest } = outcome.evidence
+      const { durations: timings, ...rest } = outcome.evidence
+      // Звіт рахує фази й найдовший оператор із сирих вимірів раннера
+      const { durations } = rehearsalReport(PLAN_HASH, outcome.evidence)
       expect(rest).toEqual({
         server: SERVER,
         ledgerHead: null,
@@ -2812,6 +2818,18 @@ describe("executePlan", () => {
       expect(ids.some((id) => /^d\d+$/.test(id))).toBe(false)
       expect(new Set(ids).size).toBe(ids.length)
       expect(durations.steps.every((s) => s.ms === 5)).toBe(true)
+      // Кожен сирий запис несе свою фазу: з `s<N>` її не видно
+      expect(
+        timings.steps
+          .filter((s) => /^s\d/.test(s.id))
+          .map((s) => `${s.id} ${s.phase}`)
+      ).toEqual([
+        "s0 intent",
+        "s0a intent",
+        "s1 engine",
+        "s2 engine",
+        "s3 engine",
+      ])
       expect(durations.phases.map((p) => p.phase)).toEqual([
         "advisory",
         "targetChecks",
@@ -3906,10 +3924,11 @@ describe("executePlan", () => {
 
   describe("rehearsal evidence", () => {
     const rehearse = withMode("rehearse")
+    /** Звіт із доказів: фази й найдовший оператор рахує `rehearsalReport`. */
     const evidenceOf = (outcome: Awaited<ReturnType<typeof executePlan>>) => {
       if (outcome.status !== "rolledBack")
         throw new Error(`not rolled back: ${outcome.status}`)
-      return outcome.evidence
+      return rehearsalReport(PLAN_HASH, outcome.evidence)
     }
 
     it("times the statements of the helpers", async () => {

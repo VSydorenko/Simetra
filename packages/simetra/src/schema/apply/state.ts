@@ -78,6 +78,10 @@ export function renderApplyState(
       // Запис застосованої промоції з хешем (рішення 11 плану П3-2a); з нього
       // `readAppliedPromotions` відрізняє застосований запис від чужого
       "  promotion jsonb,",
+      // Хеш звіту репетиції, на який спиралося застосування промоції
+      // (рішення 7 плану П3-2b-3); колонку старому ledger додає той самий
+      // план, що пише стан
+      "  rehearsal_hash text,",
       "  apply_id uuid NOT NULL UNIQUE,",
       "  engine_name text NOT NULL,",
       "  engine_version text NOT NULL,",
@@ -218,6 +222,11 @@ export interface ApplyRecord {
    * план без промоції.
    */
   promotion: { hash: string; record: PromotionRecord } | null
+  /**
+   * `rehearsalHash` звіту, з яким застосовано промоцію; `null` — без звіту
+   * (план без промоції пише SQL NULL).
+   */
+  rehearsalHash: string | null
   /** UUID виклику раннера; не входить в артефакт і хеш (рішення 14.3). */
   applyId: string
 }
@@ -277,8 +286,8 @@ export function writeApplyStateStatements(
   }
   const ledger = {
     sql: [
-      `INSERT INTO ${LEDGER} (format, plan_hash, from_hash, to_hash, scope, snapshot, target_fingerprint, result_fingerprint, allowed, drift, promotion, apply_id, engine_name, engine_version, fingerprint_version, platform_version)`,
-      "VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::uuid, $13, $14, $15, $16)",
+      `INSERT INTO ${LEDGER} (format, plan_hash, from_hash, to_hash, scope, snapshot, target_fingerprint, result_fingerprint, allowed, drift, promotion, rehearsal_hash, apply_id, engine_name, engine_version, fingerprint_version, platform_version)`,
+      "VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13::uuid, $14, $15, $16, $17)",
     ].join("\n"),
     params: [
       APPLY_STATE_FORMAT,
@@ -294,6 +303,7 @@ export function writeApplyStateStatements(
       record.drift === null ? null : json(record.drift),
       // Так само SQL NULL: план без промоції
       record.promotion === null ? null : json(record.promotion),
+      record.rehearsalHash,
       record.applyId,
       record.engine.name,
       record.engine.version,

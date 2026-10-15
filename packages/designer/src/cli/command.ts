@@ -72,15 +72,24 @@ export async function runTool(
         `Invalid --format "${format}". Expected text or json.`
       )
     }
-    // citty пропускає неоголошені прапорці, а `invoke` знає перегляд лише
-    // для запису файлів: мовчки проігнорований `--dry-run` разом із `--yes`
+    // citty пропускає неоголошені прапорці, а перегляд є лише в змін теки
+    // метаданих: мовчки проігнорований `--dry-run` разом із `--yes`
     // застосував би план до бази, хоча людина просила лише подивитися
-    if (argv["dry-run"] === true && tool.files !== "write") {
-      throw new UsageError(
-        tool.name === "apply"
-          ? "apply has no --dry-run: it writes the database, not files. To run the plan and roll it back, use --rehearse. Nothing changed."
-          : `${tool.name} has no --dry-run: it writes no files. Nothing changed.`
-      )
+    if (argv["dry-run"] === true) {
+      switch (tool.files) {
+        case "read":
+          throw new UsageError(
+            `${tool.name} has no --dry-run: it writes no files. Nothing changed.`
+          )
+        case "artifact":
+          throw new UsageError(
+            tool.name === "apply"
+              ? "apply has no --dry-run: it writes the database, not files. To run the plan and roll it back, use --rehearse. Nothing changed."
+              : `${tool.name} has no --dry-run: it writes only its own file under plans/ and never changes the metadata directory. Nothing changed.`
+          )
+        case "write":
+          break
+      }
     }
     const sweep = tool.name === "compile" && argv.all === true
     if (tool.name === "compile" && argv.staged === true && !sweep) {

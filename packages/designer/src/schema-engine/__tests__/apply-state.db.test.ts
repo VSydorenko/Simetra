@@ -128,6 +128,7 @@ const record: ApplyRecord = {
   allow: ["drop:table:app.old"],
   drift: null,
   promotion: null,
+  rehearsalHash: null,
   applyId: "6f1c1e8e-3d7a-4c3e-9f55-0b7f0a2d9c11",
 }
 
@@ -480,5 +481,57 @@ describe("readAppliedPromotions", () => {
     )
     expect(outcome.run).toMatchObject({ status: "committed" })
     expect(outcome.hashes).toEqual(new Set([await promotionRecordHash(RECORD)]))
+  })
+
+  // Рішення 7 плану П3-2b-3: колонку хешу звіту додає той самий план, що
+  // пише стан; план без промоції пише SQL NULL
+  it("adds the rehearsal column to an older ledger in an applied plan", async () => {
+    const model = await partyModel()
+    const outcome = await inAppliedTarget(async (url) => {
+      await write(url, "ALTER TABLE simetra.ledger DROP COLUMN rehearsal_hash")
+      const plan = await buildPlan(
+        engine,
+        {
+          reader: createApplyDatabase({ readOnly: true }),
+          scratch: createApplyDatabase({ readOnly: false }),
+        },
+        model,
+        { target: { url } },
+        []
+      )
+      if (plan.status !== "planned")
+        throw new Error(
+          `expected planned, got ${plan.status}: ${plan.diagnostics.map((d) => d.message).join("; ")}`
+        )
+      const { artifact } = plan
+      expect(artifact.promotion).toBeNull()
+      const run = await executePlan(
+        createApplyDatabase({ readOnly: false }),
+        { url },
+        artifact,
+        {
+          mode: "apply",
+          planHash: artifact.planHash,
+          allow: artifact.requiredPermissions,
+          snapshot: canonicalSnapshot(model),
+        }
+      )
+      const rows = await createApplyDatabase({ readOnly: true }).transaction(
+        { url },
+        "rollback",
+        (tx) =>
+          tx.query<{ hash: string | null }>(
+            "SELECT rehearsal_hash AS hash FROM simetra.ledger"
+          )
+      )
+      return { artifact, run, rows }
+    })
+    expect(outcome.artifact.steps.map((s) => s.sql)).toContainEqual(
+      expect.stringMatching(
+        /^ALTER TABLE "?simetra"?\."?ledger"? ADD COLUMN "?rehearsal_hash"? text$/
+      )
+    )
+    expect(outcome.run).toMatchObject({ status: "committed" })
+    expect(outcome.rows).toEqual([{ hash: null }])
   })
 })

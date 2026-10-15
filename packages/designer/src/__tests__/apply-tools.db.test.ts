@@ -19,6 +19,7 @@ import {
 } from "simetra/compiler"
 import {
   parsePlan,
+  parseRehearsal,
   serializePlan,
   type ApplyDatabase,
   type PlanArtifact,
@@ -35,6 +36,7 @@ import {
   it,
   vi,
 } from "vitest"
+import { runTool } from "../cli/command"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { createMcpServer } from "../mcp/server"
@@ -349,8 +351,10 @@ describe("plan", () => {
       const before = await snapshotOf(dir)
       const root = dirname(dir)
 
+      // Перегляду в `plan` немає (рішення 10 плану П3-2b-3): `dryRun` —
+      // відмова до роботи, а не мовчазний запис
       const dry = await call("plan", {}, options(dir, url, { dryRun: true }))
-      expect(errors(dry)).toEqual([])
+      expect(dry.refusal?.reason).toBe("dry-run-unsupported")
       expect(dry.written).toBe(false)
       expect(existsSync(join(root, "plans"))).toBe(false)
 
@@ -682,6 +686,80 @@ describe("apply", () => {
     })
   })
 
+  it("writes the rehearsal report next to the plan", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const root = dirname(dir)
+      const data = await planned(dir, url)
+      const file = `plans/initial-${data.toHash.slice(0, 12)}.rehearsal.json`
+      expect(file).toBe(data.file.replace(/\.plan\.json$/, ".rehearsal.json"))
+      const input = {
+        plan: data.file,
+        planHash: data.planHash,
+        rehearse: true,
+      }
+      const r = await call("apply", input, options(dir, url))
+      expect(errors(r)).toEqual([])
+      expect(r.written).toBe(true)
+      expect(r.artifacts).toEqual([file])
+      expect(r.data).toMatchObject({ status: "rolledBack", report: file })
+      const parsed = parseRehearsal(await readFile(join(root, file), "utf8"))
+      if (!parsed.ok) throw new Error(parsed.message)
+      expect(parsed.report.planHash).toBe(data.planHash)
+      expect(await markerExists(url)).toBe(false)
+
+      // Командний рядок: текст називає звіт замість «нічого не записано»,
+      // JSON — шлях в `artifacts`
+      await rm(join(root, file))
+      const argv = {
+        _: [data.file, dir],
+        "plan-hash": data.planHash,
+        rehearse: true,
+        yes: true,
+      }
+      const env = { [ENV]: url }
+      const text = await runTool(
+        toolByName("apply")!,
+        argv,
+        () => Promise.resolve(""),
+        process.cwd(),
+        env
+      )
+      expect(text.exitCode, text.stderr).toBe(0)
+      expect(text.stdout).toContain(`rehearsal report written to ${file}`)
+      expect(text.stdout).not.toContain("nothing was written")
+      expect(existsSync(join(root, file))).toBe(true)
+      const json = await runTool(
+        toolByName("apply")!,
+        { ...argv, format: "json" },
+        () => Promise.resolve(""),
+        process.cwd(),
+        env
+      )
+      expect(json.exitCode, json.stderr).toBe(0)
+      expect(JSON.parse(json.stdout)).toMatchObject({
+        artifacts: [file],
+        report: file,
+      })
+
+      // MCP: шлях і в `artifacts` структурованого результату
+      const client = await connectMcp(dir, url, true)
+      const mcp = await client.callTool({
+        name: "apply",
+        arguments: { ...input, confirm: true },
+      })
+      expect(mcp.isError).toBeFalsy()
+      expect(mcp.structuredContent).toMatchObject({
+        status: "rolledBack",
+        artifacts: [file],
+      })
+      expect((mcp.content as { text: string }[])[0]!.text).toContain(
+        `rehearsal report written to ${file}`
+      )
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
   it("apply --rehearse builds the desired shadow and passes the proof", async () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
@@ -722,6 +800,16 @@ describe("apply", () => {
       )
       expect(errors(r)).toEqual(["engine.shadow-load-failed"])
       expect(r.data).toBeUndefined()
+      // Невдала репетиція звіту не пише
+      expect(r.written).toBe(false)
+      expect(
+        existsSync(
+          join(
+            dirname(dir),
+            `plans/initial-${data.toHash.slice(0, 12)}.rehearsal.json`
+          )
+        )
+      ).toBe(false)
       // `executePlan` не викликано: транзакції цілі не було
       expect(lose.writes).toBe(0)
       expect(await markerExists(url)).toBe(false)

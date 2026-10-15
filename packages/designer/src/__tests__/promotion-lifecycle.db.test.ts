@@ -515,7 +515,7 @@ describe("promotion lifecycle", () => {
       )
 
       // Текст: блок промоції — між дрейфом і кроками
-      const text = renderPlan(data, "", { ok: true, written: true, dry: false })
+      const text = renderPlan(data, "", { ok: true, written: true })
       const block = text.indexOf(`promotion: Catalog Item (${ITEM_ID})`)
       expect(block).toBeGreaterThan(text.indexOf(`planHash: ${data.planHash}`))
       expect(text.indexOf("steps (")).toBeGreaterThan(block)

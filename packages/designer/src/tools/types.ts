@@ -29,8 +29,14 @@ export const PLANS_DIR = "plans"
  * Дві осі замість одного ефекту: запис файлів (у git, лише після чистої
  * компіляції) і дія над базою (поза git) відрізняються незворотністю, тож
  * дозвіл і тертя для них різні. Масиви — для тестів повного добутку осей.
+ *
+ * Вісь файлів: `read` нічого не пише; `artifact` пише лише власні артефакти
+ * в `plans/`, без перегляду `dryRun` і без зміни теки метаданих (`plan`,
+ * `apply`): перегляду нема чого захищати, а в `apply` `dryRun` обійшов би
+ * підтвердження; `write` змінює теку метаданих і має перегляд `dryRun`.
+ * `--read-only` забороняє і `artifact`, і `write` (рішення 10 плану П3-2b-3).
  */
-export const FILES_ACCESS = ["read", "write"] as const
+export const FILES_ACCESS = ["read", "artifact", "write"] as const
 export type FilesAccess = (typeof FILES_ACCESS)[number]
 export const DATABASE_ACCESS = ["none", "read", "write"] as const
 export type DatabaseAccess = (typeof DATABASE_ACCESS)[number]
@@ -75,8 +81,9 @@ export interface RunOutcome<D> {
   data?: D
   refusal?: string
   /**
-   * Файли поза текою метаданих — лише артефакт плану в `plans/` кореня
-   * проєкту (спека designer §3.2). Пише їх `invoke`, як і `changes`.
+   * Файли поза текою метаданих — лише артефакти в `plans/` кореня проєкту
+   * (план, запис промоції, звіт репетиції; спека designer §3.2). Пише їх
+   * `invoke`, як і `changes`.
    */
   artifacts?: FileChange[]
 }
@@ -98,6 +105,7 @@ export type RefusalReason =
   | "database-write-disabled"
   | "no-database"
   | "unconfirmed"
+  | "dry-run-unsupported"
   | "refused"
 
 export interface ToolResult<D = unknown> {

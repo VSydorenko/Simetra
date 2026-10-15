@@ -132,7 +132,7 @@ export function renderResult(
           {
             ok: r.ok,
             written: r.written,
-            ...(tool.name === "plan" ? { artifacts: r.artifacts ?? [] } : {}),
+            artifacts: r.artifacts ?? [],
             ...(r.data as Record<string, unknown> | undefined),
             diagnostics: JSON.parse(report) as unknown,
           },
@@ -146,7 +146,6 @@ export function renderResult(
           ? renderPlan(r.data as PlanData | undefined, report, {
               ok: r.ok,
               written: r.written,
-              dry: !r.written && (r.artifacts ?? []).length > 0,
             })
           : renderApply(r.data as ApplyData | undefined, r.diagnostics, report),
     }
