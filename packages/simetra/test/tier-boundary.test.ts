@@ -1,10 +1,21 @@
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ESLint } from "eslint"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), "..")
 const eslint = new ESLint({ cwd: PKG })
+
+// Перший lintText вантажить конфіг пакета з typescript-eslint і пакетом
+// `typescript` — разова ціна процесу (0,6 с у спокої, до 4,7 с під повним
+// `pnpm test`), а не перевірки межі. Тайм-аут тесту має міряти тест,
+// тому холодний старт винесено в хук зі своїм запасом.
+beforeAll(async () => {
+  await eslint.lintText("", {
+    filePath: join(PKG, "src/model/index.ts"),
+    warnIgnored: true,
+  })
+}, 60_000)
 // Таблицю ярусів тест тримає сам, а не імпортує з конфігу: інакше ярус,
 // що випав із конфігу, випав би й з тесту.
 const TIERS = ["model", "compiler", "schema", "server", "data", "ui", "shell"]
