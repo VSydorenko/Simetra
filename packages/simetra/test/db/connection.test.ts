@@ -4,6 +4,7 @@ import {
   newRunTag,
   RUN_TAG_ENV,
   runObjectPatterns,
+  runObjectStatementPattern,
   runTag,
   SHADOW_PREFIX,
   shadowAgeMinutes,
@@ -90,5 +91,33 @@ describe("run tag names", () => {
       expect(name).not.toMatch(databases)
       expect(name).not.toMatch(roles)
     }
+  })
+})
+
+describe("runObjectStatementPattern", () => {
+  const statement = runObjectStatementPattern("abc123")
+
+  it("matches statements that create the run's objects", () => {
+    for (const sql of [
+      'CREATE DATABASE "simetra_copy_abc123_k3j2h1" TEMPLATE x',
+      'create database "pgdelta_shadow_mv9rieqo_abc123_6uepn5" template template0',
+      "CREATE ROLE simetra_x_abc123 nologin",
+      "CREATE ROLE simetra_x_abc123",
+    ])
+      expect(sql).toMatch(statement)
+  })
+
+  it("does not match another run's or untagged names", () => {
+    for (const sql of [
+      'CREATE DATABASE "simetra_copy_zzz999_k3j2h1" TEMPLATE x',
+      'create database "pgdelta_shadow_mv9rieqo_zzz999_6uepn5" template template0',
+      "CREATE ROLE simetra_x_zzz999 nologin",
+      'CREATE DATABASE "pgdelta_shadow_mv9rieqo_6uepn5"',
+      "CREATE ROLE simetra_build_plan_owner",
+      "CREATE ROLE simetra_x_abc1234 nologin",
+      'CREATE DATABASE "metahub_copy" TEMPLATE x',
+      "DROP DATABASE simetra_copy_abc123_k3j2h1",
+    ])
+      expect(sql).not.toMatch(statement)
   })
 })

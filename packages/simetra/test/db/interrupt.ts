@@ -15,7 +15,7 @@ const SWEEP_TIMEOUT_MS = 40_000
 
 /**
  * Installs a synchronous SIGINT/SIGTERM/SIGHUP handler that kills this
- * process's children, sweeps the stack objects tagged `tag`, calls `release`
+ * process's descendants, sweeps the stack objects tagged `tag`, calls `release`
  * and exits with `128 + signal number`. Returns a function that removes it.
  */
 export function installInterruptCleanup(o: {
@@ -27,10 +27,14 @@ export function installInterruptCleanup(o: {
   const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
   const sweep = fileURLToPath(new URL("./sweep.ts", import.meta.url))
   const handler = (signal: NodeJS.Signals): void => {
+    // Слухачі `once` (і наш, і vitest) уже зняті: без заглушок другий Ctrl-C
+    // убив би процес посеред прибирання — без `release` і з теговими
+    // об'єктами на стеку. Вихід усе одно настане з `process.exit` нижче
+    for (const other of SIGNALS) process.on(other, ignore)
     process.stderr.write(
       `\n${signal}: stopping DB run ${o.tag} and removing its stack objects…\n`
     )
-    killChildren()
+    killDescendants()
     const result = spawnSync(
       process.execPath,
       ["--import", tsx, sweep, o.tag],
@@ -52,26 +56,36 @@ export function installInterruptCleanup(o: {
   }
 }
 
-// Воркери vitest — прямі діти: живий воркер продовжував би створювати
-// об'єкти, поки прибиральник їх видаляє
-function killChildren(): void {
-  const found = spawnSync("pgrep", ["-P", String(process.pid)], {
-    encoding: "utf8",
-  })
-  if (found.error !== undefined) {
-    process.stderr.write(
-      `pgrep is unavailable (${found.error.message}): child processes are not killed before the sweep\n`
-    )
-    return
+function ignore(): void {}
+
+// Воркери vitest — прямі діти, але й вони, і тести породжують своїх (фікстури,
+// CLI designer): будь-який живий нащадок міг би створювати тегові об'єкти,
+// поки прибиральник їх видаляє. Спершу збираємо все дерево, потім SIGKILL
+// згори вниз: убитий батько вже не породить нових, а осиротілих дітей ми
+// знаємо за pid, хоч `pgrep -P` їх після переприв'язки й не знайшов би
+function killDescendants(): void {
+  const all: string[] = []
+  for (let level = [String(process.pid)]; level.length > 0;) {
+    const found = spawnSync("pgrep", ["-P", level.join(",")], {
+      encoding: "utf8",
+    })
+    if (found.error !== undefined) {
+      process.stderr.write(
+        `pgrep is unavailable (${found.error.message}): child processes are not killed before the sweep\n`
+      )
+      break
+    }
+    level = found.stdout.split("\n").filter((line) => line !== "")
+    all.push(...level)
   }
-  for (const pid of found.stdout.split("\n").filter((line) => line !== ""))
+  for (const pid of all)
     try {
       process.kill(Number(pid), "SIGKILL")
     } catch (error) {
       // Виняток тут зірвав би обробник до прибирання — лише повідомляємо
       if ((error as NodeJS.ErrnoException).code !== "ESRCH")
         process.stderr.write(
-          `Could not kill child ${pid}: ${(error as Error).message}\n`
+          `Could not kill process ${pid}: ${(error as Error).message}\n`
         )
     }
 }

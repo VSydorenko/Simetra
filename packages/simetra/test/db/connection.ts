@@ -91,11 +91,35 @@ export function runObjectPatterns(tag: string): {
   databases: RegExp
   roles: RegExp
 } {
+  const { database, role } = runNameShapes(tag)
   return {
-    databases: new RegExp(
-      `^(pgdelta_shadow_[0-9a-z]+_${tag}_[0-9a-z]+|simetra_[a-z0-9_]+_${tag}_[0-9a-z]+)$`
-    ),
-    roles: new RegExp(`^simetra_[a-z0-9_]+_${tag}$`),
+    databases: new RegExp(`^(${database})$`),
+    roles: new RegExp(`^(${role})$`),
+  }
+}
+
+/**
+ * Шаблон оператора, що створює об'єкт прогону: `CREATE DATABASE|ROLE` з
+ * тегованим ім'ям (лапки необов'язкові), без якорів — шукається в тексті
+ * запиту `pg_stat_activity`. Прибиральник передає `.source` в `~*`: поки
+ * `CREATE` убитого воркера не зафіксовано, рядка в каталозі ще немає, і
+ * видно лише сам запит. Нечутливий до регістру, як і SQL.
+ */
+export function runObjectStatementPattern(tag: string): RegExp {
+  const { database, role } = runNameShapes(tag)
+  // Після імені — межа, інакше тег-префікс довшого імені теж збігся б
+  return new RegExp(
+    `create\\s+(database\\s+"?(${database})|role\\s+"?(${role}))("|;|\\s|$)`,
+    "i"
+  )
+}
+
+// Форми імен прогону — одне джерело для каталожних шаблонів і шаблону
+// оператора; синтаксис — спільна підмножина JS і POSIX ARE
+function runNameShapes(tag: string): { database: string; role: string } {
+  return {
+    database: `pgdelta_shadow_[0-9a-z]+_${tag}_[0-9a-z]+|simetra_[a-z0-9_]+_${tag}_[0-9a-z]+`,
+    role: `simetra_[a-z0-9_]+_${tag}`,
   }
 }
 

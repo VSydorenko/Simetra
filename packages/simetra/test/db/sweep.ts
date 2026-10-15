@@ -5,7 +5,11 @@
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
-import { runObjectPatterns, testSuperuserUrl } from "./connection"
+import {
+  runObjectPatterns,
+  runObjectStatementPattern,
+  testSuperuserUrl,
+} from "./connection"
 
 // Тег вставляється в шаблон без екранування: інша форма тегу (з аргументу CLI)
 // розширила б шаблон на чужі об'єкти
@@ -16,9 +20,10 @@ const PASS_PAUSE_MS = 1_000
 const CONNECT_TIMEOUT_MS = 5_000
 
 /**
- * Drops every stack database and role tagged with `tag`, repeating the pass
- * until one finds nothing or `deadlineMs` runs out. A failed DROP does not
- * stop the pass; whatever is still found at the end is returned in `left`.
+ * Drops every stack database and role tagged with `tag` and terminates the
+ * backends still creating one, repeating the pass until one finds nothing or
+ * `deadlineMs` runs out. A failed DROP does not stop the pass; whatever is
+ * still found at the end is returned in `left`.
  */
 export async function sweepRun(
   tag: string,
@@ -27,6 +32,7 @@ export async function sweepRun(
   checkTag(tag)
   const deadline = Date.now() + (o.deadlineMs ?? DEFAULT_DEADLINE_MS)
   const { databases, roles } = runObjectPatterns(tag)
+  const creating = runObjectStatementPattern(tag)
   // Ролі видаляє лише supabase_admin; `DROP OWNED BY` діє в поточній базі,
   // а тести працюють у `postgres`
   const url = new URL(testSuperuserUrl())
@@ -39,6 +45,18 @@ export async function sweepRun(
   try {
     const dropped: string[] = []
     for (;;) {
+      // `CREATE DATABASE` убитого воркера сервер доводить до кінця й після
+      // смерті клієнта, а до фіксації рядка в каталозі немає: прохід без
+      // таких запитів у pg_stat_activity ще не означає «чисто». Лише запити,
+      // що створюють тегове ім'я цього прогону, — чужий бекенд не чіпаємо.
+      // Запити читаються до каталогу: `CREATE`, зафіксований між двома
+      // читаннями, видно хоча б в одному з них
+      const inFlight = (
+        await client.query<{ pid: number; query: string }>(
+          "select pid, query from pg_stat_activity where pid <> pg_backend_pid() and state = 'active' and query ~* $1",
+          [creating.source]
+        )
+      ).rows
       const found = {
         databases: await names(
           client,
@@ -51,9 +69,17 @@ export async function sweepRun(
           roles.source
         ),
       }
-      const all = [...found.databases, ...found.roles]
+      const all = [
+        ...found.databases,
+        ...found.roles,
+        ...inFlight.map(
+          ({ pid, query }) => `backend ${pid} (${query.slice(0, 120)})`
+        ),
+      ]
       if (all.length === 0) return { dropped, left: [] }
       if (Date.now() > deadline) return { dropped, left: all }
+      for (const { pid } of inFlight)
+        await tryQuery(client, "SELECT pg_terminate_backend($1)", [pid])
       const id = (name: string): string => client.escapeIdentifier(name)
       // Бази спершу: роль, що володіє базою, не видалиться
       for (const name of found.databases)
@@ -67,8 +93,7 @@ export async function sweepRun(
           )
         )
           dropped.push(name)
-      // Повторний прохід ловить те, що встигло з'явитися: `CREATE DATABASE`
-      // убитого воркера сервер доводить до кінця й після смерті клієнта
+      // Повторний прохід ловить те, що встигло з'явитися між запитами
       await new Promise((resolve) => setTimeout(resolve, PASS_PAUSE_MS))
     }
   } finally {
@@ -102,9 +127,13 @@ async function names(
   )
 }
 
-async function tryQuery(client: pg.Client, sql: string): Promise<boolean> {
+async function tryQuery(
+  client: pg.Client,
+  sql: string,
+  params: unknown[] = []
+): Promise<boolean> {
   try {
-    await client.query(sql)
+    await client.query(sql, params)
     return true
   } catch (error) {
     process.stderr.write(`${sql}: ${(error as Error).message}\n`)
@@ -147,4 +176,11 @@ function isMain(): boolean {
   }
 }
 
-if (isMain()) process.exitCode = await cli(process.argv[2])
+if (isMain()) {
+  // Другий Ctrl-C чи SIGHUP дістається всій групі процесів, тобто й
+  // прибиральнику: обірваний посеред проходу, він лишив би тегові об'єкти.
+  // Межа в нього й так є — власний дедлайн і SIGTERM від таймаута spawnSync
+  process.on("SIGINT", () => {})
+  process.on("SIGHUP", () => {})
+  process.exitCode = await cli(process.argv[2])
+}

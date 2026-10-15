@@ -27,9 +27,14 @@ const SWEEP = fileURLToPath(new URL("./sweep.ts", import.meta.url))
 const INTERRUPT_TIMEOUT_MS = 90_000
 
 describe("an interrupted DB run", () => {
-  it.each(["SIGTERM", "SIGINT"] as const)(
-    "removes its own stack objects on %s",
-    async (signal) => {
+  it.each([
+    ["SIGTERM", undefined],
+    ["SIGINT", undefined],
+    // Другий Ctrl-C посеред прибирання: обробник мусить його проковтнути
+    ["SIGINT", "SIGINT"],
+  ] as const)(
+    "removes its own stack objects on %s (second signal: %s)",
+    async (signal, second) => {
       const tag = newRunTag()
       const child = spawn(process.execPath, ["--import", TSX, FIXTURE, tag], {
         env: { ...process.env, [RUN_TAG_ENV]: tag },
@@ -43,6 +48,11 @@ describe("an interrupted DB run", () => {
         // Воркер тим часом створює нові бази: сигнал застає його посеред роботи
         await new Promise((resolve) => setTimeout(resolve, 500))
         child.kill(signal)
+        if (second !== undefined) {
+          // Обробник уже в spawnSync прибиральника
+          await new Promise((resolve) => setTimeout(resolve, 300))
+          child.kill(second)
+        }
         const [code] = await withDeadline(exited, 45_000)
 
         expect(code).toBe(128 + constants.signals[signal])
@@ -59,8 +69,11 @@ describe("an interrupted DB run", () => {
           child.kill("SIGKILL")
         // Лише живому воркеру: pid мертвого міг уже дістатися іншому процесу
         if (ready !== undefined && !workerGone) killQuietly(ready.workerPid)
-        await sweepRun(tag)
-        if (ready !== undefined) await dropDatabase(ready.foreign)
+        // Коротка межа: очікування виходу (до 45 с) і прибирання разом мають
+        // уміститися в таймаут тесту
+        await cleanup(() => sweepRun(tag, { deadlineMs: 10_000 }))
+        const foreign = ready?.foreign
+        if (foreign !== undefined) await cleanup(() => dropDatabase(foreign))
       }
     },
     INTERRUPT_TIMEOUT_MS
@@ -86,10 +99,21 @@ describe("an interrupted DB run", () => {
       expect(code).toBe(1)
       expect(Date.now() - started).toBeLessThan(10_000)
       expect(stderr).toContain(tag)
+      expect(stderr).toContain("DROP DATABASE")
     },
     INTERRUPT_TIMEOUT_MS
   )
 })
+
+// Збій прибирання лише повідомляємо: виняток з `finally` затер би первинну
+// помилку тесту, а звірка стеку після прогону однаково назве залишки
+async function cleanup(step: () => Promise<unknown>): Promise<void> {
+  try {
+    await step()
+  } catch (error) {
+    process.stderr.write(`Test cleanup failed: ${(error as Error).message}\n`)
+  }
+}
 
 async function readyLine(
   child: ChildProcess
