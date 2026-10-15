@@ -330,6 +330,26 @@ export async function findApply(
 }
 
 /**
+ * Голова ledger — `apply_id` рядка з найбільшим `id` (рішення 1 плану
+ * П3-2b-3): копія, що отримала ті самі плани окремими застосуваннями, має
+ * той самий ланцюжок, але іншу голову. `null` — ledger немає чи він
+ * порожній: перше застосування створює його в тій самій транзакції.
+ */
+export async function readLedgerHead(
+  tx: ApplyTransaction
+): Promise<string | null> {
+  const [table] = await tx.query<{ exists: boolean }>(
+    "SELECT to_regclass($1) IS NOT NULL AS exists",
+    [LEDGER]
+  )
+  if (table?.exists !== true) return null
+  const [row] = await tx.query<{ head: string }>(
+    `SELECT apply_id::text AS head FROM ${LEDGER} ORDER BY id DESC LIMIT 1`
+  )
+  return row?.head ?? null
+}
+
+/**
  * Хеші застосованих записів промоції (`ledger.promotion->>'hash'`, рішення 1
  * плану П3-2a): рядок 5 таблиці рішень відрізняє з них застосований запис від
  * чужого. Ledger без колонки `promotion` — форма до промоцій, у ній жодну

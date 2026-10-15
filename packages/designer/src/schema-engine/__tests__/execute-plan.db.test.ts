@@ -11,6 +11,7 @@ import {
 import {
   compile,
   loadSqlParser,
+  localize,
   promotionRecordHash,
   type PromotionRecord,
 } from "simetra/compiler"
@@ -24,6 +25,8 @@ import {
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
   readFingerprint,
+  readLedgerHead,
+  readServerFacts,
   type ApplyDatabase,
   type ApplyDesired,
   type CatalogFingerprint,
@@ -324,6 +327,22 @@ const sessionPath = (url: string): Promise<string> =>
     readSessionSearchPath
   )
 
+/**
+ * Факти сервера й голова ledger цілі — як їх записав би план тією самою
+ * транзакцією READ ONLY, що й стан.
+ */
+const identityOf = (
+  url: string
+): Promise<Pick<ExecutablePlan, "server" | "ledgerHead">> =>
+  createApplyDatabase({ readOnly: true }).transaction(
+    { url },
+    "rollback",
+    async (tx) => ({
+      server: await readServerFacts(tx),
+      ledgerHead: await readLedgerHead(tx),
+    })
+  )
+
 /** План від `fromHash` до `toHash` над живою ціллю. */
 async function planFor(
   url: string,
@@ -350,6 +369,7 @@ async function planFor(
     // Цілі тестів глобальних ADP ролі не мають
     environment: { defaultPrivileges: [] },
     resultCatalog: { tables: [], enumTypes: [], units: [] },
+    ...(await identityOf(url)),
     ...over,
     providerLocks:
       over.providerLocks ?? (await providerList(url, over.role ?? "postgres")),
@@ -395,6 +415,7 @@ async function establish(url: string, hash: string): Promise<void> {
       requiredPermissions: [],
       drift: null,
       role: "postgres",
+      ...(await identityOf(url)),
       locks: [],
       implicitLocks: [],
       providerLocks: await providerList(url),
@@ -707,6 +728,197 @@ describe("executePlan", () => {
       expect(String(params.first)).toMatch(/app.*\bn\b/i)
       expect(await exists(url, "app.n")).toBe(false)
       expect(await marker(url)).toBeUndefined()
+    })
+  })
+
+  describe("the proof that a rehearsal copy is a copy of this target", () => {
+    /** Роль-власник об'єктів копії, відновленої під іншими власниками. */
+    const COPY_OWNER = "simetra_copy_owner"
+
+    /** Ім'я бази з адреси. */
+    const nameOf = (url: string): string => new URL(url).pathname.slice(1)
+
+    /** Адреса бази `name` з тими самими роллю й сервером, що й `url`. */
+    const onDatabase = (url: string, name: string): string => {
+      const at = new URL(url)
+      at.pathname = `/${name}`
+      return at.toString()
+    }
+
+    /**
+     * Копія цілі — окрема база стеку `CREATE DATABASE … <how>` з власником
+     * `postgres`, як тінь двигуна; прибирається у `finally`, зокрема на шляху
+     * падіння: інакше її зловить сторож стеку.
+     */
+    async function withCopy<T>(
+      how: string,
+      fn: (url: string) => Promise<T>
+    ): Promise<T> {
+      const name = `simetra_copy_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+      await other(
+        testSuperuserUrl(),
+        `create database ${name} owner postgres ${how}`
+      )
+      try {
+        return await fn(onDatabase(testDatabaseUrl(), name))
+      } finally {
+        await other(
+          testSuperuserUrl(),
+          `drop database if exists ${name} with (force)`
+        )
+      }
+    }
+
+    const rehearse = (
+      url: string,
+      plan: ExecutablePlan,
+      proof = stubRehearsal
+    ) =>
+      executePlan(apply, { url }, plan, {
+        ...options,
+        mode: "rehearse",
+        rehearsal: proof,
+      })
+
+    it("refuses a copy with the same chain and another head", async () => {
+      // Review Focus 1 плану П3-2b-3: staging того самого проєкту отримав ті
+      // самі плани окремими застосуваннями — ланцюжок, роль, відбиток і
+      // сервер збігаються, голова ledger — ні
+      await inTarget(BASE, (url) =>
+        withCopy(`template ${nameOf(url)}`, async (copy) => {
+          const first = await planFor(url, [CREATE_N])
+          for (const db of [url, copy])
+            expect(
+              await executePlan(apply, { url: db }, first, options)
+            ).toMatchObject({ status: "committed" })
+          const next = await planFor(
+            url,
+            [step("s1", "CREATE TABLE app.m (id int)")],
+            { fromHash: H1, toHash: H2 }
+          )
+          const outcome = await rehearse(copy, next)
+          expect(outcome).toMatchObject({
+            status: "refused",
+            diagnostics: [
+              { code: "apply.target-changed", params: { sections: "ledger" } },
+            ],
+          })
+          expect(await exists(copy, "app.m")).toBe(false)
+          // Та сама репетиція на самій цілі проходить
+          expect(await rehearse(url, next)).toMatchObject({
+            status: "rolledBack",
+          })
+        })
+      )
+    })
+
+    it("rehearses a copy restored under other owners", async () => {
+      // Review Focus 2 плану П3-2b-3 і вимір задачі 0: таблиця без явних
+      // грантів (relacl IS NULL) у копії належить ролі, членом якої є роль
+      // застосування. Фаза 6 репетиції порівнює без власника й пропускає;
+      // повний доказ двигуна бачить дії ACL, і відмова називає причину
+      try {
+        await other(
+          testSuperuserUrl(),
+          `drop role if exists ${COPY_OWNER};
+           create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
+        )
+        await inTarget(BASE, (url) =>
+          withCopy(`template ${nameOf(url)}`, async (copy) => {
+            await other(
+              asSuperuser(copy),
+              `alter table app.t owner to ${COPY_OWNER}`
+            )
+            expect(
+              await other<{ acl: string | null }>(
+                copy,
+                "select relacl::text as acl from pg_class where oid = 'app.t'::regclass"
+              )
+            ).toEqual([{ acl: null }])
+            const plan = await planFor(url, [CREATE_N])
+            const rehearsed = await rehearse(copy, plan, {
+              engine,
+              desired: await desiredCatalog(BASE, [CREATE_N]),
+            })
+            expect(rehearsed).toMatchObject({
+              status: "failed",
+              diagnostics: [
+                {
+                  code: "apply.rehearsal-proof-failed",
+                  params: { cause: "owners" },
+                },
+              ],
+            })
+            const [refusal] = rehearsed.diagnostics
+            expect(refusal!.message).toContain(
+              "the owners of the copy differ from the target"
+            )
+            expect(localize(refusal!, "en").hint).toContain(
+              "pg_restore --no-owner"
+            )
+            expect(localize(refusal!, "uk").hint).toContain(
+              "pg_restore --no-owner"
+            )
+            // Та сама різниця на застосуванні — ціль змінилась
+            const applied = await executePlan(
+              apply,
+              { url: copy },
+              plan,
+              options
+            )
+            expect(applied).toMatchObject({
+              status: "refused",
+              diagnostics: [
+                { code: "apply.target-changed", params: { sections: "owner" } },
+              ],
+            })
+            expect(await exists(copy, "app.n")).toBe(false)
+            expect(await marker(copy)).toBeUndefined()
+          })
+        )
+      } finally {
+        // Роль — після баз: бази з її об'єктами вже прибрано
+        await other(testSuperuserUrl(), `drop role if exists ${COPY_OWNER}`)
+      }
+    })
+
+    it("refuses a copy on another server", async () => {
+      // Аудит Codex: копія з тією самою схемою й станом, але іншим
+      // упорядкуванням — інший факт сервера, відмова до першого кроку. Ціль і
+      // копію будує той самий рецепт, різниться лише `LC_COLLATE`/`LC_CTYPE`
+      const recipe = `${desired.sql};\n${BASE}`
+      await withCopy("template template0", (url) =>
+        withCopy(
+          "template template0 lc_collate 'C' lc_ctype 'C'",
+          async (copy) => {
+            await other(url, recipe)
+            await other(copy, recipe)
+            const plan = await planFor(url, [CREATE_N])
+            expect(
+              await other<{ collate: string }>(
+                copy,
+                "select datcollate as collate from pg_database where datname = current_database()"
+              )
+            ).toEqual([{ collate: "C" }])
+            expect(plan.server.collate).not.toBe("C")
+            const outcome = await rehearse(copy, plan)
+            expect(outcome).toMatchObject({
+              status: "refused",
+              diagnostics: [
+                {
+                  code: "apply.target-changed",
+                  params: { sections: "server" },
+                },
+              ],
+            })
+            expect(await exists(copy, "app.n")).toBe(false)
+            // Та сама репетиція на самій цілі проходить
+            expect(await rehearse(url, plan)).toMatchObject({
+              status: "rolledBack",
+            })
+          }
+        )
+      )
     })
   })
 
@@ -2818,6 +3030,8 @@ describe("executePlan", () => {
         locks: [{ schema: "app", name: "n", mode: "accessExclusive" }],
         targetFingerprint: await read(url),
         desiredFingerprint: fingerprintA,
+        // Голова ledger — після першого застосування, як прочитав би план
+        ...(await identityOf(url)),
       }
       expect(
         await executePlan(apply, { url }, back, {
@@ -2843,10 +3057,12 @@ describe("executePlan", () => {
           })
         },
       }
+      // Повтор переходу A→B з тим самим `planHash`; голова ledger — поточна,
+      // інакше відмова фази 4e настала б раніше за обрив
       const outcome = await executePlan(
         lostBeforeCommit,
         { url },
-        forward,
+        { ...forward, ...(await identityOf(url)) },
         options
       )
       expect(outcome).toMatchObject({

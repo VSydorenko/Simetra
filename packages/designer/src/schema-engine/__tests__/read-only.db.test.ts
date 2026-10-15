@@ -8,7 +8,9 @@ import {
   desiredForApply,
   executePlan,
   readFingerprint,
+  readLedgerHead,
   readProviderLocks,
+  readServerFacts,
   readSessionSearchPath,
   SUPABASE_LOCKS,
   type ApplyDesired,
@@ -261,6 +263,14 @@ describe("transaction-mode pooler", () => {
         requiredPermissions: [],
         drift: null,
         role: "postgres",
+        ...(await createApplyDatabase({ readOnly: true }).transaction(
+          { url },
+          "rollback",
+          async (tx) => ({
+            server: await readServerFacts(tx),
+            ledgerHead: await readLedgerHead(tx),
+          })
+        )),
         locks: [],
         implicitLocks: [],
         providerLocks: await createApplyDatabase({

@@ -26,6 +26,20 @@ const OWNER_RECIPE = {
   uk: "Відновіть власника через `ALTER … OWNER TO <роль>` для кожного названого об'єкта (індекси, рядкові типи й послідовності колонок ідуть за своєю таблицею) або підключайтеся від ролі-власника, якщо вона прикладна; якщо власник — службова роль провайдера, об'єкт належить провайдеру: приберіть його з межі керування",
 }
 
+/**
+ * Причина `cause: "owners"` відмов репетиції (рішення 1 плану П3-2b-3):
+ * копію відновлено під іншими власниками. Порада одна для фази 6
+ * (`apply.target-changed`) і фази 18 (`apply.rehearsal-proof-failed`).
+ */
+const COPY_OWNERS = {
+  en: "the owners of the copy differ from the target",
+  uk: "власники об'єктів копії відрізняються від цілі",
+}
+const COPY_OWNERS_HINT = {
+  en: "Nothing was written. Restore the copy with the plan's role and `pg_restore --no-owner`, so its objects are owned by the plan's role as on the target, then rehearse again.",
+  uk: "Нічого не записано. Відновіть копію роллю плану з `pg_restore --no-owner`, щоб її об'єктами, як і на цілі, володіла роль плану, і повторіть репетицію.",
+}
+
 /** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
 const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
   requiredWithoutDefault: {
@@ -2281,12 +2295,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.target-changed": {
     en: (p) =>
-      `The database changed after the plan was built; catalog fingerprint sections: ${p.sections}`,
+      `The database changed after the plan was built; catalog fingerprint sections: ${p.sections}${p.cause === "owners" ? `; ${COPY_OWNERS.en}` : ""}`,
     uk: (p) =>
-      `База змінилася після побудови плану; секції відбитка каталогу: ${p.sections}`,
+      `База змінилася після побудови плану; секції відбитка каталогу: ${p.sections}${p.cause === "owners" ? `; ${COPY_OWNERS.uk}` : ""}`,
     hint: {
-      en: "Nothing was written. Plan again; permissions of the old plan no longer apply.",
-      uk: "Нічого не записано. Сплануйте знову; дозволи старого плану більше не діють.",
+      en: (p) =>
+        p.cause === "owners"
+          ? COPY_OWNERS_HINT.en
+          : "Nothing was written. Plan again; permissions of the old plan no longer apply.",
+      uk: (p) =>
+        p.cause === "owners"
+          ? COPY_OWNERS_HINT.uk
+          : "Нічого не записано. Сплануйте знову; дозволи старого плану більше не діють.",
     },
   },
   "apply.verify-failed": {
@@ -2477,12 +2497,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.rehearsal-proof-failed": {
     en: (p) =>
-      `After the plan's steps the engine still finds ${p.count} action(s) to the desired state, the first: ${p.first}. The rehearsal was rolled back`,
+      `After the plan's steps the engine still finds ${p.count} action(s) to the desired state, the first: ${p.first}${p.cause === "owners" ? `; ${COPY_OWNERS.en}` : ""}. The rehearsal was rolled back`,
     uk: (p) =>
-      `Репетиція не довела стан: після кроків двигун ще бачить ${p.count} дій до бажаного стану, перша — ${p.first}. Репетицію відкочено.`,
+      `Репетиція не довела стан: після кроків двигун ще бачить ${p.count} дій до бажаного стану, перша — ${p.first}${p.cause === "owners" ? `; ${COPY_OWNERS.uk}` : ""}. Репетицію відкочено.`,
     hint: {
-      en: "Nothing was written. The plan does not reach the desired state on this database; plan again, and report the plan if the difference repeats.",
-      uk: "Нічого не записано. План не доводить цю базу до бажаного стану; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",
+      en: (p) =>
+        p.cause === "owners"
+          ? COPY_OWNERS_HINT.en
+          : "Nothing was written. The plan does not reach the desired state on this database; plan again, and report the plan if the difference repeats.",
+      uk: (p) =>
+        p.cause === "owners"
+          ? COPY_OWNERS_HINT.uk
+          : "Нічого не записано. План не доводить цю базу до бажаного стану; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",
     },
   },
   "apply.temp-name-taken": {

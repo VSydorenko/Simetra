@@ -18,6 +18,7 @@ export {
   findApply,
   readApplyState,
   readAppliedPromotions,
+  readLedgerHead,
   renderApplyState,
   writeApplyStateStatements,
   type ApplyRecord,
@@ -25,6 +26,7 @@ export {
   type ApplyStateObjects,
   type MarkerRecord,
 } from "./state"
+export { readServerFacts, type ServerFacts } from "./server"
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
 export {

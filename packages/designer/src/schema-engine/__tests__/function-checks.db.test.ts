@@ -16,7 +16,9 @@ import {
   planFootprint,
   planLocks,
   readFingerprint,
+  readLedgerHead,
   readProviderLocks,
+  readServerFacts,
   readSessionSearchPath,
   SUPABASE_LOCKS,
   tableKey,
@@ -232,6 +234,10 @@ async function planFor(
     environment: { defaultPrivileges: [] },
     resultCatalog: EMPTY_MODEL,
     targetFingerprint: await read(url),
+    ...(await reader.transaction({ url }, "rollback", async (tx) => ({
+      server: await readServerFacts(tx),
+      ledgerHead: await readLedgerHead(tx),
+    }))),
     ...over,
     desiredFingerprint:
       over.desiredFingerprint ?? (await desiredFingerprint(url, steps)),

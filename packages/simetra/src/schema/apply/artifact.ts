@@ -36,6 +36,7 @@ import {
   type TableLock,
 } from "./locks"
 import { DATA_TRIGGER_MODES, type DataTable } from "./promotion/data"
+import type { ServerFacts } from "./server"
 import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
 
 /**
@@ -144,6 +145,20 @@ export interface PlanArtifact {
    * замки, власники й шлях запису, тож застосування іншою роллю — відмова.
    */
   role: string
+  /**
+   * Факти сервера цілі (`readServerFacts`), прочитані планом тією самою
+   * транзакцією READ ONLY, що й стан застосування (рішення 1–2 плану
+   * П3-2b-3). Під хешем: репетиція й застосування звіряють з ними живу базу
+   * (фаза 4e), тож копія на іншому сервері — не копія цієї цілі.
+   */
+  server: ServerFacts
+  /**
+   * Голова ledger цілі (`readLedgerHead`) на момент плану; `null` — ledger
+   * немає чи він порожній. Фаза 4e звіряє її: копія з тим самим ланцюжком,
+   * але окремими застосуваннями, має іншу голову. Для першого застосування
+   * пункт нічого не відрізняє — відоме обмеження.
+   */
+  ledgerHead: string | null
   /**
    * Що раннер блокує до кроків: вихідні імена з режимом, у детермінованому
    * порядку, за слідом кроків (R26 плану П3-2a). Рахує `planLocks`.
@@ -362,6 +377,16 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
     })
     .nullable(),
   role: z.string(),
+  server: z.strictObject({
+    major: z.number().int(),
+    encoding: z.string(),
+    collate: z.string(),
+    ctype: z.string(),
+    localeProvider: z.string(),
+    locale: z.string().nullable(),
+    collationVersion: z.string().nullable(),
+  }),
+  ledgerHead: z.string().nullable(),
   locks: z.array(
     z.strictObject({
       schema: z.string(),

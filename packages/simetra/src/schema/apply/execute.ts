@@ -76,7 +76,13 @@ import {
   revalidationSettings,
   withLocalSettings,
 } from "./settings"
-import { findApply, readApplyState, writeApplyStateStatements } from "./state"
+import { readServerFacts } from "./server"
+import {
+  findApply,
+  readApplyState,
+  readLedgerHead,
+  writeApplyStateStatements,
+} from "./state"
 import {
   coversMode,
   joinModes,
@@ -123,6 +129,8 @@ export type ExecutablePlan = Pick<
   | "targetFingerprint"
   | "desiredFingerprint"
   | "role"
+  | "server"
+  | "ledgerHead"
   | "locks"
   | "implicitLocks"
   | "providerLocks"
@@ -158,11 +166,12 @@ interface ExecuteBase {
 }
 
 /**
- * `apply` — ціль, `COMMIT`; `rehearse` — ціль, усе те саме, але `ROLLBACK`, і
- * з повним доказом двигуна до відкату (тому `rehearsal` обов'язковий: режим
- * без доказу мовчки послабив би репетицію); `proof` — копія стану цілі: без
- * перевірки ланцюжка (стану застосування в копії немає) і з відбитком цілі
- * без `owner` (бази різні).
+ * `apply` — ціль, `COMMIT`; `rehearse` — ціль чи її копія з даними, усе те
+ * саме, але `ROLLBACK`, відбиток цілі без `owner` (копію могли відновити під
+ * іншими власниками) і з повним доказом двигуна до відкату (тому `rehearsal`
+ * обов'язковий: режим без доказу мовчки послабив би репетицію); `proof` —
+ * копія стану цілі: без перевірки ланцюжка (стану застосування в копії
+ * немає) і з відбитком цілі без `owner` (бази різні).
  */
 export type ExecuteOptions = ExecuteBase &
   (
@@ -586,6 +595,19 @@ async function runAttempt(
       sections: "plpgsqlCheck",
     })
 
+  // 4e. Доказ, що база — саме та ціль, від якої план (рішення 1 плану
+  // П3-2b-3): факти сервера й голова ledger. Відбиток не бачить ні
+  // упорядкування, ні історії застосувань, а копія на іншому сервері чи з
+  // окремими застосуваннями тих самих планів пройшла б ланцюжок і відбиток.
+  // До блокувань і без повтору, як 4a–4d; копія доказу — інша база
+  if (o.mode !== "proof") {
+    const server = await readServerFacts(tx)
+    if (canonicalize(server) !== canonicalize(plan.server))
+      throw stop("refused", "apply.target-changed", { sections: "server" })
+    if ((await readLedgerHead(tx)) !== plan.ledgerHead)
+      throw stop("refused", "apply.target-changed", { sections: "ledger" })
+  }
+
   // 5. Блокування наперед за слідом кроків — одна точка очікування замість
   // очікувань посеред кроків. Від сильнішого режиму до слабшого, усередині —
   // порядок артефакту, детермінований (R26 плану П3-2a)
@@ -598,15 +620,26 @@ async function runAttempt(
     await lockTables(tx, locks, mode)
 
   // 6. Ціль та сама, що при плануванні. Під блокуваннями п.5 чужа DDL на
-  // цих таблицях до кроків уже неможлива. Ціль ↔ ціль — з власником; копія
-  // доказу — інша база з іншою роллю сесії
+  // цих таблицях до кроків уже неможлива. З власником порівнює лише
+  // застосування (ціль ↔ ціль): копію репетиції могли відновити з бекапу під
+  // іншими власниками (рішення 1 плану П3-2b-3), а копія доказу — інша база
+  // з іншою роллю сесії. Чи різнилася секція власника на репетиції,
+  // запам'ятовуємо структурно: відмова фази 6 чи 18 тоді називає причину,
+  // а не сирий diff. ACL не нормалізуємо відносно власника — це послабило б
+  // доказ ідентичності
   const targetFingerprint = await readFingerprint(tx, plan.scope)
   const changed = differing(plan.targetFingerprint, targetFingerprint, {
-    owner: o.mode !== "proof",
+    owner: o.mode === "apply",
   })
+  const ownersDiffer =
+    o.mode === "rehearse" &&
+    differing(plan.targetFingerprint, targetFingerprint, {
+      owner: true,
+    }).includes("owner")
   if (changed.length > 0)
     throw stop("refused", "apply.target-changed", {
       sections: changed.join(", "),
+      ...(ownersDiffer ? { cause: "owners" } : {}),
     })
 
   // 6a. Заміри збереження «до» — у старих іменах, до першого кроку
@@ -760,7 +793,8 @@ async function runAttempt(
   // з'єднанням, не має плану до бажаного каталогу. Відбиток із фази 17
   // бачить не все, що бачить двигун, а репетиція — єдине місце, де цей
   // доказ дешево перевірити до `COMMIT`
-  if (o.mode === "rehearse") await proveWithEngine(tx, plan, o.rehearsal)
+  if (o.mode === "rehearse")
+    await proveWithEngine(tx, plan, o.rehearsal, ownersDiffer)
 
   // 19. Стан у тій самій транзакції. Marker отримує повний відбиток
   // результату з власником: наступний гейт порівнює ціль ↔ ціль. Прийнятий
@@ -999,11 +1033,15 @@ async function enableTriggers(
  * відмова, що й розбіжність: довести стан не вдалося, а `COMMIT` без доказу
  * репетиція не схвалює. Обрив і повторюваний конфлікт летять як усюди в
  * раннері, бо їх обробляє повтор спроби чи пошук за `applyId`.
+ * `ownersDiffer` (фаза 6): витяг копії несе її власників, і двигун бачить
+ * дії ACL, а не `OWNER TO` (вимір задачі 0 плану П3-2b-3), тож причину
+ * відмови називає параметр `cause`, а перша дія лишається як є.
  */
 async function proveWithEngine(
   tx: ApplyTransaction,
   plan: ExecutablePlan,
-  proof: RehearsalProof
+  proof: RehearsalProof,
+  ownersDiffer: boolean
 ): Promise<void> {
   let after: Extracted
   try {
@@ -1021,6 +1059,7 @@ async function proveWithEngine(
   const count = rest.actions.length + errors.length
   if (count === 0) return
   throw stop("failed", "apply.rehearsal-proof-failed", {
+    ...(ownersDiffer ? { cause: "owners" } : {}),
     count,
     // `count > 0` і `actions` порожній, тож `errors[0]` існує
     first: rest.actions[0]?.sql ?? errors[0]!.message,

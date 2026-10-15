@@ -118,7 +118,8 @@ import {
   type WritePath,
 } from "./promotion"
 import { readSessionSearchPath } from "./settings"
-import { readAppliedPromotions, readApplyState } from "./state"
+import { readServerFacts } from "./server"
+import { readAppliedPromotions, readApplyState, readLedgerHead } from "./state"
 import {
   classifySteps,
   lintSteps,
@@ -286,8 +287,19 @@ export async function buildPlan(
   // 1–2. Бажаний стан і стан застосування цілі; пошкоджений стан лагодять
   // вручну, а не дозволом
   const desired = await desiredForApply(model)
-  const state = await dbs.reader.transaction(o.target, "rollback", (tx) =>
-    readApplyState(tx)
+  // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
+  // стан: доказ копії репетиції (рішення 1 плану П3-2b-3) звіряє з ними базу
+  // того самого моменту, що й ланцюжок
+  const { state, identity } = await dbs.reader.transaction(
+    o.target,
+    "rollback",
+    async (tx) => ({
+      state: await readApplyState(tx),
+      identity: {
+        server: await readServerFacts(tx),
+        ledgerHead: await readLedgerHead(tx),
+      },
+    })
   )
   if (state.status === "corrupt") return refused([state.diagnostic])
   const markerScope =
@@ -358,6 +370,7 @@ export async function buildPlan(
       desired,
       drift,
       fromHash,
+      identity,
       targetOwners,
       promotion: transition,
       file: input.file,
@@ -499,6 +512,7 @@ export async function buildPlan(
       requiredPermissions: permissions,
       drift,
       role: targetOwners.session,
+      ...identity,
       locks,
       implicitLocks,
       providerLocks,
@@ -533,6 +547,7 @@ export async function buildPlan(
     requiredPermissions: permissions,
     drift,
     role: targetOwners.session,
+    ...identity,
     locks,
     implicitLocks,
     providerLocks,
@@ -573,6 +588,8 @@ interface PromotionContext {
   desired: ApplyDesired
   drift: DriftReport | null
   fromHash: string | null
+  /** Факти сервера й голова ledger цілі, прочитані разом зі станом. */
+  identity: Pick<PlanArtifact, "server" | "ledgerHead">
   targetOwners: { session: string; owners: ObjectOwner[] }
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
   /** Файл запису в `plans/`: його називають відмови виявлення. */
@@ -922,6 +939,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       requiredPermissions: permissions,
       drift: c.drift,
       role: c.targetOwners.session,
+      ...c.identity,
       locks,
       implicitLocks,
       providerLocks,
@@ -953,6 +971,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     requiredPermissions: permissions,
     drift: c.drift,
     role: c.targetOwners.session,
+    ...c.identity,
     locks,
     implicitLocks,
     providerLocks,

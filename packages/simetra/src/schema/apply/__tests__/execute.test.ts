@@ -73,6 +73,17 @@ const NO_PROVIDER_TABLES: ProviderLockSet[] = SUPABASE_LOCKS.sources.map(
   })
 )
 
+/** Факти сервера фейкової цілі — ті самі, що прочитав план. */
+const SERVER = {
+  major: 17,
+  encoding: "UTF8",
+  collate: "C.UTF-8",
+  ctype: "C.UTF-8",
+  localeProvider: "c",
+  locale: null,
+  collationVersion: null,
+}
+
 const TARGET = fingerprint("target")
 const DESIRED = fingerprint("desired")
 
@@ -102,6 +113,8 @@ const plan: ExecutablePlan = {
   targetFingerprint: TARGET,
   desiredFingerprint: DESIRED,
   role: "postgres",
+  server: SERVER,
+  ledgerHead: null,
   implicitLocks: [],
   providerLocks: NO_PROVIDER_TABLES,
   locks: [
@@ -203,6 +216,10 @@ interface Script {
   role?: string
   /** Помилка оператора з міткою `label` у спробі `attempt`. */
   fail?: (label: string, attempt: number) => Error | undefined
+  /** Факти сервера цілі; типово `SERVER`. */
+  server?: Record<string, unknown>
+  /** `apply_id` останнього рядка ledger цілі; типово ledger порожній. */
+  ledgerHead?: string
   /** Ledger після обриву з'єднання: є рядок цього застосування. */
   ledgerHasApply?: boolean
   /** Форма знайденого рядка ledger; типово поточна. */
@@ -311,6 +328,8 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("regprocedure::text AS signature")) return "blind"
   if (sql === "SET CONSTRAINTS ALL IMMEDIATE") return "set-constraints"
   if (sql.includes("c.convalidated")) return "invalid"
+  if (sql.includes("FROM pg_catalog.pg_database")) return "server"
+  if (sql.includes("ORDER BY id DESC")) return "ledger-head"
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
   if (sql.includes("pg_advisory_xact_lock")) return "lookup-lock"
   if (sql.includes("set_config('statement_timeout', $1"))
@@ -414,6 +433,15 @@ function fakeDb(script: Script = {}) {
           }
           const data = dataRows(label, script)
           if (data !== undefined) return data as R[]
+          const identity: Record<string, unknown>[] | undefined =
+            label === "server"
+              ? [{ ...SERVER, ...script.server }]
+              : label === "ledger-head"
+                ? script.ledgerHead === undefined
+                  ? []
+                  : [{ head: script.ledgerHead }]
+                : undefined
+          if (identity !== undefined) return identity as R[]
           if (label === "foreign-keys")
             return (script.foreignKeys ?? []).map((fk) => ({
               schema: fk.schema,
@@ -535,6 +563,9 @@ describe("executePlan", () => {
       "provider-setting",
       "provider-setting",
       "environment",
+      // 4e. Факти сервера й голова ledger
+      "server",
+      "ledger-head",
       'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
       "fingerprint",
       // 7. Базова лінія тіл під налаштуваннями ревалідації
@@ -661,6 +692,142 @@ describe("executePlan", () => {
     expect(
       await executePlan(proof.db, target, plan, { ...options, mode: "proof" })
     ).toMatchObject({ status: "committed" })
+  })
+
+  it("refuses another server", async () => {
+    // Рішення 1–2 плану П3-2b-3: копія на сервері з іншим упорядкуванням —
+    // не копія цієї цілі, навіть коли схема й стан ті самі
+    for (const mode of ["apply", "rehearse"] as const) {
+      const { db, log } = fakeDb({ server: { collate: "C" } })
+      expect(await executePlan(db, target, plan, withMode(mode))).toMatchObject(
+        {
+          status: "refused",
+          attempts: 1,
+          diagnostics: [
+            {
+              code: "apply.target-changed",
+              params: { sections: "server" },
+            },
+          ],
+        }
+      )
+      // До блокувань і без повтору
+      expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+      expect(log).not.toContain("ledger-head")
+    }
+    // Копія доказу — інша база: її факти план не записував
+    const proof = fakeDb({ server: { collate: "C" } })
+    expect(
+      await executePlan(proof.db, target, plan, withMode("proof"))
+    ).toMatchObject({ status: "committed" })
+    expect(proof.log).not.toContain("server")
+    expect(proof.log).not.toContain("ledger-head")
+  })
+
+  it("refuses another ledger head", async () => {
+    // Review Focus 1 плану П3-2b-3: той самий ланцюжок, але ціль отримала
+    // застосування окремо — голова ledger інша
+    const head = "00000000-0000-4000-8000-0000000000aa"
+    for (const mode of ["apply", "rehearse"] as const) {
+      for (const [planHead, liveHead] of [
+        [null, head],
+        [head, undefined],
+        [head, "00000000-0000-4000-8000-0000000000bb"],
+      ] as const) {
+        const { db, log } = fakeDb({ ledgerHead: liveHead })
+        expect(
+          await executePlan(
+            db,
+            target,
+            { ...plan, ledgerHead: planHead },
+            withMode(mode)
+          )
+        ).toMatchObject({
+          status: "refused",
+          diagnostics: [
+            {
+              code: "apply.target-changed",
+              params: { sections: "ledger" },
+            },
+          ],
+        })
+        expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+      }
+    }
+    // Та сама голова — застосування йде далі
+    expect(
+      await executePlan(
+        fakeDb({ ledgerHead: head }).db,
+        target,
+        { ...plan, ledgerHead: head },
+        options
+      )
+    ).toMatchObject({ status: "committed" })
+    expect(
+      await executePlan(
+        fakeDb({ ledgerHead: head }).db,
+        target,
+        plan,
+        withMode("proof")
+      )
+    ).toMatchObject({ status: "committed" })
+  })
+
+  it("compares the target fingerprint without owners on a rehearsal", async () => {
+    // Review Focus 2 плану П3-2b-3: відновлена копія може мати інших
+    // власників; з власником порівнює лише застосування
+    const owners = { ...TARGET.sections, owner: "copy-owner" }
+    const rehearsal = fakeDb({ targetSections: owners })
+    expect(
+      await executePlan(rehearsal.db, target, plan, withMode("rehearse"))
+    ).toMatchObject({ status: "rolledBack", diagnostics: [] })
+    expect(rehearsal.log).toContain("extract")
+    const applied = fakeDb({ targetSections: owners })
+    const outcome = await executePlan(applied.db, target, plan, options)
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        { code: "apply.target-changed", params: { sections: "owner" } },
+      ],
+    })
+    expect(outcome.diagnostics[0]!.params).not.toHaveProperty("cause")
+  })
+
+  it("names the owners as the cause of a changed target on a rehearsal", async () => {
+    // Копія з іншими власниками і явними грантами: ACL пишеться відносно
+    // власника, тож різниться й він. Причину називає секція власника, яку
+    // порівняння вже дає, — без нової звірки й без нормалізації ACL
+    const both = { ...TARGET.sections, owner: "copy-owner", acl: "copy-acl" }
+    const rehearsal = await executePlan(
+      fakeDb({ targetSections: both }).db,
+      target,
+      plan,
+      withMode("rehearse")
+    )
+    expect(rehearsal).toMatchObject({ status: "refused" })
+    expect(rehearsal.diagnostics[0]!.params).toEqual({
+      sections: "acl",
+      cause: "owners",
+    })
+    expect(rehearsal.diagnostics[0]!.message).toContain(
+      "the owners of the copy differ from the target"
+    )
+    // Без різниці власників — причини немає
+    const acl = await executePlan(
+      fakeDb({ targetSections: { ...TARGET.sections, acl: "copy-acl" } }).db,
+      target,
+      plan,
+      withMode("rehearse")
+    )
+    expect(acl.diagnostics[0]!.params).toEqual({ sections: "acl" })
+    // Застосування називає обидві секції, причина — не копія
+    const applied = await executePlan(
+      fakeDb({ targetSections: both }).db,
+      target,
+      plan,
+      options
+    )
+    expect(applied.diagnostics[0]!.params).toEqual({ sections: "acl, owner" })
   })
 
   it("refuses before the locks when the global default privileges changed after the plan", async () => {
@@ -1656,6 +1823,37 @@ describe("executePlan", () => {
       })
       expect(log.slice(-2)).toEqual(["extract", "ROLLBACK"])
       expect(log).not.toContain("ledger")
+    })
+
+    it("names the owners as the cause of a failed proof", async () => {
+      // Рішення 1 плану П3-2b-3 і вимір задачі 0: двигун на копії з іншим
+      // власником бачить дії ACL, а не `OWNER TO`, тож причину називає
+      // різниця секції власника відбитка (фаза 6), а не розбір SQL
+      const revoke = 'REVOKE ALL ON TABLE "app"."t" FROM "copy_owner"'
+      const owners = await executePlan(
+        fakeDb({ targetSections: { ...TARGET.sections, owner: "copy" } }).db,
+        target,
+        plan,
+        refusing([{ sql: revoke }])
+      )
+      expect(owners).toMatchObject({ status: "failed" })
+      expect(owners.diagnostics).toHaveLength(1)
+      expect(owners.diagnostics[0]).toMatchObject({
+        code: "apply.rehearsal-proof-failed",
+        params: { cause: "owners", count: 1, first: revoke },
+      })
+      expect(owners.diagnostics[0]!.message).toContain(
+        "the owners of the copy differ from the target"
+      )
+      // Та сама дія при рівних власниках — без причини
+      const same = await executePlan(
+        fakeDb().db,
+        target,
+        plan,
+        refusing([{ sql: revoke }])
+      )
+      expect(same.diagnostics[0]!.params).toEqual({ count: 1, first: revoke })
+      expect(same.diagnostics[0]!.message).not.toContain("owners")
     })
 
     it("fails on an error diagnostic of the engine plan, ignores warnings", async () => {

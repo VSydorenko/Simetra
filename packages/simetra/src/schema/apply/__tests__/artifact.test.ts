@@ -23,6 +23,17 @@ const fingerprint = (digit: string): CatalogFingerprint => ({
   ) as Record<FingerprintSection, string>,
 })
 
+/** Факти сервера, які план прочитав з цілі. */
+const SERVER = {
+  major: 17,
+  encoding: "UTF8",
+  collate: "C.UTF-8",
+  ctype: "C.UTF-8",
+  localeProvider: "c",
+  locale: null,
+  collationVersion: null,
+}
+
 const draft = (): Omit<PlanArtifact, "planHash"> => ({
   format: PLAN_FORMAT,
   platformVersion: PLATFORM_VERSION,
@@ -58,6 +69,8 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   requiredPermissions: ["s1"],
   drift: null,
   role: "postgres",
+  server: SERVER,
+  ledgerHead: null,
   locks: [{ schema: "app", name: "t", mode: "accessExclusive" }],
   implicitLocks: [
     {
@@ -532,6 +545,40 @@ describe("plan artifact", () => {
         })
       )
     ).toMatchObject({ ok: false, reason: "invalid" })
+  })
+
+  it("covers the server facts and the ledger head with the hash and requires them", async () => {
+    const artifact = await stampPlan(draft())
+    const other = await stampPlan({
+      ...draft(),
+      server: { ...SERVER, collate: "C", collationVersion: "1" },
+      ledgerHead: "00000000-0000-4000-8000-0000000000aa",
+    })
+    expect(other.planHash).not.toBe(artifact.planHash)
+    expect(
+      (await stampPlan({ ...draft(), ledgerHead: other.ledgerHead })).planHash
+    ).not.toBe(artifact.planHash)
+    expect(parsePlan(serializePlan(other))).toEqual({
+      ok: true,
+      artifact: other,
+    })
+    for (const field of ["server", "ledgerHead"]) {
+      const without: Record<string, unknown> = { ...artifact }
+      delete without[field]
+      expect(parsePlan(JSON.stringify(without))).toMatchObject({
+        ok: false,
+        reason: "invalid",
+      })
+    }
+    for (const server of [
+      { ...SERVER, major: "17" },
+      { ...SERVER, extra: true },
+      { ...SERVER, locale: undefined },
+    ])
+      expect(parsePlan(JSON.stringify({ ...artifact, server }))).toMatchObject({
+        ok: false,
+        reason: "invalid",
+      })
   })
 
   it("covers the desired invalid objects with the hash and requires them", async () => {

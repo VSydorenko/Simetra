@@ -17,6 +17,7 @@ import {
   PLATFORM_VERSION,
   readApplyState,
   readAppliedPromotions,
+  readLedgerHead,
   writeApplyStateStatements,
   type ApplyRecord,
   type ApplyState,
@@ -309,6 +310,52 @@ describe("readApplyState", () => {
       params: { found: 99 },
     })
     expect(state.diagnostic.message).toContain("99")
+  })
+})
+
+describe("readLedgerHead", () => {
+  const head = (url: string): Promise<string | null> =>
+    createApplyDatabase({ readOnly: true }).transaction(
+      { url },
+      "rollback",
+      readLedgerHead
+    )
+
+  it("reads the head of the ledger", async () => {
+    const second = "0d9e3a52-5b8f-4f0e-8a54-2c1f2f7b6a90"
+    const heads = await inAppliedTarget(async (url) => {
+      // Таблиці стану є, але порожні
+      const empty = await head(url)
+      await applied(url)
+      const first = await head(url)
+      await createApplyDatabase({ readOnly: false }).transaction(
+        { url },
+        "commit",
+        async (tx) => {
+          for (const s of writeApplyStateStatements({
+            ...record,
+            fromHash: record.toHash,
+            toHash: "u".repeat(64),
+            applyId: second,
+          }))
+            await tx.query(s.sql, s.params)
+        }
+      )
+      return { empty, first, last: await head(url) }
+    })
+    expect(heads).toEqual({
+      empty: null,
+      first: record.applyId,
+      last: second,
+    })
+    // База без стану — `null`, без помилки відсутньої таблиці
+    const outcome = await engine.withDesiredShadow(
+      { target: stack },
+      "create schema app;",
+      { schemas: ["app"], provider: "supabase" },
+      (target) => head(target.url)
+    )
+    expect(outcome).toMatchObject({ status: "loaded", value: null })
   })
 })
 
