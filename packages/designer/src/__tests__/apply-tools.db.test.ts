@@ -78,6 +78,8 @@ const lose = vi.hoisted(() => ({
   shadowFails: false,
   /** Скільки транзакцій відкрив порт, що пише, відколи тест його скинув. */
   writes: 0,
+  /** Області викликів `withDesiredShadow`, відколи тест скинув перелік. */
+  shadowScopes: [] as unknown[],
 }))
 vi.mock("../schema-engine", async (importOriginal) => {
   const original = await importOriginal<typeof import("../schema-engine")>()
@@ -105,8 +107,9 @@ vi.mock("../schema-engine", async (importOriginal) => {
         ...real,
         withDesiredShadow: (
           ...args: Parameters<typeof real.withDesiredShadow>
-        ) =>
-          lose.shadowFails
+        ) => {
+          lose.shadowScopes.push(args[2])
+          return lose.shadowFails
             ? Promise.resolve({
                 status: "shadow-failed" as const,
                 diagnostics: [
@@ -118,7 +121,8 @@ vi.mock("../schema-engine", async (importOriginal) => {
                   },
                 ],
               })
-            : real.withDesiredShadow(...args),
+            : real.withDesiredShadow(...args)
+        },
       }
     },
   }
@@ -681,7 +685,11 @@ describe("apply", () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
       const data = await planned(dir, url)
+      const artifact = JSON.parse(
+        await readFile(join(dirname(dir), data.file), "utf8")
+      ) as { scope: unknown }
       const shadows = await shadowDatabaseCount()
+      lose.shadowScopes = []
       const r = await call(
         "apply",
         { plan: data.file, planHash: data.planHash, rehearse: true },
@@ -689,6 +697,9 @@ describe("apply", () => {
       )
       expect(errors(r)).toEqual([])
       expect((r.data as ApplyData).status).toBe("rolledBack")
+      // Шпигун: без бажаної тіні доказ не мав би з чим порівнювати, і тест
+      // мусить упасти, а не пройти на порожньому доказі
+      expect(lose.shadowScopes).toEqual([artifact.scope])
       // Тінь доказу прибрано
       expect(await shadowDatabaseCount()).toBe(shadows)
     })

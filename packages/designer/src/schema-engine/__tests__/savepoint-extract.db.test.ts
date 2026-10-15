@@ -2,6 +2,7 @@ import pg from "pg"
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
+  ApplyConnectionLost,
   desiredForApply,
   type ApplyDesired,
   type ApplyTransaction,
@@ -215,6 +216,40 @@ describe("ApplyTransaction.extract", () => {
         extractOnTransactionClient(client, desired.scope, trace)
       )
       expect(trace).toEqual(TRACE)
+    })
+  })
+
+  it("marks the connection lost when it drops during the extract", async () => {
+    await inDatabase(BEFORE, async (url) => {
+      const error = await apply
+        .transaction({ url }, "commit", async (tx) => {
+          const [row] = await tx.query<{ pid: number }>(
+            "SELECT pg_catalog.pg_backend_pid() AS pid"
+          )
+          const killer = new pg.Client({ connectionString: url })
+          await killer.connect()
+          try {
+            const extracting = tx.extract(desired.scope)
+            // Обрив просять, коли backend уже виконує оператор витягу, а не
+            // до нього: тоді зустрічаються саме запит у польоті й обрив
+            for (;;) {
+              const { rows } = await killer.query(
+                "SELECT 1 FROM pg_catalog.pg_stat_activity WHERE pid = $1 AND state = 'active'",
+                [row!.pid]
+              )
+              if (rows.length > 0) break
+              await new Promise((r) => setTimeout(r, 1))
+            }
+            await killer.query("SELECT pg_catalog.pg_terminate_backend($1)", [
+              row!.pid,
+            ])
+            await extracting
+          } finally {
+            await killer.end()
+          }
+        })
+        .catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(ApplyConnectionLost)
     })
   })
 

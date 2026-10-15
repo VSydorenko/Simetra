@@ -1735,6 +1735,40 @@ describe("executePlan", () => {
         expect(await exists(url, "app.pt")).toBe(true)
       })
     })
+
+    it("names the table whose preservation measure fails", async () => {
+      // Вираз заміру падає не на приведенні (колонки немає, 42703), тож це не
+      // звуження, а збій заміру: без нього доказу збереження немає
+      await inTarget(SETUP, async (url) => {
+        const plan = await promotionPlan(url)
+        const [table] = plan.promotion!.preservation
+        const broken: ExecutablePlan = {
+          ...plan,
+          promotion: {
+            ...plan.promotion!,
+            preservation: [
+              {
+                ...table!,
+                columns: table!.columns.map((c, n) =>
+                  n === 1 ? { ...c, before: "no_such_column" } : c
+                ),
+              },
+            ],
+          },
+        }
+        const outcome = await executePlan(apply, { url }, broken, rehearse)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.preservation-measure-failed",
+              params: { table: "app.pt", side: "before", sqlstate: "42703" },
+            },
+          ],
+        })
+        await untouched(url)
+      })
+    })
   })
 
   describe.each(["proof", "rehearse"] as const)("data steps (%s)", (mode) => {

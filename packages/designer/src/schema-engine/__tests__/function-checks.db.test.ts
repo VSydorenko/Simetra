@@ -674,6 +674,81 @@ describe("plpgsql_check", () => {
     )
   })
 
+  it("fails when plpgsql_check cannot be taken on the target", async () => {
+    // Ролі `postgres` стеку `USAGE` на будь-яку схему дає членство в
+    // `pg_read_all_data`, тож відібрати його нічим. Тому застосовує інша роль
+    // без членств: розширення стоїть у схемі, якої вона не бачить, а план
+    // «встановлене» обіцяв перевірку
+    const NOUSAGE = "simetra_fncheck_nousage"
+    await other(testSuperuserUrl(), `drop role if exists ${NOUSAGE}`)
+    await other(testSuperuserUrl(), `create role ${NOUSAGE} login password 'x'`)
+    try {
+      await inTarget(
+        `${TABLE_T};
+         grant usage, create on schema app to ${NOUSAGE};
+         grant usage on schema simetra to ${NOUSAGE};
+         grant select on all tables in schema simetra to ${NOUSAGE}`,
+        async (url) => {
+          const as = new URL(url)
+          as.username = NOUSAGE
+          as.password = "x"
+          const outcome = await executePlan(
+            apply,
+            { url: as.toString() },
+            await planFor(url, [NEUTRAL], {
+              plpgsqlCheck: "installed",
+              role: NOUSAGE,
+              providerLocks: await reader.transaction(
+                { url: as.toString() },
+                "rollback",
+                (tx) => readProviderLocks(tx, NOUSAGE, SUPABASE_LOCKS)
+              ),
+            }),
+            options
+          )
+          expect(outcome).toMatchObject({
+            status: "failed",
+            diagnostics: [
+              {
+                code: "apply.plpgsql-check-unavailable",
+                params: { sqlstate: "42501" },
+              },
+            ],
+          })
+          expect(
+            await other(url, "select to_regclass('app.n') is null as absent")
+          ).toEqual([{ absent: true }])
+        },
+        `create schema simetra_locked_ext;
+         create extension plpgsql_check schema simetra_locked_ext`
+      )
+    } finally {
+      await other(testSuperuserUrl(), `drop role if exists ${NOUSAGE}`)
+    }
+  })
+
+  it("refuses when plpgsql_check vanished since the plan", async () => {
+    await run(
+      TABLE_T,
+      [NEUTRAL],
+      { plpgsqlCheck: "installed" },
+      async (outcome, url) => {
+        expect(outcome).toMatchObject({
+          status: "refused",
+          diagnostics: [
+            {
+              code: "apply.target-changed",
+              params: { sections: "plpgsqlCheck" },
+            },
+          ],
+        })
+        expect(
+          await other(url, "select to_regclass('app.n') is null as absent")
+        ).toEqual([{ absent: true }])
+      }
+    )
+  })
+
   it("refuses a taken check schema", async () => {
     const setup = `${TABLE_T};
       create schema simetra_plpgsql_check`

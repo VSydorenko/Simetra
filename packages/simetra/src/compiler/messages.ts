@@ -2479,7 +2479,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       `After the plan's steps the engine still finds ${p.count} difference(s) between the database and the desired state, the first: ${p.first}. The rehearsal was rolled back`,
     uk: (p) =>
-      `Після кроків плану двигун ще бачить розбіжностей між базою й бажаним станом: ${p.count}, перша: ${p.first}. Репетицію відкочено`,
+      `Репетиція не довела стан: після кроків двигун ще бачить ${p.count} дій до бажаного стану, перша — ${p.first}`,
     hint: {
       en: "Nothing was written. The plan does not reach the desired state on this database; plan again, and report the plan if the difference repeats.",
       uk: "Нічого не записано. План не доводить цю базу до бажаного стану; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",
