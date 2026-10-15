@@ -179,6 +179,7 @@ const clients: Client[] = []
 beforeEach(async () => {
   lose.writer = false
   lose.shadowFails = false
+  lose.shadowScopes = []
   shadowsBefore = await shadowDatabaseCount()
 })
 afterEach(async () => {
@@ -689,7 +690,8 @@ describe("apply", () => {
         await readFile(join(dirname(dir), data.file), "utf8")
       ) as { scope: unknown }
       const shadows = await shadowDatabaseCount()
-      lose.shadowScopes = []
+      // `plan` теж будує тінь: рахуємо лише виклики самого `apply`
+      const shadowCallsBefore = lose.shadowScopes.length
       const r = await call(
         "apply",
         { plan: data.file, planHash: data.planHash, rehearse: true },
@@ -699,7 +701,9 @@ describe("apply", () => {
       expect((r.data as ApplyData).status).toBe("rolledBack")
       // Шпигун: без бажаної тіні доказ не мав би з чим порівнювати, і тест
       // мусить упасти, а не пройти на порожньому доказі
-      expect(lose.shadowScopes).toEqual([artifact.scope])
+      expect(lose.shadowScopes.slice(shadowCallsBefore)).toEqual([
+        artifact.scope,
+      ])
       // Тінь доказу прибрано
       expect(await shadowDatabaseCount()).toBe(shadows)
     })

@@ -2477,9 +2477,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.rehearsal-proof-failed": {
     en: (p) =>
-      `After the plan's steps the engine still finds ${p.count} difference(s) between the database and the desired state, the first: ${p.first}. The rehearsal was rolled back`,
+      `After the plan's steps the engine still finds ${p.count} action(s) to the desired state, the first: ${p.first}. The rehearsal was rolled back`,
     uk: (p) =>
-      `Репетиція не довела стан: після кроків двигун ще бачить ${p.count} дій до бажаного стану, перша — ${p.first}`,
+      `Репетиція не довела стан: після кроків двигун ще бачить ${p.count} дій до бажаного стану, перша — ${p.first}. Репетицію відкочено.`,
     hint: {
       en: "Nothing was written. The plan does not reach the desired state on this database; plan again, and report the plan if the difference repeats.",
       uk: "Нічого не записано. План не доводить цю базу до бажаного стану; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",

@@ -993,8 +993,7 @@ async function proveWithEngine(
   if (count === 0) return
   throw stop("failed", "apply.rehearsal-proof-failed", {
     count,
-    // `count > 0`, а дій немає, тож помилка двигуна є: `count` — це сума
-    // дій і помилок, тож `errors[0]` існує, коли `actions` порожній
+    // `count > 0` і `actions` порожній, тож `errors[0]` існує
     first: rest.actions[0]?.sql ?? errors[0]!.message,
   })
 }

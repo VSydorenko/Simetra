@@ -718,6 +718,29 @@ describe("plpgsql_check", () => {
           expect(
             await other(url, "select to_regclass('app.n') is null as absent")
           ).toEqual([{ absent: true }])
+          // Контроль: з тим самим планом, але з `USAGE` на схему розширення
+          // роль застосовує, тож причина відмови саме в `USAGE`
+          await other(
+            asSuperuser(url),
+            `grant usage on schema simetra_locked_ext to ${NOUSAGE};
+             grant insert, update, delete on all tables in schema simetra to ${NOUSAGE}`
+          )
+          expect(
+            await executePlan(
+              apply,
+              { url: as.toString() },
+              await planFor(url, [NEUTRAL], {
+                plpgsqlCheck: "installed",
+                role: NOUSAGE,
+                providerLocks: await reader.transaction(
+                  { url: as.toString() },
+                  "rollback",
+                  (tx) => readProviderLocks(tx, NOUSAGE, SUPABASE_LOCKS)
+                ),
+              }),
+              options
+            )
+          ).toMatchObject({ status: "committed", diagnostics: [] })
         },
         `create schema simetra_locked_ext;
          create extension plpgsql_check schema simetra_locked_ext`
@@ -728,11 +751,17 @@ describe("plpgsql_check", () => {
   })
 
   it("refuses when plpgsql_check vanished since the plan", async () => {
-    await run(
-      TABLE_T,
-      [NEUTRAL],
-      { plpgsqlCheck: "installed" },
-      async (outcome, url) => {
+    // План будують, поки розширення стоїть, а до застосування його знято
+    await inTarget(
+      `${TABLE_T};
+       create schema ext;
+       create extension plpgsql_check schema ext`,
+      async (url) => {
+        const plan = await planFor(url, [NEUTRAL], {
+          plpgsqlCheck: "installed",
+        })
+        await other(url, "drop extension plpgsql_check")
+        const outcome = await executePlan(apply, { url }, plan, options)
         expect(outcome).toMatchObject({
           status: "refused",
           diagnostics: [

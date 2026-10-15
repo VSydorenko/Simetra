@@ -232,7 +232,10 @@ describe("ApplyTransaction.extract", () => {
             const extracting = tx.extract(desired.scope)
             // Обрив просять, коли backend уже виконує оператор витягу, а не
             // до нього: тоді зустрічаються саме запит у польоті й обрив
+            const deadline = Date.now() + 30_000
             for (;;) {
+              if (Date.now() > deadline)
+                throw new Error("the backend never became active in 30 s")
               const { rows } = await killer.query(
                 "SELECT 1 FROM pg_catalog.pg_stat_activity WHERE pid = $1 AND state = 'active'",
                 [row!.pid]
@@ -243,7 +246,8 @@ describe("ApplyTransaction.extract", () => {
             await killer.query("SELECT pg_catalog.pg_terminate_backend($1)", [
               row!.pid,
             ])
-            await extracting
+            // Обрив має прийти саме з витягу, а не з `COMMIT` після нього
+            await expect(extracting).rejects.toBeInstanceOf(ApplyConnectionLost)
           } finally {
             await killer.end()
           }
