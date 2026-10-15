@@ -1,4 +1,4 @@
-import { loadModule, parsePlPgSQLSync } from "@libpg-query/parser"
+import { loadModule, parsePlPgSQLSync, parseSync } from "@libpg-query/parser"
 
 /**
  * Тіло функції PL/pgSQL, розібране компілятором plpgsql самого Postgres.
@@ -61,10 +61,9 @@ export interface PlpgsqlExpression {
 }
 
 /**
- * Результат розбору. Парсер викликають лише для `LANGUAGE plpgsql`: рядкове
- * тіло іншої мови дає `fn: undefined`, але SQL-стандартне тіло
- * (`LANGUAGE sql … BEGIN ATOMIC`) валить WASM-виклик, і це `ok: false`. Мову
- * перевіряє виклик за деревом `CREATE FUNCTION`, а не за текстом помилки.
+ * Результат розбору. Парсер викликають лише для `LANGUAGE plpgsql`: тіло іншої
+ * мови, зокрема SQL-стандартне (`LANGUAGE sql … BEGIN ATOMIC`), дає
+ * `fn: undefined`. Для SQL-стандартного тіла WASM-розбір навіть не викликається.
  */
 export type PlpgsqlParse =
   | { readonly ok: true; readonly fn: PlpgsqlFunction }
@@ -105,6 +104,7 @@ export function loadPlpgsqlParser(): Promise<PlpgsqlParser> {
 }
 
 function parseFunction(sql: string): PlpgsqlParse {
+  if (hasSqlStandardBody(sql)) return { ok: true, fn: undefined }
   let raw: unknown
   try {
     raw = parsePlPgSQLSync(sql)
@@ -132,6 +132,26 @@ function parseFunction(sql: string): PlpgsqlParse {
     return { ok: true, fn: undefined }
   }
   return { ok: true, fn: readFunction(body, action) }
+}
+
+/**
+ * `CREATE FUNCTION … BEGIN ATOMIC` не має рядкового тіла, і C-код обгортки
+ * робить `assert(proc_source != NULL)`. Emscripten друкує `Aborted(…)` у stderr
+ * процесу ще до того, як кидає `RuntimeError`, тож перехопити виняток мало:
+ * сам виклик не повинен відбутися. Мову виклик (`promote/sql.ts`, `calls`) не
+ * перевіряє, тому відсікаємо за деревом, а не за текстом.
+ */
+function hasSqlStandardBody(sql: string): boolean {
+  let tree: unknown
+  try {
+    tree = parseSync(sql)
+  } catch {
+    // Синтаксичну помилку нехай повідомить `parsePlPgSQLSync` її власним текстом.
+    return false
+  }
+  const stmt = asRecord(asArray(asRecord(tree)?.stmts)[0])?.stmt
+  const create = asRecord(asRecord(stmt)?.CreateFunctionStmt)
+  return create?.sql_body !== undefined
 }
 
 type Json = Record<string, unknown>

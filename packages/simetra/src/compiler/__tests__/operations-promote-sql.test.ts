@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest"
+import { parsePlPgSQLSync } from "@libpg-query/parser"
+import { describe, expect, it, vi } from "vitest"
 import {
   applyChanges,
   compile,
@@ -17,6 +18,12 @@ import {
   promotionProject,
 } from "./fixtures/promotion"
 import { acceptDebt, attribute, customTable, document, uuid } from "./helpers"
+
+// Шпигун викликає справжній розбір: решта тестів файлу розбирає plpgsql далі.
+vi.mock("@libpg-query/parser", async (orig) => {
+  const real = await orig<typeof import("@libpg-query/parser")>()
+  return { ...real, parsePlPgSQLSync: vi.fn(real.parsePlPgSQLSync) }
+})
 
 type Json = Record<string, unknown>
 
@@ -197,6 +204,35 @@ $fn$;
     expect(result.record?.rewrittenUnits).toEqual(
       expect.arrayContaining([{ identity: NAMES, file: SHARED_SQL }])
     )
+  })
+
+  it("treats a SQL-standard function body like an AS $$ body and never hands it to the WASM plpgsql parser", async () => {
+    const standard = `CREATE FUNCTION app.cp_total() RETURNS integer LANGUAGE sql STABLE
+BEGIN ATOMIC
+  SELECT count(*)::integer FROM app.counterparty;
+END;
+`
+    const quoted = fn(
+      "cp_total",
+      "SELECT count(*)::integer FROM app.counterparty"
+    )
+    const outcome = async (text: string) => {
+      const files = await project({ "sql/app/cp_total.sql": text })
+      vi.mocked(parsePlPgSQLSync).mockClear()
+      const { result } = await promoted(files)
+      const handed = vi
+        .mocked(parsePlPgSQLSync)
+        .mock.calls.map(([sql]) => sql)
+        .filter((sql) => sql.includes("cp_total"))
+      return { ok: result.ok, diagnostics: brief(result), handed }
+    }
+    const a = await outcome(standard)
+    const b = await outcome(quoted)
+    expect(a.handed).toEqual([])
+    expect({ ok: a.ok, diagnostics: a.diagnostics }).toEqual({
+      ok: b.ok,
+      diagnostics: b.diagnostics,
+    })
   })
 
   it("refuses an unclassified policy and a non-closed module function", async () => {

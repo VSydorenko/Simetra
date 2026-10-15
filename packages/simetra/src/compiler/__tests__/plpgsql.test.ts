@@ -1,9 +1,16 @@
-import { beforeAll, describe, expect, it } from "vitest"
+import { parsePlPgSQLSync } from "@libpg-query/parser"
+import { beforeAll, describe, expect, it, vi } from "vitest"
 import {
   loadPlpgsqlParser,
   type PlpgsqlFunction,
   type PlpgsqlParser,
 } from "../sql/plpgsql"
+
+// Шпигун викликає справжній розбір: інші тести файлу мусять розбирати далі.
+vi.mock("@libpg-query/parser", async (orig) => {
+  const real = await orig<typeof import("@libpg-query/parser")>()
+  return { ...real, parsePlPgSQLSync: vi.fn(real.parsePlPgSQLSync) }
+})
 
 let parse: PlpgsqlParser
 
@@ -289,13 +296,16 @@ describe("loadPlpgsqlParser", () => {
     expect(f.dynamicSqlLines).toEqual([4])
   })
 
-  it("turns a SQL-standard body into ok:false without leaking WASM text, and keeps parsing", () => {
-    // `BEGIN ATOMIC` валить WASM-виклик; мову перевіряє виклик, не цей парсер.
-    const r = parse(
+  it("returns fn undefined for a SQL-standard body without calling the WASM parser, and keeps parsing", () => {
+    // C-assert на `BEGIN ATOMIC` друкує `Aborted(…)` у stderr раніше за виняток,
+    // тож перевірити треба саме відсутність виклику.
+    const sql =
       "CREATE FUNCTION app.s() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; END;"
-    )
-    expect(r).toEqual({ ok: false, message: "PL/pgSQL body does not compile" })
+    vi.mocked(parsePlPgSQLSync).mockClear()
+    expect(parse(sql)).toEqual({ ok: true, fn: undefined })
+    expect(parsePlPgSQLSync).not.toHaveBeenCalled()
     expect(parse(fn("BEGIN RETURN NEW; END")).ok).toBe(true)
+    expect(parsePlPgSQLSync).toHaveBeenCalledTimes(1)
   })
 
   it("keeps the Postgres text of a syntax error", () => {
