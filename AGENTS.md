@@ -45,12 +45,27 @@ specs. Claude Code specifics live in `CLAUDE.md`.
 5. `docs/research/` — background for past decisions, not rules. The index and
    the rules for adding new research are in `docs/research/README.md`.
 
-Decisions that change the platform spec go through the owner. If you need to
+Decisions that change the platform spec go through the owner or the task
+architect (below). If you need to
 deviate from a spec, stop and report the deviation — never decide it silently.
 A deviation approved in the middle of executing a plan lands together with its
 spec amendment, in the same block of work: record the spec impact ("none" or
 the § to amend) next to the decision, so the drift is not left for the final
 review to find.
+
+**Task architect.** The owner may name a session the architect of a block of
+work (in its prompt or in conversation). For that block the architect stands
+in for the owner on technical decisions: plan forks, deviations, and spec
+amendments — the platform spec included — that the block needs. The
+architect researches before deciding (code, the consumer's real state,
+specs), records the decision with its spec impact, and reports it to the
+owner afterwards in plain words; technical questions are not passed on to
+the owner. Executors, plan authors and reviewers send forks and deviations
+to the architect instead of the owner; they never approve their own
+deviations. Always the owner's: commit and push requests, external actions
+(upstream issues, anything published), dropping stack objects other sessions
+created, edits to `AGENTS.md` and `CLAUDE.md`, milestone boundaries and the
+tier table, and product choices — what to build and for whom.
 
 ## Platform / consumer boundary
 
@@ -166,7 +181,8 @@ These hold for T0 and for every tier that reads metadata:
    replaced, delete the old path in the same change — no aliases, re-exports or
    "deprecated" wrappers.
 6. **Report, don't silently decide.** Uncertainty, a conflict between sources,
-   or a needed deviation from the plan — stop and report it to the owner.
+   or a needed deviation from the plan — stop and report it to the owner, or
+   to the task architect when one is named (§ "Sources of truth").
 7. Dead code you notice outside your task — mention it, don't delete it.
 
 ## Commands and gates
