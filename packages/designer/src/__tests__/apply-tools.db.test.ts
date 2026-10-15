@@ -11,7 +11,6 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
-import pg from "pg"
 import {
   compile,
   promotionRecordSchema,
@@ -55,11 +54,12 @@ import {
   catalog,
   metaFiles,
   project as projectFile,
-  shadowDatabaseCount,
-  testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
   uuid,
 } from "../../../simetra/test/support"
+import { dropRoles, inTarget as loadTarget, query } from "./support/db"
+import { leftoverShadows, provisionedShadows } from "./support/shadows"
 import { snapshotOf } from "./helpers/catalog"
 
 /**
@@ -131,81 +131,41 @@ vi.mock("../schema-engine", async (importOriginal) => {
 })
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
-const OWNER = "simetra_apply_tools_owner"
+const OWNER = testRoleName("apply_tools_owner")
 
-async function other(url: string, sql: string): Promise<void> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    await client.query(sql)
-  } finally {
-    await client.end()
-  }
-}
-
-async function one<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R | undefined> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows[0]
-  } finally {
-    await client.end()
-  }
-}
-
-const dropRole = () =>
-  other(testSuperuserUrl(), `drop role if exists ${OWNER};`)
-
-beforeAll(async () => {
-  // Роль могла лишитися від убитого прогону
-  await dropRole()
-  await other(
+beforeAll(() =>
+  query(
     testSuperuserUrl(),
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;`
   )
-})
-afterAll(dropRole)
+)
+afterAll(() => dropRoles(OWNER))
 
-let shadowsBefore = 0
 const disposers: (() => Promise<void>)[] = []
 const clients: Client[] = []
-beforeEach(async () => {
+beforeEach(() => {
   lose.writer = false
   lose.shadowFails = false
   lose.shadowScopes = []
-  shadowsBefore = await shadowDatabaseCount()
 })
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()))
   await Promise.all(disposers.splice(0).map((d) => d()))
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
 })
 
-/** Ціль із `setup`; базу прибирає порт. */
-async function inTarget(
+/**
+ * Ціль із `setup`; базу прибирає порт. Спільний `inTarget` через двигун-шпигун
+ * цього файлу, з межею цілі файлу.
+ */
+const inTarget = (
   setup: string,
   fn: (url: string) => Promise<void>
-): Promise<void> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    setup,
-    scope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-}
+): Promise<void> => loadTarget(setup, scope, fn, engine)
 
 /** Порожня ціль: лише базовий стан провайдера. */
 const EMPTY = "select 1;"
@@ -303,11 +263,11 @@ const hashOf = async (dir: string): Promise<string> =>
 
 const markerExists = async (url: string): Promise<boolean> =>
   (
-    await one<{ found: string | null }>(
+    await query<{ found: string | null }>(
       url,
       "select to_regclass('simetra.marker')::text as found"
     )
-  )?.found != null
+  )[0]?.found != null
 
 /** Ресурс бази, що рахує підключення: відмова до кроку 7 його не чіпає. */
 function spyDatabase(): { database: DatabaseResource; connects: () => number } {
@@ -380,7 +340,7 @@ describe("plan", () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
       await establish(dir, url)
-      await other(
+      await query(
         url,
         "update simetra.marker set engine_version = 'other', fingerprint_version = fingerprint_version + 1"
       )
@@ -655,18 +615,22 @@ describe("apply", () => {
       )
       expect(errors(refused)).toEqual(["apply.permission-required"])
       expect(
-        await one(
-          url,
-          "select 1 from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = 'note'"
-        )
+        (
+          await query(
+            url,
+            "select 1 from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = 'note'"
+          )
+        )[0]
       ).toBeDefined()
 
       await applied(dir, url, data, [drop!.id])
       expect(
-        await one(
-          url,
-          "select 1 from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = 'note'"
-        )
+        (
+          await query(
+            url,
+            "select 1 from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = 'note'"
+          )
+        )[0]
       ).toBeUndefined()
     })
   })
@@ -767,7 +731,7 @@ describe("apply", () => {
       const artifact = JSON.parse(
         await readFile(join(dirname(dir), data.file), "utf8")
       ) as { scope: unknown }
-      const shadows = await shadowDatabaseCount()
+      const mark = provisionedShadows().length
       // `plan` теж будує тінь: рахуємо лише виклики самого `apply`
       const shadowCallsBefore = lose.shadowScopes.length
       const r = await call(
@@ -783,7 +747,7 @@ describe("apply", () => {
         artifact.scope,
       ])
       // Тінь доказу прибрано
-      expect(await shadowDatabaseCount()).toBe(shadows)
+      expect(await leftoverShadows(mark)).toEqual([])
     })
   })
 
@@ -822,7 +786,7 @@ describe("over MCP", () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
       await establish(dir, url)
-      await other(url, "alter table app.party add column extra int")
+      await query(url, "alter table app.party add column extra int")
       const client = await connectMcp(dir, url, false)
       const r = await client.callTool({ name: "plan", arguments: {} })
       expect(r.isError).toBeFalsy()

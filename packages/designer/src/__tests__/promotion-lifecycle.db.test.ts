@@ -8,7 +8,6 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import pg from "pg"
 import {
   promoteInput,
   promotionRecordHash,
@@ -21,10 +20,9 @@ import {
   type EngineScope,
   type RehearsalReport,
 } from "simetra/schema"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
 import { renderPlan } from "../io/report"
-import { createPgDeltaEngine } from "../schema-engine"
 import type { ApplyData, PlanData } from "../tools/apply-tools"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
@@ -34,10 +32,9 @@ import {
   catalog,
   metaFiles,
   project as projectFile,
-  shadowDatabaseCount,
-  testDatabaseUrl,
   uuid,
 } from "../../../simetra/test/support"
+import { inTarget, query } from "./support/db"
 
 /**
  * Наскрізний цикл промоції інструментами (план П3-2a, задача 13): стан до
@@ -49,51 +46,14 @@ import {
  * читається.
  */
 
-const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
-let shadowsBefore = 0
 const disposers: (() => Promise<void>)[] = []
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
 afterEach(async () => {
   await Promise.all(disposers.splice(0).map((d) => d()))
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
 })
-
-async function query<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-/** Ціль із `setup`; базу прибирає порт. */
-async function inTarget(
-  setup: string,
-  fn: (url: string) => Promise<void>
-): Promise<void> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    setup,
-    scope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-}
 
 /** Порожня ціль: лише базовий стан провайдера. */
 const EMPTY = "select 1;"
@@ -405,7 +365,7 @@ const stepMatching = (d: PlanData, pattern: RegExp) =>
 
 describe("promotion lifecycle", () => {
   it("promote → plan → rehearse on the target → rolled back", async () => {
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url)
       const record = promotionRecordSchema.parse(
         JSON.parse(await readFile(join(dirname(dir), RECORD_FILE), "utf8"))
@@ -548,7 +508,7 @@ describe("promotion lifecycle", () => {
   })
 
   it("renames the foreign key to Group when its delete action is the kind's", async () => {
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url, { onDelete: "noAction" })
       const data = await planned(dir, url)
       // Та сама дія видалення — той самий ключ: FK на таблицю поза одиницею
@@ -593,7 +553,7 @@ describe("promotion lifecycle", () => {
   it("refuses to commit the promotion without a valid rehearsal report", async () => {
     // Гейти звіту на рівні конвеєра: відмова до будь-якої транзакції, ціль і
     // ledger ті самі; далі копія з меншою кількістю рядків — попередження
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url)
       const data = await planned(dir, url)
       const before = await state(url)
@@ -659,7 +619,7 @@ describe("promotion lifecycle", () => {
   })
 
   it("needs access: for a table read through the API", async () => {
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url, { read: true })
       const data = await planned(dir, url)
       const token = "access:app.item"
@@ -683,7 +643,7 @@ describe("promotion lifecycle", () => {
   it("stops a too-long title on rehearsal", async () => {
     // Review Focus 4: значення, довше за `varchar(150)` опису виду
     const long = "x".repeat(151)
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url, { title: long })
       const data = await planned(dir, url)
       const [retype] = stepMatching(data, /TYPE character varying\(150\)/)
@@ -742,7 +702,7 @@ describe("promotion lifecycle", () => {
     }
 
     it("refuses a normalizing type change without a data step", async () => {
-      await inTarget(EMPTY, async (url) => {
+      await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, { columns: asJson })
         const before = await state(url)
         const r = await apply(dir, url, data, { rehearse: true })
@@ -757,7 +717,7 @@ describe("promotion lifecycle", () => {
 
     it("rehearses a normalizing type change through a repair", async () => {
       // Review Focus 5: ремонт пише нормалізований текст до кроку двигуна
-      await inTarget(EMPTY, async (url) => {
+      await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, {
           columns: asJson,
           fill: repairJson,
@@ -774,7 +734,7 @@ describe("promotion lifecycle", () => {
     it("commits the promotion with a valid rehearsal report", async () => {
       // Репетиція пише звіт файлом, `apply` читає його й комітить; доказ
       // промоції (дані, збереження, plpgsql_check) проходить справжній файл
-      await inTarget(EMPTY, async (url) => {
+      await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, {
           columns: asJson,
           fill: repairJson,
@@ -815,14 +775,14 @@ describe("promotion lifecycle", () => {
     })
 
     it("rehearses a truncating repair", async () => {
-      await inTarget(EMPTY, async (url) => {
+      await inTarget(EMPTY, scope, async (url) => {
         const without = await converted(url, { columns: asVarchar })
         const refused = await apply(without.dir, url, without.data, {
           rehearse: true,
         })
         expect(errors(refused)).toEqual(["apply.type-narrowing"])
       })
-      await inTarget(EMPTY, async (url) => {
+      await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, {
           columns: asVarchar,
           fill: repairCode,
@@ -834,7 +794,7 @@ describe("promotion lifecycle", () => {
     })
 
     it("refuses a repair without its permission", async () => {
-      await inTarget(EMPTY, async (url) => {
+      await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, {
           columns: asJson,
           fill: repairJson,
@@ -853,7 +813,7 @@ describe("promotion lifecycle", () => {
   it("swaps two attribute columns by identity", async () => {
     // Review Focus 2: `code` → `legacy`, `legacy` → `code`; доказ збереження
     // в транзакції репетиції порівнює значення за ідентичністю колонок
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url, { swap: true })
       const data = await planned(dir, url)
       const itemTable = { schema: "app", name: "item" }
@@ -879,7 +839,7 @@ describe("promotion lifecycle", () => {
 
   it("does not block a fresh environment with a record file", async () => {
     // Review Focus 5: нова ціль без marker і таблиць, а запис лежить у репо
-    await inTarget(EMPTY, async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await projectWith(beforeEntries())
       const promote = await call("promote", mapping(), options(dir, url))
       expect(errors(promote)).toEqual([])

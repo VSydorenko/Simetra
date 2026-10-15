@@ -1,13 +1,5 @@
 import pg from "pg"
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   desiredForApply,
@@ -35,10 +27,15 @@ import {
   fingerprintAfterSteps,
   metaFiles,
   project,
-  shadowDatabaseCount,
-  testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
+import {
+  asSuperuser,
+  dropRoles,
+  inTarget as loadTarget,
+  query,
+} from "../../__tests__/support/db"
 
 /**
  * Ревалідація тіл функцій раннером на справжній базі (рішення 1–5 плану
@@ -49,12 +46,11 @@ import {
  */
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const apply = createApplyDatabase({ readOnly: false })
 const reader = createApplyDatabase({ readOnly: true })
 
 /** Роль-власник, членом якої роль застосування не є. */
-const STRANGER = "simetra_fncheck_owner"
+const STRANGER = testRoleName("fncheck_owner")
 
 const PREAMBLE: ExecutablePlan["preamble"] = [
   { name: "search_path", value: "pg_catalog" },
@@ -71,26 +67,6 @@ const options: ExecuteOptions = {
 
 let desired: ApplyDesired
 
-async function other<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-/** Та сама база, але сесією суперкористувача стеку. */
-function asSuperuser(url: string): string {
-  const su = new URL(testSuperuserUrl())
-  su.pathname = new URL(url).pathname
-  return su.toString()
-}
-
 beforeAll(async () => {
   const compiled = await compile(
     metaFiles({
@@ -100,46 +76,26 @@ beforeAll(async () => {
   )
   expect(compiled.diagnostics).toEqual([])
   desired = await desiredForApply(compiled.model!)
-  // Роль могла лишитися від убитого прогону
-  await other(testSuperuserUrl(), `drop role if exists ${STRANGER}`)
-  await other(testSuperuserUrl(), `create role ${STRANGER} nologin`)
+  await query(testSuperuserUrl(), `create role ${STRANGER} nologin`)
 })
-afterAll(() => other(testSuperuserUrl(), `drop role if exists ${STRANGER}`))
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
+afterAll(() => dropRoles(STRANGER))
 
 /**
  * Ціль: бажаний стан моделі, далі `setup` роллю застосування й `superuser`
- * сесією суперкористувача; базу прибирає порт.
+ * сесією суперкористувача; базу прибирає порт. На відміну від спільного
+ * `inTarget`, бажаний стан — модель, а `setup` і `superuser` ідуть окремими
+ * запитами по вже завантаженій цілі.
  */
-async function inTarget<T>(
+const inTarget = <T>(
   setup: string,
   fn: (url: string) => Promise<T>,
   superuser?: string
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    desired.sql,
-    desired.scope,
-    async (target) => {
-      await other(target.url, setup)
-      if (superuser !== undefined)
-        await other(asSuperuser(target.url), superuser)
-      return fn(target.url)
-    }
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> =>
+  loadTarget(desired.sql, desired.scope, async (url) => {
+    await query(url, setup)
+    if (superuser !== undefined) await query(asSuperuser(url), superuser)
+    return fn(url)
+  })
 
 const read = (url: string): Promise<CatalogFingerprint> =>
   reader.transaction({ url }, "rollback", (tx) =>
@@ -254,7 +210,7 @@ const RENAME_A = step("s1", "ALTER TABLE app.t RENAME COLUMN a TO b", {
 
 const columnsOf = async (url: string, table: string): Promise<string[]> =>
   (
-    await other<{ name: string }>(
+    await query<{ name: string }>(
       url,
       `select attname as name from pg_attribute where attrelid = '${table}'::regclass and attnum > 0 and not attisdropped order by attnum`
     )
@@ -315,7 +271,7 @@ describe("function body revalidation", () => {
         "app.bad()"
       )
       expect(
-        await other(url, "select to_regprocedure('app.bad()') is null as gone")
+        await query(url, "select to_regprocedure('app.bad()') is null as gone")
       ).toEqual([{ gone: true }])
     })
   })
@@ -397,7 +353,7 @@ describe("function body revalidation", () => {
         await holder.end()
       }
       expect(
-        await other(url, "select to_regclass('app.n') is null as absent")
+        await query(url, "select to_regclass('app.n') is null as absent")
       ).toEqual([{ absent: true }])
     })
   })
@@ -486,7 +442,7 @@ describe("function body revalidation", () => {
       expect(outcome).toMatchObject({ status: "committed" })
       expect(session).not.toBe("app, public")
       expect(
-        await other<{ path: string; bodies: string }>(
+        await query<{ path: string; bodies: string }>(
           url,
           "select path, bodies from app.seen"
         )
@@ -624,7 +580,7 @@ describe("plpgsql_check", () => {
 
   it("installs the extension only for the check", async () => {
     const leftover = (url: string) =>
-      other(
+      query(
         url,
         `select
            exists (select 1 from pg_extension where extname = 'plpgsql_check') as extension,
@@ -671,7 +627,7 @@ describe("plpgsql_check", () => {
       async (outcome, url) => {
         expect(checkFailed(outcome)).toContain("app.fp(): 42703")
         expect(
-          await other(
+          await query(
             url,
             "select extnamespace::regnamespace::text as schema from pg_extension where extname = 'plpgsql_check'"
           )
@@ -685,9 +641,8 @@ describe("plpgsql_check", () => {
     // `pg_read_all_data`, тож відібрати його нічим. Тому застосовує інша роль
     // без членств: розширення стоїть у схемі, якої вона не бачить, а план
     // «встановлене» обіцяв перевірку
-    const NOUSAGE = "simetra_fncheck_nousage"
-    await other(testSuperuserUrl(), `drop role if exists ${NOUSAGE}`)
-    await other(testSuperuserUrl(), `create role ${NOUSAGE} login password 'x'`)
+    const NOUSAGE = testRoleName("fncheck_nousage")
+    await query(testSuperuserUrl(), `create role ${NOUSAGE} login password 'x'`)
     try {
       await inTarget(
         `${TABLE_T};
@@ -722,11 +677,11 @@ describe("plpgsql_check", () => {
             ],
           })
           expect(
-            await other(url, "select to_regclass('app.n') is null as absent")
+            await query(url, "select to_regclass('app.n') is null as absent")
           ).toEqual([{ absent: true }])
           // Контроль: з тим самим планом, але з `USAGE` на схему розширення
           // роль застосовує, тож причина відмови саме в `USAGE`
-          await other(
+          await query(
             asSuperuser(url),
             `grant usage on schema simetra_locked_ext to ${NOUSAGE};
              grant insert, update, delete on all tables in schema simetra to ${NOUSAGE}`
@@ -752,7 +707,7 @@ describe("plpgsql_check", () => {
          create extension plpgsql_check schema simetra_locked_ext`
       )
     } finally {
-      await other(testSuperuserUrl(), `drop role if exists ${NOUSAGE}`)
+      await dropRoles(NOUSAGE)
     }
   })
 
@@ -766,7 +721,7 @@ describe("plpgsql_check", () => {
         const plan = await planFor(url, [NEUTRAL], {
           plpgsqlCheck: "installed",
         })
-        await other(url, "drop extension plpgsql_check")
+        await query(url, "drop extension plpgsql_check")
         const outcome = await executePlan(apply, { url }, plan, options)
         expect(outcome).toMatchObject({
           status: "refused",
@@ -778,7 +733,7 @@ describe("plpgsql_check", () => {
           ],
         })
         expect(
-          await other(url, "select to_regclass('app.n') is null as absent")
+          await query(url, "select to_regclass('app.n') is null as absent")
         ).toEqual([{ absent: true }])
       }
     )
@@ -798,7 +753,7 @@ describe("plpgsql_check", () => {
         ],
       })
       expect(
-        await other(url, "select to_regclass('app.n') is null as absent")
+        await query(url, "select to_regclass('app.n') is null as absent")
       ).toEqual([{ absent: true }])
     })
   })

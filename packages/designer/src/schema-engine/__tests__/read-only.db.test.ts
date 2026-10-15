@@ -18,7 +18,7 @@ import {
   type ExecutablePlan,
   type PlanStep,
 } from "simetra/schema"
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import { readCensus } from "../census-read"
 import { scopeProfile } from "../pg-delta/policy"
@@ -29,10 +29,9 @@ import {
   catalog,
   metaFiles,
   project,
-  shadowDatabaseCount,
-  testDatabaseUrl,
   testPoolerUrl,
 } from "../../../../simetra/test/support"
+import { inTarget as loadTarget, query } from "../../__tests__/support/db"
 
 /**
  * Читання цілі без сесійного стану (план П3-1, рішення 14.1): кожен запит до
@@ -42,7 +41,6 @@ import {
  */
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const OUTSIDE = "target query outside a read-only transaction"
 
 let desired: ApplyDesired
@@ -58,47 +56,19 @@ beforeAll(async () => {
   desired = await desiredForApply(compiled.model!)
 })
 
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
-
-async function other<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-/** Ціль: бажаний стан застосування моделі плюс `setup`; базу прибирає порт. */
-async function inTarget<T>(
+/**
+ * Ціль: бажаний стан застосування моделі плюс `setup`; базу прибирає порт.
+ * На відміну від спільного `inTarget`, бажаний стан — модель, а `setup` іде
+ * окремим запитом по вже завантаженій цілі.
+ */
+const inTarget = <T>(
   setup: string,
   fn: (url: string) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    desired.sql,
-    desired.scope,
-    async (target) => {
-      await other(target.url, setup)
-      return fn(target.url)
-    }
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> =>
+  loadTarget(desired.sql, desired.scope, async (url) => {
+    await query(url, setup)
+    return fn(url)
+  })
 
 interface Session extends Record<string, unknown> {
   pid: number
@@ -305,10 +275,10 @@ describe("transaction-mode pooler", () => {
       )
       expect(outcome).toMatchObject({ status: "committed" })
       expect(
-        await other(url, "select snapshot_hash, plan_hash from simetra.marker")
+        await query(url, "select snapshot_hash, plan_hash from simetra.marker")
       ).toEqual([{ snapshot_hash: "1".repeat(64), plan_hash: "c".repeat(64) }])
       expect(
-        await other(url, "select plan_hash, to_hash from simetra.ledger")
+        await query(url, "select plan_hash, to_hash from simetra.ledger")
       ).toEqual([{ plan_hash: "c".repeat(64), to_hash: "1".repeat(64) }])
     })
   })
@@ -323,7 +293,7 @@ describe("transaction-mode pooler", () => {
       } finally {
         await pool.end()
       }
-      const fresh = await other<{ on: string }>(
+      const fresh = await query<{ on: string }>(
         target,
         "select current_setting('default_transaction_read_only') as on"
       )

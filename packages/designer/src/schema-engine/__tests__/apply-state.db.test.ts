@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   canonicalSnapshot,
   compile,
@@ -30,9 +30,9 @@ import {
   catalog,
   metaFiles,
   project,
-  shadowDatabaseCount,
   testDatabaseUrl,
 } from "../../../../simetra/test/support"
+import { inTarget } from "../../__tests__/support/db"
 
 /**
  * Стан застосування в схемі `simetra` (план П3-1, задача 5): DDL marker і
@@ -42,14 +42,6 @@ import {
 
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 async function partyModel(): Promise<CompiledModel> {
   const compiled = await compile(
@@ -62,20 +54,13 @@ async function partyModel(): Promise<CompiledModel> {
   return compiled.model!
 }
 
-/** Ціль із бажаним станом застосування моделі без «Користувачів». */
+/**
+ * Ціль із бажаним станом застосування моделі без «Користувачів». Обгортка над
+ * спільним `inTarget`: бажаний SQL і межу дає модель, а не викликач.
+ */
 async function inAppliedTarget<T>(fn: (url: string) => Promise<T>): Promise<T> {
   const desired = await desiredForApply(await partyModel())
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    desired.sql,
-    desired.scope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
+  return inTarget(desired.sql, desired.scope, fn)
 }
 
 const read = (url: string): Promise<ApplyState> =>

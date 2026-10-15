@@ -1,5 +1,4 @@
-import pg from "pg"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   canonicalRenames,
   readEquivalenceObjects,
@@ -7,10 +6,7 @@ import {
   type EquivalenceObject,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
-import {
-  shadowDatabaseCount,
-  testDatabaseUrl,
-} from "../../../../simetra/test/support"
+import { inTarget, query } from "../../__tests__/support/db"
 
 /**
  * SQL ключів канонічних імен (рішення 4 плану П3-2a) на справжній базі: копія
@@ -21,33 +17,14 @@ import {
  */
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
 const reader = createApplyDatabase({ readOnly: true })
 const writer = createApplyDatabase({ readOnly: false })
 
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
-
-async function other<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-/** Окрема база з `sql`; базу прибирає порт. */
+/**
+ * Окрема база з `sql` поруч із довільною ціллю, а не зі стеком, як спільний
+ * `inTarget`: бажана тінь тут лягає біля копії; базу прибирає порт.
+ */
 async function inDatabase<T>(
   target: string,
   sql: string,
@@ -65,9 +42,6 @@ async function inDatabase<T>(
     )
   return outcome.value
 }
-
-const inTarget = <T>(sql: string, fn: (url: string) => Promise<T>) =>
-  inDatabase(stack.url, sql, fn)
 
 const read = (url: string, table: string): Promise<EquivalenceObject[]> =>
   reader.transaction({ url }, "rollback", (tx) =>
@@ -123,8 +97,8 @@ const CANONICAL: readonly (readonly [string, string])[] = [
 
 describe("readEquivalenceObjects", () => {
   it("gives the renamed clone and the desired shadow equal keys", async () => {
-    await inTarget(CLONE, async (clone) => {
-      await other(
+    await inTarget(CLONE, scope, async (clone) => {
+      await query(
         clone,
         `alter table app.legacy rename to items;
          alter table app.items rename column name to title;`
@@ -165,6 +139,7 @@ describe("readEquivalenceObjects", () => {
        create unique index k_incl on app.k (a) include (b);
        create unique index k_both on app.k (a, b);
        alter table app.k add constraint k_check check (a > 0) not valid;`,
+      scope,
       async (url) => {
         const before = await read(url, "k")
         expect(named(before, "k_incl").key).not.toBe(
@@ -176,7 +151,7 @@ describe("readEquivalenceObjects", () => {
         expect(named(before, "k_check").valid).toBe(false)
         expect(named(before, "k_incl").valid).toBe(true)
 
-        await other(url, "alter index app.k_incl rename to k_renamed")
+        await query(url, "alter index app.k_incl rename to k_renamed")
         expect(named(await read(url, "k"), "k_renamed").key).toBe(
           named(before, "k_incl").key
         )
@@ -185,7 +160,7 @@ describe("readEquivalenceObjects", () => {
   })
 
   it("leaves search_path intact", async () => {
-    await inTarget(CLONE, async (url) => {
+    await inTarget(CLONE, scope, async (url) => {
       const [before, after] = await reader.transaction(
         { url },
         "rollback",
@@ -209,8 +184,8 @@ describe("readEquivalenceObjects", () => {
 
 describe("canonicalRenames", () => {
   it("removes the equivalent objects from the engine diff and keeps the counter", async () => {
-    await inTarget(CLONE, async (clone) => {
-      await other(
+    await inTarget(CLONE, scope, async (clone) => {
+      await query(
         clone,
         `insert into app.owners values (1);
          insert into app.legacy (code, owner) values ('x', 1), ('y', 1);
@@ -239,7 +214,7 @@ describe("canonicalRenames", () => {
         })
 
         expect((await diff()).map((a) => a.sql)).toEqual([])
-        const [seq] = await other<{ last_value: string }>(
+        const [seq] = await query<{ last_value: string }>(
           clone,
           "select last_value from app.items_id_seq"
         )
@@ -255,6 +230,7 @@ describe("canonicalRenames", () => {
       `create schema app;
        create table app.items (code text);
        create index legacy_code_pattern on app.items (code text_pattern_ops);`,
+      scope,
       async (clone) => {
         await inDatabase(
           clone,
@@ -296,6 +272,7 @@ describe("canonicalRenames", () => {
       `create schema app;
        create table app.items (doc tsvector);
        create index legacy_doc_sig on app.items using gist (doc tsvector_ops (siglen = 32));`,
+      scope,
       async (clone) => {
         await inDatabase(
           clone,

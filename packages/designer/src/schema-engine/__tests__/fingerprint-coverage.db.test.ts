@@ -1,13 +1,10 @@
 import pg from "pg"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import type { EngineScope } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
 import { engineFacts } from "../pg-delta/adapter"
 import { coverageGaps } from "../pg-delta/fingerprint-coverage"
-import {
-  shadowDatabaseCount,
-  testDatabaseUrl,
-} from "../../../../simetra/test/support"
+import { testDatabaseUrl } from "../../../../simetra/test/support"
 
 /**
  * Контракт покриття відбитка (рішення 3 плану П3-1): кожне поле моделі
@@ -91,14 +88,6 @@ const CATALOG = `
   create server app_srv foreign data wrapper postgres_fdw options (host 'localhost', dbname 'none');
   create foreign table app.ft (x int options (column_name 'xx') default 1, y int not null) server app_srv options (table_name 'remote');
 `
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 describe("fingerprint coverage of the engine model", () => {
   it("maps every engine property to a section or an exception", async () => {

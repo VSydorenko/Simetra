@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   compareWithDesired,
@@ -8,7 +8,6 @@ import {
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
 import {
-  shadowDatabaseCount,
   testDatabaseUrl,
   acceptDebt,
   attribute,
@@ -17,6 +16,7 @@ import {
   metaFiles,
   project,
 } from "../../../../simetra/test/support"
+import { leftoverShadows } from "../../__tests__/support/shadows"
 import { boundaryViolations } from "./fixtures/engine-boundary"
 
 /**
@@ -32,17 +32,9 @@ const scopeOf = (...schemas: string[]): EngineScope => ({
   provider: "supabase",
 })
 
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
-
 describe("compareWithDesired", () => {
   it("no shadow is left behind", async () => {
-    // Лічильник до/після перевіряє `afterEach`; тут — успіх, а нижче — помилка
+    // Облік провізій файлу: тут — успіх, а нижче — помилка
     const ok = await compareWithDesired(
       engine,
       { target: stack },
@@ -51,7 +43,7 @@ describe("compareWithDesired", () => {
       []
     )
     expect(ok.status).toBe("compared")
-    expect(await shadowDatabaseCount()).toBe(shadowsBefore)
+    expect(await leftoverShadows()).toEqual([])
 
     const failed = await compareWithDesired(
       engine,
@@ -61,7 +53,7 @@ describe("compareWithDesired", () => {
       []
     )
     expect(failed.status).toBe("shadow-failed")
-    expect(await shadowDatabaseCount()).toBe(shadowsBefore)
+    expect(await leftoverShadows()).toEqual([])
   })
 
   it("broken desired sql is shadow-failed", async () => {

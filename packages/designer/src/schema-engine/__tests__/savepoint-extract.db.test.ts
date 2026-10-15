@@ -1,5 +1,5 @@
 import pg from "pg"
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   ApplyConnectionLost,
@@ -10,13 +10,8 @@ import {
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import { extractOnTransactionClient } from "../pg-delta/adapter"
-import {
-  catalog,
-  metaFiles,
-  project,
-  shadowDatabaseCount,
-  testDatabaseUrl,
-} from "../../../../simetra/test/support"
+import { catalog, metaFiles, project } from "../../../../simetra/test/support"
+import { inTarget, query } from "../../__tests__/support/db"
 
 /**
  * Витяг двигуна в транзакції застосування (рішення 8 плану П3-2b-1, спайк
@@ -26,7 +21,6 @@ import {
  */
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const apply = createApplyDatabase({ readOnly: false })
 
 /** Стан цілі до транзакції. */
@@ -58,44 +52,19 @@ beforeAll(async () => {
   desired = await desiredForApply(compiled.model!)
 })
 
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
-
-async function other(url: string, sql: string): Promise<void> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    await client.query(sql)
-  } finally {
-    await client.end()
-  }
-}
-
-/** База з бажаним станом застосування моделі плюс `setup`; базу прибирає порт. */
-async function inDatabase<T>(
+/**
+ * База з бажаним станом застосування моделі плюс `setup`; базу прибирає порт.
+ * На відміну від спільного `inTarget`, бажаний стан — модель, а `setup` іде
+ * окремим запитом по вже завантаженій базі.
+ */
+const inDatabase = <T>(
   setup: string,
   fn: (url: string) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    desired.sql,
-    desired.scope,
-    async (db) => {
-      await other(db.url, setup)
-      return fn(db.url)
-    }
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `database did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> =>
+  inTarget(desired.sql, desired.scope, async (url) => {
+    await query(url, setup)
+    return fn(url)
+  })
 
 /** Каталог двигуна бажаної бази. */
 const desiredCatalog = (): Promise<EngineCatalog> =>

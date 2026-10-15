@@ -8,7 +8,6 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import pg from "pg"
 import { promoteInput, type PromoteInput } from "simetra/compiler"
 import {
   parseRehearsal,
@@ -16,9 +15,8 @@ import {
   type EngineScope,
   type RehearsalReport,
 } from "simetra/schema"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
-import { createPgDeltaEngine } from "../schema-engine"
 import type { ApplyData, PlanData } from "../tools/apply-tools"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
@@ -27,12 +25,9 @@ import {
   acceptDebt,
   metaFiles,
   project as projectFile,
-  SHADOW_PREFIX,
-  shadowDatabaseCount,
-  testDatabaseUrl,
-  testSuperuserUrl,
   uuid,
 } from "../../../simetra/test/support"
+import { inTarget, query, withCopy } from "./support/db"
 
 /**
  * Повний цикл промоції з кроком даних інструментами (план П3-2b-3, задача
@@ -42,78 +37,25 @@ import {
  * власники, тож раннер приймає її за копію цієї цілі. Проєкт синтетичний.
  */
 
-const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
-let shadowsBefore = 0
 const disposers: (() => Promise<void>)[] = []
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
 afterEach(async () => {
   await Promise.all(disposers.splice(0).map((d) => d()))
-  // Копія має префікс тіней — лічильник ловить і її
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
 })
 
-async function query<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-/** Ціль — окрема база від `withDesiredShadow`; її прибирає порт. */
-async function inTarget(fn: (url: string) => Promise<void>): Promise<void> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    "select 1;",
-    scope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-}
+/** Порожня ціль: лише базовий стан провайдера. */
+const EMPTY = "select 1;"
 
 /**
- * Копія цілі з даними. Ім'я — за конвенцією тіней (`pgdelta_shadow_<мс у
- * base36>_…`): сирота вбитого прогону потрапить у звіт сторожа стеку з
- * віком. `TEMPLATE` вимагає, щоб до цілі не було з'єднань: інструменти
- * закривають свої пули по виклику, а `query` — клієнт по запиту. Прибирання
- * — у `finally`, зокрема на шляху падіння.
+ * Пункт `CREATE DATABASE` копії цілі з даними для спільного `withCopy`.
+ * `TEMPLATE` вимагає, щоб до цілі не було з'єднань: інструменти закривають
+ * свої пули по виклику, а `query` — клієнт по запиту.
  */
-async function withCopy(
-  target: string,
-  fn: (url: string) => Promise<void>
-): Promise<void> {
-  const name = `${SHADOW_PREFIX}${Date.now().toString(36)}_copy_${Math.random().toString(36).slice(2, 8)}`
-  const source = new URL(target).pathname.slice(1)
-  await query(
-    testSuperuserUrl(),
-    `create database ${name} owner postgres template ${source}`
-  )
-  try {
-    const at = new URL(testDatabaseUrl())
-    at.pathname = `/${name}`
-    await fn(at.toString())
-  } finally {
-    await query(
-      testSuperuserUrl(),
-      `drop database if exists ${name} with (force)`
-    )
-  }
-}
+const templateOf = (url: string): string =>
+  `template "${new URL(url).pathname.slice(1)}"`
 
 const MEMBER_ID = uuid(9501)
 const MEMBER_FILE = "custom-tables/Member/Member.meta.json"
@@ -297,7 +239,7 @@ const INACTIVE = Math.floor(ROWS / 3)
 
 describe("promotion commit", () => {
   it("promotes, rehearses on a copy with data, commits and plans nothing", async () => {
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const { dir, data } = await promoted(url)
       expect(
         await query(
@@ -328,7 +270,7 @@ describe("promotion commit", () => {
 
       // Репетиція на копії з даними: відкат, звіт записано, рядки — усі 500
       let file = ""
-      await withCopy(url, async (copy) => {
+      await withCopy(templateOf(url), async (copy) => {
         const r = await apply(dir, copy, data, { rehearse: true })
         expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
         expect((r.data as ApplyData).status).toBe("rolledBack")
@@ -366,7 +308,7 @@ describe("promotion commit", () => {
   })
 
   it("refuses to commit without a rehearsal report", async () => {
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const { dir, data } = await promoted(url)
       const before = await state(url)
       const r = await apply(dir, url, data)
@@ -379,10 +321,10 @@ describe("promotion commit", () => {
   it("refuses to commit after a rehearsal on an emptied copy", async () => {
     // Копія без рядків: репетиція проходить і пише звіт з `rows: 0`, але про
     // дані цілі вона нічого не довела — фаза 6c відмовляє в транзакції
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const { dir, data } = await promoted(url)
       let file = ""
-      await withCopy(url, async (copy) => {
+      await withCopy(templateOf(url), async (copy) => {
         await query(copy, "delete from app.members")
         const r = await apply(dir, copy, data, { rehearse: true })
         expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])

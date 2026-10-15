@@ -8,18 +8,9 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import pg from "pg"
 import { compile } from "simetra/compiler"
 import { desiredForApply, type EngineScope } from "simetra/schema"
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { createPgDeltaEngine } from "../schema-engine"
@@ -35,11 +26,12 @@ import {
   customTable,
   metaFiles,
   project as projectFile,
-  shadowDatabaseCount,
   testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
   uuid,
 } from "../../../simetra/test/support"
+import { dropRoles, inTarget, query } from "./support/db"
 
 /**
  * Наскрізний цикл `plan` → `apply` → `diff` на порожній цілі (план П3-1,
@@ -55,66 +47,23 @@ const ENV = "SIMETRA_DATABASE_URL"
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
-const OWNER = "simetra_apply_lifecycle_owner"
+const OWNER = testRoleName("apply_lifecycle_owner")
 
-async function other(url: string, sql: string): Promise<void> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    await client.query(sql)
-  } finally {
-    await client.end()
-  }
-}
-
-async function rows<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-const dropRole = () =>
-  other(testSuperuserUrl(), `drop role if exists ${OWNER};`)
-
-beforeAll(async () => {
-  // Роль могла лишитися від убитого прогону
-  await dropRole()
-  await other(
+beforeAll(() =>
+  query(
     testSuperuserUrl(),
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;`
   )
-})
-afterAll(dropRole)
+)
+afterAll(() => dropRoles(OWNER))
 
-let shadowsBefore = 0
 const disposers: (() => Promise<void>)[] = []
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
 afterEach(async () => {
   await Promise.all(disposers.splice(0).map((d) => d()))
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
 })
 
-async function inTarget(fn: (url: string) => Promise<void>): Promise<void> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    "select 1;",
-    scope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-}
+/** Порожня ціль: лише базовий стан провайдера. */
+const EMPTY = "select 1;"
 
 const PARTY = "catalogs/Party/Party.meta.json"
 const ATTRIBUTE_ID = uuid(9202)
@@ -232,14 +181,14 @@ async function expectUnchanged(dir: string, url: string): Promise<void> {
 
 const markerHash = async (url: string) =>
   (
-    await rows<{ snapshot_hash: string }>(
+    await query<{ snapshot_hash: string }>(
       url,
       "select snapshot_hash from simetra.marker"
     )
   )[0]?.snapshot_hash
 
 const ledger = (url: string) =>
-  rows<{
+  query<{
     id: string
     from_hash: string | null
     to_hash: string
@@ -252,7 +201,7 @@ const ledger = (url: string) =>
 
 const columnNullable = async (url: string, column: string) =>
   (
-    await rows<{ is_nullable: string }>(
+    await query<{ is_nullable: string }>(
       url,
       `select is_nullable from information_schema.columns where table_schema = 'app' and table_name = 'party' and column_name = '${column}'`
     )
@@ -261,7 +210,7 @@ const columnNullable = async (url: string, column: string) =>
 /** `attnum` колонок таблиці в порядку їхніх номерів. */
 const columnOrder = async (url: string, table: string) =>
   (
-    await rows<{ attname: string; attnum: number }>(
+    await query<{ attname: string; attnum: number }>(
       url,
       `select attname, attnum from pg_attribute where attrelid = '${table}'::regclass and attnum > 0 and not attisdropped order by attnum`
     )
@@ -289,7 +238,7 @@ async function shadowColumnOrder(
 
 describe("apply lifecycle", () => {
   it("runs plan, apply and diff through chain, rehearsal, data failure, drift and owner swap", async () => {
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await newProject()
       await writeMetadata(dir, party("Party", null))
 
@@ -330,7 +279,7 @@ describe("apply lifecycle", () => {
       expect(await markerHash(url)).toBe(h3)
 
       // 4. Збій на даних: NULL у реквізиті, що стає обов'язковим
-      await other(
+      await query(
         url,
         "insert into app.party (id) values ('00000000-0000-4000-8000-000000000001')"
       )
@@ -364,10 +313,10 @@ describe("apply lifecycle", () => {
       await writeMetadata(dir, party("Parties", {}))
       expect(await hashOf(dir)).toBe(h3)
       await expectUnchanged(dir, url)
-      await other(url, "delete from app.party")
+      await query(url, "delete from app.party")
 
       // 7. Дрейф у керованій властивості приймається дозволом `drift`
-      await other(url, "alter table app.party add column extra int")
+      await query(url, "alter table app.party add column extra int")
       const drifted = await planned(dir, url)
       expect(drifted.drift).not.toBeNull()
       expect(drifted.requiredPermissions[0]).toBe("drift")
@@ -398,7 +347,7 @@ describe("apply lifecycle", () => {
 
       // 8. Підміна власника за спиною платформи — відмова з порадою
       // Новий власник мусить мати CREATE на схемі, інакше ALTER OWNER неможливий
-      await other(
+      await query(
         url,
         `grant create on schema app to ${OWNER}; alter table app.party owner to ${OWNER};`
       )
@@ -419,14 +368,14 @@ describe("apply lifecycle", () => {
       expect(await markerHash(url)).toBe(h3)
       expect(await ledger(url)).toEqual(ledgerAtSwap)
       // Грант на схему був лише для ALTER OWNER; лишений, він сам став би дрейфом ACL
-      await other(
+      await query(
         url,
         `alter table app.party owner to postgres; revoke create on schema app from ${OWNER};`
       )
       await expectUnchanged(dir, url)
 
       // 9. Змінились обидві версії: план лише з дрейфом, а не відмова
-      await other(
+      await query(
         url,
         "update simetra.marker set engine_version = 'other', fingerprint_version = fingerprint_version + 1"
       )
@@ -486,7 +435,7 @@ describe("apply lifecycle", () => {
   // двигун не вбудовує її в CREATE TABLE раніше за тип. Гейти «проєкт ↔ ціль»
   // і `diff` цього не рахують
   it("applies a table that uses a type created in the same plan", async () => {
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await newProject()
       await writeMetadata(dir, party("Party", null))
       await committed(dir, url, await planned(dir, url))
@@ -540,7 +489,7 @@ describe("apply lifecycle", () => {
   // Postgres додає колонку лише в кінець: реквізит посередині масиву
   // наявного довідника на цілі стає останнім
   it("applies an attribute inserted in the middle of an existing table", async () => {
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await newProject()
       const withAttributes = (names: string[]) =>
         catalog("Party", {
@@ -578,7 +527,7 @@ describe("apply lifecycle", () => {
 describe("global default privileges", () => {
   /** Права функції чи таблиці рядками `aclexplode` з урахуванням типових. */
   const acl = async (url: string, sql: string): Promise<string[]> =>
-    (await rows<{ item: string }>(url, sql)).map((r) => r.item)
+    (await query<{ item: string }>(url, sql)).map((r) => r.item)
 
   const functionAcl = (url: string) =>
     acl(
@@ -609,8 +558,8 @@ describe("global default privileges", () => {
     "CREATE FUNCTION app.f() RETURNS int LANGUAGE sql STABLE AS $$SELECT 1$$;"
 
   it("neutralizes a global revoke on functions for a new function", async () => {
-    await inTarget(async (url) => {
-      await other(
+    await inTarget(EMPTY, scope, async (url) => {
+      await query(
         url,
         "alter default privileges for role postgres revoke all on functions from public"
       )
@@ -639,7 +588,7 @@ describe("global default privileges", () => {
       expect(await functionAcl(url)).toEqual(await shadowFunctionAcl(dir))
       expect(
         (
-          await rows<{ ok: boolean }>(
+          await query<{ ok: boolean }>(
             url,
             "select has_function_privilege('anon', 'app.f()', 'EXECUTE') as ok"
           )
@@ -650,8 +599,8 @@ describe("global default privileges", () => {
   })
 
   it("keeps anon away from the platform tables on the first apply", async () => {
-    await inTarget(async (url) => {
-      await other(
+    await inTarget(EMPTY, scope, async (url) => {
+      await query(
         url,
         "alter default privileges for role postgres grant select on tables to anon"
       )
@@ -682,7 +631,7 @@ describe("global default privileges", () => {
 
       await committed(dir, url, data)
       expect(
-        await rows<{ marker: boolean; ledger: boolean }>(
+        await query<{ marker: boolean; ledger: boolean }>(
           url,
           `select has_table_privilege('anon', 'simetra.marker', 'SELECT') as marker,
              has_table_privilege('anon', 'simetra.ledger', 'SELECT') as ledger`
@@ -693,12 +642,12 @@ describe("global default privileges", () => {
   })
 
   it("refuses when the global default privileges changed after the plan", async () => {
-    await inTarget(async (url) => {
+    await inTarget(EMPTY, scope, async (url) => {
       const dir = await newProject()
       await writeMetadata(dir, party("Party", null))
       const data = await planned(dir, url)
       expect(data.environment.defaultPrivileges).toEqual([])
-      await other(
+      await query(
         url,
         "alter default privileges for role postgres grant select on sequences to anon"
       )
@@ -711,7 +660,7 @@ describe("global default privileges", () => {
       ).toEqual({ sections: "environment" })
       // Нічого не записано: стану застосування на цілі так і немає
       expect(
-        await rows<{ exists: boolean }>(
+        await query<{ exists: boolean }>(
           url,
           "select to_regclass('simetra.marker') is not null as exists"
         )

@@ -1,14 +1,15 @@
 import { readFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { diffCatalogModels } from "simetra/model"
 import type { EngineAction, EnginePlan, EngineScope } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
+import { inTarget } from "../../__tests__/support/db"
 import {
-  shadowDatabaseCount,
-  testDatabaseUrl,
-} from "../../../../simetra/test/support"
+  leftoverShadows,
+  provisionedShadows,
+} from "../../__tests__/support/shadows"
 
 /**
  * Порт `SchemaEngine` для застосування (план П3-1, задача 2): межа сегмента,
@@ -17,38 +18,11 @@ import {
  */
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
-
-/** Розгортає `sql` у тимчасову базу поруч зі стеком; її прибирає порт. */
-async function inTarget<T>(
-  sql: string,
-  fn: (url: string) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    sql,
-    scope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
 
 /** План «ціль → бажане» над окремою ціллю з `targetSql`. */
 function planOf(targetSql: string, desiredSql: string): Promise<EnginePlan> {
-  return inTarget(targetSql, async (url) => {
+  return inTarget(targetSql, scope, async (url) => {
     const outcome = await engine.withDesiredShadow(
       { target: { url } },
       desiredSql,
@@ -246,9 +220,9 @@ describe("SchemaEngine apply port", () => {
     const viaShadow = await planOf("create schema app;", desired)
     expect(viaShadow.preamble).toEqual(expected)
     expect(viaShadow.diagnostics).toEqual([])
-    await inTarget("create schema app;", async (url) => {
+    await inTarget("create schema app;", scope, async (url) => {
       const from = await engine.extract({ url }, scope)
-      await inTarget(desired, async (desiredUrl) => {
+      await inTarget(desired, scope, async (desiredUrl) => {
         const to = await engine.extract({ url: desiredUrl }, scope)
         const plan = engine.plan(from.catalog, to.catalog, scope)
         expect(plan.preamble).toEqual(expected)
@@ -261,7 +235,7 @@ describe("SchemaEngine apply port", () => {
     const targetSql = "create schema app; create table app.t (id int);"
     const desiredSql =
       "create schema app; create table app.t (id int, c int not null default 0);"
-    await inTarget(targetSql, async (url) => {
+    await inTarget(targetSql, scope, async (url) => {
       const viaShadow = await engine.withDesiredShadow(
         { target: { url } },
         desiredSql,
@@ -323,7 +297,7 @@ describe("SchemaEngine apply port", () => {
       "create policy app_read on storage.objects for select to authenticated",
       "  using (bucket_id = 'app');",
     ].join("\n")
-    await inTarget(targetSql, async (url) => {
+    await inTarget(targetSql, scope, async (url) => {
       const target = await engine.extract({ url }, scope)
       const outcome = await engine.withTargetClone(
         { target: { url } },
@@ -355,8 +329,9 @@ describe("SchemaEngine apply port", () => {
         "create schema app;",
         "create table app.t (id int, e other.e);",
       ].join("\n"),
+      scope,
       async (url) => {
-        const before = await shadowDatabaseCount()
+        const mark = provisionedShadows().length
         const target = await engine.extract({ url }, scope)
         let called = false
         const outcome = await engine.withTargetClone(
@@ -376,7 +351,7 @@ describe("SchemaEngine apply port", () => {
         expect(outcome.diagnostics[0]!.message).toMatch(
           /^The current target state could not be reproduced in a copy: .*other\.e/
         )
-        expect(await shadowDatabaseCount()).toBe(before)
+        expect(await leftoverShadows(mark)).toEqual([])
       }
     )
   })
@@ -392,8 +367,9 @@ describe("SchemaEngine apply port", () => {
         "create domain app.d as int check (other.ok(value));",
         "create table app.t (id int, d app.d);",
       ].join("\n"),
+      scope,
       async (url) => {
-        const before = await shadowDatabaseCount()
+        const mark = provisionedShadows().length
         const target = await engine.extract({ url }, scope)
         let called = false
         const outcome = await engine.withTargetClone(
@@ -414,7 +390,7 @@ describe("SchemaEngine apply port", () => {
         expect(outcome.diagnostics[0]!.params.detail).toMatch(
           /^creating the target's types ahead of its tables failed: `CREATE DOMAIN/i
         )
-        expect(await shadowDatabaseCount()).toBe(before)
+        expect(await leftoverShadows(mark)).toEqual([])
       }
     )
   })
@@ -430,8 +406,9 @@ describe("SchemaEngine apply port", () => {
         "create type app.k as enum ('x');",
         "create table app.t (id int, k app.k, e other.e);",
       ].join("\n"),
+      scope,
       async (url) => {
-        const before = await shadowDatabaseCount()
+        const mark = provisionedShadows().length
         const target = await engine.extract({ url }, scope)
         const outcome = await engine.withTargetClone(
           { target: { url } },
@@ -447,7 +424,7 @@ describe("SchemaEngine apply port", () => {
         expect(outcome.diagnostics[0]!.params.detail).toMatch(
           /^applying the target state failed: .*other\.e/
         )
-        expect(await shadowDatabaseCount()).toBe(before)
+        expect(await leftoverShadows(mark)).toEqual([])
       }
     )
   })
@@ -455,8 +432,9 @@ describe("SchemaEngine apply port", () => {
   it("drops the clone on success and on error", async () => {
     await inTarget(
       "create schema app; create table app.t (id int);",
+      scope,
       async (url) => {
-        const before = await shadowDatabaseCount()
+        const mark = provisionedShadows().length
         const target = await engine.extract({ url }, scope)
         const ok = await engine.withTargetClone(
           { target: { url } },
@@ -465,13 +443,13 @@ describe("SchemaEngine apply port", () => {
           async () => "done"
         )
         expect(ok).toMatchObject({ status: "loaded", value: "done" })
-        expect(await shadowDatabaseCount()).toBe(before)
+        expect(await leftoverShadows(mark)).toEqual([])
         await expect(
           engine.withTargetClone({ target: { url } }, target, scope, () =>
             Promise.reject(new Error("boom"))
           )
         ).rejects.toThrow("boom")
-        expect(await shadowDatabaseCount()).toBe(before)
+        expect(await leftoverShadows(mark)).toEqual([])
       }
     )
   })

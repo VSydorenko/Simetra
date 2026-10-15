@@ -33,9 +33,11 @@ import {
   shadowAgeMinutes,
   shadowDatabaseNames,
   testDatabaseUrl,
+  testRoleName,
   readReferenceDomain,
   FIXTURES,
 } from "../../../../simetra/test/support"
+import { dropRoles, inTarget as loadTarget } from "../../__tests__/support/db"
 import {
   leftoverShadows,
   provisionedShadows,
@@ -144,10 +146,12 @@ afterEach(async () => {
   // упав ще до свого тіла. `leftoverShadows` спершу чекає провізій, що ще
   // йдуть: ім'я тіні відоме лише з результату провізії
   const leaked = await leftoverShadows()
-  const ours = new Set(provisionedShadows())
   // Нова тінь, якої цей файл не створював, — паралельна сесія: її лише
-  // названо, тест вона не валить і не видаляється
-  const foreign = (await shadowDatabaseNames()).filter(
+  // названо, тест вона не валить і не видаляється. Облік читається після
+  // знімка стеку: провізія, що завершилась між ними, інакше вийшла б чужою
+  const onStack = await shadowDatabaseNames()
+  const ours = new Set(provisionedShadows())
+  const foreign = onStack.filter(
     (name) => !ours.has(name) && !shadowsBefore.has(name)
   )
   if (foreign.length > 0)
@@ -196,24 +200,16 @@ async function withClient<T>(
   }
 }
 
-/** Розгортає `sql` у тінь-ціль поруч зі стеком; тінь прибирає порт. */
-async function inTarget<T>(
+/**
+ * Розгортає `sql` у тінь-ціль поруч зі стеком; тінь прибирає порт. Від
+ * спільного `inTarget` відрізняється лише тим, що `fn` дістає `DbConnection`
+ * для порту двигуна, а не URL.
+ */
+const inTarget = <T>(
   sql: string,
   scope: EngineScope,
   fn: (target: DbConnection) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    sql,
-    scope,
-    (target) => fn(target)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> => loadTarget(sql, scope, (url) => fn({ url }))
 
 interface Project {
   /** Ім'я наявного проєкту; без нього — ім'я нового. */
@@ -440,10 +436,9 @@ describe("a role of the application's own", () => {
     // Роль — інфраструктура кластера (спека §6.9): межа керує грантами на неї,
     // а не нею самою. Роль кластерна, тож видна й тіні поруч із ціллю;
     // прибирається в `finally`
-    const role = "simetra_round_trip_reader"
+    const role = testRoleName("round_trip_reader")
     const admin = { url: testDatabaseUrl() }
     await withClient(admin, async (c) => {
-      await c.query(`DROP ROLE IF EXISTS ${role}`)
       await c.query(`CREATE ROLE ${role} NOLOGIN`)
     })
     try {
@@ -473,7 +468,7 @@ describe("a role of the application's own", () => {
         }
       )
     } finally {
-      await withClient(admin, (c) => c.query(`DROP ROLE IF EXISTS ${role}`))
+      await dropRoles(role)
     }
   })
 })
@@ -586,10 +581,9 @@ describe("what the round trip cannot carry is loud", () => {
     // Таблицю ролі провайдера (`authenticated`) політика двигуна виключає, і
     // її ловить перепис; власника поза ролями провайдера двигун читає ребром
     // `owner`, якого модель не має. Роль кластерна — прибирається в `finally`
-    const role = "simetra_round_trip_owner"
+    const role = testRoleName("round_trip_owner")
     const admin = { url: testDatabaseUrl() }
     await withClient(admin, async (c) => {
-      await c.query(`DROP ROLE IF EXISTS ${role}`)
       await c.query(`CREATE ROLE ${role} NOLOGIN`)
       await c.query(`GRANT ${role} TO current_user`)
     })
@@ -611,7 +605,7 @@ describe("what the round trip cannot carry is loud", () => {
         `table:app.ledger: property owner cannot be represented in the catalog model: owner role:${role} is not the default owner`,
       ])
     } finally {
-      await withClient(admin, (c) => c.query(`DROP ROLE IF EXISTS ${role}`))
+      await dropRoles(role)
     }
   })
 

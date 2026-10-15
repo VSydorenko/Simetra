@@ -1,15 +1,12 @@
 import pg from "pg"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import type {
   DbConnection,
   EngineDiagnostic,
   EngineScope,
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
-import {
-  shadowDatabaseCount,
-  testDatabaseUrl,
-} from "../../../../simetra/test/support"
+import { testDatabaseUrl } from "../../../../simetra/test/support"
 import { boundaryViolations } from "./fixtures/engine-boundary"
 
 /**
@@ -84,14 +81,6 @@ const seedNoise = (diagnostics: readonly EngineDiagnostic[]) =>
       (d.engineCode === "frontend_warning" &&
         /reorder|pg-topo/i.test(d.message))
   )
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 describe("SchemaEngine on pg-delta", () => {
   it("stack database with no managed schemas extracts an empty model", async () => {

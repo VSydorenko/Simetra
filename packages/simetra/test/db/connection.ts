@@ -35,8 +35,9 @@ export function testSuperuserUrl(): string {
 
 /**
  * Префікс імені scratch-бази двигуна: pg-delta називає її
- * `pgdelta_shadow_<мс у base36>_…`. Єдине місце, де тести знають цю форму, —
- * сторож стеку, сторож тіней `round-trip.db.test.ts` і лічильники нижче.
+ * `pgdelta_shadow_<мс у base36>_…`. Префікс каже лише, що база — тінь; чия
+ * вона, вирішує облік провізій
+ * `packages/designer/src/__tests__/support/shadows.ts`.
  */
 export const SHADOW_PREFIX = "pgdelta_shadow_"
 
@@ -145,30 +146,12 @@ export function shadowAgeMinutes(
 }
 
 /**
- * Кількість scratch-баз двигуна (`pgdelta_shadow_%`) на стеку. Тінь-сирота
- * лишається, якщо процес убито до `finally` (план E2a, рішення за спайком, 1),
- * тож тести порівнюють лічильник до й після, а не покладаються на ім'я.
- */
-export async function shadowDatabaseCount(): Promise<number> {
-  const client = new pg.Client({ connectionString: testDatabaseUrl() })
-  await client.connect()
-  try {
-    const result = await client.query<{ n: number }>(
-      "select count(*)::int as n from pg_database where starts_with(datname, $1)",
-      [SHADOW_PREFIX]
-    )
-    return result.rows[0]?.n ?? -1
-  } finally {
-    await client.end()
-  }
-}
-
-/**
- * Імена scratch-баз двигуна на стеку, відсортовані. Набір, а не лічильник:
- * сирота, що вже була чи зникла, нову тінь не маскує. Але нове ім'я в наборі
+ * Імена scratch-баз двигуна на стеку, відсортовані: сирота, що вже була чи
+ * зникла, нову тінь не маскує. Але нове ім'я в наборі
  * ще не «наша» тінь: паралельна сесія створює такі самі імена на тому самому
- * стеку. Чия тінь, вирішує тест за власним записом провізії
- * (`round-trip.db.test.ts`), а не за різницею наборів.
+ * стеку. Чия тінь, вирішує облік провізій тестового файлу
+ * (`packages/designer/src/__tests__/support/shadows.ts`), а не різниця
+ * наборів.
  */
 export async function shadowDatabaseNames(): Promise<string[]> {
   const client = new pg.Client({ connectionString: testDatabaseUrl() })

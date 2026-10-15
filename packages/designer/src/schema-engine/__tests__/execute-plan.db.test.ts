@@ -57,8 +57,16 @@ import {
   metaFiles,
   project,
   testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
+import {
+  asSuperuser,
+  dropRoles,
+  inTarget as loadTarget,
+  query,
+  withCopy,
+} from "../../__tests__/support/db"
 
 /**
  * Раннер транзакції `executePlan` на справжній базі (план П3-1, задача 8).
@@ -74,12 +82,12 @@ const stack = { url: testDatabaseUrl() }
 const apply = createApplyDatabase({ readOnly: false })
 
 /** Роль-власник для підміни власника на цілі. */
-const OWNER = "simetra_execute_owner"
+const OWNER = testRoleName("execute_owner")
 /** Роль входу, чия сесія стає роллю API провайдера. */
-const API_LOGIN = "simetra_execute_api"
+const API_LOGIN = testRoleName("execute_api")
 const API_PASSWORD = "simetra-execute-api"
 /** Роль входу без права на явний `LOCK`: лише те, що їй дасть тест. */
-const LOCKER = "simetra_execute_locker"
+const LOCKER = testRoleName("execute_locker")
 const LOCKER_PASSWORD = "simetra-execute-locker"
 
 /** Базовий стан цілі поверх бажаного стану моделі. */
@@ -95,20 +103,6 @@ const PLAN_HASH = "c".repeat(64)
 const DRIFT: DriftReport = { reason: "drift", sections: ["owner"], paths: [] }
 
 let desired: ApplyDesired
-
-/** Один запит (чи кілька операторів) з окремого з'єднання. */
-async function other<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
 
 /** З'єднання, що тримає блокування, доки тест його не відпустить. */
 async function holder(url: string, sql: string): Promise<pg.Client> {
@@ -132,14 +126,6 @@ async function until(
   }
 }
 
-async function dropRoles(): Promise<void> {
-  await other(
-    testSuperuserUrl(),
-    `drop role if exists ${API_LOGIN}; drop role if exists ${OWNER};
-     drop role if exists ${LOCKER};`
-  )
-}
-
 beforeAll(async () => {
   const compiled = await compile(
     metaFiles({
@@ -149,9 +135,7 @@ beforeAll(async () => {
   )
   expect(compiled.diagnostics).toEqual([])
   desired = await desiredForApply(compiled.model!)
-  // Ролі могли лишитися від убитого прогону
-  await dropRoles()
-  await other(
+  await query(
     testSuperuserUrl(),
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;
      create role ${API_LOGIN} login password '${API_PASSWORD}';
@@ -160,28 +144,21 @@ beforeAll(async () => {
      create role ${LOCKER} login password '${LOCKER_PASSWORD}';`
   )
 })
-afterAll(dropRoles)
+afterAll(() => dropRoles(API_LOGIN, OWNER, LOCKER))
 
-/** Ціль: бажаний стан застосування моделі плюс `setup`; базу прибирає порт. */
-async function inTarget<T>(
+/**
+ * Ціль: бажаний стан застосування моделі плюс `setup`; базу прибирає порт.
+ * На відміну від спільного `inTarget`, бажаний стан — модель, а `setup` іде
+ * окремим запитом по вже завантаженій цілі.
+ */
+const inTarget = <T>(
   setup: string,
   fn: (url: string) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    desired.sql,
-    desired.scope,
-    async (target) => {
-      await other(target.url, setup)
-      return fn(target.url)
-    }
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> =>
+  loadTarget(desired.sql, desired.scope, async (url) => {
+    await query(url, setup)
+    return fn(url)
+  })
 
 const read = (url: string): Promise<CatalogFingerprint> =>
   createApplyDatabase({ readOnly: true }).transaction(
@@ -282,13 +259,6 @@ function locksOf(
     footprintTables(footprint).map((t) => [tableKey(t.schema, t.name), true])
   )
   return planLocks({ footprint, rights }).locks
-}
-
-/** Та сама база цілі, але сесією суперкористувача стеку. */
-function asSuperuser(url: string): string {
-  const su = new URL(testSuperuserUrl())
-  su.pathname = new URL(url).pathname
-  return su.toString()
 }
 
 /**
@@ -429,7 +399,7 @@ interface MarkerRow extends Record<string, unknown> {
 
 const marker = async (url: string): Promise<MarkerRow | undefined> =>
   (
-    await other<MarkerRow>(
+    await query<MarkerRow>(
       url,
       "select snapshot_hash, plan_hash, fingerprint from simetra.marker"
     )
@@ -446,14 +416,14 @@ interface LedgerRow extends Record<string, unknown> {
 }
 
 const ledger = (url: string): Promise<LedgerRow[]> =>
-  other<LedgerRow>(
+  query<LedgerRow>(
     url,
     "select plan_hash, from_hash, to_hash, allowed, drift, drift is null as no_drift, apply_id from simetra.ledger order by id"
   )
 
 const exists = async (url: string, table: string): Promise<boolean> =>
   (
-    await other<{ found: boolean }>(
+    await query<{ found: boolean }>(
       url,
       `select to_regclass('${table}') is not null as found`
     )
@@ -577,7 +547,7 @@ describe("executePlan", () => {
     await inTarget(BASE, async (url) => {
       await establish(url, H1)
       const before = await marker(url)
-      await other(url, `alter table app.t owner to ${OWNER}`)
+      await query(url, `alter table app.t owner to ${OWNER}`)
       const fingerprint = await read(url)
       const plan = await planFor(url, [], {
         fromHash: H1,
@@ -618,7 +588,7 @@ describe("executePlan", () => {
   it("keeps every check for a drift-only plan", async () => {
     await inTarget(BASE, async (url) => {
       await establish(url, H1)
-      await other(url, `alter table app.t owner to ${OWNER}`)
+      await query(url, `alter table app.t owner to ${OWNER}`)
       const fingerprint = await read(url)
       const plan = await planFor(url, [], {
         fromHash: H1,
@@ -658,7 +628,7 @@ describe("executePlan", () => {
         ],
       })
 
-      await other(url, "alter table app.t add column z int")
+      await query(url, "alter table app.t add column z int")
       const changed = await executePlan(apply, { url }, plan, allowed)
       expect(changed).toMatchObject({ status: "refused" })
       expect(codes(changed)).toEqual(["apply.target-changed"])
@@ -720,44 +690,13 @@ describe("executePlan", () => {
   describe("the proof that a rehearsal copy is a copy of this target", () => {
     /**
      * Роль-власник об'єктів копії, відновленої під іншими власниками. Ім'я
-     * унікальне для прогону, як і ім'я копії: стек спільний, і чужу роль з
-     * тим самим ім'ям тест не має права ні зайняти, ні видалити.
+     * несе тег прогону, як і ім'я копії: стек спільний, і чужу роль з тим
+     * самим ім'ям тест не має права ні зайняти, ні видалити.
      */
-    const COPY_OWNER = `simetra_copy_owner_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const COPY_OWNER = testRoleName("copy_owner")
 
     /** Ім'я бази з адреси. */
     const nameOf = (url: string): string => new URL(url).pathname.slice(1)
-
-    /** Адреса бази `name` з тими самими роллю й сервером, що й `url`. */
-    const onDatabase = (url: string, name: string): string => {
-      const at = new URL(url)
-      at.pathname = `/${name}`
-      return at.toString()
-    }
-
-    /**
-     * Копія цілі — окрема база стеку `CREATE DATABASE … <how>` з власником
-     * `postgres`, як тінь двигуна; прибирається у `finally`, зокрема на шляху
-     * падіння: інакше її зловить сторож стеку.
-     */
-    async function withCopy<T>(
-      how: string,
-      fn: (url: string) => Promise<T>
-    ): Promise<T> {
-      const name = `simetra_copy_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-      await other(
-        testSuperuserUrl(),
-        `create database ${name} owner postgres ${how}`
-      )
-      try {
-        return await fn(onDatabase(testDatabaseUrl(), name))
-      } finally {
-        await other(
-          testSuperuserUrl(),
-          `drop database if exists ${name} with (force)`
-        )
-      }
-    }
 
     const rehearse = (
       url: string,
@@ -809,19 +748,19 @@ describe("executePlan", () => {
       // повний доказ двигуна бачить дії ACL, і відмова називає причину
       // Створення — до `try`: якщо воно впаде, `finally` не видалить роль,
       // якої цей прогін не створив
-      await other(
+      await query(
         testSuperuserUrl(),
         `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
       )
       try {
         await inTarget(BASE, (url) =>
           withCopy(`template ${nameOf(url)}`, async (copy) => {
-            await other(
+            await query(
               asSuperuser(copy),
               `alter table app.t owner to ${COPY_OWNER}`
             )
             expect(
-              await other<{ acl: string | null }>(
+              await query<{ acl: string | null }>(
                 copy,
                 "select relacl::text as acl from pg_class where oid = 'app.t'::regclass"
               )
@@ -869,7 +808,7 @@ describe("executePlan", () => {
         )
       } finally {
         // Роль — після баз: бази з її об'єктами вже прибрано
-        await other(testSuperuserUrl(), `drop role if exists ${COPY_OWNER}`)
+        await dropRoles(COPY_OWNER)
       }
     })
 
@@ -882,11 +821,11 @@ describe("executePlan", () => {
         withCopy(
           "template template0 lc_collate 'C' lc_ctype 'C'",
           async (copy) => {
-            await other(url, recipe)
-            await other(copy, recipe)
+            await query(url, recipe)
+            await query(copy, recipe)
             const plan = await planFor(url, [CREATE_N])
             expect(
-              await other<{ collate: string }>(
+              await query<{ collate: string }>(
                 copy,
                 "select datcollate as collate from pg_database where datname = current_database()"
               )
@@ -935,7 +874,7 @@ describe("executePlan", () => {
   /** Чи чекає хтось блокування на `app.t`. */
   const waitsOnT = async (url: string): Promise<boolean> =>
     (
-      await other<{ waiting: boolean }>(
+      await query<{ waiting: boolean }>(
         url,
         "select exists (select from pg_locks where relation = 'app.t'::regclass and not granted) as waiting"
       )
@@ -969,7 +908,7 @@ describe("executePlan", () => {
         await reader.end()
       }
       expect(
-        await other(
+        await query(
           url,
           "select 1 from information_schema.columns where table_schema = 'app' and table_name = 't' and column_name = 'd'"
         )
@@ -1119,7 +1058,7 @@ describe("executePlan", () => {
         ],
       })
       // MAINTAIN (Postgres 17) теж дає явний LOCK
-      await other(url, `grant maintain on app.t to ${LOCKER}`)
+      await query(url, `grant maintain on app.t to ${LOCKER}`)
       expect(await rights()).toEqual(new Map([[t, true]]))
     })
   })
@@ -1134,7 +1073,7 @@ describe("executePlan", () => {
     // supautils цілі, а не з пресету
     const [policy, trigger] = await read(stack.url, "postgres")
     const listed = (setting: string) =>
-      other<{ names: string[] }>(
+      query<{ names: string[] }>(
         stack.url,
         `select array(select pg_catalog.json_array_elements_text(
            pg_catalog.current_setting('${setting}')::json -> 'postgres')) as names`
@@ -1158,7 +1097,7 @@ describe("executePlan", () => {
     expect(trigger!.statements).toEqual(["dropTrigger"])
     // Таблиця з переліку, якої на цілі немає, відсіюється, а не валить план
     await inTarget(BASE, async (url) => {
-      await other(asSuperuser(url), "drop table auth.audit_log_entries cascade")
+      await query(asSuperuser(url), "drop table auth.audit_log_entries cascade")
       const [onTarget] = await read(url, "postgres")
       expect(onTarget!.tables).toEqual(
         policy!.tables.filter((t) => t.name !== "audit_log_entries")
@@ -1177,20 +1116,20 @@ describe("executePlan", () => {
       grant usage on schema app to ${LOCKER};
       grant update on app.t to ${LOCKER};`
     await inTarget(setup, async (url) => {
-      await other(
+      await query(
         asSuperuser(url),
         `revoke all on schema realtime from public;
          grant usage on schema auth to ${LOCKER}`
       )
       const asLocker = loginAs(url, LOCKER, LOCKER_PASSWORD)
-      const [usage] = await other<{ usable: boolean }>(
+      const [usage] = await query<{ usable: boolean }>(
         asLocker,
         "select pg_catalog.has_schema_privilege('realtime', 'USAGE') as usable"
       )
       expect(usage!.usable).toBe(false)
       // `to_regclass` тут кидає 42501 — саме це зірвало б транзакцію плану
       await expect(
-        other(asLocker, "select to_regclass('realtime.messages')")
+        query(asLocker, "select to_regclass('realtime.messages')")
       ).rejects.toMatchObject({ code: "42501" })
       const reader = createApplyDatabase({ readOnly: true })
       const { sets, rights } = await reader.transaction(
@@ -1221,7 +1160,7 @@ describe("executePlan", () => {
           set.tables.some((t) => t.name === "audit_log_entries")
         )
       ).toBe(true)
-      await other(asSuperuser(url), "drop table auth.audit_log_entries cascade")
+      await query(asSuperuser(url), "drop table auth.audit_log_entries cascade")
       // Читач `app.t` конфліктує з ACCESS EXCLUSIVE: спроба замка чекала б
       const reader = await holder(
         url,
@@ -1278,7 +1217,7 @@ describe("executePlan", () => {
 
     const idType = async (url: string): Promise<string> =>
       (
-        await other<{ type: string }>(
+        await query<{ type: string }>(
           url,
           `select format_type(atttypid, atttypmod) as type from pg_attribute
             where attrelid = 'app.t'::regclass and attname = 'id'`
@@ -1288,7 +1227,7 @@ describe("executePlan", () => {
     it("refuses when a foreign key outside the scope appeared after the plan", async () => {
       await inTarget(setup, async (url) => {
         const plan = await watched(url)
-        await other(url, "create table other.r (t int references app.t)")
+        await query(url, "create table other.r (t int references app.t)")
         const outcome = await executePlan(apply, { url }, plan, options)
         expect(outcome).toMatchObject({
           status: "refused",
@@ -1389,7 +1328,7 @@ describe("executePlan", () => {
         })
         let waiting: { query: string; mode: string } | undefined
         await until("the apply to wait on the partition", async () => {
-          ;[waiting] = await other<{ query: string; mode: string }>(
+          ;[waiting] = await query<{ query: string; mode: string }>(
             url,
             `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
@@ -1472,7 +1411,7 @@ describe("executePlan", () => {
   it("refuses a changed target", async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [CREATE_N])
-      await other(url, "alter table app.t add column z int")
+      await query(url, "alter table app.t add column z int")
       const outcome = await executePlan(apply, { url }, plan, options)
       expect(outcome).toMatchObject({ status: "refused" })
       expect(codes(outcome)).toEqual(["apply.target-changed"])
@@ -1486,7 +1425,7 @@ describe("executePlan", () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [ALTER_T])
       // Таблицю прибрано за спиною платформи вже після плану
-      await other(url, "drop table app.t")
+      await query(url, "drop table app.t")
       const outcome = await executePlan(apply, { url }, plan, options)
       expect(outcome).toMatchObject({
         status: "refused",
@@ -1544,7 +1483,7 @@ describe("executePlan", () => {
     await inTarget(BASE, async (url) => {
       const plan = await renamePlan(url)
       // Таблицю зі старим ім'ям прибрано за спиною платформи після плану
-      await other(url, "drop table app.t")
+      await query(url, "drop table app.t")
       const outcome = await executePlan(apply, { url }, plan, options)
       expect(outcome).toMatchObject({
         status: "refused",
@@ -1599,7 +1538,7 @@ describe("executePlan", () => {
         })
         let waiting: { query: string; mode: string } | undefined
         await until("the apply to wait on the FK target", async () => {
-          ;[waiting] = await other<{ query: string; mode: string }>(
+          ;[waiting] = await query<{ query: string; mode: string }>(
             url,
             `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
@@ -1650,7 +1589,7 @@ describe("executePlan", () => {
         })
         const outcome = await executePlan(apply, { url: target }, plan, options)
         expect(outcome).toMatchObject({ status: "committed" })
-        const rows = await other<{ at: string; path: string; bodies: string }>(
+        const rows = await query<{ at: string; path: string; bodies: string }>(
           target,
           "select at, path, bodies from app.seen"
         )
@@ -1841,7 +1780,7 @@ describe("executePlan", () => {
     /** Ціль не змінилася: таблиця під старим іменем зі старими даними. */
     const untouched = async (url: string) =>
       expect(
-        await other(url, "select id, c, x::text from app.pt order by id")
+        await query(url, "select id, c, x::text from app.pt order by id")
       ).toEqual([
         { id: 1, c: "a", x: "10" },
         { id: 2, c: null, x: "20" },
@@ -2071,11 +2010,11 @@ describe("executePlan", () => {
             },
           ],
         })
-        expect(await other(url, "select timeout from app.seen")).toEqual([
+        expect(await query(url, "select timeout from app.seen")).toEqual([
           { timeout: "270000" },
         ])
         expect(
-          await other(url, "select rehearsal_hash from simetra.ledger")
+          await query(url, "select rehearsal_hash from simetra.ledger")
         ).toEqual([{ rehearsal_hash: await rehearsalHash(report) }])
       })
     })
@@ -2491,7 +2430,7 @@ describe("executePlan", () => {
           ],
         })
         expect(
-          await other(url, "select length(code) as n from app.dt where id = 1")
+          await query(url, "select length(code) as n from app.dt where id = 1")
         ).toEqual([{ n: 25 }])
       })
     })
@@ -2538,7 +2477,7 @@ describe("executePlan", () => {
             },
           ],
         })
-        expect(await other(url, "select p from app.dt")).toEqual([{ p: 1 }])
+        expect(await query(url, "select p from app.dt")).toEqual([{ p: 1 }])
       })
     })
 
@@ -2986,7 +2925,7 @@ describe("executePlan", () => {
             },
           ],
         })
-        expect(await other(url, "select n from app.dt order by id")).toEqual([
+        expect(await query(url, "select n from app.dt order by id")).toEqual([
           { n: 1 },
           { n: 50 },
         ])
@@ -2997,7 +2936,7 @@ describe("executePlan", () => {
   it("catches an owner swap on the target", async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [CREATE_N])
-      await other(url, `alter table app.t owner to ${OWNER}`)
+      await query(url, `alter table app.t owner to ${OWNER}`)
       const outcome = await executePlan(apply, { url }, plan, options)
       expect(outcome).toMatchObject({ status: "refused" })
       expect(codes(outcome)).toEqual(["apply.target-changed"])
@@ -3083,7 +3022,7 @@ describe("executePlan", () => {
   /** Чи чекає хтось advisory lock застосування в цій базі. */
   const waitsOnApplyLock = async (url: string): Promise<boolean> =>
     (
-      await other<{ waiting: boolean }>(
+      await query<{ waiting: boolean }>(
         url,
         "select exists (select from pg_locks where locktype = 'advisory' and classid = 1397312837 and objid = 1 and database = (select oid from pg_database where datname = current_database()) and not granted) as waiting"
       )
@@ -3222,7 +3161,7 @@ describe("executePlan", () => {
         ],
       })
       expect(
-        await other(
+        await query(
           testSuperuserUrl(),
           `select 1 from pg_stat_activity where pid = ${orphan}`
         )
@@ -3325,7 +3264,7 @@ describe("executePlan", () => {
       const database = new URL(url).pathname.slice(1)
       const backend = async () =>
         (
-          await other<{ pid: number }>(
+          await query<{ pid: number }>(
             testSuperuserUrl(),
             `select pid from pg_stat_activity where datname = '${database}' and query = '${sleepStep.sql}' and state = 'active'`
           )
@@ -3334,7 +3273,7 @@ describe("executePlan", () => {
         "the step to run",
         async () => (await backend()) !== undefined
       )
-      await other(
+      await query(
         testSuperuserUrl(),
         `select pg_terminate_backend(${await backend()})`
       )
@@ -3517,7 +3456,7 @@ describe("executePlan", () => {
           ],
         })
         expect(
-          await other(
+          await query(
             url,
             "select c, pg_typeof(c)::text as type from app.v where id = 1"
           )
@@ -3551,7 +3490,7 @@ describe("executePlan", () => {
             },
           ],
         })
-        expect(await other(url, "select c from app.p1")).toEqual([
+        expect(await query(url, "select c from app.p1")).toEqual([
           { c: "abcdefgh" },
         ])
       })
@@ -3583,7 +3522,7 @@ describe("executePlan", () => {
           ],
         })
         expect(
-          await other(url, "select n::text from app.v where id = 1")
+          await query(url, "select n::text from app.v where id = 1")
         ).toEqual([{ n: "1.2345" }])
       })
     })
@@ -3673,7 +3612,7 @@ describe("executePlan", () => {
           ],
         })
         expect(
-          await other(url, "select pg_typeof(j)::text as type from app.v")
+          await query(url, "select pg_typeof(j)::text as type from app.v")
         ).toEqual([{ type: "json" }])
       })
     })
@@ -3727,7 +3666,7 @@ describe("executePlan", () => {
             },
           ],
         })
-        expect(await other(url, "select id from app.p")).toEqual([{ id: 1 }])
+        expect(await query(url, "select id from app.p")).toEqual([{ id: 1 }])
       })
     })
 
@@ -3744,7 +3683,7 @@ describe("executePlan", () => {
         })
         expect(String(outcome.diagnostics[0]!.params?.objects)).toContain("t_a")
         expect(
-          await other(
+          await query(
             url,
             "select conname from pg_constraint where conname = 't_a'"
           )

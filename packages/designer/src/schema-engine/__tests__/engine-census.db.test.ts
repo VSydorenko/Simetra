@@ -1,7 +1,7 @@
 import { resolveProfile } from "@supabase/pg-delta"
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
   renderDesiredState,
@@ -12,12 +12,8 @@ import {
   type Extracted,
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
-import {
-  shadowDatabaseCount,
-  testDatabaseUrl,
-  testSuperuserUrl,
-  FIXTURES,
-} from "../../../../simetra/test/support"
+import { testSuperuserUrl, FIXTURES } from "../../../../simetra/test/support"
+import { inTarget } from "../../__tests__/support/db"
 import { readCensus } from "../census-read"
 import { COVERED_CLASSES, factKindOf } from "../pg-delta/census-facts"
 import { scopeProfile } from "../pg-delta/policy"
@@ -29,16 +25,7 @@ import { scopeProfile } from "../pg-delta/policy"
  */
 
 const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 async function withPool<T>(
   db: DbConnection,
@@ -55,24 +42,14 @@ async function withPool<T>(
 /**
  * Бажаний SQL у тіні → `fn` над тінню. Діагностики тіні тут не перевіряються:
  * непокриті класи двигун сам позначає `unmodeled_drift` (цілі їх бракує).
+ * Від спільного `inTarget` відрізняється лише тим, що `fn` дістає
+ * `DbConnection` для порту двигуна, а не URL.
  */
-async function inShadow<T>(
+const inShadow = <T>(
   desiredSql: string,
   shadowScope: EngineScope,
   fn: (shadow: DbConnection) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    desiredSql,
-    shadowScope,
-    (shadow) => fn(shadow)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `shadow did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> => inTarget(desiredSql, shadowScope, (url) => fn({ url }))
 
 interface ShadowFacts {
   extracted: Extracted

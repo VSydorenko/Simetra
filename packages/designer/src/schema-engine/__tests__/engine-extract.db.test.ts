@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
   catalogFromSnapshot,
@@ -15,7 +15,6 @@ import {
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
 import {
-  shadowDatabaseCount,
   testDatabaseUrl,
   readReferenceDomain,
   acceptDebt,
@@ -35,14 +34,6 @@ import {
 
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 /**
  * Поля текстів виразів, які Postgres зберігає в канонічній формі, а знімок —

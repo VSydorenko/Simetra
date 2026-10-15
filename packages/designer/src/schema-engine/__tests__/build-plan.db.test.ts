@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   applyChanges,
@@ -50,9 +49,16 @@ import {
   promotionProject,
   project,
   testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
   uuid,
 } from "../../../../simetra/test/support"
+import {
+  asSuperuser,
+  dropRoles,
+  inTarget as loadTarget,
+  query,
+} from "../../__tests__/support/db"
 
 /**
  * Конвеєр плану `buildPlan` на справжній базі (план П3-1, задача 9): гейт
@@ -71,78 +77,39 @@ const writer = createApplyDatabase({ readOnly: false })
 const targetScope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
-const OWNER = "simetra_build_plan_owner"
+const OWNER = testRoleName("build_plan_owner")
 /** Роль, членом якої роль сесії не є: об'єкт такого власника план не зніме. */
-const STRANGER = "simetra_build_plan_stranger"
+const STRANGER = testRoleName("build_plan_stranger")
 
 /** Роль-група, членом якої є роль API: її привілеї роль API успадковує. */
-const WRITERS = "simetra_build_plan_writers"
+const WRITERS = testRoleName("build_plan_writers")
 
 /** Роль адміністрування копії, інша за роль плану (R7 плану П3-2b-0). */
-const COPIER = "simetra_build_plan_copier"
+const COPIER = testRoleName("build_plan_copier")
 const COPIER_PASSWORD = "simetra_build_plan_copier"
 
 /** Службова роль провайдера, членом якої роль сесії застосування не є. */
 const SERVICE_ROLE = "supabase_auth_admin"
 
-/** Один запит (чи кілька операторів) з окремого з'єднання. */
-async function other<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-const dropRole = () =>
-  other(
-    testSuperuserUrl(),
-    `drop role if exists ${OWNER}; drop role if exists ${STRANGER};
-     drop role if exists ${WRITERS}; drop role if exists ${COPIER};`
-  )
-
-/** Та сама база цілі, але сесією суперкористувача стеку. */
-function asSuperuser(url: string): string {
-  const su = new URL(testSuperuserUrl())
-  su.pathname = new URL(url).pathname
-  return su.toString()
-}
-
-beforeAll(async () => {
-  // Роль могла лишитися від убитого прогону
-  await dropRole()
-  await other(
+beforeAll(() =>
+  query(
     testSuperuserUrl(),
     `create role ${OWNER} nologin; grant ${OWNER} to postgres;
      create role ${STRANGER} nologin;
      create role ${WRITERS} nologin; grant ${WRITERS} to authenticated;
      create role ${COPIER} login password '${COPIER_PASSWORD}';`
   )
-})
-afterAll(dropRole)
+)
+afterAll(() => dropRoles(OWNER, STRANGER, WRITERS, COPIER))
 
-/** Ціль із `setup`; базу прибирає порт. */
-async function inTarget<T>(
+/**
+ * Ціль із `setup`; базу прибирає порт. Спільний `inTarget` із межею цілі
+ * цього файлу.
+ */
+const inTarget = <T>(
   setup: string,
   fn: (url: string) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    setup,
-    targetScope,
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> => loadTarget(setup, targetScope, fn)
 
 /** Порожня ціль: лише базовий стан провайдера. */
 const EMPTY = "select 1;"
@@ -439,7 +406,7 @@ describe("buildPlan", () => {
   it("warns about blind functions in the plan except the provider's expected ones", async () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
-      await other(asSuperuser(url), BLIND_SETUP)
+      await query(asSuperuser(url), BLIND_SETUP)
       const outcome = await plan(url, model)
       // Засів тіні несе базовий стан провайдера, тож сліпі там усі функції
       // переліку: ідентичності пресету збігаються з каталогом поіменно
@@ -487,7 +454,7 @@ describe("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(url, "alter table app.party add column extra int")
+      await query(url, "alter table app.party add column extra int")
       const outcome = await plan(url, model)
       const artifact = planned(outcome)
       expect(codes(outcome)).toContain("apply.drift")
@@ -511,7 +478,7 @@ describe("buildPlan", () => {
     })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(url, `alter table app.party owner to ${OWNER}`)
+      await query(url, `alter table app.party owner to ${OWNER}`)
       const outcome = await plan(url, model)
       // Гейт бачить дрейф власника, а план відмовляє з порадою: власник —
       // керована властивість, і прийняти підміну базою не можна
@@ -530,7 +497,7 @@ describe("buildPlan", () => {
         objects: `relation app.party (owner ${OWNER}, expected postgres)`,
       })
       // Власника повернуто вручну — дрейфу більше немає
-      await other(url, "alter table app.party owner to postgres")
+      await query(url, "alter table app.party owner to postgres")
       expect((await plan(url, model)).status).toBe("unchanged")
     })
   })
@@ -564,7 +531,7 @@ describe("buildPlan", () => {
       await establish(url, model)
       // Таблиця лише цілі, власник — роль поза членством ролі сесії: план
       // зніс би її, а `DROP` упав би на застосуванні з 42501
-      await other(
+      await query(
         asSuperuser(url),
         `create table app.stray (id int);
          alter table app.stray owner to ${STRANGER};`
@@ -591,8 +558,8 @@ describe("buildPlan", () => {
       [PARTY]: party(),
     })
     await inTarget(EMPTY, async (url) => {
-      await other(url, "create extension pg_trgm schema public")
-      const [extension] = await other<{ owner: string; member: boolean }>(
+      await query(url, "create extension pg_trgm schema public")
+      const [extension] = await query<{ owner: string; member: boolean }>(
         url,
         `select pg_get_userbyid(extowner) as owner,
            pg_has_role(current_user, extowner, 'MEMBER') as member
@@ -605,7 +572,7 @@ describe("buildPlan", () => {
       )
 
       // Об'єкт поза розширенням, що належить службовій ролі провайдера
-      await other(
+      await query(
         asSuperuser(url),
         `create table public.stray (id int);
          alter table public.stray owner to ${SERVICE_ROLE};`
@@ -644,7 +611,7 @@ describe("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(
+      await query(
         url,
         "update simetra.marker set engine_version = 'other', fingerprint_version = 0"
       )
@@ -804,7 +771,7 @@ describe("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(url, "alter table app.party set (fillfactor = 70)")
+      await query(url, "alter table app.party set (fillfactor = 70)")
       const artifact = planned(await plan(url, model))
       expect(artifact.drift?.sections).toContain("relations")
       expect(stepMatching(artifact, /RESET \(fillfactor\)/)).not.toEqual([])
@@ -830,7 +797,7 @@ describe("buildPlan", () => {
     })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(url, "alter table app.counter alter column seq set cache 10")
+      await query(url, "alter table app.counter alter column seq set cache 10")
       const artifact = planned(await plan(url, model))
       expect(artifact.drift?.sections).toContain("sequences")
       expect(stepMatching(artifact, /CACHE\s+1\b/i)).not.toEqual([])
@@ -841,7 +808,7 @@ describe("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(
+      await query(
         url,
         `update simetra.marker set engine_version = 'other';
          grant select on app.party to anon;`
@@ -876,7 +843,7 @@ describe("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(url, "delete from simetra.marker")
+      await query(url, "delete from simetra.marker")
       const outcome = await plan(url, model)
       expect(outcome.status).toBe("refused")
       expect(errors(outcome)).toEqual(["apply.ledger-without-marker"])
@@ -928,13 +895,13 @@ describe("buildPlan", () => {
       ...engine,
       withTargetClone: (o, target, scope, fn) =>
         engine.withTargetClone(o, target, scope, async (clone) => {
-          await other(clone.url, "create table app.ghost ()")
+          await query(clone.url, "create table app.ghost ()")
           return fn(clone)
         }),
     }
     await inTarget(EMPTY, async (url) => {
       await establish(url, model)
-      await other(url, "alter table app.party add column extra int")
+      await query(url, "alter table app.party add column extra int")
       const outcome = await plan(url, model, ghostly)
       expect(outcome.status).toBe("refused")
       expect(new Set(errors(outcome))).toEqual(new Set(["plan.clone-mismatch"]))
@@ -957,7 +924,7 @@ describe("buildPlan", () => {
       ...engine,
       withTargetClone: (o, target, scope, fn) =>
         engine.withTargetClone(o, target, scope, async (clone) => {
-          await other(
+          await query(
             clone.url,
             "alter table app.party drop column first; alter table app.party add column first boolean"
           )
@@ -1034,7 +1001,7 @@ describe("buildPlan", () => {
       [PARTY]: party(),
     })
     await inTarget(EMPTY, async (url) => {
-      await other(
+      await query(
         asSuperuser(url),
         `alter default privileges for role postgres in schema public
            grant all on tables to postgres, anon, authenticated, service_role;
@@ -1088,7 +1055,7 @@ describe("buildPlan", () => {
     it("records the role's global default privileges and proves the plan with environment steps", async () => {
       const model = await compiled({ [PARTY]: party() })
       await inTarget(EMPTY, async (url) => {
-        await other(
+        await query(
           url,
           `alter default privileges for role postgres grant select on tables to anon with grant option;
            alter default privileges for role postgres revoke all on functions from public`
@@ -1152,7 +1119,7 @@ describe("buildPlan", () => {
         ...engine,
         withTargetClone: (o, target, scope, fn) =>
           engine.withTargetClone(o, target, scope, async (clone) => {
-            await other(
+            await query(
               clone.url,
               "alter default privileges for role postgres grant usage on types to anon"
             )
@@ -1160,7 +1127,7 @@ describe("buildPlan", () => {
           }),
       }
       await inTarget(EMPTY, async (url) => {
-        await other(
+        await query(
           url,
           "alter default privileges for role postgres revoke all on functions from public"
         )
@@ -1188,7 +1155,7 @@ describe("buildPlan", () => {
       withTargetClone: (o, target, scope, fn) =>
         engine.withTargetClone(o, target, scope, async (clone) => {
           const database = new URL(clone.url).pathname.slice(1)
-          await other(
+          await query(
             clone.url,
             `grant create on database "${database}" to ${COPIER}`
           )
@@ -1196,7 +1163,7 @@ describe("buildPlan", () => {
           as.username = COPIER
           as.password = COPIER_PASSWORD
           const url = as.toString()
-          if (setup !== undefined) await other(url, setup)
+          if (setup !== undefined) await query(url, setup)
           return fn({ url })
         }),
     })
@@ -1212,7 +1179,7 @@ describe("buildPlan", () => {
       // доказ тихо позеленів би, а на цілі `anon` читав би нові таблиці
       const model = await compiled({ [PARTY]: party() })
       await inTarget(EMPTY, async (url) => {
-        await other(
+        await query(
           url,
           "alter default privileges for role postgres grant select on tables to anon"
         )
@@ -1282,7 +1249,7 @@ describe("buildPlan", () => {
         },
       }
       await inTarget(EMPTY, async (url) => {
-        await other(
+        await query(
           url,
           "alter default privileges for role postgres revoke all on functions from public"
         )
@@ -1300,7 +1267,7 @@ describe("buildPlan", () => {
         ...engine,
         withTargetClone: (o, target, scope, fn) =>
           engine.withTargetClone(o, target, scope, async (clone) => {
-            await other(
+            await query(
               clone.url,
               "alter default privileges for role postgres grant select on tables to anon"
             )
@@ -1404,7 +1371,7 @@ describe("buildPlan", () => {
       }
       const outcome = await inTarget(EMPTY, async (url) => {
         await establish(url, model)
-        await other(url, "alter table app.party add column extra int")
+        await query(url, "alter table app.party add column extra int")
         return plan(url, model, rewriting)
       })
       expect(outcome.status).toBe("refused")
@@ -1636,7 +1603,7 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       }
       const outcome = await inTarget(EMPTY, async (url) => {
         await establish(url, model)
-        await other(url, "create table app.v (id int primary key, j json)")
+        await query(url, "create table app.v (id int primary key, j json)")
         return plan(url, model, rewriting)
       })
       expect(outcome.status).toBe("refused")
@@ -1802,13 +1769,13 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
         const to = await tables({ fk: false, code: 20 })
         await inTarget(EMPTY, async (url) => {
           await establish(url, from)
-          await other(
+          await query(
             url,
             `create schema ext;
              create table ext.r (id int primary key,
                p_code varchar(10) references app.p (code));`
           )
-          if (owner !== "") await other(asSuperuser(url), owner)
+          if (owner !== "") await query(asSuperuser(url), owner)
           const outcome = await plan(url, to)
           const artifact = planned(outcome)
           const [retype] = stepMatching(artifact, /ALTER COLUMN "code" TYPE/)
@@ -1872,7 +1839,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
 
     /** Наявні таблиці переліку налаштування для ролі сесії на цілі. */
     const listed = (url: string, setting: string) =>
-      other<{ schema: string; name: string }>(
+      query<{ schema: string; name: string }>(
         url,
         `select n.nspname as schema, c.relname as name
            from pg_catalog.json_array_elements_text(
@@ -2101,7 +2068,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       return inTarget(EMPTY, async (url) => {
         await establish(url, p.before)
         if (o.drift !== undefined)
-          await other(o.superuser === true ? asSuperuser(url) : url, o.drift)
+          await query(o.superuser === true ? asSuperuser(url) : url, o.drift)
         return buildPlan(
           o.engine ?? engine,
           { ...dbs, reader: o.reader ?? dbs.reader },
@@ -2915,7 +2882,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       const outcome = await inTarget(EMPTY, async (url) => {
         await establish(url, p.after)
         // Застосування з COMMIT у 2a відмовляє, тож рядок пише тест
-        await other(
+        await query(
           url,
           `update simetra.ledger set promotion = jsonb_build_object('hash', '${hash}')`
         )

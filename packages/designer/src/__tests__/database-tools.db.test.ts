@@ -19,7 +19,7 @@ import {
   renderDesiredState,
   type EngineScope,
 } from "simetra/schema"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { runTool, type CliArgs } from "../cli/command"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
@@ -34,10 +34,16 @@ import {
   catalog,
   metaFiles,
   project as projectFile,
-  shadowDatabaseCount,
   testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
 } from "../../../simetra/test/support"
+import {
+  asSuperuser,
+  dropRoles,
+  inTarget as loadTarget,
+  query,
+} from "./support/db"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 /**
@@ -53,17 +59,11 @@ const ENV = "SIMETRA_DATABASE_URL"
 
 useTmpProjects()
 
-let shadowsBefore = 0
 const disposers: (() => Promise<void>)[] = []
 const clients: Client[] = []
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()))
   await Promise.all(disposers.splice(0).map((d) => d()))
-  // Жодної тіні після виклику: ні від інструмента, ні від цілі фікстури
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
 })
 
 /** Корінь проєкту з `node_modules/simetra`; тека метаданих ще не існує. */
@@ -80,33 +80,15 @@ const scopeOf = (schemas: string[]): EngineScope => ({
   provider: "supabase",
 })
 
-/** Розгортає `sql` у тимчасову базу поруч зі стеком; її прибирає порт. */
-async function inTarget(
+/**
+ * Розгортає `sql` у тимчасову базу поруч зі стеком; її прибирає порт.
+ * Спільний `inTarget`, де межу задає перелік схем.
+ */
+const inTarget = (
   sql: string,
   schemas: string[],
   fn: (url: string) => Promise<void>
-): Promise<void> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    sql,
-    scopeOf(schemas),
-    (target) => fn(target.url)
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-}
-
-async function exec(url: string, sql: string): Promise<void> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    await client.query(sql)
-  } finally {
-    await client.end()
-  }
-}
+): Promise<void> => loadTarget(sql, scopeOf(schemas), fn)
 
 const options = (
   dir: string,
@@ -153,7 +135,7 @@ async function connectMcp(
 }
 
 /** Роль поза членством ролі сесії: її об'єкт двигун не прочитає. */
-const STRANGER = "simetra_db_tools_stranger"
+const STRANGER = testRoleName("db_tools_stranger")
 
 const SHOP = `
   CREATE SCHEMA app;
@@ -332,18 +314,11 @@ describe("diff", () => {
     // Двигун не будує витягу цілі з таким об'єктом (відмова «capability»):
     // без передперевірки власників `diff` давав би безликий `database.failed`
     await introspected(async (dir, env, url) => {
-      await exec(
-        testSuperuserUrl(),
-        `DROP ROLE IF EXISTS ${STRANGER}; CREATE ROLE ${STRANGER} NOLOGIN;`
-      )
+      await query(testSuperuserUrl(), `CREATE ROLE ${STRANGER} NOLOGIN;`)
       // Роль кластерна: знімається після бази цілі, яку прибирає порт
-      disposers.push(() =>
-        exec(testSuperuserUrl(), `DROP ROLE IF EXISTS ${STRANGER}`)
-      )
-      const su = new URL(testSuperuserUrl())
-      su.pathname = new URL(url).pathname
-      await exec(
-        su.toString(),
+      disposers.push(() => dropRoles(STRANGER))
+      await query(
+        asSuperuser(url),
         `CREATE TABLE app.stray (id int);
          ALTER TABLE app.stray OWNER TO ${STRANGER};`
       )
@@ -367,7 +342,7 @@ describe("diff", () => {
 
   it("diff names a dropped index in cli and mcp structured output", async () => {
     await introspected(async (dir, env, url) => {
-      await exec(url, "DROP INDEX app.orders_customer_idx")
+      await query(url, "DROP INDEX app.orders_customer_idx")
       const cli = await runTool(
         toolByName("diff")!,
         { _: [dir] },
@@ -414,7 +389,7 @@ describe("diff", () => {
     await introspected(async (dir, env, url) => {
       // FK замовлення посилається на клієнта, але його дія належить
       // замовленню: фільтр клієнта її не бачить
-      await exec(
+      await query(
         url,
         `DROP INDEX app.orders_customer_idx;
          ALTER TABLE app.orders DROP CONSTRAINT orders_customer_id_fkey;`
@@ -493,12 +468,12 @@ describe("diff and the apply state", () => {
 
   it("a complete apply state matches, a partial one is a difference", async () => {
     await introspected(async (dir, env, url) => {
-      await exec(url, renderApplyState(await modelOf(dir)))
+      await query(url, renderApplyState(await modelOf(dir)))
       expect(await diffData(dir, env)).toMatchObject({
         empty: true,
         applyState: "present",
       })
-      await exec(url, "DROP TABLE simetra.ledger")
+      await query(url, "DROP TABLE simetra.ledger")
       const partial = await diffData(dir, env)
       expect(partial.empty).toBe(false)
       expect(partial.applyState).toBe("present")
@@ -510,7 +485,7 @@ describe("diff and the apply state", () => {
     // Порожню схему без грантів модель каталогу не несе: відсутність схеми
     // видно лише з плану, і без цього її поява лишилася б непоміченою
     await introspected(async (dir, env, url) => {
-      await exec(url, "CREATE SCHEMA simetra")
+      await query(url, "CREATE SCHEMA simetra")
       const data = await diffData(dir, env)
       expect(data.applyState).toBe("present")
       expect(data.empty).toBe(false)
@@ -519,8 +494,8 @@ describe("diff and the apply state", () => {
 
   it("a changed marker table is a difference", async () => {
     await introspected(async (dir, env, url) => {
-      await exec(url, renderApplyState(await modelOf(dir)))
-      await exec(url, "ALTER TABLE simetra.marker ADD COLUMN x int")
+      await query(url, renderApplyState(await modelOf(dir)))
+      await query(url, "ALTER TABLE simetra.marker ADD COLUMN x int")
       const data = await diffData(dir, env)
       expect(data.empty).toBe(false)
       expect(data.applyState).toBe("present")

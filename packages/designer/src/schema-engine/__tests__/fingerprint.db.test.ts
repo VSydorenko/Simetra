@@ -1,13 +1,4 @@
-import pg from "pg"
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   compareFingerprints,
   readFingerprint,
@@ -15,12 +6,17 @@ import {
   type EngineScope,
   type FingerprintSection,
 } from "simetra/schema"
-import { createApplyDatabase, createPgDeltaEngine } from ".."
+import { createApplyDatabase } from ".."
 import {
-  shadowDatabaseCount,
-  testDatabaseUrl,
+  testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
+import {
+  asSuperuser,
+  dropRoles,
+  inTarget as loadTarget,
+  query,
+} from "../../__tests__/support/db"
 
 /**
  * SQL-відбиток каталогу (план П3-1, задача 4). Ціль кожного тесту — окрема
@@ -28,10 +24,8 @@ import {
  * спільна для кластера, тож її створює й прибирає суперкористувач стеку.
  */
 
-const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
-const ROLE = "simetra_fingerprint_owner"
+const ROLE = testRoleName("fingerprint_owner")
 
 /** Базовий стан цілі: таблиця, функція, політика, грант. */
 const FIXTURE = `
@@ -43,72 +37,27 @@ const FIXTURE = `
   grant create on schema app to ${ROLE};
 `
 
-/** Один запит (чи кілька операторів) з окремого з'єднання. */
-async function other<R extends Record<string, unknown>>(
-  url: string,
-  sql: string
-): Promise<R[]> {
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
-  try {
-    return (await client.query<R>(sql)).rows
-  } finally {
-    await client.end()
-  }
-}
-
-/**
- * Суперкористувач у тимчасовій базі цілі: класи й сімейства операторів
- * створює лише суперкористувач, а `postgres` на стеку ним не є.
- */
-function superuserIn(url: string): string {
-  const su = new URL(testSuperuserUrl())
-  su.pathname = new URL(url).pathname
-  return su.toString()
-}
-
-async function dropRole(): Promise<void> {
-  await other(testSuperuserUrl(), `drop role if exists ${ROLE}`)
-}
-
-beforeAll(async () => {
-  // Роль могла лишитися від убитого прогону
-  await dropRole()
-  await other(
+beforeAll(() =>
+  query(
     testSuperuserUrl(),
     `create role ${ROLE} nologin; grant ${ROLE} to postgres;`
   )
-})
-afterAll(dropRole)
+)
+afterAll(() => dropRoles(ROLE))
 
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
-
-/** Розгортає `create schema app` і `setup` у тимчасову базу; її прибирає порт. */
-async function inTarget<T>(
+/**
+ * Розгортає `create schema app` і `setup` у тимчасову базу; її прибирає порт.
+ * На відміну від спільного `inTarget`, бажаний стан — лише схема, а `setup`
+ * іде окремим запитом по вже завантаженій цілі.
+ */
+const inTarget = <T>(
   setup: string,
   fn: (url: string) => Promise<T>
-): Promise<T> {
-  const outcome = await engine.withDesiredShadow(
-    { target: stack },
-    "create schema app;",
-    scope,
-    async (target) => {
-      await other(target.url, setup)
-      return fn(target.url)
-    }
-  )
-  if (outcome.status !== "loaded")
-    throw new Error(
-      `target did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-    )
-  return outcome.value
-}
+): Promise<T> =>
+  loadTarget("create schema app;", scope, async (url) => {
+    await query(url, setup)
+    return fn(url)
+  })
 
 const read = (url: string): Promise<CatalogFingerprint> =>
   createApplyDatabase({ readOnly: true }).transaction(
@@ -254,15 +203,15 @@ describe("readFingerprint", () => {
     ],
   ])("section per mutation: %s", async (_name, sql, section, setup) => {
     await inTarget(FIXTURE, async (url) => {
-      if (setup !== undefined) await other(url, setup)
-      expect(await changedBy(url, () => other(url, sql))).toEqual([section])
+      if (setup !== undefined) await query(url, setup)
+      expect(await changedBy(url, () => query(url, sql))).toEqual([section])
     })
   })
 
   describe("default privileges", () => {
     const section = (setup: string): Promise<string> =>
       inTarget(FIXTURE, async (url) => {
-        await other(superuserIn(url), setup)
+        await query(asSuperuser(url), setup)
         return (await read(url)).sections.defaultPrivileges
       })
 
@@ -314,18 +263,18 @@ describe("readFingerprint", () => {
 
   it("sees an invalid index", async () => {
     await inTarget(FIXTURE, async (url) => {
-      await other(
+      await query(
         url,
         "create table app.d (v int); insert into app.d values (1)"
       )
-      await other(url, "create unique index d_v on app.d (v)")
+      await query(url, "create unique index d_v on app.d (v)")
       // Збій `CONCURRENTLY` на дублікатах лишає індекс із тим самим
       // визначенням, але недійсним; `CONCURRENTLY` не йде в транзакції,
       // тож окремими операторами повз порт
       const changed = await changedBy(url, async () => {
-        await other(url, "drop index app.d_v")
-        await other(url, "insert into app.d values (1)")
-        const error = await other(
+        await query(url, "drop index app.d_v")
+        await query(url, "insert into app.d values (1)")
+        const error = await query(
           url,
           "create unique index concurrently d_v on app.d (v)"
         ).catch((e: unknown) => e)
@@ -355,14 +304,14 @@ describe("readFingerprint", () => {
   it("sees aggregates", async () => {
     await inTarget(FIXTURE, async (url) => {
       const created = await changedBy(url, () =>
-        other(url, "create aggregate app.s(int) (sfunc = int4pl, stype = int)")
+        query(url, "create aggregate app.s(int) (sfunc = int4pl, stype = int)")
       )
       // Новий об'єкт має власника й типовий ACL (`acldefault`): `EXECUTE`
       // для власника й `public`
       expect(created).toEqual(["functions", "acl", "owner", "inventory"])
       expect(
         await changedBy(url, () =>
-          other(
+          query(
             url,
             "create or replace aggregate app.s(int) (sfunc = int4pl, stype = int, initcond = '1')"
           )
@@ -404,8 +353,8 @@ describe("readFingerprint", () => {
     ["rule", "create rule r as on insert to app.t do instead nothing", "owner"],
   ])("inventory per class: %s", async (_name, sql, as) => {
     await inTarget(FIXTURE, async (url) => {
-      const by = as === "superuser" ? superuserIn(url) : url
-      expect(await changedBy(url, () => other(by, sql))).toContain("inventory")
+      const by = as === "superuser" ? asSuperuser(url) : url
+      expect(await changedBy(url, () => query(by, sql))).toContain("inventory")
     })
   })
 
@@ -437,7 +386,7 @@ describe("readFingerprint", () => {
     await inTarget(FIXTURE, async (url) => {
       expect(
         await changedBy(url, () =>
-          other(
+          query(
             url,
             "create policy app_read on storage.objects for select to authenticated using (true)"
           )
@@ -447,7 +396,7 @@ describe("readFingerprint", () => {
       // на ній не входить у відбиток, хоч схема та сама, що в `objects`
       expect(
         await changedBy(url, () =>
-          other(
+          query(
             url,
             "create table storage.app_extra (id int); create policy app_x on storage.app_extra for select to authenticated using (true)"
           )

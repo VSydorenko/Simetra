@@ -65,14 +65,18 @@ async function onStack<R extends pg.QueryResultRow>(
 
 /**
  * Shadows of this test file that are still on the stack, after waiting for
- * provisions in flight.
+ * provisions in flight. With `from` (a `provisionedShadows().length` taken
+ * earlier), only the shadows provisioned since then.
  */
-export async function leftoverShadows(): Promise<string[]> {
+export async function leftoverShadows(from = 0): Promise<string[]> {
   await Promise.all([...inFlight])
-  if (provisioned.length === 0) return []
+  // Позначка, а не весь облік: тест, що питає зсередини своєї цілі, бачив би
+  // і саму ціль — вона теж тінь і жива до кінця `inTarget`
+  const names = provisioned.slice(from)
+  if (names.length === 0) return []
   const rows = await onStack<{ name: string }>(
     "select datname as name from pg_database where datname = any($1) order by 1",
-    [provisioned]
+    [names]
   )
   return rows.map((r) => r.name)
 }

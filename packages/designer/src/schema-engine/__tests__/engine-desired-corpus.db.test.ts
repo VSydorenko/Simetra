@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
   compareWithDesired,
@@ -10,7 +10,6 @@ import {
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
 import {
-  shadowDatabaseCount,
   testDatabaseUrl,
   readReferenceDomain,
   customTables,
@@ -26,14 +25,6 @@ import {
 
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 async function compiled(files: Map<string, string>): Promise<CompiledModel> {
   const result = await compile(files)
