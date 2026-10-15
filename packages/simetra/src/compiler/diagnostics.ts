@@ -185,6 +185,7 @@ export const COMPILER_RULES = [
   "apply.plan-stale",
   "apply.busy",
   "apply.api-role",
+  "apply.server-unsupported",
   "apply.role-mismatch",
   "apply.chain",
   "apply.target-changed",

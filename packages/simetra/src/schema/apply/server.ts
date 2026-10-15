@@ -1,4 +1,31 @@
+import type { EngineDiagnostic } from "../engine"
+import { applyDiagnostic } from "./diagnostic"
 import type { ApplyTransaction } from "./port"
+
+/**
+ * Найменший `server_version_num`, з яким працює платформа (платформна спека
+ * §1: Postgres 17). Підтримки старіших версій немає свідомо.
+ */
+export const MIN_SERVER_VERSION_NUM = 170000
+
+/**
+ * Відмова для сервера, старішого за мінімум платформи, — до будь-якого
+ * версійно залежного читання: без неї `readServerFacts` на Postgres 16 упав
+ * би сирим `42703` на `datlocale`, а не зрозумілою причиною.
+ */
+export async function serverVersionRefusal(
+  tx: ApplyTransaction
+): Promise<EngineDiagnostic | undefined> {
+  const [row] = await tx.query<{ num: number; version: string }>(
+    "SELECT pg_catalog.current_setting('server_version_num')::int AS num, pg_catalog.current_setting('server_version') AS version"
+  )
+  if (row === undefined) throw new Error("server_version_num returned no row")
+  return row.num < MIN_SERVER_VERSION_NUM
+    ? applyDiagnostic("apply.server-unsupported", "error", {
+        version: row.version,
+      })
+    : undefined
+}
 
 /**
  * Факти сервера й поточної бази, від яких залежить, як кроки й заміри

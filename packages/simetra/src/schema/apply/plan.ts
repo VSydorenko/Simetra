@@ -118,7 +118,7 @@ import {
   type WritePath,
 } from "./promotion"
 import { readSessionSearchPath } from "./settings"
-import { readServerFacts } from "./server"
+import { readServerFacts, serverVersionRefusal } from "./server"
 import { readAppliedPromotions, readApplyState, readLedgerHead } from "./state"
 import {
   classifySteps,
@@ -289,18 +289,27 @@ export async function buildPlan(
   const desired = await desiredForApply(model)
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
   // стан: доказ копії репетиції (рішення 1 плану П3-2b-3) звіряє з ними базу
-  // того самого моменту, що й ланцюжок
-  const { state, identity } = await dbs.reader.transaction(
+  // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
+  // платформи, — відмова до версійно залежних читань (`readServerFacts` на
+  // Postgres 16 упав би сирим `42703`)
+  const read = await dbs.reader.transaction(
     o.target,
     "rollback",
-    async (tx) => ({
-      state: await readApplyState(tx),
-      identity: {
-        server: await readServerFacts(tx),
-        ledgerHead: await readLedgerHead(tx),
-      },
-    })
+    async (tx) => {
+      const unsupported = await serverVersionRefusal(tx)
+      if (unsupported !== undefined) return { ok: false as const, unsupported }
+      return {
+        ok: true as const,
+        state: await readApplyState(tx),
+        identity: {
+          server: await readServerFacts(tx),
+          ledgerHead: await readLedgerHead(tx),
+        },
+      }
+    }
   )
+  if (!read.ok) return refused([read.unsupported])
+  const { state, identity } = read
   if (state.status === "corrupt") return refused([state.diagnostic])
   const markerScope =
     state.status === "applied" ? state.marker.scope : undefined

@@ -2293,6 +2293,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. План застосовується лише до стану, від якого його побудовано; сплануйте знову проти цієї бази.",
     },
   },
+  "apply.server-unsupported": {
+    en: (p) =>
+      `Simetra requires PostgreSQL 17 or newer; this server is ${p.version}`,
+    uk: (p) =>
+      `Simetra потребує PostgreSQL 17 або новішого; цей сервер — ${p.version}`,
+    hint: {
+      en: "Nothing was written. Upgrade the database server to PostgreSQL 17 or newer, then plan again.",
+      uk: "Нічого не записано. Оновіть сервер бази до PostgreSQL 17 або новішого й сплануйте знову.",
+    },
+  },
   "apply.target-changed": {
     en: (p) =>
       `The database changed after the plan was built; catalog fingerprint sections: ${p.sections}${p.cause === "owners" ? `; ${COPY_OWNERS.en}` : ""}`,

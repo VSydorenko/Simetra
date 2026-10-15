@@ -216,6 +216,8 @@ interface Script {
   role?: string
   /** Помилка оператора з міткою `label` у спробі `attempt`. */
   fail?: (label: string, attempt: number) => Error | undefined
+  /** Версія сервера цілі; типово Postgres 17. */
+  serverVersion?: { num: number; version: string }
   /** Факти сервера цілі; типово `SERVER`. */
   server?: Record<string, unknown>
   /** `apply_id` останнього рядка ledger цілі; типово ledger порожній. */
@@ -328,6 +330,8 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("regprocedure::text AS signature")) return "blind"
   if (sql === "SET CONSTRAINTS ALL IMMEDIATE") return "set-constraints"
   if (sql.includes("c.convalidated")) return "invalid"
+  if (sql.includes("current_setting('server_version') AS version"))
+    return "server-version"
   if (sql.includes("FROM pg_catalog.pg_database")) return "server"
   if (sql.includes("ORDER BY id DESC")) return "ledger-head"
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
@@ -434,13 +438,15 @@ function fakeDb(script: Script = {}) {
           const data = dataRows(label, script)
           if (data !== undefined) return data as R[]
           const identity: Record<string, unknown>[] | undefined =
-            label === "server"
-              ? [{ ...SERVER, ...script.server }]
-              : label === "ledger-head"
-                ? script.ledgerHead === undefined
-                  ? []
-                  : [{ head: script.ledgerHead }]
-                : undefined
+            label === "server-version"
+              ? [script.serverVersion ?? { num: 170006, version: "17.6" }]
+              : label === "server"
+                ? [{ ...SERVER, ...script.server }]
+                : label === "ledger-head"
+                  ? script.ledgerHead === undefined
+                    ? []
+                    : [{ head: script.ledgerHead }]
+                  : undefined
           if (identity !== undefined) return identity as R[]
           if (label === "foreign-keys")
             return (script.foreignKeys ?? []).map((fk) => ({
@@ -563,7 +569,8 @@ describe("executePlan", () => {
       "provider-setting",
       "provider-setting",
       "environment",
-      // 4e. Факти сервера й голова ledger
+      // 4e. Версія й факти сервера, голова ledger
+      "server-version",
       "server",
       "ledger-head",
       'LOCK TABLE app.t, app."x.y" IN ACCESS EXCLUSIVE MODE',
@@ -724,6 +731,29 @@ describe("executePlan", () => {
     expect(proof.log).not.toContain("ledger-head")
   })
 
+  it("refuses a server older than Postgres 17 before reading its facts", async () => {
+    // Платформна спека §1: Postgres 17 — мінімум; без цієї відмови читання
+    // фактів упало б сирим `42703` на `datlocale`
+    for (const mode of ["apply", "rehearse"] as const) {
+      const { db, log } = fakeDb({
+        serverVersion: { num: 160004, version: "16.4" },
+      })
+      const outcome = await executePlan(db, target, plan, withMode(mode))
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          { code: "apply.server-unsupported", params: { version: "16.4" } },
+        ],
+      })
+      expect(outcome.diagnostics[0]!.message).toBe(
+        "Simetra requires PostgreSQL 17 or newer; this server is 16.4"
+      )
+      expect(log).not.toContain("server")
+      expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
+    }
+  })
+
   it("refuses another ledger head", async () => {
     // Review Focus 1 плану П3-2b-3: той самий ланцюжок, але ціль отримала
     // застосування окремо — голова ledger інша
@@ -820,6 +850,25 @@ describe("executePlan", () => {
       withMode("rehearse")
     )
     expect(acl.diagnostics[0]!.params).toEqual({ sections: "acl" })
+    // Другі власники плюс справжня зміна схеми — причина не «власники»:
+    // порада про `--no-owner` сховала б зміну колонки
+    const column = await executePlan(
+      fakeDb({
+        targetSections: {
+          ...TARGET.sections,
+          owner: "copy-owner",
+          acl: "copy-acl",
+          columns: "copy-columns",
+        },
+      }).db,
+      target,
+      plan,
+      withMode("rehearse")
+    )
+    expect(column.diagnostics[0]!.params).toEqual({
+      sections: "columns, acl",
+    })
+    expect(column.diagnostics[0]!.message).not.toContain("owners")
     // Застосування називає обидві секції, причина — не копія
     const applied = await executePlan(
       fakeDb({ targetSections: both }).db,
@@ -1854,6 +1903,43 @@ describe("executePlan", () => {
       )
       expect(same.diagnostics[0]!.params).toEqual({ count: 1, first: revoke })
       expect(same.diagnostics[0]!.message).not.toContain("owners")
+      const otherOwner = () =>
+        fakeDb({ targetSections: { ...TARGET.sections, owner: "copy" } }).db
+      // Зміна власника й гранти — теж лише доступ
+      const access = await executePlan(
+        otherOwner(),
+        target,
+        plan,
+        refusing([
+          { sql: 'ALTER TABLE "app"."t" OWNER TO "copy_owner"' },
+          { sql: 'GRANT SELECT ON TABLE "app"."t" TO "postgres"' },
+          { sql: 'ALTER FUNCTION "app"."f"() OWNER TO "postgres"' },
+        ])
+      )
+      expect(access.diagnostics[0]!.params).toMatchObject({ cause: "owners" })
+      // Інші власники плюс дія над схемою — причини немає, навіть коли та
+      // сама команда змішує `OWNER TO` зі зміною колонки
+      for (const actions of [
+        [{ sql: revoke }, { sql: "ALTER TABLE app.t ADD COLUMN z int" }],
+        [{ sql: "ALTER TABLE app.t OWNER TO x, ADD COLUMN z int" }],
+      ]) {
+        const mixed = await executePlan(
+          otherOwner(),
+          target,
+          plan,
+          refusing(actions)
+        )
+        expect(mixed).toMatchObject({ status: "failed" })
+        expect(mixed.diagnostics[0]!.params).not.toHaveProperty("cause")
+      }
+      // Помилка двигуна — теж не доступ
+      const failed = await executePlan(
+        otherOwner(),
+        target,
+        plan,
+        refusing([{ sql: revoke }], [{ severity: "error", message: "broken" }])
+      )
+      expect(failed.diagnostics[0]!.params).not.toHaveProperty("cause")
     })
 
     it("fails on an error diagnostic of the engine plan, ignores warnings", async () => {

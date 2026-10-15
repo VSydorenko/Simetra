@@ -76,7 +76,7 @@ import {
   revalidationSettings,
   withLocalSettings,
 } from "./settings"
-import { readServerFacts } from "./server"
+import { readServerFacts, serverVersionRefusal } from "./server"
 import {
   findApply,
   readApplyState,
@@ -601,6 +601,9 @@ async function runAttempt(
   // окремими застосуваннями тих самих планів пройшла б ланцюжок і відбиток.
   // До блокувань і без повтору, як 4a–4d; копія доказу — інша база
   if (o.mode !== "proof") {
+    const unsupported = await serverVersionRefusal(tx)
+    if (unsupported !== undefined)
+      throw new AttemptStop("refused", [unsupported])
     const server = await readServerFacts(tx)
     if (canonicalize(server) !== canonicalize(plan.server))
       throw stop("refused", "apply.target-changed", { sections: "server" })
@@ -636,10 +639,15 @@ async function runAttempt(
     differing(plan.targetFingerprint, targetFingerprint, {
       owner: true,
     }).includes("owner")
+  // Причина «власники» — лише коли, крім власника, різниться самий ACL (він
+  // пишеться відносно власника). Будь-яка інша секція — справжня зміна
+  // схеми, і порада «відновіть з --no-owner» її б сховала
   if (changed.length > 0)
     throw stop("refused", "apply.target-changed", {
       sections: changed.join(", "),
-      ...(ownersDiffer ? { cause: "owners" } : {}),
+      ...(ownersDiffer && changed.every((s) => s === "acl")
+        ? { cause: "owners" }
+        : {}),
     })
 
   // 6a. Заміри збереження «до» — у старих іменах, до першого кроку
@@ -794,7 +802,7 @@ async function runAttempt(
   // бачить не все, що бачить двигун, а репетиція — єдине місце, де цей
   // доказ дешево перевірити до `COMMIT`
   if (o.mode === "rehearse")
-    await proveWithEngine(tx, plan, o.rehearsal, ownersDiffer)
+    await proveWithEngine(tx, plan, o.rehearsal, ownersDiffer, parse)
 
   // 19. Стан у тій самій транзакції. Marker отримує повний відбиток
   // результату з власником: наступний гейт порівнює ціль ↔ ціль. Прийнятий
@@ -1041,7 +1049,8 @@ async function proveWithEngine(
   tx: ApplyTransaction,
   plan: ExecutablePlan,
   proof: RehearsalProof,
-  ownersDiffer: boolean
+  ownersDiffer: boolean,
+  parse: SqlParser
 ): Promise<void> {
   let after: Extracted
   try {
@@ -1058,11 +1067,42 @@ async function proveWithEngine(
   const errors = rest.diagnostics.filter((d) => d.severity === "error")
   const count = rest.actions.length + errors.length
   if (count === 0) return
+  // Причина «власники» — лише коли кожна дія двигуна змінює права чи
+  // власника, а помилок двигуна немає: дія над схемою чи даними означає
+  // справжню розбіжність, і порада про `--no-owner` її б сховала
+  const owners =
+    ownersDiffer &&
+    errors.length === 0 &&
+    rest.actions.every((a) => changesOnlyAccess(a.sql, parse))
   throw stop("failed", "apply.rehearsal-proof-failed", {
-    ...(ownersDiffer ? { cause: "owners" } : {}),
+    ...(owners ? { cause: "owners" } : {}),
     count,
     // `count > 0` і `actions` порожній, тож `errors[0]` існує
     first: rest.actions[0]?.sql ?? errors[0]!.message,
+  })
+}
+
+/**
+ * Чи дія двигуна лише змінює права чи власника: кожен оператор — `GRANT`/
+ * `REVOKE` привілеїв, `ALTER … OWNER TO` чи `ALTER TABLE`, усі команди якого
+ * — `OWNER TO`. Структурно, вузлами розбору: `EngineAction` виду дії не
+ * несе, а текстовий префікс пропустив би `ALTER TABLE … OWNER TO …, ADD …`.
+ * Нерозібраний текст — не доступ: причину тоді не називаємо.
+ */
+function changesOnlyAccess(sql: string, parse: SqlParser): boolean {
+  const result = parse(sql)
+  if (!result.ok || result.statements.length === 0) return false
+  return result.statements.every(({ stmt }) => {
+    if ("GrantStmt" in stmt || "AlterOwnerStmt" in stmt) return true
+    if (!("AlterTableStmt" in stmt)) return false
+    const cmds = stmt.AlterTableStmt.cmds ?? []
+    return (
+      cmds.length > 0 &&
+      cmds.every(
+        (c) =>
+          "AlterTableCmd" in c && c.AlterTableCmd.subtype === "AT_ChangeOwner"
+      )
+    )
   })
 }
 
