@@ -26,7 +26,11 @@ import {
   type RehearsalReport,
   SUPABASE_LOCKS,
 } from "simetra/schema"
-import { promotionRecordHash, type PromotionRecord } from "simetra/compiler"
+import {
+  localize,
+  promotionRecordHash,
+  type PromotionRecord,
+} from "simetra/compiler"
 
 /**
  * Раннер транзакції на фейковому порті (план П3-1, задача 8): порядок
@@ -771,6 +775,42 @@ describe("executePlan", () => {
       expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
       expect(log).not.toContain("ledger-head")
     }
+    // На цілі — «ціль змінилася» без причини копії і без мітки відбитка
+    const applied = await executePlan(
+      fakeDb({ server: { collate: "C" } }).db,
+      target,
+      plan,
+      options
+    )
+    expect(applied.diagnostics[0]!.params).toEqual({ sections: "server" })
+    expect(applied.diagnostics[0]!.message).toBe(
+      "The database changed after the plan was built; identity check: server facts (version, encoding, collation)"
+    )
+    // На репетиції — «не копія цілі плану» з переліком різних фактів:
+    // перепланування на цілі дало б ті самі факти, тож порада — нова копія
+    const rehearsed = await executePlan(
+      fakeDb({ server: { collate: "C", ctype: "C" } }).db,
+      target,
+      plan,
+      withMode("rehearse")
+    )
+    expect(rehearsed.diagnostics[0]!.params).toEqual({
+      sections: "server",
+      cause: "copy",
+      facts: "collate, ctype",
+    })
+    expect(rehearsed.diagnostics[0]!.message).toBe(
+      "This database is not a copy of the plan's target; the server facts differ: collate, ctype"
+    )
+    const hint = localize(rehearsed.diagnostics[0]!, "en").hint
+    expect(hint).toContain(
+      "Make the copy from the target after the plan was built, on a server with the same major version, encoding and collation"
+    )
+    expect(hint).not.toContain("Plan again")
+    expect(hint).not.toContain("separate applies")
+    expect(localize(rehearsed.diagnostics[0]!, "uk").message).toBe(
+      "Ця база — не копія цілі плану; різняться факти сервера: collate, ctype"
+    )
     // Копія доказу — інша база: її факти план не записував
     const proof = fakeDb({ server: { collate: "C" } })
     expect(
@@ -834,6 +874,30 @@ describe("executePlan", () => {
         expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
       }
     }
+    // Репетиція: база з тими самими планами, застосованими окремо, — не копія
+    const rehearsed = await executePlan(
+      fakeDb({ ledgerHead: head }).db,
+      target,
+      plan,
+      withMode("rehearse")
+    )
+    expect(rehearsed.diagnostics[0]!.params).toEqual({
+      sections: "ledger",
+      cause: "copy",
+    })
+    expect(rehearsed.diagnostics[0]!.message).toBe(
+      "This database is not a copy of the plan's target; the ledger head differs"
+    )
+    expect(localize(rehearsed.diagnostics[0]!, "en").hint).toContain(
+      "received the same plans by separate applies is not a copy"
+    )
+    const applied = await executePlan(
+      fakeDb({ ledgerHead: head }).db,
+      target,
+      plan,
+      options
+    )
+    expect(applied.diagnostics[0]!.params).toEqual({ sections: "ledger" })
     // Та сама голова — застосування йде далі
     expect(
       await executePlan(

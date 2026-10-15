@@ -40,6 +40,35 @@ const COPY_OWNERS_HINT = {
   uk: "Нічого не записано. Відновіть копію роллю плану з `pg_restore --no-owner`, щоб її об'єктами, як і на цілі, володіла роль плану, і повторіть репетицію.",
 }
 
+/**
+ * Перевірки ідентичності цілі фази 4e (рішення 1 плану П3-2b-3): це не секції
+ * відбитка каталогу, тож відмова `apply.target-changed` називає їх окремо.
+ */
+const IDENTITY_CHECK: Readonly<Record<string, { en: string; uk: string }>> = {
+  server: {
+    en: "identity check: server facts (version, encoding, collation)",
+    uk: "перевірка ідентичності: факти сервера (версія, кодування, упорядкування)",
+  },
+  ledger: {
+    en: "identity check: ledger head (the last apply)",
+    uk: "перевірка ідентичності: голова ledger (останнє застосування)",
+  },
+}
+
+/**
+ * Причина `cause: "copy"` (рішення 1 плану П3-2b-3): репетиція на базі, що не
+ * є копією цілі плану. «Сплануйте знову» тут марне — план на цілі дасть ті
+ * самі факти й голову, — тож порада переробити копію.
+ */
+const COPY_REMAKE_HINT = {
+  en: "Nothing was written. Make the copy from the target after the plan was built, on a server with the same major version, encoding and collation, ctype and locale, then rehearse again.",
+  uk: "Нічого не записано. Зробіть копію з цілі після побудови плану, на сервері з тією самою мажорною версією, кодуванням, упорядкуванням, ctype і локаллю, і повторіть репетицію.",
+}
+const COPY_LEDGER_HINT = {
+  en: "A database that received the same plans by separate applies is not a copy: every apply records a random id, so its ledger head differs.",
+  uk: "База, що отримала ті самі плани окремими застосуваннями, — не копія: кожне застосування записує випадковий ідентифікатор, тож голова її ledger інша.",
+}
+
 /** Причини `apply.rehearsal-stale`: чим звіт не відповідає плану чи цілі. */
 const REHEARSAL_STALE: Readonly<Record<string, { en: string; uk: string }>> = {
   plan: {
@@ -2329,18 +2358,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.target-changed": {
     en: (p) =>
-      `The database changed after the plan was built; catalog fingerprint sections: ${p.sections}${p.cause === "owners" ? `; ${COPY_OWNERS.en}` : ""}`,
+      p.cause === "copy"
+        ? `This database is not a copy of the plan's target; ${p.sections === "server" ? `the server facts differ: ${p.facts}` : "the ledger head differs"}`
+        : `The database changed after the plan was built; ${IDENTITY_CHECK[String(p.sections)]?.en ?? `catalog fingerprint sections: ${p.sections}`}${p.cause === "owners" ? `; ${COPY_OWNERS.en}` : ""}`,
     uk: (p) =>
-      `База змінилася після побудови плану; секції відбитка каталогу: ${p.sections}${p.cause === "owners" ? `; ${COPY_OWNERS.uk}` : ""}`,
+      p.cause === "copy"
+        ? `Ця база — не копія цілі плану; ${p.sections === "server" ? `різняться факти сервера: ${p.facts}` : "різниться голова ledger"}`
+        : `База змінилася після побудови плану; ${IDENTITY_CHECK[String(p.sections)]?.uk ?? `секції відбитка каталогу: ${p.sections}`}${p.cause === "owners" ? `; ${COPY_OWNERS.uk}` : ""}`,
     hint: {
       en: (p) =>
         p.cause === "owners"
           ? COPY_OWNERS_HINT.en
-          : "Nothing was written. Plan again; permissions of the old plan no longer apply.",
+          : p.cause === "copy"
+            ? `${COPY_REMAKE_HINT.en}${p.sections === "ledger" ? ` ${COPY_LEDGER_HINT.en}` : ""}`
+            : "Nothing was written. Plan again; permissions of the old plan no longer apply.",
       uk: (p) =>
         p.cause === "owners"
           ? COPY_OWNERS_HINT.uk
-          : "Нічого не записано. Сплануйте знову; дозволи старого плану більше не діють.",
+          : p.cause === "copy"
+            ? `${COPY_REMAKE_HINT.uk}${p.sections === "ledger" ? ` ${COPY_LEDGER_HINT.uk}` : ""}`
+            : "Нічого не записано. Сплануйте знову; дозволи старого плану більше не діють.",
     },
   },
   "apply.verify-failed": {

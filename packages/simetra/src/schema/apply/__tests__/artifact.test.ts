@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(3)
+    expect(PLAN_FORMAT).toBe(4)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -411,8 +411,29 @@ describe("plan artifact", () => {
     expect(parsePlan(JSON.stringify(old))).toMatchObject({
       ok: false,
       reason: "format",
-      diagnostic: { params: { found: 2, supported: 3 } },
+      diagnostic: { params: { found: 2, supported: 4 } },
     })
+  })
+
+  it("asks to rebuild a plan of the third format", async () => {
+    const artifact = await stampPlan(draft())
+    // Форма третього формату: без фактів сервера й голови ledger
+    const old: Record<string, unknown> = { ...artifact, format: 3 }
+    delete old.server
+    delete old.ledgerHead
+    const parsed = parsePlan(JSON.stringify(old))
+    expect(parsed).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 3, supported: 4 },
+      },
+    })
+    if (parsed.ok || parsed.reason !== "format") throw new Error("format")
+    expect(parsed.diagnostic.message).toMatch(
+      /plan format 3 is not supported.*rebuild the plan/i
+    )
   })
 
   it("round-trips environment steps and the role's global default privileges", async () => {

@@ -87,6 +87,7 @@ import {
   withLocalSettings,
 } from "./settings"
 import {
+  differingServerFacts,
   readServerFacts,
   serverVersionRefusal,
   type ServerFacts,
@@ -788,15 +789,26 @@ async function runAttempt(
   // упорядкування, ні історії застосувань, а копія на іншому сервері чи з
   // окремими застосуваннями тих самих планів пройшла б ланцюжок і відбиток.
   // До блокувань і без повтору, як 4a–4d; копія доказу — інша база. Версію
-  // сервера вже звірено одразу після замка застосування
+  // сервера вже звірено одразу після замка застосування. На репетиції
+  // розбіжність означає не «ціль змінилася», а «це не копія цієї цілі»:
+  // перепланування на цілі дасть ті самі факти й голову, тож відмова називає
+  // причину `cause: "copy"` (і різні факти) й радить зробити копію наново
   let identity: { server: ServerFacts; ledgerHead: string | null } | undefined
   if (o.mode !== "proof") {
+    const copy = o.mode === "rehearse"
     const server = await readServerFacts(tx)
-    if (canonicalize(server) !== canonicalize(plan.server))
-      throw stop("refused", "apply.target-changed", { sections: "server" })
+    const facts = differingServerFacts(plan.server, server)
+    if (facts.length > 0)
+      throw stop("refused", "apply.target-changed", {
+        sections: "server",
+        ...(copy ? { cause: "copy", facts: facts.join(", ") } : {}),
+      })
     const ledgerHead = await readLedgerHead(tx)
     if (ledgerHead !== plan.ledgerHead)
-      throw stop("refused", "apply.target-changed", { sections: "ledger" })
+      throw stop("refused", "apply.target-changed", {
+        sections: "ledger",
+        ...(copy ? { cause: "copy" } : {}),
+      })
     identity = { server, ledgerHead }
   }
 

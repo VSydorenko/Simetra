@@ -81,3 +81,31 @@ export async function readServerFacts(
     collationVersion: row.collationVersion,
   }
 }
+
+/**
+ * Поля фактів у порядку звіту розбіжності. Запис, а не масив: нове поле
+ * `ServerFacts` без місця тут — помилка типів, а не мовчки пропущений факт.
+ */
+const SERVER_FACT_FIELDS: Readonly<Record<keyof ServerFacts, true>> = {
+  major: true,
+  encoding: true,
+  collate: true,
+  ctype: true,
+  localeProvider: true,
+  locale: true,
+  collationVersion: true,
+}
+
+/**
+ * Які факти сервера різняться (рішення 1 плану П3-2b-3): відмова копії
+ * називає їх, щоб людина знала, що виправляти в копії, а не лише «інший
+ * сервер». Значення — скаляри, тож досить порівняння `!==`.
+ */
+export function differingServerFacts(
+  planned: ServerFacts,
+  live: ServerFacts
+): (keyof ServerFacts)[] {
+  return (Object.keys(SERVER_FACT_FIELDS) as (keyof ServerFacts)[]).filter(
+    (k) => planned[k] !== live[k]
+  )
+}
