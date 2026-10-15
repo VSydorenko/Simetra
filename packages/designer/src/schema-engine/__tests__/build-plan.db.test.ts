@@ -1,14 +1,6 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   applyChanges,
   canonicalSnapshot,
@@ -57,7 +49,6 @@ import {
   metaFiles,
   promotionProject,
   project,
-  shadowDatabaseCount,
   testDatabaseUrl,
   testSuperuserUrl,
   uuid,
@@ -134,14 +125,6 @@ beforeAll(async () => {
   )
 })
 afterAll(dropRole)
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 /** Ціль із `setup`; базу прибирає порт. */
 async function inTarget<T>(

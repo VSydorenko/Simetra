@@ -1,13 +1,5 @@
 import pg from "pg"
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   compile,
   loadSqlParser,
@@ -64,7 +56,6 @@ import {
   fingerprintAfterSteps,
   metaFiles,
   project,
-  shadowDatabaseCount,
   testDatabaseUrl,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
@@ -170,14 +161,6 @@ beforeAll(async () => {
   )
 })
 afterAll(dropRoles)
-
-let shadowsBefore = 0
-beforeEach(async () => {
-  shadowsBefore = await shadowDatabaseCount()
-})
-afterEach(async () => {
-  expect(await shadowDatabaseCount()).toBe(shadowsBefore)
-})
 
 /** Ціль: бажаний стан застосування моделі плюс `setup`; базу прибирає порт. */
 async function inTarget<T>(

@@ -8,7 +8,6 @@ import {
   describe,
   expect,
   it,
-  vi,
 } from "vitest"
 import {
   compile,
@@ -38,6 +37,10 @@ import {
   FIXTURES,
 } from "../../../../simetra/test/support"
 import {
+  leftoverShadows,
+  provisionedShadows,
+} from "../../__tests__/support/shadows"
+import {
   CLASS_FIXTURES,
   readOracle,
   type OracleShape,
@@ -55,47 +58,12 @@ const stack = { url: testDatabaseUrl() }
 
 /**
  * Тіні, які створив двигун цього файлу, — єдине правило «наша» і для
- * відмови, і для прибирання. Обгортка — чистий шпигун: справжня
- * `provisionCoLocatedShadow` отримує ті самі аргументи (функція pg-delta
- * виконується без змін, двигун не латається), а ім'я тіні береться з її
- * результату. Тіні до результату немає: `CREATE DATABASE` — останній крок
- * провізії, а провізія, що впала до нього, тіні не лишає. Тож наша — й тінь, на якій
- * тест упав раніше за своє тіло: `planAndRun` застосовує бажаний SQL, двічі
- * читає каталоги й будує план до виклику `fn`. Тінь паралельної сесії сюди
- * не потрапить: її створив інший процес.
+ * відмови, і для прибирання: облік провізій setupFile-у DB-проєкту
+ * (`__tests__/support/shadows.ts`). Наша — й тінь, на якій тест упав раніше
+ * за своє тіло: `planAndRun` застосовує бажаний SQL, двічі читає каталоги й
+ * будує план до виклику `fn`. Тінь паралельної сесії в облік не потрапить:
+ * її створив інший процес.
  */
-const provisioned = vi.hoisted(() => new Set<string>())
-/**
- * Провізії, що ще йдуть: хуки чекають їх, перш ніж шукати наші тіні, — тест,
- * що вийшов за тайм-аут посеред `CREATE DATABASE`, дістане ім'я своєї тіні,
- * щойно провізія завершиться.
- */
-const inFlight = vi.hoisted(() => new Set<Promise<unknown>>())
-vi.mock("@supabase/pg-delta", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@supabase/pg-delta")>()
-  return {
-    ...actual,
-    provisionCoLocatedShadow: (
-      ...args: Parameters<typeof actual.provisionCoLocatedShadow>
-    ) => {
-      const pending = actual
-        .provisionCoLocatedShadow(...args)
-        .then((shadow) => {
-          provisioned.add(shadow.name)
-          return shadow
-        })
-      // Окремий проміс, що завжди виконується: відмову провізії отримує
-      // двигун, а не необроблений проміс у наборі
-      const settled = pending.then(
-        () => undefined,
-        () => undefined
-      )
-      inFlight.add(settled)
-      void settled.then(() => inFlight.delete(settled))
-      return pending
-    },
-  }
-})
 const engine: SchemaEngine = createPgDeltaEngine()
 
 /**
@@ -173,15 +141,14 @@ afterEach(async () => {
   // запускає afterEach одразу, а тіло ще тримає тінь, і воркер завершиться
   // раніше за `finally` порту), або прибирання pg-delta, яке ковтає збій
   // `DROP DATABASE`. Вона валить тест і прибирається — і тоді, коли тест
-  // упав ще до свого тіла. Спершу — дочекатися провізій, що ще йдуть: ім'я
-  // тіні відоме лише з результату провізії
-  await Promise.all([...inFlight])
-  const present = await shadowDatabaseNames()
-  const leaked = present.filter((name) => provisioned.has(name))
+  // упав ще до свого тіла. `leftoverShadows` спершу чекає провізій, що ще
+  // йдуть: ім'я тіні відоме лише з результату провізії
+  const leaked = await leftoverShadows()
+  const ours = new Set(provisionedShadows())
   // Нова тінь, якої цей файл не створював, — паралельна сесія: її лише
   // названо, тест вона не валить і не видаляється
-  const foreign = present.filter(
-    (name) => !provisioned.has(name) && !shadowsBefore.has(name)
+  const foreign = (await shadowDatabaseNames()).filter(
+    (name) => !ours.has(name) && !shadowsBefore.has(name)
   )
   if (foreign.length > 0)
     process.stderr.write(
@@ -202,10 +169,7 @@ afterAll(async () => {
   // останнього — цей хук, дочекавшись провізій, що ще йдуть. Лишається
   // вікно, якого процес не закриє: провізія, яку тіло почне вже після цього
   // хука, перед виходом воркера, і вбитий прогін
-  await Promise.all([...inFlight])
-  const late = (await shadowDatabaseNames()).filter((name) =>
-    provisioned.has(name)
-  )
+  const late = await leftoverShadows()
   if (late.length > 0)
     process.stderr.write(
       `Shadow databases of this test file outlived their tests; dropping: ${late.join(", ")}\n`
