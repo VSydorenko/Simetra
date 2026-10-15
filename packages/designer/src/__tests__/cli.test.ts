@@ -685,6 +685,84 @@ describe("cli adapter", () => {
       ).toBeGreaterThan(at("steps (2):"))
     })
 
+    describe("promotion data steps in the text of a plan", () => {
+      // Мінімальний план з промоцією: різниться лише секція `data`
+      const promotionPlan = (
+        data: NonNullable<PlanData["promotion"]>["data"]
+      ): PlanData => ({
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: null,
+        promotion: {
+          objectId: "00000000-0000-4000-8000-000000009311",
+          kind: "Catalog",
+          name: "Item",
+          recordHash: "f".repeat(64),
+          tables: [],
+          columns: [],
+          canonicalNames: [],
+          permissionItems: [],
+          data,
+        },
+        steps: [],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: [],
+        environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "installed",
+        expectedBlindFunctions: 0,
+      })
+      const render = (data: PlanData) =>
+        renderResult(
+          tool("plan"),
+          {
+            ok: true,
+            written: true,
+            changes: [],
+            artifacts: [data.file],
+            diagnostics: [],
+            data,
+          },
+          { dir: "metadata", locale: "en", format: "text" }
+        ).stdout
+
+      it("prints no trigger line for a table without triggers", () => {
+        const stdout = render(
+          promotionPlan([
+            {
+              temp: "simetra_fill_1",
+              before: { schema: "app", table: "items", key: "id" },
+              after: { schema: "app", table: "item", key: "id" },
+              columns: [
+                {
+                  step: "d1",
+                  column: "deletion_mark",
+                  type: "boolean",
+                  expression: "coalesce(inactive, false)",
+                  kind: "conversion",
+                  guard: "SELECT 0",
+                },
+              ],
+              triggers: [],
+            },
+          ])
+        )
+        expect(stdout).toContain("  data steps app.item:")
+        expect(stdout).toContain(
+          "    d1 deletion_mark ← coalesce(inactive, false) (conversion)"
+        )
+        expect(stdout).not.toContain("triggers disabled during the write")
+      })
+
+      it("prints no data-step lines for an empty data", () => {
+        const stdout = render(promotionPlan([]))
+        expect(stdout).toContain("promotion: Catalog Item")
+        expect(stdout).not.toContain("data steps")
+      })
+    })
+
     it("the text of a plan shows the environment steps as their own group", () => {
       // Рішення 5(е) плану П3-2b-0: пара REVOKE ALL + GRANT — вивід двигуна,
       // обидва рядки лишаються

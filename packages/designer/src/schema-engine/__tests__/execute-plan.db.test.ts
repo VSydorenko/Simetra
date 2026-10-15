@@ -2892,9 +2892,16 @@ describe.concurrent("executePlan", () => {
         // упорядкуванням — інший факт сервера, відмова до першого кроку. Ціль і
         // копію будує той самий рецепт, різниться лише `LC_COLLATE`/`LC_CTYPE`
         const recipe = `${desired.sql};\n${BASE}`
-        await withCopy("template template0", (url) =>
-          withCopy(
-            "template template0 lc_collate 'C' lc_ctype 'C'",
+        await withCopy("template template0", async (url) => {
+          // Колація копії відрізняється від колації цілі на будь-якому стенді:
+          // `C`, а якщо ціль уже `C` — `C.UTF-8`
+          const [{ collate: targetCollate }] = await query<{ collate: string }>(
+            url,
+            "select datcollate as collate from pg_database where datname = current_database()"
+          )
+          const other = targetCollate === "C" ? "C.UTF-8" : "C"
+          return withCopy(
+            `template template0 lc_collate '${other}' lc_ctype '${other}'`,
             async (copy) => {
               await query(url, recipe)
               await query(copy, recipe)
@@ -2904,8 +2911,8 @@ describe.concurrent("executePlan", () => {
                   copy,
                   "select datcollate as collate from pg_database where datname = current_database()"
                 )
-              ).toEqual([{ collate: "C" }])
-              expect(plan.server.collate).not.toBe("C")
+              ).toEqual([{ collate: other }])
+              expect(plan.server.collate).toBe(targetCollate)
               const outcome = await rehearse(copy, plan)
               expect(outcome).toMatchObject({
                 status: "refused",
@@ -2923,7 +2930,7 @@ describe.concurrent("executePlan", () => {
               })
             }
           )
-        )
+        })
       })
     }
   )

@@ -727,6 +727,13 @@ describe.concurrent("promotion lifecycle", () => {
           fill: repairJson,
         })
         expect(data.requiredPermissions).toContain("repair:app.item")
+        // `planPromotion` не експортується: кроки даних перевіряємо крізь
+        // артефакт плану на диску — блок для людини має нести ті самі кроки
+        expect(data.promotion!.data).not.toEqual([])
+        const artifact = JSON.parse(
+          await readFile(join(dirname(dir), data.file), "utf8")
+        ) as { promotion: { data: unknown } }
+        expect(data.promotion!.data).toEqual(artifact.promotion.data)
         const before = await state(url)
         const r = await apply(dir, url, data, { rehearse: true })
         expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
