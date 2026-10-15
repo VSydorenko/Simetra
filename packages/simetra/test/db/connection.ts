@@ -40,6 +40,71 @@ export function testSuperuserUrl(): string {
  */
 export const SHADOW_PREFIX = "pgdelta_shadow_"
 
+/** Змінна середовища з тегом прогону; її ставить globalSetup `stack-guard`. */
+export const RUN_TAG_ENV = "SIMETRA_DB_RUN_TAG"
+
+function rand6(): string {
+  return Math.random().toString(36).slice(2).padEnd(6, "0").slice(0, 6)
+}
+
+/** Новий тег прогону: 6 символів `[0-9a-z]`. */
+export function newRunTag(): string {
+  return rand6()
+}
+
+/**
+ * Тег поточного DB-прогону. Без нього кидає: ім'я без тегу прибиральник не
+ * впізнає як своє.
+ */
+export function runTag(): string {
+  const tag = process.env[RUN_TAG_ENV]
+  if (tag === undefined || tag === "")
+    throw new Error(
+      `${RUN_TAG_ENV} is not set: DB tests run only under the stack-guard globalSetup (vitest project db)`
+    )
+  return tag
+}
+
+/** Ім'я ролі тесту з тегом прогону; `label` — лише `[a-z0-9_]`. */
+export function testRoleName(label: string): string {
+  return `simetra_${checkedLabel(label)}_${runTag()}`
+}
+
+/** Ім'я тестової бази з тегом прогону й випадковим хвостом. */
+export function testDatabaseName(label: string): string {
+  return `simetra_${checkedLabel(label)}_${runTag()}_${rand6()}`
+}
+
+/**
+ * Суфікс імені тіні (`uniqueSuffix` pg-delta): мітка часу лишається першою,
+ * щоб `shadowAgeMinutes` читав вік, а тег дає прибиральнику впізнати тінь.
+ */
+export function shadowSuffix(): string {
+  return `${Date.now().toString(36)}_${runTag()}_${rand6()}`
+}
+
+/**
+ * Шаблони імен об'єктів одного прогону. Прибиральник передає `.source` в
+ * оператор Postgres `~`, тож синтаксис — спільна підмножина JS і POSIX ARE.
+ */
+export function runObjectPatterns(tag: string): {
+  databases: RegExp
+  roles: RegExp
+} {
+  return {
+    databases: new RegExp(
+      `^(pgdelta_shadow_[0-9a-z]+_${tag}_[0-9a-z]+|simetra_[a-z0-9_]+_${tag}_[0-9a-z]+)$`
+    ),
+    roles: new RegExp(`^simetra_[a-z0-9_]+_${tag}$`),
+  }
+}
+
+function checkedLabel(label: string): string {
+  if (!/^[a-z0-9_]+$/.test(label))
+    throw new Error(`Invalid test object label "${label}": use [a-z0-9_]`)
+  return label
+}
+
 /**
  * Вік тіні в хвилинах з її імені. Ім'я іншої форми — `undefined` («вік
  * невідомий»): невпізнане ім'я не можна видавати ні за свіже, ні за старе.

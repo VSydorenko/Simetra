@@ -14,7 +14,13 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import pg from "pg"
-import { SHADOW_PREFIX, shadowAgeMinutes, testDatabaseUrl } from "./connection"
+import {
+  newRunTag,
+  RUN_TAG_ENV,
+  SHADOW_PREFIX,
+  shadowAgeMinutes,
+  testDatabaseUrl,
+} from "./connection"
 
 // Замок у тимчасовій теці машини, а не в checkout: стек спільний і для інших
 // checkout чи worktree того самого репо
@@ -37,8 +43,13 @@ export default async function setup(): Promise<() => Promise<void>> {
   checkFreeSpace()
   await acquireLock()
   try {
+    // Форки воркерів, які vitest стартує після globalSetup, успадковують env
+    const runTag = newRunTag()
+    process.env[RUN_TAG_ENV] = runTag
     const tree = treeState()
-    if (tree !== undefined) process.stderr.write(`DB run at ${tree.summary}\n`)
+    process.stderr.write(
+      `DB run tag ${runTag}${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
+    )
     const before = await snapshot()
     reportOrphanShadows(before)
     return async () => {
