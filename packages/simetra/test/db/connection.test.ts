@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  isRunTag,
   newRunTag,
   RUN_TAG_ENV,
   runObjectPatterns,
   runObjectStatementPattern,
   runTag,
+  runTagOf,
   SHADOW_PREFIX,
   shadowAgeMinutes,
   shadowSuffix,
@@ -119,5 +121,60 @@ describe("runObjectStatementPattern", () => {
       "DROP DATABASE simetra_copy_abc123_k3j2h1",
     ])
       expect(sql).not.toMatch(statement)
+  })
+})
+
+describe("runTagOf", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("reads the tag from the run's own databases, shadows and roles", () => {
+    vi.stubEnv(RUN_TAG_ENV, "abc123")
+    expect(runTagOf("database", testDatabaseName("copy"))).toBe("abc123")
+    expect(runTagOf("database", testDatabaseName("build_plan_owner"))).toBe(
+      "abc123"
+    )
+    expect(runTagOf("database", SHADOW_PREFIX + shadowSuffix())).toBe("abc123")
+    expect(runTagOf("role", testRoleName("build_plan_owner"))).toBe("abc123")
+  })
+
+  it("agrees with the run patterns of the tag it returns", () => {
+    vi.stubEnv(RUN_TAG_ENV, "zz9zz9")
+    const { databases, roles } = runObjectPatterns("zz9zz9")
+    for (const name of [testDatabaseName("x"), SHADOW_PREFIX + shadowSuffix()])
+      expect(runTagOf("database", name) !== undefined).toBe(
+        databases.test(name)
+      )
+    expect(runTagOf("role", testRoleName("x"))).toBe("zz9zz9")
+    expect(testRoleName("x")).toMatch(roles)
+  })
+
+  it("finds no tag in untagged names", () => {
+    for (const name of [
+      "pgdelta_shadow_mv9rieqo_6uepn5",
+      "metahub_copy",
+      "metahub_copy_rehearsal",
+      "p3_3_spike_a",
+      "simetra_build_plan_owner",
+      "postgres",
+    ]) {
+      expect(runTagOf("database", name)).toBeUndefined()
+      expect(runTagOf("role", name)).toBeUndefined()
+    }
+  })
+
+  it("reads a name by the shape of its own catalog", () => {
+    // Ім'я ролі — без випадкового хвоста бази, тож як база воно не тегове
+    expect(runTagOf("database", "simetra_x_abc123")).toBeUndefined()
+    expect(runTagOf("database", "simetra_copy_abc123_k3j2h1")).toBe("abc123")
+  })
+})
+
+describe("isRunTag", () => {
+  it("accepts only 6 characters [0-9a-z]", () => {
+    expect(isRunTag(newRunTag())).toBe(true)
+    for (const value of ["", "abc12", "abc1234", "ABC123", "abc.12", ".*"])
+      expect(isRunTag(value)).toBe(false)
   })
 })

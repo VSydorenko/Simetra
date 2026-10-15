@@ -44,6 +44,10 @@ export const SHADOW_PREFIX = "pgdelta_shadow_"
 /** Змінна середовища з тегом прогону; її ставить globalSetup `stack-guard`. */
 export const RUN_TAG_ENV = "SIMETRA_DB_RUN_TAG"
 
+// Форма тегу прогону — одне джерело для перевірки тегу й шаблону «будь-який
+// тег»; синтаксис — спільна підмножина JS і POSIX ARE
+const RUN_TAG_SHAPE = "[0-9a-z]{6}"
+
 function rand6(): string {
   return Math.random().toString(36).slice(2).padEnd(6, "0").slice(0, 6)
 }
@@ -51,6 +55,15 @@ function rand6(): string {
 /** Новий тег прогону: 6 символів `[0-9a-z]`. */
 export function newRunTag(): string {
   return rand6()
+}
+
+/**
+ * Чи має рядок форму тегу прогону. Тег вставляється в шаблони без
+ * екранування: рядок іншої форми (аргумент CLI) розширив би шаблон на чужі
+ * об'єкти.
+ */
+export function isRunTag(value: string): boolean {
+  return new RegExp(`^${RUN_TAG_SHAPE}$`).test(value)
 }
 
 /**
@@ -115,8 +128,25 @@ export function runObjectStatementPattern(tag: string): RegExp {
   )
 }
 
-// Форми імен прогону — одне джерело для каталожних шаблонів і шаблону
-// оператора; синтаксис — спільна підмножина JS і POSIX ARE
+/**
+ * Тег прогону з імені тегованої бази чи ролі; `undefined` — ім'я не тегове.
+ * Форми ті самі, що в шаблонах прибиральника, з будь-яким тегом на місці
+ * конкретного: так стек можна розкласти за прогонами, лишки яких на ньому є.
+ */
+export function runTagOf(
+  kind: "database" | "role",
+  name: string
+): string | undefined {
+  // Форма бази має дві альтернативи, кожна зі своєю групою тегу
+  const match = new RegExp(
+    `^(${runNameShapes(`(${RUN_TAG_SHAPE})`)[kind]})$`
+  ).exec(name)
+  return match?.slice(2).find((group) => group !== undefined)
+}
+
+// Форми імен прогону — одне джерело для каталожних шаблонів, шаблону
+// оператора й розбору тегу; `tag` — фрагмент шаблону (конкретний тег чи
+// форма будь-якого), синтаксис — спільна підмножина JS і POSIX ARE
 function runNameShapes(tag: string): { database: string; role: string } {
   return {
     database: `pgdelta_shadow_[0-9a-z]+_${tag}_[0-9a-z]+|simetra_[a-z0-9_]+_${tag}_[0-9a-z]+`,

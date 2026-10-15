@@ -17,6 +17,7 @@ import pg from "pg"
 import {
   newRunTag,
   RUN_TAG_ENV,
+  runTagOf,
   SHADOW_PREFIX,
   shadowAgeMinutes,
   testDatabaseUrl,
@@ -56,8 +57,11 @@ export default async function setup(): Promise<() => Promise<void>> {
     process.stderr.write(
       `DB run tag ${runTag}${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
     )
+    // Тег уже є, але воркерів ще нема: об'єктів цього прогону в знімку бути
+    // не може, тож звіт називає лише чужі лишки
     const before = await snapshot()
-    reportOrphanShadows(before)
+    const leftovers = leftoverReport(before)
+    if (leftovers.length > 0) process.stderr.write(`${leftovers.join("\n")}\n`)
     return async () => {
       // Нормальне завершення не прибирає: що лишилось, показує звірка стеку
       removeInterruptCleanup()
@@ -209,21 +213,57 @@ async function snapshot(): Promise<Snapshot> {
   }
 }
 
-// Замок гарантує, що інший DB-прогін зараз не йде, тож тінь двигуна на старті —
-// сирота вбитого прогону. Її лише називаємо: видаляти чуже на спільному стеку
-// без людини не можна
-function reportOrphanShadows(before: Snapshot): void {
-  const orphans = before.databases.filter((name) =>
-    name.startsWith(SHADOW_PREFIX)
-  )
-  if (orphans.length > 0)
-    process.stderr.write(
-      `Shadow databases are already on the stack, likely left by a killed run; they are not removed. To clean up:\n${orphans.map((name) => `  DROP DATABASE "${name}" WITH (FORCE);  -- ${ageNote(name)}`).join("\n")}\n`
+/**
+ * Рядки звіту про об'єкти прогонів, що вже є на стеку; порожньо — їх нема.
+ * Замок гарантує, що інший DB-прогін зараз не йде, тож тегові об'єкти на
+ * старті — лишки вбитого прогону чи збою прибиральника: SIGKILL не ловиться,
+ * а звірка наступного прогону їх не побачить, бо вони вже є в знімку «до».
+ * Їх лише називаємо, згрупувавши за тегом із командою прибиральника цього
+ * тегу: що видаляти на спільному стеку, вирішує людина. Тінь без тегу могла
+ * лишити й інша сесія (ручний спайк), тож для неї — окремий `DROP` на ім'я.
+ */
+export function leftoverReport(
+  before: Pick<Snapshot, "databases" | "roles">,
+  now: number = Date.now()
+): string[] {
+  const byTag = new Map<string, string[]>()
+  const untaggedShadows: string[] = []
+  const objects = [
+    ...before.databases.map((name) => ({ kind: "database" as const, name })),
+    ...before.roles.map((name) => ({ kind: "role" as const, name })),
+  ]
+  for (const { kind, name } of objects) {
+    const shadow = kind === "database" && name.startsWith(SHADOW_PREFIX)
+    const tag = runTagOf(kind, name)
+    if (tag !== undefined)
+      byTag.set(tag, [
+        ...(byTag.get(tag) ?? []),
+        `${kind} ${name}${shadow ? ` (${ageNote(name, now)})` : ""}`,
+      ])
+    else if (shadow) untaggedShadows.push(name)
+  }
+  const lines: string[] = []
+  if (byTag.size > 0)
+    lines.push(
+      "Objects of earlier DB runs are already on the stack, likely left by a killed run or a failed sweep; they are not removed. A run's sweep drops only the objects of its tag:",
+      ...[...byTag].flatMap(([tag, names]) => [
+        `  run ${tag}: ${names.join(", ")}`,
+        `    cd packages/simetra && node --import tsx test/db/sweep.ts ${tag}`,
+      ])
     )
+  if (untaggedShadows.length > 0)
+    lines.push(
+      "Untagged shadow databases are already on the stack, left by a killed run or another session; they are not removed. To clean up, after checking nobody else owns them:",
+      ...untaggedShadows.map(
+        (name) =>
+          `  DROP DATABASE "${name}" WITH (FORCE);  -- ${ageNote(name, now)}`
+      )
+    )
+  return lines
 }
 
-function ageNote(name: string): string {
-  const age = shadowAgeMinutes(name)
+function ageNote(name: string, now: number): string {
+  const age = shadowAgeMinutes(name, now)
   return age === undefined ? "age unknown" : `${Math.round(age)} min old`
 }
 

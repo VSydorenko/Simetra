@@ -6,14 +6,12 @@ import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
+  isRunTag,
   runObjectPatterns,
   runObjectStatementPattern,
   testSuperuserUrl,
 } from "./connection"
 
-// Тег вставляється в шаблон без екранування: інша форма тегу (з аргументу CLI)
-// розширила б шаблон на чужі об'єкти
-const TAG_FORMAT = /^[0-9a-z]{6}$/
 const DEFAULT_DEADLINE_MS = 30_000
 const PASS_PAUSE_MS = 1_000
 // Закритий фаєрволом порт інакше тримав би обробник сигналу до його межі
@@ -113,7 +111,7 @@ function manualSweepSql(tag: string): string {
 }
 
 function checkTag(tag: string): void {
-  if (!TAG_FORMAT.test(tag))
+  if (!isRunTag(tag))
     throw new Error(`Invalid run tag "${tag}": expected 6 characters [0-9a-z]`)
 }
 
@@ -142,7 +140,7 @@ async function tryQuery(
 }
 
 async function cli(tag: string | undefined): Promise<number> {
-  if (tag === undefined || !TAG_FORMAT.test(tag)) {
+  if (tag === undefined || !isRunTag(tag)) {
     process.stderr.write(
       `Usage: node --import tsx sweep.ts <run tag> (6 characters [0-9a-z]); got "${tag ?? ""}"\n`
     )
