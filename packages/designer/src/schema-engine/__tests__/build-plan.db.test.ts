@@ -273,7 +273,9 @@ const BLIND_SETUP = `create schema other;
   alter function pgbouncer.other_auth(text) owner to ${STRANGER};
   revoke execute on function pgbouncer.other_auth(text) from public;`
 
-describe("buildPlan", () => {
+// Конкурентно: ціль і копії кожного тесту — власні бази, ролі створює лише
+// `beforeAll`, а лічильники двигунів-шпигунів — локальні для тесту
+describe.concurrent("buildPlan", () => {
   it("plans a first apply", async () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {

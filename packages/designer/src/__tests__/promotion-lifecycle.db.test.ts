@@ -20,7 +20,7 @@ import {
   type EngineScope,
   type RehearsalReport,
 } from "simetra/schema"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
 import { renderPlan } from "../io/report"
 import type { ApplyData, PlanData } from "../tools/apply-tools"
@@ -50,8 +50,10 @@ const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
 const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
 
+// Теки проєктів прибираються після файлу, а не після тесту: тести йдуть
+// конкурентно, і `afterEach` одного стер би теку сусіда посеред його роботи
 const disposers: (() => Promise<void>)[] = []
-afterEach(async () => {
+afterAll(async () => {
   await Promise.all(disposers.splice(0).map((d) => d()))
 })
 
@@ -363,7 +365,9 @@ const engineSteps = (d: PlanData) =>
 const stepMatching = (d: PlanData, pattern: RegExp) =>
   d.steps.filter((s) => pattern.test(s.sql))
 
-describe("promotion lifecycle", () => {
+// Конкурентно: кожен тест — у власній цілі й теці проєкту, кластера не
+// змінює, а спільного змінного стану файл не має
+describe.concurrent("promotion lifecycle", () => {
   it("promote → plan → rehearse on the target → rolled back", async () => {
     await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url)

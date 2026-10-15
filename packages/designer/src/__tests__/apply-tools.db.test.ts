@@ -27,7 +27,6 @@ import {
 } from "simetra/schema"
 import {
   afterAll,
-  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -146,6 +145,8 @@ beforeAll(() =>
 )
 afterAll(() => dropRoles(OWNER))
 
+// Клієнти й теки прибираються після файлу, а не після тесту: тести йдуть
+// конкурентно, і `afterEach` одного закрив би клієнта чи стер теку сусіда
 const disposers: (() => Promise<void>)[] = []
 const clients: Client[] = []
 beforeEach(() => {
@@ -153,7 +154,7 @@ beforeEach(() => {
   lose.shadowFails = false
   lose.shadowScopes = []
 })
-afterEach(async () => {
+afterAll(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()))
   await Promise.all(disposers.splice(0).map((d) => d()))
 })
@@ -304,7 +305,10 @@ async function connectMcp(
   return client
 }
 
-describe("plan", () => {
+// Конкурентно: ціль і тека кожного тесту — власні, кластера тест не змінює,
+// а перемикачів `lose` не чіпає — такі тести в послідовних `describe`
+// наприкінці файлу
+describe.concurrent("plan", () => {
   it("plan writes the artifact next to metadata", async () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
@@ -367,21 +371,6 @@ describe("plan", () => {
     })
   })
 
-  it("plan names a lost connection during the proof as a failed copy", async () => {
-    await inTarget(EMPTY, async (url) => {
-      const dir = await projectWith({ [PARTY]: party() })
-      lose.writer = true
-      const r = await call("plan", {}, options(dir, url))
-      expect(r.written).toBe(false)
-      expect(errors(r)).toEqual(["engine.clone-failed"])
-      const [failed] = r.diagnostics.filter((d) => d.severity === "error")
-      expect(failed!.message).toContain("proof run")
-      // Текст раннера про застосування й ledger до того, хто планує, не доходить
-      expect(codes(r)).not.toContain("apply.connection-lost")
-      expect(await markerExists(url)).toBe(false)
-    })
-  })
-
   it("plan refuses an owner swap", async () => {
     // Прийнята база: таблиця моделі вже є, але належить іншій ролі
     await inTarget(
@@ -405,7 +394,8 @@ describe("plan", () => {
   })
 })
 
-describe("plan with promotion records", () => {
+// Конкурентно з тієї самої причини, що й `plan` вище
+describe.concurrent("plan with promotion records", () => {
   const RECORD = `plans/${uuid(9101)}.promotion.json`
 
   /** Найменший запис, що проходить строгу схему. */
@@ -501,7 +491,8 @@ describe("plan with promotion records", () => {
   })
 })
 
-describe("apply", () => {
+// Конкурентно з тієї самої причини, що й `plan` вище
+describe.concurrent("apply", () => {
   it("apply refuses a foreign planHash", async () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
@@ -723,7 +714,85 @@ describe("apply", () => {
       expect(await markerExists(url)).toBe(false)
     })
   })
+})
 
+// Конкурентно з тієї самої причини, що й `plan` вище
+describe.concurrent("over MCP", () => {
+  it("plan shows drift first", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      await establish(dir, url)
+      await query(url, "alter table app.party add column extra int")
+      const client = await connectMcp(dir, url, false)
+      const r = await client.callTool({ name: "plan", arguments: {} })
+      expect(r.isError).toBeFalsy()
+      const out = r.structuredContent as unknown as PlanData
+      expect(out.drift).not.toBeNull()
+      expect(out.requiredPermissions[0]).toBe("drift")
+      const text = (r.content as { text: string }[])[0]!.text
+      const drift = text.indexOf("drift (drift)")
+      const firstStep = text.indexOf(`  ${out.steps[0]!.id} `)
+      expect(drift).toBeGreaterThan(-1)
+      expect(firstStep).toBeGreaterThan(drift)
+      expect(text).toContain(out.planHash)
+      // Рядок підключення в тексті не з'являється
+      expect(text).not.toContain(url)
+    })
+  })
+
+  it("apply needs the launch flag over MCP", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      const args = { plan: data.file, planHash: data.planHash, confirm: true }
+
+      const without = await connectMcp(dir, url, false)
+      const refused = await without.callTool({ name: "apply", arguments: args })
+      expect(refused.isError).toBe(true)
+      expect(await markerExists(url)).toBe(false)
+
+      const client = await connectMcp(dir, url, true)
+      const unconfirmed = await client.callTool({
+        name: "apply",
+        arguments: { plan: data.file, planHash: data.planHash },
+      })
+      expect(unconfirmed.isError).toBe(true)
+      expect(await markerExists(url)).toBe(false)
+
+      const r = await client.callTool({ name: "apply", arguments: args })
+      expect(r.isError).toBeFalsy()
+      expect(r.structuredContent).toMatchObject({
+        status: "committed",
+        attempts: 1,
+      })
+      expect(await markerExists(url)).toBe(true)
+    })
+  })
+})
+
+// Послідовно, після всіх конкурентних груп файлу: перемикачі `lose` діють на
+// кожен виклик фабрик файлу, а не лише на свій тест. Ім'я `describe` те
+// саме, тож повні імена тестів не змінились
+describe("plan", { concurrent: false }, () => {
+  it("plan names a lost connection during the proof as a failed copy", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      lose.writer = true
+      const r = await call("plan", {}, options(dir, url))
+      expect(r.written).toBe(false)
+      expect(errors(r)).toEqual(["engine.clone-failed"])
+      const [failed] = r.diagnostics.filter((d) => d.severity === "error")
+      expect(failed!.message).toContain("proof run")
+      // Текст раннера про застосування й ledger до того, хто планує, не доходить
+      expect(codes(r)).not.toContain("apply.connection-lost")
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+})
+
+// Послідовно з тієї самої причини, а ще шпигун тіней і перевірка
+// `leftoverShadows(mark)` бачили б живі тіні сусідніх тестів
+describe("apply", { concurrent: false }, () => {
   it("apply --rehearse builds the desired shadow and passes the proof", async () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
@@ -777,59 +846,6 @@ describe("apply", () => {
       // `executePlan` не викликано: транзакції цілі не було
       expect(lose.writes).toBe(0)
       expect(await markerExists(url)).toBe(false)
-    })
-  })
-})
-
-describe("over MCP", () => {
-  it("plan shows drift first", async () => {
-    await inTarget(EMPTY, async (url) => {
-      const dir = await projectWith({ [PARTY]: party() })
-      await establish(dir, url)
-      await query(url, "alter table app.party add column extra int")
-      const client = await connectMcp(dir, url, false)
-      const r = await client.callTool({ name: "plan", arguments: {} })
-      expect(r.isError).toBeFalsy()
-      const out = r.structuredContent as unknown as PlanData
-      expect(out.drift).not.toBeNull()
-      expect(out.requiredPermissions[0]).toBe("drift")
-      const text = (r.content as { text: string }[])[0]!.text
-      const drift = text.indexOf("drift (drift)")
-      const firstStep = text.indexOf(`  ${out.steps[0]!.id} `)
-      expect(drift).toBeGreaterThan(-1)
-      expect(firstStep).toBeGreaterThan(drift)
-      expect(text).toContain(out.planHash)
-      // Рядок підключення в тексті не з'являється
-      expect(text).not.toContain(url)
-    })
-  })
-
-  it("apply needs the launch flag over MCP", async () => {
-    await inTarget(EMPTY, async (url) => {
-      const dir = await projectWith({ [PARTY]: party() })
-      const data = await planned(dir, url)
-      const args = { plan: data.file, planHash: data.planHash, confirm: true }
-
-      const without = await connectMcp(dir, url, false)
-      const refused = await without.callTool({ name: "apply", arguments: args })
-      expect(refused.isError).toBe(true)
-      expect(await markerExists(url)).toBe(false)
-
-      const client = await connectMcp(dir, url, true)
-      const unconfirmed = await client.callTool({
-        name: "apply",
-        arguments: { plan: data.file, planHash: data.planHash },
-      })
-      expect(unconfirmed.isError).toBe(true)
-      expect(await markerExists(url)).toBe(false)
-
-      const r = await client.callTool({ name: "apply", arguments: args })
-      expect(r.isError).toBeFalsy()
-      expect(r.structuredContent).toMatchObject({
-        status: "committed",
-        attempts: 1,
-      })
-      expect(await markerExists(url)).toBe(true)
     })
   })
 })

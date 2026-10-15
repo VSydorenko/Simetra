@@ -514,7 +514,12 @@ function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
   }
 }
 
-describe("executePlan", () => {
+// Конкурентно: ціль кожного тесту — власна база, ролі створює `beforeAll`, а
+// advisory lock раннера діє в межах бази цілі. Тести з тримачем блокування
+// чи з опитуванням `pg_locks`/`pg_stat_activity` і тест, що створює роль, —
+// послідовні (`concurrent: false`): у файлі один верхній `describe`, тож такий
+// тест іде сам, коли сусідні конкурентні вже завершились
+describe.concurrent("executePlan", () => {
   it("applies and records state", async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [CREATE_N])
@@ -687,172 +692,186 @@ describe("executePlan", () => {
     })
   })
 
-  describe("the proof that a rehearsal copy is a copy of this target", () => {
-    /**
-     * Роль-власник об'єктів копії, відновленої під іншими власниками. Ім'я
-     * несе тег прогону, як і ім'я копії: стек спільний, і чужу роль з тим
-     * самим ім'ям тест не має права ні зайняти, ні видалити.
-     */
-    const COPY_OWNER = testRoleName("copy_owner")
+  // Послідовно: тест копії під іншими власниками створює й видаляє роль
+  // кластера, а її поява посеред чужого тесту змінила б його витяг каталогу
+  describe(
+    "the proof that a rehearsal copy is a copy of this target",
+    { concurrent: false },
+    () => {
+      /**
+       * Роль-власник об'єктів копії, відновленої під іншими власниками. Ім'я
+       * несе тег прогону, як і ім'я копії: стек спільний, і чужу роль з тим
+       * самим ім'ям тест не має права ні зайняти, ні видалити.
+       */
+      const COPY_OWNER = testRoleName("copy_owner")
 
-    /** Ім'я бази з адреси. */
-    const nameOf = (url: string): string => new URL(url).pathname.slice(1)
+      /** Ім'я бази з адреси. */
+      const nameOf = (url: string): string => new URL(url).pathname.slice(1)
 
-    const rehearse = (
-      url: string,
-      plan: ExecutablePlan,
-      proof = stubRehearsal
-    ) =>
-      executePlan(apply, { url }, plan, {
-        ...options,
-        mode: "rehearse",
-        rehearsal: proof,
-      })
-
-    it("refuses a copy with the same chain and another head", async () => {
-      // Review Focus 1 плану П3-2b-3: staging того самого проєкту отримав ті
-      // самі плани окремими застосуваннями — ланцюжок, роль, відбиток і
-      // сервер збігаються, голова ledger — ні
-      await inTarget(BASE, (url) =>
-        withCopy(`template ${nameOf(url)}`, async (copy) => {
-          const first = await planFor(url, [CREATE_N])
-          for (const db of [url, copy])
-            expect(
-              await executePlan(apply, { url: db }, first, options)
-            ).toMatchObject({ status: "committed" })
-          const next = await planFor(
-            url,
-            [step("s1", "CREATE TABLE app.m (id int)")],
-            { fromHash: H1, toHash: H2 }
-          )
-          const outcome = await rehearse(copy, next)
-          expect(outcome).toMatchObject({
-            status: "refused",
-            diagnostics: [
-              { code: "apply.target-changed", params: { sections: "ledger" } },
-            ],
-          })
-          expect(await exists(copy, "app.m")).toBe(false)
-          // Та сама репетиція на самій цілі проходить
-          expect(await rehearse(url, next)).toMatchObject({
-            status: "rolledBack",
-          })
+      const rehearse = (
+        url: string,
+        plan: ExecutablePlan,
+        proof = stubRehearsal
+      ) =>
+        executePlan(apply, { url }, plan, {
+          ...options,
+          mode: "rehearse",
+          rehearsal: proof,
         })
-      )
-    })
 
-    it("rehearses a copy restored under other owners", async () => {
-      // Review Focus 2 плану П3-2b-3 і вимір задачі 0: таблиця без явних
-      // грантів (relacl IS NULL) у копії належить ролі, членом якої є роль
-      // застосування. Фаза 6 репетиції порівнює без власника й пропускає;
-      // повний доказ двигуна бачить дії ACL, і відмова називає причину
-      // Створення — до `try`: якщо воно впаде, `finally` не видалить роль,
-      // якої цей прогін не створив
-      await query(
-        testSuperuserUrl(),
-        `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
-      )
-      try {
+      it("refuses a copy with the same chain and another head", async () => {
+        // Review Focus 1 плану П3-2b-3: staging того самого проєкту отримав ті
+        // самі плани окремими застосуваннями — ланцюжок, роль, відбиток і
+        // сервер збігаються, голова ledger — ні
         await inTarget(BASE, (url) =>
           withCopy(`template ${nameOf(url)}`, async (copy) => {
-            await query(
-              asSuperuser(copy),
-              `alter table app.t owner to ${COPY_OWNER}`
+            const first = await planFor(url, [CREATE_N])
+            for (const db of [url, copy])
+              expect(
+                await executePlan(apply, { url: db }, first, options)
+              ).toMatchObject({ status: "committed" })
+            const next = await planFor(
+              url,
+              [step("s1", "CREATE TABLE app.m (id int)")],
+              { fromHash: H1, toHash: H2 }
             )
-            expect(
-              await query<{ acl: string | null }>(
-                copy,
-                "select relacl::text as acl from pg_class where oid = 'app.t'::regclass"
-              )
-            ).toEqual([{ acl: null }])
-            const plan = await planFor(url, [CREATE_N])
-            const rehearsed = await rehearse(copy, plan, {
-              engine,
-              desired: await desiredCatalog(BASE, [CREATE_N]),
-            })
-            expect(rehearsed).toMatchObject({
-              status: "failed",
-              diagnostics: [
-                {
-                  code: "apply.rehearsal-proof-failed",
-                  params: { cause: "owners" },
-                },
-              ],
-            })
-            const [refusal] = rehearsed.diagnostics
-            expect(refusal!.message).toContain(
-              "the owners of the copy differ from the target"
-            )
-            expect(localize(refusal!, "en").hint).toContain(
-              "pg_restore --no-owner"
-            )
-            expect(localize(refusal!, "uk").hint).toContain(
-              "pg_restore --no-owner"
-            )
-            // Та сама різниця на застосуванні — ціль змінилась
-            const applied = await executePlan(
-              apply,
-              { url: copy },
-              plan,
-              options
-            )
-            expect(applied).toMatchObject({
-              status: "refused",
-              diagnostics: [
-                { code: "apply.target-changed", params: { sections: "owner" } },
-              ],
-            })
-            expect(await exists(copy, "app.n")).toBe(false)
-            expect(await marker(copy)).toBeUndefined()
-          })
-        )
-      } finally {
-        // Роль — після баз: бази з її об'єктами вже прибрано
-        await dropRoles(COPY_OWNER)
-      }
-    })
-
-    it("refuses a copy on another server", async () => {
-      // Аудит Codex: копія з тією самою схемою й станом, але іншим
-      // упорядкуванням — інший факт сервера, відмова до першого кроку. Ціль і
-      // копію будує той самий рецепт, різниться лише `LC_COLLATE`/`LC_CTYPE`
-      const recipe = `${desired.sql};\n${BASE}`
-      await withCopy("template template0", (url) =>
-        withCopy(
-          "template template0 lc_collate 'C' lc_ctype 'C'",
-          async (copy) => {
-            await query(url, recipe)
-            await query(copy, recipe)
-            const plan = await planFor(url, [CREATE_N])
-            expect(
-              await query<{ collate: string }>(
-                copy,
-                "select datcollate as collate from pg_database where datname = current_database()"
-              )
-            ).toEqual([{ collate: "C" }])
-            expect(plan.server.collate).not.toBe("C")
-            const outcome = await rehearse(copy, plan)
+            const outcome = await rehearse(copy, next)
             expect(outcome).toMatchObject({
               status: "refused",
               diagnostics: [
                 {
                   code: "apply.target-changed",
-                  params: { sections: "server" },
+                  params: { sections: "ledger" },
                 },
               ],
             })
-            expect(await exists(copy, "app.n")).toBe(false)
+            expect(await exists(copy, "app.m")).toBe(false)
             // Та сама репетиція на самій цілі проходить
-            expect(await rehearse(url, plan)).toMatchObject({
+            expect(await rehearse(url, next)).toMatchObject({
               status: "rolledBack",
             })
-          }
+          })
         )
-      )
-    })
-  })
+      })
 
-  it("refuses when busy", async () => {
+      it("rehearses a copy restored under other owners", async () => {
+        // Review Focus 2 плану П3-2b-3 і вимір задачі 0: таблиця без явних
+        // грантів (relacl IS NULL) у копії належить ролі, членом якої є роль
+        // застосування. Фаза 6 репетиції порівнює без власника й пропускає;
+        // повний доказ двигуна бачить дії ACL, і відмова називає причину
+        // Створення — до `try`: якщо воно впаде, `finally` не видалить роль,
+        // якої цей прогін не створив
+        await query(
+          testSuperuserUrl(),
+          `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
+        )
+        try {
+          await inTarget(BASE, (url) =>
+            withCopy(`template ${nameOf(url)}`, async (copy) => {
+              await query(
+                asSuperuser(copy),
+                `alter table app.t owner to ${COPY_OWNER}`
+              )
+              expect(
+                await query<{ acl: string | null }>(
+                  copy,
+                  "select relacl::text as acl from pg_class where oid = 'app.t'::regclass"
+                )
+              ).toEqual([{ acl: null }])
+              const plan = await planFor(url, [CREATE_N])
+              const rehearsed = await rehearse(copy, plan, {
+                engine,
+                desired: await desiredCatalog(BASE, [CREATE_N]),
+              })
+              expect(rehearsed).toMatchObject({
+                status: "failed",
+                diagnostics: [
+                  {
+                    code: "apply.rehearsal-proof-failed",
+                    params: { cause: "owners" },
+                  },
+                ],
+              })
+              const [refusal] = rehearsed.diagnostics
+              expect(refusal!.message).toContain(
+                "the owners of the copy differ from the target"
+              )
+              expect(localize(refusal!, "en").hint).toContain(
+                "pg_restore --no-owner"
+              )
+              expect(localize(refusal!, "uk").hint).toContain(
+                "pg_restore --no-owner"
+              )
+              // Та сама різниця на застосуванні — ціль змінилась
+              const applied = await executePlan(
+                apply,
+                { url: copy },
+                plan,
+                options
+              )
+              expect(applied).toMatchObject({
+                status: "refused",
+                diagnostics: [
+                  {
+                    code: "apply.target-changed",
+                    params: { sections: "owner" },
+                  },
+                ],
+              })
+              expect(await exists(copy, "app.n")).toBe(false)
+              expect(await marker(copy)).toBeUndefined()
+            })
+          )
+        } finally {
+          // Роль — після баз: бази з її об'єктами вже прибрано
+          await dropRoles(COPY_OWNER)
+        }
+      })
+
+      it("refuses a copy on another server", async () => {
+        // Аудит Codex: копія з тією самою схемою й станом, але іншим
+        // упорядкуванням — інший факт сервера, відмова до першого кроку. Ціль і
+        // копію будує той самий рецепт, різниться лише `LC_COLLATE`/`LC_CTYPE`
+        const recipe = `${desired.sql};\n${BASE}`
+        await withCopy("template template0", (url) =>
+          withCopy(
+            "template template0 lc_collate 'C' lc_ctype 'C'",
+            async (copy) => {
+              await query(url, recipe)
+              await query(copy, recipe)
+              const plan = await planFor(url, [CREATE_N])
+              expect(
+                await query<{ collate: string }>(
+                  copy,
+                  "select datcollate as collate from pg_database where datname = current_database()"
+                )
+              ).toEqual([{ collate: "C" }])
+              expect(plan.server.collate).not.toBe("C")
+              const outcome = await rehearse(copy, plan)
+              expect(outcome).toMatchObject({
+                status: "refused",
+                diagnostics: [
+                  {
+                    code: "apply.target-changed",
+                    params: { sections: "server" },
+                  },
+                ],
+              })
+              expect(await exists(copy, "app.n")).toBe(false)
+              // Та сама репетиція на самій цілі проходить
+              expect(await rehearse(url, plan)).toMatchObject({
+                status: "rolledBack",
+              })
+            }
+          )
+        )
+      })
+    }
+  )
+
+  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
+  // сторонніх сесій
+  it("refuses when busy", { concurrent: false }, async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [CREATE_N])
       // Advisory lock діє в межах бази: тримач — у тій самій базі цілі
@@ -880,7 +899,9 @@ describe("executePlan", () => {
       )
     )[0]!.waiting
 
-  it("retries on lock timeout", async () => {
+  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
+  // сторонніх сесій
+  it("retries on lock timeout", { concurrent: false }, async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [ALTER_T])
       const reader = await holder(
@@ -916,7 +937,9 @@ describe("executePlan", () => {
     })
   })
 
-  it("gives up after attempts", async () => {
+  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
+  // сторонніх сесій
+  it("gives up after attempts", { concurrent: false }, async () => {
     await inTarget(BASE, async (url) => {
       const plan = await planFor(url, [ALTER_T])
       const reader = await holder(
@@ -1151,43 +1174,52 @@ describe("executePlan", () => {
     })
   })
 
-  it("refuses before the locks when the provider list changed after the plan", async () => {
-    await inTarget(BASE, async (url) => {
-      // План побудовано з переліком, де таблиця ще є; на цілі її вже немає
-      const plan = await planFor(url, [ALTER_T])
-      expect(
-        plan.providerLocks.some((set) =>
-          set.tables.some((t) => t.name === "audit_log_entries")
+  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
+  // сторонніх сесій
+  it(
+    "refuses before the locks when the provider list changed after the plan",
+    { concurrent: false },
+    async () => {
+      await inTarget(BASE, async (url) => {
+        // План побудовано з переліком, де таблиця ще є; на цілі її вже немає
+        const plan = await planFor(url, [ALTER_T])
+        expect(
+          plan.providerLocks.some((set) =>
+            set.tables.some((t) => t.name === "audit_log_entries")
+          )
+        ).toBe(true)
+        await query(
+          asSuperuser(url),
+          "drop table auth.audit_log_entries cascade"
         )
-      ).toBe(true)
-      await query(asSuperuser(url), "drop table auth.audit_log_entries cascade")
-      // Читач `app.t` конфліктує з ACCESS EXCLUSIVE: спроба замка чекала б
-      const reader = await holder(
-        url,
-        "begin; lock table app.t in access share mode"
-      )
-      try {
-        const outcome = await executePlan(apply, { url }, plan, {
-          ...options,
-          timeouts: { lockTimeoutMs: 15_000 },
-        })
-        expect(outcome).toMatchObject({
-          status: "refused",
-          attempts: 1,
-          diagnostics: [
-            {
-              code: "apply.target-changed",
-              params: { sections: "providerLocks" },
-            },
-          ],
-        })
-      } finally {
-        await reader.query("rollback")
-        await reader.end()
-      }
-      expect(await ledger(url)).toEqual([])
-    })
-  })
+        // Читач `app.t` конфліктує з ACCESS EXCLUSIVE: спроба замка чекала б
+        const reader = await holder(
+          url,
+          "begin; lock table app.t in access share mode"
+        )
+        try {
+          const outcome = await executePlan(apply, { url }, plan, {
+            ...options,
+            timeouts: { lockTimeoutMs: 15_000 },
+          })
+          expect(outcome).toMatchObject({
+            status: "refused",
+            attempts: 1,
+            diagnostics: [
+              {
+                code: "apply.target-changed",
+                params: { sections: "providerLocks" },
+              },
+            ],
+          })
+        } finally {
+          await reader.query("rollback")
+          await reader.end()
+        }
+        expect(await ledger(url)).toEqual([])
+      })
+    }
+  )
 
   describe("foreign keys of the footprint", () => {
     // Рішення 9 плану П3-2b-1: схема `other` поза межею, крок змінює тип
@@ -1288,72 +1320,78 @@ describe("executePlan", () => {
     })
   })
 
-  it("locks the children of a table up front and plans them in its mode", async () => {
-    const setup = `${BASE};
+  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
+  // сторонніх сесій
+  it(
+    "locks the children of a table up front and plans them in its mode",
+    { concurrent: false },
+    async () => {
+      const setup = `${BASE};
       create table app.pt (id int, k int) partition by list (k);
       create table app.pt_1 partition of app.pt for values in (1);
       create table app.it (id int);
       create table app.it_child () inherits (app.it);`
-    await inTarget(setup, async (url) => {
-      const steps = [
-        step("s1", "ALTER TABLE app.pt ADD COLUMN x int", {
-          verb: "alter",
-          lockClass: "accessExclusive",
-          lockedTables: [{ schema: "app", name: "pt" }],
-        }),
-        step("s2", "ALTER TABLE app.it ADD COLUMN x int", {
-          verb: "alter",
-          lockClass: "accessExclusive",
-          lockedTables: [{ schema: "app", name: "it" }],
-        }),
-      ]
-      const plan = await planFor(url, steps, {
-        desiredFingerprint: await desiredFingerprint(url, steps),
-      })
-      expect(plan.locks).toEqual([
-        { schema: "app", name: "it", mode: "accessExclusive" },
-        { schema: "app", name: "pt", mode: "accessExclusive" },
-      ])
-      // Читач партиції: замок без ONLY чекає на неї ще до кроків
-      const reader = await holder(
-        url,
-        "begin; lock table app.pt_1 in access share mode"
-      )
-      try {
-        const running = executePlan(apply, { url }, plan, {
-          ...options,
-          mode: "rehearse",
-          rehearsal: stubRehearsal,
-          timeouts: { lockTimeoutMs: 15_000 },
+      await inTarget(setup, async (url) => {
+        const steps = [
+          step("s1", "ALTER TABLE app.pt ADD COLUMN x int", {
+            verb: "alter",
+            lockClass: "accessExclusive",
+            lockedTables: [{ schema: "app", name: "pt" }],
+          }),
+          step("s2", "ALTER TABLE app.it ADD COLUMN x int", {
+            verb: "alter",
+            lockClass: "accessExclusive",
+            lockedTables: [{ schema: "app", name: "it" }],
+          }),
+        ]
+        const plan = await planFor(url, steps, {
+          desiredFingerprint: await desiredFingerprint(url, steps),
         })
-        let waiting: { query: string; mode: string } | undefined
-        await until("the apply to wait on the partition", async () => {
-          ;[waiting] = await query<{ query: string; mode: string }>(
-            url,
-            `select a.query, l.mode from pg_locks l
+        expect(plan.locks).toEqual([
+          { schema: "app", name: "it", mode: "accessExclusive" },
+          { schema: "app", name: "pt", mode: "accessExclusive" },
+        ])
+        // Читач партиції: замок без ONLY чекає на неї ще до кроків
+        const reader = await holder(
+          url,
+          "begin; lock table app.pt_1 in access share mode"
+        )
+        try {
+          const running = executePlan(apply, { url }, plan, {
+            ...options,
+            mode: "rehearse",
+            rehearsal: stubRehearsal,
+            timeouts: { lockTimeoutMs: 15_000 },
+          })
+          let waiting: { query: string; mode: string } | undefined
+          await until("the apply to wait on the partition", async () => {
+            ;[waiting] = await query<{ query: string; mode: string }>(
+              url,
+              `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
               where l.relation = 'app.pt_1'::regclass and not l.granted
                 -- Знімок pg_stat_activity окремий від pg_locks: без цієї
                 -- умови він міг показати попередній оператор того backend
                 and a.wait_event_type = 'Lock'`
+            )
+            return waiting !== undefined
+          })
+          expect(waiting!.mode).toBe("AccessExclusiveLock")
+          expect(waiting!.query).toMatch(
+            /^LOCK TABLE app\.it, app\.pt IN ACCESS EXCLUSIVE MODE$/
           )
-          return waiting !== undefined
-        })
-        expect(waiting!.mode).toBe("AccessExclusiveLock")
-        expect(waiting!.query).toMatch(
-          /^LOCK TABLE app\.it, app\.pt IN ACCESS EXCLUSIVE MODE$/
-        )
-        await reader.query("rollback")
-        // Нащадки заплановано в режимі батька: звірка сліду мовчить
-        expect(await running).toMatchObject({
-          status: "rolledBack",
-          diagnostics: [],
-        })
-      } finally {
-        await reader.end()
-      }
-    })
-  })
+          await reader.query("rollback")
+          // Нащадки заплановано в режимі батька: звірка сліду мовчить
+          expect(await running).toMatchObject({
+            status: "rolledBack",
+            diagnostics: [],
+          })
+        } finally {
+          await reader.end()
+        }
+      })
+    }
+  )
 
   it("warns on rehearsal about a lock beyond the plan's footprint", async () => {
     await inTarget(BASE, async (url) => {
@@ -1500,67 +1538,73 @@ describe("executePlan", () => {
     })
   })
 
-  it("takes SHARE ROW EXCLUSIVE on FK targets up front", async () => {
-    const setup = `${BASE};
+  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
+  // сторонніх сесій
+  it(
+    "takes SHARE ROW EXCLUSIVE on FK targets up front",
+    { concurrent: false },
+    async () => {
+      const setup = `${BASE};
       create table app.p (id int primary key);
       create table app.c (id int primary key, p int);`
-    await inTarget(setup, async (url) => {
-      const steps = [
-        step(
-          "s1",
-          "ALTER TABLE app.c ADD CONSTRAINT c_p_fk FOREIGN KEY (p) REFERENCES app.p (id)",
-          {
-            verb: "alter",
-            lockClass: "accessExclusive",
-            lockedTables: [{ schema: "app", name: "c" }],
-          }
-        ),
-      ]
-      // Слід кроку FK: власна таблиця й ціль FK (виведення сліду — у
-      // модульних тестах і тестах плану)
-      const plan = await planFor(url, steps, {
-        locks: [
-          { schema: "app", name: "c", mode: "accessExclusive" },
-          { schema: "app", name: "p", mode: "shareRowExclusive" },
-        ],
-        desiredFingerprint: await desiredFingerprint(url, steps),
-      })
-      // Запис у ціль FK тримає ROW EXCLUSIVE, що конфліктує з SHARE ROW
-      // EXCLUSIVE перевірки FK
-      const writer = await holder(
-        url,
-        "begin; lock table app.p in row exclusive mode"
-      )
-      try {
-        const running = executePlan(apply, { url }, plan, {
-          ...options,
-          timeouts: { lockTimeoutMs: 15_000 },
+      await inTarget(setup, async (url) => {
+        const steps = [
+          step(
+            "s1",
+            "ALTER TABLE app.c ADD CONSTRAINT c_p_fk FOREIGN KEY (p) REFERENCES app.p (id)",
+            {
+              verb: "alter",
+              lockClass: "accessExclusive",
+              lockedTables: [{ schema: "app", name: "c" }],
+            }
+          ),
+        ]
+        // Слід кроку FK: власна таблиця й ціль FK (виведення сліду — у
+        // модульних тестах і тестах плану)
+        const plan = await planFor(url, steps, {
+          locks: [
+            { schema: "app", name: "c", mode: "accessExclusive" },
+            { schema: "app", name: "p", mode: "shareRowExclusive" },
+          ],
+          desiredFingerprint: await desiredFingerprint(url, steps),
         })
-        let waiting: { query: string; mode: string } | undefined
-        await until("the apply to wait on the FK target", async () => {
-          ;[waiting] = await query<{ query: string; mode: string }>(
-            url,
-            `select a.query, l.mode from pg_locks l
+        // Запис у ціль FK тримає ROW EXCLUSIVE, що конфліктує з SHARE ROW
+        // EXCLUSIVE перевірки FK
+        const writer = await holder(
+          url,
+          "begin; lock table app.p in row exclusive mode"
+        )
+        try {
+          const running = executePlan(apply, { url }, plan, {
+            ...options,
+            timeouts: { lockTimeoutMs: 15_000 },
+          })
+          let waiting: { query: string; mode: string } | undefined
+          await until("the apply to wait on the FK target", async () => {
+            ;[waiting] = await query<{ query: string; mode: string }>(
+              url,
+              `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
               where l.relation = 'app.p'::regclass and not l.granted
                 -- Знімок pg_stat_activity окремий від pg_locks: без цієї
                 -- умови він міг показати попередній оператор того backend
                 and a.wait_event_type = 'Lock'`
+            )
+            return waiting !== undefined
+          })
+          // Очікування — на блокуванні наперед, а не посеред кроку
+          expect(waiting!.mode).toBe("ShareRowExclusiveLock")
+          expect(waiting!.query).toMatch(
+            /^LOCK TABLE app\.p IN SHARE ROW EXCLUSIVE MODE$/
           )
-          return waiting !== undefined
-        })
-        // Очікування — на блокуванні наперед, а не посеред кроку
-        expect(waiting!.mode).toBe("ShareRowExclusiveLock")
-        expect(waiting!.query).toMatch(
-          /^LOCK TABLE app\.p IN SHARE ROW EXCLUSIVE MODE$/
-        )
-        await writer.query("rollback")
-        expect(await running).toMatchObject({ status: "committed" })
-      } finally {
-        await writer.end()
-      }
-    })
-  })
+          await writer.query("rollback")
+          expect(await running).toMatchObject({ status: "committed" })
+        } finally {
+          await writer.end()
+        }
+      })
+    }
+  )
 
   describe("engine preamble", () => {
     /** Що бачить кожна фаза: намір, крок двигуна, запис стану. */
@@ -3097,79 +3141,91 @@ describe("executePlan", () => {
     }
   }
 
-  it("waits for a COMMIT in flight before reading the ledger", async () => {
-    await inTarget(BASE, async (url) => {
-      const plan = await planFor(url, [CREATE_N])
-      // `COMMIT` доходить до сервера лише тоді, коли пошук уже чекає на
-      // блокування: без очікування пошук сказав би «не застосовано»
-      const port = lostWithLiveBackend(async (client) => {
-        await until("the lookup to wait", () => waitsOnApplyLock(url))
-        await client.query("COMMIT")
+  // Послідовно: живий backend, опитування `pg_locks`/`pg_stat_activity` і
+  // тайм-аути сервера чутливі до часу й сторонніх сесій
+  it(
+    "waits for a COMMIT in flight before reading the ledger",
+    { concurrent: false },
+    async () => {
+      await inTarget(BASE, async (url) => {
+        const plan = await planFor(url, [CREATE_N])
+        // `COMMIT` доходить до сервера лише тоді, коли пошук уже чекає на
+        // блокування: без очікування пошук сказав би «не застосовано»
+        const port = lostWithLiveBackend(async (client) => {
+          await until("the lookup to wait", () => waitsOnApplyLock(url))
+          await client.query("COMMIT")
+        })
+        const outcome = await executePlan(
+          port.db,
+          { url },
+          plan,
+          options
+        ).finally(async () => {
+          await port.pending().finally(port.close)
+        })
+        expect(outcome).toMatchObject({
+          status: "committed",
+          attempts: 1,
+          diagnostics: [
+            {
+              code: "apply.connection-lost",
+              severity: "warning",
+              params: { outcome: "applied" },
+            },
+          ],
+        })
+        expect(await marker(url)).toMatchObject({ plan_hash: PLAN_HASH })
+        expect(await exists(url, "app.n")).toBe(true)
       })
-      const outcome = await executePlan(
-        port.db,
-        { url },
-        plan,
-        options
-      ).finally(async () => {
-        await port.pending().finally(port.close)
-      })
-      expect(outcome).toMatchObject({
-        status: "committed",
-        attempts: 1,
-        diagnostics: [
-          {
-            code: "apply.connection-lost",
-            severity: "warning",
-            params: { outcome: "applied" },
-          },
-        ],
-      })
-      expect(await marker(url)).toMatchObject({ plan_hash: PLAN_HASH })
-      expect(await exists(url, "app.n")).toBe(true)
-    })
-  })
+    }
+  )
 
-  it("waits for an orphaned transaction to be ended by the server", async () => {
-    await inTarget(BASE, async (url) => {
-      const plan = await planFor(url, [CREATE_N])
-      // `COMMIT` не надіслано, а backend лишився «idle in transaction» з
-      // блокуваннями: його знімає `idle_in_transaction_session_timeout`,
-      // який раннер ставить у спробі. Зменшений тайм-аут — заради часу
-      // тесту; закрити сокет тут не можна: backend помітив би EOF і
-      // відкотився одразу, а не осиротів
-      let orphan = 0
-      const port = lostWithLiveBackend(async (_client, pid) => {
-        orphan = pid
-        await until("the lookup to wait", () => waitsOnApplyLock(url))
+  // Послідовно: живий backend, опитування `pg_locks`/`pg_stat_activity` і
+  // тайм-аути сервера чутливі до часу й сторонніх сесій
+  it(
+    "waits for an orphaned transaction to be ended by the server",
+    { concurrent: false },
+    async () => {
+      await inTarget(BASE, async (url) => {
+        const plan = await planFor(url, [CREATE_N])
+        // `COMMIT` не надіслано, а backend лишився «idle in transaction» з
+        // блокуваннями: його знімає `idle_in_transaction_session_timeout`,
+        // який раннер ставить у спробі. Зменшений тайм-аут — заради часу
+        // тесту; закрити сокет тут не можна: backend помітив би EOF і
+        // відкотився одразу, а не осиротів
+        let orphan = 0
+        const port = lostWithLiveBackend(async (_client, pid) => {
+          orphan = pid
+          await until("the lookup to wait", () => waitsOnApplyLock(url))
+        })
+        const outcome = await executePlan(port.db, { url }, plan, {
+          ...options,
+          timeouts: { idleInTransactionMs: 3000 },
+        }).finally(async () => {
+          await port.pending().finally(port.close)
+        })
+        expect(outcome).toMatchObject({
+          status: "failed",
+          attempts: 1,
+          diagnostics: [
+            {
+              code: "apply.connection-lost",
+              severity: "error",
+              params: { outcome: "not-applied" },
+            },
+          ],
+        })
+        expect(
+          await query(
+            testSuperuserUrl(),
+            `select 1 from pg_stat_activity where pid = ${orphan}`
+          )
+        ).toEqual([])
+        expect(await exists(url, "app.n")).toBe(false)
+        expect(await marker(url)).toBeUndefined()
       })
-      const outcome = await executePlan(port.db, { url }, plan, {
-        ...options,
-        timeouts: { idleInTransactionMs: 3000 },
-      }).finally(async () => {
-        await port.pending().finally(port.close)
-      })
-      expect(outcome).toMatchObject({
-        status: "failed",
-        attempts: 1,
-        diagnostics: [
-          {
-            code: "apply.connection-lost",
-            severity: "error",
-            params: { outcome: "not-applied" },
-          },
-        ],
-      })
-      expect(
-        await query(
-          testSuperuserUrl(),
-          `select 1 from pg_stat_activity where pid = ${orphan}`
-        )
-      ).toEqual([])
-      expect(await exists(url, "app.n")).toBe(false)
-      expect(await marker(url)).toBeUndefined()
-    })
-  })
+    }
+  )
 
   it("does not mistake an earlier apply for this one", async () => {
     await inTarget(BASE, async (url) => {
@@ -3251,46 +3307,52 @@ describe("executePlan", () => {
     })
   })
 
-  it("reports not applied after a connection loss mid-transaction", async () => {
-    await inTarget(BASE, async (url) => {
-      await establish(url, H1)
-      const before = await marker(url)
-      const sleepStep = step("s1", "SELECT pg_sleep(5)", { verb: "alter" })
-      const plan = await planFor(url, [sleepStep], {
-        fromHash: H1,
-        toHash: H2,
+  // Послідовно: живий backend, опитування `pg_locks`/`pg_stat_activity` і
+  // тайм-аути сервера чутливі до часу й сторонніх сесій
+  it(
+    "reports not applied after a connection loss mid-transaction",
+    { concurrent: false },
+    async () => {
+      await inTarget(BASE, async (url) => {
+        await establish(url, H1)
+        const before = await marker(url)
+        const sleepStep = step("s1", "SELECT pg_sleep(5)", { verb: "alter" })
+        const plan = await planFor(url, [sleepStep], {
+          fromHash: H1,
+          toHash: H2,
+        })
+        const running = executePlan(apply, { url }, plan, options)
+        const database = new URL(url).pathname.slice(1)
+        const backend = async () =>
+          (
+            await query<{ pid: number }>(
+              testSuperuserUrl(),
+              `select pid from pg_stat_activity where datname = '${database}' and query = '${sleepStep.sql}' and state = 'active'`
+            )
+          )[0]?.pid
+        await until(
+          "the step to run",
+          async () => (await backend()) !== undefined
+        )
+        await query(
+          testSuperuserUrl(),
+          `select pg_terminate_backend(${await backend()})`
+        )
+        const outcome = await running
+        expect(outcome).toMatchObject({
+          status: "failed",
+          attempts: 1,
+          diagnostics: [
+            {
+              code: "apply.connection-lost",
+              params: { outcome: "not-applied" },
+            },
+          ],
+        })
+        expect(await marker(url)).toEqual(before)
       })
-      const running = executePlan(apply, { url }, plan, options)
-      const database = new URL(url).pathname.slice(1)
-      const backend = async () =>
-        (
-          await query<{ pid: number }>(
-            testSuperuserUrl(),
-            `select pid from pg_stat_activity where datname = '${database}' and query = '${sleepStep.sql}' and state = 'active'`
-          )
-        )[0]?.pid
-      await until(
-        "the step to run",
-        async () => (await backend()) !== undefined
-      )
-      await query(
-        testSuperuserUrl(),
-        `select pg_terminate_backend(${await backend()})`
-      )
-      const outcome = await running
-      expect(outcome).toMatchObject({
-        status: "failed",
-        attempts: 1,
-        diagnostics: [
-          {
-            code: "apply.connection-lost",
-            params: { outcome: "not-applied" },
-          },
-        ],
-      })
-      expect(await marker(url)).toEqual(before)
-    })
-  })
+    }
+  )
 
   it("refuses a missing permission at execution", async () => {
     await inTarget(BASE, async (url) => {

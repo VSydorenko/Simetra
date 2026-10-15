@@ -21,6 +21,11 @@ export default defineConfig({
           exclude: ["**/node_modules/**", "**/dist/**"],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
+          // Файл, що пройшов аудит ізоляції, вмикає `describe.concurrent`.
+          // Стеля — CPU одного процесу (pg-delta): за заміром 8 тестів разом
+          // не швидші за 4, а більше одночасних тестів лише розтягує кожен
+          // ближче до тайм-ауту
+          maxConcurrency: 4,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
           globalSetup: ["../simetra/test/db/stack-guard.ts"],
