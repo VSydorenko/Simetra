@@ -374,7 +374,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete: and remove: items.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, remove: and repair: items.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:
@@ -386,12 +386,14 @@ export const applyTool = defineTool({
       .meta({ description: "planHash of the reviewed plan." }),
     allow: z
       .array(
-        z.string().regex(/^(?:s[1-9][0-9]*|drift|(?:access|delete|remove):.+)$/)
+        z
+          .string()
+          .regex(/^(?:s[1-9][0-9]*|drift|(?:access|delete|remove|repair):.+)$/)
       )
       .optional()
       .meta({
         description:
-          "Plan items to permit: step ids (s1, s2, …), drift, access:<table>, delete:<table>.<constraint>, remove:<table>.",
+          "Plan items to permit: step ids (s1, s2, …), drift, access:<table>, delete:<table>.<constraint>, remove:<table>, repair:<table>.",
       }),
     rehearse: z.boolean().optional(),
     lockTimeoutMs: timeoutMs.optional(),

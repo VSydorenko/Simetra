@@ -218,8 +218,19 @@ function beforeEntries(
   }
 }
 
+/**
+ * `columns` підміняє долю колонки прийнятої таблиці, `fill` додає кроки даних
+ * (типово їх немає).
+ */
+interface MappingOptions {
+  read?: boolean
+  swap?: boolean
+  columns?: Record<string, unknown>
+  fill?: PromoteInput["fill"]
+}
+
 /** Мапінг у довідник без коду й ієрархії, без кроку `fill`. */
-function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
+function mapping(o: MappingOptions = {}): PromoteInput {
   return promoteInput.parse({
     target: { name: "Item" },
     into: { kind: "Catalog", name: "Item", data: { codeLength: 0 } },
@@ -236,7 +247,9 @@ function mapping(o: { read?: boolean; swap?: boolean } = {}): PromoteInput {
       legacy: o.swap
         ? { to: "attribute", element: { name: "code" } }
         : { to: "retire" },
+      ...o.columns,
     },
+    ...(o.fill === undefined ? {} : { fill: o.fill }),
     tabularSections: [
       {
         table: "ItemLine",
@@ -347,7 +360,7 @@ const rows = (title = "first") => `
  */
 async function promoted(
   url: string,
-  o: { read?: boolean; swap?: boolean; title?: string; onDelete?: string } = {}
+  o: MappingOptions & { title?: string; onDelete?: string } = {}
 ): Promise<string> {
   const dir = await projectWith(beforeEntries(o))
   const before = await planned(dir, url)
@@ -606,6 +619,113 @@ describe("promotion lifecycle", () => {
       })
       expect(await state(url)).toEqual(before)
       expect(before.items).toEqual([expect.objectContaining({ title: long })])
+    })
+  })
+
+  describe("deliberate type conversion", () => {
+    // Реквізит `legacy` (text) стає jsonb, `code` (text) — varchar(20): обидві
+    // зміни переписують значення, тож без кроку даних їх зупиняє сторож
+    // звуження, а ремонт у кроці даних записує приведене до кроку двигуна
+    const JSON_TEXT = '{"a":1}'
+    const LONG_CODE = "c".repeat(25)
+    const asJson = {
+      legacy: { to: "attribute", element: { name: "legacy", type: "Json" } },
+    } as const
+    const asVarchar = {
+      code: {
+        to: "attribute",
+        element: { name: "code", unique: true, type: "String", length: 20 },
+      },
+    } as const
+    const repairJson: PromoteInput["fill"] = [
+      {
+        target: { to: "attribute", name: "legacy" },
+        expression: "legacy::jsonb",
+      },
+    ]
+    const repairCode: PromoteInput["fill"] = [
+      {
+        target: { to: "attribute", name: "code" },
+        expression: "left(code, 20)",
+      },
+    ]
+
+    /** Ціль із даними до промоції, у яких `legacy` і `code` треба переписати. */
+    async function converted(
+      url: string,
+      o: MappingOptions
+    ): Promise<{ dir: string; data: PlanData }> {
+      const dir = await promoted(url, o)
+      await query(
+        url,
+        `update app.items set legacy = '${JSON_TEXT}', code = '${LONG_CODE}'`
+      )
+      return { dir, data: await planned(dir, url) }
+    }
+
+    it("refuses a normalizing type change without a data step", async () => {
+      await inTarget(EMPTY, async (url) => {
+        const { dir, data } = await converted(url, { columns: asJson })
+        const before = await state(url)
+        const r = await apply(dir, url, data, { rehearse: true })
+        expect(errors(r)).toEqual(["apply.type-narrowing"])
+        expect(r.diagnostics[0]!.params).toMatchObject({
+          table: "app.item",
+          column: "legacy",
+        })
+        expect(await state(url)).toEqual(before)
+      })
+    })
+
+    it("rehearses a normalizing type change through a repair", async () => {
+      // Review Focus 5: ремонт пише нормалізований текст до кроку двигуна
+      await inTarget(EMPTY, async (url) => {
+        const { dir, data } = await converted(url, {
+          columns: asJson,
+          fill: repairJson,
+        })
+        expect(data.requiredPermissions).toContain("repair:app.item")
+        const before = await state(url)
+        const r = await apply(dir, url, data, { rehearse: true })
+        expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+        expect((r.data as ApplyData).status).toBe("rolledBack")
+        expect(await state(url)).toEqual(before)
+      })
+    })
+
+    it("rehearses a truncating repair", async () => {
+      await inTarget(EMPTY, async (url) => {
+        const without = await converted(url, { columns: asVarchar })
+        const refused = await apply(without.dir, url, without.data, {
+          rehearse: true,
+        })
+        expect(errors(refused)).toEqual(["apply.type-narrowing"])
+      })
+      await inTarget(EMPTY, async (url) => {
+        const { dir, data } = await converted(url, {
+          columns: asVarchar,
+          fill: repairCode,
+        })
+        const r = await apply(dir, url, data, { rehearse: true })
+        expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+        expect((r.data as ApplyData).status).toBe("rolledBack")
+      })
+    })
+
+    it("refuses a repair without its permission", async () => {
+      await inTarget(EMPTY, async (url) => {
+        const { dir, data } = await converted(url, {
+          columns: asJson,
+          fill: repairJson,
+        })
+        const token = "repair:app.item"
+        const r = await apply(dir, url, data, {
+          rehearse: true,
+          allow: data.requiredPermissions.filter((p) => p !== token),
+        })
+        expect(errors(r)).toEqual(["apply.permission-required"])
+        expect(JSON.stringify(r.diagnostics[0]!.params)).toContain(token)
+      })
     })
   })
 

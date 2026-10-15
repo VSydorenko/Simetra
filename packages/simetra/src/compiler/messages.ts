@@ -2377,8 +2377,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Крок плану ${p.step} змінив би тип колонки ${p.column} таблиці ${p.table} і втратив би значень: ${p.lost} — приведення до нового типу й назад не дає того самого значення. Транзакцію відкочено`
         : `Крок плану ${p.step} змінив би тип колонки ${p.column} таблиці ${p.table}, але значення не приводиться до нового типу (SQLSTATE ${p.sqlstate}). Транзакцію відкочено`,
     hint: {
-      en: "Nothing was written. A permission for a destructive step allows it to fail on the data, not to truncate or round values silently; fix the data or the target type and plan again.",
-      uk: "Нічого не записано. Дозвіл на руйнівний крок дозволяє йому впасти на даних, а не мовчки обрізати чи округлити значення; виправте дані чи цільовий тип і сплануйте знову.",
+      en: "Nothing was written. A permission for a destructive step allows it to fail on the data, not to truncate or round values silently. If the change is intended, record it as a fill step of the promotion (a repair such as left(<column>, <n>) or <column>::jsonb): the step writes the converted values before the type change. Otherwise fix the data or the target type; then plan again.",
+      uk: "Нічого не записано. Дозвіл на руйнівний крок дозволяє йому впасти на даних, а не мовчки обрізати чи округлити значення. Якщо зміна задумана, запишіть її кроком fill промоції (ремонт на кшталт left(<колонка>, <n>) чи <колонка>::jsonb): крок записує приведені значення до зміни типу. Інакше виправте дані чи цільовий тип; потім сплануйте знову.",
     },
   },
   "apply.type-guard-failed": {

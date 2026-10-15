@@ -385,7 +385,8 @@ If the environment changes before the apply, it is refused
 refused too: rebuild it with `plan`.
 
 A promotion plan's `allow` also takes the `access:<table>`,
-`delete:<table>.<constraint>` and `remove:<table>` items its output lists.
+`delete:<table>.<constraint>`, `remove:<table>` and `repair:<table>` items its
+output lists.
 Applying a promotion with a commit is refused for now
 (`apply.promotion-checks-pending`); `rehearse` it instead.
 

@@ -60,9 +60,9 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
   `plans/<objectId>.promotion.json` (артефакти — до змін у теках). `plan` читає
   `plans/*.promotion.json` суворо (хибний файл — `plan.promotion-record-invalid`),
   показує блок «Промоція» (перейменування таблиць і колонок, канонічні імена,
-  переліки `access:`/`delete:`/`remove:`, неявні замки) і кроки з походженням та
+  переліки `access:`/`delete:`/`remove:`/`repair:`, неявні замки) і кроки з походженням та
   класом перетворення. `allow` у `apply` приймає `s<N>`, `drift`,
-  `access:<table>`, `delete:<table>.<constraint>`, `remove:<table>`; CLI
+  `access:<table>`, `delete:<table>.<constraint>`, `remove:<table>`, `repair:<table>`; CLI
   `--allow` ділить за комою, тож імена з комою — лише масивом через MCP.
   Застосування промоції з `COMMIT` відхиляється (`apply.promotion-checks-pending`),
   доки не з'являться решта перевірок; репетиція на цілі дозволена. Замки плану
