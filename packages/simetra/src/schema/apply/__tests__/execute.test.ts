@@ -7,6 +7,7 @@ import {
   executePlan,
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
+  rehearsalHash,
   rehearsalReport,
   type ApplyDatabase,
   type CatalogFingerprint,
@@ -22,6 +23,7 @@ import {
   type PreservedTable,
   type RehearsalProof,
   type ProviderLockSet,
+  type RehearsalReport,
   SUPABASE_LOCKS,
 } from "simetra/schema"
 import { promotionRecordHash, type PromotionRecord } from "simetra/compiler"
@@ -281,6 +283,8 @@ interface Script {
   /** Лічильники обчислених і записаних рядків; типово 3 і стільки ж. */
   computed?: number
   written?: number
+  /** `count(*)` кожного заміру збереження; типово `1`. */
+  measured?: string
 }
 
 /** Факти бази: розширення немає, роль може його поставити. */
@@ -340,6 +344,9 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("ORDER BY id DESC")) return "ledger-head"
   if (sql.includes("pg_try_advisory_xact_lock")) return "try-lock"
   if (sql.includes("pg_advisory_xact_lock")) return "lookup-lock"
+  // Тайм-аут зі звіту (фаза 6c) — окремо від пошуку після обриву
+  if (sql === "SELECT pg_catalog.set_config('statement_timeout', $1, true)")
+    return "report-timeout"
   if (sql.includes("set_config('statement_timeout', $1"))
     return "lookup-timeouts"
   if (sql.includes("set_config('lock_timeout'")) return "timeouts"
@@ -463,7 +470,7 @@ function fakeDb(script: Script = {}) {
             })) as unknown as R[]
           const rows: Record<string, unknown>[] =
             label?.startsWith("measure") === true
-              ? [{ rows: "1", c0: "5" }]
+              ? [{ rows: script.measured ?? "1", c0: "5" }]
               : label === "get-settings"
                 ? (p![0] as string[]).map((n) => ({ value: settings[n] }))
                 : label === "blind"
@@ -2187,18 +2194,254 @@ describe("executePlan", () => {
     expect(log).toEqual([])
   })
 
-  it("refuses to commit a promotion before BEGIN", async () => {
-    const { db, log } = fakeDb()
-    const outcome = await executePlan(db, target, promoted, {
-      ...options,
-      allow: ["access:app.party"],
+  describe("the rehearsal report of a promotion apply", () => {
+    /**
+     * Промоція з однією таблицею `app.t → app.u` і її заміром; перевірку
+     * `plpgsql_check` бере тимчасово (розширення немає, але роль може).
+     */
+    const reported: ExecutablePlan = {
+      ...promoted,
+      plpgsqlCheck: "transient",
+      promotion: {
+        ...promoted.promotion!,
+        ...tabled,
+        permissionItems: [],
+        preservation: [
+          {
+            before: { schema: "app", table: "t" },
+            after: { schema: "app", table: "u" },
+            key: { before: "id", after: "id" },
+            columns: [{ before: "c", after: "d" }],
+          },
+        ],
+      },
+    }
+    /** Чинний звіт репетиції цього плану на копії з одним рядком `app.t`. */
+    const REPORT: RehearsalReport = {
+      format: 1,
+      planHash: options.planHash,
+      server: SERVER,
+      ledgerHead: null,
+      rows: [{ schema: "app", table: "t", rows: 1 }],
+      durations: { phases: [], steps: [], longestStatementMs: 100 },
+      data: [],
+      preservation: [{ schema: "app", table: "t", rows: 1 }],
+      plpgsqlCheck: "skipped",
+      triggers: [],
+      lockFootprint: [],
+    }
+    const withReport = (
+      report: RehearsalReport,
+      over: Partial<ExecuteOptions> = {}
+    ): ExecuteOptions => ({ ...options, report, ...over }) as ExecuteOptions
+
+    /** Відмова до BEGIN з одною діагностикою `code` і параметрами. */
+    const refusedBefore = async (
+      p: ExecutablePlan,
+      o: ExecuteOptions,
+      code: string,
+      params?: Record<string, unknown>
+    ) => {
+      const { db, log } = fakeDb()
+      const outcome = await executePlan(db, target, p, o)
+      expect(outcome).toMatchObject({ status: "refused", attempts: 0 })
+      expect(outcome.diagnostics).toHaveLength(1)
+      expect(outcome.diagnostics[0]).toMatchObject({
+        code,
+        severity: "error",
+        ...(params === undefined ? {} : { params }),
+      })
+      expect(log).toEqual([])
+    }
+
+    it("refuses a promotion without a report", async () => {
+      await refusedBefore(reported, options, "apply.rehearsal-required")
     })
-    expect(outcome).toMatchObject({
-      status: "refused",
-      attempts: 0,
-      diagnostics: [{ code: "apply.promotion-checks-pending" }],
+
+    it("refuses a report of another plan", async () => {
+      // Review Focus 3: той самий перехід, але план перебудовано
+      await refusedBefore(
+        reported,
+        withReport({ ...REPORT, planHash: "f".repeat(64) }),
+        "apply.rehearsal-stale",
+        { reason: "plan" }
+      )
     })
-    expect(log).toEqual([])
+
+    it("refuses a report of another server", async () => {
+      await refusedBefore(
+        reported,
+        withReport({
+          ...REPORT,
+          server: { ...SERVER, collate: "en_US.UTF-8" },
+        }),
+        "apply.rehearsal-stale",
+        { reason: "server" }
+      )
+    })
+
+    it("refuses a report of another ledger head", async () => {
+      await refusedBefore(
+        reported,
+        withReport({
+          ...REPORT,
+          ledgerHead: "6f1c1e8e-3d7a-4c3e-9f55-0b7f0a2d9c11",
+        }),
+        "apply.rehearsal-stale",
+        { reason: "ledger" }
+      )
+    })
+
+    it("refuses a report without a row count for every unit table", async () => {
+      const row = REPORT.rows[0]!
+      for (const rows of [
+        [],
+        [row, { schema: "app", table: "x", rows: 1 }],
+        [row, row],
+        // Нове ім'я замість старого — не та таблиця, яку бачила копія
+        [{ ...row, table: "u" }],
+      ])
+        await refusedBefore(
+          reported,
+          withReport({ ...REPORT, rows }),
+          "apply.rehearsal-stale",
+          { reason: "tables" }
+        )
+    })
+
+    it("does not need a report without a promotion", async () => {
+      const { db } = fakeDb()
+      expect(await executePlan(db, target, plan, options)).toMatchObject({
+        status: "committed",
+        diagnostics: [],
+      })
+    })
+
+    it("is a broken pipeline for a promotion without plpgsql_check", async () => {
+      // План таку промоцію відхиляє, тож це підмінений файл: інакше фаза 7
+      // мовчки пропустила б перевірку тіл, якої вимагає спека промоції
+      const { db, log } = fakeDb()
+      await expect(
+        executePlan(
+          db,
+          target,
+          { ...reported, plpgsqlCheck: "unavailable" },
+          withReport(REPORT)
+        )
+      ).rejects.toThrow(/plpgsql_check/)
+      expect(log).toEqual([])
+    })
+
+    it("refuses a table empty on the copy", async () => {
+      // Review Focus 4: відмова в транзакції до першого кроку
+      const { db, log } = fakeDb({ measured: "5" })
+      const outcome = await executePlan(
+        db,
+        target,
+        reported,
+        withReport({ ...REPORT, rows: [{ ...REPORT.rows[0]!, rows: 0 }] })
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          { code: "apply.rehearsal-copy-empty", params: { table: "app.t" } },
+        ],
+      })
+      expect(outcome.diagnostics).toHaveLength(1)
+      expect(log).toContain("measure app.t")
+      expect(log).not.toContain("ALTER TABLE app.t ADD COLUMN d int")
+      expect(log).not.toContain("ledger")
+      expect(log.at(-1)).toBe("ROLLBACK")
+    })
+
+    it("does not refuse a table empty on the copy and on the target", async () => {
+      const { db } = fakeDb({ measured: "0" })
+      const outcome = await executePlan(
+        db,
+        target,
+        reported,
+        withReport({ ...REPORT, rows: [{ ...REPORT.rows[0]!, rows: 0 }] })
+      )
+      expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
+    })
+
+    it("warns about fewer rows on the copy", async () => {
+      const { db } = fakeDb({ measured: "5" })
+      const outcome = await executePlan(
+        db,
+        target,
+        reported,
+        withReport({ ...REPORT, rows: [{ ...REPORT.rows[0]!, rows: 2 }] })
+      )
+      expect(outcome).toMatchObject({
+        status: "committed",
+        diagnostics: [
+          {
+            code: "apply.rehearsal-fewer-rows",
+            severity: "warning",
+            params: { table: "app.t", copy: 2, target: 5 },
+          },
+        ],
+      })
+    })
+
+    it("sets the statement timeout after the measures", async () => {
+      const { db, log, params } = fakeDb({ measured: "5" })
+      const outcome = await executePlan(
+        db,
+        target,
+        reported,
+        withReport({
+          ...REPORT,
+          durations: { ...REPORT.durations, longestStatementMs: 10_000 },
+        })
+      )
+      expect(outcome).toMatchObject({ status: "committed" })
+      expect(outcome.diagnostics.map((d) => d.code)).toEqual([
+        "apply.rehearsal-fewer-rows",
+      ])
+      // 6a під налаштуваннями даних, потім 6c, потім базова лінія (фаза 7)
+      const i = log.indexOf("report-timeout")
+      expect(log.slice(i - 3, i + 1)).toEqual([
+        "set-settings",
+        "measure app.t",
+        "set-settings",
+        "report-timeout",
+      ])
+      expect(log.indexOf("validators")).toBeGreaterThan(i)
+      // max(60 000, ⌈3 × 10 000 × 5 / 1⌉)
+      expect(params["report-timeout"]).toEqual(["150000ms"])
+      // Типовий тайм-аут раннера діє до 6c
+      expect(params.timeouts).toEqual(["3000ms", "600000ms", "60000ms"])
+    })
+
+    it("keeps an explicit statement timeout", async () => {
+      const { db, log, params } = fakeDb({ measured: "5" })
+      const outcome = await executePlan(
+        db,
+        target,
+        reported,
+        withReport(REPORT, { timeouts: { statementTimeoutMs: 1234 } })
+      )
+      expect(outcome).toMatchObject({ status: "committed" })
+      expect(log).not.toContain("report-timeout")
+      expect(params.timeouts).toEqual(["3000ms", "1234ms", "60000ms"])
+    })
+
+    it("records the hash of the report in the ledger", async () => {
+      const { db, calls } = spied()
+      const outcome = await executePlan(
+        db,
+        target,
+        reported,
+        withReport(REPORT)
+      )
+      expect(outcome).toMatchObject({ status: "committed" })
+      const ledger = calls.find((c) =>
+        c.sql.startsWith("INSERT INTO simetra.ledger")
+      )!
+      expect(ledger.params).toContain(await rehearsalHash(REPORT))
+    })
   })
 
   it.each(["rehearse", "proof"] as const)(

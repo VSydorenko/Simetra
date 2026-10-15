@@ -15,7 +15,12 @@ import {
   promotionRecordSchema,
   type PromoteInput,
 } from "simetra/compiler"
-import type { EngineScope } from "simetra/schema"
+import {
+  parseRehearsal,
+  rehearsalHash,
+  type EngineScope,
+  type RehearsalReport,
+} from "simetra/schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
 import { renderPlan } from "../io/report"
@@ -38,7 +43,8 @@ import {
  * Наскрізний цикл промоції інструментами (план П3-2a, задача 13): стан до
  * промоції застосовано з даними, `promote` пише запис у `plans/`, `plan`
  * читає його й будує план промоції, а `apply` репетирує його на цілі й
- * відкочує. Застосування з `COMMIT` до П3-2b — відмова. Фікстура синтетична.
+ * відкочує. Застосування з `COMMIT` — лише з чинним звітом репетиції (план
+ * П3-2b-3): тут копією служить сама ціль. Фікстура синтетична.
  * Ціль кожного тесту — окрема база від `withDesiredShadow`; база стеку лише
  * читається.
  */
@@ -568,15 +574,87 @@ describe("promotion lifecycle", () => {
     })
   })
 
-  it("refuses to commit the promotion in this plan", async () => {
+  /** Звіт репетиції з `plans/`, розібраний строго. */
+  async function reportAt(dir: string, file: string): Promise<RehearsalReport> {
+    const parsed = parseRehearsal(
+      await readFile(join(dirname(dir), file), "utf8")
+    )
+    if (!parsed.ok) throw new Error(parsed.message)
+    return parsed.report
+  }
+
+  /** Рядки ledger цілі за порядком застосувань. */
+  const ledger = (url: string) =>
+    query<{ promotion: unknown; rehearsal_hash: string | null }>(
+      url,
+      "select promotion, rehearsal_hash from simetra.ledger order by id"
+    )
+
+  it("refuses to commit the promotion without a valid rehearsal report", async () => {
+    // Гейти звіту на рівні конвеєра: відмова до будь-якої транзакції, ціль і
+    // ledger ті самі; далі копія з меншою кількістю рядків — попередження
     await inTarget(EMPTY, async (url) => {
       const dir = await promoted(url)
       const data = await planned(dir, url)
       const before = await state(url)
+      const applied = await ledger(url)
+      const unchanged = async () => {
+        expect(await state(url)).toEqual(before)
+        expect(await ledger(url)).toEqual(applied)
+      }
+
+      const none = await apply(dir, url, data)
+      expect(errors(none)).toEqual(["apply.rehearsal-required"])
+      expect(none.data).toBeUndefined()
+      await unchanged()
+
+      const rehearsed = await apply(dir, url, data, { rehearse: true })
+      expect(errors(rehearsed), JSON.stringify(rehearsed.diagnostics)).toEqual(
+        []
+      )
+      const file = (rehearsed.data as ApplyData).report!
+      const path = join(dirname(dir), file)
+      const valid = await readFile(path, "utf8")
+      const report = await reportAt(dir, file)
+      expect(report.rows).toEqual([
+        { schema: "app", table: "items", rows: 1 },
+        { schema: "app", table: "item_lines", rows: 1 },
+      ])
+
+      const stale = async (content: string, reason: string): Promise<void> => {
+        await writeFile(path, content)
+        const r = await apply(dir, url, data)
+        expect(r.diagnostics.map((d) => [d.code, d.params?.reason])).toEqual([
+          ["apply.rehearsal-stale", reason],
+        ])
+        await unchanged()
+      }
+      await stale(
+        JSON.stringify({ ...report, planHash: "f".repeat(64) }),
+        "plan"
+      )
+      await stale(JSON.stringify({ ...report, format: 2 }), "format")
+      // Файл переписано, `planHash` той самий (аудит Codex, блокер)
+      await stale(JSON.stringify({ ...report, rows: [] }), "tables")
+      await writeFile(path, "{")
+      const broken = await apply(dir, url, data)
+      expect(broken.refusal?.reason).toBe("refused")
+      await unchanged()
+
+      // На цілі після репетиції з'явився ще рядок: копія менша
+      await writeFile(path, valid)
+      await query(
+        url,
+        `insert into app.items (id, title, code, group_id, legacy)
+           values ('${uuid(9404)}', 'second', 'c-2', '${GROUP_ROW}', 'old')`
+      )
       const r = await apply(dir, url, data)
-      expect(errors(r)).toEqual(["apply.promotion-checks-pending"])
-      expect(r.data).toBeUndefined()
-      expect(await state(url)).toEqual(before)
+      expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+      expect(r.diagnostics.map((d) => [d.code, d.params])).toContainEqual([
+        "apply.rehearsal-fewer-rows",
+        { table: "app.items", copy: 1, target: 2 },
+      ])
+      expect((r.data as ApplyData).status).toBe("committed")
     })
   })
 
@@ -690,6 +768,49 @@ describe("promotion lifecycle", () => {
         expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
         expect((r.data as ApplyData).status).toBe("rolledBack")
         expect(await state(url)).toEqual(before)
+      })
+    })
+
+    it("commits the promotion with a valid rehearsal report", async () => {
+      // Репетиція пише звіт файлом, `apply` читає його й комітить; доказ
+      // промоції (дані, збереження, plpgsql_check) проходить справжній файл
+      await inTarget(EMPTY, async (url) => {
+        const { dir, data } = await converted(url, {
+          columns: asJson,
+          fill: repairJson,
+        })
+        const rehearsed = await apply(dir, url, data, { rehearse: true })
+        expect(
+          errors(rehearsed),
+          JSON.stringify(rehearsed.diagnostics)
+        ).toEqual([])
+        const file = (rehearsed.data as ApplyData).report!
+        const report = await reportAt(dir, file)
+        expect(report.planHash).toBe(data.planHash)
+        expect(report.data).toEqual([
+          { schema: "app", table: "items", computed: 1, written: 1 },
+        ])
+        expect(report.preservation).toEqual([
+          { schema: "app", table: "items", rows: 1 },
+          { schema: "app", table: "item_lines", rows: 1 },
+        ])
+        // Перевірка тіл не пропущена; помилки функцій провайдера — ті самі
+        // до кроків і після
+        if (report.plpgsqlCheck === "skipped")
+          throw new Error("a promotion rehearsal must check plpgsql bodies")
+        expect(report.plpgsqlCheck.after).toEqual(report.plpgsqlCheck.baseline)
+        expect(report.durations.longestStatementMs).toBeGreaterThan(0)
+
+        const r = await apply(dir, url, data)
+        expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+        expect((r.data as ApplyData).status).toBe("committed")
+        expect(
+          await query(url, "select id, legacy from app.item order by id")
+        ).toEqual([{ id: ITEM_ROW, legacy: { a: 1 } }])
+        // Хеш звіту — в рядку ledger цього застосування
+        const last = (await ledger(url)).at(-1)!
+        expect(last.promotion).not.toBeNull()
+        expect(last.rehearsal_hash).toBe(await rehearsalHash(report))
       })
     })
 

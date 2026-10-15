@@ -8,6 +8,7 @@ import {
   rehearsalHash,
   rehearsalReport,
   serializeRehearsal,
+  statementTimeoutFromReport,
   type RehearsalEvidence,
   type RehearsalReport,
 } from "simetra/schema"
@@ -268,5 +269,62 @@ describe("rehearsal file", () => {
     expect(rehearsalFileName(null, h)).toBe(
       "initial-0123456789ab.rehearsal.json"
     )
+  })
+})
+
+describe("statementTimeoutFromReport", () => {
+  /** Звіт з рядками копії й найдовшим оператором репетиції. */
+  const timed = (
+    longestStatementMs: number,
+    rows: RehearsalReport["rows"]
+  ): RehearsalReport => ({
+    ...report(),
+    rows,
+    durations: { ...report().durations, longestStatementMs },
+  })
+  const copy = [
+    { schema: "app", table: "a", rows: 10 },
+    { schema: "app", table: "b", rows: 1000 },
+  ]
+  const target = [
+    { schema: "app", table: "a", rows: 1000 },
+    { schema: "app", table: "b", rows: 1000 },
+  ]
+
+  it("scales by the worst table, not the sum", () => {
+    // Review Focus 5: `a` у сто разів більша на цілі, `b` рівна — множник
+    // 100, а не відношення сум (2000 / 1010)
+    expect(statementTimeoutFromReport(timed(100, copy), target)).toBe(60_000)
+    expect(statementTimeoutFromReport(timed(1000, copy), target)).toBe(300_000)
+  })
+
+  it("has a floor of a minute", () => {
+    expect(statementTimeoutFromReport(timed(0, copy), target)).toBe(60_000)
+    // Ціль, меншу за копію, множник не зменшує нижче одиниці
+    expect(
+      statementTimeoutFromReport(
+        timed(30_000, copy),
+        copy.map((t) => ({ ...t, rows: 1 }))
+      )
+    ).toBe(90_000)
+  })
+
+  it("leaves out a table empty on the copy", () => {
+    // Відношення до нуля немає; таку таблицю з рядками на цілі зупиняє фаза 6c
+    expect(
+      statementTimeoutFromReport(
+        timed(30_000, [{ schema: "app", table: "a", rows: 0 }]),
+        [{ schema: "app", table: "a", rows: 5 }]
+      )
+    ).toBe(90_000)
+  })
+
+  it("rounds a fractional product up", () => {
+    expect(
+      statementTimeoutFromReport(
+        timed(20_001, [{ schema: "app", table: "a", rows: 3 }]),
+        [{ schema: "app", table: "a", rows: 4 }]
+      )
+    ).toBe(80_004)
   })
 })

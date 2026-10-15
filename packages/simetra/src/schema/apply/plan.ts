@@ -1005,8 +1005,6 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       ...blindWarning(blindFunctions.blind),
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
-      // Межа 2a (рішення 12): людина дізнається про неї до `apply`
-      applyDiagnostic("plan.promotion-commit-pending", "warning"),
     ]),
   }
 }

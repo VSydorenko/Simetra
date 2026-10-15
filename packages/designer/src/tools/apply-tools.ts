@@ -18,6 +18,7 @@ import {
   executePlan,
   FINGERPRINT_VERSION,
   parsePlan,
+  parseRehearsal,
   planFileName,
   PLATFORM_VERSION,
   rehearsalFileName,
@@ -37,6 +38,7 @@ import {
   type PlanStep,
   type PromotionInput,
   type PromotionSection,
+  type RehearsalReport,
   type TableLock,
 } from "simetra/schema"
 import { z } from "zod"
@@ -360,6 +362,22 @@ async function readPlanFile(root: string, plan: string): Promise<string> {
 }
 
 /**
+ * Текст звіту репетиції з `plans/`; файлу немає — `undefined`, і раннер
+ * відмовить `apply.rehearsal-required`.
+ */
+async function readReport(
+  root: string,
+  file: string
+): Promise<string | undefined> {
+  try {
+    return await readFile(join(root, file), "utf8")
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+    throw error
+  }
+}
+
+/**
  * Версії, з якими план побудовано й доведено, мусять бути поточними: інакше
  * кроки чи відбитки значать інше (рішення 9 плану П3-1). Формат файлу звіряє
  * вже `parsePlan`.
@@ -385,7 +403,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer; a successful rehearsal writes its report to plans/<from>-<to>.rehearsal.json next to the plan. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, remove: and repair: items.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer; a successful rehearsal writes its report to plans/<from>-<to>.rehearsal.json next to the plan. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, remove: and repair: items and a valid report from a rehearsal on a copy of the target with data.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:
@@ -469,6 +487,28 @@ export const applyTool = defineTool({
     )
     if (permissions.length > 0) return refusedWith(permissions.map(fromEngine))
 
+    // 6a. Звіт репетиції — лише застосування промоції (рішення 5 плану
+    // П3-2b-3), до підключення. Звіт іншого формату — «застарів, повтори
+    // репетицію»: строгий тип його не пропустить. Чинність щодо плану,
+    // сервера, ledger і таблиць звіряє раннер: він не довіряє інструменту
+    let report: RehearsalReport | undefined
+    if (input.rehearse !== true && artifact.promotion !== null) {
+      const file = `${PLANS_DIR}/${rehearsalFileName(artifact.fromHash, artifact.toHash)}`
+      const text = await readReport(root, file)
+      if (text !== undefined) {
+        const parsed = parseRehearsal(text)
+        if (!parsed.ok && parsed.reason === "format")
+          return refusedWith([
+            diagnostic("apply.rehearsal-stale", "", "", { reason: "format" }),
+          ])
+        if (!parsed.ok)
+          throw new UsageError(
+            `${file} is not a rehearsal report: ${parsed.message}. Nothing changed.`
+          )
+        report = parsed.report
+      }
+    }
+
     // 7. Лише тут відкривається пул, що може писати в ціль. Тайм-аути — лише
     // задані: явний `undefined` не має перекривати типове значення раннера
     const timeouts: Partial<ApplyTimeouts> = {
@@ -495,6 +535,7 @@ export const applyTool = defineTool({
             outcome: await executePlan(writer, db.target, artifact, {
               ...base,
               mode: "apply",
+              ...(report === undefined ? {} : { report }),
             }),
           }
         // Репетиція доводить стан повним планом двигуна на тому самому

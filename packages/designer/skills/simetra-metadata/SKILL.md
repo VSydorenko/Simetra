@@ -388,8 +388,10 @@ refused too: rebuild it with `plan`.
 A promotion plan's `allow` also takes the `access:<table>`,
 `delete:<table>.<constraint>`, `remove:<table>` and `repair:<table>` items its
 output lists; a repair rewrites existing values with the fill expression shown.
-Applying a promotion with a commit is refused for now
-(`apply.promotion-checks-pending`); `rehearse` it instead.
+A promotion is applied only with a valid rehearsal report: rehearse the plan on
+a copy of the target with data first; `apply` refuses without it
+(`apply.rehearsal-required`) and when the plan changed since
+(`apply.rehearsal-stale`).
 
 Which connection to use:
 

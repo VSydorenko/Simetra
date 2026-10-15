@@ -2,19 +2,26 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
-import { compile, type PromotionRecord } from "simetra/compiler"
+import {
+  compile,
+  promotionRecordHash,
+  type PromotionRecord,
+} from "simetra/compiler"
 import {
   FINGERPRINT_SECTIONS,
   FINGERPRINT_VERSION,
   PLAN_FORMAT,
   PLATFORM_VERSION,
   planFileName,
+  rehearsalFileName,
   serializePlan,
+  serializeRehearsal,
   stampPlan,
   type ApplyDatabase,
   type CatalogFingerprint,
   type FingerprintSection,
   type PlanArtifact,
+  type RehearsalReport,
 } from "simetra/schema"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { runTool } from "../cli/command"
@@ -66,6 +73,17 @@ const fingerprint = (): CatalogFingerprint => ({
   ) as Record<FingerprintSection, string>,
 })
 
+/** Факти сервера, які план прочитав з цілі. */
+const SERVER: PlanArtifact["server"] = {
+  major: 17,
+  encoding: "UTF8",
+  collate: "C.UTF-8",
+  ctype: "C.UTF-8",
+  localeProvider: "c",
+  locale: null,
+  collationVersion: null,
+}
+
 /** Чинний план без кроків для еталонних метаданих у `plans/` кореня. */
 async function writePlan(
   dir: string,
@@ -87,15 +105,7 @@ async function writePlan(
     requiredPermissions: [],
     drift: null,
     role: "postgres",
-    server: {
-      major: 17,
-      encoding: "UTF8",
-      collate: "C.UTF-8",
-      ctype: "C.UTF-8",
-      localeProvider: "c",
-      locale: null,
-      collationVersion: null,
-    },
+    server: SERVER,
     ledgerHead: null,
     locks: [],
     implicitLocks: [],
@@ -209,6 +219,7 @@ describe("apply with an unknown outcome", () => {
   })
 
   describe("a plan with a promotion", () => {
+    /** Промоція однієї таблиці `app.t → app.u`. */
     const RECORD: PromotionRecord = {
       format: 1,
       base: "0".repeat(64),
@@ -216,7 +227,14 @@ describe("apply with an unknown outcome", () => {
       objectId: "00000000-0000-4000-8000-000000000001",
       kind: "Catalog",
       labelDropped: false,
-      tables: [],
+      tables: [
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          schema: "app",
+          from: "t",
+          to: "u",
+        },
+      ],
       columns: [],
       typeChanges: [],
       dataSteps: [],
@@ -230,25 +248,53 @@ describe("apply with an unknown outcome", () => {
       rewrittenUnits: [],
       contractChanges: [],
     }
-    const section: NonNullable<PlanArtifact["promotion"]> = {
-      recordHash: "d".repeat(64),
+    const section = async (): Promise<
+      NonNullable<PlanArtifact["promotion"]>
+    > => ({
+      recordHash: await promotionRecordHash(RECORD),
       record: RECORD,
       permissionItems: [{ token: "access:app.party", summary: ["anon"] }],
-      preservation: [],
+      preservation: [
+        {
+          before: { schema: "app", table: "t" },
+          after: { schema: "app", table: "u" },
+          key: { before: "id", after: "id" },
+          columns: [],
+        },
+      ],
       columns: [],
       canonicalNames: [],
       conversions: [],
       data: [],
-    }
-    const apply = async (allow?: string[]) => {
+    })
+
+    /**
+     * `apply` плану з промоцією; `report` — вміст файлу звіту поруч із
+     * планом (функція — від артефакту), без нього файлу немає.
+     */
+    const apply = async (
+      o: {
+        allow?: string[]
+        report?: (artifact: PlanArtifact) => string
+      } = {}
+    ) => {
       const dir = await project()
-      const { file, artifact } = await writePlan(dir, section)
+      const { file, artifact } = await writePlan(dir, await section())
+      if (o.report !== undefined)
+        await writeFile(
+          join(
+            dirname(dir),
+            "plans",
+            rehearsalFileName(artifact.fromHash, artifact.toHash)
+          ),
+          o.report(artifact)
+        )
       return invoke(
         toolByName("apply")!,
         {
           plan: file,
           planHash: artifact.planHash,
-          ...(allow === undefined ? {} : { allow }),
+          ...(o.allow === undefined ? {} : { allow: o.allow }),
         },
         {
           dir,
@@ -262,6 +308,28 @@ describe("apply with an unknown outcome", () => {
       )
     }
 
+    /** Чинний звіт репетиції цього плану. */
+    const reportOf = (
+      artifact: PlanArtifact,
+      over: Partial<RehearsalReport> = {}
+    ): string =>
+      serializeRehearsal({
+        format: 1,
+        planHash: artifact.planHash,
+        server: SERVER,
+        ledgerHead: null,
+        rows: [{ schema: "app", table: "t", rows: 1 }],
+        durations: { phases: [], steps: [], longestStatementMs: 1 },
+        data: [],
+        preservation: [{ schema: "app", table: "t", rows: 1 }],
+        plpgsqlCheck: "skipped",
+        triggers: [],
+        lockFootprint: [],
+        ...over,
+      })
+
+    const allow = ["access:app.party"]
+
     it("asks for the promotion items of the section", async () => {
       const r = await apply()
       expect(r.diagnostics.map((d) => [d.code, d.params?.items])).toEqual([
@@ -270,13 +338,51 @@ describe("apply with an unknown outcome", () => {
       expect(lost.transactions).toBe(0)
     })
 
-    it("refuses to commit it before any transaction", async () => {
-      const r = await apply(["access:app.party"])
+    it("refuses it without a rehearsal report before any transaction", async () => {
+      const r = await apply({ allow })
       expect(r.ok).toBe(false)
       expect(r.diagnostics.map((d) => d.code)).toEqual([
-        "apply.promotion-checks-pending",
+        "apply.rehearsal-required",
       ])
       expect(lost.transactions).toBe(0)
+    })
+
+    it.each([
+      ["plan", (a: PlanArtifact) => reportOf(a, { planHash: "f".repeat(64) })],
+      [
+        "format",
+        (a: PlanArtifact) =>
+          JSON.stringify({ ...JSON.parse(reportOf(a)), format: 2 }),
+      ],
+      // Файл переписано, `planHash` той самий (аудит Codex, блокер): без
+      // рядків звіт оминув би гейт порожньої копії
+      ["tables", (a: PlanArtifact) => reportOf(a, { rows: [] })],
+    ] as const)(
+      "refuses a stale report (%s) before any transaction",
+      async (reason, report) => {
+        const r = await apply({ allow, report })
+        expect(r.ok).toBe(false)
+        expect(r.diagnostics.map((d) => [d.code, d.params?.reason])).toEqual([
+          ["apply.rehearsal-stale", reason],
+        ])
+        expect(lost.transactions).toBe(0)
+      }
+    )
+
+    it("refuses a broken report file as a usage error", async () => {
+      const r = await apply({ allow, report: () => "{" })
+      expect(r.refusal?.reason).toBe("refused")
+      expect(r.refusal?.message).toContain("is not a rehearsal report")
+      expect(lost.transactions).toBe(0)
+    })
+
+    it("goes to the target with a valid report", async () => {
+      // Порт губить з'єднання: до транзакції дійшло — звіт пройшов гейти
+      const r = await apply({ allow, report: (a) => reportOf(a) })
+      expect(r.diagnostics.map((d) => d.code)).toEqual([
+        "apply.connection-lost",
+      ])
+      expect(lost.transactions).toBeGreaterThan(0)
     })
   })
 })

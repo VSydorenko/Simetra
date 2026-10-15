@@ -27,6 +27,7 @@ import {
   readFingerprint,
   readLedgerHead,
   readServerFacts,
+  rehearsalHash,
   rehearsalReport,
   type ApplyDatabase,
   type ApplyDesired,
@@ -53,6 +54,7 @@ import {
   type PlanStep,
   type ProviderLockSet,
   type RehearsalProof,
+  type RehearsalReport,
   type TableLock,
   typeGuards,
 } from "simetra/schema"
@@ -2001,6 +2003,97 @@ describe("executePlan", () => {
         expect(
           rehearsalReport("e".repeat(64), evidence).durations.longestStatementMs
         ).toBe(Math.ceil(max))
+      })
+    })
+
+    it("sets the statement timeout from the report", async () => {
+      // Review Focus 5 на базі: тригер на ledger бачить тайм-аут, з яким
+      // йде транзакція після фази 6c, — стан пишеться після всіх кроків
+      const record: PromotionRecord = { ...RECORD, typeChanges: [] }
+      const setup = `${SETUP};
+        create table app.seen (timeout text);
+        create function app.seen_timeout() returns trigger language plpgsql as $$
+        begin
+          insert into app.seen
+            select setting from pg_catalog.pg_settings where name = 'statement_timeout';
+          return null;
+        end $$;
+        create trigger seen_timeout after insert on simetra.ledger
+          for each row execute function app.seen_timeout();`
+      await inTarget(setup, async (url) => {
+        const newToOld = new Map([
+          [tableKey("app", "pu"), tableKey("app", "pt")],
+        ])
+        const old = [{ schema: "app", name: "pt" }]
+        const steps: PlanStep[] = [
+          { ...intentStep("ALTER TABLE app.pt RENAME TO pu", old), id: "s1" },
+          {
+            ...intentStep("ALTER TABLE app.pu RENAME COLUMN c TO d", old),
+            id: "s2",
+          },
+        ]
+        const preservation = preservationPlan(
+          record,
+          {
+            steps: [],
+            tablesNewToOld: newToOld,
+            tempNames: new Map(),
+            columns: [],
+          },
+          { tables: [source] },
+          new Map(),
+          []
+        )
+        // Бажаний відбиток — з тригером: він частина цілі
+        const plan = await planFor(url, steps, {
+          locks: locksOf(steps, newToOld),
+          plpgsqlCheck: "transient",
+          promotion: {
+            recordHash: await promotionRecordHash(record),
+            record,
+            permissionItems: [],
+            preservation,
+            columns: [
+              { table: { schema: "app", name: "pu" }, from: "c", to: "d" },
+            ],
+            canonicalNames: [],
+            conversions: [],
+            data: [],
+          },
+        })
+        // Копія з одним рядком, ціль — з трьома: ⌈3 × 30 000 × 3 / 1⌉
+        const report: RehearsalReport = {
+          format: 1,
+          planHash: PLAN_HASH,
+          server: plan.server,
+          ledgerHead: plan.ledgerHead,
+          rows: [{ schema: "app", table: "pt", rows: 1 }],
+          durations: { phases: [], steps: [], longestStatementMs: 30_000 },
+          data: [],
+          preservation: [{ schema: "app", table: "pt", rows: 1 }],
+          plpgsqlCheck: "skipped",
+          triggers: [],
+          lockFootprint: [],
+        }
+        const outcome = await executePlan(apply, { url }, plan, {
+          ...options,
+          report,
+        })
+        expect(outcome).toMatchObject({
+          status: "committed",
+          diagnostics: [
+            {
+              code: "apply.rehearsal-fewer-rows",
+              params: { table: "app.pt", copy: 1, target: 3 },
+            },
+          ],
+        })
+        expect(await other(url, "select timeout from app.seen")).toEqual([
+          { timeout: "270000" },
+        ])
+        expect(
+          await other(url, "select rehearsal_hash from simetra.ledger")
+        ).toEqual([{ rehearsal_hash: await rehearsalHash(report) }])
       })
     })
 

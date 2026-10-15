@@ -71,8 +71,12 @@ import {
 } from "./promotion/preservation"
 import {
   countOf,
+  rehearsalHash,
+  rehearsalRefusals,
+  statementTimeoutFromReport,
   type RehearsalEvidence,
   type RehearsalPhase,
+  type RehearsalReport,
   type RehearsalTimings,
 } from "./rehearsal"
 import { isRetryable } from "./retry"
@@ -181,16 +185,19 @@ interface ExecuteBase {
 }
 
 /**
- * `apply` — ціль, `COMMIT`; `rehearse` — ціль чи її копія з даними, усе те
- * саме, але `ROLLBACK`, відбиток цілі без `owner` (копію могли відновити під
- * іншими власниками) і з повним доказом двигуна до відкату (тому `rehearsal`
- * обов'язковий: режим без доказу мовчки послабив би репетицію); `proof` —
- * копія стану цілі: без перевірки ланцюжка (стану застосування в копії
- * немає) і з відбитком цілі без `owner` (бази різні).
+ * `apply` — ціль, `COMMIT`; промоцію — лише з чинним звітом репетиції
+ * (`report`, рішення 5 плану П3-2b-3), план без промоції звіту не потребує;
+ * `rehearse` — ціль чи її копія з даними, усе те саме, але `ROLLBACK`,
+ * відбиток цілі без `owner` (копію могли відновити під іншими власниками) і
+ * з повним доказом двигуна до відкату (тому `rehearsal` обов'язковий: режим
+ * без доказу мовчки послабив би репетицію); `proof` — копія стану цілі: без
+ * перевірки ланцюжка (стану застосування в копії немає) і з відбитком цілі
+ * без `owner` (бази різні).
  */
 export type ExecuteOptions = ExecuteBase &
   (
-    | { mode: "apply" | "proof" }
+    | { mode: "apply"; report?: RehearsalReport }
+    | { mode: "proof" }
     | { mode: "rehearse"; rehearsal: RehearsalProof }
   )
 
@@ -306,12 +313,6 @@ export async function executePlan(
       { steps: plan.steps, drift: plan.drift, promotion: plan.promotion },
       o.allow
     ),
-    // Межа 2a (рішення 12): промоцію з `COMMIT` застосовує лише повна
-    // перевірка П3-2b. Копія доказу й репетиція з `ROLLBACK` нічого не
-    // лишають, тож вони дозволені
-    ...(o.mode === "apply" && plan.promotion !== null
-      ? [applyDiagnostic("apply.promotion-checks-pending", "error")]
-      : []),
   ]
   if (refusals.length > 0)
     return { status: "refused", attempts: 0, diagnostics: refusals }
@@ -351,6 +352,23 @@ export async function executePlan(
     throw new Error(
       "plan steps are out of origin order: intent, engine, environment"
     )
+  // Застосування промоції з COMMIT — лише після репетиції на копії з даними
+  // (спека промоції §8, рішення 5, 9 плану П3-2b-3). План промоцію без
+  // `plpgsql_check` відхиляє, тож такий план — підмінений файл: фаза 7 інакше
+  // мовчки дала б `skipped`, а спека вимагає перевірки тіл. Звіт — до
+  // будь-якої транзакції: копія й ціль — різні бази, і звіт з іншого плану,
+  // сервера чи історії застосувань нічого не каже про цю
+  let report: { value: RehearsalReport; hash: string } | undefined
+  if (o.mode === "apply" && plan.promotion !== null) {
+    if (plan.plpgsqlCheck === "unavailable")
+      throw new Error(
+        "a promotion plan without plpgsql_check cannot be applied: the plan refuses such a promotion"
+      )
+    const stale = rehearsalRefusals(plan, o.planHash, o.report)
+    if (stale.length > 0)
+      return { status: "refused", attempts: 0, diagnostics: stale }
+    report = { value: o.report!, hash: await rehearsalHash(o.report!) }
+  }
 
   // Поза артефактом і його хешем: той самий план, застосований удруге, —
   // інше застосування з іншим рядком ledger
@@ -359,7 +377,7 @@ export async function executePlan(
   for (let attempt = 1; ; attempt++) {
     try {
       const { warnings, evidence } = await db.transaction(target, end, (tx) =>
-        runAttempt(tx, plan, o, timeouts, applyId, parse)
+        runAttempt(tx, plan, o, timeouts, applyId, parse, report)
       )
       if (end === "commit")
         return {
@@ -634,7 +652,8 @@ async function runAttempt(
   o: ExecuteOptions,
   timeouts: ApplyTimeouts,
   applyId: string,
-  parse: SqlParser
+  parse: SqlParser,
+  report: { value: RehearsalReport; hash: string } | undefined
 ): Promise<{ warnings: EngineDiagnostic[]; evidence?: RehearsalEvidence }> {
   // Докази лише в репетиції: застосування й копія доказу йдуть повз обгортку
   const timed =
@@ -829,6 +848,13 @@ async function runAttempt(
   const before = await underDataSettings(tx, preserved, () =>
     measureBefore(tx, preserved, filled, parse)
   )
+  const warnings: EngineDiagnostic[] = []
+
+  // 6c. Рядки цілі проти копії репетиції й тайм-аут оператора зі звіту
+  // (рішення 6 плану П3-2b-3) — лише застосування промоції, під замками,
+  // з лічильників 6a. До 6c діє типовий тайм-аут раннера
+  if (report !== undefined)
+    await checkCopyRows(tx, report.value, preserved, before, o, warnings)
 
   // 6b. Таблиці, що є до кроків: звірка сліду дивиться лише на них, бо
   // створена планом таблиця нікого не блокує. Застосування з COMMIT звірки
@@ -840,7 +866,6 @@ async function runAttempt(
   // до першого кроку (рішення 3 плану П3-2b-1): помилка, що була до плану,
   // не стає відмовою після нього
   const revalidation = revalidationSettings(plan.revalidationSearchPath)
-  const warnings: EngineDiagnostic[] = []
   const plpgsqlCheck = () => readPlpgsqlChecked(tx, plan, o, warnings)
   phase("baseline")
   const baseline = await withLocalSettings(tx, revalidation, async () => ({
@@ -1007,8 +1032,8 @@ async function runAttempt(
       plan.promotion === null
         ? null
         : { hash: plan.promotion.recordHash, record: plan.promotion.record },
-    // Звіт читає й хеш подає лише застосування промоції; до того — SQL NULL
-    rehearsalHash: null,
+    // Хеш звіту — лише застосування промоції; решта пише SQL NULL
+    rehearsalHash: report?.hash ?? null,
     applyId,
   }))
     await tx.query(statement.sql, statement.params)
@@ -1063,6 +1088,53 @@ async function runAttempt(
           },
         }),
   }
+}
+
+/**
+ * Фаза 6c. Таблиця з рядками на цілі й порожня на копії — відмова: репетиція
+ * не довела нічого про її дані (кроки даних, сторожі, тривалості). Менше
+ * рядків на копії — попередження: тривалості звіту недооцінюють ціль, і
+ * формула тайм-ауту масштабує їх відношенням. Явний `statementTimeoutMs`
+ * людини має перевагу: злиті `timeouts` уже несуть типове значення, тож
+ * дивимося на заданий. `statement_timeout` немає ні в `DATA_SETTINGS`, ні в
+ * преамбулі, ні в ревалідації, тож `withLocalSettings` його не перекриє.
+ */
+async function checkCopyRows(
+  tx: ApplyTransaction,
+  report: RehearsalReport,
+  preserved: readonly PreservedTable[],
+  before: readonly Measurement[],
+  o: ExecuteOptions,
+  warnings: EngineDiagnostic[]
+): Promise<void> {
+  const target = preserved.map((t, i) => ({
+    ...oldName(t),
+    rows: countOf(before[i]!.rows),
+  }))
+  for (const t of target) {
+    // Склад звіту звірено до транзакції (`rehearsalRefusals`)
+    const copy = report.rows.find(
+      (r) => r.schema === t.schema && r.table === t.table
+    )
+    if (copy === undefined)
+      throw new Error(`the rehearsal report has no rows of ${t.table}`)
+    const table = `${t.schema}.${t.table}`
+    if (t.rows > 0 && copy.rows === 0)
+      throw stop("refused", "apply.rehearsal-copy-empty", { table })
+    if (copy.rows < t.rows)
+      warnings.push(
+        applyDiagnostic("apply.rehearsal-fewer-rows", "warning", {
+          table,
+          copy: copy.rows,
+          target: t.rows,
+        })
+      )
+  }
+  if (o.timeouts?.statementTimeoutMs === undefined)
+    await tx.query(
+      "SELECT pg_catalog.set_config('statement_timeout', $1, true)",
+      [`${statementTimeoutFromReport(report, target)}ms`]
+    )
 }
 
 /** Таблиця заміру в старих іменах — як її знає ціль і звіт репетиції. */

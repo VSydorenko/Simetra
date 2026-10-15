@@ -40,6 +40,30 @@ const COPY_OWNERS_HINT = {
   uk: "Нічого не записано. Відновіть копію роллю плану з `pg_restore --no-owner`, щоб її об'єктами, як і на цілі, володіла роль плану, і повторіть репетицію.",
 }
 
+/** Причини `apply.rehearsal-stale`: чим звіт не відповідає плану чи цілі. */
+const REHEARSAL_STALE: Readonly<Record<string, { en: string; uk: string }>> = {
+  plan: {
+    en: "it is the report of another plan (the plan was rebuilt after the rehearsal)",
+    uk: "це звіт іншого плану (план перебудовано після репетиції)",
+  },
+  format: {
+    en: "it has a format this platform does not read",
+    uk: "його формат ця платформа не читає",
+  },
+  server: {
+    en: "it was made on another server (version, encoding or collation differ from the plan's)",
+    uk: "його зроблено на іншому сервері (версія, кодування чи упорядкування відрізняються від плану)",
+  },
+  ledger: {
+    en: "it was made on a database with another apply history (ledger head)",
+    uk: "його зроблено на базі з іншою історією застосувань (голова ledger)",
+  },
+  tables: {
+    en: "it does not hold exactly one row count for every table of the promotion",
+    uk: "він не має рівно одного лічильника рядків на кожну таблицю промоції",
+  },
+}
+
 /** Причини `users.provision-unsafe`: що саме порушила б вставка провізії. */
 const PROVISION_HAZARD: Readonly<Record<string, { en: string; uk: string }>> = {
   requiredWithoutDefault: {
@@ -2445,16 +2469,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не записано. Без заміру застосування не доведе, що рядки й змаплені значення пережили кроки; виправте те, що називає помилка (відсутня таблиця, право), і застосуйте знову, а якщо повториться — повідомте про план.",
     },
   },
-  "apply.promotion-checks-pending": {
-    en: () =>
-      "The plan carries a promotion, and applying a promotion with COMMIT is refused until the rest of the promotion checks are in place: the data steps and the rehearsal report on a copy with data",
-    uk: () =>
-      "План несе промоцію, а застосування промоції з COMMIT відхиляється, доки немає решти перевірок промоції: кроків даних і звіту репетиції на копії з даними",
-    hint: {
-      en: "Nothing was written. Rehearse the plan on the target instead: it runs every step and rolls back.",
-      uk: "Нічого не записано. Натомість відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
-    },
-  },
   "apply.function-check-failed": {
     en: (p) =>
       p.cut !== undefined
@@ -2519,6 +2533,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.cause === "owners"
           ? COPY_OWNERS_HINT.uk
           : "Нічого не записано. План не доводить цю базу до бажаного стану; сплануйте знову, а якщо розбіжність повториться, повідомте про план.",
+    },
+  },
+  "apply.rehearsal-required": {
+    en: () =>
+      "The plan carries a promotion, and a promotion is applied with COMMIT only with a valid rehearsal report, but this plan has none",
+    uk: () =>
+      "План несе промоцію, а промоцію застосовують із COMMIT лише з чинним звітом репетиції, але звіту цього плану немає",
+    hint: {
+      en: "Nothing was written. Rehearse the plan first on a copy of the target with data (`apply --rehearse` against the copy): a successful rehearsal writes its report next to the plan; then apply again.",
+      uk: "Нічого не записано. Спершу відрепетируйте план на копії цілі з даними (`apply --rehearse` на копії): успішна репетиція пише звіт поруч із планом; потім застосуйте знову.",
+    },
+  },
+  "apply.rehearsal-stale": {
+    en: (p) =>
+      `The rehearsal report is stale: ${REHEARSAL_STALE[String(p.reason)]?.en ?? String(p.reason)}`,
+    uk: (p) =>
+      `Звіт репетиції застарів: ${REHEARSAL_STALE[String(p.reason)]?.uk ?? String(p.reason)}`,
+    hint: {
+      en: "Nothing was written. Rehearse this plan again on a copy of the target with data, then apply.",
+      uk: "Нічого не записано. Відрепетируйте цей план знову на копії цілі з даними, потім застосуйте.",
+    },
+  },
+  "apply.rehearsal-copy-empty": {
+    en: (p) =>
+      `Table ${p.table} has rows on the target but none on the rehearsal copy, so the rehearsal proved nothing about its data. The transaction was rolled back`,
+    uk: (p) =>
+      `Таблиця ${p.table} має рядки на цілі, але жодного на копії репетиції, тож репетиція нічого не довела про її дані. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. Rehearse on a copy that holds the target's data (for example, a restored recent backup), then apply.",
+      uk: "Нічого не записано. Відрепетируйте на копії з даними цілі (наприклад, з відновленого свіжого бекапу), потім застосуйте.",
+    },
+  },
+  "apply.rehearsal-fewer-rows": {
+    en: (p) =>
+      `Table ${p.table} has ${p.target} rows on the target but ${p.copy} on the rehearsal copy: the rehearsal's durations understate this apply, so its statement timeout is scaled by the table ratio`,
+    uk: (p) =>
+      `Таблиця ${p.table} має ${p.target} рядків на цілі, але ${p.copy} на копії репетиції: тривалості репетиції недооцінюють це застосування, тож тайм-аут оператора масштабовано відношенням таблиць`,
+    hint: {
+      en: "A copy closer to the target's size gives a more faithful rehearsal; an explicit statementTimeoutMs overrides the scaled timeout.",
+      uk: "Копія, ближча за розміром до цілі, дає точнішу репетицію; явний statementTimeoutMs має перевагу над масштабованим тайм-аутом.",
     },
   },
   "apply.temp-name-taken": {
@@ -3004,16 +3058,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.services === undefined
           ? "Застосовуйте, коли сервіси, що читають цю таблицю, можуть зачекати, або розділіть зміну, щоб цей крок ішов окремо."
           : "Провайдер бере ці замки для операторів політик і тригерів ролі, що застосовує. Застосовуйте, коли ці служби можуть зачекати, або розділіть зміну, щоб зміни політик і тригерів ішли окремо.",
-    },
-  },
-  "plan.promotion-commit-pending": {
-    en: () =>
-      "The plan carries a promotion: applying it with COMMIT is refused until the rest of the promotion checks are in place (the data steps and the rehearsal report on a copy with data), and rehearsing it on the target is allowed",
-    uk: () =>
-      "План несе промоцію: застосування з COMMIT відхиляється, доки немає решти перевірок промоції (кроків даних і звіту репетиції на копії з даними), а репетицію на цілі дозволено",
-    hint: {
-      en: "Rehearse the plan on the target: it runs every step and rolls back.",
-      uk: "Відрепетируйте план на цілі: репетиція виконує всі кроки й відкочується.",
     },
   },
   "plan.plpgsql-check-unavailable": {

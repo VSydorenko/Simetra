@@ -2257,11 +2257,12 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           mode: "accessExclusive",
         },
       ])
+      // Межі 2a немає: план промоції не попереджає про відмову `COMMIT`
       expect(
-        outcome.diagnostics.find(
-          (d) => d.code === "plan.promotion-commit-pending"
-        )?.severity
-      ).toBe("warning")
+        outcome.diagnostics
+          .filter((d) => d.severity === "warning")
+          .map((d) => d.code)
+      ).toEqual(["plan.schema-only-proof"])
       expect(errors(outcome)).toEqual([])
     })
 
@@ -2959,7 +2960,6 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       expect(b.steps).toEqual(a.steps)
       expect(b.planHash).toBe(a.planHash)
       expect(codes(withRecord!)).toContain("plan.promotion-not-applicable")
-      expect(codes(without!)).not.toContain("plan.promotion-commit-pending")
     })
 
     describe("promotion data steps", () => {

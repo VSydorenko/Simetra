@@ -1,6 +1,13 @@
 import { z } from "zod"
 import { canonicalize, serializeCanonical, sha256Hex } from "simetra/compiler"
-import { hashSchema, planFileStem, serverFactsSchema } from "./artifact"
+import {
+  hashSchema,
+  planFileStem,
+  serverFactsSchema,
+  type PlanArtifact,
+} from "./artifact"
+import { applyDiagnostic } from "./diagnostic"
+import type { EngineDiagnostic } from "../engine"
 import {
   FUNCTION_ERROR_LIMIT,
   PLPGSQL_CHECK_MODES,
@@ -322,4 +329,66 @@ export function countOf(value: unknown): number {
       `a count from the database is not a non-negative safe integer: ${String(value)}`
     )
   return n
+}
+
+/**
+ * Чи звіт чинний для застосування промоції цього плану (рішення 5 плану
+ * П3-2b-3, спека промоції §8) — до будь-якої транзакції, чисто. Звіт не під
+ * `planHash`, тож раннер не довіряє ні інструменту, ні файлу: звіт іншого
+ * плану, сервера чи голови ledger — «звіт застарів». Склад `rows` — рівно
+ * один запис на кожну таблицю одиниці в старих іменах і нічого більше:
+ * інакше звіт без рядків оминув би гейт порожньої копії фази 6c. План без
+ * промоції звіту не потребує. Одна діагностика — перша розбіжність.
+ */
+export function rehearsalRefusals(
+  plan: Pick<PlanArtifact, "server" | "ledgerHead" | "promotion">,
+  planHash: string,
+  report: RehearsalReport | undefined
+): EngineDiagnostic[] {
+  if (plan.promotion === null) return []
+  if (report === undefined)
+    return [applyDiagnostic("apply.rehearsal-required", "error")]
+  const stale = (reason: "plan" | "server" | "ledger" | "tables") => [
+    applyDiagnostic("apply.rehearsal-stale", "error", { reason }),
+  ]
+  if (report.planHash !== planHash) return stale("plan")
+  if (canonicalize(report.server) !== canonicalize(plan.server))
+    return stale("server")
+  if (report.ledgerHead !== plan.ledgerHead) return stale("ledger")
+  const { tables } = plan.promotion.record
+  const covered =
+    report.rows.length === tables.length &&
+    tables.every(
+      (t) =>
+        report.rows.filter((r) => r.schema === t.schema && r.table === t.from)
+          .length === 1
+    )
+  return covered ? [] : stale("tables")
+}
+
+/** Нижня межа тайм-ауту оператора зі звіту: хвилина (спека промоції §8). */
+const MIN_STATEMENT_TIMEOUT_MS = 60_000
+
+/**
+ * `statement_timeout` застосування промоції зі звіту (рішення 6 плану
+ * П3-2b-3, спека промоції §8): `max(60 000, ⌈3 × longestStatementMs ×
+ * max(1, maxₜ(ціль ₜ / копія ₜ))⌉)` мс. Множник — найгірша таблиця, а не
+ * відношення сум: оператор над великою таблицею росте з нею, а не з
+ * одиницею. Таблиця без рядків на копії відношення не має і в множник не
+ * входить. Добуток — цілими до ділення, щоб дріб не дав зайвої мілісекунди.
+ */
+export function statementTimeoutFromReport(
+  report: RehearsalReport,
+  targetRows: readonly { schema: string; table: string; rows: number }[]
+): number {
+  const base = 3 * report.durations.longestStatementMs
+  let ms = Math.max(MIN_STATEMENT_TIMEOUT_MS, base)
+  for (const t of targetRows) {
+    const copy = report.rows.find(
+      (r) => r.schema === t.schema && r.table === t.table
+    )?.rows
+    if (copy === undefined || copy === 0) continue
+    ms = Math.max(ms, Math.ceil((base * t.rows) / copy))
+  }
+  return ms
 }

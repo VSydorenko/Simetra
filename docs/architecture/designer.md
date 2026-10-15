@@ -64,8 +64,11 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
   класом перетворення. `allow` у `apply` приймає `s<N>`, `drift`,
   `access:<table>`, `delete:<table>.<constraint>`, `remove:<table>`, `repair:<table>`; CLI
   `--allow` ділить за комою, тож імена з комою — лише масивом через MCP.
-  Застосування промоції з `COMMIT` відхиляється (`apply.promotion-checks-pending`),
-  доки не з'являться решта перевірок; репетиція на цілі дозволена. Замки плану
+  Промоцію застосовують із `COMMIT` лише з чинним звітом репетиції на копії
+  цілі з даними: `apply` читає `plans/<from>-<to>.rehearsal.json` і без нього
+  відмовляє (`apply.rehearsal-required`), а звіт іншого плану, формату,
+  сервера чи голови ledger — `apply.rehearsal-stale`; рядки цілі проти копії й
+  `statement_timeout` зі звіту звіряє транзакція. Замки плану
   йдуть за слідом кроків, а план фіксує свою роль (`apply.role-mismatch`).
   Правила — спека промоції
   [§7.2, §8](../superpowers/specs/2026-10-06-promotion-design.md), план
