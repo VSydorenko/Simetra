@@ -9,6 +9,7 @@ import { fork } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
+  isRunTag,
   RUN_TAG_ENV,
   SHADOW_PREFIX,
   shadowSuffix,
@@ -24,13 +25,11 @@ const SELF_INTERRUPT_MS = 120_000
 const WORKER_PAUSE_MS = 200
 
 async function main(tag: string | undefined): Promise<void> {
-  if (tag === undefined || !/^[0-9a-z]{6}$/.test(tag))
+  if (tag === undefined || !isRunTag(tag))
     throw new Error("Usage: interrupted-run.ts <run tag> | --worker")
   process.env[RUN_TAG_ENV] = tag
   installInterruptCleanup({ tag, release: () => {} })
 
-  // Чужа на вигляд тінь: без тегу, тож прибиральник не сміє її торкнутися
-  const foreign = `${SHADOW_PREFIX}${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
   await asSuperuser(async (client) => {
     const id = (name: string): string => client.escapeIdentifier(name)
     await client.query(
@@ -38,7 +37,6 @@ async function main(tag: string | undefined): Promise<void> {
     )
     await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
     await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
-    await client.query(`CREATE DATABASE ${id(foreign)}`)
   })
 
   // Воркер успадковує env (тег) і execArgv (`--import tsx`); `ready` — лише
@@ -50,7 +48,7 @@ async function main(tag: string | undefined): Promise<void> {
       reject(new Error(`The worker exited early with code ${code}`))
     )
   })
-  process.stdout.write(`ready ${foreign} ${worker.pid}\n`)
+  process.stdout.write(`ready ${worker.pid}\n`)
   setTimeout(() => process.kill(process.pid, "SIGTERM"), SELF_INTERRUPT_MS)
 }
 

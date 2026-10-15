@@ -12,6 +12,8 @@ import {
   newRunTag,
   RUN_TAG_ENV,
   runObjectPatterns,
+  SHADOW_PREFIX,
+  shadowSuffix,
   testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
@@ -36,14 +38,21 @@ describe("an interrupted DB run", () => {
     "removes its own stack objects on %s (second signal: %s)",
     async (signal, second) => {
       const tag = newRunTag()
-      const child = spawn(process.execPath, ["--import", TSX, FIXTURE, tag], {
-        env: { ...process.env, [RUN_TAG_ENV]: tag },
-        stdio: ["ignore", "pipe", "inherit"],
-      })
-      const exited = once(child, "exit") as Promise<[number | null, string]>
-      let ready: { foreign: string; workerPid: number } | undefined
+      // Тінь чужого прогону — з тегом зовнішнього (env воркера vitest від
+      // stack-guard, не фікстури): прибиральник фікстури не сміє її торкнутися,
+      // а перерваний зовнішній прогін, чий воркер гине без `finally`, прибере
+      // її своїм тегом. Тінь без тегу на такому перериванні лишилася б на стеку
+      const foreign = SHADOW_PREFIX + shadowSuffix()
+      await createDatabase(foreign)
+      let child: ChildProcess | undefined
+      let ready: { workerPid: number } | undefined
       let workerGone = false
       try {
+        child = spawn(process.execPath, ["--import", TSX, FIXTURE, tag], {
+          env: { ...process.env, [RUN_TAG_ENV]: tag },
+          stdio: ["ignore", "pipe", "inherit"],
+        })
+        const exited = once(child, "exit") as Promise<[number | null, string]>
         ready = await readyLine(child)
         // Воркер тим часом створює нові бази: сигнал застає його посеред роботи
         await new Promise((resolve) => setTimeout(resolve, 500))
@@ -57,23 +66,26 @@ describe("an interrupted DB run", () => {
 
         expect(code).toBe(128 + constants.signals[signal])
         expect(await taggedObjects(tag)).toEqual([])
-        expect(await databaseExists(ready.foreign)).toBe(true)
+        expect(await databaseExists(foreign)).toBe(true)
         await expect
           .poll(() => isAlive(ready!.workerPid), { timeout: 5_000 })
           .toBe(false)
         workerGone = true
       } finally {
         // Збій тесту не має лишати процесів і об'єктів, які він породив:
-        // чужа на вигляд тінь — теж його, її створила фікстура
-        if (child.exitCode === null && child.signalCode === null)
+        // тінь «чужого» прогону — теж його
+        if (
+          child !== undefined &&
+          child.exitCode === null &&
+          child.signalCode === null
+        )
           child.kill("SIGKILL")
         // Лише живому воркеру: pid мертвого міг уже дістатися іншому процесу
         if (ready !== undefined && !workerGone) killQuietly(ready.workerPid)
         // Коротка межа: очікування виходу (до 45 с) і прибирання разом мають
         // уміститися в таймаут тесту
         await cleanup(() => sweepRun(tag, { deadlineMs: 10_000 }))
-        const foreign = ready?.foreign
-        if (foreign !== undefined) await cleanup(() => dropDatabase(foreign))
+        await cleanup(() => dropDatabase(foreign))
       }
     },
     INTERRUPT_TIMEOUT_MS
@@ -115,15 +127,12 @@ async function cleanup(step: () => Promise<unknown>): Promise<void> {
   }
 }
 
-async function readyLine(
-  child: ChildProcess
-): Promise<{ foreign: string; workerPid: number }> {
+async function readyLine(child: ChildProcess): Promise<{ workerPid: number }> {
   let out = ""
   for await (const chunk of child.stdout!) {
     out += String(chunk)
-    const match = /^ready (\S+) (\d+)$/m.exec(out)
-    if (match !== null)
-      return { foreign: match[1]!, workerPid: Number(match[2]) }
+    const match = /^ready (\d+)$/m.exec(out)
+    if (match !== null) return { workerPid: Number(match[1]) }
   }
   throw new Error(`The fixture exited before "ready"; stdout: ${out}`)
 }
@@ -176,14 +185,28 @@ async function databaseExists(name: string): Promise<boolean> {
   }
 }
 
+// Тінь створює й видаляє суперкористувач, як і об'єкти фікстури
+async function createDatabase(name: string): Promise<void> {
+  await asSuperuser((client) =>
+    client.query(`CREATE DATABASE ${client.escapeIdentifier(name)}`)
+  )
+}
+
 async function dropDatabase(name: string): Promise<void> {
-  // Тінь створив суперкористувач — лише він її й видалить
+  await asSuperuser((client) =>
+    client.query(
+      `DROP DATABASE IF EXISTS ${client.escapeIdentifier(name)} WITH (FORCE)`
+    )
+  )
+}
+
+async function asSuperuser(
+  fn: (client: pg.Client) => Promise<unknown>
+): Promise<void> {
   const client = new pg.Client({ connectionString: testSuperuserUrl() })
   await client.connect()
   try {
-    await client.query(
-      `DROP DATABASE IF EXISTS ${client.escapeIdentifier(name)} WITH (FORCE)`
-    )
+    await fn(client)
   } finally {
     await client.end()
   }
