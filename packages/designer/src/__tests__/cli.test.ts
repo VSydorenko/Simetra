@@ -542,6 +542,36 @@ describe("cli adapter", () => {
           permissionItems: [
             { token: "access:app.item", summary: ["policy item_read"] },
             { token: "remove:app.item", summary: ["Item#comment"] },
+            {
+              token: "repair:app.item",
+              summary: ["description ← left(title, 10)"],
+            },
+          ],
+          data: [
+            {
+              temp: "simetra_fill_1",
+              before: { schema: "app", table: "items", key: "id" },
+              after: { schema: "app", table: "item", key: "id" },
+              columns: [
+                {
+                  step: "d1",
+                  column: "deletion_mark",
+                  type: "boolean",
+                  expression: "coalesce(inactive, false)",
+                  kind: "conversion",
+                  guard: "SELECT 0",
+                },
+                {
+                  step: "d2",
+                  column: "description",
+                  type: "text",
+                  expression: "left(title, 10)",
+                  kind: "repair",
+                  guard: "SELECT 0",
+                },
+              ],
+              triggers: [{ name: "item_audit", enabled: "O" }],
+            },
           ],
         },
         steps: [
@@ -574,7 +604,12 @@ describe("cli adapter", () => {
             step: "s2",
           },
         ],
-        requiredPermissions: ["drift", "access:app.item", "s2"],
+        requiredPermissions: [
+          "drift",
+          "access:app.item",
+          "repair:app.item",
+          "s2",
+        ],
         environment: { role: "postgres", defaultPrivileges: [] },
         plpgsqlCheck: "installed",
         expectedBlindFunctions: 0,
@@ -602,10 +637,16 @@ describe("cli adapter", () => {
         "  table app.items -> app.item",
         "  column app.item: title -> description",
         "  constraint app.item: items_pkey -> item_pkey",
+        "  data steps app.item:",
+        "    d1 deletion_mark ← coalesce(inactive, false) (conversion)",
+        "    d2 description ← left(title, 10) (repair)",
+        "    triggers disabled during the write: item_audit",
         "  access:app.item (needs allow: access:app.item)",
         "    policy item_read",
         "  remove:app.item",
         "    Item#comment",
+        "  repair:app.item (needs allow: repair:app.item)",
+        "    description ← left(title, 10)",
       ]
       const start = at(block[0]!)
       expect(lines.slice(start, start + block.length)).toEqual(block)

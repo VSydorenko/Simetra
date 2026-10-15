@@ -38,7 +38,10 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // перевиміряно в П3-2a: токени access:/delete:/remove: у вході й описі apply —
 // 17146 символів (було 17013); за тим самим правилом: 20132 + ceil((17146 −
 // 17013) × 1,05) = 20272
-const TOOLS_LIST_BUDGET = 20272
+// перевиміряно в П3-2b-2: токен repair: у вході й описі apply — 17328 символів
+// (було 17146); за тим самим правилом: 20272 + ceil((17328 − 17146) × 1,05) =
+// 20464
+const TOOLS_LIST_BUDGET = 20464
 const clients: Client[] = []
 
 useTmpProjects()
@@ -172,11 +175,16 @@ describe("apply over MCP", () => {
         "access:app.items",
         "delete:app.items.items_group_fkey",
         "remove:app.items",
+        "repair:app.items",
+        'repair:"app"."items"',
         // Ім'я з комою — лише масивом MCP: `--allow` CLI ділить за комою
         'access:app."a,b"',
       ])
     ).toBe(true)
     expect(allow(["access:"])).toBe(false)
+    // Ремонт без таблиці — не пункт дозволу
+    expect(allow(["repair"])).toBe(false)
+    expect(allow(["repair:"])).toBe(false)
     expect(allow(["grant:app.items"])).toBe(false)
     expect(allow(["s0"])).toBe(false)
   })

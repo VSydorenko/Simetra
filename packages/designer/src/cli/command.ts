@@ -322,7 +322,7 @@ function argsFor(tool: Tool): ArgsDef {
     args.allow = {
       type: "string",
       description:
-        "Comma-separated plan items to permit: step ids (s1,s2), drift, access:, delete: and remove: items (a name with a comma only via MCP)",
+        "Comma-separated plan items to permit: step ids (s1,s2), drift, access:, delete:, remove: and repair: items (a name with a comma only via MCP)",
     }
     args.rehearse = {
       type: "boolean",

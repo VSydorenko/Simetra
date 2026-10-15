@@ -122,6 +122,19 @@ function promotionLines(p: PlanPromotion, needs: Set<string>): string[] {
     lines.push(
       `  ${c.kind} ${qualified(c.table.schema, c.table.name)}: ${quoteIdent(c.from)} -> ${quoteIdent(c.to)}`
     )
+  // Вираз кроку показано в старих іменах, як його обчислює раннер; тригери —
+  // ті, що запис вимикає на свій час: людина бачить побічний ефект наперед
+  for (const t of p.data) {
+    lines.push(`  data steps ${qualified(t.after.schema, t.after.table)}:`)
+    for (const c of t.columns)
+      lines.push(
+        `    ${c.step} ${quoteIdent(c.column)} ← ${c.expression} (${c.kind})`
+      )
+    if (t.triggers.length > 0)
+      lines.push(
+        `    triggers disabled during the write: ${t.triggers.map((x) => quoteIdent(x.name)).join(", ")}`
+      )
+  }
   for (const item of p.permissionItems) {
     lines.push(
       `  ${item.token}${needs.has(item.token) ? ` (needs allow: ${item.token})` : ""}`

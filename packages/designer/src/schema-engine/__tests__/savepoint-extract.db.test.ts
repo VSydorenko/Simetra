@@ -230,6 +230,9 @@ describe("ApplyTransaction.extract", () => {
           await killer.connect()
           try {
             const extracting = tx.extract(desired.scope)
+            // Обробник — одразу: якщо цикл нижче кине за дедлайном, відхилення
+            // `extracting` не лишиться без обробника
+            const settled = extracting.catch((e: unknown) => e)
             // Обрив просять, коли backend уже виконує оператор витягу, а не
             // до нього: тоді зустрічаються саме запит у польоті й обрив
             const deadline = Date.now() + 30_000
@@ -247,7 +250,7 @@ describe("ApplyTransaction.extract", () => {
               row!.pid,
             ])
             // Обрив має прийти саме з витягу, а не з `COMMIT` після нього
-            await expect(extracting).rejects.toBeInstanceOf(ApplyConnectionLost)
+            expect(await settled).toBeInstanceOf(ApplyConnectionLost)
           } finally {
             await killer.end()
           }

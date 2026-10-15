@@ -58,8 +58,10 @@ export interface PlanPromotion {
   tables: { schema: string; from: string; to: string }[]
   columns: PromotionSection["columns"]
   canonicalNames: PromotionSection["canonicalNames"]
-  /** Пункти `access:`, `delete:`, `remove:` з переліками. */
+  /** Пункти `access:`, `delete:`, `remove:`, `repair:` з переліками. */
   permissionItems: PermissionItem[]
+  /** Кроки даних за таблицями: їх людина переглядає разом із `repair:`. */
+  data: PromotionSection["data"]
 }
 
 /** Крок плану для перегляду; клас конверсії — лише біля кроку видалення. */
@@ -145,6 +147,7 @@ function planPromotion(
     columns: section.columns,
     canonicalNames: section.canonicalNames,
     permissionItems: section.permissionItems,
+    data: section.data,
   }
 }
 

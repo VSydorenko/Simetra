@@ -386,7 +386,7 @@ refused too: rebuild it with `plan`.
 
 A promotion plan's `allow` also takes the `access:<table>`,
 `delete:<table>.<constraint>`, `remove:<table>` and `repair:<table>` items its
-output lists.
+output lists; a repair rewrites existing values with the fill expression shown.
 Applying a promotion with a commit is refused for now
 (`apply.promotion-checks-pending`); `rehearse` it instead.
 
