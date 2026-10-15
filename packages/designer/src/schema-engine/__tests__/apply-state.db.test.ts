@@ -524,7 +524,19 @@ describe("readAppliedPromotions", () => {
             "SELECT rehearsal_hash AS hash FROM simetra.ledger"
           )
       )
-      return { artifact, run, rows }
+      // Дописана колонка стоїть після інших, а не на місці скинутої: стан
+      // ledger від цього не мусить відрізнятися від бажаного
+      const again = await buildPlan(
+        engine,
+        {
+          reader: createApplyDatabase({ readOnly: true }),
+          scratch: createApplyDatabase({ readOnly: false }),
+        },
+        model,
+        { target: { url } },
+        []
+      )
+      return { artifact, run, rows, again }
     })
     expect(outcome.artifact.steps.map((s) => s.sql)).toContainEqual(
       expect.stringMatching(
@@ -533,5 +545,6 @@ describe("readAppliedPromotions", () => {
     )
     expect(outcome.run).toMatchObject({ status: "committed" })
     expect(outcome.rows).toEqual([{ hash: null }])
+    expect(outcome.again).toMatchObject({ status: "unchanged" })
   })
 })
