@@ -370,25 +370,40 @@ export function rehearsalRefusals(
 const MIN_STATEMENT_TIMEOUT_MS = 60_000
 
 /**
+ * Верхня межа `statement_timeout` Postgres (INT_MAX мс, рішення R10). Більше
+ * значення сервер відкине, а відмова через артефакт виміру заблокувала б
+ * законне застосування; стільки мілісекунд — це вже фактично «без межі», тож
+ * формула притискається до неї, а людина отримує попередження.
+ */
+const MAX_STATEMENT_TIMEOUT_MS = 2_147_483_647
+
+/**
  * `statement_timeout` застосування промоції зі звіту (рішення 6 плану
  * П3-2b-3, спека промоції §8): `max(60 000, ⌈3 × longestStatementMs ×
- * max(1, maxₜ(ціль ₜ / копія ₜ))⌉)` мс. Множник — найгірша таблиця, а не
- * відношення сум: оператор над великою таблицею росте з нею, а не з
- * одиницею. Таблиця без рядків на копії відношення не має і в множник не
- * входить. Добуток — цілими до ділення, щоб дріб не дав зайвої мілісекунди.
+ * max(1, maxₜ(ціль ₜ / копія ₜ))⌉)` мс, не більше
+ * `MAX_STATEMENT_TIMEOUT_MS`. Множник — найгірша таблиця, а не відношення
+ * сум: оператор над великою таблицею росте з нею, а не з одиницею. Таблиця
+ * без рядків на копії відношення не має і в множник не входить. Добуток —
+ * цілими до ділення, щоб дріб не дав зайвої мілісекунди. `computed` —
+ * значення формули до межі: його називає попередження про зняту межу.
  */
 export function statementTimeoutFromReport(
   report: RehearsalReport,
   targetRows: readonly { schema: string; table: string; rows: number }[]
-): number {
+): { ms: number; computed: number; clamped: boolean } {
   const base = 3 * report.durations.longestStatementMs
-  let ms = Math.max(MIN_STATEMENT_TIMEOUT_MS, base)
+  let computed = Math.max(MIN_STATEMENT_TIMEOUT_MS, base)
   for (const t of targetRows) {
     const copy = report.rows.find(
       (r) => r.schema === t.schema && r.table === t.table
     )?.rows
     if (copy === undefined || copy === 0) continue
-    ms = Math.max(ms, Math.ceil((base * t.rows) / copy))
+    computed = Math.max(computed, Math.ceil((base * t.rows) / copy))
   }
-  return ms
+  const clamped = computed > MAX_STATEMENT_TIMEOUT_MS
+  return {
+    ms: clamped ? MAX_STATEMENT_TIMEOUT_MS : computed,
+    computed,
+    clamped,
+  }
 }

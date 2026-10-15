@@ -2567,12 +2567,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.rehearsal-fewer-rows": {
     en: (p) =>
-      `Table ${p.table} has ${p.target} rows on the target but ${p.copy} on the rehearsal copy: the rehearsal's durations understate this apply, so its statement timeout is scaled by the table ratio`,
+      `Table ${p.table} has ${p.target} rows on the target but ${p.copy} on the rehearsal copy: the rehearsal's durations understate this apply`,
     uk: (p) =>
-      `Таблиця ${p.table} має ${p.target} рядків на цілі, але ${p.copy} на копії репетиції: тривалості репетиції недооцінюють це застосування, тож тайм-аут оператора масштабовано відношенням таблиць`,
+      `Таблиця ${p.table} має ${p.target} рядків на цілі, але ${p.copy} на копії репетиції: тривалості репетиції недооцінюють це застосування`,
     hint: {
-      en: "A copy closer to the target's size gives a more faithful rehearsal; an explicit statementTimeoutMs overrides the scaled timeout.",
-      uk: "Копія, ближча за розміром до цілі, дає точнішу репетицію; явний statementTimeoutMs має перевагу над масштабованим тайм-аутом.",
+      en: "A copy closer to the target's size gives a more faithful rehearsal. Without an explicit statementTimeoutMs, the statement timeout taken from the report is scaled by the table ratio.",
+      uk: "Копія, ближча за розміром до цілі, дає точнішу репетицію. Без явного statementTimeoutMs тайм-аут оператора зі звіту масштабовано відношенням таблиць.",
+    },
+  },
+  "apply.rehearsal-timeout-unbounded": {
+    en: (p) =>
+      `The statement timeout computed from the rehearsal report (${p.computed} ms) exceeds what Postgres accepts, so it was capped at ${p.limit} ms: no statement of this apply is effectively limited in time`,
+    uk: (p) =>
+      `Тайм-аут оператора, обчислений зі звіту репетиції (${p.computed} мс), більший за те, що приймає Postgres, тож його обмежено ${p.limit} мс: фактично жоден оператор цього застосування не обмежений у часі`,
+    hint: {
+      en: "Set the statement timeout explicitly with statementTimeoutMs, or rehearse on a copy closer to the target's size.",
+      uk: "Задайте тайм-аут оператора явно через statementTimeoutMs або відрепетируйте на копії, ближчій за розміром до цілі.",
     },
   },
   "apply.temp-name-taken": {

@@ -282,6 +282,9 @@ describe("statementTimeoutFromReport", () => {
     rows,
     durations: { ...report().durations, longestStatementMs },
   })
+  /** Лише значення тайм-ауту — для випадків нижче межі. */
+  const timeoutMs = (...a: Parameters<typeof statementTimeoutFromReport>) =>
+    statementTimeoutFromReport(...a).ms
   const copy = [
     { schema: "app", table: "a", rows: 10 },
     { schema: "app", table: "b", rows: 1000 },
@@ -294,15 +297,15 @@ describe("statementTimeoutFromReport", () => {
   it("scales by the worst table, not the sum", () => {
     // Review Focus 5: `a` у сто разів більша на цілі, `b` рівна — множник
     // 100, а не відношення сум (2000 / 1010)
-    expect(statementTimeoutFromReport(timed(100, copy), target)).toBe(60_000)
-    expect(statementTimeoutFromReport(timed(1000, copy), target)).toBe(300_000)
+    expect(timeoutMs(timed(100, copy), target)).toBe(60_000)
+    expect(timeoutMs(timed(1000, copy), target)).toBe(300_000)
   })
 
   it("has a floor of a minute", () => {
-    expect(statementTimeoutFromReport(timed(0, copy), target)).toBe(60_000)
+    expect(timeoutMs(timed(0, copy), target)).toBe(60_000)
     // Ціль, меншу за копію, множник не зменшує нижче одиниці
     expect(
-      statementTimeoutFromReport(
+      timeoutMs(
         timed(30_000, copy),
         copy.map((t) => ({ ...t, rows: 1 }))
       )
@@ -312,19 +315,41 @@ describe("statementTimeoutFromReport", () => {
   it("leaves out a table empty on the copy", () => {
     // Відношення до нуля немає; таку таблицю з рядками на цілі зупиняє фаза 6c
     expect(
-      statementTimeoutFromReport(
-        timed(30_000, [{ schema: "app", table: "a", rows: 0 }]),
-        [{ schema: "app", table: "a", rows: 5 }]
-      )
+      timeoutMs(timed(30_000, [{ schema: "app", table: "a", rows: 0 }]), [
+        { schema: "app", table: "a", rows: 5 },
+      ])
     ).toBe(90_000)
   })
 
   it("rounds a fractional product up", () => {
     expect(
-      statementTimeoutFromReport(
-        timed(20_001, [{ schema: "app", table: "a", rows: 3 }]),
-        [{ schema: "app", table: "a", rows: 4 }]
-      )
+      timeoutMs(timed(20_001, [{ schema: "app", table: "a", rows: 3 }]), [
+        { schema: "app", table: "a", rows: 4 },
+      ])
     ).toBe(80_004)
+  })
+
+  it("caps the timeout at the Postgres limit", () => {
+    // Рішення R10: формула з L = 1 і копією в 3 рядки дає рівно рядки цілі
+    const at = (rows: number) =>
+      statementTimeoutFromReport(
+        timed(1, [{ schema: "app", table: "a", rows: 3 }]),
+        [{ schema: "app", table: "a", rows }]
+      )
+    expect(at(2_147_483_647)).toEqual({
+      ms: 2_147_483_647,
+      computed: 2_147_483_647,
+      clamped: false,
+    })
+    expect(at(2_147_483_648)).toEqual({
+      ms: 2_147_483_647,
+      computed: 2_147_483_648,
+      clamped: true,
+    })
+    expect(at(1e15)).toEqual({
+      ms: 2_147_483_647,
+      computed: 1e15,
+      clamped: true,
+    })
   })
 })

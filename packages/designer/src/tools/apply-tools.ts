@@ -363,7 +363,9 @@ async function readPlanFile(root: string, plan: string): Promise<string> {
 
 /**
  * Текст звіту репетиції з `plans/`; файлу немає — `undefined`, і раннер
- * відмовить `apply.rehearsal-required`.
+ * відмовить `apply.rehearsal-required`. Тека на місці звіту — те саме, що
+ * його немає, як у `readPlanFile`: звіту там нема, а сирий EISDIR людині
+ * нічого не скаже.
  */
 async function readReport(
   root: string,
@@ -372,7 +374,8 @@ async function readReport(
   try {
     return await readFile(join(root, file), "utf8")
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "ENOENT" || code === "EISDIR") return undefined
     throw error
   }
 }

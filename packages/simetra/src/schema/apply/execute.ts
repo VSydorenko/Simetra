@@ -197,6 +197,12 @@ interface ExecuteBase {
 export type ExecuteOptions = ExecuteBase &
   (
     | { mode: "apply"; report?: RehearsalReport }
+    /**
+     * Комітить без звіту репетиції, без перевірки ланцюжка й ролі: такий
+     * `COMMIT` безпечний лише на scratch-клоні, який ніхто не читає.
+     * Єдиний виклик — доказ плану в `plan.ts`; на справжню ціль цей режим
+     * не спрямовують ніколи.
+     */
     | { mode: "proof" }
     | { mode: "rehearse"; rehearsal: RehearsalProof }
   )
@@ -1130,11 +1136,21 @@ async function checkCopyRows(
         })
       )
   }
-  if (o.timeouts?.statementTimeoutMs === undefined)
-    await tx.query(
-      "SELECT pg_catalog.set_config('statement_timeout', $1, true)",
-      [`${statementTimeoutFromReport(report, target)}ms`]
+  if (o.timeouts?.statementTimeoutMs !== undefined) return
+  const timeout = statementTimeoutFromReport(report, target)
+  // Притиснутий до межі Postgres тайм-аут фактично знято: людина має знати,
+  // що жоден оператор цього застосування не обірветься за часом
+  if (timeout.clamped)
+    warnings.push(
+      applyDiagnostic("apply.rehearsal-timeout-unbounded", "warning", {
+        computed: timeout.computed,
+        limit: timeout.ms,
+      })
     )
+  await tx.query(
+    "SELECT pg_catalog.set_config('statement_timeout', $1, true)",
+    [`${timeout.ms}ms`]
+  )
 }
 
 /** Таблиця заміру в старих іменах — як її знає ціль і звіт репетиції. */

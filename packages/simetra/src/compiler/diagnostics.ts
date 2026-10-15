@@ -208,6 +208,7 @@ export const COMPILER_RULES = [
   "apply.rehearsal-stale",
   "apply.rehearsal-copy-empty",
   "apply.rehearsal-fewer-rows",
+  "apply.rehearsal-timeout-unbounded",
   "apply.temp-name-taken",
   "apply.plpgsql-check-unavailable",
   "apply.replication-role",

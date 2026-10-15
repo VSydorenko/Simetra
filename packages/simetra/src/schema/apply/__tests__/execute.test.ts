@@ -2415,6 +2415,68 @@ describe("executePlan", () => {
       expect(params.timeouts).toEqual(["3000ms", "600000ms", "60000ms"])
     })
 
+    describe("at the Postgres limit of the statement timeout", () => {
+      // Копія в 3 рядки й L = 1: формула дає рівно рядки цілі (рішення R10)
+      const atLimit = (
+        measured: string,
+        over: Partial<ExecuteOptions> = {}
+      ) => {
+        const { db, params } = fakeDb({ measured })
+        return {
+          params,
+          outcome: executePlan(
+            db,
+            target,
+            reported,
+            withReport(
+              {
+                ...REPORT,
+                rows: [{ ...REPORT.rows[0]!, rows: 3 }],
+                durations: { ...REPORT.durations, longestStatementMs: 1 },
+              },
+              over
+            )
+          ),
+        }
+      }
+
+      it("keeps a timeout exactly at the limit without a warning", async () => {
+        const { outcome, params } = atLimit("2147483647")
+        const done = await outcome
+        expect(done).toMatchObject({ status: "committed" })
+        expect(done.diagnostics.map((d) => d.code)).toEqual([
+          "apply.rehearsal-fewer-rows",
+        ])
+        expect(params["report-timeout"]).toEqual(["2147483647ms"])
+      })
+
+      it("caps a larger timeout and warns that it is lifted", async () => {
+        const { outcome, params } = atLimit("2147483648")
+        const done = await outcome
+        expect(done).toMatchObject({ status: "committed" })
+        expect(done.diagnostics).toMatchObject([
+          { code: "apply.rehearsal-fewer-rows" },
+          {
+            code: "apply.rehearsal-timeout-unbounded",
+            severity: "warning",
+            params: { computed: 2_147_483_648, limit: 2_147_483_647 },
+          },
+        ])
+        expect(params["report-timeout"]).toEqual(["2147483647ms"])
+      })
+
+      it("does not warn under an explicit statement timeout", async () => {
+        const { outcome, params } = atLimit("2147483648", {
+          timeouts: { statementTimeoutMs: 1234 },
+        })
+        const done = await outcome
+        expect(done.diagnostics.map((d) => d.code)).toEqual([
+          "apply.rehearsal-fewer-rows",
+        ])
+        expect(params["report-timeout"]).toBeUndefined()
+      })
+    })
+
     it("keeps an explicit statement timeout", async () => {
       const { db, log, params } = fakeDb({ measured: "5" })
       const outcome = await executePlan(

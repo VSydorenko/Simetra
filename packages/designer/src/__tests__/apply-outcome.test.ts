@@ -270,25 +270,24 @@ describe("apply with an unknown outcome", () => {
 
     /**
      * `apply` плану з промоцією; `report` — вміст файлу звіту поруч із
-     * планом (функція — від артефакту), без нього файлу немає.
+     * планом (функція — від артефакту) або тека на його місці, без нього
+     * файлу немає.
      */
     const apply = async (
       o: {
         allow?: string[]
-        report?: (artifact: PlanArtifact) => string
+        report?: ((artifact: PlanArtifact) => string) | "directory"
       } = {}
     ) => {
       const dir = await project()
       const { file, artifact } = await writePlan(dir, await section())
-      if (o.report !== undefined)
-        await writeFile(
-          join(
-            dirname(dir),
-            "plans",
-            rehearsalFileName(artifact.fromHash, artifact.toHash)
-          ),
-          o.report(artifact)
-        )
+      const path = join(
+        dirname(dir),
+        "plans",
+        rehearsalFileName(artifact.fromHash, artifact.toHash)
+      )
+      if (o.report === "directory") await mkdir(path)
+      else if (o.report !== undefined) await writeFile(path, o.report(artifact))
       return invoke(
         toolByName("apply")!,
         {
@@ -341,6 +340,16 @@ describe("apply with an unknown outcome", () => {
     it("refuses it without a rehearsal report before any transaction", async () => {
       const r = await apply({ allow })
       expect(r.ok).toBe(false)
+      expect(r.diagnostics.map((d) => d.code)).toEqual([
+        "apply.rehearsal-required",
+      ])
+      expect(lost.transactions).toBe(0)
+    })
+
+    it("takes a directory at the report path for a missing report", async () => {
+      // Як `readPlanFile`: EISDIR — те саме, що файлу немає, а не сирий виняток
+      const r = await apply({ allow, report: "directory" })
+      expect(r.refusal).toBeUndefined()
       expect(r.diagnostics.map((d) => d.code)).toEqual([
         "apply.rehearsal-required",
       ])
