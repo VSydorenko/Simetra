@@ -416,6 +416,8 @@ export function dataPlan(p: {
 export interface DataFacts {
   triggers: Map<string, DataTable["triggers"]>
   inherited: string[]
+  /** Таблиці з правилом перезапису `UPDATE` (рішення В18). */
+  ruled: string[]
   tempPrivilege: boolean
   replicationRole: string
   types: Map<string, TypePresence>
@@ -466,6 +468,17 @@ join pg_catalog.pg_namespace n on n.nspname = x.schema
 join pg_catalog.pg_class c on c.relnamespace = n.oid and c.relname = x.name
 where c.relkind = 'p'
    or exists (select 1 from pg_catalog.pg_inherits h where h.inhparent = c.oid)
+`
+
+// Будь-яке правило `UPDATE` — і `ALSO`, і `INSTEAD`: запис мусить бути саме
+// тим `UPDATE`, чий лічильник звіряється з обчисленим (рішення В18)
+const RULED_SQL = `
+select x.schema, x.name
+from pg_catalog.json_to_recordset($1::pg_catalog.json) as x(schema text, name text)
+join pg_catalog.pg_namespace n on n.nspname = x.schema
+join pg_catalog.pg_class c on c.relnamespace = n.oid and c.relname = x.name
+where exists (
+  select 1 from pg_catalog.pg_rewrite r where r.ev_class = c.oid and r.ev_type = '2')
 `
 
 const TYPES_SQL = `
@@ -573,15 +586,15 @@ export async function readDataFacts(
       await readUserTriggers(tx, t.before)
     )
 
-  const inherited = (
-    await tx.query<{ schema: string; name: string }>(INHERITED_SQL, [
-      JSON.stringify(
-        tables.map((t) => ({ schema: t.before.schema, name: t.before.table }))
-      ),
-    ])
+  const names = JSON.stringify(
+    tables.map((t) => ({ schema: t.before.schema, name: t.before.table }))
   )
-    .map((r) => tableKey(r.schema, r.name))
-    .sort(byCodeUnit)
+  const tablesOf = async (sql: string): Promise<string[]> =>
+    (await tx.query<{ schema: string; name: string }>(sql, [names]))
+      .map((r) => tableKey(r.schema, r.name))
+      .sort(byCodeUnit)
+  const inherited = await tablesOf(INHERITED_SQL)
+  const ruled = await tablesOf(RULED_SQL)
 
   const types = await readTypePresence(
     tx,
@@ -655,6 +668,7 @@ export async function readDataFacts(
   return {
     triggers,
     inherited,
+    ruled,
     tempPrivilege: session.temp,
     replicationRole: session.role,
     types,
@@ -667,9 +681,10 @@ const functionName = (f: { schema?: string; name: string }): string =>
   f.schema === undefined ? quoteIdent(f.name) : qualified(f.schema, f.name)
 
 /**
- * Відмови з фактів цілі — до копії (рішення 4–6, 13): таблиця з нащадками
- * чи партиціонована, тип запису, якого немає у вихідному стані, вхідний FK
- * з каскадом оновлення, право `TEMP`, `session_replication_role` і
+ * Відмови з фактів цілі — до копії (рішення 4–6, 13, В18): таблиця з
+ * нащадками, партиціонована чи з правилом `UPDATE`, тип запису, якого
+ * немає у вихідному стані, вхідний FK з каскадом оновлення, право `TEMP`,
+ * `session_replication_role` і
  * детермінованість викликів на цілі. `models` — кваліфіковані імена
  * функцій моделі бажаного стану (`modelFunctions`): функція моделі, якої на
  * цілі немає, — `plan.data-step-function-changed` (її створює сам план), а
@@ -686,14 +701,17 @@ export function dataFactRefusals(
   if (tables.length === 0) return []
   const out: EngineDiagnostic[] = []
   const inherited = new Set(facts.inherited)
+  const ruled = new Set(facts.ruled)
   const cascading = new Set(facts.cascading)
   for (const t of tables) {
     const table = qualified(t.before.schema, t.before.table)
-    if (inherited.has(tableKey(t.before.schema, t.before.table))) {
+    const key = tableKey(t.before.schema, t.before.table)
+    if (inherited.has(key) || ruled.has(key)) {
       out.push(
         unsupported(origin, "dataStepTable", {
           step: dataTableStep(t),
           table,
+          ...(inherited.has(key) ? {} : { detail: "rule" }),
         })
       )
       continue

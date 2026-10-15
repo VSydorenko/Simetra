@@ -562,6 +562,7 @@ describe("data step renders", () => {
 const FACTS = (over: Partial<DataFacts> = {}): DataFacts => ({
   triggers: new Map(),
   inherited: [],
+  ruled: [],
   tempPrivilege: true,
   replicationRole: "origin",
   types: new Map<string, TypePresence>([
@@ -666,6 +667,31 @@ describe("dataFactRefusals", () => {
         ],
       ]
     )
+  })
+
+  it("refuses a table with an UPDATE rewrite rule as its own detail", () => {
+    expect(factCodes(FACTS({ ruled: [tableKey("app", "items")] }))).toEqual([
+      [
+        "plan.promotion-unsupported",
+        {
+          objectId: OBJECT_ID,
+          file: FILE,
+          reason: "dataStepTable",
+          step: "d1",
+          table: "app.items",
+          detail: "rule",
+        },
+      ],
+    ])
+    // Нащадки за успадкуванням переважають: одна відмова на таблицю
+    expect(
+      factCodes(
+        FACTS({
+          inherited: [tableKey("app", "items")],
+          ruled: [tableKey("app", "items")],
+        })
+      ).map(([, p]) => (p as Record<string, string>).detail)
+    ).toEqual([undefined])
   })
 
   it("refuses a target type absent on the target", () => {

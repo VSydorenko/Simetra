@@ -2406,10 +2406,11 @@ describe("executePlan", () => {
         "triggers",
         "ALTER TABLE app.u DISABLE TRIGGER tg",
         "write app.u",
-        "ALTER TABLE app.u ENABLE TRIGGER tg",
         "set-settings",
-        // Відкладене — вже під налаштуваннями транзакції, як у фазі 13
+        // Відкладене — вже під налаштуваннями транзакції, як у фазі 13, і
+        // до ввімкнення тригерів: інакше `55006` (рішення В17)
         "set-constraints",
+        "ALTER TABLE app.u ENABLE TRIGGER tg",
         // 11. Кроки двигуна під преамбулою
         "get-settings",
         "set-settings",
@@ -2436,6 +2437,57 @@ describe("executePlan", () => {
       // Відкладені тригери користувача фаз 10 і 13 — під налаштуваннями
       // транзакції: закріплений `search_path` зламав би тіла без схеми
       expect(seen["set-constraints"]).toEqual([SESSION, SESSION])
+      expect(seen["ALTER TABLE app.u ENABLE TRIGGER tg"]).toEqual([SESSION])
+    })
+
+    it("writes every table of the unit before the deferred check and enables after it", async () => {
+      const second: DataTable = {
+        temp: "simetra_fill_2",
+        before: { schema: "app", table: "s", key: "id" },
+        after: { schema: "app", table: "v", key: "id" },
+        columns: [{ ...COLUMN, step: "d2" }],
+        triggers: [{ name: "tg", enabled: "O" }],
+      }
+      const record: PromotionRecord = {
+        ...TABLED,
+        tables: [
+          ...TABLED.tables,
+          {
+            id: "00000000-0000-4000-8000-000000000002",
+            schema: "app",
+            from: "s",
+            to: "v",
+          },
+        ],
+        dataSteps: [STEP, { ...STEP, table: "s" }],
+      }
+      const measured = (from: string, to: string, dataStep: string) => ({
+        before: { schema: "app", table: from },
+        after: { schema: "app", table: to },
+        key: { before: "id", after: "id" },
+        columns: [{ ...MEASURE, dataStep }],
+      })
+      const { log, outcome } = await run(
+        { triggers: LIVE },
+        await withData({
+          record,
+          data: [TABLE, second],
+          preservation: [measured("t", "u", "d1"), measured("s", "v", "d2")],
+        })
+      )
+      expect(outcome).toMatchObject({ status: "rolledBack", diagnostics: [] })
+      const from = log.indexOf("ALTER TABLE app.u DISABLE TRIGGER tg")
+      expect(log.slice(from, log.indexOf("set-constraints") + 3)).toEqual([
+        "ALTER TABLE app.u DISABLE TRIGGER tg",
+        "write app.u",
+        "triggers",
+        "ALTER TABLE app.v DISABLE TRIGGER tg",
+        "write app.v",
+        "set-settings",
+        "set-constraints",
+        "ALTER TABLE app.u ENABLE TRIGGER tg",
+        "ALTER TABLE app.v ENABLE TRIGGER tg",
+      ])
     })
 
     it("throws when the cast guard returns no row", async () => {
@@ -2651,10 +2703,40 @@ describe("executePlan", () => {
             code: "apply.data-step-failed",
             params: {
               phase: "write",
+              statement: "update",
               table: "app.u",
               steps: "d1",
               sqlstate: "23514",
               error: "violates check constraint",
+            },
+          },
+        ],
+      })
+    })
+
+    it.each([
+      ["trigger-disable", "ALTER TABLE app.u DISABLE TRIGGER tg"],
+      ["trigger-enable", "ALTER TABLE app.u ENABLE TRIGGER tg"],
+    ])("names the %s statement whose ALTER fails", async (statement, sql) => {
+      const { outcome } = await run({
+        triggers: LIVE,
+        fail: (label) =>
+          label === sql
+            ? new ApplyDbError("pending trigger events", "55006")
+            : undefined,
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.data-step-failed",
+            params: {
+              phase: "write",
+              statement,
+              table: "app.u",
+              steps: "d1",
+              sqlstate: "55006",
             },
           },
         ],
@@ -2691,6 +2773,8 @@ describe("executePlan", () => {
         ],
       })
       expect(log).not.toContain(plan.steps[0]!.sql)
+      // Тригери вмикаються лише після відкладеної перевірки
+      expect(log).not.toContain("ALTER TABLE app.u ENABLE TRIGGER tg")
     })
 
     it("names the data step whose expression fails in the before measure", async () => {

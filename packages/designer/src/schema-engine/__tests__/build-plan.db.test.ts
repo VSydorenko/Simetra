@@ -3211,6 +3211,22 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         })
       })
 
+      // Рішення В18: правило `UPDATE` — і `ALSO`, і `INSTEAD` — підмінило б
+      // той `UPDATE`, чий лічильник звіряється з обчисленим
+      it("refuses a table with an UPDATE rewrite rule", async () => {
+        const outcome = await planPromotion(await promotedItems(), {
+          drift:
+            "create rule items_touch as on update to app.items do also notify items_touch;",
+        })
+        expect(outcome.status).toBe("refused")
+        expect(reasons(outcome)).toEqual(["dataStepTable"])
+        expect(params(outcome, "plan.promotion-unsupported")[0]).toMatchObject({
+          step: "d1",
+          table: "app.items",
+          detail: "rule",
+        })
+      })
+
       const NORM_SQL = (body: string) =>
         `CREATE FUNCTION app.norm(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $fn$ SELECT ${body} $fn$;\n`
 

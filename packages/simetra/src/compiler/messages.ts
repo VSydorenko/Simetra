@@ -2521,16 +2521,37 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `The expression of data step ${p.step} for column ${p.column} of ${p.table} fails on the existing rows (SQLSTATE ${p.sqlstate}). The transaction was rolled back`
         : p.phase === "cast-guard"
           ? `The check of data step ${p.step} that the value converts to the type of column ${p.column} of ${p.table} failed (SQLSTATE ${p.sqlstate}). The transaction was rolled back`
-          : `${p.phase === "compute" ? "Computing" : "Writing"} the values of data steps ${p.steps} of ${p.table} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`,
+          : p.statement === "trigger-disable"
+            ? `Disabling the user triggers of ${p.table} before writing the values of data steps ${p.steps} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`
+            : p.statement === "trigger-enable"
+              ? `Enabling the user triggers of ${p.table} again after writing the values of data steps ${p.steps} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`
+              : `${p.phase === "compute" ? "Computing" : "Writing"} the values of data steps ${p.steps} of ${p.table} failed with SQLSTATE ${p.sqlstate}: ${p.error}. The transaction was rolled back`,
     uk: (p) =>
       p.phase === "measure-before"
         ? `Вираз кроку даних ${p.step} для колонки ${p.column} таблиці ${p.table} не обчислюється на наявних рядках (SQLSTATE ${p.sqlstate}). Транзакцію відкочено`
         : p.phase === "cast-guard"
           ? `Перевірка кроку даних ${p.step}, що значення приводиться до типу колонки ${p.column} таблиці ${p.table}, завершилася помилкою (SQLSTATE ${p.sqlstate}). Транзакцію відкочено`
-          : `${p.phase === "compute" ? "Обчислення" : "Запис"} значень кроків даних ${p.steps} таблиці ${p.table} завершився помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
+          : p.statement === "trigger-disable"
+            ? `Вимкнення тригерів користувача таблиці ${p.table} перед записом значень кроків даних ${p.steps} завершилося помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`
+            : p.statement === "trigger-enable"
+              ? `Повторне ввімкнення тригерів користувача таблиці ${p.table} після запису значень кроків даних ${p.steps} завершилося помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`
+              : `${p.phase === "compute" ? "Обчислення" : "Запис"} значень кроків даних ${p.steps} таблиці ${p.table} завершився помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
+    // Збій `ALTER TABLE` на тригері — не проблема даних чи виразу (рішення
+    // В17); запис іде під закріпленим `search_path`, тож функція обмеження,
+    // індексу чи згенерованої колонки без схеми в іменах падає саме тут
     hint: {
-      en: "Nothing was written. Fix the data the step reads, or its expression in the promotion record, then plan again.",
-      uk: "Нічого не записано. Виправте дані, які читає крок, або його вираз у записі промоції й сплануйте знову.",
+      en: (p) =>
+        p.statement === "trigger-disable" || p.statement === "trigger-enable"
+          ? "Nothing was written. Switching the user triggers of the table is an ALTER TABLE, not a data problem: make sure the applying role owns the table and that nothing else in the transaction left pending trigger events on it, then apply again; if it repeats, report it to the platform maintainers."
+          : p.statement === "update"
+            ? "Nothing was written. Fix the data the step reads, or its expression in the promotion record, then plan again. Check constraints, index expressions and generated columns of the table are evaluated under the pinned search_path (pg_catalog, pg_temp), so a function they call must qualify the names it uses."
+            : "Nothing was written. Fix the data the step reads, or its expression in the promotion record, then plan again.",
+      uk: (p) =>
+        p.statement === "trigger-disable" || p.statement === "trigger-enable"
+          ? "Нічого не записано. Перемикання тригерів користувача таблиці — це ALTER TABLE, а не проблема даних: переконайтеся, що роль застосування володіє таблицею і що ніщо інше в транзакції не лишило на ній відкладених подій тригерів, і застосуйте знову; якщо повториться — повідомте супровідникам платформи."
+          : p.statement === "update"
+            ? "Нічого не записано. Виправте дані, які читає крок, або його вираз у записі промоції й сплануйте знову. CHECK-обмеження, вирази індексів і згенеровані колонки таблиці обчислюються під закріпленим search_path (pg_catalog, pg_temp), тож функція, яку вони викликають, мусить кваліфікувати імена, що вживає."
+            : "Нічого не записано. Виправте дані, які читає крок, або його вираз у записі промоції й сплануйте знову.",
     },
   },
   "apply.data-step-narrowing": {
@@ -2780,7 +2801,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         : p.reason === "sequenceSchema"
           ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
           : p.reason === "dataStepTable"
-            ? `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has inheritance children or is partitioned, so one update and its preservation measure would cover different rows`
+            ? p.detail === "rule"
+              ? `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has an UPDATE rewrite rule, which would run other statements beside or instead of the update of the data steps, so the write could not prove the rows it wrote`
+              : `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has inheritance children or is partitioned, so one update and its preservation measure would cover different rows`
             : p.reason === "dataStepType"
               ? p.detail === "oldType"
                 ? `Data step ${p.step} in the promotion ${p.file} fills ${p.column} of ${p.table}, whose type also changes, and the old type ${p.type} is not an unbounded string type, so the value written before the change could be rounded silently`
@@ -2800,7 +2823,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         : p.reason === "sequenceSchema"
           ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
           : p.reason === "dataStepTable"
-            ? `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має нащадків за успадкуванням чи партиціонована, тож один запис і його замір збереження охопили б різні рядки`
+            ? p.detail === "rule"
+              ? `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має правило перезапису UPDATE, яке виконало б інші оператори поряд з оновленням кроків даних чи замість нього, тож запис не довів би записані рядки`
+              : `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має нащадків за успадкуванням чи партиціонована, тож один запис і його замір збереження охопили б різні рядки`
             : p.reason === "dataStepType"
               ? p.detail === "oldType"
                 ? `Крок даних ${p.step} промоції ${p.file} заповнює ${p.column} таблиці ${p.table}, тип якої теж змінюється, а старий тип ${p.type} — не рядковий тип без межі, тож значення, записане до зміни, могло б мовчки округлитися`
@@ -2819,11 +2844,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.reason === "sequenceSchema"
           ? "No plan was written. Move the sequence into the schema of the table or remove the dependency before promoting."
           : p.reason === "dataStepTable"
-            ? "No plan was written. Promote this table without data steps."
+            ? p.detail === "rule"
+              ? "No plan was written. Drop the UPDATE rule of the table before promoting, or promote this table without data steps."
+              : "No plan was written. Promote this table without data steps."
             : p.reason === "dataStepType"
               ? p.detail === "cast"
                 ? "No plan was written. Cast the fill expression explicitly to the type of the column."
-                : "No plan was written. Apply the change of the type first (a plan of its own), then promote."
+                : p.detail === "unparsed"
+                  ? "No plan was written. Give the column a type the plan can name: a type name, optionally qualified with its schema, with modifiers or array bounds if needed; or promote without a data step on this column."
+                  : "No plan was written. Apply the change of the type first (a plan of its own), then promote."
               : p.reason === "dataStepKey"
                 ? "No plan was written. A data step addresses rows by the single-column primary key of the table, which keeps its name meaning and type through the promotion."
                 : p.reason === "dataStepReferenced"
@@ -2833,11 +2862,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.reason === "sequenceSchema"
           ? "План не записано. Перенесіть послідовність у схему таблиці або зніміть залежність перед промоцією."
           : p.reason === "dataStepTable"
-            ? "План не записано. Промотуйте цю таблицю без кроків даних."
+            ? p.detail === "rule"
+              ? "План не записано. Зніміть правило UPDATE таблиці перед промоцією або промотуйте цю таблицю без кроків даних."
+              : "План не записано. Промотуйте цю таблицю без кроків даних."
             : p.reason === "dataStepType"
               ? p.detail === "cast"
                 ? "План не записано. Приведіть вираз fill явно до типу колонки."
-                : "План не записано. Спершу застосуйте зміну типу окремим планом, потім промотуйте."
+                : p.detail === "unparsed"
+                  ? "План не записано. Дайте колонці тип, який план може назвати: ім'я типу, за потреби кваліфіковане схемою, з модифікаторами чи межами масиву, коли треба; або промотуйте без кроку даних на цю колонку."
+                  : "План не записано. Спершу застосуйте зміну типу окремим планом, потім промотуйте."
               : p.reason === "dataStepKey"
                 ? "План не записано. Крок даних адресує рядки одноколонковим первинним ключем таблиці, який зберігає зміст і тип через промоцію."
                 : p.reason === "dataStepReferenced"

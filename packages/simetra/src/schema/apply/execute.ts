@@ -664,18 +664,22 @@ async function runAttempt(
 
   // 10. Запис кроків даних — після наміру (колонка-ціль уже є) і до кроків
   // двигуна (сторож звуження бачить записане, `SET NOT NULL` іде після).
-  // Відкладене одразу після запису: інакше наступна DDL тієї самої таблиці
-  // впала б «pending trigger events». Відновити «як було» не можна: `ALL
-  // DEFERRED` відклав би й обмеження `INITIALLY IMMEDIATE`, а фаза 13 однаково
-  // робить те саме для решти плану. Відкладені тригери користувача
-  // спрацьовують уже під налаштуваннями транзакції, як у фазі 13: закріплений
-  // `search_path` зламав би тіло, що називає об'єкти без схеми. Результат
-  // запису (обчислено й записано за таблицею) — для звіту репетиції П3-2b-3
+  // Відкладене — один раз після запису всіх таблиць (рішення В17): раніше
+  // воно перевірило б проміжний стан, де записано лише частину одиниці.
+  // І до увімкнення тригерів: увімкнення — `ALTER TABLE`, а з відкладеними
+  // подіями на таблиці він падає `55006`, як і наступна DDL тієї самої
+  // таблиці. Відновити «як було» не можна: `ALL DEFERRED` відклав би й
+  // обмеження `INITIALLY IMMEDIATE`, а фаза 13 однаково робить те саме для
+  // решти плану. Відкладені тригери користувача спрацьовують уже під
+  // налаштуваннями транзакції, як у фазі 13: закріплений `search_path`
+  // зламав би тіло, що називає об'єкти без схеми. Результат запису
+  // (обчислено й записано за таблицею) — для звіту репетиції П3-2b-3
   if (data.length > 0) {
     await withLocalSettings(tx, DATA_SETTINGS, () =>
       writeData(tx, data, computed)
     )
     await constraintsNow(tx, "data")
+    await enableTriggers(tx, data)
   }
   // 11. Кроки двигуна разом зі сторожами — під преамбулою, такою, як її
   // записав план, і з поверненням налаштувань транзакції після них. Пару
@@ -886,14 +890,21 @@ async function dataGuard(
 }
 
 /**
+ * Оператор фази запису (рішення В17): збій `ALTER TABLE` на тригері — не
+ * проблема даних, тож діагностика називає оператор, і порада йде за ним.
+ */
+type WriteStatement = "trigger-disable" | "update" | "trigger-enable"
+
+/**
  * Оператор таблиці даних (CTAS, лічильник, тригери, `UPDATE`). Помилка бази,
  * що не повторювана, — `apply.data-step-failed` з таблицею й її кроками;
- * повторювана летить на повтор спроби, як скрізь у раннері.
+ * повторювана летить на повтор спроби, як скрізь у раннері. `at` — фаза 8
+ * (`compute`) чи оператор фази 10 (`phase: "write"` з `statement`).
  */
 async function dataQuery<R extends Record<string, unknown>>(
   tx: ApplyTransaction,
   t: DataTable,
-  phase: "compute" | "write",
+  at: "compute" | WriteStatement,
   sql: string
 ): Promise<R[]> {
   try {
@@ -901,7 +912,9 @@ async function dataQuery<R extends Record<string, unknown>>(
   } catch (error) {
     if (!(error instanceof ApplyDbError) || retryable(error)) throw error
     throw stop("failed", "apply.data-step-failed", {
-      phase,
+      ...(at === "compute"
+        ? { phase: "compute" }
+        : { phase: "write", statement: at }),
       table: dataTableName(t),
       steps: t.columns.map((c) => c.step).join(", "),
       sqlstate: error.sqlstate ?? "unknown",
@@ -913,8 +926,10 @@ async function dataQuery<R extends Record<string, unknown>>(
 /**
  * Фаза 10 під `DATA_SETTINGS`, на таблицю в нових іменах: звірка тригерів
  * користувача з планом (до вимкнення: після нього живий перелік уже `D`),
- * `DISABLE TRIGGER` поштучно, один `UPDATE`, записано = обчислено, `ENABLE
- * [ALWAYS] TRIGGER`. Повертає лічильники таблиць у старих іменах.
+ * `DISABLE TRIGGER` поштучно, один `UPDATE`, записано = обчислено. Тригери
+ * вмикає `enableTriggers` після `SET CONSTRAINTS` (рішення В17): `55006`
+ * перевіряється на таблицю, тож вимкнення наступної таблиці чужі відкладені
+ * події не зупиняють. Повертає лічильники таблиць у старих іменах.
  */
 async function writeData(
   tx: ApplyTransaction,
@@ -935,11 +950,12 @@ async function writeData(
     const live = await readUserTriggers(tx, t.after)
     if (canonicalize(live) !== canonicalize(t.triggers))
       throw stop("refused", "apply.target-changed", { sections: "triggers" })
-    for (const sql of triggerSql(t, false)) await dataQuery(tx, t, "write", sql)
+    for (const sql of triggerSql(t, false))
+      await dataQuery(tx, t, "trigger-disable", sql)
     const [row] = await dataQuery<{ written: string | number }>(
       tx,
       t,
-      "write",
+      "update",
       dataWriteSql(t)
     )
     if (row === undefined) throw new Error("the written count returned no row")
@@ -954,7 +970,6 @@ async function writeData(
         computed: was,
         written,
       })
-    for (const sql of triggerSql(t, true)) await dataQuery(tx, t, "write", sql)
     out.push({
       schema: t.before.schema,
       table: t.before.table,
@@ -963,6 +978,20 @@ async function writeData(
     })
   }
   return out
+}
+
+/**
+ * Кінець фази 10: тригери користувача всіх таблиць одиниці — у режимі, який
+ * звірено з планом (`ENABLE` чи `ENABLE ALWAYS`), після `SET CONSTRAINTS`.
+ * Під налаштуваннями транзакції: імена в операторі кваліфіковані.
+ */
+async function enableTriggers(
+  tx: ApplyTransaction,
+  tables: readonly DataTable[]
+): Promise<void> {
+  for (const t of tables)
+    for (const sql of triggerSql(t, true))
+      await dataQuery(tx, t, "trigger-enable", sql)
 }
 
 /**

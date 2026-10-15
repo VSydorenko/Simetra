@@ -168,4 +168,77 @@ describe("messages catalog", () => {
       expect(new Set(messages).size, locale).toBe(reasons.length)
     }
   })
+
+  // Рішення В17: збій `ALTER TABLE` на тригері — не проблема даних, а запис
+  // іде під закріпленим `search_path`
+  it("chooses the hint of apply.data-step-failed by the statement", () => {
+    const hint = (params: Record<string, string>, locale: "en" | "uk") =>
+      localize(
+        diagnostic("apply.data-step-failed", "", "", {
+          table: "app.u",
+          steps: "d1",
+          sqlstate: "55006",
+          error: "e",
+          ...params,
+        }),
+        locale
+      ).hint
+    const write = (statement: string) => ({ phase: "write", statement })
+    for (const statement of ["trigger-disable", "trigger-enable"]) {
+      expect(hint(write(statement), "en")).toMatch(/not a data problem/)
+      expect(hint(write(statement), "en")).not.toMatch(/Fix the data/)
+      expect(hint(write(statement), "uk")).not.toMatch(/Виправте дані/)
+    }
+    expect(hint(write("update"), "en")).toMatch(/Fix the data.*search_path/s)
+    expect(hint(write("update"), "uk")).toMatch(/Виправте дані.*search_path/s)
+    expect(hint({ phase: "compute" }, "en")).not.toMatch(/search_path/)
+    // Текст повідомлення теж називає перемикання тригерів, а не запис
+    expect(
+      localize(
+        diagnostic("apply.data-step-failed", "", "", {
+          ...write("trigger-enable"),
+          table: "app.u",
+          steps: "d1",
+          sqlstate: "55006",
+          error: "e",
+        }),
+        "en"
+      ).message
+    ).toMatch(/^Enabling the user triggers of app\.u/)
+  })
+
+  // Рішення В19: тип, якого план не називає, не лікується «спершу зміною типу»
+  it("gives the unparsed type of a data step its own hint", () => {
+    const hint = (detail: string, locale: "en" | "uk") =>
+      localize(
+        diagnostic("plan.promotion-unsupported", "", "", {
+          reason: "dataStepType",
+          detail,
+        }),
+        locale
+      ).hint
+    for (const locale of ["en", "uk"] as const) {
+      expect(hint("unparsed", locale)).not.toBe(hint("missing", locale))
+      expect(hint("unparsed", locale)).not.toBe(hint("cast", locale))
+    }
+    expect(hint("unparsed", "en")).toMatch(/a type the plan can name/)
+    expect(hint("missing", "en")).toMatch(/Apply the change of the type first/)
+  })
+
+  // Рішення В18: правило `UPDATE` — своя причина й порада
+  it("renders the rewrite rule detail of dataStepTable", () => {
+    const text = (detail: string | undefined, locale: "en" | "uk") =>
+      localize(
+        diagnostic("plan.promotion-unsupported", "", "", {
+          reason: "dataStepTable",
+          ...(detail === undefined ? {} : { detail }),
+        }),
+        locale
+      )
+    for (const locale of ["en", "uk"] as const) {
+      expect(text("rule", locale).message).toMatch(/UPDATE/)
+      expect(text("rule", locale).hint).toMatch(/UPDATE/)
+      expect(text(undefined, locale).message).not.toMatch(/UPDATE/)
+    }
+  })
 })

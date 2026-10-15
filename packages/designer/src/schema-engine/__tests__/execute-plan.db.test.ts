@@ -1801,16 +1801,42 @@ describe("executePlan", () => {
       stops?: boolean
       /** Кроки двигуна після запису (і після зміни типу, коли вона є). */
       engine?: PlanStep[]
+      /** Друга таблиця одиниці — табличну частину `app.ds` → `app.dv`. */
+      second?: Pick<DataCase, "columns" | "fills" | "triggers">
     }
 
     const TYPE_STEP = "s3"
+    const SECTION_ID = "00000000-0000-4000-8000-000000000002"
 
     async function dataStepPlan(
       url: string,
       c: DataCase
     ): Promise<ExecutablePlan> {
       const parse = await loadSqlParser()
-      const old = [{ schema: "app", name: "dt" }]
+      // Таблиці одиниці в порядку запису; ідентифікатори колонок — свої в
+      // кожної, а номери кроків наскрізні, як їх дає план
+      const sides = [
+        {
+          id: OBJECT_ID,
+          from: "dt",
+          to: "du",
+          ids: ["1", "2"],
+          columns: c.columns,
+          fills: c.fills,
+          triggers: c.triggers,
+        },
+        ...(c.second === undefined
+          ? []
+          : [
+              {
+                id: SECTION_ID,
+                from: "ds",
+                to: "dv",
+                ids: ["3", "4"],
+                ...c.second,
+              },
+            ]),
+      ]
       const record: PromotionRecord = {
         format: 1,
         base: "0".repeat(64),
@@ -1818,28 +1844,37 @@ describe("executePlan", () => {
         objectId: OBJECT_ID,
         kind: "Catalog",
         labelDropped: false,
-        tables: [{ id: OBJECT_ID, schema: "app", from: "dt", to: "du" }],
-        columns: ["id", ...c.columns].map((name, n) => ({
-          id: `00000000-0000-4000-8000-00000000010${n}`,
-          sourceId: `00000000-0000-4000-8000-00000000020${n}`,
+        tables: sides.map((s) => ({
+          id: s.id,
           schema: "app",
-          table: "du",
-          from: name,
-          to: name,
+          from: s.from,
+          to: s.to,
         })),
+        columns: sides.flatMap((s) =>
+          ["id", ...s.columns].map((name, n) => ({
+            id: `00000000-0000-4000-8000-000000000${s.ids[0]}0${n}`,
+            sourceId: `00000000-0000-4000-8000-000000000${s.ids[1]}0${n}`,
+            schema: "app",
+            table: s.to,
+            from: name,
+            to: name,
+          }))
+        ),
         typeChanges:
           c.typeChange === undefined
             ? []
             : [{ schema: "app", table: "du", ...c.typeChange }],
-        dataSteps: c.fills.map((f) => ({
-          names: "beforeRenames" as const,
-          schema: "app",
-          table: "dt",
-          key: "id",
-          column: f.column,
-          expression: f.expression,
-          kind: f.kind,
-        })),
+        dataSteps: sides.flatMap((s) =>
+          s.fills.map((f) => ({
+            names: "beforeRenames" as const,
+            schema: "app",
+            table: s.from,
+            key: "id",
+            column: f.column,
+            expression: f.expression,
+            kind: f.kind,
+          }))
+        ),
         retired: [],
         relaxed: [],
         tightened: [],
@@ -1850,30 +1885,37 @@ describe("executePlan", () => {
         rewrittenUnits: [],
         contractChanges: [],
       }
-      const data: DataTable[] = [
-        {
-          temp: "simetra_fill_1",
-          before: { schema: "app", table: "dt", key: "id" },
-          after: { schema: "app", table: "du", key: "id" },
-          columns: c.fills.map((f, i) => ({
-            step: `d${i + 1}`,
-            column: f.column,
-            type: f.type,
-            expression: f.expression,
-            kind: f.kind,
-            guard: dataGuardSql({ schema: "app", table: "dt" }, f, "compare"),
-          })),
-          triggers: c.triggers ?? [],
-        },
+      let next = 0
+      const data: DataTable[] = sides.map((s, t) => ({
+        temp: `simetra_fill_${t + 1}`,
+        before: { schema: "app", table: s.from, key: "id" },
+        after: { schema: "app", table: s.to, key: "id" },
+        columns: s.fills.map((f) => ({
+          step: `d${++next}`,
+          column: f.column,
+          type: f.type,
+          expression: f.expression,
+          kind: f.kind,
+          guard: dataGuardSql({ schema: "app", table: s.from }, f, "compare"),
+        })),
+        triggers: s.triggers ?? [],
+      }))
+      const old = (s: (typeof sides)[number]) => [
+        { schema: "app", name: s.from },
       ]
       const steps: PlanStep[] = [
-        { ...intentStep("ALTER TABLE app.dt RENAME TO du", old), id: "s1" },
-        ...c.fills
-          .filter((f) => f.mapped !== true)
-          .map((f, i) => ({
+        ...sides.map((s, t) => ({
+          ...intentStep(`ALTER TABLE app.${s.from} RENAME TO ${s.to}`, old(s)),
+          id: t === 0 ? "s1" : "s1b",
+        })),
+        ...sides
+          .flatMap((s) =>
+            s.fills.filter((f) => f.mapped !== true).map((f) => ({ s, f }))
+          )
+          .map(({ s, f }, i) => ({
             ...intentStep(
-              `ALTER TABLE app.du ADD COLUMN ${f.column} ${f.type}`,
-              old
+              `ALTER TABLE app.${s.to} ADD COLUMN ${f.column} ${f.type}`,
+              old(s)
             ),
             id: `s2${String.fromCharCode(97 + i)}`,
           })),
@@ -1913,19 +1955,24 @@ describe("executePlan", () => {
         )
       }
       steps.push(...(c.engine ?? []))
-      const newToOld = new Map([[tableKey("app", "du"), tableKey("app", "dt")]])
-      const source: PhysicalTable = {
+      const newToOld = new Map(
+        sides.map((s) => [tableKey("app", s.to), tableKey("app", s.from)])
+      )
+      const sources: PhysicalTable[] = sides.map((s) => ({
         schema: "app",
-        name: "dt",
-        origin: { objectId: OBJECT_ID },
+        name: s.from,
+        origin:
+          s.id === OBJECT_ID
+            ? { objectId: OBJECT_ID }
+            : { objectId: OBJECT_ID, tabularSectionId: s.id },
         rowLevelSecurity: "off",
         columns: [],
-        primaryKey: { name: "dt_pkey", columns: ["id"] },
+        primaryKey: { name: `${s.from}_pkey`, columns: ["id"] },
         uniques: [],
         checks: [],
         foreignKeys: [],
         indexes: [],
-      }
+      }))
       const preservation = preservationPlan(
         record,
         {
@@ -1934,7 +1981,7 @@ describe("executePlan", () => {
           tempNames: new Map(),
           columns: [],
         },
-        { tables: [source] },
+        { tables: sources },
         new Map(
           c.typeChange === undefined
             ? []
@@ -2125,6 +2172,149 @@ describe("executePlan", () => {
           ],
         })
         expect(await other(url, "select p from app.dt")).toEqual([{ p: 1 }])
+      })
+    })
+
+    /** Тригер користувача, що лише пропускає рядок: важить його режим. */
+    const KEEP = `
+      create function app.keep() returns trigger language plpgsql as $$
+        begin return new; end $$;`
+    /** Режими тригерів за іменем — до кінця транзакції. */
+    const MODES = `select json_object_agg(tgname, tgenabled::text order by tgname)
+      as modes from pg_trigger where tgname like '%_keep'`
+
+    // Рішення В17: увімкнення тригера — `ALTER TABLE`, а він неможливий, поки
+    // на таблиці є відкладені події (`55006`). Вихідний відкладений FK ставить
+    // подію на саму записувану таблицю
+    it("restores the triggers of a table with a deferred outbound foreign key", async () => {
+      const setup = `${BASE}; ${KEEP}
+        create table app.dp (id int primary key);
+        insert into app.dp values (1), (2);
+        create table app.dt (id int primary key, c text,
+          p int references app.dp deferrable initially deferred);
+        insert into app.dt values (1, 'a', 1), (2, null, 1);
+        create trigger dt_keep before update on app.dt
+          for each row execute function app.keep();`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["c", "p"],
+          fills: [
+            {
+              column: "p",
+              expression: "p + 1",
+              kind: "repair",
+              type: "integer",
+              mapped: true,
+            },
+            CONVERSION,
+          ],
+          triggers: [{ name: "dt_keep", enabled: "O" }],
+        })
+        const seen = observing(
+          apply,
+          `select (select json_agg(json_build_object('p', p, 'label', label)
+             order by id) from app.du) as rows, (${MODES}) as modes`
+        )
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
+        expect(seen.rows()).toEqual([
+          {
+            rows: [
+              { p: 2, label: "A" },
+              { p: 2, label: null },
+            ],
+            modes: { dt_keep: "O" },
+          },
+        ])
+      })
+    })
+
+    // Вхідний відкладений FK `NO ACTION` ставить подію на таблицю, на яку
+    // посилаються, — тобто знову на записувану
+    it("restores the triggers of a table with a deferred inbound foreign key", async () => {
+      const setup = `${BASE}; ${KEEP}
+        create table app.dt (id int primary key, code text unique);
+        insert into app.dt values (1, 'A'), (2, 'b');
+        create table app.dr (id int primary key,
+          code text references app.dt (code) deferrable initially deferred);
+        insert into app.dr values (1, 'A');
+        create trigger dt_keep before update on app.dt
+          for each row execute function app.keep();`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["code"],
+          fills: [
+            {
+              column: "code",
+              expression: "upper(code)",
+              kind: "repair",
+              type: "text",
+              mapped: true,
+            },
+          ],
+          triggers: [{ name: "dt_keep", enabled: "O" }],
+        })
+        const seen = observing(
+          apply,
+          `select (select json_agg(code order by id) from app.du) as codes,
+             (${MODES}) as modes`
+        )
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
+        expect(seen.rows()).toEqual([
+          { codes: ["A", "B"], modes: { dt_keep: "O" } },
+        ])
+      })
+    })
+
+    // Вердикт архітектора до В17: проміжний стан між записами двох таблиць
+    // одиниці порушує відкладений FK A → B, і перевірка не сміє настати
+    // раніше за запис обох; вимкнення тригерів B після запису A не падає
+    it("writes two tables of a unit before the deferred check and restores both", async () => {
+      const setup = `${BASE}; ${KEEP}
+        create table app.ds (id int primary key, code text unique);
+        insert into app.ds values (1, 'a'), (2, 'b');
+        create table app.dt (id int primary key,
+          code text references app.ds (code) deferrable initially deferred);
+        insert into app.dt values (1, 'a'), (2, 'b');
+        create trigger dt_keep before update on app.dt
+          for each row execute function app.keep();
+        create trigger ds_keep before update on app.ds
+          for each row execute function app.keep();
+        alter table app.ds enable always trigger ds_keep;`
+      const UPPER_CODE: Fill = {
+        column: "code",
+        expression: "upper(code)",
+        kind: "repair",
+        type: "text",
+        mapped: true,
+      }
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["code"],
+          fills: [UPPER_CODE],
+          triggers: [{ name: "dt_keep", enabled: "O" }],
+          second: {
+            columns: ["code"],
+            fills: [UPPER_CODE],
+            triggers: [{ name: "ds_keep", enabled: "A" }],
+          },
+        })
+        const seen = observing(
+          apply,
+          `select (select json_agg(code order by id) from app.du) as du,
+             (select json_agg(code order by id) from app.dv) as dv,
+             (${MODES}) as modes`
+        )
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
+        expect(seen.rows()).toEqual([
+          {
+            du: ["A", "B"],
+            dv: ["A", "B"],
+            modes: { ds_keep: "A", dt_keep: "O" },
+          },
+        ])
       })
     })
 
@@ -2345,6 +2535,7 @@ describe("executePlan", () => {
               code: "apply.data-step-failed",
               params: {
                 phase: "write",
+                statement: "update",
                 table: "app.du",
                 steps: "d1",
                 sqlstate: "23514",
