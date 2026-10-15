@@ -1765,6 +1765,8 @@ describe("executePlan", () => {
       typeChange?: { column: string; from: string; to: string }
       /** Спроба зупиняється до звірки з бажаним відбитком. */
       stops?: boolean
+      /** Кроки двигуна після запису (і після зміни типу, коли вона є). */
+      engine?: PlanStep[]
     }
 
     const TYPE_STEP = "s3"
@@ -1876,6 +1878,7 @@ describe("executePlan", () => {
           })
         )
       }
+      steps.push(...(c.engine ?? []))
       const newToOld = new Map([[tableKey("app", "du"), tableKey("app", "dt")]])
       const source: PhysicalTable = {
         schema: "app",
@@ -1975,7 +1978,7 @@ describe("executePlan", () => {
         })
         const seen = observing(apply, WRITTEN)
         const outcome = await run(seen.db, url, plan)
-        expect(outcome).toMatchObject({ status: done })
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
         expect(seen.rows()).toEqual([{ rows: UPPER, mode: "O" }])
       })
     })
@@ -1994,7 +1997,7 @@ describe("executePlan", () => {
         })
         const seen = observing(apply, WRITTEN)
         const outcome = await run(seen.db, url, plan)
-        expect(outcome).toMatchObject({ status: done })
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
         expect(seen.rows()).toEqual([{ rows: UPPER, mode: "A" }])
       })
     })
@@ -2066,6 +2069,15 @@ describe("executePlan", () => {
               mapped: true,
             },
           ],
+          // DDL тієї самої таблиці після запису: без `SET CONSTRAINTS` фази
+          // 10 вона впала б `55006 pending trigger events`
+          engine: [
+            step("s4", "ALTER TABLE app.du ADD COLUMN extra int", {
+              verb: "alter",
+              lockClass: "accessExclusive",
+              lockedTables: [{ schema: "app", name: "du" }],
+            }),
+          ],
           stops: true,
         })
         const outcome = await run(apply, url, plan)
@@ -2079,6 +2091,46 @@ describe("executePlan", () => {
           ],
         })
         expect(await other(url, "select p from app.dt")).toEqual([{ p: 1 }])
+      })
+    })
+
+    // Вердикт архітектора до задачі 5: відкладений тригер користувача фази 10
+    // спрацьовує під налаштуваннями транзакції. Подію ставить каскад FK на
+    // іншу таблицю (тригери записуваної таблиці вимкнено), а тіло називає
+    // таблицю `public` без схеми — під закріпленим `search_path` її немає
+    it("fires a deferred user trigger of the write under the transaction settings", async () => {
+      const setup = `${BASE};
+        create table public.dt_seen (id int);
+        create table app.dt (id int primary key, code text unique);
+        insert into app.dt values (1, 'a'), (2, 'b');
+        create table app.dr (id int primary key,
+          code text references app.dt (code) on update cascade);
+        insert into app.dr values (1, 'a');
+        create function app.dr_seen() returns trigger language plpgsql as $$
+          begin insert into dt_seen values (new.id); return null; end $$;
+        create constraint trigger dr_seen after update on app.dr
+          deferrable initially deferred
+          for each row execute function app.dr_seen();`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["code"],
+          fills: [
+            {
+              column: "code",
+              expression: "upper(code)",
+              kind: "repair",
+              type: "text",
+              mapped: true,
+            },
+          ],
+        })
+        const seen = observing(
+          apply,
+          "select (select json_agg(id) from public.dt_seen) as seen, (select json_agg(code order by id) from app.dr) as codes"
+        )
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
+        expect(seen.rows()).toEqual([{ seen: [1], codes: ["A"] }])
       })
     })
 

@@ -667,13 +667,16 @@ async function runAttempt(
   // Відкладене одразу після запису: інакше наступна DDL тієї самої таблиці
   // впала б «pending trigger events». Відновити «як було» не можна: `ALL
   // DEFERRED` відклав би й обмеження `INITIALLY IMMEDIATE`, а фаза 13 однаково
-  // робить те саме для решти плану. Результат запису (обчислено й записано за
-  // таблицею) — для звіту репетиції П3-2b-3
-  if (data.length > 0)
-    await withLocalSettings(tx, DATA_SETTINGS, async () => {
-      await writeData(tx, data, computed)
-      await constraintsNow(tx, "data")
-    })
+  // робить те саме для решти плану. Відкладені тригери користувача
+  // спрацьовують уже під налаштуваннями транзакції, як у фазі 13: закріплений
+  // `search_path` зламав би тіло, що називає об'єкти без схеми. Результат
+  // запису (обчислено й записано за таблицею) — для звіту репетиції П3-2b-3
+  if (data.length > 0) {
+    await withLocalSettings(tx, DATA_SETTINGS, () =>
+      writeData(tx, data, computed)
+    )
+    await constraintsNow(tx, "data")
+  }
   // 11. Кроки двигуна разом зі сторожами — під преамбулою, такою, як її
   // записав план, і з поверненням налаштувань транзакції після них. Пару
   // виконуємо лише разом із ревалідацією (R22 плану П3-2a):
@@ -861,7 +864,8 @@ async function dataGuard(
   let lost: number
   try {
     const [row] = await tx.query<{ lost: string | number }>(c.guard)
-    lost = Number(row?.lost ?? 0)
+    if (row === undefined) throw new Error("the cast guard returned no row")
+    lost = Number(row.lost)
   } catch (error) {
     if (!(error instanceof ApplyDbError) || retryable(error)) throw error
     throw stop("failed", "apply.data-step-failed", {

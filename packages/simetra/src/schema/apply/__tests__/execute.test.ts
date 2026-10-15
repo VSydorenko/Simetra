@@ -253,6 +253,8 @@ interface Script {
   lost?: (label: string) => number
   /** Живі тригери користувача записуваної таблиці; типово немає. */
   triggers?: { name: string; enabled: string }[]
+  /** Сторож приведення кроку даних не повертає рядка. */
+  noGuardRow?: boolean
   /** Лічильники обчислених і записаних рядків; типово 3 і стільки ж. */
   computed?: number
   written?: number
@@ -357,6 +359,8 @@ function dataRows(
     return [{ role: script.replicationRole ?? "origin" }]
   if (label === "temp-name") return [{ taken: script.tempTaken ?? false }]
   if (label === "triggers") return script.triggers ?? []
+  if (label?.startsWith("guard ") === true && script.noGuardRow === true)
+    return []
   if (label?.startsWith("guard ") === true)
     return [{ lost: String(script.lost?.(label) ?? 0) }]
   if (label?.startsWith("count ") === true)
@@ -2403,8 +2407,9 @@ describe("executePlan", () => {
         "ALTER TABLE app.u DISABLE TRIGGER tg",
         "write app.u",
         "ALTER TABLE app.u ENABLE TRIGGER tg",
-        "set-constraints",
         "set-settings",
+        // Відкладене — вже під налаштуваннями транзакції, як у фазі 13
+        "set-constraints",
         // 11. Кроки двигуна під преамбулою
         "get-settings",
         "set-settings",
@@ -2428,6 +2433,22 @@ describe("executePlan", () => {
       ])
         expect(seen[label], label).toEqual([pinned])
       expect(seen["ALTER TABLE app.u ADD COLUMN d text"]).toEqual([SESSION])
+      // Відкладені тригери користувача фаз 10 і 13 — під налаштуваннями
+      // транзакції: закріплений `search_path` зламав би тіла без схеми
+      expect(seen["set-constraints"]).toEqual([SESSION, SESSION])
+    })
+
+    it("throws when the cast guard returns no row", async () => {
+      const { log } = fakeDb()
+      await expect(
+        executePlan(
+          fakeDb({ triggers: LIVE, noGuardRow: true }).db,
+          target,
+          await withData(),
+          { ...rehearse, rehearsal: stubRehearsal }
+        )
+      ).rejects.toThrow(/cast guard returned no row/)
+      expect(log).toEqual([])
     })
 
     it("keeps the phase order of a plan without data steps", async () => {
@@ -2829,6 +2850,58 @@ describe("executePlan", () => {
         await broken(
           await withData({
             data: [{ ...TABLE, after: { ...TABLE.after, table: "v" } }],
+          }),
+          /data steps/
+        )
+        // Ключ і старе ім'я таблиці — не ті, що в записі
+        await broken(
+          await withData({
+            data: [{ ...TABLE, before: { ...TABLE.before, key: "c" } }],
+          }),
+          /data steps/
+        )
+        await broken(
+          await withData({
+            data: [{ ...TABLE, before: { ...TABLE.before, table: "x" } }],
+          }),
+          /data steps/
+        )
+      })
+
+      it("is a broken pipeline when a measure names a step the section does not have", async () => {
+        await broken(
+          await withData({
+            preservation: [
+              {
+                before: { schema: "app", table: "t" },
+                after: { schema: "app", table: "u" },
+                key: { before: "id", after: "id" },
+                columns: [
+                  MEASURE,
+                  {
+                    before: "((\nlower(c)\n)::text)",
+                    after: "e",
+                    dataStep: "d9",
+                  },
+                ],
+              },
+            ],
+          }),
+          /data steps/
+        )
+      })
+
+      it("is a broken pipeline when the measure of a data step reads another column after", async () => {
+        await broken(
+          await withData({
+            preservation: [
+              {
+                before: { schema: "app", table: "t" },
+                after: { schema: "app", table: "u" },
+                key: { before: "id", after: "id" },
+                columns: [{ ...MEASURE, after: "e" }],
+              },
+            ],
           }),
           /data steps/
         )
