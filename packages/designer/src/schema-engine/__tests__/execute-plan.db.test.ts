@@ -18,6 +18,7 @@ import type { CatalogModel, PhysicalTable } from "simetra/model"
 import {
   ApplyConnectionLost,
   ApplyDbError,
+  dataGuardSql,
   desiredForApply,
   executePlan,
   FINGERPRINT_SECTIONS,
@@ -26,6 +27,8 @@ import {
   type ApplyDatabase,
   type ApplyDesired,
   type CatalogFingerprint,
+  type DataStepKind,
+  type DataTable,
   type FingerprintSection,
   type DriftReport,
   type EngineCatalog,
@@ -468,6 +471,71 @@ function counted(db: ApplyDatabase): {
 
 const codes = (outcome: ExecuteOutcome) =>
   outcome.diagnostics.map((d) => d.code)
+
+/**
+ * Порт, що після `fn` і до `COMMIT`/`ROLLBACK` виконує `sql` на тій самій
+ * транзакції й зберігає рядки: після `ROLLBACK` репетиції дані й режим
+ * тригерів повертаються самі, тож перевірка після прогону нічого не доводить.
+ */
+function observing(
+  db: ApplyDatabase,
+  sql: string
+): { db: ApplyDatabase; rows(): Record<string, unknown>[] } {
+  let seen: Record<string, unknown>[] = []
+  return {
+    db: {
+      transaction: (target, end, fn) =>
+        db.transaction(target, end, async (tx) => {
+          const value = await fn(tx)
+          seen = await tx.query(sql)
+          return value
+        }),
+    },
+    rows: () => seen,
+  }
+}
+
+/**
+ * Порт, що читає `sql` на тому самому з'єднанні вже після кінця транзакції
+ * раннера: його `COMMIT`/`ROLLBACK` виконується тут, а кінцю порту лишається
+ * порожня транзакція.
+ */
+function afterEnd(
+  db: ApplyDatabase,
+  sql: string
+): { db: ApplyDatabase; rows(): Record<string, unknown>[] } {
+  let seen: Record<string, unknown>[] = []
+  return {
+    db: {
+      transaction: (target, end, fn) =>
+        db.transaction(target, end, async (tx) => {
+          const value = await fn(tx)
+          await tx.query(end === "commit" ? "COMMIT" : "ROLLBACK")
+          seen = await tx.query(sql)
+          await tx.query("BEGIN")
+          return value
+        }),
+    },
+    rows: () => seen,
+  }
+}
+
+/**
+ * Порт, що до транзакції раннера лишає на з'єднанні сесійний стан `sql`, —
+ * як попередній клієнт того самого backend за пулером (Review Focus 4 плану
+ * П3-2b-2): `BEGIN` порту закомічено порожнім, `sql` іде поза транзакцією.
+ */
+function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
+  return {
+    transaction: (target, end, fn) =>
+      db.transaction(target, end, async (tx) => {
+        await tx.query("COMMIT")
+        await tx.query(sql)
+        await tx.query("BEGIN ISOLATION LEVEL READ COMMITTED")
+        return fn(tx)
+      }),
+  }
+}
 
 describe("executePlan", () => {
   it("applies and records state", async () => {
@@ -1665,6 +1733,543 @@ describe("executePlan", () => {
           ],
         })
         expect(await exists(url, "app.pt")).toBe(true)
+      })
+    })
+  })
+
+  describe.each(["proof", "rehearse"] as const)("data steps (%s)", (mode) => {
+    /**
+     * Промоція `app.dt` → `app.du` з кроками даних (план П3-2b-2, задача 5).
+     * Артефакт зібрано вручну, як у `preservation proof`: секцію `data`
+     * будує план, а тут раннер має отримати саме її. Змаплені колонки
+     * зберігають імена; незмаплена ціль з'являється кроком наміру.
+     */
+    const OBJECT_ID = "00000000-0000-4000-8000-000000000001"
+
+    interface Fill {
+      column: string
+      expression: string
+      kind: DataStepKind
+      /** Тип запису: для змапленої цілі зі зміною типу — старий. */
+      type: string
+      /** Ціль — наявна колонка таблиці, а не нова. */
+      mapped?: boolean
+    }
+
+    interface DataCase {
+      /** Колонки старої таблиці, крім ключа `id`. */
+      columns: string[]
+      fills: Fill[]
+      triggers?: DataTable["triggers"]
+      /** Зміна типу змапленої колонки кроком двигуна `s3` зі сторожем. */
+      typeChange?: { column: string; from: string; to: string }
+      /** Спроба зупиняється до звірки з бажаним відбитком. */
+      stops?: boolean
+    }
+
+    const TYPE_STEP = "s3"
+
+    async function dataStepPlan(
+      url: string,
+      c: DataCase
+    ): Promise<ExecutablePlan> {
+      const parse = await loadSqlParser()
+      const old = [{ schema: "app", name: "dt" }]
+      const record: PromotionRecord = {
+        format: 1,
+        base: "0".repeat(64),
+        result: "1".repeat(64),
+        objectId: OBJECT_ID,
+        kind: "Catalog",
+        labelDropped: false,
+        tables: [{ id: OBJECT_ID, schema: "app", from: "dt", to: "du" }],
+        columns: ["id", ...c.columns].map((name, n) => ({
+          id: `00000000-0000-4000-8000-00000000010${n}`,
+          sourceId: `00000000-0000-4000-8000-00000000020${n}`,
+          schema: "app",
+          table: "du",
+          from: name,
+          to: name,
+        })),
+        typeChanges:
+          c.typeChange === undefined
+            ? []
+            : [{ schema: "app", table: "du", ...c.typeChange }],
+        dataSteps: c.fills.map((f) => ({
+          names: "beforeRenames" as const,
+          schema: "app",
+          table: "dt",
+          key: "id",
+          column: f.column,
+          expression: f.expression,
+          kind: f.kind,
+        })),
+        retired: [],
+        relaxed: [],
+        tightened: [],
+        rowLevelSecurity: [],
+        deleteSemantics: [],
+        conversions: [],
+        movedUnits: [],
+        rewrittenUnits: [],
+        contractChanges: [],
+      }
+      const data: DataTable[] = [
+        {
+          temp: "simetra_fill_1",
+          before: { schema: "app", table: "dt", key: "id" },
+          after: { schema: "app", table: "du", key: "id" },
+          columns: c.fills.map((f, i) => ({
+            step: `d${i + 1}`,
+            column: f.column,
+            type: f.type,
+            expression: f.expression,
+            kind: f.kind,
+            guard: dataGuardSql({ schema: "app", table: "dt" }, f, "compare"),
+          })),
+          triggers: c.triggers ?? [],
+        },
+      ]
+      const steps: PlanStep[] = [
+        { ...intentStep("ALTER TABLE app.dt RENAME TO du", old), id: "s1" },
+        ...c.fills
+          .filter((f) => f.mapped !== true)
+          .map((f, i) => ({
+            ...intentStep(
+              `ALTER TABLE app.du ADD COLUMN ${f.column} ${f.type}`,
+              old
+            ),
+            id: `s2${String.fromCharCode(97 + i)}`,
+          })),
+      ]
+      if (c.typeChange !== undefined) {
+        const { column, from, to } = c.typeChange
+        const sql = `ALTER TABLE "app"."du" ALTER COLUMN "${column}" TYPE ${to} USING "${column}"::${to}`
+        const source: CatalogModel = {
+          tables: [
+            {
+              schema: "app",
+              name: "du",
+              rowLevelSecurity: "off",
+              columns: [
+                { name: "id", type: "integer", notNull: true },
+                { name: column, type: from, notNull: false },
+              ],
+              uniques: [],
+              checks: [],
+              foreignKeys: [],
+              indexes: [],
+            },
+          ],
+          enumTypes: [],
+          units: [],
+        }
+        const result = typeGuards({ id: TYPE_STEP, sql }, source, parse)
+        if (!("guards" in result)) throw new Error(result.refusal.message)
+        steps.push(
+          step(TYPE_STEP, sql, {
+            verb: "alter",
+            class: "destructive",
+            lockClass: "accessExclusive",
+            lockedTables: [{ schema: "app", name: "du" }],
+            guards: result.guards,
+          })
+        )
+      }
+      const newToOld = new Map([[tableKey("app", "du"), tableKey("app", "dt")]])
+      const source: PhysicalTable = {
+        schema: "app",
+        name: "dt",
+        origin: { objectId: OBJECT_ID },
+        rowLevelSecurity: "off",
+        columns: [],
+        primaryKey: { name: "dt_pkey", columns: ["id"] },
+        uniques: [],
+        checks: [],
+        foreignKeys: [],
+        indexes: [],
+      }
+      const preservation = preservationPlan(
+        record,
+        {
+          steps: [],
+          tablesNewToOld: newToOld,
+          tempNames: new Map(),
+          columns: [],
+        },
+        { tables: [source] },
+        new Map(
+          c.typeChange === undefined
+            ? []
+            : [[JSON.stringify(["app", "du", c.typeChange.column]), TYPE_STEP]]
+        ),
+        data
+      )
+      return planFor(url, steps, {
+        locks: locksOf(steps, newToOld),
+        promotion: {
+          recordHash: await promotionRecordHash(record),
+          record,
+          permissionItems: [],
+          preservation,
+          columns: [],
+          canonicalNames: [],
+          conversions: [],
+          data,
+        },
+        ...(c.stops === true ? { desiredFingerprint: NOT_COMPARED } : {}),
+      })
+    }
+
+    const run = (
+      db: ApplyDatabase,
+      url: string,
+      plan: ExecutablePlan
+    ): Promise<ExecuteOutcome> => {
+      // Дозвіл — лише руйнівному кроку зміни типу, коли він є
+      const allow = plan.steps.some((s) => s.id === TYPE_STEP)
+        ? [TYPE_STEP]
+        : []
+      return executePlan(
+        db,
+        { url },
+        plan,
+        mode === "rehearse"
+          ? { ...options, mode, rehearsal: stubRehearsal, allow }
+          : { ...options, mode, allow }
+      )
+    }
+    const done = mode === "rehearse" ? "rolledBack" : "committed"
+
+    /** Тригер, що дописує `!` до `label` при кожному оновленні рядка. */
+    const BANG = `
+      create table app.dt (id int primary key, c text);
+      insert into app.dt values (1, 'a'), (2, null), (3, 'c');
+      create function app.bang() returns trigger language plpgsql as $$
+        begin new.label := coalesce(new.label, '') || '!'; return new; end $$;
+      create trigger dt_bang before update on app.dt
+        for each row execute function app.bang();`
+    const CONVERSION: Fill = {
+      column: "label",
+      expression: "upper(c)",
+      kind: "conversion",
+      type: "text",
+    }
+    /** Записані значення й режим тригера — до кінця транзакції. */
+    const WRITTEN = `select
+      (select json_agg(json_build_object('id', id, 'label', label) order by id)
+         from app.du) as rows,
+      (select tgenabled::text from pg_trigger where tgname = 'dt_bang') as mode`
+    const UPPER = [
+      { id: 1, label: "A" },
+      { id: 2, label: null },
+      { id: 3, label: "C" },
+    ]
+
+    it("writes a conversion with user triggers off", async () => {
+      await inTarget(`${BASE}; ${BANG}`, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["c"],
+          fills: [CONVERSION],
+          triggers: [{ name: "dt_bang", enabled: "O" }],
+        })
+        const seen = observing(apply, WRITTEN)
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done })
+        expect(seen.rows()).toEqual([{ rows: UPPER, mode: "O" }])
+      })
+    })
+
+    // Review Focus 3: двигун такої таблиці не планує (`engine.unrepresentable`),
+    // тож артефакт зібрано вручну з відбитком цілі, де тригер уже `A`, і
+    // раннер проходить усі перевірки
+    it("restores an ENABLE ALWAYS trigger as always", async () => {
+      const setup = `${BASE}; ${BANG}
+        alter table app.dt enable always trigger dt_bang;`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["c"],
+          fills: [CONVERSION],
+          triggers: [{ name: "dt_bang", enabled: "A" }],
+        })
+        const seen = observing(apply, WRITTEN)
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done })
+        expect(seen.rows()).toEqual([{ rows: UPPER, mode: "A" }])
+      })
+    })
+
+    it("truncates nothing in a backfill of a mapped column", async () => {
+      const setup = `${BASE};
+        create table app.dt (id int primary key, code text);
+        insert into app.dt values (1, repeat('x', 25)), (2, null), (3, 'short');`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["code"],
+          fills: [
+            {
+              column: "code",
+              expression: "coalesce(code, 'x')",
+              kind: "backfill",
+              type: "text",
+              mapped: true,
+            },
+          ],
+          typeChange: {
+            column: "code",
+            from: "text",
+            to: "character varying(20)",
+          },
+          stops: true,
+        })
+        const outcome = await run(apply, url, plan)
+        // Значення записано в старий тип, а звуження ловить сторож кроку
+        // двигуна вже на записаному — без мовчазного обрізання
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.type-narrowing",
+              params: {
+                step: TYPE_STEP,
+                table: "app.du",
+                column: "code",
+                lost: 1,
+              },
+            },
+          ],
+        })
+        expect(
+          await other(url, "select length(code) as n from app.dt where id = 1")
+        ).toEqual([{ n: 25 }])
+      })
+    })
+
+    // Review Focus 2: порушення відкладеного FK — одразу після запису, а не
+    // `55006 pending trigger events` на наступному кроці
+    it("stops a deferred foreign key broken by the write", async () => {
+      const setup = `${BASE};
+        create table app.dp (id int primary key);
+        insert into app.dp values (1);
+        create table app.dt (id int primary key,
+          p int references app.dp deferrable initially deferred);
+        insert into app.dt values (1, 1);`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["p"],
+          fills: [
+            {
+              column: "p",
+              expression: "p + 100",
+              kind: "repair",
+              type: "integer",
+              mapped: true,
+            },
+          ],
+          stops: true,
+        })
+        const outcome = await run(apply, url, plan)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.deferred-constraint-failed",
+              params: { after: "data", sqlstate: "23503" },
+            },
+          ],
+        })
+        expect(await other(url, "select p from app.dt")).toEqual([{ p: 1 }])
+      })
+    })
+
+    // Review Focus 4: сесійна тимчасова таблиця попереднього клієнта на
+    // тому самому backend
+    it("refuses a session temp table left on the backend", async () => {
+      await inTarget(`${BASE}; ${BANG}`, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["c"],
+          fills: [CONVERSION],
+          triggers: [{ name: "dt_bang", enabled: "O" }],
+          stops: true,
+        })
+        const outcome = await run(
+          sessionLeftover(apply, "CREATE TEMP TABLE simetra_fill_1 (k int)"),
+          url,
+          plan
+        )
+        expect(outcome).toMatchObject({
+          status: "refused",
+          diagnostics: [
+            {
+              code: "apply.temp-name-taken",
+              params: { name: "pg_temp.simetra_fill_1" },
+            },
+          ],
+        })
+        expect(await exists(url, "app.dt")).toBe(true)
+      })
+    })
+
+    it("keeps temp tables out of the checks", async () => {
+      const setup = `${BASE};
+        create table app.dt (id int primary key, c text);
+        insert into app.dt values (1, 'a'), (2, null);`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["c"],
+          fills: [CONVERSION],
+        })
+        const seen = afterEnd(
+          apply,
+          "select to_regclass('pg_temp.simetra_fill_1') is null as gone"
+        )
+        const outcome = await run(seen.db, url, plan)
+        // Без `apply.lock-footprint-exceeded` і `apply.function-check-blind`,
+        // відбиток результату — бажаний
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
+        expect(seen.rows()).toEqual([{ gone: true }])
+      })
+    })
+
+    // Review Focus 1: віконна функція в агрегаті заборонена
+    it("measures a windowed expression", async () => {
+      const setup = `${BASE};
+        create table app.dt (id int primary key, c text);
+        insert into app.dt values (3, 'a'), (1, null), (2, 'b');`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["c"],
+          fills: [
+            {
+              column: "seq",
+              expression: "(row_number() over (order by id))::text",
+              kind: "conversion",
+              type: "text",
+            },
+          ],
+        })
+        const seen = observing(
+          apply,
+          "select json_agg(seq order by id) as seq from app.du"
+        )
+        const outcome = await run(seen.db, url, plan)
+        expect(outcome).toMatchObject({ status: done, diagnostics: [] })
+        expect(seen.rows()).toEqual([{ seq: ["1", "2", "3"] }])
+      })
+    })
+
+    it("names the data step whose expression fails", async () => {
+      const setup = `${BASE};
+        create table app.dt (id int primary key, code text);
+        insert into app.dt values (1, '7'), (2, 'x');`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["code"],
+          fills: [
+            {
+              column: "n",
+              expression: "(code)::int",
+              kind: "conversion",
+              type: "integer",
+            },
+          ],
+          stops: true,
+        })
+        const outcome = await run(apply, url, plan)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.data-step-failed",
+              params: {
+                phase: "measure-before",
+                step: "d1",
+                table: "app.du",
+                column: "n",
+                sqlstate: "22P02",
+              },
+            },
+          ],
+        })
+      })
+    })
+
+    // Вердикт архітектора: переповнення приведення — крок, а не сира
+    // помилка. Замір «до» приводить вираз до типу запису раніше за сторож,
+    // тож переповнення ловить він
+    it("names the step whose cast overflows", async () => {
+      const setup = `${BASE};
+        create table app.dt (id int primary key, amount int);
+        insert into app.dt values (1, 12), (2, 123456);`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["amount"],
+          fills: [
+            {
+              column: "price",
+              expression: "(amount)::numeric(4,2)",
+              kind: "conversion",
+              type: "numeric(4,2)",
+            },
+          ],
+          stops: true,
+        })
+        const outcome = await run(apply, url, plan)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.data-step-failed",
+              params: {
+                phase: "measure-before",
+                step: "d1",
+                table: "app.du",
+                column: "price",
+                sqlstate: "22003",
+              },
+            },
+          ],
+        })
+      })
+    })
+
+    it("names the table whose write fails", async () => {
+      const setup = `${BASE};
+        create table app.dt (id int primary key, n int check (n < 100));
+        insert into app.dt values (1, 1), (2, 50);`
+      await inTarget(setup, async (url) => {
+        const plan = await dataStepPlan(url, {
+          columns: ["n"],
+          fills: [
+            {
+              column: "n",
+              expression: "n + 60",
+              kind: "repair",
+              type: "integer",
+              mapped: true,
+            },
+          ],
+          stops: true,
+        })
+        const outcome = await run(apply, url, plan)
+        expect(outcome).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.data-step-failed",
+              params: {
+                phase: "write",
+                table: "app.du",
+                steps: "d1",
+                sqlstate: "23514",
+              },
+            },
+          ],
+        })
+        expect(await other(url, "select n from app.dt order by id")).toEqual([
+          { n: 1 },
+          { n: 50 },
+        ])
       })
     })
   })
