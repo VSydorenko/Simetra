@@ -74,11 +74,16 @@ describe("deploy the desired state to Postgres", () => {
         const catalog = await readCatalog(client, schemas)
         expectCatalogMatchesSnapshot(catalog, model.physical)
         // Функції одиниць і обгортки рухів створені там, де їх чекає модель.
-        const functions = catalog.functions.map((f) => `${f.schema}.${f.name}`)
-        for (const unit of model.sqlUnits) {
-          if (unit.class === "function" || unit.class === "movementQuery") {
-            expect(functions).toContain(`${unit.schema}.${unit.name}`)
-          }
+        // Схеми читаються за самими функціями: функція механіки рядка лежить
+        // у `simetra`, де таблиць моделі немає.
+        const units = model.sqlUnits.filter(
+          (unit) => unit.class === "function" || unit.class === "movementQuery"
+        )
+        const functions = (
+          await readCatalog(client, [...new Set(units.map((u) => u.schema))])
+        ).functions.map((f) => `${f.schema}.${f.name}`)
+        for (const unit of units) {
+          expect(functions).toContain(`${unit.schema}.${unit.name}`)
         }
       })
     })

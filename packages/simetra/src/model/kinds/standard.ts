@@ -418,7 +418,8 @@ export function deletionMarkColumn(): StandardColumnDef {
 }
 
 /**
- * Версія рядка для оптимістичної конкурентності; тригер збільшення — П3.
+ * Версія рядка для оптимістичної конкурентності. Збільшує її разом зі
+ * службовою датою оновлення тригер механіки (`compiler/mechanics-units.ts`).
  * Іде одразу перед службовими датами.
  */
 export function versionColumn(): StandardColumnDef {

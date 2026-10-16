@@ -15,6 +15,7 @@ import {
   metaFiles,
   project,
   uuid,
+  withoutMechanics,
 } from "./helpers"
 
 /**
@@ -50,8 +51,10 @@ function withUsers(entries: Record<string, unknown> = {}) {
   })
 }
 
+// Тригер механіки таблиці «Користувачі» має того самого власника, але
+// належить механіці рядка (mechanics-units.test.ts), а не шару.
 const platformUnits = (model: CompiledModel) =>
-  model.sqlUnits.filter((u) => u.ownerObjectId === USERS_ID)
+  withoutMechanics(model.sqlUnits).filter((u) => u.ownerObjectId === USERS_ID)
 
 function unit(model: CompiledModel, identity: string) {
   const found = model.sqlUnits.find((u) => u.identity === identity)
@@ -73,8 +76,9 @@ describe("platform layer", () => {
     expect(model.physical.tables.map((t) => t.schema)).not.toContain(
       PLATFORM_SCHEMA
     )
+    // Механіка рядка лежить у `simetra` і без «Користувачів» — це не шар.
     expect(
-      model.sqlUnits.filter(
+      withoutMechanics(model.sqlUnits).filter(
         (u) => u.schema === PLATFORM_SCHEMA || u.sql.includes(PLATFORM_SCHEMA)
       )
     ).toEqual([])

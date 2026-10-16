@@ -19,8 +19,10 @@ export { isUuidColumn, singleUuidKeyColumn }
 
 export {
   monthColumn,
+  serviceDateColumns,
   singletonColumn,
   standardLogicalName,
+  versionColumn,
   type FoundElementReference,
   type FoundReference,
   type KindDefinition,

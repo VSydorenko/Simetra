@@ -59,6 +59,7 @@ describe("renderDesiredState", () => {
     expect(labels(state)).toMatchInlineSnapshot(`
       [
         "schema app",
+        "schema simetra",
         "table app.category",
         "index app.category_parent_item_id_idx",
         "index app.category_predefined_name_idx",
@@ -77,6 +78,13 @@ describe("renderDesiredState", () => {
         "unit grant:revoke:table:app.item:public:all",
         "unit grant:revoke:table:app.item:service_role:all",
         "unit grant:grant:table:app.item:authenticated:select",
+        "unit function:simetra.touch()",
+        "unit grant:revoke:function:simetra.touch():anon:execute",
+        "unit grant:revoke:function:simetra.touch():authenticated:execute",
+        "unit grant:revoke:function:simetra.touch():public:execute",
+        "unit grant:revoke:function:simetra.touch():service_role:execute",
+        "unit trigger:app.category.category_simetra_touch",
+        "unit trigger:app.item.item_simetra_touch",
         "foreignKey app.category",
         "foreignKey app.item",
       ]
@@ -90,8 +98,12 @@ describe("renderDesiredState", () => {
     )
     const list = labels(state)
     // Схема `extensions` належить провайдеру: `CREATE SCHEMA` для неї не
-    // емітується, а розширення стоїть перед таблицями.
-    expect(list.filter((l) => l.startsWith("schema "))).toEqual(["schema app"])
+    // емітується, а розширення стоїть перед таблицями. `simetra` — схема
+    // функції механіки рядка.
+    expect(list.filter((l) => l.startsWith("schema "))).toEqual([
+      "schema app",
+      "schema simetra",
+    ])
     expect(list.indexOf("unit extension:uuid-ossp")).toBeGreaterThan(-1)
     expect(list.indexOf("unit extension:uuid-ossp")).toBeLessThan(
       list.findIndex((l) => l.startsWith("table "))

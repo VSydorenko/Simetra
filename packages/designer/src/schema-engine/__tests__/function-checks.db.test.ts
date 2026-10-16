@@ -701,7 +701,18 @@ describe("plpgsql_check", () => {
               }),
               options
             )
-          ).toMatchObject({ status: "committed", diagnostics: [] })
+          ).toMatchObject({
+            status: "committed",
+            // Функція механіки рядка моделі (`simetra.touch()`) відкликає
+            // `EXECUTE` від `PUBLIC`, а роль застосування тут не власник —
+            // перевірка її не бачить; до причини відмови це не стосується
+            diagnostics: [
+              {
+                code: "apply.function-check-blind",
+                params: { count: 1, functions: "simetra.touch()" },
+              },
+            ],
+          })
         },
         `create schema simetra_locked_ext;
          create extension plpgsql_check schema simetra_locked_ext`

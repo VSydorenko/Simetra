@@ -28,6 +28,7 @@ import { checkIntegrity } from "./stages/integrity"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
+import { buildMechanicsUnits } from "./mechanics-units"
 import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
@@ -262,6 +263,13 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildMechanicsUnits(
+      physical,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -274,6 +282,11 @@ export async function runStages(
       `the platform layer of ${name(unit.ownerObjectId)}`,
     access: (unit) => `the access SQL of ${name(unit.ownerObjectId)}`,
     functionExecute: (unit) => `the EXECUTE grant of ${unit.name}`,
+    // Функція механіки й її гранти спільні для всіх таблиць — власника немає.
+    mechanics: (unit) =>
+      unit.ownerObjectId === undefined
+        ? "the row mechanics of the platform"
+        : `the row mechanics of ${name(unit.ownerObjectId)}`,
   }
   // Дослівний грант на об'єкт платформи вже названо своєю помилкою: як
   // тотожна копія згенерованого він не звітується вдруге дублікатом.

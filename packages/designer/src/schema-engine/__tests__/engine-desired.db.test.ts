@@ -250,10 +250,12 @@ describe("compareWithDesired", () => {
   })
 
   it("a model without the users catalog leaves simetra outside the boundary", async () => {
+    // Прийнята таблиця, а не довідник: механіка рядка Catalog лежить у
+    // `simetra` і ввела б схему в межу без шару (simetra out-of-scope.test.ts).
     const compiled = await compile(
       metaFiles({
         "project.meta.json": project(),
-        "catalogs/Party/Party.meta.json": catalog("Party"),
+        "custom-tables/Party/Party.meta.json": customTable("Party"),
       })
     )
     expect(compiled.diagnostics).toEqual([])

@@ -20,6 +20,18 @@ export function withoutAccess<T extends Pick<SqlUnit, "generator">>(
   return units.filter((u) => u.generator !== "access")
 }
 
+/**
+ * Одиниці без механіки рядка: функцію `simetra.touch()`, її гранти й тригер
+ * дає кожна таблиця з колонками механіки (Catalog, Document), тож тест іншого
+ * генератора звіряє свої одиниці без них; механіку звіряє
+ * mechanics-units.test.ts.
+ */
+export function withoutMechanics<T extends Pick<SqlUnit, "generator">>(
+  units: readonly T[]
+): T[] {
+  return units.filter((u) => u.generator !== "mechanics")
+}
+
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */
 export function uuid(n: number): string {
   return `00000000-0000-4000-8000-${n.toString().padStart(12, "0")}`

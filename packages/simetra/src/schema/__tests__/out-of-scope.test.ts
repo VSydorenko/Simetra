@@ -206,9 +206,18 @@ describe("the platform layer joins the boundary by its own schemas", () => {
   })
 
   it("a model without users has no simetra in scope", async () => {
+    // Прийнята таблиця не має механіки рядка, тож `simetra` в межу не дає
+    // нічого, крім шару.
+    const { scope } = await scopeWith({
+      "custom-tables/Codes/Codes.meta.json": customTable("Codes"),
+    })
+    expect(scope.schemas).toEqual(["app"])
+  })
+
+  it("the row mechanics brings simetra into scope without users", async () => {
     const { scope } = await scopeWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
     })
-    expect(scope.schemas).toEqual(["app"])
+    expect(scope.schemas).toEqual(["app", "simetra"])
   })
 })

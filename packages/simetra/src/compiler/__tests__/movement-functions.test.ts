@@ -11,6 +11,7 @@ import {
   salesDocument,
   scopedProject,
   withoutAccess,
+  withoutMechanics,
 } from "./helpers"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
@@ -19,7 +20,7 @@ async function units(entries: Record<string, unknown>) {
   const result = await compile(metaFiles(entries))
   expect(result.diagnostics).toEqual([])
   // Гранти таблиць виду (генератор `access`) звіряє access-units.test.ts.
-  return withoutAccess(result.model!.sqlUnits)
+  return withoutMechanics(withoutAccess(result.model!.sqlUnits))
 }
 
 /** Документ `Sale` із ТЧ `goods` і регістр залишків `Stock` з необов'язковим реквізитом. */

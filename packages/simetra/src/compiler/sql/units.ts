@@ -79,6 +79,7 @@ export type UnitGenerator =
   | "platformLayer"
   | "access"
   | "functionExecute"
+  | "mechanics"
 
 /** Обгортка запиту рухів: поля рухів обов'язкові. */
 export interface MovementQueryUnit extends SqlUnit {

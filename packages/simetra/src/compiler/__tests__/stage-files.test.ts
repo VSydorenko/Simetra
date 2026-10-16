@@ -12,6 +12,7 @@ import {
   scopedProject,
   STOCK_FILE,
   withoutAccess,
+  withoutMechanics,
 } from "./helpers"
 
 function codes(diagnostics: Diagnostic[]): string[] {
@@ -102,7 +103,7 @@ describe("stage 1: files", () => {
     ])
     // Гранти таблиць виду (генератор `access`) звіряє access-units.test.ts.
     expect(
-      withoutAccess(model.sqlUnits).map(
+      withoutMechanics(withoutAccess(model.sqlUnits)).map(
         ({ identity, file, ownerObjectId }) => ({
           identity,
           file,
