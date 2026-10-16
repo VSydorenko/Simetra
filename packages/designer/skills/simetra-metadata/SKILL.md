@@ -267,6 +267,14 @@ created with `create` like any object (kind `EventSubscription`):
 - `handler`: `{ schema?, name }`, a function without arguments that
   `RETURNS trigger`, declared in the closed shell below.
 
+The service date and the row version are kept by the platform, not by your
+code. Every table that has the standard `updatedAt` and `version` columns (a
+Catalog, a Document) gets the row mechanics: a `<table>_simetra_touch`
+trigger calling the shared function `simetra.touch()`. An insert starts the
+version at 1, an update adds 1, and both set the service date to `now()`;
+whatever the client writes into these columns has no effect. Do not write a
+`moddatetime` trigger or a handler that maintains them.
+
 ## Users, authorship and membership
 
 People are platform data, not tables you write yourself:

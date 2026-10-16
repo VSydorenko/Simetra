@@ -53,6 +53,10 @@ are served by `simetra mcp` with the same input.
    enum types `PgEnum`, everything else verbatim `.sql` files; ids of objects
    already described are kept, so a second run on an unchanged database
    changes nothing.
+   The platform's row mechanics (`simetra.touch()`, its grants and the
+   `<table>_simetra_touch` triggers calling it) are never written, even into
+   a directory without metadata: the platform generates them. Another trigger
+   that calls `simetra.touch()` is the table's own and is written.
 5. **Diff.** Run `diff` on the same directory. **An empty diff right after
    introspect is the baseline; any non-empty result is a finding** — report it
    instead of editing the metadata until it disappears.

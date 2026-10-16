@@ -1291,6 +1291,39 @@ describe("reverseGenerate", () => {
     expect(json(result, "sql-debt.json").units).toEqual([])
   })
 
+  it("introspect without a kept folder writes no mechanics units, but keeps own triggers", async () => {
+    // Механікою володіє платформа (рішення 9 плану П3-3a2): без збереженої
+    // теки її не описує жоден файл, але й модуль користувача нею не володіє.
+    // Власний тригер, що кличе ту саму функцію, — уже не механіка.
+    const mechanics = [
+      `CREATE OR REPLACE FUNCTION "simetra"."touch"() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;`,
+      `REVOKE EXECUTE ON FUNCTION "simetra"."touch"() FROM PUBLIC;`,
+      `REVOKE EXECUTE ON FUNCTION "simetra"."touch"() FROM "anon";`,
+      `CREATE TRIGGER "note_simetra_touch" BEFORE INSERT OR UPDATE ON "app"."note" FOR EACH ROW EXECUTE FUNCTION "simetra"."touch"();`,
+    ]
+    const AUDIT_FN =
+      "CREATE FUNCTION app.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER note_audit AFTER UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.audit();"
+    const STAMP =
+      "CREATE TRIGGER note_stamp BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION simetra.touch();"
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units([...mechanics, AUDIT_FN, AUDIT, STAMP].join("\n")),
+      }),
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    const sidecar = result.files.get("custom-tables/Note/Note.sql")
+    expect(sidecar).toContain("CREATE TRIGGER note_audit")
+    expect(sidecar).toContain("CREATE FUNCTION app.audit()")
+    expect(sidecar).toContain("CREATE TRIGGER note_stamp")
+    const written = [...result.files.values()].join("\n")
+    expect(written).not.toContain('"simetra"."touch"')
+    expect(written).not.toContain("note_simetra_touch")
+  })
+
   it("introspect writes no verbatim grant on what the platform grants", async () => {
     // Перший introspect бази, вже керованої Simetra: ADP схеми дали ролям
     // API інші права, ніж бажаний стан, але ACL функції множини й таблиці

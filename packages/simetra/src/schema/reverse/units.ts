@@ -1,6 +1,8 @@
 import {
   diagnostic,
   grantTargetKeys,
+  MECHANICS_FUNCTION,
+  mechanicsTriggerName,
   ownsTarget,
   readSqlUnits,
   unitPlacement,
@@ -229,6 +231,40 @@ function ownerTable(unit: CatalogUnit, ctx: UnitsContext): string | undefined {
   }
 }
 
+const MECHANICS = qualified(MECHANICS_FUNCTION.schema, MECHANICS_FUNCTION.name)
+
+/**
+ * Одиниця механіки рядка (рішення 9 плану П3-3a2): функція
+ * `simetra.touch()`, грант лише на неї й тригер з ім'ям механіки, що кличе
+ * саме її. Ними володіє платформа, тож вони не пишуться й без збереженого
+ * опису теки — модуль користувача ними не володіє. Інший тригер, що кличе
+ * ту саму функцію, — власний тригер таблиці: пропуск за самою схемою
+ * `simetra` його б загубив.
+ */
+function isMechanics(unit: CatalogUnit, ctx: UnitsContext): boolean {
+  switch (unit.class) {
+    case "function":
+      return unit.identity === `function:${MECHANICS}()`
+    case "grant": {
+      const targets = grantTargetKeys(unit, ctx.parse)
+      return (
+        targets.length > 0 &&
+        targets.every((t) => t === `function|${MECHANICS}()`)
+      )
+    }
+    case "trigger": {
+      const table = unitTarget(unit, ctx.parse)?.object
+      return (
+        table !== undefined &&
+        unit.name === mechanicsTriggerName(table) &&
+        triggerFunction(unit, ctx) === MECHANICS
+      )
+    }
+    default:
+      return false
+  }
+}
+
 /** Сегмент імені файлу: лише безпечні символи, `[]` — `_array`. */
 function slug(text: string): string {
   return text
@@ -334,7 +370,12 @@ export function layoutUnits(
       ownsTarget(ctx.platformGrants, target)
     )
   for (const unit of units) {
-    if (ctx.described.has(unit.identity) || platformOwned(unit)) continue
+    if (
+      ctx.described.has(unit.identity) ||
+      platformOwned(unit) ||
+      isMechanics(unit, ctx)
+    )
+      continue
     const path = pathOf(unit)
     grouped.set(path, [...(grouped.get(path) ?? []), unit])
   }
