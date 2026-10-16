@@ -2521,25 +2521,32 @@ describe("platformReplacements", () => {
       over: {
         unique?: boolean
         where?: string
-        classes?: boolean[]
+        nullsNotDistinct?: boolean
         keys?: number
         options?: number[]
+        collations?: (string | null)[]
+        storage?: string[]
+        classes?: boolean[]
       } = {}
-    ) =>
-      eq("index", name, [
+    ) => {
+      // Покласні частини мають довжину ключа, не всіх колонок: INCLUDE-колонки
+      // їх не несуть
+      const keys = columns.slice(0, over.keys ?? columns.length)
+      return eq("index", name, [
         "btree",
         over.unique ?? false,
-        false,
-        over.keys ?? columns.length,
+        over.nullsNotDistinct ?? false,
+        keys.length,
         columns,
-        over.options ?? columns.map(() => 0),
-        columns.map(() => "pg_catalog.uuid_ops"),
-        columns.map(() => null),
-        columns.map(() => null),
+        over.options ?? keys.map(() => 0),
+        keys.map(() => "pg_catalog.uuid_ops"),
+        keys.map(() => null),
+        over.collations ?? keys.map(() => null),
         over.where ?? null,
-        null,
-        over.classes ?? columns.map(() => true),
+        over.storage ?? null,
+        over.classes ?? keys.map(() => true),
       ])
+    }
     const scopeKey = eq("constraint", "item_org_id_id_key", [
       "u",
       "UNIQUE (org_id, id)",
@@ -2613,6 +2620,67 @@ describe("platformReplacements", () => {
             where: "(x)",
           }),
         ])
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover a unique index by a deferrable key", () => {
+      expect(
+        covered(
+          fullIndex("items_org_id_key", ["org_id", "id"], { unique: true }),
+          [
+            eq("constraint", "item_org_id_id_key", [
+              "u",
+              "UNIQUE (org_id, id) DEFERRABLE",
+            ]),
+          ]
+        )
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover a NULLS NOT DISTINCT index by a key without it", () => {
+      expect(
+        covered(
+          fullIndex("items_org_id_key", ["org_id", "id"], {
+            unique: true,
+            nullsNotDistinct: true,
+          })
+        )
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover an index with an explicit collation", () => {
+      expect(
+        covered(
+          fullIndex("items_org_idx", ["org_id"], {
+            collations: ['pg_catalog."C"'],
+          })
+        )
+      ).toEqual(MISSING)
+    })
+
+    it("covers an index whose collation is the column default", () => {
+      expect(
+        covered(
+          fullIndex("items_org_idx", ["org_id"], {
+            collations: ['pg_catalog."default"'],
+          })
+        )
+      ).toEqual([])
+    })
+
+    it("does not cover an index with INCLUDE", () => {
+      expect(
+        covered(fullIndex("items_org_idx", ["org_id", "id"], { keys: 1 }))
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover an index with storage parameters", () => {
+      expect(
+        covered(
+          fullIndex("items_org_idx", ["org_id"], {
+            storage: ["fillfactor=70"],
+          })
+        )
       ).toEqual(MISSING)
     })
 
