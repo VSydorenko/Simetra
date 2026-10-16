@@ -3,6 +3,7 @@ import type { PhysicalSnapshot, SqlUnitClass } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { relationNameText, type SqlParser } from "./parse"
 import {
+  grantObjects,
   pgNamespaceKeys,
   targetParts,
   type PgName,
@@ -790,23 +791,7 @@ function targetReferences(objtype: string, nodes: unknown): Reference[] {
  */
 function grantTargets(unit: SqlUnit, grant: Record<string, unknown>): string[] {
   const objtype = String(grant.objtype)
-  const names: string[] = []
-  let depth = 0
-  let quoted = false
-  let current = ""
-  for (const char of unit.name) {
-    if (char === '"') quoted = !quoted
-    if (!quoted && char === "(") depth += 1
-    if (!quoted && char === ")") depth -= 1
-    if (!quoted && depth === 0 && char === ",") {
-      names.push(current)
-      current = ""
-    } else {
-      current += char
-    }
-  }
-  names.push(current)
-  return names.map((name) => `${objtype}|${name}`)
+  return grantObjects(unit.name).map((name) => `${objtype}|${name}`)
 }
 
 function cteNames(withClause: unknown): string[] {

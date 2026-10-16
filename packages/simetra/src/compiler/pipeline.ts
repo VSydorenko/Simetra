@@ -12,7 +12,15 @@ import type {
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { modelHash } from "./canonical"
 import { accessContracts, buildAccessUnits } from "./access-units"
-import { buildContracts, usersContractOf } from "./contracts"
+import {
+  buildContracts,
+  eventSubscriptionContracts,
+  usersContractOf,
+} from "./contracts"
+import {
+  buildFunctionExecuteUnits,
+  generatedGrantConflicts,
+} from "./function-execute"
 import { buildPresentation } from "./presentation"
 import { readFiles, type FilesStageResult } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
@@ -203,6 +211,23 @@ export async function runStages(
     parse
   )
   const module = projectModule
+  // Підписки потрібні і контрактам, і грантам обробників — один масив.
+  const eventSubscriptions = eventSubscriptionContracts(
+    stage1.objects,
+    physical,
+    stage1.project
+  )
+  // Функцію множини `membership` з її грантами дає генератор членства.
+  const setFunctions = stage1.project.scopeKinds.flatMap((kind) =>
+    typeof kind.setFunction === "string"
+      ? []
+      : [
+          {
+            schema: kind.setFunction.schema ?? defaultSchema,
+            name: kind.setFunction.name,
+          },
+        ]
+  )
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
@@ -230,6 +255,13 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildFunctionExecuteUnits(
+      setFunctions,
+      eventSubscriptions.map((s) => s.handler),
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -243,13 +275,22 @@ export async function runStages(
     access: (unit) => `the access SQL of ${name(unit.ownerObjectId)}`,
     functionExecute: (unit) => `the EXECUTE grant of ${unit.name}`,
   }
-  const collisions = namespaceConflicts(physical, sqlUnits, (unit) =>
-    describeGenerated[must(unit.generator)](unit)
+  // Дослівний грант на об'єкт платформи вже названо своєю помилкою: як
+  // тотожна копія згенерованого він не звітується вдруге дублікатом.
+  const grants = generatedGrantConflicts(sqlUnits, parse)
+  const collisions = namespaceConflicts(
+    physical,
+    sqlUnits.filter((unit) => !grants.flagged.has(unit)),
+    (unit) => describeGenerated[must(unit.generator)](unit)
   )
-  if (collisions.length > 0) {
+  if (grants.diagnostics.length > 0 || collisions.length > 0) {
     return {
       ok: false,
-      diagnostics: sortDiagnostics([...diagnostics, ...collisions]),
+      diagnostics: sortDiagnostics([
+        ...diagnostics,
+        ...grants.diagnostics,
+        ...collisions,
+      ]),
     }
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
@@ -295,7 +336,8 @@ export async function runStages(
       stage1.project.timezone,
       stage3.elementChecks,
       stage1.project,
-      access
+      access,
+      eventSubscriptions
     ),
     presentation: buildPresentation(
       stage1.objects,

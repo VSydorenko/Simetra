@@ -12,7 +12,12 @@ import {
   type PhysicalNameRole,
   type StandardColumnDef,
 } from "simetra/model"
-import { compile, currentDebt, type CompiledModel } from "../compile"
+import {
+  compile,
+  currentDebt,
+  verbatimUnits,
+  type CompiledModel,
+} from "../compile"
 import { derivedFunctionLabels } from "../contracts"
 import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
 import { SQL_DEBT_SCHEMA_FILE } from "../json-schema"
@@ -31,7 +36,11 @@ import {
 } from "../object-files"
 import { PROJECT_FILE } from "../stages/files"
 import { DERIVED_TABLE_LABELS } from "../stages/model"
+import { loadSqlParser } from "../sql/parse"
+import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
+import { statementPositions } from "../sql/units"
 import { changesBetween } from "./changes"
+import { cut, mergeDeletions } from "./text-edits"
 import type { OperationResult } from "./types"
 
 /**
@@ -563,9 +572,60 @@ export async function fixFiles(
   o: CompletionOptions
 ): Promise<OperationResult> {
   const completed = completeFiles(files, o)
+  // Застарілий запис боргу закрив би компіляцію раніше за перевірку грантів,
+  // тож перелік звужено до вирізу; після вирізу — ще раз, без вирізаних.
+  const narrowed = await narrowDebt(completed.files, o.schemaPath)
+  const withoutGrants = await withoutGeneratedGrants(narrowed)
   const { result } = await compileCompletion(files, {
     ...completed,
-    files: await narrowDebt(completed.files, o.schemaPath),
+    files:
+      withoutGrants === narrowed
+        ? narrowed
+        : await narrowDebt(withoutGrants, o.schemaPath),
   })
+  return result
+}
+
+/**
+ * Вирізає дослівні оператори `sql.generated-grant` (рішення 9 плану П3-3a1):
+ * права на ці об'єкти дає платформа, тож оператор лише суперечить їй і
+ * виправлення в нього одне. Виріз — той самий, що в промоції; файл, у якому
+ * лишились самі пробіли, видаляється.
+ */
+async function withoutGeneratedGrants(
+  files: Map<string, string>
+): Promise<Map<string, string>> {
+  const flagged = (await compile(files)).diagnostics.filter(
+    (d) => d.code === "sql.generated-grant"
+  )
+  if (flagged.length === 0) return files
+  const units = await verbatimUnits(files)
+  const parse = await loadSqlParser()
+  const edits = new Map<string, TextEdit[]>()
+  for (const d of flagged) {
+    const unit = units.find(
+      (u) =>
+        u.file === d.file &&
+        u.line === d.params?.line &&
+        u.identity === d.params?.identity
+    )
+    const text = files.get(d.file)
+    if (unit === undefined || text === undefined) continue
+    const position = statementPositions(text, parse).find(
+      (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
+    )
+    if (position === undefined) continue
+    edits.set(d.file, [
+      ...(edits.get(d.file) ?? []),
+      cut(text, position.start, position.end),
+    ])
+  }
+  const result = new Map(files)
+  for (const [file, list] of edits) {
+    const text = files.get(file)!
+    const after = applyEdits(text, mergeDeletions(text, list))
+    if (after.trim() === "") result.delete(file)
+    else result.set(file, after)
+  }
   return result
 }

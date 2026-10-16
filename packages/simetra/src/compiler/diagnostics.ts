@@ -21,6 +21,7 @@ export const COMPILER_RULES = [
   "sql.statement-not-allowed",
   "sql.unit-duplicate",
   "sql.namespace-conflict",
+  "sql.generated-grant",
   "sql.dependency-cycle",
   "sql.closed-shell",
   "sql.function-overload",

@@ -1181,6 +1181,32 @@ export function grantParts(node: GrantStmt): {
   }
 }
 
+/**
+ * Об'єкти гранту з імені його одиниці: `classify` склеює канонічні цілі
+ * комою, а кома всередині сигнатури функції чи імені в лапках їх не ділить.
+ * Канонічна сигнатура (типи аргументів моделі) є лише тут: дерево розбору
+ * типів моделі не резолвить, тож ціль гранту читають з імені.
+ */
+export function grantObjects(name: string): string[] {
+  const names: string[] = []
+  let depth = 0
+  let quoted = false
+  let current = ""
+  for (const char of name) {
+    if (char === '"') quoted = !quoted
+    if (!quoted && char === "(") depth += 1
+    if (!quoted && char === ")") depth -= 1
+    if (!quoted && depth === 0 && char === ",") {
+      names.push(current)
+      current = ""
+    } else {
+      current += char
+    }
+  }
+  names.push(current)
+  return names
+}
+
 function roles(nodes: readonly Node[] | undefined): string {
   return sorted(
     (nodes ?? []).map((n) => ("RoleSpec" in n ? role(n.RoleSpec) : ""))

@@ -1,5 +1,7 @@
 import {
   diagnostic,
+  grantTargetKeys,
+  ownsTarget,
   readSqlUnits,
   unitPlacement,
   unitTarget,
@@ -26,6 +28,12 @@ export interface UnitsContext {
    * тож у базі виклику ще може не бути, але функцію вже кличе збережений файл.
    */
   handlers: ReadonlySet<string>
+  /**
+   * Цілі згенерованих грантів збереженої теки (`grantTargetKeys`): дослівний
+   * грант на них не пишемо — правами володіє платформа, і в теці він був би
+   * помилкою `sql.generated-grant`.
+   */
+  platformGrants: ReadonlySet<string>
 }
 
 export interface UnitFiles {
@@ -321,8 +329,12 @@ export function layoutUnits(
   }
 
   const grouped = new Map<string, CatalogUnit[]>()
+  const platformOwned = (unit: CatalogUnit) =>
+    grantTargetKeys(unit, ctx.parse).some((target) =>
+      ownsTarget(ctx.platformGrants, target)
+    )
   for (const unit of units) {
-    if (ctx.described.has(unit.identity)) continue
+    if (ctx.described.has(unit.identity) || platformOwned(unit)) continue
     const path = pathOf(unit)
     grouped.set(path, [...(grouped.get(path) ?? []), unit])
   }

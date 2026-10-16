@@ -584,7 +584,8 @@ export function buildContracts(
     Project,
     "scopeKinds" | "storageBuckets" | "defaultSchema" | "database"
   >,
-  access: readonly AccessContract[]
+  access: readonly AccessContract[],
+  eventSubscriptions: readonly EventSubscriptionContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -637,7 +638,7 @@ export function buildContracts(
         ),
       }))
       .sort((a, b) => compareStrings(a.bucket, b.bucket)),
-    eventSubscriptions: eventSubscriptionContracts(objects, physical, project),
+    eventSubscriptions: [...eventSubscriptions],
     personalData: personalDataContracts(objects, physical),
     ...withUsers(usersContractOf(objects, physical)),
     membership: membershipsOf(objects, physical, project).map(
@@ -841,7 +842,11 @@ export function subscriptionSourceTables(
   return result
 }
 
-function eventSubscriptionContracts(
+/**
+ * Підписки моделі без помилок. Від одиниць не залежить: конвеєр рахує їх до
+ * одиниць, бо обробникам потрібні згенеровані гранти.
+ */
+export function eventSubscriptionContracts(
   objects: readonly ParsedObject[],
   physical: PhysicalSnapshot,
   project: Pick<Project, "defaultSchema" | "database">

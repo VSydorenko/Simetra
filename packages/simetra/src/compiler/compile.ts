@@ -11,7 +11,7 @@ import type { Contracts } from "./contracts"
 import type { Presentation } from "./presentation"
 import type { ResolvedReference } from "./stages/identity"
 import type { CreationNode } from "./sql/dependencies"
-import type { SqlUnit } from "./sql/units"
+import type { SqlUnit, VerbatimUnit } from "./sql/units"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
 import { loadSqlParser } from "./sql/parse"
@@ -114,6 +114,18 @@ export async function compile(
   return assigned.some((d) => d.severity === "error")
     ? { ok: false, diagnostics }
     : { ...result, diagnostics }
+}
+
+/**
+ * Дослівні одиниці теки — з тим самим файлом, рядком і текстом, що бачить
+ * компілятор: операція, що править `.sql` за діагностикою, знаходить оператор
+ * за ними, а не пошуком тексту.
+ */
+export async function verbatimUnits(
+  files: ReadonlyMap<string, string>
+): Promise<VerbatimUnit[]> {
+  const { sql } = sqlStage(readFiles(files), await loadSqlParser())
+  return sql.units
 }
 
 /**

@@ -1291,6 +1291,67 @@ describe("reverseGenerate", () => {
     expect(json(result, "sql-debt.json").units).toEqual([])
   })
 
+  it("introspect writes no verbatim grant on what the platform grants", async () => {
+    // Перший introspect бази, вже керованої Simetra: ADP схеми дали ролям
+    // API інші права, ніж бажаний стан, але ACL функції множини й таблиці
+    // виду належить платформі, тож дослівним SQL вони не стають.
+    const kept = metaFiles({
+      "project.meta.json": project({
+        name: "App",
+        defaultSchema: "app",
+        naming: { attributeCase: "snake_case" },
+        scopeKinds: [
+          {
+            id: uuid(9401),
+            name: "org",
+            physicalName: "org_id",
+            root: { object: { kind: "Catalog", name: "Organization" } },
+            setFunction: { name: "my_orgs" },
+          },
+        ],
+      }),
+      "catalogs/Organization/Organization.meta.json": catalog("Organization", {
+        schema: "app",
+        scope: "org",
+      }),
+    })
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const layer = compiled.model!
+    expect(layer.sqlUnits.some((u) => u.generator === "functionExecute")).toBe(
+      true
+    )
+    const foreign = [
+      "GRANT EXECUTE ON FUNCTION app.my_orgs() TO anon;",
+      "REVOKE INSERT ON TABLE app.organization FROM authenticated;",
+    ]
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(layer.physical).tables,
+        units: [
+          ...layer.sqlUnits.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units(foreign.join("\n")),
+        ],
+      }),
+      options(kept)
+    )
+    expect(errors(result)).toEqual([])
+    for (const text of result.files.values())
+      for (const statement of foreign)
+        expect(text).not.toContain(statement.slice(0, -1))
+    // Функцію множини генератор лише перекладає у файл за своєю розкладкою;
+    // грантів на неї й на таблицю виду в жодному записаному файлі немає.
+    for (const change of result.changes)
+      expect(change.content ?? "").not.toMatch(/^(GRANT|REVOKE)/m)
+    expect((await compile(result.files)).diagnostics).toEqual([])
+  })
+
   it("final map compiles", async () => {
     const result = await reverseGenerate(
       model({

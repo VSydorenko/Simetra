@@ -241,4 +241,21 @@ describe("messages catalog", () => {
       expect(text(undefined, locale).message).not.toMatch(/UPDATE/)
     }
   })
+
+  it("sql.generated-grant names the object and points to fix", () => {
+    const d = diagnostic("sql.generated-grant", "sql/public/g.sql", "", {
+      identity: "grant:grant:function:public.my_orgs():anon:execute",
+      line: 1,
+      object: "public.my_orgs()",
+    })
+    expect(d.message).toBe(
+      "Privileges on public.my_orgs() are generated from the metadata; this statement contradicts them"
+    )
+    expect(d.hint).toBe("Remove the statement; simetra fix removes it.")
+    const uk = localize(d, "uk")
+    expect(uk.message).toBe(
+      "Права на public.my_orgs() генеруються з метаданих; цей оператор їм суперечить"
+    )
+    expect(uk.hint).toBe("Приберіть оператор; simetra fix прибирає його сам.")
+  })
 })

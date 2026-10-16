@@ -4,6 +4,7 @@ import {
   completeFiles,
   currentDebt,
   diagnostic,
+  platformGrantTargets,
   sortDiagnostics,
   type CompiledModel,
   type Diagnostic,
@@ -83,6 +84,12 @@ interface Elsewhere {
   targets: Map<string, TableNames>
   /** Обробники збережених підписок (`schema.name`): їх кличе збережений файл. */
   handlers: Set<string>
+  /**
+   * Цілі згенерованих грантів (`grantTargetKeys`): таблиці виду з контрактом
+   * доступу й функції з виведеним `EXECUTE`. Їхнім ACL володіє платформа, тож
+   * дослівний грант на них — помилка `sql.generated-grant`, а не стан теки.
+   */
+  platformGrants: Set<string>
 }
 
 /**
@@ -92,13 +99,15 @@ interface Elsewhere {
  * цього не каже; тоді причину назве компіляція результату.
  */
 async function describedElsewhere(
-  existing: ReadonlyMap<string, string>
+  existing: ReadonlyMap<string, string>,
+  parse: SqlParser
 ): Promise<Elsewhere> {
   const found: Elsewhere = {
     relations: new Set(),
     units: new Set(),
     targets: new Map(),
     handlers: new Set(),
+    platformGrants: new Set(),
   }
   if (
     ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
@@ -134,6 +143,7 @@ async function describedElsewhere(
       found.units.add(unit.identity)
   for (const { handler } of model.contracts.eventSubscriptions)
     found.handlers.add(qualified(handler.schema, handler.name))
+  found.platformGrants = platformGrantTargets(model.sqlUnits, parse)
   return found
 }
 
@@ -316,7 +326,7 @@ export async function reverseGenerate(
     ...folder.diagnostics,
     ...projectMismatch(folder, o.project),
   ]
-  const elsewhere = await describedElsewhere(o.existing)
+  const elsewhere = await describedElsewhere(o.existing, o.parse)
   const existingOf = (kind: string, schema: string, physical: string) =>
     folder.objects.get(objectKey(kind, schema, physical))
 
@@ -448,6 +458,7 @@ export async function reverseGenerate(
     sidecars,
     described: elsewhere.units,
     handlers: elsewhere.handlers,
+    platformGrants: elsewhere.platformGrants,
   })
   diagnostics.push(...laid.diagnostics)
   for (const [path, text] of laid.files) generated.set(path, text)

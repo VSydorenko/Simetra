@@ -42,6 +42,7 @@ import {
   type SqlUnit,
 } from "../../sql/units"
 import type { PromoteInput } from "../inputs"
+import { cut, mergeDeletions } from "../text-edits"
 import type { QualifiedTable } from "./gates"
 import type { ConversionSubject } from "./mapping"
 import type { PromotionRecord } from "./record"
@@ -619,91 +620,6 @@ export function sqlFileTexts(
     result.set(to, out)
   }
   return { files: result, placements, problems }
-}
-
-/**
- * Сусідні чи перекриті вирізи зливаються: виріз першого оператора рядка
- * забирає пробіли до наступного, а виріз останнього — пробіли перед собою,
- * тож двоє класифікованих поруч діляться пробілами. Об'єднання вирізів —
- * той самий виріз; заміни не зливаються ніколи. Злитий виріз, що дійшов до
- * кінця рядка, забирає й пробіли перед собою, а якщо спорожнив рядок — і сам
- * рядок, як виріз одиниці, що займала його сама.
- */
-function mergeDeletions(text: string, list: readonly TextEdit[]): TextEdit[] {
-  const sorted = [...list].sort((a, b) => a.start - b.start || a.end - b.end)
-  const merged: { edit: TextEdit; joined: boolean }[] = []
-  for (const e of sorted) {
-    const last = merged.at(-1)
-    if (
-      last !== undefined &&
-      last.edit.text === "" &&
-      e.text === "" &&
-      e.start <= last.edit.end
-    ) {
-      last.edit = { ...last.edit, end: Math.max(last.edit.end, e.end) }
-      last.joined = true
-    } else {
-      merged.push({ edit: e, joined: false })
-    }
-  }
-  return merged.map(({ edit, joined }) =>
-    joined ? lineAware(text, edit) : edit
-  )
-}
-
-function lineAware(text: string, edit: TextEdit): TextEdit {
-  const blank = (c: string | undefined) => c === " " || c === "\t"
-  let end = edit.end
-  while (blank(text[end])) end++
-  const crlf = text[end] === "\r" && text[end + 1] === "\n"
-  if (end < text.length && text[end] !== "\n" && !crlf) return edit
-  let start = edit.start
-  while (start > 0 && blank(text[start - 1])) start--
-  // Перед вирізом лишився інший оператор: кінець рядка лишається.
-  if (start > 0 && text[start - 1] !== "\n") return { ...edit, start, end }
-  end = Math.min(text.length, end + (crlf ? 2 : 1))
-  let next = end
-  while (blank(text[next]) || text[next] === "\r") next++
-  return { ...edit, start, end: text[next] === "\n" ? next + 1 : end }
-}
-
-/**
- * Виріз одиниці `[start, end)` разом із завершальним `;`. Одиниця, що
- * займає рядок сама, забирає й перевід рядка та один порожній рядок після.
- * Поруч з іншим оператором у рядку — лише власний текст: перед наступним
- * оператором вирізаються пробіли після `;`, а за останнім у рядку — пробіли
- * перед одиницею, і перевід рядка лишається.
- */
-function cut(text: string, start: number, end: number): TextEdit {
-  const blank = (i: number) => {
-    while (text[i] === " " || text[i] === "\t" || text[i] === "\r") i++
-    return i
-  }
-  let i = blank(end)
-  if (text[i] === ";") i = blank(i + 1)
-  const lineEnds = i >= text.length || text[i] === "\n"
-  let lineStart = start
-  while (
-    lineStart > 0 &&
-    (text[lineStart - 1] === " " || text[lineStart - 1] === "\t")
-  ) {
-    lineStart--
-  }
-  const ownLine = lineStart === 0 || text[lineStart - 1] === "\n"
-  if (!lineEnds) return { start, end: i, text: "" }
-  if (!ownLine) {
-    // Кінець рядка лишається: інакше наступний рядок піднявся б до попереднього оператора.
-    let to = i
-    while (to > end && /[ \t\r]/.test(text[to - 1]!)) to--
-    return { start: lineStart, end: to, text: "" }
-  }
-  i = i < text.length ? i + 1 : i
-  const next = blank(i)
-  return {
-    start: lineStart,
-    end: text[next] === "\n" ? next + 1 : i,
-    text: "",
-  }
 }
 
 function lineAt(text: string, offset: number): number {

@@ -7,7 +7,14 @@ import {
 } from "simetra/compiler"
 import { formatMetaFile, metadataIdSchema } from "simetra/model"
 import { readReferenceDomain } from "./fixtures/reference-domain"
-import { customTable, metaFiles, project, uuid } from "./helpers"
+import {
+  acceptDebt,
+  catalog,
+  customTable,
+  metaFiles,
+  project,
+  uuid,
+} from "./helpers"
 
 /** Детермінований джерело id у формі UUID v4: тести не залежать від випадку. */
 function counter(start = 900_000): () => string {
@@ -521,6 +528,70 @@ describe("fixFiles: debt ratchet", () => {
     const files = tableFiles("CREATE POLICY p ON", ["policy:public.t.p"])
     const result = await fixFiles(files, options())
     expect(result.changes.map((c) => c.path)).not.toContain(DEBT)
+  })
+})
+
+describe("fixFiles: sql.generated-grant", () => {
+  const DEBT = "sql-debt.json"
+  const GRANTS = "sql/public/g.sql"
+  const OTHER =
+    "CREATE FUNCTION public.other() RETURNS integer LANGUAGE sql STABLE AS $$ SELECT 1 $$;"
+  const OTHER_GRANT = "GRANT EXECUTE ON FUNCTION public.other() TO anon;"
+  const OWNED_GRANT = "GRANT EXECUTE ON FUNCTION public.my_orgs() TO anon;"
+
+  /** Вид скоупу з функцією множини `public.my_orgs()`; борг теки прийнято. */
+  const grantFiles = (sql: string) =>
+    acceptDebt(
+      metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            {
+              id: uuid(9301),
+              name: "org",
+              physicalName: "org_id",
+              root: { object: { kind: "Catalog", name: "Organization" } },
+              setFunction: { name: "my_orgs" },
+            },
+          ],
+        }),
+        "catalogs/Organization/Organization.meta.json": catalog(
+          "Organization",
+          { scope: "org" }
+        ),
+        [GRANTS]: sql,
+      })
+    )
+
+  it("fix cuts only the contradicting statement and narrows the debt", async () => {
+    const files = await grantFiles(
+      `${OTHER}\n\n${OWNED_GRANT}\n\n${OTHER_GRANT}\n`
+    )
+    expect(JSON.parse(files.get(DEBT)!).units).toContain(
+      "grant:grant:function:public.my_orgs():anon:execute"
+    )
+    const before = await compile(files)
+    expect(before.diagnostics.map((d) => d.code)).toEqual([
+      "sql.generated-grant",
+    ])
+    const result = await fixFiles(files, options())
+    expect(result.diagnostics).toEqual([])
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    expect(fixed.get(GRANTS)).toBe(`${OTHER}\n\n${OTHER_GRANT}\n`)
+    expect(JSON.parse(fixed.get(DEBT)!).units).toEqual([
+      "grant:grant:function:public.other():anon:execute",
+    ])
+    expect((await compile(fixed)).diagnostics).toEqual([])
+  })
+
+  it("fix deletes a file left without statements", async () => {
+    const files = await grantFiles(`${OWNED_GRANT}\n`)
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(true)
+    expect(result.changes).toContainEqual({ path: GRANTS, content: null })
+    const fixed = applyChanges(files, result.changes)
+    expect(fixed.has(GRANTS)).toBe(false)
+    expect(JSON.parse(fixed.get(DEBT)!).units).toEqual([])
   })
 })
 

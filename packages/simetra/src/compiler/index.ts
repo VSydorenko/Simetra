@@ -37,6 +37,11 @@ export {
 } from "./sql/units"
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { platformSchemaGrants } from "./platform/units"
+export {
+  grantTargetKeys,
+  ownsTarget,
+  platformGrantTargets,
+} from "./function-execute"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   triggerFunctionSchema,

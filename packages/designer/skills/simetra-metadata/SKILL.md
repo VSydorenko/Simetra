@@ -321,6 +321,13 @@ Follow the hint instead of rewording the statement. `CustomTable` and `PgEnum`
 modules and the shared `metadata/sql/` folder are not closed: their content is
 debt (below).
 
+Privileges on what the platform owns are generated, in every `.sql` file:
+`EXECUTE` on a declared scope set function and on a subscription handler,
+and every grant on a kind's tables. A verbatim `GRANT`/`REVOKE` on them fails
+with `sql.generated-grant`; `simetra fix` removes the statement (and the file,
+if nothing else is left in it). A grant on another overload of the same name
+is not affected.
+
 A row rule shape:
 
 ```sql

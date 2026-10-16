@@ -224,8 +224,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
     uk: "Доступ до рядків оголошується, а не пишеться: використайте publicRead об'єкта; права приходять із видами доступу (П3).",
   },
   grant: {
-    en: "Privileges are derived, not written: on a kind's tables they come from the kind, and EXECUTE on a function comes from its TypeScript declaration (P4).",
-    uk: "Привілеї виводяться, а не пишуться: на таблиці виду — з виду, а EXECUTE на функцію — з її оголошення в TypeScript (П4).",
+    en: "Privileges are derived, not written: on a kind's tables they come from the kind, EXECUTE on a scope set function and a subscription handler comes from the metadata, and EXECUTE on any other function comes from its TypeScript declaration (P4).",
+    uk: "Привілеї виводяться, а не пишуться: на таблиці виду — з виду, EXECUTE на функцію множини скоупу й обробник підписки — з метаданих, а EXECUTE на решту функцій — з їхнього оголошення в TypeScript (П4).",
   },
   defaultPrivileges: {
     en: "Privileges on a kind's tables are derived from the kind.",
@@ -659,6 +659,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "A function is identified by schema, name and argument types; a trigger or policy by its table and name; a grant by its object, grantees and privileges.",
       uk: "Функцію ідентифікують схема, ім'я й типи аргументів; тригер або політику — таблиця й ім'я; грант — об'єкт, отримувачі й привілеї.",
+    },
+  },
+  "sql.generated-grant": {
+    en: (p) =>
+      `Privileges on ${p.object} are generated from the metadata; this statement contradicts them`,
+    uk: (p) =>
+      `Права на ${p.object} генеруються з метаданих; цей оператор їм суперечить`,
+    hint: {
+      en: "Remove the statement; simetra fix removes it.",
+      uk: "Приберіть оператор; simetra fix прибирає його сам.",
     },
   },
   "sql.namespace-conflict": {
