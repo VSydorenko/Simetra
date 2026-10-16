@@ -251,12 +251,16 @@ describe("messages catalog", () => {
     expect(d.message).toBe(
       "Privileges on public.my_orgs() are generated from the metadata; this statement contradicts them"
     )
-    expect(d.hint).toBe("Remove the statement; simetra fix removes it.")
+    expect(d.hint).toBe(
+      "Remove the statement; simetra fix removes it when every target belongs to the platform — a statement that also names other objects is split by hand."
+    )
     const uk = localize(d, "uk")
     expect(uk.message).toBe(
       "Права на public.my_orgs() генеруються з метаданих; цей оператор їм суперечить"
     )
-    expect(uk.hint).toBe("Приберіть оператор; simetra fix прибирає його сам.")
+    expect(uk.hint).toBe(
+      "Приберіть оператор; simetra fix прибирає його, коли всі цілі належать платформі, — оператор, що називає й чужі об'єкти, ділять вручну."
+    )
   })
 
   it("plan.service-role-access-lost names the tables and keeps them CustomTable", () => {

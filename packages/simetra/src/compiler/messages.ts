@@ -220,8 +220,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
     uk: "Оголосіть EventSubscription на подію таблиці, а обробник залиште функцією в закритій оболонці.",
   },
   policy: {
-    en: "Row access is declared, not written: use publicRead on the object; access rights come with access kinds (P3).",
-    uk: "Доступ до рядків оголошується, а не пишеться: використайте publicRead об'єкта; права приходять із видами доступу (П3).",
+    en: "Row access is declared, not written: use publicRead on the object, and a scoped object gets its scope read policy <table>_read derived from the kind; access rights come with the rights spec (P3).",
+    uk: "Доступ до рядків оголошується, а не пишеться: використайте publicRead об'єкта, а об'єкт зі скоупом отримує політику читання скоупу <table>_read, виведену з виду; права приходять зі спекою прав (П3).",
   },
   grant: {
     en: "Privileges are derived, not written: on a kind's tables they come from the kind, EXECUTE on a scope set function and a subscription handler comes from the metadata, and EXECUTE on any other function comes from its TypeScript declaration (P4).",
@@ -667,8 +667,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Права на ${p.object} генеруються з метаданих; цей оператор їм суперечить`,
     hint: {
-      en: "Remove the statement; simetra fix removes it.",
-      uk: "Приберіть оператор; simetra fix прибирає його сам.",
+      en: "Remove the statement; simetra fix removes it when every target belongs to the platform — a statement that also names other objects is split by hand.",
+      uk: "Приберіть оператор; simetra fix прибирає його, коли всі цілі належать платформі, — оператор, що називає й чужі об'єкти, ділять вручну.",
     },
   },
   "sql.namespace-conflict": {

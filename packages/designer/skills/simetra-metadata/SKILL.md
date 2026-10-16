@@ -327,12 +327,15 @@ Follow the hint instead of rewording the statement. `CustomTable` and `PgEnum`
 modules and the shared `metadata/sql/` folder are not closed: their content is
 debt (below).
 
-Privileges on what the platform owns are generated, in every `.sql` file:
-`EXECUTE` on a declared scope set function and on a subscription handler,
-and every grant on a kind's tables. A verbatim `GRANT`/`REVOKE` on them fails
-with `sql.generated-grant`; `simetra fix` removes the statement (and the file,
-if nothing else is left in it). A grant on another overload of the same name
-is not affected.
+Privileges on what the platform owns are generated: `EXECUTE` on a declared
+scope set function and on a subscription handler, and every grant on a kind's
+tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
+`metadata/sql/`) a verbatim `GRANT`/`REVOKE` on them fails with
+`sql.generated-grant`; in a kind's own module any literal `GRANT`/`REVOKE` is
+already rejected by the closed-module rule above. `simetra fix` removes the
+statement (and the file, if nothing else is left in it) only when every target
+belongs to the platform; a statement that also names other objects you split
+by hand. A grant on another overload of the same name is not affected.
 
 A row rule shape:
 
