@@ -138,7 +138,7 @@ describe("membership", () => {
     const model = await compileOk(files())
     // Гранти самого членства: платформний шар «Користувачів» має власні.
     const grants = model.sqlUnits
-      .filter((u) => u.class === "grant" && u.ownerObjectId === uuid(81))
+      .filter((u) => u.class === "grant" && u.generator === "membership")
       .map((u) => u.sql)
     // `PUBLIC` — дефолт Postgres, `anon` — типові привілеї схеми
     // провайдера: `REVOKE … FROM PUBLIC` їх не знімає. Сервісна роль виконує

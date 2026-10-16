@@ -8,6 +8,7 @@ import {
   metaFiles,
   project,
   salesDocument,
+  withoutAccess,
 } from "./helpers"
 
 const MISC = "sql/public/misc.sql"
@@ -673,7 +674,8 @@ describe("sql units", () => {
       })
     )
     expect(result.diagnostics).toEqual([])
-    const units = result.model!.sqlUnits
+    // Гранти таблиць виду (генератор `access`) звіряє access-units.test.ts.
+    const units = withoutAccess(result.model!.sqlUnits)
     expect(units.map((u) => [u.class, u.identity])).toEqual([
       ["movementQuery", "function:public.sale_stock_movements(uuid)"],
       ["function", "function:public.sale_total(uuid)"],

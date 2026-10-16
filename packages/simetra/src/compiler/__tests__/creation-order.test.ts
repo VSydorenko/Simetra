@@ -14,8 +14,10 @@ import {
   catalog,
   customTable,
   metaFiles,
+  organization,
   project,
   salesDocument,
+  scopedProject,
   uuid,
 } from "./helpers"
 
@@ -85,6 +87,8 @@ function expectBefore(list: string[], pairs: [string, string][]): void {
     )
   }
 }
+
+const isTable = (id: string): boolean => id.startsWith("table:")
 
 const PLPGSQL = "LANGUAGE plpgsql AS $$ begin return null; end $$"
 
@@ -390,7 +394,11 @@ describe("creation order", () => {
         ],
       }),
     }
-    expect(await order(entries)).toEqual(["table:public.a", "table:public.b"])
+    // Гранти таблиць виду — згенеровані одиниці після таблиць; предмет — таблиці.
+    expect((await order(entries)).filter(isTable)).toEqual([
+      "table:public.a",
+      "table:public.b",
+    ])
   })
 
   it("self-referencing foreign key gives no edge and no cycle", async () => {
@@ -399,7 +407,7 @@ describe("creation order", () => {
         hierarchyType: "FoldersAndItems",
       }),
     })
-    expect(list).toEqual(["table:public.folder"])
+    expect(list.filter(isTable)).toEqual(["table:public.folder"])
   })
 
   it("foreign key does not order tables: tie-break alone decides", async () => {
@@ -620,6 +628,34 @@ describe("creation order", () => {
     const revoke = list.find((id) => id.startsWith("grant:revoke:"))!
     const grant = list.find((id) => id.startsWith("grant:grant:"))!
     expectBefore(list, [[revoke, grant]])
+  })
+
+  it("kind table: generated revoke before grant, both after the table; policy after the set function", async () => {
+    // Порядок «відкликання, потім грант» дає ребро графа за ціллю, а не
+    // сортування ідентичностей.
+    const list = await order({
+      "project.meta.json": scopedProject(),
+      "catalogs/Organization/Organization.meta.json": organization(),
+      "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
+    })
+    const table = "table:public.item"
+    const revoke = list.find(
+      (id) =>
+        id.startsWith("grant:revoke:table:public.item:") &&
+        id.includes(":authenticated:")
+    )!
+    const grant = list.find(
+      (id) =>
+        id.startsWith("grant:grant:table:public.item:") &&
+        id.includes(":authenticated:")
+    )!
+    expectBefore(list, [
+      [table, revoke],
+      [table, grant],
+      [revoke, grant],
+      [table, "policy:public.item.item_read"],
+      ["function:public.org_ids()", "policy:public.item.item_read"],
+    ])
   })
 
   it("same-named unqualified views, sequences and materialized views in two schemas are not a cycle", async () => {

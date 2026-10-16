@@ -11,6 +11,7 @@ import {
   SALE_FILE,
   scopedProject,
   STOCK_FILE,
+  withoutAccess,
 } from "./helpers"
 
 function codes(diagnostics: Diagnostic[]): string[] {
@@ -99,12 +100,15 @@ describe("stage 1: files", () => {
         ownerObjectId: contract.id,
       },
     ])
+    // Гранти таблиць виду (генератор `access`) звіряє access-units.test.ts.
     expect(
-      model.sqlUnits.map(({ identity, file, ownerObjectId }) => ({
-        identity,
-        file,
-        ownerObjectId,
-      }))
+      withoutAccess(model.sqlUnits).map(
+        ({ identity, file, ownerObjectId }) => ({
+          identity,
+          file,
+          ownerObjectId,
+        })
+      )
     ).toEqual([
       {
         identity: "function:public.audit_note()",

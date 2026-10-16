@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
+  accessPolicyNames,
+  buildAccessUnits,
+  tableGrants,
+} from "../access-units"
+import type { AccessContract } from "../contracts"
+import { loadSqlParser } from "../sql/parse"
+import {
   STOCK_FILE,
   SALE_FILE,
   attribute,
@@ -183,5 +190,135 @@ describe("accessContracts", () => {
       [...tables].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     )
     expect(tables[0]).toBe("app.alpha")
+  })
+})
+
+const ITEM = { schema: "public", name: "item" }
+
+function contract(overrides: Partial<AccessContract> = {}): AccessContract {
+  return {
+    objectId: "00000000-0000-4000-8000-000000000b01",
+    table: ITEM,
+    publicRead: [],
+    ...overrides,
+  }
+}
+
+const ORG_SCOPE = {
+  scopeKindId: "00000000-0000-4000-8000-000000000b02",
+  carrier: "org_id",
+  setFunction: { schema: "public", name: "org_member_scopes" },
+}
+
+async function units(access: AccessContract[]) {
+  return buildAccessUnits(access, "supabase", "app", await loadSqlParser())
+}
+
+describe("buildAccessUnits", () => {
+  it("user readers: revoke from PUBLIC and every API role, select to authenticated", () => {
+    expect(tableGrants(ITEM, ["user"], "supabase").sort()).toEqual(
+      [
+        "REVOKE ALL ON TABLE public.item FROM PUBLIC;",
+        "REVOKE ALL ON TABLE public.item FROM anon;",
+        "REVOKE ALL ON TABLE public.item FROM service_role;",
+        "REVOKE ALL ON TABLE public.item FROM authenticated;",
+        "GRANT SELECT ON TABLE public.item TO authenticated;",
+      ].sort()
+    )
+  })
+
+  it("anonymous readers keep the revoke from anon before the grant", () => {
+    // ADP схеми `public` дають `anon` усе, зокрема TRUNCATE: грант SELECT
+    // сам по собі решти не відкликав би.
+    const grants = tableGrants(ITEM, ["user", "anonymous"], "supabase")
+    expect(grants).toContain("REVOKE ALL ON TABLE public.item FROM anon;")
+    expect(grants).toContain("GRANT SELECT ON TABLE public.item TO anon;")
+    expect(grants).toContain(
+      "GRANT SELECT ON TABLE public.item TO authenticated;"
+    )
+    expect(grants.filter((g) => g.startsWith("GRANT"))).toHaveLength(2)
+  })
+
+  it("scoped table gets the uncorrelated read policy", async () => {
+    const result = await units([contract({ scope: ORG_SCOPE })])
+    const policies = result.filter((u) => u.class === "policy")
+    expect(policies.map((u) => u.sql)).toEqual([
+      "CREATE POLICY item_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated USING (org_id = ANY (ARRAY(SELECT public.org_member_scopes())));",
+    ])
+  })
+
+  it("public read for anonymous and user opens all rows to both roles", async () => {
+    const result = await units([
+      contract({ publicRead: ["anonymous", "user"] }),
+    ])
+    expect(
+      result.filter((u) => u.class === "policy").map((u) => u.sql)
+    ).toEqual([
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO anon, authenticated USING (true);",
+    ])
+    expect(result.map((u) => u.sql)).toContain(
+      "GRANT SELECT ON TABLE public.item TO anon;"
+    )
+  })
+
+  it("unscoped table without public read has grants only", async () => {
+    const result = await units([contract()])
+    expect(result.filter((u) => u.class === "policy")).toEqual([])
+    expect(result.every((u) => u.class === "grant")).toBe(true)
+    expect(result.map((u) => u.sql).sort()).toEqual(
+      tableGrants(ITEM, ["user"], "supabase").sort()
+    )
+  })
+
+  it("units are generated, owned by the object and never grant on a schema", async () => {
+    const result = await units([
+      contract({ scope: ORG_SCOPE, publicRead: ["anonymous", "user"] }),
+    ])
+    for (const unit of result) {
+      expect(unit.generator).toBe("access")
+      expect(unit.ownerObjectId).toBe(contract().objectId)
+      expect(unit.module).toBe("app")
+      expect(unit.file).toBeUndefined()
+      const grant = (unit.tree as { GrantStmt?: { objtype?: string } })
+        .GrantStmt
+      expect(grant?.objtype ?? "OBJECT_TABLE").toBe("OBJECT_TABLE")
+    }
+  })
+
+  it("quotes names that need it", async () => {
+    const table = { schema: "App", name: "select" }
+    const result = await units([
+      contract({
+        table,
+        scope: { ...ORG_SCOPE, carrier: "Org" },
+      }),
+    ])
+    expect(result.map((u) => u.sql)).toContain(
+      'GRANT SELECT ON TABLE "App"."select" TO authenticated;'
+    )
+    expect(result.find((u) => u.class === "policy")!.sql).toContain(
+      'ON "App"."select" AS PERMISSIVE'
+    )
+    expect(result.find((u) => u.class === "policy")!.sql).toContain(
+      'USING ("Org" = ANY'
+    )
+  })
+
+  it("policy names of a 60-byte table stay within 63 bytes", async () => {
+    const table = { schema: "public", name: "t".repeat(60) }
+    const names = accessPolicyNames(table)
+    for (const name of [names.read, names.publicRead]) {
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(63)
+    }
+    expect(names.read).not.toBe(names.publicRead)
+    const result = await units([
+      contract({ table, scope: ORG_SCOPE, publicRead: ["user"] }),
+    ])
+    expect(
+      result
+        .filter((u) => u.class === "policy")
+        .map((u) => u.name)
+        .sort()
+    ).toEqual([names.publicRead, names.read].sort())
   })
 })

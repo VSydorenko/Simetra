@@ -8,6 +8,17 @@ import { readFiles, sqlStage } from "../pipeline"
 import { debtUnits } from "../sql/debt"
 import { loadSqlParser } from "../sql/parse"
 import { loadPlpgsqlParser } from "../sql/plpgsql"
+import type { SqlUnit } from "../sql/units"
+
+/**
+ * Одиниці без грантів і політик таблиць виду: їх дає кожна таблиця виду з RLS,
+ * тож тест іншого генератора звіряє свої одиниці без них.
+ */
+export function withoutAccess<T extends Pick<SqlUnit, "generator">>(
+  units: readonly T[]
+): T[] {
+  return units.filter((u) => u.generator !== "access")
+}
 
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */
 export function uuid(n: number): string {

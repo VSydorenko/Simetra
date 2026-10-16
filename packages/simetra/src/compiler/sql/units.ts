@@ -73,7 +73,12 @@ export interface SqlUnit {
 }
 
 /** Хто згенерував одиницю. */
-export type UnitGenerator = "movementQuery" | "membership" | "platformLayer"
+export type UnitGenerator =
+  | "movementQuery"
+  | "membership"
+  | "platformLayer"
+  | "access"
+  | "functionExecute"
 
 /** Обгортка запиту рухів: поля рухів обов'язкові. */
 export interface MovementQueryUnit extends SqlUnit {

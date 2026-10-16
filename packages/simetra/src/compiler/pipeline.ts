@@ -11,7 +11,7 @@ import type {
 } from "./compile"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { modelHash } from "./canonical"
-import { accessContracts } from "./access-units"
+import { accessContracts, buildAccessUnits } from "./access-units"
 import { buildContracts, usersContractOf } from "./contracts"
 import { buildPresentation } from "./presentation"
 import { readFiles, type FilesStageResult } from "./stages/files"
@@ -224,6 +224,12 @@ export async function runStages(
       // провайдера ідентичності з'явиться з другим таким провайдером.
       PROVIDER_IDENTITY_SOURCES[stage1.project.database.provider]
     ),
+    ...buildAccessUnits(
+      access,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -234,6 +240,8 @@ export async function runStages(
     membership: (unit) => `the membership SQL of ${name(unit.ownerObjectId)}`,
     platformLayer: (unit) =>
       `the platform layer of ${name(unit.ownerObjectId)}`,
+    access: (unit) => `the access SQL of ${name(unit.ownerObjectId)}`,
+    functionExecute: (unit) => `the EXECUTE grant of ${unit.name}`,
   }
   const collisions = namespaceConflicts(physical, sqlUnits, (unit) =>
     describeGenerated[must(unit.generator)](unit)

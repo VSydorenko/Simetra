@@ -6,6 +6,7 @@ import {
   metaFiles,
   project,
   salesDocument,
+  withoutAccess,
 } from "./helpers"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
@@ -230,7 +231,8 @@ describe("kind module: closed forms only", () => {
       })
     )
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.class)).toEqual([
+    // Гранти таблиць виду (генератор `access`) звіряє access-units.test.ts.
+    expect(withoutAccess(result.model!.sqlUnits).map((u) => u.class)).toEqual([
       "movementQuery",
       "function",
     ])
