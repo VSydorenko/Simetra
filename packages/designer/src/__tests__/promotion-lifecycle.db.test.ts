@@ -448,7 +448,19 @@ describe.concurrent("promotion lifecycle", () => {
           'ALTER TABLE "app"."item" ADD CONSTRAINT "item_group_id_fkey" FOREIGN KEY (group_id) REFERENCES app.groups(id)',
         ],
       ])
+      // Таблиці виду читає роль користувача (згенерований `GRANT SELECT`),
+      // а прийнята таблиця такого гранту не мала — новий доступ під `access:`
       expect(promotion.permissionItems).toEqual([
+        {
+          token: "access:app.item",
+          summary: ["extra grant:grant:table:app.item:authenticated:select"],
+        },
+        {
+          token: "access:app.item_lines",
+          summary: [
+            "extra grant:grant:table:app.item_lines:authenticated:select",
+          ],
+        },
         {
           token: "delete:app.item.item_group_id_fkey",
           summary: ["own (group_id) → groups: on delete restrict → noAction"],
@@ -458,9 +470,13 @@ describe.concurrent("promotion lifecycle", () => {
           summary: ["tables.app.items.indexes.items_title_idx"],
         },
       ])
-      expect(data.requiredPermissions[0]).toBe(
-        "delete:app.item.item_group_id_fkey"
-      )
+      // Пункти промоції йдуть першими в порядку токенів: `access:` таблиць
+      // виду — перед `delete:`
+      expect(data.requiredPermissions.slice(0, 3)).toEqual([
+        "access:app.item",
+        "access:app.item_lines",
+        "delete:app.item.item_group_id_fkey",
+      ])
       // Зняття FK бере ACCESS EXCLUSIVE на `groups` — наперед, у старому
       // імені, а не посеред кроків (R26)
       expect(data.locks).toContainEqual({
@@ -531,8 +547,11 @@ describe.concurrent("promotion lifecycle", () => {
           "ALTER TABLE app.item RENAME CONSTRAINT items_group_id_fkey TO item_group_id_fkey",
         ],
       ])
-      // Лишився тільки дозвіл на зняття індексу опису (клас `removed`)
+      // Лишився тільки дозвіл на зняття індексу опису (клас `removed`) і
+      // новий доступ читання таблиць виду (згенерований `GRANT SELECT`)
       expect(data.promotion!.permissionItems.map((i) => i.token)).toEqual([
+        "access:app.item",
+        "access:app.item_lines",
         "remove:app.item",
       ])
     })

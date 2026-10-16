@@ -2192,11 +2192,14 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
           typeChangeStep: retype[0]!.id,
         },
       ])
+      // `access:app.counterparty` — згенерований грант читання таблиці виду
       expect(section.permissionItems.map((i) => i.token)).toEqual([
+        "access:app.counterparty",
         "access:app.counterparty_contacts",
         "remove:app.counterparty",
       ])
-      expect(artifact.requiredPermissions.slice(0, 2)).toEqual([
+      expect(artifact.requiredPermissions.slice(0, 3)).toEqual([
+        "access:app.counterparty",
         "access:app.counterparty_contacts",
         "remove:app.counterparty",
       ])
@@ -3440,11 +3443,23 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
         const p = await promoted(files, mapping)
         const contacts = { schema: "app", name: "counterparty_contacts" }
         const artifact = planned(await planPromotion(p))
-        expect(
-          artifact.steps.filter((s) =>
-            s.lockedTables.some((t) => t.name === contacts.name)
-          )
-        ).toEqual([])
+        const touching = artifact.steps.filter((s) =>
+          s.lockedTables.some((t) => t.name === contacts.name)
+        )
+        // Гранти доступу таблиці виду — кроки двигуна без замка таблиці:
+        // слід замків вони не змінюють
+        expect(touching.map((s) => [s.origin, s.lockClass, s.sql])).toEqual([
+          [
+            "engine",
+            "none",
+            'REVOKE ALL ON TABLE "app"."counterparty_contacts" FROM "authenticated"',
+          ],
+          [
+            "engine",
+            "none",
+            'GRANT SELECT ON TABLE "app"."counterparty_contacts" TO "authenticated"',
+          ],
+        ])
         expect(artifact.promotion!.data.map((t) => t.columns[0]!.step)).toEqual(
           ["d1"]
         )
