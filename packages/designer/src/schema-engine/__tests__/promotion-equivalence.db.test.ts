@@ -159,6 +159,33 @@ describe("readEquivalenceObjects", () => {
     )
   })
 
+  it("keys whether the operator classes are the defaults", async () => {
+    // Форма `covered` (рішення 11 плану П3-3a1) покриває лише індекс з
+    // типовими класами, а ім'я класу типовості не каже: її несе остання частина
+    await inTarget(
+      `create schema app;
+       create table app.items (code text);
+       create index items_code_pattern on app.items (code text_pattern_ops);
+       create index items_code_plain on app.items (code);`,
+      scope,
+      async (url) => {
+        const objects = await read(url, "items")
+        const pattern = JSON.parse(
+          named(objects, "items_code_pattern").key
+        ) as unknown[]
+        const plain = JSON.parse(
+          named(objects, "items_code_plain").key
+        ) as unknown[]
+        expect(pattern).not.toEqual(plain)
+        expect(pattern.at(-1)).toEqual([false])
+        expect(plain.at(-1)).toEqual([true])
+        // Колляція колонки за замовчуванням — не явна колляція індексу:
+        // `covered` її пропускає саме в такій формі
+        expect(plain[8]).toEqual(['pg_catalog."default"'])
+      }
+    )
+  })
+
   it("leaves search_path intact", async () => {
     await inTarget(CLONE, scope, async (url) => {
       const [before, after] = await reader.transaction(

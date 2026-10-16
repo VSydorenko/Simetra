@@ -1,5 +1,6 @@
-import type { Node } from "libpg-query"
+import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
+  statementTargets,
   uniqueDifferences,
   unitSubjectKeys,
   valueAt,
@@ -11,7 +12,10 @@ import {
 } from "simetra/compiler"
 import {
   KIND_REGISTRY,
+  PROVIDER_API_ROLES,
   type CatalogModel,
+  type CatalogUnit,
+  type DatabaseProvider,
   type MetadataKind,
 } from "simetra/model"
 import type { EngineDiagnostic } from "../../engine"
@@ -65,8 +69,12 @@ export function valueElementColumns(
 interface Context {
   shadow: readonly EquivalenceObject[]
   desired: CatalogModel
+  /** Копія після наміру: прийняті гранти й політики в нових іменах таблиць. */
+  clone: CatalogModel
   labels: readonly ColumnName[]
   parse: SqlParser
+  /** Роль запиту користувача провайдера: її означає прийнята `public`. */
+  userRole: string
   /** Нове ім'я таблиці одиниці за старим (`record.tables`). */
   newTable(schema: string, table: string): string
 }
@@ -135,27 +143,131 @@ const REPLACEMENT_SHAPES = {
       (s) => s.kind === adopted.kind && s.key === adopted.key
     ),
   /**
-   * «Тригери механіки», «RLS і предикат скоупу», «Гранти на відношення»,
-   * «Команди документа»: одиниця того самого класу на тій самій таблиці
-   * бажаної моделі. Одиниця без таблиці (функція) — та сама за схемою й
-   * іменем. До П3-3 генерованих політик і тригерів немає — відмова.
+   * «Індекс на FK» та інші індекси, яких вид не відтворює еквівалентно
+   * (рішення 11 плану П3-3a1): прийнятий простий btree покриває ключ чи
+   * індекс тіні на тій самій таблиці — інакше індекс скоупу `(org_id)` при
+   * ключі виду `UNIQUE (org_id, id)` був би відмовою без жодної втрати.
+   * Неунікальний покривається будь-яким простим ключем, що починається з
+   * його колонок (пошук той самий), унікальний — лише унікальним з тими
+   * самими колонками в тому самому порядку: ширший ключ дозволив би дублікати.
    */
-  unit: (
+  covered: (
+    adopted: EquivalenceObject,
+    c: Pick<Context, "shadow" | "parse">
+  ): boolean => {
+    const was =
+      adopted.kind === "index" ? plainIndex(adopted, false) : undefined
+    return (
+      was !== undefined &&
+      sameTable(c.shadow, adopted).some((s) => {
+        const by = coveringKey(s, c.parse)
+        if (by === undefined) return false
+        return was.unique
+          ? by.unique &&
+              !by.deferrable &&
+              by.nullsNotDistinct === was.nullsNotDistinct &&
+              by.columns.length === was.columns.length &&
+              was.columns.every((col, i) => by.columns[i] === col)
+          : was.columns.every((col, i) => by.columns[i] === col)
+      })
+    )
+  },
+  /**
+   * «Гранти на відношення» (рішення 10): кожна пара (роль, привілей), яку
+   * прийнятий оператор дає чи знімає на копії цілі, покрита оператором тієї
+   * самої дії на тому самому об'єкті бажаного стану. Обидва боки — з витягу
+   * (копія й тінь), де грант записано відносно типових прав, тож порівняння
+   * йде в одній формі. Пари, якої копія не показує, ціль не відрізняє від
+   * типових прав — зникати нічому, як і в структурного об'єкта, якого на копії
+   * немає.
+   */
+  grant: (
     key: Extract<PromotionObject, { kind: "unit" }>,
     c: Context
   ): boolean => {
-    const table = key.table === "" ? "" : c.newTable(key.schema, key.table)
-    return c.desired.units.some((u) =>
+    const target = {
+      schema: key.schema,
+      object: c.newTable(key.schema, key.table),
+    }
+    const adopted = subjectGrant(key.name)
+    const wanted = grantPairsOn(c.clone, target, c.parse).flatMap((was) => {
+      if (was.action !== adopted.action || !adopted.roles.includes(was.role))
+        return []
+      // Що саме з наявного на копії дає цей оператор: ширший бік звужує
+      // вужчий (`ALL` на копії — лише прийняті привілеї, і навпаки)
+      return adopted.privileges.flatMap((p) =>
+        covers(was, p) ? [{ ...was, ...p }] : covers(p, was) ? [was] : []
+      )
+    })
+    const now = grantPairsOn(c.desired, target, c.parse)
+    return wanted.every((w) =>
+      now.some(
+        (n) =>
+          n.action === w.action &&
+          n.role === w.role &&
+          covers(n, w) &&
+          // Грант з опцією покриває лише грант з опцією; відкликання самої
+          // опції не покриває повного відкликання
+          (w.action === "grant"
+            ? !w.grantOption || n.grantOption
+            : !n.grantOption || w.grantOption)
+      )
+    )
+  },
+  /**
+   * «RLS і предикат скоупу», «Публічне читання» (рішення 10): прийнята
+   * політика з копії цілі має `PERMISSIVE` і ту саму команду, що й політика
+   * бажаного стану на тій самій таблиці, а ролі тієї містять усі ролі
+   * прийнятої (`public` — роль запиту користувача, спека промоції §8).
+   * Різниця предиката — не тут, а під дозволом `access:`. Політики, якої на
+   * копії немає, ціль не має.
+   */
+  policy: (
+    key: Extract<PromotionObject, { kind: "unit" }>,
+    c: Context
+  ): boolean => {
+    const table = c.newTable(key.schema, key.table)
+    const adopted = policiesOn(c.clone, key.schema, table, c.parse).find(
+      (p) => p.name === key.name
+    )
+    if (adopted === undefined) return true
+    return (
+      adopted.permissive &&
+      policiesOn(c.desired, key.schema, table, c.parse).some(
+        (p) =>
+          p.permissive &&
+          p.command === adopted.command &&
+          adopted.roles.every(
+            (r) =>
+              p.roles.includes("public") ||
+              p.roles.includes(r === "public" ? c.userRole : r)
+          )
+      )
+    )
+  },
+  /**
+   * «Команди документа» та інші одиниці без таблиці: одиниця того самого
+   * класу з тією самою схемою й іменем у бажаному стані.
+   */
+  function: (
+    key: Extract<PromotionObject, { kind: "unit" }>,
+    c: Pick<Context, "desired" | "parse">
+  ): boolean =>
+    c.desired.units.some((u) =>
       unitSubjectKeys(u, c.parse, u.schema).some(
         (k) =>
           k.class === key.class &&
           k.schema === key.schema &&
-          k.table === table &&
-          (table !== "" || k.name === key.name)
+          k.table === "" &&
+          k.name === key.name
       )
-    )
-  },
-  /** Значення за замовчуванням і коментар: рядка класу A в §9.2 немає. */
+    ),
+  /**
+   * Значення за замовчуванням і коментар: рядка класу A в §9.2 немає.
+   * «Тригери механіки» й решта одиниць з таблицею — теж відмова: генеровані
+   * політики й гранти вже є, а тригерів ще немає (П3-3a2), і будь-який
+   * тригер механіки інакше хибно «замінив» би будь-який прийнятий тригер.
+   */
   none: (): boolean => false,
 } as const
 
@@ -171,7 +283,10 @@ export function platformReplacements(p: {
   cloneEquivalence: readonly EquivalenceObject[]
   shadowEquivalence: readonly EquivalenceObject[]
   desired: CatalogModel
+  /** Модель копії після наміру: прийняті гранти й політики цілі. */
+  clone: CatalogModel
   valueElementColumns: readonly ColumnName[]
+  provider: DatabaseProvider
   parse: SqlParser
 }): EngineDiagnostic[] {
   const { record, parse } = p
@@ -180,8 +295,10 @@ export function platformReplacements(p: {
   const c: Context = {
     shadow: p.shadowEquivalence,
     desired: p.desired,
+    clone: p.clone,
     labels: p.valueElementColumns,
     parse,
+    userRole: PROVIDER_API_ROLES[p.provider].user,
     newTable,
   }
   const subject = (o: PromotionObject): Subject | undefined => {
@@ -193,7 +310,14 @@ export function platformReplacements(p: {
     return adopted === undefined ? undefined : { of: "structural", adopted }
   }
   const replaced = (s: Subject): boolean => {
-    if (s.of === "unit") return REPLACEMENT_SHAPES.unit(s.key, c)
+    if (s.of === "unit") {
+      const { key } = s
+      if (key.class === "grant") return REPLACEMENT_SHAPES.grant(key, c)
+      if (key.class === "policy") return REPLACEMENT_SHAPES.policy(key, c)
+      if (key.table === "") return REPLACEMENT_SHAPES.function(key, c)
+      // Тригер і решта класів з таблицею — відмова до П3-3a2 (рішення 10)
+      return REPLACEMENT_SHAPES.none()
+    }
     if (s.of === "other") return REPLACEMENT_SHAPES.none()
     const { adopted } = s
     if (isForeignKey(adopted)) return REPLACEMENT_SHAPES.foreignKey(adopted, c)
@@ -202,7 +326,8 @@ export function platformReplacements(p: {
       : undefined
     return column !== undefined
       ? REPLACEMENT_SHAPES.valueList(adopted, column, c)
-      : REPLACEMENT_SHAPES.equivalent(adopted, c)
+      : REPLACEMENT_SHAPES.equivalent(adopted, c) ||
+          REPLACEMENT_SHAPES.covered(adopted, c)
   }
 
   const missing: string[] = []
@@ -306,6 +431,7 @@ const INDEX_PARTS = [
   "collations",
   "where",
   "storage",
+  "defaultOperatorClasses",
 ] as const
 const CONSTRAINT_PARTS = ["type", "definition"] as const
 
@@ -547,3 +673,240 @@ const literals = (nodes: readonly Node[] | undefined): boolean =>
     const bare = uncast(n)
     return "A_Const" in bare && bare.A_Const.isnull !== true
   })
+
+/** Ключ, що покриває прийнятий індекс: ключові колонки в порядку ключа. */
+interface CoveringKey {
+  unique: boolean
+  nullsNotDistinct: boolean
+  deferrable: boolean
+  columns: string[]
+}
+
+/** Колляція колонки за замовчуванням — не явна колляція індексу. */
+const DEFAULT_COLLATION = 'pg_catalog."default"'
+
+/**
+ * Простий btree з ключа еквівалентності (`INDEX_PARTS`): без предиката,
+ * виразів, нетипових класів операторів, колляцій, `indoption` і параметрів
+ * класу. Лише такий пошук ключ тіні гарантовано відтворює: індекс
+ * `(a text_pattern_ops)` чи `(a DESC)` служить іншим запитам. Прийнятий
+ * (`include = false`) ще й без `INCLUDE` і `reloptions`; покривальний ключ
+ * тіні може їх мати — пошуку за ключовими колонками вони не міняють.
+ */
+function plainIndex(
+  o: EquivalenceObject,
+  include: boolean
+): CoveringKey | undefined {
+  const [
+    method,
+    unique,
+    nullsNotDistinct,
+    keyCount,
+    columns,
+    options,
+    ,
+    classOptions,
+    collations,
+    where,
+    storage,
+    defaults,
+  ] = JSON.parse(o.key) as unknown[]
+  if (
+    method !== "btree" ||
+    typeof keyCount !== "number" ||
+    !Array.isArray(columns) ||
+    where !== null ||
+    (!include && (storage !== null || columns.length !== keyCount))
+  )
+    return undefined
+  const all = (v: unknown, ok: (x: unknown) => boolean) =>
+    Array.isArray(v) && v.length === keyCount && v.every(ok)
+  if (
+    !all(options, (x) => x === 0) ||
+    !all(classOptions, (x) => x === null) ||
+    !all(collations, (x) => x === null || x === DEFAULT_COLLATION) ||
+    !all(defaults, (x) => x === true)
+  )
+    return undefined
+  const keys = columns.slice(0, keyCount).map(identifier)
+  if (keys.some((k) => k === undefined)) return undefined
+  return {
+    unique: unique === true,
+    nullsNotDistinct: nullsNotDistinct === true,
+    deferrable: false,
+    columns: keys as string[],
+  }
+}
+
+/**
+ * Ключ тіні, що може покрити прийнятий індекс: простий індекс або UNIQUE чи
+ * PK — їхній індекс-носій завжди btree з типовими класами й без предиката.
+ */
+function coveringKey(
+  s: EquivalenceObject,
+  parse: SqlParser
+): CoveringKey | undefined {
+  if (s.kind === "index") return plainIndex(s, true)
+  if (s.kind !== "constraint" || !["p", "u"].includes(parts(s)[0]))
+    return undefined
+  const node = constraintNode(definition(s), parse)
+  if (node?.contype !== "CONSTR_UNIQUE" && node?.contype !== "CONSTR_PRIMARY")
+    return undefined
+  return {
+    unique: true,
+    nullsNotDistinct: node.nulls_not_distinct ?? false,
+    deferrable: node.deferrable ?? false,
+    columns: strings(node.keys),
+  }
+}
+
+/**
+ * Ім'я ключової колонки з `pg_get_indexdef(oid, k, false)`: ідентифікатор
+ * як є або в лапках. Решта — вираз, а не колонка.
+ */
+function identifier(text: unknown): string | undefined {
+  if (typeof text !== "string") return undefined
+  if (/^[a-z_][a-z0-9_$]*$/.test(text)) return text
+  const quoted = /^"((?:[^"]|"")+)"$/.exec(text)
+  return quoted === null ? undefined : quoted[1]!.replaceAll('""', '"')
+}
+
+/** Привілей пари гранту: `all` — усі; колонки — колонковий привілей. */
+interface Privilege {
+  privilege: string
+  columns: string[]
+}
+
+/** Одна пара (роль, привілей) оператора гранту. */
+interface GrantPair extends Privilege {
+  action: "grant" | "revoke"
+  role: string
+  /** `WITH GRANT OPTION` гранту чи `GRANT OPTION FOR` відкликання. */
+  grantOption: boolean
+}
+
+/** `a` покриває `b`: `ALL`, або той самий привілей на всю таблицю чи ширший перелік колонок. */
+const covers = (a: Privilege, b: Privilege): boolean =>
+  a.privilege === "all" ||
+  (a.privilege === b.privilege &&
+    (a.columns.length === 0 ||
+      (b.columns.length > 0 && b.columns.every((x) => a.columns.includes(x)))))
+
+/**
+ * Дія, ролі й привілеї прийнятого гранту з імені ключа предмета
+ * (`<grant|revoke>:<ролі>:<привілеї>`, `unitSubjectKeys`): ролі й привілеї
+ * там уже розкладено тим самим правилом, що й у дерева гранту.
+ */
+function subjectGrant(name: string): {
+  action: "grant" | "revoke"
+  roles: string[]
+  privileges: Privilege[]
+} {
+  const [action, roles = "", ...rest] = name.split(":")
+  return {
+    action: action === "grant" ? "grant" : "revoke",
+    roles: roles.split(","),
+    privileges: [...rest.join(":").matchAll(/([^,()]+)(?:\(([^)]*)\))?/g)].map(
+      (m) => ({
+        privilege: m[1]!,
+        columns: m[2] === undefined ? [] : m[2].split(","),
+      })
+    ),
+  }
+}
+
+const roleName = (spec: RoleSpec): string =>
+  spec.rolename ?? (spec.roletype ?? "").replace(/^ROLESPEC_/, "").toLowerCase()
+
+function grantPairs(node: GrantStmt): GrantPair[] {
+  const privileges: Privilege[] =
+    (node.privileges ?? []).length === 0
+      ? [{ privilege: "all", columns: [] }]
+      : node.privileges!.map((n) => {
+          const priv = "AccessPriv" in n ? n.AccessPriv : {}
+          return {
+            privilege: priv.priv_name ?? "all",
+            columns: strings(priv.cols),
+          }
+        })
+  return (node.grantees ?? []).flatMap((g) =>
+    "RoleSpec" in g
+      ? privileges.map((p) => ({
+          ...p,
+          action:
+            node.is_grant === true ? ("grant" as const) : ("revoke" as const),
+          role: roleName(g.RoleSpec),
+          grantOption: node.grant_option === true,
+        }))
+      : []
+  )
+}
+
+/** Розібрані оператори одиниць класу `cls` моделі. */
+function statementsOf(
+  model: CatalogModel,
+  cls: CatalogUnit["class"],
+  parse: SqlParser
+): { unit: CatalogUnit; stmt: Node }[] {
+  return model.units
+    .filter((u) => u.class === cls)
+    .flatMap((unit) => {
+      const parsed = parse(unit.sql)
+      // Одиниці моделі вже розібрав extract: збій — порушений інваріант
+      if (!parsed.ok)
+        throw new Error(`${cls} unit does not parse: ${parsed.message}`)
+      return parsed.statements.map((s) => ({ unit, stmt: s.stmt }))
+    })
+}
+
+/** Пари гранту моделі на об'єкт (`schema`, `object`). */
+function grantPairsOn(
+  model: CatalogModel,
+  target: { schema: string; object: string },
+  parse: SqlParser
+): GrantPair[] {
+  return statementsOf(model, "grant", parse).flatMap(({ unit, stmt }) =>
+    "GrantStmt" in stmt &&
+    statementTargets(stmt, unit.schema).some(
+      (t) => t.schema === target.schema && t.object === target.object
+    )
+      ? grantPairs(stmt.GrantStmt)
+      : []
+  )
+}
+
+interface PolicyShape {
+  name: string
+  permissive: boolean
+  command: string
+  roles: string[]
+}
+
+/** Політики моделі на таблиці; без `TO` політика діє для `public`. */
+function policiesOn(
+  model: CatalogModel,
+  schema: string,
+  table: string,
+  parse: SqlParser
+): PolicyShape[] {
+  return statementsOf(model, "policy", parse).flatMap(({ unit, stmt }) => {
+    if (!("CreatePolicyStmt" in stmt)) return []
+    const node = stmt.CreatePolicyStmt
+    if (
+      (node.table?.schemaname ?? unit.schema) !== schema ||
+      node.table?.relname !== table
+    )
+      return []
+    const roles = (node.roles ?? []).flatMap((r) =>
+      "RoleSpec" in r ? [roleName(r.RoleSpec)] : []
+    )
+    return [
+      {
+        name: node.policy_name ?? "",
+        permissive: node.permissive === true,
+        command: node.cmd_name ?? "all",
+        roles: roles.length === 0 ? ["public"] : roles,
+      },
+    ]
+  })
+}

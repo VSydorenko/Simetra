@@ -807,7 +807,11 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       cloneEquivalence: analysis.equivalence,
       shadowEquivalence: target.equivalence,
       desired: target.extracted.model,
+      // Прийняті гранти й політики — з копії після наміру (рішення 10 плану
+      // П3-3a1): у ній таблиці вже в нових іменах, як у тіні
+      clone: cloneModel,
       valueElementColumns: valueElementColumns(c.model),
+      provider: c.model.project.database.provider,
       parse,
     }),
     // Клас `property` — лише за еквівалентного відтворення в тіні (R10):

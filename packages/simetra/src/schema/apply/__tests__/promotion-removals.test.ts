@@ -5,6 +5,7 @@ import {
   type PromotionObject,
   type PromotionRecord,
   type SqlParser,
+  unitSubjectKeys,
 } from "simetra/compiler"
 import type {
   CatalogColumn,
@@ -1665,6 +1666,7 @@ describe("platformReplacements", () => {
     shadow: EquivalenceObject[],
     o: {
       units?: CatalogUnit[]
+      cloneUnits?: CatalogUnit[]
       labels?: { schema: string; table: string; column: string }[]
     } = {}
   ) {
@@ -1673,7 +1675,9 @@ describe("platformReplacements", () => {
       cloneEquivalence: clone,
       shadowEquivalence: shadow,
       desired: model([table("item")], o.units ?? []),
+      clone: model([table("item")], o.cloneUnits ?? []),
       valueElementColumns: o.labels ?? [],
+      provider: "supabase",
       parse,
     })
   }
@@ -1985,12 +1989,21 @@ describe("platformReplacements", () => {
       name: "items_read",
     }
 
+    // Прийнята політика на копії після наміру — уже на перейменованій таблиці
+    const adoptedPolicy = unit(
+      "policy",
+      "policy:app.item.items_read",
+      "items_read",
+      "CREATE POLICY items_read ON app.item FOR SELECT TO authenticated USING (x)"
+    )
+
     it("refuses a policy when the shadow has no policy on the table", () => {
       const out = gate(
         { conversions: [conversion("platform", policy)] },
         [],
         [],
         {
+          cloneUnits: [adoptedPolicy],
           units: [
             unit(
               "trigger",
@@ -2022,6 +2035,7 @@ describe("platformReplacements", () => {
         [],
         [],
         {
+          cloneUnits: [adoptedPolicy],
           units: [
             unit(
               "policy",
@@ -2072,6 +2086,339 @@ describe("platformReplacements", () => {
         gate({ conversions: [conversion("platform", fn)] }, [], [], {
           units: [same],
         })
+      ).toEqual([])
+    })
+  })
+
+  describe("units by class (§8 механізм-заміна)", () => {
+    // Бажаний стан — згенеровані одиниці доступу (генератор `access`):
+    // скоуплена таблиця з `publicRead: authenticated`
+    const GENERATED = [
+      unit(
+        "grant",
+        "grant:app.item:revoke:public:all",
+        "app.item",
+        "REVOKE ALL ON TABLE app.item FROM PUBLIC"
+      ),
+      ...["anon", "authenticated", "service_role"].map((role) =>
+        unit(
+          "grant",
+          `grant:app.item:revoke:${role}:all`,
+          "app.item",
+          `REVOKE ALL ON TABLE app.item FROM ${role}`
+        )
+      ),
+      unit(
+        "grant",
+        "grant:app.item:grant:authenticated:select",
+        "app.item",
+        "GRANT SELECT ON TABLE app.item TO authenticated"
+      ),
+      unit(
+        "policy",
+        "policy:app.item.item_read",
+        "item_read",
+        "CREATE POLICY item_read ON app.item AS PERMISSIVE FOR SELECT TO authenticated USING (org_id = ANY (ARRAY(SELECT app.my_orgs())))"
+      ),
+      unit(
+        "policy",
+        "policy:app.item.item_public_read",
+        "item_public_read",
+        "CREATE POLICY item_public_read ON app.item AS PERMISSIVE FOR SELECT TO authenticated USING (true)"
+      ),
+    ]
+
+    /**
+     * Прийнята одиниця з тим самим текстом на копії й ключем у записі; ім'я
+     * політики й тригера в текстах тестів — `p` і `a`.
+     */
+    function adopted(cls: "grant" | "policy" | "trigger", sql: string) {
+      const name = cls === "policy" ? "p" : cls === "trigger" ? "a" : "app.item"
+      const onClone = unit(cls, `${cls}:adopted`, name, sql)
+      const [key] = unitSubjectKeys(onClone, parse, "app")
+      // Запис — у старому імені таблиці; копія після наміру — вже в новому
+      return {
+        onClone,
+        object: { kind: "unit", ...key!, table: "items" } as PromotionObject,
+      }
+    }
+
+    function verdict(
+      cls: "grant" | "policy" | "trigger",
+      sql: string,
+      units: CatalogUnit[] = GENERATED
+    ): string[] {
+      const a = adopted(cls, sql)
+      return gate({ conversions: [conversion("platform", a.object)] }, [], [], {
+        units,
+        cloneUnits: [a.onClone],
+      }).map((d) => d.code)
+    }
+    const MISSING = ["plan.platform-replacement-missing"]
+
+    describe("grant", () => {
+      it("is replaced by the generated SELECT to the user role", () => {
+        expect(
+          verdict("grant", "GRANT SELECT ON TABLE app.item TO authenticated")
+        ).toEqual([])
+      })
+
+      it("is not replaced when it grants more than SELECT", () => {
+        expect(
+          verdict("grant", "GRANT ALL ON TABLE app.item TO authenticated")
+        ).toEqual(MISSING)
+      })
+
+      it("is replaced when it revokes what the generated REVOKE ALL revokes", () => {
+        expect(
+          verdict("grant", "REVOKE ALL ON TABLE app.item FROM anon")
+        ).toEqual([])
+      })
+
+      it("is not replaced for the service role, which gets no grant", () => {
+        expect(
+          verdict("grant", "GRANT SELECT ON TABLE app.item TO service_role")
+        ).toEqual(MISSING)
+      })
+
+      it("is not replaced when it keeps the grant option", () => {
+        expect(
+          verdict(
+            "grant",
+            "GRANT SELECT ON TABLE app.item TO authenticated WITH GRANT OPTION"
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("is replaced by a table SELECT when it grants SELECT on columns", () => {
+        expect(
+          verdict(
+            "grant",
+            "GRANT SELECT (id) ON TABLE app.item TO authenticated"
+          )
+        ).toEqual([])
+      })
+
+      it("covers PUBLIC only with PUBLIC", () => {
+        expect(
+          verdict("grant", "GRANT SELECT ON TABLE app.item TO PUBLIC")
+        ).toEqual(MISSING)
+        expect(
+          verdict("grant", "REVOKE ALL ON TABLE app.item FROM PUBLIC")
+        ).toEqual([])
+      })
+
+      it("checks every role of a grant to several roles", () => {
+        expect(
+          verdict(
+            "grant",
+            "GRANT SELECT ON TABLE app.item TO authenticated, anon"
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("has nothing to replace when the copy shows no such grant", () => {
+        // Витяг пише грант відносно типових прав: пари, якої копія не
+        // показує, ціль не відрізняє від типового стану
+        const a = adopted(
+          "grant",
+          "GRANT ALL ON TABLE app.item TO authenticated"
+        )
+        expect(
+          gate({ conversions: [conversion("platform", a.object)] }, [], [], {
+            units: GENERATED,
+          })
+        ).toEqual([])
+      })
+    })
+
+    describe("policy", () => {
+      it("is replaced by the generated read policy of the same command and role", () => {
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item FOR SELECT TO authenticated USING (x)"
+          )
+        ).toEqual([])
+      })
+
+      it("maps public to the user role", () => {
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item FOR SELECT TO public USING (x)"
+          )
+        ).toEqual([])
+        expect(
+          verdict("policy", "CREATE POLICY p ON app.item FOR SELECT USING (x)")
+        ).toEqual([])
+      })
+
+      it("refuses FOR ALL TO public: the generated policy covers only SELECT", () => {
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item FOR ALL TO public USING (x)"
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses a restrictive policy", () => {
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item AS RESTRICTIVE FOR SELECT TO authenticated USING (x)"
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses a role the generated policy does not have", () => {
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item FOR SELECT TO anon USING (x)"
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses SELECT on a table without a generated policy", () => {
+        // Нескоуплена таблиця без `publicRead`: лише гранти, політик немає
+        const grantsOnly = GENERATED.filter((u) => u.class === "grant")
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item FOR SELECT TO authenticated USING (true)",
+            grantsOnly
+          )
+        ).toEqual(MISSING)
+      })
+    })
+
+    it("refuses a trigger until generated triggers exist, even beside other generated units", () => {
+      const trigger = unit(
+        "trigger",
+        "trigger:app.item.t",
+        "t",
+        "CREATE TRIGGER t BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.f()"
+      )
+      expect(
+        verdict(
+          "trigger",
+          "CREATE TRIGGER a BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.f()",
+          [...GENERATED, trigger]
+        )
+      ).toEqual(MISSING)
+    })
+  })
+
+  describe("covered index (§8 механізм-заміна, decision 11)", () => {
+    /** Ключ еквівалентності індексу в порядку `INDEX_PARTS`. */
+    const fullIndex = (
+      name: string,
+      columns: string[],
+      over: {
+        unique?: boolean
+        where?: string
+        classes?: boolean[]
+        keys?: number
+        options?: number[]
+      } = {}
+    ) =>
+      eq("index", name, [
+        "btree",
+        over.unique ?? false,
+        false,
+        over.keys ?? columns.length,
+        columns,
+        over.options ?? columns.map(() => 0),
+        columns.map(() => "pg_catalog.uuid_ops"),
+        columns.map(() => null),
+        columns.map(() => null),
+        over.where ?? null,
+        null,
+        over.classes ?? columns.map(() => true),
+      ])
+    const scopeKey = eq("constraint", "item_org_id_id_key", [
+      "u",
+      "UNIQUE (org_id, id)",
+    ])
+    const covered = (adopted: EquivalenceObject, shadow = [scopeKey]) =>
+      gate(
+        {
+          conversions: [conversion("platform", indexObject(adopted.name))],
+        },
+        [adopted],
+        shadow
+      ).map((d) => d.code)
+    const MISSING = ["plan.platform-replacement-missing"]
+
+    it("covers a plain index by a key that starts with its columns", () => {
+      expect(covered(fullIndex("items_org_idx", ["org_id"]))).toEqual([])
+    })
+
+    it("does not cover a partial index", () => {
+      expect(
+        covered(fullIndex("items_org_idx", ["org_id"], { where: "(x)" }))
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover an index with a non-default operator class", () => {
+      expect(
+        covered(fullIndex("items_org_idx", ["org_id"], { classes: [false] }))
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover an index with DESC", () => {
+      expect(
+        covered(fullIndex("items_org_idx", ["org_id"], { options: [3] }))
+      ).toEqual(MISSING)
+    })
+
+    it("does not cover an index whose columns are not a prefix", () => {
+      expect(covered(fullIndex("items_id_org_idx", ["id", "org_id"]))).toEqual(
+        MISSING
+      )
+    })
+
+    it("does not cover an expression index", () => {
+      expect(covered(fullIndex("items_lower_idx", ["lower(org_id)"]))).toEqual(
+        MISSING
+      )
+    })
+
+    it("does not cover a unique index by a wider key", () => {
+      expect(
+        covered(fullIndex("items_org_key", ["org_id"], { unique: true }))
+      ).toEqual(MISSING)
+    })
+
+    it("covers a unique index by a key with the same columns", () => {
+      expect(
+        covered(
+          fullIndex("items_org_id_key", ["org_id", "id"], { unique: true })
+        )
+      ).toEqual([])
+    })
+
+    it("covers by a plain index of the shadow, not by a partial one", () => {
+      const adopted = fullIndex("items_org_idx", ["org_id"])
+      expect(
+        covered(adopted, [fullIndex("item_org_title_idx", ["org_id", "title"])])
+      ).toEqual([])
+      expect(
+        covered(adopted, [
+          fullIndex("item_org_title_idx", ["org_id", "title"], {
+            where: "(x)",
+          }),
+        ])
+      ).toEqual(MISSING)
+    })
+
+    it("covers by the primary key", () => {
+      expect(
+        covered(fullIndex("items_id_idx", ["id"]), [
+          eq("constraint", "item_pkey", ["p", "PRIMARY KEY (id)"]),
+        ])
       ).toEqual([])
     })
   })

@@ -36,7 +36,10 @@ export interface EquivalenceObject {
  * тож класи (`indclass`) — окремою частиною, і так само параметри класу
  * (`attoptions` ключових колонок індексу, PG13+: `tsvector_ops (siglen = 32)`
  * і `(siglen = 64)` — різні індекси). Класи й колляції — іменами: копія
- * й тінь — різні бази, OID користувацьких об'єктів у них різні. Послідовність — лише в схемі своєї
+ * й тінь — різні бази, OID користувацьких об'єктів у них різні. Ім'я класу
+ * не каже, чи він типовий для типу колонки, а форма `covered` (рішення 11
+ * плану П3-3a1) покриває лише індекс з типовими класами, тож типовість
+ * (`opcdefault`) — останньою окремою частиною. Послідовність — лише в схемі своєї
  * таблиці: крок перейменування адресує її схемою таблиці.
  */
 const EQUIVALENCE_SQL = `
@@ -74,7 +77,10 @@ select 'index', t.schema, t.tbl, ic.relname,
        left join pg_collation co on co.oid = u.coll
        left join pg_namespace cn on cn.oid = co.collnamespace),
     pg_get_expr(i.indpred, i.indrelid),
-    ic.reloptions),
+    ic.reloptions,
+    (select json_agg(oc.opcdefault order by u.ord)
+       from unnest(i.indclass::oid[]) with ordinality as u(cls, ord)
+       join pg_opclass oc on oc.oid = u.cls)),
   i.indisvalid and i.indisready
 from t join pg_index i on i.indrelid = t.oid
 join pg_class ic on ic.oid = i.indexrelid

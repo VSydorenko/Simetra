@@ -44,6 +44,7 @@ export {
 } from "./function-execute"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
+  statementTargets,
   triggerFunctionSchema,
   unitPlacement,
   unitSubjectKeys,

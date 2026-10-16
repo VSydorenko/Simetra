@@ -2747,11 +2747,15 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
     describe("class platform (decision 7, R9)", () => {
       const INDEX = "counterparties_inn_idx"
 
-      /** Прийнятий звичайний індекс `inn` з класом `platform`. */
-      async function platformIndex(): Promise<Promoted> {
+      /** Прийнятий звичайний індекс (типово `inn`) з класом `platform`. */
+      async function platformIndex(
+        columns: readonly string[] = ["inn"]
+      ): Promise<Promoted> {
         const files = contactsProject()
         const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
-        party.indexes = [{ name: INDEX, keys: [{ column: "inn" }] }]
+        party.indexes = [
+          { name: INDEX, keys: columns.map((column) => ({ column })) },
+        ]
         files.set(COUNTERPARTY_FILE, JSON.stringify(party))
         const mapping = contactsMapping()
         mapping.conversions[`Counterparty#indexes/${INDEX}`] = "platform"
@@ -2759,9 +2763,10 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       }
 
       it("refuses an adopted index of the class platform that the kind does not reproduce", async () => {
-        // Вид такого індексу не дає: клас `platform` без заміни був би тихим
-        // зникненням індексу
-        const outcome = await planPromotion(await platformIndex())
+        // Вид такого індексу не дає, а `UNIQUE (tax_id)` виду його не покриває:
+        // `(inn, id)` не префікс ключа. Клас `platform` без заміни був би
+        // тихим зникненням індексу
+        const outcome = await planPromotion(await platformIndex(["inn", "id"]))
         expect(outcome.status).toBe("refused")
         expect(errors(outcome)).toEqual(["plan.platform-replacement-missing"])
         expect(params(outcome, "plan.platform-replacement-missing")).toEqual([
@@ -2769,6 +2774,23 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
             objects: `Counterparty#indexes/${INDEX} (index app.counterparties.${INDEX})`,
           },
         ])
+      })
+
+      it("plans an adopted index of the class platform that a key of the kind covers", async () => {
+        // Рішення 11 плану П3-3a1: простий індекс `(inn)` покриває
+        // `UNIQUE (tax_id)` реквізиту — той самий пошук, тож заміна є, а
+        // індекс знімає двигун
+        const outcome = await planPromotion(await platformIndex())
+        const artifact = planned(outcome)
+        const drops = stepMatching(
+          artifact,
+          new RegExp(`DROP INDEX .*${INDEX}`)
+        )
+        expect(drops).toHaveLength(1)
+        expect(artifact.promotion!.conversions).toContainEqual({
+          step: drops[0]!.id,
+          class: "platform",
+        })
       })
 
       it("plans an adopted index of the class platform that the desired state reproduces", async () => {
