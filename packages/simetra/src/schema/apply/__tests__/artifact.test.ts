@@ -401,7 +401,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(4)
+    expect(PLAN_FORMAT).toBe(5)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -412,7 +412,7 @@ describe("plan artifact", () => {
     expect(parsePlan(JSON.stringify(old))).toMatchObject({
       ok: false,
       reason: "format",
-      diagnostic: { params: { found: 2, supported: 4 } },
+      diagnostic: { params: { found: 2, supported: PLAN_FORMAT } },
     })
   })
 
@@ -428,12 +428,32 @@ describe("plan artifact", () => {
       reason: "format",
       diagnostic: {
         code: "apply.plan-format",
-        params: { found: 3, supported: 4 },
+        params: { found: 3, supported: PLAN_FORMAT },
       },
     })
     if (parsed.ok || parsed.reason !== "format") throw new Error("format")
     expect(parsed.diagnostic.message).toMatch(
       /plan format 3 is not supported.*rebuild the plan/i
+    )
+  })
+
+  it("asks to rebuild a plan of the fourth format", async () => {
+    const artifact = await stampPlan(draft())
+    // Форма четвертого формату: без сигнатур функцій платформи
+    const old: Record<string, unknown> = { ...artifact, format: 4 }
+    delete old.platformFunctions
+    const parsed = parsePlan(JSON.stringify(old))
+    expect(parsed).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 4, supported: PLAN_FORMAT },
+      },
+    })
+    if (parsed.ok || parsed.reason !== "format") throw new Error("format")
+    expect(parsed.diagnostic.message).toMatch(
+      /plan format 4 is not supported.*rebuild the plan/i
     )
   })
 

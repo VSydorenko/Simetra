@@ -15,6 +15,7 @@ import {
   customTable,
   metaFiles,
   project,
+  salesDocument,
   uuid,
 } from "./helpers"
 
@@ -189,6 +190,23 @@ describe("buildMechanicsUnits", () => {
     expect(platformFunctionSignatures(model.sqlUnits)).toEqual([
       "simetra.touch()",
     ])
+  })
+
+  it("a movement query wrapper stays under plpgsql_check: it is not a platform function", async () => {
+    const model = await compiled({
+      "project.meta.json": project(),
+      ...salesDocument(),
+    })
+    const wrappers = model.sqlUnits.filter(
+      (u) => u.generator === "movementQuery"
+    )
+    expect(wrappers.length).toBeGreaterThan(0)
+    const platform = platformFunctionSignatures(model.sqlUnits)
+    expect(platform).toContain("simetra.touch()")
+    for (const wrapper of wrappers)
+      expect(platform).not.toContain(
+        wrapper.identity.slice(wrapper.identity.indexOf(":") + 1)
+      )
   })
 
   it("compile orders the trigger after its table and the function", async () => {
