@@ -1477,6 +1477,71 @@ describe("access and permission items", () => {
     ])
   })
 
+  it("marks a changed policy of the same identity that opens a role", () => {
+    const policy = (sql: string) =>
+      unit(
+        "policy",
+        "policy:app.items.items_public_read",
+        "items_public_read",
+        sql
+      )
+    const changes = access(
+      record({}),
+      model(
+        [table("items")],
+        [
+          policy(
+            "CREATE POLICY items_public_read ON app.items FOR SELECT TO authenticated USING (true)"
+          ),
+        ]
+      ),
+      model(
+        [table("items")],
+        [
+          policy(
+            "CREATE POLICY items_public_read ON app.items AS PERMISSIVE FOR SELECT TO anon, authenticated USING (true)"
+          ),
+        ]
+      )
+    )
+    expect(changes.map((c) => c.policies)).toEqual([
+      ["changed policy:app.items.items_public_read adds roles anon"],
+    ])
+  })
+
+  it("does not count an adopted restrictive policy as access a role had", () => {
+    const policy = (name: string, sql: string) =>
+      unit("policy", `policy:app.items.${name}`, name, sql)
+    const changes = access(
+      record({}),
+      model(
+        [table("items")],
+        [
+          // Обмежувальна політика лише звужує доступ: `anon` читання не мав
+          policy(
+            "items_guard",
+            "CREATE POLICY items_guard ON app.items AS RESTRICTIVE FOR SELECT TO anon USING (true)"
+          ),
+        ]
+      ),
+      model(
+        [table("items")],
+        [
+          policy(
+            "items_public_read",
+            "CREATE POLICY items_public_read ON app.items AS PERMISSIVE FOR SELECT TO anon USING (true)"
+          ),
+        ]
+      )
+    )
+    expect(changes.map((c) => c.policies)).toEqual([
+      [
+        "missing policy:app.items.items_guard",
+        "extra policy:app.items.items_public_read adds roles anon",
+      ],
+    ])
+  })
+
   it("lists a table that only loses the service role access, read under the old name", () => {
     const same = model([table("catalog_items")])
     const changes = access(

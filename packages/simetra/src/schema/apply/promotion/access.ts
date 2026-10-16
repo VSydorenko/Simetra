@@ -31,8 +31,9 @@ export interface AccessChange {
   rowLevelSecurity?: { from: "off" | "forced"; to: "enabled" }
   /**
    * `missing|extra|changed <identity>` одиниць класу `policy`; рядок `extra`
-   * закінчується ` adds roles <ролі>`, коли нова політика відкриває ролі,
-   * яких не мала жодна прийнята політика тієї самої команди на таблиці.
+   * чи `changed` закінчується ` adds roles <ролі>`, коли політика бажаного
+   * стану відкриває ролі, яких не мала жодна прийнята дозвільна політика
+   * тієї самої команди на таблиці.
    */
   policies: string[]
   /** `missing|extra|changed <identity>` одиниць класу `grant`. */
@@ -80,8 +81,8 @@ function unitsOn(
 function unitChanges(
   clone: ReadonlyMap<string, CatalogUnit>,
   desired: ReadonlyMap<string, CatalogUnit>,
-  /** Доповнення рядка `extra` за новою одиницею. */
-  extra: (unit: CatalogUnit) => string = () => ""
+  /** Доповнення рядків `extra` і `changed` за одиницею бажаного стану. */
+  suffix: (unit: CatalogUnit) => string = () => ""
 ): string[] {
   const identities = [...new Set([...clone.keys(), ...desired.keys()])].sort(
     byCodeUnits
@@ -89,15 +90,15 @@ function unitChanges(
   return identities.flatMap((identity) => {
     const was = clone.get(identity)
     const now = desired.get(identity)
-    if (was === undefined) return [`extra ${identity}${extra(now!)}`]
+    if (was === undefined) return [`extra ${identity}${suffix(now!)}`]
     if (now === undefined) return [`missing ${identity}`]
-    return was.sql === now.sql ? [] : [`changed ${identity}`]
+    return was.sql === now.sql ? [] : [`changed ${identity}${suffix(now)}`]
   })
 }
 
 /**
- * Ролі нової політики, яких не мала жодна прийнята політика тієї самої
- * команди на таблиці (умова архітектора до рішення 10 плану П3-3a1): форма
+ * Ролі політики бажаного стану (нової чи зміненої), яких не мала жодна
+ * прийнята дозвільна політика тієї самої команди на таблиці (умова архітектора до рішення 10 плану П3-3a1): форма
  * заміни `policy` перевіряє лише, що доступ прийнятої не губиться, а
  * доданий доступ має бути видно під `access:`. Прийнята `public` для
  * порівняння — роль запиту користувача, як у формі заміни.
@@ -118,7 +119,8 @@ function addedRoles(
   ).flatMap((now) => {
     const had = new Set(
       policiesOn(clone, table.schema, table.name, parse)
-        .filter((was) => was.command === now.command)
+        // Обмежувальна політика доступу не дає, лише звужує його
+        .filter((was) => was.permissive && was.command === now.command)
         .flatMap((was) => was.roles.map(asUser))
     )
     return now.roles.filter((r) => !had.has(asUser(r)))
