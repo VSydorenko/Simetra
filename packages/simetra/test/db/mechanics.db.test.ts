@@ -43,7 +43,7 @@ describe("row mechanics in Postgres", () => {
         `INSERT INTO public.item (id, description) VALUES (gen_random_uuid(), 'a') RETURNING id, ${ROW}`
       )
       const id = inserted.rows[0]!.id
-      expect(inserted.rows[0]!.version).toBe("1")
+      expect(inserted.rows[0]).toMatchObject({ version: "1", touched: true })
 
       const first = await client.query<Row>(
         `UPDATE public.item SET description = 'x', version = 100, updated_at = '2000-01-01' WHERE id = $1 RETURNING ${ROW}`,
@@ -56,6 +56,23 @@ describe("row mechanics in Postgres", () => {
         [id]
       )
       expect(second.rows).toEqual([{ version: "3", touched: true }])
+
+      // Спроба скинути версію — та сама механіка: OLD.version + 1
+      const reset = await client.query<Row>(
+        `UPDATE public.item SET version = 0 WHERE id = $1 RETURNING ${ROW}`,
+        [id]
+      )
+      expect(reset.rows).toEqual([{ version: "4", touched: true }])
+    })
+  })
+
+  it("an insert starts at version 1 whatever the client writes", async () => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const inserted = await client.query<Row>(
+        `INSERT INTO public.item (id, description, version, updated_at) VALUES (gen_random_uuid(), 'a', 999, '2000-01-01') RETURNING ${ROW}`
+      )
+      expect(inserted.rows).toEqual([{ version: "1", touched: true }])
     })
   })
 })

@@ -214,6 +214,12 @@ export interface PlanArtifact {
    */
   plpgsqlCheck: PlpgsqlCheckMode
   /**
+   * Сигнатури функцій платформи бажаного стану
+   * (`platformFunctionSignatures`): їх раннер виключає з `plpgsql_check` і
+   * переліку сліпих. Під хешем: ознаку дає модель, а раннер моделі не має.
+   */
+  platformFunctions: string[]
+  /**
    * Недійсні обмеження й індекси бажаної тіні (`readInvalidObjects`): раннер
    * після кроків відмовляє лише на недійсному, чого в бажаному стані немає
    * (рішення 1 плану П3-2b-1, фаза 16).
@@ -439,6 +445,7 @@ export const planArtifactSchema: z.ZodType<PlanArtifact> = z.strictObject({
   ),
   revalidationSearchPath: z.string(),
   plpgsqlCheck: z.enum(PLPGSQL_CHECK_MODES),
+  platformFunctions: z.array(z.string()),
   desiredInvalid: z.array(z.string()),
   promotion: promotionSectionSchema.nullable(),
   environment: z.strictObject({

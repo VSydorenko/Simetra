@@ -320,6 +320,7 @@ async function planFor(
     preamble: [],
     // Перевірку `plpgsql_check` тримає `function-checks.db.test.ts`
     plpgsqlCheck: "unavailable",
+    platformFunctions: [],
     desiredInvalid: [],
     promotion: null,
     // Цілі тестів глобальних ADP ролі не мають
@@ -379,6 +380,7 @@ async function establish(url: string, hash: string): Promise<void> {
       preamble: [],
       revalidationSearchPath: await sessionPath(url),
       plpgsqlCheck: "unavailable",
+      platformFunctions: [],
       desiredInvalid: [],
       promotion: null,
       environment: { defaultPrivileges: [] },

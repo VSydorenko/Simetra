@@ -205,7 +205,7 @@ describe("the platform layer joins the boundary by its own schemas", () => {
     expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
-  it("a model without users has no simetra in scope", async () => {
+  it("a model with only a CustomTable and no users has no simetra in scope", async () => {
     // Прийнята таблиця не має механіки рядка, тож `simetra` в межу не дає
     // нічого, крім шару.
     const { scope } = await scopeWith({

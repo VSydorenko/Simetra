@@ -2,6 +2,7 @@ import {
   canonicalSnapshot,
   loadSqlParser,
   modelFunctions,
+  platformFunctionSignatures,
   type CompiledModel,
   type RuleCode,
   type SqlParser,
@@ -494,6 +495,7 @@ export async function buildPlan(
     steps,
     parse,
     promotion: false,
+    platformFunctions: platformFunctionSignatures(model.sqlUnits),
     data: [],
     models: {
       source: live.extracted.model,
@@ -530,6 +532,7 @@ export async function buildPlan(
       preamble,
       revalidationSearchPath,
       plpgsqlCheck,
+      platformFunctions: platformFunctionSignatures(model.sqlUnits),
       desiredInvalid: target.desiredInvalid,
       promotion: null,
       environment,
@@ -565,6 +568,7 @@ export async function buildPlan(
     preamble,
     revalidationSearchPath,
     plpgsqlCheck,
+    platformFunctions: platformFunctionSignatures(model.sqlUnits),
     desiredInvalid: target.desiredInvalid,
     promotion: null,
     environment,
@@ -907,6 +911,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     steps,
     parse,
     promotion: true,
+    platformFunctions: platformFunctionSignatures(c.model.sqlUnits),
     data: dataSection,
     models: {
       source: cloneModel,
@@ -976,6 +981,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       preamble: analysis.preamble,
       revalidationSearchPath,
       plpgsqlCheck,
+      platformFunctions: platformFunctionSignatures(c.model.sqlUnits),
       desiredInvalid: target.desiredInvalid,
       promotion: section,
       environment,
@@ -1008,6 +1014,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     preamble: analysis.preamble,
     revalidationSearchPath,
     plpgsqlCheck,
+    platformFunctions: platformFunctionSignatures(c.model.sqlUnits),
     desiredInvalid: target.desiredInvalid,
     promotion: section,
     environment,
@@ -1330,6 +1337,8 @@ async function lockPlan(
     parse: SqlParser
     /** План несе промоцію: без `plpgsql_check` — відмова, а не попередження. */
     promotion: boolean
+    /** `platformFunctionSignatures` бажаної моделі. */
+    platformFunctions: readonly string[]
     /**
      * Таблиці кроків даних: обчислення й запис займають таблицю запису в
      * старому імені `SHARE ROW EXCLUSIVE` (рішення 2 плану П3-2b-2), окремим
@@ -1408,7 +1417,8 @@ async function lockPlan(
       blindFunctions: await readBlindFunctions(
         tx,
         checks.mode === "unavailable" ? "unavailable" : "available",
-        PROVIDER_EXPECTED_BLIND_FUNCTIONS[scope.provider]
+        PROVIDER_EXPECTED_BLIND_FUNCTIONS[scope.provider],
+        o.platformFunctions
       ),
     }
   })

@@ -62,6 +62,18 @@ export const FUNCTION_SCOPE_SQL = `n.nspname NOT IN ('pg_catalog', 'information_
           AND d.objid = p.oid AND d.deptype = 'e')`
 
 /**
+ * Функції платформи (`platformFunctionSignatures`) поза `plpgsql_check` і
+ * переліком сліпих: тіло фіксоване й перевірене тестами генератора, а
+ * попередження про них на кожному плані привчало б не читати попереджень.
+ * Ознака — походження одиниці, тож сигнатури приходять з моделі, а не зі
+ * схеми. `to_regprocedure` відсутньої функції дає `NULL` і нічого не
+ * виключає.
+ */
+const NOT_PLATFORM_SQL = (param: string): string =>
+  `p.oid NOT IN (SELECT f FROM (SELECT pg_catalog.to_regprocedure(s)::pg_catalog.oid AS f
+         FROM pg_catalog.unnest(${param}::text[]) s) x WHERE f IS NOT NULL)`
+
+/**
  * Ключі `proconfig`, яких DO-блок не застосовує перед валідатором функції.
  * Кожен — зі своєю причиною.
  */
@@ -255,7 +267,8 @@ export interface BlindFunctions {
 export async function readBlindFunctions(
   tx: ApplyTransaction,
   plpgsqlCheck: "available" | "unavailable",
-  expected: readonly string[]
+  expected: readonly string[],
+  platform: readonly string[]
 ): Promise<BlindFunctions> {
   const rows = await tx.query<{ signature: string; expected: boolean }>(
     `SELECT p.oid::pg_catalog.regprocedure::text AS signature,
@@ -265,6 +278,7 @@ export async function readBlindFunctions(
      JOIN pg_catalog.pg_language l ON l.oid = p.prolang
      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
      WHERE ${FUNCTION_SCOPE_SQL}
+       AND ${NOT_PLATFORM_SQL("$3")}
        AND (
          l.lanname NOT IN ('sql', 'plpgsql', 'c', 'internal')
          OR (l.lanname IN ('sql', 'plpgsql')
@@ -275,7 +289,7 @@ export async function readBlindFunctions(
              AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t
                WHERE t.tgfoid = p.oid AND NOT t.tgisinternal))))
        )`,
-    [plpgsqlCheck === "available", [...expected]]
+    [plpgsqlCheck === "available", [...expected], [...platform]]
   )
   const signatures = (want: boolean) =>
     rows
@@ -465,6 +479,7 @@ CROSS JOIN LATERAL ${quoteIdent(schema)}.plpgsql_check_function_tb(p.oid,
   coalesce(t.tgrelid, 0), fatal_errors => false,
   oldtable => t.tgoldtable, newtable => t.tgnewtable) cs
 WHERE ${FUNCTION_SCOPE_SQL}
+  AND ${NOT_PLATFORM_SQL("$1")}
   AND p.prorettype <> 'pg_catalog.event_trigger'::pg_catalog.regtype
   AND (p.prorettype <> 'pg_catalog.trigger'::pg_catalog.regtype OR t.tgrelid IS NOT NULL)
   AND cs.level = 'error'
@@ -499,7 +514,8 @@ type PlpgsqlErrorGroup = {
  */
 export async function readPlpgsqlErrors(
   tx: ApplyTransaction,
-  planned: PlpgsqlCheckMode
+  planned: PlpgsqlCheckMode,
+  platform: readonly string[]
 ): Promise<CheckResult | "skipped"> {
   if (planned === "unavailable") return "skipped"
   await tx.query(`SAVEPOINT ${CHECK_SCHEMA}`)
@@ -538,7 +554,9 @@ export async function readPlpgsqlErrors(
     }
     schema = CHECK_SCHEMA
   }
-  const groups = await tx.query<PlpgsqlErrorGroup>(plpgsqlCheckSql(schema))
+  const groups = await tx.query<PlpgsqlErrorGroup>(plpgsqlCheckSql(schema), [
+    [...platform],
+  ])
   await release()
   const total = groups.reduce((sum, g) => sum + g.n, 0)
   const errors = groups.slice(0, FUNCTION_ERROR_LIMIT).flatMap((g) =>

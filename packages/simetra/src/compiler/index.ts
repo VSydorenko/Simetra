@@ -30,6 +30,7 @@ export {
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
+  platformFunctionSignatures,
   readSqlUnits,
   withoutLocations,
   type SqlSource,

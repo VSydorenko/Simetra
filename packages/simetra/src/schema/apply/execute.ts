@@ -153,6 +153,7 @@ export type ExecutablePlan = Pick<
   | "preamble"
   | "revalidationSearchPath"
   | "plpgsqlCheck"
+  | "platformFunctions"
   | "desiredInvalid"
   | "promotion"
   | "environment"
@@ -984,7 +985,8 @@ async function runAttempt(
             await readBlindFunctions(
               tx,
               plan.plpgsqlCheck === "unavailable" ? "unavailable" : "available",
-              PROVIDER_EXPECTED_BLIND_FUNCTIONS[plan.scope.provider]
+              PROVIDER_EXPECTED_BLIND_FUNCTIONS[plan.scope.provider],
+              plan.platformFunctions
             )
           ).blind,
   }))
@@ -1491,7 +1493,11 @@ async function readPlpgsqlChecked(
   warnings: EngineDiagnostic[]
 ): Promise<CheckResult | "skipped"> {
   try {
-    return await readPlpgsqlErrors(tx, plan.plpgsqlCheck)
+    return await readPlpgsqlErrors(
+      tx,
+      plan.plpgsqlCheck,
+      plan.platformFunctions
+    )
   } catch (error) {
     if (error instanceof CheckNameTaken)
       throw stop("refused", "apply.temp-name-taken", { name: error.taken })

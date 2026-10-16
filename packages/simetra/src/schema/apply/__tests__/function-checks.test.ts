@@ -349,7 +349,7 @@ describe("readPlpgsqlErrors", () => {
 
   it("skips the check for a plan without the extension", async () => {
     const { tx, log } = fakeTx(() => [])
-    expect(await readPlpgsqlErrors(tx, "unavailable")).toBe("skipped")
+    expect(await readPlpgsqlErrors(tx, "unavailable", [])).toBe("skipped")
     expect(log).toEqual([])
   })
 
@@ -361,7 +361,7 @@ describe("readPlpgsqlErrors", () => {
           ? [group({ n: 2 }), group({ oid: "101", signature: "app.g()" })]
           : []
     )
-    const result = await readPlpgsqlErrors(tx, "transient")
+    const result = await readPlpgsqlErrors(tx, "transient", [])
     expect(result).toEqual({
       total: 3,
       errors: [
@@ -398,7 +398,7 @@ describe("readPlpgsqlErrors", () => {
           ]
         : []
     )
-    expect(await readPlpgsqlErrors(tx, "installed")).toEqual({
+    expect(await readPlpgsqlErrors(tx, "installed", [])).toEqual({
       total: 0,
       errors: [],
     })
@@ -415,7 +415,7 @@ describe("readPlpgsqlErrors", () => {
         ? [facts({ installed: true, schema: "ext", functionExecute: true })]
         : []
     )
-    const error = await readPlpgsqlErrors(tx, "installed").catch((x) => x)
+    const error = await readPlpgsqlErrors(tx, "installed", []).catch((x) => x)
     expect(error).toBeInstanceOf(PlpgsqlCheckUnavailable)
     expect(error).toMatchObject({ sqlstate: "42501" })
     expect(firstLines(log).slice(-2)).toEqual([
@@ -432,7 +432,7 @@ describe("readPlpgsqlErrors", () => {
         ? [facts({ available: true })]
         : []
     })
-    const error = await readPlpgsqlErrors(tx, "transient").catch((x) => x)
+    const error = await readPlpgsqlErrors(tx, "transient", []).catch((x) => x)
     expect(error).toBeInstanceOf(PlpgsqlCheckUnavailable)
     expect(error).toMatchObject({
       sqlstate: "42501",
@@ -452,7 +452,7 @@ describe("readPlpgsqlErrors", () => {
         ? [facts({ available: true })]
         : []
     })
-    await expect(readPlpgsqlErrors(tx, "transient")).rejects.toBe(timeout)
+    await expect(readPlpgsqlErrors(tx, "transient", [])).rejects.toBe(timeout)
   })
 
   it("refuses a taken check schema", async () => {
@@ -461,7 +461,7 @@ describe("readPlpgsqlErrors", () => {
         ? [facts({ available: true, checkSchemaTaken: true })]
         : []
     )
-    const error = await readPlpgsqlErrors(tx, "transient").catch((x) => x)
+    const error = await readPlpgsqlErrors(tx, "transient", []).catch((x) => x)
     expect(error).toBeInstanceOf(CheckNameTaken)
     expect(error).toMatchObject({ taken: "simetra_plpgsql_check" })
     expect(log.some((l) => l.sql.startsWith("CREATE"))).toBe(false)
@@ -477,7 +477,7 @@ describe("readPlpgsqlErrors", () => {
             )
           : []
     )
-    const result = await readPlpgsqlErrors(tx, "transient")
+    const result = await readPlpgsqlErrors(tx, "transient", [])
     expect(result).not.toBe("skipped")
     if (result === "skipped") return
     expect(result.total).toBe(FUNCTION_ERROR_LIMIT + 1)
@@ -497,14 +497,34 @@ describe("function check scope", () => {
         : []
     })
     await readValidatorErrors(tx)
-    await readBlindFunctions(tx, "available", [])
-    await readPlpgsqlErrors(tx, "transient")
+    await readBlindFunctions(tx, "available", [], [])
+    await readPlpgsqlErrors(tx, "transient", [])
     const queries = [
       log.find((l) => l.sql.startsWith("DO "))!,
       log.find((l) => l.sql.includes("AS expected"))!,
       log.find((l) => l.sql.includes("plpgsql_check_function_tb(p.oid"))!,
     ]
     for (const q of queries) expect(q.sql).toContain(FUNCTION_SCOPE_SQL)
+  })
+})
+
+describe("platform functions", () => {
+  it("are passed to the blind list and to plpgsql_check as an exclusion", async () => {
+    const { tx, log } = fakeTx((sql) =>
+      sql.includes("pg_available_extension_versions")
+        ? [facts({ available: true })]
+        : []
+    )
+    await readBlindFunctions(tx, "available", [], ["simetra.touch()"])
+    await readPlpgsqlErrors(tx, "transient", ["simetra.touch()"])
+    const blind = log.find((l) => l.sql.includes("AS expected"))!
+    const check = log.find((l) =>
+      l.sql.includes("plpgsql_check_function_tb(p.oid")
+    )!
+    expect(blind.sql).toContain("to_regprocedure")
+    expect(blind.params).toEqual([true, [], ["simetra.touch()"]])
+    expect(check.sql).toContain("to_regprocedure")
+    expect(check.params).toEqual([["simetra.touch()"]])
   })
 })
 
@@ -516,12 +536,17 @@ describe("readBlindFunctions", () => {
       { signature: "app.fh()", expected: false },
     ])
     expect(
-      await readBlindFunctions(tx, "available", ["pgbouncer.get_auth(text)"])
+      await readBlindFunctions(
+        tx,
+        "available",
+        ["pgbouncer.get_auth(text)"],
+        []
+      )
     ).toEqual({
       blind: ["app.fh()", "pgbouncer.other(text)"],
       expected: ["pgbouncer.get_auth(text)"],
     })
-    expect(log[0]!.params).toEqual([true, ["pgbouncer.get_auth(text)"]])
+    expect(log[0]!.params).toEqual([true, ["pgbouncer.get_auth(text)"], []])
   })
 })
 

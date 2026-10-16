@@ -81,6 +81,43 @@ export type UnitGenerator =
   | "functionExecute"
   | "mechanics"
 
+/**
+ * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
+ * тести генератора, тож `plpgsql_check` застосування її не перевіряє й
+ * сліпою не називає (спека промоції §7.2). Обгортка запиту рухів несе запит
+ * застосунку — її перевіряють, як дослівну. Запис на кожен генератор:
+ * новий генератор вирішує це явно.
+ */
+const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
+  movementQuery: false,
+  membership: true,
+  platformLayer: true,
+  access: true,
+  functionExecute: true,
+  mechanics: true,
+}
+
+/**
+ * Сигнатури функцій платформи (`<схема>.<ім'я>(<типи>)`, як у ідентичності)
+ * — ознака за походженням одиниці, а не за схемою. Типи аргументів
+ * згенерованих функцій лише вбудовані, тож сигнатуру резолвить
+ * `to_regprocedure` незалежно від шляху.
+ */
+export function platformFunctionSignatures(
+  units: readonly Pick<SqlUnit, "class" | "identity" | "file" | "generator">[]
+): string[] {
+  return units
+    .filter(
+      (unit) =>
+        unit.file === undefined &&
+        unit.class === "function" &&
+        unit.generator !== undefined &&
+        FIXED_BODY[unit.generator]
+    )
+    .map((unit) => unit.identity.slice("function:".length))
+    .sort(compareStrings)
+}
+
 /** Обгортка запиту рухів: поля рухів обов'язкові. */
 export interface MovementQueryUnit extends SqlUnit {
   class: "movementQuery"

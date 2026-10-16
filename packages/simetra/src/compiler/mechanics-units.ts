@@ -38,9 +38,9 @@ const VERSION = versionColumn()
 
 /**
  * Механіка рядка (спека промоції §9.2): службову дату оновлення й версію
- * рядка тримає база, а не клієнт — `UPDATE`, що пише їх сам, отримує `now()`
- * і `OLD.version + 1`. Таблиці беруться з фізичного знімка за
- * `origin.standard`, а не за видом: механіку має рівно та таблиця, якій
+ * рядка тримає база, а не клієнт: вставка дає версію 1, оновлення —
+ * `OLD.version + 1`, обидва — `now()`, що б не записав клієнт. Таблиці
+ * беруться з фізичного знімка за `origin.standard`, а не за видом: механіку має рівно та таблиця, якій
  * реєстр дав обидві колонки. `origin.standard` — логічне ім'я в стилі проєкту
  * (`attributeCase`), тож порівнюється зі стилізованим ім'ям реєстру. Функція
  * й її гранти — лише коли є хоч одна така таблиця; власника-об'єкта в них
@@ -88,7 +88,7 @@ export function buildMechanicsUnits(
     ...executeGrants(`${fn}()`, [], provider).map(shared),
     ...tables.map((table): SqlUnit => ({
       ...generatedUnit(
-        `CREATE TRIGGER ${quoteIdent(mechanicsTriggerName(table.name))} BEFORE UPDATE ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW EXECUTE FUNCTION ${fn}();`,
+        `CREATE TRIGGER ${quoteIdent(mechanicsTriggerName(table.name))} BEFORE INSERT OR UPDATE ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW EXECUTE FUNCTION ${fn}();`,
         table.schema,
         parse
       ),
@@ -101,15 +101,24 @@ export function buildMechanicsUnits(
 }
 
 /**
- * `SECURITY INVOKER`: присвоєння `NEW` прав на таблицю не потребує, тож
- * підвищувати роль нема чого. Порожній `search_path` — `now()` з
- * `pg_catalog` резолвиться завжди, а підміни імен через шлях немає.
+ * Вставка починає версію з 1, оновлення додає 1; службова дата — `now()` в
+ * обох. Значення клієнта не діє ні там, ні там: інакше вставка могла б
+ * почати з чужої версії. `created_at` тригер не чіпає. `SECURITY INVOKER`:
+ * присвоєння `NEW` прав на таблицю не потребує, тож підвищувати роль нема
+ * чого. Порожній `search_path` — `now()` з `pg_catalog` резолвиться завжди,
+ * а підміни імен через шлях немає.
  */
 function touchFunction(fn: string): string {
+  const updatedAt = `NEW.${quoteIdent(UPDATED_AT.physicalName)}`
+  const version = quoteIdent(VERSION.physicalName)
   const text = [
     "BEGIN",
-    `  NEW.${quoteIdent(UPDATED_AT.physicalName)} := now();`,
-    `  NEW.${quoteIdent(VERSION.physicalName)} := OLD.${quoteIdent(VERSION.physicalName)} + 1;`,
+    "  IF TG_OP = 'INSERT' THEN",
+    `    NEW.${version} := 1;`,
+    "  ELSE",
+    `    NEW.${version} := OLD.${version} + 1;`,
+    "  END IF;",
+    `  ${updatedAt} := now();`,
     "  RETURN NEW;",
     "END",
   ].join("\n")

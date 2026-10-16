@@ -91,6 +91,7 @@ const draft = (): Omit<PlanArtifact, "planHash"> => ({
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public',
   plpgsqlCheck: "transient",
+  platformFunctions: [],
   desiredInvalid: [],
   promotion: null,
   environment: { defaultPrivileges: [] },

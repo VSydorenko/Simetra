@@ -1,6 +1,6 @@
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, platformFunctionSignatures } from "simetra/compiler"
 import {
   desiredForApply,
   executePlan,
@@ -66,6 +66,8 @@ const options: ExecuteOptions = {
 }
 
 let desired: ApplyDesired
+/** Функції платформи моделі: їх `plpgsql_check` і перелік сліпих не беруть. */
+let platformFunctions: string[]
 
 beforeAll(async () => {
   const compiled = await compile(
@@ -76,6 +78,7 @@ beforeAll(async () => {
   )
   expect(compiled.diagnostics).toEqual([])
   desired = await desiredForApply(compiled.model!)
+  platformFunctions = platformFunctionSignatures(compiled.model!.sqlUnits)
   await query(testSuperuserUrl(), `create role ${STRANGER} nologin`)
 })
 afterAll(() => dropRoles(STRANGER))
@@ -185,6 +188,7 @@ async function planFor(
     revalidationSearchPath: await sessionPath(url),
     // Режим, який план дає на стеку: supautils ставить розширення
     plpgsqlCheck: "transient",
+    platformFunctions,
     desiredInvalid: [],
     promotion: null,
     environment: { defaultPrivileges: [] },
@@ -406,6 +410,39 @@ describe("function body revalidation", () => {
             {
               code: "apply.function-check-blind",
               severity: "warning",
+              params: { count: 1, functions: "app.fh()" },
+            },
+          ],
+        })
+      },
+      superuser
+    )
+  })
+
+  it("does not call a platform function blind, only the user function", async () => {
+    // Ті самі умови для обох: чужий власник і `EXECUTE` відкликано. Функція
+    // механіки — одиниця генератора платформи, тож її не названо; функція
+    // застосунку лишається сліпою
+    const setup = `${TABLE_T};
+      create function app.fh() returns text language sql as $$ select a from app.t $$`
+    const superuser = `alter function app.fh() owner to ${STRANGER};
+      revoke execute on function app.fh() from public;
+      alter function simetra.touch() owner to ${STRANGER}`
+    expect(platformFunctions).toContain("simetra.touch()")
+    await inTarget(
+      setup,
+      async (url) => {
+        const outcome = await executePlan(
+          apply,
+          { url },
+          await planFor(url, [NEUTRAL]),
+          options
+        )
+        expect(outcome).toMatchObject({
+          status: "committed",
+          diagnostics: [
+            {
+              code: "apply.function-check-blind",
               params: { count: 1, functions: "app.fh()" },
             },
           ],
@@ -701,18 +738,7 @@ describe("plpgsql_check", () => {
               }),
               options
             )
-          ).toMatchObject({
-            status: "committed",
-            // Функція механіки рядка моделі (`simetra.touch()`) відкликає
-            // `EXECUTE` від `PUBLIC`, а роль застосування тут не власник —
-            // перевірка її не бачить; до причини відмови це не стосується
-            diagnostics: [
-              {
-                code: "apply.function-check-blind",
-                params: { count: 1, functions: "simetra.touch()" },
-              },
-            ],
-          })
+          ).toMatchObject({ status: "committed", diagnostics: [] })
         },
         `create schema simetra_locked_ext;
          create extension plpgsql_check schema simetra_locked_ext`

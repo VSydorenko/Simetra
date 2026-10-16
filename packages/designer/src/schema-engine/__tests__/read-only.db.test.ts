@@ -254,6 +254,7 @@ describe("transaction-mode pooler", () => {
           readOnly: true,
         }).transaction({ url }, "rollback", readSessionSearchPath),
         plpgsqlCheck: "unavailable",
+        platformFunctions: [],
         desiredInvalid: [],
         promotion: null,
         environment: { defaultPrivileges: [] },

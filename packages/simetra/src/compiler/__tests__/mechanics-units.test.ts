@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import { executeGrants } from "../sql/execute-grants"
+import { platformFunctionSignatures } from "../sql/units"
 import {
   buildMechanicsUnits,
   MECHANICS_FUNCTION,
@@ -63,7 +64,7 @@ const snapshot = (tables: PhysicalTable[]) =>
   ({ tables, enumTypes: [] }) as unknown as PhysicalSnapshot
 
 describe("buildMechanicsUnits", () => {
-  it("a Catalog gets the platform function, its revokes and one BEFORE UPDATE trigger", async () => {
+  it("a Catalog gets the platform function, its revokes and one BEFORE INSERT OR UPDATE trigger", async () => {
     const model = await compiled({
       "project.meta.json": project(),
       [ITEM]: catalog("Item", { id: uuid(9001) }),
@@ -72,8 +73,11 @@ describe("buildMechanicsUnits", () => {
     const fn = units.find((u) => u.class === "function")!
     expect(fn.identity).toBe("function:simetra.touch()")
     expect(fn.ownerObjectId).toBeUndefined()
-    expect(fn.sql).toContain("NEW.updated_at := now();")
+    expect(fn.sql).toContain("IF TG_OP = 'INSERT' THEN")
+    expect(fn.sql).toContain("NEW.version := 1;")
     expect(fn.sql).toContain("NEW.version := OLD.version + 1;")
+    expect(fn.sql).toContain("NEW.updated_at := now();")
+    expect(fn.sql).not.toContain("created_at")
     expect(fn.sql).toContain("SECURITY INVOKER")
     expect(fn.sql).toContain("SET search_path = ''")
     expect(
@@ -87,7 +91,7 @@ describe("buildMechanicsUnits", () => {
       "trigger:public.item.item_simetra_touch",
     ])
     expect(triggers[0]!.sql).toMatch(
-      /^CREATE TRIGGER item_simetra_touch BEFORE UPDATE ON public\.item FOR EACH ROW EXECUTE FUNCTION simetra\.touch\(\);$/
+      /^CREATE TRIGGER item_simetra_touch BEFORE INSERT OR UPDATE ON public\.item FOR EACH ROW EXECUTE FUNCTION simetra\.touch\(\);$/
     )
     expect(triggers[0]!.ownerObjectId).toBe(uuid(9001))
     for (const unit of units) {
@@ -173,6 +177,18 @@ describe("buildMechanicsUnits", () => {
     expect(units.filter((u) => u.class === "trigger")[0]!.identity).toBe(
       `trigger:public.${name}.${trigger}`
     )
+  })
+
+  it("the mechanics function is a platform function, a verbatim one is not", async () => {
+    const model = await compiled({
+      "project.meta.json": project(),
+      [ITEM]: catalog("Item"),
+      "sql/public/f.sql":
+        "CREATE FUNCTION public.f(n int4) RETURNS int4 LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;",
+    })
+    expect(platformFunctionSignatures(model.sqlUnits)).toEqual([
+      "simetra.touch()",
+    ])
   })
 
   it("compile orders the trigger after its table and the function", async () => {

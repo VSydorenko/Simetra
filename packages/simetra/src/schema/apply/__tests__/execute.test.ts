@@ -135,6 +135,7 @@ const plan: ExecutablePlan = {
   preamble: [{ name: "search_path", value: "pg_catalog" }],
   revalidationSearchPath: '"$user", public, extensions',
   plpgsqlCheck: "unavailable",
+  platformFunctions: [],
   desiredInvalid: [],
   promotion: null,
   environment: { defaultPrivileges: [] },
