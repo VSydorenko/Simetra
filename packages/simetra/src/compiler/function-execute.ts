@@ -56,8 +56,11 @@ const key = (fn: QualifiedName) => `${fn.schema}.${fn.name}`
  * Дослівний грант на об'єкт, правами якого володіє платформа (рішення 9 плану
  * П3-3a1): на функцію чи таблицю, що є ціллю згенерованої одиниці `grant`.
  * Функцію звірено повною канонічною сигнатурою: грант на інше перевантаження
- * тієї самої назви — не її. `flagged` — одиниці з цією помилкою: тотожний
- * згенерованому оператор інакше дістав би ще й `sql.unit-duplicate`.
+ * тієї самої назви — не її. `object` — лише цілі платформи: оператор на кілька
+ * об'єктів, з яких платформі належить частина, `simetra fix` не вирізає
+ * (`ownsWholeGrant`), бо разом із ним зник би законний грант. `flagged` —
+ * одиниці з цією помилкою: тотожний згенерованому оператор інакше дістав би
+ * ще й `sql.unit-duplicate`.
  */
 export function generatedGrantConflicts(
   units: readonly SqlUnit[],
@@ -85,17 +88,27 @@ export function generatedGrantConflicts(
 }
 
 /**
- * Цілі згенерованих грантів — об'єкти, ACL яких належить платформі. Ключ —
+ * Об'єкти, ACL яких належить платформі (рішення 9 плану П3-3a1). Ключ —
  * `function|<сигнатура>` чи `table|<схема.ім'я>`: `grantTargetKeys`.
+ * Функція — ціль будь-якої згенерованої одиниці `grant` (`functionExecute`,
+ * членство, платформний шар); таблиця — лише таблиця з контрактом доступу,
+ * тобто ціль грантів генератора `access`.
  */
 export function platformGrantTargets(
-  units: readonly Pick<SqlUnit, "class" | "name" | "sql" | "file">[],
+  units: readonly Pick<
+    SqlUnit,
+    "class" | "name" | "sql" | "file" | "generator"
+  >[],
   parse: SqlParser
 ): Set<string> {
   return new Set(
     units
       .filter((unit) => unit.file === undefined && unit.class === "grant")
-      .flatMap((unit) => grantTargetKeys(unit, parse))
+      .flatMap((unit) =>
+        grantTargetKeys(unit, parse).filter(
+          (key) => key.startsWith("function|") || unit.generator === "access"
+        )
+      )
   )
 }
 
@@ -138,3 +151,13 @@ export function grantTargetKeys(
 }
 
 const targetName = (target: string) => target.slice(target.indexOf("|") + 1)
+
+/**
+ * Чи `object` діагностики `sql.generated-grant` охоплює всі цілі гранту з
+ * ім'ям одиниці `unitName`: лише такий оператор цілком суперечить платформі,
+ * і його можна вирізати без втрати чужого гранту. Обидва списки будує один
+ * `grantObjects` в одному порядку, тож досить порівняти їх як рядки.
+ */
+export function ownsWholeGrant(object: unknown, unitName: string): boolean {
+  return object === grantObjects(unitName).join(", ")
+}

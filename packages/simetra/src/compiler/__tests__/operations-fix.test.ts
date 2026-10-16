@@ -584,6 +584,22 @@ describe("fixFiles: sql.generated-grant", () => {
     expect((await compile(fixed)).diagnostics).toEqual([])
   })
 
+  it("fix leaves a statement that also grants on another object", async () => {
+    // Виріз забрав би й законний грант на `public.other()`: оператор ділить людина.
+    const mixed =
+      "GRANT EXECUTE ON FUNCTION public.my_orgs(), public.other() TO anon;"
+    const files = await grantFiles(`${OTHER}\n\n${mixed}\n`)
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(false)
+    expect(result.diagnostics.map((d) => [d.code, d.params?.object])).toEqual([
+      ["sql.generated-grant", "public.my_orgs()"],
+    ])
+    expect(result.changes.map((c) => c.path)).not.toContain(GRANTS)
+    expect(applyChanges(files, result.changes).get(GRANTS)).toBe(
+      files.get(GRANTS)
+    )
+  })
+
   it("fix deletes a file left without statements", async () => {
     const files = await grantFiles(`${OWNED_GRANT}\n`)
     const result = await fixFiles(files, options())

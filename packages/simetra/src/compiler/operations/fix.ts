@@ -36,6 +36,7 @@ import {
 } from "../object-files"
 import { PROJECT_FILE } from "../stages/files"
 import { DERIVED_TABLE_LABELS } from "../stages/model"
+import { ownsWholeGrant } from "../function-execute"
 import { loadSqlParser } from "../sql/parse"
 import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
 import { statementPositions } from "../sql/units"
@@ -587,10 +588,10 @@ export async function fixFiles(
 }
 
 /**
- * Вирізає дослівні оператори `sql.generated-grant` (рішення 9 плану П3-3a1):
- * права на ці об'єкти дає платформа, тож оператор лише суперечить їй і
- * виправлення в нього одне. Виріз — той самий, що в промоції; файл, у якому
- * лишились самі пробіли, видаляється.
+ * Вирізає дослівні оператори `sql.generated-grant` (рішення 9 плану П3-3a1),
+ * усі цілі яких належать платформі: права на них дає платформа, тож оператор
+ * лише суперечить їй і виправлення в нього одне. Виріз — той самий, що в
+ * промоції; файл, у якому лишились самі пробіли, видаляється.
  */
 async function withoutGeneratedGrants(
   files: Map<string, string>
@@ -610,7 +611,14 @@ async function withoutGeneratedGrants(
         u.identity === d.params?.identity
     )
     const text = files.get(d.file)
-    if (unit === undefined || text === undefined) continue
+    // Оператор, що несе й грант на чужий об'єкт, лишається з помилкою: його
+    // ділить людина, а не `fix`.
+    if (
+      unit === undefined ||
+      text === undefined ||
+      !ownsWholeGrant(d.params?.object, unit.name)
+    )
+      continue
     const position = statementPositions(text, parse).find(
       (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
     )

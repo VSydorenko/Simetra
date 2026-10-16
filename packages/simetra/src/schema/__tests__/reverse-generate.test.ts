@@ -1321,6 +1321,8 @@ describe("reverseGenerate", () => {
     expect(layer.sqlUnits.some((u) => u.generator === "functionExecute")).toBe(
       true
     )
+    // Грант на функцію поза платформою — прийнятий стан бази: його пишемо.
+    const OWN_GRANT = "GRANT EXECUTE ON FUNCTION app.other() TO anon;"
     const foreign = [
       "GRANT EXECUTE ON FUNCTION app.my_orgs() TO anon;",
       "REVOKE INSERT ON TABLE app.organization FROM authenticated;",
@@ -1336,7 +1338,7 @@ describe("reverseGenerate", () => {
             name: u.name,
             sql: u.sql,
           })),
-          ...units(foreign.join("\n")),
+          ...units([...foreign, OWN_GRANT].join("\n")),
         ],
       }),
       options(kept)
@@ -1347,8 +1349,12 @@ describe("reverseGenerate", () => {
         expect(text).not.toContain(statement.slice(0, -1))
     // Функцію множини генератор лише перекладає у файл за своєю розкладкою;
     // грантів на неї й на таблицю виду в жодному записаному файлі немає.
-    for (const change of result.changes)
-      expect(change.content ?? "").not.toMatch(/^(GRANT|REVOKE)/m)
+    const written = result.changes.map((c) => c.content ?? "")
+    for (const statement of foreign)
+      expect(written.some((t) => t.includes(statement.slice(0, -1)))).toBe(
+        false
+      )
+    expect(written.some((t) => t.includes(OWN_GRANT.slice(0, -1)))).toBe(true)
     expect((await compile(result.files)).diagnostics).toEqual([])
   })
 

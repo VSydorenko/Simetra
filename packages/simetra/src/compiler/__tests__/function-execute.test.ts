@@ -252,6 +252,35 @@ describe("sql.generated-grant", () => {
     ])
   })
 
+  it("a grant on the set function without an argument list is an error", async () => {
+    // Postgres резолвить `ON FUNCTION f` у єдину функцію з цим ім'ям.
+    const diagnostics = await grantDiagnostics(
+      scopeEntries(),
+      "GRANT EXECUTE ON FUNCTION public.my_orgs TO anon;"
+    )
+    expect(diagnostics.map((d) => [d.code, d.params?.object])).toEqual([
+      ["sql.generated-grant", "public.my_orgs"],
+    ])
+  })
+
+  it("a grant without an argument list on another name is fine", async () => {
+    const diagnostics = await grantDiagnostics(
+      scopeEntries(),
+      "GRANT EXECUTE ON FUNCTION public.my_orgs_x TO anon;"
+    )
+    expect(diagnostics).toEqual([])
+  })
+
+  it("a statement on a platform and another function names only the platform one", async () => {
+    const diagnostics = await grantDiagnostics(
+      scopeEntries(),
+      "GRANT EXECUTE ON FUNCTION public.my_orgs(), public.other() TO anon;"
+    )
+    expect(diagnostics.map((d) => [d.code, d.params?.object])).toEqual([
+      ["sql.generated-grant", "public.my_orgs()"],
+    ])
+  })
+
   it("a verbatim grant on another function is fine", async () => {
     const diagnostics = await grantDiagnostics(
       scopeEntries(),
