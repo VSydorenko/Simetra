@@ -177,9 +177,12 @@ const REPLACEMENT_SHAPES = {
    * прийнятий оператор дає чи знімає на копії цілі, покрита оператором тієї
    * самої дії на тому самому об'єкті бажаного стану. Обидва боки — з витягу
    * (копія й тінь), де грант записано відносно типових прав, тож порівняння
-   * йде в одній формі. Пари, якої копія не показує, ціль не відрізняє від
-   * типових прав — зникати нічому, як і в структурного об'єкта, якого на копії
-   * немає.
+   * йде в одній формі. Пари, рівної типовим правам цілі (ADP схеми, пресет),
+   * на копії немає, і ця форма її не перевіряє. Втрату справжнього доступу
+   * від такої пари показує інше місце плану (рішення архітектора П3-3a1):
+   * сервісної ролі — `plan.service-role-access-lost`, запису ролей API —
+   * гейт шляху запису (`plan.write-path`), читання — рядок політики чи RLS
+   * плану.
    */
   grant: (
     key: Extract<PromotionObject, { kind: "unit" }>,
@@ -312,7 +315,12 @@ export function platformReplacements(p: {
   const replaced = (s: Subject): boolean => {
     if (s.of === "unit") {
       const { key } = s
-      if (key.class === "grant") return REPLACEMENT_SHAPES.grant(key, c)
+      // Грант без цілі-об'єкта (`key.table === ""`) форма `grant` не
+      // зіставить ні з чим, і порожній перелік пар став би хибною «заміною»
+      if (key.class === "grant")
+        return key.table === ""
+          ? REPLACEMENT_SHAPES.none()
+          : REPLACEMENT_SHAPES.grant(key, c)
       if (key.class === "policy") return REPLACEMENT_SHAPES.policy(key, c)
       if (key.table === "") return REPLACEMENT_SHAPES.function(key, c)
       // Тригер і решта класів з таблицею — відмова до П3-3a2 (рішення 10)

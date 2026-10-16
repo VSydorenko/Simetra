@@ -2217,9 +2217,25 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
-      it("has nothing to replace when the copy shows no such grant", () => {
-        // Витяг пише грант відносно типових прав: пари, якої копія не
-        // показує, ціль не відрізняє від типового стану
+      it("refuses a grant without a target object", () => {
+        // Порожній перелік пар не доводить заміни: такий грант — відмова
+        const key: PromotionObject = {
+          kind: "unit",
+          class: "grant",
+          schema: "app",
+          table: "",
+          name: "grant:authenticated:usage",
+        }
+        expect(
+          gate({ conversions: [conversion("platform", key)] }, [], [], {
+            units: GENERATED,
+          }).map((d) => d.code)
+        ).toEqual(MISSING)
+      })
+
+      it("does not check a pair the copy does not show", () => {
+        // Витяг пише грант відносно типових прав: пару, рівну ADP цілі, копія
+        // не показує; її втрату показують write-path, політика чи RLS плану
         const a = adopted(
           "grant",
           "GRANT ALL ON TABLE app.item TO authenticated"

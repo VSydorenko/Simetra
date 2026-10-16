@@ -2819,6 +2819,105 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       })
     })
 
+    describe("adopted access equal to the schema ADP (decision 10)", () => {
+      // Пара гранту, рівна ADP схеми, на копії не видна, і форма `grant` її не
+      // перевіряє. Втрату справжнього доступу показує інше місце плану: запис
+      // ролей API — гейт шляху запису (Пр21), читання — рядок політики
+      const MODULE = "custom-tables/Counterparty/Counterparty.sql"
+
+      /** Модуль прийнятої таблиці з `sql` і класами його одиниць. */
+      function withModule(
+        sql: string,
+        conversions: Record<string, PromoteInput["conversions"][string]>
+      ): Promise<Promoted> {
+        const files = contactsProject()
+        files.set(MODULE, sql)
+        // Одиниці модуля — прийнятий борг, як у фікстури з модулем
+        files.set(
+          "sql-debt.json",
+          `${JSON.stringify({ units: Object.keys(conversions).sort() }, null, 2)}\n`
+        )
+        const mapping = contactsMapping()
+        Object.assign(mapping.conversions, conversions)
+        return promoted(files, mapping)
+      }
+
+      it("refuses an ADP-equal GRANT ALL to the user role through the write-path gate", async () => {
+        // Статичний гейт Пр21 бачить запис у тексті прийнятої одиниці ще в
+        // `promote`, незалежно від того, чи рівна вона ADP цілі
+        const files = contactsProject()
+        files.set(MODULE, `GRANT ALL ON TABLE ${OLD} TO authenticated;\n`)
+        const identity =
+          "grant:grant:table:app.counterparties:authenticated:all"
+        files.set(
+          "sql-debt.json",
+          `${JSON.stringify({ units: [identity] }, null, 2)}\n`
+        )
+        const mapping = contactsMapping()
+        mapping.conversions[identity] = "platform"
+        let n = 950_000
+        const result = await promoteObject(files, mapping, {
+          schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+          newId: () => uuid(++n),
+        })
+        expect(
+          result.diagnostics
+            .filter((d) => d.severity === "error")
+            .map((d) => d.code)
+        ).toEqual(["promote.write-path"])
+
+        // Той самий грант на цілі, рівний ADP схеми (витяг його не показує),
+        // ловить гейт шляху запису наживо
+        const outcome = await planPromotion(await promoted(), {
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO authenticated;
+                  GRANT ALL ON ${OLD} TO authenticated`,
+        })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.write-path"])
+        expect(params(outcome, "plan.write-path")[0]?.detail).toContain(
+          "grant INSERT to authenticated on app.counterparties"
+        )
+      })
+
+      it("refuses an adopted read policy for anon that the kind does not replace", async () => {
+        // `anon` читав таблицю грантом з ADP і політикою; вид без `publicRead`
+        // гостю нічого не дає — відмова називає політику
+        const p = await withModule(
+          `CREATE POLICY counterparties_anon ON ${OLD} FOR SELECT TO anon USING (true);\n`,
+          { "policy:app.counterparties.counterparties_anon": "platform" }
+        )
+        const outcome = await planPromotion(p, {
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;
+                  GRANT SELECT ON ${OLD} TO anon;
+                  GRANT SELECT ON app.counterparty_contacts TO anon`,
+        })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.platform-replacement-missing"])
+        expect(params(outcome, "plan.platform-replacement-missing")).toEqual([
+          {
+            objects:
+              "policy:app.counterparties.counterparties_anon (policy app.counterparties.counterparties_anon)",
+          },
+        ])
+      })
+
+      it("shows the drop of an adopted read policy for public with the class removed", async () => {
+        const p = await withModule(
+          `CREATE POLICY counterparties_all ON ${OLD} FOR SELECT TO public USING (true);\n`,
+          { "policy:app.counterparties.counterparties_all": "removed" }
+        )
+        const outcome = await planPromotion(p, {
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;
+                  GRANT SELECT ON ${OLD} TO anon;
+                  GRANT SELECT ON app.counterparty_contacts TO anon`,
+        })
+        const artifact = planned(outcome)
+        const drops = stepMatching(artifact, /DROP POLICY .*counterparties_all/)
+        expect(drops).toHaveLength(1)
+        expect(artifact.requiredPermissions).toContain(drops[0]!.id)
+      })
+    })
+
     describe("class property (R10)", () => {
       /** Предмет UNIQUE `inn` фікстури має клас `property` (мапінг-зразок). */
       const SUBJECT = "Counterparty#uniques/counterparties_inn_key"
