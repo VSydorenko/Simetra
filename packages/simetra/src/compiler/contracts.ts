@@ -1,7 +1,6 @@
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
-  PUBLIC_READ_PURPOSES,
   makeObjectName,
   postsMovements,
   truncatedPeriodExpression,
@@ -16,7 +15,6 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
-  type PublicReadRole,
   type RegisterKeySpec,
   type RequestRolePurpose,
   type ScopeKind,
@@ -248,6 +246,20 @@ export interface MembershipContract {
   setFunction?: QualifiedName
 }
 
+/**
+ * Доступ до таблиці виду з RLS (платформна спека §6.7, §6.8): з нього П3
+ * генерує гранти й політики читання. Призначення ролей — лише ролі запиту;
+ * ім'я ролі дає `PROVIDER_API_ROLES` провайдера.
+ */
+export interface AccessContract {
+  objectId: string
+  table: QualifiedName
+  /** Скоупленої таблиці: колонка-носій і функція множини виду скоупу. */
+  scope?: { scopeKindId: string; carrier: string; setFunction: QualifiedName }
+  /** Ролі запиту, яким відкрито всі рядки: `anon` → обидві, `authenticated` → `user`. */
+  publicRead: RequestRolePurpose[]
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -257,11 +269,8 @@ export interface Contracts {
   predefined: PredefinedContract[]
   /** За `objectId`. */
   numbering: NumberingContract[]
-  /**
-   * За `objectId`: призначення ролі API, якій об'єкт відкриває читання, —
-   * лише роль запиту; ім'я ролі дає `PROVIDER_API_ROLES` провайдера.
-   */
-  publicRead: { objectId: string; purpose: RequestRolePurpose }[]
+  /** За `table.schema`, далі `table.name`: кожна таблиця виду з RLS. */
+  access: AccessContract[]
   /** За `bucket`: вид скоупу вказано id, бо ім'я виду може змінитися. */
   storageBuckets: { bucket: string; scopeKindId: string }[]
   /** За `subscriptionId`. */
@@ -574,7 +583,8 @@ export function buildContracts(
   project: Pick<
     Project,
     "scopeKinds" | "storageBuckets" | "defaultSchema" | "database"
-  >
+  >,
+  access: readonly AccessContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -616,19 +626,7 @@ export function buildContracts(
     registers,
     predefined: predefinedContracts(objects, physical, style),
     numbering: numberingContracts(objects, physical, style),
-    publicRead: objects
-      .flatMap((object) => {
-        const role = (object.data as { publicRead?: PublicReadRole }).publicRead
-        return role === undefined
-          ? []
-          : [
-              {
-                objectId: object.id ?? "",
-                purpose: PUBLIC_READ_PURPOSES[role],
-              },
-            ]
-      })
-      .sort((a, b) => compareStrings(a.objectId, b.objectId)),
+    access: [...access],
     storageBuckets: project.storageBuckets
       .map(({ bucket, scopeKind }) => ({
         bucket,

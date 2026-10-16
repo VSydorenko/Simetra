@@ -11,6 +11,7 @@ import type {
 } from "./compile"
 import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { modelHash } from "./canonical"
+import { accessContracts } from "./access-units"
 import { buildContracts, usersContractOf } from "./contracts"
 import { buildPresentation } from "./presentation"
 import { readFiles, type FilesStageResult } from "./stages/files"
@@ -167,6 +168,12 @@ export async function runStages(
       onRootDelete: kind.onRootDelete,
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
+  const access = accessContracts(
+    stage1.objects,
+    physical,
+    scopeKinds,
+    scopeKindIdByFile
+  )
 
   const projectModule = stage1.project.name
   const objects = stage1.objects
@@ -279,7 +286,8 @@ export async function runStages(
       sqlUnits,
       stage1.project.timezone,
       stage3.elementChecks,
-      stage1.project
+      stage1.project,
+      access
     ),
     presentation: buildPresentation(
       stage1.objects,

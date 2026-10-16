@@ -59,7 +59,7 @@ const from = { name: "p_from", type: "timestamp with time zone" }
 const to = { name: "p_to", type: "timestamp with time zone" }
 
 describe("publicRead and storage buckets contracts", () => {
-  it("contracts carry publicRead and storage buckets", async () => {
+  it("access contracts carry publicRead and storage buckets", async () => {
     const entries = scopedProject2()
     const cp = catalog("Counterparty", { scope: "org", publicRead: "anon" })
     entries["catalogs/Counterparty/Counterparty.meta.json"] = cp
@@ -74,12 +74,14 @@ describe("publicRead and storage buckets contracts", () => {
     const model = result.model!
     const id = (name: string) =>
       model.scopeKinds.find((kind) => kind.name === name)!.id
-    expect(model.contracts.publicRead).toEqual([
-      {
-        objectId: model.objects.find((o) => o.name === "Counterparty")!.id,
-        purpose: "anonymous",
-      },
-    ])
+    const counterpartyId = model.objects.find(
+      (o) => o.name === "Counterparty"
+    )!.id
+    expect(
+      model.contracts.access
+        .filter((a) => a.objectId === counterpartyId)
+        .map((a) => a.publicRead)
+    ).toEqual([["anonymous", "user"]])
     expect(model.contracts.storageBuckets).toEqual([
       { bucket: "a-files", scopeKindId: id("org") },
       { bucket: "b-files", scopeKindId: id("user") },
@@ -101,9 +103,13 @@ describe("publicRead grantees", () => {
     const result = await compile(metaFiles(entries))
     expect(result.diagnostics).toEqual([])
     const roles = PROVIDER_API_ROLES.supabase
-    const grantees = result
-      .model!.contracts.publicRead.map(({ purpose }) => roles[purpose])
-      .sort()
+    const grantees = [
+      ...new Set(
+        result.model!.contracts.access.flatMap(({ publicRead }) =>
+          publicRead.map((purpose) => roles[purpose])
+        )
+      ),
+    ].sort()
     expect(grantees).toEqual(["anon", "authenticated"])
     expect(grantees).not.toContain(roles.service)
   })
