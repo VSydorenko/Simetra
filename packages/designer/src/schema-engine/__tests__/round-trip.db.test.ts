@@ -12,13 +12,17 @@ import {
 import {
   compile,
   loadSqlParser,
+  mechanicsTriggerName,
   type CompiledModel,
   type SchemaPathResolver,
   type SqlParser,
 } from "simetra/compiler"
 import {
+  checkPermissions,
+  classifySteps,
   compareWithDesired,
   engineScope,
+  requiredPermissions,
   renderDesiredState,
   reverseGenerate,
   type DbConnection,
@@ -219,6 +223,23 @@ interface Project {
   databaseProvider: CompiledModel["project"]["database"]["provider"]
 }
 
+/**
+ * Що round-trip свідомо втрачає: тригери механіки таблиць виду, повернутих
+ * як `CustomTable`. Межа без них — межа джерела без одиниць механіки.
+ */
+interface Loss {
+  schemas: string[]
+  triggers: { schema: string; table: string; name: string }[]
+}
+
+const NO_LOSS = (scope: EngineScope): Loss => ({
+  schemas: [...scope.schemas],
+  triggers: [],
+})
+
+const dropTrigger = (t: Loss["triggers"][number]) =>
+  `DROP TRIGGER "${t.name}" ON "${t.schema}"."${t.table}"`
+
 interface RoundTrip {
   extracted: Extracted
   model: CompiledModel
@@ -275,7 +296,8 @@ async function roundTripOf(
   target: DbConnection,
   extractScope: EngineScope,
   project: Project,
-  existing: ReadonlyMap<string, string> = new Map()
+  existing: ReadonlyMap<string, string> = new Map(),
+  loss: Loss = NO_LOSS(extractScope)
 ): Promise<RoundTrip> {
   const extracted = await engine.extract(target, extractScope)
   expect(errors(extracted.diagnostics)).toEqual([])
@@ -295,9 +317,9 @@ async function roundTripOf(
   const model = compiled.model!
   const sql = renderDesiredState(model).sql
   const { scope, diagnostics } = await engineScope(model)
-  // Межа з метаданих — та сама, що й межа читання: інакше звірка дивилася б
-  // не на ті схеми, з яких прочитано базу
-  expect([...scope.schemas].sort()).toEqual([...extractScope.schemas].sort())
+  // Межа з метаданих — та сама, що й межа читання (без схем, які давала лише
+  // втрачена механіка): інакше звірка дивилася б не на ті схеми
+  expect([...scope.schemas].sort()).toEqual([...loss.schemas].sort())
 
   const comparison = await compareWithDesired(
     engine,
@@ -310,13 +332,24 @@ async function roundTripOf(
     comparison.status === "compared" ? [] : comparison.diagnostics
   ).toEqual([])
   if (comparison.status !== "compared") throw new Error("shadow failed")
-  // Спершу — що саме не порожнє, а не голе `false`
+  // Спершу — що саме не порожнє, а не голе `false`. Різниця — рівно втрачена
+  // механіка, нічого понад неї
   expect({
-    actions: comparison.plan.actions.map((a) => a.sql),
+    actions: comparison.plan.actions.map((a) => a.sql).sort(),
     differences: comparison.differences,
     errors: errors(comparison.diagnostics),
-  }).toEqual({ actions: [], differences: [], errors: [] })
-  expect(comparison.empty).toBe(true)
+  }).toEqual({
+    actions: loss.triggers.map(dropTrigger).sort(),
+    differences: loss.triggers
+      .map((t) => ({
+        detail: "absent in second model",
+        kind: "missing",
+        path: `units.trigger:${t.schema}.${t.table}.${t.name}`,
+      }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+    errors: [],
+  })
+  expect(comparison.empty).toBe(loss.triggers.length === 0)
 
   const schemas = [...scope.schemas]
   const oracle = await engine.withDesiredShadow(
@@ -477,7 +510,81 @@ describe("a role of the application's own", () => {
 const tableKeys = (model: CompiledModel) =>
   model.physical.tables.map((t) => `${t.schema}.${t.name}`).sort()
 
-/** Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. */
+/**
+ * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
+ * `CustomTable` без стандартних колонок, а introspect механіки не пише
+ * (рішення 9 плану П3-3a2). Повертає механіку лише промоція у вид.
+ */
+async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
+  const identities = new Set(
+    source.sqlUnits
+      .filter((u) => u.generator === "mechanics" && u.class === "trigger")
+      .map((u) => u.identity)
+  )
+  const triggers = source.physical.tables
+    .map((t) => ({
+      schema: t.schema,
+      table: t.name,
+      name: mechanicsTriggerName(t.name),
+    }))
+    .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
+  expect(triggers).toHaveLength(identities.size)
+  const { scope } = await engineScope({
+    ...source,
+    sqlUnits: source.sqlUnits.filter((u) => u.generator !== "mechanics"),
+  })
+  return { schemas: [...scope.schemas], triggers }
+}
+
+/**
+ * Втрата механіки гучна: кроки, що знімають тригери механіки, — клас
+ * `relaxation`, якому потрібен явний дозвіл, і без дозволу застосування
+ * відмовляє. Класи й дозволи — ті самі функції, що в `buildPlan` і першій
+ * перевірці `executePlan`; повний `buildPlan` тут не проходить доказу на
+ * копії (копія двигуна ставить згенеровану колонку в кінець таблиці —
+ * `plan.clone-mismatch`), а це окремий дефект, не механіка.
+ */
+function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
+  const steps = classifySteps(
+    trip.comparison.plan.actions,
+    trip.comparison.target.model,
+    parse
+  )
+  const byText = <T extends { sql: string }>(list: T[]) =>
+    [...list].sort((a, b) => (a.sql < b.sql ? -1 : a.sql > b.sql ? 1 : 0))
+  expect(byText(steps.map((s) => ({ sql: s.sql, class: s.class })))).toEqual(
+    byText(
+      loss.triggers.map((t) => ({ sql: dropTrigger(t), class: "relaxation" }))
+    )
+  )
+  const subject = { steps, drift: null, promotion: null }
+  const ids = steps.map((s) => s.id)
+  expect(requiredPermissions(subject)).toEqual(ids)
+  expect(checkPermissions(subject, [])).toEqual([
+    expect.objectContaining({
+      code: "apply.permission-required",
+      severity: "error",
+      params: { items: ids.join(", ") },
+    }),
+  ])
+  expect(checkPermissions(subject, ids)).toEqual([])
+}
+
+/** Тригери оракула без втраченої механіки. */
+const withoutLost = (shape: OracleShape, loss: Loss): OracleShape => {
+  const lost = new Set(
+    loss.triggers.map((t) => `${t.schema}.${t.table} ${t.name}`)
+  )
+  return {
+    ...shape,
+    triggers: shape.triggers.filter((t) => !lost.has(`${t.table} ${t.name}`)),
+  }
+}
+
+/**
+ * Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. Без збереженої
+ * теки (`existing` порожній) механіка видів — відома втрата, і вона гучна.
+ */
 async function deployedRoundTrip(
   files: Map<string, string>,
   existing: ReadonlyMap<string, string>
@@ -486,6 +593,8 @@ async function deployedRoundTrip(
   expect(errors(original.diagnostics)).toEqual([])
   const source = original.model!
   const { scope } = await engineScope(source)
+  const loss =
+    existing.size === 0 ? await mechanicsLoss(source) : NO_LOSS(scope)
   const result = await inTarget(
     renderDesiredState(source).sql,
     scope,
@@ -499,10 +608,12 @@ async function deployedRoundTrip(
           attributeCase: source.project.naming.attributeCase,
           databaseProvider: source.project.database.provider,
         },
-        existing
+        existing,
+        loss
       )
   )
-  expect(result.shadow).toEqual(result.target)
+  if (loss.triggers.length > 0) expectLossNeedsPermission(result, loss)
+  expect(result.shadow).toEqual(withoutLost(result.target, loss))
   return { source, result }
 }
 
