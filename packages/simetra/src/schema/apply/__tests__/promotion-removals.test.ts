@@ -1287,9 +1287,19 @@ describe("access and permission items", () => {
     clone: CatalogModel,
     desired: CatalogModel,
     dependents: Map<string, string[]> = new Map(),
-    i: RenameIntent = intent()
+    i: RenameIntent = intent(),
+    serviceAccess: Map<string, string[]> = new Map()
   ) =>
-    accessChanges({ record: rec, intent: i, clone, desired, dependents, parse })
+    accessChanges({
+      record: rec,
+      intent: i,
+      clone,
+      desired,
+      dependents,
+      serviceAccess,
+      provider: "supabase",
+      parse,
+    })
 
   it("lists an access change for RLS off → enabled and a dropped read policy", () => {
     const read = unit(
@@ -1390,6 +1400,117 @@ describe("access and permission items", () => {
       [grant("anon", "GRANT SELECT ON TABLE app.items TO anon")]
     )
     expect(access(record({}), same, same)).toEqual([])
+  })
+
+  it("marks a generated policy that opens roles no adopted policy of its command had", () => {
+    const policy = (name: string, sql: string) =>
+      unit("policy", `policy:app.items.${name}`, name, sql)
+    const changes = access(
+      record({}),
+      model(
+        [table("items")],
+        [
+          policy(
+            "items_select",
+            "CREATE POLICY items_select ON app.items FOR SELECT TO authenticated USING (true)"
+          ),
+          // Інша команда ролі не покриває: `anon` тут пише, а не читає
+          policy(
+            "items_insert",
+            "CREATE POLICY items_insert ON app.items FOR INSERT TO anon WITH CHECK (true)"
+          ),
+        ]
+      ),
+      model(
+        [table("items")],
+        [
+          policy(
+            "items_read",
+            "CREATE POLICY items_read ON app.items AS PERMISSIVE FOR SELECT TO authenticated USING (true)"
+          ),
+          policy(
+            "items_public_read",
+            "CREATE POLICY items_public_read ON app.items AS PERMISSIVE FOR SELECT TO anon, authenticated USING (true)"
+          ),
+        ]
+      )
+    )
+    expect(changes.map((c) => c.policies)).toEqual([
+      [
+        "missing policy:app.items.items_insert",
+        "extra policy:app.items.items_public_read adds roles anon",
+        "extra policy:app.items.items_read",
+        "missing policy:app.items.items_select",
+      ],
+    ])
+  })
+
+  it("counts an adopted policy for public as the user role", () => {
+    const policy = (name: string, sql: string) =>
+      unit("policy", `policy:app.items.${name}`, name, sql)
+    const changes = access(
+      record({}),
+      model(
+        [table("items")],
+        [
+          policy(
+            "items_all",
+            "CREATE POLICY items_all ON app.items FOR SELECT USING (true)"
+          ),
+        ]
+      ),
+      model(
+        [table("items")],
+        [
+          policy(
+            "items_public_read",
+            "CREATE POLICY items_public_read ON app.items AS PERMISSIVE FOR SELECT TO anon, authenticated USING (true)"
+          ),
+        ]
+      )
+    )
+    expect(changes.map((c) => c.policies)).toEqual([
+      [
+        "missing policy:app.items.items_all",
+        "extra policy:app.items.items_public_read adds roles anon",
+      ],
+    ])
+  })
+
+  it("lists a table that only loses the service role access, read under the old name", () => {
+    const same = model([table("catalog_items")])
+    const changes = access(
+      record({
+        tables: [
+          { id: OBJECT_ID, schema: "app", from: "items", to: "catalog_items" },
+        ],
+      }),
+      same,
+      same,
+      new Map(),
+      intent({ tables: [["catalog_items", "items"]] }),
+      new Map([[tableKey("app", "items"), ["SELECT", "REFERENCES"]]])
+    )
+    expect(changes).toEqual([
+      {
+        table: { schema: "app", name: "catalog_items" },
+        policies: [],
+        grants: [],
+        serviceRole: {
+          role: "service_role",
+          privileges: ["SELECT", "REFERENCES"],
+        },
+        dependents: [],
+      },
+    ])
+    expect(promotionPermissionItems(changes, [], [], [])).toEqual([
+      {
+        token: "access:app.catalog_items",
+        summary: [
+          "service role service_role loses SELECT, REFERENCES: server code on the service key loses access; the server reaches kind data through platform commands (P4)",
+        ],
+      },
+    ])
   })
 
   it("emits delete tokens for own and incoming delete semantics", () => {

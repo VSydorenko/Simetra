@@ -3095,6 +3095,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Відкличте привілеї запису, типові привілеї чи політики запису на цілі й побудуйте план знову; див. відкрите питання «Шлях запису після промоції» у спеці промоції.",
     },
   },
+  // Попередження, не відмова: читання сервісним ключем вид свідомо не дає
+  // (спека промоції §8 «Сервісна роль»), а запис зупиняє `plan.write-path`
+  "plan.service-role-access-lost": {
+    en: (p) =>
+      `Server code using the service key loses access to ${p.tables}: after promotion the service role has no privileges on kind tables`,
+    uk: (p) =>
+      `Серверний код на сервісному ключі втрачає доступ до ${p.tables}: після промоції сервісна роль не має привілеїв на таблицях виду`,
+    hint: {
+      en: "If server code reads or writes these tables with the service key, keep them CustomTable until platform commands (P4).",
+      uk: "Якщо серверний код читає чи пише ці таблиці сервісним ключем, лишіть їх CustomTable до команд платформи (П4).",
+    },
+  },
   // `services` — таблиці провайдера, які займає сам провайдер для оператора
   // кроку (R27 плану П3-2a): одне попередження на крок з переліком таблиць
   "plan.foreign-exclusive-lock": {

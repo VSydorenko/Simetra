@@ -2918,6 +2918,133 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
       })
     })
 
+    describe("service role (promotion spec §8)", () => {
+      // Вид сервісній ролі нічого не дає: її доступ промоція забирає й
+      // показує окремо. Права запису зупиняє раніше гейт шляху запису
+      const LOST =
+        "server code on the service key loses access; the server reaches kind data through platform commands (P4)"
+
+      const serviceLines = (artifact: PlanArtifact) =>
+        artifact
+          .promotion!.permissionItems.map((i) => ({
+            token: i.token,
+            summary: i.summary.filter((l) => l.startsWith("service role ")),
+          }))
+          .filter((i) => i.summary.length > 0)
+
+      it("warns about the read access the service role loses and lists it under access:", async () => {
+        // Права з ADP схеми без запису: таблиця має рівний ADP грант, витяг
+        // його не показує, тож одиниці гранту немає
+        const outcome = await planPromotion(await promoted(), {
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO service_role;
+                  GRANT SELECT ON ${OLD} TO service_role;
+                  GRANT SELECT ON app.counterparty_contacts TO service_role`,
+        })
+        const artifact = planned(outcome)
+        // Таблиці — у старих іменах: так їх знає серверний код
+        expect(params(outcome, "plan.service-role-access-lost")).toEqual([
+          { tables: "app.counterparties, app.counterparty_contacts" },
+        ])
+        expect(
+          outcome.diagnostics.find(
+            (d) => d.code === "plan.service-role-access-lost"
+          )?.severity
+        ).toBe("warning")
+        expect(serviceLines(artifact)).toEqual([
+          {
+            token: "access:app.counterparty",
+            summary: [`service role service_role loses SELECT: ${LOST}`],
+          },
+          {
+            token: "access:app.counterparty_contacts",
+            summary: [`service role service_role loses SELECT: ${LOST}`],
+          },
+        ])
+      })
+
+      it("does not warn when the service role has no privileges on the tables", async () => {
+        const outcome = await planPromotion(await promoted())
+        const artifact = planned(outcome)
+        expect(codes(outcome)).not.toContain("plan.service-role-access-lost")
+        expect(serviceLines(artifact)).toEqual([])
+      })
+
+      it("warns about a column-level read grant of the service role", async () => {
+        // Явний прийнятий грант сервісній ролі — клас `removed` (§8)
+        const files = contactsProject()
+        const identity =
+          "grant:grant:table:app.counterparties:service_role:select(name)"
+        files.set(
+          "custom-tables/Counterparty/Counterparty.sql",
+          `GRANT SELECT (name) ON TABLE ${OLD} TO service_role;\n`
+        )
+        files.set(
+          "sql-debt.json",
+          `${JSON.stringify({ units: [identity] }, null, 2)}\n`
+        )
+        const mapping = contactsMapping()
+        mapping.conversions[identity] = "removed"
+        const outcome = await planPromotion(await promoted(files, mapping))
+        const artifact = planned(outcome)
+        expect(params(outcome, "plan.service-role-access-lost")).toEqual([
+          { tables: "app.counterparties" },
+        ])
+        expect(serviceLines(artifact)).toEqual([
+          {
+            token: "access:app.counterparty",
+            summary: [
+              `service role service_role loses SELECT (columns): ${LOST}`,
+            ],
+          },
+        ])
+      })
+
+      it("refuses through the write-path gate first when the ADP gives the service role ALL", async () => {
+        const outcome = await planPromotion(await promoted(), {
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO service_role;
+                  GRANT ALL ON ${OLD} TO service_role;
+                  GRANT ALL ON app.counterparty_contacts TO service_role`,
+        })
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.write-path"])
+        expect(params(outcome, "plan.write-path")[0]?.detail).toContain(
+          "grant INSERT to service_role on app.counterparties"
+        )
+        expect(codes(outcome)).not.toContain("plan.service-role-access-lost")
+      })
+
+      it("warns about a table in public whose service role access comes only from the schema ADP", async () => {
+        // Підстава архітектора П3-3a1: прийнятий грант, рівний ADP схеми,
+        // проходить промоцію без рядка класу лише тому, що втрату видно тут
+        const files = contactsProject()
+        for (const file of [COUNTERPARTY_FILE, CONTACT_FILE]) {
+          const raw = JSON.parse(files.get(file)!) as Json
+          raw.schema = "public"
+          files.set(file, JSON.stringify(raw))
+        }
+        const p = await promoted(files)
+        const outcome = await planPromotion(p, {
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO service_role;
+                  GRANT SELECT ON public.counterparties TO service_role;
+                  GRANT SELECT ON public.counterparty_contacts TO service_role`,
+        })
+        const artifact = planned(outcome)
+        expect(params(outcome, "plan.service-role-access-lost")).toEqual([
+          { tables: "public.counterparties, public.counterparty_contacts" },
+        ])
+        expect(serviceLines(artifact)).toEqual([
+          {
+            token: "access:public.counterparty",
+            summary: [`service role service_role loses SELECT: ${LOST}`],
+          },
+          {
+            token: "access:public.counterparty_contacts",
+            summary: [`service role service_role loses SELECT: ${LOST}`],
+          },
+        ])
+      })
+    })
+
     describe("class property (R10)", () => {
       /** Предмет UNIQUE `inn` фікстури має клас `property` (мапінг-зразок). */
       const SUBJECT = "Counterparty#uniques/counterparties_inn_key"

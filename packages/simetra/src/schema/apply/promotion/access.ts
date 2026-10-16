@@ -4,13 +4,20 @@ import {
   type PromotionRecord,
   type SqlParser,
 } from "simetra/compiler"
-import { quoteIdent, type CatalogModel, type CatalogUnit } from "simetra/model"
+import {
+  PROVIDER_API_ROLES,
+  quoteIdent,
+  type CatalogModel,
+  type CatalogUnit,
+  type DatabaseProvider,
+} from "simetra/model"
 import type { ApplyTransaction } from "../port"
 import { comparePermissionItems, type PermissionItem } from "../steps"
 import { tableKey } from "../table-key"
 import type { DataTable } from "./data"
 import type { RenameIntent } from "./intent"
 import type { Removal } from "./removals"
+import { policiesOn } from "./replacements"
 
 /**
  * Зміна доступу до таблиці одиниці (рішення 8 плану П3-2a): що міняється в
@@ -22,10 +29,19 @@ export interface AccessChange {
   /** Нове ім'я таблиці. */
   table: { schema: string; name: string }
   rowLevelSecurity?: { from: "off" | "forced"; to: "enabled" }
-  /** `missing|extra|changed <identity>` одиниць класу `policy`. */
+  /**
+   * `missing|extra|changed <identity>` одиниць класу `policy`; рядок `extra`
+   * закінчується ` adds roles <ролі>`, коли нова політика відкриває ролі,
+   * яких не мала жодна прийнята політика тієї самої команди на таблиці.
+   */
   policies: string[]
   /** `missing|extra|changed <identity>` одиниць класу `grant`. */
   grants: string[]
+  /**
+   * Привілеї сервісної ролі, які промоція забирає (спека промоції §8
+   * «Сервісна роль»), разом з іменем ролі: вид їй нічого не дає.
+   */
+  serviceRole?: { role: string; privileges: string[] }
   /** `policy <кваліфіковане ім'я>`, `view <кваліфіковане ім'я>`. */
   dependents: string[]
 }
@@ -63,7 +79,9 @@ function unitsOn(
  */
 function unitChanges(
   clone: ReadonlyMap<string, CatalogUnit>,
-  desired: ReadonlyMap<string, CatalogUnit>
+  desired: ReadonlyMap<string, CatalogUnit>,
+  /** Доповнення рядка `extra` за новою одиницею. */
+  extra: (unit: CatalogUnit) => string = () => ""
 ): string[] {
   const identities = [...new Set([...clone.keys(), ...desired.keys()])].sort(
     byCodeUnits
@@ -71,18 +89,49 @@ function unitChanges(
   return identities.flatMap((identity) => {
     const was = clone.get(identity)
     const now = desired.get(identity)
-    if (was === undefined) return [`extra ${identity}`]
+    if (was === undefined) return [`extra ${identity}${extra(now!)}`]
     if (now === undefined) return [`missing ${identity}`]
     return was.sql === now.sql ? [] : [`changed ${identity}`]
   })
 }
 
 /**
+ * Ролі нової політики, яких не мала жодна прийнята політика тієї самої
+ * команди на таблиці (умова архітектора до рішення 10 плану П3-3a1): форма
+ * заміни `policy` перевіряє лише, що доступ прийнятої не губиться, а
+ * доданий доступ має бути видно під `access:`. Прийнята `public` для
+ * порівняння — роль запиту користувача, як у формі заміни.
+ */
+function addedRoles(
+  created: CatalogUnit,
+  clone: CatalogModel,
+  table: { schema: string; name: string },
+  userRole: string,
+  parse: SqlParser
+): string[] {
+  const asUser = (r: string) => (r === "public" ? userRole : r)
+  return policiesOn(
+    { ...clone, units: [created] },
+    table.schema,
+    table.name,
+    parse
+  ).flatMap((now) => {
+    const had = new Set(
+      policiesOn(clone, table.schema, table.name, parse)
+        .filter((was) => was.command === now.command)
+        .flatMap((was) => was.roles.map(asUser))
+    )
+    return now.roles.filter((r) => !had.has(asUser(r)))
+  })
+}
+
+/**
  * Зміни доступу таблиць одиниці. Режим RLS — із запису (там він має клас
  * переходу), політики й гранти — з одиниць копії й тіні. Залежні — з
- * `readAccessDependents`, що читав ціль, де таблиця ще має старе ім'я: ключ
- * — `tableKey` старого імені (`tablesNewToOld`, для неперейменованої —
- * той самий).
+ * `readAccessDependents`, привілеї сервісної ролі — з `readServiceAccess`:
+ * обидва читали ціль, де таблиця ще має старе ім'я, тож ключ — `tableKey`
+ * старого імені (`tablesNewToOld`, для неперейменованої — той самий).
+ * Таблиця, що лише втрачає доступ сервісної ролі, — теж зміна доступу.
  */
 export function accessChanges(p: {
   record: PromotionRecord
@@ -90,34 +139,50 @@ export function accessChanges(p: {
   clone: CatalogModel
   desired: CatalogModel
   dependents: ReadonlyMap<string, readonly string[]>
+  serviceAccess: ReadonlyMap<string, readonly string[]>
+  provider: DatabaseProvider
   parse: SqlParser
 }): AccessChange[] {
   const { record, intent, clone, desired, dependents, parse } = p
+  const roles = PROVIDER_API_ROLES[p.provider]
   return record.tables.flatMap((t): AccessChange[] => {
     const rls = record.rowLevelSecurity.find(
       (r) => r.schema === t.schema && r.table === t.from
     )
-    const units = (cls: CatalogUnit["class"]) =>
-      unitChanges(
-        unitsOn(clone, cls, t.schema, t.to, parse),
-        unitsOn(desired, cls, t.schema, t.to, parse)
-      )
-    const policies = units("policy")
-    const grants = units("grant")
-    if (rls === undefined && policies.length === 0 && grants.length === 0)
-      return []
+    const table = { schema: t.schema, name: t.to }
+    const before = (cls: CatalogUnit["class"]) =>
+      unitsOn(clone, cls, t.schema, t.to, parse)
+    const after = (cls: CatalogUnit["class"]) =>
+      unitsOn(desired, cls, t.schema, t.to, parse)
+    const policies = unitChanges(before("policy"), after("policy"), (u) => {
+      const added = addedRoles(u, clone, table, roles.user, parse)
+      return added.length === 0 ? "" : ` adds roles ${added.join(", ")}`
+    })
+    const grants = unitChanges(before("grant"), after("grant"))
     const key = tableKey(t.schema, t.to)
+    const oldKey = intent.tablesNewToOld.get(key) ?? key
+    const service = p.serviceAccess.get(oldKey) ?? []
+    if (
+      rls === undefined &&
+      policies.length === 0 &&
+      grants.length === 0 &&
+      service.length === 0
+    )
+      return []
     return [
       {
-        table: { schema: t.schema, name: t.to },
+        table,
         ...(rls === undefined
           ? {}
           : { rowLevelSecurity: { from: rls.from, to: rls.to } }),
         policies,
         grants,
-        dependents: [
-          ...(dependents.get(intent.tablesNewToOld.get(key) ?? key) ?? []),
-        ],
+        ...(service.length === 0
+          ? {}
+          : {
+              serviceRole: { role: roles.service, privileges: [...service] },
+            }),
+        dependents: [...(dependents.get(oldKey) ?? [])],
       },
     ]
   })
@@ -206,7 +271,8 @@ export async function readAccessDependents(
 /**
  * Пункти дозволу промоції (рішення 8 плану П3-2a), імена — нові й
  * кваліфіковані `quoteIdent`:
- * - `access:<таблиця>` — на кожну зміну доступу;
+ * - `access:<таблиця>` — на кожну зміну доступу; втрата доступу сервісної
+ *   ролі — окремим рядком (спека промоції §8 «Сервісна роль»);
  * - `delete:<таблиця>.<обмеження>` — на кожен елемент семантики видалення.
  *   Лише з виведених фактів (рішення 15, R3): власні звірено із записом під
  *   час виявлення переходу, вхідні — тільки виведені;
@@ -235,6 +301,11 @@ export function promotionPermissionItems(
           ]),
       ...a.policies,
       ...a.grants,
+      ...(a.serviceRole === undefined
+        ? []
+        : [
+            `service role ${a.serviceRole.role} loses ${a.serviceRole.privileges.join(", ")}: server code on the service key loses access; the server reaches kind data through platform commands (P4)`,
+          ]),
       ...a.dependents.map((d) => `dependent ${d}`),
     ])
   for (const d of deleteSemantics)

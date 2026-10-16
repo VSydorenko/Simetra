@@ -99,6 +99,7 @@ import {
   preservationTypeRefusals,
   preservationTypeStepRefusals,
   readReservedNames,
+  readServiceAccess,
   readWritePath,
   renameIntent,
   stepConversions,
@@ -638,20 +639,28 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
 
   // Послідовність поза схемою таблиці (R17) і шлях запису через API
   // (рішення 10) — на живій цілі, до тіні й копій: обидва — відмова з
-  // порадою, і жодна копія тут нічого не уточнить
-  const blocked = await dbs.reader.transaction(
+  // порадою, і жодна копія тут нічого не уточнить. Привілеї сервісної ролі
+  // (спека промоції §8 «Сервісна роль») — тією самою транзакцією: вид їй
+  // нічого не дає, тож усе прочитане промоція забирає
+  const { blocked, serviceAccess } = await dbs.reader.transaction(
     o.target,
     "rollback",
-    async (tx) => [
-      ...(await foreignSequenceRefusals(tx, { record, file: c.file })),
-      ...writePathRefusal(
-        oldTables,
-        await readWritePath(tx, {
-          tables: oldTables,
-          apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]),
-        })
-      ),
-    ]
+    async (tx) => ({
+      blocked: [
+        ...(await foreignSequenceRefusals(tx, { record, file: c.file })),
+        ...writePathRefusal(
+          oldTables,
+          await readWritePath(tx, {
+            tables: oldTables,
+            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]),
+          })
+        ),
+      ],
+      serviceAccess: await readServiceAccess(tx, {
+        tables: oldTables,
+        role: PROVIDER_API_ROLES[scope.provider].service,
+      }),
+    })
   )
   if (blocked.length > 0) return refused(dedupe([...c.diagnostics, ...blocked]))
 
@@ -864,6 +873,13 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     clone: cloneModel,
     desired: target.extracted.model,
     dependents,
+    serviceAccess: new Map(
+      serviceAccess.map((a) => [
+        tableKey(a.table.schema, a.table.name),
+        a.privileges,
+      ])
+    ),
+    provider: scope.provider,
     parse,
   })
   // `delete:*` — лише з виведених фактів (R3), запис для них не читається
@@ -1005,12 +1021,31 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       ...withClone,
       ...collected.diagnostics,
       ...lockWarnings,
+      ...serviceRoleWarning(serviceAccess),
       ...checkDiagnostics,
       ...blindWarning(blindFunctions.blind),
       ...proof.diagnostics,
       applyDiagnostic("plan.schema-only-proof", "warning"),
     ]),
   }
+}
+
+/**
+ * Втрата доступу сервісного ключа (спека промоції §8 «Сервісна роль»): одне
+ * попередження на план з переліком таблиць у старих іменах — так їх знає
+ * серверний код, що зараз ходить сервісним ключем.
+ */
+function serviceRoleWarning(
+  found: readonly { table: TableName }[]
+): EngineDiagnostic[] {
+  if (found.length === 0) return []
+  return [
+    applyDiagnostic("plan.service-role-access-lost", "warning", {
+      tables: found
+        .map((f) => `${quoteIdent(f.table.schema)}.${quoteIdent(f.table.name)}`)
+        .join(", "),
+    }),
+  ]
 }
 
 /**

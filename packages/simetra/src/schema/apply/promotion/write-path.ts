@@ -138,3 +138,66 @@ export async function readWritePath(
   }
   return [...found.values()].sort((a, b) => byCodeUnit(a.detail, b.detail))
 }
+
+/**
+ * Привілеї сервісної ролі на таблицях одиниці (спека промоції §8 «Сервісна
+ * роль»): вид їй нічого не дає, тож усе, що вона має на прийнятій таблиці,
+ * промоція забирає. `has_table_privilege` бачить і привілеї з `PUBLIC` та
+ * ролей-груп, і ті, що таблиця отримала з типових привілеїв схеми: витяг
+ * такої пари не показує, а доступ сервісний ключ втрачає так само.
+ * Колонковий привілей — лише коли табличного немає, з позначкою
+ * `(columns)`. Порядок привілеїв — сталий, як у переліку нижче.
+ */
+const SERVICE_ACCESS_SQL = `
+with t as (
+  select c.oid, x.schema, x.name, x.ord
+  from pg_catalog.json_to_recordset($1::pg_catalog.json)
+    as x(schema text, name text, ord int)
+  join pg_catalog.pg_namespace n on n.nspname = x.schema
+  join pg_catalog.pg_class c on c.relnamespace = n.oid and c.relname = x.name
+), r as (
+  select a.oid from pg_catalog.pg_roles a where a.rolname = $2
+), p(privilege, ord) as (values ('SELECT', 1), ('INSERT', 2), ('UPDATE', 3),
+  ('DELETE', 4), ('TRUNCATE', 5), ('REFERENCES', 6), ('TRIGGER', 7)),
+found as (
+  select t.schema, t.name, t.ord as t_ord, p.ord as p_ord, p.privilege
+  from t cross join r cross join p
+  where pg_catalog.has_table_privilege(r.oid, t.oid, p.privilege)
+  union all
+  select t.schema, t.name, t.ord, p.ord, p.privilege || ' (columns)'
+  from t cross join r cross join p
+  where p.privilege = any (array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES'])
+    and not pg_catalog.has_table_privilege(r.oid, t.oid, p.privilege)
+    and pg_catalog.has_any_column_privilege(r.oid, t.oid, p.privilege)
+)
+select schema, name,
+  pg_catalog.array_agg(privilege order by p_ord) as privileges
+from found group by schema, name, t_ord order by t_ord
+`
+
+/**
+ * Привілеї ролі `role` на таблицях `tables` (старі імена — так їх бачить
+ * ціль); таблиця без привілеїв у відповідь не входить. Роль, якої в базі
+ * немає, привілеїв не має. Викликач відкриває транзакцію `READ ONLY` на
+ * цілі. Порядок — порядок `tables`.
+ */
+export async function readServiceAccess(
+  tx: ApplyTransaction,
+  p: { tables: readonly TableName[]; role: string }
+): Promise<{ table: TableName; privileges: string[] }[]> {
+  if (p.tables.length === 0) return []
+  const rows = await tx.query<{
+    schema: string
+    name: string
+    privileges: string[]
+  }>(SERVICE_ACCESS_SQL, [
+    JSON.stringify(
+      p.tables.map((t, ord) => ({ schema: t.schema, name: t.name, ord }))
+    ),
+    p.role,
+  ])
+  return rows.map((row) => ({
+    table: { schema: row.schema, name: row.name },
+    privileges: row.privileges,
+  }))
+}

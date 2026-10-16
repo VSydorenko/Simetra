@@ -239,6 +239,7 @@ export const COMPILER_RULES = [
   "plan.platform-replacement-missing",
   "plan.property-not-reproduced",
   "plan.write-path",
+  "plan.service-role-access-lost",
   "plan.foreign-exclusive-lock",
   "plan.plpgsql-check-unavailable",
   "plan.temp-name-taken",

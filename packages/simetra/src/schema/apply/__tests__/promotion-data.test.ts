@@ -1334,4 +1334,29 @@ describe("promotionPermissionItems", () => {
       { token: "repair:app.catalog_items", summary: ["code ← left(code, 20)"] },
     ])
   })
+
+  it("shows the loss of the service role access as its own access: line", () => {
+    const items = promotionPermissionItems(
+      [
+        {
+          table: { schema: "app", name: "t" },
+          policies: [],
+          grants: [],
+          serviceRole: { role: "service_role", privileges: ["SELECT"] },
+          dependents: [],
+        },
+      ],
+      [],
+      [],
+      []
+    )
+    expect(items).toEqual([
+      {
+        token: "access:app.t",
+        summary: [
+          "service role service_role loses SELECT: server code on the service key loses access; the server reaches kind data through platform commands (P4)",
+        ],
+      },
+    ])
+  })
 })

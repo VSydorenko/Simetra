@@ -258,4 +258,23 @@ describe("messages catalog", () => {
     )
     expect(uk.hint).toBe("Приберіть оператор; simetra fix прибирає його сам.")
   })
+
+  it("plan.service-role-access-lost names the tables and keeps them CustomTable", () => {
+    const d = diagnostic("plan.service-role-access-lost", "", "", {
+      tables: "app.items, app.item_lines",
+    })
+    expect(d.message).toBe(
+      "Server code using the service key loses access to app.items, app.item_lines: after promotion the service role has no privileges on kind tables"
+    )
+    expect(d.hint).toBe(
+      "If server code reads or writes these tables with the service key, keep them CustomTable until platform commands (P4)."
+    )
+    const uk = localize(d, "uk")
+    expect(uk.message).toBe(
+      "Серверний код на сервісному ключі втрачає доступ до app.items, app.item_lines: після промоції сервісна роль не має привілеїв на таблицях виду"
+    )
+    expect(uk.hint).toBe(
+      "Якщо серверний код читає чи пише ці таблиці сервісним ключем, лишіть їх CustomTable до команд платформи (П4)."
+    )
+  })
 })

@@ -883,7 +883,7 @@ function grantPairsOn(
   )
 }
 
-interface PolicyShape {
+export interface PolicyShape {
   name: string
   permissive: boolean
   command: string
@@ -891,7 +891,7 @@ interface PolicyShape {
 }
 
 /** Політики моделі на таблиці; без `TO` політика діє для `public`. */
-function policiesOn(
+export function policiesOn(
   model: CatalogModel,
   schema: string,
   table: string,

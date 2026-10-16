@@ -73,6 +73,7 @@ export {
   promotionTransition,
   readAccessDependents,
   readEquivalenceObjects,
+  readServiceAccess,
   readWritePath,
   renameIntent,
   stepConversions,

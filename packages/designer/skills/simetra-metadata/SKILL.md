@@ -134,6 +134,12 @@ says why a mapping is wrong, so read its diagnostics):
   `remove:` permission) or keep the table a `CustomTable`; for
   `plan.property-not-reproduced`, alternatively make the kind recreate the
   element equivalently.
+- Before promoting, check whether server code reads or writes the table with
+  the service key. If it does, do not promote the table: the kind gives the
+  service role no privileges, so that code loses access
+  (`plan.service-role-access-lost`); keep the table a `CustomTable` until
+  platform commands exist. An explicit adopted grant to the service role takes
+  the class `removed`.
 - Functions in the closed shell move to the kind's module, and functions that
   read the promoted tables are rewritten in place. Other verbatim SQL that
   reads them is refused: rewrite or drop it first.
