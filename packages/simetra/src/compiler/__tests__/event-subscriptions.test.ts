@@ -279,6 +279,41 @@ describe("EventSubscription", () => {
     ])
   })
 
+  it("whenChanged may list a CustomTable's own version and updated_at columns", async () => {
+    // Механіку впізнає `origin.standard`, а не ім'я: власні колонки таблиці
+    // з тими самими іменами механіка не тримає
+    const own = (
+      name: string,
+      physicalName: string,
+      n: number,
+      type: string
+    ) => ({
+      id: uuid(n),
+      name,
+      physicalName,
+      type,
+    })
+    expect(
+      await codes(
+        entries(
+          {
+            sources: [{ kind: "CustomTable", name: "Ledger" }],
+            whenChanged: ["version", "updatedAt"],
+          },
+          {
+            "custom-tables/Ledger/Ledger.meta.json": customTable("Ledger", {
+              columns: [
+                { ...own("id", "id", 7111, "UUID"), notNull: true },
+                own("version", "version", 7112, "Integer"),
+                own("updatedAt", "updated_at", 7113, "DateTime"),
+              ],
+            }),
+          }
+        )
+      )
+    ).toEqual([])
+  })
+
   it("whenChanged with a delete event is an error", async () => {
     expect(await codes(entries({ event: "onDelete" }))).toEqual([
       ["subscription.when-changed-on-delete", SUBSCRIPTION, "/whenChanged"],
