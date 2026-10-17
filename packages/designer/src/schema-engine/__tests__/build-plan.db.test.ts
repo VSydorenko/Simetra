@@ -20,6 +20,7 @@ import {
   desiredForApply,
   executePlan,
   readDataFacts,
+  renderDesiredState,
   reverseGenerate,
   serializePlan,
   SUPABASE_EXPECTED_BLIND_FUNCTIONS,
@@ -1022,6 +1023,198 @@ describe.concurrent("buildPlan", () => {
       )
       const outcome = await plan(url, model)
       expect(errors(outcome)).not.toContain("plan.clone-mismatch")
+    })
+  })
+
+  it("warns that the numbering of a new catalog is not generated", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await plan(url, model)
+      planned(outcome)
+      expect(
+        outcome.diagnostics.filter(
+          (d) => d.code === "plan.numbering-not-generated"
+        )
+      ).toEqual([
+        expect.objectContaining({
+          severity: "warning",
+          params: { object: "Party", table: "app.party" },
+        }),
+      ])
+    })
+  })
+
+  // Згенерований тригер на таблиці провайдера, ім'я якого вже займає чужий
+  // тригер (рішення 8 плану П3-3a2): гейт дрейфу таблиці провайдера не
+  // бачить, тож без відмови крок двигуна замінив би чужий тригер мовчки
+  describe("provider table triggers", () => {
+    const USERS = "catalogs/Users/Users.meta.json"
+    const users = catalog("Users", {
+      id: uuid(9101),
+      role: "users",
+      scope: "none",
+    })
+    /** Тригер провізії платформного шару на `auth.users`. */
+    const PROVISION = "simetra_provision_user"
+
+    /** Обробник на таблиці провайдера: роль автентифікації прав на `app` не має. */
+    const ON_USER = `CREATE FUNCTION app.on_user() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  RETURN NEW;
+END $$;`
+    const ON_PARTY = `CREATE FUNCTION app.on_party() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$
+BEGIN
+  RETURN NEW;
+END $$;`
+
+    const subscription = (n: number, name: string, data: object) => ({
+      [`event-subscriptions/${name}/${name}.meta.json`]: {
+        id: uuid(n),
+        kind: "EventSubscription",
+        name,
+        ...data,
+      },
+    })
+    const onUser = (physicalName: string) =>
+      subscription(9111, "OnUser", {
+        physicalName,
+        sources: [{ providerTable: "auth.users" }],
+        event: "onWrite",
+        handler: { schema: "app", name: "on_user" },
+      })
+
+    /** Чужа функція тригера в схемі `schema`, поза метаданими. */
+    const foreignTrigger = (schema: string, name: string) =>
+      `create function ${schema}.foreign_fn() returns trigger language plpgsql
+         as $$ begin return new; end $$;
+       create trigger ${name} after insert on auth.users
+         for each row execute function ${schema}.foreign_fn();`
+
+    const taken = (outcome: PlanOutcome) =>
+      outcome.diagnostics
+        .filter((d) => d.code === "plan.provider-trigger-taken")
+        .map((d) => d.params)
+
+    it("refuses a first apply over a foreign trigger with the name of the provision trigger", async () => {
+      const model = await compiled({ [USERS]: users })
+      await inTarget(foreignTrigger("public", PROVISION), async (url) => {
+        const outcome = await plan(url, model)
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.provider-trigger-taken"])
+        expect(taken(outcome)).toEqual([
+          { trigger: PROVISION, table: "auth.users" },
+        ])
+      })
+    })
+
+    it("refuses a subscription whose name a foreign trigger took after the last apply", async () => {
+      const before = await compiled({ [PARTY]: party() })
+      const after = await compiled({
+        [PARTY]: party(),
+        ...onUser("audit_x"),
+        "sql/app/handlers.sql": ON_USER,
+      })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        await query(url, foreignTrigger("public", "audit_x"))
+        const outcome = await plan(url, after)
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["plan.provider-trigger-taken"])
+        expect(taken(outcome)).toEqual([
+          { trigger: "audit_x", table: "auth.users" },
+        ])
+      })
+    })
+
+    it("plans a first apply over a trigger equal to the generated one", async () => {
+      const model = await compiled({ [USERS]: users })
+      // Ціль уже має розгорнутий шар: тригер провізії — той самий текст
+      await inTarget(renderDesiredState(model).sql, async (url) => {
+        const outcome = await plan(url, model)
+        planned(outcome)
+        expect(taken(outcome)).toEqual([])
+      })
+    })
+
+    it("refuses at the desired shadow a foreign trigger whose function is in the provider schema", async () => {
+      // Тригер із функцією в схемі провайдера двигун вважає базовим станом
+      // провайдера: він засівається в бажану тінь, і згенерований
+      // `CREATE TRIGGER` там падає на «already exists». Відмова — двигуна,
+      // ще до перевірки імені й копії доказу
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        const admin = asSuperuser(url)
+        await query(admin, foreignTrigger("auth", PROVISION))
+        const state = () =>
+          query(
+            admin,
+            `select
+               (select array_agg(pg_get_triggerdef(t.oid) order by t.tgname)
+                  from pg_trigger t
+                 where t.tgrelid = 'auth.users'::regclass and not t.tgisinternal) as triggers,
+               (select array_agg(pg_get_functiondef(p.oid))
+                  from pg_proc p
+                 where p.pronamespace = 'auth'::regnamespace
+                   and p.proname = 'foreign_fn') as functions,
+               to_regnamespace('simetra') is not null as layer`
+          )
+        const before = await state()
+        const outcome = await plan(url, model)
+        expect(outcome.status).toBe("refused")
+        expect(errors(outcome)).toEqual(["engine.shadow-load-failed"])
+        const [failed] = outcome.diagnostics.filter(
+          (d) => d.code === "engine.shadow-load-failed"
+        )
+        expect(failed?.engineCode).toBe("stuck_statement")
+        expect(failed?.message).toContain(
+          `CREATE TRIGGER ${PROVISION} AFTER INSERT ON auth.users`
+        )
+        expect(failed?.message).toContain("already exists")
+        // План лише читає ціль: чужий тригер і його функція ті самі, шару
+        // платформи не з'явилося
+        expect(await state()).toEqual(before)
+        expect(before).toEqual([
+          {
+            // Схему функції `pg_get_*def` друкує лише поза `search_path` сесії
+            triggers: [
+              expect.stringMatching(
+                new RegExp(
+                  `^CREATE TRIGGER ${PROVISION} AFTER INSERT ON auth\\.users FOR EACH ROW EXECUTE FUNCTION (auth\\.)?foreign_fn\\(\\)$`
+                )
+              ),
+            ],
+            functions: [
+              expect.stringMatching(/FUNCTION (auth\.)?foreign_fn\(\)/),
+            ],
+            layer: false,
+          },
+        ])
+      })
+    })
+
+    it("plans nothing after applying subscriptions on a provider table and a catalog", async () => {
+      // Живий текст тригера — `pg_get_triggerdef`, бажаний — текст
+      // генератора: хибна зміна тригера дала б непорожній другий план
+      const model = await compiled({
+        [PARTY]: party([
+          attribute("price", { id: uuid(9112), type: "Integer" }),
+        ]),
+        ...onUser("on_user"),
+        ...subscription(9113, "OnParty", {
+          physicalName: "on_party",
+          sources: [{ kind: "Catalog", name: "Party" }],
+          event: "beforeWrite",
+          whenChanged: ["price"],
+          handler: { schema: "app", name: "on_party" },
+        }),
+        "sql/app/handlers.sql": `${ON_USER}\n${ON_PARTY}`,
+      })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, model)
+        const outcome = await plan(url, model)
+        expect(outcome.status).toBe("unchanged")
+        expect(errors(outcome)).toEqual([])
+      })
     })
   })
 

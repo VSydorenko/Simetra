@@ -225,6 +225,8 @@ export {
 export {
   buildPlan,
   checkOwnerMembership,
+  numberingNotGenerated,
+  providerTriggerConflicts,
   type OwnerRefusalCode,
   type PlanDatabases,
   type PlanOutcome,

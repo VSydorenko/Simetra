@@ -64,6 +64,7 @@ export type {
   Node,
   RangeVar,
 } from "libpg-query"
+export { mainTableOf } from "./contracts"
 export type {
   Contracts,
   PostingContract,

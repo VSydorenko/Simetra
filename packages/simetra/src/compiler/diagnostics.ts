@@ -252,6 +252,8 @@ export const COMPILER_RULES = [
   "plan.temp-privilege",
   "plan.replication-role",
   "plan.preservation-type",
+  "plan.provider-trigger-taken",
+  "plan.numbering-not-generated",
   "database.failed",
   "introspect.unrepresentable",
   "introspect.identity-conflict",

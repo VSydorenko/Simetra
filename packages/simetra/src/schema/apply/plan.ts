@@ -1,11 +1,14 @@
 import {
   canonicalSnapshot,
   loadSqlParser,
+  mainTableOf,
   modelFunctions,
   platformFunctionSignatures,
+  withoutLocations,
   type CompiledModel,
   type RuleCode,
   type SqlParser,
+  type SqlUnit,
 } from "simetra/compiler"
 import {
   diffCatalogModels,
@@ -255,6 +258,92 @@ function guardedChanges(
   return { refusals, changes }
 }
 
+/** Генератори, чиї тригери стоять і на таблицях провайдера. */
+const PROVIDER_TRIGGER_GENERATORS: ReadonlySet<SqlUnit["generator"]> = new Set<
+  SqlUnit["generator"]
+>(["subscription", "platformLayer"])
+
+/**
+ * Згенерований тригер на таблиці провайдера, ім'я якого в цілі вже займає
+ * чужий тригер (рішення 8 плану П3-3a2, спека промоції §9.2). Двигун замінив
+ * би його мовчки: таблиця провайдера поза межею застосунку, тож гейт дрейфу
+ * чужого тригера не помічає, а `introspect` його не описує. «Чужий» — інше
+ * дерево розбору, ніж у згенерованого, і немає в останньому застосованому
+ * стані: зміна нашого ж тригера — звичайний крок. Порівнюються дерева, а не
+ * рядки: живий текст — `pg_get_triggerdef`, без лапок і `;`.
+ */
+export function providerTriggerConflicts(p: {
+  desired: readonly SqlUnit[]
+  live: CatalogModel
+  applied: CatalogModel | undefined
+  appSchemas: readonly string[]
+  parse: SqlParser
+}): EngineDiagnostic[] {
+  const live = new Map(
+    p.live.units
+      .filter((u) => u.class === "trigger")
+      .map((u) => [u.identity, u.sql])
+  )
+  const applied = new Set(p.applied?.units.map((u) => u.identity) ?? [])
+  return p.desired
+    .filter(
+      (unit) =>
+        unit.class === "trigger" &&
+        PROVIDER_TRIGGER_GENERATORS.has(unit.generator) &&
+        !p.appSchemas.includes(unit.schema) &&
+        !applied.has(unit.identity)
+    )
+    .flatMap((unit) => {
+      const sql = live.get(unit.identity)
+      if (sql === undefined) return []
+      const parsed = p.parse(sql)
+      const same =
+        parsed.ok &&
+        parsed.statements.length === 1 &&
+        JSON.stringify(withoutLocations(parsed.statements[0]!.stmt)) ===
+          JSON.stringify(unit.tree)
+      if (same) return []
+      const target = unit.identity.slice("trigger:".length)
+      return [
+        applyDiagnostic("plan.provider-trigger-taken", "error", {
+          trigger: unit.name,
+          table: target.slice(0, target.length - unit.name.length - 1),
+        }),
+      ]
+    })
+}
+
+/**
+ * Нумерація першим записом, якої платформа ще не генерує (рішення 7 плану
+ * П3-3a2): лічильників немає, тож номер лишиться порожнім. Попередження —
+ * лише там, де таблиця з'являється вперше чи переходить у вид промоцією:
+ * на вже наявній таблиці воно повторювалося б кожним планом.
+ */
+export function numberingNotGenerated(p: {
+  model: CompiledModel
+  live: CatalogModel
+  promotions: readonly PromotionInput[]
+}): EngineDiagnostic[] {
+  const live = new Set(p.live.tables.map((t) => tableKey(t.schema, t.name)))
+  const promoted = new Set(p.promotions.map((i) => i.record.objectId))
+  return p.model.contracts.numbering.flatMap((contract) => {
+    const table = mainTableOf(p.model.physical, contract.objectId)
+    if (!contract.autonumber || table === undefined) return []
+    if (
+      live.has(tableKey(table.schema, table.name)) &&
+      !promoted.has(contract.objectId)
+    )
+      return []
+    const object = p.model.objects.find((o) => o.id === contract.objectId)
+    return [
+      applyDiagnostic("plan.numbering-not-generated", "warning", {
+        object: object?.name ?? contract.objectId,
+        table: `${table.schema}.${table.name}`,
+      }),
+    ]
+  })
+}
+
 /**
  * Конвеєр плану (платформна спека §6.2 п.2–4, §6.6; задача 9 плану П3-1):
  * стан застосування, гейт дрейфу, план від живої цілі до бажаного стану,
@@ -334,6 +423,18 @@ export async function buildPlan(
   // межі виглядала б дрейфом. Коли межі збігаються, свідок той самий, що й
   // джерело плану; першому застосуванню свідок гейта не потрібен
   const live = await witness(o.target, scope)
+  // 2б. Чужий тригер з іменем згенерованого на таблиці провайдера — до гейта
+  // й кроків: дрейф його не бачить (таблиця поза межею застосунку), а крок
+  // двигуна замінив би його мовчки (рішення 8 плану П3-3a2)
+  const parse = await loadSqlParser()
+  const taken = providerTriggerConflicts({
+    desired: model.sqlUnits,
+    live: live.extracted.model,
+    applied: state.status === "applied" ? state.marker.catalog : undefined,
+    appSchemas: scope.schemas,
+    parse,
+  })
+  if (taken.length > 0) return refused(taken)
   const gateWitness =
     markerScope === undefined || sameScope(markerScope, scope)
       ? live
@@ -451,7 +552,6 @@ export async function buildPlan(
 
   // 7. Класи — від моделі вихідного стану плану, тобто живої цілі: з
   // порожньою моделлю кожна зміна типу стала б `destructive`
-  const parse = await loadSqlParser()
   const unparsable = unparsableSteps(actions, parse)
   if (unparsable.length > 0) return refused([...diagnostics, ...unparsable])
   const planSteps = classifySteps(actions, live.extracted.model, parse)
@@ -583,6 +683,11 @@ export async function buildPlan(
       ...diagnostics,
       ...collected.diagnostics,
       ...lockWarnings,
+      ...numberingNotGenerated({
+        model,
+        live: live.extracted.model,
+        promotions: [],
+      }),
       ...checkDiagnostics,
       ...blindWarning(blindFunctions.blind),
       ...proof.diagnostics,
@@ -1038,6 +1143,11 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       ...withClone,
       ...collected.diagnostics,
       ...lockWarnings,
+      ...numberingNotGenerated({
+        model: c.model,
+        live: c.live.extracted.model,
+        promotions: [{ record: c.promotion.record, file: c.file }],
+      }),
       ...serviceRoleWarning(serviceAccess),
       ...narrowings,
       ...checkDiagnostics,

@@ -282,6 +282,46 @@ describe("messages catalog", () => {
     )
   })
 
+  it("plan.provider-trigger-taken names the trigger and the provider table", () => {
+    const d = diagnostic("plan.provider-trigger-taken", "", "", {
+      trigger: "audit_x",
+      table: "auth.users",
+    })
+    expect(d.message).toBe(
+      "No plan was written. Trigger audit_x on auth.users already exists and was not created by Simetra; the generated trigger would silently replace it"
+    )
+    expect(d.hint).toBe(
+      "Give the subscription another physicalName, or describe the existing trigger first (introspect) and apply."
+    )
+    const uk = localize(d, "uk")
+    expect(uk.message).toBe(
+      "План не записано. Тригер audit_x на auth.users уже є і створений не Simetra; згенерований тригер тихо замінив би його"
+    )
+    expect(uk.hint).toBe(
+      "Дайте підписці інший physicalName або спершу опишіть наявний тригер (introspect) і застосуйте."
+    )
+  })
+
+  it("plan.numbering-not-generated names the object and its table", () => {
+    const d = diagnostic("plan.numbering-not-generated", "", "", {
+      object: "Party",
+      table: "app.party",
+    })
+    expect(d.message).toBe(
+      "Party (app.party) numbers rows on first write, but counters are not generated yet: the number stays empty"
+    )
+    expect(d.hint).toBe(
+      "If the object needs no number, set autonumber: false, or codeLength: 0 for a catalog; otherwise the number stays empty until the platform generates counters."
+    )
+    const uk = localize(d, "uk")
+    expect(uk.message).toBe(
+      "Party (app.party) нумерує рядки першим записом, але лічильники ще не генеруються: номер лишиться порожнім"
+    )
+    expect(uk.hint).toBe(
+      "Якщо номер об'єкту не потрібен, задайте autonumber: false, а довіднику — codeLength: 0; інакше номер лишатиметься порожнім, доки платформа не генерує лічильників."
+    )
+  })
+
   it("plan.update-of-narrowed names the trigger, the table and the columns", () => {
     const d = diagnostic("plan.update-of-narrowed", "", "", {
       trigger: "items_price",
