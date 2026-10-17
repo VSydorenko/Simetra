@@ -216,3 +216,239 @@ describe("engine plan of a new table with a generated column", () => {
     ])
   })
 })
+
+/**
+ * Запобіжник проти циклу на рівні дій двигуна: дія створює факт разом із
+ * нащадками (`ADD COLUMN … DEFAULT` — і `default`, `CREATE DOMAIN` — і його
+ * обмеження) і впорядковується за ребрами їх усіх; синтетичні ребра однієї
+ * нової таблиці можуть замкнути цикл через іншу. Кожен сценарій перевіряє,
+ * що ребер для таблиці немає, і що двигун над результатом будує план.
+ */
+describe("withColumnOrder against engine action cycles", () => {
+  const schemaFact: Fact = { id: app, payload: { owner: "postgres" } }
+  const tbl = (name: string): StableId => ({
+    kind: "table",
+    schema: "app",
+    name,
+  })
+  const tableFact = (name: string): Fact => ({
+    id: tbl(name),
+    parent: app,
+    payload: {
+      persistence: "p",
+      rowSecurity: false,
+      forceRowSecurity: false,
+      replicaIdentity: "d",
+      replicaIdentityIndex: null,
+      partitionKey: null,
+      partitionBound: null,
+      parentTable: null,
+      reloptions: null,
+    },
+  })
+  const colOf = (t: string, name: string): StableId => ({
+    kind: "column",
+    schema: "app",
+    table: t,
+    name,
+  })
+  const columnOf = (
+    t: string,
+    name: string,
+    position: number,
+    opts: { type?: string; generatedExpr?: string } = {}
+  ): Fact => ({
+    id: colOf(t, name),
+    parent: tbl(t),
+    payload: {
+      type: opts.type ?? "integer",
+      notNull: false,
+      _position: position,
+      identity: null,
+      collation: null,
+      generatedExpr: opts.generatedExpr ?? null,
+    },
+  })
+  const fn = (name: string): StableId => ({
+    kind: "function",
+    schema: "app",
+    name,
+    args: [],
+  })
+  const fnFact = (name: string, body: string): Fact => ({
+    id: fn(name),
+    parent: app,
+    payload: {
+      def: `CREATE FUNCTION app.${name}() RETURNS int IMMUTABLE LANGUAGE sql BEGIN ATOMIC ${body}; END`,
+    },
+  })
+  const source = new FactBase([schemaFact], [])
+  const planSql = (desired: FactBase) =>
+    plan(source, desired).actions.map((a) => a.sql)
+
+  it("sees the default of a column reading a later column", () => {
+    // `a DEFAULT app.f()`, а `f` читає пізнішу `b`: ребро `default → f`
+    // висить на нащадку колонки, не на ній самій
+    const dflt: StableId = {
+      kind: "default",
+      schema: "app",
+      table: "t",
+      name: "a",
+    }
+    const target = new FactBase(
+      [
+        schemaFact,
+        tableFact("t"),
+        columnOf("t", "a", 1),
+        columnOf("t", "b", 2),
+        { id: dflt, parent: colOf("t", "a"), payload: { expr: "app.f()" } },
+        fnFact("f", "SELECT max(b) FROM app.t"),
+      ],
+      [
+        depends(tbl("t"), app),
+        depends(fn("f"), app),
+        depends(fn("f"), colOf("t", "b")),
+        depends(fn("f"), tbl("t")),
+        depends(dflt, fn("f")),
+        depends(dflt, colOf("t", "a")),
+      ]
+    )
+    const result = withColumnOrder(source, target)
+    expect(newEdges(target, result)).toEqual([])
+    expect(() => planSql(result)).not.toThrow()
+  })
+
+  it("sees the check of a domain whose function reads a later column", () => {
+    // Обмеження домену — нащадок домену, вбудований у `CREATE DOMAIN`
+    const dom: StableId = { kind: "domain", schema: "app", name: "dom" }
+    const con: StableId = {
+      kind: "constraint",
+      schema: "app",
+      table: "dom",
+      name: "c",
+    }
+    const target = new FactBase(
+      [
+        schemaFact,
+        tableFact("t"),
+        columnOf("t", "a", 1, { type: "app.dom" }),
+        columnOf("t", "b", 2),
+        fnFact("f", "SELECT max(b) FROM app.t"),
+        {
+          id: dom,
+          parent: app,
+          payload: {
+            baseType: "integer",
+            collation: null,
+            default: null,
+            notNull: false,
+          },
+        },
+        {
+          id: con,
+          parent: dom,
+          payload: {
+            def: "CHECK (VALUE IS NULL OR app.f() IS NOT NULL)",
+            type: "c",
+            validated: true,
+          },
+        },
+      ],
+      [
+        depends(tbl("t"), app),
+        depends(fn("f"), app),
+        depends(dom, app),
+        depends(fn("f"), colOf("t", "b")),
+        depends(fn("f"), tbl("t")),
+        depends(colOf("t", "a"), dom),
+        depends(con, dom),
+        depends(con, fn("f")),
+      ]
+    )
+    const result = withColumnOrder(source, target)
+    expect(newEdges(target, result)).toEqual([])
+    expect(() => planSql(result)).not.toThrow()
+  })
+
+  // `a.a1` читає `b.b2` через `f`, `b.b1` читає `a.a2` через `g`: кожна
+  // таблиця окремо проходить запобіжник, разом ланцюги замикають цикл
+  const crossFacts = () => [
+    schemaFact,
+    tableFact("a"),
+    tableFact("b"),
+    columnOf("a", "a1", 1, { generatedExpr: "app.f()" }),
+    columnOf("a", "a2", 2),
+    columnOf("b", "b1", 1, { generatedExpr: "app.g()" }),
+    columnOf("b", "b2", 2),
+    fnFact("f", "SELECT max(b2) FROM app.b"),
+    fnFact("g", "SELECT max(a2) FROM app.a"),
+  ]
+  const crossEdges = [
+    depends(tbl("a"), app),
+    depends(tbl("b"), app),
+    depends(fn("f"), app),
+    depends(fn("g"), app),
+    depends(colOf("a", "a1"), fn("f")),
+    depends(fn("f"), colOf("b", "b2")),
+    depends(colOf("b", "b1"), fn("g")),
+    depends(fn("g"), colOf("a", "a2")),
+  ]
+
+  it("leaves the later of two cross-dependent new tables without edges", () => {
+    const target = new FactBase(crossFacts(), crossEdges)
+    const result = withColumnOrder(source, target)
+    // Таблиці отримують ребра за порядком ідентичності: `a` раніше за `b`
+    expect(newEdges(target, result)).toEqual(
+      edgeKeys([depends(colOf("a", "a2"), colOf("a", "a1"))])
+    )
+    expect(() => planSql(result)).not.toThrow()
+  })
+
+  it("does not depend on the order the facts arrive in", () => {
+    const forward = new FactBase(crossFacts(), crossEdges)
+    const backward = new FactBase(
+      [...crossFacts()].reverse(),
+      [...crossEdges].reverse()
+    )
+    expect(newEdges(backward, withColumnOrder(source, backward))).toEqual(
+      newEdges(forward, withColumnOrder(source, forward))
+    )
+  })
+
+  it("checks every column, not only the first one", () => {
+    // `c1` нікуди не посилається, а `c2` — уперед на `c3`
+    const target = new FactBase(
+      [
+        schemaFact,
+        tableFact("t"),
+        columnOf("t", "c1", 1),
+        columnOf("t", "c2", 2, { generatedExpr: "c3 * 2" }),
+        columnOf("t", "c3", 3),
+      ],
+      [depends(tbl("t"), app), depends(colOf("t", "c2"), colOf("t", "c3"))]
+    )
+    expect(newEdges(target, withColumnOrder(source, target))).toEqual([])
+  })
+
+  it("keeps checking tables after one with a forward reference", () => {
+    const target = new FactBase(
+      [
+        schemaFact,
+        tableFact("a"),
+        tableFact("b"),
+        columnOf("a", "g", 1, { generatedExpr: "h * 2" }),
+        columnOf("a", "h", 2),
+        columnOf("b", "x", 1),
+        columnOf("b", "y", 2),
+      ],
+      [
+        depends(tbl("a"), app),
+        depends(tbl("b"), app),
+        depends(colOf("a", "g"), colOf("a", "h")),
+      ]
+    )
+    expect(newEdges(target, withColumnOrder(source, target))).toEqual(
+      edgeKeys([depends(colOf("b", "y"), colOf("b", "x"))])
+    )
+  })
+})
