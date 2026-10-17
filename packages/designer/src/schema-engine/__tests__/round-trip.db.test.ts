@@ -336,7 +336,9 @@ async function roundTripOf(
   // механіка, нічого понад неї
   expect({
     actions: comparison.plan.actions.map((a) => a.sql).sort(),
-    differences: comparison.differences,
+    differences: [...comparison.differences].sort((a, b) =>
+      a.path < b.path ? -1 : a.path > b.path ? 1 : 0
+    ),
     errors: errors(comparison.diagnostics),
   }).toEqual({
     actions: loss.triggers.map(dropTrigger).sort(),

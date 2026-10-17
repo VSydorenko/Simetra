@@ -1324,6 +1324,40 @@ describe("reverseGenerate", () => {
     expect(written).not.toContain("note_simetra_touch")
   })
 
+  it("a grant shared with another function and a mechanics-named trigger on another function are written", async () => {
+    // Межі рішення 9: пропускається лише одиниця, ціла належна механіці.
+    // Грант зі спільною ціллю несе й чужий привілей, а тригер з ім'ям
+    // механіки, що кличе іншу функцію, — власний тригер таблиці.
+    const MIXED =
+      "REVOKE EXECUTE ON FUNCTION simetra.touch(), app.other() FROM anon;"
+    const NAMESAKE =
+      "CREATE TRIGGER note_simetra_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.stamp();"
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units(
+          [
+            "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+            NAMESAKE,
+            MIXED,
+          ].join("\n")
+        ),
+      }),
+      options()
+    )
+    // Грант пишеться дослівно, і схема платформи в ньому — гучна помилка
+    // `schema.reserved` саме на його файлі, а не тихий пропуск
+    const grantFile =
+      "sql/app/grant__revoke__function__app_other_simetra_touch__anon__execute.sql"
+    expect(result.files.get(grantFile)).toContain(MIXED.slice(0, -1))
+    expect(errors(result).map((d) => ({ code: d.code, file: d.file }))).toEqual(
+      [{ code: "schema.reserved", file: grantFile }]
+    )
+    expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
+      NAMESAKE.slice(0, -1)
+    )
+  })
+
   it("introspect writes no verbatim grant on what the platform grants", async () => {
     // Перший introspect бази, вже керованої Simetra: ADP схеми дали ролям
     // API інші права, ніж бажаний стан, але ACL функції множини й таблиці
