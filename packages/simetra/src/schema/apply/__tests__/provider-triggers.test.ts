@@ -186,20 +186,20 @@ describe("providerTriggerConflicts", () => {
   describe("whenChanged on a varchar column of the provider table", () => {
     // `pg_get_triggerdef` друкує умову над `varchar` з `::text`, генератор —
     // без нього: тотожний тригер не мусить ставати «чужим»
-    const withEmail = () =>
+    const withColumns = (whenChanged: string[]) =>
       compiled({
         ...subscription(7303, "OnUser", {
           physicalName: "on_user",
           sources: [{ providerTable: "auth.users" }],
           event: "onWrite",
-          whenChanged: ["email"],
+          whenChanged,
           handler: { schema: "public", name: "on_user" },
         }),
         "sql/public/handlers.sql": HANDLER,
       })
-    const conflicts = async (when: string) =>
+    const conflicts = async (when: string, whenChanged = ["email"]) =>
       providerTriggerConflicts({
-        desired: (await withEmail()).sqlUnits,
+        desired: (await withColumns(whenChanged)).sqlUnits,
         live: catalogOf([
           trigger(
             "auth",
@@ -230,6 +230,24 @@ describe("providerTriggerConflicts", () => {
       expect(
         await conflicts(
           "((old.email)::integer IS DISTINCT FROM (new.email)::integer)"
+        )
+      ).toEqual(["plan.provider-trigger-taken"])
+    })
+
+    it("takes the live ::text form of several columns joined by OR", async () => {
+      expect(
+        await conflicts(
+          "(((old.email)::text IS DISTINCT FROM (new.email)::text) OR ((old.phone)::text IS DISTINCT FROM (new.phone)::text))",
+          ["email", "phone"]
+        )
+      ).toEqual([])
+    })
+
+    it("still refuses when one disjunct names another column", async () => {
+      expect(
+        await conflicts(
+          "(((old.email)::text IS DISTINCT FROM (new.email)::text) OR ((old.role)::text IS DISTINCT FROM (new.role)::text))",
+          ["email", "phone"]
         )
       ).toEqual(["plan.provider-trigger-taken"])
     })
