@@ -10,6 +10,7 @@ import {
   it,
 } from "vitest"
 import {
+  canonicalSnapshot,
   compile,
   loadSqlParser,
   mechanicsTriggerName,
@@ -18,10 +19,12 @@ import {
   type SqlParser,
 } from "simetra/compiler"
 import {
+  buildPlan,
   checkPermissions,
   classifySteps,
   compareWithDesired,
   engineScope,
+  executePlan,
   requiredPermissions,
   renderDesiredState,
   reverseGenerate,
@@ -32,7 +35,7 @@ import {
   type Extracted,
   type SchemaEngine,
 } from "simetra/schema"
-import { createPgDeltaEngine } from ".."
+import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   shadowAgeMinutes,
   shadowDatabaseNames,
@@ -71,6 +74,11 @@ const stack = { url: testDatabaseUrl() }
  * її створив інший процес.
  */
 const engine: SchemaEngine = createPgDeltaEngine()
+const dbs = {
+  reader: createApplyDatabase({ readOnly: true }),
+  scratch: createApplyDatabase({ readOnly: false }),
+}
+const writer = createApplyDatabase({ readOnly: false })
 
 /**
  * Тінь, старша за цей вік, не належить живому прогонові: тінь живе один
@@ -541,12 +549,12 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
 /**
  * Втрата механіки гучна: кроки, що знімають тригери механіки, — клас
  * `relaxation`, якому потрібен явний дозвіл, і без дозволу застосування
- * відмовляє. Класи й дозволи — ті самі функції, що в `buildPlan` і першій
- * перевірці `executePlan`; повний `buildPlan` тут не проходить доказу на
- * копії (копія двигуна ставить згенеровану колонку в кінець таблиці —
- * `plan.clone-mismatch`), а це окремий дефект, не механіка.
+ * відмовляє. Класи й дозволи — ті самі чисті функції, що в `buildPlan` і
+ * першій перевірці `executePlan`: тут вони звіряють клас кожного кроку
+ * точно, а наскрізний прогін нижче лише підтверджує, що повний конвеєр
+ * просить дозволу рівно на ці кроки. Повертає ідентифікатори кроків утрати.
  */
-function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
+function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): string[] {
   const steps = classifySteps(
     trip.comparison.plan.actions,
     trip.comparison.target.model,
@@ -570,6 +578,7 @@ function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
     }),
   ])
   expect(checkPermissions(subject, ids)).toEqual([])
+  return ids
 }
 
 /** Тригери оракула без втраченої механіки. */
@@ -584,12 +593,57 @@ const withoutLost = (shape: OracleShape, loss: Loss): OracleShape => {
 }
 
 /**
+ * Повний конвеєр над ціллю: план повернутої моделі проходить доказ на копії,
+ * а застосування без дозволів або нічого не має робити (без утрати), або
+ * відмовляє рівно на кроках утрати. Так round-trip доводить не лише порожню
+ * звірку, а й те, що інструмент `apply` прийме повернуту теку як є.
+ */
+async function expectPlanAndApply(
+  target: DbConnection,
+  model: CompiledModel,
+  lossSteps: readonly string[]
+): Promise<void> {
+  const outcome = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: outcome.status,
+    errors: errors(outcome.diagnostics),
+  }).toEqual({ status: "planned", errors: [] })
+  if (outcome.status !== "planned") throw new Error("plan refused")
+  const artifact = outcome.artifact
+  expect(artifact.requiredPermissions).toEqual(lossSteps)
+
+  const applied = await executePlan(writer, target, artifact, {
+    mode: "apply",
+    planHash: artifact.planHash,
+    allow: [],
+    snapshot: canonicalSnapshot(model),
+  })
+  if (lossSteps.length === 0) {
+    expect({
+      status: applied.status,
+      errors: errors(applied.diagnostics),
+    }).toEqual({ status: "committed", errors: [] })
+    return
+  }
+  expect(applied.status).toBe("refused")
+  expect(applied.diagnostics).toEqual([
+    expect.objectContaining({
+      code: "apply.permission-required",
+      severity: "error",
+      params: { items: lossSteps.join(", ") },
+    }),
+  ])
+}
+
+/**
  * Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. Без збереженої
  * теки (`existing` порожній) механіка видів — відома втрата, і вона гучна.
+ * `endToEnd` веде повернуту модель ще й повним конвеєром плану й застосування.
  */
 async function deployedRoundTrip(
   files: Map<string, string>,
-  existing: ReadonlyMap<string, string>
+  existing: ReadonlyMap<string, string>,
+  endToEnd: boolean
 ): Promise<{ source: CompiledModel; result: RoundTrip }> {
   const original = await compile(files)
   expect(errors(original.diagnostics)).toEqual([])
@@ -600,8 +654,8 @@ async function deployedRoundTrip(
   const result = await inTarget(
     renderDesiredState(source).sql,
     scope,
-    (target) =>
-      roundTripOf(
+    async (target) => {
+      const trip = await roundTripOf(
         target,
         scope,
         {
@@ -613,8 +667,12 @@ async function deployedRoundTrip(
         existing,
         loss
       )
+      const lossSteps =
+        loss.triggers.length > 0 ? expectLossNeedsPermission(trip, loss) : []
+      if (endToEnd) await expectPlanAndApply(target, trip.model, lossSteps)
+      return trip
+    }
   )
-  if (loss.triggers.length > 0) expectLossNeedsPermission(result, loss)
   expect(result.shadow).toEqual(withoutLost(result.target, loss))
   return { source, result }
 }
@@ -625,7 +683,11 @@ const kindsOf = (model: CompiledModel) =>
 describe("adoption from scratch: the E1 corpus survives the round trip", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      const { source, result } = await deployedRoundTrip(fixture(), new Map())
+      const { source, result } = await deployedRoundTrip(
+        fixture(),
+        new Map(),
+        true
+      )
       // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
       expect(tableKeys(result.model)).toEqual(tableKeys(source))
       expect(
@@ -645,7 +707,7 @@ describe("adoption from scratch: the E1 corpus survives the round trip", () => {
 describe("over existing metadata: the reference domain survives the round trip", () => {
   it("reference domain", async () => {
     const files = readReferenceDomain()
-    const { source, result } = await deployedRoundTrip(files, files)
+    const { source, result } = await deployedRoundTrip(files, files, false)
     // Види 1С і платформний шар лишаються описаними власною текою
     expect(tableKeys(result.model)).toEqual(tableKeys(source))
     expect(kindsOf(result.model)).toEqual(kindsOf(source))
