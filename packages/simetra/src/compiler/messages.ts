@@ -3137,16 +3137,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Якщо серверний код читає чи пише ці таблиці сервісним ключем, лишіть їх CustomTable до команд платформи (П4).",
     },
   },
-  // Попередження, не відмова: заміна законна (рішення 6 плану П3-3a2), але
-  // тригер звужується, і автор має це побачити
   "plan.provider-trigger-taken": {
     en: (p) =>
-      `No plan was written. Trigger ${p.trigger} on ${p.table} already exists and was not created by Simetra; the generated trigger would silently replace it`,
+      `Trigger ${p.trigger} on ${p.table} already exists and was not created by Simetra; the generated trigger would silently replace it`,
     uk: (p) =>
-      `План не записано. Тригер ${p.trigger} на ${p.table} уже є і створений не Simetra; згенерований тригер тихо замінив би його`,
+      `Тригер ${p.trigger} на ${p.table} уже є і створений не Simetra; згенерований тригер тихо замінив би його`,
     hint: {
-      en: "Give the subscription another physicalName, or describe the existing trigger first (introspect) and apply.",
-      uk: "Дайте підписці інший physicalName або спершу опишіть наявний тригер (introspect) і застосуйте.",
+      en: "No plan was written. Give the subscription another physicalName, or describe the existing trigger first (introspect) and apply.",
+      uk: "План не записано. Дайте підписці інший physicalName або спершу опишіть наявний тригер (introspect) і застосуйте.",
     },
   },
   "plan.numbering-not-generated": {
@@ -3159,6 +3157,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Якщо номер об'єкту не потрібен, задайте autonumber: false, а довіднику — codeLength: 0; інакше номер лишатиметься порожнім, доки платформа не генерує лічильників.",
     },
   },
+  // Попередження, не відмова: заміна законна (рішення 6 плану П3-3a2), але
+  // тригер звужується, і автор має це побачити
   "plan.update-of-narrowed": {
     en: (p) =>
       `Trigger ${p.trigger} on ${p.table} fired on UPDATE OF ${p.columns}; the subscription fires only when a value actually changes`,

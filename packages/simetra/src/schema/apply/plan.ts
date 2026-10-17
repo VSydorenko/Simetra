@@ -6,6 +6,7 @@ import {
   platformFunctionSignatures,
   withoutLocations,
   type CompiledModel,
+  type Node,
   type RuleCode,
   type SqlParser,
   type SqlUnit,
@@ -270,7 +271,9 @@ const PROVIDER_TRIGGER_GENERATORS: ReadonlySet<SqlUnit["generator"]> = new Set<
  * чужого тригера не помічає, а `introspect` його не описує. «Чужий» — інше
  * дерево розбору, ніж у згенерованого, і немає в останньому застосованому
  * стані: зміна нашого ж тригера — звичайний крок. Порівнюються дерева, а не
- * рядки: живий текст — `pg_get_triggerdef`, без лапок і `;`.
+ * рядки: живий текст — `pg_get_triggerdef`, без лапок і `;`. Функцію в ньому
+ * двигун завжди кваліфікує схемою: витяг pg-delta ставить `search_path` у
+ * `pg_catalog`, тож ім'я без схеми — інше дерево, а не та сама функція.
  */
 export function providerTriggerConflicts(p: {
   desired: readonly SqlUnit[]
@@ -303,11 +306,16 @@ export function providerTriggerConflicts(p: {
         JSON.stringify(withoutLocations(parsed.statements[0]!.stmt)) ===
           JSON.stringify(unit.tree)
       if (same) return []
-      const target = unit.identity.slice("trigger:".length)
+      // Таблицю дає дерево оператора: генератор завжди кваліфікує її схемою
+      const tree = unit.tree as Node
+      const relation =
+        "CreateTrigStmt" in tree ? tree.CreateTrigStmt.relation : undefined
+      if (relation?.relname === undefined)
+        throw new Error(`internal: trigger unit without a table: ${unit.sql}`)
       return [
         applyDiagnostic("plan.provider-trigger-taken", "error", {
           trigger: unit.name,
-          table: target.slice(0, target.length - unit.name.length - 1),
+          table: `${relation.schemaname ?? unit.schema}.${relation.relname}`,
         }),
       ]
     })
@@ -419,13 +427,11 @@ export async function buildPlan(
   if (membership.refusal !== undefined) return refused([membership.refusal])
   const targetOwners = membership.owners
 
-  // 3. Гейт дрейфу порівнює ціль, зняту під межею з marker: інакше зміна
-  // межі виглядала б дрейфом. Коли межі збігаються, свідок той самий, що й
-  // джерело плану; першому застосуванню свідок гейта не потрібен
+  // 2б. Свідок цілі під межею плану. Чужий тригер з іменем згенерованого на
+  // таблиці провайдера — до гейта й кроків: дрейф його не бачить (таблиця
+  // поза межею застосунку), а крок двигуна замінив би його мовчки (рішення 8
+  // плану П3-3a2)
   const live = await witness(o.target, scope)
-  // 2б. Чужий тригер з іменем згенерованого на таблиці провайдера — до гейта
-  // й кроків: дрейф його не бачить (таблиця поза межею застосунку), а крок
-  // двигуна замінив би його мовчки (рішення 8 плану П3-3a2)
   const parse = await loadSqlParser()
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
@@ -435,6 +441,10 @@ export async function buildPlan(
     parse,
   })
   if (taken.length > 0) return refused(taken)
+
+  // 3. Гейт дрейфу порівнює ціль, зняту під межею з marker: інакше зміна
+  // межі виглядала б дрейфом. Коли межі збігаються, свідок той самий, що й
+  // джерело плану; першому застосуванню свідок гейта не потрібен
   const gateWitness =
     markerScope === undefined || sameScope(markerScope, scope)
       ? live

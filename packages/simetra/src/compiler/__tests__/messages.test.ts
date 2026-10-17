@@ -288,17 +288,17 @@ describe("messages catalog", () => {
       table: "auth.users",
     })
     expect(d.message).toBe(
-      "No plan was written. Trigger audit_x on auth.users already exists and was not created by Simetra; the generated trigger would silently replace it"
+      "Trigger audit_x on auth.users already exists and was not created by Simetra; the generated trigger would silently replace it"
     )
     expect(d.hint).toBe(
-      "Give the subscription another physicalName, or describe the existing trigger first (introspect) and apply."
+      "No plan was written. Give the subscription another physicalName, or describe the existing trigger first (introspect) and apply."
     )
     const uk = localize(d, "uk")
     expect(uk.message).toBe(
-      "План не записано. Тригер audit_x на auth.users уже є і створений не Simetra; згенерований тригер тихо замінив би його"
+      "Тригер audit_x на auth.users уже є і створений не Simetra; згенерований тригер тихо замінив би його"
     )
     expect(uk.hint).toBe(
-      "Дайте підписці інший physicalName або спершу опишіть наявний тригер (introspect) і застосуйте."
+      "План не записано. Дайте підписці інший physicalName або спершу опишіть наявний тригер (introspect) і застосуйте."
     )
   })
 

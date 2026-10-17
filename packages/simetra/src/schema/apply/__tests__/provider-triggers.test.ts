@@ -9,6 +9,7 @@ import { catalogFromSnapshot, type CatalogModel } from "simetra/model"
 import { numberingNotGenerated, providerTriggerConflicts } from "simetra/schema"
 import {
   catalog,
+  document,
   metaFiles,
   project,
   uuid,
@@ -159,6 +160,48 @@ describe("providerTriggerConflicts", () => {
     })
     expect(found).toEqual([])
   })
+
+  it("takes a function name without a schema for another function", async () => {
+    // Витяг двигуна ставить `search_path` у `pg_catalog`, тож живий текст
+    // завжди кваліфікує функцію схемою; ім'я без схеми — інше дерево, і
+    // тотожний тригер хибної відмови не дає лише завдяки цій кваліфікації
+    const model = await withSubscriptions()
+    const found = providerTriggerConflicts({
+      desired: model.sqlUnits,
+      live: catalogOf([
+        trigger(
+          "auth",
+          "users",
+          "on_user",
+          "CREATE TRIGGER on_user AFTER INSERT OR UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION on_user()"
+        ),
+      ]),
+      applied: undefined,
+      appSchemas: ["public", "simetra"],
+      parse: await loadSqlParser(),
+    })
+    expect(found.map((d) => d.code)).toEqual(["plan.provider-trigger-taken"])
+  })
+
+  it("refuses when the live trigger text does not parse", async () => {
+    // Не розібраний текст не доводить тотожності: обережно — відмова
+    const model = await withSubscriptions()
+    const found = providerTriggerConflicts({
+      desired: model.sqlUnits,
+      live: catalogOf([
+        trigger("auth", "users", "on_user", "CREATE TRIGGER on_user ???"),
+      ]),
+      applied: undefined,
+      appSchemas: ["public", "simetra"],
+      parse: await loadSqlParser(),
+    })
+    expect(found).toEqual([
+      expect.objectContaining({
+        code: "plan.provider-trigger-taken",
+        params: { trigger: "on_user", table: "auth.users" },
+      }),
+    ])
+  })
 })
 
 const PARTY_ID = uuid(7311)
@@ -201,6 +244,21 @@ describe("numberingNotGenerated", () => {
     const model = await party()
     const live = { ...catalogOf([]), ...catalogFromSnapshot(model.physical) }
     expect(numberingNotGenerated({ model, live, promotions: [] })).toEqual([])
+  })
+
+  it("warns about the numbering of a new document", async () => {
+    const model = await compiled({
+      "documents/Sale/Sale.meta.json": document("Sale", { id: uuid(7312) }),
+    })
+    expect(
+      numberingNotGenerated({ model, live: catalogOf([]), promotions: [] })
+    ).toEqual([
+      expect.objectContaining({
+        code: "plan.numbering-not-generated",
+        severity: "warning",
+        params: { object: "Sale", table: "public.sale" },
+      }),
+    ])
   })
 
   it("warns about a promotion target", async () => {
