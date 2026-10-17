@@ -700,6 +700,38 @@ function cloneFailed(
   }
 }
 
+/**
+ * Текст запобіжника двигуна, яким сортування дій відмовляє на циклі
+ * (`src/plan/graph.ts` у `@supabase/pg-delta` 1.0.0-alpha.56). Класу чи коду
+ * в цього винятку немає, тож розпізнаємо текст; оновлення двигуна мусить його
+ * перевірити. Змінений текст дасть гучний червоний DB-тест засіву, а не тиху
+ * хибну відмову.
+ */
+const ENGINE_CYCLE_MESSAGE = /^dependency cycle among \d+ actions/
+
+/**
+ * Збій засіву копії як діагностики копії; `undefined` — виняток не наш, його
+ * кидають далі, як у `planAndRun`. Крім збоїв бажаного стану (`shadowFailure`),
+ * результатом є цикл двигуна: план «ціль → засів» відкидаємо, але двигун будує
+ * його повністю, і для цілі, де функція читає таблицю, що її викликає
+ * (DEFAULT, вираз, CHECK домену), сортування дій падає циклом на `DROP`
+ * функції й таблиці. Копії тоді немає — це безпечна відмова доказу, а не
+ * виняток, що обірвав би `buildPlan`.
+ */
+export function seedFailure(error: unknown): EngineDiagnostic[] | undefined {
+  if (error instanceof Error && ENGINE_CYCLE_MESSAGE.test(error.message))
+    return [
+      cloneFailed(`preparing the copy failed: ${error.message}`, "seed_failed"),
+    ]
+  return shadowFailure(error)?.map((d) =>
+    cloneFailed(
+      `preparing the copy failed: ${String(d.params.detail)}`,
+      d.engineCode,
+      d.object
+    )
+  )
+}
+
 /** Застосовує план відтворення до копії; збій — діагностика копії. */
 async function reproduce(
   clonePool: pg.Pool,
@@ -752,32 +784,9 @@ async function cloneAndRun<T>(
         }
       )
     } catch (error) {
-      const failure = shadowFailure(error)
-      // Решту винятків засіву кидає сам двигун: план «ціль → засів» відкидаємо,
-      // але двигун будує його повністю, і для цілі, де функція читає таблицю,
-      // що її викликає (DEFAULT, вираз, CHECK домену), сортування дій падає
-      // циклом на `DROP` функції й таблиці. Копії тоді немає — це збій копії з
-      // безпечною відмовою доказу, а не виняток, що обірвав би `buildPlan`
-      if (failure === undefined)
-        return {
-          status: "shadow-failed",
-          diagnostics: [
-            cloneFailed(
-              `preparing the copy failed: ${error instanceof Error ? error.message : String(error)}`,
-              "seed_failed"
-            ),
-          ],
-        }
-      return {
-        status: "shadow-failed",
-        diagnostics: failure.map((d) =>
-          cloneFailed(
-            `preparing the copy failed: ${String(d.params.detail)}`,
-            d.engineCode,
-            d.object
-          )
-        ),
-      }
+      const failure = seedFailure(error)
+      if (failure === undefined) throw error
+      return { status: "shadow-failed", diagnostics: failure }
     }
     // Преамбулу цих планів не звіряємо з дозволеним переліком: їх виконує
     // `apply` самого двигуна, а не виконавець порту, тож перелік тут не діє;
