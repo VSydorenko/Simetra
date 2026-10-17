@@ -546,26 +546,32 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
   return { schemas: [...scope.schemas], triggers }
 }
 
+/** Кроки за текстом SQL: порядок кроків у плані тут не важить. */
+const byText = <T extends { sql: string }>(list: readonly T[]) =>
+  [...list].sort((a, b) => (a.sql < b.sql ? -1 : a.sql > b.sql ? 1 : 0))
+
+/** Кроки, що знімають утрачену механіку, — за змістом, а не за позицією. */
+const lossSteps = (loss: Loss) =>
+  byText(
+    loss.triggers.map((t) => ({ sql: dropTrigger(t), class: "relaxation" }))
+  )
+
 /**
  * Втрата механіки гучна: кроки, що знімають тригери механіки, — клас
  * `relaxation`, якому потрібен явний дозвіл, і без дозволу застосування
  * відмовляє. Класи й дозволи — ті самі чисті функції, що в `buildPlan` і
  * першій перевірці `executePlan`: тут вони звіряють клас кожного кроку
  * точно, а наскрізний прогін нижче лише підтверджує, що повний конвеєр
- * просить дозволу рівно на ці кроки. Повертає ідентифікатори кроків утрати.
+ * просить дозволу рівно на ці кроки.
  */
-function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): string[] {
+function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
   const steps = classifySteps(
     trip.comparison.plan.actions,
     trip.comparison.target.model,
     parse
   )
-  const byText = <T extends { sql: string }>(list: T[]) =>
-    [...list].sort((a, b) => (a.sql < b.sql ? -1 : a.sql > b.sql ? 1 : 0))
   expect(byText(steps.map((s) => ({ sql: s.sql, class: s.class })))).toEqual(
-    byText(
-      loss.triggers.map((t) => ({ sql: dropTrigger(t), class: "relaxation" }))
-    )
+    lossSteps(loss)
   )
   const subject = { steps, drift: null, promotion: null }
   const ids = steps.map((s) => s.id)
@@ -578,7 +584,6 @@ function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): string[] {
     }),
   ])
   expect(checkPermissions(subject, ids)).toEqual([])
-  return ids
 }
 
 /** Тригери оракула без втраченої механіки. */
@@ -596,12 +601,15 @@ const withoutLost = (shape: OracleShape, loss: Loss): OracleShape => {
  * Повний конвеєр над ціллю: план повернутої моделі проходить доказ на копії,
  * а застосування без дозволів або нічого не має робити (без утрати), або
  * відмовляє рівно на кроках утрати. Так round-trip доводить не лише порожню
- * звірку, а й те, що інструмент `apply` прийме повернуту теку як є.
+ * звірку, а й те, що інструмент `apply` прийме повернуту теку як є. Кроки
+ * дозволу звіряються за SQL: ідентифікатори позиційні, а план артефакту —
+ * не той, що в звірці, тож рівність ідентифікаторів не довела б, що дозволу
+ * просять саме кроки втрати.
  */
 async function expectPlanAndApply(
   target: DbConnection,
   model: CompiledModel,
-  lossSteps: readonly string[]
+  loss: Loss
 ): Promise<void> {
   const outcome = await buildPlan(engine, dbs, model, { target }, [])
   expect({
@@ -610,7 +618,19 @@ async function expectPlanAndApply(
   }).toEqual({ status: "planned", errors: [] })
   if (outcome.status !== "planned") throw new Error("plan refused")
   const artifact = outcome.artifact
-  expect(artifact.requiredPermissions).toEqual(lossSteps)
+  const permitted = new Set(artifact.requiredPermissions)
+  expect(
+    byText(
+      artifact.steps
+        .filter((s) => permitted.has(s.id))
+        .map((s) => ({ sql: s.sql, class: s.class }))
+    )
+  ).toEqual(lossSteps(loss))
+  // Пункт дозволу поза кроками (дрейф, промоція) фільтр вище не побачив би
+  const stepIds = new Set(artifact.steps.map((s) => s.id))
+  expect(artifact.requiredPermissions.filter((id) => !stepIds.has(id))).toEqual(
+    []
+  )
 
   const applied = await executePlan(writer, target, artifact, {
     mode: "apply",
@@ -618,7 +638,7 @@ async function expectPlanAndApply(
     allow: [],
     snapshot: canonicalSnapshot(model),
   })
-  if (lossSteps.length === 0) {
+  if (loss.triggers.length === 0) {
     expect({
       status: applied.status,
       errors: errors(applied.diagnostics),
@@ -630,7 +650,7 @@ async function expectPlanAndApply(
     expect.objectContaining({
       code: "apply.permission-required",
       severity: "error",
-      params: { items: lossSteps.join(", ") },
+      params: { items: artifact.requiredPermissions.join(", ") },
     }),
   ])
 }
@@ -667,9 +687,8 @@ async function deployedRoundTrip(
         existing,
         loss
       )
-      const lossSteps =
-        loss.triggers.length > 0 ? expectLossNeedsPermission(trip, loss) : []
-      if (endToEnd) await expectPlanAndApply(target, trip.model, lossSteps)
+      if (loss.triggers.length > 0) expectLossNeedsPermission(trip, loss)
+      if (endToEnd) await expectPlanAndApply(target, trip.model, loss)
       return trip
     }
   )
