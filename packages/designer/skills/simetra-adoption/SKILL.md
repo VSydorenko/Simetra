@@ -145,8 +145,10 @@ class `platform` only when the kind replaces it, and `plan` refuses
 - A foreign trigger on a provider table (`auth.users`) that holds the name of
   a generated one → `plan` refuses with `plan.provider-trigger-taken`, or with
   `engine.shadow-load-failed` "trigger … already exists" when the trigger's
-  function lives in the provider schema. Give the subscription another
-  `physicalName`; for the first form, introspecting the trigger also works.
+  function lives in the provider schema. Rename or drop the existing trigger;
+  for a subscription, another `physicalName` also works. Introspecting the
+  trigger does not help: it becomes a debt unit, and a subscription with the
+  same name is then a duplicate (`sql.unit-duplicate`).
 
 ## Exit codes
 

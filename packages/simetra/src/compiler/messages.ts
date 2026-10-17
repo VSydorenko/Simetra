@@ -3143,8 +3143,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Тригер ${p.trigger} на ${p.table} уже є і створений не Simetra; згенерований тригер тихо замінив би його`,
     hint: {
-      en: "No plan was written. Give the subscription another physicalName, or describe the existing trigger first (introspect) and apply.",
-      uk: "План не записано. Дайте підписці інший physicalName або спершу опишіть наявний тригер (introspect) і застосуйте.",
+      en: "No plan was written. Rename or drop the existing trigger; for a subscription, another physicalName also works.",
+      uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
     },
   },
   "plan.numbering-not-generated": {
