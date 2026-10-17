@@ -753,7 +753,21 @@ async function cloneAndRun<T>(
       )
     } catch (error) {
       const failure = shadowFailure(error)
-      if (failure === undefined) throw error
+      // Решту винятків засіву кидає сам двигун: план «ціль → засів» відкидаємо,
+      // але двигун будує його повністю, і для цілі, де функція читає таблицю,
+      // що її викликає (DEFAULT, вираз, CHECK домену), сортування дій падає
+      // циклом на `DROP` функції й таблиці. Копії тоді немає — це збій копії з
+      // безпечною відмовою доказу, а не виняток, що обірвав би `buildPlan`
+      if (failure === undefined)
+        return {
+          status: "shadow-failed",
+          diagnostics: [
+            cloneFailed(
+              `preparing the copy failed: ${error instanceof Error ? error.message : String(error)}`,
+              "seed_failed"
+            ),
+          ],
+        }
       return {
         status: "shadow-failed",
         diagnostics: failure.map((d) =>

@@ -506,6 +506,45 @@ describe("SchemaEngine apply port", () => {
     )
   })
 
+  it("reports a seed the engine cannot plan as engine.clone-failed", async () => {
+    // DEFAULT `a` викликає функцію, що читає таблицю: план засіву копії
+    // («ціль → засів») кидає виняток циклу двигуна на `DROP` функції й
+    // таблиці. Порт віддає його збоєм копії, а не винятком
+    await inTarget(
+      [
+        "create schema app;",
+        "create table app.t (a int, b int);",
+        "create function app.f() returns int language sql begin atomic select max(b) from app.t; end;",
+        "alter table app.t alter column a set default app.f();",
+      ].join("\n"),
+      scope,
+      async (url) => {
+        const mark = provisionedShadows().length
+        const target = await engine.extract({ url }, scope)
+        let called = false
+        const outcome = await engine.withTargetClone(
+          { target: { url } },
+          target,
+          scope,
+          async () => {
+            called = true
+          }
+        )
+        expect(called).toBe(false)
+        expect(outcome.status).toBe("shadow-failed")
+        expect(outcome.diagnostics.map((d) => d.code)).toEqual([
+          "engine.clone-failed",
+        ])
+        expect(outcome.diagnostics[0]!.severity).toBe("error")
+        expect(outcome.diagnostics[0]!.engineCode).toBe("seed_failed")
+        expect(outcome.diagnostics[0]!.params.detail).toMatch(
+          /^preparing the copy failed: dependency cycle/
+        )
+        expect(await leftoverShadows(mark)).toEqual([])
+      }
+    )
+  })
+
   it("drops the clone on success and on error", async () => {
     await inTarget(
       "create schema app; create table app.t (id int);",
