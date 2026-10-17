@@ -2784,6 +2784,80 @@ describe("platformReplacements", () => {
           ],
         })
       })
+
+      // Кожен випадок нижче тримає один запобіжник `triggerReplacement`: без
+      // нього прийнятий тригер зійшов би за підписку, і промоція мовчки
+      // змінила б поведінку
+      it("refuses an adopted constraint trigger even with the subscription's handler", () => {
+        expect(
+          codesOf(
+            "CREATE CONSTRAINT TRIGGER a AFTER INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            [
+              MECHANICS,
+              trigger(
+                "s",
+                "CREATE TRIGGER s AFTER INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+              ),
+            ]
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses an adopted trigger with a transition table", () => {
+        // Postgres дає перехідну таблицю лише `AFTER`-тригеру однієї події,
+        // тож форма підписки поруч — `onDelete`
+        expect(
+          codesOf(
+            "CREATE TRIGGER a AFTER DELETE ON app.item REFERENCING OLD TABLE AS o FOR EACH ROW EXECUTE FUNCTION app.h()",
+            [
+              MECHANICS,
+              trigger(
+                "s",
+                "CREATE TRIGGER s AFTER DELETE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+              ),
+            ]
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses INSERT OR UPDATE OF with its own WHEN under whenChanged", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE OF price ON app.item FOR EACH ROW WHEN ((new.price > 0)) EXECUTE FUNCTION app.h()",
+            WHEN_CHANGED
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("does not take a debt constraint trigger of the desired state for a subscription", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a AFTER INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            [
+              MECHANICS,
+              trigger(
+                "s",
+                "CREATE CONSTRAINT TRIGGER s AFTER INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+              ),
+            ]
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("does not take a debt UPDATE OF trigger of the desired state for a subscription", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            [
+              MECHANICS,
+              trigger(
+                "s",
+                "CREATE TRIGGER s BEFORE INSERT OR UPDATE OF price ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+              ),
+            ]
+          )
+        ).toEqual(MISSING)
+      })
     })
   })
 
