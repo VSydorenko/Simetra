@@ -126,6 +126,18 @@ describe("loadPlpgsqlParser", () => {
     ).toEqual([{ variable: "n" }, { variable: "new.total" }])
   })
 
+  it("records the record variable a RETURN gives back", () => {
+    const returns = (body: string) =>
+      parsed(fn(`DECLARE r record;\nBEGIN\n  ${body}\nEND`))
+        .statements.filter((s) => s.type === "return")
+        .map((s) => [s.returns, s.expressions.map((e) => e.query)])
+    expect(returns("RETURN NEW;")).toEqual([[{ variable: "new" }, ["NEW"]]])
+    expect(returns("RETURN (Old);")).toEqual([[{ variable: "old" }, ["(Old)"]]])
+    expect(returns("r := NEW; RETURN r;")).toEqual([[{ variable: "r" }, ["r"]]])
+    expect(returns("RETURN NULL;")).toEqual([[{ null: true }, ["NULL"]]])
+    expect(returns("RETURN NEW.total;")).toEqual([[undefined, ["NEW.total"]]])
+  })
+
   it("records GET DIAGNOSTICS targets", () => {
     const f = parsed(
       fn(

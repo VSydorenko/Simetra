@@ -230,15 +230,13 @@ Attribute properties (an element of `attributes`):
   `\b`, `\B`, `\x`, `\u{}` or inline flag groups such as `(?i:…)`. Write a
   character as itself or as `\uXXXX`.
 - `personalData: true` marks personal data (a name, a phone, an address):
-  anonymization sets the attribute to `NULL`, so it cannot also be
-  `required`.
+  anonymization sets it to `NULL`, so it cannot also be `required`.
 
 Object properties:
 
 - `indexes` on a Catalog, a Document and their tabular sections: a list of
   composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`.
-- `publicRead`: `"authenticated"` or `"anon"`, on kinds that have row-level
-  security.
+- `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security.
 - Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
 
 An attribute with properties, added through the tool:
@@ -258,24 +256,26 @@ An attribute with properties, added through the tool:
 ```
 
 An event subscription is a file in `event-subscriptions/`, created with `create`
-like any object (kind `EventSubscription`): `sources` (refs `{ kind, name }` or
+(kind `EventSubscription`): `sources` (refs `{ kind, name }` or
 `{ "providerTable": "<schema>.<table>" }`), `event` (`beforeWrite`, `onWrite`,
 `beforeDelete`, `onDelete`), optional `whenChanged` (attribute names, write
 events only) and `handler` (`{ schema?, name }`, a no-argument function that
 `RETURNS trigger`, in the closed shell below). The platform generates its
 `FOR EACH ROW` triggers, named after `physicalName`, on every source: `before*`
 is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
-`DELETE`. With `whenChanged`, `<physicalName>` fires on `UPDATE` when
-`OLD.<c> IS DISTINCT FROM NEW.<c>` for a listed column and
-`<physicalName>_insert` on every `INSERT`. There is no separate before-insert
-event: the handler tells insert from update by `TG_OP`. A handler on a provider
-table (`auth.users`) that writes app tables must be `SECURITY DEFINER` with
-`SET search_path = ''`: the firing provider role has no rights on your schemas.
+`DELETE`. With `whenChanged`, `<physicalName>` fires on an `UPDATE` that changes
+a listed column (`IS DISTINCT FROM`), `<physicalName>_insert` on every `INSERT`.
+No event is insert-only; `TG_OP` tells insert from update. A handler on a
+provider table (`auth.users`) that writes app tables must be `SECURITY DEFINER`
+with `SET search_path = ''`: the provider role has no rights on your schemas.
 
 Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
 (the single platform function `simetra.touch()`): an insert sets `version` to 1,
 an update adds 1, both set `updatedAt` to `now()` whatever the client writes.
-Never maintain them (`moddatetime`, a handler) or list them in `whenChanged`.
+Never maintain them (`moddatetime`) or list them in `whenChanged`. A
+`beforeWrite` handler never assigns `NEW.updated_at` or `NEW.version` nor
+replaces the row (`NEW := …`, `SELECT … INTO NEW`): it returns `NEW`, or `NULL`
+to skip the write, never `OLD` or a copy of the row.
 
 ## Users, authorship and membership
 

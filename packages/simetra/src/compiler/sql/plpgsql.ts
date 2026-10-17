@@ -48,6 +48,12 @@ export interface PlpgsqlStatement {
   readonly target?: { readonly variable: string }
   /** Курсор `OPEN`/`FETCH`/`MOVE`/`FOR … IN <курсор>`: ім'я його змінної. */
   readonly cursor?: string
+  /**
+   * Що повертає `RETURN`: змінну (`new`, `old`, інший запис; неквотоване ім'я
+   * в нижньому регістрі) чи літерал `NULL`. Будь-який інший вираз поля не
+   * дає; сам вираз лишається в `expressions`.
+   */
+  readonly returns?: { readonly variable: string } | { readonly null: true }
 }
 
 export interface PlpgsqlExpression {
@@ -308,6 +314,42 @@ function targetOf(body: Json, datums: Datum[]) {
   return variable === undefined ? undefined : { variable }
 }
 
+/**
+ * Що повертає `RETURN`. Postgres ставить `retvarno`, лише коли знає, що
+ * функція повертає рядок; обгортка розбирає тіло без типу результату, тож
+ * `RETURN NEW` приходить виразом `NEW`. Вираз читається деревом розбору
+ * Postgres, а не текстом: дужки, регістр і лапки імені він уже звів.
+ */
+function returnOf(
+  body: Json,
+  datums: Datum[]
+): PlpgsqlStatement["returns"] | undefined {
+  if (typeof body.retvarno === "number") {
+    const variable = datumName(datums[body.retvarno], datums)
+    return variable === undefined ? undefined : { variable }
+  }
+  const query = nodeOf(body.expr)?.body.query
+  if (typeof query !== "string") return undefined
+  let tree: unknown
+  try {
+    tree = parseSync(`SELECT ${query}`)
+  } catch {
+    return undefined
+  }
+  const select = asRecord(
+    asRecord(asRecord(asArray(asRecord(tree)?.stmts)[0])?.stmt)?.SelectStmt
+  )
+  const targets = asArray(select?.targetList)
+  if (targets.length !== 1 || select?.fromClause !== undefined) return undefined
+  const value = asRecord(asRecord(asRecord(targets[0])?.ResTarget)?.val)
+  if (asRecord(value?.A_Const)?.isnull === true) return { null: true }
+  const fields = asArray(asRecord(value?.ColumnRef)?.fields)
+  const name = asRecord(asRecord(fields[0])?.String)?.sval
+  return fields.length === 1 && typeof name === "string"
+    ? { variable: name }
+    : undefined
+}
+
 function walkStatement(
   kind: string,
   body: Json,
@@ -321,6 +363,10 @@ function walkStatement(
   const statement: StatementDraft = { type, lineno, depth, expressions: [] }
   const target = targetOf(body, datums)
   if (target !== undefined) statement.target = target
+  if (type === "return") {
+    const returns = returnOf(body, datums)
+    if (returns !== undefined) statement.returns = returns
+  }
   if (typeof body.curvar === "number") {
     const cursor = datumName(datums[body.curvar], datums)
     if (cursor !== undefined) statement.cursor = cursor

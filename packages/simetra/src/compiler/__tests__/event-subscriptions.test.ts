@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { attribute, catalog, metaFiles, project, uuid } from "./helpers"
+import {
+  attribute,
+  catalog,
+  customTable,
+  metaFiles,
+  project,
+  uuid,
+} from "./helpers"
 
 const SUBSCRIPTION = "event-subscriptions/StampContract/StampContract.meta.json"
 const HANDLER_FILE = "sql/app/stamp.sql"
@@ -355,6 +362,140 @@ describe("EventSubscription", () => {
     expect(await found("BEGIN SELEKT 1; RETURN NEW; END")).toEqual([
       ["subscription.handler-not-closed", "/handler", "body"],
     ])
+  })
+
+  describe("a beforeWrite handler leaves the row mechanics alone", () => {
+    const handler = (body: string) =>
+      `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
+    const found = async (
+      body: string,
+      overrides: Record<string, unknown> = {},
+      extra: Record<string, unknown> = {}
+    ) =>
+      (
+        await compile(
+          metaFiles(
+            entries(overrides, { [HANDLER_FILE]: handler(body), ...extra })
+          )
+        )
+      ).diagnostics.map((d) => [d.code, d.file, d.pointer, d.params?.problem])
+    const assigns = (problem: string) => [
+      [
+        "subscription.handler-assigns-mechanics",
+        SUBSCRIPTION,
+        "/handler",
+        problem,
+      ],
+    ]
+
+    it.each([
+      ["BEGIN NEW.version := 1; RETURN NEW; END", "new.version"],
+      ["BEGIN NEW.Updated_At := now(); RETURN NEW; END", "new.updated_at"],
+      ["BEGIN NEW := OLD; RETURN NEW; END", "new"],
+      ["BEGIN SELECT OLD.* INTO NEW; RETURN NEW; END", "new"],
+      // Postgres приймає поле запису ціллю GET DIAGNOSTICS.
+      [
+        "BEGIN GET DIAGNOSTICS NEW.version = ROW_COUNT; RETURN NEW; END",
+        "new.version",
+      ],
+      [
+        "DECLARE r record; BEGIN r := NEW; r.version := 5; RETURN r; END",
+        "RETURN r",
+      ],
+      ["BEGIN RETURN OLD; END", "RETURN OLD"],
+    ])("%s", async (body, problem) => {
+      expect(await found(body)).toEqual(assigns(problem))
+    })
+
+    it("dynamic SQL INTO NEW is stopped by the closed shell first", async () => {
+      expect(
+        await found("BEGIN EXECUTE 'SELECT 1' INTO NEW; RETURN NEW; END")
+      ).toEqual([
+        [
+          "subscription.handler-not-closed",
+          SUBSCRIPTION,
+          "/handler",
+          "dynamicSql",
+        ],
+      ])
+    })
+
+    it("an unparsable body is stopped by the closed shell", async () => {
+      expect(
+        await found("BEGIN SELEKT 1; NEW.version := 1; RETURN NEW; END")
+      ).toEqual([
+        ["subscription.handler-not-closed", SUBSCRIPTION, "/handler", "body"],
+      ])
+    })
+
+    it("other columns of NEW, RETURN NEW and RETURN NULL are fine", async () => {
+      expect(
+        await found("BEGIN NEW.number := upper(NEW.number); RETURN NEW; END")
+      ).toEqual([])
+      expect(
+        await found(
+          "BEGIN IF NEW.number = '' THEN RETURN NULL; END IF; RETURN NEW; END"
+        )
+      ).toEqual([])
+    })
+
+    it("an AFTER event or a source without mechanics is not checked", async () => {
+      const body = "BEGIN NEW.version := 1; RETURN OLD; END"
+      expect(await found(body, { event: "onWrite" })).toEqual([])
+      expect(
+        await found(
+          body,
+          {
+            sources: [{ kind: "CustomTable", name: "Ledger" }],
+            whenChanged: undefined,
+          },
+          {
+            // Власна колонка `version` таблиці — не механіка.
+            "custom-tables/Ledger/Ledger.meta.json": customTable("Ledger", {
+              columns: [
+                {
+                  id: uuid(7101),
+                  name: "id",
+                  physicalName: "id",
+                  type: "UUID",
+                  notNull: true,
+                },
+                {
+                  id: uuid(7102),
+                  name: "version",
+                  physicalName: "version",
+                  type: "Integer",
+                },
+              ],
+            }),
+          }
+        )
+      ).toEqual([])
+    })
+
+    it("a handler shared with a beforeWrite subscription on mechanics is checked", async () => {
+      const other = "event-subscriptions/AuditContract/AuditContract.meta.json"
+      expect(
+        await found(
+          "BEGIN NEW.version := 1; RETURN NEW; END",
+          { event: "onWrite" },
+          {
+            [other]: subscription({
+              id: uuid(7002),
+              name: "AuditContract",
+              physicalName: "audit_contract",
+            }),
+          }
+        )
+      ).toEqual([
+        [
+          "subscription.handler-assigns-mechanics",
+          other,
+          "/handler",
+          "new.version",
+        ],
+      ])
+    })
   })
 
   it("a subscription on an enumeration is an error", async () => {

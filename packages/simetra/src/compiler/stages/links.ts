@@ -1,16 +1,19 @@
 import {
   KIND_REGISTRY,
   MEMBERSHIP_SET_FUNCTION,
+  standardLogicalName,
   type MetadataRef,
   type MovementDecl,
   type Project,
+  type SubscriptionSpec,
 } from "simetra/model"
 import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
 import type { SqlParser } from "../sql/parse"
-import type { PlpgsqlParser } from "../sql/plpgsql"
+import { mechanicsStandardNames } from "../mechanics-units"
+import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -542,10 +545,96 @@ function checkSubscriptionHandlers(
             { function: fn, problem }
           )
         )
+      } else if (unit !== undefined) {
+        const mechanics = beforeWriteMechanics(spec, objects, project)
+        const parsed = mechanics.size === 0 ? undefined : plpgsql(unit.sql)
+        if (parsed?.ok === true && parsed.fn !== undefined) {
+          for (const assigned of mechanicsProblems(parsed.fn, mechanics)) {
+            found.push(
+              diagnostic(
+                "subscription.handler-assigns-mechanics",
+                object.file,
+                "/handler",
+                { function: fn, problem: assigned }
+              )
+            )
+          }
+        }
       }
     }
   }
   return found
+}
+
+/**
+ * Фізичні імена колонок механіки джерел підписки `beforeWrite` (спека промоції
+ * §9.3); порожньо для іншої події. Результат `AFTER`-обробника Postgres
+ * ігнорує, а `beforeDelete` не має `NEW`, тож зламати механіку може лише
+ * `beforeWrite`. Колонки — з реєстру виду, як і в самої механіки: таблиця
+ * провайдера й `CustomTable` їх не мають, хоч би як звалися їхні колонки.
+ */
+function beforeWriteMechanics(
+  spec: SubscriptionSpec,
+  objects: readonly ParsedObject[],
+  project: Project
+): ReadonlySet<string> {
+  if (spec.event !== "beforeWrite") return new Set()
+  const style = project.naming.attributeCase
+  const standard = mechanicsStandardNames(style)
+  const names = new Set<string>()
+  for (const source of spec.sources) {
+    if (!("ref" in source)) continue
+    const target = objects.find(
+      (o) =>
+        objectKey(o.kind, o.name) ===
+        objectKey(source.ref.kind, source.ref.name)
+    )
+    if (target === undefined) continue
+    for (const def of KIND_REGISTRY[target.kind].standardColumns(target.data)) {
+      if (standard.has(standardLogicalName(def, style))) {
+        names.add(def.physicalName.toLowerCase())
+      }
+    }
+  }
+  return names
+}
+
+/**
+ * Чим обробник ламає механіку: запис у `NEW` цілком (`NEW :=`, `SELECT … INTO
+ * NEW`) чи в колонку механіки, або `RETURN` не `NEW` і не `NULL`. Рядок, що
+ * його повертає пізніший `BEFORE`-тригер, і є рядком для запису, тож `RETURN
+ * OLD` чи копія запису затерли б версію й дату, які поставила механіка.
+ */
+function mechanicsProblems(
+  fn: PlpgsqlFunction,
+  mechanics: ReadonlySet<string>
+): string[] {
+  const problems: string[] = []
+  for (const statement of fn.statements) {
+    if (statement.type === "declare") continue
+    for (const name of statement.target?.variable.split(", ") ?? []) {
+      const [record, column, ...rest] = name.toLowerCase().split(".")
+      if (
+        record === "new" &&
+        rest.length === 0 &&
+        (column === undefined || mechanics.has(column))
+      ) {
+        problems.push(name.toLowerCase())
+      }
+    }
+    if (statement.type !== "return") continue
+    const { returns } = statement
+    const allowed =
+      returns !== undefined &&
+      ("null" in returns || returns.variable.toLowerCase() === "new")
+    // `RETURN;` без виразу не повертає ні запису, ні копії.
+    if (!allowed && statement.expressions.length > 0) {
+      problems.push(
+        `RETURN ${statement.expressions.map((e) => e.query).join(" ")}`
+      )
+    }
+  }
+  return problems
 }
 
 /**

@@ -97,6 +97,25 @@ describe("messages catalog", () => {
     })
   })
 
+  it("subscription.handler-assigns-mechanics names the problem and the way out", () => {
+    const d = diagnostic(
+      "subscription.handler-assigns-mechanics",
+      "a.meta.json",
+      "/handler",
+      { function: "app.stamp", problem: "RETURN OLD" }
+    )
+    expect(localize(d, "en")).toEqual({
+      message:
+        "Handler app.stamp assigns a row-mechanics column or replaces the row (RETURN OLD); the platform maintains updated_at and version",
+      hint: "Change other columns of NEW and return NEW, or NULL to skip the write.",
+    })
+    expect(localize(d, "uk")).toEqual({
+      message:
+        "Обробник app.stamp присвоює колонку механіки рядка або підміняє рядок (RETURN OLD); updated_at і version веде платформа",
+      hint: "Змінюйте інші колонки NEW і повертайте NEW або NULL, щоб пропустити запис.",
+    })
+  })
+
   it("localize omits the hint when the rule has none", () => {
     const d = diagnostic("identity.name-duplicate", "a", "/n", {
       name: "X",
