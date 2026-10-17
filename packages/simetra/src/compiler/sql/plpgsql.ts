@@ -372,8 +372,18 @@ function targetOf(body: Json, datums: Datum[]) {
     direct ?? (typeof body.varno === "number" ? datums[body.varno] : undefined)
   if (datum === undefined) return undefined
   if (datum.kind === "PLpgSQL_row" && datum.body.refname === UNNAMED_ROW) {
+    // Ім'я поля — як його написав автор (`r.version`, `b.r.version`), а
+    // `varno` — уже розв'язана змінна: через `ALIAS` чи мітку блоку текст
+    // назвав би не той запис, тож текст — лише коли `varno` немає.
     const names = asArray(datum.body.fields)
-      .map((field) => asRecord(field)?.name)
+      .map((field) => {
+        const record = asRecord(field)
+        const resolved =
+          typeof record?.varno === "number"
+            ? datumName(datums[record.varno], datums)
+            : undefined
+        return resolved ?? record?.name
+      })
       .filter((name): name is string => typeof name === "string")
     return names.length === 0 ? undefined : { variable: names.join(", ") }
   }

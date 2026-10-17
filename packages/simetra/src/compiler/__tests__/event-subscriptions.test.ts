@@ -419,6 +419,31 @@ describe("EventSubscription", () => {
         "CALL app.bump(NEW.version)",
       ],
       ["BEGIN CALL app.swap(NEW); RETURN NEW; END", "CALL app.swap(NEW)"],
+      // `INTO` у безіменний рядок: ціль — розв'язана змінна, а не текст автора.
+      [
+        "DECLARE r ALIAS FOR NEW; BEGIN SELECT 1 INTO r.version; RETURN NEW; END",
+        "new.version",
+      ],
+      [
+        "DECLARE a int; r ALIAS FOR NEW; BEGIN SELECT 1, 2 INTO a, r.version; RETURN NEW; END",
+        "new.version",
+      ],
+      [
+        "DECLARE c CURSOR FOR SELECT 1; r ALIAS FOR NEW; BEGIN OPEN c; FETCH c INTO r.version; RETURN NEW; END",
+        "new.version",
+      ],
+      [
+        "DECLARE a int; c CURSOR FOR SELECT 1, 2; r ALIAS FOR NEW; BEGIN OPEN c; FETCH c INTO a, r.version; RETURN NEW; END",
+        "new.version",
+      ],
+      [
+        "<<b>> DECLARE a int; r ALIAS FOR NEW; BEGIN SELECT 1, 2 INTO a, b.r.version; RETURN NEW; END",
+        "new.version",
+      ],
+      [
+        "DECLARE r ALIAS FOR NEW; BEGIN INSERT INTO app.log (n) VALUES (1) RETURNING n INTO r.version; RETURN NEW; END",
+        "new.version",
+      ],
       // Ціль псевдоніма дерево не зберігає, а `NEW` живе й під міткою функції.
       [
         "DECLARE r ALIAS FOR NEW; BEGIN CALL app.bump(r.version); RETURN NEW; END",

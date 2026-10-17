@@ -149,6 +149,17 @@ describe("loadPlpgsqlParser", () => {
     expect(f.variables.filter((v) => v.name === "new")).toHaveLength(1)
   })
 
+  it("names INTO fields by the resolved variable, not by the author's text", () => {
+    const f = parsed(
+      fn(
+        `<<b>>\nDECLARE a int; r ALIAS FOR NEW;\nBEGIN\n  SELECT 1, 2 INTO a, b.r.total;\n  SELECT 1 INTO r.total;\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(
+      f.statements.filter((s) => s.type === "execsql").map((s) => s.target)
+    ).toEqual([{ variable: "a, new.total" }, { variable: "new.total" }])
+  })
+
   it("records GET DIAGNOSTICS targets", () => {
     const f = parsed(
       fn(
