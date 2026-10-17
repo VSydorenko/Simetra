@@ -1,0 +1,854 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+      "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "description": "Logical object name in PascalCase."
+    },
+    "physicalName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+    },
+    "schema": {
+      "description": "PostgreSQL schema of the object; the project defaultSchema applies when absent.",
+      "type": "string"
+    },
+    "scope": {
+      "description": "Scope kind of the object, or none to keep it outside any scope. Required when the project declares scope kinds.",
+      "type": "string"
+    },
+    "title": {
+      "description": "Human-readable title of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "description": {
+      "description": "Description of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "kind": {
+      "type": "string",
+      "const": "AccumulationRegister",
+      "description": "Metadata kind; always AccumulationRegister."
+    },
+    "registerType": {
+      "default": "Balance",
+      "description": "Balance keeps running totals; Turnover only accumulates.",
+      "type": "string",
+      "enum": [
+        "Balance",
+        "Turnover"
+      ]
+    },
+    "recorderTypes": {
+      "default": [],
+      "description": "Document kinds allowed to write records of this register.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Catalog",
+              "Document",
+              "Enumeration",
+              "InformationRegister",
+              "AccumulationRegister",
+              "Constant",
+              "CustomTable",
+              "PgEnum",
+              "EventSubscription"
+            ],
+            "description": "Kind of the referenced metadata object."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9]*$",
+            "description": "Logical name of the referenced object."
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "additionalProperties": false,
+        "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+      }
+    },
+    "balanceControl": {
+      "description": "Negative-balance control at posting; allowed only on a Balance register.",
+      "type": "object",
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Logical names of resources whose balance is controlled."
+        }
+      },
+      "required": [
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "publicRead": {
+      "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
+      "type": "string",
+      "enum": [
+        "authenticated",
+        "anon"
+      ]
+    },
+    "standardAttributeOverrides": {
+      "default": {},
+      "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "description": "Overridden title of the standard attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": {
+            "description": "Overridden description of the standard attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dimensions": {
+      "default": [],
+      "description": "Dimensions: the key fields of a record.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": {
+            "description": "Description of the attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "UUID",
+              "String",
+              "Text",
+              "Integer",
+              "SmallInt",
+              "BigInt",
+              "Numeric",
+              "Boolean",
+              "Date",
+              "DateTime",
+              "Bytes",
+              "Json",
+              "Ref"
+            ],
+            "description": "Logical value type."
+          },
+          "length": {
+            "description": "Maximum length; required for String and allowed only there.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "precision": {
+            "description": "Total number of digits; allowed only for Numeric.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "scale": {
+            "description": "Digits after the decimal point; requires precision.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ref": {
+            "description": "Single reference target of a Ref value; mutually exclusive with allowedTypes.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum",
+                  "EventSubscription"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "allowedTypes": {
+            "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "Catalog",
+                    "Document",
+                    "Enumeration",
+                    "InformationRegister",
+                    "AccumulationRegister",
+                    "Constant",
+                    "CustomTable",
+                    "PgEnum",
+                    "EventSubscription"
+                  ],
+                  "description": "Kind of the referenced metadata object."
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "description": "Logical name of the referenced object."
+                }
+              },
+              "required": [
+                "kind",
+                "name"
+              ],
+              "additionalProperties": false,
+              "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+            }
+          },
+          "array": {
+            "description": "Whether the value is an array of the type.",
+            "type": "boolean"
+          },
+          "crossScope": {
+            "description": "Marks a deliberately cross-scope Ref: the FK has no scope part in its key.",
+            "type": "boolean",
+            "const": true
+          },
+          "required": {
+            "default": false,
+            "description": "Whether a value is mandatory (NOT NULL).",
+            "type": "boolean"
+          },
+          "indexed": {
+            "default": false,
+            "description": "Whether the attribute is indexed.",
+            "type": "boolean"
+          },
+          "unique": {
+            "default": false,
+            "description": "Whether values must be unique; \"ignoreCase\" compares a scalar String or Text value case-insensitively.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "const": "ignoreCase"
+              }
+            ]
+          },
+          "defaultValue": {
+            "description": "Default value of the attribute.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "fill": {
+                    "type": "string",
+                    "enum": [
+                      "now",
+                      "today",
+                      "newUuid"
+                    ],
+                    "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
+                  }
+                },
+                "required": [
+                  "fill"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "empty": {
+                    "anyOf": [
+                      {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "object",
+                          "array"
+                        ]
+                      }
+                    ],
+                    "description": "Empty value: true for an array of any type, object or array for a scalar Json."
+                  }
+                },
+                "required": [
+                  "empty"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "nonNegative": {
+            "description": "Value must be zero or greater (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes positive.",
+            "type": "boolean",
+            "const": true
+          },
+          "positive": {
+            "description": "Value must be greater than zero (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes nonNegative.",
+            "type": "boolean",
+            "const": true
+          },
+          "minValue": {
+            "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "maxValue": {
+            "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "pattern": {
+            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
+            "type": "string",
+            "minLength": 1
+          },
+          "minLength": {
+            "description": "Minimum number of characters (CHECK); scalar String or Text only.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "resources": {
+      "default": [],
+      "description": "Resources: the summed value fields of a record; Integer or Numeric only.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the resource.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": {
+            "description": "Description of the resource.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "Integer",
+              "Numeric"
+            ],
+            "description": "Logical value type; Integer or Numeric only."
+          },
+          "precision": {
+            "description": "Total number of digits; allowed only for Numeric.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "scale": {
+            "description": "Digits after the decimal point; requires precision.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "additionalProperties": false,
+        "description": "Resource of an accumulation register: a summed number."
+      }
+    },
+    "attributes": {
+      "default": [],
+      "description": "Attributes: extra information of a record.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+          },
+          "physicalName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+          },
+          "title": {
+            "description": "Human-readable title of the attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": {
+            "description": "Description of the attribute.",
+            "type": "object",
+            "properties": {
+              "uk": {
+                "description": "Ukrainian text.",
+                "type": "string"
+              },
+              "en": {
+                "description": "English text.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "UUID",
+              "String",
+              "Text",
+              "Integer",
+              "SmallInt",
+              "BigInt",
+              "Numeric",
+              "Boolean",
+              "Date",
+              "DateTime",
+              "Bytes",
+              "Json",
+              "Ref"
+            ],
+            "description": "Logical value type."
+          },
+          "length": {
+            "description": "Maximum length; required for String and allowed only there.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "precision": {
+            "description": "Total number of digits; allowed only for Numeric.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "scale": {
+            "description": "Digits after the decimal point; requires precision.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ref": {
+            "description": "Single reference target of a Ref value; mutually exclusive with allowedTypes.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum",
+                  "EventSubscription"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "allowedTypes": {
+            "description": "Polymorphic reference targets of a Ref value; mutually exclusive with ref.",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "Catalog",
+                    "Document",
+                    "Enumeration",
+                    "InformationRegister",
+                    "AccumulationRegister",
+                    "Constant",
+                    "CustomTable",
+                    "PgEnum",
+                    "EventSubscription"
+                  ],
+                  "description": "Kind of the referenced metadata object."
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "description": "Logical name of the referenced object."
+                }
+              },
+              "required": [
+                "kind",
+                "name"
+              ],
+              "additionalProperties": false,
+              "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+            }
+          },
+          "array": {
+            "description": "Whether the value is an array of the type.",
+            "type": "boolean"
+          },
+          "crossScope": {
+            "description": "Marks a deliberately cross-scope Ref: the FK has no scope part in its key.",
+            "type": "boolean",
+            "const": true
+          },
+          "required": {
+            "default": false,
+            "description": "Whether a value is mandatory (NOT NULL).",
+            "type": "boolean"
+          },
+          "indexed": {
+            "default": false,
+            "description": "Whether the attribute is indexed.",
+            "type": "boolean"
+          },
+          "unique": {
+            "default": false,
+            "description": "Whether values must be unique; \"ignoreCase\" compares a scalar String or Text value case-insensitively.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "const": "ignoreCase"
+              }
+            ]
+          },
+          "defaultValue": {
+            "description": "Default value of the attribute.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "fill": {
+                    "type": "string",
+                    "enum": [
+                      "now",
+                      "today",
+                      "newUuid"
+                    ],
+                    "description": "Fill expression computed by the database: now (DateTime), today (Date), newUuid (UUID)."
+                  }
+                },
+                "required": [
+                  "fill"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "empty": {
+                    "anyOf": [
+                      {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "object",
+                          "array"
+                        ]
+                      }
+                    ],
+                    "description": "Empty value: true for an array of any type, object or array for a scalar Json."
+                  }
+                },
+                "required": [
+                  "empty"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "nonNegative": {
+            "description": "Value must be zero or greater (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes positive.",
+            "type": "boolean",
+            "const": true
+          },
+          "positive": {
+            "description": "Value must be greater than zero (CHECK); scalar Integer, SmallInt, BigInt or Numeric; excludes nonNegative.",
+            "type": "boolean",
+            "const": true
+          },
+          "minValue": {
+            "description": "Lower bound of the value (CHECK): a number or a decimal-fraction string within the type's range; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "maxValue": {
+            "description": "Upper bound of the value (CHECK): a number or a decimal-fraction string within the type's range; must not be below minValue; numeric types only.",
+            "type": [
+              "number",
+              "string"
+            ]
+          },
+          "pattern": {
+            "description": "Regular expression the value must match (CHECK); valid for both JavaScript (u flag) and Postgres, so no named groups, \\p{...}, \\k<...>, \\b, \\B, \\x, \\u{...} or (?flags) groups; scalar String or Text only.",
+            "type": "string",
+            "minLength": 1
+          },
+          "minLength": {
+            "description": "Minimum number of characters (CHECK); scalar String or Text only.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "personalData": {
+            "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "name",
+    "kind"
+  ],
+  "additionalProperties": false,
+  "$id": "accumulation-registers.schema.json"
+}

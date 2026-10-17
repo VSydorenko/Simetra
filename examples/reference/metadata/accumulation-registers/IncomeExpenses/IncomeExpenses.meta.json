@@ -1,0 +1,70 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/accumulation-registers.schema.json",
+  "id": "8fe07eac-b0d6-4b26-9464-bd0106b1503a",
+  "kind": "AccumulationRegister",
+  "name": "IncomeExpenses",
+  "physicalName": "income_expenses",
+  "scope": "org",
+  "title": {
+    "uk": "Доходи й витрати"
+  },
+  "registerType": "Turnover",
+  "recorderTypes": [
+    {
+      "kind": "Document",
+      "name": "ServiceAccrual"
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "38e851a1-01e0-4c86-ad51-e1b5eed02d39",
+      "name": "counterparty",
+      "physicalName": "counterparty_id",
+      "title": {
+        "uk": "Контрагент"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Counterparty"
+      }
+    },
+    {
+      "id": "070222a0-bed1-4f02-ade2-2f6957c6ef39",
+      "name": "accrualKind",
+      "physicalName": "accrual_kind",
+      "title": {
+        "uk": "Вид нарахування"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Enumeration",
+        "name": "AccrualKind"
+      }
+    }
+  ],
+  "resources": [
+    {
+      "id": "1a77704d-7fba-47e5-aaac-b746588374d1",
+      "name": "income",
+      "physicalName": "income",
+      "title": {
+        "uk": "Дохід"
+      },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 2
+    },
+    {
+      "id": "86f64d4d-f19b-498e-9681-167d2e0783be",
+      "name": "expense",
+      "physicalName": "expense",
+      "title": {
+        "uk": "Витрата"
+      },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 2
+    }
+  ]
+}

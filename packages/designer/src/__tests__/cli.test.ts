@@ -1,0 +1,876 @@
+import { existsSync } from "node:fs"
+import { join } from "node:path"
+import { describe, expect, it, vi } from "vitest"
+import { commandByName, runTool, toolCommand } from "../cli/command"
+import { cliInput } from "../cli/input"
+import { renderResult } from "../cli/render"
+import type { PlanData } from "../tools/apply-tools"
+import { TOOLS, toolByName, type Tool } from "../tools/catalog"
+import { TOOL_NAMES } from "../tools/types"
+import {
+  addAdoptedTag,
+  project,
+  snapshotOf,
+  TAG_FILE,
+  tagMapping,
+  useTmpProjects,
+} from "./helpers/catalog"
+
+useTmpProjects()
+
+const noStdin = async (): Promise<string> => {
+  throw new Error("stdin must not be read")
+}
+const tool = (name: string) => toolByName(name)!
+const scratch = { kind: "Catalog", name: "Scratch", data: { scope: "none" } }
+const scratchTarget = { target: { kind: "Catalog", name: "Scratch" } }
+
+async function withScratch(): Promise<string> {
+  const dir = await project()
+  const r = await runTool(tool("create"), {
+    _: [JSON.stringify(scratch), dir],
+  })
+  expect(r.exitCode).toBe(0)
+  return dir
+}
+
+describe("cli adapter", () => {
+  it("has a subcommand for every catalog tool", () => {
+    expect(TOOLS.map((t) => t.name)).toEqual([...TOOL_NAMES])
+    for (const name of TOOL_NAMES) {
+      expect(commandByName(name).meta).toMatchObject({ name })
+    }
+  })
+
+  it("maps explain args onto the catalog input", async () => {
+    const { input, dirs } = await cliInput(
+      tool("explain"),
+      { _: ["Catalog.Products"] },
+      noStdin
+    )
+    expect(tool("explain").input.parse(input)).toEqual({
+      kind: "Catalog",
+      name: "Products",
+    })
+    expect(dirs).toEqual(["./metadata"])
+  })
+
+  it("reads mutation input from a positional, --input and stdin alike", async () => {
+    const json = JSON.stringify(scratchTarget)
+    const stdin = async () => json
+    const t = tool("delete")
+    const a = await cliInput(t, { _: [json, "d"] }, noStdin)
+    const b = await cliInput(t, { _: ["d"], input: json }, noStdin)
+    const c = await cliInput(t, { _: ["-", "d"] }, stdin)
+    expect(a).toEqual({ input: scratchTarget, dirs: ["d"] })
+    expect(b).toEqual(a)
+    expect(c).toEqual(a)
+  })
+
+  it("--dry-run exists only on write tools and --yes only on destructive ones", () => {
+    for (const t of TOOLS) {
+      const args = toolCommand(t).args ?? {}
+      expect("dry-run" in args).toBe(t.files === "write")
+      expect("yes" in args).toBe(t.destructive)
+    }
+  })
+
+  it("writes are on by default and delete still needs --yes", async () => {
+    const dir = await withScratch()
+    const file = join(dir, "catalogs/Scratch/Scratch.meta.json")
+    expect(existsSync(file)).toBe(true)
+    const unconfirmed = await runTool(tool("delete"), {
+      _: [JSON.stringify(scratchTarget), dir],
+    })
+    expect(unconfirmed.exitCode).toBe(2)
+    expect(existsSync(file)).toBe(true)
+  })
+
+  it("invalid input exits 2 with the zod path", async () => {
+    const dir = await project()
+    const r = await runTool(tool("rename"), {
+      _: ['{"target":{"kind":"Nope","name":"X"},"newName":"Y"}', dir],
+    })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("target.kind")
+  })
+
+  it("malformed JSON exits 2", async () => {
+    const dir = await project()
+    const r = await runTool(tool("rename"), { _: ["{ x", dir] })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("not valid JSON")
+  })
+
+  it("create works from --input and lands on disk", async () => {
+    const dir = await project()
+    const r = await runTool(tool("create"), {
+      _: [dir],
+      input: JSON.stringify(scratch),
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("written")
+    expect(existsSync(join(dir, "catalogs/Scratch/Scratch.meta.json"))).toBe(
+      true
+    )
+  })
+
+  it("delete without --yes changes nothing and exits 2", async () => {
+    const dir = await withScratch()
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("delete"), {
+      _: [JSON.stringify(scratchTarget), dir],
+    })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("Nothing changed")
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("delete --dry-run without --yes previews and changes nothing", async () => {
+    const dir = await withScratch()
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("delete"), {
+      _: [JSON.stringify(scratchTarget), dir],
+      "dry-run": true,
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("would delete")
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("delete with --yes deletes an unreferenced object", async () => {
+    const dir = await withScratch()
+    const r = await runTool(tool("delete"), {
+      _: [JSON.stringify(scratchTarget), dir],
+      yes: true,
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("deleted")
+    expect(existsSync(join(dir, "catalogs/Scratch/Scratch.meta.json"))).toBe(
+      false
+    )
+  })
+
+  it("delete of a referenced object exits 1 and lists the references", async () => {
+    const dir = await project()
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("delete"), {
+      _: ['{"target":{"kind":"Catalog","name":"Currency"}}', dir],
+      yes: true,
+    })
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain("operation.delete-referenced")
+    expect(r.stdout).toContain("catalogs/Contract/Contract.meta.json")
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("a bad explain target exits 2", async () => {
+    const r = await runTool(tool("explain"), { _: ["Nope"] })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("<Kind>.<Name>")
+  })
+
+  it("--out needs an existing parent directory", async () => {
+    const dir = await project()
+    const out = join(dir, "no/such/parent/out")
+    const r = await runTool(tool("compile"), { _: [dir], out })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--out")
+    expect(existsSync(join(dir, "no"))).toBe(false)
+  })
+
+  it("--out pointing at a file exits 2", async () => {
+    const dir = await project()
+    const out = join(dir, "catalogs/Currency/Currency.meta.json")
+    const r = await runTool(tool("compile"), { _: [dir], out })
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("not a directory")
+  })
+
+  it("maps introspect and diff flags onto the catalog input", async () => {
+    expect(
+      await cliInput(
+        tool("introspect"),
+        {
+          _: ["meta/"],
+          schemas: "app, reports",
+          "project-name": "Shop",
+          "attribute-case": "snake_case",
+          "database-provider": "supabase",
+        },
+        noStdin
+      )
+    ).toEqual({
+      input: {
+        schemas: ["app", "reports"],
+        project: {
+          name: "Shop",
+          attributeCase: "snake_case",
+          database: { provider: "supabase" },
+        },
+      },
+      dirs: ["meta"],
+    })
+    expect(await cliInput(tool("introspect"), { _: [] }, noStdin)).toEqual({
+      input: {},
+      dirs: ["./metadata"],
+    })
+    expect(
+      await cliInput(
+        tool("diff"),
+        { _: [], tables: "app.orders,lines" },
+        noStdin
+      )
+    ).toEqual({
+      input: { tables: ["app.orders", "lines"] },
+      dirs: ["./metadata"],
+    })
+    await expect(
+      cliInput(tool("diff"), { _: [], tables: "a,,b" }, noStdin)
+    ).rejects.toThrow("--tables expects a comma-separated list")
+  })
+
+  it("database flags exist only on database tools", () => {
+    for (const t of TOOLS) {
+      const args = toolCommand(t).args ?? {}
+      const db = t.database !== "none"
+      expect("database-url-env" in args, t.name).toBe(db)
+      expect("shadow-url-env" in args, t.name).toBe(db)
+    }
+  })
+
+  it("an unknown database provider exits 2", async () => {
+    const dir = await project()
+    const r = await runTool(
+      tool("introspect"),
+      { _: [dir], schemas: "app", "database-provider": "mysql" },
+      noStdin,
+      process.cwd(),
+      { SIMETRA_DATABASE_URL: "postgres://u:p@h/db" }
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("project.database.provider")
+  })
+
+  it("a database tool without a connection exits 2 naming the chosen variable", async () => {
+    const dir = await project()
+    const r = await runTool(
+      tool("diff"),
+      { _: [dir], "database-url-env": "APP_DB" },
+      noStdin,
+      process.cwd(),
+      { SIMETRA_DATABASE_URL: "postgres://u:p@h/db" }
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("APP_DB")
+    expect(r.stderr).not.toContain("SIMETRA_DATABASE_URL")
+    expect(r.stderr).not.toMatch(/restart/i)
+  })
+
+  it("a tool without the database never reads the environment", async () => {
+    const dir = await project()
+    const env = new Proxy({} as NodeJS.ProcessEnv, {
+      get: () => {
+        throw new Error("the environment must not be read")
+      },
+    })
+    const r = await runTool(
+      tool("compile"),
+      { _: [dir] },
+      noStdin,
+      process.cwd(),
+      env
+    )
+    expect(r.exitCode).toBe(0)
+  })
+
+  it("promote reads the mapping from stdin, writes and prints the record summary", async () => {
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const r = await runTool(tool("promote"), { _: ["-", dir] }, async () =>
+      JSON.stringify(tagMapping)
+    )
+    expect(r.exitCode).toBe(0)
+    expect(existsSync(join(dir, TAG_FILE))).toBe(false)
+    expect(existsSync(join(dir, "catalogs/Tag/Tag.meta.json"))).toBe(true)
+    expect(r.stdout).toContain("written")
+    expect(r.stdout).toMatch(/^promoted \S+ into Catalog$/m)
+  })
+
+  it("promote --dry-run says the summary would promote", async () => {
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("promote"), {
+      _: [JSON.stringify(tagMapping), dir],
+      "dry-run": true,
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain("would write")
+    expect(r.stdout).toMatch(/^would promote \S+ into Catalog$/m)
+    expect(r.stdout).not.toMatch(/^promoted /m)
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("promote --format json carries the record", async () => {
+    const dir = await project()
+    await addAdoptedTag(dir)
+    const before = await snapshotOf(dir)
+    const r = await runTool(tool("promote"), {
+      _: [JSON.stringify(tagMapping), dir],
+      "dry-run": true,
+      format: "json",
+    })
+    expect(r.exitCode).toBe(0)
+    const out = JSON.parse(r.stdout) as {
+      written: boolean
+      record: { kind: string; tables: unknown[] }
+    }
+    expect(out.written).toBe(false)
+    expect(out.record.kind).toBe("Catalog")
+    expect(out.record.tables.length).toBeGreaterThan(0)
+    expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  describe("plan and apply", () => {
+    const hash = "b".repeat(64)
+    const env = { SIMETRA_DATABASE_URL: "postgres://u:p@db.example.test/app" }
+    const REPORT = "plans/initial-0123456789ab.rehearsal.json"
+
+    it("plan takes its directory as a positional, not JSON", async () => {
+      expect(await cliInput(tool("plan"), { _: ["meta/"] }, noStdin)).toEqual({
+        input: {},
+        dirs: ["meta"],
+      })
+      expect(await cliInput(tool("plan"), { _: [] }, noStdin)).toEqual({
+        input: {},
+        dirs: ["./metadata"],
+      })
+    })
+
+    it("maps apply flags onto the catalog input", async () => {
+      expect(
+        await cliInput(
+          tool("apply"),
+          {
+            _: ["plans/initial-0123456789ab.plan.json", "meta"],
+            "plan-hash": hash,
+            allow: "drift,s2",
+            rehearse: true,
+            "lock-timeout-ms": "5000",
+            "statement-timeout-ms": "60000",
+          },
+          noStdin
+        )
+      ).toEqual({
+        input: {
+          plan: "plans/initial-0123456789ab.plan.json",
+          planHash: hash,
+          allow: ["drift", "s2"],
+          rehearse: true,
+          lockTimeoutMs: 5000,
+          statementTimeoutMs: 60000,
+        },
+        dirs: ["meta"],
+      })
+      await expect(
+        cliInput(tool("apply"), { _: [], "plan-hash": hash }, noStdin)
+      ).rejects.toThrow("apply needs the plan file")
+    })
+
+    it("an allow item that is neither a step id nor drift is an input error", async () => {
+      const r = await runTool(
+        tool("apply"),
+        {
+          _: ["plans/initial-0123456789ab.plan.json", await project()],
+          "plan-hash": hash,
+          allow: "drifts",
+          yes: true,
+        },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("allow")
+    })
+
+    it("apply without --yes exits 2 and connects nowhere", async () => {
+      const r = await runTool(
+        tool("apply"),
+        {
+          _: ["plans/initial-0123456789ab.plan.json", await project()],
+          "plan-hash": hash,
+        },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("needs confirmation")
+    })
+
+    it("apply --yes --dry-run exits 2 before the tool runs", async () => {
+      // Усі підключення до бази відкриває `run` інструмента: не викликаний
+      // `run` — жодного підключення
+      const run = vi.fn<Tool["run"]>()
+      const r = await runTool(
+        { ...tool("apply"), run },
+        {
+          _: ["plans/initial-0123456789ab.plan.json", await project()],
+          "plan-hash": hash,
+          yes: true,
+          "dry-run": true,
+        },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("--rehearse")
+      expect(run).not.toHaveBeenCalled()
+    })
+
+    it("--dry-run on a tool that writes no files exits 2", async () => {
+      const r = await runTool(tool("compile"), {
+        _: [await project()],
+        "dry-run": true,
+      })
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("compile has no --dry-run")
+    })
+
+    it("apply and plan have no --dry-run; apply has --yes", async () => {
+      const apply = toolCommand(tool("apply")).args ?? {}
+      for (const flag of [
+        "plan-hash",
+        "allow",
+        "rehearse",
+        "lock-timeout-ms",
+        "statement-timeout-ms",
+        "yes",
+      ])
+        expect(flag in apply, flag).toBe(true)
+      expect("dry-run" in apply).toBe(false)
+      // `plan` пише лише свій артефакт (рішення 10 плану П3-2b-3): перегляду
+      // немає, а прапорець — помилка використання, не мовчазний запис
+      expect("dry-run" in (toolCommand(tool("plan")).args ?? {})).toBe(false)
+      const run = vi.fn<Tool["run"]>()
+      const r = await runTool(
+        { ...tool("plan"), run },
+        { _: [await project()], "dry-run": true },
+        noStdin,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr).toContain("plan has no --dry-run")
+      expect(run).not.toHaveBeenCalled()
+    })
+
+    it("the text of a plan shows drift before the first step", () => {
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: {
+          reason: "drift",
+          sections: ["relations"],
+          paths: ["tables.app.party.columns.extra"],
+        },
+        promotion: null,
+        steps: [
+          {
+            id: "s1",
+            origin: "engine",
+            class: "destructive",
+            lockClass: "accessExclusive",
+            sql: "ALTER TABLE app.party DROP COLUMN extra;\n-- second line",
+          },
+        ],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: ["drift", "s1"],
+        environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "transient",
+        expectedBlindFunctions: 1,
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const drift = stdout.indexOf("drift (drift)")
+      const step = stdout.indexOf("s1 engine destructive")
+      expect(drift).toBeGreaterThan(-1)
+      expect(step).toBeGreaterThan(drift)
+      expect(stdout).toContain(hash)
+      expect(stdout).toContain(data.file)
+      expect(stdout).toContain("needs allow: drift")
+      expect(stdout).toContain("needs allow: s1")
+      expect(stdout).not.toContain("second line")
+      // Режим `plpgsql_check` і очікувані сліпі функції пресету — рядками
+      expect(stdout.split("\n")).toContain(
+        "plpgsql_check: transient (installed for the check, rolled back)"
+      )
+      expect(stdout.split("\n")).toContain(
+        "expected provider blind functions (preset): 1"
+      )
+    })
+
+    it("the text of a plan shows the promotion between drift and steps", () => {
+      const item = { schema: "app", name: "item" }
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: { reason: "drift", sections: ["relations"], paths: [] },
+        promotion: {
+          objectId: "00000000-0000-4000-8000-000000009311",
+          kind: "Catalog",
+          name: "Item",
+          recordHash: "f".repeat(64),
+          // Таблиця, що лишає ім'я, рядка перейменування не дає
+          tables: [
+            { schema: "app", from: "items", to: "item" },
+            { schema: "app", from: "item_rows", to: "item_rows" },
+          ],
+          columns: [{ table: item, from: "title", to: "description" }],
+          canonicalNames: [
+            {
+              kind: "constraint",
+              table: item,
+              from: "items_pkey",
+              to: "item_pkey",
+            },
+          ],
+          permissionItems: [
+            { token: "access:app.item", summary: ["policy item_read"] },
+            { token: "remove:app.item", summary: ["Item#comment"] },
+            {
+              token: "repair:app.item",
+              summary: ["description ← left(title, 10)"],
+            },
+          ],
+          data: [
+            {
+              temp: "simetra_fill_1",
+              before: { schema: "app", table: "items", key: "id" },
+              after: { schema: "app", table: "item", key: "id" },
+              columns: [
+                {
+                  step: "d1",
+                  column: "deletion_mark",
+                  type: "boolean",
+                  expression: "coalesce(inactive, false)",
+                  kind: "conversion",
+                  guard: "SELECT 0",
+                },
+                {
+                  step: "d2",
+                  column: "description",
+                  type: "text",
+                  expression: "left(title, 10)",
+                  kind: "repair",
+                  guard: "SELECT 0",
+                },
+              ],
+              triggers: [{ name: "item_audit", enabled: "O" }],
+            },
+          ],
+        },
+        steps: [
+          {
+            id: "s1",
+            origin: "intent",
+            class: "catalogOnly",
+            lockClass: "accessExclusive",
+            sql: "ALTER TABLE app.items RENAME TO item",
+          },
+          {
+            id: "s2",
+            origin: "engine",
+            class: "destructive",
+            lockClass: "accessExclusive",
+            sql: 'ALTER TABLE "app"."item" DROP COLUMN "legacy"',
+            conversion: "removed",
+          },
+        ],
+        locks: [
+          { schema: "app", name: "items", mode: "accessExclusive" },
+          { schema: "app", name: "groups", mode: "shareRowExclusive" },
+        ],
+        // Ім'я з крапкою лишається однозначним: лапки, а не склеювання
+        implicitLocks: [
+          {
+            schema: "app",
+            name: "odd.name",
+            mode: "shareRowExclusive",
+            step: "s2",
+          },
+        ],
+        requiredPermissions: [
+          "drift",
+          "access:app.item",
+          "repair:app.item",
+          "s2",
+        ],
+        environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "installed",
+        expectedBlindFunctions: 0,
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const lines = stdout.split("\n")
+      expect(lines).toContain("plpgsql_check: installed")
+      // Очікуваних сліпих функцій немає — рядка теж
+      expect(stdout).not.toContain("expected provider blind functions")
+      const at = (line: string) => lines.indexOf(line)
+      const block = [
+        "promotion: Catalog Item (00000000-0000-4000-8000-000000009311)",
+        `  record hash: ${"f".repeat(64)}`,
+        "  table app.items -> app.item",
+        "  column app.item: title -> description",
+        "  constraint app.item: items_pkey -> item_pkey",
+        "  data steps app.item:",
+        "    d1 deletion_mark ← coalesce(inactive, false) (conversion)",
+        "    d2 description ← left(title, 10) (repair)",
+        "    triggers disabled during the write: item_audit",
+        "  access:app.item (needs allow: access:app.item)",
+        "    policy item_read",
+        "  remove:app.item",
+        "    Item#comment",
+        "  repair:app.item (needs allow: repair:app.item)",
+        "    description ← left(title, 10)",
+      ]
+      const start = at(block[0]!)
+      expect(lines.slice(start, start + block.length)).toEqual(block)
+      expect(start).toBeGreaterThan(at("drift (drift): needs allow: drift"))
+      expect(at("steps (2):")).toBe(start + block.length)
+      expect(lines).toContain(
+        "  s1 intent catalogOnly (lock accessExclusive) ALTER TABLE app.items RENAME TO item"
+      )
+      expect(lines).toContain(
+        '  s2 engine destructive (lock accessExclusive; conversion removed; needs allow: s2) ALTER TABLE "app"."item" DROP COLUMN "legacy"'
+      )
+      expect(stdout).not.toContain("app.item_rows ->")
+      expect(
+        at(
+          "locks up front: app.items ACCESS EXCLUSIVE, app.groups SHARE ROW EXCLUSIVE"
+        )
+      ).toBeGreaterThan(at("steps (2):"))
+      expect(
+        at(
+          'implicit lock: app."odd.name" SHARE ROW EXCLUSIVE taken by step s2, not up front: the apply role may not lock it explicitly'
+        )
+      ).toBeGreaterThan(at("steps (2):"))
+    })
+
+    describe("promotion data steps in the text of a plan", () => {
+      // Мінімальний план з промоцією: різниться лише секція `data`
+      const promotionPlan = (
+        data: NonNullable<PlanData["promotion"]>["data"]
+      ): PlanData => ({
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: null,
+        promotion: {
+          objectId: "00000000-0000-4000-8000-000000009311",
+          kind: "Catalog",
+          name: "Item",
+          recordHash: "f".repeat(64),
+          tables: [],
+          columns: [],
+          canonicalNames: [],
+          permissionItems: [],
+          data,
+        },
+        steps: [],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: [],
+        environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "installed",
+        expectedBlindFunctions: 0,
+      })
+      const render = (data: PlanData) =>
+        renderResult(
+          tool("plan"),
+          {
+            ok: true,
+            written: true,
+            changes: [],
+            artifacts: [data.file],
+            diagnostics: [],
+            data,
+          },
+          { dir: "metadata", locale: "en", format: "text" }
+        ).stdout
+
+      it("prints no trigger line for a table without triggers", () => {
+        const stdout = render(
+          promotionPlan([
+            {
+              temp: "simetra_fill_1",
+              before: { schema: "app", table: "items", key: "id" },
+              after: { schema: "app", table: "item", key: "id" },
+              columns: [
+                {
+                  step: "d1",
+                  column: "deletion_mark",
+                  type: "boolean",
+                  expression: "coalesce(inactive, false)",
+                  kind: "conversion",
+                  guard: "SELECT 0",
+                },
+              ],
+              triggers: [],
+            },
+          ])
+        )
+        expect(stdout).toContain("  data steps app.item:")
+        expect(stdout).toContain(
+          "    d1 deletion_mark ← coalesce(inactive, false) (conversion)"
+        )
+        expect(stdout).not.toContain("triggers disabled during the write")
+      })
+
+      it("prints no data-step lines for an empty data", () => {
+        const stdout = render(promotionPlan([]))
+        expect(stdout).toContain("promotion: Catalog Item")
+        expect(stdout).not.toContain("data steps")
+      })
+    })
+
+    it("the text of a plan shows the environment steps as their own group", () => {
+      // Рішення 5(е) плану П3-2b-0: пара REVOKE ALL + GRANT — вивід двигуна,
+      // обидва рядки лишаються
+      const environment = (id: string, sql: string) => ({
+        id,
+        origin: "environment" as const,
+        class: "catalogOnly" as const,
+        lockClass: "none",
+        sql,
+      })
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: null,
+        promotion: null,
+        steps: [
+          {
+            id: "s1",
+            origin: "engine",
+            class: "catalogOnly",
+            lockClass: "none",
+            sql: 'CREATE FUNCTION "app"."f"() RETURNS integer',
+          },
+          environment("s2", 'REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC'),
+          environment("s3", 'GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC'),
+        ],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: [],
+        environment: {
+          role: "postgres",
+          defaultPrivileges: [
+            {
+              objtype: "f",
+              grantee: "postgres",
+              privilege: "EXECUTE",
+              grantable: false,
+            },
+          ],
+        },
+        plpgsqlCheck: "unavailable",
+        expectedBlindFunctions: 0,
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const lines = stdout.split("\n")
+      const steps = lines.indexOf("steps (1):")
+      expect(steps).toBeGreaterThan(-1)
+      expect(lines[steps + 1]).toBe(
+        '  s1 engine catalogOnly (lock none) CREATE FUNCTION "app"."f"() RETURNS integer'
+      )
+      expect(lines.slice(steps + 2, steps + 5)).toEqual([
+        "environment rights: the global default privileges of role postgres:",
+        '  s2 environment catalogOnly (lock none) REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
+        '  s3 environment catalogOnly (lock none) GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC',
+      ])
+    })
+
+    it("the text of a rehearsal warns about the locks it took", () => {
+      const { stdout } = renderResult(
+        tool("apply"),
+        {
+          ok: true,
+          written: false,
+          changes: [],
+          diagnostics: [],
+          artifacts: [REPORT],
+          data: { status: "rolledBack", attempts: 1, report: REPORT },
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      expect(stdout).toContain("took the plan's locks")
+      expect(stdout).toContain("rolled back")
+      // Звіт записано: «нічого не записано» було б неправдою
+      expect(stdout).toContain(`rehearsal report written to ${REPORT}`)
+      expect(stdout).toContain("the database was not changed")
+      expect(stdout).not.toContain("nothing was written")
+    })
+
+    it("the JSON of apply names its artifacts", () => {
+      const { stdout } = renderResult(
+        tool("apply"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [REPORT],
+          diagnostics: [],
+          data: { status: "rolledBack", attempts: 1, report: REPORT },
+        },
+        { dir: "metadata", locale: "en", format: "json" }
+      )
+      expect(JSON.parse(stdout)).toMatchObject({
+        artifacts: [REPORT],
+        report: REPORT,
+      })
+    })
+  })
+})

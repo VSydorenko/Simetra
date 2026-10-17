@@ -1,0 +1,64 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/accumulation-registers.schema.json",
+  "id": "d790a0f8-585f-4a6b-9236-27da5695543f",
+  "kind": "AccumulationRegister",
+  "name": "PerformerSettlements",
+  "physicalName": "performer_settlements",
+  "scope": "org",
+  "title": {
+    "uk": "Розрахунки з виконавцями"
+  },
+  "registerType": "Balance",
+  "recorderTypes": [
+    {
+      "kind": "Document",
+      "name": "ServiceAccrual"
+    }
+  ],
+  "balanceControl": {
+    "resources": [
+      "amount"
+    ]
+  },
+  "dimensions": [
+    {
+      "id": "59a808b1-879d-47b0-9460-1150c7ea2257",
+      "name": "performer",
+      "physicalName": "performer_id",
+      "title": {
+        "uk": "Виконавець"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Counterparty"
+      }
+    },
+    {
+      "id": "9f3d75ec-36b1-41c1-9183-2d75efa7a840",
+      "name": "currency",
+      "physicalName": "currency_id",
+      "title": {
+        "uk": "Валюта"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Currency"
+      }
+    }
+  ],
+  "resources": [
+    {
+      "id": "c8aaa913-f30e-4a5a-b314-31309288930b",
+      "name": "amount",
+      "physicalName": "amount",
+      "title": {
+        "uk": "Сума"
+      },
+      "type": "Numeric",
+      "precision": 15,
+      "scale": 2
+    }
+  ]
+}

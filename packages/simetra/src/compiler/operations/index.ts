@@ -1,0 +1,61 @@
+export type { FileChange, OperationResult } from "./types"
+export { applyChanges, changesBetween } from "./changes"
+export {
+  completeFiles,
+  fixFiles,
+  sqlDebtText,
+  type CompletionOptions,
+  type IdSource,
+  type SchemaPathResolver,
+} from "./fix"
+export { createObject } from "./create"
+export { addElement } from "./add"
+export { renameElement } from "./rename"
+export { deleteElement } from "./delete"
+export { resolveTarget, type ResolvedTarget } from "./target"
+export {
+  addElementInput,
+  containerTarget,
+  conversionClass,
+  createObjectInput,
+  deleteInput,
+  elementTarget,
+  promoteInput,
+  renameInput,
+  type AddElementInput,
+  type ContainerTarget,
+  type ConversionClass,
+  type CreateObjectInput,
+  type DeleteInput,
+  type ElementTarget,
+  type PromoteInput,
+  type RenameInput,
+} from "./inputs"
+export { promoteObject } from "./promote"
+export {
+  fillCalls,
+  modelFunctions,
+  NOW_FUNCTIONS,
+  recordedFillKind,
+  type ModelFunctions,
+} from "./promote/fill"
+export {
+  uniqueDifferences,
+  type FieldDifference,
+  type UniqueShape,
+} from "./promote/mapping"
+export {
+  DATA_STEP_KINDS,
+  PROMOTION_RECORD_FORMAT,
+  derivePromotionFacts,
+  promotionFileName,
+  promotionMapping,
+  promotionRecordHash,
+  promotionRecordSchema,
+  type DerivedFacts,
+  type PromoteResult,
+  type PromotionFacts,
+  type PromotionMapping,
+  type PromotionObject,
+  type PromotionRecord,
+} from "./promote/record"

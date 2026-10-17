@@ -1,0 +1,49 @@
+{
+  "$schema": "../../../node_modules/simetra/schemas/project.schema.json",
+  "name": "Reference",
+  "title": {
+    "uk": "Референсний застосунок"
+  },
+  "defaultSchema": "app",
+  "database": {
+    "provider": "supabase"
+  },
+  "naming": {
+    "attributeCase": "camelCase"
+  },
+  "timezone": "Europe/Kyiv",
+  "scopeKinds": [
+    {
+      "id": "af2fe265-695f-43cb-ba37-5857ce29fa66",
+      "name": "org",
+      "physicalName": "org_id",
+      "title": {
+        "uk": "Організація"
+      },
+      "root": {
+        "object": {
+          "kind": "Catalog",
+          "name": "Organization"
+        }
+      },
+      "setFunction": "membership"
+    },
+    {
+      "id": "9383aa59-d1ff-4dbd-ac5f-fa115590a74a",
+      "name": "user",
+      "physicalName": "user_id",
+      "title": {
+        "uk": "Користувач"
+      },
+      "root": {
+        "object": {
+          "kind": "Catalog",
+          "name": "Users"
+        }
+      },
+      "setFunction": {
+        "name": "accessible_user_ids"
+      }
+    }
+  ]
+}

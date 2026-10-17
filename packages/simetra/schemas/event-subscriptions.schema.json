@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+      "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "description": "Logical object name in PascalCase."
+    },
+    "physicalName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Physical database name. Assigned once at creation and never changed, so a rename emits no DDL. At most 63 bytes in UTF-8."
+    },
+    "title": {
+      "description": "Human-readable title of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "description": {
+      "description": "Description of the object.",
+      "type": "object",
+      "properties": {
+        "uk": {
+          "description": "Ukrainian text.",
+          "type": "string"
+        },
+        "en": {
+          "description": "English text.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "kind": {
+      "type": "string",
+      "const": "EventSubscription",
+      "description": "Metadata kind; always EventSubscription."
+    },
+    "sources": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum",
+                  "EventSubscription"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false,
+            "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "providerTable": {
+                "type": "string",
+                "pattern": "^[^.\\s]+\\.[^.\\s]+$",
+                "description": "Provider table as <schema>.<table>; it must be in the provider event source preset."
+              }
+            },
+            "required": [
+              "providerTable"
+            ],
+            "additionalProperties": false,
+            "description": "A table of the database provider as the source."
+          }
+        ]
+      },
+      "description": "Tables whose rows raise the event: application objects with a table or provider tables from the preset."
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "beforeWrite",
+        "onWrite",
+        "beforeDelete",
+        "onDelete"
+      ],
+      "description": "Row event the handler reacts to, before or after it."
+    },
+    "whenChanged": {
+      "description": "Write events only: fire only when one of these attributes changes; logical names in every object source, preset columns for a provider table.",
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "handler": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "description": "PostgreSQL schema of the handler; the project defaultSchema applies when absent.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of a function without arguments that returns trigger, declared in the .sql files."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Trigger function called for the event."
+    }
+  },
+  "required": [
+    "name",
+    "kind",
+    "sources",
+    "event",
+    "handler"
+  ],
+  "additionalProperties": false,
+  "$id": "event-subscriptions.schema.json"
+}
