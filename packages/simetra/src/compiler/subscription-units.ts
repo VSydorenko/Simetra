@@ -26,7 +26,8 @@ export function subscriptionTriggerNames(
   contract: EventSubscriptionContract,
   source: Source
 ): string[] {
-  return source.whenChanged.length === 0
+  // `whenChanged` має сенс лише для подій запису (стадія 4).
+  return source.whenChanged.length === 0 || !TIMING[contract.event].write
     ? [contract.name]
     : [contract.name, `${contract.name}_insert`]
 }
@@ -67,8 +68,8 @@ function triggers(contract: EventSubscriptionContract, source: Source) {
   if (!write) return [trigger(contract.name, "DELETE")]
   const [name, insert] = subscriptionTriggerNames(contract, source)
   if (insert === undefined) return [trigger(name!, "INSERT OR UPDATE")]
-  // Кожне порівняння в дужках — та сама форма, що в `pg_get_triggerdef`:
-  // текст одиниці читається так, як його покаже жива база.
+  // Кожне порівняння в дужках, як у `pg_get_triggerdef` (він друкує `old.` і
+  // `new.` малими); дерева розбору від регістру й дужок не залежать.
   const changed = source.whenChanged
     .map((c) => `(OLD.${quoteIdent(c)} IS DISTINCT FROM NEW.${quoteIdent(c)})`)
     .join(" OR ")

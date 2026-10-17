@@ -569,16 +569,6 @@ function checkSubscriptions(
       )
     }
     if (spec.whenChanged === undefined) continue
-    if (
-      physicalName !== undefined &&
-      byteLength(`${physicalName}_insert`) > MAX_IDENT_BYTES
-    ) {
-      found.push(
-        diagnostic("physical.name-too-long", object.file, "/physicalName", {
-          name: `${physicalName}_insert`,
-        })
-      )
-    }
     if (DELETE_EVENTS.has(spec.event)) {
       found.push(
         diagnostic(
@@ -589,6 +579,17 @@ function checkSubscriptions(
         )
       )
       continue
+    }
+    // Лише подія запису дає тригер вставки.
+    if (
+      physicalName !== undefined &&
+      byteLength(`${physicalName}_insert`) > MAX_IDENT_BYTES
+    ) {
+      found.push(
+        diagnostic("physical.name-too-long", object.file, "/physicalName", {
+          name: `${physicalName}_insert`,
+        })
+      )
     }
     const seenNames = new Set<string>()
     spec.whenChanged.forEach((name, index) => {

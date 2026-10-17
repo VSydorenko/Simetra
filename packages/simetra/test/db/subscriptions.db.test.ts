@@ -26,6 +26,9 @@ import { testSuperuserUrl, withRollback } from "./connection"
  */
 const AUTH_SERVICE_ROLE = "supabase_auth_admin"
 
+/** Роль застосунку локального стеку: від неї застосовується схема. */
+const APP_ROLE = "postgres"
+
 const journalInsert = (source: string) =>
   `INSERT INTO public.journal (id, op, source) VALUES (pg_catalog.gen_random_uuid(), TG_OP, '${source}');`
 
@@ -189,9 +192,17 @@ describe("event subscription triggers in Postgres", () => {
 
   it("onWrite on auth.users fires for an insert by the auth service role", async () => {
     // Роль застосунку не є членом ролі автентифікації: перемкнутися на неї
-    // може лише суперкористувач стеку.
+    // може лише суперкористувач стеку. Застосування — від ролі застосунку, як
+    // у споживача: обробник `SECURITY DEFINER` належить їй, а не
+    // суперкористувачу, тож тест доводить правило закритої оболонки.
     await withRollback(async (client) => {
+      await client.query(`SET LOCAL ROLE ${APP_ROLE}`)
       await deploy(client)
+      await client.query("RESET ROLE")
+      const owner = await client.query<{ owner: string }>(
+        "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid = 'public.on_user()'::regprocedure"
+      )
+      expect(owner.rows).toEqual([{ owner: APP_ROLE }])
       await client.query(`SET LOCAL ROLE ${AUTH_SERVICE_ROLE}`)
       await client.query(
         "INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), $1)",

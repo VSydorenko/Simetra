@@ -257,8 +257,8 @@ An attribute with properties, added through the tool:
 }
 ```
 
-An event subscription (kind `EventSubscription`, a file in
-`event-subscriptions/`) has `sources` (refs `{ kind, name }` or
+An event subscription is a file in `event-subscriptions/`, created with `create`
+like any object (kind `EventSubscription`): `sources` (refs `{ kind, name }` or
 `{ "providerTable": "<schema>.<table>" }`), `event` (`beforeWrite`, `onWrite`,
 `beforeDelete`, `onDelete`), optional `whenChanged` (attribute names, write
 events only) and `handler` (`{ schema?, name }`, a no-argument function that
@@ -267,15 +267,15 @@ events only) and `handler` (`{ schema?, name }`, a no-argument function that
 is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
 `DELETE`. With `whenChanged`, `<physicalName>` fires on `UPDATE` when
 `OLD.<c> IS DISTINCT FROM NEW.<c>` for a listed column and
-`<physicalName>_insert` on every `INSERT`; with no before-insert event, the
-handler reads `TG_OP`. A handler on a provider table (`auth.users`) that
-writes app tables must be `SECURITY DEFINER` with `SET search_path = ''`: the
-firing provider role has no rights on your schemas.
+`<physicalName>_insert` on every `INSERT`. There is no separate before-insert
+event: the handler tells insert from update by `TG_OP`. A handler on a provider
+table (`auth.users`) that writes app tables must be `SECURITY DEFINER` with
+`SET search_path = ''`: the firing provider role has no rights on your schemas.
 
-Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`:
-an insert sets `version` to 1, an update adds 1, both set `updatedAt` to `now()`
-whatever the client writes. Never maintain them (`moddatetime`, a handler) and
-never list them in `whenChanged`.
+Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
+(the single platform function `simetra.touch()`): an insert sets `version` to 1,
+an update adds 1, both set `updatedAt` to `now()` whatever the client writes.
+Never maintain them (`moddatetime`, a handler) or list them in `whenChanged`.
 
 ## Users, authorship and membership
 

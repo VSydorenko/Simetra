@@ -242,6 +242,12 @@ describe("EventSubscription", () => {
     expect(
       await codes(entries({ physicalName: long, whenChanged: undefined }))
     ).toEqual([])
+    // Подія видалення тригера вставки не дає: лише помилка `whenChanged`.
+    expect(
+      await codes(entries({ physicalName: long, event: "onDelete" }))
+    ).toEqual([
+      ["subscription.when-changed-on-delete", SUBSCRIPTION, "/whenChanged"],
+    ])
   })
 
   it("whenChanged cannot list a column the row mechanics maintains", async () => {

@@ -88,6 +88,14 @@ describe("buildSubscriptionUnits", () => {
     ])
   })
 
+  it("a delete event gets no insert trigger name", () => {
+    const c = contract({
+      event: "onDelete",
+      sources: [{ schema: "public", table: "item", whenChanged: ["a"] }],
+    })
+    expect(subscriptionTriggerNames(c, c.sources[0]!)).toEqual(["audit"])
+  })
+
   it("two sources give the same names on both tables, distinct identities", () => {
     const c = contract({
       event: "onWrite",
