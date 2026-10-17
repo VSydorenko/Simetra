@@ -390,15 +390,21 @@ export function updateOfNarrowings(p: {
       conversion.objects.flatMap((o) => {
         if (o.kind !== "unit" || o.class !== "trigger") return []
         const { narrowed } = triggerReplacement(o, c)
-        return narrowed === undefined
-          ? []
-          : [
-              applyDiagnostic("plan.update-of-narrowed", "warning", {
-                trigger: o.name,
-                table: `${o.schema}.${o.table}`,
-                columns: narrowed.join(", "),
-              }),
-            ]
+        if (narrowed === undefined) return []
+        // Колонки `UPDATE OF` — з копії після наміру, тобто вже в нових
+        // іменах; назад їх веде той самий мапінг запису, що й `newColumn`
+        const table = c.newTable(o.schema, o.table)
+        const old = (column: string) =>
+          p.record.columns.find(
+            (m) => m.schema === o.schema && m.table === table && m.to === column
+          )?.from ?? column
+        return [
+          applyDiagnostic("plan.update-of-narrowed", "warning", {
+            trigger: o.name,
+            table: `${o.schema}.${o.table}`,
+            columns: narrowed.map(old).join(", "),
+          }),
+        ]
       })
     )
 }

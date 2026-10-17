@@ -2740,6 +2740,50 @@ describe("platformReplacements", () => {
           )
         ).toEqual(MISSING)
       })
+
+      it("names the narrowed columns by their old names when the promotion renames them", () => {
+        // Копія після наміру друкує `UPDATE OF` уже в новому імені колонки
+        // (Postgres тримає номер атрибута), а попередження — у старих іменах
+        const COST: Partial<PromotionRecord> = {
+          columns: [
+            {
+              id: ATTRIBUTE_ID,
+              sourceId: ATTRIBUTE_ID,
+              schema: "app",
+              table: "item",
+              from: "price",
+              to: "cost",
+            },
+          ],
+        }
+        const units = [
+          MECHANICS,
+          trigger(
+            "s",
+            "CREATE TRIGGER s BEFORE UPDATE ON app.item FOR EACH ROW WHEN ((old.cost IS DISTINCT FROM new.cost)) EXECUTE FUNCTION app.h()"
+          ),
+          trigger(
+            "s_insert",
+            "CREATE TRIGGER s_insert BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+          ),
+        ]
+        expect(
+          triggerGate(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE OF cost ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            units,
+            COST
+          )
+        ).toEqual({
+          codes: [],
+          narrowed: [
+            [
+              "plan.update-of-narrowed",
+              "warning",
+              { trigger: "a", table: "app.items", columns: "price" },
+            ],
+          ],
+        })
+      })
     })
   })
 
