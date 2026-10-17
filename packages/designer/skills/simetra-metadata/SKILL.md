@@ -257,23 +257,25 @@ An attribute with properties, added through the tool:
 }
 ```
 
-An event subscription is a file per subscription in `event-subscriptions/`,
-created with `create` like any object (kind `EventSubscription`):
+An event subscription (kind `EventSubscription`, a file in
+`event-subscriptions/`) has `sources` (refs `{ kind, name }` or
+`{ "providerTable": "<schema>.<table>" }`), `event` (`beforeWrite`, `onWrite`,
+`beforeDelete`, `onDelete`), optional `whenChanged` (attribute names, write
+events only) and `handler` (`{ schema?, name }`, a no-argument function that
+`RETURNS trigger`, in the closed shell below). The platform generates its
+`FOR EACH ROW` triggers, named after `physicalName`, on every source: `before*`
+is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
+`DELETE`. With `whenChanged`, `<physicalName>` fires on `UPDATE` when
+`OLD.<c> IS DISTINCT FROM NEW.<c>` for a listed column and
+`<physicalName>_insert` on every `INSERT`; with no before-insert event, the
+handler reads `TG_OP`. A handler on a provider table (`auth.users`) that
+writes app tables must be `SECURITY DEFINER` with `SET search_path = ''`: the
+firing provider role has no rights on your schemas.
 
-- `sources`: one or more metadata refs `{ kind, name }` or
-  `{ "providerTable": "<schema>.<table>" }`.
-- `event`: `beforeWrite`, `onWrite`, `beforeDelete` or `onDelete`.
-- `whenChanged` (optional, write events only): attribute names.
-- `handler`: `{ schema?, name }`, a function without arguments that
-  `RETURNS trigger`, declared in the closed shell below.
-
-The service date and the row version are kept by the platform, not by your
-code. Every table that has the standard `updatedAt` and `version` columns (a
-Catalog, a Document) gets the row mechanics: a `<table>_simetra_touch`
-trigger calling the shared function `simetra.touch()`. An insert starts the
-version at 1, an update adds 1, and both set the service date to `now()`;
-whatever the client writes into these columns has no effect. Do not write a
-`moddatetime` trigger or a handler that maintains them.
+Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`:
+an insert sets `version` to 1, an update adds 1, both set `updatedAt` to `now()`
+whatever the client writes. Never maintain them (`moddatetime`, a handler) and
+never list them in `whenChanged`.
 
 ## Users, authorship and membership
 
@@ -339,11 +341,9 @@ Privileges on what the platform owns are generated: `EXECUTE` on a declared
 scope set function and on a subscription handler, and every grant on a kind's
 tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
 `metadata/sql/`) a verbatim `GRANT`/`REVOKE` on them fails with
-`sql.generated-grant`; in a kind's own module any literal `GRANT`/`REVOKE` is
-already rejected by the closed-module rule above. `simetra fix` removes the
-statement (and the file, if nothing else is left in it) only when every target
-belongs to the platform; a statement that also names other objects you split
-by hand. A grant on another overload of the same name is not affected.
+`sql.generated-grant` (a kind's own module rejects any). `simetra fix` removes
+the statement (and its file, if left empty) only when every target belongs to
+the platform; one that also names other objects you split by hand. A grant on another overload of the same name is not affected.
 
 A row rule shape:
 
