@@ -71,12 +71,18 @@ export function withColumnOrder(source: FactBase, target: FactBase): FactBase {
       if (!edges.has(key)) edges.set(key, edge)
     }
   }
-  return new FactBase(
+  const ordered = new FactBase(
     target.facts(),
     [...edges.values()],
     target.source,
     target.referenceOnly
   )
+  // Конструктор не переносить діагностики, а `plan()` читає їх із бажаного
+  // стану (відмова на невключованих інтентах, межа нечитаних user mapping):
+  // без перенесення копія мовчки обійшла б ці запобіжники. Ідіома двигуна —
+  // дописати після побудови, як `extract.ts` після перебудови бази
+  ordered.diagnostics.push(...target.diagnostics)
+  return ordered
 }
 
 /** Чи досягає якась колонка за ребрами цілі колонки з більшим `attnum`. */

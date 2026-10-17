@@ -3,6 +3,7 @@ import {
   FactBase,
   plan,
   type DependencyEdge,
+  type Diagnostic,
   type Fact,
   type StableId,
 } from "@supabase/pg-delta"
@@ -131,6 +132,22 @@ describe("withColumnOrder", () => {
       [depends(col("c1"), f), depends(f, col("c3"))]
     )
     expect(newEdges(target, withColumnOrder(source, target))).toEqual([])
+  })
+
+  it("keeps the diagnostics of the target", () => {
+    // `plan()` читає діагностики бажаного стану й відмовляє на них
+    const source = new FactBase([fact(app)], [])
+    const target = new FactBase(
+      [fact(app), fact(table, app), column("a", 1), column("b", 2)],
+      []
+    )
+    const unkeyed: Diagnostic = {
+      code: "intent-unkeyed",
+      severity: "warning",
+      message: "unnamed job",
+    }
+    target.diagnostics.push(unkeyed)
+    expect(withColumnOrder(source, target).diagnostics).toEqual([unkeyed])
   })
 
   it("keeps the source tag and reference-only facts", () => {
