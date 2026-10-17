@@ -1,9 +1,12 @@
 import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
+  MECHANICS_FUNCTION,
+  mechanicsTriggerName,
   statementTargets,
   uniqueDifferences,
   unitSubjectKeys,
   valueAt,
+  withoutLocations,
   type CompiledModel,
   type PromotionObject,
   type PromotionRecord,
@@ -13,6 +16,7 @@ import {
 import {
   KIND_REGISTRY,
   PROVIDER_API_ROLES,
+  serviceDateColumns,
   type CatalogModel,
   type CatalogUnit,
   type DatabaseProvider,
@@ -77,6 +81,8 @@ interface Context {
   userRole: string
   /** Нове ім'я таблиці одиниці за старим (`record.tables`). */
   newTable(schema: string, table: string): string
+  /** Нове ім'я колонки за старим на таблиці в новому імені (`record.columns`). */
+  newColumn(schema: string, table: string, column: string): string
 }
 
 /**
@@ -266,10 +272,22 @@ const REPLACEMENT_SHAPES = {
       )
     ),
   /**
-   * Значення за замовчуванням і коментар: рядка класу A в §9.2 немає.
-   * «Тригери механіки» й решта одиниць з таблицею — теж відмова: генеровані
-   * політики й гранти вже є, а тригерів ще немає (П3-3a2), і будь-який
-   * тригер механіки інакше хибно «замінив» би будь-який прийнятий тригер.
+   * «Тригери механіки» й «Реакції застосунку на запис» (рішення 6 плану
+   * П3-3a2): генеровані тригери — механіка рядка й тригери підписок, а
+   * дослівних тригерів модуль виду не приймає, тож кожен тригер бажаного
+   * стану на таблиці виду — згенерований. Прийнятий тригер з копії після
+   * наміру (таблиця вже в новому імені) замінено механікою, коли він —
+   * `moddatetime` на колонці, що стає службовою датою, або підпискою з тим
+   * самим обробником, часом, рівнем, подіями й умовою. Тригера, якого на
+   * копії немає, ціль не має.
+   */
+  trigger: (
+    key: Extract<PromotionObject, { kind: "unit" }>,
+    c: TriggerContext
+  ): boolean => triggerReplacement(key, c).replaced,
+  /**
+   * Значення за замовчуванням, коментар і решта одиниць з таблицею: рядка
+   * класу A в §9.2 немає.
    */
   none: (): boolean => false,
 } as const
@@ -293,16 +311,11 @@ export function platformReplacements(p: {
   parse: SqlParser
 }): EngineDiagnostic[] {
   const { record, parse } = p
-  const newTable = (schema: string, table: string): string =>
-    newTableName(record, schema, table)
   const c: Context = {
+    ...triggerContext(p),
     shadow: p.shadowEquivalence,
-    desired: p.desired,
-    clone: p.clone,
     labels: p.valueElementColumns,
-    parse,
     userRole: PROVIDER_API_ROLES[p.provider].user,
-    newTable,
   }
   const subject = (o: PromotionObject): Subject | undefined => {
     if (o.kind === "unit") return { of: "unit", key: o }
@@ -322,8 +335,8 @@ export function platformReplacements(p: {
           ? REPLACEMENT_SHAPES.none()
           : REPLACEMENT_SHAPES.grant(key, c)
       if (key.class === "policy") return REPLACEMENT_SHAPES.policy(key, c)
+      if (key.class === "trigger") return REPLACEMENT_SHAPES.trigger(key, c)
       if (key.table === "") return REPLACEMENT_SHAPES.function(key, c)
-      // Тригер і решта класів з таблицею — відмова до П3-3a2 (рішення 10)
       return REPLACEMENT_SHAPES.none()
     }
     if (s.of === "other") return REPLACEMENT_SHAPES.none()
@@ -354,6 +367,64 @@ export function platformReplacements(p: {
           objects: missing.join(", "),
         }),
       ]
+}
+
+/**
+ * Попередження `plan.update-of-narrowed` (рішення 6 плану П3-3a2): прийнятий
+ * `UPDATE OF <колонки>`, який замінює підписка з `whenChanged`, спрацьовував
+ * на кожен `UPDATE` з цими колонками в `SET`, а підписка — лише на справжню
+ * зміну значення. Заміна законна, але поведінка звужується, тож автор має це
+ * побачити. Імена — старі, як у записі й у `plan.platform-replacement-missing`.
+ */
+export function updateOfNarrowings(p: {
+  record: PromotionRecord
+  clone: CatalogModel
+  desired: CatalogModel
+  parse: SqlParser
+}): EngineDiagnostic[] {
+  const c = triggerContext(p)
+  return p.record.conversions
+    .filter((conversion) => conversion.class === "platform")
+    .flatMap((conversion) =>
+      conversion.objects.flatMap((o) => {
+        if (o.kind !== "unit" || o.class !== "trigger") return []
+        const { narrowed } = triggerReplacement(o, c)
+        return narrowed === undefined
+          ? []
+          : [
+              applyDiagnostic("plan.update-of-narrowed", "warning", {
+                trigger: o.name,
+                table: `${o.schema}.${o.table}`,
+                columns: narrowed.join(", "),
+              }),
+            ]
+      })
+    )
+}
+
+/** Те, з чим форма `trigger` порівнює прийнятий тригер. */
+type TriggerContext = Pick<
+  Context,
+  "clone" | "desired" | "parse" | "newTable" | "newColumn"
+>
+
+function triggerContext(p: {
+  record: PromotionRecord
+  clone: CatalogModel
+  desired: CatalogModel
+  parse: SqlParser
+}): TriggerContext {
+  const { record } = p
+  return {
+    clone: p.clone,
+    desired: p.desired,
+    parse: p.parse,
+    newTable: (schema, table) => newTableName(record, schema, table),
+    newColumn: (schema, table, column) =>
+      record.columns.find(
+        (m) => m.schema === schema && m.table === table && m.from === column
+      )?.to ?? column,
+  }
 }
 
 /**
@@ -918,3 +989,212 @@ export function policiesOn(
     ]
   })
 }
+
+/** Біти `CreateTrigStmt.timing` і `events` (`trigger.h` Postgres). */
+const TRIGGER_BEFORE = 2
+const TRIGGER_INSERT = 4
+const TRIGGER_UPDATE = 16
+
+/** Службова дата оновлення, яку тримає механіка рядка, — з реєстру. */
+const UPDATED_AT = serviceDateColumns().find(
+  (c) => c.logicalName === "updatedAt"
+)!.physicalName
+
+/** Те, що тригер робить, з дерева `CreateTrigStmt`. */
+interface TriggerShape {
+  name: string
+  /** Функція: некваліфіковане ім'я — у схемі одиниці, як `unitTargets`. */
+  function: { schema: string; name: string }
+  timing: number
+  events: number
+  row: boolean
+  /** `UPDATE OF <колонки>`. */
+  columns: string[]
+  when: Node | undefined
+  args: string[]
+  /**
+   * Тригер обмеження чи з `REFERENCING`: такого генератори не дають, тож він
+   * ні з чим не зрівняється.
+   */
+  special: boolean
+}
+
+/** Тригери моделі на таблиці (`schema`, `table`). */
+function triggersOn(
+  model: CatalogModel,
+  schema: string,
+  table: string,
+  parse: SqlParser
+): TriggerShape[] {
+  return statementsOf(model, "trigger", parse).flatMap(({ unit, stmt }) => {
+    if (!("CreateTrigStmt" in stmt)) return []
+    const node = stmt.CreateTrigStmt
+    if (
+      (node.relation?.schemaname ?? unit.schema) !== schema ||
+      node.relation?.relname !== table
+    )
+      return []
+    const fn = strings(node.funcname)
+    return [
+      {
+        name: node.trigname ?? "",
+        function: { schema: fn.at(-2) ?? unit.schema, name: fn.at(-1) ?? "" },
+        timing: node.timing ?? 0,
+        events: node.events ?? 0,
+        row: node.row === true,
+        columns: strings(node.columns),
+        when: node.whenClause,
+        args: strings(node.args),
+        special:
+          node.isconstraint === true ||
+          (node.transitionRels ?? []).length > 0 ||
+          node.constrrel !== undefined,
+      },
+    ]
+  })
+}
+
+/**
+ * Вердикт форми `trigger` і, коли заміна покриває `UPDATE OF`, колонки, на
+ * яких тригер звужується до справжньої зміни значення.
+ */
+function triggerReplacement(
+  key: Extract<PromotionObject, { kind: "unit" }>,
+  c: TriggerContext
+): { replaced: boolean; narrowed?: string[] } {
+  const table = c.newTable(key.schema, key.table)
+  const adopted = triggersOn(c.clone, key.schema, table, c.parse).find(
+    (t) => t.name === key.name
+  )
+  if (adopted === undefined) return { replaced: true }
+  if (adopted.special || !adopted.row) return { replaced: false }
+  const desired = triggersOn(c.desired, key.schema, table, c.parse)
+  const isMechanics = (t: TriggerShape) =>
+    t.name === mechanicsTriggerName(table) &&
+    sameFunction(t.function, MECHANICS_FUNCTION)
+
+  // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
+  // посилення: дата й версія правильні й на вставці (спека промоції §8).
+  // Аргумент тригера — рядок, перейменування колонки його не переписує, тож
+  // ім'я колонки береться з мапінгу запису.
+  if (
+    adopted.function.name === "moddatetime" &&
+    adopted.timing === TRIGGER_BEFORE &&
+    adopted.events === TRIGGER_UPDATE &&
+    adopted.columns.length === 0 &&
+    adopted.when === undefined &&
+    adopted.args.length === 1 &&
+    c.newColumn(key.schema, table, adopted.args[0]!) === UPDATED_AT
+  )
+    return { replaced: desired.some(isMechanics) }
+
+  const found = subscriptionShapes(desired.filter((t) => !isMechanics(t)))
+    .filter(
+      (s) =>
+        !s.special &&
+        s.row &&
+        sameFunction(s.function, adopted.function) &&
+        s.timing === adopted.timing &&
+        s.events === adopted.events &&
+        sameList(s.args, adopted.args) &&
+        s.columns.length === 0
+    )
+    .some((s) =>
+      adopted.columns.length === 0
+        ? sameTree(s.when, adopted.when)
+        : adopted.when === undefined &&
+          sameSet(changedColumns(s.when), adopted.columns)
+    )
+  if (!found) return { replaced: false }
+  return adopted.columns.length === 0
+    ? { replaced: true }
+    : { replaced: true, narrowed: adopted.columns }
+}
+
+/**
+ * Логічні тригери підписок: `whenChanged` дає пару — `<name>` на `UPDATE` з
+ * умовою й `<name>_insert` на `INSERT` без неї (`subscriptionTriggerNames`),
+ * і разом вони спрацьовують на обидві події. Без пари тригер — сам по собі.
+ */
+function subscriptionShapes(triggers: readonly TriggerShape[]): TriggerShape[] {
+  const byName = new Map(triggers.map((t) => [t.name, t]))
+  const paired = new Set<string>()
+  const shapes = triggers.map((t) => {
+    const insert = byName.get(`${t.name}_insert`)
+    if (
+      insert === undefined ||
+      t.events !== TRIGGER_UPDATE ||
+      insert.events !== TRIGGER_INSERT ||
+      insert.when !== undefined ||
+      insert.columns.length > 0 ||
+      insert.special !== t.special ||
+      insert.row !== t.row ||
+      insert.timing !== t.timing ||
+      !sameFunction(insert.function, t.function) ||
+      !sameList(insert.args, t.args)
+    )
+      return t
+    paired.add(insert.name)
+    return { ...t, events: TRIGGER_UPDATE | TRIGGER_INSERT }
+  })
+  return shapes.filter((s) => !paired.has(s.name))
+}
+
+/**
+ * Колонки умови `whenChanged`: лише `OLD.c IS DISTINCT FROM NEW.c`, з'єднані
+ * `OR`. Інша умова — `undefined`: вона не з `whenChanged`.
+ */
+function changedColumns(when: Node | undefined): string[] | undefined {
+  if (when === undefined) return undefined
+  const parts =
+    "BoolExpr" in when && when.BoolExpr.boolop === "OR_EXPR"
+      ? (when.BoolExpr.args ?? [])
+      : [when]
+  const columns: string[] = []
+  for (const part of parts) {
+    if (!("A_Expr" in part)) return undefined
+    const { kind, name, lexpr, rexpr } = part.A_Expr
+    if (kind !== "AEXPR_DISTINCT" || strings(name).join(".") !== "=")
+      return undefined
+    const was = lexpr !== undefined && "ColumnRef" in lexpr
+    const now = rexpr !== undefined && "ColumnRef" in rexpr
+    if (!was || !now) return undefined
+    const [oldRow, oldColumn, ...restOld] = strings(lexpr.ColumnRef.fields)
+    const [newRow, newColumn, ...restNew] = strings(rexpr.ColumnRef.fields)
+    if (
+      oldRow !== "old" ||
+      newRow !== "new" ||
+      oldColumn === undefined ||
+      oldColumn !== newColumn ||
+      restOld.length > 0 ||
+      restNew.length > 0
+    )
+      return undefined
+    columns.push(oldColumn)
+  }
+  return columns
+}
+
+const sameFunction = (
+  a: { schema: string; name: string },
+  b: { schema: string; name: string }
+): boolean => a.schema === b.schema && a.name === b.name
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((v, i) => v === b[i])
+
+const sameSet = (
+  a: readonly string[] | undefined,
+  b: readonly string[]
+): boolean =>
+  a !== undefined &&
+  a.every((v) => b.includes(v)) &&
+  b.every((v) => a.includes(v))
+
+/**
+ * Умови рівні за деревом без позицій: libpg-query не має депарсу, а текст
+ * `pg_get_triggerdef` відрізняється від згенерованого дужками й регістром.
+ */
+const sameTree = (a: Node | undefined, b: Node | undefined): boolean =>
+  JSON.stringify(a === undefined ? null : withoutLocations(a)) ===
+  JSON.stringify(b === undefined ? null : withoutLocations(b))

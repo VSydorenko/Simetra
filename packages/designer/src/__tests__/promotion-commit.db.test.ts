@@ -122,7 +122,9 @@ const SEED = `
          case when i % 3 = 0 then true when i % 5 = 0 then null else false end
   from generate_series(1, ${ROWS}) as i;`
 
-async function projectWith(): Promise<string> {
+async function projectWith(
+  o: { member?: unknown; files?: Record<string, string> } = {}
+): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "simetra-promotion-commit-"))
   await mkdir(join(root, "node_modules"))
   await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
@@ -131,7 +133,8 @@ async function projectWith(): Promise<string> {
   const files = await acceptDebt(
     metaFiles({
       "project.meta.json": projectFile({ defaultSchema: "app" }),
-      [MEMBER_FILE]: member(),
+      [MEMBER_FILE]: o.member ?? member(),
+      ...o.files,
     })
   )
   for (const [path, content] of files) {
@@ -189,16 +192,24 @@ const apply = (
  * Стан до промоції застосовано з `COMMIT`, засіяно, потім `promote`: тека
  * метаданих уже після промоції, запис — у `plans/`, план промоції побудовано.
  */
-async function promoted(url: string): Promise<{ dir: string; data: PlanData }> {
-  const dir = await projectWith()
+async function promoted(
+  url: string,
+  o: {
+    member?: unknown
+    files?: Record<string, string>
+    seed?: string
+    mapping?: PromoteInput
+  } = {}
+): Promise<{ dir: string; data: PlanData }> {
+  const dir = await projectWith(o)
   const before = await planned(dir, url)
   expect(before.promotion).toBeNull()
   const committed = await apply(dir, url, before)
   expect(committed.diagnostics, JSON.stringify(committed.diagnostics)).toEqual(
     []
   )
-  await query(url, SEED)
-  const r = await call("promote", mapping(), options(dir, url))
+  await query(url, o.seed ?? SEED)
+  const r = await call("promote", o.mapping ?? mapping(), options(dir, url))
   expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
   expect(r.written).toBe(true)
   return { dir, data: await planned(dir, url) }
@@ -236,6 +247,64 @@ async function reportAt(dir: string, file: string): Promise<RehearsalReport> {
 
 /** Кожен третій із 500 — `true`. */
 const INACTIVE = Math.floor(ROWS / 3)
+
+/** Розширення `moddatetime`: у цілі — до плану, у проєкті — та сама одиниця. */
+const MODDATETIME =
+  "CREATE EXTENSION IF NOT EXISTS moddatetime WITH SCHEMA extensions;\n"
+
+/** Прийнятий тригер службової дати на `app.members`. */
+const STAMP = "members_stamp"
+
+/** `app.members` з колонкою службової дати й тригером `moddatetime`. */
+const stamped = {
+  member: {
+    ...member(),
+    columns: [
+      ...member().columns,
+      {
+        id: uuid(9505),
+        name: "updatedAt",
+        physicalName: "updated_at",
+        type: "DateTime",
+        notNull: true,
+      },
+    ],
+  },
+  files: {
+    "sql/app/extensions.sql": MODDATETIME,
+    "custom-tables/Member/Member.sql": `CREATE TRIGGER ${STAMP} BEFORE UPDATE ON app.members FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime(updated_at);\n`,
+  },
+  seed: `
+  insert into app.members (id, name, inactive, updated_at)
+  select ('00000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
+         'member ' || i,
+         case when i % 3 = 0 then true when i % 5 = 0 then null else false end,
+         '2000-01-01T00:00:00Z'
+  from generate_series(1, ${ROWS}) as i;`,
+  // Службова дата стає стандартною `updatedAt`, тригер — класом `platform`:
+  // його замінює механіка рядка (спека промоції §8)
+  mapping: () => {
+    const m = mapping()
+    return promoteInput.parse({
+      ...m,
+      columns: {
+        ...m.columns,
+        updatedAt: { to: "standard", name: "updatedAt" },
+      },
+      conversions: {
+        ...m.conversions,
+        [`trigger:app.members.${STAMP}`]: "platform",
+      },
+    })
+  },
+}
+
+/** Тригери таблиці без внутрішніх (FK) і їхній стан увімкнення. */
+const triggersOf = (url: string, table: string) =>
+  query<{ name: string; enabled: string }>(
+    url,
+    `select tgname as name, tgenabled as enabled from pg_trigger where tgrelid = '${table}'::regclass and not tgisinternal order by tgname`
+  )
 
 describe("promotion commit", () => {
   it("promotes, rehearses on a copy with data, commits and plans nothing", async () => {
@@ -342,6 +411,55 @@ describe("promotion commit", () => {
         ["apply.rehearsal-copy-empty", { table: "app.members" }],
       ])
       expect(await state(url)).toEqual(before)
+    })
+  })
+
+  it("replaces an adopted moddatetime trigger by the row mechanics", async () => {
+    await inTarget(MODDATETIME, scope, async (url) => {
+      const { dir, data } = await promoted(url, {
+        ...stamped,
+        mapping: stamped.mapping(),
+      })
+      expect(await triggersOf(url, "app.members")).toEqual([
+        { name: STAMP, enabled: "O" },
+      ])
+      expect(data.promotion!.data).toHaveLength(1)
+      let file = ""
+      await withCopy(templateOf(url), async (copy) => {
+        const r = await apply(dir, copy, data, { rehearse: true })
+        expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+        file = (r.data as ApplyData).report!
+      })
+      expect((await reportAt(dir, file)).rows).toEqual([
+        { schema: "app", table: "members", rows: ROWS },
+      ])
+
+      const r = await apply(dir, url, data)
+      expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+      expect((r.data as ApplyData).status).toBe("committed")
+      // Прийнятого тригера немає, механіка є, і обидва — увімкнені, як до
+      // плану: крок даних повертає стан тригерів
+      expect(await triggersOf(url, "app.member")).toEqual([
+        { name: "member_simetra_touch", enabled: "O" },
+      ])
+      // Колонку версії й механіку створює фаза двигуна після запису значень,
+      // тож переписані кроком рядки — з першою версією
+      expect(
+        await query(
+          url,
+          "select count(*)::int as rows, count(*) filter (where version = 1)::int as first from app.member"
+        )
+      ).toEqual([{ rows: ROWS, first: ROWS }])
+      await query(
+        url,
+        "update app.member set description = 'renamed' where id = '00000000-0000-4000-8000-000000000001'"
+      )
+      expect(
+        await query(
+          url,
+          "select version::int as version, updated_at > '2000-01-01T00:00:00Z' as touched from app.member where id = '00000000-0000-4000-8000-000000000001'"
+        )
+      ).toEqual([{ version: 2, touched: true }])
     })
   })
 })

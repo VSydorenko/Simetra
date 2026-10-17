@@ -118,6 +118,31 @@ not express through metadata (CustomTable and PgEnum modules, shared
 - A project that already has a `sql/` folder but no list is seeded by running
   `introspect` again on the same directory.
 
+## Adopted triggers
+
+An adopted trigger stays verbatim debt while its table is a `CustomTable`.
+When `promote` turns the table into a Catalog or Document, a trigger gets the
+class `platform` only when the kind replaces it, and `plan` refuses
+(`plan.platform-replacement-missing`) otherwise:
+
+- `moddatetime` fired `BEFORE UPDATE … FOR EACH ROW` on the column that becomes
+  `updatedAt` → the row mechanics (`<table>_simetra_touch`). The mechanics also
+  fires on insert, which only makes the date and the version right there too.
+- A trigger calling the same handler with the same timing, level and events →
+  an `EventSubscription` with that handler (see `simetra-metadata`).
+- `INSERT OR UPDATE OF <columns>` → a subscription with `whenChanged` on the
+  same columns. The plan warns (`plan.update-of-narrowed`): the subscription
+  fires only when a value actually changes, not on every `UPDATE` that sets
+  the column.
+- A trigger on `UPDATE` alone has no replacement: a write subscription fires
+  on insert too. Give it the class `removed` (the plan then needs the
+  `remove:` permission) and let the subscription's handler check `TG_OP`.
+- A numbering trigger or default has no replacement until the platform
+  generates counters: keep the table a `CustomTable`, or remove it with the
+  permission and accept that the number is no longer filled.
+- Anything else — another `WHEN`, other events, trigger arguments, another
+  function — has no replacement either.
+
 ## Exit codes
 
 | Code | `introspect`                          | `diff`                            |

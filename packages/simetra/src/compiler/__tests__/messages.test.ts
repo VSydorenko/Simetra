@@ -282,6 +282,27 @@ describe("messages catalog", () => {
     )
   })
 
+  it("plan.update-of-narrowed names the trigger, the table and the columns", () => {
+    const d = diagnostic("plan.update-of-narrowed", "", "", {
+      trigger: "items_price",
+      table: "app.items",
+      columns: "price, qty",
+    })
+    expect(d.message).toBe(
+      "Trigger items_price on app.items fired on UPDATE OF price, qty; the subscription fires only when a value actually changes"
+    )
+    expect(d.hint).toBe(
+      "Review the handler: an UPDATE that writes the current values into these columns no longer runs it."
+    )
+    const uk = localize(d, "uk")
+    expect(uk.message).toBe(
+      "Тригер items_price на app.items спрацьовував на UPDATE OF price, qty; підписка спрацьовує лише на справжню зміну значення"
+    )
+    expect(uk.hint).toBe(
+      "Перевірте обробник: UPDATE, що записує в ці колонки їхні поточні значення, його більше не запускає."
+    )
+  })
+
   it("plan.service-role-access-lost names the tables and keeps them CustomTable", () => {
     const d = diagnostic("plan.service-role-access-lost", "", "", {
       tables: "app.items, app.item_lines",

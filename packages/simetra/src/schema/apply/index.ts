@@ -65,6 +65,7 @@ export {
   platformReplacements,
   promotionPermissionItems,
   propertyReproductions,
+  updateOfNarrowings,
   castProbeQuery,
   preservationPlan,
   preservationQuery,

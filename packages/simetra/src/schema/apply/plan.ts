@@ -90,6 +90,7 @@ import {
   foreignSequenceRefusals,
   platformReplacements,
   propertyReproductions,
+  updateOfNarrowings,
   preservationPlan,
   promotionPermissionItems,
   promotionTransition,
@@ -837,6 +838,15 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     }),
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])
+  // Заміна `UPDATE OF` підпискою з `whenChanged` звужує тригер до справжньої
+  // зміни значення (рішення 6 плану П3-3a2): план можливий, але автор має це
+  // побачити
+  const narrowings = updateOfNarrowings({
+    record,
+    clone: cloneModel,
+    desired: target.extracted.model,
+    parse,
+  })
 
   // Кроки середовища (рішення 5 плану П3-2b-0): копія цілі в старих іменах
   // проходить і кроки наміру, і кроки двигуна, тож залишок — у нових
@@ -1029,6 +1039,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       ...collected.diagnostics,
       ...lockWarnings,
       ...serviceRoleWarning(serviceAccess),
+      ...narrowings,
       ...checkDiagnostics,
       ...blindWarning(blindFunctions.blind),
       ...proof.diagnostics,

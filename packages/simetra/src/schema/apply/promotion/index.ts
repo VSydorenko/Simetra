@@ -37,6 +37,7 @@ export { readReservedNames } from "./reserved-names"
 export {
   platformReplacements,
   propertyReproductions,
+  updateOfNarrowings,
   valueElementColumns,
   type ColumnName,
 } from "./replacements"

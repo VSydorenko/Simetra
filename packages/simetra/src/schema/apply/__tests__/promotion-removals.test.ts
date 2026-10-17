@@ -27,6 +27,7 @@ import {
   tableKey,
   unclassifiedRemovals,
   unrealizedRenames,
+  updateOfNarrowings,
   valueElementColumns,
   type EngineAction,
   type EquivalenceObject,
@@ -2496,20 +2497,206 @@ describe("platformReplacements", () => {
       })
     })
 
-    it("refuses a trigger until generated triggers exist, even beside other generated units", () => {
-      const trigger = unit(
-        "trigger",
-        "trigger:app.item.t",
-        "t",
-        "CREATE TRIGGER t BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.f()"
+    describe("trigger (§8 механізм-заміна)", () => {
+      const trigger = (name: string, sql: string) =>
+        unit("trigger", `trigger:app.item.${name}`, name, sql)
+      // Таблиця виду завжди має механіку: кожна перевірка підписки йде поруч
+      // із нею, щоб тригер механіки не «замінив» чужий
+      const MECHANICS = trigger(
+        "item_simetra_touch",
+        "CREATE TRIGGER item_simetra_touch BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION simetra.touch()"
       )
-      expect(
-        verdict(
-          "trigger",
-          "CREATE TRIGGER a BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.f()",
-          [...GENERATED, trigger]
-        )
-      ).toEqual(MISSING)
+      const subscription = (handler: string) => [
+        MECHANICS,
+        trigger(
+          "s",
+          `CREATE TRIGGER s BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION ${handler}()`
+        ),
+      ]
+      // `whenChanged: [price]` у формі `pg_get_triggerdef`: оновлення з умовою
+      // й окремий тригер вставки
+      const WHEN_CHANGED = [
+        MECHANICS,
+        trigger(
+          "s",
+          "CREATE TRIGGER s BEFORE UPDATE ON app.item FOR EACH ROW WHEN ((old.price IS DISTINCT FROM new.price)) EXECUTE FUNCTION app.h()"
+        ),
+        trigger(
+          "s_insert",
+          "CREATE TRIGGER s_insert BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+        ),
+      ]
+      // Перейменування колонки не переписує аргументу тригера: це рядок
+      const EDITED_AT: Partial<PromotionRecord> = {
+        columns: [
+          {
+            id: ATTRIBUTE_ID,
+            sourceId: ATTRIBUTE_ID,
+            schema: "app",
+            table: "item",
+            from: "edited_at",
+            to: "updated_at",
+          },
+        ],
+      }
+      const moddatetime = (column: string, timing = "BEFORE UPDATE") =>
+        `CREATE TRIGGER a ${timing} ON app.item FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime(${column})`
+
+      function triggerGate(
+        sql: string,
+        units: CatalogUnit[],
+        over: Partial<PromotionRecord> = {}
+      ) {
+        const a = adopted("trigger", sql)
+        const input = {
+          record: record({
+            ...RENAMED,
+            conversions: [conversion("platform", a.object)],
+            ...over,
+          }),
+          clone: model([table("item")], [a.onClone]),
+          desired: model([table("item")], units),
+          parse,
+        }
+        return {
+          codes: platformReplacements({
+            ...input,
+            cloneEquivalence: [],
+            shadowEquivalence: [],
+            valueElementColumns: [],
+            provider: "supabase",
+          }).map((d) => d.code),
+          narrowed: updateOfNarrowings(input).map((d) => [
+            d.code,
+            d.severity,
+            d.params,
+          ]),
+        }
+      }
+      const codesOf = (
+        sql: string,
+        units: CatalogUnit[],
+        over?: Partial<PromotionRecord>
+      ) => triggerGate(sql, units, over).codes
+
+      it("is replaced by the row mechanics for moddatetime on updated_at", () => {
+        expect(codesOf(moddatetime("updated_at"), [MECHANICS])).toEqual([])
+      })
+
+      it("maps the moddatetime argument through the record's columns", () => {
+        expect(
+          codesOf(moddatetime("edited_at"), [MECHANICS], EDITED_AT)
+        ).toEqual([])
+        expect(codesOf(moddatetime("edited_at"), [MECHANICS])).toEqual(MISSING)
+      })
+
+      it("refuses moddatetime fired after the update", () => {
+        expect(
+          codesOf(moddatetime("updated_at", "AFTER UPDATE"), [MECHANICS])
+        ).toEqual(MISSING)
+      })
+
+      it("refuses moddatetime without the row mechanics in the desired state", () => {
+        expect(codesOf(moddatetime("updated_at"), [])).toEqual(MISSING)
+      })
+
+      it("refuses moddatetime narrowed by UPDATE OF or WHEN", () => {
+        // Звужений `moddatetime` — свідоме рішення автора, якого механіка не
+        // тримає; такий тригер знімають з дозволом
+        expect(
+          codesOf(moddatetime("updated_at", "BEFORE UPDATE OF name"), [
+            MECHANICS,
+          ])
+        ).toEqual(MISSING)
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE UPDATE ON app.item FOR EACH ROW WHEN ((old.name IS DISTINCT FROM new.name)) EXECUTE FUNCTION extensions.moddatetime(updated_at)",
+            [MECHANICS]
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses another function on a table that has only the mechanics", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.stamp()",
+            [MECHANICS]
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("is replaced by a subscription with the same handler, timing and events", () => {
+        const sql =
+          "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+        expect(triggerGate(sql, subscription("app.h"))).toEqual({
+          codes: [],
+          narrowed: [],
+        })
+        expect(codesOf(sql, subscription("app.g"))).toEqual(MISSING)
+      })
+
+      it("covers INSERT OR UPDATE OF with whenChanged and warns of the narrowing", () => {
+        expect(
+          triggerGate(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE OF price ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            WHEN_CHANGED
+          )
+        ).toEqual({
+          codes: [],
+          narrowed: [
+            [
+              "plan.update-of-narrowed",
+              "warning",
+              { trigger: "a", table: "app.items", columns: "price" },
+            ],
+          ],
+        })
+      })
+
+      it("refuses UPDATE OF without INSERT: the subscription fires on insert too", () => {
+        expect(
+          triggerGate(
+            "CREATE TRIGGER a BEFORE UPDATE OF price ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            WHEN_CHANGED
+          )
+        ).toEqual({ codes: MISSING, narrowed: [] })
+      })
+
+      it("refuses UPDATE OF other columns than whenChanged", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE OF price, qty ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            WHEN_CHANGED
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses an arbitrary WHEN", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW WHEN ((new.price > 0)) EXECUTE FUNCTION app.h()",
+            subscription("app.h")
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses FOR EACH STATEMENT", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH STATEMENT EXECUTE FUNCTION app.h()",
+            subscription("app.h")
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("refuses trigger arguments the handler would read", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h('x')",
+            subscription("app.h")
+          )
+        ).toEqual(MISSING)
+      })
     })
   })
 

@@ -216,8 +216,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
   Record<string, { en: string; uk: string }>
 > = {
   trigger: {
-    en: "Declare an EventSubscription for the table's event and keep its handler as a function in the closed shell.",
-    uk: "Оголосіть EventSubscription на подію таблиці, а обробник залиште функцією в закритій оболонці.",
+    en: "The service date and the row version are kept by the platform's row mechanics; for any other reaction declare an EventSubscription for the table's event and keep its handler as a function in the closed shell.",
+    uk: "Службову дату й версію рядка тримає механіка платформи; для решти реакцій оголосіть EventSubscription на подію таблиці, а обробник залиште функцією в закритій оболонці.",
   },
   policy: {
     en: "Row access is declared, not written: use publicRead on the object, and a scoped object gets its scope read policy <table>_read derived from the kind; access rights come with the rights spec (P3).",
@@ -3101,8 +3101,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Промоція дає клас platform прийнятим об'єктам, яким бажаний стан не має заміни: ${p.objects}`,
     hint: {
-      en: "No plan was written. The class platform means the kind replaces the adopted object: an equivalent index or constraint on the same table, a foreign key with the same columns, target, MATCH and deferrability (only RESTRICT and NO ACTION may swap), a Ref to an enumeration for a CHECK value list, or a unit of the same class on the same table. Generated grants and read policies replace only equal grants and permissive policies of the same command; triggers and register keys are not generated yet. Give such an object the class removed (it then needs the remove: permission) or keep the table adopted.",
-      uk: "План не записано. Клас platform означає, що вид заміняє прийнятий об'єкт: еквівалентним індексом чи обмеженням на тій самій таблиці, FK з тими самими колонками, ціллю, MATCH і відкладеністю (міняються місцями лише RESTRICT і NO ACTION), Ref на перерахування для переліку значень у CHECK або одиницею того самого класу на тій самій таблиці. Згенеровані гранти й політики читання замінюють лише рівні гранти й permissive-політики тієї самої команди; тригерів і ключів регістрів ще немає. Дайте такому об'єкту клас removed (тоді потрібен дозвіл remove:) або лишіть таблицю прийнятою.",
+      en: "No plan was written. The class platform means the kind replaces the adopted object: an equivalent index or constraint on the same table, a foreign key with the same columns, target, MATCH and deferrability (only RESTRICT and NO ACTION may swap), a Ref to an enumeration for a CHECK value list, or a unit of the same class on the same table. Generated grants and read policies replace only equal grants and permissive policies of the same command; triggers are replaced only by a subscription trigger with the same handler, timing, level, events and condition columns, or by the row mechanics for moddatetime; register keys are not generated yet. Give such an object the class removed (it then needs the remove: permission) or keep the table adopted.",
+      uk: "План не записано. Клас platform означає, що вид заміняє прийнятий об'єкт: еквівалентним індексом чи обмеженням на тій самій таблиці, FK з тими самими колонками, ціллю, MATCH і відкладеністю (міняються місцями лише RESTRICT і NO ACTION), Ref на перерахування для переліку значень у CHECK або одиницею того самого класу на тій самій таблиці. Згенеровані гранти й політики читання замінюють лише рівні гранти й permissive-політики тієї самої команди; тригер замінюють лише тригер підписки з тим самим обробником, часом, рівнем, подіями й колонками умови або механіка рядка замість moddatetime; ключів регістрів ще немає. Дайте такому об'єкту клас removed (тоді потрібен дозвіл remove:) або лишіть таблицю прийнятою.",
     },
   },
   "plan.property-not-reproduced": {
@@ -3135,6 +3135,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "If server code reads or writes these tables with the service key, keep them CustomTable until platform commands (P4).",
       uk: "Якщо серверний код читає чи пише ці таблиці сервісним ключем, лишіть їх CustomTable до команд платформи (П4).",
+    },
+  },
+  // Попередження, не відмова: заміна законна (рішення 6 плану П3-3a2), але
+  // тригер звужується, і автор має це побачити
+  "plan.update-of-narrowed": {
+    en: (p) =>
+      `Trigger ${p.trigger} on ${p.table} fired on UPDATE OF ${p.columns}; the subscription fires only when a value actually changes`,
+    uk: (p) =>
+      `Тригер ${p.trigger} на ${p.table} спрацьовував на UPDATE OF ${p.columns}; підписка спрацьовує лише на справжню зміну значення`,
+    hint: {
+      en: "Review the handler: an UPDATE that writes the current values into these columns no longer runs it.",
+      uk: "Перевірте обробник: UPDATE, що записує в ці колонки їхні поточні значення, його більше не запускає.",
     },
   },
   // `services` — таблиці провайдера, які займає сам провайдер для оператора
