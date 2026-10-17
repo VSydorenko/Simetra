@@ -2680,6 +2680,49 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
+      it("refuses other events or timing than the subscription's", () => {
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            subscription("app.h")
+          )
+        ).toEqual(MISSING)
+        expect(
+          codesOf(
+            "CREATE TRIGGER a AFTER INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            subscription("app.h")
+          )
+        ).toEqual(MISSING)
+      })
+
+      it("does not pair an UPDATE trigger with an arbitrary WHEN and its _insert", () => {
+        // Два боргові тригери: `x` з довільною умовою й `x_insert` — не пара
+        // `whenChanged`, тож `INSERT OR UPDATE OF` вони не покривають
+        const debt = [
+          MECHANICS,
+          trigger(
+            "x",
+            "CREATE TRIGGER x BEFORE UPDATE ON app.item FOR EACH ROW WHEN ((new.price > 0)) EXECUTE FUNCTION app.h()"
+          ),
+          trigger(
+            "x_insert",
+            "CREATE TRIGGER x_insert BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+          ),
+        ]
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW WHEN ((new.price > 0)) EXECUTE FUNCTION app.h()",
+            debt
+          )
+        ).toEqual(MISSING)
+        expect(
+          codesOf(
+            "CREATE TRIGGER a BEFORE INSERT OR UPDATE OF price ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+            debt
+          )
+        ).toEqual(MISSING)
+      })
+
       it("refuses FOR EACH STATEMENT", () => {
         expect(
           codesOf(

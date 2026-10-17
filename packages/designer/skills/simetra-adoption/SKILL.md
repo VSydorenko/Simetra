@@ -121,7 +121,7 @@ not express through metadata (CustomTable and PgEnum modules, shared
 ## Adopted triggers
 
 An adopted trigger stays verbatim debt while its table is a `CustomTable`.
-When `promote` turns the table into a Catalog or Document, a trigger gets the
+When `promote` turns the table into a kind, a trigger gets the
 class `platform` only when the kind replaces it, and `plan` refuses
 (`plan.platform-replacement-missing`) otherwise:
 
