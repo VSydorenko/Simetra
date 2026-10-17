@@ -95,6 +95,7 @@ import {
   platformReplacements,
   propertyReproductions,
   updateOfNarrowings,
+  withoutRowTextCasts,
   preservationPlan,
   promotionPermissionItems,
   promotionTransition,
@@ -274,7 +275,9 @@ const PROVIDER_TRIGGER_GENERATORS: ReadonlySet<SqlUnit["generator"]> = new Set<
  * — перейменувати чи зняти чужий тригер. «Чужий» — інше дерево розбору, ніж
  * у згенерованого, і немає в останньому застосованому стані: зміна нашого ж
  * тригера — звичайний крок. Порівнюються дерева, а не рядки: живий текст —
- * `pg_get_triggerdef`, без лапок і `;`. Функцію в ньому двигун завжди
+ * `pg_get_triggerdef`, без лапок і `;`, а умову над `varchar` він друкує з
+ * `::text` над `old.c`/`new.c`, тож обидва дерева порівнюються без цього
+ * приведення (`withoutRowTextCasts`). Функцію в ньому двигун завжди
  * кваліфікує схемою: витяг pg-delta ставить `search_path` у `pg_catalog`,
  * тож ім'я без схеми — інше дерево, а не та сама функція.
  */
@@ -306,8 +309,11 @@ export function providerTriggerConflicts(p: {
       const same =
         parsed.ok &&
         parsed.statements.length === 1 &&
-        JSON.stringify(withoutLocations(parsed.statements[0]!.stmt)) ===
-          JSON.stringify(unit.tree)
+        JSON.stringify(
+          withoutRowTextCasts(
+            withoutLocations(parsed.statements[0]!.stmt) as Node
+          )
+        ) === JSON.stringify(withoutRowTextCasts(unit.tree as Node))
       if (same) return []
       // Таблицю дає дерево оператора: генератор завжди кваліфікує її схемою
       const tree = unit.tree as Node

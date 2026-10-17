@@ -2785,6 +2785,64 @@ describe("platformReplacements", () => {
         })
       })
 
+      describe("whenChanged in the pg_get_triggerdef form of a varchar column", () => {
+        // Тінь друкує умову над `varchar` з `::text` з обох боків
+        const shadow = (when: string) => [
+          MECHANICS,
+          trigger(
+            "s",
+            `CREATE TRIGGER s BEFORE UPDATE ON app.item FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION app.h()`
+          ),
+          trigger(
+            "s_insert",
+            "CREATE TRIGGER s_insert BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+          ),
+        ]
+        const updateOf = (columns: string, when: string) =>
+          triggerGate(
+            `CREATE TRIGGER a BEFORE INSERT OR UPDATE OF ${columns} ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()`,
+            shadow(when)
+          )
+        const narrowed = (columns: string) => ({
+          codes: [],
+          narrowed: [
+            [
+              "plan.update-of-narrowed",
+              "warning",
+              { trigger: "a", table: "app.items", columns },
+            ],
+          ],
+        })
+
+        it("covers UPDATE OF one column", () => {
+          expect(
+            updateOf(
+              "name",
+              "((old.name)::text IS DISTINCT FROM (new.name)::text)"
+            )
+          ).toEqual(narrowed("name"))
+        })
+
+        it("covers UPDATE OF several columns joined by OR", () => {
+          expect(
+            updateOf(
+              "name, code",
+              "(((old.name)::text IS DISTINCT FROM (new.name)::text) OR ((old.code)::text IS DISTINCT FROM (new.code)::text))"
+            )
+          ).toEqual(narrowed("name, code"))
+        })
+
+        it("does not take a one-sided cast or a cast to another type for whenChanged", () => {
+          // Приведення лише з одного боку чи до іншого типу — вираз над
+          // колонкою, не умова `whenChanged`
+          for (const when of [
+            "((old.name)::text IS DISTINCT FROM new.name)",
+            "((old.name)::integer IS DISTINCT FROM (new.name)::integer)",
+          ])
+            expect(updateOf("name", when).codes, when).toEqual(MISSING)
+        })
+      })
+
       // Кожен випадок нижче тримає один запобіжник `triggerReplacement`: без
       // нього прийнятий тригер зійшов би за підписку, і промоція мовчки
       // змінила б поведінку

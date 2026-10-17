@@ -39,6 +39,7 @@ export {
   propertyReproductions,
   updateOfNarrowings,
   valueElementColumns,
+  withoutRowTextCasts,
   type ColumnName,
 } from "./replacements"
 export {

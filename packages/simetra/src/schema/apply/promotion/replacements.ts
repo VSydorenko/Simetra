@@ -1151,8 +1151,68 @@ function subscriptionShapes(triggers: readonly TriggerShape[]): TriggerShape[] {
 }
 
 /**
+ * Операнд `old.c` чи `new.c` без `::text`, який Postgres дописує колонці
+ * `varchar` у `pg_get_triggerdef`; `cast` — чи він там був. Інше приведення —
+ * вираз над колонкою, а не сама колонка, тож воно лишається.
+ */
+function rowOperand(node: Node): { cast: boolean; node: Node } {
+  if (
+    "TypeCast" in node &&
+    textCast(node.TypeCast) &&
+    "ColumnRef" in node.TypeCast.arg!
+  ) {
+    const [row] = strings(node.TypeCast.arg.ColumnRef.fields)
+    if (row === "old" || row === "new")
+      return { cast: true, node: node.TypeCast.arg }
+  }
+  return { cast: false, node }
+}
+
+/**
+ * Дерево оператора тригера без `::text` над `old.c`/`new.c` в умові `WHEN`:
+ * так `pg_get_triggerdef` друкує умову над `varchar`, а генератор — без
+ * приведення. Решта дерева — як є.
+ */
+export function withoutRowTextCasts(stmt: Node): Node {
+  if (
+    !("CreateTrigStmt" in stmt) ||
+    stmt.CreateTrigStmt.whenClause === undefined
+  )
+    return stmt
+  const strip = (node: Node): Node => {
+    if ("BoolExpr" in node)
+      return {
+        BoolExpr: {
+          ...node.BoolExpr,
+          args: node.BoolExpr.args?.map(strip),
+        },
+      }
+    if ("A_Expr" in node) {
+      const { lexpr, rexpr } = node.A_Expr
+      return {
+        A_Expr: {
+          ...node.A_Expr,
+          ...(lexpr === undefined ? {} : { lexpr: rowOperand(lexpr).node }),
+          ...(rexpr === undefined ? {} : { rexpr: rowOperand(rexpr).node }),
+        },
+      }
+    }
+    return node
+  }
+  return {
+    CreateTrigStmt: {
+      ...stmt.CreateTrigStmt,
+      whenClause: strip(stmt.CreateTrigStmt.whenClause),
+    },
+  }
+}
+
+/**
  * Колонки умови `whenChanged`: лише `OLD.c IS DISTINCT FROM NEW.c`, з'єднані
- * `OR`. Інша умова — `undefined`: вона не з `whenChanged`.
+ * `OR`. Інша умова — `undefined`: вона не з `whenChanged`. Тінь друкує умову
+ * над `varchar` як `(old.c)::text IS DISTINCT FROM (new.c)::text`, тож
+ * `::text` знімається, але лише з обох боків разом: однобічне приведення —
+ * не та умова, яку дає `whenChanged`.
  */
 function changedColumns(when: Node | undefined): string[] | undefined {
   if (when === undefined) return undefined
@@ -1166,11 +1226,15 @@ function changedColumns(when: Node | undefined): string[] | undefined {
     const { kind, name, lexpr, rexpr } = part.A_Expr
     if (kind !== "AEXPR_DISTINCT" || strings(name).join(".") !== "=")
       return undefined
-    const was = lexpr !== undefined && "ColumnRef" in lexpr
-    const now = rexpr !== undefined && "ColumnRef" in rexpr
-    if (!was || !now) return undefined
-    const [oldRow, oldColumn, ...restOld] = strings(lexpr.ColumnRef.fields)
-    const [newRow, newColumn, ...restNew] = strings(rexpr.ColumnRef.fields)
+    if (lexpr === undefined || rexpr === undefined) return undefined
+    const left = rowOperand(lexpr)
+    const right = rowOperand(rexpr)
+    if (left.cast !== right.cast) return undefined
+    const was = left.node
+    const now = right.node
+    if (!("ColumnRef" in was) || !("ColumnRef" in now)) return undefined
+    const [oldRow, oldColumn, ...restOld] = strings(was.ColumnRef.fields)
+    const [newRow, newColumn, ...restNew] = strings(now.ColumnRef.fields)
     if (
       oldRow !== "old" ||
       newRow !== "new" ||

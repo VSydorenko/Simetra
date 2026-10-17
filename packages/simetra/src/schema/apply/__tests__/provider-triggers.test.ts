@@ -183,6 +183,58 @@ describe("providerTriggerConflicts", () => {
     expect(found.map((d) => d.code)).toEqual(["plan.provider-trigger-taken"])
   })
 
+  describe("whenChanged on a varchar column of the provider table", () => {
+    // `pg_get_triggerdef` друкує умову над `varchar` з `::text`, генератор —
+    // без нього: тотожний тригер не мусить ставати «чужим»
+    const withEmail = () =>
+      compiled({
+        ...subscription(7303, "OnUser", {
+          physicalName: "on_user",
+          sources: [{ providerTable: "auth.users" }],
+          event: "onWrite",
+          whenChanged: ["email"],
+          handler: { schema: "public", name: "on_user" },
+        }),
+        "sql/public/handlers.sql": HANDLER,
+      })
+    const conflicts = async (when: string) =>
+      providerTriggerConflicts({
+        desired: (await withEmail()).sqlUnits,
+        live: catalogOf([
+          trigger(
+            "auth",
+            "users",
+            "on_user",
+            `CREATE TRIGGER on_user AFTER UPDATE ON auth.users FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION public.on_user()`
+          ),
+        ]),
+        applied: undefined,
+        appSchemas: ["public", "simetra"],
+        parse: await loadSqlParser(),
+      }).map((d) => d.code)
+
+    it("takes the live ::text form for the same trigger", async () => {
+      expect(
+        await conflicts(
+          "((old.email)::text IS DISTINCT FROM (new.email)::text)"
+        )
+      ).toEqual([])
+    })
+
+    it("still refuses a trigger that differs in something else", async () => {
+      expect(
+        await conflicts(
+          "((old.phone)::text IS DISTINCT FROM (new.phone)::text)"
+        )
+      ).toEqual(["plan.provider-trigger-taken"])
+      expect(
+        await conflicts(
+          "((old.email)::integer IS DISTINCT FROM (new.email)::integer)"
+        )
+      ).toEqual(["plan.provider-trigger-taken"])
+    })
+  })
+
   it("refuses when the live trigger text does not parse", async () => {
     // Не розібраний текст не доводить тотожності: обережно — відмова
     const model = await withSubscriptions()
