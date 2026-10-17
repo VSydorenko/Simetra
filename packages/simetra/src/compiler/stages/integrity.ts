@@ -46,6 +46,7 @@ import {
   subscriptionSourceTables,
   type DerivedFunction,
 } from "../contracts"
+import { mechanicsStandardNames } from "../mechanics-units"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
@@ -205,7 +206,7 @@ export function checkIntegrity(
   diagnostics.push(...checkCompositeIndexes(objects, style))
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
-  diagnostics.push(...checkSubscriptions(objects, model, provider))
+  diagnostics.push(...checkSubscriptions(objects, model, provider, style))
   diagnostics.push(...checkUsersCatalogs(objects, model))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
@@ -485,12 +486,22 @@ function referenceTargetError(
  * `physicalName` — база імені тригера: дві однакові дали б однойменні тригери
  * на спільній таблиці, а простору імен таблиць підписка не займає. Джерело-
  * об'єкт без таблиці звітує перевірка цілей посилань, невідоме — стадія 2.
+ *
+ * `whenChanged` дає другий тригер `<physicalName>_insert`, тож довжину
+ * перевіряє й його ім'я. Колонка механіки в `whenChanged` — помилка: умову
+ * `BEFORE`-тригера Postgres рахує з `NEW` після попередніх тригерів, тож
+ * спрацювання залежало б від того, чи йде механіка раніше за ім'ям.
  */
 function checkSubscriptions(
   objects: readonly ParsedObject[],
   model: ModelStageResult,
-  provider: DatabaseProvider
+  provider: DatabaseProvider,
+  style: AttributeCase
 ): Diagnostic[] {
+  const mechanics = mechanicsStandardNames(style)
+  const tablesByName = new Map(
+    model.physical.tables.map((t) => [`${t.schema}.${t.name}`, t])
+  )
   const found: Diagnostic[] = []
   const triggerNames = new Map<string, string>()
   for (const object of objects) {
@@ -558,6 +569,16 @@ function checkSubscriptions(
       )
     }
     if (spec.whenChanged === undefined) continue
+    if (
+      physicalName !== undefined &&
+      byteLength(`${physicalName}_insert`) > MAX_IDENT_BYTES
+    ) {
+      found.push(
+        diagnostic("physical.name-too-long", object.file, "/physicalName", {
+          name: `${physicalName}_insert`,
+        })
+      )
+    }
     if (DELETE_EVENTS.has(spec.event)) {
       found.push(
         diagnostic(
@@ -586,6 +607,29 @@ function checkSubscriptions(
         return
       }
       seenNames.add(name)
+      // Колонку механіки впізнає `origin.standard` знімка, а не ім'я: власна
+      // колонка `version` прийнятої таблиці механікою не є.
+      const maintained = spec.sources.some((source) => {
+        const table = tables.get(source.pointer)
+        if (table === undefined) return false
+        const physical = tablesByName.get(`${table.schema}.${table.table}`)
+        return (table.columns.get(name) ?? []).some((column) =>
+          mechanics.has(
+            physical?.columns.find((c) => c.name === column)?.origin.standard ??
+              ""
+          )
+        )
+      })
+      if (maintained) {
+        found.push(
+          diagnostic(
+            "subscription.when-changed-mechanics",
+            object.file,
+            pointer,
+            { column: name }
+          )
+        )
+      }
       for (const source of spec.sources) {
         const table = tables.get(source.pointer)
         if (table === undefined || table.columns.has(name)) continue

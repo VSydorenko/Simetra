@@ -224,6 +224,48 @@ describe("EventSubscription", () => {
     ])
   })
 
+  it("whenChanged checks the length of the second trigger name", async () => {
+    // 60 байтів: саме ім'я влазить у 63, а `<ім'я>_insert` — ні.
+    const long = "s".repeat(60)
+    expect(
+      (
+        await compile(metaFiles(entries({ physicalName: long })))
+      ).diagnostics.map((d) => [d.code, d.file, d.pointer, d.params])
+    ).toEqual([
+      [
+        "physical.name-too-long",
+        SUBSCRIPTION,
+        "/physicalName",
+        { name: `${long}_insert` },
+      ],
+    ])
+    expect(
+      await codes(entries({ physicalName: long, whenChanged: undefined }))
+    ).toEqual([])
+  })
+
+  it("whenChanged cannot list a column the row mechanics maintains", async () => {
+    expect(await codes(entries({ whenChanged: ["version"] }))).toEqual([
+      ["subscription.when-changed-mechanics", SUBSCRIPTION, "/whenChanged/0"],
+    ])
+    expect(
+      await codes(entries({ whenChanged: ["number", "updatedAt"] }))
+    ).toEqual([
+      ["subscription.when-changed-mechanics", SUBSCRIPTION, "/whenChanged/1"],
+    ])
+    // Стиль проєкту: `origin.standard` несе стилізоване ім'я.
+    expect(
+      await codes({
+        ...entries({ whenChanged: ["updated_at"] }),
+        "project.meta.json": project({
+          naming: { attributeCase: "snake_case" },
+        }),
+      })
+    ).toEqual([
+      ["subscription.when-changed-mechanics", SUBSCRIPTION, "/whenChanged/0"],
+    ])
+  })
+
   it("whenChanged with a delete event is an error", async () => {
     expect(await codes(entries({ event: "onDelete" }))).toEqual([
       ["subscription.when-changed-on-delete", SUBSCRIPTION, "/whenChanged"],

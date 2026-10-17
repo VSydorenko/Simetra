@@ -29,6 +29,10 @@ import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { buildMechanicsUnits } from "./mechanics-units"
+import {
+  buildSubscriptionUnits,
+  subscriptionTriggerConflicts,
+} from "./subscription-units"
 import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
@@ -270,6 +274,7 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildSubscriptionUnits(eventSubscriptions, module, parse),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -287,7 +292,15 @@ export async function runStages(
       unit.ownerObjectId === undefined
         ? "the row mechanics of the platform"
         : `the row mechanics of ${name(unit.ownerObjectId)}`,
+    subscription: (unit) =>
+      `the event subscription ${name(unit.ownerObjectId)}`,
   }
+  const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
+  const triggerConflicts = subscriptionTriggerConflicts(
+    sqlUnits,
+    (id) => fileById.get(id ?? "") ?? "",
+    (unit) => describeGenerated[must(unit.generator)](unit)
+  )
   // Дослівний грант на об'єкт платформи вже названо своєю помилкою: як
   // тотожна копія згенерованого він не звітується вдруге дублікатом.
   const grants = generatedGrantConflicts(sqlUnits, parse)
@@ -296,17 +309,21 @@ export async function runStages(
     sqlUnits.filter((unit) => !grants.flagged.has(unit)),
     (unit) => describeGenerated[must(unit.generator)](unit)
   )
-  if (grants.diagnostics.length > 0 || collisions.length > 0) {
+  if (
+    triggerConflicts.length > 0 ||
+    grants.diagnostics.length > 0 ||
+    collisions.length > 0
+  ) {
     return {
       ok: false,
       diagnostics: sortDiagnostics([
         ...diagnostics,
+        ...triggerConflicts,
         ...grants.diagnostics,
         ...collisions,
       ]),
     }
   }
-  const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const ordered = creationOrder(
     physical,
     sqlUnits,

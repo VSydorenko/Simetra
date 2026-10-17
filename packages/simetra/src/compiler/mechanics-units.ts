@@ -37,6 +37,18 @@ const UPDATED_AT = serviceDateColumns().find(
 const VERSION = versionColumn()
 
 /**
+ * Логічні імена колонок механіки в стилі проєкту — так їх несе
+ * `origin.standard` фізичного знімка.
+ */
+export function mechanicsStandardNames(
+  attributeCase: AttributeCase
+): ReadonlySet<string> {
+  return new Set(
+    [UPDATED_AT, VERSION].map((def) => standardLogicalName(def, attributeCase))
+  )
+}
+
+/**
  * Механіка рядка (спека промоції §9.2): службову дату оновлення й версію
  * рядка тримає база, а не клієнт: вставка дає версію 1, оновлення —
  * `OLD.version + 1`, обидва — `now()`, що б не записав клієнт. Таблиці
@@ -53,9 +65,7 @@ export function buildMechanicsUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  const mechanics = new Set(
-    [UPDATED_AT, VERSION].map((def) => standardLogicalName(def, attributeCase))
-  )
+  const mechanics = mechanicsStandardNames(attributeCase)
   const tables = physical.tables.filter((table) => {
     const found = table.columns.filter((c) =>
       mechanics.has(c.origin.standard ?? "")

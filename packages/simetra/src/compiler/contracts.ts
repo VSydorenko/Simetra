@@ -187,8 +187,8 @@ export interface NumberingContract {
 }
 
 /**
- * Підписка на подію (спека промоції §9.3): П3 генерує з неї тригер
- * `FOR EACH ROW` на кожне джерело з викликом обробника.
+ * Підписка на подію (спека промоції §9.3): з неї генератор `subscription`
+ * будує тригери `FOR EACH ROW` на кожне джерело з викликом обробника.
  */
 export interface EventSubscriptionContract {
   subscriptionId: string
@@ -202,7 +202,10 @@ export interface EventSubscriptionContract {
   sources: { schema: string; table: string; whenChanged: string[] }[]
   event: SubscriptionEvent
   handler: QualifiedName
-  /** Текст для `COMMENT ON TRIGGER`: коментар прийнятого тригера стає ним. */
+  /**
+   * Опис підписки живе в метаданих, як описи таблиць виду: `COMMENT ON
+   * TRIGGER` платформа не генерує.
+   */
   title?: LocalizedString
   description?: LocalizedString
 }
