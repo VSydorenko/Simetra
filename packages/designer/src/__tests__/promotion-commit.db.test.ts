@@ -299,6 +299,65 @@ const stamped = {
   },
 }
 
+/** Прийнятий тригер `UPDATE OF` на `app.member`. */
+const AUDIT = "members_audit"
+
+/** Обробник у закритій оболонці: його кличе і прийнятий тригер, і підписка. */
+const AUDIT_HANDLER = `CREATE FUNCTION app.audit_member() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$
+BEGIN
+  RETURN NEW;
+END $$;
+`
+
+/**
+ * `app.member` з тригером `INSERT OR UPDATE OF rank`: промоція в довідник з
+ * кодом, чию нумерацію платформа ще не генерує, а тригер — клас `platform`,
+ * його замінює підписка з `whenChanged` (рішення 6–7 плану П3-3a2).
+ */
+const audited = {
+  // Таблиця вже в імені довідника: нумерацію про неї план каже лише тому, що
+  // її переводить промоція, а не тому, що таблиці в цілі немає
+  member: {
+    ...member(),
+    physicalName: "member",
+    columns: [
+      ...member().columns,
+      { id: uuid(9506), name: "rank", physicalName: "rank", type: "Integer" },
+    ],
+  },
+  files: {
+    "sql/app/handlers.sql": AUDIT_HANDLER,
+    "custom-tables/Member/Member.sql": `CREATE TRIGGER ${AUDIT} BEFORE INSERT OR UPDATE OF rank ON app.member FOR EACH ROW EXECUTE FUNCTION app.audit_member();\n`,
+  },
+  mapping: () => {
+    const m = mapping()
+    return promoteInput.parse({
+      ...m,
+      into: { kind: "Catalog", name: "Member", data: { codeLength: 9 } },
+      // Реквізит з іншим ім'ям: колонка `UPDATE OF` перейменовується
+      columns: {
+        ...m.columns,
+        rank: { to: "attribute", element: { name: "priority" } },
+      },
+      conversions: {
+        ...m.conversions,
+        [`trigger:app.member.${AUDIT}`]: "platform",
+      },
+    })
+  },
+  /** Підписка, що замінює прийнятий тригер; пишеться після `promote`. */
+  subscription: {
+    id: uuid(9511),
+    kind: "EventSubscription",
+    name: "AuditMember",
+    physicalName: "member_audit",
+    sources: [{ kind: "Catalog", name: "Member" }],
+    event: "beforeWrite",
+    whenChanged: ["priority"],
+    handler: { schema: "app", name: "audit_member" },
+  },
+}
+
 /** Тригери таблиці без внутрішніх (FK) і їхній стан увімкнення. */
 const triggersOf = (url: string, table: string) =>
   query<{ name: string; enabled: string }>(
@@ -411,6 +470,54 @@ describe("promotion commit", () => {
         ["apply.rehearsal-copy-empty", { table: "app.members" }],
       ])
       expect(await state(url)).toEqual(before)
+    })
+  })
+
+  it("warns of the UPDATE OF narrowing and the numbering in a promotion plan", async () => {
+    await inTarget(EMPTY, scope, async (url) => {
+      const dir = await projectWith(audited)
+      const committed = await apply(dir, url, await planned(dir, url))
+      expect(errors(committed), JSON.stringify(committed.diagnostics)).toEqual(
+        []
+      )
+      const promote = await call(
+        "promote",
+        audited.mapping(),
+        options(dir, url)
+      )
+      expect(errors(promote), JSON.stringify(promote.diagnostics)).toEqual([])
+      // Підписку на довідник можна описати лише після промоції: до неї
+      // довідника `Member` немає, а без неї прийнятому тригеру нема заміни
+      const file = join(
+        dir,
+        "event-subscriptions/AuditMember/AuditMember.meta.json"
+      )
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, JSON.stringify(audited.subscription))
+      const r = await call("plan", {}, options(dir, url))
+      expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+      expect((r.data as PlanData).promotion).not.toBeNull()
+      // Колонка — у старому імені, як тригер і таблиця запису
+      expect(
+        r.diagnostics
+          .filter((d) => d.severity === "warning")
+          .filter((d) =>
+            [
+              "plan.update-of-narrowed",
+              "plan.numbering-not-generated",
+            ].includes(d.code)
+          )
+          .map((d) => [d.code, d.params])
+      ).toEqual([
+        [
+          "plan.numbering-not-generated",
+          { object: "Member", table: "app.member" },
+        ],
+        [
+          "plan.update-of-narrowed",
+          { trigger: AUDIT, table: "app.member", columns: "rank" },
+        ],
+      ])
     })
   })
 
