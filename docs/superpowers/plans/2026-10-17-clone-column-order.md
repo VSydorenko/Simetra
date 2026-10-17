@@ -1,6 +1,6 @@
 # Порядок колонок у копії доказу: план імплементації
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [X]`) syntax for tracking.
 
 Статус: прийнято архітектором задачі 2026-10-17; рішення 3 підтверджено
 (зняття — окремий коміт після зеленої задачі 2, зі стоп-гейтом за фактом).
@@ -266,7 +266,7 @@ R4.
 
 **Files:** —
 
-- [ ] **Step 1: Якорі плану**
+- [X] **Step 1: Якорі плану**
 
 Run: `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-17-clone-column-order.md`
 Expected: усі шляхи з File Structure, крім нових, існують; символи
@@ -276,7 +276,7 @@ Expected: усі шляхи з File Structure, крім нових, існуют
 `1.0.0-alpha.56`; інша версія — стоп: перечитати «Корінь дефекту» на новій
 версії й звітувати архітекторові.
 
-- [ ] **Step 2: Базова лінія**
+- [X] **Step 2: Базова лінія**
 
 Run: `pnpm --filter @simetra/designer test`, і, коли стек вільний,
 `pnpm --filter @simetra/designer test:db engine-apply-port`.
@@ -296,7 +296,7 @@ Expected: зелено. Наявні падіння записати в звіт
   факт виду `table`, якого немає в `source`; колонки — її діти виду
   `column`, відсортовані за числом `payload._position`.
 
-- [ ] **Step 1: Юніт-тести (червоні)**
+- [X] **Step 1: Юніт-тести (червоні)**
 
 Факти будувати, як у `type-phase.test.ts` (`fact`, `depends`), колонки з
 payload `{ type, notNull: false, _position }`, згенерована — ще з
@@ -335,7 +335,7 @@ payload `{ type, notNull: false, _position }`, згенерована — ще �
 Run: `pnpm --filter @simetra/designer test column-order`
 Expected: FAIL — модуля `column-order` немає.
 
-- [ ] **Step 2: Реалізувати `withColumnOrder`**
+- [X] **Step 2: Реалізувати `withColumnOrder`**
 
 Обхід досяжності — DFS за `target.outgoingEdges(id)` з множиною
 відвіданих, для кожної колонки таблиці окремо. Нову `FactBase` збирати, як
@@ -344,12 +344,12 @@ Expected: FAIL — модуля `column-order` немає.
 «Кореня дефекту») і чому таблиця з посиланням уперед лишається без них
 (рішення 2).
 
-- [ ] **Step 3: Зелено**
+- [X] **Step 3: Зелено**
 
 Run: `pnpm --filter @simetra/designer test column-order && pnpm --filter @simetra/designer typecheck && pnpm --filter @simetra/designer lint`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [X] **Step 4: Commit**
 
 ```bash
 git add packages/designer/src/schema-engine/pg-delta/column-order.ts packages/designer/src/schema-engine/__tests__/column-order.test.ts
@@ -366,7 +366,7 @@ git commit -m "feat(designer): ребра порядку колонок нови
 **Interfaces:**
 - Consumes: `withColumnOrder` (задача 1).
 
-- [ ] **Step 1: DB-тести порту (червоні)**
+- [X] **Step 1: DB-тести порту (червоні)**
 
 У `describe("SchemaEngine apply port")` — помічник
 `cloneOrder(targetSql, table)`: `inTarget` → `engine.extract` →
@@ -396,7 +396,7 @@ Run: `pgrep -af vitest | grep Simetra` (порожньо), потім
 `pnpm --filter @simetra/designer test:db engine-apply-port`
 Expected: перші два FAIL (копія `["id", "d", "note", "p"]`), третій PASS.
 
-- [ ] **Step 2: Сценарій боргу через інструменти (червоний)**
+- [X] **Step 2: Сценарій боргу через інструменти (червоний)**
 
 У `describe("apply lifecycle")` — тест
 `plans again after an attribute is added to a document`. Метадані:
@@ -417,7 +417,7 @@ Expected: перші два FAIL (копія `["id", "d", "note", "p"]`), тре
 Run: `pnpm --filter @simetra/designer test:db apply-lifecycle`
 Expected: новий тест FAIL на кроці 3 з `plan.clone-mismatch`.
 
-- [ ] **Step 3: Підключити ребра в `cloneAndRun`**
+- [X] **Step 3: Підключити ребра в `cloneAndRun`**
 
 План фази відтворення будувати над
 `withColumnOrder(source.factBase, targetCatalog.factBase)` замість
@@ -425,12 +425,12 @@ Expected: новий тест FAIL на кроці 3 з `plan.clone-mismatch`.
 коментар над фазою 1 і над планом фази 2: порядок колонок тепер тримають
 ребра, фаза типів лишається до задачі 3.
 
-- [ ] **Step 4: Зелено**
+- [X] **Step 4: Зелено**
 
 Run: `pnpm --filter @simetra/designer test:db engine-apply-port && pnpm --filter @simetra/designer test:db apply-lifecycle && pnpm --filter @simetra/designer test:db build-plan && pnpm --filter @simetra/designer typecheck && pnpm --filter @simetra/designer lint`
 Expected: PASS; наявні тести копії й промоції в `build-plan` — без змін.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/designer/src/schema-engine/pg-delta/adapter.ts packages/designer/src/schema-engine/__tests__/engine-apply-port.db.test.ts packages/designer/src/__tests__/apply-lifecycle.db.test.ts
@@ -450,7 +450,7 @@ git commit -m "fix(designer): копія доказу відтворює пор�
   — без параметра фази; текст збою —
   `applying the target state failed: …`.
 
-- [ ] **Step 1: Регресійний тест порядку типів (зелений і до, і після)**
+- [X] **Step 1: Регресійний тест порядку типів (зелений і до, і після)**
 
 `clones a column of an application type in the middle of a table` — ціль:
 `create schema app; create type app.hue as enum ('red', 'green'); create domain app.positive as int check (value > 0); create table app.card (id int, hue app.hue, n app.positive, label text);`
@@ -459,7 +459,7 @@ git commit -m "fix(designer): копія доказу відтворює пор�
 Run: `pnpm --filter @simetra/designer test:db engine-apply-port`
 Expected: PASS (ще з фазою типів).
 
-- [ ] **Step 2: Зняти фазу**
+- [X] **Step 2: Зняти фазу**
 
 `cloneAndRun` будує один план «засіяна копія → `withColumnOrder(засіяна,
 ціль)`» і застосовує його `reproduce`. Видалити `type-phase.ts`,
@@ -471,7 +471,7 @@ Expected: PASS (ще з фазою типів).
 видалити (фаз більше немає, решту покриває
 `reports a failed reproduction as engine.clone-failed`).
 
-- [ ] **Step 3: Стоп-гейт**
+- [X] **Step 3: Стоп-гейт**
 
 Run: `pnpm --filter @simetra/designer test:db engine-apply-port && pnpm --filter @simetra/designer test:db apply-lifecycle && pnpm --filter @simetra/designer test:db build-plan`
 Expected: PASS, зокрема `applies a table that uses a type created in the
@@ -480,7 +480,7 @@ same plan` і тест кроку 1. **Будь-який червоний тес
 тест кроку 1, звітувати архітекторові з текстом падіння; фазу типів не
 знімати без його рішення.
 
-- [ ] **Step 4: Перевірки й commit**
+- [X] **Step 4: Перевірки й commit**
 
 Run: `pnpm --filter @simetra/designer test && pnpm --filter @simetra/designer typecheck && pnpm --filter @simetra/designer lint && grep -rn "typePhase\|type-phase" packages/designer/src`
 Expected: PASS; `grep` порожній.
@@ -502,7 +502,7 @@ git commit -m "refactor(designer): порядок колонок копії тр
   `createApplyDatabase({ readOnly })` з `..` — `reader` (`readOnly: true`),
   `scratch` і `writer` (`readOnly: false`), як у `build-plan.db.test.ts`.
 
-- [ ] **Step 1: Тест**
+- [X] **Step 1: Тест**
 
 У `deployedRoundTrip` додати параметр `endToEnd: boolean`; корпус E1
 (`adoption from scratch: …`) передає `true`, референсний домен — `false`.
@@ -520,7 +520,7 @@ git commit -m "refactor(designer): порядок колонок копії тр
 `buildPlan` не проходить доказу через `plan.clone-mismatch`, прибрати;
 чисті функції лишаються як точна звірка класів кроків.
 
-- [ ] **Step 2: Прогін**
+- [X] **Step 2: Прогін**
 
 Run: `pnpm --filter @simetra/designer test:db round-trip`
 Expected: PASS. **Відмова `buildPlan` з іншим кодом** (не пов'язаним із
@@ -528,7 +528,7 @@ Expected: PASS. **Відмова `buildPlan` з іншим кодом** (не п
 розширювати очікування, звітувати архітекторові з кодом і фікстурою; тоді
 рішення 4 переглядає архітектор.
 
-- [ ] **Step 3: Commit**
+- [X] **Step 3: Commit**
 
 ```bash
 git add packages/designer/src/schema-engine/__tests__/round-trip.db.test.ts
@@ -542,7 +542,7 @@ git commit -m "test(designer): round-trip прийому з нуля прохо�
 - Modify: `docs/ROADMAP.md`
 - Modify: цей план (позначки виконання)
 
-- [ ] **Step 1: Документи**
+- [X] **Step 1: Документи**
 
 Зняти з боргу §1 пункт «Копія доказу ставить згенеровану колонку в кінець
 таблиці» повністю (правило файлу: пункт знімається, коли його бере план).
@@ -553,7 +553,7 @@ git commit -m "test(designer): round-trip прийому з нуля прохо�
 Run: `python3 scripts/check-doc-anchors.py`
 Expected: без мертвих посилань.
 
-- [ ] **Step 2: Повні гейти на одному SHA**
+- [X] **Step 2: Повні гейти на одному SHA**
 
 Закомітити крок 1, потім:
 `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm metadata:check`,
@@ -567,7 +567,7 @@ git add docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md docs/ROADMAP.md
 git commit -m "docs(plan): порядок колонок копії доказу виконано — пункт боргу П3-2b знято"
 ```
 
-- [ ] **Step 3: Звіт архітекторові**
+- [X] **Step 3: Звіт архітекторові**
 
 SHA задач, результат стоп-гейта задачі 3 (фазу знято чи лишено),
 результат задачі 4 по фікстурах корпусу, доля контрольних тестів задачі 1.
