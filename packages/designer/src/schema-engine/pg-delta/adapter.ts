@@ -59,7 +59,6 @@ import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
 import { aclDefaultsOf, producedBy } from "./map-units"
 import { scopeProfile } from "./policy"
-import { typePhase } from "./type-phase"
 import {
   ShadowCreateRefusedError,
   ShadowServerError,
@@ -701,29 +700,16 @@ function cloneFailed(
   }
 }
 
-/**
- * Що робила копія у фазі, яка впала: фаза типів (1) і відтворення стану (2)
- * дають той самий код двигуна, тож розрізняє їх лише текст.
- */
-const CLONE_PHASES = {
-  types: "creating the target's types ahead of its tables failed",
-  state: "applying the target state failed",
-} as const
-
-/**
- * Застосовує план фази до копії; збій — діагностика копії, що називає фазу:
- * без неї збій фази типів і збій відтворення не відрізнити.
- */
+/** Застосовує план відтворення до копії; збій — діагностика копії. */
 async function reproduce(
   clonePool: pg.Pool,
-  plan: Plan,
-  phase: keyof typeof CLONE_PHASES
+  plan: Plan
 ): Promise<EngineDiagnostic | undefined> {
   const report = await apply(plan, clonePool, { fingerprintGate: false })
   if (report.status === "applied") return undefined
   return cloneFailed(
     // Текст помилки оператора стосується об'єкта, а не підключення
-    `${CLONE_PHASES[phase]}: ${
+    `applying the target state failed: ${
       report.error === undefined
         ? "the plan was not applied"
         : `\`${report.error.sql}\`: ${report.error.message}`
@@ -738,8 +724,8 @@ async function reproduce(
  * бо заглушки `auth.users` і `storage.objects` дає `seedAssumedSchemas`, а без
  * них тригер чи політика застосунку на поверхні провайдера не відтворилися б.
  * Стан цілі відтворює план двигуна «копія → ціль» з опціями копії, як `plan`
- * порту, після фази типів (`typePhase`), коли вона потрібна. Гейт відбитка
- * `apply` вимкнено: копія жертовна, а точність її стану перевіряє викликач.
+ * порту, одним планом. Гейт відбитка `apply` вимкнено: копія жертовна, а
+ * точність її стану перевіряє викликач.
  */
 async function cloneAndRun<T>(
   target: DbConnection,
@@ -782,33 +768,18 @@ async function cloneAndRun<T>(
     // Преамбулу цих планів не звіряємо з дозволеним переліком: їх виконує
     // `apply` самого двигуна, а не виконавець порту, тож перелік тут не діє;
     // плани же копіюються лише в жертовну копію й назовні не виходять.
-    // Фаза 1 створює типи цілі раніше за таблиці. Порядок колонок копії від
-    // неї вже не залежить, його тримають ребра плану фази 2; фаза лишається
-    // до задачі 3 плану порядку колонок, яка її прибирає
+    // Один план «засіяна копія → ціль»: типи цілі двигун створює в ньому ж,
+    // а порядок колонок нових таблиць тримають ребра `withColumnOrder` — і для
+    // колонки типу, створеного в тому самому плані. Двигун сам ставить
+    // згенеровану колонку й колонку з пізнішою функцією виразу після решти, а
+    // копія мусить мати порядок цілі, бо його звіряє доказ
     const seeded = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
-    const phase = typePhase(seeded.factBase, targetCatalog.factBase)
-    let source = seeded
-    if (phase !== undefined) {
-      const failure = await reproduce(
-        clonePool,
-        enginePlan(seeded.factBase, phase, seeded.planOptions),
-        "types"
-      )
-      if (failure !== undefined)
-        return { status: "shadow-failed", diagnostics: [failure] }
-      source = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
-    }
-    // Бажаний стан фази 2 — ціль з ребрами порядку колонок нових таблиць:
-    // двигун сам ставить згенеровану колонку й колонку з пізнішою функцією
-    // виразу після решти, а копія мусить мати порядок цілі, бо його звіряє
-    // доказ. Діагностики — лише цього плану: фаза 1 описує проміжний стан, а
-    // все, що вона створила, план фази 2 бачить на цілі теж
     const plan = enginePlan(
-      source.factBase,
-      withColumnOrder(source.factBase, targetCatalog.factBase),
-      source.planOptions
+      seeded.factBase,
+      withColumnOrder(seeded.factBase, targetCatalog.factBase),
+      seeded.planOptions
     )
-    const failure = await reproduce(clonePool, plan, "state")
+    const failure = await reproduce(clonePool, plan)
     if (failure !== undefined)
       return { status: "shadow-failed", diagnostics: [failure] }
     // Той самий фільтр `unmodeled_kind`, що в `planAndRun`

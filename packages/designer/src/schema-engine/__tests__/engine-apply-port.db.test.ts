@@ -397,6 +397,24 @@ describe("SchemaEngine apply port", () => {
     expect(r.diff).toEqual([])
   })
 
+  it("clones a column of an application type in the middle of a table", async () => {
+    // Типи цілі копія створює в тому самому плані, що й таблицю: колонка типу
+    // посередині мусить лишитися на своєму місці, а не піти в кінець
+    const r = await cloneOrder(
+      [
+        "create schema app;",
+        "create type app.hue as enum ('red', 'green');",
+        "create domain app.positive as int check (value > 0);",
+        "create table app.card (id int, hue app.hue, n app.positive, label text);",
+      ].join("\n"),
+      "app.card"
+    )
+    expect(r.errors).toEqual([])
+    expect(r.target).toEqual(["id", "hue", "n", "label"])
+    expect(r.clone).toEqual(r.target)
+    expect(r.diff).toEqual([])
+  })
+
   it("keeps a forward reference loud instead of failing the copy", async () => {
     // `g` посилається на пізнішу `b`: ланцюг ребер дав би цикл, тож таблиця
     // лишається без ребер, а розбіжність порядку видно в різниці моделей
@@ -450,9 +468,9 @@ describe("SchemaEngine apply port", () => {
     )
   })
 
-  it("reports a failure of the type phase as engine.clone-failed", async () => {
+  it("reports a failed domain of the target as engine.clone-failed", async () => {
     // Обмеження домену викликає функцію зі схеми поза межею: копія її не має,
-    // тож `CREATE DOMAIN` падає у фазі типів, до створення таблиць
+    // тож `CREATE DOMAIN` падає на копії
     await inTarget(
       [
         "create schema other;",
@@ -480,43 +498,8 @@ describe("SchemaEngine apply port", () => {
           "engine.clone-failed",
         ])
         expect(outcome.diagnostics[0]!.engineCode).toBe("apply_failed")
-        // Діагностика називає фазу: та сама помилка у фазі 2 читалася б інакше
         expect(outcome.diagnostics[0]!.params.detail).toMatch(
-          /^creating the target's types ahead of its tables failed: `CREATE DOMAIN/i
-        )
-        expect(await leftoverShadows(mark)).toEqual([])
-      }
-    )
-  })
-
-  it("names the reproduction phase when the type phase has passed", async () => {
-    // Фаза 1 створює `app.k`, а фаза 2 падає на типі `other.e` поза межею:
-    // діагностика каже, що впала саме вона, а не фаза типів
-    await inTarget(
-      [
-        "create schema other;",
-        "create type other.e as enum ('a');",
-        "create schema app;",
-        "create type app.k as enum ('x');",
-        "create table app.t (id int, k app.k, e other.e);",
-      ].join("\n"),
-      scope,
-      async (url) => {
-        const mark = provisionedShadows().length
-        const target = await engine.extract({ url }, scope)
-        const outcome = await engine.withTargetClone(
-          { target: { url } },
-          target,
-          scope,
-          async () => {}
-        )
-        expect(outcome.status).toBe("shadow-failed")
-        expect(outcome.diagnostics.map((d) => d.code)).toEqual([
-          "engine.clone-failed",
-        ])
-        expect(outcome.diagnostics[0]!.engineCode).toBe("apply_failed")
-        expect(outcome.diagnostics[0]!.params.detail).toMatch(
-          /^applying the target state failed: .*other\.e/
+          /^applying the target state failed: `CREATE DOMAIN/i
         )
         expect(await leftoverShadows(mark)).toEqual([])
       }
