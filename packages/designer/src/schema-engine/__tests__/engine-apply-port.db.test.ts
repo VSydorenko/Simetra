@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { diffCatalogModels } from "simetra/model"
 import type { EngineAction, EnginePlan, EngineScope } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
-import { inTarget } from "../../__tests__/support/db"
+import { inTarget, query } from "../../__tests__/support/db"
 import {
   leftoverShadows,
   provisionedShadows,
@@ -34,6 +34,48 @@ function planOf(targetSql: string, desiredSql: string): Promise<EnginePlan> {
         `desired did not load: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
       )
     return outcome.value
+  })
+}
+
+/** Імена колонок `table` у порядку `attnum`, без видалених. */
+const columnNames = async (url: string, table: string) =>
+  (
+    await query<{ attname: string }>(
+      url,
+      `select attname from pg_attribute where attrelid = '${table}'::regclass and attnum > 0 and not attisdropped order by attnum`
+    )
+  ).map((r) => r.attname)
+
+/**
+ * Копія цілі з `targetSql`: порядок колонок `table` на цілі й на копії,
+ * різниця моделей з порядком колонок і помилки відтворення.
+ */
+function cloneOrder(targetSql: string, table: string) {
+  return inTarget(targetSql, scope, async (url) => {
+    const target = await engine.extract({ url }, scope)
+    const outcome = await engine.withTargetClone(
+      { target: { url } },
+      target,
+      scope,
+      async (clone) => ({
+        order: await columnNames(clone.url, table),
+        extract: await engine.extract(clone, scope),
+      })
+    )
+    return {
+      status: outcome.status,
+      target: await columnNames(url, table),
+      clone: outcome.status === "loaded" ? outcome.value.order : undefined,
+      diff:
+        outcome.status === "loaded"
+          ? diffCatalogModels(target.model, outcome.value.extract.model, {
+              columnOrder: true,
+            })
+          : undefined,
+      errors: outcome.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.message),
+    }
   })
 }
 
@@ -317,6 +359,58 @@ describe("SchemaEngine apply port", () => {
         diffCatalogModels(target.model, clone.model, { columnOrder: true })
       ).toEqual([])
     })
+  })
+
+  it("clones a generated column in the middle of a table", async () => {
+    // Колонку `note` додано після згенерованої `p`: копія мусить створити їх
+    // у тому самому порядку, а не згорнути `note` у `CREATE TABLE` повз `p`
+    const r = await cloneOrder(
+      [
+        "create schema app;",
+        "create table app.t (id int primary key, x int, d date not null, p date generated always as (date_trunc('month', d::timestamp)::date) stored);",
+        "alter table app.t drop column x;",
+        "alter table app.t add column note text;",
+      ].join("\n"),
+      "app.t"
+    )
+    expect(r.errors).toEqual([])
+    expect(r.target).toEqual(["id", "d", "p", "note"])
+    expect(r.clone).toEqual(r.target)
+    expect(r.diff).toEqual([])
+  })
+
+  it("clones a generated column that calls a function of the application", async () => {
+    // Функцію двигун створює пізніше за таблицю: без ребра порядку `note`
+    // обійшла б `p` навіть без згортання
+    const r = await cloneOrder(
+      [
+        "create schema app;",
+        "create function app.month_of(date) returns date language sql immutable",
+        "  as $$ select date_trunc('month', $1)::date $$;",
+        "create table app.t (id int, d date, p date generated always as (app.month_of(d)) stored, note text);",
+      ].join("\n"),
+      "app.t"
+    )
+    expect(r.errors).toEqual([])
+    expect(r.target).toEqual(["id", "d", "p", "note"])
+    expect(r.clone).toEqual(["id", "d", "p", "note"])
+    expect(r.diff).toEqual([])
+  })
+
+  it("keeps a forward reference loud instead of failing the copy", async () => {
+    // `g` посилається на пізнішу `b`: ланцюг ребер дав би цикл, тож таблиця
+    // лишається без ребер, а розбіжність порядку видно в різниці моделей
+    const r = await cloneOrder(
+      [
+        "create schema app;",
+        "create table app.f (g int generated always as (b * 2) stored, b int);",
+      ].join("\n"),
+      "app.f"
+    )
+    expect(r.status).toBe("loaded")
+    expect(r.target).toEqual(["g", "b"])
+    expect(r.clone).toEqual(["b", "g"])
+    expect(r.diff?.map((d) => d.path)).toContain("tables.app.f.columns")
   })
 
   it("reports a failed reproduction as engine.clone-failed", async () => {

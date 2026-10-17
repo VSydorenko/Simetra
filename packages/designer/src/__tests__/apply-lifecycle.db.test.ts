@@ -24,6 +24,7 @@ import {
   attribute,
   catalog,
   customTable,
+  document,
   metaFiles,
   project as projectFile,
   testDatabaseUrl,
@@ -514,6 +515,53 @@ describe("apply lifecycle", () => {
           .filter((n) => ["first", "middle", "last"].includes(n))
       expect(names(target)).toEqual(["first", "last", "middle"])
       expect(names(shadow)).toEqual(["first", "middle", "last"])
+    })
+  })
+
+  // Перше застосування ставить згенеровану `number_period` в кінець, а
+  // наступний реквізит лягає вже після неї: копія доказу мусить відтворити
+  // саме такий порядок, інакше кожен наступний план — `plan.clone-mismatch`
+  it("plans again after an attribute is added to a document", async () => {
+    await inTarget(EMPTY, scope, async (url) => {
+      const dir = await newProject()
+      const amount = attribute("amount", {
+        id: uuid(9241),
+        type: "Numeric",
+        precision: 12,
+        scale: 2,
+      })
+      const note = attribute("note", {
+        id: uuid(9242),
+        type: "String",
+        length: 50,
+      })
+      const orders = (attributes: unknown[]) => ({
+        "documents/Orders/Orders.meta.json": document("Orders", {
+          id: uuid(9240),
+          attributes,
+        }),
+      })
+
+      await writeMetadata(dir, party("Party", null), orders([amount]))
+      await committed(dir, url, await planned(dir, url))
+
+      await writeMetadata(dir, party("Party", null), orders([amount, note]))
+      await committed(dir, url, await planned(dir, url))
+      const names = (await columnOrder(url, "app.orders")).map(
+        (c) => c.split(":")[1]!
+      )
+      expect(names.indexOf("number_period")).toBeGreaterThanOrEqual(0)
+      expect(names.indexOf("number_period")).toBeLessThan(names.indexOf("note"))
+      expect(names.at(-1)).toBe("note")
+
+      await writeMetadata(dir, party("Party", null), {
+        ...orders([amount, note]),
+        "catalogs/Vendor/Vendor.meta.json": catalog("Vendor", {
+          id: uuid(9243),
+        }),
+      })
+      await committed(dir, url, await planned(dir, url))
+      await expectUnchanged(dir, url)
     })
   })
 })

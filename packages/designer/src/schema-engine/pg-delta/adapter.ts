@@ -54,6 +54,7 @@ import { readExtensionComments } from "../extension-comments"
 import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
 import { closeSavepoint, savepointPool } from "../savepoint-pool"
 import { readRoutineVolatility } from "../routine-volatility"
+import { withColumnOrder } from "./column-order"
 import { mapModel } from "./map-model"
 import type { MappingIssue } from "./map-tables"
 import { aclDefaultsOf, producedBy } from "./map-units"
@@ -781,9 +782,9 @@ async function cloneAndRun<T>(
     // Преамбулу цих планів не звіряємо з дозволеним переліком: їх виконує
     // `apply` самого двигуна, а не виконавець порту, тож перелік тут не діє;
     // плани же копіюються лише в жертовну копію й назовні не виходять.
-    // Фаза 1 (рішення 1 плану П3-2b-0) створює типи цілі раніше за таблиці:
-    // інакше двигун не вбудує колонку нового типу в `CREATE TABLE`, поставить
-    // її в кінець, і порядок колонок копії розійдеться з ціллю
+    // Фаза 1 створює типи цілі раніше за таблиці. Порядок колонок копії від
+    // неї вже не залежить, його тримають ребра плану фази 2; фаза лишається
+    // до задачі 3 плану порядку колонок, яка її прибирає
     const seeded = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
     const phase = typePhase(seeded.factBase, targetCatalog.factBase)
     let source = seeded
@@ -797,11 +798,14 @@ async function cloneAndRun<T>(
         return { status: "shadow-failed", diagnostics: [failure] }
       source = asOwnCatalog((await extractFrom(clonePool, scope)).catalog)
     }
-    // Діагностики — лише плану, що відтворює ціль: фаза 1 описує проміжний
-    // стан, а все, що вона створила, план фази 2 бачить на цілі теж
+    // Бажаний стан фази 2 — ціль з ребрами порядку колонок нових таблиць:
+    // двигун сам ставить згенеровану колонку й колонку з пізнішою функцією
+    // виразу після решти, а копія мусить мати порядок цілі, бо його звіряє
+    // доказ. Діагностики — лише цього плану: фаза 1 описує проміжний стан, а
+    // все, що вона створила, план фази 2 бачить на цілі теж
     const plan = enginePlan(
       source.factBase,
-      targetCatalog.factBase,
+      withColumnOrder(source.factBase, targetCatalog.factBase),
       source.planOptions
     )
     const failure = await reproduce(clonePool, plan, "state")
