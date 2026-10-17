@@ -419,6 +419,19 @@ describe("EventSubscription", () => {
         "CALL app.bump(NEW.version)",
       ],
       ["BEGIN CALL app.swap(NEW); RETURN NEW; END", "CALL app.swap(NEW)"],
+      // Ціль псевдоніма дерево не зберігає, а `NEW` живе й під міткою функції.
+      [
+        "DECLARE r ALIAS FOR NEW; BEGIN CALL app.bump(r.version); RETURN NEW; END",
+        "CALL app.bump(r.version)",
+      ],
+      [
+        "BEGIN CALL app.bump(stamp.new.version); RETURN NEW; END",
+        "CALL app.bump(stamp.new.version)",
+      ],
+      [
+        "BEGIN CALL app.swap(stamp.new); RETURN NEW; END",
+        "CALL app.swap(stamp.new)",
+      ],
     ])("%s", async (body, problem) => {
       expect(await found(body)).toEqual(assigns(problem))
     })

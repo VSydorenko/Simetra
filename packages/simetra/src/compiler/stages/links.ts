@@ -641,7 +641,7 @@ function mechanicsProblems(
     }
     if (statement.type === "call") {
       for (const e of statement.expressions) {
-        if (callPassesNew(e.query, mechanics, parse)) {
+        if (callPassesNew(e.query, mechanics, fn.aliases, parse)) {
           problems.push(e.query)
         }
       }
@@ -662,34 +662,42 @@ function mechanicsProblems(
 }
 
 /**
- * `CALL` передає `NEW`, `NEW.*` чи колонку механіки будь-де в аргументах.
- * Параметр `INOUT` пише лише в прямий аргумент-змінну, але вкладений теж
- * рахується: суворіше, зате без розбору сигнатури процедури. Нерозбірний
- * текст — теж відмова.
+ * `CALL` згадує `NEW` чи псевдонім будь-де в аргументах. Параметр `INOUT` пише
+ * в аргумент-змінну без цілі в дереві, а дістатися `NEW` можна й через
+ * псевдонім (`r.version`), і через мітку функції (`f.new.version`): ціль
+ * псевдоніма дерево не зберігає, тож підозрілий кожен. Дозволено лише пряме
+ * `new.<колонка не механіки>`. Вкладене теж рахується — суворіше, зате без
+ * розбору сигнатури процедури; нерозбірний текст — теж відмова.
  */
 function callPassesNew(
   query: string,
   mechanics: ReadonlySet<string>,
+  aliases: readonly string[],
   parse: SqlParser
 ): boolean {
   const parsed = parse(query)
   if (!parsed.ok) return true
+  const suspect = new Set(["new", ...aliases.map((a) => a.toLowerCase())])
   const visit = (value: unknown): boolean => {
     if (Array.isArray(value)) return value.some(visit)
     if (typeof value !== "object" || value === null) return false
     const node = value as Record<string, unknown>
     const ref = node.ColumnRef as
-      | { fields?: { String?: { sval?: string }; A_Star?: unknown }[] }
-      | undefined
-    const [first, second, ...rest] = ref?.fields ?? []
-    if (first?.String?.sval?.toLowerCase() === "new" && rest.length === 0) {
-      const column = second?.String?.sval?.toLowerCase()
-      if (
-        second === undefined ||
-        second.A_Star !== undefined ||
-        (column !== undefined && mechanics.has(column))
-      ) {
-        return true
+      { fields?: { String?: { sval?: string } }[] } | undefined
+    if (ref !== undefined) {
+      // `*` (`A_Star`) імені не має: `NEW.*` упізнає перше поле.
+      const fields = (ref.fields ?? []).map((f) =>
+        f.String?.sval === undefined ? undefined : f.String.sval.toLowerCase()
+      )
+      if (fields.some((f) => f !== undefined && suspect.has(f))) {
+        const [record, column] = fields
+        const direct =
+          fields.length === 2 &&
+          record === "new" &&
+          column !== undefined &&
+          !suspect.has(column) &&
+          !mechanics.has(column)
+        if (!direct) return true
       }
     }
     return Object.values(node).some(visit)
