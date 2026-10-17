@@ -5,7 +5,8 @@ import { objectHeaderShape } from "./object-header"
 
 /**
  * Події підписки (спека промоції §9.3): до чи після запису й видалення рядка
- * джерела. Тригер за подією генерує П3; тут — лише множина значень.
+ * джерела. Тригер за подією генерує компілятор
+ * (`compiler/subscription-units.ts`); тут — лише множина значень.
  */
 export const SUBSCRIPTION_EVENTS = [
   "beforeWrite",

@@ -490,8 +490,8 @@ function volatilityProblem(fn: FunctionNode): string | undefined {
 /**
  * Обробник підписки — функція без аргументів з `RETURNS trigger` у закритій
  * оболонці (спека промоції §9.3–§9.4) будь-де в `.sql` проєкту; тригер на неї
- * генерує П3. Як і функція множини, підпис читається з дерева розбору, а не з
- * тексту.
+ * генерує `compiler/subscription-units.ts`. Як і функція множини, підпис
+ * читається з дерева розбору, а не з тексту.
  */
 function checkSubscriptionHandlers(
   objects: readonly ParsedObject[],
