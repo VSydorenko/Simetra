@@ -60,6 +60,12 @@ are served by `simetra mcp` with the same input.
 5. **Diff.** Run `diff` on the same directory. **An empty diff right after
    introspect is the baseline; any non-empty result is a finding** — report it
    instead of editing the metadata until it disappears.
+   The one expected exception: adopting from scratch a database that
+   Simetra deployed shows the removal of each `<table>_simetra_touch`
+   trigger, a step that needs a permission, because a kind table comes back
+   as a `CustomTable` without the row mechanics (the adoption row of the
+   system schema and users spec in the Simetra repository,
+   `docs/superpowers/specs/2026-10-07-system-schema-users-design.md`).
 6. **Narrow when reconciling part of the schema.** `--tables` (MCP: `tables`)
    narrows the plan, the differences and the diagnostics to the named tables
    (`schema.table` or `table`) together with their enum types and sequences;
