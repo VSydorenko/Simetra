@@ -142,6 +142,11 @@ class `platform` only when the kind replaces it, and `plan` refuses
   permission and accept that the number is no longer filled.
 - Anything else — another `WHEN`, other events, trigger arguments, another
   function — has no replacement either.
+- A foreign trigger on a provider table (`auth.users`) that holds the name of
+  a generated one → `plan` refuses with `plan.provider-trigger-taken`, or with
+  `engine.shadow-load-failed` "trigger … already exists" when the trigger's
+  function lives in the provider schema. Give the subscription another
+  `physicalName`; for the first form, introspecting the trigger also works.
 
 ## Exit codes
 
