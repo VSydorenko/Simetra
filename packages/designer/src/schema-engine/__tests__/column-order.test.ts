@@ -430,6 +430,64 @@ describe("withColumnOrder against engine action cycles", () => {
     expect(newEdges(target, withColumnOrder(source, target))).toEqual([])
   })
 
+  it("does not descend from another schema into its children", () => {
+    // Схема не вбудовує нащадків у свою дію: функція `pub.f`, що читає
+    // пізню `b`, не стосується дій колонок `t`, хоча `a` має тип зі схеми
+    // `pub`. Спуск зі схеми хибно позбавив би таблицю ребер
+    const pub: StableId = { kind: "schema", name: "pub" }
+    const mood: StableId = { kind: "type", schema: "pub", name: "mood" }
+    const pubF: StableId = {
+      kind: "function",
+      schema: "pub",
+      name: "f",
+      args: [],
+    }
+    const pubFact: Fact = { id: pub, payload: { owner: "postgres" } }
+    const target = new FactBase(
+      [
+        schemaFact,
+        pubFact,
+        tableFact("t"),
+        columnOf("t", "id", 1),
+        columnOf("t", "g", 2, { generatedExpr: "id * 2" }),
+        columnOf("t", "a", 3, { type: "pub.mood" }),
+        columnOf("t", "b", 4),
+        { id: mood, parent: pub, payload: { variant: "enum", values: ["x"] } },
+        {
+          id: pubF,
+          parent: pub,
+          payload: {
+            def: "CREATE FUNCTION pub.f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT max(b) FROM app.t; END",
+          },
+        },
+      ],
+      [
+        depends(tbl("t"), app),
+        depends(mood, pub),
+        depends(pubF, pub),
+        depends(colOf("t", "g"), colOf("t", "id")),
+        depends(colOf("t", "a"), mood),
+        depends(pubF, colOf("t", "b")),
+        depends(pubF, tbl("t")),
+      ]
+    )
+    const result = withColumnOrder(source, target)
+    expect(newEdges(target, result)).toEqual(
+      // `g → id` уже є в цілі (вираз), ланцюг її не дублює
+      edgeKeys([
+        depends(colOf("t", "a"), colOf("t", "g")),
+        depends(colOf("t", "b"), colOf("t", "a")),
+      ])
+    )
+    const withPub = new FactBase([schemaFact, pubFact], [])
+    const sequence = plan(withPub, result).actions.flatMap((a) =>
+      a.produces.flatMap((id) =>
+        id.kind === "column" && id.table === "t" ? [id.name] : []
+      )
+    )
+    expect(sequence).toEqual(["id", "g", "a", "b"])
+  })
+
   it("keeps checking tables after one with a forward reference", () => {
     const target = new FactBase(
       [
