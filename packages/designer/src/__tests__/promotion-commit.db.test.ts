@@ -312,9 +312,10 @@ END $$;
 /**
  * `app.member` з тригером `INSERT OR UPDATE OF rank`: промоція в довідник з
  * кодом, чию нумерацію платформа ще не генерує, а тригер — клас `platform`,
- * його замінює підписка з `whenChanged` (рішення 6–7 плану П3-3a2).
+ * його замінює підписка з `whenChanged` (рішення 6–7 плану П3-3a2). `type` —
+ * тип колонки `rank`: умову над `varchar` тінь друкує з `::text`.
  */
-const audited = {
+const audited = (type: Record<string, unknown>) => ({
   // Таблиця вже в імені довідника: нумерацію про неї план каже лише тому, що
   // її переводить промоція, а не тому, що таблиці в цілі немає
   member: {
@@ -322,7 +323,7 @@ const audited = {
     physicalName: "member",
     columns: [
       ...member().columns,
-      { id: uuid(9506), name: "rank", physicalName: "rank", type: "Integer" },
+      { id: uuid(9506), name: "rank", physicalName: "rank", ...type },
     ],
   },
   files: {
@@ -356,7 +357,7 @@ const audited = {
     whenChanged: ["priority"],
     handler: { schema: "app", name: "audit_member" },
   },
-}
+})
 
 /** Тригери таблиці без внутрішніх (FK) і їхній стан увімкнення. */
 const triggersOf = (url: string, table: string) =>
@@ -473,53 +474,61 @@ describe("promotion commit", () => {
     })
   })
 
-  it("warns of the UPDATE OF narrowing and the numbering in a promotion plan", async () => {
-    await inTarget(EMPTY, scope, async (url) => {
-      const dir = await projectWith(audited)
-      const committed = await apply(dir, url, await planned(dir, url))
-      expect(errors(committed), JSON.stringify(committed.diagnostics)).toEqual(
-        []
-      )
-      const promote = await call(
-        "promote",
-        audited.mapping(),
-        options(dir, url)
-      )
-      expect(errors(promote), JSON.stringify(promote.diagnostics)).toEqual([])
-      // Підписку на довідник можна описати лише після промоції: до неї
-      // довідника `Member` немає, а без неї прийнятому тригеру нема заміни
-      const file = join(
-        dir,
-        "event-subscriptions/AuditMember/AuditMember.meta.json"
-      )
-      await mkdir(dirname(file), { recursive: true })
-      await writeFile(file, JSON.stringify(audited.subscription))
-      const r = await call("plan", {}, options(dir, url))
-      expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
-      expect((r.data as PlanData).promotion).not.toBeNull()
-      // Колонка — у старому імені, як тригер і таблиця запису
-      expect(
-        r.diagnostics
-          .filter((d) => d.severity === "warning")
-          .filter((d) =>
-            [
-              "plan.update-of-narrowed",
-              "plan.numbering-not-generated",
-            ].includes(d.code)
-          )
-          .map((d) => [d.code, d.params])
-      ).toEqual([
-        [
-          "plan.numbering-not-generated",
-          { object: "Member", table: "app.member" },
-        ],
-        [
-          "plan.update-of-narrowed",
-          { trigger: AUDIT, table: "app.member", columns: "rank" },
-        ],
-      ])
-    })
-  })
+  it.each([
+    ["an integer", { type: "Integer" }],
+    ["a varchar", { type: "String", length: 20 }],
+  ])(
+    "warns of the UPDATE OF narrowing on %s column and the numbering in a promotion plan",
+    async (_, type) => {
+      const fixture = audited(type)
+      await inTarget(EMPTY, scope, async (url) => {
+        const dir = await projectWith(fixture)
+        const committed = await apply(dir, url, await planned(dir, url))
+        expect(
+          errors(committed),
+          JSON.stringify(committed.diagnostics)
+        ).toEqual([])
+        const promote = await call(
+          "promote",
+          fixture.mapping(),
+          options(dir, url)
+        )
+        expect(errors(promote), JSON.stringify(promote.diagnostics)).toEqual([])
+        // Підписку на довідник можна описати лише після промоції: до неї
+        // довідника `Member` немає, а без неї прийнятому тригеру нема заміни
+        const file = join(
+          dir,
+          "event-subscriptions/AuditMember/AuditMember.meta.json"
+        )
+        await mkdir(dirname(file), { recursive: true })
+        await writeFile(file, JSON.stringify(fixture.subscription))
+        const r = await call("plan", {}, options(dir, url))
+        expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
+        expect((r.data as PlanData).promotion).not.toBeNull()
+        // Колонка — у старому імені, як тригер і таблиця запису
+        expect(
+          r.diagnostics
+            .filter((d) => d.severity === "warning")
+            .filter((d) =>
+              [
+                "plan.update-of-narrowed",
+                "plan.numbering-not-generated",
+              ].includes(d.code)
+            )
+            .map((d) => [d.code, d.params])
+        ).toEqual([
+          [
+            "plan.numbering-not-generated",
+            { object: "Member", table: "app.member" },
+          ],
+          [
+            "plan.update-of-narrowed",
+            { trigger: AUDIT, table: "app.member", columns: "rank" },
+          ],
+        ])
+      })
+    }
+  )
 
   it("replaces an adopted moddatetime trigger by the row mechanics", async () => {
     await inTarget(MODDATETIME, scope, async (url) => {

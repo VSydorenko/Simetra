@@ -1136,6 +1136,38 @@ END $$;`
       })
     })
 
+    it("plans a first apply over a generated whenChanged trigger on a varchar column", async () => {
+      // `pg_get_triggerdef` друкує умову над `auth.users.email` (`varchar`) з
+      // `::text`, генератор — без нього: той самий тригер не «чужий»
+      const model = await compiled({
+        ...subscription(9111, "OnUser", {
+          physicalName: "on_user",
+          sources: [{ providerTable: "auth.users" }],
+          event: "onWrite",
+          whenChanged: ["email"],
+          handler: { schema: "app", name: "on_user" },
+        }),
+        "sql/app/handlers.sql": ON_USER,
+      })
+      await inTarget(renderDesiredState(model).sql, async (url) => {
+        expect(
+          await query(
+            asSuperuser(url),
+            "select pg_get_triggerdef(oid) as def from pg_trigger where tgrelid = 'auth.users'::regclass and tgname = 'on_user'"
+          )
+        ).toEqual([
+          {
+            def: expect.stringContaining(
+              "(old.email)::text IS DISTINCT FROM (new.email)::text"
+            ),
+          },
+        ])
+        const outcome = await plan(url, model)
+        planned(outcome)
+        expect(taken(outcome)).toEqual([])
+      })
+    })
+
     it("refuses at the desired shadow a foreign trigger whose function is in the provider schema", async () => {
       // Тригер із функцією в схемі провайдера двигун вважає базовим станом
       // провайдера: він засівається в бажану тінь, і згенерований
