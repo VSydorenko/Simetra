@@ -273,7 +273,7 @@ Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
 (the single platform function `simetra.touch()`): an insert sets `version` to 1,
 an update adds 1, both set `updatedAt` to `now()` whatever the client writes.
 Never maintain them (`moddatetime`) or list them in `whenChanged`. A
-`beforeWrite` handler never assigns `NEW.updated_at` or `NEW.version` nor
+`beforeWrite` handler never assigns `NEW.updated_at` or `NEW.version` and never
 replaces the row (`NEW := …`, `SELECT … INTO NEW`): it returns `NEW`, or `NULL`
 to skip the write, never `OLD` or a copy of the row.
 

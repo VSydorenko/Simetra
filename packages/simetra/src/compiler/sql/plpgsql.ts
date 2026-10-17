@@ -1,4 +1,9 @@
-import { loadModule, parsePlPgSQLSync, parseSync } from "@libpg-query/parser"
+import {
+  loadModule,
+  parsePlPgSQLSync,
+  parseSync,
+  scanSync,
+} from "@libpg-query/parser"
 
 /**
  * Тіло функції PL/pgSQL, розібране компілятором plpgsql самого Postgres.
@@ -16,6 +21,12 @@ export interface PlpgsqlFunction {
   readonly statements: readonly PlpgsqlStatement[]
   /** Рядки (від `$тег$`) операторів, що виконують динамічний SQL. */
   readonly dynamicSqlLines: readonly number[]
+  /**
+   * Імена, оголошені через `<ім'я> ALIAS FOR …` (неквотоване — у нижньому
+   * регістрі). Псевдонім не стає змінною: дерево розбору його не несе зовсім,
+   * тож без цього списку перевірка не побачила б, що `new` означає інший запис.
+   */
+  readonly aliases: readonly string[]
 }
 
 export interface PlpgsqlVariable {
@@ -137,7 +148,60 @@ function parseFunction(sql: string): PlpgsqlParse {
   if (body === undefined || action === undefined) {
     return { ok: true, fn: undefined }
   }
-  return { ok: true, fn: readFunction(body, action) }
+  const aliases = aliasesOf(sql)
+  // Тіло, яке Postgres уже розібрав, сканер теж прочитає; якщо ж ні, —
+  // нерозбірне тіло чесніше за порожній список псевдонімів.
+  if (aliases === undefined) {
+    return { ok: false, message: "PL/pgSQL body does not compile" }
+  }
+  return { ok: true, fn: { ...readFunction(body, action), aliases } }
+}
+
+/**
+ * Псевдоніми тіла — лексемами сканера Postgres, а не регулярним виразом:
+ * рядки, коментарі й квотовані імена сканер уже відділив. Шаблон
+ * `<ім'я> ALIAS FOR` може трапитися й поза `DECLARE` (`… FROM t alias FOR
+ * UPDATE`); тоді «псевдонім» зайвий, і перевірка лише суворіша.
+ */
+function aliasesOf(sql: string): string[] | undefined {
+  try {
+    const create = asRecord(
+      asRecord(asRecord(asArray(asRecord(parseSync(sql))?.stmts)[0])?.stmt)
+        ?.CreateFunctionStmt
+    )
+    const as = asArray(create?.options)
+      .map((o) => asRecord(asRecord(o)?.DefElem))
+      .find((o) => o?.defname === "as")
+    const source = asRecord(
+      asRecord(asArray(asRecord(asRecord(as?.arg)?.List)?.items)[0])?.String
+    )?.sval
+    if (typeof source !== "string") return []
+    const tokens = scanSync(source).tokens.filter(
+      (t) => t.tokenName !== "SQL_COMMENT" && t.tokenName !== "C_COMMENT"
+    )
+    const names: string[] = []
+    tokens.forEach((token, index) => {
+      const next = tokens[index + 1]
+      const previous = tokens[index - 1]
+      if (
+        previous !== undefined &&
+        token.text.toLowerCase() === "alias" &&
+        next?.text.toLowerCase() === "for"
+      ) {
+        names.push(identName(previous.text))
+      }
+    })
+    return names
+  } catch {
+    return undefined
+  }
+}
+
+/** Ім'я, як його бачить Postgres: квотоване — дослівно, інше — в нижньому регістрі. */
+function identName(text: string): string {
+  return text.startsWith('"')
+    ? text.slice(1, -1).replaceAll('""', '"')
+    : text.toLowerCase()
 }
 
 /**
@@ -211,7 +275,10 @@ function linenoOf(body: Json, fallback = 0): number {
   return typeof body.lineno === "number" ? body.lineno : fallback
 }
 
-function readFunction(body: Json, action: Json): PlpgsqlFunction {
+function readFunction(
+  body: Json,
+  action: Json
+): Omit<PlpgsqlFunction, "aliases"> {
   const datums = asArray(body.datums).map(nodeOf)
   const statements: StatementDraft[] = []
   const dynamicLines = new Set<number>()

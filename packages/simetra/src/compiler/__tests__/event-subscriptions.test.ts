@@ -403,6 +403,22 @@ describe("EventSubscription", () => {
         "RETURN r",
       ],
       ["BEGIN RETURN OLD; END", "RETURN OLD"],
+      // Псевдонім дерево не несе зовсім, а змінна `new` затіняє запис тригера:
+      // `RETURN new` тоді повертає інше, ніж бачить перевірка.
+      [
+        "DECLARE new ALIAS FOR OLD; BEGIN RETURN new; END",
+        "declares a variable named NEW",
+      ],
+      [
+        "BEGIN DECLARE new app.t := OLD; BEGIN RETURN new; END; END",
+        "declares a variable named NEW",
+      ],
+      // Параметр `INOUT` процедури пише в аргумент без цілі в дереві.
+      [
+        "BEGIN CALL app.bump(NEW.version); RETURN NEW; END",
+        "CALL app.bump(NEW.version)",
+      ],
+      ["BEGIN CALL app.swap(NEW); RETURN NEW; END", "CALL app.swap(NEW)"],
     ])("%s", async (body, problem) => {
       expect(await found(body)).toEqual(assigns(problem))
     })
@@ -431,6 +447,9 @@ describe("EventSubscription", () => {
     it("other columns of NEW, RETURN NEW and RETURN NULL are fine", async () => {
       expect(
         await found("BEGIN NEW.number := upper(NEW.number); RETURN NEW; END")
+      ).toEqual([])
+      expect(
+        await found("BEGIN CALL app.log(NEW.number); RETURN NEW; END")
       ).toEqual([])
       expect(
         await found(

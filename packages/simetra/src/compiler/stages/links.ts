@@ -35,7 +35,7 @@ export function checkLinks(
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
     ...checkSetFunctions(objects, project, units, parse, plpgsql),
-    ...checkSubscriptionHandlers(objects, project, units, plpgsql),
+    ...checkSubscriptionHandlers(objects, project, units, parse, plpgsql),
     ...checkPolicyCurrentUser(units),
   ]
 }
@@ -497,6 +497,7 @@ function checkSubscriptionHandlers(
   objects: readonly ParsedObject[],
   project: Project,
   units: readonly VerbatimUnit[],
+  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
@@ -549,7 +550,11 @@ function checkSubscriptionHandlers(
         const mechanics = beforeWriteMechanics(spec, objects, project)
         const parsed = mechanics.size === 0 ? undefined : plpgsql(unit.sql)
         if (parsed?.ok === true && parsed.fn !== undefined) {
-          for (const assigned of mechanicsProblems(parsed.fn, mechanics)) {
+          for (const assigned of mechanicsProblems(
+            parsed.fn,
+            mechanics,
+            parse
+          )) {
             found.push(
               diagnostic(
                 "subscription.handler-assigns-mechanics",
@@ -604,12 +609,24 @@ function beforeWriteMechanics(
  * NEW`) чи в колонку механіки, або `RETURN` не `NEW` і не `NULL`. Рядок, що
  * його повертає пізніший `BEFORE`-тригер, і є рядком для запису, тож `RETURN
  * OLD` чи копія запису затерли б версію й дату, які поставила механіка.
+ *
+ * Спосіб зібрати `NEW`, якого дерево не показує, — відмова, а не пропуск:
+ * змінна чи псевдонім з ім'ям `new` затіняє запис тригера (тоді `RETURN new`
+ * повертає інше), а `CALL` з `NEW` аргументом пише в нього через `INOUT`
+ * без цілі в дереві.
  */
 function mechanicsProblems(
   fn: PlpgsqlFunction,
-  mechanics: ReadonlySet<string>
+  mechanics: ReadonlySet<string>,
+  parse: SqlParser
 ): string[] {
   const problems: string[] = []
+  // Запис тригера `new` є в списку змінних завжди; другий — уже затінення.
+  const shadows =
+    fn.variables.filter((v) => v.name.toLowerCase() === "new").length -
+    1 +
+    fn.aliases.filter((a) => a.toLowerCase() === "new").length
+  if (shadows > 0) problems.push("declares a variable named NEW")
   for (const statement of fn.statements) {
     if (statement.type === "declare") continue
     for (const name of statement.target?.variable.split(", ") ?? []) {
@@ -620,6 +637,13 @@ function mechanicsProblems(
         (column === undefined || mechanics.has(column))
       ) {
         problems.push(name.toLowerCase())
+      }
+    }
+    if (statement.type === "call") {
+      for (const e of statement.expressions) {
+        if (callPassesNew(e.query, mechanics, parse)) {
+          problems.push(e.query)
+        }
       }
     }
     if (statement.type !== "return") continue
@@ -635,6 +659,42 @@ function mechanicsProblems(
     }
   }
   return problems
+}
+
+/**
+ * `CALL` передає `NEW`, `NEW.*` чи колонку механіки будь-де в аргументах.
+ * Параметр `INOUT` пише лише в прямий аргумент-змінну, але вкладений теж
+ * рахується: суворіше, зате без розбору сигнатури процедури. Нерозбірний
+ * текст — теж відмова.
+ */
+function callPassesNew(
+  query: string,
+  mechanics: ReadonlySet<string>,
+  parse: SqlParser
+): boolean {
+  const parsed = parse(query)
+  if (!parsed.ok) return true
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit)
+    if (typeof value !== "object" || value === null) return false
+    const node = value as Record<string, unknown>
+    const ref = node.ColumnRef as
+      | { fields?: { String?: { sval?: string }; A_Star?: unknown }[] }
+      | undefined
+    const [first, second, ...rest] = ref?.fields ?? []
+    if (first?.String?.sval?.toLowerCase() === "new" && rest.length === 0) {
+      const column = second?.String?.sval?.toLowerCase()
+      if (
+        second === undefined ||
+        second.A_Star !== undefined ||
+        (column !== undefined && mechanics.has(column))
+      ) {
+        return true
+      }
+    }
+    return Object.values(node).some(visit)
+  }
+  return visit(parsed.statements.map((s) => s.stmt))
 }
 
 /**

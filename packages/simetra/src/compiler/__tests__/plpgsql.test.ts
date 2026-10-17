@@ -35,7 +35,8 @@ describe("loadPlpgsqlParser", () => {
         `BEGIN\n  NEW.total := NEW.qty * NEW.price;\n  IF NEW.status = 'draft' THEN\n    PERFORM pg_notify('x', 'y');\n  END IF;\n  RETURN NEW;\nEND`
       )
     )
-    // `RETURN NEW` компілюється у `retvarno` без виразу, тож його вирази тут не перевіряються.
+    // `RETURN NEW` приходить виразом `NEW` (обгортка не знає типу результату,
+    // тож `retvarno` не ставить); перші чотири оператори — до нього.
     expect(
       r.ok &&
         r.fn?.statements
@@ -136,6 +137,16 @@ describe("loadPlpgsqlParser", () => {
     expect(returns("r := NEW; RETURN r;")).toEqual([[{ variable: "r" }, ["r"]]])
     expect(returns("RETURN NULL;")).toEqual([[{ null: true }, ["NULL"]]])
     expect(returns("RETURN NEW.total;")).toEqual([[undefined, ["NEW.total"]]])
+  })
+
+  it("lists names declared with ALIAS FOR, which the tree does not carry", () => {
+    const f = parsed(
+      fn(
+        `DECLARE\n  new ALIAS FOR OLD;\n  "Row" ALIAS FOR NEW;\n  -- x alias for y\nBEGIN\n  RAISE NOTICE 'a alias for b';\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(f.aliases).toEqual(["new", "Row"])
+    expect(f.variables.filter((v) => v.name === "new")).toHaveLength(1)
   })
 
   it("records GET DIAGNOSTICS targets", () => {
