@@ -207,9 +207,14 @@ export function expandRole(
     const targets: RightsContract[] = []
     if (selector !== undefined && "withAction" in selector) {
       // Лише дії, які рівень дозволяє на об'єкті: нескоуплений документ з
-      // `post` під роллю скоупу має тільки `read` і не потрапляє сюди.
+      // `post` під роллю скоупу має тільки `read` і не потрапляє сюди. Об'єкт
+      // без обсягу запису селектор пропускає, як `grantAll` (Р1b-7): запис
+      // його не називав, тож помилка на ньому лише заважала б селектору.
       for (const contract of ctx.rights.values()) {
-        if (allowedActions(level, contract)?.has(selector.withAction)) {
+        if (
+          allowedActions(level, contract)?.has(selector.withAction) &&
+          (grant.extent === undefined || supports(contract, grant.extent))
+        ) {
           targets.push(contract)
         }
       }

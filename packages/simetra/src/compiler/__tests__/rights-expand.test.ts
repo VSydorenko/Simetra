@@ -308,10 +308,57 @@ describe("rights projection", () => {
     expect(rows(everyone)).toContainEqual(["Everyone", "Users", "read", "own"])
   })
 
-  it("skips unsupported extents in grantAll", async () => {
-    const model = await compiled(files(member(grantAll("own"))))
-    expect(objectsOf(model)).toContain("Task")
-    expect(objectsOf(model)).not.toContain("Region")
+  const ANNOUNCEMENT = objects(["Document", "Announcement"])
+  // Явний перелік з обсягом, якого об'єкт не має, — помилка (рядки
+  // `rejects a grant`); `grantAll` і селектор за дією такий об'єкт тихо
+  // пропускають (Р1b-7): вони його не називали.
+  it.each([
+    {
+      case: "grantAll",
+      role: "OrgMember",
+      input: files(member(grantAll("own"))),
+      present: ["Task"],
+      absent: ["Region"],
+    },
+    {
+      case: "an action selector of a document",
+      role: "Support",
+      input: files({
+        [ROLE_FILE("Support")]: {
+          grants: [grant({ withAction: "post" }, ["post"], "own")],
+        },
+      }),
+      present: [],
+      absent: ["Announcement"],
+    },
+    {
+      case: "an action selector of every object",
+      role: "OrgMember",
+      input: files(member(grant({ withAction: "read" }, ["read"], "own"))),
+      present: ["Task", "Users"],
+      absent: ["Region"],
+    },
+    {
+      case: "a deny through an action selector",
+      role: "Support",
+      input: files({
+        [ROLE_FILE("Support")]: {
+          grants: [
+            grant(ANNOUNCEMENT, ["read"], "any"),
+            deny({ withAction: "read" }, ["read"], "own"),
+          ],
+        },
+      }),
+      present: ["Announcement"],
+      absent: [],
+    },
+  ])("skips unsupported extents in $case", async (row) => {
+    const model = await compiled(row.input)
+    const granted = rows(model)
+      .filter(([role]) => role === row.role)
+      .map(([, object]) => object)
+    for (const name of row.present) expect(granted).toContain(name)
+    for (const name of row.absent) expect(granted).not.toContain(name)
   })
 
   it("grants a custom action by name", async () => {
