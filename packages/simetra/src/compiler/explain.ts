@@ -133,6 +133,12 @@ export function explainObject(
     ...(contracts.users?.objectId === object.id ? [contracts.users] : []),
     ...contracts.membership.filter((c) => c.objectId === object.id),
     ...contracts.rights.filter((c) => c.objectId === object.id),
+    ...contracts.roles.filter((c) => c.roleId === object.id),
+    // Рядки проєкції — і ролі (що вона дає), і об'єкта (хто й що на ньому
+    // може): одне джерело для обох поглядів, без повторного розгортання.
+    ...contracts.rightsProjection.filter(
+      (r) => r.roleId === object.id || r.objectId === object.id
+    ),
   ]
 
   const ownIds = new Set([object.id, ...elements.keys()])

@@ -2,6 +2,12 @@
 
 Forms of the people and rights declarations; the router is `SKILL.md`.
 
+Contents:
+
+- Users, authorship and membership
+- Rights declarations
+- Rights sets and roles
+
 ## Users, authorship and membership
 
 People are platform data, not tables you write yourself:
@@ -87,3 +93,64 @@ Dimensions and sources are project elements: add them to the project root
 (`"target": { "kind": "Project" }`) and rename or delete them by
 `{ "kind": "Project", "element": ["<name>"] }`; their names are unique among
 all named elements of the project.
+
+## Rights sets and roles
+
+A **rights set** (`rights-sets/<Name>/<Name>.meta.json`) is a named group of
+grants; a **role** (`roles/<Name>/<Name>.meta.json`) is what an assignment
+gives a member. Both get an id from `fix` and have no physical name.
+
+```jsonc
+{
+  "kind": "Role",
+  "name": "<role>",
+  "assignedOn": "global" | "everyUser" | { "scopeKind": "<scope kind>" } | { "container": <catalog ref> },
+  "include": [{ "kind": "RightsSet", "name": "<set>" }],
+  "grants": [
+    { "grantAll": { "extent": "<extent>" } },
+    { "grant": { "objects": [<object ref>], "actions": ["<action>"], "extent": "<extent>" } },
+    { "deny": { "objects": { "withAction": "<standard action>" }, "actions": ["<action>"] } }
+  ]
+}
+```
+
+A set has the same `include` and `grants`, without `assignedOn` and without
+`deny`. A role also takes `fullAccess`, `order`, `assignable`, `maxHolders`,
+`rootCreator` and `sourceKeys` (`[{ "source": "<assignment source>", "key": "<key>" }]`,
+the role's key in an adopted assignment table of the same level).
+
+**Levels** (`assignedOn`) decide which objects a role's grants may touch:
+
+- `"global"` — per user; in a project with scope kinds, unscoped objects only.
+- `{ "scopeKind": "<scope kind>" }` — per member of a tenant: every action on
+  objects of that scope kind, only `read` on unscoped ones. The scope kind
+  needs a membership.
+- `{ "container": <ref> }` — per row of a `rightsContainer` catalog: objects
+  whose `containerBinding` leads to it.
+- `"everyUser"` — every valid user without an assignment: unscoped objects,
+  `own` or a dimension extent only, no `fullAccess`, no source keys.
+
+**Grants:**
+
+- `include` — the sets' grants become the role's; includes are transitive,
+  a cycle is an error.
+- `grantAll` — every action the level allows on every object of the level
+  that supports the extent; an object without it is skipped.
+- `grant` — the listed actions on the objects. `objects` is a list of
+  references or `{ "withAction": "<standard action>" }` (every object of the
+  level that has it). A custom action is granted on exactly one listed object.
+- `deny` — only in a role: removes rows after the includes are expanded, with
+  the given extent or, without one, every extent of the actions.
+
+**Extents:** `"any"`, `"own"` (the object needs `ownership`) or
+`{ "dimension": "<dimension>" }` (the object maps it in `access`). `any`
+covers `own` and every dimension, so `X@any` also yields `X@own` and
+`X@<dimension>`; `own` and dimensions do not cover each other. An action's
+`requires` is met at the same extent or at `any`.
+
+The compiler reports these as `rights.*` (for example `rights.grant-level`,
+`rights.extent-unsupported`, `rights.requires-missing`,
+`rights.custom-action-multi-object`, `rights.include-cycle`); the full set is
+the compiler's rule catalog. Changing a role's level is an
+`identity.assigned-once-changed` error; renaming its scope kind or container
+is not.

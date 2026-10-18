@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest"
 import { compile, explainObject } from "simetra/compiler"
 import { readReferenceDomain } from "./fixtures/reference-domain"
-import { compileRights, rightsFiles } from "./fixtures/rights"
+import {
+  ORG_MEMBER_ROLE_ID,
+  ROLE_FILE,
+  SET_FILE,
+  TASK_FILE,
+  TASK_ID,
+  compileRights,
+  grant,
+  objects,
+  rightsFiles,
+  withRoles,
+} from "./fixtures/rights"
 import { attribute, metaFiles, project, salesDocument } from "./helpers"
 
 async function referenceModel() {
@@ -114,6 +125,41 @@ describe("explainObject", () => {
     expect(e.contracts).toContainEqual(
       expect.objectContaining({ kindLabel: "task", actions: expect.any(Array) })
     )
+  })
+
+  it("explains a role with its projection", async () => {
+    const TASK = objects(["Document", "Task"])
+    const result = await compileRights(
+      withRoles({
+        [TASK_FILE]: { ownership: ["assignee"] },
+        [SET_FILE("TaskReaders")]: { grants: [grant(TASK, ["read"], "any")] },
+        [ROLE_FILE("Support")]: {
+          grants: [grant(objects(["Catalog", "Users"]), ["read"], "any")],
+        },
+      })
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const model = result.model!
+    const role = explainObject(model, { kind: "Role", name: "OrgMember" })!
+    expect(role.tables).toEqual([])
+    const roleContract = model.contracts.roles.find(
+      (r) => r.roleId === ORG_MEMBER_ROLE_ID
+    )!
+    const roleRows = model.contracts.rightsProjection.filter(
+      (r) => r.roleId === ORG_MEMBER_ROLE_ID
+    )
+    expect(roleRows).not.toEqual([])
+    expect(role.contracts).toEqual([roleContract, ...roleRows])
+
+    const task = explainObject(model, { kind: "Document", name: "Task" })!
+    const taskRows = model.contracts.rightsProjection.filter(
+      (r) => r.objectId === TASK_ID
+    )
+    expect(taskRows.map((r) => r.roleId)).toContain(ORG_MEMBER_ROLE_ID)
+    // Рядки інших об'єктів (Support → Users) у пояснення задачі не входять.
+    expect(
+      task.contracts.filter((c) => Object.hasOwn(c as object, "sources"))
+    ).toEqual(taskRows)
   })
 
   it("unknown object", async () => {

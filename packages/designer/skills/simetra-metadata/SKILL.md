@@ -284,10 +284,12 @@ People are platform data, not tables you write yourself: a users catalog
 (`membership`) instead of hand-written tables and set functions. Rights are
 declarations too: `customActions`, `ownership`, `rightsContainer`,
 `containerBinding` and `access` on objects; `accessDimensions`,
-`membershipSources` and `assignmentSources` on the project. Every name in
+`membershipSources` and `assignmentSources` on the project; rights sets
+(`rights-sets/`) and roles (`roles/`) are objects of their own. Every name in
 them is a reference, so `rename` rewrites it and `delete` refuses while it is
 used; the compiler checks them (rules `users.*`, `rights.*`) and `explain`
-shows the derived rights contract. Forms of each field:
+shows the derived rights contract, a role's contract and the rows of the
+rights projection. Forms of each field:
 `references/people-and-rights.md`.
 
 ```json simetra:add
