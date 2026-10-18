@@ -77,6 +77,10 @@ Simetra port (an interface Simetra owns) and is upgraded through Simetra's
 contract tests for that port. A purely tooling dependency (a CLI parser, a
 build tool) needs only the exact pin.
 
+Known upstream defects, our workarounds, their removal conditions and the
+upgrade checklist live in [docs/dependency-monitoring.md](docs/dependency-monitoring.md);
+an upgrade updates that file in the same change.
+
 ## Disclaimer
 
 This policy is a practical guide for contributors, not legal advice. When in
