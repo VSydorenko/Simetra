@@ -309,9 +309,9 @@ describe("rights projection", () => {
   })
 
   const ANNOUNCEMENT = objects(["Document", "Announcement"])
-  // Явний перелік з обсягом, якого об'єкт не має, — помилка (рядки
-  // `rejects a grant`); `grantAll` і селектор за дією такий об'єкт тихо
-  // пропускають (Р1b-7): вони його не називали.
+  // Явний перелік з дією, рівнем чи обсягом, яких об'єкт не має, — помилка
+  // (рядки `rejects a grant`); `grantAll` і селектор за дією таку пару тихо
+  // пропускають (Р1b-7): вони об'єкта не називали.
   it.each([
     {
       case: "grantAll",
@@ -352,13 +352,47 @@ describe("rights projection", () => {
       present: ["Announcement"],
       absent: [],
     },
-  ])("skips unsupported extents in $case", async (row) => {
+    {
+      // Каталог не має `post`: селектор дає йому решту дій запису. `update`
+      // у записі — бо `post` його вимагає.
+      case: "an action selector with an action some objects lack",
+      role: "OrgMember",
+      input: files(
+        member(
+          grant({ withAction: "update" }, ["read", "update", "post"], "any")
+        )
+      ),
+      present: [],
+      absent: [],
+      actions: {
+        Task: ["post", "read", "update"],
+        TaskComment: ["read", "update"],
+      },
+    },
+    {
+      // Нескоуплений об'єкт роль скоупу лише читає (Р1b-1): `update` на ньому
+      // поза рівнем, і селектор цю пару пропускає.
+      case: "an action selector with an action the level denies",
+      role: "OrgMember",
+      input: files(
+        member(grant({ withAction: "read" }, ["read", "update"], "any"))
+      ),
+      present: [],
+      absent: [],
+      actions: { Task: ["read", "update"], Announcement: ["read"] },
+    },
+  ])("skips unsuitable pairs in $case", async (row) => {
     const model = await compiled(row.input)
-    const granted = rows(model)
-      .filter(([role]) => role === row.role)
-      .map(([, object]) => object)
-    for (const name of row.present) expect(granted).toContain(name)
-    for (const name of row.absent) expect(granted).not.toContain(name)
+    const granted = rows(model).filter(([role]) => role === row.role)
+    const objectNames = granted.map(([, object]) => object)
+    for (const name of row.present) expect(objectNames).toContain(name)
+    for (const name of row.absent) expect(objectNames).not.toContain(name)
+    for (const [name, actions] of Object.entries(row.actions ?? {})) {
+      const held = granted
+        .filter(([, object, , extent]) => object === name && extent === "any")
+        .map(([, , action]) => action)
+      expect(held.sort(), name).toEqual(actions)
+    }
   })
 
   it("grants a custom action by name", async () => {

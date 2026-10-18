@@ -189,64 +189,55 @@ export function expandRole(
     }
   }
 
-  // Об'єкти, дії й обсяги запису `grant`/`deny`, які рівень дозволяє; решта —
-  // діагностики на місці запису. Явний перелік стадія 4 вже перевірила на
-  // дії й обсяги цілей, тож невідома дія тут можлива лише в селекторі за дією.
+  // Пари (об'єкт, дія) запису `grant`/`deny`, які рівень дозволяє. Явний
+  // перелік стадія 4 вже перевірила на дії й обсяги цілей, тож тут лишається
+  // рівень; селектор за дією непридатні пари пропускає (Р1b-7).
   const resolve = (grant: ResolvedGrant) => {
-    const at = `/grants/${grant.index}/${grant.form}`
-    const report = (
-      code: Parameters<typeof diagnostic>[0],
-      pointer: string,
-      params: Record<string, string>
-    ) => diagnostics.push(diagnostic(code, grant.file, pointer, params))
     if (grant.extent !== undefined && !levelAllowsExtent(level, grant.extent)) {
       diagnostics.push(extentLevelError(grant, grant.extent))
       return []
     }
     const selector = grant.objects
-    const targets: RightsContract[] = []
-    if (selector !== undefined && "withAction" in selector) {
-      // Лише дії, які рівень дозволяє на об'єкті: нескоуплений документ з
-      // `post` під роллю скоупу має тільки `read` і не потрапляє сюди. Об'єкт
-      // без обсягу запису селектор пропускає, як `grantAll` (Р1b-7): запис
-      // його не називав, тож помилка на ньому лише заважала б селектору.
+    const found: { contract: RightsContract; action: string }[] = []
+    if (selector === undefined) return found
+    if ("withAction" in selector) {
+      // Одне правило селектора: він бере об'єкти, де рівень дозволяє його дію,
+      // і з дій запису лишає ті, що в об'єкта є, рівнем дозволені й мають
+      // обсяг запису. Об'єкта запис не називав, тож непридатна пара — не
+      // помилка, а просто не його пара; запис без рядків — теж не помилка.
       for (const contract of ctx.rights.values()) {
-        if (
-          allowedActions(level, contract)?.has(selector.withAction) &&
-          (grant.extent === undefined || supports(contract, grant.extent))
-        ) {
-          targets.push(contract)
+        const allowed = allowedActions(level, contract)
+        if (allowed?.has(selector.withAction) !== true) continue
+        if (grant.extent !== undefined && !supports(contract, grant.extent)) {
+          continue
+        }
+        for (const action of grant.actions) {
+          if (allowed.has(action)) found.push({ contract, action })
         }
       }
-    } else if (selector !== undefined) {
-      for (const id of selector.ids) {
-        const contract = ctx.rights.get(id)
-        if (contract !== undefined) targets.push(contract)
-      }
+      return found
     }
-    const found: { contract: RightsContract; action: string }[] = []
-    for (const contract of targets) {
+    for (const id of selector.ids) {
+      const contract = ctx.rights.get(id)!
       const allowed = allowedActions(level, contract)
       grant.actions.forEach((action, position) => {
-        const actionAt = `${at}/actions/${position}`
-        const params = {
-          object: objectName(contract.objectId),
-          action: actionName(contract, action),
-        }
-        if (!contract.actions.some((a) => a.action === action)) {
-          report("rights.action-unknown", actionAt, {
-            action,
-            object: params.object,
-          })
-        } else if (allowed?.has(action) !== true) {
-          report("rights.grant-level", actionAt, {
-            ...params,
-            level: level.level,
-            role: roleName,
-          })
-        } else {
+        if (allowed?.has(action) === true) {
           found.push({ contract, action })
+          return
         }
+        diagnostics.push(
+          diagnostic(
+            "rights.grant-level",
+            grant.file,
+            `/grants/${grant.index}/${grant.form}/actions/${position}`,
+            {
+              object: objectName(contract.objectId),
+              action: actionName(contract, action),
+              level: level.level,
+              role: roleName,
+            }
+          )
+        )
       })
     }
     return found
