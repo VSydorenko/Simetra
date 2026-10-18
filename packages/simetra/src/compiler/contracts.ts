@@ -395,6 +395,24 @@ export interface RoleContract {
   sets: string[]
 }
 
+/** Обсяг рядка проєкції: вимір названо id, бо ім'я виміру може змінитися. */
+export type ProjectionExtent = "any" | "own" | { dimensionId: string }
+
+/**
+ * Рядок проєкції прав (спека прав §3, §4.1): роль дає дію на об'єкт в
+ * обсязі. З проєкції Права-2 генерують таблицю прав ролей, а аналіз прав
+ * (Рх17) читає `sources` — звідки рядок узявся.
+ */
+export interface RightsProjectionRow {
+  roleId: string
+  objectId: string
+  /** Слово словника або UUID кастомної дії (Рх18). */
+  action: string
+  extent: ProjectionExtent
+  /** Роль і набори, через які рядок з'явився, за id. */
+  sources: { kind: "Role" | "RightsSet"; id: string }[]
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -426,6 +444,8 @@ export interface Contracts {
   assignmentSources: AssignmentSourceContract[]
   /** За `roleId`. */
   roles: RoleContract[]
+  /** За `roleId`, `objectId`, `action`, далі обсяг: `any` < `own` < вимір за id. */
+  rightsProjection: RightsProjectionRow[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -734,7 +754,8 @@ export function buildContracts(
   rights: readonly RightsContract[],
   accessDimensions: readonly AccessDimensionContract[],
   sources: Pick<Contracts, "membershipSources" | "assignmentSources">,
-  roles: readonly RoleContract[]
+  roles: readonly RoleContract[],
+  rightsProjection: readonly RightsProjectionRow[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -806,6 +827,7 @@ export function buildContracts(
     membershipSources: [...sources.membershipSources],
     assignmentSources: [...sources.assignmentSources],
     roles: [...roles],
+    rightsProjection: [...rightsProjection],
   }
 }
 

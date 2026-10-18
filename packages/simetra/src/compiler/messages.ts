@@ -1809,9 +1809,17 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.root-creator-level": {
     en: (p) =>
-      `rootCreator is allowed on a scope role only, not on a ${p.level} role`,
+      p.level === "global"
+        ? "rootCreator is allowed on a scope role only, not on a global role"
+        : p.level === "container"
+          ? "rootCreator is allowed on a scope role only, not on a container role"
+          : "rootCreator is allowed on a scope role only, not on a role of every user",
     uk: (p) =>
-      `rootCreator дозволено лише на ролі рівня скоупу, а не на ролі рівня ${p.level}`,
+      p.level === "global"
+        ? "rootCreator дозволено лише на ролі рівня скоупу, а не на глобальній ролі"
+        : p.level === "container"
+          ? "rootCreator дозволено лише на ролі рівня скоупу, а не на контейнерній ролі"
+          : "rootCreator дозволено лише на ролі рівня скоупу, а не на ролі кожного користувача",
     hint: {
       en: "The creator of a scope root gets a role of that scope kind; assign other levels explicitly.",
       uk: "Творець кореня скоупу отримує роль цього виду скоупу; інші рівні призначайте явно.",
@@ -1853,6 +1861,80 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Give each role its own key in the source.",
       uk: "Дайте кожній ролі власний ключ у джерелі.",
+    },
+  },
+  "rights.grant-level": {
+    en: (p) =>
+      p.level === "scope"
+        ? `A scope role cannot grant "${p.action}" on ${p.object}: it covers the objects of its scope kind and only reads unscoped ones`
+        : p.level === "global"
+          ? `A global role cannot grant "${p.action}" on ${p.object}: in a project with scope kinds it covers unscoped objects only`
+          : p.level === "container"
+            ? `A container role cannot grant "${p.action}" on ${p.object}: the object is not bound to the role container`
+            : `A role of every user cannot grant "${p.action}" on ${p.object}: it covers unscoped objects with the own or a dimension extent only`,
+    uk: (p) =>
+      p.level === "scope"
+        ? `Роль рівня скоупу не може дати "${p.action}" на ${p.object}: вона покриває об'єкти свого виду скоупу, а нескоуплені лише читає`
+        : p.level === "global"
+          ? `Глобальна роль не може дати "${p.action}" на ${p.object}: у проєкті з видами скоупу вона покриває лише нескоуплені об'єкти`
+          : p.level === "container"
+            ? `Контейнерна роль не може дати "${p.action}" на ${p.object}: об'єкт не прив'язаний до контейнера ролі`
+            : `Роль кожного користувача не може дати "${p.action}" на ${p.object}: вона покриває нескоуплені об'єкти лише з обсягом own чи виміру`,
+    hint: {
+      en: "Grant the action on a role of the level that covers the object.",
+      uk: "Дайте дію на ролі того рівня, який покриває об'єкт.",
+    },
+  },
+  "rights.extent-unsupported": {
+    en: (p) =>
+      p.extent === "own"
+        ? `${p.object} has no ownership, so it has no own extent`
+        : `${p.object} has no mapping to access dimension "${p.extent}"`,
+    uk: (p) =>
+      p.extent === "own"
+        ? `${p.object} не має власності, тож не має обсягу own`
+        : `${p.object} не має мапінгу на вимір доступу "${p.extent}"`,
+    hint: {
+      en: "Declare ownership or an access mapping on the object, or grant another extent.",
+      uk: "Оголосіть власність чи мапінг access на об'єкті або дайте інший обсяг.",
+    },
+  },
+  "rights.requires-missing": {
+    en: (p) =>
+      `"${p.action}" on ${p.object} with extent ${p.extent} requires "${p.requires}", which the role does not grant with that extent or any`,
+    uk: (p) =>
+      `"${p.action}" на ${p.object} з обсягом ${p.extent} вимагає "${p.requires}", якої роль не дає з тим самим обсягом чи any`,
+    hint: {
+      en: "Grant the required action too, or deny the action that requires it.",
+      uk: "Дайте й потрібну дію або заберіть дію, яка її вимагає.",
+    },
+  },
+  "rights.custom-table-no-contract": {
+    en: (p) =>
+      `Adopted table ${p.object} has no rights contract yet and cannot be granted`,
+    uk: (p) =>
+      `Прийнята таблиця ${p.object} ще не має контракту прав, тож її не можна дати в гранті`,
+    hint: {
+      en: "Rights of adopted tables are not designed yet; promote the table into a kind to grant it.",
+      uk: "Права прийнятих таблиць ще не спроєктовано; промотуйте таблицю у вид, щоб дати її в гранті.",
+    },
+  },
+  "rights.object-without-rights": {
+    en: (p) => `${p.object} is a ${p.kind}, which has no rights to grant`,
+    uk: (p) => `${p.object} — ${p.kind}, вид без прав, які можна дати`,
+    hint: {
+      en: "Grant objects of kinds with a rights contract: catalogs, documents, registers.",
+      uk: "Давайте в грантах об'єкти видів з контрактом прав: довідники, документи, регістри.",
+    },
+  },
+  "rights.custom-action-multi-object": {
+    en: (p) =>
+      `Custom action "${p.action}" is granted on several objects or through withAction`,
+    uk: (p) =>
+      `Кастомну дію "${p.action}" дано на кількох об'єктах чи через withAction`,
+    hint: {
+      en: "One name in different objects is a different custom action; grant it on one object at a time.",
+      uk: "Одне ім'я в різних об'єктах — різні кастомні дії; давайте її на один об'єкт за раз.",
     },
   },
   "rights.ownership-target": {

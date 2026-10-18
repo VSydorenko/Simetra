@@ -886,16 +886,46 @@ export function kitchenSink(): Map<string, string> {
 
   // Набори й ролі (спека прав §4.1): роль кожного рівня, з ключами в
   // джерелах свого рівня й включеннями. Id — поза лічильником, як у джерел.
+  // Гранти задають кожну форму запису, обсягу й селектора, і кожен —
+  // у межах рівня своїх ролей: `Viewers` включають і глобальна, і роль
+  // скоупу, тож він дає лише нескоуплених «Користувачів».
   const declaration = (n: number, kind: string, name: string) => ({
     ...schemaHint(kind),
     id: uuid(n),
     kind,
     name,
   })
-  const viewers = declaration(9940, "RightsSet", "Viewers")
+  const viewers = {
+    ...declaration(9940, "RightsSet", "Viewers"),
+    grants: [
+      {
+        grant: {
+          objects: [ref("Catalog", "Users")],
+          actions: ["read"],
+          extent: "own",
+        },
+      },
+    ],
+  }
   const editors = {
     ...declaration(9941, "RightsSet", "Editors"),
     include: [ref("RightsSet", "Viewers")],
+    grants: [{ grantAll: { extent: "any" } }],
+  }
+  // Набір лише ролі скоупу: обидві форми запису набору з виміром і селектор
+  // за дією.
+  const posters = {
+    ...declaration(9946, "RightsSet", "Posters"),
+    grants: [
+      { grantAll: { extent: { dimension: "item" } } },
+      {
+        grant: {
+          objects: { withAction: "post" },
+          actions: ["post"],
+          extent: { dimension: "item" },
+        },
+      },
+    ],
   }
   const admin = {
     ...declaration(9942, "Role", "Admin"),
@@ -913,16 +943,58 @@ export function kitchenSink(): Map<string, string> {
     maxHolders: 1,
     rootCreator: true,
     sourceKeys: [{ source: "orgGrants", key: "org_owner" }],
-    include: [ref("RightsSet", "Viewers")],
+    include: [ref("RightsSet", "Viewers"), ref("RightsSet", "Posters")],
+    // Вимір `partner` у грантах не названо: шлях його мапінгу йде через
+    // власника, а варіант фікстури з кількома власниками такі шляхи знімає.
+    // Кастомна дія `approve` — лише на одному явному об'єкті; її вимога
+    // `post` (а з нею `update` і `read`) — у тому самому гранті.
+    grants: [
+      { grantAll: { extent: "own" } },
+      {
+        grant: {
+          objects: { withAction: "post" },
+          actions: ["post"],
+          extent: { dimension: "item" },
+        },
+      },
+      {
+        grant: {
+          objects: [ref("Document", "Sale")],
+          actions: ["read", "update", "post", "approve"],
+          extent: "any",
+        },
+      },
+      {
+        deny: {
+          objects: [ref("Document", "Sale")],
+          actions: ["approve"],
+          extent: { dimension: "item" },
+        },
+      },
+      { deny: { objects: { withAction: "post" }, actions: ["delete"] } },
+    ],
   }
   const partnerManager = {
     ...declaration(9944, "Role", "PartnerManager"),
     assignedOn: { container: ref("Catalog", "Partner") },
     sourceKeys: [{ source: "partnerGrants", key: "manager" }],
+    // Товар прив'язаний до партнера-власника, тож контейнерна роль його
+    // бачить; `grantAll`, бо варіант фікстури з кількома власниками прив'язку
+    // знімає, і явний грант став би помилкою рівня.
+    grants: [{ grantAll: { extent: { dimension: "item" } } }],
   }
   const visitor = {
     ...declaration(9945, "Role", "Visitor"),
     assignedOn: "everyUser",
+    grants: [
+      {
+        grant: {
+          objects: [ref("Catalog", "Users")],
+          actions: ["read"],
+          extent: "own",
+        },
+      },
+    ],
   }
 
   const entries: Record<string, unknown> = {
@@ -946,6 +1018,7 @@ export function kitchenSink(): Map<string, string> {
     "event-subscriptions/UserDeleted/UserDeleted.meta.json": userDeleted,
     "rights-sets/Viewers/Viewers.meta.json": viewers,
     "rights-sets/Editors/Editors.meta.json": editors,
+    "rights-sets/Posters/Posters.meta.json": posters,
     "roles/Admin/Admin.meta.json": admin,
     "roles/OrgOwner/OrgOwner.meta.json": orgOwner,
     "roles/PartnerManager/PartnerManager.meta.json": partnerManager,

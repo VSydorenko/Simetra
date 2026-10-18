@@ -15,9 +15,10 @@ import {
   type MembershipSourceContract,
   type RightsAction,
   type RightsContract,
+  type RightsProjectionRow,
   type RoleContract,
 } from "../contracts"
-import { compareStrings } from "../diagnostics"
+import { compareStrings, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
 import { kindLabelOf } from "../stages/model"
@@ -37,14 +38,25 @@ import {
   customActionEffects,
   customActionsOf,
   declarationsOf,
+  grantRecords,
   headerReference,
   includedSets,
   isRightsContainer,
   ownershipOf,
+  recordCustomAction,
+  recordExtent,
+  recordObjects,
   roleLevel,
   scopeKindOf,
   sourceLevel,
+  supportedExtents,
 } from "./facts"
+import {
+  compareExtents,
+  expandRole,
+  type DeclarationInput,
+  type ResolvedGrant,
+} from "./expand"
 import { must, objectTarget, projectTarget } from "./references"
 
 /**
@@ -144,14 +156,7 @@ function rightsContract(
       carrier: resolved.contract,
     }
   })
-  const extents: RightsAction["extents"] = [
-    { form: "any" },
-    ...(ownership.length > 0 ? [{ form: "own" as const }] : []),
-    ...access.map(({ dimensionId }) => ({
-      form: "dimension" as const,
-      dimensionId,
-    })),
-  ]
+  const extents = supportedExtents(object, references)
   // Ім'я шапки стандартної дії — факт реєстру; без фізичної колонки це дрейф
   // реєстру, а не порожній ефект.
   const canonicalHeader = (header: ActionEffects["header"]) =>
@@ -407,4 +412,89 @@ export function roleContracts(
       }
     })
     .sort((a, b) => compareStrings(a.roleId, b.roleId))
+}
+
+/**
+ * Проєкція прав (спека прав §3, §4.1): рядки всіх ролей за `roleId`,
+ * `objectId`, дією й обсягом. Викликається на моделі без помилок стадій 2–5:
+ * цілі грантів резолвлено, а перевірки без рівня вже пройдено. Діагностики
+ * рівня й вимог — свої: набір, включений кількома ролями, звітує однакову
+ * помилку один раз.
+ */
+export function rightsProjection(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  rights: readonly RightsContract[],
+  roles: readonly RoleContract[],
+  project: Pick<Project, "accessDimensions">
+): { rows: RightsProjectionRow[]; diagnostics: Diagnostic[] } {
+  const inputs = new Map<string, DeclarationInput>()
+  for (const object of [
+    ...declarationsOf(objects, "set"),
+    ...declarationsOf(objects, "role"),
+  ]) {
+    inputs.set(must(object.id), {
+      kind:
+        KIND_REGISTRY[object.kind].rightsDeclaration === "role"
+          ? "Role"
+          : "RightsSet",
+      id: must(object.id),
+      grants: grantRecords(object).map((record, index): ResolvedGrant => {
+        const selector = record.objects
+        const extent = record.extent
+        return {
+          form: record.form,
+          file: object.file,
+          index,
+          ...(selector === undefined
+            ? {}
+            : {
+                objects: Array.isArray(selector)
+                  ? { ids: recordObjects(object, record, references).map(must) }
+                  : selector,
+              }),
+          actions: record.actions.map(
+            (name, at) =>
+              recordCustomAction(object, record, at, references) ?? name
+          ),
+          ...(extent === undefined
+            ? {}
+            : { extent: must(recordExtent(object, record, references)) }),
+        }
+      }),
+      include: includedSets(object, references).map(must),
+    })
+  }
+  const ctx = {
+    rights: new Map(rights.map((c) => [c.objectId, c])),
+    objectNames: new Map(objects.map((o) => [must(o.id), o.name])),
+    dimensionNames: new Map(
+      project.accessDimensions.map((d) => [must(d.id), d.name])
+    ),
+  }
+  const rows: RightsProjectionRow[] = []
+  const diagnostics = new Map<string, Diagnostic>()
+  for (const role of roles) {
+    const expanded = expandRole(
+      {
+        ...must(inputs.get(role.roleId)),
+        kind: "Role",
+        assignedOn: role.assignedOn,
+        sets: role.sets.map((id) => must(inputs.get(id))),
+      },
+      ctx
+    )
+    rows.push(...expanded.rows)
+    for (const d of expanded.diagnostics) {
+      diagnostics.set(JSON.stringify([d.code, d.file, d.pointer, d.params]), d)
+    }
+  }
+  rows.sort(
+    (a, b) =>
+      compareStrings(a.roleId, b.roleId) ||
+      compareStrings(a.objectId, b.objectId) ||
+      compareStrings(a.action, b.action) ||
+      compareExtents(a.extent, b.extent)
+  )
+  return { rows, diagnostics: [...diagnostics.values()] }
 }

@@ -13,7 +13,10 @@ import {
   assignedOnSchema,
   assignmentSourceSchema,
   customActionSchema,
+  extentSchema,
+  grantEntrySchema,
   membershipSourceSchema,
+  objectSelectorSchema,
   rightsCarrierSchema,
   rightsSetSchema,
   roleSchema,
@@ -371,6 +374,134 @@ describe("rights sets and roles", () => {
       input: set({ physicalName: "readers" }),
       ok: false,
     },
+    {
+      case: "a role with every grant form",
+      schema: roleSchema,
+      input: role({
+        grants: [
+          { grantAll: { extent: "own" } },
+          {
+            grant: {
+              objects: [{ kind: "Document", name: "Task" }],
+              actions: ["read"],
+              extent: "any",
+            },
+          },
+          {
+            deny: {
+              objects: { withAction: "post" },
+              actions: ["post"],
+            },
+          },
+        ],
+      }),
+      ok: true,
+    },
+    {
+      case: "a grant without an extent",
+      schema: roleSchema,
+      input: role({
+        grants: [
+          {
+            grant: {
+              objects: [{ kind: "Document", name: "Task" }],
+              actions: ["read"],
+            },
+          },
+        ],
+      }),
+      ok: false,
+    },
+    {
+      case: "a grant without actions",
+      schema: roleSchema,
+      input: role({
+        grants: [
+          {
+            grant: {
+              objects: [{ kind: "Document", name: "Task" }],
+              actions: [],
+              extent: "any",
+            },
+          },
+        ],
+      }),
+      ok: false,
+    },
+    {
+      case: "a grant entry of two forms",
+      schema: grantEntrySchema,
+      input: {
+        grantAll: { extent: "any" },
+        deny: { objects: { withAction: "read" }, actions: ["read"] },
+      },
+      ok: false,
+    },
+    {
+      case: "a set that grants",
+      schema: rightsSetSchema,
+      input: set({
+        grants: [
+          { grantAll: { extent: { dimension: "region" } } },
+          {
+            grant: {
+              objects: { withAction: "post" },
+              actions: ["post"],
+              extent: "any",
+            },
+          },
+        ],
+      }),
+      ok: true,
+    },
+    // `deny` віднімає з архетипу ролі, тож наборові він не належить (Р1b-5).
+    {
+      case: "a set that denies",
+      schema: rightsSetSchema,
+      input: set({
+        grants: [
+          {
+            deny: {
+              objects: [{ kind: "Document", name: "Task" }],
+              actions: ["read"],
+            },
+          },
+        ],
+      }),
+      ok: false,
+    },
+    { case: "the any extent", schema: extentSchema, input: "any", ok: true },
+    { case: "the own extent", schema: extentSchema, input: "own", ok: true },
+    {
+      case: "a dimension extent",
+      schema: extentSchema,
+      input: { dimension: "region" },
+      ok: true,
+    },
+    {
+      case: "an unknown extent",
+      schema: extentSchema,
+      input: "all",
+      ok: false,
+    },
+    {
+      case: "a list of objects",
+      schema: objectSelectorSchema,
+      input: [{ kind: "Document", name: "Task" }],
+      ok: true,
+    },
+    {
+      case: "an empty list of objects",
+      schema: objectSelectorSchema,
+      input: [],
+      ok: false,
+    },
+    {
+      case: "objects with an action",
+      schema: objectSelectorSchema,
+      input: { withAction: "post" },
+      ok: true,
+    },
     // «Кожен дійсний користувач» — рівень лише ролі, не джерела (Р1b-3).
     {
       case: "a source of every user",
@@ -397,11 +528,13 @@ describe("rights sets and roles", () => {
       rootCreator: false,
       sourceKeys: [],
       include: [],
+      grants: [],
     })
     expect(rightsSetSchema.parse(set({}))).toEqual({
       kind: "RightsSet",
       name: "Readers",
       include: [],
+      grants: [],
     })
   })
 })

@@ -186,6 +186,288 @@
         "additionalProperties": false,
         "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
       }
+    },
+    "grants": {
+      "default": [],
+      "description": "Grants of the role; deny entries remove from what the grants and the included sets give.",
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "grantAll": {
+                "type": "object",
+                "properties": {
+                  "extent": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "any"
+                      },
+                      {
+                        "type": "string",
+                        "const": "own"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "dimension": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "description": "Name of a project access dimension."
+                          }
+                        },
+                        "required": [
+                          "dimension"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Rows the grant opens: any row, own rows, or rows with a value of an access dimension of the user."
+                  }
+                },
+                "required": [
+                  "extent"
+                ],
+                "additionalProperties": false,
+                "description": "Grant every action the role level allows on every object of the level that supports the extent."
+              }
+            },
+            "required": [
+              "grantAll"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "grant": {
+                "type": "object",
+                "properties": {
+                  "objects": {
+                    "anyOf": [
+                      {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "Catalog",
+                                "Document",
+                                "Enumeration",
+                                "InformationRegister",
+                                "AccumulationRegister",
+                                "Constant",
+                                "CustomTable",
+                                "PgEnum",
+                                "EventSubscription",
+                                "RightsSet",
+                                "Role"
+                              ],
+                              "description": "Kind of the referenced metadata object."
+                            },
+                            "name": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Za-z0-9]*$",
+                              "description": "Logical name of the referenced object."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "withAction": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "description": "Standard action word; selects every object of the role level that has it."
+                          }
+                        },
+                        "required": [
+                          "withAction"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Objects of the grant: a list, or every object of the role level with an action."
+                  },
+                  "actions": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                    },
+                    "description": "Standard action words, or names of custom actions of the single object of the grant."
+                  },
+                  "extent": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "any"
+                      },
+                      {
+                        "type": "string",
+                        "const": "own"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "dimension": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "description": "Name of a project access dimension."
+                          }
+                        },
+                        "required": [
+                          "dimension"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Rows the grant opens: any row, own rows, or rows with a value of an access dimension of the user."
+                  }
+                },
+                "required": [
+                  "objects",
+                  "actions",
+                  "extent"
+                ],
+                "additionalProperties": false,
+                "description": "Grant the actions on the objects within the extent."
+              }
+            },
+            "required": [
+              "grant"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "deny": {
+                "type": "object",
+                "properties": {
+                  "objects": {
+                    "anyOf": [
+                      {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "Catalog",
+                                "Document",
+                                "Enumeration",
+                                "InformationRegister",
+                                "AccumulationRegister",
+                                "Constant",
+                                "CustomTable",
+                                "PgEnum",
+                                "EventSubscription",
+                                "RightsSet",
+                                "Role"
+                              ],
+                              "description": "Kind of the referenced metadata object."
+                            },
+                            "name": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Za-z0-9]*$",
+                              "description": "Logical name of the referenced object."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Reference to a metadata object by kind and logical name; the compiler resolves it to an id."
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "withAction": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "description": "Standard action word; selects every object of the role level that has it."
+                          }
+                        },
+                        "required": [
+                          "withAction"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Objects of the grant: a list, or every object of the role level with an action."
+                  },
+                  "actions": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                    },
+                    "description": "Standard action words, or names of custom actions of the single object of the grant."
+                  },
+                  "extent": {
+                    "description": "Extent to remove; every extent of the actions when omitted.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "any"
+                      },
+                      {
+                        "type": "string",
+                        "const": "own"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "dimension": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "description": "Name of a project access dimension."
+                          }
+                        },
+                        "required": [
+                          "dimension"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "objects",
+                  "actions"
+                ],
+                "additionalProperties": false,
+                "description": "Remove the actions from what the grants of the role and its sets give."
+              }
+            },
+            "required": [
+              "deny"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
     }
   },
   "required": [

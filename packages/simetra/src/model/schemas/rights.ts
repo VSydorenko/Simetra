@@ -297,6 +297,98 @@ const includeSchema = z.array(metadataRefSchema).default([]).meta({
 })
 
 /**
+ * Обсяг гранту (спека прав §3): усі рядки, власні рядки чи рядки зі значенням
+ * виміру доступу користувача. Вимір названо іменем елемента проєкту, тож
+ * перейменування виміру переписує грант.
+ */
+export const extentSchema = z
+  .union([
+    z.literal("any"),
+    z.literal("own"),
+    z.strictObject({
+      dimension: elementNameSchema.meta({
+        description: "Name of a project access dimension.",
+      }),
+    }),
+  ])
+  .meta({
+    description:
+      "Rows the grant opens: any row, own rows, or rows with a value of an access dimension of the user.",
+  })
+
+export type Extent = z.infer<typeof extentSchema>
+
+/**
+ * Об'єкти гранту (Р1b-6): явний перелік або «усі об'єкти рівня ролі, чиї
+ * дії мають цю» — щоб роль не перелічувала кожен документ заради `post`.
+ */
+export const objectSelectorSchema = z
+  .union([
+    z.array(metadataRefSchema).min(1),
+    z.strictObject({
+      withAction: elementNameSchema.meta({
+        description:
+          "Standard action word; selects every object of the role level that has it.",
+      }),
+    }),
+  ])
+  .meta({
+    description:
+      "Objects of the grant: a list, or every object of the role level with an action.",
+  })
+
+export type ObjectSelector = z.infer<typeof objectSelectorSchema>
+
+const grantActionsSchema = z.array(elementNameSchema).min(1).meta({
+  description:
+    "Standard action words, or names of custom actions of the single object of the grant.",
+})
+
+const grantSchema = z
+  .strictObject({
+    objects: objectSelectorSchema,
+    actions: grantActionsSchema,
+    extent: extentSchema,
+  })
+  .meta({ description: "Grant the actions on the objects within the extent." })
+
+const grantAllSchema = z.strictObject({ extent: extentSchema }).meta({
+  description:
+    "Grant every action the role level allows on every object of the level that supports the extent.",
+})
+
+const denySchema = z
+  .strictObject({
+    objects: objectSelectorSchema,
+    actions: grantActionsSchema,
+    extent: extentSchema.optional().meta({
+      description:
+        "Extent to remove; every extent of the actions when omitted.",
+    }),
+  })
+  .meta({
+    description:
+      "Remove the actions from what the grants of the role and its sets give.",
+  })
+
+/** Запис гранту набору: без `deny` — віднімання належить ролі (Р1b-5). */
+export const setGrantEntrySchema = z.union([
+  z.strictObject({ grantAll: grantAllSchema }),
+  z.strictObject({ grant: grantSchema }),
+])
+
+export type SetGrantEntry = z.infer<typeof setGrantEntrySchema>
+
+/** Запис гранту ролі: `deny` віднімає з архетипу після розгортання (Р1b-5). */
+export const grantEntrySchema = z.union([
+  z.strictObject({ grantAll: grantAllSchema }),
+  z.strictObject({ grant: grantSchema }),
+  z.strictObject({ deny: denySchema }),
+])
+
+export type GrantEntry = z.infer<typeof grantEntrySchema>
+
+/**
  * Набір прав (спека прав §4.1, Рх16): іменована група грантів, яку
  * включають ролі й інші набори. Цикл включень — помилка компілятора.
  */
@@ -306,6 +398,9 @@ export const rightsSetSchema = z.strictObject({
     .literal("RightsSet")
     .meta({ description: "Metadata kind; always RightsSet." }),
   include: includeSchema,
+  grants: z.array(setGrantEntrySchema).default([]).meta({
+    description: "Grants of the set; a set has no level and cannot deny.",
+  }),
 })
 
 export type RightsSet = z.infer<typeof rightsSetSchema>
@@ -353,6 +448,10 @@ export const roleSchema = z.strictObject({
       description: "Keys that name this role in adopted assignment sources.",
     }),
   include: includeSchema,
+  grants: z.array(grantEntrySchema).default([]).meta({
+    description:
+      "Grants of the role; deny entries remove from what the grants and the included sets give.",
+  }),
 })
 
 export type Role = z.infer<typeof roleSchema>

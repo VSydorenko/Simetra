@@ -34,6 +34,7 @@ import { checkIntegrity } from "./stages/integrity"
 import {
   accessDimensionContracts,
   rightsContracts,
+  rightsProjection,
   roleContracts,
   sourceContracts,
 } from "./rights/contracts"
@@ -194,6 +195,30 @@ export async function runStages(
   ])
   const ok = !hasErrors(diagnostics)
   if (!ok) return { ok, diagnostics }
+
+  const rights = rightsContracts(
+    stage1.objects,
+    stage2.references,
+    physical,
+    stage1.project
+  )
+  const roles = roleContracts(stage1.objects, stage2.references)
+  // Рівень ролі й вимоги дій видно лише на контрактах прав, а ті будуються
+  // лише на моделі без помилок — тож ці помилки йдуть після гейта стадій 4–5,
+  // як конфлікти тригерів нижче.
+  const projection = rightsProjection(
+    stage1.objects,
+    stage2.references,
+    rights,
+    roles,
+    stage1.project
+  )
+  if (projection.diagnostics.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...projection.diagnostics]),
+    }
+  }
 
   const scopeKindIdByFile = new Map<string, string>()
   const rootIdByPointer = new Map<string, string>()
@@ -416,12 +441,7 @@ export async function runStages(
       stage1.project,
       access,
       eventSubscriptions,
-      rightsContracts(
-        stage1.objects,
-        stage2.references,
-        physical,
-        stage1.project
-      ),
+      rights,
       accessDimensionContracts(
         stage1.objects,
         stage2.references,
@@ -434,7 +454,8 @@ export async function runStages(
         physical,
         stage1.project
       ),
-      roleContracts(stage1.objects, stage2.references)
+      roles,
+      projection.rows
     ),
     presentation: buildPresentation(
       stage1.objects,

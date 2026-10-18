@@ -19,21 +19,15 @@ import {
   grantTable,
   grantsSource,
   rightsFiles,
+  rightsSet,
   role,
-  rolesAndSets,
+  withRoles,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
-/** Ролі й набори фікстури; перевизначення зливається з файлом за шляхом. */
-function files(overrides: Record<string, Record<string, unknown>> = {}) {
-  const merged = rolesAndSets()
-  for (const [path, fields] of Object.entries(overrides)) {
-    merged[path] = { ...merged[path], ...fields }
-  }
-  return rightsFiles(merged)
-}
+const files = withRoles
 
 /** Джерела призначень контейнерного (`grants`) і глобального рівня. */
 function withSources(overrides: Record<string, Record<string, unknown>> = {}) {
@@ -205,6 +199,18 @@ describe("roles and rights sets", () => {
       params: { chain: "TaskEditors → TaskReaders → TaskEditors" },
     },
     {
+      case: "includes itself",
+      input: files({
+        [SET_FILE("TaskReaders")]: {
+          include: [ref("RightsSet", "TaskReaders")],
+        },
+      }),
+      code: "rights.include-cycle",
+      file: SET_FILE("TaskReaders"),
+      pointer: "/include/0",
+      params: { chain: "TaskReaders → TaskReaders" },
+    },
+    {
       case: "assigns on a scope kind without membership",
       input: files({
         [PROJECT_FILE]: team,
@@ -337,6 +343,27 @@ describe("roles and rights sets", () => {
   ])("rejects a role that $case", async (row) => {
     const { case: label, input, ...expected } = row
     expect(await errors(input), label).toEqual([expected])
+  })
+
+  it("closes a diamond of includes once", async () => {
+    // Ромб: роль включає B і C, обидва — D; D у замиканні один раз.
+    const result = await compileRights(
+      files({
+        [ROLE_FILE("OrgMember")]: {
+          include: [ref("RightsSet", "SetB"), ref("RightsSet", "SetC")],
+        },
+        [SET_FILE("SetB")]: rightsSet(uuid(6203), "SetB", {
+          include: [ref("RightsSet", "TaskReaders")],
+        }),
+        [SET_FILE("SetC")]: rightsSet(uuid(6204), "SetC", {
+          include: [ref("RightsSet", "TaskReaders")],
+        }),
+      })
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(
+      result.model!.contracts.roles.find((r) => r.name === "OrgMember")?.sets
+    ).toEqual([TASK_READERS_ID, uuid(6203), uuid(6204)])
   })
 
   it("needs no physical name and gets an id from fix", async () => {

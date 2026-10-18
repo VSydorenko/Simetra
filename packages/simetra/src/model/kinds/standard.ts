@@ -166,6 +166,12 @@ export type ReferenceRole =
   | "role.container"
   /** Джерело призначень у `sourceKeys[].source` ролі. */
   | "role.sourceKey"
+  /** Об'єкт у переліку `objects` гранту чи `deny`. */
+  | "grant.object"
+  /** Вимір доступу проєкту в обсязі гранту (`extent.dimension`). */
+  | "grant.dimension"
+  /** Кастомна дія єдиного об'єкта гранту в `actions` (Р1b-10). */
+  | "grant.customAction"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */

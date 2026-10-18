@@ -948,6 +948,7 @@ describe("rights declarations", () => {
         writePattern: "none",
         scope: "absent",
         physicalName: false,
+        rightsDeclaration: kind === "Role" ? "role" : "set",
       })
       expect(
         Object.keys((def.schema as z.ZodObject).shape),
@@ -1004,5 +1005,52 @@ describe("rights declarations", () => {
     expect(
       KIND_REGISTRY.RightsSet.references(set).map((r) => [r.pointer, r.role])
     ).toEqual([["/include/0", "rights.include"]])
+  })
+
+  it("index the objects and the dimensions of grants", () => {
+    // Селектор за дією об'єктів не називає; слово словника — не посилання.
+    const grants = [
+      {
+        grant: {
+          objects: [{ kind: "Document", name: "Task" }],
+          actions: ["read"],
+          extent: { dimension: "region" },
+        },
+      },
+      { grantAll: { extent: { dimension: "region" } } },
+      { deny: { objects: { withAction: "post" }, actions: ["post"] } },
+    ]
+    for (const [kind, data] of [
+      [
+        "Role",
+        roleSchema.parse({
+          kind: "Role",
+          name: "Lead",
+          assignedOn: "global",
+          grants,
+        }),
+      ],
+      [
+        "RightsSet",
+        rightsSetSchema.parse({
+          kind: "RightsSet",
+          name: "Readers",
+          grants: grants.slice(0, 2),
+        }),
+      ],
+    ] as const) {
+      const def = KIND_REGISTRY[kind]
+      expect(
+        def.references(data).map((r) => [r.pointer, r.role]),
+        kind
+      ).toEqual([["/grants/0/grant/objects/0", "grant.object"]])
+      expect(
+        def.projectReferences?.(data).map((r) => [r.pointer, r.collection]),
+        kind
+      ).toEqual([
+        ["/grants/0/grant/extent/dimension", "accessDimensions"],
+        ["/grants/1/grantAll/extent/dimension", "accessDimensions"],
+      ])
+    }
   })
 })

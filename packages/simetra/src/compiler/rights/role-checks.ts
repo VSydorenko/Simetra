@@ -1,14 +1,20 @@
-import type { Role } from "simetra/model"
+import { KIND_REGISTRY, STANDARD_ACTIONS, type Role } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { membershipOfScopeKind, type RightsCheckContext } from "./checks"
 import {
+  customActionsOf,
   declarationsOf,
+  grantRecords,
   includedSets,
   isRightsContainer,
   levelKey,
+  recordCustomAction,
+  recordExtent,
+  recordObjects,
   roleLevel,
   sourceLevel,
+  supportedExtents,
 } from "./facts"
 import { objectTarget } from "./references"
 
@@ -140,6 +146,142 @@ export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
     })
   }
   diagnostics.push(...includeCycles(ctx))
+  diagnostics.push(...checkGrants(ctx))
+  return diagnostics
+}
+
+const STANDARD_WORDS: ReadonlySet<string> = new Set(STANDARD_ACTIONS)
+
+/**
+ * Правила грантів, що не залежать від рівня ролі (спека прав §4.1, Р1b-10,
+ * Р1b-13): ціль — об'єкт з контрактом прав, дія — дія цілі, обсяг — той, що
+ * ціль підтримує, кастомна дія — лише на одному явному об'єкті. Звітуються
+ * на файлі декларації один раз, хоч скільки ролей включає набір; перевірки
+ * рівня й вимог робить розгортання на контрактах прав.
+ */
+function checkGrants(ctx: RightsCheckContext): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  const declarations = ctx.objects.filter(
+    (o) => KIND_REGISTRY[o.kind].rightsDeclaration !== undefined
+  )
+  for (const object of declarations) {
+    for (const record of grantRecords(object)) {
+      const at = record.pointer
+      const report = (
+        code: Parameters<typeof diagnostic>[0],
+        pointer: string,
+        params: Record<string, string>
+      ) => diagnostics.push(diagnostic(code, object.file, pointer, params))
+      const extent = record.extent
+      const compiled = recordExtent(object, record, ctx.references)
+      if (typeof extent === "object" && compiled === undefined) {
+        report("rights.dimension-unknown", `${at}/extent/dimension`, {
+          dimension: extent.dimension,
+        })
+      }
+      const selector = record.objects
+      if (selector === undefined) continue
+      if (!Array.isArray(selector)) {
+        // Селектор за дією бере об'єкти з цим словом словника; кастомна дія
+        // в різних об'єктах — різні UUID, тож без одного об'єкта вона
+        // неоднозначна (Р1b-10). Ключ кастомної дії в контракті — UUID, тож
+        // селектор з її іменем мовчки не взяв би жодного об'єкта. Одна
+        // причина на запис: кастомна дія в `actions` уже названа там.
+        const customAction = record.actions.some((a) => !STANDARD_WORDS.has(a))
+        if (!customAction && !STANDARD_WORDS.has(selector.withAction)) {
+          report(
+            "rights.custom-action-multi-object",
+            `${at}/objects/withAction`,
+            { action: selector.withAction }
+          )
+        }
+        record.actions.forEach((action, index) => {
+          if (STANDARD_WORDS.has(action)) return
+          report(
+            "rights.custom-action-multi-object",
+            `${at}/actions/${index}`,
+            {
+              action,
+            }
+          )
+        })
+        continue
+      }
+      const targets = recordObjects(object, record, ctx.references).flatMap(
+        (id, index) => {
+          const target = id === undefined ? undefined : ctx.byId.get(id)
+          if (target === undefined) return []
+          const def = KIND_REGISTRY[target.kind]
+          if (def.rightsExtents.length > 0) return [target]
+          // Дизайн прав прийнятих таблиць відкладено, тож у них свій код.
+          if (def.declared) {
+            report(
+              "rights.custom-table-no-contract",
+              `${at}/objects/${index}`,
+              {
+                object: target.name,
+              }
+            )
+          } else {
+            report("rights.object-without-rights", `${at}/objects/${index}`, {
+              object: target.name,
+              kind: target.kind,
+            })
+          }
+          return []
+        }
+      )
+      const single = selector.length === 1
+      record.actions.forEach((action, index) => {
+        const actionAt = `${at}/actions/${index}`
+        const standard = (target: (typeof targets)[number]) =>
+          KIND_REGISTRY[target.kind]
+            .actions(target.data)
+            .some((a) => a.name === action)
+        if (single) {
+          const target = targets[0]
+          if (target === undefined || standard(target)) return
+          if (recordCustomAction(object, record, index, ctx.references)) return
+          report("rights.action-unknown", actionAt, {
+            action,
+            object: target.name,
+          })
+          return
+        }
+        const custom =
+          !STANDARD_WORDS.has(action) ||
+          targets.some(
+            (target) =>
+              !standard(target) &&
+              customActionsOf(target).some((a) => a.name === action)
+          )
+        if (custom) {
+          report("rights.custom-action-multi-object", actionAt, { action })
+          return
+        }
+        for (const target of targets) {
+          if (standard(target)) continue
+          report("rights.action-unknown", actionAt, {
+            action,
+            object: target.name,
+          })
+        }
+      })
+      if (extent === undefined || compiled === undefined) continue
+      for (const target of targets) {
+        const supported = supportedExtents(target, ctx.references).some((e) =>
+          typeof compiled === "string"
+            ? e.form === compiled
+            : e.form === "dimension" && e.dimensionId === compiled.dimensionId
+        )
+        if (supported) continue
+        report("rights.extent-unsupported", `${at}/extent`, {
+          object: target.name,
+          extent: typeof extent === "string" ? extent : extent.dimension,
+        })
+      }
+    }
+  }
   return diagnostics
 }
 

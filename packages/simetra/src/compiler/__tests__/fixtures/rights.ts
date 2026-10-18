@@ -28,6 +28,13 @@ export const PROJECT_LEAD_ID = uuid(6212)
 export const SUPPORT_ID = uuid(6213)
 export const EVERYONE_ID = uuid(6214)
 
+export const USERS_FILE = "catalogs/Users/Users.meta.json"
+export const REGION_FILE = "catalogs/Region/Region.meta.json"
+export const ANNOUNCEMENT_ID = uuid(6090)
+export const ANNOUNCEMENT_FILE = "documents/Announcement/Announcement.meta.json"
+export const REGION_DIMENSION_ID = uuid(6060)
+export const STATUS_FILE = "enumerations/Status/Status.meta.json"
+
 export const ROLE_FILE = (name: string) => `roles/${name}/${name}.meta.json`
 export const SET_FILE = (name: string) =>
   `rights-sets/${name}/${name}.meta.json`
@@ -84,7 +91,7 @@ function defaults(): Record<string, Record<string, unknown>> {
       "Organization",
       "organization"
     ),
-    "catalogs/Users/Users.meta.json": catalog(uuid(6003), "Users", "users", {
+    [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
       role: "users",
       scope: "none",
     }),
@@ -95,7 +102,7 @@ function defaults(): Record<string, Record<string, unknown>> {
       ],
     }),
     [PROJECT_CATALOG_FILE]: catalog(PROJECT_ID, "Project", "project"),
-    "catalogs/Region/Region.meta.json": catalog(uuid(6040), "Region", "region"),
+    [REGION_FILE]: catalog(uuid(6040), "Region", "region"),
     [TASK_FILE]: {
       id: TASK_ID,
       kind: "Document",
@@ -188,14 +195,26 @@ export function role(
   return { id, kind: "Role", name, assignedOn, ...rest }
 }
 
+const ANNOUNCEMENT = {
+  id: ANNOUNCEMENT_ID,
+  kind: "Document",
+  name: "Announcement",
+  physicalName: "announcement",
+  kindLabel: "announcement",
+  scope: "none",
+}
+
 /**
  * Набори й ролі кожного рівня — перевизначення для `rightsFiles`, а не
  * типові файли: тести планів 1a їх не бачать. `OrgMember` включає
  * `TaskEditors`, а той — `TaskReaders`, тож замикання включень має два
  * кроки. Контейнерна роль вимагає прапорця контейнера на `Project`.
+ * Нескоуплений документ `Announcement` має `post`, якого рівень скоупу на
+ * ньому не дає (Р1b-1). Грантів типові ролі й набори не мають.
  */
 export function rolesAndSets(): Record<string, Record<string, unknown>> {
   return {
+    [ANNOUNCEMENT_FILE]: ANNOUNCEMENT,
     [SET_FILE("TaskReaders")]: rightsSet(TASK_READERS_ID, "TaskReaders"),
     [SET_FILE("TaskEditors")]: rightsSet(TASK_EDITORS_ID, "TaskEditors", {
       include: [ref("RightsSet", "TaskReaders")],
@@ -220,6 +239,70 @@ export function rolesAndSets(): Record<string, Record<string, unknown>> {
     [PROJECT_CATALOG_FILE]: { rightsContainer: true },
   }
 }
+
+/**
+ * Ролі й набори фікстури з шарами перевизначень: кожен шар зливається з
+ * файлом за шляхом на верхньому рівні ключів, пізніший — поверх раннього.
+ */
+export function withRoles(
+  ...layers: Record<string, Record<string, unknown>>[]
+): Map<string, string> {
+  const merged = rolesAndSets()
+  for (const layer of layers) {
+    for (const [path, fields] of Object.entries(layer)) {
+      merged[path] = { ...merged[path], ...fields }
+    }
+  }
+  return rightsFiles(merged)
+}
+
+/** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */
+export function regionDimension() {
+  return {
+    id: REGION_DIMENSION_ID,
+    name: "region",
+    target: ref("Catalog", "Region"),
+    values: {
+      relation: {
+        object: ref("InformationRegister", "MemberRegion"),
+        subject: "member",
+        value: "region",
+      },
+    },
+  }
+}
+
+/** Перерахування — вид без контракту прав. */
+export function statusEnumeration() {
+  return {
+    id: uuid(6100),
+    kind: "Enumeration",
+    name: "Status",
+    physicalName: "status",
+    values: [{ id: uuid(6101), name: "Open", physicalName: "open" }],
+  }
+}
+
+export const objects = (...refs: [kind: string, name: string][]) =>
+  refs.map(([kind, name]) => ref(kind, name))
+
+export const grant = (
+  objects: unknown,
+  actions: string[],
+  extent: unknown
+) => ({
+  grant: { objects, actions, extent },
+})
+
+export const grantAll = (extent: unknown) => ({ grantAll: { extent } })
+
+export const deny = (
+  objects: unknown,
+  actions: string[],
+  extent?: unknown
+) => ({
+  deny: { objects, actions, ...(extent === undefined ? {} : { extent }) },
+})
 
 /**
  * Файли проєкту прав. Перевизначення зливається з типовим файлом за шляхом

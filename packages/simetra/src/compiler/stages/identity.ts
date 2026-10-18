@@ -11,6 +11,7 @@ import {
   type AccessDimension,
   type AttributeCase,
   type Expr,
+  type GrantEntry,
   type MetadataKind,
   type MovementDecl,
   type Project,
@@ -565,6 +566,7 @@ export function checkIdentity(
     checkBalanceControl(object, references, diagnostics)
     resolveMembershipUser(object, references)
     resolveCustomActionRequires(object, references)
+    resolveCustomActionReferences(object, objectsByName, references)
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
       resolveIndexAttributes(object, style, references)
@@ -1278,6 +1280,53 @@ function resolveCustomActionRequires(
       })
     })
   }
+}
+
+/**
+ * Ім'я кастомної дії в `actions` гранту чи `deny` (Р1b-10) — посилання на
+ * дію єдиного явного об'єкта запису: одне ім'я в різних об'єктах — різні
+ * UUID, тож без одного об'єкта ціль неоднозначна. Окремий резолвер, бо
+ * `elementReferences` резолвить колонки, а дія колонкою не є. Слова
+ * словника — не посилання (Р1a-21); невідоме ім'я й запис кількох об'єктів
+ * тут мовчать: звітує стадія 4.
+ */
+function resolveCustomActionReferences(
+  object: ParsedObject,
+  objectsByName: ReadonlyMap<string, ParsedObject>,
+  references: ResolvedReference[]
+) {
+  if (KIND_REGISTRY[object.kind].rightsDeclaration === undefined) return
+  const objectId = object.id
+  if (objectId === undefined) return
+  const grants = (object.data as { grants: GrantEntry[] }).grants
+  grants.forEach((entry, index) => {
+    const [key, body] =
+      "grant" in entry
+        ? (["grant", entry.grant] as const)
+        : "deny" in entry
+          ? (["deny", entry.deny] as const)
+          : [undefined, undefined]
+    if (body === undefined || !Array.isArray(body.objects)) return
+    if (body.objects.length !== 1) return
+    const [only] = body.objects
+    const target = objectsByName.get(objectKey(only!.kind, only!.name))
+    const actions =
+      (target?.data as { customActions?: Element[] } | undefined)
+        ?.customActions ?? []
+    body.actions.forEach((name, at) => {
+      const id = actions.find((a) => a.name === name)?.id
+      if (typeof id !== "string") return
+      references.push({
+        from: {
+          file: object.file,
+          pointer: `/grants/${index}/${key}/actions/${at}`,
+          objectId,
+        },
+        to: { kind: "Element", id },
+        role: "grant.customAction",
+      })
+    })
+  })
 }
 
 /**

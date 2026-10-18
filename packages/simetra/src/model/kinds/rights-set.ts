@@ -1,7 +1,12 @@
 import type { MetadataRef } from "../schemas/metadata-ref"
-import { rightsSetSchema, type RightsSet } from "../schemas/rights"
+import {
+  rightsSetSchema,
+  type GrantEntry,
+  type RightsSet,
+} from "../schemas/rights"
 import {
   keyOrderOf,
+  type FoundProjectReference,
   type FoundReference,
   type KindDefinition,
 } from "./standard"
@@ -20,6 +25,53 @@ export function includeReferences(
     pair: false,
     polymorphic: false,
   }))
+}
+
+/** Тіло запису гранту з ключем форми: `grantAll`, `grant` чи `deny`. */
+function entryBody(entry: GrantEntry) {
+  if ("grantAll" in entry) return { key: "grantAll", body: entry.grantAll }
+  if ("grant" in entry) return { key: "grant", body: entry.grant }
+  return { key: "deny", body: entry.deny }
+}
+
+/**
+ * Об'єкти явного переліку гранту — посилання індексу: перейменування об'єкта
+ * переписує грант, а видалення об'єкта, на який грант посилається, бачить
+ * індекс. Селектор `withAction` об'єктів не називає.
+ */
+export function grantReferences(
+  grants: readonly GrantEntry[]
+): FoundReference[] {
+  return grants.flatMap((entry, index) => {
+    const { key, body } = entryBody(entry)
+    if (!("objects" in body) || !Array.isArray(body.objects)) return []
+    return body.objects.map((ref, at) => ({
+      pointer: `/grants/${index}/${key}/objects/${at}`,
+      ref,
+      role: "grant.object" as const,
+      pair: false,
+      polymorphic: false,
+    }))
+  })
+}
+
+/** Вимір обсягу гранту — елемент проєкту: перейменування виміру переписує грант. */
+export function grantProjectReferences(
+  grants: readonly GrantEntry[]
+): FoundProjectReference[] {
+  return grants.flatMap((entry, index) => {
+    const { key, body } = entryBody(entry)
+    const { extent } = body
+    if (typeof extent !== "object") return []
+    return [
+      {
+        pointer: `/grants/${index}/${key}/extent/dimension`,
+        name: extent.dimension,
+        collection: "accessDimensions" as const,
+        role: "grant.dimension" as const,
+      },
+    ]
+  })
 }
 
 /**
@@ -50,5 +102,9 @@ export const rightsSetKind: KindDefinition = {
   schema: rightsSetSchema,
   keyOrder: keyOrderOf(rightsSetSchema),
   rightsDeclaration: "set",
-  references: (obj) => includeReferences((obj as RightsSet).include),
+  references: (obj) => {
+    const set = obj as RightsSet
+    return [...includeReferences(set.include), ...grantReferences(set.grants)]
+  },
+  projectReferences: (obj) => grantProjectReferences((obj as RightsSet).grants),
 }

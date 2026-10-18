@@ -4,13 +4,21 @@ import {
   type ActionEffects,
   type AssignedOn,
   type CustomAction,
+  type Extent,
+  type GrantEntry,
   type MetadataRef,
+  type ObjectSelector,
   type PhysicalSnapshot,
   type Project,
   type RightsCarrier,
   type RoleAssignedOn,
 } from "simetra/model"
-import type { CompiledAssignedOn, CompiledRoleLevel } from "../contracts"
+import type {
+  CompiledAssignedOn,
+  CompiledRoleLevel,
+  ProjectionExtent,
+  RightsExtent,
+} from "../contracts"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import type { CarrierContext } from "./carriers"
@@ -221,5 +229,119 @@ export function includedSets(
   const include = (object.data as { include: MetadataRef[] }).include
   return include.map((_, index) =>
     objectTarget(object, `/include/${index}`, "rights.include", references)
+  )
+}
+
+/**
+ * Обсяги, які об'єкт підтримує (спека прав §3): `any` — завжди, `own` — з
+ * власністю, вимір — з мапінгом `access` на нього. Одне читання для
+ * контракту й правил гранту, тож «обсяг підтримано» не розійдеться з тим,
+ * що бачать Права-2.
+ */
+export function supportedExtents(
+  object: ParsedObject,
+  references: readonly ResolvedReference[]
+): RightsExtent[] {
+  return [
+    { form: "any" },
+    ...(ownershipOf(object).length > 0 ? [{ form: "own" as const }] : []),
+    ...accessOf(object).flatMap((_, index) => {
+      const dimensionId = accessDimensionId(object, index, references)
+      return dimensionId === undefined
+        ? []
+        : [{ form: "dimension" as const, dimensionId }]
+    }),
+  ]
+}
+
+/** Запис гранту декларації прав з вказівником на тіло запису. */
+export interface GrantRecord {
+  form: "grantAll" | "grant" | "deny"
+  /** Вказівник на тіло запису: `/grants/<i>/<форма>`. */
+  pointer: string
+  /** Немає — `grantAll`, що бере всі об'єкти рівня. */
+  objects?: ObjectSelector
+  /** Порожньо в `grantAll`: він бере всі дії, які дозволяє рівень. */
+  actions: readonly string[]
+  /** Немає — `deny` без обсягу, що знімає всі обсяги дії. */
+  extent?: Extent
+}
+
+/** Записи `grants` набору чи ролі в порядку файлу. */
+export function grantRecords(object: ParsedObject): GrantRecord[] {
+  const grants = (object.data as { grants: GrantEntry[] }).grants
+  return grants.map((entry, index): GrantRecord => {
+    if ("grantAll" in entry) {
+      return {
+        form: "grantAll",
+        pointer: `/grants/${index}/grantAll`,
+        actions: [],
+        extent: entry.grantAll.extent,
+      }
+    }
+    const [form, body] =
+      "grant" in entry
+        ? (["grant", entry.grant] as const)
+        : (["deny", entry.deny] as const)
+    return {
+      form,
+      pointer: `/grants/${index}/${form}`,
+      objects: body.objects,
+      actions: body.actions,
+      ...(body.extent === undefined ? {} : { extent: body.extent }),
+    }
+  })
+}
+
+/**
+ * Обсяг запису в скомпільованій формі: вимір — id з індексу посилань
+ * (`grant.dimension`). `undefined` — вимір невідомий (звітує стадія 4).
+ */
+export function recordExtent(
+  object: ParsedObject,
+  record: GrantRecord,
+  references: readonly ResolvedReference[]
+): ProjectionExtent | undefined {
+  const { extent } = record
+  if (extent === undefined || typeof extent === "string") return extent
+  const dimensionId = objectTarget(
+    object,
+    `${record.pointer}/extent/dimension`,
+    "grant.dimension",
+    references
+  )
+  return dimensionId === undefined ? undefined : { dimensionId }
+}
+
+/** Id об'єктів явного переліку запису; `undefined` — ціль не резолвлено. */
+export function recordObjects(
+  object: ParsedObject,
+  record: GrantRecord,
+  references: readonly ResolvedReference[]
+): (string | undefined)[] {
+  const selector = record.objects
+  if (selector === undefined || !Array.isArray(selector)) return []
+  return selector.map((_, at) =>
+    objectTarget(
+      object,
+      `${record.pointer}/objects/${at}`,
+      "grant.object",
+      references
+    )
+  )
+}
+
+/** UUID кастомної дії на позиції `at` в `actions` запису (`grant.customAction`). */
+export function recordCustomAction(
+  object: ParsedObject,
+  record: GrantRecord,
+  at: number,
+  references: readonly ResolvedReference[]
+): string | undefined {
+  return objectTarget(
+    object,
+    `${record.pointer}/actions/${at}`,
+    "grant.customAction",
+    references
   )
 }

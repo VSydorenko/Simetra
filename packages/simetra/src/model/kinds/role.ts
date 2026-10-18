@@ -1,5 +1,10 @@
 import { roleSchema, type Role } from "../schemas/rights"
-import { includeReferences, rightsDeclarationFacts } from "./rights-set"
+import {
+  grantProjectReferences,
+  grantReferences,
+  includeReferences,
+  rightsDeclarationFacts,
+} from "./rights-set"
 import {
   keyOrderOf,
   type FoundProjectReference,
@@ -34,7 +39,11 @@ export const roleKind: KindDefinition = {
             },
           ]
         : []
-    return [...includeReferences(role.include), ...container]
+    return [
+      ...includeReferences(role.include),
+      ...container,
+      ...grantReferences(role.grants),
+    ]
   },
   projectReferences: (obj) => {
     const role = obj as Role
@@ -58,6 +67,7 @@ export const roleKind: KindDefinition = {
         collection: "assignmentSources",
         role: "role.sourceKey",
       })),
+      ...grantProjectReferences(role.grants),
     ]
   },
 }
