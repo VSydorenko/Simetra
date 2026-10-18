@@ -476,6 +476,8 @@ describe("projectSchema", () => {
       timezone: "UTC",
       scopeKinds: [],
       accessDimensions: [],
+      membershipSources: [],
+      assignmentSources: [],
       storageBuckets: [],
     })
   })

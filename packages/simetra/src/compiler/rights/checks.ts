@@ -87,6 +87,8 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     }
   }
   diagnostics.push(...checkDimensions(ctx))
+  diagnostics.push(...checkSources(ctx))
+  diagnostics.push(...checkUsers(ctx))
   return diagnostics
 }
 
@@ -133,11 +135,17 @@ function checkOwnership(
     if (field.key) return isUsers(holder) ? [] : target("key")
     const owner = field.target!
     if (isUsers(owner)) return []
-    const membership =
-      (owner.data as { membership?: unknown }).membership !== undefined
-    if (!membership || scopeOf(owner) !== scopeOf(object)) {
-      return target("target")
-    }
+    // Прийнята таблиця — джерело членства виду об'єкта — стоїть на місці
+    // довідника членства (Р1a-24): учасник — її рядок, а складений FK
+    // (`UNIQUE (scope, id)`, §4.5) тримає його в межах тенанта.
+    const scopeKindId = scopeOf(object)
+    const catalog =
+      (owner.data as { membership?: unknown }).membership !== undefined &&
+      scopeOf(owner) === scopeKindId
+    const source =
+      scopeKindId !== undefined &&
+      membershipSourceTables(scopeKindId, ctx).includes(must(owner.id))
+    if (!catalog && !source) return target("target")
     return field.inScope
       ? []
       : [
@@ -209,7 +217,7 @@ function scopeKindOf(
 function projectTarget(
   pointer: string,
   role: ResolvedReference["role"],
-  ctx: RightsCheckContext
+  ctx: Pick<RightsCheckContext, "references">
 ): string | undefined {
   return ctx.references.find(
     (r) =>
@@ -372,6 +380,172 @@ function checkAccess(
   })
 }
 
+/**
+ * Правила прийнятих джерел (спека прав §4.7): таблиця — прийнята
+ * (`CustomTable`) і без `FORCE ROW LEVEL SECURITY`, бо функції прав
+ * `SECURITY DEFINER` інакше проходили б її політики; вид скоупу відомий і має
+ * одне членство — довідник чи джерело (Р1a-17); рівень контейнера — об'єкт із
+ * `rightsContainer`, а колонка контейнера є саме на контейнерному рівні.
+ */
+function checkSources(ctx: RightsCheckContext): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  const report = (
+    code: Parameters<typeof diagnostic>[0],
+    pointer: string,
+    params: Record<string, string>
+  ) => diagnostics.push(diagnostic(code, PROJECT_FILE, pointer, params))
+  const known = new Set(ctx.scopeKinds.map((k) => k.name))
+  const table = (source: { name: string }, at: string) => {
+    const id = projectTarget(`${at}/table`, "source.table", ctx)
+    const target = id === undefined ? undefined : ctx.byId.get(id)
+    // Невідому ціль уже звітувала стадія 2 (`reference.unresolved`).
+    if (target === undefined) return
+    if (!KIND_REGISTRY[target.kind].declared) {
+      report("rights.source-table", `${at}/table`, { source: source.name })
+    } else if (
+      (target.data as { rowLevelSecurity?: string }).rowLevelSecurity ===
+      "forced"
+    ) {
+      report("rights.source-forced-rls", `${at}/table`, {
+        source: source.name,
+        table: target.name,
+      })
+    }
+  }
+  // Членство виду рахується наростаючим підсумком: перше джерело виду без
+  // довідника законне, кожне наступне — дубль.
+  const counted = new Set<string>()
+  ctx.project.membershipSources.forEach((source, index) => {
+    const at = `/membershipSources/${index}`
+    if (!known.has(source.scopeKind)) {
+      report("rights.scope-kind-unknown", `${at}/scopeKind`, {
+        scopeKind: source.scopeKind,
+      })
+    } else {
+      const kindId = projectTarget(`${at}/scopeKind`, "source.scopeKind", ctx)
+      if (kindId !== undefined) {
+        const catalog = membershipCatalogs(kindId, ctx).length > 0
+        if (catalog || counted.has(kindId)) {
+          report("rights.membership-source-duplicate", `${at}/scopeKind`, {
+            scopeKind: source.scopeKind,
+          })
+        }
+        counted.add(kindId)
+      }
+    }
+    table(source, at)
+  })
+  ctx.project.assignmentSources.forEach((source, index) => {
+    const at = `/assignmentSources/${index}`
+    const level = source.assignedOn
+    const container = level !== "global" && "container" in level
+    if (
+      level !== "global" &&
+      "scopeKind" in level &&
+      !known.has(level.scopeKind)
+    ) {
+      report("rights.scope-kind-unknown", `${at}/assignedOn/scopeKind`, {
+        scopeKind: level.scopeKind,
+      })
+    }
+    if (container) {
+      const pointer = `${at}/assignedOn/container`
+      const id = projectTarget(pointer, "source.container", ctx)
+      const target = id === undefined ? undefined : ctx.byId.get(id)
+      if (
+        target !== undefined &&
+        (target.data as { rightsContainer?: boolean }).rightsContainer !== true
+      ) {
+        report("rights.container-target", pointer, {
+          source: source.name,
+          name: target.name,
+        })
+      }
+    }
+    if (container && source.columns.container === undefined) {
+      report("rights.source-container-column", `${at}/columns`, {
+        source: source.name,
+        reason: "missing",
+      })
+    }
+    if (!container && source.columns.container !== undefined) {
+      report("rights.source-container-column", `${at}/columns/container`, {
+        source: source.name,
+        reason: "unexpected",
+      })
+    }
+    table(source, at)
+  })
+  return diagnostics
+}
+
+/**
+ * Декларації прав без «Користувачів» можливі лише з прийнятим джерелом
+ * членства (спека прав §4.6): інакше множини «моїх» значень і суб'єкти
+ * призначень не мали б з чим зіставити поточного користувача. Права-1b
+ * додадуть до декларацій ролі й набори прав.
+ */
+function checkUsers(ctx: RightsCheckContext): Diagnostic[] {
+  if (ctx.objects.some(isUsers) || ctx.project.membershipSources.length > 0) {
+    return []
+  }
+  const declared =
+    ctx.project.accessDimensions.length > 0 ||
+    ctx.project.assignmentSources.length > 0 ||
+    ctx.objects.some(
+      (o) =>
+        ownershipOf(o).length > 0 ||
+        accessOf(o).length > 0 ||
+        bindingOf(o) !== undefined
+    )
+  return declared
+    ? [diagnostic("rights.users-missing", PROJECT_FILE, "", {})]
+    : []
+}
+
+/** Довідники членства виду скоупу. */
+function membershipCatalogs(
+  scopeKindId: string,
+  ctx: Pick<RightsCheckContext, "objects" | "references">
+): ParsedObject[] {
+  return ctx.objects.filter(
+    (o) =>
+      (o.data as { membership?: unknown }).membership !== undefined &&
+      scopeKindOf(o, ctx.references) === scopeKindId
+  )
+}
+
+/** Id таблиць прийнятих джерел членства виду скоупу. */
+function membershipSourceTables(
+  scopeKindId: string,
+  ctx: Pick<RightsCheckContext, "project" | "references">
+): string[] {
+  return ctx.project.membershipSources.flatMap((_, index) => {
+    const at = `/membershipSources/${index}`
+    const kind = projectTarget(`${at}/scopeKind`, "source.scopeKind", ctx)
+    const table = projectTarget(`${at}/table`, "source.table", ctx)
+    return kind === scopeKindId && table !== undefined ? [table] : []
+  })
+}
+
+/**
+ * Чим вид скоупу має членство (Р1a-17): довідником, прийнятим джерелом чи
+ * нічим. Права-1b читає це для вимоги «вид скоупу має членство» (Рх7);
+ * `setFunction: "membership"` і далі вимагає саме довідника.
+ */
+export function membershipOfScopeKind(
+  scopeKindId: string,
+  objects: readonly ParsedObject[],
+  ctx: Pick<RightsCheckContext, "project" | "references">
+): "catalog" | "source" | undefined {
+  if (membershipCatalogs(scopeKindId, { objects, ...ctx }).length > 0) {
+    return "catalog"
+  }
+  return membershipSourceTables(scopeKindId, ctx).length > 0
+    ? "source"
+    : undefined
+}
+
 function isUsers(object: ParsedObject): boolean {
   return (object.data as { role?: string }).role === "users"
 }
@@ -458,4 +632,10 @@ function requiresCycles(
     if (state[i] === "new") visit(i)
   })
   return diagnostics
+}
+
+/** Стадія 2 гарантує id об'єкта; відсутність — дефект компілятора. */
+function must<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("internal: missing rights input")
+  return value
 }

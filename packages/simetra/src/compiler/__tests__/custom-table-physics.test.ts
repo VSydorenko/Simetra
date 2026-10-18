@@ -303,7 +303,7 @@ describe("CustomTable physics round-trip", () => {
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
     const physical = result.model!.physical
     // Знімок похідних таблиць видів 1С (усе, крім CustomTable `ledger`,
-    // `ledger_tag` і `note`)
+    // `ledger_tag`, `note` і таблиць джерел прав `crew`, `role_grant`)
     // побайтно той самий, що до появи нових полів: хеш зафіксовано до зміни.
     // Оновлено свідомо разом із константою `MainColor` фікстури: єдина
     // різниця — її власна таблиця `main_color`. Потім додано `COLLATE "C"`
@@ -327,7 +327,10 @@ describe("CustomTable physics round-trip", () => {
     // `simetra.identities`; без неї хеш той самий, що до шару.
     const derived = {
       tables: physical.tables.filter(
-        (t) => !["ledger", "ledger_tag", "note"].includes(t.name)
+        (t) =>
+          !["ledger", "ledger_tag", "note", "crew", "role_grant"].includes(
+            t.name
+          )
       ),
       enumTypes: physical.enumTypes,
     }

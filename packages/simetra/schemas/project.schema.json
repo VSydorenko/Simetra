@@ -403,6 +403,249 @@
         "additionalProperties": false
       }
     },
+    "membershipSources": {
+      "default": [],
+      "description": "Adopted tables that hold the membership of a scope kind instead of a membership catalog.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical name of the membership source, unique among all named elements of the project."
+          },
+          "scopeKind": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Name of the project scope kind whose membership the table holds."
+          },
+          "table": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum",
+                  "EventSubscription"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false,
+            "description": "Adopted table (CustomTable) with the membership rows."
+          },
+          "columns": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Column with the scope value."
+              },
+              "user": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Column with the user id."
+              },
+              "active": {
+                "description": "Boolean column; only active rows count as membership.",
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "scope",
+              "user"
+            ],
+            "additionalProperties": false,
+            "description": "Logical names of the table columns."
+          }
+        },
+        "required": [
+          "name",
+          "scopeKind",
+          "table",
+          "columns"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "assignmentSources": {
+      "default": [],
+      "description": "Adopted tables that hold role assignments of one level.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical name of the assignment source, unique among all named elements of the project."
+          },
+          "assignedOn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "global"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "scopeKind": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                    "description": "Name of the project scope kind of the level."
+                  }
+                },
+                "required": [
+                  "scopeKind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "container": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "Catalog",
+                          "Document",
+                          "Enumeration",
+                          "InformationRegister",
+                          "AccumulationRegister",
+                          "Constant",
+                          "CustomTable",
+                          "PgEnum",
+                          "EventSubscription"
+                        ],
+                        "description": "Kind of the referenced metadata object."
+                      },
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Za-z0-9]*$",
+                        "description": "Logical name of the referenced object."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Rights container object of the level."
+                  }
+                },
+                "required": [
+                  "container"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Level of the assignment: global, a scope kind or a rights container."
+          },
+          "table": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum",
+                  "EventSubscription"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false,
+            "description": "Adopted table (CustomTable) with the assignment rows."
+          },
+          "columns": {
+            "type": "object",
+            "properties": {
+              "member": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Column with the member (a user for the global level)."
+              },
+              "role": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Column with the role key declared by a role in sourceKeys."
+              },
+              "container": {
+                "description": "Column with the container; required for the container level only.",
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+              },
+              "active": {
+                "description": "Boolean column; only active rows count as assignments.",
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+              }
+            },
+            "required": [
+              "member",
+              "role"
+            ],
+            "additionalProperties": false,
+            "description": "Logical names of the table columns."
+          }
+        },
+        "required": [
+          "name",
+          "assignedOn",
+          "table",
+          "columns"
+        ],
+        "additionalProperties": false
+      }
+    },
     "storageBuckets": {
       "default": [],
       "description": "Provider storage buckets whose access policies follow a scope kind.",

@@ -1526,9 +1526,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.container-target": {
     en: (p) =>
-      `Container binding "${p.attribute}" references "${p.name}", which is not a rights container`,
+      p.source === undefined
+        ? `Container binding "${p.attribute}" references "${p.name}", which is not a rights container`
+        : `Assignment source "${p.source}" is assigned on "${p.name}", which is not a rights container`,
     uk: (p) =>
-      `Прив'язка до контейнера "${p.attribute}" посилається на "${p.name}", який не є контейнером прав`,
+      p.source === undefined
+        ? `Прив'язка до контейнера "${p.attribute}" посилається на "${p.name}", який не є контейнером прав`
+        : `Джерело призначень "${p.source}" має рівень "${p.name}", який не є контейнером прав`,
     hint: {
       en: "Set rightsContainer: true on the target catalog or name another attribute.",
       uk: "Задайте rightsContainer: true на довіднику-цілі або назвіть інший реквізит.",
@@ -1653,15 +1657,73 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Перевірка прав кличе функцію значень, тож сама вона прав не читає: зі схеми платформи дозволено лише simetra.current_user_id(), а кожна викликана функція — LANGUAGE sql функція проєкту, згенерована функція членства чи вбудована, що не виконує SQL з рядка.",
     },
   },
+  "rights.source-table": {
+    en: (p) => `Table of source "${p.source}" is not an adopted table`,
+    uk: (p) => `Таблиця джерела "${p.source}" — не прийнята таблиця`,
+    hint: {
+      en: "A source names a CustomTable; a membership catalog declares membership itself.",
+      uk: "Джерело називає CustomTable; довідник членства оголошує членство сам.",
+    },
+  },
+  "rights.source-forced-rls": {
+    en: (p) =>
+      `Table ${p.table} of source "${p.source}" forces row level security`,
+    uk: (p) =>
+      `Таблиця ${p.table} джерела "${p.source}" примусово вмикає безпеку рядків`,
+    hint: {
+      en: "Rights functions are SECURITY DEFINER and would pass through the table policies: drop rowLevelSecurity: forced.",
+      uk: "Функції прав — SECURITY DEFINER і проходили б політики таблиці: приберіть rowLevelSecurity: forced.",
+    },
+  },
+  "rights.membership-source-duplicate": {
+    en: (p) => `Scope kind "${p.scopeKind}" already has a membership`,
+    uk: (p) => `Вид скоупу "${p.scopeKind}" уже має членство`,
+    hint: {
+      en: "A scope kind has one membership: a membership catalog or one membership source.",
+      uk: "Вид скоупу має одне членство: довідник членства або одне джерело членства.",
+    },
+  },
+  "rights.source-container-column": {
+    en: (p) =>
+      p.reason === "missing"
+        ? `Assignment source "${p.source}" is assigned on a container but names no container column`
+        : `Assignment source "${p.source}" names a container column, but its level is not a container`,
+    uk: (p) =>
+      p.reason === "missing"
+        ? `Джерело призначень "${p.source}" має рівень контейнера, але не називає колонки контейнера`
+        : `Джерело призначень "${p.source}" називає колонку контейнера, а його рівень — не контейнер`,
+    hint: {
+      en: "columns.container is required on the container level and only there.",
+      uk: "columns.container обов'язкова на контейнерному рівні й лише там.",
+    },
+  },
+  "rights.scope-kind-unknown": {
+    en: (p) => `Scope kind "${p.scopeKind}" is not declared in the project`,
+    uk: (p) => `Вид скоупу "${p.scopeKind}" не оголошено в проєкті`,
+    hint: {
+      en: "Name a scope kind from scopeKinds of project.meta.json.",
+      uk: "Назвіть вид скоупу з scopeKinds файлу project.meta.json.",
+    },
+  },
+  "rights.users-missing": {
+    en: () =>
+      "The project declares rights but has neither the users catalog nor a membership source",
+    uk: () =>
+      "Проєкт оголошує права, але не має ні довідника «Користувачі», ні джерела членства",
+    hint: {
+      en: "Declare a catalog with role: users, or an adopted membership source on a provider where the user id is the session subject.",
+      uk: "Оголосіть довідник з role: users або прийняте джерело членства на провайдері, де id користувача — суб'єкт сесії.",
+    },
+  },
   "rights.ownership-target": {
     en: (p) =>
       p.reason === "key"
         ? `Owner "${p.attribute}" is the key, but only the users catalog owns its own rows`
-        : `Owner "${p.attribute}" references neither the membership catalog of the object's scope kind nor the users catalog`,
+        : `Owner "${p.attribute}" references neither a membership catalog or adopted membership source of the object's scope kind nor the users catalog`,
     uk: (p) =>
       p.reason === "key"
         ? `Власник "${p.attribute}" — ключ, але власником свого рядка є лише довідник «Користувачі»`
-        : `Власник "${p.attribute}" не посилається ні на довідник членства виду скоупу об'єкта, ні на «Користувачі»`,
+        : `Власник "${p.attribute}" не посилається ні на довідник членства чи прийняте джерело членства виду скоупу об'єкта, ні на «Користувачі»`,
     hint: {
       en: "Name a reference to a member of the same scope kind or to the users catalog; ref is an owner only on the users catalog.",
       uk: "Назвіть посилання на учасника того самого виду скоупу чи на «Користувачі»; ref — власник лише в довіднику «Користувачі».",

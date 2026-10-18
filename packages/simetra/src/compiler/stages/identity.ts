@@ -502,6 +502,14 @@ export function checkIdentity(
       references
     )
   })
+  resolveSources(
+    project,
+    scopeKindsByName,
+    resolveObjectRef,
+    style,
+    references,
+    diagnostics
+  )
   for (const object of objects) {
     for (const found of KIND_REGISTRY[object.kind].projectReferences?.(
       object.data
@@ -619,6 +627,104 @@ function resolveDimension(
       role: "dimension.relationField",
     })
   }
+}
+
+/**
+ * Посилання прийнятих джерел (спека прав §4.7): таблиця, вид скоупу, контейнер
+ * рівня й колонки. Власник — саме джерело, як у виміру: перейменування
+ * таблиці, колонки чи виду бачить індекс і переписує мапінг. Невідома колонка
+ * прийнятої таблиці — помилка опису джерела тут, як і будь-яке ім'я колонки,
+ * що називає опис таблиці; ціль не `CustomTable` і невідомий вид звітують
+ * правила джерела стадії 4.
+ */
+function resolveSources(
+  project: Project | undefined,
+  scopeKindsByName: ReadonlyMap<string, ScopeKind>,
+  resolveObjectRef: ObjectRefResolver,
+  style: AttributeCase | undefined,
+  references: ResolvedReference[],
+  diagnostics: Diagnostic[]
+) {
+  const scopeKind = (
+    sourceId: string | undefined,
+    pointer: string,
+    name: string
+  ) => {
+    const kind = scopeKindsByName.get(name)
+    if (sourceId === undefined || kind?.id === undefined) return
+    references.push({
+      from: { file: PROJECT_FILE, pointer, objectId: sourceId },
+      to: { kind: "ScopeKind", id: kind.id },
+      role: "source.scopeKind",
+    })
+  }
+  const table = (
+    source: { id?: string; table: { kind: string; name: string } },
+    at: string,
+    columns: readonly (readonly [string, string | undefined])[]
+  ) => {
+    const target = resolveObjectRef(
+      PROJECT_FILE,
+      source.id,
+      { pointer: `${at}/table`, ref: source.table },
+      "source.table"
+    )
+    if (target === undefined || !KIND_REGISTRY[target.kind].declared) return
+    const byName = columnTable(target, style)
+    if (byName === undefined) return
+    for (const [field, name] of columns) {
+      if (name === undefined) continue
+      const pointer = `${at}/columns/${field}`
+      if (!byName.has(name)) {
+        diagnostics.push(
+          diagnostic("customTable.column-unknown", PROJECT_FILE, pointer, {
+            column: name,
+            table: target.name,
+          })
+        )
+        continue
+      }
+      const id = byName.get(name)
+      if (id === undefined || source.id === undefined) continue
+      references.push({
+        from: { file: PROJECT_FILE, pointer, objectId: source.id },
+        to: { kind: "Element", id },
+        role: "source.column",
+      })
+    }
+  }
+  ;(project?.membershipSources ?? []).forEach((source, index) => {
+    const at = `/membershipSources/${index}`
+    scopeKind(source.id, `${at}/scopeKind`, source.scopeKind)
+    const { scope, user, active } = source.columns
+    table(source, at, [
+      ["scope", scope],
+      ["user", user],
+      ["active", active],
+    ])
+  })
+  ;(project?.assignmentSources ?? []).forEach((source, index) => {
+    const at = `/assignmentSources/${index}`
+    const level = source.assignedOn
+    if (level !== "global" && "scopeKind" in level) {
+      scopeKind(source.id, `${at}/assignedOn/scopeKind`, level.scopeKind)
+    }
+    if (level !== "global" && "container" in level) {
+      resolveObjectRef(
+        PROJECT_FILE,
+        source.id,
+        { pointer: `${at}/assignedOn/container`, ref: level.container },
+        "source.container"
+      )
+    }
+    const { member, role, container, active } = source.columns
+    table(source, at, [
+      ["member", member],
+      ["role", role],
+      ["container", container],
+      ["active", active],
+    ])
+  })
 }
 
 /** Роль типового значення за роллю одиночного `Ref`, що його несе. */

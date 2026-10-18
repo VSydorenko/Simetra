@@ -4,7 +4,11 @@ import { localizedStringSchema } from "./localized-string"
 import type { SchemaRule } from "./rules"
 import { ATTRIBUTE_CASES, elementNameSchema } from "./identity"
 import { NO_SCOPE, scopeKindSchema } from "./scope"
-import { accessDimensionSchema } from "./rights"
+import {
+  accessDimensionSchema,
+  assignmentSourceSchema,
+  membershipSourceSchema,
+} from "./rights"
 
 /**
  * Пресети провайдера бази (платформна спека §6.9). Проєкт вибирає пресет
@@ -247,6 +251,14 @@ export const projectSchema = z
     accessDimensions: z.array(accessDimensionSchema).default([]).meta({
       description:
         "Access dimensions of the application: value catalogs that grants may restrict rows by.",
+    }),
+    // Джерела припускають С8 (id користувача = sub): провайдер поки один — Supabase; другий провайдер введе факт пресету й перевірку.
+    membershipSources: z.array(membershipSourceSchema).default([]).meta({
+      description:
+        "Adopted tables that hold the membership of a scope kind instead of a membership catalog.",
+    }),
+    assignmentSources: z.array(assignmentSourceSchema).default([]).meta({
+      description: "Adopted tables that hold role assignments of one level.",
     }),
     // Бакет — ключ політик сховища провайдера; сам бакет створює провайдер,
     // а тут лише декларація, за якою П3 генерує політики за скоупом.

@@ -27,6 +27,8 @@ describe("namedCollections", () => {
     expect([...namedCollections(projectSchema).keys()]).toEqual([
       "scopeKinds",
       "accessDimensions",
+      "membershipSources",
+      "assignmentSources",
     ])
   })
 })

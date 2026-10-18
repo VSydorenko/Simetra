@@ -10,7 +10,10 @@ import { projectSchema } from "../schemas/project"
 import {
   accessDimensionSchema,
   accessMappingSchema,
+  assignedOnSchema,
+  assignmentSourceSchema,
   customActionSchema,
+  membershipSourceSchema,
   rightsCarrierSchema,
 } from "../schemas/rights"
 import { METADATA_KINDS } from "../schemas/metadata-kind"
@@ -220,5 +223,65 @@ describe("access mapping", () => {
         def.rightsExtents.includes("dimension")
       )
     }
+  })
+})
+
+describe("adopted sources", () => {
+  const table = { kind: "CustomTable", name: "RoleGrant" }
+
+  it("assignedOn accepts three forms and rejects a mixed one", () => {
+    for (const form of [
+      "global",
+      { scopeKind: "org" },
+      { container: { kind: "Catalog", name: "Project" } },
+    ]) {
+      expect(
+        assignedOnSchema.safeParse(form).success,
+        JSON.stringify(form)
+      ).toBe(true)
+    }
+    expect(
+      assignedOnSchema.safeParse({
+        scopeKind: "org",
+        container: { kind: "Catalog", name: "Project" },
+      }).success
+    ).toBe(false)
+    expect(assignedOnSchema.safeParse("scope").success).toBe(false)
+  })
+
+  it("parses both sources strictly", () => {
+    expect(
+      membershipSourceSchema.safeParse({
+        name: "members",
+        scopeKind: "org",
+        table,
+        columns: { scope: "orgId", user: "userId", active: "isActive" },
+      }).success
+    ).toBe(true)
+    expect(
+      membershipSourceSchema.safeParse({
+        name: "members",
+        scopeKind: "org",
+        table,
+        columns: { scope: "orgId", user: "userId", member: "id" },
+      }).success
+    ).toBe(false)
+    expect(
+      assignmentSourceSchema.safeParse({
+        name: "grants",
+        assignedOn: "global",
+        table,
+        columns: { member: "memberId", role: "roleKey" },
+      }).success
+    ).toBe(true)
+  })
+
+  it("live on the project with empty defaults", () => {
+    const parsed = projectSchema.parse({
+      name: "App",
+      database: { provider: "supabase" },
+    })
+    expect(parsed.membershipSources).toEqual([])
+    expect(parsed.assignmentSources).toEqual([])
   })
 })

@@ -159,3 +159,101 @@ export const accessSchema = z.array(accessMappingSchema).min(1).meta({
   description:
     "Access dimensions that restrict the rows of this object, each with its carrier.",
 })
+
+/**
+ * Рівень призначення (спека прав §4.1, §4.7): глобальний, вид скоупу чи
+ * об'єкт-контейнер. Одна форма для ролі й джерела призначень, тож рівень
+ * джерела порівнюється з рівнем ролі без перекладу.
+ */
+export const assignedOnSchema = z
+  .union([
+    z.literal("global"),
+    z.strictObject({
+      scopeKind: elementNameSchema.meta({
+        description: "Name of the project scope kind of the level.",
+      }),
+    }),
+    z.strictObject({
+      container: metadataRefSchema.meta({
+        description: "Rights container object of the level.",
+      }),
+    }),
+  ])
+  .meta({
+    description:
+      "Level of the assignment: global, a scope kind or a rights container.",
+  })
+
+export type AssignedOn = z.infer<typeof assignedOnSchema>
+
+/**
+ * Прийняте джерело членства (спека прав §4.7): `CustomTable`, чиї рядки
+ * пов'язують користувача зі значенням виду скоупу. Колонки — логічні імена
+ * колонок таблиці, тож перейменування колонки переписує мапінг.
+ */
+export const membershipSourceSchema = z.strictObject({
+  // Як у виду скоупу: обов'язковість id дає стадія 2.
+  id: metadataIdSchema.optional(),
+  name: elementNameSchema.meta({
+    description:
+      "Logical name of the membership source, unique among all named elements of the project.",
+  }),
+  scopeKind: elementNameSchema.meta({
+    description:
+      "Name of the project scope kind whose membership the table holds.",
+  }),
+  table: metadataRefSchema.meta({
+    description: "Adopted table (CustomTable) with the membership rows.",
+  }),
+  columns: z
+    .strictObject({
+      scope: elementNameSchema.meta({
+        description: "Column with the scope value.",
+      }),
+      user: elementNameSchema.meta({
+        description: "Column with the user id.",
+      }),
+      active: elementNameSchema.optional().meta({
+        description: "Boolean column; only active rows count as membership.",
+      }),
+    })
+    .meta({ description: "Logical names of the table columns." }),
+})
+
+export type MembershipSource = z.infer<typeof membershipSourceSchema>
+
+/**
+ * Прийняте джерело призначень (спека прав §4.7): `CustomTable`, чиї рядки
+ * дають учаснику роль на одному рівні. Рівень — стала джерела (Р1a-16).
+ */
+export const assignmentSourceSchema = z.strictObject({
+  id: metadataIdSchema.optional(),
+  name: elementNameSchema.meta({
+    description:
+      "Logical name of the assignment source, unique among all named elements of the project.",
+  }),
+  assignedOn: assignedOnSchema,
+  table: metadataRefSchema.meta({
+    description: "Adopted table (CustomTable) with the assignment rows.",
+  }),
+  columns: z
+    .strictObject({
+      member: elementNameSchema.meta({
+        description: "Column with the member (a user for the global level).",
+      }),
+      role: elementNameSchema.meta({
+        description:
+          "Column with the role key declared by a role in sourceKeys.",
+      }),
+      container: elementNameSchema.optional().meta({
+        description:
+          "Column with the container; required for the container level only.",
+      }),
+      active: elementNameSchema.optional().meta({
+        description: "Boolean column; only active rows count as assignments.",
+      }),
+    })
+    .meta({ description: "Logical names of the table columns." }),
+})
+
+export type AssignmentSource = z.infer<typeof assignmentSourceSchema>

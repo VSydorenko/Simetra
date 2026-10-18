@@ -340,6 +340,42 @@ export interface AccessDimensionContract {
     | { function: QualifiedName }
 }
 
+/** Рівень призначення з id замість імен (спека прав §4.1, §4.7). */
+export type CompiledAssignedOn =
+  | { level: "global" }
+  | { level: "scope"; scopeKindId: string }
+  | { level: "container"; containerId: string }
+
+/**
+ * Прийняте джерело членства (спека прав §4.7): таблиця й фізичні колонки,
+ * з яких Права-2 будують функції членства виду скоупу.
+ */
+export interface MembershipSourceContract {
+  sourceId: string
+  name: string
+  scopeKindId: string
+  table: QualifiedName
+  /** Колонка значення скоупу. */
+  scope: string
+  /** Колонка id користувача (С8). */
+  user: string
+  /** Колонка активності; немає — активний кожен рядок. */
+  active?: string
+}
+
+/** Прийняте джерело призначень (спека прав §4.7): один рівень, фізичні колонки. */
+export interface AssignmentSourceContract {
+  sourceId: string
+  name: string
+  assignedOn: CompiledAssignedOn
+  table: QualifiedName
+  member: string
+  role: string
+  /** Колонка контейнера; є саме на контейнерному рівні. */
+  container?: string
+  active?: string
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -365,6 +401,10 @@ export interface Contracts {
   rights: RightsContract[]
   /** За `dimensionId`. */
   accessDimensions: AccessDimensionContract[]
+  /** За `sourceId`. */
+  membershipSources: MembershipSourceContract[]
+  /** За `sourceId`. */
+  assignmentSources: AssignmentSourceContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -671,7 +711,8 @@ export function buildContracts(
   access: readonly AccessContract[],
   eventSubscriptions: readonly EventSubscriptionContract[],
   rights: readonly RightsContract[],
-  accessDimensions: readonly AccessDimensionContract[]
+  accessDimensions: readonly AccessDimensionContract[],
+  sources: Pick<Contracts, "membershipSources" | "assignmentSources">
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -740,6 +781,8 @@ export function buildContracts(
     ),
     rights: [...rights],
     accessDimensions: [...accessDimensions],
+    membershipSources: [...sources.membershipSources],
+    assignmentSources: [...sources.assignmentSources],
   }
 }
 

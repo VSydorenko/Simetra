@@ -239,6 +239,45 @@ export function kitchenSink(): Map<string, string> {
         values: { function: { schema: "public", name: "my_partner_ids" } },
       },
     ],
+    // Прийняті джерела (спека прав §4.7): членство виду `user`, у якого немає
+    // довідника членства, і призначення на всіх трьох рівнях. Id — поза
+    // лічильником, як у вимірів.
+    membershipSources: [
+      {
+        id: uuid(9910),
+        name: "crew",
+        scopeKind: "user",
+        table: ref("CustomTable", "Crew"),
+        columns: { scope: "userRoot", user: "account", active: "isActive" },
+      },
+    ],
+    assignmentSources: [
+      {
+        id: uuid(9911),
+        name: "globalGrants",
+        assignedOn: "global",
+        table: ref("CustomTable", "RoleGrant"),
+        columns: { member: "memberId", role: "roleKey", active: "isActive" },
+      },
+      {
+        id: uuid(9912),
+        name: "orgGrants",
+        assignedOn: { scopeKind: "org" },
+        table: ref("CustomTable", "RoleGrant"),
+        columns: { member: "memberId", role: "roleKey" },
+      },
+      {
+        id: uuid(9913),
+        name: "partnerGrants",
+        assignedOn: { container: ref("Catalog", "Partner") },
+        table: ref("CustomTable", "RoleGrant"),
+        columns: {
+          member: "memberId",
+          role: "roleKey",
+          container: "partnerId",
+        },
+      },
+    ],
   }
 
   const organization = {
@@ -804,6 +843,41 @@ export function kitchenSink(): Map<string, string> {
     ],
   }
 
+  // Таблиці прийнятих джерел; id — поза лічильником, щоб не зсувати решти.
+  const sourceColumn = (
+    n: number,
+    name: string,
+    physicalName: string,
+    type: string
+  ) => ({ id: uuid(n), name, physicalName, type, notNull: true })
+  const crew = {
+    ...header("CustomTable", "Crew", "crew"),
+    id: uuid(9920),
+    kindLabel: "crew",
+    columns: [
+      sourceColumn(9921, "id", "id", "UUID"),
+      sourceColumn(9922, "userRoot", "user_root", "UUID"),
+      sourceColumn(9923, "account", "account", "UUID"),
+      sourceColumn(9924, "isActive", "is_active", "Boolean"),
+    ],
+    primaryKey: { name: "crew_pk", columns: ["id"] },
+    scope: "none",
+  }
+  const roleGrant = {
+    ...header("CustomTable", "RoleGrant", "role_grant"),
+    id: uuid(9930),
+    kindLabel: "role_grant",
+    columns: [
+      sourceColumn(9931, "id", "id", "UUID"),
+      sourceColumn(9932, "memberId", "member_id", "UUID"),
+      sourceColumn(9933, "roleKey", "role_key", "Text"),
+      sourceColumn(9934, "partnerId", "partner_id", "UUID"),
+      sourceColumn(9935, "isActive", "is_active", "Boolean"),
+    ],
+    primaryKey: { name: "role_grant_pk", columns: ["id"] },
+    scope: "none",
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
@@ -819,6 +893,8 @@ export function kitchenSink(): Map<string, string> {
     "custom-tables/Ledger/Ledger.meta.json": ledger,
     "custom-tables/LedgerTag/LedgerTag.meta.json": ledgerTag,
     "custom-tables/Note/Note.meta.json": note,
+    "custom-tables/Crew/Crew.meta.json": crew,
+    "custom-tables/RoleGrant/RoleGrant.meta.json": roleGrant,
     "event-subscriptions/StampItem/StampItem.meta.json": stampItem,
     "event-subscriptions/UserDeleted/UserDeleted.meta.json": userDeleted,
     "sql/public/subscription-handlers.sql": handlers,

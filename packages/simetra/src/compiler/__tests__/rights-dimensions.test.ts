@@ -307,6 +307,8 @@ describe("access dimensions", () => {
             ],
           }),
           "catalogs/Region/Region.meta.json": catalog("Region"),
+          // Права без «Користувачів» — `rights.users-missing` (§4.6).
+          "catalogs/Users/Users.meta.json": catalog("Users", { role: "users" }),
         }),
         "my_regions"
       )

@@ -12,6 +12,10 @@ import {
 import {
   mainTableOf,
   type AccessDimensionContract,
+  type AssignmentSourceContract,
+  type CompiledAssignedOn,
+  type Contracts,
+  type MembershipSourceContract,
   type RightsAction,
   type RightsContract,
 } from "../contracts"
@@ -332,6 +336,97 @@ export function accessDimensionContracts(
       }
     })
     .sort((a, b) => compareStrings(a.dimensionId, b.dimensionId))
+}
+
+/**
+ * Контракти прийнятих джерел (спека прав §4.7): ідентичність, рівень і
+ * таблиця з фізичними колонками. Викликається лише на моделі без помилок:
+ * таблиці, колонки, види й контейнери вже резолвила стадія 2 і перевірила
+ * стадія 4.
+ */
+export function sourceContracts(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  physical: PhysicalSnapshot,
+  project: Project
+): Pick<Contracts, "membershipSources" | "assignmentSources"> {
+  const byId = new Map(objects.map((o) => [must(o.id), o]))
+  const toId = (pointer: string, role: ResolvedReference["role"]) =>
+    references.find(
+      (r) =>
+        r.from.file === PROJECT_FILE &&
+        r.from.pointer === pointer &&
+        r.role === role
+    )?.to.id
+  // Таблиця джерела й фізична колонка за логічним полем мапінгу.
+  const tableOf = (at: string) => {
+    const object = must(byId.get(must(toId(`${at}/table`, "source.table"))))
+    const table = must(mainTableOf(physical, must(object.id)))
+    const columns = elementColumns(object, table, project.naming.attributeCase)
+    const column = (field: string) =>
+      must(
+        columns.get(must(toId(`${at}/columns/${field}`, "source.column")))?.[0]
+      )
+    return {
+      table: { schema: table.schema, name: table.name },
+      column,
+    }
+  }
+  const membershipSources = project.membershipSources
+    .map((source, index): MembershipSourceContract => {
+      const at = `/membershipSources/${index}`
+      const { table, column } = tableOf(at)
+      return {
+        sourceId: must(source.id),
+        name: source.name,
+        scopeKindId: must(toId(`${at}/scopeKind`, "source.scopeKind")),
+        table,
+        scope: column("scope"),
+        user: column("user"),
+        ...(source.columns.active === undefined
+          ? {}
+          : { active: column("active") }),
+      }
+    })
+    .sort((a, b) => compareStrings(a.sourceId, b.sourceId))
+  const assignmentSources = project.assignmentSources
+    .map((source, index): AssignmentSourceContract => {
+      const at = `/assignmentSources/${index}`
+      const { table, column } = tableOf(at)
+      const level = source.assignedOn
+      const assignedOn: CompiledAssignedOn =
+        level === "global"
+          ? { level: "global" }
+          : "scopeKind" in level
+            ? {
+                level: "scope",
+                scopeKindId: must(
+                  toId(`${at}/assignedOn/scopeKind`, "source.scopeKind")
+                ),
+              }
+            : {
+                level: "container",
+                containerId: must(
+                  toId(`${at}/assignedOn/container`, "source.container")
+                ),
+              }
+      return {
+        sourceId: must(source.id),
+        name: source.name,
+        assignedOn,
+        table,
+        member: column("member"),
+        role: column("role"),
+        ...(source.columns.container === undefined
+          ? {}
+          : { container: column("container") }),
+        ...(source.columns.active === undefined
+          ? {}
+          : { active: column("active") }),
+      }
+    })
+    .sort((a, b) => compareStrings(a.sourceId, b.sourceId))
+  return { membershipSources, assignmentSources }
 }
 
 /** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */

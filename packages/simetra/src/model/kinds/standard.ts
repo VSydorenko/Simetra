@@ -150,6 +150,14 @@ export type ReferenceRole =
   | "dimension.relationObject"
   /** Поле об'єкта зв'язку виміру (`values.relation.subject`/`value`). */
   | "dimension.relationField"
+  /** Прийнята таблиця джерела членства чи призначень (`table`). */
+  | "source.table"
+  /** Колонка таблиці джерела в `columns` джерела. */
+  | "source.column"
+  /** Вид скоупу джерела: `scopeKind` членства, `assignedOn.scopeKind` призначень. */
+  | "source.scopeKind"
+  /** Контейнер рівня джерела призначень (`assignedOn.container`). */
+  | "source.container"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */

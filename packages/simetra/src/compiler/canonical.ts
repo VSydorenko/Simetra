@@ -179,12 +179,15 @@ export function canonicalSnapshot(model: Omit<CompiledModel, "hash">): unknown {
   // Види скоупу — лише резолвленою формою: у файлі проєкту корінь названо
   // іменем, а `$schema` — шлях для редактора. Бакети й виміри доступу теж
   // називають цілі іменем; їхня резолвлена форма — `contracts.storageBuckets`
-  // і `contracts.accessDimensions`.
+  // і `contracts.accessDimensions`. Так само джерела членства й призначень —
+  // `contracts.membershipSources` і `contracts.assignmentSources`.
   const unresolved = new Set([
     "$schema",
     "scopeKinds",
     "storageBuckets",
     "accessDimensions",
+    "membershipSources",
+    "assignmentSources",
   ])
   const project = Object.fromEntries(
     Object.entries(model.project).filter(([key]) => !unresolved.has(key))
