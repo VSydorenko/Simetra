@@ -1537,11 +1537,23 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   "rights.carrier-cross-tenant": {
-    en: (p) => `Rights carrier "${p.attribute}" leaves the tenant`,
-    uk: (p) => `Носій прав "${p.attribute}" виходить за межі тенанта`,
+    en: (p) =>
+      p.host === "unscoped"
+        ? `Rights carrier "${p.attribute}" is not a reference within the scope: its object is not scoped`
+        : `Rights carrier "${p.attribute}" leaves the tenant`,
+    uk: (p) =>
+      p.host === "unscoped"
+        ? `Носій прав "${p.attribute}" не є посиланням у межах скоупу: його об'єкт не скоуплений`
+        : `Носій прав "${p.attribute}" виходить за межі тенанта`,
     hint: {
-      en: "The reference must stay within the scope (a composite foreign key): drop crossScope or name another attribute.",
-      uk: "Посилання мусить лишатися в межах скоупу (складений зовнішній ключ): приберіть crossScope або назвіть інший реквізит.",
+      en: (p) =>
+        p.host === "unscoped"
+          ? "A carrier stays within the scope through a composite foreign key, which only a scoped object has: scope the object or drop the declaration."
+          : "The reference must stay within the scope (a composite foreign key): drop crossScope or name another attribute.",
+      uk: (p) =>
+        p.host === "unscoped"
+          ? "Носій тримається межі скоупу складеним зовнішнім ключем, а його має лише скоуплений об'єкт: скоупіть об'єкт або приберіть декларацію."
+          : "Посилання мусить лишатися в межах скоупу (складений зовнішній ключ): приберіть crossScope або назвіть інший реквізит.",
     },
   },
   "rights.container-target": {

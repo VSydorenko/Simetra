@@ -2,12 +2,9 @@ import {
   KIND_REGISTRY,
   actionRequires,
   closeRequires,
-  type AccessMapping,
   type ActionEffects,
-  type CustomAction,
   type PhysicalSnapshot,
   type Project,
-  type RightsCarrier,
 } from "simetra/model"
 import {
   mainTableOf,
@@ -30,63 +27,20 @@ import {
   resolveCarrier,
   type CarrierContext,
 } from "./carriers"
+import {
+  accessCarrier,
+  accessDimensionId,
+  accessOf,
+  bindingOf,
+  carrierContext,
+  customActionEffects,
+  customActionsOf,
+  headerReference,
+  isRightsContainer,
+  ownershipOf,
+  scopeKindOf,
+} from "./facts"
 import { must, projectTarget } from "./references"
-
-/** Кастомні дії розібраного об'єкта виду з контрактом прав. */
-export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
-  return (object.data as { customActions?: CustomAction[] }).customActions ?? []
-}
-
-/** Носії `ownership` об'єкта виду з обсягом `own`. */
-export function ownershipOf(object: ParsedObject): readonly RightsCarrier[] {
-  return (object.data as { ownership?: RightsCarrier[] }).ownership ?? []
-}
-
-/** Носій `containerBinding` об'єкта виду з фактом `rightsBinding`. */
-export function bindingOf(object: ParsedObject): RightsCarrier | undefined {
-  return (object.data as { containerBinding?: RightsCarrier }).containerBinding
-}
-
-/** Мапінги `access` об'єкта виду з обсягом `dimension`. */
-export function accessOf(object: ParsedObject): readonly AccessMapping[] {
-  return (object.data as { access?: AccessMapping[] }).access ?? []
-}
-
-/** Носій мапінгу й його вказівник: реквізит чи шлях `ref`. */
-export function accessCarrier(
-  mapping: AccessMapping,
-  index: number
-): { carrier: RightsCarrier; pointer: string } {
-  return "attribute" in mapping
-    ? { carrier: mapping.attribute, pointer: `/access/${index}/attribute` }
-    : { carrier: mapping.ref, pointer: `/access/${index}/ref` }
-}
-
-/** Id виміру, який називає мапінг: його резолвить стадія 2 (`access.dimension`). */
-export function accessDimensionId(
-  object: ParsedObject,
-  index: number,
-  references: readonly ResolvedReference[]
-): string | undefined {
-  const pointer = `/access/${index}/dimension`
-  return references.find(
-    (r) =>
-      r.role === "access.dimension" &&
-      r.from.file === object.file &&
-      r.from.pointer === pointer
-  )?.to.id
-}
-
-/**
- * Ефекти кастомної дії: `dml` не оголошується, а виводиться (Р1a-8) — є що
- * писати, отже це оновлення рядка; інакше дія нічого не пише.
- */
-export function customActionEffects(action: CustomAction): ActionEffects {
-  const header = action.effects.header ?? []
-  const tabularSections = action.effects.tabularSections ?? false
-  const writes = header === "all" || header.length > 0 || tabularSections
-  return { dml: writes ? ["update"] : [], header, tabularSections }
-}
 
 /**
  * Контракти прав (спека прав §3): запис має кожен об'єкт виду з непорожнім
@@ -99,12 +53,7 @@ export function rightsContracts(
   physical: PhysicalSnapshot,
   project: Project
 ): RightsContract[] {
-  const ctx: CarrierContext = {
-    references,
-    physical,
-    project,
-    byId: new Map(objects.map((o) => [must(o.id), o])),
-  }
+  const ctx = carrierContext({ objects, references, physical, project })
   return objects
     .filter((object) => KIND_REGISTRY[object.kind].rightsExtents.length > 0)
     .map((object) => rightsContract(object, ctx))
@@ -208,19 +157,18 @@ function rightsContract(
             columnsOf.get(standardElementId(objectId, { logicalName: name }))
           )
         )
+  // Ім'я шапки кастомної дії резолвила стадія 2 і перевірила стадія 4, тож
+  // відсутня колонка — дефект компілятора, а не тихо порожній ефект.
   const customHeader = (index: number, header: ActionEffects["header"]) =>
     header === "all"
       ? ("all" as const)
-      : header.flatMap((_, at) => {
-          const pointer = `/customActions/${index}/effects/header/${at}`
-          const target = references.find(
-            (r) =>
-              r.from.file === object.file &&
-              r.from.pointer === pointer &&
-              r.role === "customAction.header"
+      : header.flatMap((_, at) =>
+          must(
+            columnsOf.get(
+              must(headerReference(object, index, at, references)).to.id
+            )
           )
-          return columnsOf.get(must(target).to.id) ?? []
-        })
+        )
 
   const actions: RightsAction[] = [
     ...standard.map((a) => ({
@@ -250,9 +198,7 @@ function rightsContract(
       }
     }),
   ]
-  const scopeKindId = references.find(
-    (r) => r.role === "object.scope" && r.from.file === object.file
-  )?.to.id
+  const scopeKindId = scopeKindOf(object, references)
   return {
     objectId,
     kindLabel: must(kindLabelOf(object)),
@@ -260,9 +206,7 @@ function rightsContract(
     ...(scopeKindId === undefined ? {} : { scopeKindId }),
     actions,
     ownership,
-    ...((object.data as { rightsContainer?: boolean }).rightsContainer === true
-      ? { container: true as const }
-      : {}),
+    ...(isRightsContainer(object) ? { container: true as const } : {}),
     ...(binding === undefined ? {} : { binding }),
     access,
   }
@@ -278,12 +222,7 @@ export function accessDimensionContracts(
   physical: PhysicalSnapshot,
   project: Project
 ): AccessDimensionContract[] {
-  const ctx: CarrierContext = {
-    references,
-    physical,
-    project,
-    byId: new Map(objects.map((o) => [must(o.id), o])),
-  }
+  const ctx = carrierContext({ objects, references, physical, project })
   const toId = (pointer: string, role: ResolvedReference["role"]) =>
     must(projectTarget(pointer, role, { references }))
   return project.accessDimensions
@@ -346,7 +285,7 @@ export function sourceContracts(
   physical: PhysicalSnapshot,
   project: Project
 ): Pick<Contracts, "membershipSources" | "assignmentSources"> {
-  const byId = new Map(objects.map((o) => [must(o.id), o]))
+  const { byId } = carrierContext({ objects, references, physical, project })
   const toId = (pointer: string, role: ResolvedReference["role"]) =>
     projectTarget(pointer, role, { references })
   // Таблиця джерела й фізична колонка за логічним полем мапінгу.

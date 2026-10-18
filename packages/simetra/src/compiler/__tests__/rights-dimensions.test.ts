@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, localize } from "simetra/compiler"
 import {
   MEMBER_REGION_ID,
   TASK_FILE,
@@ -306,6 +306,26 @@ describe("access dimensions", () => {
       reason: "unknown",
       name: "nowhere",
     })
+  })
+
+  it("names an unscoped host instead of a tenant it would leave", async () => {
+    const result = await compileRights(
+      withDimension({
+        [TASK_FILE]: {
+          scope: "none",
+          access: [{ attribute: "region", dimension: "region" }],
+        },
+      })
+    )
+    const found = errors(result).filter(
+      (d) => d.code === "rights.carrier-cross-tenant"
+    )
+    expect(found.map((d) => [d.pointer, d.params])).toEqual([
+      ["/access/0/attribute", { attribute: "region", host: "unscoped" }],
+    ])
+    expect(localize(found[0]!, "en").message).toBe(
+      'Rights carrier "region" is not a reference within the scope: its object is not scoped'
+    )
   })
 
   it("accepts an unscoped target in a single-tenant project", async () => {

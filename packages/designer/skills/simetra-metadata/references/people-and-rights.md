@@ -45,8 +45,17 @@ the tenant (`rights.carrier-cross-tenant`).
   of the object, `effects` says what it writes. The name is unique among the
   object's attributes, tabular sections and custom actions.
   `{ "name": "<action>", "requires": ["update"], "effects": { "header": ["<attribute>"] } }`
+  Effects only on a kind with a writing standard action (not an accumulation
+  register or a recorder-subordinate information register), and
+  `tabularSections: true` only on a kind with tabular sections
+  (`rights.custom-action-effects`).
 - **`ownership`** — carriers whose `Ref` names the owner of a row (a member
   or a user). `"ownership": ["<attribute>", ["<ref attribute>", "<attribute>"]]`
+  The target is the users catalog, the membership catalog of the object's own
+  scope kind, or the adopted table of that scope kind's membership source
+  (`rights.ownership-target`); `"ref"` (the key) owns only rows of the users
+  catalog. An adopted target needs a `UNIQUE (<scope column>, <key>)`, so the
+  reference becomes a composite foreign key within the scope.
 - **`rightsContainer`** — the catalog is a rights container: roles can be
   assigned on its rows. `"rightsContainer": true`
 - **`containerBinding`** — the carrier that binds a row to its container.
@@ -59,6 +68,13 @@ the tenant (`rights.carrier-cross-tenant`).
   user's values come from: a relation object or a verbatim SQL function.
   `{ "name": "<dimension>", "target": <catalog ref>, "values": { "relation": { "object": <ref>, "subject": "<field>", "value": "<field>" } } }`
   or `"values": { "function": { "name": "<function>" } }`.
+  The function is verbatim SQL of a closed form: no arguments,
+  `RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''`
+  with an `AS $$ … $$` body,
+  every name schema-qualified (also in the views it reads and the `sql`
+  functions it calls; a `plpgsql` function in that chain is refused), and no
+  `simetra.*` object except `simetra.current_user_id()`
+  (`rights.dimension-function-*`).
 - **`membershipSources`** (project) — an adopted table that holds the
   membership of a scope kind instead of a membership catalog.
   `{ "name": "<source>", "scopeKind": "<scope kind>", "table": <CustomTable ref>, "columns": { "scope": "<column>", "user": "<column>" } }`

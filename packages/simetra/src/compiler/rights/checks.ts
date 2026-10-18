@@ -10,6 +10,7 @@ import type { ResolvedReference } from "../stages/identity"
 import type { ModelStageResult } from "../stages/model"
 import {
   carrierTarget,
+  crossTenant,
   elementField,
   resolveCarrier,
   type CarrierContext,
@@ -19,10 +20,16 @@ import {
   accessDimensionId,
   accessOf,
   bindingOf,
+  carrierContext,
   customActionEffects,
   customActionsOf,
+  headerReference,
+  isMembershipCatalog,
+  isRightsContainer,
+  isUsers,
   ownershipOf,
-} from "./contracts"
+  scopeKindOf,
+} from "./facts"
 import { must, projectTarget } from "./references"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
@@ -44,6 +51,7 @@ export interface RightsCheckContext {
  */
 export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
+  const carriers = carrierContext({ ...ctx, physical: ctx.model.physical })
   for (const object of ctx.objects) {
     const def = KIND_REGISTRY[object.kind]
     if (def.rightsExtents.length === 0) continue
@@ -114,27 +122,19 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     })
     diagnostics.push(...requiresCycles(object, actions, standard))
     if (def.rightsExtents.includes("own")) {
-      diagnostics.push(...checkOwnership(object, ctx))
+      diagnostics.push(...checkOwnership(object, ctx, carriers))
     }
-    if (def.rightsBinding) diagnostics.push(...checkBinding(object, ctx))
+    if (def.rightsBinding) {
+      diagnostics.push(...checkBinding(object, carriers))
+    }
     if (def.rightsExtents.includes("dimension")) {
-      diagnostics.push(...checkAccess(object, ctx))
+      diagnostics.push(...checkAccess(object, ctx, carriers))
     }
   }
-  diagnostics.push(...checkDimensions(ctx))
+  diagnostics.push(...checkDimensions(ctx, carriers))
   diagnostics.push(...checkSources(ctx))
   diagnostics.push(...checkUsers(ctx))
   return diagnostics
-}
-
-/** Контекст резолву носія з контексту правил стадії 4. */
-export function carrierContext(ctx: RightsCheckContext): CarrierContext {
-  return {
-    references: ctx.references,
-    physical: ctx.model.physical,
-    project: ctx.project,
-    byId: ctx.byId,
-  }
 }
 
 /**
@@ -146,9 +146,9 @@ export function carrierContext(ctx: RightsCheckContext): CarrierContext {
  */
 function checkOwnership(
   object: ParsedObject,
-  ctx: RightsCheckContext
+  ctx: RightsCheckContext,
+  carriers: CarrierContext
 ): Diagnostic[] {
-  const carriers = carrierContext(ctx)
   const scopeOf = (o: ParsedObject) => scopeKindOf(o, ctx.references)
   return ownershipOf(object).flatMap((carrier, index) => {
     const pointer = `/ownership/${index}`
@@ -174,20 +174,14 @@ function checkOwnership(
     // довідника членства (Р1a-24): учасник — її рядок, а складений FK
     // (`UNIQUE (scope, id)`, §4.5) тримає його в межах тенанта.
     const scopeKindId = scopeOf(object)
-    const catalog =
-      (owner.data as { membership?: unknown }).membership !== undefined &&
-      scopeOf(owner) === scopeKindId
+    const catalog = isMembershipCatalog(owner) && scopeOf(owner) === scopeKindId
     const source =
       scopeKindId !== undefined &&
       membershipSourceTables(scopeKindId, ctx).includes(must(owner.id))
     if (!catalog && !source) return target("target")
     return field.inScope
       ? []
-      : [
-          diagnostic("rights.carrier-cross-tenant", object.file, at, {
-            attribute: field.name,
-          }),
-        ]
+      : [crossTenant(object, at, field.name, ctx.references)]
   })
 }
 
@@ -198,7 +192,7 @@ function checkOwnership(
  */
 function checkBinding(
   object: ParsedObject,
-  ctx: RightsCheckContext
+  carriers: CarrierContext
 ): Diagnostic[] {
   const carrier = bindingOf(object)
   if (carrier === undefined) return []
@@ -207,7 +201,7 @@ function checkBinding(
     object,
     carrier,
     { pointer, field: "containerBinding" },
-    carrierContext(ctx)
+    carriers
   )
   if (!resolved.ok) return [resolved.diagnostic]
   const at = typeof carrier === "string" ? pointer : `${pointer}/1`
@@ -215,7 +209,7 @@ function checkBinding(
   const target = carrierTarget(resolved.terminal)
   // Спершу — чи ціль контейнер: не-контейнер, прив'язаний сам до себе,
   // помиляється ціллю, а не самоприв'язкою контейнера.
-  if ((target.data as { rightsContainer?: boolean }).rightsContainer !== true) {
+  if (!isRightsContainer(target)) {
     return [
       diagnostic("rights.container-target", object.file, at, {
         attribute: field.name,
@@ -233,21 +227,7 @@ function checkBinding(
   }
   return field.inScope
     ? []
-    : [
-        diagnostic("rights.carrier-cross-tenant", object.file, at, {
-          attribute: field.name,
-        }),
-      ]
-}
-
-/** Id виду скоупу об'єкта; немає — об'єкт без скоупу. */
-function scopeKindOf(
-  object: ParsedObject,
-  references: readonly ResolvedReference[]
-): string | undefined {
-  return references.find(
-    (r) => r.role === "object.scope" && r.from.file === object.file
-  )?.to.id
+    : [crossTenant(object, at, field.name, carriers.references)]
 }
 
 /**
@@ -258,9 +238,11 @@ function scopeKindOf(
  * на довідник членства того самого виду, `value` — одиночний `Ref` на
  * довідник значень. Функцію значень перевіряє стадія 5.
  */
-function checkDimensions(ctx: RightsCheckContext): Diagnostic[] {
+function checkDimensions(
+  ctx: RightsCheckContext,
+  carriers: CarrierContext
+): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
-  const carriers = carrierContext(ctx)
   const scopeOf = (o: ParsedObject) => scopeKindOf(o, ctx.references)
   ctx.project.accessDimensions.forEach((dimension, index) => {
     const at = `/accessDimensions/${index}`
@@ -327,8 +309,7 @@ function checkDimensions(ctx: RightsCheckContext): Diagnostic[] {
     }
     const subject = targetOf("subject")
     const member = (o: ParsedObject) =>
-      (o.data as { membership?: unknown }).membership !== undefined &&
-      scopeOf(o) === scopeOf(target)
+      isMembershipCatalog(o) && scopeOf(o) === scopeOf(target)
     if (subject === null) broken("subject", "unknown", relation.subject)
     else if (subject === undefined || !(isUsers(subject) || member(subject))) {
       broken("subject", "target")
@@ -347,9 +328,9 @@ function checkDimensions(ctx: RightsCheckContext): Diagnostic[] {
  */
 function checkAccess(
   object: ParsedObject,
-  ctx: RightsCheckContext
+  ctx: RightsCheckContext,
+  carriers: CarrierContext
 ): Diagnostic[] {
-  const carriers = carrierContext(ctx)
   const seen = new Set<string>()
   return accessOf(object).flatMap((mapping, index) => {
     const dimensionAt = `/access/${index}/dimension`
@@ -402,11 +383,7 @@ function checkAccess(
     }
     return field.inScope
       ? []
-      : [
-          diagnostic("rights.carrier-cross-tenant", object.file, at, {
-            attribute: field.name,
-          }),
-        ]
+      : [crossTenant(object, at, field.name, ctx.references)]
   })
 }
 
@@ -526,10 +503,7 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
       const pointer = `${at}/assignedOn/container`
       const id = projectTarget(pointer, "source.container", ctx)
       const target = id === undefined ? undefined : ctx.byId.get(id)
-      if (
-        target !== undefined &&
-        (target.data as { rightsContainer?: boolean }).rightsContainer !== true
-      ) {
+      if (target !== undefined && !isRightsContainer(target)) {
         report("rights.container-target", pointer, {
           source: source.name,
           name: target.name,
@@ -584,8 +558,7 @@ function membershipCatalogs(
 ): ParsedObject[] {
   return ctx.objects.filter(
     (o) =>
-      (o.data as { membership?: unknown }).membership !== undefined &&
-      scopeKindOf(o, ctx.references) === scopeKindId
+      isMembershipCatalog(o) && scopeKindOf(o, ctx.references) === scopeKindId
   )
 }
 
@@ -620,10 +593,6 @@ export function membershipOfScopeKind(
     : undefined
 }
 
-function isUsers(object: ParsedObject): boolean {
-  return (object.data as { role?: string }).role === "users"
-}
-
 /**
  * Ім'я в `effects.header`, якого індекс посилань не резолвив, — не колонка
  * об'єкта: стадія 2 мовчить про нього для видів 1С, тож звітує це правило.
@@ -636,23 +605,18 @@ function unknownHeader(
 ): Diagnostic[] {
   const { header } = action.effects
   if (header === undefined || header === "all") return []
-  return header.flatMap((name, at) => {
-    const pointer = `/customActions/${index}/effects/header/${at}`
-    const resolved = references.some(
-      (r) =>
-        r.from.file === object.file &&
-        r.from.pointer === pointer &&
-        r.role === "customAction.header"
-    )
-    return resolved
+  return header.flatMap((name, at) =>
+    headerReference(object, index, at, references) !== undefined
       ? []
       : [
-          diagnostic("rights.attribute-unknown", object.file, pointer, {
-            attribute: name,
-            field: "customActions.effects.header",
-          }),
+          diagnostic(
+            "rights.attribute-unknown",
+            object.file,
+            `/customActions/${index}/effects/header/${at}`,
+            { attribute: name, field: "customActions.effects.header" }
+          ),
         ]
-  })
+  )
 }
 
 /**

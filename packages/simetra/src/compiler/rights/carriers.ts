@@ -12,6 +12,7 @@ import { mainTableOf, type CarrierContract } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { scopeKindOf } from "./facts"
 import { must } from "./references"
 
 /**
@@ -23,7 +24,10 @@ import { must } from "./references"
  * його знаходить `fieldForeignKey`. Лише для полів виду: поле виду дає
  * одноколонковий FK лише простим посиланням, тож більше однієї колонки
  * однозначно означає складений; FK прийнятої таблиці описує файл, і там цей
- * висновок не тримається.
+ * висновок не тримається. Для прийнятої таблиці (`declared`) правило
+ * закрите за побудовою: її колонки не мають `origin.scopeKindId`, тож
+ * `fieldForeignKey` знаходить лише одноколонковий FK (у проєкті з видами
+ * скоупу — не в межах), а складений не знаходить зовсім (не `Ref`).
  */
 export function inScopeTarget(
   foreignKey: Pick<PhysicalTable["foreignKeys"][number], "columns"> | undefined,
@@ -134,7 +138,10 @@ export function resolveCarrier(
     return fail("rights.carrier-not-ref", object, firstPointer, first)
   }
   if (!head.field.inScope) {
-    return fail("rights.carrier-cross-tenant", object, firstPointer, first)
+    return {
+      ok: false,
+      diagnostic: crossTenant(object, firstPointer, first, ctx.references),
+    }
   }
   const target = head.field.target
   const tail = resolveStep(
@@ -211,6 +218,10 @@ function resolveStep(
  * знімком: одна колонка з FK — одиночний `Ref` (і реквізит, і стандартний, як
  * `createdBy`), ключ — колонка первинного ключа без FK. Поліморфна пара FK не
  * має й двох колонок, тож, як і не-посилання, дає `undefined`.
+ *
+ * `inScope` виводиться лише для полів виду (`inScopeTarget`): на прийнятій
+ * таблиці складений FK з файлу не розпізнається, і поле лишається поза
+ * межею скоупу чи не-`Ref` — відмова, а не хибний дозвіл.
  */
 export function elementField(
   object: ParsedObject,
@@ -261,8 +272,27 @@ function objectOfTable(
   return table === undefined ? undefined : ctx.byId.get(table.origin.objectId)
 }
 
+/**
+ * Носій виходить за межі скоупу. Нескоуплений об'єкт тенанта не має, тож
+ * текст тоді називає не «вихід за тенант», а те, що посилання не тримається
+ * межі скоупу: виправлення інше — скоупити об'єкт.
+ */
+export function crossTenant(
+  object: ParsedObject,
+  pointer: string,
+  attribute: string,
+  references: readonly ResolvedReference[]
+): Diagnostic {
+  return diagnostic("rights.carrier-cross-tenant", object.file, pointer, {
+    attribute,
+    ...(scopeKindOf(object, references) === undefined
+      ? { host: "unscoped" }
+      : {}),
+  })
+}
+
 function fail(
-  code: "rights.carrier-not-ref" | "rights.carrier-cross-tenant",
+  code: "rights.carrier-not-ref",
   object: ParsedObject,
   pointer: string,
   attribute: string

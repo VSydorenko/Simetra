@@ -92,10 +92,7 @@ export function kindFile(
   if (def.scope !== "absent" && table.scope !== undefined) {
     raw.scope = table.scope
   }
-  // Мітка переходить без змін (§9.11); вид без мітки її не має.
-  if (def.kindLabel === true && table.kindLabel !== undefined) {
-    raw.kindLabel = table.kindLabel
-  }
+  if (table.kindLabel !== undefined) raw.kindLabel = table.kindLabel
   if (raw.title === undefined && table.title !== undefined) {
     raw.title = table.title
   }

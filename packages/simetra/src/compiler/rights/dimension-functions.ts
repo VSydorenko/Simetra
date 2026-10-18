@@ -13,6 +13,7 @@ import { unitCalls, unitRelations } from "../sql/dependencies"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
+import { PROJECT_FILE } from "../stages/files"
 import {
   bodyHasUnqualifiedRelation,
   nullaryFunction,
@@ -87,7 +88,7 @@ export function checkDimensionFunctions(
     const pointer = toPointer(["accessDimensions", index, "values", "function"])
     const at = (code: RuleCode, params: DiagnosticParams) =>
       found.push(
-        diagnostic(code, "project.meta.json", pointer, {
+        diagnostic(code, PROJECT_FILE, pointer, {
           dimension: dimension.name,
           ...params,
         })
