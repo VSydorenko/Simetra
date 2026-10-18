@@ -1,5 +1,6 @@
 import {
   ASSIGNED_ONCE,
+  type AssignedOnceContext,
   projectSchema,
   type AssignedOnceField,
   type KindDefinition,
@@ -14,7 +15,7 @@ import {
 } from "./object-files"
 import { PROJECT_FILE } from "./stages/files"
 
-type Context = Parameters<NonNullable<AssignedOnceField["effective"]>>[1]
+type Context = AssignedOnceContext
 
 /** Носій полів, призначених раз: об'єкт чи іменований елемент у своєму файлі. */
 interface Holder {
@@ -51,8 +52,38 @@ function stateOf(files: ReadonlyMap<string, string>): State {
   const parsed =
     project === undefined ? undefined : projectSchema.safeParse(project)
   const defaultSchema = parsed?.success ? parsed.data.defaultSchema : undefined
+  // Резолвери читають сирий стан: рівень ролі порівнюється за id, тож
+  // перейменування виду скоупу чи контейнера не є зміною рівня.
+  const files_ = readObjectFiles(files)
+  const scopeKindIds = new Map<string, string>()
+  for (const at of project === undefined
+    ? []
+    : elementsAt(project, "scopeKinds")) {
+    const { name, id } = at.element
+    if (typeof name === "string" && typeof id === "string") {
+      scopeKindIds.set(name, id)
+    }
+  }
+  const objectIds = new Map<string, string>()
+  for (const { raw } of files_) {
+    const { kind, name, id } = raw
+    if (
+      typeof kind === "string" &&
+      typeof name === "string" &&
+      typeof id === "string"
+    ) {
+      objectIds.set(`${kind}:${name}`, id)
+    }
+  }
   const contextOf = (materializes: boolean): Context | undefined =>
-    defaultSchema === undefined ? undefined : { defaultSchema, materializes }
+    defaultSchema === undefined
+      ? undefined
+      : {
+          defaultSchema,
+          materializes,
+          resolveScopeKind: (name) => scopeKindIds.get(name),
+          resolveObject: (ref) => objectIds.get(`${ref.kind}:${ref.name}`),
+        }
   const holders: State["holders"] = { object: new Map(), element: new Map() }
   const add = (on: AssignedOnceField["on"], holder: Holder) => {
     const id = holder.element.id
@@ -60,7 +91,7 @@ function stateOf(files: ReadonlyMap<string, string>): State {
       holders[on].set(id, holder)
     }
   }
-  for (const file of readObjectFiles(files)) {
+  for (const file of files_) {
     const ctx = contextOf(file.def.materializes !== "none")
     add("object", {
       file: file.path,
@@ -100,8 +131,9 @@ function valueOf(
   return typeof value === "string" ? value : undefined
 }
 
+// Значення поля може бути об'єктом (`assignedOn`), не лише рядком.
 const explicit = (record: AssignedOnceField, holder: Holder) =>
-  typeof holder.element[record.field] === "string"
+  holder.element[record.field] !== undefined
 
 /**
  * Діагностика стоїть там, чиє значення змінилося. Поле явне хоча б з одного

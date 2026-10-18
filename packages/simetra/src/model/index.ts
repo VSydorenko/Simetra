@@ -12,5 +12,6 @@ export {
 export {
   ASSIGNED_ONCE,
   namedCollections,
+  type AssignedOnceContext,
   type AssignedOnceField,
 } from "./named-elements"

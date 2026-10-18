@@ -34,11 +34,58 @@ export function namedCollections(
  */
 export interface AssignedOnceField {
   on: "object" | "element"
-  field: "physicalName" | "kindLabel" | "schema"
+  field: "physicalName" | "kindLabel" | "schema" | "assignedOn"
   effective?: (
     raw: Readonly<Record<string, unknown>>,
-    ctx: { defaultSchema: string; materializes: boolean }
+    ctx: AssignedOnceContext
   ) => string | undefined
+}
+
+/**
+ * Контекст ефективного значення. Резолвери дає компілятор над станом, який
+ * порівнюється: T0 не імпортує розв'язання посилань, а значення за id не
+ * ламається перейменуванням.
+ */
+export interface AssignedOnceContext {
+  defaultSchema: string
+  materializes: boolean
+  /** `id` виду скоупу проєкту за іменем; немає — ім'я не розв'язується. */
+  resolveScopeKind: (name: string) => string | undefined
+  /** `id` об'єкта за посиланням `{ kind, name }`. */
+  resolveObject: (ref: { kind: string; name: string }) => string | undefined
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+/**
+ * Рівень ролі як ефективне значення: `global`/`everyUser` як є, вид скоупу й
+ * контейнер — за `id`, щоб перейменування не було зміною рівня. Нерозв'язане
+ * ім'я лишається іменем (`scope?:`/`container?:`), тож його зміна видна.
+ */
+function effectiveAssignedOn(
+  raw: Readonly<Record<string, unknown>>,
+  ctx: AssignedOnceContext
+): string | undefined {
+  const level = raw.assignedOn
+  if (typeof level === "string") return level
+  if (!isRecord(level)) return undefined
+  if (typeof level.scopeKind === "string") {
+    const id = ctx.resolveScopeKind(level.scopeKind)
+    return id === undefined ? `scope?:${level.scopeKind}` : `scope:${id}`
+  }
+  const target = level.container
+  if (
+    isRecord(target) &&
+    typeof target.kind === "string" &&
+    typeof target.name === "string"
+  ) {
+    const id = ctx.resolveObject({ kind: target.kind, name: target.name })
+    return id === undefined
+      ? `container?:${target.kind}:${target.name}`
+      : `container:${id}`
+  }
+  return undefined
 }
 
 export const ASSIGNED_ONCE: readonly AssignedOnceField[] = [
@@ -55,4 +102,6 @@ export const ASSIGNED_ONCE: readonly AssignedOnceField[] = [
         : undefined,
   },
   { on: "element", field: "physicalName" },
+  // Рівень ролі (Рх20): запис діє для кожного об'єкта, що має поле.
+  { on: "object", field: "assignedOn", effective: effectiveAssignedOn },
 ]

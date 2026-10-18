@@ -7,6 +7,13 @@ import {
 } from "simetra/compiler"
 import { assignedOnceDiagnostics } from "../assigned-once"
 import {
+  PROJECT_CATALOG_FILE,
+  PROJECT_FILE as RIGHTS_PROJECT,
+  ROLE_FILE,
+  ORG_KIND_ID,
+  withRoles,
+} from "./fixtures/rights"
+import {
   attribute,
   catalog,
   customTable,
@@ -547,5 +554,83 @@ describe("assigned-once fields on a promotion", () => {
         { field: "physicalName", before: "inn", after: "tax_id" },
       ],
     ])
+  })
+})
+
+describe("assignedOn of a role is assigned once", () => {
+  const ROLE = ROLE_FILE("Lead")
+  const BOARD = "catalogs/Board/Board.meta.json"
+  const level = (assignedOn: unknown) =>
+    withRoles({
+      [ROLE]: { id: uuid(7001), kind: "Role", name: "Lead", assignedOn },
+      [BOARD]: {
+        ...catalog("Board", { id: uuid(7002) }),
+        rightsContainer: true,
+      },
+    })
+  /** Правка одного файлу в копії набору файлів. */
+  const editFile = (
+    files: ReadonlyMap<string, string>,
+    path: string,
+    edit: (content: Json) => void
+  ) => {
+    const content = JSON.parse(files.get(path)!) as Json
+    edit(content)
+    return new Map(files).set(path, JSON.stringify(content))
+  }
+  it.each([
+    ["global", { scopeKind: "org" }, "global", `scope:${ORG_KIND_ID}`],
+    [
+      { scopeKind: "org" },
+      { container: { kind: "Catalog", name: "Project" } },
+      `scope:${ORG_KIND_ID}`,
+      `container:${uuid(6020)}`,
+    ],
+    [
+      { container: { kind: "Catalog", name: "Project" } },
+      { container: { kind: "Catalog", name: "Board" } },
+      `container:${uuid(6020)}`,
+      `container:${uuid(7002)}`,
+    ],
+  ])(
+    "reports a level change %# in the role file",
+    (from, to, before, after) => {
+      expect(
+        assignedOnceDiagnostics(level(from), level(to)).map((d) => [
+          d.code,
+          d.file,
+          d.pointer,
+          d.params,
+        ])
+      ).toEqual([
+        [
+          "identity.assigned-once-changed",
+          ROLE,
+          "/assignedOn",
+          { field: "assignedOn", before, after },
+        ],
+      ])
+    }
+  )
+
+  it("keeps a level across a rename of its scope kind and container", () => {
+    const before = level({ scopeKind: "org" })
+    // Перейменування переписує кожне посилання на вид скоупу й контейнер.
+    let renamed = editFile(before, RIGHTS_PROJECT, (p) => {
+      ;(p.scopeKinds as Json[])[0]!.name = "tenant"
+    })
+    renamed = editFile(renamed, PROJECT_CATALOG_FILE, (c) => {
+      c.name = "Initiative"
+    })
+    for (const path of renamed.keys()) {
+      if (!path.startsWith("roles/")) continue
+      renamed = editFile(renamed, path, (r) => {
+        const at = r.assignedOn as Json | string
+        if (typeof at === "string") return
+        if (at.scopeKind !== undefined) at.scopeKind = "tenant"
+        else at.container = { kind: "Catalog", name: "Initiative" }
+      })
+    }
+    expect(assignedOnceDiagnostics(before, renamed)).toEqual([])
   })
 })
