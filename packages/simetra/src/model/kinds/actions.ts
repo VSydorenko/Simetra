@@ -1,13 +1,17 @@
+/** The platform's standard action vocabulary. */
+export const STANDARD_ACTIONS = [
+  "read",
+  "create",
+  "update",
+  "markDeletion",
+  "delete",
+  "post",
+  "unpost",
+  "write",
+] as const
+
 /** A word of the platform's standard action vocabulary. */
-export type StandardAction =
-  | "read"
-  | "create"
-  | "update"
-  | "markDeletion"
-  | "delete"
-  | "post"
-  | "unpost"
-  | "write"
+export type StandardAction = (typeof STANDARD_ACTIONS)[number]
 
 /** A DML statement kind an action performs on the object's own table. */
 export type Dml = "insert" | "update" | "delete"

@@ -87,6 +87,10 @@ interface NamedElement {
   element: Element
   /** Стає колонкою таблиці, тож не може зайняти ім'я стандартної колонки. */
   column: boolean
+  /** Елемент без `physicalName` (кастомна дія): мітки в нього немає. */
+  unlabelled?: true
+  /** Стиль імені, сталий незалежно від стилю проєкту. */
+  style?: AttributeCase
 }
 
 /**
@@ -142,7 +146,12 @@ export function checkIdentity(
     }
   }
 
-  const checkIdentified = (file: string, pointer: string, element: Element) => {
+  const checkIdentified = (
+    file: string,
+    pointer: string,
+    element: Element,
+    labelled = true
+  ) => {
     const id = element.id
     if (typeof id !== "string") {
       diagnostics.push(diagnostic("identity.id-missing", file, `${pointer}/id`))
@@ -159,7 +168,7 @@ export function checkIdentity(
         )
       }
     }
-    if (element.physicalName === undefined) {
+    if (labelled && element.physicalName === undefined) {
       diagnostics.push(
         diagnostic(
           "identity.physical-name-missing",
@@ -332,8 +341,9 @@ export function checkIdentity(
           })
         )
       }
-      for (const { pointer, element, column } of namespace.elements) {
-        checkIdentified(object.file, pointer, element)
+      for (const named of namespace.elements) {
+        const { pointer, element, column } = named
+        checkIdentified(object.file, pointer, element, !named.unlabelled)
         const name = String(element.name)
         const at = `${pointer}/name`
         if (seen.has(name)) {
@@ -359,13 +369,13 @@ export function checkIdentity(
           }
           labels.add(label)
         }
-        if (
-          namespace.styled &&
-          style !== undefined &&
-          !matchesAttributeCase(name, style)
-        ) {
+        const expected = named.style ?? (namespace.styled ? style : undefined)
+        if (expected !== undefined && !matchesAttributeCase(name, expected)) {
           diagnostics.push(
-            diagnostic("identity.name-case", object.file, at, { name, style })
+            diagnostic("identity.name-case", object.file, at, {
+              name,
+              style: expected,
+            })
           )
         }
         if (collides && column && name === scopeKind.name) {
@@ -479,6 +489,7 @@ export function checkIdentity(
     )
     checkBalanceControl(object, references, diagnostics)
     resolveMembershipUser(object, references)
+    resolveCustomActionRequires(object, references)
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
       resolveIndexAttributes(object, style, references)
@@ -562,11 +573,22 @@ function namespacesOf(
       ? []
       : elementsAt(data, "tabularSections")
   ).map((section) => ({ ...section, column: false }))
+  // Кастомні дії ділять простір імен із реквізитами й ТЧ (Р1a-22): адресація
+  // елемента за іменем бере першу колекцію зі збігом. Ім'я — camelCase, як
+  // слова словника дій, незалежно від стилю проєкту (Р1a-7).
+  const actions = (def.idElementFields ?? [])
+    .flatMap((field) => elementsAt(data, field))
+    .map((action) => ({
+      ...action,
+      column: false,
+      unlabelled: true as const,
+      style: "camelCase" as const,
+    }))
   namespaces.push({
     scope: `${object.kind} ${object.name}`,
     styled: true,
     reserved: style === undefined ? [] : def.standardColumns(data),
-    elements: [...columns, ...sections],
+    elements: [...columns, ...sections, ...actions],
   })
 
   const sectionColumns =
@@ -651,6 +673,9 @@ function resolveElementReferences(
     const table = tableOf(target)
     if (table === undefined) continue
     if (!table.has(name)) {
+      // Прийнята таблиця описує фізику сама, тож невідома колонка — її
+      // помилка тут; в інших видів ім'я звітує правило поля (`rights.*`).
+      if (!KIND_REGISTRY[object.kind].declared) continue
       diagnostics.push(
         diagnostic("customTable.column-unknown", object.file, pointer, {
           column: name,
@@ -759,7 +784,7 @@ type NameTable = Map<string, string>
  */
 export function standardElementId(
   ownerId: string,
-  column: StandardColumnDef
+  column: Pick<StandardColumnDef, "logicalName">
 ): string {
   return `${ownerId}#${column.logicalName}`
 }
@@ -974,6 +999,45 @@ function resolveMembershipUser(
     to: { kind: "Element", id },
     role: "catalog.membershipUser",
   })
+}
+
+/**
+ * `requires` кастомної дії називає кастомні дії того самого об'єкта за
+ * іменем: посилання в індексі дає перейменуванню переписати вимогу, а
+ * видаленню — побачити залежність. Слова словника — не посилання (Р1a-21), а
+ * невідоме ім'я тут мовчить: звітує стадія 4 (`rights.action-unknown`).
+ */
+function resolveCustomActionRequires(
+  object: ParsedObject,
+  references: ResolvedReference[]
+) {
+  const data = object.data as Element
+  const actions = (KIND_REGISTRY[object.kind].idElementFields ?? []).flatMap(
+    (field) =>
+      ((data[field] as Element[] | undefined) ?? []).map((element, index) => ({
+        field,
+        index,
+        element,
+      }))
+  )
+  const objectId = object.id
+  if (actions.length === 0 || objectId === undefined) return
+  for (const { field, index, element } of actions) {
+    const { requires } = element as { requires?: string[] }
+    ;(requires ?? []).forEach((name, at) => {
+      const id = actions.find((a) => a.element.name === name)?.element.id
+      if (typeof id !== "string") return
+      references.push({
+        from: {
+          file: object.file,
+          pointer: `/${field}/${index}/requires/${at}`,
+          objectId,
+        },
+        to: { kind: "Element", id },
+        role: "customAction.requires",
+      })
+    })
+  }
 }
 
 /**

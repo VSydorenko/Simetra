@@ -70,6 +70,11 @@ export {
 } from "./accumulation-register"
 export { constantSchema, type Constant } from "./constant"
 export {
+  customActionSchema,
+  customActionsSchema,
+  type CustomAction,
+} from "./rights"
+export {
   customTableSchema,
   customTableColumnSchema,
   type CustomTable,

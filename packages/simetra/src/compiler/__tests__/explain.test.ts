@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, explainObject } from "simetra/compiler"
 import { readReferenceDomain } from "./fixtures/reference-domain"
+import { compileRights, rightsFiles } from "./fixtures/rights"
 import { attribute, metaFiles, project, salesDocument } from "./helpers"
 
 async function referenceModel() {
@@ -105,6 +106,14 @@ describe("explainObject", () => {
       origin: "rowRule",
     })
     expect(checks.filter((c) => c.origin === "kind")).not.toEqual([])
+  })
+
+  it("shows the rights contract of an object", async () => {
+    const result = await compileRights(rightsFiles())
+    const e = explainObject(result.model!, { kind: "Document", name: "Task" })!
+    expect(e.contracts).toContainEqual(
+      expect.objectContaining({ kindLabel: "task", actions: expect.any(Array) })
+    )
   })
 
   it("unknown object", async () => {

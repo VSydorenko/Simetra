@@ -236,6 +236,70 @@
         "anon"
       ]
     },
+    "customActions": {
+      "default": [],
+      "description": "Custom actions of the object beyond the standard actions of its kind.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical name of the custom action, camelCase like the standard action words; must not repeat a standard action of the kind."
+          },
+          "requires": {
+            "default": [],
+            "description": "Actions a holder of this action must also hold: standard action words of the kind or names of custom actions of the same object.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+            }
+          },
+          "effects": {
+            "default": {},
+            "description": "What the action writes itself; an action that writes anything is an update.",
+            "type": "object",
+            "properties": {
+              "header": {
+                "description": "Header columns the action writes: all, or logical names of attributes and standard attributes of the object.",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "all"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                    }
+                  }
+                ]
+              },
+              "tabularSections": {
+                "description": "Whether the action writes the tabular section rows.",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
     "standardAttributeOverrides": {
       "default": {},
       "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",

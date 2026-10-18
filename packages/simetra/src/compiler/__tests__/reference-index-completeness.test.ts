@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile, type ResolvedReference } from "simetra/compiler"
-import { parseExpression, walkExpr } from "simetra/model"
+import { STANDARD_ACTIONS, parseExpression, walkExpr } from "simetra/model"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 
@@ -35,7 +35,12 @@ function toPointer(path: Path): string {
  * Місця, чиї рядки можуть збігтися з логічним іменем, але посиланням не є.
  * Кожен запис — з причиною: allowlist не має ставати смітником для пропусків.
  */
-const NOT_REFERENCES: { matches: (path: Path) => boolean; reason: string }[] = [
+const STANDARD_ACTION_WORDS: ReadonlySet<string> = new Set(STANDARD_ACTIONS)
+
+const NOT_REFERENCES: {
+  matches: (path: Path, value: string) => boolean
+  reason: string
+}[] = [
   {
     matches: (path) => path.at(-1) === "physicalName",
     reason:
@@ -60,6 +65,17 @@ const NOT_REFERENCES: { matches: (path: Path) => boolean; reason: string }[] = [
     matches: (path) => path.at(-1) === "comment",
     reason:
       "`comment` прийнятої таблиці й колонки — вільний текст `COMMENT ON`, як title/description",
+  },
+  {
+    // І місце, і слово: ім'я кастомної дії в тому самому масиві лишається
+    // кандидатом.
+    matches: (path, value) =>
+      STANDARD_ACTION_WORDS.has(value) &&
+      (path.at(-2) === "requires" ||
+        (path.at(-2) === "actions" &&
+          (path.at(-3) === "grant" || path.at(-3) === "deny"))),
+    reason:
+      "стандартна дія — слово платформи, а не посилання на елемент метаданих; кастомні дії — посилання й винятку не мають",
   },
 ]
 /** Поля з виразами конструктора: їх розбирає парсер T0, а не порівняння рядка. */
@@ -156,7 +172,7 @@ function candidates(files: ReadonlyMap<string, string>): Candidate[] {
           return
         }
         if (!all.has(value)) return
-        if (NOT_REFERENCES.some((entry) => entry.matches(path))) return
+        if (NOT_REFERENCES.some((entry) => entry.matches(path, value))) return
         found.push({
           file,
           pointer: toPointer(path),

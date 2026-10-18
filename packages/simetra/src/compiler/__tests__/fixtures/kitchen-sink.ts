@@ -140,6 +140,29 @@ const overrides = (name: string) => ({
   [name]: { title: text(name), description: text(name) },
 })
 
+/**
+ * Кастомні дії: `approve` пише задані колонки, `archive` вимагає її — так
+ * задано обидва види вимог (слово словника й кастомна дія). Id — поза
+ * лічильником, щоб не зсувати id решти фікстури.
+ */
+let nextAction = 0
+function customActions(
+  standard: string,
+  header: "all" | string[],
+  tabularSections: boolean
+) {
+  const actionId = () => uuid(9800 + ++nextAction)
+  return [
+    {
+      id: actionId(),
+      name: "approve",
+      requires: [standard],
+      effects: { header, tabularSections },
+    },
+    { id: actionId(), name: "archive", requires: ["approve", "read"] },
+  ]
+}
+
 function header(kind: string, name: string, physicalName: string) {
   return {
     ...schemaHint(kind),
@@ -161,6 +184,7 @@ function header(kind: string, name: string, physicalName: string) {
 
 export function kitchenSink(): Map<string, string> {
   next = 0
+  nextAction = 0
   const project = {
     ...schemaHint("project"),
     name: "KitchenSink",
@@ -212,6 +236,9 @@ export function kitchenSink(): Map<string, string> {
     autonumber: false,
     codeUnique: false,
     mainPresentation: "Code",
+    // Обидві гілки `effects.header`: тут — список (власний і стандартний
+    // реквізит), у документа — "all".
+    customActions: customActions("update", ["itemNote", "description"], true),
     predefinedItems: [
       {
         id: id(),
@@ -274,6 +301,7 @@ export function kitchenSink(): Map<string, string> {
     numberType: "Number",
     autonumber: false,
     numberPeriodicity: "Month",
+    customActions: customActions("post", "all", true),
     posting: {
       movements: [
         {
@@ -353,6 +381,7 @@ export function kitchenSink(): Map<string, string> {
     publicRead: "anon",
     periodicity: "Month",
     writeMode: "RecorderSubordinate",
+    customActions: customActions("read", ["price"], false),
     recorderTypes: [ref("Document", "Sale")],
     standardAttributeOverrides: overrides("period"),
     dimensions: [
@@ -385,6 +414,7 @@ export function kitchenSink(): Map<string, string> {
     registerType: "Balance",
     recorderTypes: [ref("Document", "Sale")],
     balanceControl: { resources: ["qty"] },
+    customActions: customActions("read", ["qty"], false),
     standardAttributeOverrides: overrides("period"),
     dimensions: [
       {
@@ -423,6 +453,7 @@ export function kitchenSink(): Map<string, string> {
       length: 3,
       defaultValue: "UAH",
       publicRead: "anon",
+      customActions: customActions("update", ["value"], false),
     }),
     VatRate: constant("VatRate", "vat_rate", {
       type: "Numeric",

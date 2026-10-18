@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
+import { customActionsSchema } from "./rights"
 import { physicalNameSchema } from "./identity"
 import { objectHeaderShape } from "./object-header"
 import {
@@ -23,6 +24,7 @@ export const constantSchema = z
         "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
     }),
     publicRead: publicReadSchema,
+    customActions: customActionsSchema,
     ...valueTypeShape,
     defaultValue: defaultValueSchema
       .optional()

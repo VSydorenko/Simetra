@@ -7,6 +7,7 @@ import {
   valueTypeReferences,
   type KindDefinition,
   type StandardColumnDef,
+  customActionReferences,
 } from "./standard"
 
 /** Лише поля типу: решта полів константи до колонки `value` не належить. */
@@ -59,8 +60,10 @@ export const constantKind: KindDefinition = {
   declared: false,
   kindLabel: true,
   columnFields: [],
+  idElementFields: ["customActions"],
   valueElements: false,
   standardColumns,
+  elementReferences: (obj) => customActionReferences(obj as Constant),
   references: (obj) =>
     valueTypeReferences(
       obj as Constant,

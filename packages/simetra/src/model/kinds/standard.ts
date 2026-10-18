@@ -9,6 +9,7 @@ import { toSnakeCase, type AttributeCase } from "../schemas/identity"
 import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import type { MetadataRef } from "../schemas/metadata-ref"
+import type { CustomAction } from "../schemas/rights"
 import type { TabularSection } from "../schemas/tabular-section"
 import type { DefaultValue, ValueType } from "../schemas/value-type"
 
@@ -127,6 +128,10 @@ export type ReferenceRole =
   | "eventSubscription.source"
   /** Реквізит джерела в `whenChanged` підписки. */
   | "eventSubscription.whenChanged"
+  /** Кастомна дія того самого об'єкта в `requires` кастомної дії. */
+  | "customAction.requires"
+  /** Власна колонка об'єкта в `effects.header` кастомної дії. */
+  | "customAction.header"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */
@@ -307,6 +312,14 @@ export interface KindDefinition {
    */
   namedElementFields?: readonly string[]
   /**
+   * Поля з елементами, що мають лише `id` і `name`, без `physicalName`
+   * (кастомні дії, Р1a-6): у даних елемент називає його UUID, тож фізичної
+   * мітки немає. `id` перевіряється глобально, ім'я ділить простір імен
+   * об'єкта з реквізитами й ТЧ і пишеться в camelCase незалежно від стилю
+   * проєкту — як слова словника дій.
+   */
+  idElementFields?: readonly string[]
+  /**
    * Види, що можуть бути власником об'єкта цього виду (`owners`). Є лише у
    * видів із підпорядкуванням власнику: як у 1С, власник довідника — довідник.
    */
@@ -344,8 +357,10 @@ export interface KindDefinition {
   tabularSectionColumns?(obj: unknown): StandardColumnDef[]
   references(obj: unknown): FoundReference[]
   /**
-   * Посилання на колонки за логічним іменем. Є лише у виду, що описує фізику
-   * сам (ключі, індекси й FK прийнятої таблиці називають колонки).
+   * Посилання на колонки за логічним іменем: ключі, індекси й FK прийнятої
+   * таблиці, `effects.header` кастомних дій. Невідоме ім'я звітує стадія 2
+   * лише у виду, що описує фізику сам (`declared`); для решти — правило, що
+   * володіє полем.
    */
   elementReferences?(obj: unknown): FoundElementReference[]
   /** Ключі таблиць регістра; є лише у видів-регістрів. */
@@ -609,6 +624,24 @@ export function tabularRowColumns(keyDefault: boolean): StandardColumnDef[] {
 }
 
 // --- Пошук посилань -------------------------------------------------------
+
+/**
+ * Колонки шапки, які пишуть кастомні дії (`effects.header`): посилання на
+ * власні колонки об'єкта, тож перейменування реквізиту бачить індекс.
+ */
+export function customActionReferences(obj: {
+  customActions: readonly CustomAction[]
+}): FoundElementReference[] {
+  return obj.customActions.flatMap((action, index) => {
+    const { header } = action.effects
+    if (header === undefined || header === "all") return []
+    return header.map((name, at) => ({
+      pointer: `/customActions/${index}/effects/header/${at}`,
+      name,
+      role: "customAction.header" as const,
+    }))
+  })
+}
 
 type TypedField = Pick<ValueType, "ref" | "allowedTypes">
 

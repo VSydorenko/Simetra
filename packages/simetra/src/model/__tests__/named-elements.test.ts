@@ -11,6 +11,7 @@ describe("namedCollections", () => {
         ...(def.tabularSectionColumns === undefined ? [] : ["tabularSections"]),
         ...(def.valueElements ? ["values"] : []),
         ...(def.namedElementFields ?? []),
+        ...(def.idElementFields ?? []),
       ].sort()
       expect([...namedCollections(def.schema).keys()].sort(), def.kind).toEqual(
         expected

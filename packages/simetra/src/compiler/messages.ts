@@ -1448,6 +1448,42 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
 
+  "rights.action-unknown": {
+    en: (p) => `Action "${p.action}" is not an action of ${p.object}`,
+    uk: (p) => `Дія "${p.action}" не є дією ${p.object}`,
+    hint: {
+      en: "Name a standard action of the kind or a custom action of the same object.",
+      uk: "Назвіть стандартну дію виду або кастомну дію того самого об'єкта.",
+    },
+  },
+  "rights.custom-action-reserved": {
+    en: (p) =>
+      `Custom action "${p.action}" repeats a standard action of ${p.kind}`,
+    uk: (p) =>
+      `Кастомна дія "${p.action}" повторює стандартну дію виду ${p.kind}`,
+    hint: {
+      en: "Rename the custom action: the standard action already exists.",
+      uk: "Перейменуйте кастомну дію: стандартна дія вже існує.",
+    },
+  },
+  "rights.requires-cycle": {
+    en: (p) => `Custom action requirements form a cycle: ${p.actions}`,
+    uk: (p) => `Вимоги кастомних дій утворюють цикл: ${p.actions}`,
+    hint: {
+      en: "Remove one requirement of the chain.",
+      uk: "Приберіть одну вимогу ланцюжка.",
+    },
+  },
+  "rights.attribute-unknown": {
+    en: (p) =>
+      `${p.field} names "${p.attribute}", which is not an attribute of the object`,
+    uk: (p) => `${p.field} називає "${p.attribute}", а це не реквізит об'єкта`,
+    hint: {
+      en: "Name an own attribute or a standard attribute of the object.",
+      uk: "Назвіть власний або стандартний реквізит об'єкта.",
+    },
+  },
+
   "reference.not-referenceable": {
     en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,
     uk: (p) => `На ${p.kind} "${p.name}" тут не можна посилатися`,

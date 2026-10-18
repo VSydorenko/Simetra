@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
+import { customActionsSchema } from "./rights"
 import { attributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
@@ -133,6 +134,7 @@ export const documentSchema = z.strictObject({
   }),
 
   publicRead: publicReadSchema,
+  customActions: customActionsSchema,
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

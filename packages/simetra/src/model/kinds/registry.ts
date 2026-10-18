@@ -18,6 +18,7 @@ import type { KindDefinition } from "./standard"
 export { isUuidColumn, singleUuidKeyColumn }
 
 export {
+  STANDARD_ACTIONS,
   actionRequires,
   closeRequires,
   type ActionEffects,

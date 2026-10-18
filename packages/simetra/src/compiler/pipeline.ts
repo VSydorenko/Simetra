@@ -25,6 +25,7 @@ import { buildPresentation } from "./presentation"
 import { readFiles, type FilesStageResult } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
+import { rightsContracts } from "./rights/contracts"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
@@ -130,10 +131,8 @@ export async function runStages(
       stage1.objects,
       stage2.references,
       { ...stage3, physical },
-      stage1.project.naming.attributeCase,
-      stage1.project.scopeKinds,
-      sql.units,
-      stage1.project.database.provider
+      stage1.project,
+      sql.units
     ),
     ...checkLinks(
       stage1.objects,
@@ -367,7 +366,13 @@ export async function runStages(
       stage3.elementChecks,
       stage1.project,
       access,
-      eventSubscriptions
+      eventSubscriptions,
+      rightsContracts(
+        stage1.objects,
+        stage2.references,
+        physical,
+        stage1.project.naming.attributeCase
+      )
     ),
     presentation: buildPresentation(
       stage1.objects,

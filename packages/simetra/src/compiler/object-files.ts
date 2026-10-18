@@ -71,6 +71,9 @@ export function namedElementsOf(file: ObjectFile): Located[] {
       ...elementsAt(section.element, "attributes", section.pointer),
     ]),
     ...labelGroupsOf(file).flat(),
+    ...(file.def.idElementFields ?? []).flatMap((field) =>
+      elementsAt(file.raw, field)
+    ),
   ]
 }
 

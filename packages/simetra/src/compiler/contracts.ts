@@ -7,6 +7,7 @@ import {
   standardLogicalName,
   type Attribute,
   type DatabaseProvider,
+  type Dml,
   type LocalizedString,
   type NumberingSpec,
   type AttributeCase,
@@ -263,6 +264,37 @@ export interface AccessContract {
   publicRead: RequestRolePurpose[]
 }
 
+/** Обсяг, яким грант може обмежити дію (спека прав §3). */
+export type RightsExtent =
+  { form: "any" } | { form: "own" } | { form: "dimension"; dimensionId: string }
+
+/** Дія об'єкта в контракті прав: стандартна чи кастомна. */
+export interface RightsAction {
+  /** Слово словника або UUID кастомної дії (Рх18). */
+  action: string
+  name: string
+  /** Замикання вимог без самої дії, відсортоване. */
+  requires: string[]
+  /** `header` — фізичні колонки основної таблиці або "all". */
+  effects: { dml: Dml[]; header: "all" | string[]; tabularSections: boolean }
+  extents: RightsExtent[]
+}
+
+/**
+ * Контракт прав об'єкта (спека прав §3): дії з вимогами, ефектами й
+ * обсягами. Його мають усі об'єкти видів з непорожнім `rightsExtents`; з
+ * нього Права-2 будують політики, а матриця — рядки дій.
+ */
+export interface RightsContract {
+  objectId: string
+  kindLabel: string
+  table: QualifiedName
+  /** Немає — об'єкт без скоупу. */
+  scopeKindId?: string
+  /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
+  actions: RightsAction[]
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -284,6 +316,8 @@ export interface Contracts {
   users?: UsersContract
   /** За `objectId`. */
   membership: MembershipContract[]
+  /** За `objectId`: кожен об'єкт виду з непорожнім `rightsExtents`. */
+  rights: RightsContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -588,7 +622,8 @@ export function buildContracts(
     "scopeKinds" | "storageBuckets" | "defaultSchema" | "database"
   >,
   access: readonly AccessContract[],
-  eventSubscriptions: readonly EventSubscriptionContract[]
+  eventSubscriptions: readonly EventSubscriptionContract[],
+  rights: readonly RightsContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -655,6 +690,7 @@ export function buildContracts(
         ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
       })
     ),
+    rights: [...rights],
   }
 }
 

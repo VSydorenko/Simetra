@@ -19,6 +19,7 @@ import {
   NO_SCOPE,
   type MetadataRef,
   type MovementDecl,
+  type Project,
   type ReferenceRole,
   type ScopeKind,
   type StandardColumnDef,
@@ -49,6 +50,7 @@ import {
 import { mechanicsStandardNames } from "../mechanics-units"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
+import { checkRights } from "../rights/checks"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import {
@@ -107,12 +109,13 @@ export function checkIntegrity(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   model: ModelStageResult,
-  style: AttributeCase,
-  scopeKinds: readonly ScopeKind[],
-  sqlUnits: readonly VerbatimUnit[],
-  provider: DatabaseProvider
+  project: Project,
+  sqlUnits: readonly VerbatimUnit[]
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
+  const style = project.naming.attributeCase
+  const { scopeKinds } = project
+  const { provider } = project.database
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
   const byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
 
@@ -210,6 +213,9 @@ export function checkIntegrity(
   diagnostics.push(...checkUsersCatalogs(objects, model))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
+  diagnostics.push(
+    ...checkRights({ objects, references, model, scopeKinds, project, byId })
+  )
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {

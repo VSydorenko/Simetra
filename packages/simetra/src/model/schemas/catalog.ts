@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
+import { customActionsSchema } from "./rights"
 import { localizedStringSchema } from "./localized-string"
 import { catalogAttributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
@@ -124,6 +125,7 @@ export const catalogSchema = z.strictObject({
     }),
 
   publicRead: publicReadSchema,
+  customActions: customActionsSchema,
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

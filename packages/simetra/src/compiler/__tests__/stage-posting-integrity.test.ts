@@ -997,10 +997,8 @@ describe("stage 4: robustness", () => {
       stage1.objects,
       stage2.references,
       stage3,
-      "camelCase",
-      [],
-      [],
-      "supabase"
+      stage1.project!,
+      []
     )
     expect(stage4).toEqual([])
   })
@@ -1028,10 +1026,8 @@ describe("stage 4: robustness", () => {
       stage1.objects,
       stage2.references,
       buildModel(stage1.objects, stage1.project!, stage2.references),
-      "camelCase",
-      [],
-      [],
-      "supabase"
+      stage1.project!,
+      []
     )
     expect(stage4).toEqual([])
   })

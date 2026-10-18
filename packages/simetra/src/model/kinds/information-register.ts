@@ -11,6 +11,7 @@ import {
   standardRefReferences,
   type KindDefinition,
   type StandardColumnDef,
+  customActionReferences,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -42,6 +43,7 @@ export const informationRegisterKind: KindDefinition = {
   declared: false,
   kindLabel: true,
   columnFields: ["dimensions", "resources", "attributes"],
+  idElementFields: ["customActions"],
   valueElements: false,
   standardColumns,
   // Незалежний регістр пишуть командою T3, тож PK для PostgREST не потрібен,
@@ -64,6 +66,8 @@ export const informationRegisterKind: KindDefinition = {
           : ["sliceLast", "sliceFirst"],
     }
   },
+  elementReferences: (obj) =>
+    customActionReferences(obj as InformationRegister),
   references(obj) {
     const register = obj as InformationRegister
     return [

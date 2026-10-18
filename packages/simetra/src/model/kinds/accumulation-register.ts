@@ -11,6 +11,7 @@ import {
   standardRefReferences,
   type KindDefinition,
   type StandardColumnDef,
+  customActionReferences,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -46,6 +47,7 @@ export const accumulationRegisterKind: KindDefinition = {
   declared: false,
   kindLabel: true,
   columnFields: ["dimensions", "resources", "attributes"],
+  idElementFields: ["customActions"],
   valueElements: false,
   standardColumns,
   // Рухи пишуть кілька документів, тож ключ рядка — реєстратор; підсумки
@@ -64,6 +66,8 @@ export const accumulationRegisterKind: KindDefinition = {
         ? ["balance", "balanceAndTurnovers"]
         : ["turnovers"],
   }),
+  elementReferences: (obj) =>
+    customActionReferences(obj as AccumulationRegister),
   references(obj) {
     const register = obj as AccumulationRegister
     return [

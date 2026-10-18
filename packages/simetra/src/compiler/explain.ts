@@ -132,6 +132,7 @@ export function explainObject(
     ),
     ...(contracts.users?.objectId === object.id ? [contracts.users] : []),
     ...contracts.membership.filter((c) => c.objectId === object.id),
+    ...contracts.rights.filter((c) => c.objectId === object.id),
   ]
 
   const ownIds = new Set([object.id, ...elements.keys()])

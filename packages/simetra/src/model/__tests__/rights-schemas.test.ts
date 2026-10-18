@@ -1,0 +1,68 @@
+import { describe, expect, it } from "vitest"
+import type { z } from "zod"
+import { KIND_REGISTRY } from "../kinds/registry"
+import { catalogSchema } from "../schemas/catalog"
+import { customTableSchema } from "../schemas/custom-table"
+import { customActionSchema } from "../schemas/rights"
+import { METADATA_KINDS } from "../schemas/metadata-kind"
+
+describe("custom actions", () => {
+  it("accepts a custom action with defaults", () => {
+    expect(
+      customActionSchema.parse({ name: "invite", requires: ["read"] })
+    ).toEqual({ name: "invite", requires: ["read"], effects: {} })
+    expect(customActionSchema.parse({ name: "invite" })).toEqual({
+      name: "invite",
+      requires: [],
+      effects: {},
+    })
+  })
+
+  it("rejects an unknown key", () => {
+    expect(
+      customActionSchema.safeParse({ name: "invite", title: "Invite" }).success
+    ).toBe(false)
+    expect(
+      customActionSchema.safeParse({
+        name: "invite",
+        effects: { dml: ["update"] },
+      }).success
+    ).toBe(false)
+  })
+
+  it("accepts both header forms", () => {
+    for (const header of ["all", ["status"]]) {
+      expect(
+        customActionSchema.safeParse({ name: "close", effects: { header } })
+          .success
+      ).toBe(true)
+    }
+  })
+
+  it("lives on kinds with a rights contract only", () => {
+    expect(
+      catalogSchema.safeParse({
+        kind: "Catalog",
+        name: "Project",
+        customActions: [{ name: "archive" }],
+      }).success
+    ).toBe(true)
+    expect(
+      customTableSchema.safeParse({
+        kind: "CustomTable",
+        name: "Ledger",
+        columns: [{ name: "id", type: "UUID" }],
+        customActions: [{ name: "archive" }],
+      }).success
+    ).toBe(false)
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      const shape = (def.schema as z.ZodObject).shape
+      expect("customActions" in shape, kind).toBe(def.rightsExtents.length > 0)
+      expect(
+        def.idElementFields?.includes("customActions") === true,
+        kind
+      ).toBe(def.rightsExtents.length > 0)
+    }
+  })
+})
