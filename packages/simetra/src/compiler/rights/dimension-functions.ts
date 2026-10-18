@@ -20,11 +20,32 @@ import {
   volatilityProblem,
   type FunctionNode,
   type SetFunctionReason,
-} from "../stages/links"
+} from "../sql/function-shape"
 
 const PLATFORM = CURRENT_USER_FUNCTION.schema
 const CURRENT_USER = `${PLATFORM}.${CURRENT_USER_FUNCTION.name}`
 const ARROW = " → "
+
+/** Причина закритої форми функції виміру й ланок понад причини функції множини. */
+type DimensionFunctionReason = SetFunctionReason | "sqlBody"
+
+/**
+ * Вбудовані функції, що виконують SQL з рядка: обхід бачить лише дерево, а не
+ * текст, який вони виконають, тож будь-яке читання в ньому — невидиме.
+ */
+const DYNAMIC_SQL_BUILTINS: ReadonlySet<string> = new Set([
+  "query_to_xml",
+  "query_to_xml_and_xmlschema",
+  "query_to_xmlschema",
+  "table_to_xml",
+  "table_to_xml_and_xmlschema",
+  "table_to_xmlschema",
+  "cursor_to_xml",
+  "cursor_to_xmlschema",
+])
+
+const FUNCTION_CLASSES: ReadonlySet<string> = new Set(["function"])
+const VIEW_CLASSES: ReadonlySet<string> = new Set(["view", "materializedView"])
 
 /** Ланка ланцюжка в черзі обходу: одиниця й шлях імен до неї від виміру. */
 interface Step {
@@ -73,10 +94,11 @@ export function checkDimensionFunctions(
       return
     }
     const problem = typeof fn === "string" ? fn : volatilityProblem(fn)
-    const reason =
+    const reason: DimensionFunctionReason | undefined =
       typeof fn === "string" || problem !== undefined
         ? undefined
-        : setFunctionClosedProblem(fn, units, schema, name, parse, plpgsql)
+        : (setFunctionClosedProblem(fn, units, schema, name, parse, plpgsql) ??
+          (fn.sql_body === undefined ? undefined : "sqlBody"))
     // Спершу закрита форма: без неї мова чи search_path роблять обхід
     // безпідставним.
     if (reason !== undefined) {
@@ -100,8 +122,10 @@ export function checkDimensionFunctions(
 }
 
 /**
- * Обхід у ширину від функції виміру. Відвідані одиниці — множина: цикл
- * викликів (його окремо відхиляє порядок створення) не зациклює обхід.
+ * Обхід у ширину від функції виміру за викликами й за відношеннями-
+ * представленнями проєкту: представлення читає свої таблиці від імені
+ * власника так само, як функція. Відвідані одиниці — множина: цикл (його
+ * окремо відхиляє порядок створення) не зациклює обхід.
  */
 function walk(
   head: VerbatimUnit,
@@ -118,70 +142,112 @@ function walk(
     })
   const visited = new Set<string>([head.identity])
   const queue: Step[] = [{ unit: head, chain: [headName] }]
-  for (let step = queue.shift(); step !== undefined; step = queue.shift()) {
-    const { unit, chain } = step
-    for (const relation of unitRelations(unit, parse)) {
-      if (relation.schema === PLATFORM) {
-        readsRights(chain, `${relation.schema}.${relation.name}`)
+  const named = (classes: ReadonlySet<string>, name: string, schema?: string) =>
+    units.filter(
+      (u) =>
+        classes.has(u.class) &&
+        u.name === name &&
+        (schema === undefined || u.schema === schema)
+    )
+  const enqueue = (unit: VerbatimUnit, chain: readonly string[]) => {
+    if (visited.has(unit.identity)) return
+    visited.add(unit.identity)
+    const next = [...chain, `${unit.schema}.${unit.name}`]
+    if (unit.class === "function") {
+      const language = routineLanguage(unit.tree as Node)
+      if (language !== "sql") {
+        readsRights(next, language === "plpgsql" ? "plpgsql" : "unknown")
+        return
+      }
+      const reason = linkProblem(unit, parse)
+      if (reason !== undefined) {
+        at("rights.dimension-function-signature", {
+          function: `${unit.schema}.${unit.name}`,
+          reason,
+        })
       }
     }
-    for (const call of unitCalls(unit, parse)) {
-      // З `search_path = ''` (його має кожна ланка) некваліфікований виклик
-      // розв'язується лише в `pg_catalog`.
-      if (call.schema === undefined || call.schema === "pg_catalog") continue
-      const callee = `${call.schema}.${call.name}`
-      if (callee === CURRENT_USER || membershipFunctions.has(callee)) continue
-      const next = [...chain, callee]
-      const project = units.filter(
-        (u) =>
-          u.class === "function" &&
-          u.schema === call.schema &&
-          u.name === call.name
-      )
-      if (project.length === 0) {
-        readsRights(
-          call.schema === PLATFORM ? chain : next,
-          call.schema === PLATFORM ? callee : "unknown"
-        )
+    queue.push({ unit, chain: next })
+  }
+  for (let step = queue.shift(); step !== undefined; step = queue.shift()) {
+    const { unit, chain } = step
+    // Представлення не має власного `search_path`: імена в ньому зв'язуються
+    // під час створення з `search_path` сесії, якого компілятор не знає.
+    const view = VIEW_CLASSES.has(unit.class)
+    let unqualified = false
+    for (const relation of unitRelations(unit, parse)) {
+      if (relation.schema === undefined) {
+        unqualified ||= view
         continue
       }
-      // Перевантаження за типами аргументів компілятор не розрізняє, тож
-      // судить кожну одиницю з таким ім'ям.
-      for (const candidate of project) {
-        if (visited.has(candidate.identity)) continue
-        visited.add(candidate.identity)
-        const language = routineLanguage(candidate.tree as Node)
-        if (language !== "sql") {
-          readsRights(next, language === "plpgsql" ? "plpgsql" : "unknown")
+      if (relation.schema === PLATFORM) {
+        readsRights(chain, `${relation.schema}.${relation.name}`)
+        continue
+      }
+      for (const target of named(
+        VIEW_CLASSES,
+        relation.name,
+        relation.schema
+      )) {
+        enqueue(target, chain)
+      }
+    }
+    if (unqualified) {
+      at("rights.dimension-function-signature", {
+        function: chain.at(-1) ?? "",
+        reason: "unqualified",
+      })
+    }
+    for (const call of unitCalls(unit, parse)) {
+      if (call.schema === undefined || call.schema === "pg_catalog") {
+        if (DYNAMIC_SQL_BUILTINS.has(call.name)) {
+          readsRights(chain, "dynamic")
           continue
         }
-        const reason = linkProblem(candidate, parse)
-        if (reason !== undefined) {
-          at("rights.dimension-function-signature", {
-            function: callee,
-            reason,
-          })
+        // З `search_path = ''` (його має кожна функція ланцюжка)
+        // некваліфікований виклик розв'язується лише в `pg_catalog`. У
+        // представленні — будь-де, тож судиться кожна функція проєкту з
+        // таким ім'ям.
+        if (call.schema === undefined && view) {
+          for (const target of named(FUNCTION_CLASSES, call.name)) {
+            enqueue(target, chain)
+          }
         }
-        queue.push({ unit: candidate, chain: next })
+        continue
       }
+      const callee = `${call.schema}.${call.name}`
+      // Перевантаження за типами аргументів компілятор не розрізняє, тож
+      // судить кожну одиницю проєкту з таким ім'ям — і тоді, коли ім'я
+      // збігається зі згенерованою функцією членства: довіра — лише самій
+      // згенерованій.
+      const project = named(FUNCTION_CLASSES, call.name, call.schema)
+      if (project.length > 0) {
+        for (const target of project) enqueue(target, chain)
+        continue
+      }
+      if (callee === CURRENT_USER || membershipFunctions.has(callee)) continue
+      if (call.schema === PLATFORM) readsRights(chain, callee)
+      else readsRights([...chain, callee], "unknown")
     }
   }
 }
 
 /**
- * Закрита форма ланки: `SET search_path = ''` і кваліфіковані відношення.
- * `STABLE` і `SECURITY DEFINER` вимагає лише функція виміру — ланка
- * виконується в її контексті; але без порожнього `search_path` ланки
- * некваліфіковане ім'я непомітно спрямувалося б у схему платформи.
+ * Закрита форма ланки: `SET search_path = ''`, рядкове тіло й кваліфіковані
+ * відношення. `STABLE` і `SECURITY DEFINER` вимагає лише функція виміру —
+ * ланка виконується в її контексті; але без порожнього `search_path` ланки
+ * некваліфіковане ім'я непомітно спрямувалося б у схему платформи. Тіло
+ * стандарту SQL зв'язує імена під час створення з `search_path` сесії, тож
+ * його компілятор не судить і відхиляє (fail-closed).
  */
 function linkProblem(
   unit: VerbatimUnit,
   parse: SqlParser
-): SetFunctionReason | undefined {
+): DimensionFunctionReason | undefined {
   const tree = unit.tree as Node
   if (!hasEmptySearchPath(tree)) return "searchPath"
   const fn = (tree as { CreateFunctionStmt?: FunctionNode }).CreateFunctionStmt
-  return fn !== undefined && bodyHasUnqualifiedRelation(fn, parse)
-    ? "unqualified"
-    : undefined
+  if (fn === undefined) return undefined
+  if (fn.sql_body !== undefined) return "sqlBody"
+  return bodyHasUnqualifiedRelation(fn, parse) ? "unqualified" : undefined
 }

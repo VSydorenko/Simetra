@@ -303,6 +303,10 @@ const SET_FUNCTION_REASON: Readonly<
     en: "with an empty search_path an unqualified relation does not resolve",
     uk: "з порожнім search_path некваліфіковане відношення не розв'язується",
   },
+  sqlBody: {
+    en: "its SQL-standard body binds names with the search_path of the creating session, so the compiler cannot check it; use a string body (AS $$ ... $$)",
+    uk: "її тіло стандарту SQL зв'язує імена з search_path сесії, що її створює, тож компілятор не може його перевірити; використайте рядкове тіло (AS $$ ... $$)",
+  },
 }
 const ROW_RULE_GRAMMAR = {
   en: "A row rule combines with AND, OR, NOT and parentheses the atoms <column> IS [NOT] NULL, <column> = or <> <literal>, <column> [NOT] IN (<literals>), <column> <op> <column> of the same type and num_nonnulls(<columns>) <op> <integer>, where <op> is =, <>, <, <=, > or >=; columns are unqualified columns of the table, without casts, other functions or subqueries; emptiness is checked with IS [NOT] NULL, never with a NULL literal.",
@@ -1617,11 +1621,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.reason === undefined
         ? `Values function ${p.function}() of access dimension "${p.dimension}" has the wrong signature: ${p.problem}`
-        : `Function ${p.function}() in the values of access dimension "${p.dimension}" is outside the closed form: ${SET_FUNCTION_REASON[String(p.reason)]?.en ?? p.reason}`,
+        : `${p.function} in the values of access dimension "${p.dimension}" is outside the closed form: ${SET_FUNCTION_REASON[String(p.reason)]?.en ?? p.reason}`,
     uk: (p) =>
       p.reason === undefined
         ? `Функція значень ${p.function}() виміру доступу "${p.dimension}" має хибну сигнатуру: ${p.problem}`
-        : `Функція ${p.function}() у значеннях виміру доступу "${p.dimension}" поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
+        : `${p.function} у значеннях виміру доступу "${p.dimension}" — поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
     hint: {
       en: "The values function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; every function it calls is LANGUAGE sql SET search_path = ''; every relation is qualified by a schema.",
       uk: "Функція значень не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; кожна функція, яку вона кличе, — LANGUAGE sql SET search_path = ''; кожне відношення кваліфіковане схемою.",
@@ -1629,16 +1633,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.dimension-function-reads-rights": {
     en: (p) =>
-      p.object === "plpgsql" || p.object === "unknown"
-        ? `Values of access dimension "${p.dimension}" depend on a function the compiler cannot check (${p.object}): ${p.chain}`
-        : `Values of access dimension "${p.dimension}" read the platform object ${p.object}: ${p.chain}`,
+      p.object === "dynamic"
+        ? `Values of access dimension "${p.dimension}" execute SQL from a string, which the compiler cannot check: ${p.chain}`
+        : p.object === "plpgsql" || p.object === "unknown"
+          ? `Values of access dimension "${p.dimension}" depend on a function the compiler cannot check (${p.object}): ${p.chain}`
+          : `Values of access dimension "${p.dimension}" read the platform object ${p.object}: ${p.chain}`,
     uk: (p) =>
-      p.object === "plpgsql" || p.object === "unknown"
-        ? `Значення виміру доступу "${p.dimension}" залежать від функції, яку компілятор не може перевірити (${p.object}): ${p.chain}`
-        : `Значення виміру доступу "${p.dimension}" читають об'єкт платформи ${p.object}: ${p.chain}`,
+      p.object === "dynamic"
+        ? `Значення виміру доступу "${p.dimension}" виконують SQL з рядка, якого компілятор не може перевірити: ${p.chain}`
+        : p.object === "plpgsql" || p.object === "unknown"
+          ? `Значення виміру доступу "${p.dimension}" залежать від функції, яку компілятор не може перевірити (${p.object}): ${p.chain}`
+          : `Значення виміру доступу "${p.dimension}" читають об'єкт платформи ${p.object}: ${p.chain}`,
     hint: {
-      en: "Rights checks call the values function, so it must not read rights itself: of the platform schema only simetra.current_user_id() is allowed, and every called function must be a LANGUAGE sql function of the project, a generated membership function or a builtin.",
-      uk: "Перевірка прав кличе функцію значень, тож сама вона прав не читає: зі схеми платформи дозволено лише simetra.current_user_id(), а кожна викликана функція — LANGUAGE sql функція проєкту, згенерована функція членства чи вбудована.",
+      en: "Rights checks call the values function, so it must not read rights itself: of the platform schema only simetra.current_user_id() is allowed, and every called function must be a LANGUAGE sql function of the project, a generated membership function or a builtin that does not execute SQL from a string.",
+      uk: "Перевірка прав кличе функцію значень, тож сама вона прав не читає: зі схеми платформи дозволено лише simetra.current_user_id(), а кожна викликана функція — LANGUAGE sql функція проєкту, згенерована функція членства чи вбудована, що не виконує SQL з рядка.",
     },
   },
   "rights.ownership-target": {

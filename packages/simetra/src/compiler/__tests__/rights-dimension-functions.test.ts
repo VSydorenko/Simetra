@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { Diagnostic } from "simetra/compiler"
 import { MEMBER_FILE, compileRights, rightsFiles } from "./fixtures/rights"
-import { uuid } from "./helpers"
+import { acceptDebt, uuid } from "./helpers"
 
 const PROJECT = "project.meta.json"
 const POINTER = "/accessDimensions/0/values/function"
@@ -39,7 +39,9 @@ function files(
 }
 
 async function errors(sql: string, overrides = {}) {
-  const result = await compileRights(files(sql, overrides))
+  // Представлення й функції поза закритою оболонкою — борг; ратчет боргу тут
+  // не предмет, тож перелік приймає весь борг фікстури.
+  const result = await compileRights(await acceptDebt(files(sql, overrides)))
   return result.diagnostics.filter((d) => d.severity === "error")
 }
 
@@ -287,5 +289,109 @@ describe("access dimension value function", () => {
         object: "unknown",
       },
     ])
+  })
+  describe("fix round 1", () => {
+    const head = (body: string) => fn("region_ids", CLOSED, body)
+    const params = async (sql: string) =>
+      rightsErrors(await errors(sql)).map((d) => [d.code, d.params])
+    const reads = (chain: string, object: string) => [
+      "rights.dimension-function-reads-rights",
+      { dimension: "region", chain, object },
+    ]
+    const signature = (fn: string, reason: string) => [
+      "rights.dimension-function-signature",
+      { dimension: "region", function: fn, reason },
+    ]
+
+    it("follows project views", async () => {
+      const viewHead = head("SELECT v.id FROM public.v v")
+      expect(
+        await params(
+          viewHead +
+            "CREATE VIEW public.v AS SELECT i.id FROM simetra.identities i;\n"
+        )
+      ).toEqual([reads("public.region_ids → public.v", "simetra.identities")])
+      expect(
+        await params(
+          viewHead +
+            "CREATE FUNCTION public.p() RETURNS uuid LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN NULL; END $$;\n" +
+            "CREATE VIEW public.v AS SELECT public.p() AS id;\n"
+        )
+      ).toEqual([reads("public.region_ids → public.v → public.p", "plpgsql")])
+      expect(
+        await params(
+          viewHead +
+            "CREATE VIEW public.v AS SELECT r.region_id AS id FROM member_region r;\n"
+        )
+      ).toEqual([signature("public.v", "unqualified")])
+      expect(
+        await params(
+          viewHead +
+            "CREATE VIEW public.v AS SELECT r.region_id AS id FROM public.member_region r;\n"
+        )
+      ).toEqual([])
+    })
+
+    it("rejects SQL-standard bodies in the head and in a link", async () => {
+      expect(
+        await params(
+          "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT NULL::uuid; END;\n"
+        )
+      ).toEqual([signature("public.region_ids", "sqlBody")])
+      expect(
+        await params(
+          head("SELECT public.helper_id()") +
+            "CREATE FUNCTION public.helper_id() RETURNS uuid LANGUAGE sql STABLE SET search_path = '' RETURN NULL::uuid;\n"
+        )
+      ).toEqual([signature("public.helper_id", "sqlBody")])
+    })
+
+    it("judges a project function that shares a membership function name", async () => {
+      // Стадія 4 уже відхиляє колізію імен (`physical.function-duplicate` на
+      // `/membership`), тож членство стає недовіреним; обхід і сам судить
+      // одиницю проєкту раніше за довіру до згенерованого імені.
+      const found = await errors(
+        head(
+          "SELECT r.region_id FROM public.member_region r WHERE r.member_id = public.org_member_my_member(r.org_id::text)"
+        ) +
+          "CREATE FUNCTION public.org_member_my_member(p text) RETURNS uuid LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN NULL; END $$;\n"
+      )
+      expect(found.map((d) => d.code)).toContain("physical.function-duplicate")
+      expect(rightsErrors(found).map((d) => [d.code, d.params])).toEqual([
+        reads("public.region_ids → public.org_member_my_member", "plpgsql"),
+      ])
+    })
+
+    it("rejects builtins that execute SQL from a string", async () => {
+      expect(
+        await params(
+          head(
+            "SELECT NULL::uuid WHERE query_to_xml('select 1', true, true, '') IS NOT NULL"
+          )
+        )
+      ).toEqual([reads("public.region_ids", "dynamic")])
+      expect(
+        await params(
+          head(
+            "SELECT NULL::uuid WHERE pg_catalog.table_to_xml('public.member_region'::regclass, true, true, '') IS NOT NULL"
+          )
+        )
+      ).toEqual([reads("public.region_ids", "dynamic")])
+    })
+
+    it("rejects other platform functions and non-sql links, allows pg_catalog builtins", async () => {
+      expect(await params(head("SELECT simetra.role_ids()"))).toEqual([
+        reads("public.region_ids", "simetra.role_ids"),
+      ])
+      expect(
+        await params(
+          head("SELECT public.helper_ids()") +
+            "CREATE FUNCTION public.helper_ids() RETURNS SETOF uuid LANGUAGE c STABLE AS 'helper_lib', 'helper_ids';\n"
+        )
+      ).toEqual([reads("public.region_ids → public.helper_ids", "unknown")])
+      expect(await errors(head("SELECT pg_catalog.lower('x')::uuid"))).toEqual(
+        []
+      )
+    })
   })
 })
