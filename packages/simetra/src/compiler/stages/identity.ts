@@ -663,7 +663,9 @@ function resolveElementReferences(
     const target =
       owner === undefined
         ? object
-        : objectsByName.get(objectKey(owner.kind, owner.name))
+        : owner === "users"
+          ? usersCatalog(objectsByName)
+          : objectsByName.get(objectKey(owner.kind, owner.name))
     if (
       target === undefined ||
       KIND_REGISTRY[target.kind].materializes !== "table"
@@ -692,6 +694,19 @@ function resolveElementReferences(
       role,
     })
   }
+}
+
+/**
+ * «Користувачі» — за роллю, перший за шляхом файлу, як `usersCatalogOf`
+ * стадії 3 (дубль звітує стадія 4); стадія 3 імпортує цей модуль, тож
+ * функцію не беремо звідти.
+ */
+function usersCatalog(
+  objectsByName: ReadonlyMap<string, ParsedObject>
+): ParsedObject | undefined {
+  return [...objectsByName.values()]
+    .filter((o) => (o.data as { role?: string }).role === "users")
+    .sort((a, b) => compareStrings(a.file, b.file))[0]
 }
 
 /**

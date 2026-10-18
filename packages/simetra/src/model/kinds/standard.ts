@@ -169,8 +169,12 @@ export interface FoundElementReference {
   /** JSON Pointer (RFC 6901) на рядок з іменем. */
   pointer: string
   name: string
-  /** Об'єкт, чию колонку названо; немає — власна колонка. */
-  owner?: MetadataRef
+  /**
+   * Об'єкт, чию колонку названо; немає — власна колонка. `"users"` —
+   * довідник «Користувачі»: його знає лише стадія 2 (за роллю, не за іменем),
+   * тож ціль стандартного `ref: "users"` вона й підставляє.
+   */
+  owner?: MetadataRef | "users"
   role: ReferenceRole
 }
 
@@ -647,22 +651,33 @@ export function customActionReferences(obj: {
   })
 }
 
+/** Об'єкт, що несе носії прав: його реквізити й стандартні колонки виду. */
+export interface CarrierHost {
+  kind: MetadataRef["kind"]
+  name: string
+  attributes: readonly Attribute[]
+  owners?: readonly MetadataRef[]
+}
+
 /**
  * Посилання носія прав (Рх21): рядок чи перший крок шляху — власна колонка,
- * другий крок — колонка цілі першого. Ціль другого кроку відома лише тоді,
- * коли перший — реквізит з одиночним `ref`; інакше другий крок в індекс не
- * йде, а перший відхиляє правило носія (`rights.carrier-not-ref`).
+ * другий крок — колонка цілі першого. Ціль першого кроку — `ref` реквізиту
+ * або ціль стандартної колонки-посилання (`parent` — сам об'єкт, єдиний
+ * власник, «Користувачі» авторства). Невідома ціль (поліморфне посилання,
+ * не посилання) — другий крок в індекс не йде, а перший відхиляє правило
+ * носія (`rights.carrier-not-ref`).
  */
 export function carrierReferences(
   carrier: RightsCarrier,
   pointer: string,
-  attributes: readonly Attribute[]
+  host: CarrierHost,
+  standard: readonly StandardColumnDef[]
 ): FoundElementReference[] {
   if (typeof carrier === "string") {
     return [{ pointer, name: carrier, role: "rights.carrier" }]
   }
   const [first, second] = carrier
-  const owner = attributes.find((a) => a.name === first)?.ref
+  const owner = carrierStepTarget(first, host, standard)
   return [
     { pointer: `${pointer}/0`, name: first, role: "rights.carrier" },
     ...(owner === undefined
@@ -678,13 +693,38 @@ export function carrierReferences(
   ]
 }
 
+/**
+ * Ціль одиночного посилання за логічним іменем. Стиль імен проєкту T0 не
+ * знає, тож стандартну колонку впізнаємо в обох стилях: її ім'я
+ * зарезервоване, і реквізит з таким самим іменем неможливий.
+ */
+function carrierStepTarget(
+  name: string,
+  host: CarrierHost,
+  standard: readonly StandardColumnDef[]
+): MetadataRef | "users" | undefined {
+  const attribute = host.attributes.find((a) => a.name === name)
+  if (attribute !== undefined) return attribute.ref
+  const column = standard.find(
+    (c) => c.logicalName === name || toSnakeCase(c.logicalName) === name
+  )
+  // `whenMany` — пара лише з кількома власниками, а їх перевіряє гілка `owners`.
+  if (column === undefined || column.polymorphic === "always") return undefined
+  if (column.ref === "self") return { kind: host.kind, name: host.name }
+  if (column.ref === "users") return "users"
+  if (column.ref === "owners" && host.owners?.length === 1) {
+    return host.owners[0]
+  }
+  return undefined
+}
+
 /** Носії `ownership` об'єкта. */
-export function ownershipReferences(obj: {
-  ownership?: readonly RightsCarrier[]
-  attributes: readonly Attribute[]
-}): FoundElementReference[] {
+export function ownershipReferences(
+  obj: CarrierHost & { ownership?: readonly RightsCarrier[] },
+  standard: readonly StandardColumnDef[]
+): FoundElementReference[] {
   return (obj.ownership ?? []).flatMap((carrier, index) =>
-    carrierReferences(carrier, `/ownership/${index}`, obj.attributes)
+    carrierReferences(carrier, `/ownership/${index}`, obj, standard)
   )
 }
 

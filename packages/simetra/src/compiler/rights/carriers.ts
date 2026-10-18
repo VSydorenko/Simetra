@@ -183,6 +183,8 @@ function resolveStep(
         {
           attribute: name,
           field: at.field,
+          // Другий крок шляху називає реквізит цілі, тож і текст — про неї.
+          ...(object === owner ? {} : { target: object.name }),
         }
       ),
     }

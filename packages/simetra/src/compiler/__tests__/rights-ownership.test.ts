@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { applyChanges, compile, renameElement } from "simetra/compiler"
 import {
   COMMENT_FILE,
   PROJECT_CATALOG_FILE,
@@ -7,9 +8,11 @@ import {
   compileRights,
   rightsFiles,
 } from "./fixtures/rights"
-import { uuid } from "./helpers"
+import { metaFiles, uuid } from "./helpers"
 
 const USERS_FILE = "catalogs/Users/Users.meta.json"
+const REGION_FILE = "catalogs/Region/Region.meta.json"
+const REGION_ID = uuid(6040)
 
 type Files = ReturnType<typeof rightsFiles>
 
@@ -174,5 +177,141 @@ describe("rights ownership", () => {
         rightsFiles({ [COMMENT_FILE]: { ownership: [["task", "nobody"]] } })
       )
     ).toEqual([["rights.attribute-unknown", "/ownership/0/1"]])
+  })
+
+  it("starts a path at the parent of a hierarchical catalog", async () => {
+    const region = await contractOf(
+      rightsFiles({
+        [REGION_FILE]: {
+          hierarchyType: "FoldersAndItems",
+          attributes: [
+            {
+              id: uuid(6041),
+              name: "lead",
+              physicalName: "lead_id",
+              type: "Ref",
+              ref: ref("Catalog", "OrgMember"),
+            },
+          ],
+          ownership: [["parent", "lead"]],
+        },
+      }),
+      REGION_ID
+    )
+    expect(region.ownership).toEqual([
+      {
+        column: "parent_id",
+        via: {
+          objectId: REGION_ID,
+          table: { schema: "public", name: "region" },
+          column: "lead_id",
+        },
+      },
+    ])
+  })
+
+  it("starts a path at the single owner of a catalog", async () => {
+    const region = await contractOf(
+      rightsFiles({
+        [PROJECT_CATALOG_FILE]: {
+          attributes: [
+            {
+              id: uuid(6021),
+              name: "manager",
+              physicalName: "manager_id",
+              type: "Ref",
+              ref: ref("Catalog", "OrgMember"),
+            },
+          ],
+        },
+        [REGION_FILE]: {
+          owners: [ref("Catalog", "Project")],
+          ownership: [["owner", "manager"]],
+        },
+      }),
+      REGION_ID
+    )
+    expect(region.ownership[0]!.via).toMatchObject({
+      table: { schema: "public", name: "project" },
+      column: "manager_id",
+    })
+  })
+
+  it("starts a path at the author in a project without scope kinds", async () => {
+    const files = metaFiles({
+      "project.meta.json": {
+        name: "Single",
+        database: { provider: "supabase" },
+      },
+      [USERS_FILE]: {
+        id: uuid(6101),
+        kind: "Catalog",
+        name: "Users",
+        physicalName: "users",
+        kindLabel: "users",
+        role: "users",
+        attributes: [
+          {
+            id: uuid(6102),
+            name: "mentor",
+            physicalName: "mentor_id",
+            type: "Ref",
+            ref: ref("Catalog", "Users"),
+          },
+        ],
+      },
+      [TASK_FILE]: {
+        id: TASK_ID,
+        kind: "Document",
+        name: "Task",
+        physicalName: "task",
+        kindLabel: "task",
+        trackAuthor: true,
+        ownership: [["createdBy", "mentor"]],
+      },
+    })
+    const result = await compile(files)
+    expect(errors(result)).toEqual([])
+    const task = result.model!.contracts.rights.find(
+      (c) => c.objectId === TASK_ID
+    )!
+    expect(task.ownership).toEqual([
+      {
+        column: "created_by_id",
+        via: {
+          objectId: uuid(6101),
+          table: { schema: "public", name: "users" },
+          column: "mentor_id",
+        },
+      },
+    ])
+  })
+
+  it("names the target of the path when its second step is unknown", async () => {
+    const [unknown] = errors(
+      await compileRights(
+        rightsFiles({ [COMMENT_FILE]: { ownership: [["task", "nobody"]] } })
+      )
+    )
+    expect(unknown!.message).toContain("Task")
+  })
+
+  it("rewrites the second step of a path when its attribute is renamed", async () => {
+    const files = rightsFiles({
+      [COMMENT_FILE]: { ownership: [["task", "assignee"]] },
+    })
+    const renamed = await renameElement(files, {
+      target: { kind: "Document", name: "Task", element: ["assignee"] },
+      newName: "performer",
+    })
+    expect(renamed.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    expect(renamed.ok).toBe(true)
+    const after = applyChanges(files, renamed.changes)
+    const comment = JSON.parse(after.get(COMMENT_FILE)!) as {
+      ownership: string[][]
+    }
+    expect(comment.ownership[0]).toEqual(["task", "performer"])
   })
 })

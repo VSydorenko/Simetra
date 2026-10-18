@@ -1486,8 +1486,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.attribute-unknown": {
     en: (p) =>
-      `${p.field} names "${p.attribute}", which is not an attribute of the object`,
-    uk: (p) => `${p.field} називає "${p.attribute}", а це не реквізит об'єкта`,
+      p.target === undefined
+        ? `${p.field} names "${p.attribute}", which is not an attribute of the object`
+        : `${p.field} names "${p.attribute}", which is not an attribute of ${p.target}, the target of the path`,
+    uk: (p) =>
+      p.target === undefined
+        ? `${p.field} називає "${p.attribute}", а це не реквізит об'єкта`
+        : `${p.field} називає "${p.attribute}", а це не реквізит ${p.target} — цілі шляху`,
     hint: {
       en: "Name an own attribute or a standard attribute of the object.",
       uk: "Назвіть власний або стандартний реквізит об'єкта.",

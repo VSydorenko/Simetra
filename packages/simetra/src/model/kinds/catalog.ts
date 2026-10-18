@@ -204,7 +204,7 @@ export const catalogKind: KindDefinition = {
   tabularSectionColumns: () => tabularRowColumns(false),
   elementReferences: (obj) => [
     ...customActionReferences(obj as Catalog),
-    ...ownershipReferences(obj as Catalog),
+    ...ownershipReferences(obj as Catalog, standardColumns(obj)),
   ],
   references(obj) {
     const catalog = obj as Catalog

@@ -146,7 +146,7 @@ export const documentKind: KindDefinition = {
   tabularSectionColumns: () => tabularRowColumns(true),
   elementReferences: (obj) => [
     ...customActionReferences(obj as Document),
-    ...ownershipReferences(obj as Document),
+    ...ownershipReferences(obj as Document, standardColumns(obj)),
   ],
   references(obj) {
     const document = obj as Document
