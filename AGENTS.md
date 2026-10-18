@@ -329,4 +329,6 @@ skills:
   load: ".agents/skills/codebase-research/SKILL.md"
 - task: "review landed work before merge: choosing lenses, severity x confidence scale, adversarial verification of findings"
   load: ".agents/skills/code-review/SKILL.md"
+- task: "add or change tests (unit, DB, pgTAP), write the test steps of a plan, or review test form"
+  load: ".agents/skills/writing-tests/SKILL.md"
 <!-- intent-skills:end -->
