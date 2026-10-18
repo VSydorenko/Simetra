@@ -344,7 +344,7 @@ export async function runStages(
     actions: objects
       .map((o) => ({
         objectId: o.id,
-        actions: KIND_REGISTRY[o.kind].actions,
+        actions: KIND_REGISTRY[o.kind].actions(o.data).map((a) => a.name),
       }))
       .sort((a, b) => compareStrings(a.objectId, b.objectId)),
     scopeKinds,

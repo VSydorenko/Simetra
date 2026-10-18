@@ -1,3 +1,4 @@
+import { recordActions } from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import {
   authorColumns,
@@ -176,7 +177,10 @@ export const catalogKind: KindDefinition = {
   referenceable: true,
   compositeIndexes: true,
   writePattern: "optimistic",
-  actions: ["read", "create", "update", "markDeletion", "delete"],
+  actions: () => recordActions(catalogKind.tabularSectionColumns !== undefined),
+  rightsExtents: ["any", "own", "dimension"],
+  rightsContainer: true,
+  rightsBinding: true,
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",

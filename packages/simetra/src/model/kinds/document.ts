@@ -1,3 +1,4 @@
+import { postAction, recordActions, unpostAction } from "./actions"
 import type { PeriodUnit } from "../physical/period"
 import { documentSchema, type Document } from "../schemas/document"
 import {
@@ -120,15 +121,13 @@ export const documentKind: KindDefinition = {
   referenceable: true,
   compositeIndexes: true,
   writePattern: "server",
-  actions: [
-    "read",
-    "create",
-    "update",
-    "markDeletion",
-    "delete",
-    "post",
-    "unpost",
+  actions: () => [
+    ...recordActions(documentKind.tabularSectionColumns !== undefined),
+    postAction,
+    unpostAction,
   ],
+  rightsExtents: ["any", "own", "dimension"],
+  rightsBinding: true,
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",

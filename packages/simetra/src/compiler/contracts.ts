@@ -469,7 +469,7 @@ export function derivedFunctionLabels(
   if (predefinedItemsOf(object).length > 0) {
     labels.push({ label: PREDEFINED_LABEL, description: "predefined lookup" })
   }
-  if (postsMovements(object.kind)) {
+  if (postsMovements(object.kind, object.data)) {
     labels.push(
       { label: POSTING_LABELS.save, description: "save" },
       { label: POSTING_LABELS.post, description: "post" },
@@ -599,7 +599,7 @@ export function buildContracts(
   )
 
   const posting = objects
-    .filter((object) => postsMovements(object.kind))
+    .filter((object) => postsMovements(object.kind, object.data))
     .map((document): PostingContract => {
       const table = must(mainTableOf(physical, document.id ?? ""))
       const movements = sqlUnits

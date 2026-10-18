@@ -18,6 +18,16 @@ import type { KindDefinition } from "./standard"
 export { isUuidColumn, singleUuidKeyColumn }
 
 export {
+  actionRequires,
+  closeRequires,
+  type ActionEffects,
+  type Dml,
+  type KindAction,
+  type RightsExtentForm,
+  type StandardAction,
+} from "./actions"
+
+export {
   monthColumn,
   serviceDateColumns,
   singletonColumn,
@@ -68,8 +78,10 @@ const POST_ACTION = "post"
  * Чи вид проводиться (пише рухи в регістри). Факт реєстру, що його читають і
  * перевірка реєстратора, і розбір `.sql`, тож назви дії ніхто не дублює.
  */
-export function postsMovements(kind: MetadataKind): boolean {
-  return KIND_REGISTRY[kind].actions.includes(POST_ACTION)
+export function postsMovements(kind: MetadataKind, obj: unknown): boolean {
+  return KIND_REGISTRY[kind]
+    .actions(obj)
+    .some((action) => action.name === POST_ACTION)
 }
 
 /**

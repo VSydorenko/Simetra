@@ -439,7 +439,9 @@ function referenceTargetError(
       : "subscription.source-not-table"
   }
   if (role === "register.recorder") {
-    return postsMovements(target.kind) ? undefined : "register.recorder-kind"
+    return postsMovements(target.kind, target.data)
+      ? undefined
+      : "register.recorder-kind"
   }
   if (role === "catalog.owner") {
     const source = byId.get(reference.from.objectId)
@@ -1249,7 +1251,7 @@ function checkScope(
 
     if (role === "register.recorder") {
       // Не-документ уже отримав register.recorder-kind; скоуп йому — зайвий шум.
-      if (!postsMovements(target.kind)) continue
+      if (!postsMovements(target.kind, target.data)) continue
       const recorderKind = scopeOf(target)
       if (recorderKind !== sourceKind) {
         found.push(

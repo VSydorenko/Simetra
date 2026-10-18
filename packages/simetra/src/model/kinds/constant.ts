@@ -1,3 +1,4 @@
+import { readAction, updateAction } from "./actions"
 import { constantSchema, type Constant } from "../schemas/constant"
 import type { ValueType } from "../schemas/value-type"
 import {
@@ -48,7 +49,9 @@ export const constantKind: KindDefinition = {
   keyOrder: keyOrderOf(constantSchema),
   referenceable: false,
   writePattern: "server",
-  actions: ["read", "update"],
+  // Константа — єдиний рядок: перший запис вставляє його, дальші оновлюють.
+  actions: () => [readAction, updateAction(false, ["insert", "update"])],
+  rightsExtents: ["any"],
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",

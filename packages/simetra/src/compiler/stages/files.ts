@@ -213,7 +213,7 @@ function readMovementBlocks(
       diagnostic("file.movements-block", file, "", { detail, line })
     )
   for (const error of errors) report(error.message, error.line)
-  const postable = owner !== undefined && postsMovements(owner.kind)
+  const postable = owner !== undefined && postsMovements(owner.kind, owner.data)
   // Попередження лише для документа: в інших файлах маркерів не чекають, і
   // відступ там — звичайний коментар.
   if (postable) {

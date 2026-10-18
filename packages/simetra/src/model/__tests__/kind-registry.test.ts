@@ -111,7 +111,11 @@ describe("KIND_REGISTRY", () => {
     expect(KIND_REGISTRY.PgEnum.materializes).toBe("enumType")
     expect(KIND_REGISTRY.CustomTable.materializes).toBe("table")
     expect(KIND_REGISTRY.InformationRegister.referenceable).toBe(false)
-    expect(KIND_REGISTRY.Document.actions).toEqual([
+    expect(
+      KIND_REGISTRY.Document.actions(
+        documentSchema.parse({ kind: "Document", name: "Doc" })
+      ).map((a) => a.name)
+    ).toEqual([
       "read",
       "create",
       "update",
@@ -127,7 +131,7 @@ describe("posting kinds", () => {
   // Контракт оболонки проведення будує `header` для кожного виду, що
   // проводиться, а стадія 3 створює CHECK і шукає колонку `posted` за цим
   // фактом: без пари вид дав би внутрішню помилку замість діагностики.
-  const posting = METADATA_KINDS.filter((kind) => postsMovements(kind))
+  const posting = METADATA_KINDS.filter((kind) => postsMovements(kind, {}))
 
   it("every posting kind is requiredOnPost and has a posted column", () => {
     expect(posting.length).toBeGreaterThan(0)

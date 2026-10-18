@@ -1,3 +1,4 @@
+import type { KindAction, RightsExtentForm } from "./actions"
 import type { z } from "zod"
 import type { PeriodUnit } from "../physical/period"
 import type { Attribute } from "../schemas/attribute"
@@ -250,7 +251,17 @@ export interface KindDefinition {
   keyOrder: readonly string[]
   referenceable: boolean
   writePattern: WritePattern
-  actions: readonly string[]
+  /**
+   * Standard actions of the object, a function of its settings (rights
+   * contract): the vocabulary, requirements and effects are kind facts.
+   */
+  actions(obj: unknown): readonly KindAction[]
+  /** Extent forms a rights grant on this kind may use; empty — no contract. */
+  rightsExtents: readonly RightsExtentForm[]
+  /** The object can hold the rights container flag (rights contract). */
+  rightsContainer?: true
+  /** The object can bind to a rights container (rights contract). */
+  rightsBinding?: true
   materializes: "table" | "enumType" | "none"
   /**
    * Що приймає `<Ім'я>.sql` об'єкта (спека П2 §3, «Дослівний SQL»):

@@ -1,3 +1,4 @@
+import { readAction } from "./actions"
 import {
   accumulationRegisterSchema,
   type AccumulationRegister,
@@ -36,7 +37,8 @@ export const accumulationRegisterKind: KindDefinition = {
   keyOrder: keyOrderOf(accumulationRegisterSchema),
   referenceable: false,
   writePattern: "server",
-  actions: ["read"],
+  actions: () => [readAction],
+  rightsExtents: ["any", "dimension"],
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",

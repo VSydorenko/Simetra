@@ -1,3 +1,4 @@
+import { createAction, deleteAction, readAction, updateAction } from "./actions"
 import { customTableSchema, type CustomTable } from "../schemas/custom-table"
 import {
   ATTRIBUTE_ROLES,
@@ -140,7 +141,13 @@ export const customTableKind: KindDefinition = {
   // Чи має ціль придатний ключ, перевіряє стадія 4, а не реєстр.
   referenceable: true,
   writePattern: "optimistic",
-  actions: ["read", "create", "update", "delete"],
+  actions: () => [
+    readAction,
+    createAction(false),
+    updateAction(false),
+    deleteAction,
+  ],
+  rightsExtents: [],
   sqlModule: "debt",
   materializes: "table",
   scope: "required",

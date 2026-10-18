@@ -1,3 +1,4 @@
+import { readAction, writeAction } from "./actions"
 import {
   informationRegisterSchema,
   type InformationRegister,
@@ -28,7 +29,12 @@ export const informationRegisterKind: KindDefinition = {
   keyOrder: keyOrderOf(informationRegisterSchema),
   referenceable: false,
   writePattern: "server",
-  actions: ["read"],
+  // Підлеглий регістр пишуть рухи реєстратора, тож власної дії запису він не має.
+  actions: (obj) =>
+    (obj as InformationRegister).writeMode === "Independent"
+      ? [readAction, writeAction]
+      : [readAction],
+  rightsExtents: ["any", "dimension"],
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",

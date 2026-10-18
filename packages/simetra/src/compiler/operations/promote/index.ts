@@ -122,7 +122,7 @@ function unitGates(
   // Документ, що пише рухи, промотується разом зі своїми регістрами (Пр15).
   const document = data as { posting?: unknown; registerMovements?: unknown[] }
   if (
-    postsMovements(kind) &&
+    postsMovements(kind, data) &&
     (document.posting !== undefined ||
       (document.registerMovements ?? []).length > 0)
   ) {
