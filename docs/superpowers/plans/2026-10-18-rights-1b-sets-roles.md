@@ -1,6 +1,6 @@
 # Права-1b: набори прав і ролі — план імплементації
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [X]`) syntax for tracking.
 
 Статус: прийнято архітектором задачі 2026-10-18 після аудиту Codex.
 Архітектор задачі — сесія, що замовила план (`consumer-reconciliation2`);
@@ -49,7 +49,7 @@
 | Р1b-4 | Розгортання: `X@any` породжує `X@own` і `X@<кожен вимір об'єкта>` (там, де об'єкт їх підтримує); вимога `X ⇒ Y` для обсягу e виконана, коли є `Y@e'`, де e' = e або e' = `any` | спека прав §3 (Задача 0) |
 | Р1b-5 | `deny` — лише в грантах `Role` (схема набору його не має); віднімає з архетипу своєї ролі після розгортання й породження, з точністю до обсягу; без обсягу — усі обсяги дії | спека прав §4.1 (Задача 0) |
 | Р1b-6 | Селектор об'єктів — `[{ kind, name }, …]` або `{ withAction: "<дія>" }` (усі об'єкти рівня ролі, чиї дії її мають) | немає |
-| Р1b-7 | селектор `withAction` пропускає непридатні для вибраного об'єкта пари (дія, рівень, обсяг); явний перелік — помилки | немає |
+| Р1b-7 | `grantAll` пропускає об'єкти без обсягу; селектор `withAction` пропускає непридатні для вибраного об'єкта пари (дія, рівень, обсяг); явний перелік — помилки | немає |
 | Р1b-8 | `assignedOn` у `ASSIGNED_ONCE` порівнюється розв'язаним значенням (id виду скоупу чи контейнера): перейменування не є зміною рівня | немає |
 | Р1b-9 | `Role` і `RightsSet` не мають `physicalName` — новий факт реєстру `physicalName: false` | немає |
 | Р1b-10 | Кастомна дія в `grant.actions` — посилання за іменем на кастомну дію об'єкта (роль `grant.customAction`), з власним резолвером і простором посилань (не колонки, як `elementReferences`). Грант із кастомною дією — **рівно на один явний об'єкт**: селектор `withAction` і список з кількох об'єктів — лише для стандартних дій, інакше `rights.custom-action-multi-object` (одне ім'я в різних об'єктах — різні UUID). Грант на вид з порожнім `rightsExtents`: `declared` — `rights.custom-table-no-contract` (дизайн прав прийнятих таблиць відкладено), інші — `rights.object-without-rights` | спека прав §4.1 (Задача 0) |
@@ -192,7 +192,7 @@ export interface RoleContract {
   `Contracts.roles: RoleContract[]` (за `roleId`).
 - Коди: `rights.include-target` (`{ kind, name }`), `rights.include-cycle` (`{ chain }`), `rights.scope-without-membership` (`{ scopeKind }` — вид скоупу без довідника членства й без джерела, Рх7; читає `membershipOfScopeKind`), `rights.full-access-level` (`{ level }` — `fullAccess` на контейнерній ролі чи `everyUser`), `rights.root-creator-level`, `rights.root-creator-duplicate` (`{ scopeKind, firstFile }`), `rights.source-key-level` (`{ source }` — рівень джерела не дорівнює рівню ролі; `everyUser` з ключами), `rights.source-key-duplicate` (`{ source, key, firstFile }`).
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `kind-schemas.test.ts`: закріплений перелік `METADATA_KINDS` доповнити `"RightsSet"`, `"Role"`; `roleSchema` приймає всі чотири форми `assignedOn`, відмовляє на `physicalName`, `title` і на `maxHolders: 0`; `rightsSetSchema` не має `assignedOn`.
   - `kind-registry.test.ts`: теки `rights-sets`, `roles`; `physicalName: false` в обох; `references` ролі дає `rights.include` і `role.container`.
   - `rights-roles.test.ts`:
@@ -200,19 +200,19 @@ export interface RoleContract {
     - `it("rejects broken role declarations")` — `[code, file, pointer]`: включення ролі замість набору → `rights.include-target` `/include/0`; цикл A → B → A → `rights.include-cycle`; роль рівня виду скоупу без членства → `rights.scope-without-membership` `/assignedOn/scopeKind`; `fullAccess` на `ProjectLead` → `rights.full-access-level` `/fullAccess`; `rootCreator` на глобальній ролі → `rights.root-creator-level`; дві `rootCreator` на `org` → `rights.root-creator-duplicate`; `sourceKeys` на джерело іншого рівня → `rights.source-key-level`; однаковий ключ у двох ролях → `rights.source-key-duplicate`; невідомий вид скоупу → `rights.scope-kind-unknown`.
     - `it("needs no physical name and gets an id from fix")` — `completeFiles` дає `id`, не дає `physicalName`; компіляція без `identity.physical-name-missing`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test kind-schemas kind-registry rights-schemas rights-roles`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — за прецедентом `event-subscription.ts`; `kitchen-sink.ts` — набір і роль кожної форми `assignedOn`, з `order`, `maxHolders`, `rootCreator`, `sourceKeys`, `include` (без `title`/`description`, Р1b-14); регенерувати JSON Schema.
+- [X] **Step 3: Implement** — за прецедентом `event-subscription.ts`; `kitchen-sink.ts` — набір і роль кожної форми `assignedOn`, з `order`, `maxHolders`, `rootCreator`, `sourceKeys`, `include` (без `title`/`description`, Р1b-14); регенерувати JSON Schema.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test && pnpm --filter @simetra/designer test`
 Expected: PASS (зокрема `field-ratchet`, `reference-index-completeness`, `json-schema`, `creation-order`, `named-elements`).
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -302,7 +302,7 @@ deny ролі (лише власні записи): спершу розв'яза
   Перевірки набору, що не залежать від рівня (невідома дія, непідтриманий
   обсяг, об'єкт без прав), звітуються на файлі набору один раз.
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `rights-schemas.test.ts`: `rightsSetSchema` відмовляє на записі `deny`; `objectSelectorSchema` приймає список і `{ withAction: "post" }`.
   - `rights-expand.test.ts` (рядки порівнюються як `[roleName, objectName, action, extentKey]` через локальний помічник `rows(model)`):
     - `it("expands sets transitively and derives own from any")` — `OrgMember` дає `["OrgMember","Task","read","any"]`, `["OrgMember","Task","read","own"]`, `["OrgMember","Task","read","dim:region"]`, `["OrgMember","Task","update","own"]`.
@@ -316,19 +316,19 @@ deny ролі (лише власні записи): спершу розв'яза
     - `it("checks deny before subtracting")` — `deny { objects: [Task], actions: ["approve"] }` → `rights.action-unknown`; `deny` з `extent: "own"` на `Region` → `rights.extent-unsupported`.
     - `it("refuses grants on objects without rights")` — `CustomTable` → `rights.custom-table-no-contract`; `Enumeration` → `rights.object-without-rights`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test rights-expand rights-schemas`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — посилання: `grant.objects[i]` і `deny.objects[i]` → `references` (роль `grant.object`); обсяг-вимір → `projectReferences` (`accessDimensions`, роль `grant.dimension`); ім'я кастомної дії в `actions` — **окремий** резолвер `resolveCustomActionReferences` у `stages/identity.ts` (поруч із резолвером `customAction.requires` плану 1a): шукає ім'я серед `customActions` єдиного явного об'єкта гранту й пише `{ to: { kind: "Element", id: <UUID дії> }, role: "grant.customAction" }`; `elementReferences` для цього не годиться — він резолвить колонки. Слова словника посиланнями не є (виняток `NOT_REFERENCES` — Р1a-21). `kitchen-sink.ts` — усі гілки `grantEntrySchema`, `extentSchema` і `objectSelectorSchema`.
+- [X] **Step 3: Implement** — посилання: `grant.objects[i]` і `deny.objects[i]` → `references` (роль `grant.object`); обсяг-вимір → `projectReferences` (`accessDimensions`, роль `grant.dimension`); ім'я кастомної дії в `actions` — **окремий** резолвер `resolveCustomActionReferences` у `stages/identity.ts` (поруч із резолвером `customAction.requires` плану 1a): шукає ім'я серед `customActions` єдиного явного об'єкта гранту й пише `{ to: { kind: "Element", id: <UUID дії> }, role: "grant.customAction" }`; `elementReferences` для цього не годиться — він резолвить колонки. Слова словника посиланнями не є (виняток `NOT_REFERENCES` — Р1a-21). `kitchen-sink.ts` — усі гілки `grantEntrySchema`, `extentSchema` і `objectSelectorSchema`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test rights field-ratchet reference-index-completeness json-schema`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -347,24 +347,24 @@ git commit -m "feat(compiler): розгортання грантів ролей 
 - Produces: контекст `effective(raw, ctx)` отримує `resolveScopeKind(name: string): string | undefined` і `resolveObject(ref: MetadataRef): string | undefined` — кожен над своїм станом (базовим чи поточним); ефективне значення `assignedOn` — `"global"`, `"everyUser"`, `scope:<id>`, `container:<id>`; нерозв'язане ім'я — `scope?:<ім'я>` / `container?:<kind>:<name>` (тоді зміна видна як зміна).
 - Produces: `explicit(record, holder)` в `assigned-once.ts` — поле явне, коли `holder.element[record.field] !== undefined`, а не лише коли це рядок. Сьогодні він перевіряє `typeof … === "string"`, тож для значення-об'єкта (`{ scopeKind }`, `{ container }`) вважав би поле успадкованим і ставив діагностику на `defaultSchema` проєкту.
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `it("reports a changed role level")` — `global` → `{ scopeKind: "org" }` → `identity.assigned-once-changed` (`field: "assignedOn"`, `before: "global"`, `after: "scope:<ORG_KIND_ID>"`) на `/assignedOn`.
   - `it("keeps a role level across a rename of its scope kind and container")` — перейменування `org` → `tenant` (з переписаним `assignedOn`) і `Project` → `Initiative` → без діагностик.
   - `it("reports object-to-object level changes in the role file")` — `{ scopeKind: "org" }` → `{ container: Project }` і `{ container: Project }` → `{ container: Board }` (інший контейнер) → `identity.assigned-once-changed` з `file: "roles/<Role>/<Role>.meta.json"` і `pointer: "/assignedOn"` (не `project.meta.json` `/defaultSchema`); `"global"` → `{ scopeKind }` — так само.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test assigned-once`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — резолвери будуються з `project.meta.json` (`scopeKinds` за іменем → `id`) і файлів об'єктів (`{ kind, name }` → `id`) кожного стану; запис `{ on: "object", field: "assignedOn", effective }` у `ASSIGNED_ONCE` діє для кожного об'єкта, що має поле (без розгалуження за видом); виправлення `explicit` — у тому самому коміті (тест `schema` проєкту з явним і успадкованим значенням лишається зеленим).
+- [X] **Step 3: Implement** — резолвери будуються з `project.meta.json` (`scopeKinds` за іменем → `id`) і файлів об'єктів (`{ kind, name }` → `id`) кожного стану; запис `{ on: "object", field: "assignedOn", effective }` у `ASSIGNED_ONCE` діє для кожного об'єкта, що має поле (без розгалуження за видом); виправлення `explicit` — у тому самому коміті (тест `schema` проєкту з явним і успадкованим значенням лишається зеленим).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test assigned-once kind-label`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -383,24 +383,24 @@ git commit -m "feat(compiler): рівень призначення ролі пр
 **Interfaces:**
 - Consumes: `createObject`, `renameElement`, `deleteElement`, `explainObject`; ролі посилань Задач 1–2.
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `operations-roles.test.ts`:
     - `it("creates a rights set and a role in their folders")` — `createObject({ kind: "Role", name: "Auditor", data: { assignedOn: "global", grants: [...] } })` → файл `roles/Auditor/Auditor.meta.json` з `id`, без `physicalName`; компіляція чиста.
     - `it("renames a set, an object, a scope kind, a dimension, a custom action and a source everywhere in roles")` — після кожного `renameElement` переписано відповідно `include`, `grant.objects`, `assignedOn.scopeKind`, `extent.dimension`, `grant.actions`, `sourceKeys[].source`; компіляція з базовим станом — без `identity.assigned-once-changed`.
     - `it("refuses to delete what a role refers to")` — видалення `TaskReaders`, `Task`, виду `org` і `Project` → `operation.delete-referenced` з ролями `rights.include`, `grant.object`, `role.scopeKind`, `role.container`.
   - `explain.test.ts`: `it("explains a role with its projection")` — `explainObject(model, { kind: "Role", name: "OrgMember" })` → `tables: []`, у `contracts` — `RoleContract` і рядки проєкції ролі; для `Task` — рядки, де він об'єкт.
 
-- [ ] **Step 2: Run tests to verify they fail or pass**
+- [X] **Step 2: Run tests to verify they fail or pass**
 
 Run: `pnpm --filter simetra test operations-roles explain`
 Expected: `explain` — FAIL до зміни `explain.ts`; червоні тести операцій вказують на пропущене посилання — виправити в коді Задач 1–2 (не в операціях) і назвати у звіті.
 
-- [ ] **Step 3: Implement** — блоки `explain`; розділи скілу: тека, форма файлу з плейсхолдерами, чотири рівні, `include`/`grantAll`/`grant`/`deny`, порядок обсягів, правила `rights.*`, без переказу спеки.
+- [X] **Step 3: Implement** — блоки `explain`; розділи скілу: тека, форма файлу з плейсхолдерами, чотири рівні, `include`/`grantAll`/`grant`/`deny`, порядок обсягів, правила `rights.*`, без переказу спеки.
 
 Run: `pnpm --filter @simetra/designer test && python3 scripts/check-doc-anchors.py`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [X] **Step 4: Commit**
 
 ```bash
 git add packages
@@ -411,12 +411,12 @@ git commit -m "feat(compiler): explain ролей і мутації designer н�
 
 ### Задача 5: гейти
 
-- [ ] **Step 1:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — усе зелене.
-- [ ] **Step 2:** `pnpm metadata:check` — код 0.
-- [ ] **Step 3:** `python3 scripts/check-doc-anchors.py` — код 0.
-- [ ] **Step 4:** `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-1b-sets-roles.md` — якорі відповідають коду.
-- [ ] **Step 5:** повний `pnpm test:db` на одному SHA, дерево незмінне під час прогону; SHA — у звіт. Нових DB-тестів немає; прогін доводить, що нові види без сховища не змінюють рендер, тінь і застосування.
-- [ ] **Step 6:** правки форматування — `pnpm format:fix` і коміт `style: форматування Права-1b`.
+- [X] **Step 1:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — усе зелене.
+- [X] **Step 2:** `pnpm metadata:check` — код 0.
+- [X] **Step 3:** `python3 scripts/check-doc-anchors.py` — код 0.
+- [X] **Step 4:** `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-1b-sets-roles.md` — якорі відповідають коду.
+- [X] **Step 5:** повний `pnpm test:db` на одному SHA, дерево незмінне під час прогону; SHA — у звіт. Нових DB-тестів немає; прогін доводить, що нові види без сховища не змінюють рендер, тінь і застосування.
+- [X] **Step 6:** правки форматування — `pnpm format:fix` і коміт `style: форматування Права-1b`.
 
 ## Критерії приймання
 
