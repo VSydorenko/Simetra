@@ -529,6 +529,7 @@ describe("posting and register contracts", () => {
             kind: "InformationRegister",
             name: "Price",
             physicalName: "price",
+            kindLabel: "price",
             periodicity,
             dimensions: [attribute("code", { type: "String", length: 10 })],
             resources: [
@@ -628,6 +629,7 @@ describe("posting and register contracts", () => {
         kind: "AccumulationRegister",
         name,
         physicalName: name.toLowerCase(),
+        kindLabel: name.toLowerCase(),
         ...extra,
       },
     })
@@ -760,6 +762,7 @@ describe("posting and register contracts", () => {
         kind: "AccumulationRegister",
         name: "Sales",
         physicalName: "sales",
+        kindLabel: "sales",
         registerType: "Turnover",
         resources: [
           attribute("amount", { type: "Numeric", precision: 15, scale: 2 }),
@@ -771,6 +774,7 @@ describe("posting and register contracts", () => {
         kind: "InformationRegister",
         name: "Rates",
         physicalName: "rates",
+        kindLabel: "rates",
         periodicity: "Day",
         writeMode: "RecorderSubordinate",
         resources: [
@@ -926,6 +930,7 @@ describe("posting and register contracts", () => {
       kind: "AccumulationRegister",
       name,
       physicalName: name.toLowerCase(),
+      kindLabel: name.toLowerCase(),
       registerType: "Turnover",
       resources: [
         attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),

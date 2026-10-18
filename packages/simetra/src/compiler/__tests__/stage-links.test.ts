@@ -184,6 +184,7 @@ describe("movement block marker forms", () => {
       kind: "InformationRegister",
       name: "Stock",
       physicalName: "stock_info",
+      kindLabel: "stock_info",
       resources: [{ ...attribute("threshold", { type: "Integer" }) }],
     },
   }

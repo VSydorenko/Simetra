@@ -81,7 +81,6 @@ export function renderPromotion(r: PromotionRecord, written: boolean): string {
     ["contract changes", r.contractChanges.length],
   ]
   for (const [label, n] of counts) if (n > 0) lines.push(`  ${label}: ${n}`)
-  if (r.labelDropped) lines.push("  kind label dropped")
   return lines.join("\n")
 }
 

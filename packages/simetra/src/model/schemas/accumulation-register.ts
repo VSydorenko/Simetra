@@ -53,6 +53,13 @@ export const accumulationRegisterSchema = z
       description: "Metadata kind; always AccumulationRegister.",
     }),
 
+    // Мітка виду — дискримінатор поліморфних пар і ідентифікатор об'єкта в
+    // контракті прав; призначається раз, тож перейменування її не змінює.
+    kindLabel: physicalNameSchema.optional().meta({
+      description:
+        "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+    }),
+
     registerType: z.enum(["Balance", "Turnover"]).default("Balance").meta({
       description: "Balance keeps running totals; Turnover only accumulates.",
     }),

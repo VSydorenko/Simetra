@@ -44,6 +44,7 @@ export const accumulationRegisterKind: KindDefinition = {
   rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
+  kindLabel: true,
   columnFields: ["dimensions", "resources", "attributes"],
   valueElements: false,
   standardColumns,

@@ -6,7 +6,6 @@ import {
   type MetadataRef,
   type PhysicalTable,
 } from "simetra/model"
-import { polymorphicTargets } from "../../assigned-once"
 import type { CompiledModel, SourceObject } from "../../compile"
 import {
   compareStrings,
@@ -137,19 +136,6 @@ function unitGates(
     def.tabularSectionColumns === undefined
   ) {
     unsupported("the kind has no tabular sections")
-  }
-  // Вид без мітки її губить, а дискримінатор поліморфної пари лежить у даних
-  // (рішення 4).
-  if (
-    def.kindLabel !== true &&
-    polymorphicTargets(files).has(`${object.kind}:${object.name}`)
-  ) {
-    problems.push(
-      diagnostic("promote.label-target", object.file, "", {
-        kind,
-        name: object.name,
-      })
-    )
   }
   return problems
 }

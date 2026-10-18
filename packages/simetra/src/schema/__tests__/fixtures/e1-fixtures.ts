@@ -121,6 +121,7 @@ export function accumulationRegisters(): Map<string, string> {
     kind: "AccumulationRegister",
     name,
     physicalName: name.toLowerCase(),
+    kindLabel: name.toLowerCase(),
     scope: "org",
     registerType,
     recorderTypes: [{ kind: "Document", name: "Sale" }],
@@ -200,6 +201,7 @@ export function informationRegisters(): Map<string, string> {
       kind: "InformationRegister",
       name: "Prices",
       physicalName: "prices",
+      kindLabel: "prices",
       scope: "org",
       periodicity: "Day",
       dimensions: dimensions(),
@@ -212,6 +214,7 @@ export function informationRegisters(): Map<string, string> {
       kind: "InformationRegister",
       name: "Rates",
       physicalName: "rates",
+      kindLabel: "rates",
       scope: "org",
       periodicity: "Month",
       writeMode: "RecorderSubordinate",
@@ -235,6 +238,7 @@ export function constants(): Map<string, string> {
     kind: "Constant",
     name,
     physicalName: toSnakeCase(name),
+    kindLabel: toSnakeCase(name),
     ...value,
   })
   return domain({
@@ -428,6 +432,7 @@ export function movementQuery(): Map<string, string> {
       kind: "AccumulationRegister",
       name: "Stock",
       physicalName: "stock",
+      kindLabel: "stock",
       scope: "org",
       recorderTypes: [{ kind: "Document", name: "Sale" }],
       dimensions: [

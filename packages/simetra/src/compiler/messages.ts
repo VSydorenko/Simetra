@@ -1974,16 +1974,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: 'Таку колонку промотують лише як { "to": "scope" } виду скоупу, корінь якого — ця таблиця.',
     },
   },
-  "promote.label-target": {
-    en: (p) =>
-      `${p.name} would lose its kind label in ${p.kind}, but a polymorphic reference of the project targets it`,
-    uk: (p) =>
-      `${p.name} втратив би мітку виду в ${p.kind}, а на нього вказує поліморфне посилання проєкту`,
-    hint: {
-      en: "The label is the discriminator of the polymorphic pair: promote into a kind with a label, or remove the object from the allowed types first.",
-      uk: "Мітка — дискримінатор поліморфної пари: промотуйте у вид із міткою або спершу приберіть об'єкт із допустимих типів.",
-    },
-  },
   "promote.enum-labels": {
     en: (p) =>
       `Column ${p.column} of ${p.table} has enum type ${p.enum}: it maps only to a Ref to an Enumeration whose value labels include ${p.labels}`,

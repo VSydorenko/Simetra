@@ -926,6 +926,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         kind: "Constant",
         name: "Rate",
         physicalName: "rate",
+        kindLabel: "rate",
         type: "Numeric",
         precision: 9,
         scale: 4,
@@ -950,6 +951,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         kind: "InformationRegister",
         name: "Settings",
         physicalName: "settings",
+        kindLabel: "settings",
         resources: [attribute("capacity", { type: "Integer", required: true })],
       },
     })

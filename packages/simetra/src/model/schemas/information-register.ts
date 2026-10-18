@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
 import { attributeSchema, registerFieldSchema } from "./attribute"
+import { physicalNameSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import {
   objectHeaderShape,
@@ -12,6 +13,13 @@ export const informationRegisterSchema = z.strictObject({
   ...objectHeaderShape,
   kind: z.literal("InformationRegister").meta({
     description: "Metadata kind; always InformationRegister.",
+  }),
+
+  // Мітка виду — дискримінатор поліморфних пар і ідентифікатор об'єкта в
+  // контракті прав; призначається раз, тож перейменування її не змінює.
+  kindLabel: physicalNameSchema.optional().meta({
+    description:
+      "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
   }),
 
   periodicity: z

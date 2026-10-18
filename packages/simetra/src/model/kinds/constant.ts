@@ -57,6 +57,7 @@ export const constantKind: KindDefinition = {
   rowLevelSecurity: "enabled",
   scope: "required",
   declared: false,
+  kindLabel: true,
   columnFields: [],
   valueElements: false,
   standardColumns,

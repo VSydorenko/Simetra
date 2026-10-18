@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { compile, type CompileResult } from "simetra/compiler"
+import {
+  applyChanges,
+  compile,
+  fixFiles,
+  type CompileResult,
+} from "simetra/compiler"
 import {
   attribute,
   catalog,
@@ -187,5 +192,58 @@ describe("stage 2: kind label", () => {
       })
     )
     expect(result.diagnostics).toEqual([])
+  })
+
+  const REGISTER = "information-registers/Price/Price.meta.json"
+  const CONSTANT = "constants/Rate/Rate.meta.json"
+  const bareRegister = () => ({
+    id: uuid(21),
+    kind: "InformationRegister",
+    name: "Price",
+    physicalName: "price",
+    writeMode: "Independent",
+    periodicity: "NonPeriodic",
+    dimensions: [attribute("item", { id: uuid(22), type: "Text" })],
+  })
+  const bareConstant = () => ({
+    id: uuid(23),
+    kind: "Constant",
+    name: "Rate",
+    physicalName: "rate",
+    type: "Text",
+  })
+
+  it("reports a missing label on a register and a constant", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        [REGISTER]: bareRegister(),
+        [CONSTANT]: bareConstant(),
+      })
+    )
+    expect(codes(result)).toEqual([
+      ["identity.kind-label-missing", CONSTANT, "/kindLabel"],
+      ["identity.kind-label-missing", REGISTER, "/kindLabel"],
+    ])
+  })
+
+  it("fix assigns register labels by the physicalName rule", async () => {
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [REGISTER]: bareRegister(),
+      [CONSTANT]: bareConstant(),
+    })
+    const result = await fixFiles(files, {
+      schemaPath: (file, schemaFile) => `${file}/${schemaFile}`,
+      newId: (() => {
+        let n = 900_000
+        return () => uuid(++n)
+      })(),
+    })
+    const fixed = applyChanges(files, result.changes)
+    const read = (path: string) =>
+      JSON.parse(fixed.get(path)!) as Record<string, unknown>
+    expect(read(REGISTER).kindLabel).toBe(read(REGISTER).physicalName)
+    expect(read(CONSTANT).kindLabel).toBe(read(CONSTANT).physicalName)
   })
 })

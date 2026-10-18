@@ -258,6 +258,7 @@ export function salesDocument(
       kind: "AccumulationRegister",
       name: "Stock",
       physicalName: "stock",
+      kindLabel: "stock",
       recorderTypes: [{ kind: "Document", name: "Sale" }],
       dimensions: [
         attribute("item", {

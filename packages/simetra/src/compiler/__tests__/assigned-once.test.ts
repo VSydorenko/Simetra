@@ -10,7 +10,6 @@ import {
   attribute,
   catalog,
   customTable,
-  document,
   metaFiles,
   organization,
   project,
@@ -325,7 +324,6 @@ describe("assigned-once fields on a promotion", () => {
     "custom-tables/CounterpartyContact/CounterpartyContact.meta.json"
   const PROMOTED = "catalogs/Counterparty/Counterparty.meta.json"
   const REGISTER = "information-registers/Counterparty/Counterparty.meta.json"
-  const USER = "documents/Order/Order.meta.json"
   const PG_ENUM = "pg-enums/Counterparty/Counterparty.meta.json"
 
   const column = (id: number, physicalName: string) => ({
@@ -457,127 +455,14 @@ describe("assigned-once fields on a promotion", () => {
       { id: uuid(2), name: "taxId", physicalName: "tax_id", type: "Text" },
     ],
   })
-
-  it("lets the label vanish when the new kind has none", () => {
-    expect(run({ [PROJECT]: project(), [REGISTER]: register() })).toEqual([])
-  })
-
-  it.each([
-    [
-      "allowedTypes of an attribute",
-      USER,
-      document("Order", {
-        attributes: [
-          attribute("party", {
-            type: "Ref",
-            allowedTypes: [
-              { kind: "InformationRegister", name: "Counterparty" },
-            ],
-          }),
-        ],
-      }),
-    ],
-    [
-      "allowedTypes of a constant",
-      "constants/Favorite/Favorite.meta.json",
-      {
-        id: uuid(60),
-        kind: "Constant",
-        name: "Favorite",
-        physicalName: "favorite",
-        type: "Ref",
-        allowedTypes: [{ kind: "InformationRegister", name: "Counterparty" }],
-      },
-    ],
-    [
-      "recorderTypes",
-      "information-registers/Other/Other.meta.json",
-      {
-        ...register(),
-        id: uuid(50),
-        name: "Other",
-        physicalName: "other",
-        writeMode: "RecorderSubordinate",
-        recorderTypes: [{ kind: "InformationRegister", name: "Counterparty" }],
-      },
-    ],
-  ])("refuses the vanished label of a target of %s", (_, path, user) => {
-    const current = {
-      [PROJECT]: project(),
-      [REGISTER]: register(),
-      [path]: user,
-    }
-    expect(run(current)).toEqual([
+  it("keeps reporting a removed label after promotion", () => {
+    expect(run({ [PROJECT]: project(), [REGISTER]: register() })).toEqual([
       [
         REGISTER,
         "/kindLabel",
         { field: "kindLabel", before: "counterparty", after: "(removed)" },
       ],
     ])
-  })
-
-  it("refuses the vanished label of one of several catalog owners", () => {
-    const current = {
-      [PROJECT]: project(),
-      [REGISTER]: register(),
-      "catalogs/Item/Item.meta.json": catalog("Item", {
-        owners: [
-          { kind: "InformationRegister", name: "Counterparty" },
-          { kind: "Catalog", name: "Item" },
-        ],
-      }),
-    }
-    expect(run(current).map(([file]) => file)).toEqual([REGISTER])
-  })
-
-  it("a single reference to the promoted object keeps no label alive", () => {
-    const current = {
-      [PROJECT]: project(),
-      [REGISTER]: register(),
-      [USER]: document("Order", {
-        attributes: [
-          attribute("party", {
-            type: "Ref",
-            ref: { kind: "InformationRegister", name: "Counterparty" },
-          }),
-        ],
-      }),
-    }
-    expect(run(current)).toEqual([])
-  })
-
-  it("a single catalog owner is no polymorphic pair and keeps no label alive", () => {
-    const current = {
-      [PROJECT]: project(),
-      [REGISTER]: register(),
-      "catalogs/Item/Item.meta.json": catalog("Item", {
-        owners: [{ kind: "InformationRegister", name: "Counterparty" }],
-      }),
-    }
-    expect(run(current)).toEqual([])
-  })
-
-  // Колонка прийнятої таблиці пари ще не має, але промоція таблиці зробить її
-  // парою, і тоді знадобиться мітка цілі.
-  it("refuses the vanished label of a target of an accepted-table column", () => {
-    const current = {
-      [PROJECT]: project(),
-      [REGISTER]: register(),
-      "custom-tables/Links/Links.meta.json": customTable("Links", {
-        columns: [
-          {
-            id: uuid(70),
-            name: "target",
-            physicalName: "target",
-            type: "Ref",
-            allowedTypes: [
-              { kind: "InformationRegister", name: "Counterparty" },
-            ],
-          },
-        ],
-      }),
-    }
-    expect(run(current).map(([file]) => file)).toEqual([REGISTER])
   })
 
   it("does not treat a custom table turning into a PgEnum as a promotion", () => {

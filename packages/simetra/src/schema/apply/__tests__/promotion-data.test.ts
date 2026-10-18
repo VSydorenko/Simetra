@@ -57,7 +57,6 @@ function record(over: Partial<PromotionRecord>): PromotionRecord {
     result: "1".repeat(64),
     objectId: OBJECT_ID,
     kind: "Catalog",
-    labelDropped: false,
     tables: [],
     columns: [],
     typeChanges: [],

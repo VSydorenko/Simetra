@@ -209,6 +209,7 @@ describe("movement query functions", () => {
         kind: "InformationRegister",
         name: "Prices",
         physicalName: "prices",
+        kindLabel: "prices",
         periodicity: "Month",
         writeMode: "RecorderSubordinate",
         recorderTypes: [{ kind: "Document", name: "Sale" }],
@@ -324,6 +325,7 @@ describe("movement query functions", () => {
       kind: "InformationRegister",
       name: "Flags",
       physicalName: "flags",
+      kindLabel: "flags",
       writeMode: "RecorderSubordinate",
       recorderTypes: [{ kind: "Document", name: "Sale" }],
       resources: [

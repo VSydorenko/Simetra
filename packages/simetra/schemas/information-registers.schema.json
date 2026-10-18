@@ -65,6 +65,11 @@
       "const": "InformationRegister",
       "description": "Metadata kind; always InformationRegister."
     },
+    "kindLabel": {
+      "description": "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+      "type": "string",
+      "minLength": 1
+    },
     "periodicity": {
       "default": "NonPeriodic",
       "description": "Period granularity of the register records.",

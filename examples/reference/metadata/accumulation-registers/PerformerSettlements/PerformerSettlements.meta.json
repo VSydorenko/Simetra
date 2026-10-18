@@ -4,6 +4,7 @@
   "kind": "AccumulationRegister",
   "name": "PerformerSettlements",
   "physicalName": "performer_settlements",
+  "kindLabel": "performer_settlements",
   "scope": "org",
   "title": {
     "uk": "Розрахунки з виконавцями"

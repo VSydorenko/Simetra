@@ -907,7 +907,7 @@ describe("numbering spec", () => {
 describe("expectsKindLabel", () => {
   it("catalog and document always, custom table only with a single uuid key", () => {
     expect(expectsKindLabel("Catalog", {})).toBe(true)
-    expect(expectsKindLabel("InformationRegister", {})).toBe(false)
+    expect(expectsKindLabel("InformationRegister", {})).toBe(true)
     const id = { name: "id", type: "UUID" }
     expect(
       expectsKindLabel("CustomTable", {
@@ -922,5 +922,13 @@ describe("expectsKindLabel", () => {
         primaryKey: { columns: ["id"] },
       })
     ).toBe(false)
+  })
+
+  it("expects a label on every kind with row-level security", () => {
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      if (def.rowLevelSecurity !== "enabled" || def.declared) continue
+      expect(expectsKindLabel(kind, {}), kind).toBe(true)
+    }
   })
 })

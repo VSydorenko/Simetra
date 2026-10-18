@@ -4,6 +4,7 @@
   "kind": "Constant",
   "name": "DefaultCurrency",
   "physicalName": "default_currency",
+  "kindLabel": "default_currency",
   "scope": "org",
   "title": {
     "uk": "Основна валюта"

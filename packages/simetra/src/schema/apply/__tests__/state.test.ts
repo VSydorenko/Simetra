@@ -169,7 +169,6 @@ describe("writeApplyStateStatements", () => {
     result: "1".repeat(64),
     objectId: "00000000-0000-4000-8000-000000000001",
     kind: "Catalog",
-    labelDropped: false,
     tables: [
       {
         id: "00000000-0000-4000-8000-000000000001",

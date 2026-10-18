@@ -520,6 +520,7 @@ $fn$;
       kind: "Constant",
       name: "Favorite",
       physicalName: "favorite",
+      kindLabel: "favorite",
       type: "Ref",
       allowedTypes: [
         { kind: "CustomTable", name: "Counterparty" },

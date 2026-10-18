@@ -406,7 +406,6 @@ describe.concurrent("plan with promotion records", () => {
       result: "b".repeat(64),
       objectId,
       kind: "Catalog",
-      labelDropped: false,
       tables: [],
       columns: [],
       typeChanges: [],

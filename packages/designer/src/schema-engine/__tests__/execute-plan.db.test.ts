@@ -1314,7 +1314,6 @@ describe.concurrent("executePlan", () => {
         result: "1".repeat(64),
         objectId: OBJECT_ID,
         kind: "Catalog",
-        labelDropped: false,
         tables: sides.map((s) => ({
           id: s.id,
           schema: "app",
@@ -3232,7 +3231,6 @@ describe.concurrent("executePlan", () => {
       result: "1".repeat(64),
       objectId: OBJECT_ID,
       kind: "Catalog",
-      labelDropped: false,
       tables: [{ id: OBJECT_ID, schema: "app", from: "pt", to: "pu" }],
       columns: [
         ["id", "id"],

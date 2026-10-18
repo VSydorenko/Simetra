@@ -24,6 +24,7 @@ function register(name: string, overrides: Record<string, unknown> = {}) {
     kind: "InformationRegister",
     name,
     physicalName: name.toLowerCase(),
+    kindLabel: name.toLowerCase(),
     ...overrides,
   }
 }
@@ -41,6 +42,7 @@ const CONSTANT = {
   kind: "Constant",
   name: "Rate",
   physicalName: "rate",
+  kindLabel: "rate",
   type: "Integer",
 }
 
@@ -77,6 +79,7 @@ describe("stage 4: integrity", () => {
         kind: "Constant",
         name: "Rate",
         physicalName: "rate",
+        kindLabel: "rate",
         type: "Integer",
       },
       "pg-enums/Mood/Mood.meta.json": {
@@ -305,6 +308,7 @@ describe("stage 4: integrity", () => {
         kind: "Constant",
         name: "Subject",
         physicalName: "subject",
+        kindLabel: "subject",
         type: "Ref",
         allowedTypes: [
           { kind: "Enumeration", name: "Status" },

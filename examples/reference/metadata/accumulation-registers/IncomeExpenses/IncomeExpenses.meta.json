@@ -4,6 +4,7 @@
   "kind": "AccumulationRegister",
   "name": "IncomeExpenses",
   "physicalName": "income_expenses",
+  "kindLabel": "income_expenses",
   "scope": "org",
   "title": {
     "uk": "Доходи й витрати"

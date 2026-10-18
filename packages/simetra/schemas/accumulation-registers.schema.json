@@ -65,6 +65,11 @@
       "const": "AccumulationRegister",
       "description": "Metadata kind; always AccumulationRegister."
     },
+    "kindLabel": {
+      "description": "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+      "type": "string",
+      "minLength": 1
+    },
     "registerType": {
       "default": "Balance",
       "description": "Balance keeps running totals; Turnover only accumulates.",

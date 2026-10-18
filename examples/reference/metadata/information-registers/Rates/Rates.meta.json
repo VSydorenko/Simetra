@@ -4,6 +4,7 @@
   "kind": "InformationRegister",
   "name": "Rates",
   "physicalName": "rates",
+  "kindLabel": "rates",
   "scope": "org",
   "title": {
     "uk": "Ставки"

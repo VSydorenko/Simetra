@@ -64,7 +64,6 @@ export interface PromotionRecord {
   objectId: string
   kind: "Catalog" | "Document" | "InformationRegister"
   kindLabel?: string
-  labelDropped: boolean
   // Лише коли consumerLabels не порожній: кроки перекладу виводить П3 (рішення 4).
   labelTranslation?: {
     from: string[]
@@ -223,7 +222,6 @@ export const promotionRecordSchema: z.ZodType<PromotionRecord> = z.strictObject(
     objectId: z.string(),
     kind: z.enum(["Catalog", "Document", "InformationRegister"]),
     kindLabel: z.string().optional(),
-    labelDropped: z.boolean(),
     labelTranslation: z
       .strictObject({
         from: z.array(z.string()),
@@ -699,7 +697,6 @@ export function promotionRecord(
     result: after.hash,
     objectId,
     kind: input.into.kind,
-    labelDropped: false,
     ...facts,
     dataSteps: [],
     conversions: Object.entries(input.conversions)
@@ -717,8 +714,6 @@ export function promotionRecord(
   const kindLabel = (promotedObject?.data as { kindLabel?: string } | undefined)
     ?.kindLabel
   if (kindLabel !== undefined) record.kindLabel = kindLabel
-  record.labelDropped =
-    main.table.kindLabel !== undefined && kindLabel === undefined
 
   for (const step of steps) {
     record.dataSteps.push({

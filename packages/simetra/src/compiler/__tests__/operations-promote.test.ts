@@ -31,15 +31,7 @@ import {
   counterpartyMapping,
   promotionProject,
 } from "./fixtures/promotion"
-import {
-  attribute,
-  catalog,
-  customTable,
-  metaFiles,
-  project,
-  scopedProject,
-  uuid,
-} from "./helpers"
+import { catalog, metaFiles, project, scopedProject, uuid } from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -172,7 +164,6 @@ describe("promoteObject: catalog from one CustomTable", () => {
       objectId: COUNTERPARTY_ID,
       kind: "Catalog",
       kindLabel: "counterparty",
-      labelDropped: false,
       conversions: [
         // Коментар таблиці дослівно став описом виду (R24)
         { subject: "Counterparty#comment", class: "metadata" },
@@ -2630,7 +2621,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     ])
   })
 
-  it("promotes an independent information register and drops the label", async () => {
+  it("promotes an independent information register and keeps the label", async () => {
     const files = metaFiles({
       "project.meta.json": project(),
       [PRICE_FILE]: price(),
@@ -2638,7 +2629,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     const { result, after } = await promoted(files, priceMapping())
     expect(errors(result)).toEqual([])
     const register = json(after, "information-registers/Price/Price.meta.json")
-    expect(register).not.toHaveProperty("kindLabel")
+    expect(register.kindLabel).toBe("price")
     expect(register).toMatchObject({
       id: uuid(7301),
       dimensions: [
@@ -2654,81 +2645,30 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     })
     expect(result.record).toMatchObject({
       kind: "InformationRegister",
-      labelDropped: true,
+      kindLabel: "price",
       retired: [{ schema: "app", table: "prices", column: "id" }],
     })
-    expect(result.record).not.toHaveProperty("kindLabel")
+    expect(result.record).not.toHaveProperty("labelDropped")
     const compiled = await compile(after, { baseline: files })
     expect(compiled.diagnostics).toEqual([])
   })
 
-  it("refuses an information register target that a polymorphic Ref points to", async () => {
-    const holder = catalog("Holder", {
-      attributes: [
-        attribute("subject", {
-          type: "Ref",
-          allowedTypes: [
-            { kind: "CustomTable", name: "Price" },
-            { kind: "Catalog", name: "Holder" },
-          ],
-        }),
-      ],
-    })
+  it("assigns a label when the adopted table had none", async () => {
+    // Без uuid-ключа прийнята таблиця мітки не має (її не очікує вид).
+    const bare = price()
+    delete (bare as Json).kindLabel
+    bare.columns[0] = { ...bare.columns[0]!, type: "Integer" }
     const files = metaFiles({
       "project.meta.json": project(),
-      [PRICE_FILE]: price(),
-      "catalogs/Holder/Holder.meta.json": holder,
+      [PRICE_FILE]: bare,
     })
-    expect((await compile(files)).diagnostics).toEqual([])
     const { result, after } = await promoted(files, priceMapping())
-    expect(brief(result)).toEqual([
-      {
-        code: "promote.label-target",
-        file: PRICE_FILE,
-        pointer: "",
-        params: { kind: "InformationRegister", name: "Price" },
-      },
-    ])
-    expect(after).toEqual(files)
-  })
-
-  // Колонка прийнятої таблиці пари ще не має, але промоція таблиці зробить
-  // її парою — мітка цілі мусить уціліти.
-  it("refuses an information register target that only an accepted-table column points to", async () => {
-    const links = customTable("Links", {
-      columns: [
-        {
-          id: uuid(7350),
-          name: "id",
-          physicalName: "id",
-          type: "UUID",
-          notNull: true,
-        },
-        {
-          id: uuid(7351),
-          name: "target",
-          physicalName: "target",
-          type: "Ref",
-          allowedTypes: [{ kind: "CustomTable", name: "Price" }],
-        },
-      ],
-    })
-    const files = metaFiles({
-      "project.meta.json": project(),
-      [PRICE_FILE]: price(),
-      "custom-tables/Links/Links.meta.json": links,
-    })
-    expect((await compile(files)).diagnostics).toEqual([])
-    const { result, after } = await promoted(files, priceMapping())
-    expect(brief(result)).toEqual([
-      {
-        code: "promote.label-target",
-        file: PRICE_FILE,
-        pointer: "",
-        params: { kind: "InformationRegister", name: "Price" },
-      },
-    ])
-    expect(after).toEqual(files)
+    expect(errors(result)).toEqual([])
+    const register = json(after, "information-registers/Price/Price.meta.json")
+    expect(register.kindLabel).toBe(register.physicalName)
+    expect(result.record).toMatchObject({ kindLabel: register.kindLabel })
+    const compiled = await compile(after, { baseline: files })
+    expect(compiled.diagnostics).toEqual([])
   })
 
   it("refuses a document with posting, a recorder-subordinate register and an accumulation register", async () => {

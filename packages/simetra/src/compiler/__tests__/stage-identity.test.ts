@@ -437,6 +437,7 @@ describe("stage 2: enumeration defaults", () => {
         kind: "Constant",
         name: "Rate",
         physicalName: "rate",
+        kindLabel: "rate",
         ...statusRef,
         defaultValue: "Open",
       },

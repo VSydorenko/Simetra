@@ -151,7 +151,6 @@ export const COMPILER_RULES = [
   "promote.unclassified",
   "promote.write-path",
   "promote.provider-user-reference",
-  "promote.label-target",
   "promote.enum-labels",
   "promote.type-unsupported",
   "promote.default-unplaced",

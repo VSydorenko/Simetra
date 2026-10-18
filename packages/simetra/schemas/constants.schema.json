@@ -65,6 +65,11 @@
       "const": "Constant",
       "description": "Metadata kind; always Constant."
     },
+    "kindLabel": {
+      "description": "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
+      "type": "string",
+      "minLength": 1
+    },
     "publicRead": {
       "description": "API role that may read every row of the object: authenticated users or anonymous visitors. Absent means no public read.",
       "type": "string",

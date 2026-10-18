@@ -79,6 +79,7 @@ function stockFiles(register: Record<string, unknown> = {}) {
       kind: "AccumulationRegister",
       name: "Stock",
       physicalName: "stock",
+      kindLabel: "stock",
       scope: "org",
       recorderTypes: [{ kind: "Document", name: "Sale" }],
       dimensions: [
@@ -112,6 +113,7 @@ function ratesFiles(register: Record<string, unknown> = {}) {
       kind: "InformationRegister",
       name: "Rates",
       physicalName: "rates",
+      kindLabel: "rates",
       scope: "org",
       periodicity: "Day",
       dimensions: [
@@ -235,6 +237,7 @@ describe("stage 3: register keys", () => {
           kind: "AccumulationRegister",
           name: "Stock",
           physicalName: "stock",
+          kindLabel: "stock",
           resources: [attribute("qty", { type: "Integer" })],
         },
       })
@@ -338,6 +341,7 @@ describe("stage 3: register keys", () => {
           kind: "InformationRegister",
           name: "Settings",
           physicalName: "settings",
+          kindLabel: "settings",
           writeMode: "RecorderSubordinate",
           recorderTypes: [{ kind: "Document", name: "Sale" }],
           resources: [attribute("limit", { type: "Integer" })],
@@ -376,6 +380,7 @@ describe("stage 3: register keys", () => {
           kind: "InformationRegister",
           name: "Settings",
           physicalName: "settings",
+          kindLabel: "settings",
           resources: [attribute("limit", { type: "Integer" })],
         },
       })
@@ -398,6 +403,7 @@ describe("stage 3: register keys", () => {
           kind: "InformationRegister",
           name: "Settings",
           physicalName: "settings",
+          kindLabel: "settings",
           scope: "org",
           resources: [attribute("limit", { type: "Integer" })],
         },
@@ -477,6 +483,7 @@ describe("stage 3: register keys", () => {
           kind: "AccumulationRegister",
           name: "Stock",
           physicalName: "stock",
+          kindLabel: "stock",
           scope: "org",
           resources: [attribute("qty", { type: "Integer" })],
         },
@@ -502,6 +509,7 @@ describe("stage 3: register keys", () => {
           kind: "AccumulationRegister",
           name: "Stock",
           physicalName: "stock",
+          kindLabel: "stock",
           resources: [attribute("qty", { type: "Integer" })],
         },
       })
@@ -546,6 +554,7 @@ describe("stage 3: register keys", () => {
         kind: "AccumulationRegister",
         name: "Stock",
         physicalName: "stock",
+        kindLabel: "stock",
         resources: [attribute("qty", { type: "Integer" })],
       },
     })
@@ -567,6 +576,7 @@ describe("stage 3: register keys", () => {
         kind: "AccumulationRegister",
         name: "Stock",
         physicalName: "stock",
+        kindLabel: "stock",
         resources: [attribute("qty", { type: "Integer" })],
       },
     })
@@ -587,6 +597,7 @@ describe("derived table column collisions", () => {
         kind: "AccumulationRegister",
         name: "Stock",
         physicalName: "stock",
+        kindLabel: "stock",
         resources: [attribute("qty", { type: "Integer" })],
         ...patch,
       },

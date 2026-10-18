@@ -139,25 +139,6 @@ const isAcceptedTable = (holder: Holder) =>
   holder.def.materializes === "table"
 
 /**
- * Об'єкти (`"<Вид>:<Ім'я>"`), що є ціллю поліморфного посилання хоча б в
- * одному файлі: їхня мітка виду лежить у даних пар або ляже туди, коли
- * колонку прийнятої таблиці промотують у пару, тож зникнути не може. Те саме
- * правило — гейт промоції в регістр відомостей (`promote.label-target`).
- */
-export function polymorphicTargets(
-  files: ReadonlyMap<string, string>
-): ReadonlySet<string> {
-  const targets = new Set<string>()
-  for (const file of readObjectFiles(files)) {
-    if (file.data === undefined) continue
-    for (const { ref, polymorphic } of file.def.references(file.data)) {
-      if (polymorphic) targets.add(`${ref.kind}:${ref.name}`)
-    }
-  }
-  return targets
-}
-
-/**
  * Вид 1С, що матеріалізується таблицею: не прийнята таблиця й не службовий
  * тип (`PgEnum` теж `declared`, але таблиці не дає) — ціль промоції.
  */
@@ -224,30 +205,18 @@ interface Change {
 }
 
 /**
- * Зміна, яку промоція дозволяє: `physicalName` об'єкта й елементів, що були у
- * звільненому файлі й тепер живуть у промотованому об'єкті, а також зникнення
- * мітки виду.
+ * Зміна, яку промоція дозволяє: лише `physicalName` об'єкта й елементів, що
+ * були у звільненому файлі й тепер живуть у промотованому об'єкті. Мітка виду
+ * переходить без змін, тож її зникнення — звичайна зміна.
  */
 function releasedByPromotion(
   promotion: Promotion,
-  { record, id, was, now, value }: Change,
-  polymorphic: () => ReadonlySet<string>
+  { record, id, was, now }: Change
 ): boolean {
-  if (record.field === "physicalName") {
-    return record.on === "object"
-      ? promotion.objects.has(id)
-      : promotion.releasedFiles.has(was.file) && promotion.files.has(now.file)
-  }
-  const kind = promotion.objects.get(id)
-  if (record.on !== "object" || record.field !== "kindLabel") return false
-  if (kind === undefined || value !== undefined) return false
-  // Мітку виду не відновити, тож вона зникає лише там, де нового виду її не
-  // очікує, і лише якщо жодна поліморфна пара не веде на об'єкт: значення
-  // може лежати в даних; повторне вживання — борг П3.
-  return (
-    kind.kindLabel !== true &&
-    !polymorphic().has(`${now.def?.kind}:${String(now.element.name)}`)
-  )
+  if (record.field !== "physicalName") return false
+  return record.on === "object"
+    ? promotion.objects.has(id)
+    : promotion.releasedFiles.has(was.file) && promotion.files.has(now.file)
 }
 
 /**
@@ -265,8 +234,6 @@ export function assignedOnceDiagnostics(
   const before = stateOf(baseline)
   const after = stateOf(current)
   const promotion = promotionOf(before, after)
-  let polymorphic: ReadonlySet<string> | undefined
-  const polymorphicOf = () => (polymorphic ??= polymorphicTargets(current))
   const result: Diagnostic[] = []
   for (const record of ASSIGNED_ONCE) {
     for (const [id, now] of after.holders[record.on]) {
@@ -276,13 +243,7 @@ export function assignedOnceDiagnostics(
       const value = valueOf(record, now)
       if (old === null || value === null) continue
       if (old === undefined || old === value) continue
-      if (
-        releasedByPromotion(
-          promotion,
-          { record, id, was, now, value },
-          polymorphicOf
-        )
-      ) {
+      if (releasedByPromotion(promotion, { record, id, was, now, value })) {
         continue
       }
       result.push(

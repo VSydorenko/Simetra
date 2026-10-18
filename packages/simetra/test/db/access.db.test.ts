@@ -115,6 +115,7 @@ async function compiled(scenario: Scenario): Promise<CompiledModel> {
       kind: "AccumulationRegister",
       name: "Stock",
       physicalName: "stock",
+      kindLabel: "stock",
       scope: "org",
       recorderTypes: [{ kind: "Document", name: "Sale" }],
       dimensions: [itemRef("item_id")],

@@ -392,6 +392,7 @@ describe("stage 4: movement constructor semantics", () => {
             kind: "InformationRegister",
             name: "Prices",
             physicalName: "prices",
+            kindLabel: "prices",
             periodicity: "Day",
             writeMode: "RecorderSubordinate",
             recorderTypes: [{ kind: "Document", name: "Sale" }],
@@ -450,6 +451,7 @@ describe("stage 4: movement constructor semantics", () => {
               kind: "InformationRegister",
               name: "Prices",
               physicalName: "prices",
+              kindLabel: "prices",
               writeMode: "RecorderSubordinate",
               recorderTypes: [{ kind: "Document", name: "Sale" }],
               dimensions: [attribute("item", ref("Item"))],
@@ -611,6 +613,7 @@ describe("stage 4: movement constructor, fix round 1", () => {
           kind: "InformationRegister",
           name: "Prices",
           physicalName: "prices",
+          kindLabel: "prices",
           writeMode: "RecorderSubordinate",
           recorderTypes: [{ kind: "Document", name: "Sale" }],
           dimensions: [attribute("item", ref("Item"))],
@@ -819,6 +822,7 @@ describe("stage 4: movement constructor, fix round 1", () => {
         kind: "InformationRegister",
         name: "Prices",
         physicalName: "prices",
+        kindLabel: "prices",
         dimensions: [attribute("item", ref("Item"))],
       }
     })
