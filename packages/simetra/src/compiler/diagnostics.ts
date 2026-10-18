@@ -74,6 +74,7 @@ export const COMPILER_RULES = [
   "scope.recorder-mismatch",
   "scope.custom-table-column",
   "scope.cross-scope-redundant",
+  "scope.custom-table-cross-tenant",
   "scope.set-function-missing",
   "scope.set-function-signature",
   "scope.membership-missing",
@@ -338,6 +339,7 @@ export interface Diagnostic {
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
   "scope.cross-scope-redundant",
+  "scope.custom-table-cross-tenant",
   "file.movements-marker-indented",
   "posting.query-order-missing",
   "operation.physical-name-too-long",

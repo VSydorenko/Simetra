@@ -1078,6 +1078,67 @@ describe("stage 3: scoped owner", () => {
   })
 })
 
+describe("stage 3: scope, reference to a scoped custom table", () => {
+  const LEDGER = "custom-tables/Ledger/Ledger.meta.json"
+  const SALE = "documents/Sale/Sale.meta.json"
+
+  const ledger = (uniques: unknown[]) => ({
+    ...logTable(),
+    name: "Ledger",
+    physicalName: "ledgers",
+    kindLabel: "ledger",
+    id: uuid(910),
+    uniques,
+  })
+
+  const sale = () =>
+    document("Sale", {
+      scope: "org",
+      attributes: [
+        attribute("ledger", {
+          physicalName: "ledger_id",
+          ...ref("CustomTable", "Ledger"),
+        }),
+      ],
+    })
+
+  it("composes a key to a scoped custom table with UNIQUE (scope, id)", async () => {
+    // Порядок колонок в обмеженні не важливий.
+    for (const columns of [
+      ["orgRef", "id"],
+      ["id", "orgRef"],
+    ]) {
+      const physical = await compileScoped({
+        [LEDGER]: ledger([{ columns }]),
+        [SALE]: sale(),
+      })
+      expect(fkOn(tableOf(physical, "sale"), "ledger_id")).toEqual([
+        expect.objectContaining({
+          columns: ["org_id", "ledger_id"],
+          references: {
+            schema: "public",
+            table: "ledgers",
+            columns: ["org_id", "id"],
+          },
+        }),
+      ])
+    }
+  })
+
+  it("keeps a plain key to a scoped custom table without UNIQUE (scope, id)", async () => {
+    const physical = await compileScoped({
+      [LEDGER]: ledger([]),
+      [SALE]: sale(),
+    })
+    expect(fkOn(tableOf(physical, "sale"), "ledger_id")).toEqual([
+      expect.objectContaining({
+        columns: ["ledger_id"],
+        references: { schema: "public", table: "ledgers", columns: ["id"] },
+      }),
+    ])
+  })
+})
+
 /** Скоуплена прийнята таблиця називає власну uuid-колонку скоупу. */
 function logTable() {
   return customTable("Log", {

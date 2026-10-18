@@ -1216,6 +1216,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: () => "crossScope нічого не змінює: посилання дозволене й без нього",
     hint: { en: "Remove crossScope.", uk: "Приберіть crossScope." },
   },
+  "scope.custom-table-cross-tenant": {
+    en: (p) =>
+      `The reference to the scoped CustomTable ${p.table} cannot be a composite key: the foreign key does not hold the tenant`,
+    uk: (p) =>
+      `Посилання на CustomTable ${p.table} зі скоупом не може бути складеним ключем: зовнішній ключ не тримає тенант`,
+    hint: {
+      en: "Add a unique constraint over the scope column and the key to the metadata of the adopted table, or mark the reference crossScope.",
+      uk: "Додайте в метадані прийнятої таблиці обмеження унікальності над колонкою скоупу й ключем або позначте посилання crossScope.",
+    },
+  },
 
   "scope.set-function-missing": {
     en: (p) =>

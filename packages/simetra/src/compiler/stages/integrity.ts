@@ -59,6 +59,7 @@ import {
   type ResolvedReference,
 } from "./identity"
 import {
+  hasScopeKeyUnique,
   isDeclaredTable,
   keyColumnOf,
   membershipUserOf,
@@ -1280,11 +1281,9 @@ function checkScope(
       /\/(ref|allowedTypes\/\d+)$/,
       ""
     )
-    const crossScope =
-      (
-        valueAt(source.data, elementPointer) as
-          { crossScope?: true } | undefined
-      )?.crossScope === true
+    const element = valueAt(source.data, elementPointer) as
+      { crossScope?: true; array?: boolean } | undefined
+    const crossScope = element?.crossScope === true
     const params = {
       kind: target.kind,
       name: target.name,
@@ -1309,6 +1308,27 @@ function checkScope(
           )
         )
       }
+      // Складений FK на прийняту таблицю можливий лише з її `UNIQUE (scope,
+      // key)`; без нього FK плоский і тримає тенант лише дисципліна автора.
+      // Масив FK не має зовсім, а таблиця без одного uuid-ключа — цілі.
+      if (
+        isDeclaredTable(target) &&
+        !crossScope &&
+        element?.array !== true &&
+        keyColumnOf(target) !== undefined &&
+        !hasScopeKeyUnique(target.data as CustomTable)
+      ) {
+        found.push(
+          diagnostic(
+            "scope.custom-table-cross-tenant",
+            from.file,
+            elementPointer,
+            {
+              table: target.name,
+            }
+          )
+        )
+      }
     } else if (!crossScope) {
       found.push(
         diagnostic(
@@ -1324,14 +1344,9 @@ function checkScope(
 
     if (crossScope) {
       // Прапорець зайвий, лише коли без нього посилання дозволене й фізично те
-      // саме: глобальна ціль або `CustomTable` того ж виду (FK і так плоский).
-      const useful =
-        targetKind !== undefined &&
-        !(
-          sourceKind === targetKind &&
-          rootOfTarget === undefined &&
-          isDeclaredTable(target)
-        )
+      // саме: глобальна ціль. На `CustomTable` того ж виду він змістовний:
+      // знімає складений FK (чи попередження про його відсутність).
+      const useful = targetKind !== undefined
       const at = `${elementPointer}/crossScope`
       const key = `${from.file}\0${at}`
       const known = crossScopeUse.get(key)

@@ -602,6 +602,63 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
+  describe("reference to a scoped custom table", () => {
+    const LEDGER = "custom-tables/Ledger/Ledger.meta.json"
+    const ledger = (uniques: unknown[], overrides = {}) =>
+      customTable("Ledger", {
+        scope: "org",
+        scopeColumn: "orgRef",
+        columns: [
+          {
+            id: uuid(905),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
+          {
+            id: uuid(906),
+            name: "orgRef",
+            physicalName: "org_id",
+            type: "UUID",
+            notNull: true,
+          },
+        ],
+        primaryKey: { columns: ["id"] },
+        uniques,
+        ...overrides,
+      })
+    const sale = (extra: Record<string, unknown> = {}) =>
+      document("Sale", {
+        scope: "org",
+        attributes: [attribute("ledger", ref("CustomTable", "Ledger", extra))],
+      })
+
+    it("warns about a reference to a scoped custom table without UNIQUE (scope, id)", async () => {
+      const result = await compileScoped({
+        [LEDGER]: ledger([]),
+        [SALE]: sale(),
+      })
+      expect(result.ok).toBe(true)
+      expect(scopeDiagnostics(result)).toEqual([
+        ["scope.custom-table-cross-tenant", "warning", SALE, "/attributes/0"],
+      ])
+    })
+
+    it("is silent with UNIQUE (scope, id) or an explicit crossScope", async () => {
+      const unique = await compileScoped({
+        [LEDGER]: ledger([{ columns: ["id", "orgRef"] }]),
+        [SALE]: sale(),
+      })
+      expect(scopeDiagnostics(unique)).toEqual([])
+      const cross = await compileScoped({
+        [LEDGER]: ledger([]),
+        [SALE]: sale({ crossScope: true }),
+      })
+      expect(scopeDiagnostics(cross)).toEqual([])
+    })
+  })
+
   it("redundant crossScope is a warning", async () => {
     const result = await compileScoped({
       [CP]: counterparty({

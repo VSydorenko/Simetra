@@ -1078,8 +1078,19 @@ class SnapshotBuilder {
     if (scope?.carrier === undefined || crossScope) return undefined
     const kind = this.scopeKindOf(target)
     if (kind !== scope.kind || this.isRoot(target, kind)) return undefined
-    if (KIND_REGISTRY[target.kind].declared) return undefined
     if (keyColumnOf(target) === undefined) return undefined
+    if (KIND_REGISTRY[target.kind].declared) {
+      // Прийнята таблиця скоуп-колонку не виводить: її називає опис, а
+      // `UNIQUE (scope, key)`, потрібне складеному FK, — лише те, що автор
+      // оголосив сам. Без нього FK лишається простим (попередження звітує
+      // стадія 4), бо Postgres не прийме FK на неунікальну пару.
+      const table = target.data as unknown as CustomTable
+      const column = this.scopeColumns.get(target.id ?? "")
+      const to = column === undefined ? undefined : this.columnNames.get(column)
+      return hasScopeKeyUnique(table) && to !== undefined
+        ? { from: scope.carrier, to }
+        : undefined
+    }
     return { from: scope.carrier, to: kind.physicalName! }
   }
 
@@ -1745,6 +1756,25 @@ function physicalColumnsById(object: ParsedObject): [string, string][] {
     }
   }
   return found
+}
+
+/**
+ * Прийнята таблиця оголошує `UNIQUE` рівно над `(колонка скоупу, єдиний uuid-ключ)`
+ * у будь-якому порядку: лише тоді складений FK у межах скоупу можливий (спека
+ * прав §4.5). Імена колонок у метаданих логічні, тож порівняння — за ними.
+ */
+export function hasScopeKeyUnique(table: CustomTable): boolean {
+  const key = singleUuidKeyColumn(table)
+  const scope = table.scopeColumn
+  if (key === undefined || scope === undefined || key.name === scope) {
+    return false
+  }
+  return table.uniques.some(
+    (unique) =>
+      unique.columns.length === 2 &&
+      unique.columns.includes(key.name) &&
+      unique.columns.includes(scope)
+  )
 }
 
 /**
