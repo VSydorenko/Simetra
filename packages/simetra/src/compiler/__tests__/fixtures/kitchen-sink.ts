@@ -239,6 +239,8 @@ export function kitchenSink(): Map<string, string> {
     // Обидві гілки `effects.header`: тут — список (власний і стандартний
     // реквізит), у документа — "all".
     customActions: customActions("update", ["itemNote", "description"], true),
+    // Власник — стандартний реквізит авторства («Користувачі»).
+    ownership: ["createdBy"],
     predefinedItems: [
       {
         id: id(),
@@ -302,6 +304,8 @@ export function kitchenSink(): Map<string, string> {
     autonumber: false,
     numberPeriodicity: "Month",
     customActions: customActions("post", "all", true),
+    // Обидві форми носія: рядок і шлях через товар до його автора.
+    ownership: ["createdBy", ["saleItem", "createdBy"]],
     posting: {
       movements: [
         {
@@ -731,6 +735,8 @@ export function kitchenSink(): Map<string, string> {
     ...header("Catalog", "Users", "users"),
     scope: "none",
     role: "users",
+    // Ключ — власник лише рядка самих «Користувачів» (Р1a-11).
+    ownership: ["ref"],
   }
 
   // Довідник членства виду `org`: учасник посилається на «Користувачі».

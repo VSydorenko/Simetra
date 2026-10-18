@@ -280,6 +280,14 @@ export interface RightsAction {
   extents: RightsExtent[]
 }
 
+/** Носій прав у таблиці: власна колонка або крок шляху (Рх21). */
+export interface CarrierContract {
+  /** Власна колонка основної таблиці; у шляху — колонка першого кроку. */
+  column: string
+  /** Шлях: колонка в основній таблиці цілі першого кроку. */
+  via?: { objectId: string; table: QualifiedName; column: string }
+}
+
 /**
  * Контракт прав об'єкта (спека прав §3): дії з вимогами, ефектами й
  * обсягами. Його мають усі об'єкти видів з непорожнім `rightsExtents`; з
@@ -293,6 +301,11 @@ export interface RightsContract {
   scopeKindId?: string
   /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
   actions: RightsAction[]
+  /**
+   * Носії власності (спека прав §4.2) у порядку файлу; непорожній перелік
+   * додає обсяг `own` кожній дії.
+   */
+  ownership: CarrierContract[]
 }
 
 export interface Contracts {

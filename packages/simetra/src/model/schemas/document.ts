@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
-import { customActionsSchema } from "./rights"
+import { customActionsSchema, ownershipSchema } from "./rights"
 import { attributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
@@ -135,6 +135,10 @@ export const documentSchema = z.strictObject({
 
   publicRead: publicReadSchema,
   customActions: customActionsSchema,
+  ownership: ownershipSchema.optional().meta({
+    description:
+      "Owners of a row: users or members the own extent of a grant opens the row to.",
+  }),
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

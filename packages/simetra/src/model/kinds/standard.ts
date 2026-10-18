@@ -9,7 +9,7 @@ import { toSnakeCase, type AttributeCase } from "../schemas/identity"
 import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import type { MetadataRef } from "../schemas/metadata-ref"
-import type { CustomAction } from "../schemas/rights"
+import type { CustomAction, RightsCarrier } from "../schemas/rights"
 import type { TabularSection } from "../schemas/tabular-section"
 import type { DefaultValue, ValueType } from "../schemas/value-type"
 
@@ -132,6 +132,10 @@ export type ReferenceRole =
   | "customAction.requires"
   /** Власна колонка об'єкта в `effects.header` кастомної дії. */
   | "customAction.header"
+  /** Носій прав: власний реквізит об'єкта чи перший крок шляху (Рх21). */
+  | "rights.carrier"
+  /** Другий крок шляху носія — реквізит цілі першого кроку. */
+  | "rights.carrierPath"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */
@@ -641,6 +645,47 @@ export function customActionReferences(obj: {
       role: "customAction.header" as const,
     }))
   })
+}
+
+/**
+ * Посилання носія прав (Рх21): рядок чи перший крок шляху — власна колонка,
+ * другий крок — колонка цілі першого. Ціль другого кроку відома лише тоді,
+ * коли перший — реквізит з одиночним `ref`; інакше другий крок в індекс не
+ * йде, а перший відхиляє правило носія (`rights.carrier-not-ref`).
+ */
+export function carrierReferences(
+  carrier: RightsCarrier,
+  pointer: string,
+  attributes: readonly Attribute[]
+): FoundElementReference[] {
+  if (typeof carrier === "string") {
+    return [{ pointer, name: carrier, role: "rights.carrier" }]
+  }
+  const [first, second] = carrier
+  const owner = attributes.find((a) => a.name === first)?.ref
+  return [
+    { pointer: `${pointer}/0`, name: first, role: "rights.carrier" },
+    ...(owner === undefined
+      ? []
+      : [
+          {
+            pointer: `${pointer}/1`,
+            name: second,
+            owner,
+            role: "rights.carrierPath" as const,
+          },
+        ]),
+  ]
+}
+
+/** Носії `ownership` об'єкта. */
+export function ownershipReferences(obj: {
+  ownership?: readonly RightsCarrier[]
+  attributes: readonly Attribute[]
+}): FoundElementReference[] {
+  return (obj.ownership ?? []).flatMap((carrier, index) =>
+    carrierReferences(carrier, `/ownership/${index}`, obj.attributes)
+  )
 }
 
 type TypedField = Pick<ValueType, "ref" | "allowedTypes">

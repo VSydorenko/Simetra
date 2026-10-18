@@ -17,6 +17,7 @@ import {
   type NumberingSpec,
   type StandardColumnDef,
   customActionReferences,
+  ownershipReferences,
 } from "./standard"
 
 const periodUnits = {
@@ -143,7 +144,10 @@ export const documentKind: KindDefinition = {
   standardColumns,
   numbering,
   tabularSectionColumns: () => tabularRowColumns(true),
-  elementReferences: (obj) => customActionReferences(obj as Document),
+  elementReferences: (obj) => [
+    ...customActionReferences(obj as Document),
+    ...ownershipReferences(obj as Document),
+  ],
   references(obj) {
     const document = obj as Document
     return [

@@ -371,7 +371,7 @@ export async function runStages(
         stage1.objects,
         stage2.references,
         physical,
-        stage1.project.naming.attributeCase
+        stage1.project
       )
     ),
     presentation: buildPresentation(

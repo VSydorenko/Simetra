@@ -1493,6 +1493,38 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Назвіть власний або стандартний реквізит об'єкта.",
     },
   },
+  "rights.carrier-not-ref": {
+    en: (p) =>
+      `Rights carrier "${p.attribute}" is not a single reference or the key`,
+    uk: (p) =>
+      `Носій прав "${p.attribute}" не є одиночним посиланням чи ключем`,
+    hint: {
+      en: "A carrier names a Ref attribute with one target; the first step of a path must be such a reference too, not a polymorphic one.",
+      uk: "Носій називає реквізит Ref з однією ціллю; перший крок шляху — теж таке посилання, а не поліморфне.",
+    },
+  },
+  "rights.carrier-cross-tenant": {
+    en: (p) => `Rights carrier "${p.attribute}" leaves the tenant`,
+    uk: (p) => `Носій прав "${p.attribute}" виходить за межі тенанта`,
+    hint: {
+      en: "The reference must stay within the scope (a composite foreign key): drop crossScope or name another attribute.",
+      uk: "Посилання мусить лишатися в межах скоупу (складений зовнішній ключ): приберіть crossScope або назвіть інший реквізит.",
+    },
+  },
+  "rights.ownership-target": {
+    en: (p) =>
+      p.reason === "key"
+        ? `Owner "${p.attribute}" is the key, but only the users catalog owns its own rows`
+        : `Owner "${p.attribute}" references neither the membership catalog of the object's scope kind nor the users catalog`,
+    uk: (p) =>
+      p.reason === "key"
+        ? `Власник "${p.attribute}" — ключ, але власником свого рядка є лише довідник «Користувачі»`
+        : `Власник "${p.attribute}" не посилається ні на довідник членства виду скоупу об'єкта, ні на «Користувачі»`,
+    hint: {
+      en: "Name a reference to a member of the same scope kind or to the users catalog; ref is an owner only on the users catalog.",
+      uk: "Назвіть посилання на учасника того самого виду скоупу чи на «Користувачі»; ref — власник лише в довіднику «Користувачі».",
+    },
+  },
 
   "reference.not-referenceable": {
     en: (p) => `${p.kind} "${p.name}" cannot be referenced here`,

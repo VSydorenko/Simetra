@@ -8,7 +8,8 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import type { ModelStageResult } from "../stages/model"
-import { customActionsOf } from "./contracts"
+import { resolveCarrier, type CarrierContext } from "./carriers"
+import { customActionsOf, ownershipOf } from "./contracts"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
 export interface RightsCheckContext {
@@ -65,8 +66,76 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
       diagnostics.push(...unknownHeader(object, action, index, ctx.references))
     })
     diagnostics.push(...requiresCycles(object, actions, standard))
+    if (def.rightsExtents.includes("own")) {
+      diagnostics.push(...checkOwnership(object, ctx))
+    }
   }
   return diagnostics
+}
+
+/** Контекст резолву носія з контексту правил стадії 4. */
+export function carrierContext(ctx: RightsCheckContext): CarrierContext {
+  return {
+    references: ctx.references,
+    physical: ctx.model.physical,
+    project: ctx.project,
+    byId: ctx.byId,
+  }
+}
+
+/**
+ * Правило цілі власності (спека прав §4.2, Р1a-11): кінцевий `Ref` носія —
+ * на довідник членства того самого виду скоупу, що й об'єкт, і в межах
+ * скоупу (інакше власник з чужого тенанта відкрив би рядок), або на
+ * «Користувачі» — там простий FK, бо предикат власності йде AND зі скоупами.
+ * Ключ (`ref`) — власник лише рядка самих «Користувачів».
+ */
+function checkOwnership(
+  object: ParsedObject,
+  ctx: RightsCheckContext
+): Diagnostic[] {
+  const carriers = carrierContext(ctx)
+  const scopeOf = (o: ParsedObject) =>
+    ctx.references.find(
+      (r) => r.role === "object.scope" && r.from.file === o.file
+    )?.to.id
+  return ownershipOf(object).flatMap((carrier, index) => {
+    const pointer = `/ownership/${index}`
+    const resolved = resolveCarrier(
+      object,
+      carrier,
+      { pointer, field: "ownership" },
+      carriers
+    )
+    if (!resolved.ok) return [resolved.diagnostic]
+    const at = typeof carrier === "string" ? pointer : `${pointer}/1`
+    const { object: holder, field } = resolved.terminal
+    const target = (reason: "key" | "target") => [
+      diagnostic("rights.ownership-target", object.file, at, {
+        attribute: field.name,
+        reason,
+      }),
+    ]
+    if (field.key) return isUsers(holder) ? [] : target("key")
+    const owner = field.target!
+    if (isUsers(owner)) return []
+    const membership =
+      (owner.data as { membership?: unknown }).membership !== undefined
+    if (!membership || scopeOf(owner) !== scopeOf(object)) {
+      return target("target")
+    }
+    return field.inScope
+      ? []
+      : [
+          diagnostic("rights.carrier-cross-tenant", object.file, at, {
+            attribute: field.name,
+          }),
+        ]
+  })
+}
+
+function isUsers(object: ParsedObject): boolean {
+  return (object.data as { role?: string }).role === "users"
 }
 
 /**

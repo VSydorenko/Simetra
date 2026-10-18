@@ -49,3 +49,21 @@ export const customActionsSchema = z
     description:
       "Custom actions of the object beyond the standard actions of its kind.",
   })
+
+/**
+ * Носій прав (Рх21): реквізит самого об'єкта або шлях з двох кроків —
+ * посилання в межах скоупу й реквізит його цілі. Довших шляхів немає:
+ * кожен крок — це з'єднання в політиці рядка, а один крок покриває
+ * «коментар задачі належить виконавцю задачі».
+ */
+export const rightsCarrierSchema = z
+  .union([elementNameSchema, z.tuple([elementNameSchema, elementNameSchema])])
+  .meta({
+    description:
+      "An attribute of this object, or a path [attribute, attribute of its target]",
+  })
+
+export type RightsCarrier = z.infer<typeof rightsCarrierSchema>
+
+/** Власники рядка (спека прав §4.2): порожній перелік — це відсутність поля. */
+export const ownershipSchema = z.array(rightsCarrierSchema).min(1)

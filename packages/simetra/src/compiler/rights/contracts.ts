@@ -2,12 +2,11 @@ import {
   KIND_REGISTRY,
   actionRequires,
   closeRequires,
-  standardLogicalName,
   type ActionEffects,
-  type AttributeCase,
   type CustomAction,
   type PhysicalSnapshot,
-  type PhysicalTable,
+  type Project,
+  type RightsCarrier,
 } from "simetra/model"
 import {
   mainTableOf,
@@ -18,10 +17,16 @@ import { compareStrings } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
 import { kindLabelOf } from "../stages/model"
+import { elementColumns, resolveCarrier, type CarrierContext } from "./carriers"
 
 /** Кастомні дії розібраного об'єкта виду з контрактом прав. */
 export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
   return (object.data as { customActions?: CustomAction[] }).customActions ?? []
+}
+
+/** Носії `ownership` об'єкта виду з обсягом `own`. */
+export function ownershipOf(object: ParsedObject): readonly RightsCarrier[] {
+  return (object.data as { ownership?: RightsCarrier[] }).ownership ?? []
 }
 
 /**
@@ -44,24 +49,33 @@ export function rightsContracts(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
-  style: AttributeCase
+  project: Project
 ): RightsContract[] {
+  const ctx: CarrierContext = {
+    references,
+    physical,
+    project,
+    byId: new Map(objects.map((o) => [must(o.id), o])),
+  }
   return objects
     .filter((object) => KIND_REGISTRY[object.kind].rightsExtents.length > 0)
-    .map((object) => rightsContract(object, references, physical, style))
+    .map((object) => rightsContract(object, ctx))
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
 
 function rightsContract(
   object: ParsedObject,
-  references: readonly ResolvedReference[],
-  physical: PhysicalSnapshot,
-  style: AttributeCase
+  ctx: CarrierContext
 ): RightsContract {
+  const { references, physical } = ctx
   const def = KIND_REGISTRY[object.kind]
   const objectId = must(object.id)
   const table = must(mainTableOf(physical, objectId))
-  const columnsOf = elementColumns(object, objectId, table, style)
+  const columnsOf = elementColumns(
+    object,
+    table,
+    ctx.project.naming.attributeCase
+  )
   const standard = def.actions(object.data)
   const custom = customActionsOf(object)
     .map((action, index) => ({ action, index }))
@@ -88,7 +102,21 @@ function rightsContract(
     })),
   ])
 
-  const extents: RightsAction["extents"] = [{ form: "any" }]
+  // Носії вже перевірила стадія 4, тож резолв тут не падає.
+  const ownership = ownershipOf(object).map((carrier, index) => {
+    const resolved = resolveCarrier(
+      object,
+      carrier,
+      { pointer: `/ownership/${index}`, field: "ownership" },
+      ctx
+    )
+    if (!resolved.ok) throw new Error("internal: unchecked rights carrier")
+    return resolved.contract
+  })
+  const extents: RightsAction["extents"] = [
+    { form: "any" },
+    ...(ownership.length > 0 ? [{ form: "own" as const }] : []),
+  ]
   const canonicalHeader = (header: ActionEffects["header"]) =>
     header === "all"
       ? ("all" as const)
@@ -148,40 +176,8 @@ function rightsContract(
     table: { schema: table.schema, name: table.name },
     ...(scopeKindId === undefined ? {} : { scopeKindId }),
     actions,
+    ownership,
   }
-}
-
-/**
- * Фізичні колонки основної таблиці за id елемента: реквізит — за своїм UUID,
- * стандартний реквізит — за синтетичним id з канонічним ім'ям (той самий, що
- * дає індекс посилань), тож ефекти реєстру й посилання файлу читаються
- * однаково. Поліморфна пара дає обидві колонки.
- */
-function elementColumns(
-  object: ParsedObject,
-  objectId: string,
-  table: PhysicalTable,
-  style: AttributeCase
-): Map<string, string[]> {
-  const byStandard = new Map(
-    KIND_REGISTRY[object.kind]
-      .standardColumns(object.data)
-      .map((c) => [
-        standardLogicalName(c, style),
-        standardElementId(objectId, c),
-      ])
-  )
-  const result = new Map<string, string[]>()
-  for (const column of table.columns) {
-    const id =
-      column.origin.elementId ??
-      (column.origin.standard === undefined
-        ? undefined
-        : byStandard.get(column.origin.standard))
-    if (id === undefined) continue
-    result.set(id, [...(result.get(id) ?? []), column.name])
-  }
-  return result
 }
 
 /** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */

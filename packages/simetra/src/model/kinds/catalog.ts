@@ -15,6 +15,7 @@ import {
   type NumberingSpec,
   type StandardColumnDef,
   customActionReferences,
+  ownershipReferences,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -201,7 +202,10 @@ export const catalogKind: KindDefinition = {
   },
   numbering,
   tabularSectionColumns: () => tabularRowColumns(false),
-  elementReferences: (obj) => customActionReferences(obj as Catalog),
+  elementReferences: (obj) => [
+    ...customActionReferences(obj as Catalog),
+    ...ownershipReferences(obj as Catalog),
+  ],
   references(obj) {
     const catalog = obj as Catalog
     return [

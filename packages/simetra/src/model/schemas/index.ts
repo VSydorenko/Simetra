@@ -72,7 +72,10 @@ export { constantSchema, type Constant } from "./constant"
 export {
   customActionSchema,
   customActionsSchema,
+  ownershipSchema,
+  rightsCarrierSchema,
   type CustomAction,
+  type RightsCarrier,
 } from "./rights"
 export {
   customTableSchema,
