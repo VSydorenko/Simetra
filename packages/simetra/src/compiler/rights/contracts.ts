@@ -357,7 +357,7 @@ export function sourceContracts(
  * зростанням. Викликається лише на моделі без помилок: цикли включень уже
  * відхилила стадія 4, тож обхід скінченний; ромб дає набір один раз.
  */
-export function includeClosure(
+function includeClosure(
   object: ParsedObject,
   byId: ReadonlyMap<string, ParsedObject>,
   references: readonly ResolvedReference[]
@@ -434,10 +434,6 @@ export function rightsProjection(
     ...declarationsOf(objects, "role"),
   ]) {
     inputs.set(must(object.id), {
-      kind:
-        KIND_REGISTRY[object.kind].rightsDeclaration === "role"
-          ? "Role"
-          : "RightsSet",
       id: must(object.id),
       grants: grantRecords(object).map((record, index): ResolvedGrant => {
         const selector = record.objects
@@ -478,7 +474,6 @@ export function rightsProjection(
     const expanded = expandRole(
       {
         ...must(inputs.get(role.roleId)),
-        kind: "Role",
         assignedOn: role.assignedOn,
         sets: role.sets.map((id) => must(inputs.get(id))),
       },

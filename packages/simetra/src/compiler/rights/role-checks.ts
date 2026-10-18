@@ -8,6 +8,7 @@ import {
   grantRecords,
   includedSets,
   isRightsContainer,
+  isRightsDeclaration,
   levelKey,
   recordCustomAction,
   recordExtent,
@@ -15,6 +16,7 @@ import {
   roleLevel,
   sourceLevel,
   supportedExtents,
+  supportsExtent,
 } from "./facts"
 import { objectTarget } from "./references"
 
@@ -161,10 +163,7 @@ const STANDARD_WORDS: ReadonlySet<string> = new Set(STANDARD_ACTIONS)
  */
 function checkGrants(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
-  const declarations = ctx.objects.filter(
-    (o) => KIND_REGISTRY[o.kind].rightsDeclaration !== undefined
-  )
-  for (const object of declarations) {
+  for (const object of ctx.objects.filter(isRightsDeclaration)) {
     for (const record of grantRecords(object)) {
       const at = record.pointer
       const report = (
@@ -259,12 +258,8 @@ function checkGrants(ctx: RightsCheckContext): Diagnostic[] {
       })
       if (extent === undefined || compiled === undefined) continue
       for (const target of targets) {
-        const supported = supportedExtents(target, ctx.references).some((e) =>
-          typeof compiled === "string"
-            ? e.form === compiled
-            : e.form === "dimension" && e.dimensionId === compiled.dimensionId
-        )
-        if (supported) continue
+        const extents = supportedExtents(target, ctx.references)
+        if (supportsExtent(extents, compiled)) continue
         report("rights.extent-unsupported", `${at}/extent`, {
           object: target.name,
           extent: typeof extent === "string" ? extent : extent.dimension,

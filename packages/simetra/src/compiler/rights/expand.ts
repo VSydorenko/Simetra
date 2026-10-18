@@ -5,6 +5,7 @@ import type {
   RightsProjectionRow,
 } from "../contracts"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
+import { supportsExtent } from "./facts"
 
 /**
  * Запис гранту з резолвленими цілями: об'єкти — id, дії — ключі контракту
@@ -26,7 +27,6 @@ export interface ResolvedGrant {
 
 /** Набір прав чи роль як джерело грантів: власні записи й прямі включення. */
 export interface DeclarationInput {
-  kind: "Role" | "RightsSet"
   id: string
   grants: readonly ResolvedGrant[]
   /** Id прямо включених наборів у порядку `include`. */
@@ -35,7 +35,6 @@ export interface DeclarationInput {
 
 /** Роль з рівнем і наборами її замикання включень. */
 export interface RoleInput extends DeclarationInput {
-  kind: "Role"
   assignedOn: CompiledRoleLevel
   /** Усі набори замикання включень ролі. */
   sets: readonly DeclarationInput[]
@@ -61,7 +60,7 @@ interface Row {
 }
 
 /** Ключ обсягу: `any`, `own` чи `dim:<id>`. */
-export function extentKey(extent: ProjectionExtent): string {
+function extentKey(extent: ProjectionExtent): string {
   return typeof extent === "string" ? extent : `dim:${extent.dimensionId}`
 }
 
@@ -77,12 +76,12 @@ export function compareExtents(
 const sameExtent = (a: ProjectionExtent, b: ProjectionExtent) =>
   extentKey(a) === extentKey(b)
 
-/** Обсяг підтримано об'єктом: `own` — з власністю, вимір — з мапінгом на нього. */
-function supports(contract: RightsContract, extent: ProjectionExtent) {
-  if (extent === "any") return true
-  if (extent === "own") return contract.ownership.length > 0
-  return contract.access.some((a) => a.dimensionId === extent.dimensionId)
-}
+/**
+ * Обсяг підтримано об'єктом. Обсяги дій об'єкта однакові — контракт бере їх
+ * з `supportedExtents` — тож читання те саме, що в правилах стадії 4.
+ */
+const supports = (contract: RightsContract, extent: ProjectionExtent) =>
+  contract.actions.some((a) => supportsExtent(a.extents, extent))
 
 /**
  * Дії, які рівень ролі дозволяє на об'єкті; `undefined` — об'єкт поза
@@ -191,7 +190,8 @@ export function expandRole(
   }
 
   // Об'єкти, дії й обсяги запису `grant`/`deny`, які рівень дозволяє; решта —
-  // діагностики на місці запису.
+  // діагностики на місці запису. Явний перелік стадія 4 вже перевірила на
+  // дії й обсяги цілей, тож невідома дія тут можлива лише в селекторі за дією.
   const resolve = (grant: ResolvedGrant) => {
     const at = `/grants/${grant.index}/${grant.form}`
     const report = (
@@ -243,14 +243,6 @@ export function expandRole(
             ...params,
             level: level.level,
             role: roleName,
-          })
-        } else if (
-          grant.extent !== undefined &&
-          !supports(contract, grant.extent)
-        ) {
-          report("rights.extent-unsupported", `${at}/extent`, {
-            object: params.object,
-            extent: extentName(grant.extent),
           })
         } else {
           found.push({ contract, action })

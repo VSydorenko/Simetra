@@ -27,7 +27,11 @@ import {
   valueAt,
   type Diagnostic,
 } from "../diagnostics"
-import { customActionsOf, grantRecords } from "../rights/facts"
+import {
+  customActionsOf,
+  grantRecords,
+  isRightsDeclaration,
+} from "../rights/facts"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 
 export interface ResolvedReference {
@@ -1295,7 +1299,7 @@ function resolveCustomActionReferences(
   objectsByName: ReadonlyMap<string, ParsedObject>,
   references: ResolvedReference[]
 ) {
-  if (KIND_REGISTRY[object.kind].rightsDeclaration === undefined) return
+  if (!isRightsDeclaration(object)) return
   const objectId = object.id
   if (objectId === undefined) return
   for (const record of grantRecords(object)) {

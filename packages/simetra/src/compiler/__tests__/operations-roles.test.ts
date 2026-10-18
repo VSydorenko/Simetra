@@ -165,6 +165,13 @@ describe("designer operations over roles and rights sets", () => {
       (after) => json(after, ROLE_FILE("ProjectLead")).sourceKeys,
       [{ source: "leadGrants", key: "lead" }],
     ],
+    [
+      "a container",
+      { kind: "Catalog", name: "Project" },
+      "Workspace",
+      (after) => json(after, ROLE_FILE("ProjectLead")).assignedOn,
+      { container: ref("Catalog", "Workspace") },
+    ],
   ])("renames %s everywhere in roles", async (_, target, newName, at, want) => {
     const before = files()
     const result = await renameElement(before, { target, newName })
@@ -180,6 +187,17 @@ describe("designer operations over roles and rights sets", () => {
     ["an object", { kind: "Document", name: "Task" }, "grant.object"],
     ["a scope kind", { kind: "Project", element: ["org"] }, "role.scopeKind"],
     ["a container", { kind: "Catalog", name: "Project" }, "role.container"],
+    [
+      "a dimension",
+      { kind: "Project", element: ["region"] },
+      "grant.dimension",
+    ],
+    ["a source", { kind: "Project", element: ["grants"] }, "role.sourceKey"],
+    [
+      "a custom action",
+      { kind: "Document", name: "Task", element: ["reassign"] },
+      "grant.customAction",
+    ],
   ])("refuses to delete %s a role refers to", async (_, target, role) => {
     const result = await deleteElement(files(), { target })
     expect(result.ok).toBe(false)

@@ -539,6 +539,21 @@ describe("rights projection", () => {
       params: { action: "post" },
     },
     {
+      case: "denies a scoped object in a global role",
+      input: files({
+        [ROLE_FILE("Support")]: { grants: [deny(TASK, ["read"])] },
+      }),
+      code: "rights.grant-level",
+      file: ROLE_FILE("Support"),
+      pointer: "/grants/0/deny/actions/0",
+      params: {
+        object: "Task",
+        action: "read",
+        level: "global",
+        role: "Support",
+      },
+    },
+    {
       case: "denies an unknown action",
       input: files(member(deny(TASK, ["approve"]))),
       code: "rights.action-unknown",

@@ -1,5 +1,6 @@
 import type { MetadataRef } from "../schemas/metadata-ref"
 import {
+  grantEntryForm,
   rightsSetSchema,
   type GrantEntry,
   type RightsSet,
@@ -27,13 +28,6 @@ export function includeReferences(
   }))
 }
 
-/** Тіло запису гранту з ключем форми: `grantAll`, `grant` чи `deny`. */
-function entryBody(entry: GrantEntry) {
-  if ("grantAll" in entry) return { key: "grantAll", body: entry.grantAll }
-  if ("grant" in entry) return { key: "grant", body: entry.grant }
-  return { key: "deny", body: entry.deny }
-}
-
 /**
  * Об'єкти явного переліку гранту — посилання індексу: перейменування об'єкта
  * переписує грант, а видалення об'єкта, на який грант посилається, бачить
@@ -43,10 +37,10 @@ export function grantReferences(
   grants: readonly GrantEntry[]
 ): FoundReference[] {
   return grants.flatMap((entry, index) => {
-    const { key, body } = entryBody(entry)
+    const { form, body } = grantEntryForm(entry)
     if (!("objects" in body) || !Array.isArray(body.objects)) return []
     return body.objects.map((ref, at) => ({
-      pointer: `/grants/${index}/${key}/objects/${at}`,
+      pointer: `/grants/${index}/${form}/objects/${at}`,
       ref,
       role: "grant.object" as const,
       pair: false,
@@ -60,12 +54,12 @@ export function grantProjectReferences(
   grants: readonly GrantEntry[]
 ): FoundProjectReference[] {
   return grants.flatMap((entry, index) => {
-    const { key, body } = entryBody(entry)
+    const { form, body } = grantEntryForm(entry)
     const { extent } = body
     if (typeof extent !== "object") return []
     return [
       {
-        pointer: `/grants/${index}/${key}/extent/dimension`,
+        pointer: `/grants/${index}/${form}/extent/dimension`,
         name: extent.dimension,
         collection: "accessDimensions" as const,
         role: "grant.dimension" as const,

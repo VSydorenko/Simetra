@@ -391,6 +391,17 @@ export const grantEntrySchema = z.union([
 
 export type GrantEntry = z.infer<typeof grantEntrySchema>
 
+/** Form of a grant entry (`grantAll`, `grant` or `deny`) and its body. */
+export function grantEntryForm(entry: GrantEntry) {
+  // Одне розрізнення форми для індексу посилань (T0) і компілятора (T1):
+  // інакше нова форма запису розійшлася б у їхніх вказівниках.
+  if ("grantAll" in entry) {
+    return { form: "grantAll" as const, body: entry.grantAll }
+  }
+  if ("grant" in entry) return { form: "grant" as const, body: entry.grant }
+  return { form: "deny" as const, body: entry.deny }
+}
+
 /**
  * Набір прав (спека прав §4.1, Рх16): іменована група грантів, яку
  * включають ролі й інші набори. Цикл включень — помилка компілятора.

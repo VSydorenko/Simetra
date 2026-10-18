@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  grantEntryForm,
   type AccessMapping,
   type ActionEffects,
   type AssignedOn,
@@ -147,6 +148,11 @@ export function carrierContext(input: {
   }
 }
 
+/** Декларація прав — набір чи роль (факт реєстру `rightsDeclaration`). */
+export function isRightsDeclaration(object: ParsedObject): boolean {
+  return KIND_REGISTRY[object.kind].rightsDeclaration !== undefined
+}
+
 /** Декларації прав одного факту реєстру (`rightsDeclaration`), у порядку файлів. */
 export function declarationsOf(
   objects: readonly ParsedObject[],
@@ -254,6 +260,21 @@ export function supportedExtents(
   ]
 }
 
+/**
+ * Обсяг серед підтриманих (`supportedExtents`): одне порівняння для правил
+ * гранту й розгортання, тож вони не розійдуться в тому, що «підтримано».
+ */
+export function supportsExtent(
+  extents: readonly RightsExtent[],
+  extent: ProjectionExtent
+): boolean {
+  return extents.some((e) =>
+    typeof extent === "string"
+      ? e.form === extent
+      : e.form === "dimension" && e.dimensionId === extent.dimensionId
+  )
+}
+
 /** Запис гранту декларації прав з вказівником на тіло запису. */
 export interface GrantRecord {
   form: "grantAll" | "grant" | "deny"
@@ -271,21 +292,14 @@ export interface GrantRecord {
 export function grantRecords(object: ParsedObject): GrantRecord[] {
   const grants = (object.data as { grants: GrantEntry[] }).grants
   return grants.map((entry, index): GrantRecord => {
-    if ("grantAll" in entry) {
-      return {
-        form: "grantAll",
-        pointer: `/grants/${index}/grantAll`,
-        actions: [],
-        extent: entry.grantAll.extent,
-      }
+    const { form, body } = grantEntryForm(entry)
+    const pointer = `/grants/${index}/${form}`
+    if (form === "grantAll") {
+      return { form, pointer, actions: [], extent: body.extent }
     }
-    const [form, body] =
-      "grant" in entry
-        ? (["grant", entry.grant] as const)
-        : (["deny", entry.deny] as const)
     return {
       form,
-      pointer: `/grants/${index}/${form}`,
+      pointer,
       objects: body.objects,
       actions: body.actions,
       ...(body.extent === undefined ? {} : { extent: body.extent }),

@@ -26,6 +26,7 @@ import {
   headerReference,
   isMembershipCatalog,
   isRightsContainer,
+  isRightsDeclaration,
   isUsers,
   ownershipOf,
   scopeKindOf,
@@ -542,7 +543,7 @@ function checkUsers(ctx: RightsCheckContext): Diagnostic[] {
     ctx.project.assignmentSources.length > 0 ||
     ctx.objects.some(
       (o) =>
-        KIND_REGISTRY[o.kind].rightsDeclaration !== undefined ||
+        isRightsDeclaration(o) ||
         ownershipOf(o).length > 0 ||
         accessOf(o).length > 0 ||
         bindingOf(o) !== undefined

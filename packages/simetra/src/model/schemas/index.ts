@@ -78,6 +78,7 @@ export {
   customActionSchema,
   customActionsSchema,
   extentSchema,
+  grantEntryForm,
   grantEntrySchema,
   membershipSourceSchema,
   objectSelectorSchema,
