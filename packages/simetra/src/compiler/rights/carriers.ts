@@ -12,6 +12,7 @@ import { mainTableOf, type CarrierContract } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { must } from "./references"
 
 /**
  * Чи носій прав «в межах скоупу» (Р1a-10): фізичний FK поля є складеним, тобто
@@ -303,10 +304,4 @@ export function elementColumns(
     result.set(id, [...(result.get(id) ?? []), column.name])
   }
   return result
-}
-
-/** Модель після стадії 3 гарантує наявність; відсутність — дефект компілятора. */
-function must<T>(value: T | undefined): T {
-  if (value === undefined) throw new Error("internal: missing carrier input")
-  return value
 }

@@ -20,7 +20,7 @@ import {
   type RightsContract,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
-import { PROJECT_FILE, type ParsedObject } from "../stages/files"
+import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
 import { kindLabelOf } from "../stages/model"
 import {
@@ -30,6 +30,7 @@ import {
   resolveCarrier,
   type CarrierContext,
 } from "./carriers"
+import { must, projectTarget } from "./references"
 
 /** Кастомні дії розібраного об'єкта виду з контрактом прав. */
 export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
@@ -282,14 +283,7 @@ export function accessDimensionContracts(
     byId: new Map(objects.map((o) => [must(o.id), o])),
   }
   const toId = (pointer: string, role: ResolvedReference["role"]) =>
-    must(
-      references.find(
-        (r) =>
-          r.from.file === PROJECT_FILE &&
-          r.from.pointer === pointer &&
-          r.role === role
-      )?.to.id
-    )
+    must(projectTarget(pointer, role, { references }))
   return project.accessDimensions
     .map((dimension, index): AccessDimensionContract => {
       const at = `/accessDimensions/${index}`
@@ -352,12 +346,7 @@ export function sourceContracts(
 ): Pick<Contracts, "membershipSources" | "assignmentSources"> {
   const byId = new Map(objects.map((o) => [must(o.id), o]))
   const toId = (pointer: string, role: ResolvedReference["role"]) =>
-    references.find(
-      (r) =>
-        r.from.file === PROJECT_FILE &&
-        r.from.pointer === pointer &&
-        r.role === role
-    )?.to.id
+    projectTarget(pointer, role, { references })
   // Таблиця джерела й фізична колонка за логічним полем мапінгу.
   const tableOf = (at: string) => {
     const object = must(byId.get(must(toId(`${at}/table`, "source.table"))))
@@ -427,10 +416,4 @@ export function sourceContracts(
     })
     .sort((a, b) => compareStrings(a.sourceId, b.sourceId))
   return { membershipSources, assignmentSources }
-}
-
-/** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */
-function must<T>(value: T | undefined): T {
-  if (value === undefined) throw new Error("internal: missing rights input")
-  return value
 }

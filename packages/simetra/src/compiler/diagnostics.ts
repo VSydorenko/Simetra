@@ -120,6 +120,7 @@ export const COMPILER_RULES = [
   "rights.dimension-function-reads-rights",
   "rights.source-table",
   "rights.source-forced-rls",
+  "rights.source-scope-column",
   "rights.membership-source-duplicate",
   "rights.source-container-column",
   "rights.scope-kind-unknown",

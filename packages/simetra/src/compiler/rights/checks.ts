@@ -22,6 +22,7 @@ import {
   customActionsOf,
   ownershipOf,
 } from "./contracts"
+import { must, projectTarget } from "./references"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
 export interface RightsCheckContext {
@@ -213,20 +214,6 @@ function scopeKindOf(
   )?.to.id
 }
 
-/** Ціль посилання з файлу проєкту за вказівником і роллю. */
-function projectTarget(
-  pointer: string,
-  role: ResolvedReference["role"],
-  ctx: Pick<RightsCheckContext, "references">
-): string | undefined {
-  return ctx.references.find(
-    (r) =>
-      r.from.file === PROJECT_FILE &&
-      r.from.pointer === pointer &&
-      r.role === role
-  )?.to.id
-}
-
 /**
  * Правила виміру доступу (спека прав §4.4, Р1a-13): довідник значень — вид,
  * що може ним бути, і скоуплений, коли в проєкті є види скоупу (інакше
@@ -395,14 +382,21 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
     params: Record<string, string>
   ) => diagnostics.push(diagnostic(code, PROJECT_FILE, pointer, params))
   const known = new Set(ctx.scopeKinds.map((k) => k.name))
-  const table = (source: { name: string }, at: string) => {
+  // Прийнята таблиця джерела; `undefined` — ціль невідома (стадія 2) чи не
+  // прийнята таблиця (звітовано тут).
+  const table = (
+    source: { name: string },
+    at: string
+  ): ParsedObject | undefined => {
     const id = projectTarget(`${at}/table`, "source.table", ctx)
     const target = id === undefined ? undefined : ctx.byId.get(id)
     // Невідому ціль уже звітувала стадія 2 (`reference.unresolved`).
     if (target === undefined) return
     if (!KIND_REGISTRY[target.kind].declared) {
       report("rights.source-table", `${at}/table`, { source: source.name })
-    } else if (
+      return
+    }
+    if (
       (target.data as { rowLevelSecurity?: string }).rowLevelSecurity ===
       "forced"
     ) {
@@ -411,10 +405,46 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
         table: target.name,
       })
     }
+    return target
   }
   // Членство виду рахується наростаючим підсумком: перше джерело виду без
   // довідника законне, кожне наступне — дубль.
   const counted = new Set<string>()
+  // Скоуп джерела членства — скоуп самої таблиці (Р1a-24): складений FK
+  // власника тримає рівність колонки `scopeColumn` таблиці, тож значення
+  // скоупу членства мусить читатися саме з неї. Інакше FK тримав би один
+  // тенант, а членство — інший.
+  const checkSourceScope = (
+    source: string,
+    at: string,
+    target: ParsedObject
+  ) => {
+    const kindId = projectTarget(`${at}/scopeKind`, "source.scopeKind", ctx)
+    // Невідомий вид уже звітовано вище.
+    if (kindId === undefined) return
+    if (scopeKindOf(target, ctx.references) !== kindId) {
+      report("rights.source-scope-column", `${at}/table`, {
+        source,
+        reason: "scope",
+      })
+      return
+    }
+    const column = projectTarget(`${at}/columns/scope`, "source.column", ctx)
+    // Невідому колонку звітувала стадія 2 (`customTable.column-unknown`).
+    if (column === undefined) return
+    const scopeColumn = ctx.references.find(
+      (r) =>
+        r.from.file === target.file &&
+        r.from.pointer === "/scopeColumn" &&
+        r.role === "customTable.scopeColumn"
+    )?.to.id
+    if (scopeColumn !== column) {
+      report("rights.source-scope-column", `${at}/columns/scope`, {
+        source,
+        reason: "column",
+      })
+    }
+  }
   ctx.project.membershipSources.forEach((source, index) => {
     const at = `/membershipSources/${index}`
     if (!known.has(source.scopeKind)) {
@@ -433,7 +463,8 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
         counted.add(kindId)
       }
     }
-    table(source, at)
+    const target = table(source, at)
+    if (target !== undefined) checkSourceScope(source.name, at, target)
   })
   ctx.project.assignmentSources.forEach((source, index) => {
     const at = `/assignmentSources/${index}`
@@ -632,10 +663,4 @@ function requiresCycles(
     if (state[i] === "new") visit(i)
   })
   return diagnostics
-}
-
-/** Стадія 2 гарантує id об'єкта; відсутність — дефект компілятора. */
-function must<T>(value: T | undefined): T {
-  if (value === undefined) throw new Error("internal: missing rights input")
-  return value
 }

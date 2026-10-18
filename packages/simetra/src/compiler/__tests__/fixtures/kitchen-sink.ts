@@ -861,7 +861,10 @@ export function kitchenSink(): Map<string, string> {
       sourceColumn(9924, "isActive", "is_active", "Boolean"),
     ],
     primaryKey: { name: "crew_pk", columns: ["id"] },
-    scope: "none",
+    // Скоуп джерела членства — скоуп таблиці, а `columns.scope` — її
+    // скоуп-колонка (Р1a-24).
+    scope: "user",
+    scopeColumn: "userRoot",
   }
   const roleGrant = {
     ...header("CustomTable", "RoleGrant", "role_grant"),

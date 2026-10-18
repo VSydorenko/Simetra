@@ -308,6 +308,19 @@ describe("adopted sources", () => {
         ],
       ])
     )
+    // Два джерела членства одного виду — теж дубль.
+    expect(
+      await codes(
+        adopted({
+          membershipSources: [
+            membersSource(),
+            membersSource({ id: uuid(6124), name: "moreMembers" }),
+          ],
+        })
+      )
+    ).toEqual([
+      ["rights.membership-source-duplicate", "/membershipSources/1/scopeKind"],
+    ])
     expect(
       await codes(
         adopted({
@@ -335,12 +348,73 @@ describe("adopted sources", () => {
     ])
   })
 
+  it("ties the scope of a membership source to the scope of its table", async () => {
+    // Колонка скоупу джерела — не скоуп-колонка таблиці: складений FK тримав
+    // би один тенант, а членство читалося б з іншого.
+    expect(
+      await codes(
+        adopted({
+          membershipSources: [
+            membersSource({ columns: { scope: "userId", user: "userId" } }),
+          ],
+        })
+      )
+    ).toEqual([
+      ["rights.source-scope-column", "/membershipSources/0/columns/scope"],
+    ])
+    const unscoped = membershipTable({ scope: "none" })
+    delete (unscoped as { scopeColumn?: string }).scopeColumn
+    expect(
+      await codes(
+        adopted(
+          { membershipSources: [membersSource()] },
+          { [MEMBERSHIP_FILE]: unscoped }
+        )
+      )
+    ).toEqual([["rights.source-scope-column", "/membershipSources/0/table"]])
+    const otherKind = await compileRights(
+      adopted(
+        {
+          scopeKinds: [
+            {
+              id: ORG_KIND_ID,
+              name: "org",
+              physicalName: "org_id",
+              root: { object: ref("Catalog", "Organization") },
+              setFunction: { schema: "public", name: "org_ids" },
+            },
+            {
+              id: uuid(6140),
+              name: "team",
+              physicalName: "team_id",
+              root: {
+                external: { schema: "auth", table: "users", column: "id" },
+              },
+              setFunction: { schema: "public", name: "team_ids" },
+            },
+          ],
+          membershipSources: [membersSource()],
+        },
+        { [MEMBERSHIP_FILE]: membershipTable({ scope: "team" }) }
+      )
+    )
+    expect(
+      errors(otherKind)
+        .filter((d) => d.code === "rights.source-scope-column")
+        .map((d) => [d.pointer, d.params])
+    ).toEqual([
+      ["/membershipSources/0/table", { source: "members", reason: "scope" }],
+    ])
+  })
+
   it("requires users or a membership source for rights declarations", async () => {
-    const withoutUsers = (project: Record<string, unknown>) => {
+    const withoutUsers = (
+      project: Record<string, unknown>,
+      task: Record<string, unknown> = {}
+    ) => {
       const files = adopted(project, {
         [TASK_FILE]: {
           trackAuthor: false,
-          ownership: ["assignee"],
           attributes: [
             {
               id: uuid(6011),
@@ -349,17 +423,56 @@ describe("adopted sources", () => {
               type: "Ref",
               ref: ref("CustomTable", "Membership"),
             },
+            {
+              id: uuid(6012),
+              name: "project",
+              physicalName: "project_id",
+              type: "Ref",
+              ref: ref("Catalog", "Project"),
+            },
           ],
+          ...task,
         },
       })
       files.delete(USERS_FILE)
       return files
     }
-    expect(await codes(withoutUsers({}))).toContainEqual([
-      "rights.users-missing",
-      "",
-    ])
-    await compiled(withoutUsers({ membershipSources: [membersSource()] }))
+    const region = {
+      id: uuid(6130),
+      name: "region",
+      target: ref("Catalog", "Region"),
+      values: { function: { name: "my_regions" } },
+    }
+    // Кожна декларація прав окремо вимагає «Користувачів» чи джерела.
+    const declarations: [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ][] = [
+      ["ownership", {}, { ownership: ["assignee"] }],
+      [
+        "access",
+        {},
+        { access: [{ attribute: "project", dimension: "region" }] },
+      ],
+      ["containerBinding", {}, { containerBinding: "project" }],
+      ["accessDimensions", { accessDimensions: [region] }, {}],
+      ["assignmentSources", { assignmentSources: [grantsSource()] }, {}],
+    ]
+    for (const [label, project, task] of declarations) {
+      expect(await codes(withoutUsers(project, task)), label).toContainEqual([
+        "rights.users-missing",
+        "",
+      ])
+    }
+    // Без декларацій прав «Користувачі» не потрібні.
+    await compiled(withoutUsers({}))
+    await compiled(
+      withoutUsers(
+        { membershipSources: [membersSource()] },
+        { ownership: ["assignee"] }
+      )
+    )
   })
 
   it("accepts an owner that refers to the adopted membership source", async () => {

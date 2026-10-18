@@ -1675,6 +1675,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функції прав — SECURITY DEFINER і проходили б політики таблиці: приберіть rowLevelSecurity: forced.",
     },
   },
+  "rights.source-scope-column": {
+    en: (p) =>
+      p.reason === "scope"
+        ? `Table of membership source "${p.source}" is not scoped by the scope kind of the source`
+        : `Scope column of membership source "${p.source}" is not the scope column of its table`,
+    uk: (p) =>
+      p.reason === "scope"
+        ? `Таблиця джерела членства "${p.source}" не скоуплена видом скоупу джерела`
+        : `Колонка скоупу джерела членства "${p.source}" — не скоуп-колонка його таблиці`,
+    hint: {
+      en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn: the composite foreign key of an owner keeps exactly that column within the tenant.",
+      uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn: складений зовнішній ключ власника тримає в межах тенанта саме цю колонку.",
+    },
+  },
   "rights.membership-source-duplicate": {
     en: (p) => `Scope kind "${p.scopeKind}" already has a membership`,
     uk: (p) => `Вид скоупу "${p.scopeKind}" уже має членство`,
