@@ -1,6 +1,6 @@
 # Права-1a: носії прав і контракт прав об'єкта — план імплементації
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [X]`) syntax for tracking.
 
 Статус: прийнято архітектором задачі 2026-10-18 після аудиту Codex.
 Архітектор задачі — сесія, що замовила план (`consumer-reconciliation2`);
@@ -150,7 +150,7 @@
 Кожна правка точкова: одне-два речення в наявному абзаці, з посиланням на
 розділ спеки прав, без переказу її змісту (правило «один факт — один документ»).
 
-- [ ] **Step 1: Платформна спека.**
+- [X] **Step 1: Платформна спека.**
   - §6.8, абзац «Права — контракт платформи»: стандартна реалізація — платформи, застосунок може замінити; функції множини — за (дія, об'єкт) у формі обсягу, повертають скоупи, id чи значення носія; «окремо від скоуп-предиката» означає скоуп `RESTRICTIVE` і права `PERMISSIVE`; булева форма для нескоуплених; виняток ТЧ — спека прав §5.2; речення про опцію JWT-claims видалити; «скалярна перевірка … один раз на команду» → «на кожен кореневий рядок команди».
   - §6.7: `EXECUTE` функцій прав, скоупу, членства й `current_user_id` та `USAGE` на `simetra` — також `simetra_command`; сервісна роль отримує порожню множину; `simetra_command` не член `authenticated` і має `SELECT` таблиць виду (для `UPDATE … WHERE` і `RETURNING`).
   - §9, «Згенеровані команди»: перевірка права — на кожен кореневий рядок команди.
@@ -158,8 +158,8 @@
   - §8.4 і Р21: `runCommand` ставить `simetra.command` поруч із claims.
   - §4, «Поліморфні посилання»: виняток «мітка зникає…» видалити — мітку мають усі види з RLS (спека промоції §9.11).
   - §13, рядок прав: перевірити, що вже позначено закритим спекою прав; якщо ні — позначити.
-- [ ] **Step 2: Спека системної схеми.** С6/§8: ролі — платформна модель спеки прав (профіль і запрошення — застосунку); членство може бути прийнятою таблицею з мапінгом (спека прав §4.7); `EXECUTE` функцій членства — також `simetra_command`. §3: `USAGE` на `simetra` для `simetra_command`. §12 «Видимість Користувачів»: своя функція множини довідника лишається (роль рівня скоупу дає `read` на нескоуплені, Рх7); відкрите питання «прийом з нуля бази Simetra»: системні об'єкти прав і їхні політики розпізнаються як платформні, а не `CustomTable` і борг.
-- [ ] **Step 3: Спека П2.**
+- [X] **Step 2: Спека системної схеми.** С6/§8: ролі — платформна модель спеки прав (профіль і запрошення — застосунку); членство може бути прийнятою таблицею з мапінгом (спека прав §4.7); `EXECUTE` функцій членства — також `simetra_command`. §3: `USAGE` на `simetra` для `simetra_command`. §12 «Видимість Користувачів»: своя функція множини довідника лишається (роль рівня скоупу дає `read` на нескоуплені, Рх7); відкрите питання «прийом з нуля бази Simetra»: системні об'єкти прав і їхні політики розпізнаються як платформні, а не `CustomTable` і борг.
+- [X] **Step 3: Спека П2.**
   - §3, перелік «мітка виду об'єкта (…)»: довідник, документ, регістри, константа й `CustomTable` з одноколонковим uuid-ключем.
   - §3, абзац «Призначене раз»: прибрати «і зникнення `kindLabel`, коли вид мітки не має…».
   - §3, «Дослівний SQL»: «функції множини скоупу й прав» → «функції множини скоупу; функція значень виміру доступу — у `metadata/sql/<схема>/` (спека прав §4.4)».
@@ -167,13 +167,13 @@
   - §6, «Посилання»: посилання на скоуплену `CustomTable` з `UNIQUE (scope, id)` — складений FK (спека прав §4.5).
   - §6, «Членство»: щонайбільше одне на вид скоупу — скоуплений довідник або прийнята таблиця (спека прав §4.7).
   - §6, ТЧ: стандартні колонки рядка ТЧ — і денормалізовані носії власника (спека прав §5.2).
-- [ ] **Step 4: Спека промоції.**
+- [X] **Step 4: Спека промоції.**
   - Пр11 і §9.4, пункт «функції множини скоупу й виду доступу»: закрита форма `(p_action, p_object) RETURNS SETOF uuid` у модулі об'єкта замінюється функцією значень виміру без аргументів, незалежною від гранту, в оголошенні проєкту (SQL — `metadata/sql/<схема>/`; спека прав §4.4).
   - Пр25: мітку мають усі види з RLS.
   - Пр18 і §9.11: промоція мітку зберігає, а якщо мітки не було — призначає за правилом `physicalName`; абзац «Ціль без мітки (регістр відомостей)…» видалити.
   - §9.2, рядок «Доступ за значеннями полів»: вид доступу = вимір доступу (спека прав §4.4); форми `attribute \| ref` зберігаються; гейт еквівалентності «роль × дія × рядок» для прийнятих політик лишається.
   - §9.3: рядок `access` → «доступ за виміром (спека прав §4.4)»; речення «Форму `access` … фіксує план генерації політик» → «форма — спека прав §4.4».
-- [ ] **Step 5: Спека прав (вердикт розвилок Права-1).**
+- [X] **Step 5: Спека прав (вердикт розвилок Права-1).**
   - §3: дія в даних — слово словника або UUID кастомної дії (Рх18); кожна дія з DML вимагає `read`; ефекти — `effects(obj)` у формі Р1a-3; вимоги — лише передумова права, ефекти — власні ефекти дії (дія, що вимагає `update`, його ефектів не успадковує); дія запису незалежного регістра — `write`; імена в `header` кастомної дії — посилання на реквізити.
   - §5.3: форма ефектів — посилання на §3; одне речення: вимоги не переносять ефектів.
   - §4.2: ціль власності — й прийнята таблиця-джерело членства виду скоупу об'єкта, якщо вона дає `UNIQUE (scope, id)` для складеного FK (§4.5).
@@ -181,12 +181,12 @@
   - §4.4: закрита форма функції значень = форма функції множини скоупу; перевірка транзитивна за дослівними sql-функціями проєкту, plpgsql чи невідома функція — помилка; з `simetra.*` дозволено лише `current_user_id()`; вимір над нескоупленим довідником — помилка лише в проєкті з видами скоупу.
   - §4.7: рівень джерела призначень — стала форми `assignedOn`, одне джерело — один рівень; джерела — іменовані елементи з UUID; ключ ролі — `sourceKeys: [{ source, key }]`.
   - Вступ Додатка А: «решту правок … вносить перший крок плану» → «правки внесено в названі документи; перелік — покажчик місць».
-- [ ] **Step 6: Перевірка.**
+- [X] **Step 6: Перевірка.**
 
 Run: `python3 scripts/check-doc-anchors.py && pnpm format:check`
 Expected: обидві команди завершуються з кодом 0.
 
-- [ ] **Step 7: Commit**
+- [X] **Step 7: Commit**
 
 ```bash
 git add docs/superpowers/specs
@@ -217,7 +217,7 @@ git commit -m "docs(spec): правки Додатка А спеки прав і
   - `function closeRequires(actions: readonly { name: string; requires: readonly string[] }[]): ReadonlyMap<string, readonly string[]>` — транзитивне замикання (без самої дії, відсортоване); на циклі кидає `Error` — перевірку циклу робить компілятор раніше
 - Produces (T1): `CompiledModel.actions` — `{ objectId, actions: string[] }`, тепер з `actions(obj)` (імена стандартних дій; кастомні додає Задача 3)
 
-- [ ] **Step 1: Write the failing test** `kind-actions.test.ts`
+- [X] **Step 1: Write the failing test** `kind-actions.test.ts`
 
 ```ts
 describe("actions(obj)", () => {
@@ -267,29 +267,29 @@ describe("actions(obj)", () => {
 файли, як у `kind-schemas.test.ts`; `names(kind, overrides)` — локальний
 помічник над `actions(...)`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [X] **Step 2: Run test to verify it fails**
 
 Run: `pnpm --filter simetra test kind-actions`
 Expected: FAIL — `actionRequires` не експортовано, `actions` — масив, а не функція.
 
-- [ ] **Step 3: Implement**
+- [X] **Step 3: Implement**
   - `actions.ts`: кожна стандартна дія має власні ефекти; вимоги їх не переносять (Р1a-3). `update`: `{ dml: ["update"], header: "all", tabularSections: <має ТЧ> }`, де `tabularSections` — `def.tabularSectionColumns !== undefined`; `post` і `unpost`: `{ dml: ["update"], header: ["posted"], tabularSections: false }` (рухи пише оболонка проведення привілейованим шляхом, не дія).
   - Вид: Catalog — `read, create, update, markDeletion, delete`; Document — ще `post` (`requires: ["update"]`) і `unpost` (`requires: ["post"]`); InformationRegister — `read`, плюс `write` лише за `writeMode === "Independent"`; AccumulationRegister — `read`; Constant — `read`, `update` з `dml: ["insert","update"]`; CustomTable — `read, create, update, delete`; Enumeration, PgEnum, EventSubscription — `[]`.
   - `create`: `{ dml: ["insert"], header: "all", tabularSections }`; `delete`: `{ dml: ["delete"], header: [], tabularSections: false }`; `markDeletion`: `{ dml: ["update"], header: ["deletionMark"], tabularSections: false }`; `read`: `{ dml: [], header: [], tabularSections: false }`.
   - `postsMovements(kind)` → `postsMovements(kind, obj)`: читає `actions(obj)`; оновити всіх викликачів (знайти `grep -rn postsMovements packages/simetra/src`). Якщо викликач має лише вид без розібраного об'єкта — зупинитися й повідомити архітектора, а не повертати статичний перелік.
   - `pipeline.ts`: `actions: KIND_REGISTRY[o.kind].actions(o.data).map((a) => a.name)`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test kind-actions kind-registry`
 Expected: PASS.
 
-- [ ] **Step 5: Повний прогін пакета** (зміна факту зачіпає знімки хешів)
+- [X] **Step 5: Повний прогін пакета** (зміна факту зачіпає знімки хешів)
 
 Run: `pnpm --filter simetra test && pnpm --filter simetra typecheck && pnpm --filter simetra lint`
 Expected: PASS. Якщо змінився лише хеш моделі в тестах, які його закріплюють, оновити очікування й у звіті назвати файли.
 
-- [ ] **Step 6: Commit**
+- [X] **Step 6: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -314,18 +314,18 @@ git commit -m "feat(model): дії виду — функція налаштув�
 - Consumes: `expectsKindLabel(kind, data)`, `kindLabelOf(object)`, `NameAssigner.assignKindLabels` — без змін, вони вже читають реєстр.
 - Produces: `PromotionRecord` без поля `labelDropped`; коду `promote.label-target` немає.
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `kind-registry.test.ts`, `describe("expectsKindLabel")`: `it("expects a label on every kind with row-level security")` — для кожного виду з `rowLevelSecurity === "enabled"` і не `declared` `expectsKindLabel(kind, data) === true` (цикл за `METADATA_KINDS`, без переліку назв).
   - `kind-label.test.ts`: `it("reports a missing label on a register and a constant")` — коди `identity.kind-label-missing` з pointer `/kindLabel` для файлів регістра й константи без мітки; `it("fix assigns register labels by the physicalName rule")` — після `completeFiles` у регістра `kindLabel === physicalName`.
   - `operations-promote.test.ts`: тест «promotes an independent information register and drops the label» перейменувати на `"promotes an independent information register and keeps the label"` з `expect(register.kindLabel).toBe("price")` (мітка прийнятої таблиці фікстури); новий `"assigns a label when the adopted table had none"` — `CustomTable` без uuid-ключа промотовано в регістр, `kindLabel` дорівнює `physicalName`, `compile(after, { baseline: files })` без діагностик; тести `promote.label-target` видалити (ціль без мітки серед видів з RLS більше не існує).
   - `assigned-once.test.ts`: тест, де промоція звільняє `kindLabel`, перетворити на `"keeps reporting a removed label after promotion"` — зникнення мітки промотованого об'єкта тепер `identity.assigned-once-changed` (`before: "counterparty", after: "(removed)"`).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test kind-label kind-registry operations-promote assigned-once`
 Expected: FAIL — регістри й константа мітки не очікують, промоція її губить.
 
-- [ ] **Step 3: Implement**
+- [X] **Step 3: Implement**
   - Факт `kindLabel: true` і поле `kindLabel: physicalNameSchema.optional()` (той самий `.meta`, що в `catalog.ts`) у трьох видах.
   - Промоція: `kind-file.ts` переносить мітку прийнятої таблиці, а відсутню призначає те саме доповнення, що й `fix` (`completeAndCompile`); у `index.ts` прибрати гейт `promote.label-target`; у `record.ts` — поле `labelDropped` з інтерфейсу, схеми й побудови; в `assigned-once.ts` у `releasedByPromotion` прибрати гілку `kindLabel` (лишається лише `physicalName`) разом з `polymorphicTargets`, якщо вона більше ніде не читається (`grep`); коментар до функції оновити.
   - `diagnostics.ts`/`messages.ts`: видалити `promote.label-target`.
@@ -333,12 +333,12 @@ Expected: FAIL — регістри й константа мітки не очі
   - Регенерувати JSON Schema: `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`.
   - Мітки прикладів: `node packages/designer/bin/simetra.mjs fix examples/reference/metadata` (перевірити синтаксис командою `node packages/designer/bin/simetra.mjs fix --help`); диф — лише нові `kindLabel` у файлах регістрів і константи.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test && pnpm --filter simetra typecheck && pnpm --filter @simetra/designer test && pnpm --filter @simetra/designer typecheck && pnpm metadata:check`
 Expected: PASS. Typecheck designer обов'язковий: DB-тести designer не входять у `test`, а поле `labelDropped` у їхніх фікстурах ловить лише він. Тести, що закріплюють рендер в'юхи `simetra.kind_labels` чи хеш, отримують рядки регістрів і константи — оновити очікування й назвати файли у звіті.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages examples
@@ -395,7 +395,7 @@ export interface RightsContract {
 - Produces: `checkRights(ctx: RightsCheckContext): Diagnostic[]` у `rights/checks.ts`, де `RightsCheckContext = { objects; references; model: ModelStageResult; scopeKinds; project; byId }`; Задачі 4–9 додають у нього правила.
 - Коди: `rights.action-unknown` (`{ action, object }`), `rights.custom-action-reserved` (`{ action, kind }`), `rights.requires-cycle` (`{ actions }` — ланцюжок через ` → `), `rights.attribute-unknown` (`{ attribute, field }` — спільний для всіх полів прав).
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `rights-schemas.test.ts`: `customActionSchema` приймає `{ name: "invite", requires: ["read"] }` з дефолтами `effects: {}`; відмовляє на невідомому ключі; `catalogSchema` приймає `customActions`, а `customTableSchema` — ні (поле лише там, де `rightsExtents` непорожній).
   - `rights-contract.test.ts`:
 
@@ -434,24 +434,24 @@ it("reports an unknown header attribute", ...) // rights.attribute-unknown, "/cu
   - `it("refuses a custom action named like a sibling attribute")` — кастомна дія `assignee` поруч із реквізитом `assignee` → `identity.name-duplicate` на `/customActions/0/name` (Р1a-22).
   - Фікстура: `fixtures/rights.ts` (домен — у «Структурі файлів»), `fixtures/kitchen-sink.ts` — кастомна дія з `requires`, `effects.header` (обидві гілки: `"all"` в одному об'єкті й список в іншому) і `tabularSections`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test rights-schemas rights-contract explain`
 Expected: FAIL — поля й контракту немає.
 
-- [ ] **Step 3: Implement**
+- [X] **Step 3: Implement**
   - Ідентичність: кастомна дія отримує id тим самим шляхом, що й реквізит (`namedElementsOf` → `idElementFields`); id перевіряється глобально; ім'я — унікальне серед **усіх сусідніх іменованих колекцій об'єкта** — реквізитів (зокрема вимірів і ресурсів), ТЧ і кастомних дій (`identity.name-duplicate`, Р1a-22) — і в camelCase (`identity.name-case` зі стилем `camelCase`, Р1a-7).
   - Посилання: ім'я кастомної дії в `requires` — `{ to: { kind: "Element", id }, role: "customAction.requires" }` (резолв у `identity.ts` поруч із `resolveMembershipUser`); слова словника посиланнями не є: у `reference-index-completeness.test.ts` — запис `NOT_REFERENCES` для рядків під `requires` (і під `grant.actions`, `deny.actions` Прав-1b), що є словами `StandardAction`, з причиною «стандартна дія — слово платформи, а не посилання на елемент метаданих; кастомні дії — посилання й винятку не мають» (Р1a-21). Предикат винятку перевіряє і місце, і те, що рядок — слово словника: ім'я кастомної дії в тому самому масиві лишається кандидатом. `effects.header` — `elementReferences` з роллю `customAction.header` (власна колонка). `resolveElementReferences` видає `customTable.column-unknown` лише для `declared`-видів; для решти мовчить, а невідоме ім'я звітує `checkRights` кодом `rights.attribute-unknown`.
   - Контракт: стандартні дії з `actions(obj)` у порядку реєстру, далі кастомні за `id`; `requires` — `closeRequires` над прямими ребрами (`actionRequires`), кастомна дія — `requires` з файлу плюс загальне ребро `read`, якщо `dml` непорожній; `header` — фізичні колонки з фізичного знімка (стандартні — за `logicalName`). Цикл перевіряє `checkRights` до побудови контракту.
   - `explain.ts`: додати `...contracts.rights.filter((c) => c.objectId === object.id)` у `blocks`.
   - Діагностики й тексти en/uk (сенс повідомлень: en — `Action "<action>" is not an action of <object>`; uk — `Дія "<action>" не є дією <object>`; решта — так само коротко й з підказкою).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test rights messages field-ratchet reference-index-completeness explain json-schema`
 Expected: PASS (JSON Schema регенеровано).
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -471,23 +471,23 @@ git commit -m "feat(compiler): контракт прав об'єкта й кас
 - Produces: фізичний FK посилання скоупленого об'єкта виду на скоуплену `CustomTable` має `scope: { from: <носій джерела>, to: <фізична колонка scopeColumn цілі> }`, коли ціль оголошує `uniques` рівно над `[scopeColumn, <ключ>]` (у будь-якому порядку); інакше FK простий, а стадія 4 дає попередження `scope.custom-table-cross-tenant` (`{ table }`, у `WARNING_RULES`) з підказкою додати обмеження в метадані прийнятої таблиці.
 - Produces: функція `inScopeTarget(field): boolean` у `compiler/rights/carriers.ts` — FK поля має складену частину або проєкт не має видів скоупу; її споживають Задачі 5–8.
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `stage-scope-model.test.ts`: `it("composes a key to a scoped custom table with UNIQUE (scope, id)")` — у колонки `ledger_id` документа FK `{ table: "ledgers", column: "id", scope: { from: "org_id", to: "org_id" } }`; `it("keeps a plain key to a scoped custom table without UNIQUE (scope, id)")`.
   - `stage-scope-integrity.test.ts`: `it("warns about a reference to a scoped custom table without UNIQUE (scope, id)")` — `[["scope.custom-table-cross-tenant", "warning", "/attributes/0"]]`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test stage-scope`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — у `scopedKey` гілка `declared`: замість `return undefined` повертати складену частину, коли ціль має `scopeColumn` того самого виду скоупу й `UNIQUE` над `(scopeColumn, ключ)`; `to` — фізичне ім'я `scopeColumn` цілі. Попередження — у `checkScope` поруч із правилами посилань (`SCOPED_REFERENCE_ROLES`).
+- [X] **Step 3: Implement** — у `scopedKey` гілка `declared`: замість `return undefined` повертати складену частину, коли ціль має `scopeColumn` того самого виду скоупу й `UNIQUE` над `(scopeColumn, ключ)`; `to` — фізичне ім'я `scopeColumn` цілі. Попередження — у `checkScope` поруч із правилами посилань (`SCOPED_REFERENCE_ROLES`).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test stage-scope stage-model creation-order`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -521,29 +521,29 @@ export interface CarrierContract {
 - Produces: `resolveCarrier(object, carrier, ctx): { ok: true; terminal: { object: ParsedObject; field: Field }; contract: CarrierContract } | { ok: false; diagnostic: Diagnostic }` у `carriers.ts` — перший крок шляху мусить бути одиночним неполіморфним `Ref` у межах скоупу (`inScopeTarget`), другий — реквізит його цілі.
 - Коди: `rights.carrier-not-ref` (`{ attribute }`), `rights.carrier-cross-tenant` (`{ attribute }`), `rights.ownership-target` (`{ attribute, reason }`).
 
-- [ ] **Step 1: Write the failing tests** `rights-ownership.test.ts`
+- [X] **Step 1: Write the failing tests** `rights-ownership.test.ts`
   - `it("accepts a member reference and a users reference as owners")` — `ownership: ["assignee", "createdBy"]` (`assignee` → `OrgMember` в межах скоупу; `trackAuthor: true`): `contracts.rights[Task].ownership` дорівнює `[{ column: "assignee_id" }, { column: "created_by" }]`, а `extents` кожної дії — `[{ form: "any" }, { form: "own" }]`.
   - `it("accepts the key of the users catalog")` — `Users.ownership: ["ref"]` → `[{ column: "id" }]`; на іншому довіднику `["ref"]` → `rights.ownership-target` (`reason: "key"`).
   - `it("accepts a path through an in-scope reference")` — `TaskComment.ownership: [["task", "assignee"]]` → `{ column: "task_id", via: { objectId: TASK_ID, table: { schema: "public", name: "task" }, column: "assignee_id" } }`.
   - `it("rejects carriers that leave the tenant or are not references")` — очікування `[code, pointer]`: `crossScope`-реквізит → `rights.carrier-cross-tenant` `/ownership/0`; рядковий реквізит → `rights.carrier-not-ref`; `Ref` на `Region` (не членство й не «Користувачі») → `rights.ownership-target` (`reason: "target"`); невідомий реквізит → `rights.attribute-unknown` `/ownership/0`; поліморфний перший крок шляху → `rights.carrier-not-ref` `/ownership/0/0`.
   - `rights-schemas.test.ts`: `informationRegisterSchema` не приймає `ownership` (регістр не має обсягу `own`).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test rights-ownership rights-schemas`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [X] **Step 3: Implement**
   - Посилання носія: `elementReferences` виду — рядок або перший крок → власна колонка (роль `rights.carrier`); другий крок → колонка цілі першого (`owner` = `ref` першого реквізиту, роль `rights.carrierPath`). Стандартні реквізити (`createdBy`, `ref`) id не мають і в індекс не йдуть — їх не перейменовують.
   - Правило цілі власності: кінцевий `Ref` — на довідник з `membership` того самого виду скоупу, що й об'єкт (складений FK обов'язковий), або на довідник з `role: "users"` (простий FK; §4.2 — предикат AND зі скоупами), або `ref` довідника `users`.
   - `kitchen-sink.ts`: `ownership` з рядком і шляхом.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test rights field-ratchet reference-index-completeness json-schema`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -563,25 +563,25 @@ git commit -m "feat(compiler): власність і носії прав зі ш
 - Produces: `RightsContract.container?: true` (об'єкт — контейнер); `RightsContract.binding?: { containerId: string; carrier: CarrierContract }`.
 - Коди: `rights.container-target` (`{ attribute, name }` — кінцева ціль не має `rightsContainer`), `rights.container-self` (контейнер прив'язаний до себе), а також `rights.carrier-*` із Задачі 5.
 
-- [ ] **Step 1: Write the failing tests** `rights-container.test.ts`
+- [X] **Step 1: Write the failing tests** `rights-container.test.ts`
   - `it("binds a document to a container catalog")` — `Task.binding` дорівнює `{ containerId: PROJECT_ID, carrier: { column: "project_id" } }`, `Project.container === true`.
   - `it("binds through a path")` — `TaskComment.containerBinding: ["task", "project"]` → `carrier.via.column === "project_id"`.
   - `it("rejects a binding to an object that is not a container")` → `rights.container-target` `/containerBinding`; `crossScope`-прив'язка → `rights.carrier-cross-tenant`; `Project.containerBinding` на себе → `rights.container-self`.
   - `rights-schemas.test.ts`: `documentSchema` не приймає `rightsContainer`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test rights-container rights-schemas`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — `resolveCarrier` із Задачі 5; поле в схемі — лише там, де факт реєстру (`rightsContainer` / `rightsBinding`); `kitchen-sink.ts` — обидва поля.
+- [X] **Step 3: Implement** — `resolveCarrier` із Задачі 5; поле в схемі — лише там, де факт реєстру (`rightsContainer` / `rightsBinding`); `kitchen-sink.ts` — обидва поля.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test rights field-ratchet reference-index-completeness json-schema`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -643,7 +643,7 @@ export interface AccessDimensionContract {
 
 - Коди: `rights.dimension-unknown` (`{ dimension }`), `rights.dimension-target` (`{ dimension, reason }`: `"kind"` — не довідник, `"unscoped"` — нескоуплений у проєкті з видами скоупу), `rights.dimension-relation` (`{ dimension, field, reason }`), `rights.access-target` (`{ attribute, dimension }` — кінцевий `Ref` не на `target` виміру), `rights.access-duplicate` (`{ dimension }`).
 
-- [ ] **Step 1: Write the failing tests**
+- [X] **Step 1: Write the failing tests**
   - `rights-dimensions.test.ts`:
     - `it("maps an attribute to a dimension")` — `Task.access` → `contracts.rights[Task].access` дорівнює `[{ dimensionId: REGION_DIM_ID, carrier: { column: "region_id" } }]`; `extents` — `[{ form: "any" }, { form: "own" }, { form: "dimension", dimensionId: REGION_DIM_ID }]`; `contracts.accessDimensions[0].values.relation` — `{ objectId: MEMBER_REGION_ID, table: …, subject: "member_id", value: "region_id" }`.
     - `it("maps a register dimension")` — `access` на регістрі накопичення з реквізитом-виміром `region`.
@@ -651,24 +651,24 @@ export interface AccessDimensionContract {
   - `stage-identity.test.ts`: `it("refuses one name in two project collections")` — вид скоупу `org` і вимір `org` → `identity.name-duplicate` (scope `"project elements"`) на `/accessDimensions/0/name`; `it("assigns ids to access dimensions")` через `completeFiles`.
   - `rights-schemas.test.ts`: `constantSchema` не приймає `access` (константа — лише `any`).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test rights-dimensions stage-identity rights-schemas`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [X] **Step 3: Implement**
   - `projectReferences` виду повертає `access[].dimension` (`collection: "accessDimensions"`, роль `access.dimension`); `identity.ts` резолвить за іменем у колекції проєкту в `{ kind: "Element", id }` з власником — об'єктом файлу (як `storage.scopeKind`, але з `objectId` об'єкта). `target` і `relation.object` виміру — `resolveObjectRef` з роллю `dimension.target` / `dimension.relationObject` (власник — вимір, `file: "project.meta.json"`); `subject`/`value` — посилання на елемент об'єкта зв'язку (роль `dimension.relationField`).
   - Атрибут `access` — `elementReferences` (роль `access.attribute`, шлях — як носій Задачі 5).
   - Правило зв'язку: `subject` — одиночний `Ref` на довідник `users` чи на довідник членства; `value` — одиночний `Ref` на `target`; об'єкт зв'язку — у межах того самого виду скоупу, що й `target`.
   - Функція значень: контракт отримує `{ function: { schema: schema ?? defaultSchema, name } }`; перевірка тіла — Задача 8.
   - `kitchen-sink.ts`: вимір з `relation` і вимір з `function` (обидві гілки), `access` з `attribute` і з `ref`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test rights stage-identity field-ratchet reference-index-completeness json-schema`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -690,7 +690,7 @@ git commit -m "feat(compiler): виміри доступу проєкту й м�
 - **Як імена членства доходять до перевірки (порядок стадій).** `runStages` виконує стадію 4 (`checkIntegrity`, зокрема `checkMembership`) і стадію 5 (`checkLinks`) підряд, а гейт помилок стоїть після обох. Тому `pipeline.ts` між ними будує `membershipFunctions` — кваліфіковані імена `<таблиця>_my_member` і `<таблиця>_member_scopes` з `membershipsOf(...)` **лише для довідників, на файлі яких стадія 4 не дала жодної діагностики `membership.*`**. Зламане членство отже не легалізує виклик: виклик його функції — `unknown`.
 - Коди: `rights.dimension-function-missing` (`{ dimension, function }`), `rights.dimension-function-signature` (`{ dimension, function, reason }` — причини ті самі, що в `scope.set-function-signature`; для ланки ланцюжка `function` — ланка), `rights.dimension-function-reads-rights` (`{ dimension, chain, object }` — `chain` — функції від виміру до ланки через ` → `, `object` — заборонене ім'я чи `"plpgsql"`/`"unknown"`).
 
-- [ ] **Step 1: Write the failing test** `rights-dimension-functions.test.ts`
+- [X] **Step 1: Write the failing test** `rights-dimension-functions.test.ts`
   - `it("accepts a closed set function that reads app tables and the current user")` — тіло `SELECT r.region_id FROM public.member_region r WHERE r.user_id = (SELECT simetra.current_user_id())` → без діагностик.
   - `it("follows calls into project sql functions")` — `region_ids()` кличе `public.helper_ids()` (sql, читає таблицю застосунку) → без діагностик; `helper_ids()` читає `simetra.identities` → `rights.dimension-function-reads-rights` з `chain: "public.region_ids → public.helper_ids"`, `object: "simetra.identities"`.
   - `it("fails closed on plpgsql and unknown functions in the chain")` → `object: "plpgsql"` і `object: "unknown"` для `ext.foo()`.
@@ -699,19 +699,19 @@ git commit -m "feat(compiler): виміри доступу проєкту й м�
   - `it("checks the closed form of every function in the chain")` — ланка `public.helper_ids()` з `SET search_path = simetra`, що читає некваліфіковане `identities` (непряме читання `simetra.identities`) → `rights.dimension-function-signature` з `function: "public.helper_ids"`; ланка без `SET search_path = ''` чи з некваліфікованим відношенням — так само.
   - `it("does not trust functions of a broken membership")` — довідник членства з `membership.user` не на «Користувачів» і функція виміру, що кличе його `<таблиця>_my_member` → є і `membership.user-not-users-ref`, і `rights.dimension-function-reads-rights` з `object: "unknown"`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [X] **Step 2: Run test to verify it fails**
 
 Run: `pnpm --filter simetra test rights-dimension-functions`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — обхід у ширину від функції виміру за `unitCalls`; **кожна** функція ланцюжка проходить закриту форму — `LANGUAGE sql`, `SET search_path = ''`, кваліфіковані відношення (`setFunctionClosedProblem` чи його частина; від ланок не вимагаються `STABLE` і `SECURITY DEFINER` — їх вимагає лише функція виміру). Інакше `search_path` ланки міг би непомітно спрямувати некваліфіковане ім'я в `simetra`. Некваліфікований виклик без одиниці проєкту — вбудована функція `pg_catalog` (дозволено: `search_path = ''`); кваліфікований виклик — одиниця проєкту `LANGUAGE sql` (йти далі), ім'я з `membershipFunctions` (лист), `simetra.current_user_id` (лист), інакше `plpgsql`/`unknown`; кожна одиниця ланцюжка — `unitRelations` без схеми `simetra`. Відвідані одиниці — множина (цикл викликів не зациклює обхід).
+- [X] **Step 3: Implement** — обхід у ширину від функції виміру за `unitCalls`; **кожна** функція ланцюжка проходить закриту форму — `LANGUAGE sql`, `SET search_path = ''`, кваліфіковані відношення (`setFunctionClosedProblem` чи його частина; від ланок не вимагаються `STABLE` і `SECURITY DEFINER` — їх вимагає лише функція виміру). Інакше `search_path` ланки міг би непомітно спрямувати некваліфіковане ім'я в `simetra`. Некваліфікований виклик без одиниці проєкту — вбудована функція `pg_catalog` (дозволено: `search_path = ''`); кваліфікований виклик — одиниця проєкту `LANGUAGE sql` (йти далі), ім'я з `membershipFunctions` (лист), `simetra.current_user_id` (лист), інакше `plpgsql`/`unknown`; кожна одиниця ланцюжка — `unitRelations` без схеми `simetra`. Відвідані одиниці — множина (цикл викликів не зациклює обхід).
 
-- [ ] **Step 4: Run test to verify it passes**
+- [X] **Step 4: Run test to verify it passes**
 
 Run: `pnpm --filter simetra test rights-dimension-functions rights-dimensions messages`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -768,26 +768,26 @@ export interface AssignmentSourceContract {
 - Produces: `membershipOfScopeKind(scopeKindId, objects, contracts): "catalog" | "source" | undefined` у `rights/checks.ts` — Права-1b читає його для Рх7.
 - Коди: `rights.source-table` (`{ source }` — ціль не `CustomTable`), `rights.source-forced-rls` (`{ source, table }` — `rowLevelSecurity: "forced"`), `rights.membership-source-duplicate` (`{ scopeKind }` — у виду вже є довідник членства чи інше джерело), `rights.source-container-column` (`{ source, reason }`: `"missing"` для контейнерного рівня, `"unexpected"` для інших), `rights.scope-kind-unknown` (`{ scopeKind }`), `rights.container-target` (з Задачі 6, для `assignedOn.container`), `rights.users-missing` (`{}` — у проєкті є декларації прав, але немає ні довідника `users`, ні джерела членства; на `project.meta.json` `""`).
 
-- [ ] **Step 1: Write the failing tests** `rights-sources.test.ts`
+- [X] **Step 1: Write the failing tests** `rights-sources.test.ts`
   - `it("compiles a membership source and an assignment source")` — `CustomTable` `Membership` (`scopeColumn`, колонки `org_id`, `user_id`, `is_active`) і `RoleGrant` (`member_id`, `role_key`, `project_id`); контракти дорівнюють очікуваним записам з фізичними колонками.
   - `it("rejects broken sources")` — `[code, pointer]`: `table` на довідник → `rights.source-table`; `rowLevelSecurity: "forced"` → `rights.source-forced-rls`; джерело членства для виду, що має `OrgMember` → `rights.membership-source-duplicate`; контейнерний рівень без `columns.container` → `rights.source-container-column` (`missing`); невідомий вид скоупу → `rights.scope-kind-unknown`; невідома колонка → `customTable.column-unknown`.
   - `it("requires users or a membership source for rights declarations")` — `ownership` без довідника `users` і без джерела → `rights.users-missing`; з джерелом членства — без діагностики.
   - `it("accepts an owner that refers to the adopted membership source")` (Р1a-24) — `Task.assignee` → `CustomTable` `Membership` (джерело членства виду `org`, `uniques` над `[org_id, id]`): `ownership: ["assignee"]` компілюється, носій `{ column: "assignee_id" }`, FK складений; та сама таблиця без `UNIQUE (scope, id)` → `rights.carrier-cross-tenant`; прийнята таблиця, що не є джерелом членства цього виду, → `rights.ownership-target` (`reason: "target"`).
   - `rights-schemas.test.ts`: `assignedOnSchema` приймає три форми й відмовляє на `{ scopeKind, container }`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [X] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter simetra test rights-sources rights-schemas`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — правило цілі власності Задачі 5 розширюється (Р1a-24): кінцевий `Ref` може вести й на `CustomTable` — джерело членства виду скоупу об'єкта, за умови складеного FK (Задача 4); колонки джерела — посилання на елементи `CustomTable` за логічним іменем (роль `source.column`, власник — джерело, як `storage.scopeKind`), тож перейменування колонки переписує мапінг (§4.7); «декларації прав» для `rights.users-missing` — непорожні `ownership`, `access`, `containerBinding`, `accessDimensions` чи `assignmentSources` (Права-1b додасть ролі й набори); коментар біля `membershipSources`: `// Джерела припускають С8 (id користувача = sub): провайдер поки один — Supabase; другий провайдер введе факт пресету й перевірку.` `kitchen-sink.ts` — обидва джерела й усі три форми `assignedOn`.
+- [X] **Step 3: Implement** — правило цілі власності Задачі 5 розширюється (Р1a-24): кінцевий `Ref` може вести й на `CustomTable` — джерело членства виду скоупу об'єкта, за умови складеного FK (Задача 4); колонки джерела — посилання на елементи `CustomTable` за логічним іменем (роль `source.column`, власник — джерело, як `storage.scopeKind`), тож перейменування колонки переписує мапінг (§4.7); «декларації прав» для `rights.users-missing` — непорожні `ownership`, `access`, `containerBinding`, `accessDimensions` чи `assignmentSources` (Права-1b додасть ролі й набори); коментар біля `membershipSources`: `// Джерела припускають С8 (id користувача = sub): провайдер поки один — Supabase; другий провайдер введе факт пресету й перевірку.` `kitchen-sink.ts` — обидва джерела й усі три форми `assignedOn`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [X] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter simetra test rights field-ratchet reference-index-completeness json-schema`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -805,7 +805,7 @@ git commit -m "feat(compiler): прийняті джерела членства 
 **Interfaces:**
 - Consumes: `createObject`, `addElement`, `renameElement`, `deleteElement`, `explainObject` з `simetra/compiler`; поля й ролі Задач 3–9.
 
-- [ ] **Step 1: Write the failing tests** `operations-rights.test.ts`
+- [X] **Step 1: Write the failing tests** `operations-rights.test.ts`
   - `it("adds a custom action and an access dimension with ids")` — `addElement({ target: { kind: "Document", name: "Task" }, collection: "customActions", element: { name: "reassign" } })` і `addElement({ target: { kind: "Project" }, collection: "accessDimensions", element: {...} })` → у результаті є `id`, компіляція чиста.
   - `it("renames an attribute in every rights place")` — перейменування `Task.assignee` → `owner` переписує `ownership`, `TaskComment.ownership[0][1]` і `effects.header` кастомної дії; перейменування `Task.project` переписує `containerBinding` і `TaskComment.containerBinding[1]`; перейменування колонки джерела переписує `columns`.
   - `it("renames a dimension and a custom action")` — `{ kind: "Project", element: ["region"] }` → переписано `access[].dimension`; кастомна дія → переписано `requires` іншої кастомної дії.
@@ -813,17 +813,17 @@ git commit -m "feat(compiler): прийняті джерела членства 
   - `it("creates a container catalog with rights fields")` — `createObject` з `data: { rightsContainer: true, ... }`.
   - `it("addresses a custom action unambiguously")` (Р1a-22) — `addElement` кастомної дії з іменем наявного реквізиту → відмова з `identity.name-duplicate` і без запису файлів; `renameElement` і `deleteElement` з `{ kind: "Document", name: "Task", element: ["reassign"] }` діють саме на кастомну дію: після перейменування `model.references` з роллю `customAction.requires` має `to.id` = UUID кастомної дії, а реквізити не змінено.
 
-- [ ] **Step 2: Run test to verify it fails or passes**
+- [X] **Step 2: Run test to verify it fails or passes**
 
 Run: `pnpm --filter simetra test operations-rights`
 Expected: тести, які покриває загальний механізм, проходять одразу; червоні вказують на пропущене посилання чи колекцію — виправити в коді відповідної задачі (не в операціях) і назвати у звіті.
 
-- [ ] **Step 3: Скіл споживача** — розділ «Rights declarations» у `SKILL.md`: кожне поле — одне речення й приклад форми з плейсхолдерами, посилання на правила компілятора (`rights.*`); без переказу спеки.
+- [X] **Step 3: Скіл споживача** — розділ «Rights declarations» у `SKILL.md`: кожне поле — одне речення й приклад форми з плейсхолдерами, посилання на правила компілятора (`rights.*`); без переказу спеки.
 
 Run: `pnpm --filter @simetra/designer test skill-examples && python3 scripts/check-doc-anchors.py`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [X] **Step 4: Commit**
 
 ```bash
 git add packages
@@ -834,12 +834,12 @@ git commit -m "test(compiler): мутації designer над полями пр�
 
 ### Задача 11: гейти
 
-- [ ] **Step 1:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — усе зелене.
-- [ ] **Step 2:** `pnpm metadata:check` — код 0.
-- [ ] **Step 3:** `python3 scripts/check-doc-anchors.py` — код 0.
-- [ ] **Step 4:** `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-1a-carriers-contract.md` — якорі плану відповідають коду.
-- [ ] **Step 5:** `pnpm db:start` (якщо стек не запущено) і повний `pnpm test:db` на одному SHA, без змін у дереві під час прогону; результат — у звіт з SHA. Нових DB-тестів немає: прогін доводить, що мітки регістрів, складений FK на `CustomTable` і зміна запису промоції не зламали тінь, рендер і застосування.
-- [ ] **Step 6:** якщо гейти дали правки форматування — `pnpm format:fix` і коміт `style: форматування Права-1a`.
+- [X] **Step 1:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — усе зелене.
+- [X] **Step 2:** `pnpm metadata:check` — код 0.
+- [X] **Step 3:** `python3 scripts/check-doc-anchors.py` — код 0.
+- [X] **Step 4:** `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-1a-carriers-contract.md` — якорі плану відповідають коду.
+- [X] **Step 5:** `pnpm db:start` (якщо стек не запущено) і повний `pnpm test:db` на одному SHA, без змін у дереві під час прогону; результат — у звіт з SHA. Нових DB-тестів немає: прогін доводить, що мітки регістрів, складений FK на `CustomTable` і зміна запису промоції не зламали тінь, рендер і застосування.
+- [X] **Step 6:** якщо гейти дали правки форматування — `pnpm format:fix` і коміт `style: форматування Права-1a`.
 
 ## Критерії приймання
 
