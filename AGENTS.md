@@ -161,9 +161,8 @@ These hold for T0 and for every tier that reads metadata:
   promotion: enumeration value labels, predefined-item labels and the
   object's kind label — the kind label, not a table name, discriminates
   polymorphic pairs and identifies the object in the rights contract. A label
-  value never changes; the one way a kind label disappears is promotion into
-  a kind that has no label, and only when no polymorphic reference in the
-  project can target the object. The style of logical attribute names is the
+  value never changes, and a kind label never disappears: promotion keeps it
+  or assigns one. The style of logical attribute names is the
   project's `naming.attributeCase`.
   Never build a mechanism on the name as identity.
 
