@@ -303,6 +303,10 @@ const SET_FUNCTION_REASON: Readonly<
     en: "with an empty search_path an unqualified relation does not resolve",
     uk: "з порожнім search_path некваліфіковане відношення не розв'язується",
   },
+  viewUnqualified: {
+    en: "a view binds names with the search_path of the creating session, so every relation and function in it is qualified by a schema (builtins as pg_catalog.<name>)",
+    uk: "представлення зв'язує імена з search_path сесії, що його створює, тож кожне відношення й функція в ньому кваліфіковані схемою (вбудовані — як pg_catalog.<ім'я>)",
+  },
   sqlBody: {
     en: "its SQL-standard body binds names with the search_path of the creating session, so the compiler cannot check it; use a string body (AS $$ ... $$)",
     uk: "її тіло стандарту SQL зв'язує імена з search_path сесії, що її створює, тож компілятор не може його перевірити; використайте рядкове тіло (AS $$ ... $$)",

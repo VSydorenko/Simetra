@@ -27,7 +27,7 @@ const CURRENT_USER = `${PLATFORM}.${CURRENT_USER_FUNCTION.name}`
 const ARROW = " → "
 
 /** Причина закритої форми функції виміру й ланок понад причини функції множини. */
-type DimensionFunctionReason = SetFunctionReason | "sqlBody"
+type DimensionFunctionReason = SetFunctionReason | "sqlBody" | "viewUnqualified"
 
 /**
  * Вбудовані функції, що виконують SQL з рядка: обхід бачить лише дерево, а не
@@ -42,6 +42,15 @@ const DYNAMIC_SQL_BUILTINS: ReadonlySet<string> = new Set([
   "table_to_xmlschema",
   "cursor_to_xml",
   "cursor_to_xmlschema",
+  "schema_to_xml",
+  "schema_to_xmlschema",
+  "schema_to_xml_and_xmlschema",
+  "database_to_xml",
+  "database_to_xmlschema",
+  "database_to_xml_and_xmlschema",
+  // Аргумент-запит `tsvector`/`tsquery` — теж текст, що виконується.
+  "ts_stat",
+  "ts_rewrite",
 ])
 
 const FUNCTION_CLASSES: ReadonlySet<string> = new Set(["function"])
@@ -192,12 +201,6 @@ function walk(
         enqueue(target, chain)
       }
     }
-    if (unqualified) {
-      at("rights.dimension-function-signature", {
-        function: chain.at(-1) ?? "",
-        reason: "unqualified",
-      })
-    }
     for (const call of unitCalls(unit, parse)) {
       if (call.schema === undefined || call.schema === "pg_catalog") {
         if (DYNAMIC_SQL_BUILTINS.has(call.name)) {
@@ -206,13 +209,9 @@ function walk(
         }
         // З `search_path = ''` (його має кожна функція ланцюжка)
         // некваліфікований виклик розв'язується лише в `pg_catalog`. У
-        // представленні — будь-де, тож судиться кожна функція проєкту з
-        // таким ім'ям.
-        if (call.schema === undefined && view) {
-          for (const target of named(FUNCTION_CLASSES, call.name)) {
-            enqueue(target, chain)
-          }
-        }
+        // представленні — будь-де, навіть у схемі платформи, тож там
+        // вбудована функція пишеться як `pg_catalog.<ім'я>`.
+        if (call.schema === undefined) unqualified ||= view
         continue
       }
       const callee = `${call.schema}.${call.name}`
@@ -228,6 +227,12 @@ function walk(
       if (callee === CURRENT_USER || membershipFunctions.has(callee)) continue
       if (call.schema === PLATFORM) readsRights(chain, callee)
       else readsRights([...chain, callee], "unknown")
+    }
+    if (unqualified) {
+      at("rights.dimension-function-signature", {
+        function: chain.at(-1) ?? "",
+        reason: "viewUnqualified",
+      })
     }
   }
 }

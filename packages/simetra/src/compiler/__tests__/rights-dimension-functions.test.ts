@@ -323,7 +323,7 @@ describe("access dimension value function", () => {
           viewHead +
             "CREATE VIEW public.v AS SELECT r.region_id AS id FROM member_region r;\n"
         )
-      ).toEqual([signature("public.v", "unqualified")])
+      ).toEqual([signature("public.v", "viewUnqualified")])
       expect(
         await params(
           viewHead +
@@ -360,6 +360,41 @@ describe("access dimension value function", () => {
       expect(rightsErrors(found).map((d) => [d.code, d.params])).toEqual([
         reads("public.region_ids → public.org_member_my_member", "plpgsql"),
       ])
+    })
+
+    it("requires schema-qualified calls in views", async () => {
+      const viewHead = head("SELECT v.id FROM public.v v")
+      const view = (select: string) =>
+        viewHead + `CREATE VIEW public.v AS ${select};\n`
+      expect(
+        await params(
+          view(
+            "SELECT lower(r.region_id::text)::uuid AS id FROM public.member_region r"
+          )
+        )
+      ).toEqual([signature("public.v", "viewUnqualified")])
+      // Не виклики функцій: COALESCE, NULLIF, CASE і CAST — вирази дерева.
+      expect(
+        await params(
+          view(
+            "SELECT COALESCE(NULLIF(r.region_id, r.region_id), CASE WHEN r.region_id IS NULL THEN NULL ELSE CAST(r.region_id AS uuid) END) AS id, pg_catalog.lower('x') AS t FROM public.member_region r"
+          )
+        )
+      ).toEqual([])
+    })
+
+    it.each([
+      ["schema_to_xml", "schema_to_xml('public', true, true, '')"],
+      [
+        "pg_catalog.database_to_xml",
+        "pg_catalog.database_to_xml(true, true, '')",
+      ],
+      ["ts_stat", "ts_stat('select 1')"],
+      ["ts_rewrite", "ts_rewrite('a'::tsquery, 'select 1')"],
+    ])("rejects the dynamic builtin %s", async (_name, call) => {
+      expect(
+        await params(head(`SELECT NULL::uuid WHERE ${call} IS NOT NULL`))
+      ).toEqual([reads("public.region_ids", "dynamic")])
     })
 
     it("rejects builtins that execute SQL from a string", async () => {
