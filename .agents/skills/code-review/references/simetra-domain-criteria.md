@@ -92,7 +92,8 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | --- | --- |
 | nothing silenced to go green | `.skip`, `.only` or `.todo` added; an assertion deleted or loosened; a threshold lowered; a file excluded from test, lint or typecheck config |
 | no suppressions | `@ts-ignore`, `@ts-expect-error`, `eslint-disable` or `as any` added to pass a gate; an unavoidable one without a Ukrainian comment saying why |
-| schema changes carry tests | a new or changed Zod schema without accept and reject cases in core's tests |
+| schema changes carry tests | a new or changed Zod schema without accept and reject cases in core's tests (one table-driven test per schema, not a case-by-case restatement) |
+| test form | new or changed tests break the `writing-tests` skill: a DB test with no reason the unit level cannot give, metadata spelled inline or copied between files instead of a fixture builder, near-identical `it` blocks instead of a table, message text asserted outside the message catalog tests, a test of a temporary process state |
 | generated SQL assertions | `toContain` on a fragment proves presence, not the statement; mutate the generator branch and confirm red |
 | tests do not time the machine | an assertion that depends on wall-clock speed or contention |
 
